@@ -926,6 +926,7 @@ export const de: Record<keyof typeof en, string> = {
   'skills.import.error.tooManyFiles': 'Das Paket enthält mehr Dateien als erlaubt.',
   'skills.import.error.tooLarge': 'Das Paket ist größer als erlaubt.',
   'skills.import.error.fileTooLarge': 'Eine Datei im Paket ist größer als erlaubt.',
+  'skills.import.error.duplicatePath': 'Das Paket enthält zwei Dateien, die auf denselben Pfad verweisen.',
   'skills.import.error.badExtension': 'Das Paket enthält einen nicht erlaubten Dateityp.',
   'skills.import.error.nestedArchive': 'Das Paket enthält ein eingebettetes Archiv, was nicht erlaubt ist.',
   'skills.import.error.noSkillMd': 'Das Paket enthält keine SKILL.md-Datei.',

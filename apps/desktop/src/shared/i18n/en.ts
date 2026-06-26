@@ -907,6 +907,7 @@ export const en = {
   'skills.import.error.tooManyFiles': 'The package contains more files than allowed.',
   'skills.import.error.tooLarge': 'The package is larger than the allowed size.',
   'skills.import.error.fileTooLarge': 'A file in the package is larger than the allowed size.',
+  'skills.import.error.duplicatePath': 'The package contains two files that resolve to the same path.',
   'skills.import.error.badExtension': 'The package contains a file type that is not allowed.',
   'skills.import.error.nestedArchive': 'The package contains an embedded archive, which is not allowed.',
   'skills.import.error.noSkillMd': 'The package does not contain a SKILL.md file.',

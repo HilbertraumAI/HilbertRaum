@@ -185,10 +185,10 @@ persona section below.
 | U-1 | MEDIUM | UX/Correctness | ✅ **fixed (Phase 5, Minimal)** — `listRunnableTools` now returns the in-scope target **ids** alongside the tools; the renderer maps ids→**names** from its own loaded list (no title crosses the IPC), shows the single doc's name or a **Radix chooser** when >1, and passes the chosen `documentId` to `startSkillRun`, which **validates** it is in the resolved scope (else `documentOutOfScope`). `documentCount` stays the honest **1**. Redaction routing answer is count-honest (`answerMulti`) | `registerSkillsIpc.ts` `listRunnableTools`/`startSkillRun`, `SkillRunBar.tsx`, `ChatScreen.tsx`, `analysis/redaction.ts` |
 | U-2 | MEDIUM | UX/Surprise | ✅ **fixed (Phase 6, explicit offer)** — the silent background-categorize enqueue is **removed** from the extract runner; after a successful rows>0 extract the run-bar **result row** offers a one-tap **"Categorize transactions"** follow-up (user-initiated), targeting the SAME document via a renderer-remembered id (`runTargetId`). The audit/run state stay content-free; the deterministic 0-model chat breakdown is unchanged | `tool-runs.ts` `buildToolRunner` extract case, `SkillRunBar.tsx`, `ChatScreen.tsx` |
 | PC-1 | MEDIUM | Concurrency | Lane A (chat analysis auto-run) and Lane B (`SkillRunController`) are mutually unaware; a chat re-extract (`replaceExisting` DELETE) can race a button run on the same statement | §2.3; `run.ts:221`, `run-controller.ts` |
-| S-1 | MEDIUM | Security (DoS) | Zip importer slices/inflates a member using the **central-directory `compressedSize`** (≤ total cap, ~8 MiB) before any per-file bound; a crafted member stalls the main thread | `installer.ts:208-242` |
+| S-1 | MEDIUM | Security (DoS) | ✅ **fixed (Phase 8)** — `inflateEntry` now rejects any member whose central-directory **`compressedSize` exceeds `maxFileBytes`** *before* slicing/inflating (for both STORE and DEFLATE), bounding the synchronous inflate **input**, not only its `maxOutputLength` output. Reuses `fileTooLarge`. Proven by a spy that `inflateRawSync` is never reached (with a positive control) | `installer.ts` `inflateEntry` |
 | U-3 | LOW→MED | UX | ✅ **fixed (Phase 7, inline closed-trigger label)** — `ChatScreen` now recomputes the deterministic offer **proactively as the draft changes** (debounced ~400 ms, only when no skill is picked) and `SkillPicker` mirrors it as a quiet, named **"Suggested: &lt;skill&gt;" hint on the CLOSED trigger** (`chat.skill.suggestedHint`); one tap selects it. Still inert until tapped — no canvas chip, no settings key, never auto-applied (§22-D3); an explicit "None" sets a per-draft `suggestionDismissed` flag so it never re-nags. `suggestSkills` still logs nothing (privacy test green) | `ChatScreen.tsx` `refreshSuggestion`/suggest effect, `SkillPicker.tsx` closed hint |
 | A-1 | LOW→MED | Architecture | For tool skills the **SKILL.md body is inert on the primary answer path** — the deterministic answer format is reimplemented in TS (`buildBankAnswer`/`buildInvoiceAnswer`); editing the body only affects the off-topic relevance fallback | `analysis/bank-statement.ts:294`, `analysis/invoice.ts:201` |
-| S-2 | LOW→MED | Security | Zip stager: two members can **strip to the same `relPath`** (last-writer-wins overwrite); the stripped path is not re-validated | `installer.ts:279-339` |
+| S-2 | LOW→MED | Security | ✅ **fixed (Phase 8)** — `stageZip` now **re-asserts `safeRelPath` on the stripped path** and **rejects a colliding `relPath`** (a `Set` of seen paths) with a new content-free `duplicatePath` code, so a later duplicate can't last-writer-wins shadow a preview-validated `SKILL.md`. EOCD-first-match recorded as an accepted residual in `security-model.md` | `installer.ts` `stageZip`, `SKILL_IMPORT_ERRORS.duplicatePath`, `SkillsTab.tsx`, en/de |
 | L-1 | LOW | LLM | ✅ **fixed (Phase 2)** — Categorizer dropped a whole 20-row batch on any parse failure; now `batchMaxTokens` is length-aware AND an unparseable reply is retried once before the (honest) drop | `categorizer.ts` `batchMaxTokens`/`categorizeBatch` |
 | L-2 | LOW | Robustness | ✅ **fixed (Phase 2)** — `categorizeBatch` accumulated model output **unbounded**; the streamed reply is now bounded by a char cap (`batchMaxTokens * 8`) and the batch is dropped past it | `categorizer.ts` `streamBatchReply` |
 | C-3 | LOW | Correctness | ✅ **fixed (Phase 3)** — `assessCompleteness` now sums the `opening + Σ == closing` tie in INTEGER CENTS (`Math.round(amount*100)`), an exact compare; float drift can no longer flip a tying statement to `contradicted`. Read-time only (no version bump) | `tools/bank-statement.ts` `assessCompleteness`, `money.ts` `MONEY_EPS` |
@@ -546,7 +546,7 @@ tests, and the docs to touch.
 | 5 | Tool-run document targeting (multi-doc) ✅ **fixed (Phase 5)** | U-1 | P2 | yes |
 | 6 | Make auto-categorize explicit ✅ **fixed (Phase 6)** | U-2 | P2 | yes (DECISION) |
 | 7 | Suggestion discoverability ✅ **fixed (Phase 7)** | U-3 | P2 | yes |
-| 8 | Zip importer DoS hardening | S-1, S-2 | P2 | yes |
+| 8 | Zip importer DoS hardening ✅ **fixed (Phase 8)** | S-1, S-2 | P2 | yes |
 | 9 | Cross-lane write safety | PC-1 | P3 | yes |
 | 10 | Cleanup & contract parity | X-1, X-2, A-1 test | P3 | yes |
 | 11 | Test backfill & residuals | T-1, R-1, R-2 | P3 | tests/docs |
@@ -914,7 +914,38 @@ tapping selects the skill; nothing auto-applies; `suggestSkills` still logs noth
 
 ---
 
-### Phase 8 — Zip importer DoS hardening (S-1, S-2)
+### Phase 8 — Zip importer DoS hardening (S-1, S-2) ✅ **fixed (Phase 8)**
+
+**Error-code choice (implementer's pick, recorded like Phases 2/5/6/7).** S-1 **reuses** the existing
+`fileTooLarge` structural reason (an over-cap compressed slice is, honestly, a file too large). S-2 adds
+a **new content-free `duplicatePath` code** (the recommended precise-diagnostic option) with its three
+coupled edits — `SKILL_IMPORT_ERRORS.duplicatePath` in `installer.ts`, the `IMPORT_ERROR_KEY` reverse-map
+entry in `SkillsTab.tsx`, and the EN+DE `skills.import.error.duplicatePath` strings (i18n parity is
+compile-enforced; the dev machine boots de-AT so the German renders live). No schema change; the importer
+gained **no new DB/FS/net capability** — both are bounds checks on data already in hand. Content-class
+boundary held: both reasons are fixed structural strings that never echo a member name/path (the
+`skills-ipc.test.ts` sentinel-grep stays green).
+
+**As built.**
+- **S-1 — inflate-input bound.** A guard at the **top of `inflateEntry`** (before `entryDataRange`/the
+  `subarray`) rejects any member whose central-directory `compressedSize > maxFileBytes`, covering BOTH
+  the STORE and DEFLATE paths, so the synchronous `inflateRawSync` input is bounded — not only its
+  `maxOutputLength` output. `maxOutputLength` remains the authoritative backstop against a lying *declared*
+  uncompressed size.
+- **S-2 — stripped-path re-validation + collision reject.** In `stageZip`'s materialize loop the stripped
+  path is re-run through `safeRelPath` (belt-and-braces — a single-level strip can only shrink a path, so
+  it never bites a valid package) and tracked in a `Set<string>`; a second member resolving to a seen
+  `relPath` throws `duplicatePath` before any write.
+- **EOCD-first-match residual.** Recorded as an **accepted low residual** in `security-model.md` (every
+  enumerated member is still fully validated, so the parser-differential is hardening, not an escape); the
+  `cdOffset+size` self-consistency check was **deliberately not built**.
+- **Tests (+3, `tests/integration/skills-installer.test.ts`).** (a) S-1: an incompressible 4 KiB DEFLATE
+  member under a 1 KiB per-file cap is rejected with `fileTooLarge`, and a `node:zlib` `vi.mock` spy proves
+  `inflateRawSync` is **never reached** — preceded by a **positive control** (a normal compressed import
+  *does* hit the spy) so the negative assertion can't false-pass. (b) S-2: a hand-built raw zip with two
+  `pkg/SKILL.md` central-directory entries (JSZip can't emit duplicate names) is rejected with
+  `duplicatePath` (preview `errorCodes == ['duplicatePath']` + import throw), nothing persisted. (c) a
+  well-formed multi-file package still imports unchanged. Suite **2267 passed / 38 skipped (+3)**.
 
 **Goal.** Two low-effort hardening fixes to the net-new zip reader (main-thread DoS + parser-differential).
 

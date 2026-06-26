@@ -6,6 +6,47 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 8 (Zip importer DoS hardening; S-1, S-2) — MAIN-SIDE
+SECURITY/PARSING PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2267 passed / 38 skipped (+3)**,
+typecheck clean, build OK. Two low-effort hardening fixes to the net-new `.skill.zip` reader
+(`services/skills/installer.ts`); **no renderer surface** beyond one new content-free error string.
+**Load-bearing posture:** the importer gained **NO new DB/FS/net capability** — both fixes are bounds
+checks on data already in hand (no schema change); and the import error path stays a **content-free
+structural reason only** — neither new reason interpolates a member name/path/body, so the
+`skills-ipc.test.ts` privacy sentinel-grep stays green. **As built:**
+- **S-1 (MEDIUM, DoS only) — bound the inflate INPUT.** The importer used to slice + synchronously
+  `inflateRawSync` a member sized by the central-directory `compressedSize` (≤ the ~8 MiB total cap; the
+  cheap pre-check only sums the *spoofable* `uncompressedSize`), so a crafted member could stall the main
+  thread on import. A guard at the **top of `inflateEntry`** (before `entryDataRange`/`subarray`) now
+  rejects any member whose `compressedSize > maxFileBytes` — for BOTH store and deflate — **reusing
+  `fileTooLarge`**. `maxOutputLength` stays the authoritative backstop against a lying *declared* size.
+- **S-2 (LOW→MED) — re-validate the stripped path + reject collisions.** `stripCommonPrefix`'s output
+  wasn't re-validated, and two distinct central-directory members (e.g. a duplicate name) could collapse
+  to the same stripped `relPath`, where `writeStaged` is last-writer-wins → a later duplicate could
+  silently shadow a preview-validated `SKILL.md`. `stageZip` now re-runs `safeRelPath` on the stripped
+  path (belt-and-braces) and tracks a `Set<string>`; a colliding `relPath` throws a **new content-free
+  `SKILL_IMPORT_ERRORS.duplicatePath`** code (the precise-diagnostic pick — recorded in the audit prose).
+  Its three coupled edits landed: the `SKILL_IMPORT_ERRORS` entry, the `SkillsTab.tsx` `IMPORT_ERROR_KEY`
+  reverse-map sibling, and the EN+DE `skills.import.error.duplicatePath` strings (parity compile-enforced;
+  dev machine boots de-AT so the German renders live).
+- **EOCD-first-match (S-3-adjacent).** Recorded as an **accepted low residual** in `security-model.md`
+  (every enumerated member is still fully validated → hardening, not an escape); the `cdOffset+size`
+  self-consistency check was deliberately **not** built.
+- **Tests (+3, `tests/integration/skills-installer.test.ts`).** S-1: an incompressible 4 KiB DEFLATE
+  member under a 1 KiB cap is rejected with `fileTooLarge` and a `node:zlib` `vi.mock` spy proves
+  `inflateRawSync` is never reached — guarded by a **positive control** (a normal compressed import *does*
+  hit the spy; spying on a default/namespace import does NOT intercept the installer's `import * as zlib`,
+  hence `vi.mock`). S-2: a hand-built raw zip with two `pkg/SKILL.md` entries (JSZip can't emit duplicate
+  names — added a `writeRawZip` fixture builder) is rejected with `duplicatePath`. Plus a well-formed
+  multi-file package still imports. Privacy sentinel-grep + all existing import tests stay green.
+- **Docs:** `architecture.md` §4 (the two DoS bounds folded into the staging design record);
+  `security-model.md` "Skill-import defences" (the inflate-input bound + duplicate-collision defences +
+  the EOCD-first-match accepted residual); audit doc §3 S-1/S-2 rows + the Phase-8 index row flipped to
+  ✅ fixed (Phase 8), the error-code choice recorded in the Phase-8 prose.
+- **Eyeball:** none — a main-side parsing/security phase with no meaningful UI surface (R-2 unaffected).
+  **Next:** Phase 9 (PC-1 — cross-lane write safety: a chat re-extract `replaceExisting` DELETE racing a
+  `SkillRunController` button run on the same statement; `run.ts` / `run-controller.ts`)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 7 (Suggestion discoverability; U-3) — RENDERER /
 COMPOSER-FOOTER UX PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2264 passed / 38 skipped
 (+4)**, typecheck clean, build OK. **AFFORDANCE DECISION = inline "Suggested: <skill>" label on the

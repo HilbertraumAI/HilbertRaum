@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   mkdtempSync,
   mkdirSync,
@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import JSZip from 'jszip'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
@@ -22,6 +23,19 @@ import {
 } from '../../src/main/services/skills/installer'
 import { getSkill, getSkillsByDeclaredId, reconcileSkills, skillInstallId } from '../../src/main/services/skills/registry'
 import { DEFAULT_SKILL_LIMITS, type SkillLimits } from '../../src/main/services/skills/limits'
+
+// Phase 8 / S-1: spy on `zlib.inflateRawSync` to prove the importer rejects an over-cap member
+// BEFORE inflating it. `vi.spyOn` can't redefine a frozen ESM namespace, and spying on a default
+// import doesn't intercept the installer's `import * as zlib` binding — so mock the module record
+// itself (call-through preserves real inflate behaviour for every other test in this file).
+const { inflateSpy } = vi.hoisted(() => ({ inflateSpy: vi.fn() }))
+vi.mock('node:zlib', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:zlib')>()
+  inflateSpy.mockImplementation((...args: Parameters<typeof actual.inflateRawSync>) =>
+    actual.inflateRawSync(...args)
+  )
+  return { ...actual, inflateRawSync: inflateSpy as unknown as typeof actual.inflateRawSync }
+})
 
 // Skills plan Phase S4 — the import/export/install/delete lifecycle + the NEW safe member-by-member
 // extractor (§22-A2). A view-imported `.skill.zip` is attacker-supplied and is now written STRAIGHT
@@ -87,6 +101,56 @@ async function writeZip(members: ZipMember[], opts: { compress?: boolean } = {})
 /** A minimal valid single-file `.skill.zip`. */
 async function validZip(fields: Parameters<typeof skillMd>[0] = {}): Promise<string> {
   return writeZip([{ name: 'SKILL.md', content: skillMd(fields) }])
+}
+
+const RAW_SIG_LFH = 0x04034b50
+const RAW_SIG_CDH = 0x02014b50
+const RAW_SIG_EOCD = 0x06054b50
+
+/**
+ * Hand-build a STORE-method `.skill.zip` on disk from explicit members. Unlike JSZip (which keys
+ * files by name and so cannot emit two entries that share a name), this honours the member list
+ * verbatim — letting a fixture craft the duplicate central-directory entries S-2 must reject.
+ */
+function writeRawZip(members: Array<{ name: string; data: Buffer }>): string {
+  const locals: Buffer[] = []
+  const centrals: Buffer[] = []
+  let offset = 0
+  for (const m of members) {
+    const nameBuf = Buffer.from(m.name, 'utf8')
+    const lfh = Buffer.alloc(30)
+    lfh.writeUInt32LE(RAW_SIG_LFH, 0)
+    lfh.writeUInt16LE(20, 4) // version needed
+    lfh.writeUInt16LE(0, 8) // method 0 = store
+    lfh.writeUInt32LE(m.data.length, 18) // compressed
+    lfh.writeUInt32LE(m.data.length, 22) // uncompressed
+    lfh.writeUInt16LE(nameBuf.length, 26)
+    locals.push(lfh, nameBuf, m.data)
+
+    const cdh = Buffer.alloc(46)
+    cdh.writeUInt32LE(RAW_SIG_CDH, 0)
+    cdh.writeUInt16LE(20, 4) // version made by
+    cdh.writeUInt16LE(20, 6) // version needed
+    cdh.writeUInt16LE(0, 10) // method 0 = store
+    cdh.writeUInt32LE(m.data.length, 20) // compressed
+    cdh.writeUInt32LE(m.data.length, 24) // uncompressed
+    cdh.writeUInt16LE(nameBuf.length, 28)
+    cdh.writeUInt32LE(0, 38) // external attrs (no symlink bits)
+    cdh.writeUInt32LE(offset, 42) // local header offset
+    centrals.push(cdh, nameBuf)
+    offset += lfh.length + nameBuf.length + m.data.length
+  }
+  const centralBuf = Buffer.concat(centrals)
+  const localBuf = Buffer.concat(locals)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(RAW_SIG_EOCD, 0)
+  eocd.writeUInt16LE(members.length, 8)
+  eocd.writeUInt16LE(members.length, 10)
+  eocd.writeUInt32LE(centralBuf.length, 12)
+  eocd.writeUInt32LE(localBuf.length, 16) // cd offset = end of locals
+  const path = join(tempDir(), 'raw.skill.zip')
+  writeFileSync(path, Buffer.concat([localBuf, centralBuf, eocd]))
+  return path
 }
 
 // ---- the extractor matrix (§22-A2 / §9.2) -------------------------------------------
@@ -202,6 +266,69 @@ describe('safe extractor — rejects (nothing persisted, friendly + structural)'
     expect(() => importSkill(db, zip, deps)).toThrow()
     const entries = existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir) : []
     expect(entries).toEqual([]) // no <id>/ and no leftover .skill-import-* staging dir
+  })
+})
+
+// ---- Phase 8: zip importer DoS hardening (audit S-1 / S-2) ---------------------------
+
+describe('safe extractor — DoS hardening (S-1 input bound, S-2 collision)', () => {
+  it('S-1: rejects a member whose compressedSize exceeds maxFileBytes BEFORE inflating', async () => {
+    const limits: SkillLimits = { ...DEFAULT_SKILL_LIMITS, maxFileBytes: 1024 }
+    inflateSpy.mockClear()
+
+    // POSITIVE CONTROL — a normal DEFLATE member really runs through inflateRawSync, proving the
+    // spy is wired into the installer's call site (so the negative assertion below is meaningful,
+    // not a false pass from a spy that never intercepts the installer's `import * as zlib`).
+    const ctrl = await writeZip([{ name: 'SKILL.md', content: skillMd({ id: 'ctrl' }) }], { compress: true })
+    importSkill(freshDb(), ctrl, makeDeps())
+    expect(inflateSpy).toHaveBeenCalled()
+    inflateSpy.mockClear()
+
+    // S-1 — an incompressible 4 KiB member: its DEFLATE compressedSize (~4 KiB) exceeds the 1 KiB
+    // per-file cap, so the new compressedSize guard must reject it without ever running the
+    // synchronous inflate (the main-thread stall). Random bytes never deflate below their length,
+    // so the compressedSize > cap relationship holds regardless of the exact ratio.
+    const deps = makeDeps()
+    const incompressible = randomBytes(4096)
+    const zip = await writeZip([{ name: 'SKILL.md', content: incompressible }], { compress: true })
+    expect(() => importSkill(freshDb(), zip, { ...deps, limits })).toThrow(SKILL_IMPORT_ERRORS.fileTooLarge)
+    // The discriminator: WITHOUT the guard the slice would be sliced + inflated here (the stall);
+    // WITH it the input is bounded before inflate, so inflateRawSync is never reached.
+    expect(inflateSpy).not.toHaveBeenCalled()
+    // Nothing persisted on a rejected import.
+    expect(existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir) : []).toEqual([])
+  })
+
+  it('S-2: rejects two members that collapse to the same stripped relPath', () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    // Two distinct central-directory entries that share one common top-level folder, so the prefix
+    // strip collapses BOTH to `SKILL.md` — last-writer-wins would silently shadow the first. The
+    // collision is caught structurally before anything is written.
+    const body = Buffer.from(skillMd({ id: 'collide' }))
+    const zip = writeRawZip([
+      { name: 'pkg/SKILL.md', data: body },
+      { name: 'pkg/SKILL.md', data: body }
+    ])
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errors).toContain(SKILL_IMPORT_ERRORS.duplicatePath)
+    expect(preview.errorCodes).toEqual(['duplicatePath'])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.duplicatePath)
+    expect(existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir) : []).toEqual([])
+  })
+
+  it('a legitimate well-formed package still imports unchanged after the new bounds', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const zip = await writeZip([
+      { name: 'SKILL.md', content: skillMd({ id: 'still-ok' }) },
+      { name: 'examples/one.md', content: 'a worked example' }
+    ])
+    const info = importSkill(db, zip, deps).info
+    expect(info.id).toBe('still-ok')
+    expect(existsSync(join(deps.userSkillsDir, 'still-ok', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(deps.userSkillsDir, 'still-ok', 'examples', 'one.md'))).toBe(true)
   })
 })
 

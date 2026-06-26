@@ -41,6 +41,7 @@ const IMPORT_ERROR_KEY: Record<string, MessageKey> = {
   tooManyFiles: 'skills.import.error.tooManyFiles',
   tooLarge: 'skills.import.error.tooLarge',
   fileTooLarge: 'skills.import.error.fileTooLarge',
+  duplicatePath: 'skills.import.error.duplicatePath',
   badExtension: 'skills.import.error.badExtension',
   nestedArchive: 'skills.import.error.nestedArchive',
   noSkillMd: 'skills.import.error.noSkillMd',

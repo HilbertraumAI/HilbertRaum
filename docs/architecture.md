@@ -1842,7 +1842,14 @@ folder — for both sources (no decrypt/transient/shred).
 `services/skills/installer.ts` owns the lifecycle behind IPC. Import **validates** a `.skill.zip` or
 folder with a net-new dependency-free **member-by-member safe extractor** (built-in `node:zlib` + a
 central-directory parser; full defence matrix in [`security-model.md`](security-model.md)), stages the
-whole tree, then **places it as plain files at `user-skills/<id>/`** (folder name == manifest id) and
+whole tree, then **places it as plain files at `user-skills/<id>/`** (folder name == manifest id).
+Two **DoS-hardening bounds** sit in the staging loop (audit S-1/S-2, Phase 8):
+`inflateEntry` rejects a member whose **central-directory `compressedSize` exceeds the per-file cap**
+*before* slicing/inflating — bounding the synchronous inflate **input**, not only its `maxOutputLength`
+output (a legitimate text member never compresses past the cap); and after the common-prefix strip the
+loop **re-asserts `safeRelPath` on the stripped path** and **rejects two members that collapse to the
+same `relPath`** (`SKILL_IMPORT_ERRORS.duplicatePath`) so a later duplicate can't last-writer-wins
+shadow a preview-validated `SKILL.md`. It then
 reconciles the row to **enabled-with-warning** (DS7) — unless an enabled app skill of the same id is
 already effective, in which case the import **coexists disabled** (trust-first precedence, DS12). A
 lower version is refused unless developer mode (DS15). **Delete** is an app-level **ref-clear sweep**:

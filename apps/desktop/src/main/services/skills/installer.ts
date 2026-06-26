@@ -73,6 +73,7 @@ export const SKILL_IMPORT_ERRORS = {
   tooManyFiles: 'The package contains more files than allowed.',
   tooLarge: 'The package is larger than the allowed size.',
   fileTooLarge: 'A file in the package is larger than the allowed size.',
+  duplicatePath: 'The package contains two files that resolve to the same path.',
   badExtension: 'The package contains a file type that is not allowed.',
   nestedArchive: 'The package contains an embedded archive, which is not allowed.',
   noSkillMd: 'The package does not contain a SKILL.md file.',
@@ -224,6 +225,14 @@ function entryDataRange(buf: Buffer, e: ZipEntry): { start: number; end: number 
  * are the only methods a skill package legitimately uses; anything else is refused.
  */
 function inflateEntry(buf: Buffer, e: ZipEntry, maxFileBytes: number): Buffer {
+  // S-1 (DoS): bound the synchronous inflate INPUT, not only its output. The central-directory
+  // `compressedSize` can be as large as the ~8 MiB total cap, while the cheap declared-size
+  // pre-check only sums the spoofable `uncompressedSize` (a crafted member sets it to 0), so a
+  // member could slice + `inflateRawSync` a near-cap buffer synchronously on the main process and
+  // stall it. A legitimate text member never compresses to > maxFileBytes, so reject here — BEFORE
+  // building the slice or calling inflate — for BOTH store and deflate. (`maxOutputLength` below
+  // remains the authoritative zip-bomb backstop against a lying *declared* size.)
+  if (e.compressedSize > maxFileBytes) throw new SkillImportError(SKILL_IMPORT_ERRORS.fileTooLarge)
   const { start, end } = entryDataRange(buf, e)
   const slice = buf.subarray(start, end)
   if (e.method === 0) {
@@ -325,6 +334,12 @@ function stageZip(zipPath: string, limits: SkillLimits): StagedFile[] {
   const strip = stripCommonPrefix(rels)
 
   const staged: StagedFile[] = []
+  // S-2: `stripCommonPrefix`'s output is not otherwise re-validated, and two distinct members can
+  // collapse to the same stripped relPath (e.g. a duplicate central-directory name) — `writeStaged`
+  // is last-writer-wins, so a later duplicate could silently shadow a preview-validated SKILL.md.
+  // Re-assert `safeRelPath` on the STRIPPED path (belt-and-braces) and reject a collision with a
+  // fixed structural reason (`relPath` carries no echoed content — §22-M1).
+  const seen = new Set<string>()
   let actualTotal = 0
   for (const e of fileEntries) {
     const rel0 = safeRelPath(e.name, limits)
@@ -333,8 +348,10 @@ function stageZip(zipPath: string, limits: SkillLimits): StagedFile[] {
     actualTotal += data.length
     if (actualTotal > limits.maxTotalBytes) throw new SkillImportError(SKILL_IMPORT_ERRORS.tooLarge)
     if (looksLikeArchive(data)) throw new SkillImportError(SKILL_IMPORT_ERRORS.nestedArchive)
-    const rel = strip(rel0)
+    const rel = safeRelPath(strip(rel0), limits)
     if (rel === '') continue
+    if (seen.has(rel)) throw new SkillImportError(SKILL_IMPORT_ERRORS.duplicatePath)
+    seen.add(rel)
     staged.push({ relPath: rel, data })
   }
   return staged
