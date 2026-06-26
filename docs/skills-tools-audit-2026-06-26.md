@@ -178,8 +178,8 @@ persona section below.
 |---|----------|------|---------|-------|
 | D-1 | MEDIUM | Docs | ✅ **fixed (Phase 1)** — Docs claimed **"nine" bundled app skills**; only **eight** exist on disk | architecture.md DS17, BUILD_STATE, drive-layout.md, README |
 | D-2 | MEDIUM | Docs/Security | ✅ **fixed (Phase 1)** — Docs still described the **deleted `globToRegExp` ">10 wildcards" ReDoS cap**; code now uses a linear `globMatches` | architecture.md §12/§13, security-model.md, BUILD_STATE |
-| C-1 | MEDIUM | Correctness | `categorizeRow` uses raw `desc.includes()` (so `fee ⊂ coffee` mis-files as *Fees*); the LLM path fixed this with `wordIncludes` but the deterministic path did not | `tools/bank-statement.ts:493` vs `categorizer.ts:136` |
-| C-2 | MEDIUM | Consistency | **Two categorize engines** (deterministic rules vs LLM doctask) give different results for the *same* document depending on entry point (chat breakdown vs button vs auto-offer) | `analysis/bank-statement.ts:475`, `tool-runs.ts:259`, `categorizer.ts` |
+| C-1 | MEDIUM | Correctness | ✅ **fixed (Phase 2)** — `categorizeRow` used raw `desc.includes()` (so `fee ⊂ coffee` mis-files as *Fees*); now shares the word-boundary `wordIncludes` (moved to `tools/money.ts`) with the LLM `prefilterCategory`, so both paths agree | `tools/bank-statement.ts` `categorizeRow`, `tools/money.ts` `wordIncludes` |
+| C-2 | MEDIUM | Consistency | ✅ **fixed (Phase 2, option A)** — **Two categorize engines** gave divergent results by entry point; the deterministic chat breakdown now **labels itself rule-based** (`categoryRuleBased`, points at the Categorize button), preserving the 0-model-call chat contract | `analysis/bank-statement.ts` `buildBankAnswer`, en/de `categoryRuleBased` |
 | P-1 | MEDIUM | Performance | Analysis handlers **run each read-only tool through the seam and then recompute the same pure function**; rows are re-loaded from DB 3–4× per question | `analysis/bank-statement.ts:454-499`, `analysis/invoice.ts:282-290`, `run.ts` |
 | P-2 | MEDIUM | Performance | `runCashflowSummary` **persists nothing** — in the analysis path its run row + audit + row-reload are pure overhead (the handler recomputes `summarizeCashflow`) | `run.ts:630-651`, `analysis/bank-statement.ts:454` |
 | U-1 | MEDIUM | UX/Correctness | Multi-document scope: tools **silently act on `docIds[0]`**, `documentCount` is **hardcoded to 1**, and there is **no document picker** in the run bar | `registerSkillsIpc.ts:314-328` |
@@ -189,8 +189,8 @@ persona section below.
 | U-3 | LOW→MED | UX | The one-tap **suggestion is only computed/shown *inside* the picker on open** — a user who never opens it never sees the nudge | `ChatScreen.tsx:625`, `SkillPicker.tsx:55` |
 | A-1 | LOW→MED | Architecture | For tool skills the **SKILL.md body is inert on the primary answer path** — the deterministic answer format is reimplemented in TS (`buildBankAnswer`/`buildInvoiceAnswer`); editing the body only affects the off-topic relevance fallback | `analysis/bank-statement.ts:294`, `analysis/invoice.ts:201` |
 | S-2 | LOW→MED | Security | Zip stager: two members can **strip to the same `relPath`** (last-writer-wins overwrite); the stripped path is not re-validated | `installer.ts:279-339` |
-| L-1 | LOW | LLM | Categorizer **drops a whole 20-row batch** to `Uncategorized` on any parse failure; a long-description batch can blow `batchMaxTokens`, truncate the JSON, and drop silently | `categorizer.ts:75-77,168-209` |
-| L-2 | LOW | Robustness | `categorizeBatch` accumulates model output **unbounded** into `text` before parsing | `categorizer.ts:178-189` |
+| L-1 | LOW | LLM | ✅ **fixed (Phase 2)** — Categorizer dropped a whole 20-row batch on any parse failure; now `batchMaxTokens` is length-aware AND an unparseable reply is retried once before the (honest) drop | `categorizer.ts` `batchMaxTokens`/`categorizeBatch` |
+| L-2 | LOW | Robustness | ✅ **fixed (Phase 2)** — `categorizeBatch` accumulated model output **unbounded**; the streamed reply is now bounded by a char cap (`batchMaxTokens * 8`) and the batch is dropped past it | `categorizer.ts` `streamBatchReply` |
 | C-3 | LOW | Correctness | Completeness gate sums many floats then compares against `MONEY_EPS=0.005`; float drift over thousands of rows could flip a genuinely-complete statement to `contradicted` | `tools/bank-statement.ts:241`, `money.ts:45` |
 | C-4 | LOW | Correctness | `KONTOSTAND_PER` is in **both** opening & closing label lists; a statement with a single such line reads opening==closing → forces `contradicted`/refusal when rows ≠ 0 | `tools/bank-statement.ts:136-160` |
 | X-1 | LOW | Consistency | **Three near-duplicate scope→docs queries** with subtly different predicates (`resolveInScopeDocumentIds` omits the `EXISTS chunks` check the analysis handlers require) | `tool-runs.ts:69`, `scope-signals.ts:11`, `analysis/*.ts inScopeDocuments` |
@@ -540,7 +540,7 @@ tests, and the docs to touch.
 | Phase | Title | Findings | Risk | Code? |
 |-------|-------|----------|------|-------|
 | 1 | Documentation truth-up ✅ **fixed (Phase 1)** | D-1, D-2, §16 count, A-1 note | P1 | docs only |
-| 2 | Categorization correctness & consistency | C-1, C-2, L-1, L-2 | P1–P2 | yes |
+| 2 | Categorization correctness & consistency ✅ **fixed (Phase 2)** | C-1, C-2, L-1, L-2 | P1–P2 | yes |
 | 3 | Bank completeness-gate numerics | C-3, C-4 | P2 | yes (version bump) |
 | 4 | Analysis-handler performance | P-1, P-2 | P2 | yes |
 | 5 | Tool-run document targeting (multi-doc) | U-1 | P2 | yes |
@@ -631,6 +631,9 @@ Tests: `skills-categorizer.test.ts`, `skills-bank-statement-tool.test.ts`, `skil
      pulls a model call onto the chat-analysis path and crosses into the doctask lane (D26) — bigger blast
      radius; only do this if the user wants identical results regardless of entry point.
    - Implement the chosen option; record the decision in BUILD_STATE.
+   - **✅ DECIDED (Phase 2): option A.** Option B would pull a model call onto the chat path and cross into
+     the doctask lane — exactly the load-bearing 0-model-call invariant the §22 record protects ("this
+     handler stays 0-model-calls"). Implemented the `categoryRuleBased` honesty note instead.
 3. **L-1 — batch can truncate and silently drop 20 rows.** `batchMaxTokens(n)=64+n*24`
    ([`categorizer.ts:75`](../apps/desktop/src/main/services/skills/categorizer.ts#L75)); a verbose batch can
    overrun → JSON truncates → whole batch → `Uncategorized`. Lower-risk hardening: (a) shrink

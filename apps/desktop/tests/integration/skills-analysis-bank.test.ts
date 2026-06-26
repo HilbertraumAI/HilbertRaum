@@ -207,6 +207,9 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain('Income') // Salary → Income (built-in rule)
     // Deterministic rule pass only — NOT labelled model-assisted.
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.categoryAssisted'))
+    // …but it IS labelled a quick rule-based grouping that points at the Categorize button (audit C-2),
+    // so the chat breakdown and the (model-assisted) button result are not silently divergent.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryRuleBased'))
   })
 
   it('reads PERSISTED categories (Phase 33) and labels a model-assigned breakdown model-assisted', async () => {
@@ -238,6 +241,8 @@ describe('bank-statement analysis handler — run()', () => {
     )
     expect(res.answer).toContain('Groceries')
     expect(res.answer).toContain(tr('skills.bankAnalysis.categoryAssisted'))
+    // The model-assisted breakdown carries the assisted note, NOT the rule-based one (audit C-2).
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.categoryRuleBased'))
     // No duplicate statement was created (re-extraction is suppressed when one exists).
     const count = db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(id) as {
       n: number

@@ -493,6 +493,12 @@ export const en = {
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.categoryAssisted':
     '_Categories are model-assisted — a label may be off, but the totals above are unchanged._',
+  // Honesty note for the DETERMINISTIC breakdown (audit C-2): the chat path groups by a quick rule set
+  // (no model call) so the result is path-dependent — the "Categorize" button uses the richer
+  // model-assisted taxonomy (Groceries/Dining/…). Say so, so the two entry points are not silently
+  // divergent. Shown only when the breakdown was NOT model-assisted.
+  'skills.bankAnalysis.categoryRuleBased':
+    '_This is a quick rule-based grouping (no model used). For a richer, model-assisted breakdown, run the “Categorize” button._',
   // Localized DISPLAY labels for the fixed category set (Phase 33). The PERSISTED identifier stays the
   // canonical English name (the enum / model-assisted detection key on it); only the breakdown display
   // is localized. An unknown name (e.g. a future user category) falls back to its raw identifier.

@@ -4,7 +4,7 @@ import type {
   SkillTool,
   ToolResult
 } from '../../../../shared/types'
-import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate } from './money'
+import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate, wordIncludes } from './money'
 
 // The deterministic money/date/CSV parsing primitives are shared with the invoice tools (one parser
 // per locale rule, §8). Re-exported here so existing import sites (`tools/bank-statement`) and the
@@ -489,12 +489,17 @@ export const BUILTIN_CATEGORIES: readonly string[] = [
   ...new Set([...BUILTIN_CATEGORY_RULES.map((r) => r.category), 'Spending', UNCATEGORIZED])
 ]
 
-/** Assign one row a category name deterministically (pure). First matching rule wins; sign fallback. */
+/**
+ * Assign one row a category name deterministically (pure). First matching rule wins; sign fallback.
+ * Description rules match on WORD boundaries (shared `wordIncludes`, not a raw `includes`), so a
+ * coincidental substring no longer mis-files (`coffee`→Fees, `atmosphere`→Cash, `mühlohn`→Income) and
+ * this deterministic path AGREES with the LLM `prefilterCategory` on the same rules (audit C-1).
+ */
 export function categorizeRow(row: TransactionInput): string {
   const desc = row.description.toLowerCase()
   for (const rule of BUILTIN_CATEGORY_RULES) {
     if (rule.matchKind === 'description-substring') {
-      if (desc.includes(rule.pattern)) return rule.category
+      if (wordIncludes(desc, rule.pattern)) return rule.category
     } else if (rule.pattern === 'positive' && row.amount > 0) {
       return rule.category
     } else if (rule.pattern === 'negative' && row.amount < 0) {

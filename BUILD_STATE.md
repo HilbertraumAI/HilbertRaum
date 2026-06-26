@@ -6,6 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 2 (Categorization correctness & consistency; C-1 / C-2 / L-1 / L-2) —
+FIRST CODE-TOUCHING PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2237 passed / 38 skipped (+6)**, typecheck
+clean, build OK. Content-class boundary unchanged (audit stays `{skillId, toolName, documentCount}`; the tool gate gained
+NO new DB/FS/net capability; LLM prompts stay English; new user-facing copy is EN+DE). **As built:**
+- **C-1 — word-boundary deterministic categorizer.** `categorizeRow` (`tools/bank-statement.ts`) matched description rules
+  with a raw `desc.includes()`, so `coffee`→*Fees* (`fee`⊂`coffee`), `atmosphere`→*Cash* (`atm`), `mühlohn`→*Income*
+  (`lohn`). Moved the Unicode word-boundary tester `wordIncludes` into the shared **`tools/money.ts`** (both modules already
+  import it — no import cycle) and pointed BOTH `categorizeRow` and the LLM `prefilterCategory` at it, so the two paths now
+  agree on every description rule. The amount-sign rule + the Spending/Uncategorized sign fallback are unchanged. **No
+  `BANK_EXTRACTOR_VERSION` bump** — categories live in `bank_transactions.category_id` (re-derivable), NOT part of
+  `extractor_version`; wrongly-seeded rows self-correct on the next categorize run. Trade-off (intended, already true of the
+  pre-filter): a German COMPOUND that merely contains a keyword (`Kontoführungsgebühr`) no longer rule-matches deterministically
+  → it goes to the model.
+- **C-2 (DECISION = option A).** Two engines categorize the same statement by entry point: the chat breakdown runs the
+  **deterministic** rule pass (0 model calls), while the "Categorize" button + auto-offer use the **LLM** doctask's richer
+  taxonomy. **Chose option A** (keep the deterministic seed, label it honestly) over option B (route chat through the LLM
+  doctask) because option B pulls a model call onto the chat-analysis path and crosses into the doctask lane — breaking the
+  **load-bearing 0-model-call invariant** the §22 read-back record protects. Implemented: when `modelAssisted === false`,
+  `buildBankAnswer` appends the new `skills.bankAnalysis.categoryRuleBased` note ("a quick rule-based grouping … run the
+  Categorize button for a richer, model-assisted breakdown"), the mirror of the existing `categoryAssisted` note (EN + DE).
+  The two entry points are no longer silently divergent.
+- **L-1 — batch truncation hardening.** `batchMaxTokens` is now **length-aware** (per-row description-length allowance,
+  bounded at the 160-char prompt truncation) so a verbose batch is less likely to truncate; and an **unparseable** reply
+  (truncated / prose) is **retried once** before the whole batch drops to `Uncategorized` (the honest final fallback,
+  unchanged). An off-list/out-of-range parsed reply is NOT retried (a deliberate drop, not a fault).
+- **L-2 — bounded output.** `categorizeBatch` streamed `text += token` unbounded; now `streamBatchReply` caps the reply at
+  `batchMaxTokens * 8` chars and drops the batch past it (no retry on a runaway), so a looping local runtime can't grow memory.
+- **Tests (+6).** `skills-bank-statement-tool.test.ts`: `categorizeRow` word boundaries (`coffee`≠Fees, compound
+  `Kontoführungsgebühr`→Spending), DE keyword as its own word still→Fees. `skills-categorizer.test.ts`: `categorizeRow`
+  agrees with `prefilterCategory` on coincidental substrings; L-1 truncation-retry-then-succeed + retry-once-then-drop; L-2
+  char-cap drop (not retried). `skills-analysis-bank.test.ts`: the rule-based note present when `modelAssisted` is false,
+  ABSENT when model-assisted. **Docs:** `architecture.md` §8 (shared `wordIncludes`), §19 (rule-based breakdown label), §22
+  (C-1 both-paths-agree + L-1/L-2 batch robustness + C-2 framing + Tests line); audit doc §3 C-1/C-2/L-1/L-2 rows + the
+  Phase-2 index row flipped to ✅ fixed (Phase 2), the C-2 DECISION recorded as option A. **Next:** Phase 3 (bank
+  completeness-gate numerics C-3/C-4 — version bump to 2)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 1 (Documentation truth-up; D-1 / D-2 / §16 / A-1) — DOCS ONLY, no source change
 (branch `skills-tools-audit-2026-06-26`).** First remediation phase off the multi-persona Skills & Tools audit
 (`docs/skills-tools-audit-2026-06-26.md`, §13 plan). Made the design docs match the shipped code; `npm test` unchanged at

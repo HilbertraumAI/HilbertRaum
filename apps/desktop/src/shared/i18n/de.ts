@@ -518,6 +518,8 @@ export const de: Record<keyof typeof en, string> = {
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.categoryAssisted':
     '_Die Kategorien sind modellgestützt — eine Zuordnung kann falsch sein, die Summen oben bleiben davon unberührt._',
+  'skills.bankAnalysis.categoryRuleBased':
+    '_Dies ist eine schnelle regelbasierte Gruppierung (ohne Modell). Für eine reichhaltigere, modellgestützte Aufschlüsselung nutzen Sie die Schaltfläche „Kategorisieren“._',
   // Lokalisierte ANZEIGE-Labels für die feste Kategorienmenge (Phase 33). Der GESPEICHERTE Bezeichner
   // bleibt der kanonische englische Name (Enum / Modell-gestützt-Erkennung hängen daran); nur die
   // Anzeige der Aufschlüsselung wird übersetzt. Ein unbekannter Name fällt auf den Bezeichner zurück.

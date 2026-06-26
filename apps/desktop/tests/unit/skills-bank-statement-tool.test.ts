@@ -345,13 +345,26 @@ describe('validate_statement_balances (S11c)', () => {
 describe('categorize_transactions (S11c)', () => {
   it('categorizeRow applies deterministic rules (EN + DE keywords), sign fallback', () => {
     expect(categorizeRow(tx({ description: 'Monthly account fee', amount: -3 }))).toBe('Fees')
-    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Monatliche Gebühr Konto', amount: -3 }))).toBe('Fees') // DE keyword as its own word
     expect(categorizeRow(tx({ description: 'Salary March', amount: 2500 }))).toBe('Income')
     expect(categorizeRow(tx({ description: 'SEPA Überweisung', amount: -100 }))).toBe('Transfer')
     expect(categorizeRow(tx({ description: 'ATM withdrawal', amount: -50 }))).toBe('Cash')
     expect(categorizeRow(tx({ description: 'Unknown shop', amount: -12 }))).toBe('Spending')
     expect(categorizeRow(tx({ description: 'Mystery credit', amount: 7 }))).toBe('Income') // positive ⇒ Income
     expect(categorizeRow(tx({ description: 'Zero', amount: 0 }))).toBe(UNCATEGORIZED)
+  })
+
+  it('categorizeRow matches description rules on WORD boundaries, not raw substrings (audit C-1)', () => {
+    // A coincidental substring no longer mis-files: 'fee'⊂'coffee', 'atm'⊂'atmosphere', 'lohn'⊂'mühlohn'.
+    expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).not.toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).toBe('Spending') // sign fallback
+    expect(categorizeRow(tx({ description: 'Atmosphere Bar', amount: -12 }))).not.toBe('Cash')
+    expect(categorizeRow(tx({ description: 'Baeckerei Muehlohn', amount: -3.1 }))).not.toBe('Income')
+    // A COMPOUND that merely contains a keyword no longer matches — so it now agrees with the LLM
+    // prefilter (which sends such a row to the model): 'Kontoführungsgebühr' has no standalone 'gebühr'.
+    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Spending')
+    // The keyword as its OWN word still matches.
+    expect(categorizeRow(tx({ description: 'Coffee and a fee', amount: -3.5 }))).toBe('Fees')
   })
 
   it('categorizeRows returns one assignment per row, in order', () => {

@@ -1941,7 +1941,10 @@ trailing quantity + trailing unit-price/line-total money tokens, and anything th
 parsed is **dropped** (header fields are individually optional, never guessed). The deterministic money/date
 primitives (`parseAmount`/`parseDate`/`detectCurrency`) and the CSV formula-injection neutralization
 (`csvField`) are now **shared** by both domains in `services/skills/tools/money.ts` — one parser per locale
-rule, one audited export boundary. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
+rule, one audited export boundary. The Unicode **word-boundary** matcher `wordIncludes` lives here too
+(audit C-1, Phase 2): both the deterministic `categorizeRow` and the LLM `prefilterCategory` now call it,
+so a coincidental substring (`coffee`⊃`fee`, `atmosphere`⊃`atm`, `mühlohn`⊃`lohn`) can no longer mis-file
+a row to *Fees*/*Cash*/*Income* — and the two categorization paths agree on every description rule. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
 `run.ts`'s `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, same no-partial-persist
 (BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
 (no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
@@ -2415,6 +2418,10 @@ therefore be kept in step (a SKILL.md-⇔-TS parity test is a tracked follow-up)
   `summarize_cashflow` + `validate_statement_balances` (+ `categorize_transactions` only when the
   question is category-shaped). Leads with the count, surfaces unreconciled rows before the totals,
   reports mixed currency as "no single total." Citations narrow to the transactions' `source_page`.
+  The category-shaped breakdown runs the **deterministic** rule pass here (0 model calls); since the
+  "Categorize" button uses the richer LLM taxonomy, the chat answer **labels** a rule-based breakdown as
+  such and points at the button (audit C-2 — see §22 "Consistent breakdown framing"), so the two entry
+  points are not silently divergent.
 - **`invoice`** (`analysis/invoice.ts`): `extract_invoice` → `validate_invoice_totals`. Surfaces any
   failed reconciliation check (line-items→net, net+tax→gross, tax-vs-rate) **before** the headline
   gross; prints only the figures the invoice states (a field that couldn't be parsed is left out).
@@ -2811,12 +2818,22 @@ figure verification is needed. The constraints that DO hold:
   llama-server `response_format:{type:'json_schema',strict:true}`). DE glosses ride in the prompt only.
 - **Drop-to-`Uncategorized`.** Any invalid / out-of-range / unparseable output drops to `Uncategorized`
   (a whole batch drops on a parse failure). Never an invented category. The mock runtime (which ignores
-  `responseSchema`) exercises exactly this path in CI.
+  `responseSchema`) exercises exactly this path in CI. **Batch robustness (audit L-1/L-2, Phase 2):** the
+  per-batch output-token budget `batchMaxTokens` is now **length-aware** (a per-row description-length
+  allowance) so a verbose batch is far less likely to truncate; an **unparseable** reply is **retried once**
+  before the batch drops (a transient truncation gets a second chance); and the streamed reply is bounded by
+  a generous char cap (`batchMaxTokens * 8`) so a **looping** local runtime that ignores `maxTokens` can't
+  grow `text` unbounded — past the cap the batch is dropped (not retried). Drop-to-`Uncategorized` remains the
+  honest final fallback.
 - **Model-OPTIONAL.** With no model loaded the module degrades to the deterministic rule pass
   (`categorizeRow`). Confident description-rule matches (Fees/Income/Transfer/Cash) are a PRE-FILTER that
-  skips the model; the rest go to the model in batches of `CATEGORIZER_BATCH_SIZE` (=20). The pre-filter
-  matches on Unicode WORD boundaries (review fix P10), so a coincidental substring (`fee`⊂`coffee`) never
-  makes a confident wrong skip-the-model match.
+  skips the model; the rest go to the model in batches of `CATEGORIZER_BATCH_SIZE` (=20). Both the PRE-FILTER
+  (`prefilterCategory`) **and** the deterministic `categorizeRow` match on the **same shared** Unicode
+  WORD-boundary tester (`wordIncludes`, moved into `tools/money.ts` at audit C-1, Phase 2 — review fix P10
+  originally hardened only the pre-filter), so a coincidental substring (`fee`⊂`coffee`, `atm`⊂`atmosphere`,
+  `lohn`⊂`mühlohn`) never makes a confident wrong match on EITHER path, and the two paths agree on every
+  description rule. (Trade-off: a German COMPOUND that merely contains a keyword — `Kontoführungsgebühr` —
+  no longer rule-matches deterministically; it goes to the model, exactly as the pre-filter already did.)
 - **Model-assisted label.** The breakdown is labelled model-assisted from the authoritative persisted flag
   `bank_statements.categorized_by_model` (=1 whenever the LLM was consulted), written by the categorizer
   doctask (review fix A8). The earlier "any persisted category OUTSIDE the deterministic rule set" heuristic
@@ -2854,6 +2871,15 @@ figure verification is needed. The constraints that DO hold:
   structural. The model call happens ONLY in the doctask. After a categorize run completes the renderer
   ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown appears as a
   normal chat answer (`ChatScreen` → the analysis handler, still 0 model calls).
+- **Consistent breakdown framing (audit C-2, Phase 2; DECISION = option A).** Two engines categorize the
+  same statement by entry point: the chat breakdown runs the **deterministic** rule pass when nothing is
+  categorized yet (0 model calls — keeping THIS path 0-model is the load-bearing invariant), while the
+  "Categorize" button + the auto-offer use the **LLM** doctask's richer taxonomy. Rather than pull a model
+  call onto the chat path (option B — bigger blast radius, crosses into the doctask lane), the chat answer
+  now **labels** the rule-based breakdown honestly: when `modelAssisted === false` it appends
+  `skills.bankAnalysis.categoryRuleBased` ("a quick rule-based grouping … run the Categorize button for a
+  richer, model-assisted breakdown"), the mirror of the model-assisted note. So the two entry points are no
+  longer SILENTLY divergent, and the 0-model-call chat contract is preserved.
 - **Stale-statement re-extraction (A9; Phase 31–33 follow-up).** Reuse is gated on FRESHNESS:
   `bank_statements.extractor_version` is stamped with `BANK_EXTRACTOR_VERSION` (in `tools/bank-statement.ts`)
   on every extraction; a statement whose stored version is NULL (legacy) or `<` current is STALE
@@ -2870,9 +2896,13 @@ figure verification is needed. The constraints that DO hold:
   whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input.**
 
 **Tests:** `skills-categorizer.test.ts` (taxonomy/enum, prefilter, model path, off-list/out-of-range
-drop, unparseable-batch drop, batching, no-runtime fallback); `doctasks-categorize.test.ts` (model path
+drop, unparseable-batch drop, batching, no-runtime fallback; **Phase 2:** `categorizeRow` agrees with the
+prefilter on coincidental substrings, L-1 truncation-retry-then-succeed + retry-once-then-drop, L-2
+char-cap drop); `skills-bank-statement-tool.test.ts` (**Phase 2:** `categorizeRow` word-boundary matching —
+`coffee`≠Fees, compound `Kontoführungsgebühr`→Spending); `doctasks-categorize.test.ts` (model path
 persists, deterministic fallback persists, auto-extract-then-categorize, A9 stale-statement re-extract +
 replace); `skills-analysis-bank.test.ts` (persisted model categories surface + the model-assisted label;
+**Phase 2:** the rule-based note when `modelAssisted` is false, absent when model-assisted;
 no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh statement reused).
 
 

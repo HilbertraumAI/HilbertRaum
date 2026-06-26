@@ -375,8 +375,13 @@ export function buildBankAnswer(
         )
       }
       // A model-assigned category is NOT a verified figure — note it so the breakdown is read honestly
-      // (the verified total + the D56 gate are untouched by a mislabel). Only when the LLM was involved.
-      if (modelAssisted) lines.push(tr('skills.bankAnalysis.categoryAssisted'))
+      // (the verified total + the D56 gate are untouched by a mislabel). When the LLM was NOT involved,
+      // say so instead: the chat breakdown is a quick RULE-based grouping and the "Categorize" button
+      // gives the richer model-assisted taxonomy — making the two entry points' divergence explicit
+      // rather than silent (audit C-2), without adding a model call to this 0-model-call path.
+      lines.push(
+        tr(modelAssisted ? 'skills.bankAnalysis.categoryAssisted' : 'skills.bankAnalysis.categoryRuleBased')
+      )
     }
     lines.push(
       '',

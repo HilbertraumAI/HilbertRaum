@@ -108,6 +108,26 @@ export function parseDate(token: string): string | null {
   return null
 }
 
+// ---- Word-bounded substring test (shared by both categorization paths) ----
+
+/**
+ * A WORD-bounded substring test (case-folded by the caller): the needle must be flanked by a
+ * non-letter/digit (or a string edge) on both sides. `\b` is ASCII-only and would mishandle the German
+ * keywords (`gebühr`, `überweisung`), so the boundary is checked against the Unicode letter/number
+ * classes. This stops a coincidental substring from a confident WRONG match (`fee` ⊂ `coffee`,
+ * `atm` ⊂ `atmos`, `lohn` ⊂ `mühlohn`). Shared so the DETERMINISTIC categorizer (`categorizeRow`) and
+ * the LLM PRE-FILTER (`prefilterCategory`) agree on every description rule (audit C-1).
+ */
+export function wordIncludes(haystack: string, needle: string): boolean {
+  const isLetterDigit = (c: string): boolean => c !== '' && /[\p{L}\p{N}]/u.test(c)
+  for (let i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
+    const before = i === 0 ? '' : haystack[i - 1]
+    const after = i + needle.length >= haystack.length ? '' : haystack[i + needle.length]
+    if (!isLetterDigit(before) && !isLetterDigit(after)) return true
+  }
+  return false
+}
+
 // ---- CSV escaping + formula-injection neutralization (the export-file boundary) ----
 
 // A field that can be executed as a FORMULA when the CSV is opened in Excel / LibreOffice / Google

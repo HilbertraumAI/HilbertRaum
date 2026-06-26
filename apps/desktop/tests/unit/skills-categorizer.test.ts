@@ -7,7 +7,7 @@ import {
   categorizeTransactions,
   prefilterCategory
 } from '../../src/main/services/skills/categorizer'
-import type { TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
+import { categorizeRow, type TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
 
 // Unit coverage for the bank-statement LLM categorizer (Phase 33). The MockRuntime IGNORES
 // `responseSchema` (exactly like the dev mock runtime), so the drop-to-Uncategorized parse + the
@@ -87,6 +87,26 @@ describe('categorizer — prefilter', () => {
   })
 })
 
+describe('categorizer — deterministic categorizeRow agrees with the prefilter (audit C-1)', () => {
+  it('a coincidental substring neither prefilters NOR deterministically categorizes by the keyword', () => {
+    // The two paths must agree: 'fee'⊂'coffee', 'atm'⊂'atmos', 'lohn'⊂'mühlohn' fire NEITHER rule.
+    const cases: Array<[string, string]> = [
+      ['Coffee Fellows', 'Fees'],
+      ['ATMOS Sportswear', 'Cash'],
+      ['Baeckerei Muehlohn', 'Income']
+    ]
+    for (const [desc, keywordCategory] of cases) {
+      expect(prefilterCategory(row(desc, -4.2))).toBeNull()
+      expect(categorizeRow(row(desc, -4.2))).not.toBe(keywordCategory)
+    }
+  })
+
+  it('a real keyword as its own word both prefilters AND categorizes the same way', () => {
+    expect(prefilterCategory(row('Monatliche Gebühr', -3.5))).toBe('Fees')
+    expect(categorizeRow(row('Monatliche Gebühr', -3.5))).toBe('Fees')
+  })
+})
+
 describe('categorizeTransactions — model path', () => {
   it('keeps prefilter matches and assigns the rest from the model', async () => {
     const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
@@ -133,6 +153,47 @@ describe('categorizeTransactions — model path', () => {
     const runtime = scriptedRuntime(() => 'Sure! Here are your categories: groceries and dining.')
     const rows = [row('A', -1), row('B', -2), row('C', -3)]
     const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
+    expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
+  })
+
+  it('retries a batch ONCE on an unparseable (truncated) reply, then succeeds (audit L-1)', async () => {
+    let n = 0
+    const runtime = scriptedRuntime((call) => {
+      n += 1
+      // First reply is TRUNCATED mid-JSON (a verbose batch overran the token budget) → JSON.parse throws.
+      if (n === 1) return '{"assignments":[{"index":0,"category":"Sho'
+      // The single retry returns a clean, complete reply.
+      return validReplyFor(() => 'Shopping')(call)
+    })
+    const rows = [row('Amazon', -20), row('Zalando', -50)]
+    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
+    expect(n).toBe(2) // initial attempt + exactly one retry
+    expect(assignments.every((a) => a.category === 'Shopping')).toBe(true)
+  })
+
+  it('does not retry past one attempt — a persistently unparseable reply drops to Uncategorized (audit L-1)', async () => {
+    let n = 0
+    const runtime = scriptedRuntime(() => {
+      n += 1
+      return 'still prose, not JSON'
+    })
+    const rows = [row('Amazon', -20), row('Zalando', -50)]
+    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
+    expect(n).toBe(2) // one initial + one retry, then give up
+    expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
+  })
+
+  it('drops a batch whose reply blows the output char cap, without retrying (audit L-2)', async () => {
+    // A looping runtime that ignores maxTokens streams far more than the char cap → the batch is bounded
+    // and dropped to Uncategorized rather than accumulating output unbounded into memory.
+    let n = 0
+    const runtime = scriptedRuntime(() => {
+      n += 1
+      return 'x '.repeat(100_000)
+    })
+    const rows = [row('Amazon', -20), row('Zalando', -50)]
+    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
+    expect(n).toBe(1) // a runaway reply is NOT retried (that would just repeat the cost)
     expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
   })
 
