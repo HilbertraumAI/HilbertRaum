@@ -2601,25 +2601,40 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
   out-of-column dates so a Valuta line can't be re-extracted by the date-leading `parseLine`.
 - **The BALANCE-LABEL GUARD (`isBalanceLabelLine`, `bank-statement.ts`) — the other half of the fix.**
   Raiffeisen prints opening/closing as `Kontostand per <date>` with the date IN the Datum column, so
-  geometry alone can't reject it. `'kontostand per'` is added to BOTH `OPENING_LABELS` and
-  `CLOSING_LABELS` (the existing "first opening / last closing" rule then reads opening `35.037,04`
-  from the period-start line and closing `30.647,07` from the period-end line; "Aktueller Kontostand"
-  deliberately excluded — it restates the closing at the top and would corrupt the opening), and
-  `extractTransactionRows` SKIPS any balance-label line so a summary is never counted as a transaction
-  (it is still read by `extractStatementBalances`). This stops the double-count that broke the tie.
+  geometry alone can't reject it. `'kontostand per'` belongs to `BALANCE_LABELS`, so
+  `extractTransactionRows` SKIPS any such line — a summary is never counted as a transaction (it is read
+  by `extractStatementBalances` instead). It is deliberately kept OUT of `OPENING_LABELS` /
+  `CLOSING_LABELS`: the SAME label prints BOTH balances, so it cannot be split by label alone — it is
+  disambiguated by DATE in `extractStatementBalances` (see the gate bullet, audit C-4). "Aktueller
+  Kontostand" stays excluded (it restates the closing at the top and would corrupt the opening). This
+  stops the double-count that broke the tie.
 - **The completeness gate (D56 + the D56-R refinement).** New `extractStatementBalances` (printed
   opening/closing, EN+DE labels incl. `balance brought/carried forward`, `opening/closing balance`,
   `Anfangs-/Endsaldo`, `Kontostand per`) feeds `assessCompleteness`, the three-outcome classifier
   (`complete` / `contradicted` / `unverified`); `isStatementComplete` is retained as its boolean
-  `=== 'complete'` projection (the unit tests pin the gate by that name). Balances persist additively on
-  `bank_statements` (`opening_balance`/`closing_balance`, REAL, nullable, content-class — never
-  logged/audited/exported). `buildBankAnswer` renders each outcome: `complete` → VERIFIED total + the
-  proven-whole `caveat`; `unverified` → the SAME single-currency totals + categories under
-  `unverifiedCaveat` (a labelled sum of the rows read — the no-balance "Umsätze" case, the reported
-  bug); `contradicted` → `skills.bankAnalysis.incompleteNoTotal` (the honest refusal). Mixed-currency
-  reports no-single-total (safe) regardless of outcome. A bounded transaction listing
-  (`transactionsHeading`/`transactionItem`/`transactionsMore`, first 10 + "ask to export CSV") trails
-  every non-empty answer. All strings are EN+DE.
+  `=== 'complete'` projection (the unit tests pin the gate by that name).
+  - **Cent-exact tie (audit C-3, 2026-06-26).** `assessCompleteness` sums and compares the
+    `opening + Σamounts == closing` tie in **integer cents** (`Math.round(amount*100)`), not a float
+    `reduce`. Every figure is exactly 2-dp, so the cent sum is exact and the tie is an exact integer test
+    — float drift over thousands of rows can no longer push the difference past `MONEY_EPS` and flip a
+    genuinely-tying statement to a false `contradicted`. Read-time only; nothing persisted changes.
+  - **`Kontostand per` date disambiguation (audit C-4, 2026-06-26).** Because the same label prints both
+    balances, `extractStatementBalances` resolves it by DATE: with two distinct-dated `Kontostand per`
+    lines the **earliest** is the opening and the **latest** is the closing; a **single** such line (no
+    pair to bracket the period) is the **closing only** (opening undefined → the gate downgrades to an
+    honest `unverified` labelled sum, never a false `contradicted` from reading opening == closing).
+    Explicit `Anfangs-/Endsaldo` labels still win where both appear. This **changes the persisted
+    `opening_balance`/`closing_balance`** on affected statements → `BANK_EXTRACTOR_VERSION` bumped 1 → 2
+    (stale v1/NULL statements re-extract via the A9 path on the next reuse).
+  - **Persistence & rendering.** Balances persist additively on `bank_statements`
+    (`opening_balance`/`closing_balance`, REAL, nullable, content-class — never logged/audited/exported).
+    `buildBankAnswer` renders each outcome: `complete` → VERIFIED total + the proven-whole `caveat`;
+    `unverified` → the SAME single-currency totals + categories under `unverifiedCaveat` (a labelled sum
+    of the rows read — the no-balance "Umsätze" case, the reported bug); `contradicted` →
+    `skills.bankAnalysis.incompleteNoTotal` (the honest refusal). Mixed-currency reports no-single-total
+    (safe) regardless of outcome. A bounded transaction listing
+    (`transactionsHeading`/`transactionItem`/`transactionsMore`, first 10 + "ask to export CSV") trails
+    every non-empty answer. All strings are EN+DE.
 - **Wiring (D51/D58).** `readDocumentSegments(id, {layout})` → `extractDocumentPreview` (now accepting
   `layout` + the `maxPages` cap, a DoS guard since per-page clustering is uncapped otherwise) →
   `ParseContext.layout` → `PdfParser` layout mode (scan-detection re-keyed on RAW text so an empty
@@ -2893,13 +2908,18 @@ figure verification is needed. The constraints that DO hold:
   deterministic pass / the next categorize run); model categorization re-runs on the next Kategorisieren /
   auto-offer. The single shared `latestBankStatementId` helper (`run.ts`) keeps the load-bearing
   `created_at DESC, id DESC` tie-break identical across all three call sites. **Bump `BANK_EXTRACTOR_VERSION`
-  whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input.**
+  whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input.** It is now
+  at **2** (1 → 2 at audit C-4, 2026-06-26: the `Kontostand per` date disambiguation changes the persisted
+  `opening_balance`/`closing_balance` on Raiffeisen statements — so v1 statements re-extract via this path).
 
 **Tests:** `skills-categorizer.test.ts` (taxonomy/enum, prefilter, model path, off-list/out-of-range
 drop, unparseable-batch drop, batching, no-runtime fallback; **Phase 2:** `categorizeRow` agrees with the
 prefilter on coincidental substrings, L-1 truncation-retry-then-succeed + retry-once-then-drop, L-2
 char-cap drop); `skills-bank-statement-tool.test.ts` (**Phase 2:** `categorizeRow` word-boundary matching —
-`coffee`≠Fees, compound `Kontoführungsgebühr`→Spending); `doctasks-categorize.test.ts` (model path
+`coffee`≠Fees, compound `Kontoführungsgebühr`→Spending; **Phase 3:** the cent-exact many-row drift case
+stays `complete` (C-3), the `Kontostand per` dated pair maps opening/closing and a lone line is closing-only
+→ `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`); `skills-run.test.ts` (**Phase 3:** a v1 statement is
+detected stale at v2, a freshly-stamped one is not); `doctasks-categorize.test.ts` (model path
 persists, deterministic fallback persists, auto-extract-then-categorize, A9 stale-statement re-extract +
 replace); `skills-analysis-bank.test.ts` (persisted model categories surface + the model-assisted label;
 **Phase 2:** the rule-based note when `modelAssisted` is false, absent when model-assisted;

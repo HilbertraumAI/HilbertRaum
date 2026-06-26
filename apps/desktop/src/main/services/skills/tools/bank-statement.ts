@@ -58,8 +58,12 @@ export const MAX_TRANSACTIONS = 10000
  * History (each entry = the output-affecting work that warranted the value):
  *   1 — baseline: Phase 32 multi-baseline payee recovery + currency-token class + A3 sign-column fold,
  *       and the Phase 31–33 review's sign-handling correctness fixes (the current parser as built).
+ *   2 — audit C-4: `extractStatementBalances` disambiguates the dual-role `Kontostand per` label by date
+ *       (earliest = opening, latest = closing; a lone line = closing only) instead of reading it as BOTH
+ *       opening and closing, changing the persisted `opening_balance`/`closing_balance` on Raiffeisen
+ *       "Mein ELBA"-style statements. Stale v1 statements re-extract via the A9 path on the next reuse.
  */
-export const BANK_EXTRACTOR_VERSION = 1
+export const BANK_EXTRACTOR_VERSION = 2
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -130,23 +134,24 @@ function parseLine(line: string, page: number | null, statementCurrency: string 
 
 // `kontostand per <date>` is the Raiffeisen "Mein ELBA" balance-line label: the statement prints the
 // OPENING balance as `Kontostand per <period-start>` and the CLOSING balance as `Kontostand per
-// <period-end>`. Adding it to BOTH lists lets the "first opening / last closing" rule below read the
-// period-start line as the opening and the period-end line as the closing. NOT "Aktueller Kontostand"
-// (the top-of-document restatement of the closing value — it would corrupt the opening).
+// <period-end>` — the SAME label for both. It therefore CANNOT be split by label alone, so it is kept
+// OUT of the opening/closing lists below and disambiguated by DATE in `extractStatementBalances` (audit
+// C-4): the earliest-dated line is the opening, the latest-dated is the closing; a lone such line is the
+// closing only. It still belongs to `BALANCE_LABELS` so the line is dropped from the transaction stream.
+// NOT "Aktueller Kontostand" (the top-of-document restatement of the closing value — it would corrupt
+// the opening).
 const KONTOSTAND_PER = 'kontostand per'
 
 /** Opening-balance label fragments (lowercased substrings), EN + DE for the de-AT target. */
 const OPENING_LABELS: readonly string[] = [
   'opening balance', 'balance brought forward', 'previous balance', 'starting balance',
-  'alter kontostand', 'alter saldo', 'anfangssaldo', 'saldovortrag', 'kontostand alt', 'saldo alt',
-  KONTOSTAND_PER
+  'alter kontostand', 'alter saldo', 'anfangssaldo', 'saldovortrag', 'kontostand alt', 'saldo alt'
 ]
 
 /** Closing-balance label fragments (lowercased substrings), EN + DE. */
 const CLOSING_LABELS: readonly string[] = [
   'closing balance', 'balance carried forward', 'new balance', 'ending balance', 'final balance',
-  'neuer kontostand', 'neuer saldo', 'endsaldo', 'schlusssaldo', 'kontostand neu', 'saldo neu',
-  KONTOSTAND_PER
+  'neuer kontostand', 'neuer saldo', 'endsaldo', 'schlusssaldo', 'kontostand neu', 'saldo neu'
 ]
 
 /**
@@ -157,7 +162,7 @@ const CLOSING_LABELS: readonly string[] = [
  * opening/closing into Σamounts, breaking the completeness tie — so the extractor drops any line
  * matching a balance label; `extractStatementBalances` still reads those same lines for the gate.
  */
-const BALANCE_LABELS: readonly string[] = [...OPENING_LABELS, ...CLOSING_LABELS]
+const BALANCE_LABELS: readonly string[] = [...OPENING_LABELS, ...CLOSING_LABELS, KONTOSTAND_PER]
 
 function isBalanceLabelLine(lowerLine: string): boolean {
   return BALANCE_LABELS.some((l) => lowerLine.includes(l))
@@ -170,36 +175,79 @@ function lastMoneyOnLine(line: string): number | null {
   return parseAmount(matches[matches.length - 1][0])
 }
 
+/** The first whitespace-token on a line that parses as a date (ISO `YYYY-MM-DD`), or null. */
+function firstDateOnLine(line: string): string | null {
+  for (const token of line.split(/\s+/)) {
+    const d = parseDate(token)
+    if (d) return d
+  }
+  return null
+}
+
 /**
  * Extract the statement-level opening/closing balances from the read text (pure, deterministic).
- * Takes the FIRST labelled opening line and the LAST labelled closing line (a closing/"new balance"
- * is often repeated in a footer summary — the last wins). Returns only what is confidently found; a
- * missing balance stays undefined and the completeness gate (§3.5) then downgrades to honesty.
+ * Explicit opening/closing labels (Anfangssaldo / Endsaldo, …) take the FIRST labelled opening line and
+ * the LAST labelled closing line (a closing/"new balance" is often repeated in a footer summary — the
+ * last wins). The Raiffeisen `Kontostand per <date>` label is BOTH opening and closing, so it is
+ * disambiguated by DATE (audit C-4): with two distinct-dated such lines the earliest is the opening and
+ * the latest is the closing; a single such line (no pair to bracket the period) is the CLOSING ONLY (the
+ * opening stays undefined → the §3.5 gate downgrades to an honest labelled sum, not a false refusal).
+ * Explicit labels win over the date-derived pair where both appear. Returns only what is confidently
+ * found; a missing balance stays undefined and the completeness gate (§3.5) then downgrades to honesty.
  */
 export function extractStatementBalances(chunks: DocumentChunkRead[]): {
   openingBalance?: number
   closingBalance?: number
 } {
-  let opening: number | undefined
-  let closing: number | undefined
+  let explicitOpening: number | undefined
+  let explicitClosing: number | undefined
+  // Every `Kontostand per <date>` line with its (parsed) period date — resolved to opening/closing below.
+  const kontostand: { date: string | null; value: number }[] = []
   for (const chunk of chunks) {
     for (const rawLine of chunk.text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
       const lower = line.toLowerCase()
-      if (opening === undefined && OPENING_LABELS.some((l) => lower.includes(l))) {
+      if (lower.includes(KONTOSTAND_PER)) {
+        // A dual-role label — never matched against the opening/closing lists; resolved by date below.
+        const value = lastMoneyOnLine(line)
+        if (value !== null) kontostand.push({ date: firstDateOnLine(line), value })
+        continue
+      }
+      if (explicitOpening === undefined && OPENING_LABELS.some((l) => lower.includes(l))) {
         const v = lastMoneyOnLine(line)
-        if (v !== null) opening = v
+        if (v !== null) explicitOpening = v
       }
       if (CLOSING_LABELS.some((l) => lower.includes(l))) {
         const v = lastMoneyOnLine(line)
-        if (v !== null) closing = v // last labelled closing line wins
+        if (v !== null) explicitClosing = v // last labelled closing line wins
       }
     }
   }
+
+  // Resolve the `Kontostand per` lines by date. A period is bracketed only when two such lines carry
+  // DISTINCT dates (earliest = opening, latest = closing). A single line — or several sharing one date —
+  // cannot bracket a period, so it is the CLOSING only (last in document order); the opening stays
+  // undefined so the gate downgrades to `unverified` rather than reading opening == closing and refusing.
+  let kontostandOpening: number | undefined
+  let kontostandClosing: number | undefined
+  if (kontostand.length > 0) {
+    const dated = kontostand.filter((k): k is { date: string; value: number } => k.date !== null)
+    const sorted = [...dated].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    if (sorted.length >= 2 && sorted[0].date < sorted[sorted.length - 1].date) {
+      kontostandOpening = sorted[0].value
+      kontostandClosing = sorted[sorted.length - 1].value
+    } else {
+      kontostandClosing = kontostand[kontostand.length - 1].value
+    }
+  }
+
+  // Explicit opening/closing labels take precedence; the date-derived pair fills any slot they leave open.
+  const openingBalance = explicitOpening ?? kontostandOpening
+  const closingBalance = explicitClosing ?? kontostandClosing
   const out: { openingBalance?: number; closingBalance?: number } = {}
-  if (opening !== undefined) out.openingBalance = opening
-  if (closing !== undefined) out.closingBalance = closing
+  if (openingBalance !== undefined) out.openingBalance = openingBalance
+  if (closingBalance !== undefined) out.closingBalance = closingBalance
   return out
 }
 
@@ -237,9 +285,15 @@ export function assessCompleteness(args: {
   if (reconcile.rows.some((r) => r.status === 'mismatch')) return 'contradicted'
   // No statement-level opening+closing pair to tie against: nothing claimed → nothing contradicted.
   if (openingBalance === undefined || closingBalance === undefined) return 'unverified'
-  // Both balances printed: they MUST tie out, else the document's own claim is contradicted.
-  const sum = rows.reduce((acc, r) => acc + r.amount, 0)
-  return Math.abs(openingBalance + sum - closingBalance) < MONEY_EPS ? 'complete' : 'contradicted'
+  // Both balances printed: they MUST tie out, else the document's own claim is contradicted. Sum and
+  // compare in INTEGER CENTS, not floats (audit C-3): a float `reduce(acc + amount)` over thousands of
+  // 2-dp rows accumulates representation error that can drift `opening + Σ − closing` past MONEY_EPS and
+  // flip a genuinely-tying statement to `contradicted`. Every figure is exactly 2-dp (MONEY_RE ends in
+  // `[.,]\d{2}`), so `Math.round(x*100)` is its exact cent value and the tie is an EXACT integer test
+  // (the faithful, drift-free equivalent of the old `< 0.005`, since 2-dp figures differ by whole cents).
+  const toCents = (n: number): number => Math.round(n * 100)
+  const sumCents = rows.reduce((acc, r) => acc + toCents(r.amount), 0)
+  return toCents(openingBalance) + sumCents === toCents(closingBalance) ? 'complete' : 'contradicted'
 }
 
 /**

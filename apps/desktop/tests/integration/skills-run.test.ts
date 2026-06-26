@@ -11,8 +11,10 @@ import {
   runBalanceValidation,
   runCategorization,
   runCashflowSummary,
-  runCsvExport
+  runCsvExport,
+  isBankStatementStale
 } from '../../src/main/services/skills/run'
+import { BANK_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/bank-statement'
 import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
 
 // architecture.md "Skills — design record" §8 (S11a) — the app-orchestrated run seam end-to-end on a real DB:
@@ -86,6 +88,23 @@ describe('runBankExtraction (S11a)', () => {
     // S11c additive columns on bank_transactions (ensureColumn).
     const cols = (db.prepare(`PRAGMA table_info(bank_transactions)`).all() as Array<{ name: string }>).map((c) => c.name)
     expect(cols).toEqual(expect.arrayContaining(['category_id', 'reconciled', 'confidence']))
+  })
+
+  it('isBankStatementStale: a v1 statement is STALE now the extractor is at v2 (audit C-4 bump); current is fresh', async () => {
+    // The C-4 disambiguation changed the persisted opening/closing on Raiffeisen statements, so the
+    // version moved 1 → 2 and every statement an OLDER (v1 / pre-versioning NULL) parser produced must
+    // re-extract via the A9 path. A fresh extraction is stamped at the current version → never stale.
+    expect(BANK_EXTRACTOR_VERSION).toBe(2)
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
+    const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })
+    const id = res.statementId!
+    expect(isBankStatementStale(db, id)).toBe(false) // freshly stamped at v2
+
+    db.prepare('UPDATE bank_statements SET extractor_version = 1 WHERE id = ?').run(id)
+    expect(isBankStatementStale(db, id)).toBe(true) // produced by the pre-C-4 parser → re-extract
+    db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(id)
+    expect(isBankStatementStale(db, id)).toBe(true) // legacy / pre-versioning → re-extract
   })
 
   it('runs end-to-end: persists statement + transactions and marks the run done', async () => {

@@ -6,6 +6,51 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 3 (Bank completeness-gate numerics; C-3 / C-4) — VERSION-BUMP PHASE
+(branch `skills-tools-audit-2026-06-26`).** Suite **2242 passed / 38 skipped (+5)**, typecheck clean, build OK.
+Content-class boundary unchanged (audit stays `{skillId, toolName, documentCount}`; the tool gate gained NO new
+DB/FS/net capability; no new user-facing copy → no i18n keys). **As built:**
+- **C-3 — cent-exact completeness sum.** `assessCompleteness` (`tools/bank-statement.ts`) summed the
+  `opening + Σamounts == closing` tie with a FLOAT `rows.reduce(acc + amount)` then `Math.abs(...) < MONEY_EPS`
+  (0.005); over thousands of 2-dp rows the float sum can drift past half a cent and flip a genuinely-tying
+  statement to a false `contradicted`. Now it sums in **integer cents** (`Math.round(amount*100)`) and compares
+  `toCents(opening) + Σcents === toCents(closing)` EXACTLY — the drift-free equivalent of the old `< 0.005`
+  (2-dp figures differ by whole cents). **Pure read-time computation, NOT persisted → C-3 alone needs no version
+  bump.** `MONEY_EPS` is untouched (still used by `reconcileBalances`).
+- **C-4 — disambiguate the dual-role `Kontostand per` label.** `KONTOSTAND_PER` ("kontostand per") was in BOTH
+  `OPENING_LABELS` and `CLOSING_LABELS`, so a statement with a SINGLE `Kontostand per <date>` line read
+  opening == closing → forced `contradicted`/refusal whenever rows ≠ 0. Removed it from both lists (kept in
+  `BALANCE_LABELS` so `extractTransactionRows` still DROPS the summary line, no double-count) and made
+  `extractStatementBalances` disambiguate by **DATE** (shared `parseDate`): two distinct-dated `Kontostand per`
+  lines → earliest = opening, latest = closing; a **single** line (no pair to bracket the period) → **closing
+  only** (opening undefined → the D56 gate downgrades to an honest `unverified` labelled sum, not a refusal).
+  Explicit `Anfangs-/Endsaldo` labels still win where both appear. **DATA CONTRACT:** this CHANGES persisted
+  `bank_statements.opening_balance/closing_balance` for affected statements → **`BANK_EXTRACTOR_VERSION` bumped
+  1 → 2** (History line added in the constant's doc comment). Stale v1/NULL statements re-extract automatically
+  on the next reuse via the A9 `isBankStatementStale` path (gate is `v == null || v < CURRENT`; confirmed by a
+  new test). Schema is unchanged (the column is already nullable/additive from A9).
+- **Tests (+5).** `skills-bank-statement-tool.test.ts` (+4): the many-row float-drift case (3000 rows of
+  700000000.07, naive float drifts ~0.06 but cents tie) stays `complete` (C-3); a `Kontostand per` dated PAIR
+  maps opening/closing, and a LONE line is closing-only → the statement is `unverified` not `contradicted`
+  (C-4); `BANK_EXTRACTOR_VERSION === 2`. `skills-run.test.ts` (+1): a v1-stamped statement is detected stale at
+  v2, a freshly-stamped one is not. The two existing `pdf-bank-layout.test.ts` Kontostand-per tests (distinct
+  dated pair) pass UNCHANGED — old "first opening / last closing" and new "earliest / latest date" coincide on
+  a 2-line pair; only the single-line case (uncovered before) changed.
+- **GOLD-SET re-measure (gated, LOCAL — `HILBERTRAUM_PDF_GOLDSET=1`, corpus present in
+  `apps/desktop/tests/real-data/corpus/`, 4 files incl. the real Raiffeisen `Umsätze - Mein ELBA.pdf`).** Ran on
+  the v2 code: **3 statements measured** (1 image-only excluded), **recall micro 101.2% (86/85), macro 100%**,
+  3/3 at full recall, over-extracted 1/3 (precision, pre-existing), **completeness-gate VERIFIED 1/3**, unverified
+  labelled sums 1/3, **figure exact-match 100% (1/1)**, and the cardinal safety invariants **hallucinated 0 /
+  partial-total 0 / model-calls 0**. No regression — the Mein ELBA Kontostand-per PAIR still reads
+  opening 35.037,04 / closing 30.647,07 and ties out (VERIFIED) under v2. (This is the 3-text+1-scan aggregate
+  the Phase-33 note left pending.)
+- **Docs:** `architecture.md` §21 — BALANCE-LABEL GUARD bullet rewritten (Kontostand-per is date-disambiguated,
+  no longer dual-listed), completeness-gate bullet gains C-3 (cent-exact) + C-4 (date disambiguation + v2 bump)
+  sub-bullets, the A9 version-bump note records "now at 2", Tests line gains the Phase-3 cases. Audit doc §3
+  C-3/C-4 rows + the Phase-3 index row flipped to ✅ fixed (Phase 3). **Next:** Phase 4 (analysis-handler
+  performance P-1/P-2 — the read-only tools run through the seam then recompute the same pure function with
+  3–4× row reloads per question; `run.ts`/`invoice-run.ts`/`analysis/*`)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 2 (Categorization correctness & consistency; C-1 / C-2 / L-1 / L-2) —
 FIRST CODE-TOUCHING PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2237 passed / 38 skipped (+6)**, typecheck
 clean, build OK. Content-class boundary unchanged (audit stays `{skillId, toolName, documentCount}`; the tool gate gained

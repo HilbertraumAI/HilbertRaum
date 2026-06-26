@@ -191,8 +191,8 @@ persona section below.
 | S-2 | LOW→MED | Security | Zip stager: two members can **strip to the same `relPath`** (last-writer-wins overwrite); the stripped path is not re-validated | `installer.ts:279-339` |
 | L-1 | LOW | LLM | ✅ **fixed (Phase 2)** — Categorizer dropped a whole 20-row batch on any parse failure; now `batchMaxTokens` is length-aware AND an unparseable reply is retried once before the (honest) drop | `categorizer.ts` `batchMaxTokens`/`categorizeBatch` |
 | L-2 | LOW | Robustness | ✅ **fixed (Phase 2)** — `categorizeBatch` accumulated model output **unbounded**; the streamed reply is now bounded by a char cap (`batchMaxTokens * 8`) and the batch is dropped past it | `categorizer.ts` `streamBatchReply` |
-| C-3 | LOW | Correctness | Completeness gate sums many floats then compares against `MONEY_EPS=0.005`; float drift over thousands of rows could flip a genuinely-complete statement to `contradicted` | `tools/bank-statement.ts:241`, `money.ts:45` |
-| C-4 | LOW | Correctness | `KONTOSTAND_PER` is in **both** opening & closing label lists; a statement with a single such line reads opening==closing → forces `contradicted`/refusal when rows ≠ 0 | `tools/bank-statement.ts:136-160` |
+| C-3 | LOW | Correctness | ✅ **fixed (Phase 3)** — `assessCompleteness` now sums the `opening + Σ == closing` tie in INTEGER CENTS (`Math.round(amount*100)`), an exact compare; float drift can no longer flip a tying statement to `contradicted`. Read-time only (no version bump) | `tools/bank-statement.ts` `assessCompleteness`, `money.ts` `MONEY_EPS` |
+| C-4 | LOW | Correctness | ✅ **fixed (Phase 3)** — `KONTOSTAND_PER` removed from both label lists; `extractStatementBalances` disambiguates by DATE (earliest=opening / latest=closing; a lone line = closing-only → `unverified`, not `contradicted`). Changes persisted balances → `BANK_EXTRACTOR_VERSION` bumped 1→2 | `tools/bank-statement.ts` `extractStatementBalances`, `KONTOSTAND_PER`, `BANK_EXTRACTOR_VERSION` |
 | X-1 | LOW | Consistency | **Three near-duplicate scope→docs queries** with subtly different predicates (`resolveInScopeDocumentIds` omits the `EXISTS chunks` check the analysis handlers require) | `tool-runs.ts:69`, `scope-signals.ts:11`, `analysis/*.ts inScopeDocuments` |
 | X-2 | LOW | Cleanup | `count_selected_documents` reference tool is still registered but never wired/declared (only the gate test uses it) | `tool-registry.ts:187-217` |
 | R-1 | LOW | Residual | Auto-fire ships but only `document-redaction` opts in; the eval corpus (33 turns) covers only the **original four** skills | architecture.md §18, BUILD_STATE |
@@ -541,7 +541,7 @@ tests, and the docs to touch.
 |-------|-------|----------|------|-------|
 | 1 | Documentation truth-up ✅ **fixed (Phase 1)** | D-1, D-2, §16 count, A-1 note | P1 | docs only |
 | 2 | Categorization correctness & consistency ✅ **fixed (Phase 2)** | C-1, C-2, L-1, L-2 | P1–P2 | yes |
-| 3 | Bank completeness-gate numerics | C-3, C-4 | P2 | yes (version bump) |
+| 3 | Bank completeness-gate numerics ✅ **fixed (Phase 3)** | C-3, C-4 | P2 | yes (version bump) |
 | 4 | Analysis-handler performance | P-1, P-2 | P2 | yes |
 | 5 | Tool-run document targeting (multi-doc) | U-1 | P2 | yes |
 | 6 | Make auto-categorize explicit | U-2 | P2 | yes (DECISION) |
