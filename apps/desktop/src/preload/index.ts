@@ -40,7 +40,7 @@ import type {
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
-  RunnableTool,
+  RunnableToolSet,
   RuntimeStatus,
   VisionStatus,
   SkillInfo,
@@ -429,9 +429,10 @@ const api = {
   suggestSkills: (conversationId: string, question?: string): Promise<SkillSuggestion[]> =>
     ipcRenderer.invoke(IPC.suggestSkills, conversationId, question),
 
-  /** Wired, runnable Tier-2 tools for the active skill in this conversation's scope (skills plan
-   *  §12.2/§16, S11b). Empty when none apply. Logs nothing — the scope is content (§22-C4). */
-  listRunnableTools: (skillInstallId: string, conversationId: string): Promise<RunnableTool[]> =>
+  /** Wired, runnable Tier-2 tools for the active skill in this conversation's scope, plus the
+   *  in-scope target document IDS (skills plan §12.2/§16, S11b; audit U-1). Empty when none apply.
+   *  Logs nothing; carries ids only — the renderer maps ids→names, so no title crosses the IPC. */
+  listRunnableTools: (skillInstallId: string, conversationId: string): Promise<RunnableToolSet> =>
     ipcRenderer.invoke(IPC.listRunnableTools, skillInstallId, conversationId),
   /** Start an app-orchestrated tool run from a user action (DS4). Returns ids/counts only. */
   startSkillRun: (req: StartSkillRunRequest): Promise<StartSkillRunResult> =>

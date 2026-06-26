@@ -28,7 +28,7 @@ import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript } from '../chat'
+import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -152,8 +152,14 @@ export function ChatScreen({
   /** Per-conversation skill selection this session ('new' = no conversation yet). A key present
    *  here overrides the conversation's persisted `activeSkillId`; null = explicitly no skill. */
   const [skillByConv, setSkillByConv] = useState<Record<string, string | null>>({})
-  /** The deterministic one-tap suggestion for the open picker (skills plan §10.2/S8), or null. */
+  /** The deterministic one-tap suggestion for the picker (skills plan §10.2/S8), or null. Now
+   *  recomputed proactively as the draft changes (U-3) so it can ride the CLOSED trigger too. */
   const [skillSuggestion, setSkillSuggestion] = useState<SkillSuggestion | null>(null)
+  /** U-3: the user explicitly declined the suggestion for this draft (picked "None"). Suppresses the
+   *  CLOSED-trigger hint so it never re-nags; reset when the turn is sent or the conversation changes.
+   *  A renderer-only flag — `currentSkillId === null` alone can't tell an explicit "None" from a
+   *  never-set default, and nothing about a declined offer crosses the IPC (it is purely UI state). */
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
@@ -604,6 +610,10 @@ export function ChatScreen({
   function selectSkill(installId: string | null): void {
     if (busyStreaming) return
     setSkillByConv((prev) => ({ ...prev, [depthKey]: installId }))
+    // U-3: an explicit "None" pick DECLINES the current suggestion — remember it so the quiet
+    // closed-trigger hint does not re-nag for this draft. Any real pick clears the flag (the hint
+    // is gated on "no skill picked" anyway, but this keeps the next "None" an honest fresh decline).
+    setSuggestionDismissed(installId == null)
     // Persist the sticky default the moment a conversation exists; a still-"new" pick is persisted
     // when the conversation is created on send (ensureConversation).
     if (activeId) void window.api.setConversationDefaultSkill?.(activeId, installId)
@@ -619,16 +629,49 @@ export function ChatScreen({
     setSkillByConv((prev) => ({ ...prev, [convId]: skillId }))
   }
 
-  // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — the offer
-  // rides the picker the user already opened (no canvas chip). The draft question is scored
-  // main-side and never logged; scope is resolved there from the conversation id.
-  function onSkillPickerOpenChange(open: boolean): void {
-    if (!open) return
-    void window.api
-      .suggestSkills?.(activeId ?? '', input)
-      .then((s) => setSkillSuggestion(s[0] ?? null))
+  // Score the current draft for the one-tap suggestion (deterministic, main-side, never logged) and
+  // store the single best offer (or null). `Promise.resolve` + optional chaining keep it inert when
+  // the IPC is absent or a test stub returns nothing — it never throws inside the debounce timer.
+  function refreshSuggestion(convId: string, draft: string): void {
+    void Promise.resolve(window.api.suggestSkills?.(convId, draft))
+      .then((s) => setSkillSuggestion(s?.[0] ?? null))
       .catch(() => setSkillSuggestion(null))
   }
+
+  // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — a refresh
+  // that keeps the in-picker pinned offer current. The draft question is scored main-side and never
+  // logged; scope is resolved there from the conversation id.
+  function onSkillPickerOpenChange(open: boolean): void {
+    if (!open) return
+    refreshSuggestion(activeId ?? '', input)
+  }
+
+  // U-3: recompute the suggestion PROACTIVELY as the draft changes (debounced ~400 ms, mirroring the
+  // attachment-poll/stream-flush timer precedent) so a high-confidence offer can ride the CLOSED
+  // trigger — a user who never opens "Skill: none ▾" still sees the nudge. Deterministic
+  // `suggestSkills` IPC (no model, no network); the draft is CONTENT — scored main-side, never
+  // logged. Only when no skill is already picked (an explicit pick owns the turn); cleared otherwise.
+  const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (currentSkillId) {
+      setSkillSuggestion(null)
+      return
+    }
+    const convId = activeId ?? ''
+    const draft = input
+    if (suggestTimer.current != null) clearTimeout(suggestTimer.current)
+    suggestTimer.current = setTimeout(() => refreshSuggestion(convId, draft), 400)
+    return () => {
+      if (suggestTimer.current != null) clearTimeout(suggestTimer.current)
+    }
+  }, [input, currentSkillId, activeId])
+
+  // U-3: a declined offer is per-draft — reset the dismissal when the conversation changes so a fresh
+  // conversation starts from a clean slate (the per-send reset rides `onSend`'s `setInput('')` →
+  // recompute). Never carries a decline across conversations.
+  useEffect(() => {
+    setSuggestionDismissed(false)
+  }, [activeId])
 
   // ---- Tier-2 tool runs (skills plan §12.2/§15, S11b) ------------------------------------------
   // The single active run survives screen unmounts (the doc-task store precedent), polled main-side.
@@ -637,19 +680,29 @@ export function ChatScreen({
   // reserves Tier-2 tools AND there is an in-scope document. Main resolves the scope (§22-C4); the
   // renderer stays bank-free (it renders whatever descriptors come back).
   const [runnableTools, setRunnableTools] = useState<RunnableTool[]>([])
+  // U-1: the in-scope target document ids main resolved (ids only — content-free). The names are
+  // mapped renderer-side from the loaded document list (`docs`/`attachments`), so a title never
+  // enters the run state/IPC. `[0]` is the default target.
+  const [scopeDocIds, setScopeDocIds] = useState<string[]>([])
   useEffect(() => {
     if (!currentSkillId || !activeId || !window.api.listRunnableTools) {
       setRunnableTools([])
+      setScopeDocIds([])
       return
     }
     let live = true
     void window.api
       .listRunnableTools(currentSkillId, activeId)
-      .then((tools) => {
-        if (live) setRunnableTools(tools)
+      .then((res) => {
+        if (!live) return
+        setRunnableTools(res?.tools ?? [])
+        setScopeDocIds(res?.documentIds ?? [])
       })
       .catch(() => {
-        if (live) setRunnableTools([])
+        if (live) {
+          setRunnableTools([])
+          setScopeDocIds([])
+        }
       })
     return () => {
       live = false
@@ -661,17 +714,48 @@ export function ChatScreen({
     // `activeId` (null → created id).
   }, [currentSkillId, activeId])
 
+  // U-1: resolve an in-scope target id to its DISPLAY NAME from the renderer's own loaded documents
+  // (Library docs + this chat's attachments). The title is read here, renderer-side — it never comes
+  // from the run state/IPC. An unknown id (not yet loaded) falls back to a generic, content-free label.
+  const docNameForId = useCallback(
+    (id: string): string => {
+      const found = docs.find((d) => d.id === id) ?? attachments.find((d) => d.id === id)
+      return found?.title ?? t('chat.skill.run.thisDocument')
+    },
+    [docs, attachments, t]
+  )
+  // The in-scope target documents offered in the run bar (id + renderer-resolved name), in main's
+  // resolution order. Exactly one ⇒ the name is shown; more than one ⇒ the chooser appears.
+  const targetDocuments = useMemo<SkillRunTarget[]>(
+    () => scopeDocIds.map((id) => ({ id, name: docNameForId(id) })),
+    [scopeDocIds, docNameForId]
+  )
+  // The name of the document the ACTIVE run targets — remembered renderer-side when the run is
+  // launched (the run state carries only ids/counts, never the title). Drives the busy/result row.
+  const [runTargetName, setRunTargetName] = useState<string | null>(null)
+  // The id of that same target, remembered alongside the name (U-2). The run state is content-free,
+  // so this is how the post-extract "Categorize transactions" offer targets the SAME document the
+  // extract ran on — the id rides back through `onRunTool('categorize_transactions', …, id)`.
+  const [runTargetId, setRunTargetId] = useState<string | null>(null)
+
   // The conversation a categorize run was started in (C1): the routed breakdown below must land in THIS
   // conversation, never whatever conversation happens to be active when the (module-level, app-wide) run
   // finishes — switching conversations mid-run would otherwise inject the answer into the wrong transcript.
   const categorizeRunConvRef = useRef<string | null>(null)
 
-  // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model).
-  function onRunTool(toolName: string, confirmed: boolean): void {
+  // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model). The
+  // chosen `documentId` (U-1) is an in-scope id the renderer offered; main re-validates it against the
+  // resolved scope. Defaults to the first in-scope document when none was chosen.
+  function onRunTool(toolName: string, confirmed: boolean, documentId?: string): void {
     if (!currentSkillId || !activeId) return
     if (toolName === 'categorize_transactions') categorizeRunConvRef.current = activeId
+    const targetId = documentId ?? scopeDocIds[0]
+    // Remember the target NAME + ID for the busy/result row (resolved renderer-side; never from the
+    // IPC). The id powers the U-2 post-extract categorize offer (same-document targeting).
+    setRunTargetName(targetId ? docNameForId(targetId) : null)
+    setRunTargetId(targetId ?? null)
     setError(null)
-    void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, confirmed })
+    void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, documentId, confirmed })
       .then((outcome) => {
         // `needsConfirmation` is handled inside SkillRunBar (it raises the modal before calling with
         // confirmed:true); reaching it here would mean a write tool slipped the modal — surface it.
@@ -807,6 +891,8 @@ export function ChatScreen({
     const text = input.trim()
     if (!text || busyStreaming) return
     setInput('')
+    // U-3: a fresh turn deserves a fresh suggestion — a decline was scoped to the just-sent draft.
+    setSuggestionDismissed(false)
     try {
       // The 'new'-composer depth selection sticks to the conversation that gets created.
       const depth = depthFor(depthKey)
@@ -1255,6 +1341,9 @@ export function ChatScreen({
         <SkillRunBar
           run={activeSkillRun}
           runnableTools={runnableTools}
+          targetDocuments={targetDocuments}
+          runningDocumentName={runTargetName}
+          runningDocumentId={runTargetId}
           onRun={onRunTool}
           onCancel={() => void cancelActiveSkillRun()}
           onDismiss={acknowledgeSkillRun}
@@ -1311,6 +1400,7 @@ export function ChatScreen({
                   disabled={busyStreaming}
                   suggestion={skillSuggestion}
                   onOpenChange={onSkillPickerOpenChange}
+                  suggestionDismissed={suggestionDismissed}
                 />
               )}
               {/* Context-window usage meter (§5.1): pushed to the right of the footer's quiet

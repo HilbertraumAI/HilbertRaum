@@ -3,6 +3,7 @@ import type { Db } from '../db'
 import type { DocumentChunkRead, SkillToolAudit, SkillToolContext } from '../../../shared/types'
 import { getRegisteredTool, runSkillTool } from './tool-registry'
 import { finishRun, resolveDocumentReader } from './run'
+import { withDocumentLock } from './doc-lock'
 import type {
   ExtractInvoiceOutput,
   InvoiceInput,
@@ -74,6 +75,13 @@ export interface InvoiceToolResult {
   count?: number
   /** A content-free outcome discriminator (validate: 'reconciled'|'unreconciled'|'unchecked'). */
   resultKind?: string
+  /**
+   * The already-validated structured tool output (`validate_invoice_totals` → `InvoiceTotalsResult`)
+   * for IN-PROCESS reuse by the analysis handler (audit P-1: it reuses this instead of recomputing the
+   * same pure function over a re-queried invoice). These are FIGURES (content): the handler keeps them
+   * in-process and they must NEVER cross into `ToolRunOutcome`/IPC — `tool-runs.ts` maps only counts.
+   */
+  output?: InvoiceTotalsResult
   cancelled?: boolean
   errorCode?: string
   error?: string
@@ -82,8 +90,20 @@ export interface InvoiceToolResult {
 /**
  * Run `extract_invoice` on one selected document through the gate and persist the structured invoice.
  * Returns ids/counts only — never the extracted content (which lives only in the invoice_* tables).
+ *
+ * Serialized per document (audit PC-1): the whole extract+persist holds the per-document lock so a
+ * concurrent run on the SAME document (any lane) cannot interleave (re-entrant when the analysis lane
+ * already holds it; unrelated documents stay concurrent).
  */
 export async function runInvoiceExtraction(
+  db: Db,
+  args: InvoiceRunArgs,
+  deps: InvoiceRunDeps
+): Promise<InvoiceExtractionResult> {
+  return withDocumentLock(args.documentId, () => runInvoiceExtractionInner(db, args, deps))
+}
+
+async function runInvoiceExtractionInner(
   db: Db,
   args: InvoiceRunArgs,
   deps: InvoiceRunDeps
@@ -292,7 +312,11 @@ async function prepareInvoiceRun(
   toolName: string,
   args: InvoiceRunArgs,
   deps: InvoiceRunDeps,
-  confirmed?: boolean
+  confirmed?: boolean,
+  // When the caller has ALREADY reconstructed the invoice (the analysis handler loads it once for the
+  // answer), pass it here so this prefix skips its own `loadInvoice` — the single-load that audit P-1
+  // collapses. The persist still targets the latest invoice's id (`latestInvoice`), unchanged.
+  preloadedInvoice?: InvoiceInput
 ): Promise<{ prepared: PreparedInvoiceRun } | { failed: InvoiceToolResult }> {
   const now = deps.now ?? (() => new Date().toISOString())
   const runId = randomUUID()
@@ -318,7 +342,9 @@ async function prepareInvoiceRun(
       return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
     }
 
-    const invoice = loadInvoice(db, invoiceRow.id)
+    // Reuse the caller's already-reconstructed invoice when provided (audit P-1); otherwise load it
+    // here (the run-bar/IPC path, which has no invoice in hand).
+    const invoice = preloadedInvoice ?? loadInvoice(db, invoiceRow.id)
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
@@ -373,10 +399,24 @@ function persistFailure(db: Db, runId: string, now: () => string): InvoiceToolRe
 export async function runInvoiceTotalsValidation(
   db: Db,
   args: InvoiceRunArgs,
-  deps: InvoiceRunDeps
+  deps: InvoiceRunDeps,
+  preloadedInvoice?: InvoiceInput
+): Promise<InvoiceToolResult> {
+  // Serialized per document (audit PC-1): the `totals_reconciled` persist must not run against an
+  // invoice a concurrent re-extract is replacing. Re-entrant when the analysis lane already holds it.
+  return withDocumentLock(args.documentId, () =>
+    runInvoiceTotalsValidationInner(db, args, deps, preloadedInvoice)
+  )
+}
+
+async function runInvoiceTotalsValidationInner(
+  db: Db,
+  args: InvoiceRunArgs,
+  deps: InvoiceRunDeps,
+  preloadedInvoice?: InvoiceInput
 ): Promise<InvoiceToolResult> {
   const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareInvoiceRun(db, VALIDATE_TOOL_NAME, args, deps)
+  const prep = await prepareInvoiceRun(db, VALIDATE_TOOL_NAME, args, deps, undefined, preloadedInvoice)
   if ('failed' in prep) return prep.failed
   const { runId, invoiceId, output, completedAt } = prep.prepared
   const result = output as InvoiceTotalsResult
@@ -394,7 +434,10 @@ export async function runInvoiceTotalsValidation(
   } catch {
     return persistFailure(db, runId, now)
   }
-  return { ok: true, runId, count: mismatchCount, resultKind }
+  // Surface the validated `InvoiceTotalsResult` for in-process reuse (audit P-1) — the analysis handler
+  // reuses it instead of recomputing `validateInvoiceTotals` over a re-queried invoice. Content
+  // (figures): in-process only, never mapped into `ToolRunOutcome`/IPC.
+  return { ok: true, runId, count: mismatchCount, resultKind, output: result }
 }
 
 export interface InvoiceCsvExportDeps extends InvoiceRunDeps {

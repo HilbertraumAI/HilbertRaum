@@ -3,7 +3,7 @@ import type { AuditRecorder } from '../audit'
 import type { AuditEventType, DocumentChunkRead, RunnableTool, SkillToolAudit } from '../../../shared/types'
 import type { SkillRecord } from './registry'
 import { resolveScope } from '../collections'
-import { buildScopeFilter } from '../retrieval-scope'
+import { documentsInScope } from './scope-documents'
 import { getRegisteredTool, resolveEffectiveTools, toolRequiresConfirmation } from './tool-registry'
 import { skillNeedsNewerApp } from '../../../shared/skill-manifest'
 import {
@@ -74,16 +74,10 @@ export function resolveInScopeDocumentIds(db: Db, conversationId: string): strin
   } catch {
     return []
   }
-  const filter = buildScopeFilter(scope, 'd.id')
-  const where = filter ? ` AND ${filter.sql}` : ''
-  const params = filter ? filter.params : []
-  const rows = db
-    .prepare(
-      `SELECT d.id AS id FROM documents d
-       WHERE d.status = 'indexed'${where} ORDER BY d.created_at, d.id`
-    )
-    .all(...params) as Array<{ id: string }>
-  return rows.map((r) => r.id)
+  // The RUN path takes `requireChunks: false`: a button run re-extracts FAITHFULLY from the stored copy,
+  // so an `indexed` document is runnable even before it is chunked (X-1). The shared helper's
+  // deterministic `ORDER BY created_at, id` is what makes `[0]` the stable default run target (U-1/U-2).
+  return documentsInScope(db, scope, { requireChunks: false }).map((d) => d.id)
 }
 
 /**
@@ -221,21 +215,11 @@ export function buildToolRunner(
           // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
           layout: true
         })
-        // Auto-offer (Phase 33, Q2): once a statement with rows is extracted, kick off categorization in
-        // the background doctask lane (D26-safe, model-optional). Best-effort. Guards: only when rows were
-        // actually extracted (a 0-row extract has nothing to categorize), and only when no categorize is
-        // already queued/running for this document (so a re-run extract — or extract + a manual categorize
-        // — never enqueues a duplicate that redoes the model work and overwrites the first's labels).
-        if (res.ok && (res.transactionCount ?? 0) > 0 && deps.docTasks) {
-          const docTasks = deps.docTasks
-          if (!docTasks.hasPendingKind(args.documentId, 'categorize')) {
-            try {
-              docTasks.startDocTask({ kind: 'categorize', documentIds: [args.documentId] })
-            } catch {
-              /* best-effort auto-offer */
-            }
-          }
-        }
+        // U-2 (audit 2026-06-26): a read-only "Extract transactions" click does NOT start the LLM
+        // categorizer on its own. The earlier Phase-33 auto-offer silently enqueued a `categorize`
+        // doctask here (invisible in the run bar, in the doctask lane) — a no-surprises violation for a
+        // calm, privacy-posture app. The categorize is now an EXPLICIT one-tap offer on the run-bar
+        // result row (renderer-side), targeting the same document; the model pass is user-initiated.
         return {
           ok: res.ok,
           transactionCount: res.transactionCount,

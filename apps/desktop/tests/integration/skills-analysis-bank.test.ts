@@ -77,6 +77,24 @@ function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisC
   }
 }
 
+/** Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (audit P-1 query-count).
+ *  Matching `FROM bank_transactions` counts only row LOADS, never the reconciled/category UPDATEs. */
+async function countPrepares(db: Db, pattern: RegExp, fn: () => Promise<void>): Promise<number> {
+  const real = db.prepare.bind(db)
+  let count = 0
+  const target = db as unknown as { prepare: Db['prepare'] }
+  target.prepare = ((sql: string) => {
+    if (pattern.test(sql)) count++
+    return real(sql)
+  }) as Db['prepare']
+  try {
+    await fn()
+  } finally {
+    target.prepare = real
+  }
+  return count
+}
+
 // A clean 2-row statement: Grocery -45.90 (out), Salary +2500.00 (in); the running balances reconcile.
 // NOTE: it prints NO opening/closing balance, so under the D56 completeness gate it cannot PROVE it
 // captured the whole statement → no total is presented (the downgrade). Used by the tests that don't
@@ -139,6 +157,19 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain('EUR')
     // The statement reconciles, so there is NO "check these rows first" block.
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.unreconciledHeading'))
+  })
+
+  it('issues ONE bank_transactions read per analysis question (audit P-1): the seams reuse the single load', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // Warm-up extracts a FRESH statement so the measured run reuses it (no re-extraction in the window).
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    const reads = await countPrepares(db, /FROM bank_transactions\b/i, async () => {
+      await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    })
+    // Was THREE before Phase 4 (summarize seam load + validate seam load + the handler's own load); now
+    // the handler loads once and hands the rows to both seams as `preloaded`, so neither re-queries.
+    expect(reads).toBe(1)
   })
 
   it('figures are quoted, never invented — no fabricated number leaks into the answer', async () => {
@@ -207,6 +238,9 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain('Income') // Salary → Income (built-in rule)
     // Deterministic rule pass only — NOT labelled model-assisted.
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.categoryAssisted'))
+    // …but it IS labelled a quick rule-based grouping that points at the Categorize button (audit C-2),
+    // so the chat breakdown and the (model-assisted) button result are not silently divergent.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryRuleBased'))
   })
 
   it('reads PERSISTED categories (Phase 33) and labels a model-assigned breakdown model-assisted', async () => {
@@ -238,6 +272,8 @@ describe('bank-statement analysis handler — run()', () => {
     )
     expect(res.answer).toContain('Groceries')
     expect(res.answer).toContain(tr('skills.bankAnalysis.categoryAssisted'))
+    // The model-assisted breakdown carries the assisted note, NOT the rule-based one (audit C-2).
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.categoryRuleBased'))
     // No duplicate statement was created (re-extraction is suppressed when one exists).
     const count = db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(id) as {
       n: number

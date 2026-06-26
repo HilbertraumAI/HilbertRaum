@@ -107,6 +107,58 @@ describe('SkillPicker (composer footer, skills plan §10.2)', () => {
   })
 })
 
+describe('SkillPicker — closed-trigger suggestion hint (U-3)', () => {
+  const offer = { installId: 'user:bank', title: 'Bank statement helper' }
+
+  it('surfaces the suggestion on the CLOSED trigger and selects it on one tap', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(withI18n(<SkillPicker skills={[skill()]} value={null} onChange={onChange} suggestion={offer} />))
+    // Visible WITHOUT opening the picker — the dropdown is still closed (no menu items rendered).
+    const hint = screen.getByRole('button', { name: /^Suggested: Bank statement helper$/ })
+    expect(hint).toBeInTheDocument()
+    expect(screen.queryByRole('menuitemradio')).not.toBeInTheDocument()
+    // Inert until tapped — surfacing it applies nothing.
+    expect(onChange).not.toHaveBeenCalled()
+    await user.click(hint)
+    expect(onChange).toHaveBeenCalledWith('user:bank')
+  })
+
+  it('shows no closed-trigger hint when a skill is already selected (even for a different offer)', () => {
+    render(
+      withI18n(
+        <SkillPicker
+          skills={[skill(), skill({ installId: 'user:invoice', id: 'invoice', title: 'Invoice helper' })]}
+          value="user:bank"
+          onChange={vi.fn()}
+          suggestion={{ installId: 'user:invoice', title: 'Invoice helper' }}
+        />
+      )
+    )
+    expect(screen.queryByRole('button', { name: /^Suggested:/ })).not.toBeInTheDocument()
+  })
+
+  it('hides the closed-trigger hint once the user declines it (suggestionDismissed)', () => {
+    render(
+      withI18n(
+        <SkillPicker skills={[skill()]} value={null} onChange={vi.fn()} suggestion={offer} suggestionDismissed />
+      )
+    )
+    expect(screen.queryByRole('button', { name: /^Suggested:/ })).not.toBeInTheDocument()
+  })
+
+  it('clears the closed-trigger hint once a skill is picked', () => {
+    const { rerender } = render(
+      withI18n(<SkillPicker skills={[skill()]} value={null} onChange={vi.fn()} suggestion={offer} />)
+    )
+    expect(screen.getByRole('button', { name: /^Suggested:/ })).toBeInTheDocument()
+    rerender(
+      withI18n(<SkillPicker skills={[skill()]} value="user:bank" onChange={vi.fn()} suggestion={offer} />)
+    )
+    expect(screen.queryByRole('button', { name: /^Suggested:/ })).not.toBeInTheDocument()
+  })
+})
+
 describe('per-message skill glyph (Transcript, DS16/§22-A5)', () => {
   function msg(over: Partial<Message>): Message {
     return {

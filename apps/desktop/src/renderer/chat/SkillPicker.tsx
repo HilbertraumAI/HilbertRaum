@@ -23,6 +23,9 @@ interface SkillPickerProps {
   suggestion?: SkillSuggestion | null
   /** Fired when the menu opens/closes — the screen recomputes the suggestion on open. */
   onOpenChange?: (open: boolean) => void
+  /** U-3: the user explicitly declined the suggestion for this draft (picked "None"). Suppresses the
+   *  CLOSED-trigger hint so it never re-nags — the in-picker pinned offer is unaffected. */
+  suggestionDismissed?: boolean
 }
 
 export function SkillPicker({
@@ -31,7 +34,8 @@ export function SkillPicker({
   onChange,
   disabled,
   suggestion,
-  onOpenChange
+  onOpenChange,
+  suggestionDismissed
 }: SkillPickerProps): JSX.Element {
   const { t, lang } = useT()
   const selected = value ? skills.find((s) => s.installId === value) ?? null : null
@@ -41,7 +45,13 @@ export function SkillPicker({
     suggestion && suggestion.installId !== value
       ? skills.find((s) => s.installId === suggestion.installId) ?? null
       : null
+  // U-3: when NO skill is picked and the offer was not declined, surface that same offer as a quiet,
+  // named affordance on the CLOSED trigger so a user who never opens the picker still sees it. It
+  // sits OUTSIDE the dropdown, so one tap SELECTS the skill (it never opens the menu) — still an
+  // inert offer the user taps (§22-D3: no canvas chip, no settings key, never auto-applied).
+  const closedHintSkill = value == null && !suggestionDismissed ? offerSkill : null
   return (
+    <>
     <DropdownMenu.Root onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button type="button" className="footer-menu-btn" disabled={disabled}>
@@ -94,5 +104,16 @@ export function SkillPicker({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+    {closedHintSkill && (
+      <button
+        type="button"
+        className="footer-menu-btn skill-suggest-hint"
+        disabled={disabled}
+        onClick={() => onChange(closedHintSkill.installId)}
+      >
+        {t('chat.skill.suggestedHint', { title: localizedSkillTitle(closedHintSkill, lang) })}
+      </button>
+    )}
+    </>
   )
 }

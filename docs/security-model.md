@@ -493,6 +493,21 @@ staging dir and only places it on a clean pass. Each defence:
   `zlib.inflateRawSync(member, { maxOutputLength })`, which aborts the moment a member's **actual**
   inflated output exceeds `HILBERTRAUM_SKILL_MAX_FILE_BYTES` — a lying declared size cannot get
   past it. Only STORE and DEFLATE are accepted; encrypted/ZIP64 archives are refused.
+- **Inflate-input bound (DoS, audit S-1, Phase 8).** The output cap above bounds what inflate
+  *produces*, but the compressed slice handed to the synchronous `inflateRawSync` could still be as
+  large as the ~8 MiB total cap (the cheap pre-check only sums the *spoofable* `uncompressedSize`),
+  so a crafted member could stall the main thread inflating it. `inflateEntry` therefore rejects any
+  member whose central-directory **`compressedSize` exceeds the per-file cap** *before* it slices or
+  inflates — bounding the inflate **input** for both STORE and DEFLATE (a legitimate text member never
+  compresses past the cap). Impact was always bounded (import is a user action), so this is a DoS-only
+  hardening, not an escape.
+- **Duplicate stripped-path collision (audit S-2, Phase 8).** A `.skill.zip` may wrap its files under
+  one shared top-level folder, which the importer strips; that stripped path was not otherwise
+  re-validated, and two distinct central-directory members (e.g. a duplicate name) could collapse to
+  the **same** `relPath`, where the final `writeFileSync` is last-writer-wins — so a later duplicate
+  could silently shadow a `SKILL.md` the preview already validated. The stager now **re-asserts
+  `safeRelPath` on the stripped path** (belt-and-braces) and **rejects a colliding `relPath`** with the
+  structural `duplicatePath` reason, so the materialized tree is one-write-per-path.
 - **Nested-archive sniff (E2)** — every inflated member's leading bytes are checked against archive
   signatures (zip `PK`, gzip, xz, zstd, tar `ustar`), so a zip renamed `data.csv` is rejected even
   though its extension is allowlisted.
@@ -515,6 +530,15 @@ run history) as a minimal STORE-method zip built the same dependency-free way. *
 are read-only and cannot be deleted or overwritten** (the built-in-collection precedent); the
 residual that a hash manifest on a writable drive is unanchored (real integrity = off-drive
 signing) is the same one already accepted for the engine binary (§22-M2).
+
+**Accepted residual (EOCD-first-match, audit S-3-adjacent, Phase 8).** The central-directory locator
+scans backward for the first End-Of-Central-Directory record and uses it — a classic
+**parser-differential** vs a stock `unzip` (a crafted archive could embed a second EOCD that a
+different tool would prefer). This is **hardening-only, not an escape**: every member that the chosen
+EOCD's central directory enumerates is still fully path-/symlink-/extension-/size-validated and
+re-checked against its local header, so a divergent reading cannot smuggle an unvalidated file onto
+disk. A `cdOffset+size` self-consistency check was considered and **deliberately not built** — it buys
+no security over the existing per-member validation. Documented and accepted, not papered over.
 
 ### App-skill provisioning + the accepted integrity residual (skills plan §22-M2, Phase S9, 2026-06-17)
 
@@ -673,8 +697,10 @@ Security-relevant items: **(S1)** the import-preview clamp/`manifest.json`-confl
 echo the raw frontmatter value — closing the one §22-M1 gap where attacker text could ride the
 `SkillPreview` IPC payload into the UI (the structural *errors* were already clean); **(S2)** the
 `filenamePatterns` residual above is now actively bounded — the parser caps each entry's length (≤200)
-and count (≤64) and `selector.globToRegExp` refuses a glob with >10 `*` wildcards, so the
-bounded-RegExp claim no longer rests on input being benign. The B1/B2 cancel-semantics and I1/I2
+and count (≤64) and the glob is matched by a **linear, non-backtracking two-pointer matcher**
+(`selector.globMatches`), so backtracking is structurally impossible regardless of input. (S12
+originally compiled the glob to a bounded RegExp with a >10-`*` wildcard cap; **vuln-scan 2026-06-21
+replaced that compile with the linear matcher** — see the parsing-DoS section below.) The B1/B2 cancel-semantics and I1/I2
 localization fixes added no content to any log/audit and no new capability.
 
 > **§-anchor note.** This section cites the original skills-plan's section numbers (`§12`, `§14`,

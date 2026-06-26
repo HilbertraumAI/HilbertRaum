@@ -1796,7 +1796,7 @@ provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
   per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
   shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
 - **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
-  `prepare-drive` — never network-fetched. **Nine** bundled app skills now ship. Three are **Tier-2**
+  `prepare-drive` — never network-fetched. **Eight** bundled app skills now ship. Three are **Tier-2**
   tool references — **`bank-statement`** (the first, `kind: tool`, app-orchestrated tools through the
   §7 gate), **`invoice`** (the second Tier-2, proving the gate generalizes to a second content class),
   and **`document-redaction`** (read-transform-export). The rest are **Tier-1 instruction** skills
@@ -1842,7 +1842,14 @@ folder — for both sources (no decrypt/transient/shred).
 `services/skills/installer.ts` owns the lifecycle behind IPC. Import **validates** a `.skill.zip` or
 folder with a net-new dependency-free **member-by-member safe extractor** (built-in `node:zlib` + a
 central-directory parser; full defence matrix in [`security-model.md`](security-model.md)), stages the
-whole tree, then **places it as plain files at `user-skills/<id>/`** (folder name == manifest id) and
+whole tree, then **places it as plain files at `user-skills/<id>/`** (folder name == manifest id).
+Two **DoS-hardening bounds** sit in the staging loop (audit S-1/S-2, Phase 8):
+`inflateEntry` rejects a member whose **central-directory `compressedSize` exceeds the per-file cap**
+*before* slicing/inflating — bounding the synchronous inflate **input**, not only its `maxOutputLength`
+output (a legitimate text member never compresses past the cap); and after the common-prefix strip the
+loop **re-asserts `safeRelPath` on the stripped path** and **rejects two members that collapse to the
+same `relPath`** (`SKILL_IMPORT_ERRORS.duplicatePath`) so a later duplicate can't last-writer-wins
+shadow a preview-validated `SKILL.md`. It then
 reconciles the row to **enabled-with-warning** (DS7) — unless an enabled app skill of the same id is
 already effective, in which case the import **coexists disabled** (trust-first precedence, DS12). A
 lower version is refused unless developer mode (DS15). **Delete** is an app-level **ref-clear sweep**:
@@ -1881,10 +1888,17 @@ globs (supporting) — fully **deterministic, no model, no network**, with a fix
 document signal never fires). `services/skills/suggest.ts` resolves the conversation's scope
 **main-side from the conversationId** (§22-C4), gathers the signals, and returns at most **one** offer
 over `suggestSkills(conversationId, question?)`. The question is content: scored but **never logged**.
-The offer is surfaced **only inside the composer picker** (no canvas chip, no settings key) and is
-**inert until tapped**. **Auto-fire (S13)** is the opt-in extension of this same scorer that *does*
-apply a skill without a tap, behind a separate higher threshold + an opt-in + a per-turn undo — see
-**§18**.
+The offer is surfaced **in the composer picker** — pinned atop the menu when it is open, and (U-3)
+mirrored as a quiet, named **hint on the CLOSED trigger** (`chat.skill.suggestedHint`, a
+`.skill-suggest-hint` footer affordance) so a user who never opens "Skill: none ▾" still sees the
+nudge. `ChatScreen` recomputes the offer **proactively as the draft changes** (debounced ~400 ms via
+the same defensive `suggestSkills` call, only when no skill is picked) on top of the open-time refresh.
+Both surfaces keep the same invariants: **no canvas chip, no settings key, inert until tapped, never
+auto-applied** (§22-D3). The closed hint shows **only while no skill is selected and the offer was not
+declined** — an explicit "None" pick sets a renderer-side per-draft `suggestionDismissed` flag (reset
+on send / conversation change) so it never re-nags; one tap selects the skill. **Auto-fire (S13)** is
+the opt-in extension of this same scorer that *does* apply a skill without a tap, behind a separate
+higher threshold + an opt-in + a per-turn undo — see **§18**.
 
 ### §7 Tier-2 tool gate (S10)
 
@@ -1900,6 +1914,12 @@ shape; (3) refuse a write/export tool lacking `confirmed:true`; (4) run inside a
 (6) bracket with ids/counts-only audit (`skill_run_started`/`done`/`failed` = `{skillId, toolName,
 documentCount}`). S10 shipped the gate with one harmless reference tool (`count_selected_documents`).
 The full ceiling rationale is in [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)".
+*(Audit X-2, Phase 10: `count_selected_documents` is **kept deliberately as the gate's test-only
+canary** — registered, but no bundled skill declares it and it is intentionally **not wired to a
+`run.ts` dispatch seam** (`tool-runs.ts buildToolRunner` returns `null` for it), so it is registry-only
+and exposes no live capability. It is the minimal reference the gate tests exercise end-to-end. Both
+halves are pinned: `skills-tool-registry.test.ts` asserts it is registered; `skills-tool-run-ipc.test.ts`
+asserts `buildToolRunner` returns `null` for it — so removing it OR wiring it up both fail a test.)*
 
 ### §8 Bank-statement tools + the run seam (S11)
 
@@ -1917,6 +1937,10 @@ content, not surfaced in v1), and `export_transactions_csv` (confirm-gated `expo
 and persists atomically (ROLLBACK ⇒ no partial rows). The four downstream tools operate on the
 **already-extracted** rows — the seam loads the **latest statement** for the in-scope document and passes
 them as **structured input**, so the tools stay pure and the §7 ceiling is unchanged (no new accessor).
+*(Phase-4 perf, audit P-1: the read-only downstream seams take an optional `preloaded` rows arg — the
+analysis handler loads the rows once and supplies it, so the seam skips its own load — and return their
+validated structured `output` for in-process reuse by that handler; both are no-ops for the run-bar/IPC
+path, which passes no rows and maps counts only. See §19.)*
 **The CSV export is the first FS-write from a skill tool:** the pure tool only *produces* the CSV string;
 the seam writes it main-side to a **user-chosen path** via a save dialog, gated on the `export-file`
 confirm — the path + content never touch any log/audit (only "saved N rows" is surfaced), and free-text
@@ -1941,7 +1965,10 @@ trailing quantity + trailing unit-price/line-total money tokens, and anything th
 parsed is **dropped** (header fields are individually optional, never guessed). The deterministic money/date
 primitives (`parseAmount`/`parseDate`/`detectCurrency`) and the CSV formula-injection neutralization
 (`csvField`) are now **shared** by both domains in `services/skills/tools/money.ts` — one parser per locale
-rule, one audited export boundary. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
+rule, one audited export boundary. The Unicode **word-boundary** matcher `wordIncludes` lives here too
+(audit C-1, Phase 2): both the deterministic `categorizeRow` and the LLM `prefilterCategory` now call it,
+so a coincidental substring (`coffee`⊃`fee`, `atmosphere`⊃`atm`, `mühlohn`⊃`lohn`) can no longer mis-file
+a row to *Fees*/*Cash*/*Income* — and the two categorization paths agree on every description rule. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
 `run.ts`'s `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, same no-partial-persist
 (BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
 (no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
@@ -1988,6 +2015,54 @@ renders `validate_statement_balances` from a content-free `resultKind` discrimin
 'unreconciled' | 'unchecked') — the controller/IPC stay bank-free (the discriminator is an opaque
 string; the bank meaning lives only in the renderer's copy map).
 
+**Run-UI target document for a multi-doc scope (audit U-1).** The v1 tools are single-document, but a
+conversation's scope can hold several indexed documents. Rather than silently acting on `docIds[0]`
+with an opaque "1 document" label, the run UI surfaces — and lets the user choose — the target:
+`listRunnableTools` returns `RunnableToolSet = { tools, documentIds }`, where `documentIds` is the
+in-scope indexed ids **in main's resolution order** (`[0]` = the default target). The renderer maps
+those **ids → NAMES from its own already-loaded document list** (`docs`/`attachments` in `ChatScreen`),
+so a document **title/filename never crosses the IPC** (the §6 content-adjacent posture): `SkillRunState`
+and the `skills:*` channels stay ids/counts only. With exactly one in-scope doc the `SkillRunBar` shows
+its name (a disabled chooser); with **more than one** it shows a small Radix dropdown (the DepthMenu
+pattern) and passes the chosen `documentId` to `startSkillRun`. That id is **UNTRUSTED**: `startSkillRun`
+re-resolves the in-scope set and **refuses** an id not in it (`main.skills.run.documentOutOfScope`) —
+never trusting a renderer-supplied id past the scope filter; `documentCount` stays the honest **1** (a
+single-doc tool), not "all N". The busy/result row names the running target from a renderer-remembered
+name (resolved at launch from the same list), falling back to the legacy count label when unknown (e.g.
+after a remount). The redaction **routing** answer is likewise count-honest: with scope > 1 it uses
+`skills.redactionRouting.answerMulti` ("pick which document on the button"), still content-free.
+**Post-extract categorize is an explicit offer (audit U-2, Phase 6):** a read-only extract no longer
+silently starts the LLM categorizer; after a successful rows>0 extract the result row offers a one-tap
+**"Categorize transactions"** follow-up that targets the SAME document via a renderer-remembered id
+(`runTargetId`, the sibling of `runTargetName`) — see §22. The model pass is user-initiated; the run
+state stays content-free (no documentId in `SkillRunState`).
+
+**Cross-lane write safety — per-document serialization (audit PC-1, Phase 9).** Three INDEPENDENT
+execution lanes can touch the same bank/invoice tables (§22 / the audit §2.3): **Lane A** the chat
+analysis auto-run, **Lane B** this `SkillRunController` button run, **Lane C** the `DocTaskManager`
+categorize. The main process is single-threaded, so the hazard is not an OS data race but **cooperative
+interleaving across `await` points** — one lane parked at an await (e.g. re-reading the stored document)
+while another runs its DELETE+INSERT on the SAME statement (the cardinal case: a chat re-extract
+`replaceExisting` DELETE racing a button/categorize run → "statement vanished mid-read", orphaned rows,
+a nondeterministic final state). A lightweight in-process **per-document async mutex**
+(`services/skills/doc-lock.ts` `withDocumentLock(documentId, fn)` — a `Map<documentId, Promise>` chain,
+**re-entrant** within one async call chain via `AsyncLocalStorage`) now serializes every **write-capable**
+section by `documentId`: the write seams (`runBankExtraction` incl. its `replaceExisting` DELETE+INSERT,
+`runBalanceValidation`, `runCategorization`, `runInvoiceExtraction`, `runInvoiceTotalsValidation`)
+**self-lock**, and the two MULTI-step lanes wrap their WHOLE sequence in one outer `withDocumentLock`
+(the analysis handlers' extract→validate→categorize, and `runCategorize`'s extract→categorize-persist),
+so a re-extract from another lane cannot slip BETWEEN a lane's own steps (the inner self-locks are
+re-entrant no-ops under the outer hold). Read-only/export paths (`summarize_cashflow`, the CSV exports,
+`redact_document`) need not lock. **Posture:** NO new DB/FS/net capability (an in-memory map in the one
+main process; the workspace DB is single-writer anyway), no schema change, no IPC change, the audit
+payload still `{skillId, toolName, documentCount}`; the key is a document **id** (never content) and
+nothing new is logged. The DELETE+INSERT re-extract is already one `BEGIN…COMMIT` — the mutex serializes
+*lanes*, that txn keeps a *single* re-extract atomic (no new transaction was added). **Granularity:**
+per document — unrelated documents still run fully concurrently. **No deadlock:** the doc lock is finer
+than `DocTaskManager.acquireChatSlot()` / the `ModelSlotArbiter` and is always released in a `finally`;
+the analysis lane acquires the chat slot FIRST and only then the doc lock, and Lanes B/C never acquire
+the chat slot — so no party ever holds the doc lock while waiting on the chat slot (no cycle).
+
 ### §10 Data model (additive `db.ts`)
 
 `skills` (the registry index, keyed by `install_id`) + nullable `conversations.active_skill_id` /
@@ -2020,8 +2095,9 @@ export boundary), and the scattered S10/S11 sentinel tests were consolidated int
 tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy**. Accepted LOW residuals
 (documented in [`known-limitations.md`](known-limitations.md)): prompt text-injection is contained by the
 **structural ceiling**, not by escaping the fence delimiter; a user skill's `triggers.filenamePatterns`
-compile to a bounded RegExp run only on a user action (and, post-S12, the entry length/count are capped
-at parse time + the selector refuses a wildcard-heavy glob — see §13 S2). **Deferred:** S13 auto-fire
+are matched against a title only on a user action by a **linear, non-backtracking two-pointer matcher**
+(`selector.globMatches`), and the entry length/count are capped at parse time (vuln-scan 2026-06-21
+replaced the original glob→RegExp compile entirely — see §13 S2). **Deferred:** S13 auto-fire
 (gated on an evaluation harness); native model tool-calling (stays a future option behind the same gate);
 the app-skill integrity residual (by location, not signature — same as the engine binary, §22-M2).
 **History:** the wave shipped S2–S12 (2026-06-17); the original plans: `git show <S12^>:docs/skills-plan.md`
@@ -2049,8 +2125,12 @@ behind the unchanged §14 ceiling (no new capability, still offline, audit still
   where attacker text could ride the `SkillPreview` IPC payload into the UI (notes share the path with
   the already-clean structural errors).
 - **S2 — ReDoS guard on `filenamePatterns`.** Two layers: the parser caps each trigger entry's length
-  (≤200) and count (≤64), and `selector.globToRegExp` refuses a glob with >10 `*` wildcards (treated as
-  a non-match) so a `*a*a…`-style pattern can never hang the synchronous main-side scoring.
+  (≤200) and count (≤64), and the glob is matched against a title by a **linear, non-backtracking
+  two-pointer matcher** (`selector.globMatches`) so a `*?*?…`-style pattern can never hang the
+  synchronous main-side scoring. (S12 originally compiled the glob to a bounded RegExp with a >10-`*`
+  wildcard cap; **vuln-scan 2026-06-21 replaced that with the linear matcher** because the cap counted
+  only `*` — a `*?*?…` pattern with ≤10 stars still compiled to a degree-10 backtracking RegExp — see
+  [`known-limitations.md`](known-limitations.md).)
 - **B3 — `summarize_cashflow` self-consistency.** `net` is derived from the rounded `totalIn`/`totalOut`
   so the three reported figures always satisfy `net === totalIn − totalOut`.
 - **B4 — no stranded `started` run.** `runBankExtraction` and `prepareStatementRun` now wrap everything
@@ -2068,6 +2148,16 @@ behind the unchanged §14 ceiling (no new capability, still offline, audit still
   same-id user skill was enabled): it keeps the highest-precedence one (trust app > user → version →
   recency) and disables the rest. The enable IPC + import already enforced this on their paths; reconcile
   was the gap.
+- **PC-1 — cross-lane write safety (skills-tools-audit-2026-06-26, Phase 9).** The three lanes that touch
+  the bank/invoice tables (Lane A chat analysis, Lane B `SkillRunController`, Lane C `DocTaskManager`
+  categorize) had **no cross-lane lock**, so a chat re-extract `replaceExisting` DELETE could race a
+  button run / a categorize on the SAME statement (cooperative interleaving across `await` points, not an
+  OS data race — the main process is single-threaded). A per-document async mutex
+  (`services/skills/doc-lock.ts` `withDocumentLock`, a re-entrant `Map<documentId, Promise>` chain) now
+  serializes every write-capable section by `documentId`: the write seams self-lock and the two
+  multi-step lanes wrap their whole sequence (re-entrant inner locks). In-memory, per-document (unrelated
+  docs stay concurrent), no new capability/schema/IPC, finer than `acquireChatSlot` and `finally`-released
+  (no deadlock). Full record in §9.
 
 ### §14 Content-reach + compatibility audit fixes (2026-06-17b)
 
@@ -2165,9 +2255,12 @@ and still answers in German, D-L6):
   cards + detail modal, and the per-message **glyph** in `Transcript` (an installId→localized-title
   resolver threaded from `ChatScreen`, built from the full skills list so a now-disabled stamped skill
   still localizes, with a stamped-title fallback). Every pick falls back to the canonical text.
-- **Bundled skills.** All four app skills (`bank-statement`, `invoice`, `document-redaction`,
-  `meeting-protocol`) gained a `localized.de` title + description. (The triggers were already bilingual,
-  which is why German questions already fired the suggestion — only the visible text was English.)
+- **Bundled skills.** The four app skills shipping at the time (`bank-statement`, `invoice`,
+  `document-redaction`, `meeting-protocol`) gained a `localized.de` title + description; the four
+  **Professional Documents** skills added 2026-06-21 (`contract-brief`, `deadline-obligation-finder`,
+  `what-changed`, `share-safe-review`) carry it too, so **all eight bundled skills** are now
+  German-localized. (The triggers were already bilingual, which is why German questions already fired
+  the suggestion — only the visible text was English.)
 
 Display-only by design: nothing here threads locale into `resolveTurnSkill`/the prompt, so the gate +
 ceiling are unchanged and the injected body is byte-identical regardless of UI language.
@@ -2394,15 +2487,40 @@ skipped and the relevance + coverage-extract paths run **byte-unchanged** (R5).
 multi-doc keeps relevance) **and** an analysis-shaped keyword set (EN+DE, substring-ambiguous tokens
 avoided per §1's DS17 caution). `run()` auto-runs the read-only tools through the run seam for their
 `skill_runs` lifecycle + ids/counts audit, then computes the answer's **figures from the persisted
-rows** via the **pure** tool functions (the seams surface only counts). The answer is deterministic,
+rows** via the **pure** tool functions. **Single row load + seam-output reuse (Phase-4 perf, audit
+P-1/P-2):** the handler loads the statement rows **once** — `loadStatementRowsWithCategories` is now the
+sole `bank_transactions` read on the non-category path — and hands them to the downstream seams as a new
+optional `preloaded` arg (`prepareStatementRun`/`prepareInvoiceRun` skip their own load when it is
+supplied). The read-only seams (`summarize_cashflow`, `validate_statement_balances`,
+`validate_invoice_totals`) now **return their validated structured `output`** (`CashflowSummary` /
+`ReconcileResult` / `InvoiceTotalsResult`) for **in-process** reuse, so the handler reuses it instead of
+recomputing the same pure function over a re-queried row set (a pure recompute is the fallback if a seam
+failed). These outputs are figures (content) and stay **in-handler** — they are never mapped into
+`ToolRunOutcome`/IPC (the run-bar dispatch in `tool-runs.ts` still maps counts only). The `skill_runs`
+lifecycle + ids/counts audit are **unchanged** (the `summarize_cashflow` run + its `skill_run_*` trio
+still fire — approach A, not the "drop the summary run" alternative B). Net: a non-category bank question
+issues **one** `bank_transactions` read (was three: two seam loads + the handler load); an invoice
+question **one** `invoice_line_items` read (was two). The answer is deterministic,
 localized Markdown honouring the SKILL.md honesty posture (quote printed figures; surface flagged rows
 **before** the headline; never invent), with real `[Sn]` source-chunk citations (M2-safe, never the
-synthesised total).
+synthesised total). On this **exhaustive** path the honesty posture is **code-enforced, not
+body-driven**: `buildBankAnswer`/`buildInvoiceAnswer` (`analysis/bank-statement.ts`,
+`analysis/invoice.ts`) reimplement those rules directly in TS, so editing the SKILL.md body changes
+only the off-topic relevance fallback (where the body rides the fence) — the body and the TS must
+therefore be kept in step. **Audit A-1 (Phase 10) pins that step with a parity test**
+(`skills-skillmd-parity.test.ts`): for both skills it asserts the SKILL.md body still states each
+honesty bullet (unreconciled-before-total, reconcile-or-say-so, never-invent) **and** that the answer
+builder still produces the matching honest branch for a constructed unreconciled / contradicted /
+mixed-currency / missing-figure case — so a drift in **either** the body or the TS now fails a test.
 
 - **`bank-statement`** (`analysis/bank-statement.ts`): `extract_transactions` →
   `summarize_cashflow` + `validate_statement_balances` (+ `categorize_transactions` only when the
   question is category-shaped). Leads with the count, surfaces unreconciled rows before the totals,
   reports mixed currency as "no single total." Citations narrow to the transactions' `source_page`.
+  The category-shaped breakdown runs the **deterministic** rule pass here (0 model calls); since the
+  "Categorize" button uses the richer LLM taxonomy, the chat answer **labels** a rule-based breakdown as
+  such and points at the button (audit C-2 — see §22 "Consistent breakdown framing"), so the two entry
+  points are not silently divergent.
 - **`invoice`** (`analysis/invoice.ts`): `extract_invoice` → `validate_invoice_totals`. Surfaces any
   failed reconciliation check (line-items→net, net+tax→gross, tax-vs-rate) **before** the headline
   gross; prints only the figures the invoice states (a field that couldn't be parsed is left out).
@@ -2410,9 +2528,23 @@ synthesised total).
   source chunks (still real chunks, M2-safe). i18n: `skills.invoiceAnalysis.*` (EN+DE parity), reusing
   the shared `coverage.extract.*` meter + `skills.analysis.refusePartial` refuse copy.
 
+**Scope resolution (audit X-1, Phase 10).** Each handler's `applies()`/`run()` resolve the in-scope
+documents through the **one shared** `documentsInScope(db, scope, { requireChunks })` helper
+(`services/skills/scope-documents.ts`) — the single definition of "indexed documents in a resolved
+scope," replacing five hand-copied queries. The analysis handlers pass `requireChunks: true` (they read
+the stored `chunks`, so an indexed-but-unchunked document is not answerable here); the **run path**
+(`resolveInScopeDocumentIds`) and the **suggest/auto-fire path** (`inScopeDocSignals`) pass `false` (the
+run re-extracts faithfully from the stored copy; the suggestion is keyword/MIME signal only). The helper
+logs nothing and stays main-side — a `title` is content-adjacent and never crosses IPC from it — and its
+deterministic `ORDER BY created_at, id` keeps `resolveInScopeDocumentIds[0]` the stable default run
+target (U-1/U-2). *(The RAG router keeps its own `registerRagIpc.documentsInScope` — same predicate, a
+deliberate sibling in a different layer, outside the skills subsystem this helper unifies.)*
+
 **Tests.** `skills-analysis-bank.test.ts` + `skills-analysis-invoice.test.ts` (handler-level:
 `applies()` pre-flight, exhaustive math from rows, flagged check surfaced before the headline, figures
 quoted not invented, export never auto-run, coverage `fullyChunked` true/false, real source citations);
+`skills-skillmd-parity.test.ts` (audit A-1: the SKILL.md honesty bullets ⇔ the
+`buildBankAnswer`/`buildInvoiceAnswer` honest branches, both directions);
 `rag-skill-analysis.test.ts` + `rag-skill-analysis-invoice.test.ts` (IPC-level over the real
 `askDocuments`: exhaustive path with `coverage.mode==='extract'` + no model call, refuse path, relevance
 path byte-unchanged, single-locked-slot contract).
@@ -2582,25 +2714,40 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
   out-of-column dates so a Valuta line can't be re-extracted by the date-leading `parseLine`.
 - **The BALANCE-LABEL GUARD (`isBalanceLabelLine`, `bank-statement.ts`) — the other half of the fix.**
   Raiffeisen prints opening/closing as `Kontostand per <date>` with the date IN the Datum column, so
-  geometry alone can't reject it. `'kontostand per'` is added to BOTH `OPENING_LABELS` and
-  `CLOSING_LABELS` (the existing "first opening / last closing" rule then reads opening `35.037,04`
-  from the period-start line and closing `30.647,07` from the period-end line; "Aktueller Kontostand"
-  deliberately excluded — it restates the closing at the top and would corrupt the opening), and
-  `extractTransactionRows` SKIPS any balance-label line so a summary is never counted as a transaction
-  (it is still read by `extractStatementBalances`). This stops the double-count that broke the tie.
+  geometry alone can't reject it. `'kontostand per'` belongs to `BALANCE_LABELS`, so
+  `extractTransactionRows` SKIPS any such line — a summary is never counted as a transaction (it is read
+  by `extractStatementBalances` instead). It is deliberately kept OUT of `OPENING_LABELS` /
+  `CLOSING_LABELS`: the SAME label prints BOTH balances, so it cannot be split by label alone — it is
+  disambiguated by DATE in `extractStatementBalances` (see the gate bullet, audit C-4). "Aktueller
+  Kontostand" stays excluded (it restates the closing at the top and would corrupt the opening). This
+  stops the double-count that broke the tie.
 - **The completeness gate (D56 + the D56-R refinement).** New `extractStatementBalances` (printed
   opening/closing, EN+DE labels incl. `balance brought/carried forward`, `opening/closing balance`,
   `Anfangs-/Endsaldo`, `Kontostand per`) feeds `assessCompleteness`, the three-outcome classifier
   (`complete` / `contradicted` / `unverified`); `isStatementComplete` is retained as its boolean
-  `=== 'complete'` projection (the unit tests pin the gate by that name). Balances persist additively on
-  `bank_statements` (`opening_balance`/`closing_balance`, REAL, nullable, content-class — never
-  logged/audited/exported). `buildBankAnswer` renders each outcome: `complete` → VERIFIED total + the
-  proven-whole `caveat`; `unverified` → the SAME single-currency totals + categories under
-  `unverifiedCaveat` (a labelled sum of the rows read — the no-balance "Umsätze" case, the reported
-  bug); `contradicted` → `skills.bankAnalysis.incompleteNoTotal` (the honest refusal). Mixed-currency
-  reports no-single-total (safe) regardless of outcome. A bounded transaction listing
-  (`transactionsHeading`/`transactionItem`/`transactionsMore`, first 10 + "ask to export CSV") trails
-  every non-empty answer. All strings are EN+DE.
+  `=== 'complete'` projection (the unit tests pin the gate by that name).
+  - **Cent-exact tie (audit C-3, 2026-06-26).** `assessCompleteness` sums and compares the
+    `opening + Σamounts == closing` tie in **integer cents** (`Math.round(amount*100)`), not a float
+    `reduce`. Every figure is exactly 2-dp, so the cent sum is exact and the tie is an exact integer test
+    — float drift over thousands of rows can no longer push the difference past `MONEY_EPS` and flip a
+    genuinely-tying statement to a false `contradicted`. Read-time only; nothing persisted changes.
+  - **`Kontostand per` date disambiguation (audit C-4, 2026-06-26).** Because the same label prints both
+    balances, `extractStatementBalances` resolves it by DATE: with two distinct-dated `Kontostand per`
+    lines the **earliest** is the opening and the **latest** is the closing; a **single** such line (no
+    pair to bracket the period) is the **closing only** (opening undefined → the gate downgrades to an
+    honest `unverified` labelled sum, never a false `contradicted` from reading opening == closing).
+    Explicit `Anfangs-/Endsaldo` labels still win where both appear. This **changes the persisted
+    `opening_balance`/`closing_balance`** on affected statements → `BANK_EXTRACTOR_VERSION` bumped 1 → 2
+    (stale v1/NULL statements re-extract via the A9 path on the next reuse).
+  - **Persistence & rendering.** Balances persist additively on `bank_statements`
+    (`opening_balance`/`closing_balance`, REAL, nullable, content-class — never logged/audited/exported).
+    `buildBankAnswer` renders each outcome: `complete` → VERIFIED total + the proven-whole `caveat`;
+    `unverified` → the SAME single-currency totals + categories under `unverifiedCaveat` (a labelled sum
+    of the rows read — the no-balance "Umsätze" case, the reported bug); `contradicted` →
+    `skills.bankAnalysis.incompleteNoTotal` (the honest refusal). Mixed-currency reports no-single-total
+    (safe) regardless of outcome. A bounded transaction listing
+    (`transactionsHeading`/`transactionItem`/`transactionsMore`, first 10 + "ask to export CSV") trails
+    every non-empty answer. All strings are EN+DE.
 - **Wiring (D51/D58).** `readDocumentSegments(id, {layout})` → `extractDocumentPreview` (now accepting
   `layout` + the `maxPages` cap, a DoS guard since per-page clustering is uncapped otherwise) →
   `ParseContext.layout` → `PdfParser` layout mode (scan-detection re-keyed on RAW text so an empty
@@ -2779,6 +2926,7 @@ without churning ~150 comments. Read a historical `§N` as:
 | `pdf-geometry-extraction-plan.md` §3.2 | The non-breaking `parseDate` guarantee (year resolved in reconstruction) | §21 |
 | `pdf-geometry-extraction-plan.md` §3.5 / D56 | The opening/closing-balance completeness gate (no partial totals) | §21 |
 | `pdf-geometry-extraction-plan.md` D50–D58 | Stage-1 architecture decisions (geometry-first; Stage 2 conditional) | §21 |
+| `skills-tools-audit-2026-06-26` D-1…T-1 / C-* / P-* / U-* / S-* / PC-1 / X-* / A-1 / R-1 / R-2 | Skills & Tools audit findings (7 personas, 11 phases, no CRITICAL/HIGH) | §23 close-out ledger → the per-finding § noted there |
 
 
 ### §22 Bank-statement LLM categorizer (Phase 33, 2026-06-25, D55/D26)
@@ -2799,12 +2947,22 @@ figure verification is needed. The constraints that DO hold:
   llama-server `response_format:{type:'json_schema',strict:true}`). DE glosses ride in the prompt only.
 - **Drop-to-`Uncategorized`.** Any invalid / out-of-range / unparseable output drops to `Uncategorized`
   (a whole batch drops on a parse failure). Never an invented category. The mock runtime (which ignores
-  `responseSchema`) exercises exactly this path in CI.
+  `responseSchema`) exercises exactly this path in CI. **Batch robustness (audit L-1/L-2, Phase 2):** the
+  per-batch output-token budget `batchMaxTokens` is now **length-aware** (a per-row description-length
+  allowance) so a verbose batch is far less likely to truncate; an **unparseable** reply is **retried once**
+  before the batch drops (a transient truncation gets a second chance); and the streamed reply is bounded by
+  a generous char cap (`batchMaxTokens * 8`) so a **looping** local runtime that ignores `maxTokens` can't
+  grow `text` unbounded — past the cap the batch is dropped (not retried). Drop-to-`Uncategorized` remains the
+  honest final fallback.
 - **Model-OPTIONAL.** With no model loaded the module degrades to the deterministic rule pass
   (`categorizeRow`). Confident description-rule matches (Fees/Income/Transfer/Cash) are a PRE-FILTER that
-  skips the model; the rest go to the model in batches of `CATEGORIZER_BATCH_SIZE` (=20). The pre-filter
-  matches on Unicode WORD boundaries (review fix P10), so a coincidental substring (`fee`⊂`coffee`) never
-  makes a confident wrong skip-the-model match.
+  skips the model; the rest go to the model in batches of `CATEGORIZER_BATCH_SIZE` (=20). Both the PRE-FILTER
+  (`prefilterCategory`) **and** the deterministic `categorizeRow` match on the **same shared** Unicode
+  WORD-boundary tester (`wordIncludes`, moved into `tools/money.ts` at audit C-1, Phase 2 — review fix P10
+  originally hardened only the pre-filter), so a coincidental substring (`fee`⊂`coffee`, `atm`⊂`atmosphere`,
+  `lohn`⊂`mühlohn`) never makes a confident wrong match on EITHER path, and the two paths agree on every
+  description rule. (Trade-off: a German COMPOUND that merely contains a keyword — `Kontoführungsgebühr` —
+  no longer rule-matches deterministically; it goes to the model, exactly as the pre-filter already did.)
 - **Model-assisted label.** The breakdown is labelled model-assisted from the authoritative persisted flag
   `bank_statements.categorized_by_model` (=1 whenever the LLM was consulted), written by the categorizer
   doctask (review fix A8). The earlier "any persisted category OUTSIDE the deterministic rule set" heuristic
@@ -2820,10 +2978,15 @@ figure verification is needed. The constraints that DO hold:
 - **D26 — the categorizer is a `DocTaskManager` kind (`'categorize'`), NOT a model call on the skill-run
   seam.** The `ModelSlotArbiter` only mediates chat ↔ a *yielding* build; the chat↔task one-job-at-a-time
   exclusion (D26) lives in the `DocTaskManager` (chat checks `hasActiveTask()`, tasks check
-  `isChatStreaming()`); the skill-run `SkillRunController` is a SEPARATE lane neither observes. A model
-  call on `runCategorization` could let two `chatStream` calls hit the one llama-server at once. The
-  doctask lane gives D26 exclusion + progress + cancel + `getRuntime()` for free. `'categorize'` is the
-  one **model-OPTIONAL** kind (it skips `startDocTask`'s runtime gate; a null runtime ⇒ deterministic).
+  `isChatStreaming()`); the skill-run `SkillRunController` is a SEPARATE lane that does not observe the
+  D26 *model-slot* exclusion. A model call on `runCategorization` could let two `chatStream` calls hit
+  the one llama-server at once. The doctask lane gives D26 exclusion + progress + cancel + `getRuntime()`
+  for free. `'categorize'` is the one **model-OPTIONAL** kind (it skips `startDocTask`'s runtime gate; a
+  null runtime ⇒ deterministic). **DB-write safety across these lanes (audit PC-1, Phase 9): the lanes
+  were mutually unaware of each other's WRITES — now every write-capable section is serialized PER
+  DOCUMENT by `withDocumentLock` (`services/skills/doc-lock.ts`), so a chat re-extract DELETE can no
+  longer race a button run / a categorize on the same statement (see §9). That doc lock is independent of
+  and finer than the D26 model-slot exclusion — it guards table writes, not the llama-server.**
 - **Button wiring — wrap the doctask in the skill-run shell.** The existing "Kategorisieren" button keeps
   its `SkillRunController` UX: the `categorize_transactions` runner ENQUEUES a `'categorize'` doctask and
   MIRRORS its progress/cancel into the run bar (`tool-runs.ts` `runCategorizeViaDocTask`). The real job —
@@ -2832,9 +2995,21 @@ figure verification is needed. The constraints that DO hold:
   exists (the "categorize before extract" `needsExtraction` failure is gone). Persistence of
   `category_id` is atomic (BEGIN/COMMIT, no partial annotations survive); the categories are seeded by
   the SHARED `ensureBuiltinCategories` (now the union of the rule set + the LLM taxonomy).
-- **Auto-offer after extraction (Q2).** A successful `extract_transactions` BUTTON run best-effort
-  enqueues a `'categorize'` doctask in the background (D26-safe, model-optional) — categories are ready
-  by the time the user asks. The chat analysis path is unaffected (it never goes through that runner).
+- **Explicit categorize offer after extraction (Q2; audit U-2, Phase 6; DECISION = explicit offer).**
+  A read-only `extract_transactions` BUTTON click does NOT start the LLM categorizer on its own. The
+  earlier Phase-33 behaviour silently enqueued a background `'categorize'` doctask here — invisible in
+  the run bar (it lived in the doctask lane), a **no-surprises violation** for a calm, privacy-posture
+  app (a deterministic, advertised read-only action triggering an un-asked model pass). Now, after a
+  successful rows>0 extract, the run-bar **result row** offers a one-tap **"Categorize transactions"**
+  follow-up; the model invocation is **user-initiated**. The offer targets the SAME document the extract
+  ran on: its id is remembered **renderer-side** (`ChatScreen` `runTargetId`, mirroring the Phase-5
+  `runTargetName`) and rides back through the existing `onRunTool('categorize_transactions', false,
+  documentId)` → `runCategorizeViaDocTask` path (D26 lane unchanged). The offer copy is content-free
+  (`chat.skill.run.categorizeOffer`, EN+DE); the run state / IPC stay ids/counts-only (no documentId in
+  `SkillRunState`). The audit payload is unchanged (`{skillId, toolName, documentCount}`) — and because
+  the categorize is no longer auto-fired, an extract click no longer emits a categorize run's audit trio
+  unless the user taps the follow-up. The chat analysis path is unaffected (it never went through that
+  runner), and the deterministic 0-model chat breakdown still works with NO prior categorize.
 - **Read-back stays 0-model-calls (Q3 routed feedback).** `analysis/bank-statement.ts` REUSES the latest
   statement when it is FRESH (re-extraction is deterministic, so reuse avoids a duplicate AND preserves the
   doctask's persisted categories); a single LEFT-JOINed read (`loadStatementRowsWithCategories`) returns
@@ -2842,6 +3017,16 @@ figure verification is needed. The constraints that DO hold:
   structural. The model call happens ONLY in the doctask. After a categorize run completes the renderer
   ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown appears as a
   normal chat answer (`ChatScreen` → the analysis handler, still 0 model calls).
+- **Consistent breakdown framing (audit C-2, Phase 2; DECISION = option A).** Two engines categorize the
+  same statement by entry point: the chat breakdown runs the **deterministic** rule pass when nothing is
+  categorized yet (0 model calls — keeping THIS path 0-model is the load-bearing invariant), while the
+  "Categorize" button + the post-extract categorize offer (Q2/U-2) use the **LLM** doctask's richer
+  taxonomy. Rather than pull a model
+  call onto the chat path (option B — bigger blast radius, crosses into the doctask lane), the chat answer
+  now **labels** the rule-based breakdown honestly: when `modelAssisted === false` it appends
+  `skills.bankAnalysis.categoryRuleBased` ("a quick rule-based grouping … run the Categorize button for a
+  richer, model-assisted breakdown"), the mirror of the model-assisted note. So the two entry points are no
+  longer SILENTLY divergent, and the 0-model-call chat contract is preserved.
 - **Stale-statement re-extraction (A9; Phase 31–33 follow-up).** Reuse is gated on FRESHNESS:
   `bank_statements.extractor_version` is stamped with `BANK_EXTRACTOR_VERSION` (in `tools/bank-statement.ts`)
   on every extraction; a statement whose stored version is NULL (legacy) or `<` current is STALE
@@ -2852,16 +3037,91 @@ figure verification is needed. The constraints that DO hold:
   for no-balance "Umsätze" statements, which present an `unverified` sum the D56 gate can't catch), and
   re-extraction never accumulates duplicates. The old per-row categories go with the replaced statement
   (the rows changed because the parser changed them — recompute is the honest move, done by the breakdown's
-  deterministic pass / the next categorize run); model categorization re-runs on the next Kategorisieren /
-  auto-offer. The single shared `latestBankStatementId` helper (`run.ts`) keeps the load-bearing
+  deterministic pass / the next categorize run); model categorization re-runs on the next Kategorisieren
+  click / the post-extract categorize offer. The single shared `latestBankStatementId` helper (`run.ts`) keeps the load-bearing
   `created_at DESC, id DESC` tie-break identical across all three call sites. **Bump `BANK_EXTRACTOR_VERSION`
-  whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input.**
+  whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input.** It is now
+  at **2** (1 → 2 at audit C-4, 2026-06-26: the `Kontostand per` date disambiguation changes the persisted
+  `opening_balance`/`closing_balance` on Raiffeisen statements — so v1 statements re-extract via this path).
 
 **Tests:** `skills-categorizer.test.ts` (taxonomy/enum, prefilter, model path, off-list/out-of-range
-drop, unparseable-batch drop, batching, no-runtime fallback); `doctasks-categorize.test.ts` (model path
+drop, unparseable-batch drop, batching, no-runtime fallback; **Phase 2:** `categorizeRow` agrees with the
+prefilter on coincidental substrings, L-1 truncation-retry-then-succeed + retry-once-then-drop, L-2
+char-cap drop; **Phase 11 (audit T-1):** an empty input makes NO model call and returns an empty result
+(`modelAssisted:false`), and the EXACT batch boundary — exactly `CATEGORIZER_BATCH_SIZE`(20) model-bound
+rows is ONE call, 21 is two, a 1-row batch is one — pinning the off-by-one the 25-row batching test only
+brackets); `skills-bank-statement-tool.test.ts` (**Phase 2:** `categorizeRow` word-boundary matching —
+`coffee`≠Fees, compound `Kontoführungsgebühr`→Spending; **Phase 3:** the cent-exact many-row drift case
+stays `complete` (C-3), the `Kontostand per` dated pair maps opening/closing and a lone line is closing-only
+→ `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`); `skills-run.test.ts` (**Phase 3:** a v1 statement is
+detected stale at v2, a freshly-stamped one is not); `doctasks-categorize.test.ts` (model path
 persists, deterministic fallback persists, auto-extract-then-categorize, A9 stale-statement re-extract +
-replace); `skills-analysis-bank.test.ts` (persisted model categories surface + the model-assisted label;
-no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh statement reused).
+replace; **Phase 6:** an extract run leaves the doctask lane untouched and the rows uncategorized — no
+hidden model run); `skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO
+`categorize` doctask — U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions"
+offer renders only after a successful rows>0 extract and fires the categorize path with the remembered id;
+absent for a 0-row / non-extract / non-done run); `skills-analysis-bank.test.ts` (persisted model categories
+surface + the model-assisted label; **Phase 2:** the rule-based note when `modelAssisted` is false, absent
+when model-assisted; no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh
+statement reused).
+
+### §23 Skills & Tools audit (2026-06-26) — remediation close-out
+
+A **seven-persona** audit (architecture, security/privacy, performance, LLM/prompt, UX, docs, testing)
+swept the whole Skills & Tools surface — selection → the Tier-2 gate → the run seam → the bank / invoice /
+redaction tools → the LLM categorizer → the `.skill.zip` installer. **No CRITICAL / HIGH.** All **11
+remediation phases are landed** on branch `skills-tools-audit-2026-06-26`. The standalone report
+(`docs/skills-tools-audit-2026-06-26.md`) was **deleted** under the CLAUDE.md doc-lifecycle rule once
+fully implemented — its design records were folded into the §§ below as each phase shipped, and the full
+original report stays **recoverable in git history** (the parent of the Phase-11 close-out commit,
+`bd2acdb`), mirroring the 2026-06-13 audit closeout. This ledger is the durable index — read a code
+comment's `audit <ID>` citation through it:
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| D-1, D-2 | 1 | docs truth-up: eight bundled skills; the linear `globMatches` matcher (no dead `globToRegExp` cap) | §12/§13; DS17 |
+| C-1, C-2, L-1, L-2 | 2 | shared word-boundary `wordIncludes`; rule-based breakdown labels itself; retry-once + char-cap on a batch | §8/§22 |
+| C-3, C-4 | 3 | cent-exact completeness sum; `Kontostand per` date disambiguation (`BANK_EXTRACTOR_VERSION` → 2) | §21 |
+| P-1, P-2 | 4 | load the rows ONCE; the seams return their validated output for in-process reuse | §8/§19 |
+| U-1 | 5 | multi-doc target ids ride the IPC, render-side maps ids→names; the chosen id is validated main-side | §9/§19 |
+| U-2 | 6 | a read-only extract no longer auto-runs the model; an explicit one-tap "Categorize" follow-up instead | §9/§22 (D26) |
+| U-3 | 7 | a quiet inline "Suggested: …" hint on the closed picker for a high-confidence offer | §6 |
+| S-1, S-2 | 8 | bound the inflate INPUT; re-validate + reject a duplicate stripped path | §4; security-model |
+| PC-1 | 9 | per-document `withDocumentLock` serializes the three write lanes (no cross-lane race) | §9/§13/§22 |
+| X-1, X-2, A-1 | 10 | one `documentsInScope` helper; `count_selected_documents` kept as a test-only canary; a SKILL.md⇔TS parity test | §7/§19 |
+| T-1, R-1, R-2 | 11 | test backfill + the two residuals (below) | this section |
+
+**Phase 11 (T-1 / R-1 / R-2) — as built:**
+
+- **T-1 — backfilled only the genuinely-missing edges (no padding).** Two categorizer edges were ADDED to
+  `skills-categorizer.test.ts`: an **empty input** makes NO model call and returns an empty result
+  (`modelAssisted:false`), and the **exact batch boundary** — exactly `CATEGORIZER_BATCH_SIZE`(20)
+  model-bound rows is ONE model call, 21 is two, a 1-row batch is one — pinning the off-by-one the prior
+  25-row "batches of 20" test only *brackets*. **Teeth-verified** (a transient batch-step off-by-one made
+  the boundary test fail; reverted). The other clustered T-1 gaps were verified **already covered** by the
+  earlier phases' own tests and were **NOT re-added**: cross-lane concurrency PC-1
+  (`skills-concurrency.test.ts`, Phase 9), multi-doc `docIds[0]`/chooser + the no-title `SkillRunState`
+  privacy sentinel + the U-2 no-auto-categorize behaviour (`skills-tool-run-ipc.test.ts`, Phases 5/6), the
+  whole-batch-drop / retry-once / char-cap / 25-rows⇒2-calls categorizer cases (`skills-categorizer.test.ts`,
+  Phase 2), and the C-3/C-4 completeness numerics (`skills-bank-statement-tool.test.ts`, Phase 3).
+- **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** `document-redaction` is STILL the
+  ONLY app skill opting into `triggers.autoFire`, and the eval gate already covers it: the harness's
+  `APP_SKILL_IDS` and the 33-turn `tests/fixtures/skill-triggers/corpus.json` (four `document-redaction`
+  turns among them) drive the S13b gate (`fired-wrong == 0` AND `precision ≥ 0.95`). Per the plan's
+  explicit fallback, since NO new skill opts in, no corpus rows were added — the corpus is deliberately
+  scoped to the auto-fire surface and the eval gate is unchanged. (See §18 for the auto-fire contract.)
+- **R-2 — run-surface eyeball deferred (re-affirmed, surfaced for opt-in).** The live `SkillRunBar`
+  Playwright walk (`walk-skills-runbar.mjs`, recipe in `docs/design-review/skills-s12/README.md`) needs a
+  GUI session a test harness cannot drive; every visual state stays unit-covered by `SkillRunBar.test.tsx`
+  (offer / running / result / confirm-modal, EN+DE). The honest deferral (the documented default since
+  Phase 5) is re-affirmed — no fake captures; the owner may run the capture on a GUI machine and commit the
+  PNGs.
+
+**Posture held across all 11 phases (load-bearing):** offline / no telemetry; the **content class** (skill
+bodies, the draft question, extracted figures, redacted text, document text **and** titles/filenames) is
+never logged / audited / echoed — only ids/counts cross the IPC/audit boundary; the audit payload stays
+`{skillId, toolName, documentCount}`; schema changes are additive; the Tier-2 gate gained **no new
+DB/FS/net capability**; i18n parity is compile-enforced (LLM prompts stay English).
 
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)

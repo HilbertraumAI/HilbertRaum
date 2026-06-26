@@ -28,6 +28,8 @@ vi.mock('electron', () => ({
 }))
 
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
+import { buildToolRunner, resolveInScopeDocumentIds, toSkillToolAudit } from '../../src/main/services/skills/tool-runs'
+import type { DocTaskManager } from '../../src/main/services/doctasks'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
@@ -35,7 +37,7 @@ import { createAuditRecorder, listAuditEvents } from '../../src/main/services/au
 import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import type { AppContext } from '../../src/main/services/context'
-import type { RunnableTool, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
+import type { RunnableTool, RunnableToolSet, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -80,8 +82,8 @@ function writeRedactionSkill(appSkillsDir: string): void {
   writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
 }
 
-function seedDocWithChunks(db: Db, text: string): string {
-  const now = new Date().toISOString()
+function seedDocWithChunks(db: Db, text: string, opts: { title?: string; createdAt?: string } = {}): string {
+  const now = opts.createdAt ?? new Date().toISOString()
   const docId = randomUUID()
   // A REAL stored .txt copy: the run seam re-extracts VERBATIM segments from the stored file via
   // extractDocumentPreview (the faithful content reach the IPC injects) — NOT the newline-collapsed,
@@ -92,8 +94,8 @@ function seedDocWithChunks(db: Db, text: string): string {
   writeFileSync(storedPath, text, 'utf8')
   db.prepare(
     `INSERT INTO documents (id, title, stored_path, status, mime_type, created_at, updated_at)
-     VALUES (?, 'document.txt', ?, 'indexed', 'text/plain', ?, ?)`
-  ).run(docId, storedPath, now, now)
+     VALUES (?, ?, ?, 'indexed', 'text/plain', ?, ?)`
+  ).run(docId, opts.title ?? 'document.txt', storedPath, now, now)
   db.prepare(
     `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
      VALUES (?, ?, 0, ?, 'p', 1, ?)`
@@ -101,13 +103,10 @@ function seedDocWithChunks(db: Db, text: string): string {
   return docId
 }
 
-interface Harness {
-  db: Db
-  conversationId: string
-  skillInstallId: string
-}
-
-function makeHarness(statementText: string): Harness {
+// A bank-skill harness scoped to SEVERAL indexed documents (U-1 multi-doc targeting). Distinct,
+// ascending `created_at` makes `resolveInScopeDocumentIds` order deterministic = the seed order, so
+// `docIds[0]` is the first seeded document (the default target). Returns the ids in that order.
+function makeMultiDocHarness(texts: string[]): Harness & { docIds: string[] } {
   const root = tempDir()
   const appSkillsDir = join(root, 'app-skills')
   const userSkillsDir = join(root, 'user-skills')
@@ -128,7 +127,41 @@ function makeHarness(statementText: string): Harness {
     ocrEngine: undefined
   } as unknown as AppContext
   registerSkillsIpc(ctx)
-  const docId = seedDocWithChunks(db, statementText)
+  const docIds = texts.map((text, i) =>
+    seedDocWithChunks(db, text, { createdAt: `2026-01-0${i + 1}T00:00:00.000Z` })
+  )
+  const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: docIds } })
+  return { db, conversationId: conv.id, skillInstallId: 'app:bank-statement', docIds }
+}
+
+interface Harness {
+  db: Db
+  conversationId: string
+  skillInstallId: string
+}
+
+function makeHarness(statementText: string, opts: { title?: string } = {}): Harness {
+  const root = tempDir()
+  const appSkillsDir = join(root, 'app-skills')
+  const userSkillsDir = join(root, 'user-skills')
+  mkdirSync(appSkillsDir, { recursive: true })
+  mkdirSync(userSkillsDir, { recursive: true })
+  writeBankSkill(appSkillsDir)
+  const db = openDatabase(join(root, 'test.sqlite'))
+  seedSettings(db)
+  const audit = createAuditRecorder(() => db)
+  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
+  const ctx = {
+    db,
+    paths: { workspacePath: root },
+    workspace: { isUnlocked: () => true, documentCipher: () => null },
+    isDev: false,
+    audit,
+    skills,
+    ocrEngine: undefined
+  } as unknown as AppContext
+  registerSkillsIpc(ctx)
+  const docId = seedDocWithChunks(db, statementText, { title: opts.title })
   const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   return { db, conversationId: conv.id, skillInstallId: 'app:bank-statement' }
 }
@@ -197,20 +230,22 @@ describe('skills tool-run IPC (S11b)', () => {
   it('listRunnableTools surfaces all five wired tools (export confirm-gated) in declared order', async () => {
     const { skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
     const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
-    expect(result).toEqual<RunnableTool[]>([
+    expect((result as RunnableToolSet).tools).toEqual<RunnableTool[]>([
       { name: 'extract_transactions', requiresConfirmation: false },
       { name: 'validate_statement_balances', requiresConfirmation: false },
       { name: 'categorize_transactions', requiresConfirmation: false },
       { name: 'summarize_cashflow', requiresConfirmation: false },
       { name: 'export_transactions_csv', requiresConfirmation: true }
     ])
+    // U-1: the single in-scope target id rides along (ids only — no title crosses the IPC).
+    expect((result as RunnableToolSet).documentIds).toHaveLength(1)
   })
 
   it('listRunnableTools is empty with no in-scope document', async () => {
     const { skillInstallId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
     // An unknown conversation resolves to no scope → nothing to run against (empty-tolerant).
     const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, 'no-such-conversation')
-    expect(result).toEqual([])
+    expect(result).toEqual({ tools: [], documentIds: [] })
   })
 
   it('excludes an enabled-but-incompatible skill from listRunnableTools AND startSkillRun (§6.5/M1 airtight)', async () => {
@@ -264,7 +299,7 @@ describe('skills tool-run IPC (S11b)', () => {
     db.prepare('UPDATE skills SET enabled = 1 WHERE install_id = ?').run('app:bank-statement')
 
     const { result: tools } = await invoke(handlers, IPC.listRunnableTools, 'app:bank-statement', conv.id)
-    expect(tools).toEqual([]) // incompatible → no runnable tools even though enabled
+    expect(tools).toEqual({ tools: [], documentIds: [] }) // incompatible → no runnable tools even though enabled
 
     const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
       skillInstallId: 'app:bank-statement',
@@ -303,6 +338,23 @@ describe('skills tool-run IPC (S11b)', () => {
     expect((result as StartSkillRunResult).started).toBe(false)
   })
 
+  it('keeps count_selected_documents as a registry-only canary: registered but NOT wired to a run seam (X-2)', () => {
+    // X-2 decision (audit 2026-06-26): the reference tool is kept as the gate's test-only canary. It is
+    // registered (the gate tests run it end-to-end) but deliberately exposes NO live capability — it has
+    // no dispatch case in `buildToolRunner`. This test gives that decision teeth in BOTH directions: if
+    // the tool were dropped from the registry the listing test breaks; if it were ever wired to a run
+    // seam (turning it into a live capability) this assertion breaks.
+    const { db, skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
+    const documentId = resolveInScopeDocumentIds(db, conversationId)[0]
+    const runner = buildToolRunner(
+      db,
+      'count_selected_documents',
+      { skillInstallId, conversationId, documentId },
+      toSkillToolAudit()
+    )
+    expect(runner).toBeNull()
+  })
+
   it('logs nothing: a secret in a transaction never reaches the audit (ids/counts only)', async () => {
     const { db, skillInstallId, conversationId } = makeHarness(`EUR\n2026-01-02 ${SENTINEL} -12,00`)
     const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
@@ -323,6 +375,106 @@ describe('skills tool-run IPC (S11b)', () => {
     // …and the run state the renderer polls carries no content either.
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, start.run.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(SENTINEL)
+  })
+})
+
+// U-1 — multi-document scope: the target is visible/choosable, the chosen id is validated MAIN-side,
+// and a document TITLE never crosses the IPC (the renderer maps ids→names locally).
+describe('skills tool-run IPC — multi-document targeting (U-1)', () => {
+  const ONE_TXN = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'
+  const TWO_TXN = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+  const TITLE_SENTINEL = 'XDOCTITLE_SENTINEL_secret_filename_88888'
+
+  it('listRunnableTools returns ALL in-scope target ids (ids only) in resolution order', async () => {
+    const { skillInstallId, conversationId, docIds } = makeMultiDocHarness([ONE_TXN, TWO_TXN])
+    const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
+    expect((result as RunnableToolSet).documentIds).toEqual(docIds)
+    expect((result as RunnableToolSet).tools.length).toBeGreaterThan(0)
+  })
+
+  it('defaults to the first in-scope document when no documentId is chosen', async () => {
+    const { skillInstallId, conversationId } = makeMultiDocHarness([ONE_TXN, TWO_TXN])
+    const final = await runTool(skillInstallId, conversationId, 'extract_transactions')
+    expect(final.state).toBe('done')
+    expect(final.transactionCount).toBe(1) // docIds[0] has one transaction
+    // The target count stays honest at 1 (a single-doc tool), never implying "all N".
+    expect(final.documentCount).toBe(1)
+  })
+
+  it('runs on the CHOSEN in-scope document when a documentId is supplied', async () => {
+    const { skillInstallId, conversationId, docIds } = makeMultiDocHarness([ONE_TXN, TWO_TXN])
+    const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'extract_transactions',
+      conversationId,
+      documentId: docIds[1] // the SECOND document (two transactions)
+    })
+    const start = startRaw as StartSkillRunResult
+    if (!start.started) throw new Error('expected the run to start')
+    const final = await pollUntilTerminal(start.run.runHandle)
+    expect(final.state).toBe('done')
+    expect(final.transactionCount).toBe(2) // proves it targeted docIds[1], not docIds[0]
+    expect(final.documentCount).toBe(1)
+  })
+
+  it('REFUSES a documentId that is not in the resolved in-scope set (never trusts a renderer id)', async () => {
+    const { skillInstallId, conversationId } = makeMultiDocHarness([ONE_TXN, TWO_TXN])
+    const { result } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'extract_transactions',
+      conversationId,
+      documentId: randomUUID() // a well-formed id that is NOT in scope
+    })
+    const start = result as StartSkillRunResult
+    expect(start.started).toBe(false)
+    if (start.started) throw new Error('expected refusal')
+    expect('error' in start && start.error).toBeTruthy()
+  })
+
+  it('never leaks a document TITLE through listRunnableTools or the run state (content-free)', async () => {
+    // The document's TITLE carries a sentinel; the IPC must surface only its id/counts.
+    const { skillInstallId, conversationId } = makeHarness(ONE_TXN, { title: TITLE_SENTINEL })
+    const { result: toolsRaw } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
+    expect(JSON.stringify(toolsRaw)).not.toContain(TITLE_SENTINEL)
+    const final = await runTool(skillInstallId, conversationId, 'extract_transactions')
+    const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)
+    expect(JSON.stringify(stateRaw)).not.toContain(TITLE_SENTINEL)
+  })
+})
+
+// U-2 — a read-only "Extract transactions" click must NOT silently start the LLM categorizer in the
+// background. The Phase-33 auto-offer that enqueued a `categorize` doctask on extract is removed; the
+// categorize is now an explicit one-tap follow-up on the run-bar result row (SkillRunBar.test.tsx).
+describe('skills tool-run IPC — extract does not auto-categorize (U-2)', () => {
+  const STATEMENT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+
+  it('an extract with rows enqueues NO categorize doctask (the model pass is user-initiated)', async () => {
+    const { db, skillInstallId, conversationId } = makeHarness(STATEMENT)
+    const docId = resolveInScopeDocumentIds(db, conversationId)[0]
+    // A docTasks spy that records every enqueue. The old auto-offer would have started a 'categorize'
+    // here (synchronously, inside the runner) whenever rows>0 and no categorize was already pending —
+    // so this spy would catch a regression. The runner is exercised directly: the CI IPC ctx wires no
+    // doctask lane, so the auto-offer could only be observed through the dispatch with one supplied.
+    const enqueued: Array<{ kind: string }> = []
+    const docTasks = {
+      startDocTask: (req: { kind: string }) => {
+        enqueued.push(req)
+        return { jobId: 'job-1' }
+      },
+      hasPendingKind: () => false
+    } as unknown as DocTaskManager
+    const runner = buildToolRunner(
+      db,
+      'extract_transactions',
+      { skillInstallId, conversationId, documentId: docId },
+      toSkillToolAudit(),
+      { docTasks, readDocumentSegments: async () => [{ text: STATEMENT, page: 1, index: 0 }] }
+    )!
+    const outcome = await runner({ signal: new AbortController().signal, onProgress: () => {} })
+    expect(outcome.ok).toBe(true)
+    expect(outcome.transactionCount).toBe(2) // rows WERE extracted (the old auto-offer's rows>0 guard would have fired)
+    // …yet the LLM categorizer was never started on its own — nothing reached the doctask lane.
+    expect(enqueued).toHaveLength(0)
   })
 })
 
@@ -393,7 +545,9 @@ describe('skills redact_document IPC (S11d)', () => {
   it('listRunnableTools surfaces the single redaction tool, confirm-gated', async () => {
     const { skillInstallId, conversationId } = makeRedactionHarness(`Contact ${SECRET_EMAIL} today.`)
     const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
-    expect(result).toEqual<RunnableTool[]>([{ name: 'redact_document', requiresConfirmation: true }])
+    expect((result as RunnableToolSet).tools).toEqual<RunnableTool[]>([
+      { name: 'redact_document', requiresConfirmation: true }
+    ])
   })
 
   it('confirm-gates the redaction: refuses without confirmation, asking for it', async () => {

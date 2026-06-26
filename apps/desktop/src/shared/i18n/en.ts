@@ -154,6 +154,9 @@ export const en = {
   'chat.skill.trigger': 'Skill: {label}',
   'chat.skill.none': 'No skill',
   'chat.skill.suggested': 'Suggested: {title} — use it?',
+  // U-3: the same deterministic offer surfaced on the CLOSED picker trigger so a user who never
+  // opens it still sees the nudge. Quiet, named, one tap selects it — never auto-applied (§22-D3).
+  'chat.skill.suggestedHint': 'Suggested: {title}',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'This answer was shaped by the skill “{title}”.',
   // S13c (D3) — an AUTO-FIRED turn: visible (the glyph reads "Answered with …") + reversible (the
@@ -177,6 +180,13 @@ export const en = {
   'chat.skill.categorize.breakdownQuestion': 'Break down my spending by category.',
   'chat.skill.run.running.one': 'Running: {tool} on {count} document…',
   'chat.skill.run.running.other': 'Running: {tool} on {count} documents…',
+  // U-1: the busy row naming the target document (the renderer resolves `{document}` from its own
+  // loaded document list — the title never crosses the run-state IPC). Used when the name is known;
+  // it falls back to the count form above otherwise.
+  'chat.skill.run.runningOn': 'Running: {tool} on {document}…',
+  // U-1: the run-bar target chooser (a >1-doc scope) + the single-doc name affordance.
+  'chat.skill.run.chooseDocument': 'Choose target document',
+  'chat.skill.run.thisDocument': 'this document',
   'chat.skill.run.cancel': 'Cancel',
   'chat.skill.run.done.one': 'Extracted {count} transaction.',
   'chat.skill.run.done.other': 'Extracted {count} transactions.',
@@ -205,6 +215,9 @@ export const en = {
   'chat.skill.run.error.persistFailed': 'This couldn’t be saved. Nothing was changed.',
   'chat.skill.run.error.exportWriteFailed': 'The file couldn’t be saved. Nothing was changed.',
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
+  // U-2: the one-tap follow-up on the extract RESULT row. The LLM categorize is user-initiated here,
+  // not silently auto-run on extract. Content-free (names a tool action, never a document).
+  'chat.skill.run.categorizeOffer': 'Categorize transactions',
   'chat.skill.run.dismiss': 'Dismiss',
   'chat.skill.confirm.title': 'Run this tool?',
   'chat.skill.confirm.body': 'This creates or exports a file from the documents on this drive.',
@@ -493,6 +506,12 @@ export const en = {
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.categoryAssisted':
     '_Categories are model-assisted — a label may be off, but the totals above are unchanged._',
+  // Honesty note for the DETERMINISTIC breakdown (audit C-2): the chat path groups by a quick rule set
+  // (no model call) so the result is path-dependent — the "Categorize" button uses the richer
+  // model-assisted taxonomy (Groceries/Dining/…). Say so, so the two entry points are not silently
+  // divergent. Shown only when the breakdown was NOT model-assisted.
+  'skills.bankAnalysis.categoryRuleBased':
+    '_This is a quick rule-based grouping (no model used). For a richer, model-assisted breakdown, run the “Categorize” button._',
   // Localized DISPLAY labels for the fixed category set (Phase 33). The PERSISTED identifier stays the
   // canonical English name (the enum / model-assisted detection key on it); only the breakdown display
   // is localized. An unknown name (e.g. a future user category) falls back to its raw identifier.
@@ -571,6 +590,16 @@ export const en = {
     'data — e-mail addresses, phone numbers, IBANs, dates, and links — reading the whole document. ' +
     'It’s a best-effort first pass, not a guarantee: it can’t catch names or unusual formats, so ' +
     'review the saved copy before you share it.',
+  // U-1: the same routing answer when MORE THAN ONE document is in scope. The tool redacts one
+  // document at a time, so the copy is honest about that and points at the run button's own target
+  // chooser — content-free (the count drives the wording; no document title appears here).
+  'skills.redactionRouting.answerMulti':
+    'To redact a document, click the **{button}** button just below the chat box and pick which ' +
+    'document to redact, then choose where to save the copy. It works on one document at a time, ' +
+    'runs entirely on this device, and masks clearly-formatted personal data — e-mail addresses, ' +
+    'phone numbers, IBANs, dates, and links — reading the whole document. It’s a best-effort first ' +
+    'pass, not a guarantee: it can’t catch names or unusual formats, so review the saved copy ' +
+    'before you share it.',
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
@@ -878,6 +907,7 @@ export const en = {
   'skills.import.error.tooManyFiles': 'The package contains more files than allowed.',
   'skills.import.error.tooLarge': 'The package is larger than the allowed size.',
   'skills.import.error.fileTooLarge': 'A file in the package is larger than the allowed size.',
+  'skills.import.error.duplicatePath': 'The package contains two files that resolve to the same path.',
   'skills.import.error.badExtension': 'The package contains a file type that is not allowed.',
   'skills.import.error.nestedArchive': 'The package contains an embedded archive, which is not allowed.',
   'skills.import.error.noSkillMd': 'The package does not contain a SKILL.md file.',
@@ -1360,6 +1390,9 @@ export const en = {
   'main.skills.run.unavailable': "This skill's tool isn't available right now.",
   'main.skills.run.noDocument': 'Add a document to this chat first, then try again.',
   'main.skills.run.busy': 'A skill is already working. Let it finish or cancel it first.',
+  // U-1: a renderer-supplied target id that is not in the freshly-resolved in-scope set (a defensive
+  // backstop — the renderer only ever offers in-scope ids). Friendly + content-free.
+  'main.skills.run.documentOutOfScope': "That document isn't in this chat's documents. Pick one of them and try again.",
 
   // ---- Document organization — Documents screen sections + actions (plan §12) ----
   // German copy in de.ts reviewed in the D-L7 pass (2026-06-14).

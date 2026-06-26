@@ -13,6 +13,7 @@ import {
   type TransactionInput
 } from './tools/bank-statement'
 import { CATEGORIZER_CATEGORIES } from './categorizer'
+import { withDocumentLock } from './doc-lock'
 import type { RedactDocumentOutput } from './tools/redaction'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
@@ -160,8 +161,20 @@ export function finishRun(
 /**
  * Run `extract_transactions` on one selected document through the gate and persist the result.
  * Returns ids/counts only — never the extracted content (which lives only in the bank data tables).
+ *
+ * Serialized per document (audit PC-1): the whole run — including the `replaceExisting` DELETE+INSERT —
+ * holds the per-document lock so a concurrent run/categorize on the SAME statement (any lane) cannot
+ * race the delete (re-entrant when a lane already holds it; unrelated documents stay concurrent).
  */
 export async function runBankExtraction(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps
+): Promise<BankExtractionResult> {
+  return withDocumentLock(args.documentId, () => runBankExtractionInner(db, args, deps))
+}
+
+async function runBankExtractionInner(
   db: Db,
   args: BankExtractionArgs,
   deps: BankExtractionDeps
@@ -303,8 +316,12 @@ const CATEGORIZE_TOOL_NAME = 'categorize_transactions'
 const SUMMARIZE_TOOL_NAME = 'summarize_cashflow'
 const EXPORT_TOOL_NAME = 'export_transactions_csv'
 
-/** A transaction loaded from the DB — the tool input fields plus the ids the seam persists against. */
-interface LoadedTransaction extends TransactionInput {
+/**
+ * A transaction loaded from the DB — the tool input fields plus the ids the seam persists against.
+ * Exported so the analysis handler can load the rows ONCE (with ids) and hand them to the downstream
+ * seams as `preloaded` (audit P-1), instead of each seam re-querying `bank_transactions`.
+ */
+export interface LoadedTransaction extends TransactionInput {
   id: string
   rowIndex: number
 }
@@ -317,6 +334,14 @@ export interface StatementToolResult {
   count?: number
   /** A content-free outcome discriminator (validate: 'reconciled'|'unreconciled'|'unchecked'). */
   resultKind?: string
+  /**
+   * The already-validated structured tool output (`summarize_cashflow` → `CashflowSummary`,
+   * `validate_statement_balances` → `ReconcileResult`) for IN-PROCESS reuse by the analysis handler
+   * (audit P-1: it reuses this instead of recomputing the same pure function over a re-queried row
+   * set). These are FIGURES (content): the handler keeps them in-process and they must NEVER cross
+   * into `ToolRunOutcome`/IPC — the run-bar dispatch (`tool-runs.ts`) maps only counts, never `output`.
+   */
+  output?: CashflowSummary | ReconcileResult
   /**
    * True when the run ended because it was CANCELLED (vs a genuine failure) — e.g. the user
    * dismissed the CSV save dialog, or Cancel landed before the work persisted (B1/B2). The
@@ -441,7 +466,12 @@ async function prepareStatementRun(
   toolName: string,
   args: BankExtractionArgs,
   deps: BankExtractionDeps,
-  confirmed?: boolean
+  confirmed?: boolean,
+  // When the caller has ALREADY loaded the statement's rows (the analysis handler loads them once for
+  // the listing + categories), pass them here so this prefix skips its own `loadTransactions` — the
+  // single-row-load that audit P-1 collapses. Same shape `loadTransactions` returns (ids in row order,
+  // null columns omitted), so the persist (`UPDATE … WHERE id = ?`) targets the right rows.
+  preloaded?: LoadedTransaction[]
 ): Promise<{ prepared: PreparedRun } | { failed: StatementToolResult }> {
   const now = deps.now ?? (() => new Date().toISOString())
   const runId = randomUUID()
@@ -469,7 +499,10 @@ async function prepareStatementRun(
       return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
     }
 
-    const transactions = loadTransactions(db, statementId)
+    // Reuse the caller's already-loaded rows when provided (audit P-1); otherwise load them here (the
+    // run-bar/IPC path, which has no rows in hand). `?? `-guard would treat an empty array as "no rows",
+    // so branch on `undefined` explicitly: a genuinely empty statement passes `[]` and is honoured.
+    const transactions = preloaded !== undefined ? preloaded : loadTransactions(db, statementId)
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
@@ -522,10 +555,22 @@ function persistFailure(db: Db, runId: string, now: () => string): StatementTool
 export async function runBalanceValidation(
   db: Db,
   args: BankExtractionArgs,
-  deps: BankExtractionDeps
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
+): Promise<StatementToolResult> {
+  // Serialized per document (audit PC-1): the `reconciled` persist must not run against a statement a
+  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock.
+  return withDocumentLock(args.documentId, () => runBalanceValidationInner(db, args, deps, preloaded))
+}
+
+async function runBalanceValidationInner(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
 ): Promise<StatementToolResult> {
   const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareStatementRun(db, VALIDATE_TOOL_NAME, args, deps)
+  const prep = await prepareStatementRun(db, VALIDATE_TOOL_NAME, args, deps, undefined, preloaded)
   if ('failed' in prep) return prep.failed
   const { runId, statementId, transactions, output, completedAt } = prep.prepared
   const reconcile = output as ReconcileResult
@@ -548,7 +593,10 @@ export async function runBalanceValidation(
   } catch {
     return persistFailure(db, runId, now)
   }
-  return { ok: true, runId, count: mismatchCount, resultKind }
+  // Surface the validated `ReconcileResult` for in-process reuse (audit P-1) — the analysis handler
+  // reuses it instead of recomputing `reconcileBalances` over a re-queried row set. Content (figures):
+  // in-process only, never mapped into `ToolRunOutcome`/IPC.
+  return { ok: true, runId, count: mismatchCount, resultKind, output: reconcile }
 }
 
 /**
@@ -596,10 +644,22 @@ export function ensureBuiltinCategories(db: Db, now: string): Map<string, string
 export async function runCategorization(
   db: Db,
   args: BankExtractionArgs,
-  deps: BankExtractionDeps
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
+): Promise<StatementToolResult> {
+  // Serialized per document (audit PC-1): the `category_id` persist must not run against a statement a
+  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock.
+  return withDocumentLock(args.documentId, () => runCategorizationInner(db, args, deps, preloaded))
+}
+
+async function runCategorizationInner(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
 ): Promise<StatementToolResult> {
   const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareStatementRun(db, CATEGORIZE_TOOL_NAME, args, deps)
+  const prep = await prepareStatementRun(db, CATEGORIZE_TOOL_NAME, args, deps, undefined, preloaded)
   if ('failed' in prep) return prep.failed
   const { runId, statementId, transactions, output, completedAt } = prep.prepared
   const { categories } = output as { categories: CategorizationRow[] }
@@ -630,10 +690,11 @@ export async function runCategorization(
 export async function runCashflowSummary(
   db: Db,
   args: BankExtractionArgs,
-  deps: BankExtractionDeps
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
 ): Promise<StatementToolResult> {
   const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareStatementRun(db, SUMMARIZE_TOOL_NAME, args, deps)
+  const prep = await prepareStatementRun(db, SUMMARIZE_TOOL_NAME, args, deps, undefined, preloaded)
   if ('failed' in prep) return prep.failed
   const { runId, statementId, output, completedAt } = prep.prepared
   const summary = output as CashflowSummary
@@ -647,7 +708,10 @@ export async function runCashflowSummary(
   } catch {
     return persistFailure(db, runId, now)
   }
-  return { ok: true, runId, count: summary.count }
+  // Surface the validated `CashflowSummary` for in-process reuse (audit P-1/P-2) — the analysis handler
+  // reuses it instead of recomputing `summarizeCashflow` over a re-queried row set. The summary still
+  // persists nothing; this is the same value the run already computed (content: in-process only).
+  return { ok: true, runId, count: summary.count, output: summary }
 }
 
 export interface CsvExportDeps extends BankExtractionDeps {

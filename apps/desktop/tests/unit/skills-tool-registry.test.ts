@@ -104,6 +104,8 @@ describe('validateJsonSchema (subset)', () => {
 
 describe('registry + resolveEffectiveTools', () => {
   it('ships the reference tool + the bank tools + the invoice tools + the redaction tool', () => {
+    // `count_selected_documents` is the gate's test-only CANARY — registered but never wired (X-2, kept
+    // deliberately; the "not wired to a run seam" half is pinned in skills-tool-run-ipc.test.ts).
     expect(listRegisteredToolNames()).toEqual([
       'count_selected_documents',
       'extract_transactions',

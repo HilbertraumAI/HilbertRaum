@@ -843,6 +843,9 @@ code, pre, kbd { font-family: var(--font-mono); }
   color: var(--text-muted);
 }
 .skill-run-status { display: inline-flex; align-items: center; gap: 8px; }
+/* U-1 target-document chooser: a quiet footer-style trigger; long filenames truncate, never wrap. */
+.skill-run-target { max-width: 16rem; }
+.skill-run-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
    pre-wrap (which would double every blank line) is turned off. The image-understanding
@@ -1585,6 +1588,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* The deterministic skill suggestion pinned atop the composer picker (skills plan §10.2/S8): a calm
    accent tint so it reads as an OFFER, not a warning. Still a plain menu item — one tap accepts. */
 .menu-item.skill-suggest { color: var(--accent); font-weight: 600; }
+/* U-3: the same offer surfaced on the CLOSED picker trigger — a quiet accent-tinted footer affordance
+   (reuses .footer-menu-btn) so a user who never opens the picker still sees the nudge. One tap selects
+   the skill; it is never auto-applied. */
+.footer-menu-btn.skill-suggest-hint { color: var(--accent); }
+.footer-menu-btn.skill-suggest-hint:hover:not(:disabled) { color: var(--accent); background: var(--surface-hover); }
 
 /* ---- Settings → Skills (skills plan §15) ---- */
 /* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */

@@ -18,6 +18,7 @@ import {
   summarizeCashflowTool,
   exportTransactionsCsvTool,
   UNCATEGORIZED,
+  BANK_EXTRACTOR_VERSION,
   type ExtractTransactionsOutput,
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
@@ -144,6 +145,33 @@ describe('extractStatementBalances + isStatementComplete (completeness gate — 
     expect(extractStatementBalances([chunk('2026-01-02 Coffee -3,50 100,00')])).toEqual({})
   })
 
+  it('disambiguates the dual-role `Kontostand per` label by DATE: earliest = opening, latest = closing (audit C-4)', () => {
+    // Raiffeisen "Mein ELBA" prints BOTH the opening and the closing balance with the SAME label,
+    // `Kontostand per <date>`. The earliest-dated line is the opening; the latest-dated is the closing.
+    const c = chunk('Kontostand per 31.03.2025 35.037,04\n... rows ...\nKontostand per 23.06.2025 30.647,07')
+    expect(extractStatementBalances([c])).toEqual({ openingBalance: 35037.04, closingBalance: 30647.07 })
+  })
+
+  it('a SINGLE `Kontostand per` line is CLOSING only — opening stays undefined (audit C-4)', () => {
+    // One such line cannot bracket the period, so reading it as BOTH opening and closing (the old dual
+    // listing) produced opening == closing → a false `contradicted`. Now it is the closing only, so the
+    // gate downgrades to an honest `unverified` labelled sum instead of refusing.
+    expect(extractStatementBalances([chunk('Kontostand per 31.03.2025 35.037,04')])).toEqual({
+      closingBalance: 35037.04
+    })
+    // A statement with a lone Kontostand-per line + rows is `unverified`, NOT `contradicted` (the C-4 fix).
+    const rows: TransactionInput[] = [
+      { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR' },
+      { date: '2026-01-03', description: 'Salary', amount: 2500, currency: 'EUR' }
+    ]
+    const { openingBalance, closingBalance } = extractStatementBalances([
+      chunk('Kontostand per 31.03.2025 35.037,04')
+    ])
+    expect(assessCompleteness({ rows, openingBalance, closingBalance, reconcile: reconcileBalances(rows) })).toBe(
+      'unverified'
+    )
+  })
+
   it('is complete only when opening + Σamounts == closing within half a cent', () => {
     const rows = [
       { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR' },
@@ -215,6 +243,37 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
     const reconcile = reconcileBalances(ROWS)
     expect(isStatementComplete({ rows: ROWS, openingBalance: 2000, closingBalance: 4454.1, reconcile })).toBe(true)
     expect(isStatementComplete({ rows: ROWS, reconcile })).toBe(false) // unverified ⇒ not 'complete'
+  })
+
+  it("sums in INTEGER CENTS so float drift over many rows can't flip a tying statement to contradicted (audit C-3)", () => {
+    // A genuinely-tying statement whose NAIVE float `reduce(acc + amount)` drifts past MONEY_EPS. The
+    // magnitude is adversarially large so the per-addition rounding accumulates within a few thousand
+    // rows (on a real statement the drift is far smaller, but the property is the same): 3000 rows of
+    // 700000000.07 sum EXACTLY to 2_100_000_000_210.00 in cents, but the float sum drifts ~0.06.
+    const N = 3000
+    const AMOUNT = 700000000.07
+    const CLOSING = 2100000000210
+    const rows: TransactionInput[] = Array.from({ length: N }, (_, i) => ({
+      date: '2026-01-02',
+      description: `Row ${i}`,
+      amount: AMOUNT,
+      currency: 'EUR'
+    }))
+    // Premise check: the OLD float sum would have failed the half-cent compare → a false 'contradicted'.
+    const naiveFloatSum = rows.reduce((acc, r) => acc + r.amount, 0)
+    expect(Math.abs(0 + naiveFloatSum - CLOSING)).toBeGreaterThan(0.005)
+    // The cent-exact gate ties out → 'complete' (no per-row balances, so reconcile has no mismatch).
+    const reconcile = reconcileBalances(rows)
+    expect(assessCompleteness({ rows, openingBalance: 0, closingBalance: CLOSING, reconcile })).toBe('complete')
+  })
+})
+
+describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
+  it('is at 2 — the audit C-4 bump (Kontostand-per disambiguation changes persisted balances)', () => {
+    // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. The
+    // C-4 fix changes the persisted opening/closing on Raiffeisen statements, so v1 rows MUST re-extract;
+    // `skills-run.test.ts` proves `isBankStatementStale` flags a v1 statement once this reads 2.
+    expect(BANK_EXTRACTOR_VERSION).toBe(2)
   })
 })
 
@@ -345,13 +404,26 @@ describe('validate_statement_balances (S11c)', () => {
 describe('categorize_transactions (S11c)', () => {
   it('categorizeRow applies deterministic rules (EN + DE keywords), sign fallback', () => {
     expect(categorizeRow(tx({ description: 'Monthly account fee', amount: -3 }))).toBe('Fees')
-    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Monatliche Gebühr Konto', amount: -3 }))).toBe('Fees') // DE keyword as its own word
     expect(categorizeRow(tx({ description: 'Salary March', amount: 2500 }))).toBe('Income')
     expect(categorizeRow(tx({ description: 'SEPA Überweisung', amount: -100 }))).toBe('Transfer')
     expect(categorizeRow(tx({ description: 'ATM withdrawal', amount: -50 }))).toBe('Cash')
     expect(categorizeRow(tx({ description: 'Unknown shop', amount: -12 }))).toBe('Spending')
     expect(categorizeRow(tx({ description: 'Mystery credit', amount: 7 }))).toBe('Income') // positive ⇒ Income
     expect(categorizeRow(tx({ description: 'Zero', amount: 0 }))).toBe(UNCATEGORIZED)
+  })
+
+  it('categorizeRow matches description rules on WORD boundaries, not raw substrings (audit C-1)', () => {
+    // A coincidental substring no longer mis-files: 'fee'⊂'coffee', 'atm'⊂'atmosphere', 'lohn'⊂'mühlohn'.
+    expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).not.toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).toBe('Spending') // sign fallback
+    expect(categorizeRow(tx({ description: 'Atmosphere Bar', amount: -12 }))).not.toBe('Cash')
+    expect(categorizeRow(tx({ description: 'Baeckerei Muehlohn', amount: -3.1 }))).not.toBe('Income')
+    // A COMPOUND that merely contains a keyword no longer matches — so it now agrees with the LLM
+    // prefilter (which sends such a row to the model): 'Kontoführungsgebühr' has no standalone 'gebühr'.
+    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Spending')
+    // The keyword as its OWN word still matches.
+    expect(categorizeRow(tx({ description: 'Coffee and a fee', amount: -3.5 }))).toBe('Fees')
   })
 
   it('categorizeRows returns one assignment per row, in order', () => {

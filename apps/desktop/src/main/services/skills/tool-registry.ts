@@ -183,6 +183,13 @@ export function toolRequiresConfirmation(tool: SkillTool): boolean {
  * reads only the fixed `ctx.documentIds` (ids/count), touches no DB/FS/network, and has no side
  * effects — so it needs only `read-selected-docs` and no confirmation. NO bank-statement tool ships
  * in S10 (those are S11).
+ *
+ * X-2 (audit 2026-06-26) — KEPT DELIBERATELY as the gate's test-only CANARY, not dead code. No bundled
+ * skill declares it and it is intentionally NOT wired to a `run.ts` dispatch seam (`tool-runs.ts`
+ * `buildToolRunner` returns null for it), so it is registry-only and exposes NO live capability. It is
+ * the minimal reference the gate tests run end-to-end (`skills-tool-registry.test.ts`,
+ * `skills-tool-run-ipc.test.ts`). Removing it would churn those tests for no behaviour gain; keeping
+ * it documented here stops it being mistaken for an orphan to delete OR a capability to wire up.
  */
 const countSelectedDocumentsTool: SkillTool = {
   name: 'count_selected_documents',
@@ -214,7 +221,7 @@ const countSelectedDocumentsTool: SkillTool = {
  * `export-file`); it persists no rows (the deliverable is the file).
  */
 const REGISTRY: Record<string, SkillTool> = {
-  [countSelectedDocumentsTool.name]: countSelectedDocumentsTool,
+  [countSelectedDocumentsTool.name]: countSelectedDocumentsTool, // test-only gate canary, not wired (X-2)
   [extractTransactionsTool.name]: extractTransactionsTool,
   [validateStatementBalancesTool.name]: validateStatementBalancesTool,
   [categorizeTransactionsTool.name]: categorizeTransactionsTool,

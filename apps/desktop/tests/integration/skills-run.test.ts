@@ -11,9 +11,74 @@ import {
   runBalanceValidation,
   runCategorization,
   runCashflowSummary,
-  runCsvExport
+  runCsvExport,
+  isBankStatementStale,
+  type LoadedTransaction
 } from '../../src/main/services/skills/run'
+import {
+  BANK_EXTRACTOR_VERSION,
+  reconcileBalances,
+  summarizeCashflow,
+  type TransactionInput
+} from '../../src/main/services/skills/tools/bank-statement'
 import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
+
+/**
+ * Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (audit P-1 query-count
+ * assertions). `UPDATE … bank_transactions` is excluded by matching `FROM bank_transactions` — only
+ * the row LOADS are counted, never the reconciled/category persists.
+ */
+async function countPrepares(db: Db, pattern: RegExp, fn: () => Promise<void>): Promise<number> {
+  const real = db.prepare.bind(db)
+  let count = 0
+  const target = db as unknown as { prepare: Db['prepare'] }
+  target.prepare = ((sql: string) => {
+    if (pattern.test(sql)) count++
+    return real(sql)
+  }) as Db['prepare']
+  try {
+    await fn()
+  } finally {
+    target.prepare = real
+  }
+  return count
+}
+
+/** Load a statement's rows in the `LoadedTransaction` shape the analysis handler hands to the seams as
+ *  `preloaded` (id + tool fields, null columns omitted, row order). */
+function loadLoadedRows(db: Db, statementId: string): LoadedTransaction[] {
+  const rows = db
+    .prepare(
+      `SELECT id, row_index AS rowIndex, date, value_date AS valueDate, description, amount, currency,
+              balance_after AS balanceAfter, source_page AS sourcePage
+       FROM bank_transactions WHERE statement_id = ? ORDER BY row_index`
+    )
+    .all(statementId) as Array<{
+    id: string
+    rowIndex: number
+    date: string
+    valueDate: string | null
+    description: string
+    amount: number
+    currency: string
+    balanceAfter: number | null
+    sourcePage: number | null
+  }>
+  return rows.map((r) => {
+    const t: LoadedTransaction = {
+      id: r.id,
+      rowIndex: r.rowIndex,
+      date: r.date,
+      description: r.description,
+      amount: r.amount,
+      currency: r.currency
+    }
+    if (r.valueDate != null) t.valueDate = r.valueDate
+    if (r.balanceAfter != null) t.balanceAfter = r.balanceAfter
+    if (r.sourcePage != null) t.sourcePage = r.sourcePage
+    return t
+  })
+}
 
 // architecture.md "Skills — design record" §8 (S11a) — the app-orchestrated run seam end-to-end on a real DB:
 // build the narrow context → run extract_transactions through the gate → persist. Proves the
@@ -86,6 +151,23 @@ describe('runBankExtraction (S11a)', () => {
     // S11c additive columns on bank_transactions (ensureColumn).
     const cols = (db.prepare(`PRAGMA table_info(bank_transactions)`).all() as Array<{ name: string }>).map((c) => c.name)
     expect(cols).toEqual(expect.arrayContaining(['category_id', 'reconciled', 'confidence']))
+  })
+
+  it('isBankStatementStale: a v1 statement is STALE now the extractor is at v2 (audit C-4 bump); current is fresh', async () => {
+    // The C-4 disambiguation changed the persisted opening/closing on Raiffeisen statements, so the
+    // version moved 1 → 2 and every statement an OLDER (v1 / pre-versioning NULL) parser produced must
+    // re-extract via the A9 path. A fresh extraction is stamped at the current version → never stale.
+    expect(BANK_EXTRACTOR_VERSION).toBe(2)
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
+    const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })
+    const id = res.statementId!
+    expect(isBankStatementStale(db, id)).toBe(false) // freshly stamped at v2
+
+    db.prepare('UPDATE bank_statements SET extractor_version = 1 WHERE id = ?').run(id)
+    expect(isBankStatementStale(db, id)).toBe(true) // produced by the pre-C-4 parser → re-extract
+    db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(id)
+    expect(isBankStatementStale(db, id)).toBe(true) // legacy / pre-versioning → re-extract
   })
 
   it('runs end-to-end: persists statement + transactions and marks the run done', async () => {
@@ -310,6 +392,53 @@ describe('downstream statement seams (S11c)', () => {
     expect(res.count).toBe(2)
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('done')
+  })
+
+  it('summarize/validate surface the validated tool output equal to the pure function (audit P-1)', async () => {
+    const db = freshDb()
+    const docId = await extractFirst(db)
+    const { audit } = capturingAudit()
+    const summary = await runCashflowSummary(db, { skillInstallId, documentId: docId }, { audit })
+    const validate = await runBalanceValidation(db, { skillInstallId, documentId: docId }, { audit })
+    // The CLEAN fixture's two rows, as the pure tools see them (null columns omitted). The analysis
+    // handler now REUSES `output` instead of recomputing, so it must deep-equal a fresh recompute.
+    const rows: TransactionInput[] = [
+      { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 },
+      { date: '2026-01-03', description: 'Salary', amount: 2500, currency: 'EUR', balanceAfter: 4454.1 }
+    ]
+    expect(summary.output).toEqual(summarizeCashflow(rows))
+    expect(validate.output).toEqual(reconcileBalances(rows))
+  })
+
+  it('preloaded rows skip the bank_transactions re-query but yield the SAME output (audit P-1)', async () => {
+    const db = freshDb()
+    const docId = await extractFirst(db)
+    const { audit } = capturingAudit()
+    const statementId = (
+      db.prepare('SELECT id FROM bank_statements WHERE document_id = ?').get(docId) as { id: string }
+    ).id
+    const loaded = loadLoadedRows(db, statementId) // the analysis handler's single load
+
+    // Baseline (no preload) — each seam loads its own rows.
+    const baseSummary = await runCashflowSummary(db, { skillInstallId, documentId: docId }, { audit })
+    const baseValidate = await runBalanceValidation(db, { skillInstallId, documentId: docId }, { audit })
+
+    let summary: Awaited<ReturnType<typeof runCashflowSummary>> | undefined
+    let validate: Awaited<ReturnType<typeof runBalanceValidation>> | undefined
+    const reads = await countPrepares(db, /FROM bank_transactions\b/i, async () => {
+      summary = await runCashflowSummary(db, { skillInstallId, documentId: docId }, { audit }, loaded)
+      validate = await runBalanceValidation(db, { skillInstallId, documentId: docId }, { audit }, loaded)
+    })
+    expect(reads).toBe(0) // both seams used the preloaded rows — neither re-queried bank_transactions
+    expect(summary!.output).toEqual(baseSummary.output) // identical figures to the self-loading path
+    expect(validate!.output).toEqual(baseValidate.output)
+    // validate still persisted the reconciled flags against the preloaded ids (unchanged behaviour).
+    const flags = (
+      db.prepare('SELECT reconciled FROM bank_transactions ORDER BY row_index').all() as Array<{
+        reconciled: number | null
+      }>
+    ).map((r) => r.reconciled)
+    expect(flags).toEqual([null, 1])
   })
 
   it('export produces the CSV, the seam writes it (stub), and reports the row count', async () => {

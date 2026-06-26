@@ -1,6 +1,6 @@
 import type { Db } from '../../db'
 import type { RetrievalScope } from '../../../../shared/types'
-import { buildScopeFilter } from '../../retrieval-scope'
+import { documentsInScope } from '../scope-documents'
 import { skillInstallId } from '../registry'
 import type { SkillAnalysisHandler, SkillAnalysisInput } from './types'
 
@@ -29,29 +29,20 @@ export const SHARE_SAFE_REVIEW_INSTALL_ID = skillInstallId('app', 'share-safe-re
 export const DEADLINE_OBLIGATION_INSTALL_ID = skillInstallId('app', 'deadline-obligation-finder')
 export const WHAT_CHANGED_INSTALL_ID = skillInstallId('app', 'what-changed')
 
-/** The indexed, answerable documents within a scope (mirrors invoice/bank `inScopeDocuments`). */
-function inScopeDocuments(db: Db, scope: RetrievalScope): Array<{ id: string }> {
-  const filter = buildScopeFilter(scope, 'd.id')
-  const where = filter ? ` AND ${filter.sql}` : ''
-  const params = filter ? filter.params : []
-  return db
-    .prepare(
-      `SELECT d.id AS id FROM documents d
-       WHERE d.status = 'indexed'
-         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)${where}`
-    )
-    .all(...params) as Array<{ id: string }>
-}
+// The whole-document handlers read the stored `chunks` (the model answers OVER them), so they take the
+// shared helper's `requireChunks: true` predicate (X-1) — an indexed-but-unchunked document is runnable
+// via the button but not answerable here. These handlers only count the in-scope documents (1 or 2), so
+// the helper's id projection is enough; the deterministic ordering is harmless here.
 
-/** The single in-scope document, or null when the scope is not exactly one document (Wave 2 scope). */
+/** The single in-scope answerable document, or null when the scope is not exactly one (Wave 2 scope). */
 function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string } | null {
-  const docs = inScopeDocuments(db, scope)
-  return docs.length === 1 ? docs[0] : null
+  const docs = documentsInScope(db, scope, { requireChunks: true })
+  return docs.length === 1 ? { id: docs[0].id } : null
 }
 
 /** True when the scope holds EXACTLY TWO in-scope documents (what-changed compare — Follow-up B). */
 function exactlyTwoInScopeDocuments(db: Db, scope: RetrievalScope): boolean {
-  return inScopeDocuments(db, scope).length === 2
+  return documentsInScope(db, scope, { requireChunks: true }).length === 2
 }
 
 /** Build a `grounded-whole-doc-compare` handler: applies on a compare-shaped question (any of

@@ -1,7 +1,7 @@
 import type { Db } from '../../db'
 import type { Citation, CoverageInfo, RetrievalScope } from '../../../../shared/types'
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
-import { buildScopeFilter } from '../../retrieval-scope'
+import { documentsInScope } from '../scope-documents'
 import { documentChunkCount } from '../../analysis/coverage'
 import { skillInstallId } from '../registry'
 import {
@@ -10,6 +10,7 @@ import {
   type InvoiceRunArgs,
   type InvoiceRunDeps
 } from '../invoice-run'
+import { withDocumentLock } from '../doc-lock'
 import {
   validateInvoiceTotals,
   type InvoiceInput,
@@ -47,24 +48,12 @@ function isAnalysisShaped(question: string): boolean {
   return ANALYSIS_KEYWORDS.some((k) => q.includes(k))
 }
 
-/** The indexed, answerable documents within a scope (mirrors registerRagIpc.documentsInScope). */
-function inScopeDocuments(db: Db, scope: RetrievalScope): Array<{ id: string; title: string }> {
-  const filter = buildScopeFilter(scope, 'd.id')
-  const where = filter ? ` AND ${filter.sql}` : ''
-  const params = filter ? filter.params : []
-  return db
-    .prepare(
-      `SELECT d.id AS id, d.title AS title FROM documents d
-       WHERE d.status = 'indexed'
-         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)${where}`
-    )
-    .all(...params) as Array<{ id: string; title: string }>
-}
-
-/** The single in-scope document, or null when the scope is not exactly one document (R2). */
+/** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
+ *  analysis path reads the stored `chunks`, so it requires them (`requireChunks: true`) — an indexed
+ *  but unchunked document is runnable via the button but not answerable here (X-1, the shared helper). */
 function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string; title: string } | null {
-  const docs = inScopeDocuments(db, scope)
-  return docs.length === 1 ? docs[0] : null
+  const docs = documentsInScope(db, scope, { requireChunks: true })
+  return docs.length === 1 ? { id: docs[0].id, title: docs[0].title } : null
 }
 
 /**
@@ -264,34 +253,43 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, '') }
     }
 
-    const args: InvoiceRunArgs = {
-      skillInstallId: ctx.skillInstallId,
-      conversationId: ctx.conversationId ?? null,
-      documentId: target.id
-    }
-    const deps: InvoiceRunDeps = {
-      audit: ctx.audit,
-      signal: ctx.signal,
-      now: ctx.now,
-      readDocumentSegments: ctx.readDocumentSegments
-    }
+    // Serialize the WHOLE extract→validate→read-back sequence per document (audit PC-1): the seams
+    // self-lock, but one outer lock spanning the sequence keeps a re-extract from ANOTHER lane from
+    // replacing the invoice BETWEEN this handler's own steps. Re-entrant (inner locks become no-ops);
+    // unrelated documents still answer concurrently.
+    return withDocumentLock(target.id, async () => {
+      const args: InvoiceRunArgs = {
+        skillInstallId: ctx.skillInstallId,
+        conversationId: ctx.conversationId ?? null,
+        documentId: target.id
+      }
+      const deps: InvoiceRunDeps = {
+        audit: ctx.audit,
+        signal: ctx.signal,
+        now: ctx.now,
+        readDocumentSegments: ctx.readDocumentSegments
+      }
 
-    // Auto-run the READ-ONLY tools through the run seam (D46) — extract first, then validate the totals
-    // for its lifecycle + the persisted `totals_reconciled` flag. Export is excluded by construction
-    // (`runInvoiceCsvExport` is never imported).
-    const extraction = await runInvoiceExtraction(db, args, deps)
-    if (!extraction.ok || !extraction.invoiceId) {
-      return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
-    }
-    await runInvoiceTotalsValidation(db, args, deps)
+      // Auto-run the READ-ONLY tools through the run seam (D46) — extract first, then validate the totals
+      // for its lifecycle + the persisted `totals_reconciled` flag. Export is excluded by construction
+      // (`runInvoiceCsvExport` is never imported).
+      const extraction = await runInvoiceExtraction(db, args, deps)
+      if (!extraction.ok || !extraction.invoiceId) {
+        return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+      }
 
-    // Figures come from the PERSISTED invoice via the PURE tool function (the seam surfaces only counts).
-    const invoice = loadInvoice(db, extraction.invoiceId)
-    const validation = validateInvoiceTotals(invoice)
+      // Reconstruct the invoice ONCE from the persisted rows (the single invoice read — audit P-1), hand
+      // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
+      // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
+      // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
+      const invoice = loadInvoice(db, extraction.invoiceId)
+      const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
+      const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 
-    const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation })
-    const citations = buildInvoiceCitations(db, target.id, target.title)
-    const coverage = computeCoverage(db, target.id)
-    return { answer, citations, coverage }
+      const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation })
+      const citations = buildInvoiceCitations(db, target.id, target.title)
+      const coverage = computeCoverage(db, target.id)
+      return { answer, citations, coverage }
+    })
   }
 }

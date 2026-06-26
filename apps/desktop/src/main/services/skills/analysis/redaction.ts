@@ -74,9 +74,13 @@ export const documentRedactionAnalysisHandler: SkillAnalysisHandler = {
   async run(ctx: SkillAnalysisContext): Promise<SkillAnalysisResult> {
     // Deterministic, localized, content-free copy (no model call, no content read). It names the
     // run button via the SAME catalog key the SkillRunBar uses, so the wording always matches the
-    // affordance the user sees. No citations ⇒ no coverage badge.
-    const answer = ctx.tr('skills.redactionRouting.answer', {
-      button: ctx.tr('chat.skill.tool.redactDocument')
+    // affordance the user sees. No citations ⇒ no coverage badge. With MORE THAN ONE document in
+    // scope (U-1) the single-doc tool targets one document, so the copy stays honest about that —
+    // it tells the user to choose which document on the run button (the COUNT only, never a title).
+    const button = ctx.tr('chat.skill.tool.redactDocument')
+    const multiDoc = inScopeDocuments(ctx.db, ctx.scope).length > 1
+    const answer = ctx.tr(multiDoc ? 'skills.redactionRouting.answerMulti' : 'skills.redactionRouting.answer', {
+      button
     })
     return { answer, citations: [] }
   }

@@ -8,6 +8,7 @@ import {
   type CategorizationRow,
   type TransactionInput
 } from './tools/bank-statement'
+import { wordIncludes } from './tools/money'
 
 // The bank-statement LLM categorizer (Phase 33; architecture.md "Skills — design record" §21). It
 // assigns each transaction a category from a FIXED set, picking ONLY from that set — the reply is
@@ -71,10 +72,28 @@ const CATEGORY_SET: ReadonlySet<string> = new Set(CATEGORIZER_CATEGORIES)
 /** Rows per model call — bounded so one statement stays a handful of small, fast completions. */
 export const CATEGORIZER_BATCH_SIZE = 20
 
-/** Output-token budget for one batch — generous room for `{index, category}` per row plus framing. */
-function batchMaxTokens(rowsInBatch: number): number {
-  return 64 + rowsInBatch * 24
+/**
+ * Output-token budget for one batch — generous room for `{index, category}` per row plus framing. The
+ * per-row term carries a small DESCRIPTION-LENGTH allowance (audit L-1): a verbose batch can nudge a
+ * non-grammar-constrained model toward a longer reply (echoes / reasoning), so a long-description batch
+ * gets more headroom before the JSON truncates and the WHOLE batch silently drops to `Uncategorized`.
+ * Bounded (the prompt itself truncates each description to 160 chars) so it can never run away.
+ */
+function batchMaxTokens(rows: readonly TransactionInput[]): number {
+  const perRow = rows.reduce((acc, r) => {
+    const descLen = Math.min(r.description.length, 160) // the prompt truncates to 160 chars
+    return acc + 24 + Math.ceil(descLen / 16) // up to ~+10 tokens of headroom for a long description
+  }, 0)
+  return 64 + perRow
 }
+
+/**
+ * A defensive char-cap multiplier over `batchMaxTokens` (audit L-2): a well-behaved reply is a few
+ * chars per token, so `maxTokens * 8` chars is generous slack while still bounding a LOOPING local
+ * runtime that ignores `maxTokens` — past it the batch is dropped (to `Uncategorized`) rather than
+ * accumulating output unbounded into memory.
+ */
+const BATCH_OUTPUT_CHAR_CAP_PER_TOKEN = 8
 
 /**
  * The grammar contract for ONE batch: an array of `{index, category}` where `category` is an ENUM of
@@ -127,28 +146,12 @@ export function buildBatchPrompt(rows: TransactionInput[]): string {
 }
 
 /**
- * A WORD-bounded substring test (case-folded): the needle must be flanked by a non-letter/digit (or a
- * string edge) on both sides. `\b` is ASCII-only and would mishandle the German keywords (`gebühr`,
- * `überweisung`), so the boundary is checked against the Unicode letter/number classes. This stops the
- * prefilter from a confident WRONG skip-the-model match on a coincidental substring (`fee` ⊂ `coffee`,
- * `atm` ⊂ `atmos`, `lohn` ⊂ `mühlohn`).
- */
-function wordIncludes(haystack: string, needle: string): boolean {
-  const isLetterDigit = (c: string): boolean => c !== '' && /[\p{L}\p{N}]/u.test(c)
-  for (let i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
-    const before = i === 0 ? '' : haystack[i - 1]
-    const after = i + needle.length >= haystack.length ? '' : haystack[i + needle.length]
-    if (!isLetterDigit(before) && !isLetterDigit(after)) return true
-  }
-  return false
-}
-
-/**
  * Confident PRE-FILTER: a deterministic, WORD-bounded description rule match (Fees/Income/Transfer/Cash)
- * skips the model entirely (it is already unambiguous and in the taxonomy). Word-bounded (not a raw
- * substring) so a coincidental match (`fee` inside `coffee`) never wrongly skips the model. The
- * amount-sign fallback is NOT confident, so those rows still go to the model. Returns the category or
- * null (→ ask the model).
+ * skips the model entirely (it is already unambiguous and in the taxonomy). Word-bounded (shared
+ * `wordIncludes`, not a raw substring) so a coincidental match (`fee` inside `coffee`) never wrongly
+ * skips the model — and so this PRE-FILTER and the deterministic `categorizeRow` agree on the same
+ * description rules (audit C-1). The amount-sign fallback is NOT confident, so those rows still go to
+ * the model. Returns the category or null (→ ask the model).
  */
 export function prefilterCategory(row: TransactionInput): string | null {
   const desc = row.description.toLowerCase()
@@ -164,21 +167,22 @@ export function prefilterCategory(row: TransactionInput): string | null {
   return null
 }
 
-/** Run one model batch and return a batch-local index→category map (drops the whole batch on failure). */
-async function categorizeBatch(
-  rows: TransactionInput[],
+/**
+ * Stream ONE model completion for a batch and return the accumulated reply text, or `null` if the
+ * output blew the defensive char cap (audit L-2 — a looping runtime ignoring `maxTokens`). Aborts
+ * propagate as an `AbortError`.
+ */
+async function streamBatchReply(
+  messages: ChatMessage[],
   runtime: ModelRuntime,
-  signal: AbortSignal
-): Promise<Map<number, string>> {
-  const out = new Map<number, string>()
-  const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: buildBatchPrompt(rows) }
-  ]
+  signal: AbortSignal,
+  maxTokens: number
+): Promise<string | null> {
   let text = ''
+  const charCap = maxTokens * BATCH_OUTPUT_CHAR_CAP_PER_TOKEN
   const stream = runtime.chatStream(messages, {
     signal,
-    maxTokens: batchMaxTokens(rows.length),
+    maxTokens,
     temperature: 0,
     responseSchema: batchOutputSchema(),
     responseSchemaName: 'transaction_categories'
@@ -186,26 +190,64 @@ async function categorizeBatch(
   for await (const token of stream) {
     if (signal.aborted) throw new DOMException('Categorization cancelled', 'AbortError')
     text += token
+    if (text.length > charCap) return null // L-2: bound memory — drop the batch rather than grow unbounded
   }
   if (signal.aborted) throw new DOMException('Categorization cancelled', 'AbortError')
+  return text
+}
 
-  // Parse → validate each assignment. A parse failure (the mock runtime, or a model that — absent
-  // grammar constraint — replied with prose) drops the WHOLE batch: every row falls to Uncategorized
-  // at the merge step. An out-of-range index or an off-list category is ignored (same drop).
+/**
+ * Parse a batch reply into a batch-local index→category map, or `null` if the JSON is UNPARSEABLE
+ * (truncated / prose) — distinct from a parsed-but-empty result (every assignment off-list/out-of-range),
+ * which returns an empty map. The `null` signals the caller to RETRY once before dropping (audit L-1).
+ */
+function parseBatchAssignments(text: string, rowCount: number): Map<number, string> | null {
   try {
-    const parsed = JSON.parse(stripThinkBlocks(text).trim()) as { assignments?: Array<{ index?: unknown; category?: unknown }> }
+    const parsed = JSON.parse(stripThinkBlocks(text).trim()) as {
+      assignments?: Array<{ index?: unknown; category?: unknown }>
+    }
     const assignments = Array.isArray(parsed?.assignments) ? parsed.assignments : []
+    const out = new Map<number, string>()
     for (const a of assignments) {
       const idx = typeof a.index === 'number' ? a.index : NaN
       const cat = typeof a.category === 'string' ? a.category : ''
-      if (Number.isInteger(idx) && idx >= 0 && idx < rows.length && CATEGORY_SET.has(cat) && !out.has(idx)) {
+      if (Number.isInteger(idx) && idx >= 0 && idx < rowCount && CATEGORY_SET.has(cat) && !out.has(idx)) {
         out.set(idx, cat)
       }
     }
+    return out
   } catch {
-    // Unparseable — leave `out` empty so the whole batch drops to Uncategorized (honest).
+    return null // unparseable
   }
-  return out
+}
+
+/**
+ * Run one model batch and return a batch-local index→category map. A parse failure (the mock runtime,
+ * or a model that — absent grammar constraint — replied with prose, or a TRUNCATED reply that overran
+ * the token budget) is RETRIED once (audit L-1) before the WHOLE batch drops to `Uncategorized` (every
+ * row falls to it at the merge step — the honest final fallback). An over-long reply (L-2 char cap) is
+ * dropped without a retry (retrying an unbounded reply would only repeat the cost). An out-of-range
+ * index or an off-list category is ignored (parsed, so no retry — that is a deliberate drop, not a fault).
+ */
+async function categorizeBatch(
+  rows: TransactionInput[],
+  runtime: ModelRuntime,
+  signal: AbortSignal
+): Promise<Map<number, string>> {
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: buildBatchPrompt(rows) }
+  ]
+  const maxTokens = batchMaxTokens(rows)
+  const MAX_ATTEMPTS = 2 // one initial try + a single retry on an unparseable (e.g. truncated) reply
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const text = await streamBatchReply(messages, runtime, signal, maxTokens)
+    if (text === null) break // L-2 cap blown — drop the batch (no retry on a runaway reply)
+    const parsed = parseBatchAssignments(text, rows.length)
+    if (parsed) return parsed // parsed OK (possibly empty after validation) — accept, do not retry
+    // Unparseable — retry once, then fall through to the empty-map drop.
+  }
+  return new Map<number, string>() // drop the whole batch to Uncategorized (honest)
 }
 
 export interface CategorizeResult {

@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
   CATEGORIZER_CATEGORIES,
+  CATEGORIZER_BATCH_SIZE,
   buildBatchPrompt,
   batchOutputSchema,
   categorizeTransactions,
   prefilterCategory
 } from '../../src/main/services/skills/categorizer'
-import type { TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
+import { categorizeRow, type TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
 
 // Unit coverage for the bank-statement LLM categorizer (Phase 33). The MockRuntime IGNORES
 // `responseSchema` (exactly like the dev mock runtime), so the drop-to-Uncategorized parse + the
@@ -87,6 +88,26 @@ describe('categorizer — prefilter', () => {
   })
 })
 
+describe('categorizer — deterministic categorizeRow agrees with the prefilter (audit C-1)', () => {
+  it('a coincidental substring neither prefilters NOR deterministically categorizes by the keyword', () => {
+    // The two paths must agree: 'fee'⊂'coffee', 'atm'⊂'atmos', 'lohn'⊂'mühlohn' fire NEITHER rule.
+    const cases: Array<[string, string]> = [
+      ['Coffee Fellows', 'Fees'],
+      ['ATMOS Sportswear', 'Cash'],
+      ['Baeckerei Muehlohn', 'Income']
+    ]
+    for (const [desc, keywordCategory] of cases) {
+      expect(prefilterCategory(row(desc, -4.2))).toBeNull()
+      expect(categorizeRow(row(desc, -4.2))).not.toBe(keywordCategory)
+    }
+  })
+
+  it('a real keyword as its own word both prefilters AND categorizes the same way', () => {
+    expect(prefilterCategory(row('Monatliche Gebühr', -3.5))).toBe('Fees')
+    expect(categorizeRow(row('Monatliche Gebühr', -3.5))).toBe('Fees')
+  })
+})
+
 describe('categorizeTransactions — model path', () => {
   it('keeps prefilter matches and assigns the rest from the model', async () => {
     const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
@@ -136,6 +157,47 @@ describe('categorizeTransactions — model path', () => {
     expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
   })
 
+  it('retries a batch ONCE on an unparseable (truncated) reply, then succeeds (audit L-1)', async () => {
+    let n = 0
+    const runtime = scriptedRuntime((call) => {
+      n += 1
+      // First reply is TRUNCATED mid-JSON (a verbose batch overran the token budget) → JSON.parse throws.
+      if (n === 1) return '{"assignments":[{"index":0,"category":"Sho'
+      // The single retry returns a clean, complete reply.
+      return validReplyFor(() => 'Shopping')(call)
+    })
+    const rows = [row('Amazon', -20), row('Zalando', -50)]
+    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
+    expect(n).toBe(2) // initial attempt + exactly one retry
+    expect(assignments.every((a) => a.category === 'Shopping')).toBe(true)
+  })
+
+  it('does not retry past one attempt — a persistently unparseable reply drops to Uncategorized (audit L-1)', async () => {
+    let n = 0
+    const runtime = scriptedRuntime(() => {
+      n += 1
+      return 'still prose, not JSON'
+    })
+    const rows = [row('Amazon', -20), row('Zalando', -50)]
+    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
+    expect(n).toBe(2) // one initial + one retry, then give up
+    expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
+  })
+
+  it('drops a batch whose reply blows the output char cap, without retrying (audit L-2)', async () => {
+    // A looping runtime that ignores maxTokens streams far more than the char cap → the batch is bounded
+    // and dropped to Uncategorized rather than accumulating output unbounded into memory.
+    let n = 0
+    const runtime = scriptedRuntime(() => {
+      n += 1
+      return 'x '.repeat(100_000)
+    })
+    const rows = [row('Amazon', -20), row('Zalando', -50)]
+    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
+    expect(n).toBe(1) // a runaway reply is NOT retried (that would just repeat the cost)
+    expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
+  })
+
   it('batches in groups of 20 (two model calls for 25 model-bound rows)', async () => {
     const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
     const runtime = scriptedRuntime(validReplyFor(() => 'Shopping'), calls)
@@ -144,6 +206,57 @@ describe('categorizeTransactions — model path', () => {
     expect(calls).toHaveLength(2)
     expect(assignments).toHaveLength(25)
     expect(assignments.every((a) => a.category === 'Shopping')).toBe(true)
+  })
+})
+
+// The exact batch boundary + empty input (audit T-1). The 25-row test above BRACKETS the boundary but
+// does not NAIL the off-by-one: exactly CATEGORIZER_BATCH_SIZE rows must stay ONE call, and the empty
+// case must not call the model at all. `Shop N` never prefilters (no Fees/Income/Transfer/Cash keyword),
+// so every row is genuinely model-bound — the call count IS the batch count.
+describe('categorizeTransactions — batch boundary & empty input (audit T-1)', () => {
+  it('exactly 20 model-bound rows → ONE call; 21 → two (pins the off-by-one at the boundary)', async () => {
+    expect(CATEGORIZER_BATCH_SIZE).toBe(20) // the boundary the two counts below bracket
+
+    const callsAt: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtimeAt = scriptedRuntime(validReplyFor(() => 'Shopping'), callsAt)
+    const rowsAt = Array.from({ length: 20 }, (_, i) => row(`Shop ${i}`, -i - 1))
+    const at = await categorizeTransactions(rowsAt, { runtime: runtimeAt, signal: new AbortController().signal })
+    expect(callsAt).toHaveLength(1) // a full batch is NOT split — a batch-size off-by-one would make this 2
+    expect(at.assignments).toHaveLength(20)
+    expect(at.assignments.every((a) => a.category === 'Shopping')).toBe(true)
+
+    const callsPast: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtimePast = scriptedRuntime(validReplyFor(() => 'Shopping'), callsPast)
+    const rowsPast = Array.from({ length: 21 }, (_, i) => row(`Shop ${i}`, -i - 1))
+    await categorizeTransactions(rowsPast, { runtime: runtimePast, signal: new AbortController().signal })
+    expect(callsPast).toHaveLength(2) // one past the boundary spills into a second batch
+  })
+
+  it('a single model-bound row is exactly one model call', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(validReplyFor(() => 'Shopping'), calls)
+    const { assignments } = await categorizeTransactions([row('Shop 0', -1)], {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(calls).toHaveLength(1)
+    expect(assignments).toEqual([{ index: 0, category: 'Shopping' }])
+  })
+
+  it('an empty input makes NO model call and returns an empty result (modelAssisted false)', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    // The reply throws if reached — but `calls` is appended BEFORE the reply runs, so an empty `calls`
+    // proves chatStream was never entered. The empty-input guard returns before any batch loop.
+    const runtime = scriptedRuntime(() => {
+      throw new Error('the model must not be consulted for an empty input')
+    }, calls)
+    const { assignments, modelAssisted } = await categorizeTransactions([], {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(assignments).toEqual([])
+    expect(modelAssisted).toBe(false) // dropping the rows>0 guard would flip this to true (teeth)
+    expect(calls).toHaveLength(0)
   })
 })
 

@@ -172,6 +172,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.trigger': 'Skill: {label}',
   'chat.skill.none': 'Kein Skill',
   'chat.skill.suggested': 'Vorschlag: {title} – nutzen?',
+  'chat.skill.suggestedHint': 'Vorschlag: {title}',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'Diese Antwort wurde vom Skill „{title}“ geprägt.',
   // S13c (D3) – eine automatisch angewandte Antwort: sichtbar („Beantwortet mit …“) + umkehrbar
@@ -194,6 +195,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.categorize.breakdownQuestion': 'Schlüssle meine Ausgaben nach Kategorie auf.',
   'chat.skill.run.running.one': 'Läuft: {tool} für {count} Dokument…',
   'chat.skill.run.running.other': 'Läuft: {tool} für {count} Dokumente…',
+  // U-1: Statuszeile mit dem Zieldokument (`{document}` löst der Renderer aus seiner eigenen
+  // Dokumentliste auf – der Titel verlässt nie den IPC-Zustand). Fällt sonst auf die Zählform zurück.
+  'chat.skill.run.runningOn': 'Läuft: {tool} für {document}…',
+  // U-1: die Zieldokument-Auswahl der Lauf-Leiste (Bereich mit >1 Dokument) + die Ein-Dokument-Anzeige.
+  'chat.skill.run.chooseDocument': 'Zieldokument auswählen',
+  'chat.skill.run.thisDocument': 'dieses Dokument',
   'chat.skill.run.cancel': 'Abbrechen',
   'chat.skill.run.done.one': '{count} Transaktion extrahiert.',
   'chat.skill.run.done.other': '{count} Transaktionen extrahiert.',
@@ -229,6 +236,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.error.persistFailed': 'Das konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.error.exportWriteFailed': 'Die Datei konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
+  // U-2: die Ein-Klick-Folgeaktion in der Ergebniszeile nach dem Extrahieren. Die KI-Kategorisierung
+  // wird hier vom Nutzer ausgelöst, nicht still im Hintergrund. Inhaltsfrei (benennt eine Aktion).
+  'chat.skill.run.categorizeOffer': 'Transaktionen kategorisieren',
   'chat.skill.run.dismiss': 'Schließen',
   'chat.skill.confirm.title': 'Dieses Tool ausführen?',
   'chat.skill.confirm.body': 'Dabei wird aus den Dokumenten auf diesem Laufwerk eine Datei erstellt oder exportiert.',
@@ -518,6 +528,8 @@ export const de: Record<keyof typeof en, string> = {
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.categoryAssisted':
     '_Die Kategorien sind modellgestützt — eine Zuordnung kann falsch sein, die Summen oben bleiben davon unberührt._',
+  'skills.bankAnalysis.categoryRuleBased':
+    '_Dies ist eine schnelle regelbasierte Gruppierung (ohne Modell). Für eine reichhaltigere, modellgestützte Aufschlüsselung nutzen Sie die Schaltfläche „Kategorisieren“._',
   // Lokalisierte ANZEIGE-Labels für die feste Kategorienmenge (Phase 33). Der GESPEICHERTE Bezeichner
   // bleibt der kanonische englische Name (Enum / Modell-gestützt-Erkennung hängen daran); nur die
   // Anzeige der Aufschlüsselung wird übersetzt. Ein unbekannter Name fällt auf den Bezeichner zurück.
@@ -591,6 +603,17 @@ export const de: Record<keyof typeof en, string> = {
   'skills.redactionRouting.answer':
     'Um dieses Dokument zu schwärzen, klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
     'wähle anschließend, wo die Kopie gespeichert werden soll. Sie läuft vollständig auf diesem ' +
+    'Gerät und maskiert klar erkennbare personenbezogene Daten – E-Mail-Adressen, Telefonnummern, ' +
+    'IBANs, Datumsangaben und Links – und liest dabei das ganze Dokument. Es ist ein bestmöglicher ' +
+    'erster Durchlauf, keine Garantie: Namen oder ungewöhnliche Formate erkennt sie nicht – prüfe ' +
+    'die gespeicherte Kopie, bevor du sie teilst.',
+  // U-1: dieselbe Weiterleitungsantwort, wenn MEHR ALS EIN Dokument im Bereich liegt. Das Werkzeug
+  // schwärzt jeweils ein Dokument, daher bleibt die Antwort ehrlich und verweist auf die Zielauswahl
+  // der Schaltfläche – inhaltsfrei (die Anzahl steuert den Text; hier erscheint kein Dokumenttitel).
+  'skills.redactionRouting.answerMulti':
+    'Um ein Dokument zu schwärzen, klicke unten beim Chat auf die Schaltfläche **{button}**, wähle ' +
+    'aus, welches Dokument geschwärzt werden soll, und lege anschließend fest, wo die Kopie ' +
+    'gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft vollständig auf diesem ' +
     'Gerät und maskiert klar erkennbare personenbezogene Daten – E-Mail-Adressen, Telefonnummern, ' +
     'IBANs, Datumsangaben und Links – und liest dabei das ganze Dokument. Es ist ein bestmöglicher ' +
     'erster Durchlauf, keine Garantie: Namen oder ungewöhnliche Formate erkennt sie nicht – prüfe ' +
@@ -903,6 +926,7 @@ export const de: Record<keyof typeof en, string> = {
   'skills.import.error.tooManyFiles': 'Das Paket enthält mehr Dateien als erlaubt.',
   'skills.import.error.tooLarge': 'Das Paket ist größer als erlaubt.',
   'skills.import.error.fileTooLarge': 'Eine Datei im Paket ist größer als erlaubt.',
+  'skills.import.error.duplicatePath': 'Das Paket enthält zwei Dateien, die auf denselben Pfad verweisen.',
   'skills.import.error.badExtension': 'Das Paket enthält einen nicht erlaubten Dateityp.',
   'skills.import.error.nestedArchive': 'Das Paket enthält ein eingebettetes Archiv, was nicht erlaubt ist.',
   'skills.import.error.noSkillMd': 'Das Paket enthält keine SKILL.md-Datei.',
@@ -1434,6 +1458,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.skills.run.unavailable': 'Das Tool dieses Skills ist gerade nicht verfügbar.',
   'main.skills.run.noDocument': 'Füge diesem Chat zuerst ein Dokument hinzu und versuche es dann erneut.',
   'main.skills.run.busy': 'Ein Skill arbeitet bereits. Lass ihn fertig werden oder brich ihn ab.',
+  // U-1: eine vom Renderer übergebene Ziel-ID, die nicht im neu aufgelösten Bereich liegt (eine
+  // defensive Absicherung – der Renderer bietet nur Dokumente aus dem Bereich an). Freundlich + inhaltsfrei.
+  'main.skills.run.documentOutOfScope':
+    'Dieses Dokument gehört nicht zu den Dokumenten dieses Chats. Wähle eines davon und versuche es erneut.',
 
   // ---- Dokumentorganisation — Bereiche + Aktionen (Plan §12). D-L7-Review erledigt (2026-06-14). ----
   'docs.section.heading': 'Bereiche',
