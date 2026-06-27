@@ -2096,6 +2096,45 @@ migration (the ordered delete already closes the bug). Pinned by
 a simulated pre-fix drive; teeth = the un-cascaded FK throws without the ordered delete; plus the
 fresh-schema cascade).
 
+**Financial-extraction correctness (backend audit 2026-06-27, Phase 2 — BL-1/BL-2/BL-3).** Parsing/
+aggregation-logic only; no schema or audit-payload change (figures stay content-class — never logged/
+audited/exported).
+- **BL-1 — value-date column (the LINE PARSER, `tools/bank-statement.ts parseLine` +
+  `tools/invoice.ts parseLineItem`).** A DACH statement row often prints BOTH a booking date
+  (Buchungstag) and a value date (Wertstellung/Valuta) as its first two columns. The shared `MONEY_RE`
+  reads a `dd.mm.20yy` date's `.20yy` tail as a 2-decimal amount (`07.06.2026` → `07.06.20` → 706.20),
+  so a value date left in the scanned remainder either became the row's first "money" match (empty
+  description → the row **silently dropped**) or fed a wrong figure as the amount. Fix: a shared
+  `tools/money.ts splitLeadingDates(line)` strips the **whole leading run** of date tokens before the
+  money scan (not just the first token); `parseLine` records the first as the booking `date` and a second
+  as the optional `valueDate` (schema/CSV already carry it), `parseLineItem` strips and discards (line
+  items have no date field). Capped at two leading dates (booking + value), stops at the first non-date
+  token (a description is never consumed), handles either column order. The money scanner's **last-token**
+  readers (`lastMoneyOnLine` / balance / invoice-total) take the trailing figure, so they were never
+  affected and are untouched. This is the **line-parser fallback** (plain-text statements, CSV, and the
+  invoice path — which has no geometry pass); the geometry layout's own out-of-column value-date handling
+  is §21 (the booking-date column model), a separate seam. Pinned by the 4-column `Buchung Valuta Betrag
+  Saldo` fixtures (`skills-bank-statement-tool.test.ts` unit + `skills-analysis-bank.test.ts` end-to-end);
+  teeth = reverting to the single-token strip drops/mis-values the rows.
+- **BL-2 — single-currency precondition on the completeness gate (`assessCompleteness` /
+  `isStatementComplete`) and `reconcileBalances`.** Both summed amounts across currencies: the gate tied
+  `opening + Σamounts == closing` and the reconcile chained `prevBalance + amount` regardless of currency,
+  so a mixed-currency statement could be mislabelled `complete`/`contradicted` or carry a spurious
+  per-row `mismatch`. Now both mirror `summarizeCashflow`'s `currencies.size === 1` guard:
+  `assessCompleteness` returns `'unverified'` for a mixed-currency statement (never claims a verdict from
+  a meaningless cross-currency sum) and `reconcileBalances` reports every row `unknown` (never reconciled).
+  `buildBankAnswer`'s honesty branches are **unchanged** — the mixed-currency answer was already gated on
+  `summary.currency` (the `noCurrency` branch), so the SKILL.md ⇔ TS parity contract
+  (`skills-skillmd-parity.test.ts`) holds without a wording change; the fix hardens the **public
+  predicates** a future caller might trust. Pinned by mixed-currency `assessCompleteness`/`reconcileBalances`
+  unit tests; teeth = removing either guard flips the verdict back.
+- **BL-3 — currency-blind `categoryTotals` (`analysis/bank-statement.ts`).** The per-category accumulator
+  keyed by category alone, summing signed amounts across currencies into one figure. Now keyed by
+  `(category, currency)` — each `CategoryTotal` carries its own currency and `buildBankAnswer` renders it
+  with `c.currency`. The breakdown is only ever rendered on the **single-currency branch** (so the live
+  output is byte-identical, confirmed by the unchanged category tests); the fix removes the latent
+  currency-blindness for any future reuse.
+
 ### §11 IPC / audit surface
 
 `skills:list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning` +
@@ -2751,6 +2790,14 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
     `reduce`. Every figure is exactly 2-dp, so the cent sum is exact and the tie is an exact integer test
     — float drift over thousands of rows can no longer push the difference past `MONEY_EPS` and flip a
     genuinely-tying statement to a false `contradicted`. Read-time only; nothing persisted changes.
+  - **Single-currency precondition (backend audit 2026-06-27, BL-2).** The tie sums every amount into one
+    figure against a single opening/closing pair, so `assessCompleteness` first returns `'unverified'`
+    when the rows span more than one currency (a cross-currency Σ is meaningless), and `reconcileBalances`
+    reports a mixed-currency statement all-`unknown` — both mirroring `summarizeCashflow`'s
+    `currencies.size === 1` guard. `buildBankAnswer`'s mixed-currency branch (already gated on
+    `summary.currency` → no single total) is unchanged, so the change only hardens the public predicates;
+    the §10 record carries the full note. Also BL-1's value-date column fix lives in the **line parser**
+    (`parseLine`, §10), distinct from the geometry booking-date column model below.
   - **`Kontostand per` date disambiguation (audit C-4, 2026-06-26).** Because the same label prints both
     balances, `extractStatementBalances` resolves it by DATE: with two distinct-dated `Kontostand per`
     lines the **earliest** is the opening and the **latest** is the closing; a **single** such line (no

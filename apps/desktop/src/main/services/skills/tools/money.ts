@@ -108,6 +108,41 @@ export function parseDate(token: string): string | null {
   return null
 }
 
+/**
+ * Split the LEADING date column(s) off a printed transaction/line-item row (backend audit 2026-06-27,
+ * BL-1). Returns the ISO dates found at the very start of the line (in order — typically a booking date
+ * then an optional value/settlement date) and the remaining text after them.
+ *
+ * **Why this exists.** A DACH statement row often prints BOTH a booking date (Buchungstag) and a value
+ * date (Wertstellung/Valuta) as its first two columns. Reading only the FIRST whitespace token as the
+ * date left the value date in the text handed to the `MONEY_RE` scan — where `MONEY_RE` reads its
+ * `dd.mm.20yy` tail as a 2-decimal amount (`07.06.2026` → `07.06.20` → 706.20). That either made the
+ * value date the row's first "money" match (empty description → the row silently DROPPED) or fed a wrong
+ * figure into the amount. Consuming the WHOLE leading run of date tokens (not just the first) keeps the
+ * value-date column out of the money scan; it also handles either column ORDER (booking-first or
+ * value-first) since both sit in the leading date region.
+ *
+ * Conservative by construction: it stops at the first NON-date token, so a description is never consumed,
+ * and it is capped at two dates (booking + value) so a date-shaped FIRST word of a description cannot eat
+ * the whole row. `dates` is empty when the line does not begin with a date (the caller then drops it).
+ * The money scanner's other users (`lastMoneyOnLine`/balance/invoice-total readers) take the LAST token,
+ * not the first, so they were never affected and are deliberately left untouched.
+ */
+export function splitLeadingDates(line: string): { dates: string[]; rest: string } {
+  const dates: string[] = []
+  let rest = line
+  // Cap at two leading dates (booking + value) — a third date-shaped leading token is not a real column.
+  while (dates.length < 2) {
+    const m = /^(\S+)\s+(.*)$/.exec(rest)
+    if (!m) break
+    const d = parseDate(m[1])
+    if (!d) break
+    dates.push(d)
+    rest = m[2]
+  }
+  return { dates, rest }
+}
+
 // ---- Word-bounded substring test (shared by both categorization paths) ----
 
 /**

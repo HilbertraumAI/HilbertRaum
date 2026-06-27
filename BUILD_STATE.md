@@ -6,6 +6,67 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 2 (Financial-extraction correctness;
+BL-1, BL-2, BL-3, TEST-2, TEST-6) — MAIN-SIDE PARSING/AGGREGATION PHASE, no renderer surface, no schema
+change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2292 passed / 38 skipped
+(+6)**, typecheck clean, build OK. Parsing/aggregation logic only — figures stay content-class (never
+logged/audited/exported); the audit payload is untouched. **The bugs:**
+- **BL-1 (High) — value-date column mis-parse.** The shared `MONEY_RE` (`tools/money.ts`) reads a
+  `dd.mm.20yy` date's `.20yy` tail as a 2-decimal amount (`07.06.2026` → `07.06.20` → 706.20). The line
+  parsers (`tools/bank-statement.ts parseLine`, `tools/invoice.ts parseLineItem`) stripped only the FIRST
+  whitespace token as the date, so a DACH statement printing BOTH a booking date (Buchungstag) and a value
+  date (Wertstellung/Valuta) left the value date in the money-scanned remainder → either an empty
+  description (row **silently dropped**) or a wrong amount.
+- **BL-2 (Medium) — currency-blind completeness.** `assessCompleteness`/`isStatementComplete` summed
+  `opening + Σamounts == closing` and `reconcileBalances` chained `prevBalance + amount` across currencies
+  → a mixed-currency statement could be mislabelled `complete`/`contradicted` or carry a spurious mismatch.
+- **BL-3 (Low) — currency-blind category totals.** `analysis/bank-statement.ts categoryTotals` keyed by
+  category alone, summing signed amounts across currencies (gated in practice by the single-currency render
+  branch, but latently wrong).
+**As built (implementer's picks):**
+- **BL-1 — took the recommended default (date-stripping, NOT the MONEY_RE lookahead).** New shared
+  `tools/money.ts splitLeadingDates(line)` consumes the WHOLE leading run of date tokens before the money
+  scan (capped at two — booking + value — and stops at the first non-date token so a description is never
+  consumed; handles either column order). `parseLine` records the first as the booking `date` and the
+  second as the optional `valueDate` (the schema/CSV already carry it — so the fix also **enriches** the
+  data rather than discarding the value date); `parseLineItem` strips + discards (line items have no date
+  field). **Scoped to the description/amount boundary only** — the money scanner's last-token readers
+  (`lastMoneyOnLine`/balance/invoice-total) take the trailing figure and were never affected, left
+  untouched (confirmed: existing balance/total fixtures unchanged). This fixes the **line-parser fallback**
+  (plain-text statements, CSV, the invoice path with no geometry pass); the auto-run geometry path's own
+  out-of-column value-date handling is the separate booking-date column model (architecture §21).
+- **BL-2 — mirrored the `summarizeCashflow` `currencies.size === 1` guard.** `assessCompleteness` returns
+  `'unverified'` for a mixed-currency statement (first check, before the mismatch/opening-closing logic);
+  `reconcileBalances` returns every row `unknown` (never reconciled). **`buildBankAnswer`'s honesty
+  branches did NOT change** — the mixed-currency answer was already gated on `summary.currency` (the
+  `noCurrency` branch), independent of `status` — so the SKILL.md ⇔ TS parity test stays green with no
+  wording change; the fix hardens the **public predicates** a future caller might trust.
+- **BL-3 — keyed `categoryTotals` by `(category, currency)`.** Each `CategoryTotal` now carries its own
+  `currency`; `buildBankAnswer` renders `c.currency` (identical to `summary.currency` on the only branch
+  that renders the breakdown — the single-currency one — so the live output is byte-identical, confirmed by
+  the unchanged category tests). Removes the latent currency-blindness for any future reuse.
+- **Tests (TEST-2/TEST-6, +6).** `skills-bank-statement-tool.test.ts`: the 4-column `Buchung Valuta Betrag
+  Saldo` fixture (both rows parse — none dropped — value date captured, amount = −45.90 not 706.20, Σ feeds
+  the total), a single-date-row regression (valueDate stays undefined), mixed-currency `assessCompleteness`
+  ⇒ `'unverified'` (TEST-6) and `reconcileBalances` ⇒ all-`unknown`. `skills-invoice-tool.test.ts`: a
+  `parseLineItem` leading-date strip (no misread unit price). `skills-analysis-bank.test.ts`: the 4-column
+  statement **end-to-end** → the verified (`caveat`) total, no `706.20` leak. **Teeth verified:** reverting
+  `parseLine` to the single-token strip failed both BL-1 fixtures; removing each BL-2 guard flipped the
+  mixed-currency verdict (`assessCompleteness`/`reconcileBalances` tests failed) — both restored. **BL-3
+  has no behavioral teeth:** the function is private and only rendered single-currency, so its correctness
+  manifests only on a path that isn't rendered; the unchanged category tests prove the live path is
+  byte-identical (the relevant safety property).
+- **Posture (held):** no network/telemetry; this phase changes parsing/aggregation only — extracted figures
+  live only in the encrypted workspace DB and are never logged/audited/exported; the run audit payload stays
+  ids/counts. No IPC/schema-shape change (`valueDate` was already on the row schema + CSV; now populated).
+- **Docs:** `architecture.md` "Skills — design record" §10 (new "Financial-extraction correctness" record —
+  BL-1 line-parser value-date handling, BL-2 single-currency precondition, BL-3 currency-keyed totals) + §21
+  cross-ref (the gate's single-currency precondition; BL-1 line-parser vs the geometry column model). Plan
+  checkbox flipped to ✅. **Eyeball:** none — a main-side parsing/aggregation phase, no UI surface.
+  **Next: Phase 3 — Cancellation & timeouts (REL-1 audio-ingest abort+watchdog, REL-2 OCR per-page timeout,
+  REL-3 dictation timeout/concurrency, REL-6 transcriber workDir; TEST-4).** See
+  `docs/backend-audit-2026-06-27-remediation-plan.md` Phase 3._
+
 _2026-06-27 — **Backend audit 2026-06-27 remediation — Phase 1 (Document-deletion data integrity;
 DATA-1, DOC-1, MAINT-1, TEST-1) — MAIN-SIDE DATA-CORRECTNESS PHASE, no renderer surface, no new
 capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2286 passed / 38 skipped (+4)**,

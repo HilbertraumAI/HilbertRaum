@@ -115,6 +115,49 @@ describe('extractTransactionRows', () => {
     expect(rows[0].sourcePage).toBeUndefined()
   })
 
+  it('parses a 4-column Buchung/Valuta/Betrag/Saldo statement: value date stripped, not read as the amount (BL-1)', () => {
+    // The common DACH layout prints a booking date (Buchungstag) AND a value date (Wertstellung/Valuta)
+    // as the first two columns. Before the BL-1 fix, MONEY_RE read the value date's `dd.mm.20yy` tail as
+    // a 2-decimal amount (`07.06.2026` → `07.06.20` → 706.20): the LEADING value date made `matches[0]`
+    // start at index 0 → an empty description → the row was SILENTLY DROPPED. Now the whole leading date
+    // run is stripped first, so both rows parse with the real amount + a non-empty description, and the
+    // value date is captured separately.
+    const text = [
+      'Kontoauszug EUR',
+      'Buchung    Valuta      Buchungstext       Betrag      Saldo', // header — no leading date, dropped
+      '06.06.2026 07.06.2026 Supermarkt Billa   -45,90      1.954,10',
+      '08.06.2026 09.06.2026 Gehalt ACME         2.500,00    4.454,10'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2) // NEITHER row dropped by the value-date column
+    expect(rows[0]).toMatchObject({
+      date: '2026-06-06',
+      valueDate: '2026-06-07',
+      description: 'Supermarkt Billa',
+      amount: -45.9, // the real movement — NOT 706.20 (the misread value-date fragment)
+      currency: 'EUR',
+      balanceAfter: 1954.1
+    })
+    expect(rows[1]).toMatchObject({
+      date: '2026-06-08',
+      valueDate: '2026-06-09',
+      description: 'Gehalt ACME',
+      amount: 2500,
+      balanceAfter: 4454.1
+    })
+    // Every row has a non-empty description and a correctly-signed amount (the BL-1 contract).
+    expect(rows.every((r) => r.description.length > 0)).toBe(true)
+    // The amounts feed the correct total: Σ = 2500 − 45.90 = 2454.10 (no 706.20-style date fragment).
+    expect(rows.reduce((s, r) => s + r.amount, 0)).toBeCloseTo(2454.1, 2)
+  })
+
+  it('captures the value date only when a SECOND leading date is present (single-date rows unchanged)', () => {
+    // A plain single-date row is byte-identical to before the BL-1 fix — `valueDate` stays undefined.
+    const single = extractTransactionRows([chunk('2026-01-02 Grocery -45,90 1.954,10', 1)], 'EUR')
+    expect(single[0].valueDate).toBeUndefined()
+    expect(single[0]).toMatchObject({ date: '2026-01-02', description: 'Grocery', amount: -45.9 })
+  })
+
   it('ReDoS regression: a giant digit/separator run is scanned linearly (no main-process freeze)', () => {
     // vuln-scan-2026-06-21: the shared MONEY_RE used to backtrack quadratically (O(N²)) on a long
     // run of digits/separators with no valid `[.,]\d{2}` tail — a hostile statement whose chunk is
@@ -243,6 +286,26 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
     const reconcile = reconcileBalances(ROWS)
     expect(isStatementComplete({ rows: ROWS, openingBalance: 2000, closingBalance: 4454.1, reconcile })).toBe(true)
     expect(isStatementComplete({ rows: ROWS, reconcile })).toBe(false) // unverified ⇒ not 'complete'
+  })
+
+  it("'unverified' for a MIXED-currency statement — never a meaningless cross-currency tie (audit BL-2/TEST-6)", () => {
+    // Σ over rows in different currencies is a meaningless figure to compare against ONE opening/closing
+    // pair, so the gate must never claim 'complete' OR 'contradicted' from it — the honest verdict is
+    // 'unverified' (mirrors summarizeCashflow's single-currency guard).
+    const mixed: TransactionInput[] = [
+      { date: '2026-01-02', description: 'Coffee', amount: -3.5, currency: 'EUR' },
+      { date: '2026-01-03', description: 'Book', amount: -10, currency: 'USD' }
+    ]
+    const reconcile = reconcileBalances(mixed)
+    // Even a printed opening+closing pair (which on a single-currency statement would force a verdict)
+    // cannot make a mixed-currency statement 'complete' or 'contradicted'.
+    expect(assessCompleteness({ rows: mixed, openingBalance: 100, closingBalance: 86.5, reconcile })).toBe(
+      'unverified'
+    )
+    expect(assessCompleteness({ rows: mixed, openingBalance: 100, closingBalance: 9999.99, reconcile })).toBe(
+      'unverified'
+    )
+    expect(isStatementComplete({ rows: mixed, openingBalance: 100, closingBalance: 86.5, reconcile })).toBe(false)
   })
 
   it("sums in INTEGER CENTS so float drift over many rows can't flip a tying statement to contradicted (audit C-3)", () => {
@@ -380,6 +443,19 @@ describe('validate_statement_balances (S11c)', () => {
     const res = reconcileBalances(rows)
     expect(res.reconciled).toBe(false)
     expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'mismatch'])
+  })
+
+  it('reconcileBalances: a MIXED-currency statement is all-unknown, never a cross-currency mismatch (BL-2)', () => {
+    // The running chain `prevBalance + amount` would add a USD amount onto a EUR balance — meaningless.
+    // Every row is reported `unknown` (nothing genuinely checked), so the statement is never reconciled
+    // and no spurious `mismatch` flows into the completeness gate.
+    const rows = [
+      tx({ amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 }),
+      tx({ amount: -10, currency: 'USD', balanceAfter: 1944.1 }) // a same-currency chain would 'mismatch'
+    ]
+    const res = reconcileBalances(rows)
+    expect(res.reconciled).toBe(false)
+    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'unknown'])
   })
 
   it('reconcileBalances: all-baseline (no predecessor ever has a balance) ⇒ not reconciled', () => {
