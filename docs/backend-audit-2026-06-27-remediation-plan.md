@@ -177,7 +177,7 @@ When Phases 1–8 are ✅: fold any remaining live status into the relevant topi
 
 ## Phase tracker
 
-- [ ] Phase 1 — Document-deletion data integrity (DATA-1, DOC-1, MAINT-1, TEST-1) — **High**
+- [x] Phase 1 — Document-deletion data integrity (DATA-1, DOC-1, MAINT-1, TEST-1) — **High** ✅ (branch `backend-audit-2026-06-27-fixes`; ordered manual delete + full-chain CASCADE on fresh schemas, txn-wrapped, shred-after-commit; `purgeDocumentDerivatives`/`purgeSkillDataForDocument`; teeth-verified test)
 - [ ] Phase 2 — Financial-extraction correctness (BL-1, BL-2, BL-3) — **High/Med**
 - [ ] Phase 3 — Cancellation & timeouts (REL-1, REL-2, REL-3, REL-6) — **Med**
 - [ ] Phase 4 — Ingestion robustness & caps (REL-5, REL-9, REL-10, BL-5, MAINT-4) — **Med/Low**

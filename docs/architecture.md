@@ -1648,7 +1648,10 @@ Three new tables; **`ON DELETE CASCADE` on both FKs of `document_collections` an
 `conversation_documents` is load-bearing (C4)**: `openDatabase` runs `PRAGMA foreign_keys = ON` and
 `deleteDocument` deletes the `documents` row directly, so without CASCADE a *pre-feature* app deleting
 a doc in a *post-feature* DB would hit an FK violation. CASCADE makes any build delete a doc cleanly
-and removes manual membership-cleanup ordering.
+and removes manual membership-cleanup ordering. (The later skills `bank_*`/`invoice_*` content tables
+needed the same treatment — backend audit 2026-06-27 DATA-1 — but since `CREATE TABLE IF NOT EXISTS`
+can't add CASCADE to an existing drive, `deleteDocument` ALSO does an explicit ordered delete of those
+rows in one transaction; see "Skills — design record" §10.)
 
 ```
 collections(id, name, type, description, builtin, color, created_at, updated_at,
@@ -2075,6 +2078,23 @@ exported** (§9.5) — distinct from the non-secret skill packages. The **invoic
 parallel content-class tables `invoices` (header + totals + a `totals_reconciled` flag) +
 `invoice_line_items` (the line-item rows), with the same isolation; `skill_runs.result_ref` points at a
 `bank_statements.id` **or** an `invoices.id`, never inline content.
+
+**Deletion safety (backend audit 2026-06-27, DATA-1).** The bank/invoice tables reference `documents`
+(and their parents) — but the original S11a/S11c DDL omitted `ON DELETE CASCADE`, while `deleteDocument`
+deleted only chunks/embeddings/the row. With `foreign_keys = ON` that left the final `DELETE FROM
+documents` to throw `SQLITE_CONSTRAINT_FOREIGNKEY` *after* the file was shredded — a corrupt, undeletable
+document. Fixed two ways: (1) `deleteDocument` now purges every derivative in FK order inside **one
+transaction** — `ingestion/index.ts purgeDocumentDerivatives` (embeddings → chunks → tree_nodes) →
+`skills/run.ts purgeSkillDataForDocument` (bank_corrections → bank_transactions → bank_statements,
+invoice_line_items → invoices), the **single authoritative teardown list** (MAINT-1) reusing the
+re-extract delete — and shreds the workspace copy only **after** the commit; and (2) the schema now
+declares `ON DELETE CASCADE` down both chains, so a *fresh* DB stays safe even on a bare `DELETE FROM
+documents` (defense-in-depth for the next table). `CREATE TABLE IF NOT EXISTS` can't add the cascade to
+an **existing** drive, so there the explicit ordered delete is what's load-bearing — no table-rebuild
+migration (the ordered delete already closes the bug). Pinned by
+`tests/integration/document-delete-derivatives.test.ts` (real bank+invoice extractions deleted cleanly on
+a simulated pre-fix drive; teeth = the un-cascaded FK throws without the ordered delete; plus the
+fresh-schema cascade).
 
 ### §11 IPC / audit surface
 

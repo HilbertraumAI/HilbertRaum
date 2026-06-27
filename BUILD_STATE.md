@@ -6,6 +6,70 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-27 — **Backend audit 2026-06-27 remediation — Phase 1 (Document-deletion data integrity;
+DATA-1, DOC-1, MAINT-1, TEST-1) — MAIN-SIDE DATA-CORRECTNESS PHASE, no renderer surface, no new
+capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2286 passed / 38 skipped (+4)**,
+typecheck clean, build OK. **The bug (DATA-1, High, reproduced against `node:sqlite`):**
+`deleteDocument` shredded the file + deleted chunks/embeddings, then threw
+`SQLITE_CONSTRAINT_FOREIGNKEY` on the final un-transacted `DELETE FROM documents` because the
+`bank_statements`/`invoices` (and child) tables reference `documents(id)` with **no `ON DELETE
+CASCADE`** and were never cleaned up — leaving a permanently corrupt, undeletable document, and
+contradicting the deletion-safety invariant in `known-limitations.md` §39–46 (DOC-1).
+**As built (implementer's picks):**
+- **Centralised teardown (MAINT-1).** New private `ingestion/index.ts` `purgeDocumentDerivatives(db,
+  id)` = the single authoritative "everything hanging off a document" list, in FK order: embeddings →
+  chunks → tree_nodes → `purgeSkillDataForDocument`. The bank/invoice half is a new **exported**
+  `skills/run.ts purgeSkillDataForDocument(db, documentId)` = `deleteBankStatementsForDocument`
+  (REUSED — the existing re-extract "replace" delete: bank_corrections → bank_transactions →
+  bank_statements) + a new sibling `deleteInvoicesForDocument` (invoice_line_items → invoices). No
+  duplication of the bank ordering. The CASCADE-from-documents tables (`document_collections`,
+  `conversation_documents`, `extraction_records`) are left to the final `DELETE FROM documents`;
+  `tree_nodes` is cleared explicitly anyway (mirrors the re-index teardown) so the list stays complete
+  on every drive.
+- **Atomicity.** `deleteDocument` now wraps `purgeDocumentDerivatives` + the row delete in ONE
+  `BEGIN…COMMIT` (ROLLBACK + rethrow on any throw), and **shreds the workspace copy only AFTER the
+  commit** — closing the window where the file was destroyed before a failing delete left a corrupt
+  row. `invalidateResidentVectors` stays (post-commit).
+- **DECISION (took the recommended default, confirmed against the code).** Explicit ordered manual
+  delete (works on EXISTING drives immediately — load-bearing there) **AND** `ON DELETE CASCADE` added
+  to the SCHEMA down BOTH full chains (`bank_statements.document_id` + `bank_transactions.statement_id`
+  + `bank_corrections.transaction_id`; `invoices.document_id` + `invoice_line_items.invoice_id`) so a
+  *fresh* DB is safe even on a bare `DELETE FROM documents` (defense-in-depth). **Why full-chain, not
+  just the two top FKs:** a top-only cascade would itself FK-throw on a fresh DB (the un-cascaded child
+  rows block the parent's cascade) — so cascading the whole chain is the only coherent defense-in-depth.
+  **Skipped the table-rebuild migration** for existing drives (heavy on portable USB; the ordered
+  delete already closes the bug there — `CREATE TABLE IF NOT EXISTS` can't alter the existing FK, which
+  is fine).
+- **Reindex parity (confirmed unaffected).** `index.ts:667–687` deletes chunks/embeddings/tree but NOT
+  the document row, so no FK issue; bank/invoice rows correctly persist as stale, gated by
+  `extractor_version` — untouched by this phase.
+- **Test (TEST-1) — `tests/integration/document-delete-derivatives.test.ts` (+4).** Drives the REAL
+  `runBankExtraction` + `runInvoiceExtraction` (via `readDocumentSegments`) onto one document, plus a
+  manual `bank_corrections` row (no UI writes it) + embeddings + tree_node, on a **simulated pre-fix
+  drive** (`degradeSkillTablesToLegacyFk` reads each table's live DDL and strips the cascade — faithful
+  "existing drive", carries migrated columns automatically), then `deleteDocument` → succeeds, every
+  derived row gone, file shredded, `skill_runs` (no FK) intentionally kept. Plus: a fresh-schema
+  bare-delete cascades the whole chain; and the **IPC end-to-end** path (`registerDocsIpc` →
+  `IPC.deleteDocument` on a doc WITH a tool run) fires `document_deleted` — the exact audit-ipc gap
+  TEST-1 named. **Teeth verified:** neutering `purgeSkillDataForDocument` made the service + IPC tests
+  fail with `FOREIGN KEY constraint failed` (and the txn rolled back — the row survived); reverted.
+- **Data contract (new):** `purgeSkillDataForDocument(db, documentId)` (exported from `skills/run.ts`)
+  is the authoritative bank+invoice teardown for a document, FK-ordered, runs inside the caller's
+  transaction, ids/figures only. `purgeDocumentDerivatives` (private to ingestion) is the full
+  derived-row teardown that `deleteDocument` routes through. Anyone adding a new document-scoped table
+  extends `purgeDocumentDerivatives` (and adds the cascade to fresh schemas).
+- **Posture (load-bearing):** no network/telemetry; bank/invoice rows are content-class but this phase
+  touches only ids/row counts — nothing logged/audited/echoed; the delete audit payload stays
+  `{documentId}`. No IPC/schema-shape change beyond the additive cascade clauses (no data migration).
+- **Docs:** `known-limitations.md` §39–46 (deletion-safety paragraph — bank/invoice now handled by the
+  ordered cleanup + fresh-schema CASCADE; pre-skills version-skew caveat), `architecture.md` "Skills —
+  design record" §10 (new Deletion-safety paragraph) + "Document organization — design record" §3
+  (cascade cross-ref), `rag-design.md` `deleteDocument` IPC row. Plan checkbox flipped to ✅.
+  **Eyeball:** none — a main-side data-correctness phase, no UI surface.
+  **Next: Phase 2 — Financial-extraction correctness (BL-1 value-date money parse, BL-2 mixed-currency
+  completeness, BL-3 currency-blind categoryTotals; TEST-2/TEST-6).** See
+  `docs/backend-audit-2026-06-27-remediation-plan.md` Phase 2._
+
 _2026-06-26 — **Skills & Tools audit — Phase 11 (FINAL: Test backfill & residuals; T-1, R-1, R-2) —
 TESTS/DOCS PHASE, no renderer surface, no new capability (branch `skills-tools-audit-2026-06-26`). ALL 11
 PHASES REMEDIATED — audit complete.** Suite **2282 passed / 38 skipped (+3)**, typecheck clean, build OK.

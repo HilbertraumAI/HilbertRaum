@@ -170,7 +170,7 @@ retrieval time.
 | `importDocuments(paths)` | → `ImportJob { jobId, documentIds }` | queue + background ingest |
 | `getImportJob(jobId)` | → `ImportJobStatus` | poll job aggregate |
 | `listDocuments()` | → `DocumentInfo[]` | non-deleted docs, newest first, with chunk counts |
-| `deleteDocument(id)` | → `void` | remove chunks/embeddings/stored copy/row |
+| `deleteDocument(id)` | → `void` | atomic teardown: `purgeDocumentDerivatives` (chunks/embeddings/tree + bank/invoice rows) → row, in one txn; stored copy shredded after commit (audit DATA-1) |
 | `reindexDocument(id)` | → `DocumentInfo` | re-parse & re-chunk the stored copy |
 
 ---

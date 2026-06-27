@@ -29,6 +29,7 @@ import { sha256File } from '../models'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
 import { type Embedder, encodeVector, invalidateResidentVectors } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
+import { purgeSkillDataForDocument } from '../skills/run'
 import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
 import {
@@ -1355,23 +1356,69 @@ export function getDocument(db: Db, id: string): DocumentInfo | null {
 }
 
 /**
- * Delete a document and everything derived from it: its chunks, embeddings, the
- * workspace copy on disk, and the row itself. The original file is never touched.
+ * Delete every DB row DERIVED from a document, in FK order, EXCEPT the `documents` row itself
+ * (the caller deletes that last, inside the same transaction). This is the single authoritative
+ * list of "everything hanging off a document" (audit MAINT-1) so a teardown can't miss a table the
+ * way `deleteDocument` historically missed the bank/invoice tables (audit DATA-1):
+ *
+ *   embeddings → chunks → tree_nodes → bank/invoice extraction rows (`purgeSkillDataForDocument`).
+ *
+ * Tables that declare `ON DELETE CASCADE` to `documents` (`document_collections`,
+ * `conversation_documents`, `extraction_records`, and `tree_nodes` on fresh schemas) need no manual
+ * delete — the final `DELETE FROM documents` removes them. `tree_nodes` is cleared explicitly here
+ * anyway, mirroring the re-index teardown, so this list stays complete on every drive. The
+ * bank/invoice tables carry no documents-CASCADE on drives created before the DATA-1 fix, so their
+ * ordered delete is load-bearing there, not a belt. ids only — content is never logged/audited.
+ */
+function purgeDocumentDerivatives(db: Db, id: string): void {
+  db.prepare(
+    'DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)'
+  ).run(id)
+  db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id)
+  // Summary-tree nodes cascade their edges (FK on parent_id); cleared explicitly to keep the list
+  // complete (on fresh schemas tree_nodes also cascades from documents — harmless double-cover).
+  db.prepare('DELETE FROM tree_nodes WHERE document_id = ?').run(id)
+  // Tier-2 skill content tables (bank_statements/invoices + children): NO documents-CASCADE on
+  // existing drives, so this ordered delete is what closes DATA-1.
+  purgeSkillDataForDocument(db, id)
+}
+
+/**
+ * Delete a document and everything derived from it: its chunks, embeddings, summary tree, any
+ * bank/invoice extraction rows, the workspace copy on disk, and the row itself. The original file
+ * (the user's own location) is never touched.
+ *
+ * Atomicity (audit DATA-1): all DB deletes run in ONE transaction so a future FK miss rolls back
+ * instead of half-committing. The on-disk shred runs ONLY AFTER the DB commit — never destroy the
+ * workspace copy while the row delete could still fail, which is exactly the window that left a
+ * corrupt, undeletable document when a bank/invoice extraction blocked the (un-transacted) delete.
  */
 export function deleteDocument(db: Db, id: string): void {
   const row = getRow(db, id)
   if (!row) return
+  db.exec('BEGIN')
+  try {
+    purgeDocumentDerivatives(db, id)
+    // Membership (document_collections) + chat-attachment (conversation_documents) +
+    // extraction_records rows cascade away via ON DELETE CASCADE (plan C4 / H1) — no manual
+    // cleanup needed here.
+    db.prepare('DELETE FROM documents WHERE id = ?').run(id)
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
+    throw err
+  }
+  // The DB delete committed. Now shred (overwrite-then-unlink) the workspace copy rather than a bare
+  // unlink (plan M5). Best-effort: a locked/missing copy must not resurrect the already-deleted DB
+  // rows. Shredding AFTER the commit closes the DATA-1 window where the file was destroyed before a
+  // failing delete left a row with no chunks and no stored file.
   if (row.stored_path && existsSync(row.stored_path)) {
-    // Shred (overwrite-then-unlink) the workspace copy rather than a bare unlink (plan M5),
-    // keeping the on-disk delete contract consistent with the rest of the app. Best-effort:
-    // a locked/missing copy must not block the DB cleanup.
     shredFile(row.stored_path)
   }
-  db.prepare('DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(id)
-  db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id)
-  // Membership (document_collections) + chat-attachment (conversation_documents) rows
-  // cascade away via ON DELETE CASCADE (plan C4) — no manual cleanup needed here.
-  db.prepare('DELETE FROM documents WHERE id = ?').run(id)
   // RAG-6 (Wave P4) belt: this doc's vectors were just DELETEd — drop the resident
   // decoded-vector cache (closes the delete-then-equal-reinsert signature blind spot).
   invalidateResidentVectors(db)

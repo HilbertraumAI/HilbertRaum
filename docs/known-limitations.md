@@ -39,11 +39,20 @@ password recovery — are documented in
 - **A pre-document-organization build ignores collections on a post-feature DB — but deletes still
   work.** An older app shows the flat document corpus (it never reads the `collections` /
   `document_collections` / `conversation_documents` tables), so organization is invisible, not
-  corrupting. Document **deletion** stays safe only because those membership/link tables declare
-  `ON DELETE CASCADE`: the old app's direct `DELETE FROM documents` (with `PRAGMA foreign_keys = ON`)
-  cascade-removes the orphan rows instead of raising a foreign-key violation. Same accepted
-  app-beside-data version-skew stance as the vault note above. (See `docs/architecture.md`
-  "Document organization — design record" §3.)
+  corrupting. Document **deletion** stays safe for those membership/link tables because they declare
+  `ON DELETE CASCADE`: a direct `DELETE FROM documents` (with `PRAGMA foreign_keys = ON`)
+  cascade-removes the orphan rows instead of raising a foreign-key violation. The later **skills**
+  content tables (`bank_statements` / `bank_transactions` / `bank_corrections`, `invoices` /
+  `invoice_line_items`) are handled two ways (backend audit 2026-06-27, DATA-1): the current build's
+  `deleteDocument` does an **explicit ordered delete** of those rows (`purgeDocumentDerivatives` →
+  `purgeSkillDataForDocument`) inside one transaction *before* the `documents` delete, which keeps
+  deletion safe on **existing** drives whose FKs predate the fix; and fresh schemas additionally
+  declare `ON DELETE CASCADE` down both chains, so even a bare `DELETE FROM documents` (e.g. a future
+  caller) cascades cleanly. Note: a **pre-skills** build deleting a document that has bank/invoice
+  extractions would hit the un-cleaned FK and fail — the same accepted app-beside-data version-skew
+  stance as the vault note above (the *current* build deletes such a document cleanly and atomically).
+  (See `docs/architecture.md` "Document organization — design record" §3 and "Skills — design record"
+  §10.)
 - **Password-change edge: a post-commit swap interruption can briefly wedge one document.**
   If the one-time v1→v2 migration is interrupted AFTER its descriptor commit but mid file-swap
   (e.g. a transiently locked file on Windows), a not-yet-swapped document sidecar stays under
