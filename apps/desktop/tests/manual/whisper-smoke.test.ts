@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createWhisperCliTranscriber,
@@ -34,6 +35,9 @@ import { packTranscriptSegments } from '../../src/main/services/ingestion/parser
 const ROOT = process.env.HILBERTRAUM_WHISPER_SMOKE?.trim() ?? ''
 const AUDIO_DIR = process.env.HILBERTRAUM_WHISPER_AUDIO?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT) && AUDIO_DIR.length > 0 && existsSync(AUDIO_DIR)
+// REL-6: workDir is required (the transient transcript must stay in a swept dir). A throwaway
+// temp dir is fine here — the transcript is shredded after each call regardless.
+const WORK = mkdtempSync(join(tmpdir(), 'whisper-smoke-'))
 
 function transcriberModel(root: string): string | null {
   const dir = join(root, 'models', 'transcriber')
@@ -67,6 +71,7 @@ describe.skipIf(!enabled)('Whisper smoke (manual, real v1.8.6 + real German audi
       const progress: number[] = []
       const segments = await t.transcribe(file, {
         language: 'de',
+        workDir: WORK,
         onProgress: (p) => progress.push(p)
       })
       expect(segments.length).toBeGreaterThan(0)
@@ -87,7 +92,7 @@ describe.skipIf(!enabled)('Whisper smoke (manual, real v1.8.6 + real German audi
     const file = join(AUDIO_DIR, 'sample.m4a')
     if (!existsSync(file)) return console.log('sample.m4a not provided — leg skipped')
     const t = makeReal()
-    await expect(t.transcribe(file)).rejects.toThrow(AUDIO_DECODE_ERROR_PREFIX)
+    await expect(t.transcribe(file, { workDir: WORK })).rejects.toThrow(AUDIO_DECODE_ERROR_PREFIX)
   })
 
   // R-W4: the long-file leg — wall time + progressive progress on a ~60 min recording.
@@ -99,6 +104,7 @@ describe.skipIf(!enabled)('Whisper smoke (manual, real v1.8.6 + real German audi
     const progress: number[] = []
     const segments = await t.transcribe(file, {
       language: 'de',
+      workDir: WORK,
       onProgress: (p) => progress.push(p)
     })
     const wallS = Math.round((Date.now() - started) / 1000)

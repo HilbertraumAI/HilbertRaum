@@ -282,8 +282,76 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
   })
 
   it('stop() refuses new work permanently (the will-quit latch)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-stop-'))
     const { transcriber } = fakeCliTranscriber({ json: WHISPER_JSON })
     await transcriber.stop()
-    await expect(transcriber.transcribe('a.mp3')).rejects.toThrow(/stopped/)
+    await expect(transcriber.transcribe('a.mp3', { workDir })).rejects.toThrow(/stopped/)
+  })
+
+  // REL-1 (TEST-4): a wedged/spinning child that emits nothing and never closes on its own
+  // is killed by the inactivity watchdog and the call rejects — instead of hanging the
+  // ingestion slot until app restart. Teeth: with a generous idleTimeoutMs this never fires
+  // (the call would hang), so a small one proving the kill is the load-bearing assertion.
+  it('the inactivity watchdog kills a silent/wedged child and rejects (REL-1)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-idle-'))
+    let heldChild: FakeChild | null = null
+    const t = createWhisperCliTranscriber({
+      id: 't',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/m.bin',
+      idleTimeoutMs: 20, // dialled down; prod default is 15 min
+      spawnImpl: (): ChildProcess => {
+        const child = makeFakeChild() // emits no data, never closes on its own
+        heldChild = child
+        return child as unknown as ChildProcess
+      }
+    })
+    await expect(t.transcribe('a.mp3', { workDir })).rejects.toThrow(/watchdog|no output/i)
+    expect(heldChild).not.toBeNull()
+    expect(heldChild!.killed).toBe(true)
+    expect(readdirSync(workDir)).toEqual([]) // no transient stranded by the kill
+  })
+
+  // REL-1 (TEST-4): the threaded AbortSignal (now actually supplied by the ingestion call
+  // site) arms the abort listener — aborting mid-transcription kills the in-flight child and
+  // the call rejects "cancelled". Previously the listener existed but was never armed.
+  it('an aborted signal kills the in-flight child and the call rejects (REL-1 threaded cancel)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-sig-'))
+    const controller = new AbortController()
+    let heldChild: FakeChild | null = null
+    const t = createWhisperCliTranscriber({
+      id: 't',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/m.bin',
+      spawnImpl: (): ChildProcess => {
+        const child = makeFakeChild() // "runs" until killed
+        heldChild = child
+        return child as unknown as ChildProcess
+      }
+    })
+    const call = t.transcribe('a.mp3', { workDir, signal: controller.signal })
+    await new Promise((r) => setImmediate(r))
+    expect(heldChild).not.toBeNull()
+    controller.abort()
+    await expect(call).rejects.toThrow(/cancelled/i)
+    expect(heldChild!.killed).toBe(true)
+  })
+
+  // REL-6: workDir is required — the transient transcript (recognised speech = content)
+  // must land in a swept directory, never the OS tmpdir. A missing/empty workDir fails
+  // closed BEFORE any spawn rather than stranding content outside the crash sweep.
+  it('refuses an empty workDir before spawning (REL-6 fail-closed)', async () => {
+    let spawned = false
+    const t = createWhisperCliTranscriber({
+      id: 't',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/m.bin',
+      spawnImpl: (): ChildProcess => {
+        spawned = true
+        return makeFakeChild() as unknown as ChildProcess
+      }
+    })
+    await expect(t.transcribe('a.mp3', { workDir: '' })).rejects.toThrow(/workDir is required/i)
+    expect(spawned).toBe(false)
   })
 })

@@ -197,6 +197,50 @@ describe('audio ingestion (Phase 36)', () => {
     }
   })
 
+  it('aborting an import kills the in-flight transcription — task ends failed, signal threaded (REL-1)', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const controller = new AbortController()
+    let sawSignal: AbortSignal | undefined
+    let started: () => void = () => undefined
+    const reached = new Promise<void>((r) => {
+      started = r
+    })
+    // A transcriber that blocks until its signal aborts, then rejects — mimics a real
+    // whisper child killed by the abort listener. It records the signal it was handed so
+    // the test can prove the signal was threaded all the way from `deps.signal`.
+    const t: Transcriber = {
+      id: 'blocking',
+      transcribe: (_file, opts) => {
+        sawSignal = opts.signal
+        started()
+        return new Promise<never>((_resolve, reject) => {
+          opts.signal?.addEventListener(
+            'abort',
+            () => reject(new Error('Transcription was cancelled.')),
+            { once: true }
+          )
+        })
+      }
+    }
+
+    const doc = createQueuedDocument(db, writeAudioSource())
+    const p = processDocument(db, store, doc.id, { transcriber: t, signal: controller.signal })
+    await reached // transcribe() is now in flight
+    controller.abort()
+    const info = await p
+
+    // The cancelled transcription surfaces as a friendly per-file failure on the row.
+    expect(info.status).toBe('failed')
+    // The load-bearing assertion: the signal reached `transcribe` (was threaded
+    // deps.signal → ParseContext.signal → AudioParser → transcribe) and is aborted.
+    expect(sawSignal).toBe(controller.signal)
+    expect(sawSignal?.aborted).toBe(true)
+    // No transient transcript (.parse-transcript) stranded — only the legitimate stored
+    // copy persists for a later re-index.
+    expect(readdirSync(store).some((n) => n.includes('.parse-transcript'))).toBe(false)
+  })
+
   it('summarizeImportPaths counts audio files + bytes for the D35 size confirm', () => {
     const audio = writeAudioSource('big.wav')
     const txt = join(srcDir, 'note.txt')

@@ -22,6 +22,23 @@ import type { OcrEngine, OcrRecognizeOptions, OcrResult } from './index'
  * cannot run legacy/float models — `tessdata_best` float crashes it). */
 const OEM_LSTM_ONLY = 1
 
+/**
+ * Per-PAGE recognition timeout ceiling (REL-2). A tesseract.js WASM job cannot be
+ * cooperatively cancelled — once `worker.recognize()` is in flight a crafted/huge image
+ * could spin for the whole session, and because recognitions are serialized through one
+ * worker chain, one wedged page would block every later page. So a page that exceeds this
+ * ceiling terminates the worker (recreated lazily) and rejects, freeing the chain. 2 min is
+ * generous for a single ≤4096px page even on slow hardware. Override with
+ * `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS` or per instance via `recognizeTimeoutMs` (tests).
+ */
+export const DEFAULT_OCR_PAGE_TIMEOUT_MS = 2 * 60 * 1000
+
+function resolveOcrPageTimeoutMs(explicit?: number): number {
+  if (typeof explicit === 'number' && explicit > 0) return explicit
+  const env = Number(process.env.HILBERTRAUM_OCR_PAGE_TIMEOUT_MS)
+  return Number.isFinite(env) && env > 0 ? env : DEFAULT_OCR_PAGE_TIMEOUT_MS
+}
+
 export interface TesseractOcrEngineOptions {
   /** Directory containing the vendored `<lang>.traineddata.gz` files. */
   langDir: string
@@ -32,6 +49,11 @@ export interface TesseractOcrEngineOptions {
    * Default lazily `require`s the real pinned package on first recognition.
    */
   loadTesseract?: () => Promise<TesseractModule>
+  /**
+   * Per-page recognition timeout in ms (REL-2). Default `DEFAULT_OCR_PAGE_TIMEOUT_MS`
+   * (env-overridable). Injected small in tests to exercise the terminate-on-timeout path.
+   */
+  recognizeTimeoutMs?: number
 }
 
 /** The slice of tesseract.js this engine touches (kept narrow for the fake). */
@@ -72,6 +94,7 @@ export class TesseractOcrEngine implements OcrEngine {
   readonly languages: readonly string[]
 
   private readonly opts: TesseractOcrEngineOptions
+  private readonly recognizeTimeoutMs: number
   private worker: TesseractWorker | null = null
   private starting: Promise<TesseractWorker> | null = null
   /** Serializes recognitions — a tesseract worker handles one job at a time. */
@@ -80,6 +103,7 @@ export class TesseractOcrEngine implements OcrEngine {
 
   constructor(opts: TesseractOcrEngineOptions) {
     this.opts = opts
+    this.recognizeTimeoutMs = resolveOcrPageTimeoutMs(opts.recognizeTimeoutMs)
     this.languages = [...opts.languages]
     this.id = 'tesseract.js-7.0.0'
   }
@@ -121,20 +145,62 @@ export class TesseractOcrEngine implements OcrEngine {
         throw new DOMException('OCR recognition aborted', 'AbortError')
       }
       const worker = await this.ensureWorker()
-      const result = await worker.recognize(image)
-      const confidence =
-        typeof result.data.confidence === 'number' && Number.isFinite(result.data.confidence)
-          ? result.data.confidence
-          : null
-      return { text: result.data.text ?? '', confidence }
+      return this.recognizeWithTimeout(worker, image, opts.signal)
     })
     // The chain must survive a failed job (keep serializing, swallow for the chain only).
     this.chain = run.catch(() => undefined)
     return run
   }
 
-  async stop(): Promise<void> {
-    this.stopped = true
+  /**
+   * Race `worker.recognize` against the per-page timeout and the abort signal (REL-2). A
+   * tesseract.js WASM job is not cooperatively cancellable, so on timeout OR abort the only
+   * real recovery is to TERMINATE the worker (recreated lazily on the next page) and reject
+   * — that frees the serialized chain so one wedged image can't block the rest of the scan.
+   * A plain recognition error leaves the worker intact (its existing behaviour).
+   */
+  private async recognizeWithTimeout(
+    worker: TesseractWorker,
+    image: Buffer,
+    signal?: AbortSignal
+  ): Promise<OcrResult> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let onAbort: (() => void) | undefined
+    let interrupted: 'timeout' | 'abort' | null = null
+    try {
+      const result = await new Promise<{ data: { text: string; confidence: number } }>(
+        (resolve, reject) => {
+          timer = setTimeout(() => {
+            interrupted = 'timeout'
+            reject(new Error(`OCR recognition timed out after ${this.recognizeTimeoutMs} ms`))
+          }, this.recognizeTimeoutMs)
+          onAbort = (): void => {
+            interrupted = 'abort'
+            reject(new DOMException('OCR recognition aborted', 'AbortError'))
+          }
+          if (signal?.aborted) onAbort()
+          else signal?.addEventListener('abort', onAbort, { once: true })
+          // The WASM job keeps running after a timeout/abort win; terminate() (below)
+          // discards it. Its late settle resolves into the void — harmless.
+          worker.recognize(image).then(resolve, reject)
+        }
+      )
+      const confidence =
+        typeof result.data.confidence === 'number' && Number.isFinite(result.data.confidence)
+          ? result.data.confidence
+          : null
+      return { text: result.data.text ?? '', confidence }
+    } catch (err) {
+      if (interrupted) await this.terminateWorker()
+      throw err
+    } finally {
+      if (timer) clearTimeout(timer)
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  /** Terminate the warm worker (best-effort) and clear it so it is recreated lazily. */
+  private async terminateWorker(): Promise<void> {
     const worker = this.worker
     this.worker = null
     this.starting = null
@@ -142,9 +208,15 @@ export class TesseractOcrEngine implements OcrEngine {
       try {
         await worker.terminate()
       } catch {
-        // Termination is best-effort — the process is quitting/locking anyway.
+        // Best-effort: a timeout/abort/quit terminate that throws still leaves us
+        // with a null worker, so the next recognition starts a fresh one.
       }
     }
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true
+    await this.terminateWorker()
   }
 }
 

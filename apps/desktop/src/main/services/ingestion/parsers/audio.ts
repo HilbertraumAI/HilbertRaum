@@ -142,7 +142,12 @@ export const AudioParser: DocumentParser = {
     try {
       segments = await transcriber.transcribe(filePath, {
         onProgress: ctx?.onProgress,
-        workDir: ctx?.workDir
+        // workDir is REQUIRED by the transcriber (REL-6); the ingestion call site always
+        // supplies the storeDir. Fall back to it explicitly so the type stays honest even
+        // if a future caller builds a bare ParseContext.
+        workDir: ctx?.workDir ?? '',
+        // REL-1: forward cancellation so an aborted import kills the whisper child.
+        signal: ctx?.signal
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

@@ -93,6 +93,14 @@ export interface IngestionDeps {
    * defaults). Injected mainly so tests can dial the caps down.
    */
   limits?: IngestionLimits
+  /**
+   * Cancellation for the parse phase (REL-1). Threaded to `ParseContext.signal` so an
+   * aborted import KILLS an in-flight audio transcription mid-flight (the import loop
+   * aborts this when the workspace locks mid-job). Optional: text parsers ignore it and
+   * are bounded by `withParseTimeout`; the transcriber's inactivity watchdog still bounds
+   * a wedged whisper child when no signal is supplied.
+   */
+  signal?: AbortSignal
 }
 
 // Canonical home of the `.enc` suffix is workspace-vault (the password change
@@ -619,6 +627,10 @@ export async function prepareDocument(
       ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
       workDir: storeDir,
       onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent),
+      // REL-1: cancellation for an unbounded audio transcription. Audio stays EXEMPT from
+      // the wall-clock parse timeout below, so the signal (+ the transcriber's own idle
+      // watchdog) is the only way to stop a wedged/cancelled whisper child.
+      signal: deps.signal,
       // Per-parser caps (M-2/M-3): bound the PDF page loop and the DOCX inflate.
       maxPages: limits.pdfMaxPages,
       maxInflatedBytes: limits.docxMaxInflatedBytes

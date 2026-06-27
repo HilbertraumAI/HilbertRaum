@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-20 (added the Image understanding section — CPU prefill latency, RAM co-residency, single-image/no-persistence, OCR-vs-vision separation)._
+_Last updated: 2026-06-28 (backend audit 2026-06-27 Phase 3: transcription/dictation/OCR now self-recover from a wedged or cancelled operation via inactivity watchdog / wall-clock timeout / per-page timeout — REL-1/2/3; added under the respective sections). Prior: 2026-06-20 (Image understanding section)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -480,6 +480,13 @@ password recovery — are documented in
   model, 4 threads): a 52-minute meeting took ~35 minutes; peak memory ~1.2 GB. The
   import shows honest "Transcribing… N%" progress and the app stays usable meanwhile.
   GPU-accelerated whisper is a possible later opt-in, never a default risk.
+- **A wedged or cancelled transcription self-recovers — it cannot hang the import slot**
+  (backend audit 2026-06-27, REL-1). A whisper child that stops producing any output for
+  15 minutes (env-tunable) is killed by an inactivity watchdog; because a healthy run emits
+  `-pp` progress continuously, this only trips on a genuinely spinning/hung child, never a
+  slow-but-advancing one. Cancelling the import (e.g. locking the vault mid-job) also aborts
+  the in-flight child immediately. Either way the one document fails friendly and the import
+  loop continues.
 - **Re-indexing an audio document is a FULL re-transcription** (D35). The stored copy is
   the audio itself (the locked copy-into-workspace contract — also what makes the drive
   self-contained), and there is no separate transcript cache; a sha256-keyed cache is the
@@ -516,6 +523,12 @@ password recovery — are documented in
   transcribes and inserts; deleting unwanted text is one Ctrl+Z / selection away
   (the insert participates in the input's normal undo history). Leaving the screen
   mid-recording discards the recording and releases the microphone.
+- **One dictation at a time, and a wedged child can't hang the mic forever** (backend
+  audit 2026-06-27, REL-3). A second mic press while a dictation is still transcribing is
+  refused with friendly copy rather than spawning a concurrent whisper child. A child that
+  is still running past a 10-minute wall-clock ceiling (env-tunable; the recording is already
+  capped at ~35 min of audio) is killed and the composer gets the friendly failure instead of
+  a perpetual spinner.
 
 ## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11)
 
@@ -542,6 +555,11 @@ password recovery — are documented in
   searchable (OCR)" again — it overwrites.
 - **Photos are read on import** (the D33 asymmetry — one image, seconds). A photo
   import without the OCR files on the drive fails per-file with friendly copy.
+- **A single crafted/huge page can't wedge OCR for the session** (backend audit
+  2026-06-27, REL-2). tesseract.js recognitions are serialized through one worker and a WASM
+  job isn't cooperatively cancellable, so a page that exceeds a 2-minute per-page ceiling
+  (env-tunable) — or a Cancel landing mid-page — terminates the worker (recreated lazily on
+  the next page) and fails that OCR task friendly; the engine recovers for the next document.
 - **Packaged-app OCR needs the asar-unpacked tesseract packages** (worker_threads
   cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
   verifying a real OCR run from the produced portable .exe is a release-acceptance

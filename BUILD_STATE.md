@@ -6,6 +6,75 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 3 (Cancellation & timeouts; REL-1, REL-2,
+REL-3, REL-6, TEST-4) — MAIN-SIDE RELIABILITY PHASE, no renderer surface, no schema change, no new
+capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2300 passed / 38 skipped (+8)**,
+typecheck clean, build OK. **The problem:** one crafted/edge-case audio or image could wedge a shared
+worker for the whole session, and cancel was a no-op mid-operation.
+- **REL-1 (Medium) — audio transcription uncancellable + time-unbounded.** `ParseContext` had no
+  `signal`; the ingestion call site exempts audio from `withParseTimeout`; `WhisperCliTranscriber.run`
+  installed an abort listener that was **never armed** (no signal supplied) and had **no per-spawn
+  timeout** → a pathological audio that makes whisper spin hung the ingestion slot indefinitely.
+- **REL-2 (Medium) — OCR per-page recognition had no timeout/abort.** `tesseract.ts` checked
+  `signal.aborted` only BEFORE `await worker.recognize`; recognitions serialize through one worker, so
+  one hung image wedged every later page; Cancel only landed between pages.
+- **REL-3 (Medium) — dictation IPC had no timeout/cancel/concurrency guard.** A wedged child hung the
+  mic spinner forever; rapid presses spawned N concurrent whisper processes.
+- **REL-6 (Low) — transcriber transcript defaulted to `tmpdir()` when `workDir` omitted** → recognised
+  speech (content) could land outside the crash sweep (latent; both prod callers passed `workDir`).
+**As built (implementer's picks):**
+- **REL-1 — inactivity watchdog (not a fixed total ceiling) + real threaded signal.** Took an INACTIVITY
+  watchdog in `transcriber/cli.ts run()`: reset on every stdout/stderr chunk, fires only after the child
+  is completely silent for `idleTimeoutMs` (default 15 min, `HILBERTRAUM_WHISPER_IDLE_TIMEOUT_MS`,
+  ctor-injectable). Rationale over the audit's suggested "N× duration / fixed max": whisper emits `-pp`
+  progress continuously, so inactivity cleanly distinguishes a spinning/hung child (no output → killed +
+  rejected) from a slow-but-advancing one (keeps resetting) — no false kills on legitimately long audio,
+  no need to probe duration up front. The watchdog/timeout errors carry only durations, never transcript.
+  Signal threaded end-to-end: `IngestionDeps.signal` → `ParseContext.signal` → `AudioParser.parse` →
+  `transcribe({ signal })`, arming the previously-dead abort listener. `registerDocsIpc` creates a per-job
+  `AbortController` and aborts it on a mid-job workspace lock (belt-and-suspenders with the lock's
+  existing `transcriber.suspend()`, which already kills children directly).
+- **REL-2 — `Promise.race(recognize, timeout, abort)` + terminate-on-interrupt.** `recognize()` races the
+  WASM job against a per-page timeout (`recognizeTimeoutMs`, default 2 min,
+  `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`, ctor-injectable) AND the abort signal; on timeout OR mid-page abort
+  it `terminate()`s the worker (cleared → recreated lazily) and rejects — the only real abort since a
+  tesseract.js WASM job isn't cooperatively cancellable. A plain recognition error still leaves the worker
+  intact (unchanged). `stop()` refactored onto the shared `terminateWorker()`.
+- **REL-3 — single-flight guard + wall-clock abort.** A second `dictation:transcribe` while one is in
+  flight is rejected with `DICTATION_BUSY_MESSAGE` BEFORE touching disk/spawn (no double-spawn). A
+  `maxDurationMs` ceiling (default 10 min, `HILBERTRAUM_DICTATION_TIMEOUT_MS`, injectable via the new
+  `registerDictationIpc(ctx, { maxDurationMs })` test seam) drives an `AbortController` → a wedged child
+  is killed and the renderer gets the friendly failure. Temp WAV shredded in `finally` on every path.
+- **REL-6 — `TranscribeOptions.workDir` is now REQUIRED (type-level) + runtime fail-closed guard.** Dropped
+  the `tmpdir()` fallback (and the `tmpdir` import); an empty `workDir` throws before any spawn rather than
+  stranding content outside the `.parse` sweep. Both prod callers already pass it; fixed the 2 call sites
+  that relied on the default (transcriber stop() test, manual whisper-smoke).
+- **Tests (TEST-4, +8, all teeth-verified then restored).** `transcriber.test.ts`: inactivity watchdog
+  kills a silent child + rejects; an aborted signal kills the in-flight child (the threaded-cancel path);
+  empty-workDir fails closed before spawn. `audio-ingestion.test.ts`: abort mid-transcribe (blocking mock)
+  → task `failed`, signal proven threaded all the way to `transcribe`. `ocr.test.ts`: per-page timeout →
+  worker terminated, chain recovers on the next page with a fresh worker; mid-page abort → worker
+  terminated. `dictation-ipc.test.ts`: concurrent dictation rejected, no double-spawn; wedged child rejects
+  on the wall-clock timeout (not a hang). **Teeth:** neutering each fix (watchdog kill, signal threading,
+  OCR terminate, dictation guard, dictation timeout, workDir guard) failed the matching test (assertion or
+  15 s test-timeout); all restored.
+- **Data contracts (new, additive/optional — non-audio parsers unaffected):** `ParseContext.signal?:
+  AbortSignal` (forwarded only by `AudioParser`; text parsers ignore it, still bounded by
+  `withParseTimeout`); `IngestionDeps.signal?: AbortSignal` (threaded to `ParseContext.signal`).
+  `TranscribeOptions.workDir` is now **required** (no tmpdir default). New tuning envs:
+  `HILBERTRAUM_WHISPER_IDLE_TIMEOUT_MS` / `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS` /
+  `HILBERTRAUM_DICTATION_TIMEOUT_MS`. No IPC/schema-shape change.
+- **Posture (held):** no network/telemetry; transcription/OCR output stays content-class (never logged/
+  audited) — only ids/durations ride the watchdog/timeout paths. Full parser suite stays green (signal is
+  optional, so every non-audio parser is byte-unaffected).
+- **Docs:** `architecture.md` transcriber/dictation/OCR sections each carry the cancellation & timeout
+  record (REL-1/2/3/6); `known-limitations.md` Audio/Dictation/OCR sections each state the operation now
+  self-recovers via watchdog/timeout (no "can hang the session" assumption). Plan checkbox flipped to ✅.
+  **Eyeball:** none — a main-side reliability phase, no UI surface.
+  **Next: Phase 4 — Ingestion robustness & cap enforcement (REL-5 preview cap-stack, REL-9 symlink-cycle,
+  REL-10 `Math.max(...spread)`, BL-5 ragged CSV, MAINT-4 `parseWithLimits` decorator).** See
+  `docs/backend-audit-2026-06-27-remediation-plan.md` Phase 4._
+
 _2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 2 (Financial-extraction correctness;
 BL-1, BL-2, BL-3, TEST-2, TEST-6) — MAIN-SIDE PARSING/AGGREGATION PHASE, no renderer surface, no schema
 change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2292 passed / 38 skipped

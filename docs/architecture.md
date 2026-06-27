@@ -1,6 +1,6 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-06-20. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
+_Last updated: 2026-06-28. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. The transcriber/dictation/OCR sections carry the backend-audit-2026-06-27 cancellation & timeout records (REL-1/2/3/6). Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
 
 ## Overview
 
@@ -765,6 +765,21 @@ it fails with friendly convert-to-WAV/MP3 copy.
   carries the transcript, which must never ride an error message into logs).
   `suspend()` (workspace lock) and `stop()` (will-quit) kill in-flight children; the
   failing parse marks that document `failed` and the decrypted transient is shredded.
+- **Cancellation & watchdog (backend audit 2026-06-27, REL-1/REL-6).** Audio is EXEMPT
+  from the wall-clock `withParseTimeout` (a long recording legitimately transcribes for
+  many minutes), so two mechanisms bound a wedged/cancelled child instead: **(1) an
+  inactivity watchdog** in `run()` — whisper emits `-pp` progress continuously, so the
+  watchdog is reset on every stdout/stderr chunk and only fires when the child has been
+  completely silent for `idleTimeoutMs` (default 15 min, `HILBERTRAUM_WHISPER_IDLE_TIMEOUT_MS`),
+  distinguishing a spinning/hung child (no output → killed + rejected) from a slow-but-
+  advancing one (keeps resetting); **(2) a real `AbortSignal`** now threaded end-to-end
+  (`IngestionDeps.signal` → `ParseContext.signal` → `AudioParser` → `transcribe`), so the
+  import loop aborts the in-flight transcription the moment the workspace locks mid-job
+  (`registerDocsIpc` per-job `AbortController`; belt-and-suspenders with `suspend()`). The
+  previously-dead abort listener in `run()` is now armed. **REL-6:** `TranscribeOptions.workDir`
+  is now **required** (no OS-tmpdir default) — the transient transcript is recognised speech
+  (content) and must stay inside the `.parse` crash sweep; an empty `workDir` fails closed
+  before any spawn. The watchdog/timeout errors carry only durations, never any transcript.
 - **`AudioParser` implements `DocumentParser`.** `parse(filePath, ctx)` uses the
   transcriber injected per call via the ADDITIVE `ParseContext` (carried from
   `IngestionDeps.transcriber` — the embedder-injection precedent; text parsers ignore
@@ -818,6 +833,14 @@ explicitly out of scope.
   (content-adjacent, like search); errors to the renderer are fixed friendly copy with
   the technical reason in the local log only. The OS mic indicator is the recording
   signal. Locked workspace needs no handling — the composer doesn't exist pre-unlock.
+- **Concurrency & timeout (backend audit 2026-06-27, REL-3).** whisper is not internally
+  serialized, so the handler holds a **single-flight guard**: a second `dictation:transcribe`
+  while one is in flight is rejected with friendly copy (`DICTATION_BUSY_MESSAGE`) BEFORE it
+  writes the temp WAV or spawns — rapid mic presses can't double-spawn. A **wall-clock
+  ceiling** (`maxDurationMs`, default 10 min, `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
+  `AbortController` whose signal is passed to `transcribe` — a wedged child is killed and the
+  mic spinner gets the friendly failure instead of hanging forever. The temp WAV is shredded
+  in `finally` on every path (success, refusal, timeout).
 - **Live in-input waveform (2026-06-13):** an in-app "recording started" cue. A read-only
   Web Audio `AnalyserNode` tap on the SAME `getUserMedia` stream (never wired to a
   destination, never touching the recorded bytes) is exposed as `DictationCapture.analyser`;
@@ -858,6 +881,16 @@ sentinel-tested), zero native deps.
   protocol is **pull-based** (`services/ocr/rasterizer.ts`): main requests one page at
   a time and recognition backpressures rendering, so a long scan never queues unbounded
   page images.
+- **Per-page timeout & recovery (backend audit 2026-06-27, REL-2).** A tesseract.js WASM
+  job is **not cooperatively cancellable** and recognitions are serialized through one
+  worker chain, so one crafted/huge image could wedge OCR for the whole session and Cancel
+  only landed between pages. `recognize()` now races `worker.recognize` against a per-page
+  timeout (`recognizeTimeoutMs`, default 2 min, `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`) **and**
+  the abort signal; on timeout OR mid-page abort the only real recovery is to `terminate()`
+  the worker (cleared → recreated lazily) and reject — which frees the serialized chain so
+  the next page proceeds with a fresh worker. A plain recognition error still leaves the
+  worker intact (unchanged). The OCR document task surfaces a timed-out page as a friendly
+  task failure (the recognition stays unpersisted; Cancel/redo unchanged).
 - **D33: OCR is NEVER automatic for PDFs.** Detection marks the row; "Make searchable
   (OCR)" runs as a **Phase-33 document task** (kind `'ocr'` — queue, progress
   "pages + 1", cancel; the D26 guards hold, but it needs the OCR engine instead of the
