@@ -18,6 +18,7 @@ vi.mock('electron', () => ({
 }))
 
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
+import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -334,5 +335,49 @@ describe('registerChatIpc', () => {
 
     await invoke(handlers, IPC.sendChatMessage, conv.id, 'hi', { mode: 'TURBO' })
     expect(seen.options?.mode).toBeUndefined()
+  })
+})
+
+// TEST-N8: the locked-vault guard was spot-checked on only ~3 of the chat IPC handlers, so a newly
+// added unguarded handler would slip through. These STRUCTURAL tests enumerate EVERY registered
+// handler and assert the guard fires for all DB-touching ones (chat + the benchmark handlers, now
+// guarded per SEC-N2) — and that the two in-memory chat handlers stay usable while locked.
+describe('locked-vault guard coverage (TEST-N8)', () => {
+  // The only chat handlers that legitimately work while locked: they touch in-memory stream state,
+  // never ctx.db. Everything else must refuse.
+  const IN_MEMORY_CHANNELS = new Set<string>([IPC.stopGeneration, IPC.getActiveStream])
+
+  it('every DB-touching chat handler refuses with the friendly copy when locked (structural)', async () => {
+    const db = freshDb()
+    const { runtime } = gatedRuntime()
+    registerChatIpc(makeCtx(db, runtime, /* unlocked */ false))
+    const channels = [...handlers.keys()]
+    // Sanity: the enumeration actually covers the surface (guards against a registration refactor
+    // silently leaving this test asserting nothing).
+    expect(channels.length).toBeGreaterThanOrEqual(14)
+    for (const ch of channels) {
+      if (IN_MEMORY_CHANNELS.has(ch)) continue
+      // Throwaway args — the guard is the FIRST statement in every DB-touching handler, before any
+      // arg is used, so the refusal is arg-shape-independent.
+      await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.toThrow(/Workspace is locked\./)
+      // …and never the raw vault-getter string ("Workspace is locked — unlock it first.").
+      await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.not.toThrow(/unlock it first/i)
+    }
+  })
+
+  it('the in-memory chat handlers stay usable when locked (documented exemption)', async () => {
+    const db = freshDb()
+    const { runtime } = gatedRuntime()
+    registerChatIpc(makeCtx(db, runtime, false))
+    // Neither throws when locked (they read/clear the in-memory in-flight map, never ctx.db).
+    await expect(invoke(handlers, IPC.stopGeneration, 'no-such-conv')).resolves.toBeDefined()
+    await expect(invoke(handlers, IPC.getActiveStream, 'no-such-conv')).resolves.toBeDefined()
+  })
+
+  it('the benchmark handlers refuse when locked (SEC-N2 parity)', async () => {
+    registerBenchmarkIpc({ workspace: { isUnlocked: () => false } } as unknown as AppContext)
+    await expect(invoke(handlers, IPC.runBenchmark)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
+    await expect(invoke(handlers, IPC.tryGpuAgain)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
+    await expect(invoke(handlers, IPC.runBenchmark)).rejects.not.toThrow(/unlock it first/i)
   })
 })

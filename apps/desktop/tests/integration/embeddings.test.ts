@@ -158,6 +158,18 @@ describe('vector BLOB encoding', () => {
     const exact = encodeVector(new Float32Array([1, 2, 3, 4]))
     expect(decodeVector(exact, 4)).not.toBeNull()
   })
+
+  // TEST-N7: a FIXED little-endian byte layout, decoded WITHOUT going through encodeVector. The
+  // round-trip tests above can't catch a SYMMETRIC endianness bug (encode + decode both flipped);
+  // this pins the on-disk LE contract (spec §6 / EMB-4) against a known wire byte sequence.
+  it('decodes a fixed little-endian byte layout independent of encodeVector (TEST-N7)', () => {
+    // 1.0f == 0x3f800000, little-endian bytes [00 00 80 3f].
+    expect(Array.from(decodeVector(Buffer.from([0x00, 0x00, 0x80, 0x3f]), 1)!)).toEqual([1])
+    // [1.0, 2.0]: 2.0f == 0x40000000 → [00 00 00 40].
+    expect(
+      Array.from(decodeVector(Buffer.from([0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x40]), 2)!)
+    ).toEqual([1, 2])
+  })
 })
 
 // ---- VectorIndex cosine search --------------------------------------------------

@@ -188,7 +188,9 @@ describe('bank-statement analysis handler — run()', () => {
     })
     // Was THREE before Phase 4 (summarize seam load + validate seam load + the handler's own load); now
     // the handler loads once and hands the rows to both seams as `preloaded`, so neither re-queries.
-    expect(reads).toBe(1)
+    // TEST-N5: assert the OUTCOME (no DUPLICATE load) rather than an exact count — a safe refactor
+    // that loads zero extra times still passes; a regression that re-queries (2+) still fails.
+    expect(reads).toBeLessThanOrEqual(1)
   })
 
   it('figures are quoted, never invented — no fabricated number leaks into the answer', async () => {

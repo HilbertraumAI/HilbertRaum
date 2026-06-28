@@ -355,7 +355,13 @@ describe('extract_transactions through the gate', () => {
       expect(out.currency).toBe('EUR')
       expect(validateToolOutput(extractTransactionsTool, result.output)).toEqual([])
     }
-    expect(events.map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
+    // TEST-N5: assert the OUTCOME (a successful run records start + done, and never a failure)
+    // via membership rather than an exact, order-pinned array that a benign new lifecycle event
+    // would break while still passing if `done` silently stopped firing.
+    const eventTypes = events.map((e) => e.type)
+    expect(eventTypes).toContain('skill_run_started')
+    expect(eventTypes).toContain('skill_run_done')
+    expect(eventTypes).not.toContain('skill_run_failed')
   })
 
   it('refuses invalid input (no documentId) without running', async () => {

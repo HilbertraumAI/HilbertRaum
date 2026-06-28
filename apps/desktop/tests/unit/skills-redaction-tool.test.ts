@@ -159,7 +159,13 @@ describe('redact_document through the gate', () => {
       expect(out.redactedText).not.toContain('jane.doe@example.com')
       expect(validateToolOutput(redactDocumentTool, result.output)).toEqual([])
     }
-    expect(events.map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
+    // TEST-N5: assert the OUTCOME (a successful run records start + done, and never a failure)
+    // via membership rather than an exact, order-pinned array that a benign new lifecycle event
+    // would break while still passing if `done` silently stopped firing.
+    const eventTypes = events.map((e) => e.type)
+    expect(eventTypes).toContain('skill_run_started')
+    expect(eventTypes).toContain('skill_run_done')
+    expect(eventTypes).not.toContain('skill_run_failed')
   })
 
   it('is confirm-gated: the gate refuses it without confirmation', async () => {

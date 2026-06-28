@@ -377,6 +377,26 @@ describe('retrieve', () => {
     expect(scoped.chunks.length).toBeGreaterThan(0)
     expect(scoped.chunks.every((c) => c.sourceTitle === 'contract.pdf')).toBe(true)
   })
+
+  // TEST-N8: a query-embed failure inside retrieve() must PROPAGATE — a swallowed reject would
+  // masquerade as "no documents" (NO_DOCUMENT_CONTEXT_ANSWER), wrongly telling the user their
+  // corpus is empty when it is actually a transient embedder fault. The corpus IS non-empty here,
+  // so an "empty corpus ⇒ []" path can't masquerade as the reject path.
+  it('propagates a query-embed failure instead of silently returning no documents (TEST-N8)', async () => {
+    const db = freshDb()
+    const indexer = new MockEmbedder()
+    await seedDocument(db, indexer, 'a.txt', [{ text: 'alpha beta gamma delta' }])
+    // A FRESH embedder instance (so the per-instance query-vector LRU can't mask the reject) that
+    // shares the seeded vectors' model id (so scoping matches) but rejects on the query embed.
+    const failing = {
+      id: indexer.id,
+      dimensions: indexer.dimensions,
+      embed: async (): Promise<never> => {
+        throw new Error('embed boom (simulated query-embed failure)')
+      }
+    }
+    await expect(retrieve(db, failing, 'alpha beta gamma delta', SETTINGS)).rejects.toThrow(/embed boom/)
+  })
 })
 
 // ---- generateGroundedAnswer: streaming + citation persistence -------------------
