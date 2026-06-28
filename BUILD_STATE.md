@@ -6,6 +6,37 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 — FULLY REMEDIATED (all 8 phases) + Phase 9 close-out
+(branch `backend-audit-2026-06-27-fixes`).** The multi-persona backend audit (2 High · 9 Medium · 14 Low ·
+8 Info; no Critical, no remote-exploitable issue) is closed out. Suite **2335 passed / 39 skipped**,
+typecheck clean, build OK — the cumulative branch state is green (no phase regressed another). Offline/
+no-telemetry posture held end-to-end; this close-out phase edited **docs + BUILD_STATE only** and removed
+the plan file — **no application-code change**.
+- **As-built headline picks (per phase):** **P1 (DATA-1/DOC-1/MAINT-1)** atomic-txn `deleteDocument` —
+  ordered `purgeDocumentDerivatives` → `purgeSkillDataForDocument` before the row delete, shred-after-commit,
+  full-chain `ON DELETE CASCADE` on fresh schemas. **P2 (BL-1/2/3)** shared `money.ts splitLeadingDates`
+  value-date strip; single-currency precondition on completeness/reconcile; `(category, currency)`-keyed
+  totals. **P3 (REL-1/2/3/6)** `AbortSignal` + per-op timeouts for audio/OCR/dictation; `workDir` required.
+  **P4 (REL-5/9/10, BL-5, MAINT-4)** single `parseWithLimits` decorator (preview now capped); symlink-cycle
+  guard; single-pass y-fold; ragged-CSV cells kept. **P5 (RAG-1/EMB-1/DATA-2/EMB-4)** coverage-wording honesty
+  gate; shared CJK/Thai-aware reranker truncation; `decodeVector` truncated-blob guard; LE-endianness assert.
+  **P6 (SEC-1/API-3/DOC-5)** Tier-2 tools gated to **app skills** (`skillCanRunTools` = `source === 'app'`).
+  **P7 (SEC-2/3/4/5/6, REL-4/7/8)** permission-check + redirect guards; vision/OCR byte caps; spawn lifecycle;
+  SEC-4/5 accepted residuals. **P8 (API-1, DATA-3/MAINT-3, DATA-4, DOC-2/3/4, BL-4, API-2)** chat
+  `requireUnlocked()`; `summary_cache` row-count eviction (50 000); doc-drift fixes; API-2 accepted residual.
+- **Close-out (Phase 9, as built):** the per-finding **ledger** is folded into [`docs/architecture.md`](docs/architecture.md)
+  **§24 "Backend audit (2026-06-27) — remediation close-out"** (mirrors the §23 Skills & Tools precedent) —
+  every finding ID → phase → disposition → the topic-doc § its record now lives in, including the docs-only
+  and accepted-residual items (SEC-4/SEC-5/API-2 residuals; SEC-7 verified-clean; **TEST-9 not remediated** —
+  accepted installer-fixture gap). The audit report [`audits/backend-audit-2026-06-27.md`](audits/backend-audit-2026-06-27.md)
+  is **kept** as the historical deliverable with a one-line "FULLY REMEDIATED → §24" banner at its top.
+- **Plan file deleted.** `docs/backend-audit-2026-06-27-remediation-plan.md` removed per the CLAUDE.md
+  doc-lifecycle rule — its decisions now live in the topic-doc §§ (folded by each phase) + the §24 ledger;
+  the full original is **recoverable in git history** at the parent of the Phase-9 close-out commit.
+- **Next action:** branch is committed and ready — **merge `backend-audit-2026-06-27-fixes` to `master` when
+  the owner is ready** (do not auto-merge/push). No open remediation items; the residuals above are on record._
+
+
 _2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 8 (API consistency, doc drift & housekeeping;
 API-1, DATA-3/MAINT-3, DATA-4, DOC-2/3/4, BL-4, API-2) — LOW/INFO CLEANUP PHASE, no renderer surface, no
 schema change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2335 passed / 39

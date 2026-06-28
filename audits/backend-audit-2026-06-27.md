@@ -6,6 +6,8 @@
 **Scope:** Electron **main process** + shared/preload of `apps/desktop` (the only workspace). Read-only: no application code was modified.
 **Method:** Documentation read first (CLAUDE.md, BUILD_STATE.md, `docs/`), then full reads of the security-critical core (crypto, vault, db, preload, IPC) plus eight subsystem deep-dives. Two headline findings were reproduced against the real `node:sqlite` driver.
 
+> **Status: FULLY REMEDIATED across Phases 1–8** (branch `backend-audit-2026-06-27-fixes`). Every finding's disposition — code fix, doc fix, or accepted residual — is recorded in the per-finding close-out ledger at [`docs/architecture.md`](../docs/architecture.md) **§24** ("Backend audit (2026-06-27) — remediation close-out"). This report is retained as the historical deliverable; the working-paper remediation plan was deleted under the doc-lifecycle rule (recoverable in git history).
+
 ---
 
 ## 1. Executive summary

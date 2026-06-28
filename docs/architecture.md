@@ -3291,6 +3291,74 @@ free refusal). **API-3** — `documentCount` stays the v1 constant `1` (single-d
 in-code TODO to make it a real count if a multi-document tool lands. The §22 posture above is
 unchanged (no new capability; audit payload still `{skillId, toolName, documentCount}`).
 
+### §24 Backend audit (2026-06-27) — remediation close-out
+
+A **multi-persona read-only backend audit** ([`audits/backend-audit-2026-06-27.md`](backend-audit-2026-06-27.md),
+HEAD `c26d361`) swept the Electron **main process** + shared/preload of `apps/desktop` — crypto/vault, the
+data layer, the full IPC surface, ingestion/parsers, RAG/analysis, doctasks/skills, runtime/downloads,
+OCR/transcriber/vision, embeddings/reranker — focusing on what the five prior rounds did **not** cover.
+**2 High · 9 Medium · 14 Low · 8 Info; no Critical, no remote-exploitable issue** (offline by construction).
+**All 8 remediation phases are landed** on branch `backend-audit-2026-06-27-fixes`. The working-paper plan
+(`docs/backend-audit-2026-06-27-remediation-plan.md`) was **deleted** under the CLAUDE.md doc-lifecycle rule
+once every phase shipped — each phase's decisions were folded into the topic-doc §§ below as it landed, and
+the full plan stays **recoverable in git history** (the parent of the Phase-9 close-out commit). The audit
+**report itself is kept** in `audits/` as the historical deliverable (banner-linked back here). This ledger is
+the durable index — resolve a code comment's `audit <ID>` citation through it:
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **DATA-1** (High), DOC-1, MAINT-1, TEST-1 | 1 | atomic-txn `deleteDocument`: ordered `purgeDocumentDerivatives` → `purgeSkillDataForDocument` (bank/invoice rows) **before** the row delete, stored copy shredded **after** commit; fresh schemas also declare full-chain `ON DELETE CASCADE`; teeth-verified extract-then-delete test | arch §10; known-lim §39–46; rag-design `deleteDocument` row |
+| **BL-1** (High), TEST-2 | 2 | shared `money.ts splitLeadingDates` strips the whole leading date run (booking + value date) before the money scan in `parseLine`/`parseLineItem` — value-date column no longer dropped/mis-valued | arch §10 (line parser) / §21 (layout) |
+| BL-2 (Med), TEST-6 | 2 | `assessCompleteness`/`reconcileBalances` return `unverified` unless single-currency (mirrors `summarizeCashflow`) | arch §10 |
+| BL-3 (Low) | 2 | `categoryTotals` keyed by `(category, currency)` | arch §10 |
+| REL-1 (Med), TEST-4 | 3 | `AbortSignal` threaded `ParseContext`→`AudioParser`→`transcribe` + whisper idle watchdog; per-job abort | arch "Audio transcription" |
+| REL-2 (Med) | 3 | per-page OCR `Promise.race` timeout + terminate-and-recreate worker on timeout/abort | arch "Scanned-PDF / photo OCR" |
+| REL-3 (Med) | 3 | dictation single-flight guard + wall-clock abort | arch "Voice dictation" |
+| REL-6 (Low) | 3 | `TranscribeOptions.workDir` now **required** — no OS-tmpdir fallback outside the crash sweep | arch "Audio transcription" |
+| REL-5 (Med), MAINT-4 | 4 | one `parseWithLimits(parser, source, ctx, limits)` decorator across **every** parse entry point; preview gains `maxPages`/`maxInflatedBytes`/wall-clock timeout (ingest byte-for-byte unchanged) | rag-design §2 (cap stack); arch "Document ingestion" |
+| REL-9 (Low) | 4 | `expandPaths` symlink-cycle guard via recursion-path `realpathSync` Set | arch "Document ingestion" |
+| REL-10 (Low) | 4 | `resolvePageYear` single-pass y-range fold (no `Math.max(...spread)`) | arch §21 |
+| BL-5 (Info) | 4 | ragged-CSV overflow cells kept under `colN:` (no silent truncation) | rag-design §2 |
+| RAG-1 (Med), TEST-3 | 5 | `coverageWhole` gated on `fullyChunked && scannedChunks >= totalChunks` — a multi-doc partial scope falls to "sections scanned" | rag-design §14.5 |
+| EMB-1 (Med), MAINT-2, TEST-5 | 5 | reranker drops naive `truncateWords` for the shared CJK/Thai-aware `truncateToApproxTokens`, per-field caps clamped to the context budget (no silent 500 on space-less input) | rag-design §12.4 |
+| DATA-2 (Low), EMB-2, TEST-7 | 5 | truncated-blob guard moved **into** `decodeVector` (`Float32Array \| null`) so all call sites skip a corrupt row uniformly | rag-design §12.4 |
+| EMB-4 (Info), MAINT-5 | 5 | module-load LE-endianness assert in `codec.ts` | rag-design §12.4 |
+| **SEC-1** (Med), DOC-5, TEST-8 | 6 | **DECISION: gate Tier-2 tools to APP skills** — `skillCanRunTools(skill)` = `source === 'app'` at `runnableToolNames` + re-check at `startSkillRun`; a user `kind:tool` skill keeps declared `allowedTools` (future per-tool grant UI) but runs none | arch §7/§23; security-model "Skill tool ceiling (Tier-2)" |
+| API-3 (Info) | 6 | `documentCount` left the v1 constant `1` + in-code TODO (no behaviour change) | arch §7/§23 |
+| SEC-2 (Low) | 7 | `installPermissionCheckHandler` mirrors the request handler via one shared `grantsMicrophone` predicate | security-model |
+| SEC-3 (Low) | 7 | `installNavigationGuard` attaches one deny-predicate to **both** `will-navigate` + `will-redirect` (main shell-only; OCR window deny-all) | security-model |
+| SEC-6 (Low) | 7 | `validateAnalyzeRequest` rejects a claimed png/jpeg with a `null` pixel count (`decodeFailed`) instead of byte-cap-only | security-model; arch (vision) |
+| REL-4 (Med) | 7 | OCR page PNG byte cap (`assertPageWithinByteCap`, `OCR_MAX_PAGE_PNG_BYTES` = 96 MiB) | arch "Scanned-PDF / photo OCR" |
+| REL-7 (Low) | 7 | `windowsHide: true` on the sidecar + GPU-probe spawns | arch (runtime) |
+| REL-8 (Low) | 7 | `child.unref()` on the GPU probe so a wedged probe can't delay app quit | arch (runtime) |
+| API-1 (Low) | 8 | `requireUnlocked()` preamble (new `main.chat.locked` i18n key) on every DB-touching chat handler | registerChatIpc — parity w/ docs/collections/doctasks |
+| DATA-3 (Info), MAINT-3 | 8 | **DECISION: row-count eviction** — `evictSummaryCache` deletes oldest rows past `SUMMARY_CACHE_MAX_ROWS` (50 000), called once per `buildTree`, content-free counter | known-lim "Document tasks & summaries" |
+| DOC-2 (Info) | 8 | rag-design "Cap" rewritten to over-cap **rejection** (`main.ingest.tooManyChunks`), not silent truncation | rag-design §14.1 |
+| DOC-3 (Low) | 8 | E5 no-prefix retrieval **ceiling** surfaced (floor stays 0; reranker load-bearing) | known-lim "Retrieval quality" |
+| DOC-4 (Info) | 8 | `summary_cache` eviction documented | known-lim "Document tasks & summaries" |
+| BL-4 (Low) | 8 | redaction date-locale asymmetry (US-order / 2-digit-year slip; names/addresses unmasked) recorded as by-design under-detection | known-lim "Security & privacy" (redaction bullet) |
+| DATA-4 (Info) | 8 | `ORDER BY chunk_index` on `documentApproxTokenTotal` (sum is order-independent → **zero behaviour change**) | — (read-shape parity) |
+
+**Accepted residuals & non-code dispositions** (on record, deliberately not changed):
+
+- **SEC-4** (Low, Phase 7) — pre-spawn binary verification is **session-cached per path** (the verify→spawn
+  TOCTOU widens to per-session): a deliberate consistency trade-off, documented in `security-model.md`.
+- **SEC-5** (Low, Phase 7) — `imageAnalyze` takes raw drag-drop bytes (not picker-token-bound): documented
+  boundary, `security-model.md`.
+- **API-2** (Info, Phase 8) — `importPreflight` accepts raw renderer paths for the recursive count/size walk:
+  a pre-existing documented residual, **no code change**.
+- **SEC-7** (Info) — the verified-clean inventory (crypto/vault, zip importer, manifest parsing, subprocess
+  spawns, offline guard, audit/log, confused-deputy tokens): **no action**, recorded so it is not
+  re-investigated (audit §6).
+- **TEST-9** (Low) — a double-EOCD / duplicate-name zip adversarial fixture for the installer was **not
+  added**; the documented installer behaviour stands and the gap is an accepted residual (audit §11).
+
+**Posture held across all 8 phases (load-bearing):** offline / no telemetry / no new network egress; the
+**content class** (document text + titles/filenames, chat, extracted figures, redacted text) is never
+logged/audited — the new lock message and the eviction counter carry **counts only**; schema changes were
+additive (or fresh-schema CASCADE); the Electron + vision/OCR caps are defense-in-depth with **no new
+DB/FS/net capability**. Final suite **2335 passed / 39 skipped**.
+
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 
