@@ -28,11 +28,15 @@ the plan file — **no application-code change**.
   **§24 "Backend audit (2026-06-27) — remediation close-out"** (mirrors the §23 Skills & Tools precedent) —
   every finding ID → phase → disposition → the topic-doc § its record now lives in, including the docs-only
   and accepted-residual items (SEC-4/SEC-5/API-2 residuals; SEC-7 verified-clean; **TEST-9 not remediated** —
-  accepted installer-fixture gap). The audit report [`audits/backend-audit-2026-06-27.md`](audits/backend-audit-2026-06-27.md)
-  is **kept** as the historical deliverable with a one-line "FULLY REMEDIATED → §24" banner at its top.
-- **Plan file deleted.** `docs/backend-audit-2026-06-27-remediation-plan.md` removed per the CLAUDE.md
-  doc-lifecycle rule — its decisions now live in the topic-doc §§ (folded by each phase) + the §24 ledger;
-  the full original is **recoverable in git history** at the parent of the Phase-9 close-out commit.
+  accepted installer-fixture gap). §24 also carries the **verified-clean inventory** (crypto/vault, zip
+  importer, manifest, spawns, offline guard, audit/log, data layer, IPC surface, CLAUDE.md hard-rule
+  re-attestation) so the next round does not re-investigate it.
+- **Plan file + audit report both deleted** per the CLAUDE.md doc-lifecycle rule —
+  `docs/backend-audit-2026-06-27-remediation-plan.md` (a working paper) and
+  `audits/backend-audit-2026-06-27.md` (the findings deliverable). Their lasting content now lives in the
+  topic-doc §§ (folded by each phase) + the §24 ledger + the §24 verified-clean inventory; both files stay
+  **recoverable in git history** (the plan at the parent of the Phase-9 close-out commit; the report at the
+  parent of the follow-up fold-in commit). The `audits/` folder is left empty (untracked by git).
 - **Next action:** branch is committed and ready — **merge `backend-audit-2026-06-27-fixes` to `master` when
   the owner is ready** (do not auto-merge/push). No open remediation items; the residuals above are on record._
 

@@ -3293,17 +3293,18 @@ unchanged (no new capability; audit payload still `{skillId, toolName, documentC
 
 ### §24 Backend audit (2026-06-27) — remediation close-out
 
-A **multi-persona read-only backend audit** ([`audits/backend-audit-2026-06-27.md`](backend-audit-2026-06-27.md),
-HEAD `c26d361`) swept the Electron **main process** + shared/preload of `apps/desktop` — crypto/vault, the
-data layer, the full IPC surface, ingestion/parsers, RAG/analysis, doctasks/skills, runtime/downloads,
-OCR/transcriber/vision, embeddings/reranker — focusing on what the five prior rounds did **not** cover.
+A **multi-persona read-only backend audit** (report `audits/backend-audit-2026-06-27.md`, HEAD `c26d361`)
+swept the Electron **main process** + shared/preload of `apps/desktop` — crypto/vault, the data layer, the
+full IPC surface, ingestion/parsers, RAG/analysis, doctasks/skills, runtime/downloads, OCR/transcriber/vision,
+embeddings/reranker — focusing on what the five prior rounds did **not** cover.
 **2 High · 9 Medium · 14 Low · 8 Info; no Critical, no remote-exploitable issue** (offline by construction).
-**All 8 remediation phases are landed** on branch `backend-audit-2026-06-27-fixes`. The working-paper plan
-(`docs/backend-audit-2026-06-27-remediation-plan.md`) was **deleted** under the CLAUDE.md doc-lifecycle rule
-once every phase shipped — each phase's decisions were folded into the topic-doc §§ below as it landed, and
-the full plan stays **recoverable in git history** (the parent of the Phase-9 close-out commit). The audit
-**report itself is kept** in `audits/` as the historical deliverable (banner-linked back here). This ledger is
-the durable index — resolve a code comment's `audit <ID>` citation through it:
+**All 8 remediation phases are landed** on branch `backend-audit-2026-06-27-fixes`. Both the working-paper
+plan (`docs/backend-audit-2026-06-27-remediation-plan.md`) and the audit report
+(`audits/backend-audit-2026-06-27.md`) were **deleted** under the CLAUDE.md doc-lifecycle rule once every
+finding was dispositioned — each phase's decisions were folded into the topic-doc §§ as it landed, and the
+report's lasting content (the per-finding dispositions, the **verified-clean inventory**, and the accepted
+residuals) lives in **this section**. Both files stay **recoverable in git history**. This ledger is the
+durable index — resolve a code comment's `audit <ID>` citation through it:
 
 | Finding(s) | Phase | Disposition (one line) | Record |
 |---|---|---|---|
@@ -3347,11 +3348,36 @@ the durable index — resolve a code comment's `audit <ID>` citation through it:
   boundary, `security-model.md`.
 - **API-2** (Info, Phase 8) — `importPreflight` accepts raw renderer paths for the recursive count/size walk:
   a pre-existing documented residual, **no code change**.
-- **SEC-7** (Info) — the verified-clean inventory (crypto/vault, zip importer, manifest parsing, subprocess
-  spawns, offline guard, audit/log, confused-deputy tokens): **no action**, recorded so it is not
-  re-investigated (audit §6).
+- **SEC-7** (Info) — the verified-clean inventory: **no action**, recorded below so it is not re-investigated.
 - **TEST-9** (Low) — a double-EOCD / duplicate-name zip adversarial fixture for the installer was **not
-  added**; the documented installer behaviour stands and the gap is an accepted residual (audit §11).
+  added**; the documented installer behaviour stands and the gap is an accepted residual.
+
+**Verified-clean inventory (attested 2026-06-27 — recorded so it is not re-investigated next round).** The
+audit read each of these and found them correct and well-tested; they are deliberately **not** findings:
+
+- **Crypto / vault** — Argon2id default + scrypt legacy; descriptor-bound KDF params with sane bounds; the
+  GCM verifier is checked before any DB decrypt; streaming file crypto with atomic temp+rename; key zeroing
+  on lock and on wrong password; journaled v1→v2 rekey that recovers old-or-new per file.
+- **Zip importer** — enumerate-before-inflate; path/symlink/extension/size re-validation; content-free error
+  codes; no zip-slip.
+- **Manifest parsing** — no `eval`/`Function`/`require` of package content; no prototype-pollution sink
+  (own-enumerable `__proto__`, a fresh sanitized object).
+- **Subprocess spawns** — array argv, no shell, hash-verified before spawn, drive-root escape guards.
+- **Offline guard** — IPv4-anchored loopback check, fails safe.
+- **Audit / log** — ids/counts/filenames only, sentinel-grep enforced, log encrypted at rest.
+- **Confused-deputy** — picker capability tokens; drag-drop symlink-rejected + realpath-canonicalised.
+- **Data layer** — FKs enforced (`foreign_keys = ON`); migrations idempotent + identifier-validated against
+  injection; FTS5 mirrors trigger-synced + VACUUM-safe; `deleteConversation` deletes in FK order;
+  `extraction_records`/`tree_nodes`/`document_collections`/`conversation_documents`/`image_turns` all CASCADE
+  correctly; the prepared-statement cache is keyed by constant SQL only. *(The one exception — the
+  bank/invoice tables lacking CASCADE — was DATA-1, fixed in Phase 1.)*
+- **IPC / API surface** — the preload bridge is a closed allow-list; every handler validates id/array shapes;
+  exports always go to a `dialog.showSaveDialog` user-chosen path; image/doc/skill-run jobs use
+  async-with-polling; unknown job ids resolve to a terminal `failed` rather than throwing.
+- **CLAUDE.md hard rules** — re-attested ✅: no cloud / hosted-AI APIs (only the two user-gated downloaders +
+  loopback sidecar use `fetch`; CSP `connect-src 'self'`); no telemetry / analytics / remote crash reporting;
+  no weights/user-data/logs committed; fully usable offline; user data local + encrypted by default; no
+  hardcoded dev paths; Windows first-class; clean swappable service boundaries.
 
 **Posture held across all 8 phases (load-bearing):** offline / no telemetry / no new network egress; the
 **content class** (document text + titles/filenames, chat, extracted figures, redacted text) is never
