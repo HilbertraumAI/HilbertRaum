@@ -46,6 +46,19 @@ export const de: Record<keyof typeof en, string> = {
   'app.fatal.hintAfter': ' auf deinem Laufwerk und sieh in docs/troubleshooting.md nach.',
   'app.loadingWorkspace': 'Arbeitsbereich wird geladen…',
 
+  // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
+  'errorBoundary.title': 'Auf diesem Bildschirm ist etwas schiefgelaufen',
+  'errorBoundary.body':
+    'Dieser Bildschirm ist auf ein unerwartetes Problem gestoßen. Deine Arbeit und deine Daten ' +
+    'sind sicher — es ist nichts verloren gegangen. Versuch es noch einmal oder geh zurück zum Start.',
+  'errorBoundary.retry': 'Noch einmal versuchen',
+  'errorBoundary.home': 'Zum Start',
+  'errorBoundary.app.title': 'Die App ist auf ein Problem gestoßen',
+  'errorBoundary.app.body':
+    'Etwas Unerwartetes ist passiert. Deine Daten auf dem Laufwerk sind sicher. Lade neu, um ' +
+    'fortzufahren.',
+  'errorBoundary.app.reload': 'Neu laden',
+
   // ---- Home ----
   'home.headline.ready': 'Bereit zum Chatten.',
   'home.headline.starting': 'Gleich bereit…',

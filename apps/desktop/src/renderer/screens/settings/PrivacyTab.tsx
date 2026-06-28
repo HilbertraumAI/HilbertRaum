@@ -15,10 +15,16 @@ export function PrivacyTab(): JSX.Element {
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
 
+  // The `active` guard avoids a setState after unmount if a read resolves late (audit FE-4),
+  // mirroring the HomeScreen mount-effect pattern.
   useEffect(() => {
-    window.api?.getPolicy().then(setPolicy).catch(() => setPolicy(null))
-    window.api?.getDriveStatus().then(setDrive).catch(() => setDrive(null))
-    window.api?.getSettings().then(setSettings).catch(() => setSettings(null))
+    let active = true
+    window.api?.getPolicy().then((p) => active && setPolicy(p)).catch(() => active && setPolicy(null))
+    window.api?.getDriveStatus().then((d) => active && setDrive(d)).catch(() => active && setDrive(null))
+    window.api?.getSettings().then((s) => active && setSettings(s)).catch(() => active && setSettings(null))
+    return () => {
+      active = false
+    }
   }, [])
 
   const offline = policy?.offlineMode ?? true

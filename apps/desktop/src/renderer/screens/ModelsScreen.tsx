@@ -342,7 +342,14 @@ export function ModelsScreen(): JSX.Element {
           <Button
             size="sm"
             disabled={mine.status === 'verifying'}
-            onClick={() => window.api.cancelDownload(mine.jobId).then(setJob)}
+            // Surface a cancel rejection as a friendly error instead of an unhandled
+            // promise rejection (audit FE-2).
+            onClick={() =>
+              window.api
+                .cancelDownload(mine.jobId)
+                .then(setJob)
+                .catch((e) => setError(friendlyIpcError(e)))
+            }
           >
             {t('models.download.cancel')}
           </Button>

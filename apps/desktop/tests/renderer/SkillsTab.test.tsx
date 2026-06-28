@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, within } from '@testing-library/react'
+import { render, screen, cleanup, within, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SkillsTab } from '../../src/renderer/screens/settings/SkillsTab'
 import { I18nProvider } from '../../src/renderer/i18n'
@@ -105,6 +105,36 @@ describe('SkillsTab — enable / disable', () => {
     expect(disableSkill).toHaveBeenCalledWith('user:bank-statement')
   })
 
+  // FE-3: rapid toggles must not race. The Switch is disabled while a toggle is in flight and a
+  // second submit for the same skill is ignored; the final UI reconciles to the server state.
+  it('suppresses a second toggle while the first is pending and ends on the server state', async () => {
+    const user = userEvent.setup()
+    let resolveDisable: (() => void) | null = null
+    const disableSkill = vi.fn(() => new Promise<void>((res) => { resolveDisable = res }))
+    const listSkills = vi.fn()
+    listSkills.mockResolvedValueOnce([skill({ enabled: true })]) // initial load
+    listSkills.mockResolvedValue([skill({ enabled: false })]) // server state after the disable
+    stubApi({ listSkills, disableSkill: disableSkill as never })
+    renderTab()
+    const sw = await screen.findByRole('switch')
+    expect(sw).toBeChecked()
+
+    await user.click(sw) // first toggle → in flight
+    expect(disableSkill).toHaveBeenCalledTimes(1)
+    expect(sw).toBeDisabled() // disabled while pending — no double-submit
+
+    await user.click(sw) // second toggle while pending → suppressed
+    expect(disableSkill).toHaveBeenCalledTimes(1)
+
+    // Resolve the first toggle → refresh reconciles to the server's post-disable state.
+    await act(async () => {
+      resolveDisable?.()
+    })
+    await waitFor(() => expect(screen.getByRole('switch')).not.toBeChecked())
+    expect(screen.getByRole('switch')).toBeEnabled()
+    expect(disableSkill).toHaveBeenCalledTimes(1)
+  })
+
   it('confirms before enabling a duplicate-id skill (one active per name, DS12)', async () => {
     const enableSkill = vi.fn(async () => skill({ enabled: true }))
     const user = userEvent.setup()
@@ -198,6 +228,21 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     expect(dialog.getByText('This skill can:')).toBeInTheDocument()
     await user.click(dialog.getByRole('button', { name: 'Add skill' }))
     expect(importSkill).toHaveBeenCalledWith('/tmp/new.skill.zip')
+  })
+
+  // FE-2: pickSkillPackage now sits INSIDE pick()'s try, so a rejecting picker surfaces a
+  // friendly toast instead of an unhandled promise rejection.
+  it('shows a friendly toast (no unhandled rejection) when the skill picker rejects', async () => {
+    const user = userEvent.setup()
+    const pickSkillPackage = vi.fn(async () => {
+      throw new Error('picker exploded')
+    })
+    stubApi({ listSkills: vi.fn(async () => []), pickSkillPackage: pickSkillPackage as never })
+    renderTab()
+    await screen.findByText('No skills yet')
+    await user.click(screen.getByRole('button', { name: /Import a skill/ }))
+    await user.click(await screen.findByRole('menuitem', { name: /From a file/ }))
+    expect(await screen.findByText(/couldn.t be added/)).toBeInTheDocument()
   })
 
   it('blocks confirm on a dev-mode-gated downgrade (DS15)', async () => {

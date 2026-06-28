@@ -34,16 +34,30 @@ export function SegmentedControl<T extends string>({
     options.findIndex((o) => o.value === value)
   )
 
+  function select(i: number): void {
+    refs.current[i]?.focus()
+    onChange(options[i].value)
+  }
+
   function move(from: number, delta: number): void {
     // Skip disabled segments, wrapping around.
     for (let step = 1; step <= options.length; step++) {
       const i = (from + delta * step + options.length * step) % options.length
       if (!options[i].disabled) {
-        refs.current[i]?.focus()
-        onChange(options[i].value)
+        select(i)
         return
       }
     }
+  }
+
+  // Home/End jump to the FIRST/LAST enabled segment directly (audit FE-9) — scanning inward
+  // from the chosen edge — rather than relying on `move`'s modulo wrap to land there, which was
+  // correct only as a side effect of the wrap and fragile under future changes to `move`.
+  function moveToEdge(forward: boolean): void {
+    const indices = [...options.keys()]
+    if (!forward) indices.reverse()
+    const target = indices.find((i) => !options[i].disabled)
+    if (target !== undefined) select(target)
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
@@ -55,10 +69,10 @@ export function SegmentedControl<T extends string>({
       move(index, -1)
     } else if (e.key === 'Home') {
       e.preventDefault()
-      move(options.length - 1, 1)
+      moveToEdge(true)
     } else if (e.key === 'End') {
       e.preventDefault()
-      move(0, -1)
+      moveToEdge(false)
     }
   }
 

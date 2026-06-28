@@ -6,6 +6,61 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 3 (RENDERER ROBUSTNESS; FE-1 High +
+FE-2…FE-9) — the renderer was the least-audited surface (prior rounds were backend-only); the headline
+gap was that ANY screen render throw blanked the whole offline app with no recovery (branch
+`full-audit-2026-06-28-fixes`).** Suite **2372 passed / 39 skipped** (was 2356/39 at Phase 2 → **+16
+tests**), typecheck clean, build OK. **Renderer-only** (plus the shared i18n catalogs) — no IPC surface,
+no main-process behavior, no data-layer change; offline/no-telemetry posture held. Touched only the
+listed renderer files + their tests + the architecture renderer record.
+- **THE FIX (FE-1, verified High) — top-level React error boundary.** Before: zero
+  `ErrorBoundary`/`componentDidCatch`/`getDerivedStateFromError` anywhere, so a screen render throw
+  (`react-markdown` on malformed model output, a Radix portal edge) unmounted the whole tree → blank
+  window, force-quit. Now: new `renderer/components/ErrorBoundary.tsx` (class component,
+  `getDerivedStateFromError` + `componentDidCatch`, `fallback(reset)` render-prop). **LOGGING IS
+  LOCAL-ONLY** (`console.error`; no renderer→main log IPC exists — preload has only READ-only
+  `getLogTail`/`exportLog`; never a network call — CLAUDE.md hard rule). **Per-screen boundary** in
+  `App.tsx` wraps the active screen KEYED by `screen` (navigating away re-mounts → clears the error)
+  INSIDE `<main>` so the nav rail stays alive; localized `ScreenErrorFallback` (role="alert") offers
+  in-place **Try again** (reset) + **Go to Home**. **Outer last-resort boundary** in `main.tsx` wraps
+  `<App/>` (catches the gate/provider/AppShell) with a localized `RootErrorFallback` resolved via the
+  pre-unlock language (it sits outside `I18nProvider`).
+- **FE-2…FE-9 (the cluster).** FE-2 unhandled IPC rejections — `ModelsScreen` cancel `.catch` →
+  `friendlyIpcError`, `SkillsTab.pick()` moved `pickSkillPackage` inside the try → toast. FE-3 skill
+  toggle double-submit — per-skill in-flight `Set` disables the Switch while pending + ignores stale
+  submits; `refresh()` reconciles to server state. FE-4 setState-after-unmount — the HomeScreen `let
+  active` guard / a `mountedRef` applied to the Documents import poll, PrivacyTab, DiagnosticsTab
+  refreshers, SkillsTab settings load, General tab. FE-5 — `applyLanguageSetting` is now
+  `useCallback([])` (identity-stable) so a UI-language switch no longer re-fires App's
+  `getPolicy()`+`getSettings()` effect. FE-6 — ScopePopover pending chips key by file name; ChatScreen
+  optimistic id uses a monotonic counter (not `Date.now()`). FE-7 — ToastProvider tracks its dismiss
+  timers in a ref + clears them on unmount. FE-8 — DiagnosticsTab benchmark failure → `friendlyIpcError`,
+  `'UNKNOWN'` literal → `t('diag.app.unknown')`. FE-9 — SegmentedControl Home/End select the first/last
+  ENABLED segment directly (`moveToEdge`), not via the arrow-key modulo wrap.
+- **New i18n keys (en + de, parity typecheck-enforced):** `errorBoundary.title`, `.body`, `.retry`,
+  `.home`, `.app.title`, `.app.body`, `.app.reload`.
+- **Tests added (+16) + teeth.** New `ErrorBoundary.test.tsx` (3: children pass-through; throw → local
+  log + onError + fallback; reset re-mounts), `AppErrorBoundary.test.tsx` (3: screen throw → localized
+  fallback + nav rail alive; nav re-mount clears; **de** fallback render), `DiagnosticsErrors.test.tsx`
+  (2: friendly bench error has no transport/Error prefix; profile row shows localized "unknown" not
+  'UNKNOWN'), `ScopePopover.test.tsx` (1: name-keyed pending chips). Extended `Components.test.tsx`
+  (FE-9 Home/End skip disabled ends; FE-7 timer cancelled on unmount via `vi.getTimerCount()`),
+  `SkillsTab.test.tsx` (FE-3 second toggle suppressed + Switch disabled + ends on server state; FE-2
+  picker reject → friendly toast), `ModelsScreen.test.tsx` (FE-2 cancel reject → friendly error),
+  `I18n.test.tsx` (FE-5 `applyLanguageSetting` referentially stable across a language switch),
+  `DocumentsScreen.test.tsx` (FE-4 in-flight poll tick after unmount does NOT refresh the list —
+  deferred-promise harness gives it teeth despite React-18's silent no-op).
+- **Files changed:** new `renderer/components/ErrorBoundary.tsx` (+ barrel export); `renderer/App.tsx`,
+  `renderer/main.tsx`, `renderer/i18n.tsx`, `renderer/components/{Toast,SegmentedControl}.tsx`,
+  `renderer/chat/ScopePopover.tsx`, `renderer/screens/{ChatScreen,ModelsScreen,DocumentsScreen,SettingsScreen}.tsx`,
+  `renderer/screens/settings/{SkillsTab,PrivacyTab,DiagnosticsTab}.tsx`; `shared/i18n/{en,de}.ts`; the
+  9 test files above; `docs/architecture.md` (new "Renderer robustness — design record (full audit
+  2026-06-28, Phase 3)" §). **Out of scope (untouched):** main-process (PERF-1/PERF-2 deferred to
+  Phase 7), data-layer, RAG, perf items PERF-5/PERF-6.
+- **Next action (owner):** review/commit Phase 3 (do NOT auto-push/merge). Then **Phase 4 — CJK/Thai
+  token-vs-word wave (RAG-N1, RAG-N2)** per `audits/full-audit-2026-06-28.md` §6._
+
+
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 2 (GPU MID-SESSION CRASH AUTO-FALLBACK,
 reliability; REL-1 High + REL-2 Low) — the advertised self-healing CPU fallback was a silent no-op
 (branch `full-audit-2026-06-28-fixes`).** Suite **2356 passed / 39 skipped** (was 2353/39 at Phase 1 →

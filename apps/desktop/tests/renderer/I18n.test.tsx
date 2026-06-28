@@ -7,7 +7,8 @@ import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import {
   I18nProvider,
   UI_LANGUAGE_STORAGE_KEY,
-  resolvePreUnlockLanguage
+  resolvePreUnlockLanguage,
+  useT
 } from '../../src/renderer/i18n'
 import { DEFAULT_SETTINGS, type AppSettings, type WorkspaceStateInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
@@ -66,6 +67,33 @@ describe('pre-unlock gate language (App + WorkspaceGate)', () => {
     expect(screen.getByPlaceholderText('Passwort')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Entsperren' })).toBeInTheDocument()
     expect(document.documentElement.lang).toBe('de')
+  })
+})
+
+describe('I18nProvider — stable applyLanguageSetting identity (FE-5)', () => {
+  it('keeps applyLanguageSetting referentially stable across a language switch', async () => {
+    const user = userEvent.setup()
+    const seen: Array<unknown> = []
+    function Probe(): JSX.Element {
+      const { lang, applyLanguageSetting } = useT()
+      seen.push(applyLanguageSetting)
+      return <button onClick={() => applyLanguageSetting('de')}>lang:{lang}</button>
+    }
+    render(
+      <I18nProvider>
+        <Probe />
+      </I18nProvider>
+    )
+    expect(screen.getByRole('button')).toHaveTextContent('lang:en')
+    const first = seen[0]
+
+    await user.click(screen.getByRole('button'))
+    // The language flipped (a re-render happened)…
+    expect(screen.getByRole('button')).toHaveTextContent('lang:de')
+    // …but the applier kept ONE identity, so an effect listing it in deps (App's policy/settings
+    // effect) no longer re-fires purely because the UI language changed.
+    expect(seen.length).toBeGreaterThan(1)
+    expect(seen.every((fn) => fn === first)).toBe(true)
   })
 })
 

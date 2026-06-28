@@ -7,9 +7,18 @@ import { DocumentsScreen } from './screens/DocumentsScreen'
 import { ImagesScreen } from './screens/ImagesScreen'
 import { SkillsScreen } from './screens/SkillsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
-import { Banner, BrandMark, Button, Icon, LocalIndicator, ToastProvider, type IconName } from './components'
+import {
+  Banner,
+  BrandMark,
+  Button,
+  ErrorBoundary,
+  Icon,
+  LocalIndicator,
+  ToastProvider,
+  type IconName
+} from './components'
 import { setThemeSetting } from './theme'
-import { I18nProvider, useT } from './i18n'
+import { I18nProvider, useT, type I18n } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
 import type { MessageKey } from '@shared/i18n'
 import type { WorkspaceStateInfo } from '@shared/types'
@@ -254,21 +263,62 @@ function AppShell(): JSX.Element {
             {notice}
           </Banner>
         )}
-        {screen === 'home' && <HomeScreen onNavigate={navigate} />}
-        {screen === 'chat' && (
-          <ChatScreen
-            onNavigate={navigate}
-            initialMode={chatMode}
-            initialScopeDocumentIds={chatScope}
-          />
-        )}
-        {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
-        {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
-        {screen === 'models' && <ModelsScreen />}
-        {screen === 'skills' && <SkillsScreen />}
-        {screen === 'settings' && <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />}
+        {/* Per-screen error boundary (audit FE-1). KEYED by `screen`, so navigating to any
+            other destination re-mounts the subtree and clears a captured error — the nav rail
+            above lives OUTSIDE the boundary, so a render throw never traps the user. The
+            fallback also offers an in-place retry. Logging is local-only (ErrorBoundary). */}
+        <ErrorBoundary
+          key={screen}
+          fallback={(reset) => (
+            <ScreenErrorFallback t={t} onRetry={reset} onHome={() => navigate('home')} />
+          )}
+        >
+          {screen === 'home' && <HomeScreen onNavigate={navigate} />}
+          {screen === 'chat' && (
+            <ChatScreen
+              onNavigate={navigate}
+              initialMode={chatMode}
+              initialScopeDocumentIds={chatScope}
+            />
+          )}
+          {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
+          {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
+          {screen === 'models' && <ModelsScreen />}
+          {screen === 'skills' && <SkillsScreen />}
+          {screen === 'settings' && (
+            <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />
+          )}
+        </ErrorBoundary>
       </main>
     </div>
     </ToastProvider>
+  )
+}
+
+// The localized per-screen fallback (audit FE-1). role="alert" so the contained failure is
+// announced; the calm copy (spec §11.4) reassures that nothing was lost, with an in-place
+// retry and an escape to Home.
+function ScreenErrorFallback({
+  t,
+  onRetry,
+  onHome
+}: {
+  t: I18n['t']
+  onRetry: () => void
+  onHome: () => void
+}): JSX.Element {
+  return (
+    <div className="screen" role="alert">
+      <div className="card">
+        <h2>{t('errorBoundary.title')}</h2>
+        <p className="hint">{t('errorBoundary.body')}</p>
+        <div className="actions">
+          <Button variant="primary" onClick={onRetry}>
+            {t('errorBoundary.retry')}
+          </Button>
+          <Button onClick={onHome}>{t('errorBoundary.home')}</Button>
+        </div>
+      </div>
+    </div>
   )
 }

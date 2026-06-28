@@ -65,6 +65,11 @@ export function SkillsTab(): JSX.Element {
   // S13c (D4): the global auto-fire opt-in. Loaded best-effort; the toggle hides until it resolves so
   // a failed read never shows a misleading "off". Mirrors the SettingsScreen patch pattern.
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  // Per-skill enable/disable in-flight set (audit FE-3): the Switch is disabled while a toggle is
+  // pending and a second toggle for the same skill is ignored, so rapid clicks can't race (no
+  // overlapping enable/disable whose last-resolved refresh wins). Disable-while-pending over
+  // optimistic UI — simpler and robust; `refresh()` reconciles to the server state at the end.
+  const [toggling, setToggling] = useState<ReadonlySet<string>>(() => new Set())
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -82,16 +87,21 @@ export function SkillsTab(): JSX.Element {
   }, [refresh])
 
   // Load the auto-fire opt-in (S13c/D4). Best-effort: a failed read leaves `settings` null and the
-  // toggle simply doesn't render (rather than implying a state we couldn't confirm).
+  // toggle simply doesn't render (rather than implying a state we couldn't confirm). The `active`
+  // guard avoids a setState after unmount if the read resolves late (audit FE-4).
   useEffect(() => {
+    let active = true
     void (async () => {
       try {
         const s = await window.api?.getSettings?.()
-        if (s) setSettings(s)
+        if (active && s) setSettings(s)
       } catch {
-        setSettings(null)
+        if (active) setSettings(null)
       }
     })()
+    return () => {
+      active = false
+    }
   }, [])
 
   // Flip the auto-fire opt-in, persisting through the shared Settings patch path (the saved value
@@ -115,9 +125,12 @@ export function SkillsTab(): JSX.Element {
   }, [skills, detail])
 
   async function pick(mode: 'file' | 'folder'): Promise<void> {
-    const path = await window.api.pickSkillPackage(mode)
-    if (!path) return
+    // pickSkillPackage is INSIDE the try (audit FE-2): a rejecting picker now surfaces a
+    // friendly toast instead of an unhandled promise rejection. A user cancel resolves to a
+    // falsy path and simply returns.
     try {
+      const path = await window.api.pickSkillPackage(mode)
+      if (!path) return
       const preview = await window.api.previewSkillPackage(path)
       setPending({ path, preview })
     } catch {
@@ -149,6 +162,11 @@ export function SkillsTab(): JSX.Element {
   }
 
   async function applyEnabled(skill: SkillInfo, on: boolean): Promise<void> {
+    // Suppress a double-submit while a toggle for this skill is in flight (audit FE-3) — the
+    // Switch is also disabled in the row, this is the belt-and-braces guard against a queued
+    // event. `finally` clears it so the row is interactive again after refresh reconciles.
+    if (toggling.has(skill.installId)) return
+    setToggling((prev) => new Set(prev).add(skill.installId))
     try {
       if (on) await window.api.enableSkill(skill.installId)
       else await window.api.disableSkill(skill.installId)
@@ -156,6 +174,12 @@ export function SkillsTab(): JSX.Element {
       toast(on ? t('skills.row.on') : t('skills.row.off'))
     } catch {
       toast(t('skills.loadFailed'))
+    } finally {
+      setToggling((prev) => {
+        const next = new Set(prev)
+        next.delete(skill.installId)
+        return next
+      })
     }
   }
 
@@ -248,6 +272,7 @@ export function SkillsTab(): JSX.Element {
             <SkillRow
               key={skill.installId}
               skill={skill}
+              pending={toggling.has(skill.installId)}
               onOpen={() => setDetail(skill)}
               onToggle={(on) => void setEnabled(skill, on)}
               onExport={() => void doExport(skill)}
@@ -307,12 +332,15 @@ const TRUST_LABEL: Record<SkillInfo['trustedLevel'], MessageKey> = {
 
 function SkillRow({
   skill,
+  pending,
   onOpen,
   onToggle,
   onExport,
   onDelete
 }: {
   skill: SkillInfo
+  /** A toggle for this skill is in flight — the Switch is disabled until it resolves (FE-3). */
+  pending: boolean
   onOpen: () => void
   onToggle: (on: boolean) => void
   onExport: () => void
@@ -354,7 +382,7 @@ function SkillRow({
         )}
         <Switch
           checked={skill.enabled}
-          disabled={skill.unavailable || skill.incompatible}
+          disabled={skill.unavailable || skill.incompatible || pending}
           onChange={onToggle}
           label={t('skills.row.enableLabel')}
         />

@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ReactNode
@@ -30,13 +31,26 @@ export function useToast(): (message: string) => void {
 export function ToastProvider({ children }: { children: ReactNode }): JSX.Element {
   const [toasts, setToasts] = useState<ToastItem[]>([])
   const nextId = useRef(0)
+  // Track the auto-dismiss timers so they can be cancelled on unmount (audit FE-7) — an
+  // outstanding timer firing after the provider unmounts would setState on a dead component.
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
 
   const show = useCallback((message: string): void => {
     const id = nextId.current++
     setToasts((prev) => [...prev, { id, message }])
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      timers.current.delete(timer)
       setToasts((prev) => prev.filter((t) => t.id !== id))
     }, TOAST_DURATION_MS)
+    timers.current.add(timer)
+  }, [])
+
+  useEffect(() => {
+    const pending = timers.current
+    return () => {
+      for (const timer of pending) clearTimeout(timer)
+      pending.clear()
+    }
   }, [])
 
   return (

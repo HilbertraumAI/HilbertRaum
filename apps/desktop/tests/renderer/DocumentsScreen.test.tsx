@@ -662,6 +662,67 @@ describe('DocumentsScreen', () => {
     }
   })
 
+  // ---- FE-4: a late import-poll tick after unmount must not refresh the list ----------
+  it('drops an in-flight import-poll tick after unmount — no list refresh on a dead component', async () => {
+    vi.useFakeTimers()
+    try {
+      const listDocuments = vi.fn(async () => [doc({})])
+      // The poll's getImportJob: resolves immediately while `live` is false; once armed it hands
+      // back a promise we resolve BY HAND, so a tick can go in-flight, straddle the unmount, and
+      // THEN resolve — exercising the post-await mounted guard.
+      type Job = { jobId: string; total: number; completed: number; failed: number; done: boolean }
+      let live = false
+      const parked: Array<() => void> = []
+      const getImportJob = vi.fn((): Promise<Job> => {
+        if (!live) {
+          return Promise.resolve({ jobId: 'j1', total: 2, completed: 0, failed: 0, done: false })
+        }
+        return new Promise<Job>((res) => {
+          parked.push(() => res({ jobId: 'j1', total: 2, completed: 2, failed: 0, done: false }))
+        })
+      })
+      stubApi({
+        listDocuments,
+        pickDocuments: vi.fn(async () => ({ token: 't', paths: ['/u/a.pdf', '/u/b.pdf'] })),
+        importPreflight: vi.fn(async () => ({ fileCount: 2, audioFileCount: 0, audioBytes: 0 })),
+        importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
+        getImportJob
+      })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
+      const { unmount } = render(<DocumentsScreen />)
+      await flush() // mount refresh + ocr status
+      fireEvent.click(screen.getByRole('button', { name: /import files/i }))
+      await flush() // pick → preflight → import → watchJob armed (no tick yet)
+
+      // First real tick (live=false): completed 0, the -1 → 0 transition refreshes the list once.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      // Arm the deferred path, fire the next tick so it parks mid-await.
+      live = true
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(parked).toHaveLength(1)
+      const listBefore = listDocuments.mock.calls.length
+
+      // Unmount mid-poll (clears the interval), THEN resolve the parked tick. The post-await
+      // guard drops it: no extra listDocuments refresh on the dead component.
+      unmount()
+      await act(async () => {
+        parked[0]()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(listDocuments.mock.calls.length).toBe(listBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('"Re-index all" can be cancelled without running anything (M-U6)', async () => {
     const user = userEvent.setup()
     const stale = [

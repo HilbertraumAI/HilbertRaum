@@ -184,6 +184,63 @@ refactor); the FE-4 `DocRow` extraction (a ~25-prop memoized row — high stale-
 **FE-5** list windowing of the transcript + document list (needs a measured approach to preserve
 scroll-to-bottom + a11y; the cheap scroll-thrash half of FE-5 is already done under FE-1).
 
+## Renderer robustness — design record (full audit 2026-06-28, Phase 3)
+The renderer was the least-audited surface (prior rounds were backend-only). Phase 3 closes a
+top-level robustness gap plus a cluster of unhandled-rejection / effect-lifecycle / key / i18n / a11y
+items. All changes are renderer-only (plus the shared i18n catalogs); no IPC surface, no main-process
+behavior. The labels below are the audit's **FE-1…FE-9** (full-audit-2026-06-28 — distinct from the
+Wave-P2 perf FE-* record above).
+
+**Error boundary (FE-1 — the one High).** Before Phase 3 there was **no** error boundary anywhere, so
+any screen render throw (e.g. `react-markdown` on malformed model output, a Radix portal edge)
+unmounted the whole tree → a blank window with no recovery, in an offline app the user must
+force-quit. The contract now:
+- **Component:** `renderer/components/ErrorBoundary.tsx` — a class component with
+  `getDerivedStateFromError` + `componentDidCatch`. It takes a `fallback(reset)` render-prop and an
+  optional `onError` sink. **Logging is LOCAL-ONLY** (CLAUDE.md hard rule: no cloud/telemetry/remote
+  crash reporting): there is no renderer→main log IPC (the preload exposes only the READ-only
+  `getLogTail`/`exportLog`), so it logs via `console.error` — never a network call.
+- **Per-screen boundary (`App.tsx`).** AppShell wraps the active screen in an `<ErrorBoundary>` **keyed
+  by `screen`**, so navigating to any other destination re-mounts the subtree and clears a captured
+  error. The boundary is INSIDE `<main>`, so the nav rail (rendered outside it) stays alive — the user
+  is never trapped. The localized fallback (`ScreenErrorFallback`, `role="alert"`) offers an in-place
+  **Try again** (`reset`) and a **Go to Home** escape.
+- **Outer last-resort boundary (`main.tsx`).** Wraps `<App/>` so a throw ABOVE the per-screen boundary
+  (the gate, the i18n provider, AppShell itself) still shows a localized reload prompt
+  (`RootErrorFallback`) instead of a blank window. It sits OUTSIDE `I18nProvider`, so it resolves the
+  pre-unlock language itself (`resolvePreUnlockLanguage` + the standalone `t`).
+- **New i18n keys** (en + de, parity typecheck-enforced): `errorBoundary.title/body/retry/home` and
+  `errorBoundary.app.title/body/reload`.
+
+**The FE-2…FE-9 cluster.**
+- **FE-2 (unhandled IPC rejections).** `ModelsScreen` cancel now `.catch`es → `friendlyIpcError` into
+  the error banner; `SkillsTab.pick()` moved `pickSkillPackage` INSIDE its `try` → a rejecting picker
+  shows the `skills.import.failed` toast, not an unhandled rejection.
+- **FE-3 (skill toggle double-submit).** A per-skill in-flight `Set` (`toggling`) disables the row
+  Switch while an enable/disable is pending and ignores a second submit for the same skill;
+  `refresh()` reconciles to the server state in `finally`. Disable-while-pending over optimistic UI
+  (simpler, robust).
+- **FE-4 (setState-after-unmount).** The HomeScreen `let active` guard (or a component `mountedRef`
+  where the async setState lives in a shared callback/interval) is applied uniformly: the
+  DocumentsScreen import poll (guard checked after each `await` before any setState), `PrivacyTab`,
+  `DiagnosticsTab` refreshers, `SkillsTab` settings load, and the General tab. (React 18 makes a
+  post-unmount setState a silent no-op, so this is defensive correctness; the DocumentsScreen test has
+  teeth by asserting `listDocuments` is not re-fetched after unmount.)
+- **FE-5 (effect re-run on language change).** `I18nProvider.applyLanguageSetting` is now
+  `useCallback([])` (identity-stable; it only needs `setLang`), so App's policy/settings effect, which
+  lists it in deps, no longer re-fires `getPolicy()`+`getSettings()` purely because the UI language
+  changed.
+- **FE-6 (unstable keys).** ScopePopover pending-attachment chips key by file name (not array index);
+  the ChatScreen optimistic user-message id uses a monotonic counter (not `Date.now()`, which collides
+  within a millisecond).
+- **FE-7 (untracked toast timer).** `ToastProvider` tracks its auto-dismiss `setTimeout` ids in a ref
+  and clears them in a cleanup effect.
+- **FE-8 (raw English in localized copy).** `DiagnosticsTab` benchmark failures route through
+  `friendlyIpcError` (no transport/Error-class prefix in `diag.bench.failed`); the literal `'UNKNOWN'`
+  is replaced with `t('diag.app.unknown')`.
+- **FE-9 (SegmentedControl Home/End).** Home/End now select the FIRST/LAST **enabled** segment directly
+  (`moveToEdge`), instead of relying on the arrow-key modulo wrap to land there incidentally.
+
 ## Performance — design record (perf audit 2026-06-18, Wave P3)
 Pipeline throughput & latency on the two hottest operations — **import a document** and **ask a
 question** — plus runtime-startup knobs. Unlike P2 (pure memoization), several P3 items are

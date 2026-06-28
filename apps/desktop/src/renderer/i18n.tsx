@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode
+} from 'react'
 import {
   resolveUiLanguage,
   t,
@@ -97,9 +105,17 @@ export function I18nProvider({ children }: { children: ReactNode }): JSX.Element
     document.documentElement.lang = lang
   }, [lang])
 
-  const value = useMemo(
-    () => bind(lang, (setting) => setLang(applyResolved(setting))),
-    [lang]
+  // Identity-stable applier (audit FE-5): it only needs the (stable) `setLang`, so a
+  // useCallback([]) keeps its reference constant across renders. Consumers that list it in an
+  // effect's deps (App.tsx's policy/settings effect) therefore no longer re-fire purely because
+  // the UI language changed — the feedback path the previous useMemo([lang]) created.
+  const applyLanguageSetting = useCallback(
+    (setting: UiLanguageSetting) => setLang(applyResolved(setting)),
+    []
   )
+
+  // `value` still re-binds on `lang` so `t`/`tCount` render in the current language; only the
+  // applier's identity is pinned.
+  const value = useMemo(() => bind(lang, applyLanguageSetting), [lang, applyLanguageSetting])
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }

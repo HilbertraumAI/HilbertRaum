@@ -263,6 +263,16 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // chat ConversationList pattern). Holds the open row id, or null.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Mounted flag (audit FE-4): the import poll's in-flight `getImportJob`/`refresh` can resolve
+  // AFTER the interval is cleared on unmount; clearing the interval doesn't abort that tick's
+  // promise, so guard every setState behind this flag.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   // The single active document task — module-level store so a running summary's
   // busy/progress state survives navigating away and back.
   const activeTask = useSyncExternalStore(subscribeDocTask, getActiveDocTask)
@@ -277,6 +287,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   const refresh = useCallback(async (): Promise<void> => {
     const next = await window.api.listDocuments()
+    if (!mountedRef.current) return // unmounted while the list was loading (FE-4)
     setDocs(next)
     void refreshCollections()
     // Drop selected ids that no longer exist or are no longer indexed.
@@ -314,6 +325,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       pollRef.current = setInterval(async () => {
         try {
           const job = await window.api.getImportJob(jobId)
+          // The interval may have been cleared (unmount) while this tick was awaiting — drop
+          // the late result instead of setState-ing on an unmounted component (audit FE-4).
+          if (!mountedRef.current) return
           const settled = job.completed + job.failed
           const transitioned = settled !== lastSettled
           lastSettled = settled
@@ -321,11 +335,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           if (job.done) {
             if (pollRef.current) clearInterval(pollRef.current)
             pollRef.current = null
-            setBusy(null)
+            if (mountedRef.current) setBusy(null)
           }
         } catch (e) {
           if (pollRef.current) clearInterval(pollRef.current)
           pollRef.current = null
+          if (!mountedRef.current) return
           setBusy(null)
           setError(friendlyIpcError(e))
         }

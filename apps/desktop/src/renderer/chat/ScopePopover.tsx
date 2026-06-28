@@ -215,8 +215,10 @@ export function ScopePopover({
                     {d.title}
                   </span>
                 ))}
-                {pendingAttachmentNames.map((name, i) => (
-                  <span className="doc-chip scope-attachment pending" key={`pending-${i}`}>
+                {pendingAttachmentNames.map((name) => (
+                  // Key by file name, not array index (audit FE-6): when a pending attachment
+                  // resolves out of order an index key would mis-associate the remaining chips.
+                  <span className="doc-chip scope-attachment pending" key={`pending-${name}`}>
                     {t('chat.attach.processing', { name })}
                   </span>
                 ))}

@@ -1466,9 +1466,14 @@ function pathsFromDrop(e: DragEvent): string[] {
   return out
 }
 
+// Monotonic counter for optimistic message ids (audit FE-6): two user turns sent in the same
+// millisecond would collide on a `Date.now()` key; an ever-incrementing counter is unique for
+// the session, which is all a React key needs.
+let optimisticSeq = 0
+
 function optimisticUser(conversationId: string, content: string): Message {
   return {
-    id: `optimistic-${Date.now()}`,
+    id: `optimistic-${++optimisticSeq}`,
     conversationId,
     role: 'user',
     content,

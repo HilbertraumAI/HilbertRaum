@@ -30,6 +30,22 @@ export const en = {
   'app.fatal.hintAfter': ' on your drive and see docs/troubleshooting.md.',
   'app.loadingWorkspace': 'Loading workspace…',
 
+  // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
+  // Per-screen fallback (the nav rail stays alive behind it). Calm, reassuring tone
+  // (spec §11.4): the failure is contained, nothing is lost, and recovery is one tap.
+  'errorBoundary.title': 'Something went wrong on this screen',
+  'errorBoundary.body':
+    'This screen ran into an unexpected problem. Your work and your data are safe — nothing ' +
+    'was lost. Try again, or go back to Home.',
+  'errorBoundary.retry': 'Try again',
+  'errorBoundary.home': 'Go to Home',
+  // Outer last-resort fallback around the whole app (rendered before the language provider,
+  // so it is resolved with the pre-unlock language).
+  'errorBoundary.app.title': 'The app ran into a problem',
+  'errorBoundary.app.body':
+    'Something unexpected happened. Your data on the drive is safe. Reload to continue.',
+  'errorBoundary.app.reload': 'Reload',
+
   // ---- Home (HomeScreen.tsx) ----
   'home.headline.ready': 'Ready to chat.',
   'home.headline.starting': 'Getting ready…',
