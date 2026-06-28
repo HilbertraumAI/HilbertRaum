@@ -93,8 +93,9 @@ function jpegPixelCount(b: Uint8Array): number | null {
 
 /**
  * Decoded pixel count (width*height) parsed from the image HEADER only — no full decode, so this
- * is cheap and safe on a bomb. Returns null when the dimensions can't be determined (the byte
- * cap then remains the only bound; a truly undecodable image fails downstream anyway).
+ * is cheap and safe on a bomb. Returns null when the dimensions can't be determined (unknown MIME,
+ * or a malformed/forged header). `validateAnalyzeRequest` treats a `null` for a CLAIMED png/jpeg
+ * as suspicious and rejects it (SEC-6) — a `null` here is no longer a "byte-cap-only" fall-through.
  */
 export function decodedPixelCount(bytes: Uint8Array, mimeType: string): number | null {
   if (mimeType === 'image/png') return pngPixelCount(bytes)
@@ -136,9 +137,14 @@ export function validateAnalyzeRequest(
   }
   if (imageBytes.byteLength > maxBytes) return 'tooLarge'
   // D4: reject a decompression bomb (small file, enormous decoded bitmap) before its bytes are
-  // inlined to the sidecar. Unknown dimensions (null) fall through — the byte cap still applies.
+  // inlined to the sidecar.
   const pixels = decodedPixelCount(imageBytes, mimeType)
-  if (pixels !== null && pixels > maxPixels) return 'tooLarge'
+  // SEC-6 (backend-audit-2026-06-27): the MIME is already known to be png/jpeg here, so a `null`
+  // pixel count means a CLAIMED png/jpeg whose header won't parse — malformed or forged bytes.
+  // It previously fell through to byte-cap-only, silently disabling the pixel-bomb guard; treat
+  // it as undecodable and reject rather than admit unverifiable bytes to the sidecar.
+  if (pixels === null) return 'decodeFailed'
+  if (pixels > maxPixels) return 'tooLarge'
   if (typeof question !== 'string' || question.trim() === '') return 'emptyResponse'
   return null
 }

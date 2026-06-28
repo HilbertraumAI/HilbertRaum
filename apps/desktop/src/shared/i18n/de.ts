@@ -1321,6 +1321,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.emptyQuestion': 'Eine leere Frage kann nicht gesendet werden.',
   'main.chat.stopFirst':
     'Für diese Unterhaltung wird noch eine Antwort erstellt. Stoppe sie zuerst.',
+  'main.chat.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um zu chatten.',
   'main.task.unknownKind': 'Unbekannte Dokumentaufgabe.',
   'main.task.refusedChatStreaming':
     'Gerade wird eine Antwort geschrieben. Warte, bis sie fertig ist (oder stoppe sie), und ' +

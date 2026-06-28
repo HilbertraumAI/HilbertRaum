@@ -365,6 +365,48 @@ describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
     expect(text).toContain(compareTruncationNotice('a.txt'))
   })
 
+  it('skips a physically truncated stored vector instead of failing the whole compare [DATA-2]', async () => {
+    const ctx = 1024
+    const embedder = createMockEmbedder()
+    // ~1200 words each → multiple stored chunks per doc, so truncating ONE vector still leaves
+    // valid pairing candidates. Mode (b) decodes BOTH sides' stored vectors (manager.ts compare
+    // path), the two call sites DATA-2 flags.
+    const a = await importDoc(1200, 'a.txt', 'alpha', { embedder })
+    const b = await importDoc(1200, 'b.txt', 'beta', { embedder })
+
+    // Physically truncate the FIRST stored vector of each document (a partial write). The
+    // `dimensions` column still claims 384, so the dimension guard doesn't catch it — the OLD
+    // decodeVector threw a RangeError here and failed the whole compare task. The guard now skips.
+    const firstChunk = (documentId: string): string =>
+      (
+        db
+          .prepare(
+            `SELECT e.chunk_id AS id FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
+             WHERE c.document_id = ? ORDER BY c.chunk_index LIMIT 1`
+          )
+          .get(documentId) as { id: string }
+      ).id
+    for (const docId of [a, b]) {
+      db.prepare('UPDATE embeddings SET vector_blob = ? WHERE chunk_id = ?').run(
+        Buffer.alloc(8), // 8 bytes ≪ 384*4
+        firstChunk(docId)
+      )
+    }
+
+    const status = await runCompare(
+      makeManager({
+        runtime: scriptedRuntime(),
+        contextTokens: ctx,
+        ingestionDeps: () => ({ embedder: createMockEmbedder() })
+      }),
+      a,
+      b
+    )
+    // The corrupt rows were skipped and the compare completed — no thrown RangeError.
+    expect(status.state).toBe('done')
+    expect(getDocument(db, status.resultRef?.documentId as string)?.status).toBe('indexed')
+  })
+
   it('fails friendly when either document is invisible to the active embedder (stale vectors)', async () => {
     const ctx = 1024
     // Vectors exist, but under a LEGACY embedder id — the active (mock) embedder

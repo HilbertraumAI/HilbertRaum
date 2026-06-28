@@ -28,13 +28,19 @@ vi.mock('electron', () => ({
 }))
 
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
-import { buildToolRunner, resolveInScopeDocumentIds, toSkillToolAudit } from '../../src/main/services/skills/tool-runs'
+import {
+  buildToolRunner,
+  resolveInScopeDocumentIds,
+  runnableToolNames,
+  runnableToolsForSkill,
+  toSkillToolAudit
+} from '../../src/main/services/skills/tool-runs'
 import type { DocTaskManager } from '../../src/main/services/doctasks'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
-import { createSkillRegistry } from '../../src/main/services/skills/registry'
+import { createSkillRegistry, getSkill } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import type { AppContext } from '../../src/main/services/context'
 import type { RunnableTool, RunnableToolSet, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
@@ -78,6 +84,27 @@ function writeRedactionSkill(appSkillsDir: string): void {
     'allowedTools: [redact_document]',
     '---',
     'Best-effort redaction; review the copy.'
+  ]
+  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+}
+
+// A USER-imported `kind:'tool'` skill (dropped into user-skills/) that DECLARES the same Tier-2
+// tools an app skill would. Its TITLE carries a sentinel so the SEC-1 refusal can be asserted
+// content-free. The SEC-1 gate means it must run NONE of these even when enabled.
+const USER_SKILL_TITLE_SENTINEL = 'XUSERSKILL_SENTINEL_imported_title_99999'
+function writeUserToolSkill(userSkillsDir: string): void {
+  const d = join(userSkillsDir, 'imported-bank')
+  mkdirSync(d, { recursive: true })
+  const lines = [
+    '---',
+    'id: imported-bank',
+    `title: ${USER_SKILL_TITLE_SENTINEL}`,
+    'description: A user-imported tool skill.',
+    'version: 1.0.0',
+    'kind: tool',
+    'allowedTools: [extract_transactions, export_transactions_csv]',
+    '---',
+    'Quote the printed figures.'
   ]
   writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
 }
@@ -190,6 +217,37 @@ function makeRedactionHarness(docText: string): Harness {
   const docId = seedDocWithChunks(db, docText)
   const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   return { db, conversationId: conv.id, skillInstallId: 'app:document-redaction' }
+}
+
+// A harness whose runnable skill is a USER-imported `kind:'tool'` skill, force-enabled to model the
+// worst case (a drop-in installs DISABLED per DS19; a zip import installs enabled-with-warning per
+// DS7 — either way an ENABLED user tool skill). The SEC-1 gate must still refuse it every Tier-2 tool.
+function makeUserSkillHarness(statementText: string): Harness {
+  const root = tempDir()
+  const appSkillsDir = join(root, 'app-skills')
+  const userSkillsDir = join(root, 'user-skills')
+  mkdirSync(appSkillsDir, { recursive: true })
+  mkdirSync(userSkillsDir, { recursive: true })
+  writeUserToolSkill(userSkillsDir)
+  const db = openDatabase(join(root, 'test.sqlite'))
+  seedSettings(db)
+  const audit = createAuditRecorder(() => db)
+  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
+  const ctx = {
+    db,
+    paths: { workspacePath: root },
+    workspace: { isUnlocked: () => true, documentCipher: () => null },
+    isDev: false,
+    audit,
+    skills,
+    ocrEngine: undefined
+  } as unknown as AppContext
+  registerSkillsIpc(ctx)
+  const docId = seedDocWithChunks(db, statementText)
+  const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+  skills.list() // reconcile disk→DB (the user skill installs DISABLED)
+  db.prepare('UPDATE skills SET enabled = 1 WHERE install_id = ?').run('user:imported-bank') // force-enable
+  return { db, conversationId: conv.id, skillInstallId: 'user:imported-bank' }
 }
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
@@ -375,6 +433,68 @@ describe('skills tool-run IPC (S11b)', () => {
     // …and the run state the renderer polls carries no content either.
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, start.run.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(SENTINEL)
+  })
+})
+
+// SEC-1 (backend-audit 2026-06-27, Phase 6 — TEST-8): Tier-2 tools run for APP skills only. A
+// user-imported `kind:'tool'` skill may DECLARE allowedTools (kept for a future per-tool grant UI)
+// but runs NONE of them — the gate is at the runnable-tools surface (`skillCanRunTools`), enforced at
+// `runnableToolNames` (so listRunnableTools + the run bar offer nothing) and again at `startSkillRun`
+// (so a forged IPC call is refused, friendly + content-free). App skills are completely unaffected.
+describe('skills tool-run IPC — SEC-1 trust gate (user kind:tool skills cannot run Tier-2 tools)', () => {
+  const STATEMENT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'
+
+  it('runnableToolNames/runnableToolsForSkill return [] for an enabled user kind:tool skill (gate at the source)', () => {
+    const { db } = makeUserSkillHarness(STATEMENT)
+    const record = getSkill(db, 'user:imported-bank')!
+    // Sanity: it really is a user tool skill that DECLARED tools (so [] is the gate, not an empty list).
+    expect(record.source).toBe('user')
+    expect(record.kind).toBe('tool')
+    expect(record.manifest.allowedTools.length).toBeGreaterThan(0)
+    expect(record.enabled).toBe(true)
+    // …yet it runs nothing.
+    expect(runnableToolNames(record, '0.0.0-test')).toEqual([])
+    expect(runnableToolsForSkill(record, '0.0.0-test')).toEqual([])
+  })
+
+  it('listRunnableTools offers nothing for a user kind:tool skill (the run bar never shows a tool)', async () => {
+    const { skillInstallId, conversationId } = makeUserSkillHarness(STATEMENT)
+    const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
+    expect(result).toEqual({ tools: [], documentIds: [] })
+  })
+
+  it('startSkillRun for a user kind:tool skill is refused — friendly, content-free, nothing audited', async () => {
+    const { db, skillInstallId, conversationId } = makeUserSkillHarness(STATEMENT)
+    const { result } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'extract_transactions',
+      conversationId
+    })
+    const start = result as StartSkillRunResult
+    expect(start.started).toBe(false)
+    if (start.started) throw new Error('expected refusal')
+    expect('error' in start && start.error).toBeTruthy()
+    // Content-free: the refusal interpolates no skill title/id/path (the imported title's sentinel
+    // must not leak into the IPC payload).
+    expect(JSON.stringify(start)).not.toContain(USER_SKILL_TITLE_SENTINEL)
+    expect(JSON.stringify(start)).not.toContain('imported-bank')
+    // Nothing ran → no run lifecycle reached the audit (the refusal returns before runController.start).
+    const auditText = listAuditEvents(db, { limit: 5000 })
+      .map((e) => `${e.type} ${e.message} ${JSON.stringify(e.metadata)}`)
+      .join('\n')
+    expect(auditText).not.toContain('skill_run_started')
+    expect(auditText).not.toContain('skill_run_done')
+    expect(auditText).not.toContain(USER_SKILL_TITLE_SENTINEL)
+  })
+
+  it('an APP skill with the SAME tools is unaffected — still runnable (proves the gate keys on source)', async () => {
+    // makeHarness installs the bank skill under app-skills/ (source 'app'); it must keep offering tools.
+    const { skillInstallId, conversationId } = makeHarness(STATEMENT)
+    const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
+    expect((result as RunnableToolSet).tools.length).toBeGreaterThan(0)
+    // And it runs end-to-end (the gate did not narrow app skills).
+    const final = await runTool(skillInstallId, conversationId, 'extract_transactions')
+    expect(final.state).toBe('done')
   })
 })
 

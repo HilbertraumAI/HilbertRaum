@@ -78,7 +78,7 @@ function oldScan(db: Db, query: Float32Array, topK: number): { chunkId: string; 
   for (const row of rows) {
     if (row.dimensions !== query.length) continue
     if (row.vector_blob.length < row.dimensions * 4) continue
-    const vec = decodeVector(row.vector_blob, row.dimensions)
+    const vec = decodeVector(row.vector_blob, row.dimensions)! // guarded above → non-null
     hits.push({ chunkId: row.chunk_id, score: dotProduct(query, vec) })
   }
   hits.sort((a, b) => b.score - a.score)

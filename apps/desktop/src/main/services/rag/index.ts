@@ -419,8 +419,11 @@ function sourceMeta(chunk: RetrievedChunk): string {
 /** A document's whole size in the SAME token unit as `retrieveWholeDocument` (persisted token_count
  *  scaled by TOKENS_PER_WORD), so the compare budget can be split by real size. */
 function documentApproxTokenTotal(db: Db, documentId: string): number {
+  // ORDER BY chunk_index for read-shape parity with `retrieveWholeDocument` (audit DATA-4):
+  // the sum is order-independent, so this changes no value — it just keeps the budget
+  // computation and the actual whole-document read on the same ordered query.
   const rows = db
-    .prepare('SELECT text, token_count FROM chunks WHERE document_id = ?')
+    .prepare('SELECT text, token_count FROM chunks WHERE document_id = ? ORDER BY chunk_index')
     .all(documentId) as unknown as Array<{ text: string; token_count: number | null }>
   let total = 0
   for (const r of rows) total += Math.ceil((r.token_count ?? approxTokenCount(r.text)) * TOKENS_PER_WORD)

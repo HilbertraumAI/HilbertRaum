@@ -77,7 +77,8 @@ function oracleRanking(db: Db, query: Float32Array, modelId: string): string[] {
     .all(modelId) as unknown as Array<{ chunk_id: string; vector_blob: Uint8Array; dimensions: number }>
   return rows
     .filter((r) => r.dimensions === query.length && r.vector_blob.length >= r.dimensions * 4)
-    .map((r) => ({ id: r.chunk_id, s: dotProduct(query, decodeVector(r.vector_blob, r.dimensions)) }))
+    // The filter guarantees a full-length blob, so decodeVector is non-null here.
+    .map((r) => ({ id: r.chunk_id, s: dotProduct(query, decodeVector(r.vector_blob, r.dimensions)!) }))
     .sort((a, b) => b.s - a.s)
     .map((h) => h.id)
 }

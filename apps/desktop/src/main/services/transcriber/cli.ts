@@ -1,7 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { llamaOsDir, defaultThreadCount, type ResolveBinOptions } from '../runtime/sidecar'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
@@ -54,6 +53,25 @@ export function resolveWhisperCliPath(
 /** Marker prefix so the AudioParser can map a decode failure to friendly copy. */
 export const AUDIO_DECODE_ERROR_PREFIX = 'AUDIO_DECODE_FAILED:'
 
+/**
+ * Per-spawn INACTIVITY watchdog ceiling (REL-1). whisper-cli emits `-pp` progress
+ * (`progress = N%`, ~every 5%); a healthy run — even a slow, hours-long one — keeps
+ * producing output, so the watchdog is reset on EVERY stdout/stderr chunk and only
+ * fires when the child has been completely silent for this long. That distinguishes a
+ * legitimately slow transcription (keeps advancing) from a wedged/spinning child (no
+ * output at all), which would otherwise hang the ingestion slot until app restart.
+ * 15 min is deliberately generous (one `-pp` step on a multi-hour file on a slow CPU
+ * stays well under it). Override with `HILBERTRAUM_WHISPER_IDLE_TIMEOUT_MS` or per
+ * instance via `WhisperCliOptions.idleTimeoutMs` (tests dial it down).
+ */
+export const DEFAULT_WHISPER_IDLE_TIMEOUT_MS = 15 * 60 * 1000
+
+function resolveIdleTimeoutMs(explicit?: number): number {
+  if (typeof explicit === 'number' && explicit > 0) return explicit
+  const env = Number(process.env.HILBERTRAUM_WHISPER_IDLE_TIMEOUT_MS)
+  return Number.isFinite(env) && env > 0 ? env : DEFAULT_WHISPER_IDLE_TIMEOUT_MS
+}
+
 /** Shape of the `-oj` output we rely on (whisper.cpp v1.8.6). */
 interface WhisperJson {
   transcription?: Array<{
@@ -80,6 +98,11 @@ export interface WhisperCliOptions {
    * `HILBERTRAUM_WHISPER_BIN` override is never hash-gated (dev resolves `skip-dev`).
    */
   verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
+  /**
+   * Per-spawn inactivity watchdog ceiling in ms (REL-1). Default
+   * `DEFAULT_WHISPER_IDLE_TIMEOUT_MS` (env-overridable). Injected small in tests.
+   */
+  idleTimeoutMs?: number
 }
 
 export class WhisperCliTranscriber implements Transcriber {
@@ -87,6 +110,7 @@ export class WhisperCliTranscriber implements Transcriber {
   private readonly binPath: string
   private readonly modelPath: string
   private readonly threads: number
+  private readonly idleTimeoutMs: number
   private readonly spawnImpl: (command: string, args: string[], options: SpawnOptions) => ChildProcess
   private readonly verifyBinary: (binPath: string) => Promise<BinaryVerifyResult>
   /**
@@ -104,17 +128,23 @@ export class WhisperCliTranscriber implements Transcriber {
     this.binPath = opts.binPath
     this.modelPath = opts.modelPath
     this.threads = opts.threads ?? defaultThreadCount()
+    this.idleTimeoutMs = resolveIdleTimeoutMs(opts.idleTimeoutMs)
     this.spawnImpl = opts.spawnImpl ?? nodeSpawn
     this.verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
   }
 
-  async transcribe(filePath: string, opts: TranscribeOptions = {}): Promise<TranscriptSegment[]> {
+  async transcribe(filePath: string, opts: TranscribeOptions): Promise<TranscriptSegment[]> {
     if (this.stopped) throw new Error('Transcriber has been stopped.')
     // The CLI writes `<outBase>.json` — content, so it must be a transient we shred.
     // Inside the workspace documents dir the `.parse` infix keeps it covered by the
-    // startup crash sweep; it must NEVER default to "next to the input" (on a first
-    // import the input is the user's ORIGINAL file outside the workspace).
-    const outBase = join(opts.workDir ?? tmpdir(), `${randomUUID()}.parse-transcript`)
+    // startup crash sweep; it must NEVER land in the OS tmpdir (which the sweep never
+    // reaches) or "next to the input" (on a first import the input is the user's
+    // ORIGINAL file outside the workspace). REL-6: `workDir` is REQUIRED — fail closed
+    // rather than strand recognised speech outside the sweep if a caller ever omits it.
+    if (!opts.workDir) {
+      throw new Error('Transcriber workDir is required (transient transcript must stay inside the crash sweep).')
+    }
+    const outBase = join(opts.workDir, `${randomUUID()}.parse-transcript`)
     const jsonPath = `${outBase}.json`
 
     const args = [
@@ -191,11 +221,40 @@ export class WhisperCliTranscriber implements Transcriber {
           if (pct >= 0 && pct <= 100) opts.onProgress?.(pct)
         }
       }
+
+      // Inactivity watchdog (REL-1): kill a child that has gone completely silent for
+      // `idleTimeoutMs` (no `-pp` progress, no stderr) — a wedged/spinning whisper that
+      // would otherwise hang this ingestion slot forever. Reset on every chunk so a
+      // legitimately slow but advancing transcription is never killed. The timeout error
+      // carries ONLY the duration — never any output/content.
+      let timedOut = false
+      let watchdog: ReturnType<typeof setTimeout> | undefined
+      const clearWatchdog = (): void => {
+        if (watchdog) clearTimeout(watchdog)
+        watchdog = undefined
+      }
+      const armWatchdog = (): void => {
+        clearWatchdog()
+        watchdog = setTimeout(() => {
+          timedOut = true
+          try {
+            child.kill()
+          } catch {
+            /* already gone */
+          }
+        }, this.idleTimeoutMs)
+      }
+      armWatchdog()
+
       // `-pp` progress goes to stderr in v1.8.6; scan both streams to be safe — but the
       // error TAIL keeps STDERR ONLY: stdout carries the TRANSCRIPT (content), which
       // must never ride an error message into logs or the documents table.
-      child.stdout?.on('data', (chunk: Buffer | string) => scanProgress(String(chunk)))
+      child.stdout?.on('data', (chunk: Buffer | string) => {
+        armWatchdog()
+        scanProgress(String(chunk))
+      })
       child.stderr?.on('data', (chunk: Buffer | string) => {
+        armWatchdog()
         const text = String(chunk)
         scanProgress(text)
         stderrTail = (stderrTail + text).slice(-4000)
@@ -208,16 +267,23 @@ export class WhisperCliTranscriber implements Transcriber {
           /* already gone */
         }
       }
-      opts.signal?.addEventListener('abort', onAbort, { once: true })
+      // Already aborted at spawn time (rare): kill at once; otherwise arm the listener.
+      if (opts.signal?.aborted) onAbort()
+      else opts.signal?.addEventListener('abort', onAbort, { once: true })
 
       child.on('error', (err) => {
+        clearWatchdog()
         opts.signal?.removeEventListener('abort', onAbort)
         reject(err)
       })
       child.on('close', (code, signal) => {
+        clearWatchdog()
         opts.signal?.removeEventListener('abort', onAbort)
         if (opts.signal?.aborted || this.stopped) {
           reject(new Error('Transcription was cancelled.'))
+        } else if (timedOut) {
+          // Distinct from a generic terminate so the local log shows WHY (no content).
+          reject(new Error(`whisper-cli watchdog: no output for ${this.idleTimeoutMs} ms; transcription aborted`))
         } else if (signal) {
           reject(new Error(`whisper-cli was terminated (${signal})`))
         } else {

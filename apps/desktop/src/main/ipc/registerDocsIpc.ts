@@ -214,12 +214,17 @@ export function registerDocsIpc(ctx: AppContext): void {
   // cleared when the document leaves the processing set.
   const transcribing = new Map<string, number>()
 
-  const ingestionDeps = (): IngestionDeps => ({
+  // `signal` (REL-1): threaded to the parse phase so cancelling an import KILLS an
+  // in-flight audio transcription mid-flight. The import job below aborts it on a mid-job
+  // workspace lock; the other entry points (re-index) pass none and rely on the
+  // transcriber's own inactivity watchdog to bound a wedged child.
+  const ingestionDeps = (signal?: AbortSignal): IngestionDeps => ({
     embedder: ctx.embedder,
     cipher: ctx.workspace.documentCipher(),
     transcriber: ctx.transcriber,
     ocrEngine: ctx.ocrEngine,
-    onTranscribeProgress: (documentId, percent) => transcribing.set(documentId, percent)
+    onTranscribeProgress: (documentId, percent) => transcribing.set(documentId, percent),
+    signal
   })
 
   // Open the OS file/folder picker in the main process (renderer has no dialog access).
@@ -326,6 +331,10 @@ export function registerDocsIpc(ctx: AppContext): void {
     // per-phase transactions, and the lock-mid-job behavior are all preserved: prepare/
     // finalize are just `processDocument` split at the already-DB-mediated chunk↔embed
     // boundary, and each captures its own failure on the row.
+    // Per-job cancellation (REL-1): aborted when the workspace locks mid-job, so an
+    // in-flight audio transcription (the unbounded parse) is killed at once rather than
+    // waited out. Belt-and-suspenders with the lock's `transcriber.suspend()`.
+    const jobAbort = new AbortController()
     void (async () => {
       type Pending = { id: string; promise: Promise<PreparedDocument> }
       // Start the parse+chunk of `documentIds[idx]` (the look-ahead). Skipped (null) past the
@@ -335,7 +344,7 @@ export function registerDocsIpc(ctx: AppContext): void {
         if (idx >= documentIds.length || !ctx.workspace.isUnlocked()) return null
         const id = documentIds[idx]
         processing.add(id)
-        return { id, promise: prepareDocument(ctx.db, storeDir, id, ingestionDeps()) }
+        return { id, promise: prepareDocument(ctx.db, storeDir, id, ingestionDeps(jobAbort.signal)) }
       }
       let pending = startPrepare(0)
       try {
@@ -345,6 +354,8 @@ export function registerDocsIpc(ctx: AppContext): void {
           // are reconciled to `failed` (re-indexable) after the next unlock.
           if (!ctx.workspace.isUnlocked()) {
             log.warn('Import stopped: workspace locked mid-job', { jobId })
+            // Kill any in-flight audio transcription (the look-ahead prepare) at once.
+            jobAbort.abort()
             break
           }
           const id = documentIds[i]
@@ -357,8 +368,8 @@ export function registerDocsIpc(ctx: AppContext): void {
           try {
             const prepared = current
               ? await current.promise
-              : await prepareDocument(ctx.db, storeDir, id, ingestionDeps())
-            const info = await finalizeDocument(ctx.db, id, ingestionDeps(), prepared)
+              : await prepareDocument(ctx.db, storeDir, id, ingestionDeps(jobAbort.signal))
+            const info = await finalizeDocument(ctx.db, id, ingestionDeps(jobAbort.signal), prepared)
             if (info.status === 'failed') status.failed += 1
             else {
               status.completed += 1

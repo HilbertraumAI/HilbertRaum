@@ -1,5 +1,5 @@
 import type { DocumentChunkRead, JsonSchema, SkillTool, ToolResult } from '../../../../shared/types'
-import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate } from './money'
+import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate, splitLeadingDates } from './money'
 
 // Invoice Tier-2 tools — the SECOND Tier-2 content-class domain (architecture.md "Skills — design
 // record" §8). It mirrors the bank-statement tools layer-for-layer to prove the gate generalizes:
@@ -230,7 +230,12 @@ function applyTotals(line: string, totals: InvoiceTotals): boolean {
  * currency is dropped (never invents one).
  */
 export function parseLineItem(line: string, documentCurrency: string | null): InvoiceLineItem | null {
-  const matches = [...line.matchAll(MONEY_RE)]
+  // Strip any leading DATE column(s) (e.g. a service-/delivery-date column) before the money scan so a
+  // `dd.mm.yyyy` token's `.20yy` tail can't be read as a price (shared BL-1 fix; see bank `parseLine`).
+  // An invoice line item rarely leads with a date, so this is usually a no-op; when it does, the date is
+  // dropped (line items carry no date field) and the description starts at the first non-date token.
+  const { rest } = splitLeadingDates(line)
+  const matches = [...rest.matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   const amounts: number[] = []
   for (const m of matches) {
@@ -239,7 +244,7 @@ export function parseLineItem(line: string, documentCurrency: string | null): In
   }
   if (amounts.length === 0) return null
 
-  let description = line.slice(0, matches[0].index).trim()
+  let description = rest.slice(0, matches[0].index).trim()
   if (!description) return null
   const currency = detectCurrency(line) ?? documentCurrency
   if (!currency) return null

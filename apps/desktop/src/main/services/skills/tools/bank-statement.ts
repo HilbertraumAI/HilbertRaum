@@ -4,7 +4,7 @@ import type {
   SkillTool,
   ToolResult
 } from '../../../../shared/types'
-import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate, wordIncludes } from './money'
+import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate, splitLeadingDates, wordIncludes } from './money'
 
 // The deterministic money/date/CSV parsing primitives are shared with the invoice tools (one parser
 // per locale rule, §8). Re-exported here so existing import sites (`tools/bank-statement`) and the
@@ -101,11 +101,14 @@ export interface ExtractTransactionsOutput {
 // ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
 
 function parseLine(line: string, page: number | null, statementCurrency: string | null): ExtractedTransaction | null {
-  const m = /^(\S+)\s+(.*)$/.exec(line)
-  if (!m) return null
-  const date = parseDate(m[1])
-  if (!date) return null
-  const rest = m[2]
+  // Strip the leading DATE column(s) before the money scan (BL-1): the FIRST is the booking date, a
+  // SECOND consecutive date token is the value date (Wertstellung/Valuta). Reading only the first token
+  // left a value-date column in `rest`, where MONEY_RE reads its `dd.mm.20yy` tail as a 2-decimal amount —
+  // dropping the row (empty description) or mis-valuing it. `splitLeadingDates` consumes the whole leading
+  // date run; the description then starts at the first non-date token. (Shared with the invoice parser.)
+  const { dates, rest } = splitLeadingDates(line)
+  if (dates.length === 0) return null
+  const date = dates[0]
   const matches = [...rest.matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   const first = matches[0]
@@ -116,6 +119,9 @@ function parseLine(line: string, page: number | null, statementCurrency: string 
   const currency = detectCurrency(line) ?? statementCurrency
   if (!currency) return null
   const row: ExtractedTransaction = { date, description, amount, currency }
+  // A value-date column (the second leading date), when present, is captured as `valueDate` — the
+  // schema/CSV already carry it; the booking date (de-AT Buchungstag) is conventionally printed first.
+  if (dates.length >= 2) row.valueDate = dates[1]
   if (matches.length >= 2) {
     const bal = parseAmount(matches[matches.length - 1][0])
     if (bal !== null) row.balanceAfter = bal
@@ -281,6 +287,13 @@ export function assessCompleteness(args: {
   reconcile: ReconcileResult
 }): CompletenessStatus {
   const { rows, openingBalance, closingBalance, reconcile } = args
+  // The completeness tie sums every amount into ONE figure to compare against a single opening/closing
+  // pair — meaningful only when every row shares a currency (mirror summarizeCashflow's single-currency
+  // guard; audit BL-2). On a mixed-currency statement that sum is a meaningless cross-currency figure, so
+  // we never claim 'complete' OR 'contradicted' from it — the honest verdict is 'unverified'. (The bank
+  // answer already suppresses any total for mixed currency; this keeps the public predicate honest for
+  // any other caller too.) An empty / single-currency statement falls through to the real assessment.
+  if (new Set(rows.map((r) => r.currency)).size > 1) return 'unverified'
   // A per-row running balance that contradicts is a read error — suspect regardless of summary balances.
   if (reconcile.rows.some((r) => r.status === 'mismatch')) return 'contradicted'
   // No statement-level opening+closing pair to tie against: nothing claimed → nothing contradicted.
@@ -440,6 +453,13 @@ export interface ReconcileResult {
  * at least one row was actually compared against a predecessor (`okCount > 0`).
  */
 export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
+  // The running-balance chain (`prevBalance + amount`) is only meaningful WITHIN one currency; a
+  // mixed-currency statement would add an amount in one currency onto a balance printed in another
+  // (audit BL-2). Report every row `unknown` (nothing genuinely checked, never reconciled) rather than a
+  // spurious ok/mismatch — mirrors the single-currency guard in summarizeCashflow/assessCompleteness.
+  if (new Set(rows.map((r) => r.currency)).size > 1) {
+    return { reconciled: false, rows: rows.map((_, i) => ({ index: i, status: 'unknown' as const })) }
+  }
   const out: ReconcileRow[] = []
   let prevBalance: number | null = null
   let okCount = 0

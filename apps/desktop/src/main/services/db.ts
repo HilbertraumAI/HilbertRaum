@@ -217,7 +217,10 @@ CREATE INDEX IF NOT EXISTS idx_tree_edges_child ON tree_edges(child_id, child_is
 -- (content_hash, model_id) so a chat-model change doesn't reuse an older model's summary. The
 -- node vector (embedding_blob) is NULL at build time, embedded lazily on first use (L6,
 -- rag-design §14.6). Carries no document_id; survives node/tree deletion; never pruned by FK.
--- Not size/age-pruned in v1 — the cache grows unbounded (eviction is a future policy).
+-- Growth is bounded by a row-count cap (backend-audit-2026-06-27 DATA-3/MAINT-3): each tree
+-- build opportunistically evicts the oldest rows past SUMMARY_CACHE_MAX_ROWS via
+-- evictSummaryCache (analysis/summary-cache.ts). It is a cache, so eviction only costs a
+-- future re-summarize, never data loss.
 CREATE TABLE IF NOT EXISTS summary_cache (
   content_hash TEXT NOT NULL,
   model_id TEXT NOT NULL,             -- chat model that produced summary_text
@@ -312,6 +315,13 @@ CREATE INDEX IF NOT EXISTS idx_skill_runs_skill ON skill_runs(skill_install_id);
 -- in the skill .skill.zip or conversation export. Distinct from the non-secret skill packages
 -- (DS20). S11a creates only what extract_transactions needs; categories/rules/corrections arrive
 -- additively with S11c (the tree_nodes-per-feature precedent — no overbuild, skills-plan §13).
+-- ON DELETE CASCADE on the document FK is load-bearing on FRESH drives (audit DATA-1): foreign_keys
+-- is ON and deleteDocument deletes the documents row directly, so without CASCADE a delete of a
+-- document that has an extraction would hit an FK violation. The whole bank chain cascades
+-- (statement → transactions → corrections), so a bare DELETE FROM documents cleans up cleanly. On
+-- drives created BEFORE this fix the FK has NO cascade (CREATE TABLE IF NOT EXISTS can't alter it),
+-- so deleteDocument also does an explicit ordered delete (purgeDocumentDerivatives) — that ordered
+-- delete is what keeps EXISTING drives safe; the cascade is defense-in-depth for fresh ones.
 CREATE TABLE IF NOT EXISTS bank_statements (
   id            TEXT PRIMARY KEY,
   document_id   TEXT NOT NULL,              -- the source document (id only)
@@ -320,7 +330,7 @@ CREATE TABLE IF NOT EXISTS bank_statements (
   period_end    TEXT,
   currency      TEXT,                       -- statement currency, nullable
   created_at    TEXT NOT NULL,
-  FOREIGN KEY (document_id) REFERENCES documents(id)
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_bank_statements_document ON bank_statements(document_id);
 
@@ -337,7 +347,7 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
   balance_after  REAL,                      -- content, nullable
   source_page    INTEGER,                   -- provenance (1-based) for quoting
   created_at     TEXT NOT NULL,
-  FOREIGN KEY (statement_id) REFERENCES bank_statements(id)
+  FOREIGN KEY (statement_id) REFERENCES bank_statements(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_statement ON bank_transactions(statement_id);
 
@@ -369,7 +379,7 @@ CREATE TABLE IF NOT EXISTS bank_corrections (
   old_value      TEXT,                   -- content
   new_value      TEXT,                   -- content
   created_at     TEXT NOT NULL,
-  FOREIGN KEY (transaction_id) REFERENCES bank_transactions(id)
+  FOREIGN KEY (transaction_id) REFERENCES bank_transactions(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_bank_corrections_transaction ON bank_corrections(transaction_id);
 
@@ -393,7 +403,10 @@ CREATE TABLE IF NOT EXISTS invoices (
   gross_total       REAL,                   -- content, nullable
   totals_reconciled INTEGER,                -- 1 reconciled / 0 not / NULL unchecked (validate_invoice_totals)
   created_at        TEXT NOT NULL,
-  FOREIGN KEY (document_id) REFERENCES documents(id)
+  -- ON DELETE CASCADE (document → invoices → line items) mirrors the bank chain: load-bearing on
+  -- fresh drives, with the explicit ordered delete in purgeDocumentDerivatives covering existing
+  -- ones (audit DATA-1).
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_invoices_document ON invoices(document_id);
 
@@ -408,7 +421,7 @@ CREATE TABLE IF NOT EXISTS invoice_line_items (
   line_total   REAL NOT NULL,               -- content
   currency     TEXT NOT NULL,
   created_at   TEXT NOT NULL,
-  FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+  FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_invoice_line_items_invoice ON invoice_line_items(invoice_id);
 

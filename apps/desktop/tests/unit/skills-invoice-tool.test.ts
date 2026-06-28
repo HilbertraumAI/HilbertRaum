@@ -107,6 +107,15 @@ describe('extractInvoice (conservative drops)', () => {
     expect(li).toEqual({ description: 'Flat service fee', lineTotal: 50, currency: 'EUR' })
   })
 
+  it('parseLineItem strips a leading service-/delivery-date column before the money scan (shared BL-1 fix)', () => {
+    // A line item that leads with a `dd.mm.yyyy` column: before BL-1, MONEY_RE read the date's `.20yy`
+    // tail as a price (`07.04.2026` → `07.04.20` → 704.20) and mis-set unitPrice; now the leading date
+    // is stripped, so the only price read is the real line total.
+    const li = parseLineItem('07.04.2026 Consulting   120,00', 'EUR')
+    expect(li).toEqual({ description: 'Consulting', lineTotal: 120, currency: 'EUR' })
+    expect(li?.unitPrice).toBeUndefined() // the date fragment is NOT mistaken for a unit price
+  })
+
   it('does not mistake a header/totals line for a line item (no figure invented)', () => {
     // "Gross Total" is a totals label, so it never becomes a line item; an unlabeled prose line with
     // no money is dropped.

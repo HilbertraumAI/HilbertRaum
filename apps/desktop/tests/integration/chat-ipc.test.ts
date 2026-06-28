@@ -53,9 +53,10 @@ function gatedRuntime(): { runtime: ModelRuntime; release: () => void; started: 
   return { runtime, release, started }
 }
 
-function makeCtx(db: Db, runtime: ModelRuntime | null): AppContext {
+function makeCtx(db: Db, runtime: ModelRuntime | null, unlocked = true): AppContext {
   return {
     db,
+    workspace: { isUnlocked: () => unlocked },
     runtime: { active: () => runtime, activeModelId: () => runtime?.modelId ?? null }
   } as unknown as AppContext
 }
@@ -75,6 +76,29 @@ describe('registerChatIpc', () => {
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, null))
     await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(/No AI model is running/)
+  })
+
+  it('surfaces the friendly localized lock message on a locked-vault chat call, not the raw engine string (API-1)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const { runtime } = gatedRuntime()
+    // A locked workspace: every DB-touching handler must refuse with the friendly localized
+    // copy BEFORE it reaches `ctx.db` (which would otherwise throw the raw English
+    // "Workspace is locked — unlock it first." from the vault getter).
+    registerChatIpc(makeCtx(db, runtime, /* unlocked */ false))
+
+    // A representative DB-touching handler from each shape: list, send (the stream path), delete.
+    await expect(invoke(handlers, IPC.listConversations)).rejects.toThrow(
+      'Workspace is locked. Unlock it to chat.'
+    )
+    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(
+      'Workspace is locked. Unlock it to chat.'
+    )
+    await expect(invoke(handlers, IPC.deleteConversation, conv.id)).rejects.toThrow(
+      'Workspace is locked. Unlock it to chat.'
+    )
+    // None of these reached the raw engine string the vault getter throws.
+    await expect(invoke(handlers, IPC.listConversations)).rejects.not.toThrow(/unlock it first/i)
   })
 
   it('rejects an empty message and an unknown conversation', async () => {
@@ -120,6 +144,7 @@ describe('registerChatIpc', () => {
 
     const ctx = {
       db,
+      workspace: { isUnlocked: () => true },
       embedder: createMockEmbedder(),
       runtime: { active: () => null, activeModelId: () => null }
     } as unknown as AppContext

@@ -42,6 +42,14 @@ export interface ParseContext {
   /** Directory for transient content files the parse may create (storeDir). */
   workDir?: string
   /**
+   * Cancellation for a long/unbounded parse (REL-1). Additive — the text parsers (which
+   * are bounded by the ingestion wall-clock `withParseTimeout`) ignore it. The AudioParser
+   * forwards it to the transcriber so cancelling an import KILLS the in-flight whisper
+   * child mid-transcription instead of waiting it out. Absent → no caller-driven abort
+   * (the transcriber's own inactivity watchdog still bounds a wedged child).
+   */
+  signal?: AbortSignal
+  /**
    * OCR engine for photo imports. Optional AND nullable: absent/null means a photo
    * FILE fails friendly with the needs-the-OCR-files copy — text ingestion is
    * unaffected (graceful-fallback rule).

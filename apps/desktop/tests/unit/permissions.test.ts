@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   installPermissionRequestHandler,
+  installPermissionCheckHandler,
+  type PermissionCheckDetails,
+  type PermissionCheckSessionLike,
   type PermissionRequestDetails,
   type PermissionSessionLike
 } from '../../src/main/services/permissions'
@@ -91,5 +94,90 @@ describe('installPermissionRequestHandler', () => {
 
     decision(handler, ownWebContents, 'media', { mediaTypes: ['audio'] })
     expect(onDeny).toHaveBeenCalledTimes(1) // the grant did not report
+  })
+})
+
+// SEC-2 (backend-audit-2026-06-27): Electron's SYNCHRONOUS permission-check path
+// (`navigator.permissions.query`, the internal pre-getUserMedia check) is independent of the
+// request path and ALSO defaults to grant when no handler is installed. The check handler must
+// mirror the request handler exactly — deny-by-default, audio-only `media` from the app's own
+// WebContents — using the SAME grant predicate so the two can never drift. Note the check path
+// carries a SCALAR `mediaType` (not the request path's `mediaTypes` array).
+
+type CheckHandler = (
+  webContents: unknown,
+  permission: string,
+  requestingOrigin: string,
+  details: PermissionCheckDetails
+) => boolean
+
+function fakeCheckSession(): {
+  session: PermissionCheckSessionLike
+  getHandler: () => CheckHandler
+} {
+  let handler: CheckHandler | null = null
+  return {
+    session: {
+      setPermissionCheckHandler(h) {
+        handler = h as CheckHandler
+      }
+    },
+    getHandler: () => {
+      if (!handler) throw new Error('no check handler installed')
+      return handler
+    }
+  }
+}
+
+describe('installPermissionCheckHandler', () => {
+  const ORIGIN = 'file://'
+
+  it('denies every permission check when no microphone allow is configured', () => {
+    const { session, getHandler } = fakeCheckSession()
+    installPermissionCheckHandler(session)
+    const handler = getHandler()
+    for (const permission of ['media', 'geolocation', 'notifications', 'clipboard-read', 'unknown-future']) {
+      expect(handler({}, permission, ORIGIN, { mediaType: 'audio' })).toBe(false)
+    }
+  })
+
+  it('grants an audio media check from exactly the allowed WebContents', () => {
+    const { session, getHandler } = fakeCheckSession()
+    const ownWebContents = { id: 'main-window' }
+    installPermissionCheckHandler(session, { allowMicrophoneFor: ownWebContents })
+    expect(getHandler()(ownWebContents, 'media', ORIGIN, { mediaType: 'audio' })).toBe(true)
+  })
+
+  it('denies a NON-audio permission check (the SEC-2 boundary)', () => {
+    const { session, getHandler } = fakeCheckSession()
+    const ownWebContents = { id: 'main-window' }
+    installPermissionCheckHandler(session, { allowMicrophoneFor: ownWebContents })
+    const handler = getHandler()
+
+    // Same allowed WebContents, but not an audio media check → denied.
+    expect(handler(ownWebContents, 'media', ORIGIN, { mediaType: 'video' })).toBe(false)
+    expect(handler(ownWebContents, 'media', ORIGIN, { mediaType: 'unknown' })).toBe(false)
+    expect(handler(ownWebContents, 'media', ORIGIN, {})).toBe(false) // unverifiable scope
+    expect(handler(ownWebContents, 'geolocation', ORIGIN, { mediaType: 'audio' })).toBe(false)
+    expect(handler(ownWebContents, 'notifications', ORIGIN, {})).toBe(false)
+    // Audio, but the wrong requester (e.g. a null/foreign WebContents) → denied.
+    expect(handler({ id: 'other' }, 'media', ORIGIN, { mediaType: 'audio' })).toBe(false)
+    expect(handler(null, 'media', ORIGIN, { mediaType: 'audio' })).toBe(false)
+  })
+
+  it('check and request agree: both grant audio, both deny video, from the app WebContents', () => {
+    const ownWebContents = { id: 'main-window' }
+
+    const req = fakeSession()
+    installPermissionRequestHandler(req.session, { allowMicrophoneFor: ownWebContents })
+    const chk = fakeCheckSession()
+    installPermissionCheckHandler(chk.session, { allowMicrophoneFor: ownWebContents })
+
+    // Audio: both allow.
+    expect(decision(req.getHandler(), ownWebContents, 'media', { mediaTypes: ['audio'] })).toBe(true)
+    expect(chk.getHandler()(ownWebContents, 'media', ORIGIN, { mediaType: 'audio' })).toBe(true)
+    // Video: both deny.
+    expect(decision(req.getHandler(), ownWebContents, 'media', { mediaTypes: ['video'] })).toBe(false)
+    expect(chk.getHandler()(ownWebContents, 'media', ORIGIN, { mediaType: 'video' })).toBe(false)
   })
 })

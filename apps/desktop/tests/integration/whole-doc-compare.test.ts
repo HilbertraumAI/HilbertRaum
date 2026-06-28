@@ -318,9 +318,10 @@ describe('persistence — node vectors survive a reopen (whole-file encrypted at
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) {
       const vec = decodeVector(row.embedding_blob, row.dimensions)
-      expect(vec).toHaveLength(384)
+      expect(vec).not.toBeNull()
+      expect(vec!).toHaveLength(384)
       let norm = 0
-      for (const x of vec) norm += x * x
+      for (const x of vec!) norm += x * x
       expect(norm).toBeGreaterThan(0) // a real, non-zero vector round-tripped
     }
   })

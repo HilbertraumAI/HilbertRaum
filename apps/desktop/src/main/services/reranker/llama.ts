@@ -1,5 +1,7 @@
 import type { Reranker, RerankedHit, RerankOptions } from './index'
 import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
+import { maxInputApproxTokens } from '../runtime/context-budget'
+import { truncateToApproxTokens } from '../ingestion/chunker'
 
 // Real on-device reranker (rag-design §11). The THIRD `LlamaServer`
 // composition (after the chat runtime and the E5 embedder): the SAME shipped b9585
@@ -18,19 +20,21 @@ import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime
 
 const DEFAULT_CONTEXT_TOKENS = 2048
 /**
- * Same word→BPE-token safety margin as the E5 embedder: inputs are sized in
- * whitespace words, the sidecar context is real tokens (≈1.4 tokens/word for English).
+ * Approx-token caps per rerank FIELD (rag-design §12.3). A rerank task is ONE query+document
+ * pair that the server combines into a SINGLE sequence, so the combined cost must fit the
+ * context: (160 + 320) approx tokens × REAL_TOKENS_PER_APPROX_TOKEN ≈ 1056 real tokens, well
+ * under 2048. The doc cap also bounds CPU latency per candidate (the reranker is CPU-pinned).
+ *
+ * EMB-1 (backend audit 2026-06-27): inputs are truncated by the CJK/Thai-aware
+ * `truncateToApproxTokens` (shared with the E5 embedder), NOT a whitespace word split. The old
+ * split treated a space-less passage (CJK/Thai) as ONE "word" and never truncated it, so it
+ * overflowed `n_ctx`, the sidecar 500'd, and the rerank silently fell back to the fused order.
+ * The constructor clamps these caps to the context budget so they can never exceed `n_ctx`.
  */
-const TOKENS_PER_WORD_ESTIMATE = 1.4
-/**
- * Word caps per rerank input (rag-design §12.3): each rerank task is ONE
- * query+document pair, so (160 + 320) × 1.4 + specials ≈ 700 real tokens. The doc cap
- * chiefly bounds CPU latency per candidate (the reranker is CPU-pinned).
- * NOTE: ~700 tokens exceeds llama-server's DEFAULT physical batch of 512 in
- * embedding mode — see the --batch-size args in `ensureStarted`.
- */
-const MAX_QUERY_WORDS = 160
-const MAX_DOC_WORDS = 320
+const MAX_QUERY_APPROX_TOKENS = 160
+const MAX_DOC_APPROX_TOKENS = 320
+/** Approx-token headroom reserved for BOS/EOS + the query↔document separator the server inserts. */
+const RERANK_SPECIALS_APPROX_TOKENS = 16
 /** Per-request bound so a wedged sidecar fails the question's rerank pass, not the app. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 
@@ -53,13 +57,12 @@ interface RerankResponse {
   results?: Array<{ index?: number; relevance_score?: number }>
 }
 
-function truncateWords(text: string, maxWords: number): string {
-  const words = text.split(/\s+/).filter((w) => w.length > 0)
-  return words.length <= maxWords ? text : words.slice(0, maxWords).join(' ')
-}
-
 export class LlamaReranker implements Reranker {
   readonly id: string
+  /** Per-field approx-token truncation caps, clamped to the context so query+doc can't exceed
+   *  n_ctx (EMB-1). Computed once from `contextTokens` in the constructor. */
+  private readonly queryApproxTokens: number
+  private readonly docApproxTokens: number
   private server: LlamaServer | null = null
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
@@ -74,6 +77,14 @@ export class LlamaReranker implements Reranker {
 
   constructor(private readonly opts: LlamaRerankerOptions) {
     this.id = opts.id
+    // Query+document ride ONE sequence server-side, so derive the per-field caps from the SHARED
+    // context budget (so they can never exceed n_ctx), then clamp to the latency-oriented
+    // defaults. At the default 2048 context this yields exactly 160/320 — no behaviour change for
+    // ordinary inputs; a smaller configured context shrinks the caps so a rerank can't 500.
+    const contextTokens = opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
+    const usable = Math.max(2, maxInputApproxTokens(contextTokens) - RERANK_SPECIALS_APPROX_TOKENS)
+    this.queryApproxTokens = Math.min(MAX_QUERY_APPROX_TOKENS, Math.max(1, Math.floor(usable / 3)))
+    this.docApproxTokens = Math.min(MAX_DOC_APPROX_TOKENS, Math.max(1, usable - this.queryApproxTokens))
   }
 
   /** Lazily spawn the rerank sidecar (once). Concurrent callers share one start. */
@@ -98,8 +109,8 @@ export class LlamaReranker implements Reranker {
         // "embeddings enabled
         // with n_batch (2048) > n_ubatch (512) ... setting n_batch = n_ubatch = 512").
         // A rerank input is query+document in ONE sequence — up to
-        // (MAX_QUERY_WORDS + MAX_DOC_WORDS) words ≈ 670 real tokens — so the 512 default
-        // makes the server 500 the WHOLE request ("input (… tokens) is too large to
+        // (MAX_QUERY_APPROX_TOKENS + MAX_DOC_APPROX_TOKENS) approx tokens ≈ 1056 real tokens — so
+        // the 512 default makes the server 500 the WHOLE request ("input (… tokens) is too large to
         // process. increase the physical batch size"), which would silently drop every
         // rerank pass back to the fused order on real-length chunks. Sizing the physical
         // batch to the context guarantees any in-context input decodes in one ubatch (a
@@ -140,8 +151,9 @@ export class LlamaReranker implements Reranker {
   }
 
   /**
-   * Score every document against `query` via `/v1/rerank`. Inputs are word-truncated
-   * to the context/latency budget; the response's `results[].index` maps each score
+   * Score every document against `query` via `/v1/rerank`. Inputs are truncated to the
+   * context/latency budget by the CJK/Thai-aware `truncateToApproxTokens` (EMB-1 — a space-less
+   * passage can't slip past and overflow n_ctx); the response's `results[].index` maps each score
    * back to its input (the server sorts by score desc — order is NOT input order).
    * Throws unless every input received exactly one score. `opts.signal` (a user "Stop")
    * is combined with the timeout so the CPU-slow rerank cancels promptly (M-C5).
@@ -154,8 +166,8 @@ export class LlamaReranker implements Reranker {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model: this.id,
-        query: truncateWords(query, MAX_QUERY_WORDS),
-        documents: documents.map((d) => truncateWords(d, MAX_DOC_WORDS))
+        query: truncateToApproxTokens(query, this.queryApproxTokens),
+        documents: documents.map((d) => truncateToApproxTokens(d, this.docApproxTokens))
       }),
       signal: combineSignals(opts?.signal, this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
     })

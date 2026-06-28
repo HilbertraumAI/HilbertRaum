@@ -405,6 +405,35 @@ function deleteBankStatementsForDocument(db: Db, documentId: string): void {
   db.prepare('DELETE FROM bank_statements WHERE document_id = ?').run(documentId)
 }
 
+/**
+ * Delete every `invoices` row for a document plus its line items in FK order. Mirrors
+ * `deleteBankStatementsForDocument` for the second Tier-2 content domain (the invoice path has no
+ * re-extract "replace" today, but document teardown needs the same authoritative ordered delete).
+ * Runs inside the caller's transaction.
+ */
+function deleteInvoicesForDocument(db: Db, documentId: string): void {
+  db.prepare(
+    `DELETE FROM invoice_line_items WHERE invoice_id IN (
+       SELECT id FROM invoices WHERE document_id = ?)`
+  ).run(documentId)
+  db.prepare('DELETE FROM invoices WHERE document_id = ?').run(documentId)
+}
+
+/**
+ * Delete ALL Tier-2 skill extraction rows (bank statements + invoices and their dependent
+ * transactions / corrections / line items) for a document, in FK order. The single authoritative
+ * list of skill-domain rows that hang off a document, so document teardown
+ * (`ingestion/index.ts` `purgeDocumentDerivatives`) can't orphan them or hit an FK violation on the
+ * final `DELETE FROM documents` (audit DATA-1 / MAINT-1). The bank/invoice→documents FKs carry NO
+ * `ON DELETE CASCADE` on drives created before that fix, so this explicit ordered delete — not a
+ * cascade — is what keeps deletion safe there. Runs inside the caller's transaction; touches
+ * ids/figures only (the CONTENT-CLASS rows are never logged/audited).
+ */
+export function purgeSkillDataForDocument(db: Db, documentId: string): void {
+  deleteBankStatementsForDocument(db, documentId)
+  deleteInvoicesForDocument(db, documentId)
+}
+
 /** Load a statement's transactions in stable row order (null columns omitted, not passed as null). */
 function loadTransactions(db: Db, statementId: string): LoadedTransaction[] {
   const rows = db

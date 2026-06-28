@@ -10,6 +10,7 @@ import {
   singlePassPrompt
 } from '../doctasks/summary'
 import type { ModelSlotArbiter } from './model-slot-arbiter'
+import { evictSummaryCache } from './summary-cache'
 
 // The ingest-time hierarchical summary tree builder (whole-document-analysis plan §4.1).
 // Pack a document's chunks (in chunk_index order) into groups; summarize each group into
@@ -368,5 +369,12 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
     nowIso(),
     documentId
   )
+  // Opportunistic housekeeping (backend-audit-2026-06-27 DATA-3/MAINT-3): this build just
+  // wrote fresh summary_cache rows; the cache carries no document_id and survives tree/doc
+  // deletion, so nothing else ever prunes it. Bound its growth here — once per build, never
+  // per row — by evicting the oldest rows past the row-count cap. It is a cache: an evicted
+  // row only costs a future re-summarize. Not inside a transaction; content-free (row counts
+  // only, never reads/logs summary_text).
+  evictSummaryCache(db)
   return meta
 }

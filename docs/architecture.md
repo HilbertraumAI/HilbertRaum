@@ -1,6 +1,6 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-06-20. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
+_Last updated: 2026-06-28. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. The transcriber/dictation/OCR sections carry the backend-audit-2026-06-27 cancellation & timeout records (REL-1/2/3/6). Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
 
 ## Overview
 
@@ -207,13 +207,31 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   files — strictly shortening plaintext lifetime. **New data contract:** `prepareDocument` /
   `finalizeDocument` / `PreparedDocument` are exported alongside `processDocument`.
 
-**OCR (`services/ocr/pipeline.ts`, `services/ocr/rasterizer.ts`).**
+**OCR (`services/ocr/pipeline.ts`, `services/ocr/rasterizer.ts`, `services/ocr/page-cap.ts`).**
 - **ING-5 — 1-deep render/recognize look-ahead.** OCR rendered page N (pdfjs, hidden window) then
   awaited recognize(N) (WASM tesseract) before rendering N+1 — two different engines run strictly
   serially. A new pure `pipelinePages(pageCount, renderPage, onPage, opts)` helper renders page N+1
   **while** page N recognizes, keeping recognitions serial and in order. Memory stays bounded (at most
   one extra rendered PNG resident); page ordering, progress %, and cancellation are unchanged. The
   helper is Electron-free so it is unit-testable with fake render/recognize functions.
+- **REL-4 — per-page PNG byte cap (backend-audit-2026-06-27).** The hidden window caps render
+  *dimensions* at `MAX_RENDER_PIXELS` (4096/side), but the *encoded* PNG it returned over IPC was
+  previously unbounded — unlike the vision subsystem, which enforces `VISION_MAX_IMAGE_BYTES`. With
+  the 1-deep look-ahead holding up to **two** page PNGs resident, a crafted PDF rasterising near the
+  worst case across many pages could drive main-process memory. `services/ocr/page-cap.ts`
+  (`assertPageWithinByteCap`, `OCR_MAX_PAGE_PNG_BYTES`, electron-free + unit-tested) now rejects an
+  over-cap page the moment the rasterizer receives it — before it is handed to recognition or held
+  behind the look-ahead — and the OCR task downgrades to a friendly failure. The cap is **96 MiB**,
+  sized to the WORST CASE of a *legitimate* page (a 4096×4096 RGBA bitmap is 64 MiB raw and a
+  near-incompressible scan PNG-encodes to about that), **not** the vision path's 20 MiB, which would
+  reject real dense color scans; env-overridable via `HILBERTRAUM_MAX_OCR_PAGE_BYTES`. (The vision
+  vs OCR caps differ on purpose: vision images are arbitrary user files, OCR pages are bounded by
+  the render-dimension cap, so their worst cases — and thus their byte ceilings — differ.)
+- **SEC-3 — navigation guard on the hidden window.** The rasterizer's worker window renders
+  untrusted PDF bytes; it denies window-open and, via `installNavigationGuard(win.webContents,
+  () => false)` (`services/navigation-guard.ts`), **all** navigation on both `will-navigate` *and*
+  `will-redirect` (see security-model.md — a redirect reaches a remote origin without firing
+  `will-navigate`).
 
 **Grounded-answer prompt (`services/rag/index.ts`).**
 - **RT-2 — cacheable grounding prompt (updates §17 (a) to implemented).** The stable grounding rules +
@@ -374,7 +392,13 @@ Condensed from `docs/performance-audit-2026-06-18.md` §4 after Wave P5 shipped 
   dirs/files take the cheap `Dirent` path; a symlink (or any special entry) falls back to
   `statSync(full)`, reproducing the exact link-following expansion set. Tests prove a dir-symlink is
   still walked and a file-symlink still added (skipped where the OS denies symlink creation, e.g.
-  Windows without the privilege). **SKIPPED — the optional cross-call cache** (reuse the preflight's
+  Windows without the privilege). **Symlink-cycle guard (backend audit 2026-06-27, REL-9):** the
+  link-following fallback above could recurse forever on a self-referential tree (`a/loop -> ..`),
+  so `walk()` now tracks the `realpathSync` of every directory on the *current recursion path* in a
+  Set and skips a directory whose real path is already an ancestor. This terminates the cycle while
+  keeping every acyclic walk's expansion set byte-identical (a symlink to a *distinct* directory is
+  not an ancestor → still followed). Teeth: a junction cycle re-adds the same file 64× without the
+  guard, exactly once with it. **SKIPPED — the optional cross-call cache** (reuse the preflight's
   expansion on import to avoid the second walk): preflight and import are separate IPC calls and the
   filesystem can change between them, so a cross-call cache carries a real staleness risk for a modest
   gain; the per-walk syscall win is the safe, unconditional part.
@@ -394,6 +418,17 @@ Condensed from `docs/performance-audit-2026-06-18.md` §4 after Wave P5 shipped 
   better (same one parse, tiny payload), and only reading a huge doc page-by-page re-parses per "Show
   more" — bounded to one parse per interaction (what the old code paid up front). `requireNotProcessing`
   + deterministic parse keep `totalSegments`/slices stable across page calls.
+- **Preview cap stack (backend audit 2026-06-27, REL-5 / MAINT-4).** The preview re-parse formerly
+  threaded *none* of the ingest cap stack (only `maxPages`, and only in layout mode), so a pathological
+  but already-indexed file (e.g. a 4000-page PDF) could wedge the main process on a "Show more" where
+  import would have killed it. Both `extractDocumentPreview` and `extractDocumentPreviewPage` now route
+  the re-parse through the **single `parseWithLimits(parser, source, ctx, limits)` decorator** shared
+  with the ingest path (`prepareDocument`) — the ONE cap-enforcement point (MAINT-4). It injects
+  `maxPages` + `maxInflatedBytes` from the resolved `IngestionLimits` and applies the wall-clock parse
+  timeout (audio exempt — its `signal` + the transcriber watchdog bound it instead); the byte ceiling
+  stays the ingest path's pre-selection stat (the preview reads the already-import-capped stored copy).
+  The ingest path is byte-for-byte unchanged (the decorator injects the same caps it set inline before);
+  `ExtractPreviewOptions.limits` is a test seam to dial the caps down.
 
 Deferred with explicit, unmet triggers (recorded, not built): P4b worker/`SharedArrayBuffer` scan
 (trigger: cached main-thread scan >100 ms routinely; measured ≤70 ms @10k chunks), P4c ANN/sqlite-vec
@@ -765,6 +800,21 @@ it fails with friendly convert-to-WAV/MP3 copy.
   carries the transcript, which must never ride an error message into logs).
   `suspend()` (workspace lock) and `stop()` (will-quit) kill in-flight children; the
   failing parse marks that document `failed` and the decrypted transient is shredded.
+- **Cancellation & watchdog (backend audit 2026-06-27, REL-1/REL-6).** Audio is EXEMPT
+  from the wall-clock `withParseTimeout` (a long recording legitimately transcribes for
+  many minutes), so two mechanisms bound a wedged/cancelled child instead: **(1) an
+  inactivity watchdog** in `run()` — whisper emits `-pp` progress continuously, so the
+  watchdog is reset on every stdout/stderr chunk and only fires when the child has been
+  completely silent for `idleTimeoutMs` (default 15 min, `HILBERTRAUM_WHISPER_IDLE_TIMEOUT_MS`),
+  distinguishing a spinning/hung child (no output → killed + rejected) from a slow-but-
+  advancing one (keeps resetting); **(2) a real `AbortSignal`** now threaded end-to-end
+  (`IngestionDeps.signal` → `ParseContext.signal` → `AudioParser` → `transcribe`), so the
+  import loop aborts the in-flight transcription the moment the workspace locks mid-job
+  (`registerDocsIpc` per-job `AbortController`; belt-and-suspenders with `suspend()`). The
+  previously-dead abort listener in `run()` is now armed. **REL-6:** `TranscribeOptions.workDir`
+  is now **required** (no OS-tmpdir default) — the transient transcript is recognised speech
+  (content) and must stay inside the `.parse` crash sweep; an empty `workDir` fails closed
+  before any spawn. The watchdog/timeout errors carry only durations, never any transcript.
 - **`AudioParser` implements `DocumentParser`.** `parse(filePath, ctx)` uses the
   transcriber injected per call via the ADDITIVE `ParseContext` (carried from
   `IngestionDeps.transcriber` — the embedder-injection precedent; text parsers ignore
@@ -818,6 +868,14 @@ explicitly out of scope.
   (content-adjacent, like search); errors to the renderer are fixed friendly copy with
   the technical reason in the local log only. The OS mic indicator is the recording
   signal. Locked workspace needs no handling — the composer doesn't exist pre-unlock.
+- **Concurrency & timeout (backend audit 2026-06-27, REL-3).** whisper is not internally
+  serialized, so the handler holds a **single-flight guard**: a second `dictation:transcribe`
+  while one is in flight is rejected with friendly copy (`DICTATION_BUSY_MESSAGE`) BEFORE it
+  writes the temp WAV or spawns — rapid mic presses can't double-spawn. A **wall-clock
+  ceiling** (`maxDurationMs`, default 10 min, `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
+  `AbortController` whose signal is passed to `transcribe` — a wedged child is killed and the
+  mic spinner gets the friendly failure instead of hanging forever. The temp WAV is shredded
+  in `finally` on every path (success, refusal, timeout).
 - **Live in-input waveform (2026-06-13):** an in-app "recording started" cue. A read-only
   Web Audio `AnalyserNode` tap on the SAME `getUserMedia` stream (never wired to a
   destination, never touching the recorded bytes) is exposed as `DictationCapture.analyser`;
@@ -858,6 +916,16 @@ sentinel-tested), zero native deps.
   protocol is **pull-based** (`services/ocr/rasterizer.ts`): main requests one page at
   a time and recognition backpressures rendering, so a long scan never queues unbounded
   page images.
+- **Per-page timeout & recovery (backend audit 2026-06-27, REL-2).** A tesseract.js WASM
+  job is **not cooperatively cancellable** and recognitions are serialized through one
+  worker chain, so one crafted/huge image could wedge OCR for the whole session and Cancel
+  only landed between pages. `recognize()` now races `worker.recognize` against a per-page
+  timeout (`recognizeTimeoutMs`, default 2 min, `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`) **and**
+  the abort signal; on timeout OR mid-page abort the only real recovery is to `terminate()`
+  the worker (cleared → recreated lazily) and reject — which frees the serialized chain so
+  the next page proceeds with a fresh worker. A plain recognition error still leaves the
+  worker intact (unchanged). The OCR document task surfaces a timed-out page as a friendly
+  task failure (the recognition stays unpersisted; Cancel/redo unchanged).
 - **D33: OCR is NEVER automatic for PDFs.** Detection marks the row; "Make searchable
   (OCR)" runs as a **Phase-33 document task** (kind `'ocr'` — queue, progress
   "pages + 1", cancel; the D26 guards hold, but it needs the OCR engine instead of the
@@ -1061,7 +1129,10 @@ files**.
     (`--host 127.0.0.1 --port <random> --model <gguf> --ctx-size <n> --threads <n>` + optional extra
     args), polls `/health` with a **timeout** before reporting ready (never hangs on a wedged server),
     exposes a loopback `fetch`, and `stop()` kills the child **and waits for exit** so no orphan
-    survives. A child that crashes or never gets healthy makes `start()` throw a clear error.
+    survives. A child that crashes or never gets healthy makes `start()` throw a clear error. The
+    spawn passes **`windowsHide: true`** (REL-7, backend-audit-2026-06-27) so this high-frequency
+    spawn (every model start — chat, embedder, reranker, vision all funnel through here) never
+    flashes a console window on Windows, matching the tar / transcriber / runtime-download spawns.
 - **`services/runtime/llama.ts`** — `LlamaRuntime implements ModelRuntime`, composing a `LlamaServer`.
   `chatStream` POSTs to the server's **OpenAI-compatible** `/v1/chat/completions` with `stream: true`,
   sending `messages` as plain role/content (the server applies the model's chat template — we never
@@ -1086,7 +1157,11 @@ adds is the safety machinery:
 - **`services/runtime/gpu.ts`** — `probeGpuDevices(binPath)` spawns the drive's own
   `llama-server --list-devices` (offline, no model, sub-second, kill-timeout-bounded (10 s);
   resolves on the child's `close` event so late-buffered stdout is never truncated; never
-  throws — any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested).
+  throws — any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested). The
+  spawn passes **`windowsHide: true`** (REL-7) so the once-per-session probe never flashes a
+  console window on Windows, and the child is **`unref()`'d** right after spawn (REL-8): the
+  probe is not tracked by `shutdown()`, so detaching it from the parent event loop means a
+  wedged/cold driver can never delay app quit — the probe's own 10 s kill-timeout still reaps it.
   `looksIntegrated(name)` is the conservative iGPU heuristic for the Phase-16 profile bump
   (covers Windows + RADV APU names and Meteor-Lake Arc). `createCachedGpuProbe()` memoizes per
   binary per session and exposes `invalidate()` (wired to "Try GPU again"). The ladder kicks
@@ -1648,7 +1723,10 @@ Three new tables; **`ON DELETE CASCADE` on both FKs of `document_collections` an
 `conversation_documents` is load-bearing (C4)**: `openDatabase` runs `PRAGMA foreign_keys = ON` and
 `deleteDocument` deletes the `documents` row directly, so without CASCADE a *pre-feature* app deleting
 a doc in a *post-feature* DB would hit an FK violation. CASCADE makes any build delete a doc cleanly
-and removes manual membership-cleanup ordering.
+and removes manual membership-cleanup ordering. (The later skills `bank_*`/`invoice_*` content tables
+needed the same treatment — backend audit 2026-06-27 DATA-1 — but since `CREATE TABLE IF NOT EXISTS`
+can't add CASCADE to an existing drive, `deleteDocument` ALSO does an explicit ordered delete of those
+rows in one transaction; see "Skills — design record" §10.)
 
 ```
 collections(id, name, type, description, builtin, color, created_at, updated_at,
@@ -1921,6 +1999,21 @@ and exposes no live capability. It is the minimal reference the gate tests exerc
 halves are pinned: `skills-tool-registry.test.ts` asserts it is registered; `skills-tool-run-ipc.test.ts`
 asserts `buildToolRunner` returns `null` for it — so removing it OR wiring it up both fail a test.)*
 
+*(Audit SEC-1, backend-audit 2026-06-27 Phase 6 — **the trust gate at the runnable-tools surface**.
+The `kind:'tool'` flip (§8) made a declared `allowedTools` effective for any non-instruction skill, and
+the run surface gated on enabled/compatibility/confirm but **not on `source`** — so the deliberate
+posture "**Tier-2 tools run for `source === 'app'` skills only**" is now enforced explicitly. A single
+named predicate `skillCanRunTools(skill)` (`tool-runs.ts`, `source === 'app'`) is the gate; it short-
+circuits `runnableToolNames` to `[]` for a non-app skill (so `listRunnableTools` + the run bar offer
+nothing) and is re-checked at `startSkillRun` (defense-in-depth: a **forged IPC** call with a user
+skill's id is refused with the generic, content-free `run.unavailable` string — no title/path leaks,
+audit posture intact). A user `kind:'tool'` skill still **keeps** its declared `allowedTools` (the
+parser is untouched) for a future per-tool grant UI — it just runs none of them until that UI exists.
+Full rationale in [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)" → SEC-1.
+**API-3:** the audit/run-state `documentCount` is the v1 constant `1` because every wired tool is
+single-document; an in-code TODO at `registerSkillsIpc.ts` marks that it must become a **real count**
+if a multi-document tool ever lands, else the audit would understate scope.)*
+
 ### §8 Bank-statement tools + the run seam (S11)
 
 S11 wires the first Tier-2 *feature*. The bank specifics live in
@@ -2075,6 +2168,62 @@ exported** (§9.5) — distinct from the non-secret skill packages. The **invoic
 parallel content-class tables `invoices` (header + totals + a `totals_reconciled` flag) +
 `invoice_line_items` (the line-item rows), with the same isolation; `skill_runs.result_ref` points at a
 `bank_statements.id` **or** an `invoices.id`, never inline content.
+
+**Deletion safety (backend audit 2026-06-27, DATA-1).** The bank/invoice tables reference `documents`
+(and their parents) — but the original S11a/S11c DDL omitted `ON DELETE CASCADE`, while `deleteDocument`
+deleted only chunks/embeddings/the row. With `foreign_keys = ON` that left the final `DELETE FROM
+documents` to throw `SQLITE_CONSTRAINT_FOREIGNKEY` *after* the file was shredded — a corrupt, undeletable
+document. Fixed two ways: (1) `deleteDocument` now purges every derivative in FK order inside **one
+transaction** — `ingestion/index.ts purgeDocumentDerivatives` (embeddings → chunks → tree_nodes) →
+`skills/run.ts purgeSkillDataForDocument` (bank_corrections → bank_transactions → bank_statements,
+invoice_line_items → invoices), the **single authoritative teardown list** (MAINT-1) reusing the
+re-extract delete — and shreds the workspace copy only **after** the commit; and (2) the schema now
+declares `ON DELETE CASCADE` down both chains, so a *fresh* DB stays safe even on a bare `DELETE FROM
+documents` (defense-in-depth for the next table). `CREATE TABLE IF NOT EXISTS` can't add the cascade to
+an **existing** drive, so there the explicit ordered delete is what's load-bearing — no table-rebuild
+migration (the ordered delete already closes the bug). Pinned by
+`tests/integration/document-delete-derivatives.test.ts` (real bank+invoice extractions deleted cleanly on
+a simulated pre-fix drive; teeth = the un-cascaded FK throws without the ordered delete; plus the
+fresh-schema cascade).
+
+**Financial-extraction correctness (backend audit 2026-06-27, Phase 2 — BL-1/BL-2/BL-3).** Parsing/
+aggregation-logic only; no schema or audit-payload change (figures stay content-class — never logged/
+audited/exported).
+- **BL-1 — value-date column (the LINE PARSER, `tools/bank-statement.ts parseLine` +
+  `tools/invoice.ts parseLineItem`).** A DACH statement row often prints BOTH a booking date
+  (Buchungstag) and a value date (Wertstellung/Valuta) as its first two columns. The shared `MONEY_RE`
+  reads a `dd.mm.20yy` date's `.20yy` tail as a 2-decimal amount (`07.06.2026` → `07.06.20` → 706.20),
+  so a value date left in the scanned remainder either became the row's first "money" match (empty
+  description → the row **silently dropped**) or fed a wrong figure as the amount. Fix: a shared
+  `tools/money.ts splitLeadingDates(line)` strips the **whole leading run** of date tokens before the
+  money scan (not just the first token); `parseLine` records the first as the booking `date` and a second
+  as the optional `valueDate` (schema/CSV already carry it), `parseLineItem` strips and discards (line
+  items have no date field). Capped at two leading dates (booking + value), stops at the first non-date
+  token (a description is never consumed), handles either column order. The money scanner's **last-token**
+  readers (`lastMoneyOnLine` / balance / invoice-total) take the trailing figure, so they were never
+  affected and are untouched. This is the **line-parser fallback** (plain-text statements, CSV, and the
+  invoice path — which has no geometry pass); the geometry layout's own out-of-column value-date handling
+  is §21 (the booking-date column model), a separate seam. Pinned by the 4-column `Buchung Valuta Betrag
+  Saldo` fixtures (`skills-bank-statement-tool.test.ts` unit + `skills-analysis-bank.test.ts` end-to-end);
+  teeth = reverting to the single-token strip drops/mis-values the rows.
+- **BL-2 — single-currency precondition on the completeness gate (`assessCompleteness` /
+  `isStatementComplete`) and `reconcileBalances`.** Both summed amounts across currencies: the gate tied
+  `opening + Σamounts == closing` and the reconcile chained `prevBalance + amount` regardless of currency,
+  so a mixed-currency statement could be mislabelled `complete`/`contradicted` or carry a spurious
+  per-row `mismatch`. Now both mirror `summarizeCashflow`'s `currencies.size === 1` guard:
+  `assessCompleteness` returns `'unverified'` for a mixed-currency statement (never claims a verdict from
+  a meaningless cross-currency sum) and `reconcileBalances` reports every row `unknown` (never reconciled).
+  `buildBankAnswer`'s honesty branches are **unchanged** — the mixed-currency answer was already gated on
+  `summary.currency` (the `noCurrency` branch), so the SKILL.md ⇔ TS parity contract
+  (`skills-skillmd-parity.test.ts`) holds without a wording change; the fix hardens the **public
+  predicates** a future caller might trust. Pinned by mixed-currency `assessCompleteness`/`reconcileBalances`
+  unit tests; teeth = removing either guard flips the verdict back.
+- **BL-3 — currency-blind `categoryTotals` (`analysis/bank-statement.ts`).** The per-category accumulator
+  keyed by category alone, summing signed amounts across currencies into one figure. Now keyed by
+  `(category, currency)` — each `CategoryTotal` carries its own currency and `buildBankAnswer` renders it
+  with `c.currency`. The breakdown is only ever rendered on the **single-currency branch** (so the live
+  output is byte-identical, confirmed by the unchanged category tests); the fix removes the latent
+  currency-blindness for any future reuse.
 
 ### §11 IPC / audit surface
 
@@ -2731,6 +2880,14 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
     `reduce`. Every figure is exactly 2-dp, so the cent sum is exact and the tie is an exact integer test
     — float drift over thousands of rows can no longer push the difference past `MONEY_EPS` and flip a
     genuinely-tying statement to a false `contradicted`. Read-time only; nothing persisted changes.
+  - **Single-currency precondition (backend audit 2026-06-27, BL-2).** The tie sums every amount into one
+    figure against a single opening/closing pair, so `assessCompleteness` first returns `'unverified'`
+    when the rows span more than one currency (a cross-currency Σ is meaningless), and `reconcileBalances`
+    reports a mixed-currency statement all-`unknown` — both mirroring `summarizeCashflow`'s
+    `currencies.size === 1` guard. `buildBankAnswer`'s mixed-currency branch (already gated on
+    `summary.currency` → no single total) is unchanged, so the change only hardens the public predicates;
+    the §10 record carries the full note. Also BL-1's value-date column fix lives in the **line parser**
+    (`parseLine`, §10), distinct from the geometry booking-date column model below.
   - **`Kontostand per` date disambiguation (audit C-4, 2026-06-26).** Because the same label prints both
     balances, `extractStatementBalances` resolves it by DATE: with two distinct-dated `Kontostand per`
     lines the **earliest** is the opening and the **latest** is the closing; a **single** such line (no
@@ -3123,6 +3280,111 @@ never logged / audited / echoed — only ids/counts cross the IPC/audit boundary
 `{skillId, toolName, documentCount}`; schema changes are additive; the Tier-2 gate gained **no new
 DB/FS/net capability**; i18n parity is compile-enforced (LLM prompts stay English).
 
+**Backend-audit 2026-06-27 follow-ups on this surface (Phase 6 — SEC-1 / API-3).** A later backend
+audit re-examined the same skills surface and landed two dispositions, recorded in §7 (full rationale
+in [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)" → SEC-1): **SEC-1** — the
+run/runnable surface now gates on `source` via `skillCanRunTools(skill)` (`source === 'app'`), so
+**Tier-2 tools run for built-in app skills only**; a user-imported `kind:'tool'` skill may declare
+`allowedTools` (kept for a future per-tool grant UI) but runs none until that UI exists — enforced at
+`runnableToolNames` (the choke point) and re-checked at `startSkillRun` (forged-IPC defense, content-
+free refusal). **API-3** — `documentCount` stays the v1 constant `1` (single-document tools) with an
+in-code TODO to make it a real count if a multi-document tool lands. The §22 posture above is
+unchanged (no new capability; audit payload still `{skillId, toolName, documentCount}`).
+
+### §24 Backend audit (2026-06-27) — remediation close-out
+
+A **multi-persona read-only backend audit** (report `audits/backend-audit-2026-06-27.md`, HEAD `c26d361`)
+swept the Electron **main process** + shared/preload of `apps/desktop` — crypto/vault, the data layer, the
+full IPC surface, ingestion/parsers, RAG/analysis, doctasks/skills, runtime/downloads, OCR/transcriber/vision,
+embeddings/reranker — focusing on what the five prior rounds did **not** cover.
+**2 High · 9 Medium · 14 Low · 8 Info; no Critical, no remote-exploitable issue** (offline by construction).
+**All 8 remediation phases are landed** on branch `backend-audit-2026-06-27-fixes`. Both the working-paper
+plan (`docs/backend-audit-2026-06-27-remediation-plan.md`) and the audit report
+(`audits/backend-audit-2026-06-27.md`) were **deleted** under the CLAUDE.md doc-lifecycle rule once every
+finding was dispositioned — each phase's decisions were folded into the topic-doc §§ as it landed, and the
+report's lasting content (the per-finding dispositions, the **verified-clean inventory**, and the accepted
+residuals) lives in **this section**. Both files stay **recoverable in git history**. This ledger is the
+durable index — resolve a code comment's `audit <ID>` citation through it:
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **DATA-1** (High), DOC-1, MAINT-1, TEST-1 | 1 | atomic-txn `deleteDocument`: ordered `purgeDocumentDerivatives` → `purgeSkillDataForDocument` (bank/invoice rows) **before** the row delete, stored copy shredded **after** commit; fresh schemas also declare full-chain `ON DELETE CASCADE`; teeth-verified extract-then-delete test | arch §10; known-lim §39–46; rag-design `deleteDocument` row |
+| **BL-1** (High), TEST-2 | 2 | shared `money.ts splitLeadingDates` strips the whole leading date run (booking + value date) before the money scan in `parseLine`/`parseLineItem` — value-date column no longer dropped/mis-valued | arch §10 (line parser) / §21 (layout) |
+| BL-2 (Med), TEST-6 | 2 | `assessCompleteness`/`reconcileBalances` return `unverified` unless single-currency (mirrors `summarizeCashflow`) | arch §10 |
+| BL-3 (Low) | 2 | `categoryTotals` keyed by `(category, currency)` | arch §10 |
+| REL-1 (Med), TEST-4 | 3 | `AbortSignal` threaded `ParseContext`→`AudioParser`→`transcribe` + whisper idle watchdog; per-job abort | arch "Audio transcription" |
+| REL-2 (Med) | 3 | per-page OCR `Promise.race` timeout + terminate-and-recreate worker on timeout/abort | arch "Scanned-PDF / photo OCR" |
+| REL-3 (Med) | 3 | dictation single-flight guard + wall-clock abort | arch "Voice dictation" |
+| REL-6 (Low) | 3 | `TranscribeOptions.workDir` now **required** — no OS-tmpdir fallback outside the crash sweep | arch "Audio transcription" |
+| REL-5 (Med), MAINT-4 | 4 | one `parseWithLimits(parser, source, ctx, limits)` decorator across **every** parse entry point; preview gains `maxPages`/`maxInflatedBytes`/wall-clock timeout (ingest byte-for-byte unchanged) | rag-design §2 (cap stack); arch "Document ingestion" |
+| REL-9 (Low) | 4 | `expandPaths` symlink-cycle guard via recursion-path `realpathSync` Set | arch "Document ingestion" |
+| REL-10 (Low) | 4 | `resolvePageYear` single-pass y-range fold (no `Math.max(...spread)`) | arch §21 |
+| BL-5 (Info) | 4 | ragged-CSV overflow cells kept under `colN:` (no silent truncation) | rag-design §2 |
+| RAG-1 (Med), TEST-3 | 5 | `coverageWhole` gated on `fullyChunked && scannedChunks >= totalChunks` — a multi-doc partial scope falls to "sections scanned" | rag-design §14.5 |
+| EMB-1 (Med), MAINT-2, TEST-5 | 5 | reranker drops naive `truncateWords` for the shared CJK/Thai-aware `truncateToApproxTokens`, per-field caps clamped to the context budget (no silent 500 on space-less input) | rag-design §12.4 |
+| DATA-2 (Low), EMB-2, TEST-7 | 5 | truncated-blob guard moved **into** `decodeVector` (`Float32Array \| null`) so all call sites skip a corrupt row uniformly | rag-design §12.4 |
+| EMB-4 (Info), MAINT-5 | 5 | module-load LE-endianness assert in `codec.ts` | rag-design §12.4 |
+| **SEC-1** (Med), DOC-5, TEST-8 | 6 | **DECISION: gate Tier-2 tools to APP skills** — `skillCanRunTools(skill)` = `source === 'app'` at `runnableToolNames` + re-check at `startSkillRun`; a user `kind:tool` skill keeps declared `allowedTools` (future per-tool grant UI) but runs none | arch §7/§23; security-model "Skill tool ceiling (Tier-2)" |
+| API-3 (Info) | 6 | `documentCount` left the v1 constant `1` + in-code TODO (no behaviour change) | arch §7/§23 |
+| SEC-2 (Low) | 7 | `installPermissionCheckHandler` mirrors the request handler via one shared `grantsMicrophone` predicate | security-model |
+| SEC-3 (Low) | 7 | `installNavigationGuard` attaches one deny-predicate to **both** `will-navigate` + `will-redirect` (main shell-only; OCR window deny-all) | security-model |
+| SEC-6 (Low) | 7 | `validateAnalyzeRequest` rejects a claimed png/jpeg with a `null` pixel count (`decodeFailed`) instead of byte-cap-only | security-model; arch (vision) |
+| REL-4 (Med) | 7 | OCR page PNG byte cap (`assertPageWithinByteCap`, `OCR_MAX_PAGE_PNG_BYTES` = 96 MiB) | arch "Scanned-PDF / photo OCR" |
+| REL-7 (Low) | 7 | `windowsHide: true` on the sidecar + GPU-probe spawns | arch (runtime) |
+| REL-8 (Low) | 7 | `child.unref()` on the GPU probe so a wedged probe can't delay app quit | arch (runtime) |
+| API-1 (Low) | 8 | `requireUnlocked()` preamble (new `main.chat.locked` i18n key) on every DB-touching chat handler | registerChatIpc — parity w/ docs/collections/doctasks |
+| DATA-3 (Info), MAINT-3 | 8 | **DECISION: row-count eviction** — `evictSummaryCache` deletes oldest rows past `SUMMARY_CACHE_MAX_ROWS` (50 000), called once per `buildTree`, content-free counter | known-lim "Document tasks & summaries" |
+| DOC-2 (Info) | 8 | rag-design "Cap" rewritten to over-cap **rejection** (`main.ingest.tooManyChunks`), not silent truncation | rag-design §14.1 |
+| DOC-3 (Low) | 8 | E5 no-prefix retrieval **ceiling** surfaced (floor stays 0; reranker load-bearing) | known-lim "Retrieval quality" |
+| DOC-4 (Info) | 8 | `summary_cache` eviction documented | known-lim "Document tasks & summaries" |
+| BL-4 (Low) | 8 | redaction date-locale asymmetry (US-order / 2-digit-year slip; names/addresses unmasked) recorded as by-design under-detection | known-lim "Security & privacy" (redaction bullet) |
+| DATA-4 (Info) | 8 | `ORDER BY chunk_index` on `documentApproxTokenTotal` (sum is order-independent → **zero behaviour change**) | — (read-shape parity) |
+
+**Accepted residuals & non-code dispositions** (on record, deliberately not changed):
+
+- **SEC-4** (Low, Phase 7) — pre-spawn binary verification is **session-cached per path** (the verify→spawn
+  TOCTOU widens to per-session): a deliberate consistency trade-off, documented in `security-model.md`.
+- **SEC-5** (Low, Phase 7) — `imageAnalyze` takes raw drag-drop bytes (not picker-token-bound): documented
+  boundary, `security-model.md`.
+- **API-2** (Info, Phase 8) — `importPreflight` accepts raw renderer paths for the recursive count/size walk:
+  a pre-existing documented residual, **no code change**.
+- **SEC-7** (Info) — the verified-clean inventory: **no action**, recorded below so it is not re-investigated.
+- **TEST-9** (Low) — a double-EOCD / duplicate-name zip adversarial fixture for the installer was **not
+  added**; the documented installer behaviour stands and the gap is an accepted residual.
+
+**Verified-clean inventory (attested 2026-06-27 — recorded so it is not re-investigated next round).** The
+audit read each of these and found them correct and well-tested; they are deliberately **not** findings:
+
+- **Crypto / vault** — Argon2id default + scrypt legacy; descriptor-bound KDF params with sane bounds; the
+  GCM verifier is checked before any DB decrypt; streaming file crypto with atomic temp+rename; key zeroing
+  on lock and on wrong password; journaled v1→v2 rekey that recovers old-or-new per file.
+- **Zip importer** — enumerate-before-inflate; path/symlink/extension/size re-validation; content-free error
+  codes; no zip-slip.
+- **Manifest parsing** — no `eval`/`Function`/`require` of package content; no prototype-pollution sink
+  (own-enumerable `__proto__`, a fresh sanitized object).
+- **Subprocess spawns** — array argv, no shell, hash-verified before spawn, drive-root escape guards.
+- **Offline guard** — IPv4-anchored loopback check, fails safe.
+- **Audit / log** — ids/counts/filenames only, sentinel-grep enforced, log encrypted at rest.
+- **Confused-deputy** — picker capability tokens; drag-drop symlink-rejected + realpath-canonicalised.
+- **Data layer** — FKs enforced (`foreign_keys = ON`); migrations idempotent + identifier-validated against
+  injection; FTS5 mirrors trigger-synced + VACUUM-safe; `deleteConversation` deletes in FK order;
+  `extraction_records`/`tree_nodes`/`document_collections`/`conversation_documents`/`image_turns` all CASCADE
+  correctly; the prepared-statement cache is keyed by constant SQL only. *(The one exception — the
+  bank/invoice tables lacking CASCADE — was DATA-1, fixed in Phase 1.)*
+- **IPC / API surface** — the preload bridge is a closed allow-list; every handler validates id/array shapes;
+  exports always go to a `dialog.showSaveDialog` user-chosen path; image/doc/skill-run jobs use
+  async-with-polling; unknown job ids resolve to a terminal `failed` rather than throwing.
+- **CLAUDE.md hard rules** — re-attested ✅: no cloud / hosted-AI APIs (only the two user-gated downloaders +
+  loopback sidecar use `fetch`; CSP `connect-src 'self'`); no telemetry / analytics / remote crash reporting;
+  no weights/user-data/logs committed; fully usable offline; user data local + encrypted by default; no
+  hardcoded dev paths; Windows first-class; clean swappable service boundaries.
+
+**Posture held across all 8 phases (load-bearing):** offline / no telemetry / no new network egress; the
+**content class** (document text + titles/filenames, chat, extracted figures, redacted text) is never
+logged/audited — the new lock message and the eviction counter carry **counts only**; schema changes were
+additive (or fresh-schema CASCADE); the Electron + vision/OCR caps are defense-in-depth with **no new
+DB/FS/net capability**. Final suite **2335 passed / 39 skipped**.
+
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 
@@ -3206,7 +3468,11 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   → installed`), the lazy `skipHash` path, and the `(path,size,mtime)` two-tier checksum cache.
 - **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible →
   available; cheap, lazy, lock-safe), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
-  guards + `validateAnalyzeRequest` — the SEC-3 main-side re-validation `importDocuments` lacks),
+  guards + the D4 header pixel-bomb cap + `validateAnalyzeRequest` — the SEC-3 main-side re-validation
+  `importDocuments` lacks). **SEC-6 (backend-audit-2026-06-27):** `validateAnalyzeRequest` now rejects
+  a **claimed** png/jpeg whose header won't parse (`decodedPixelCount` → `null`) as `decodeFailed`
+  instead of falling through to byte-cap-only — a `null` pixel count for a known-png/jpeg MIME means
+  malformed/forged bytes and previously silently disabled the D4 pixel-bomb guard.
   `runtime.ts` (`VisionRuntime` on `LlamaServer` directly with the §1 args; lazy single-flight
   `ensureStarted`; `analyze` builds the base64 `image_url` request + `readChatSSE`; the §6
   idle-teardown interlock), `index.ts` (`VisionService`: ephemeral job map, own one-job

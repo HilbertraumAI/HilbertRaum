@@ -41,7 +41,14 @@ valid and lets the real embedder swap in unchanged (Phase 10).
 
 1. **Select / expand.** `expandPaths()` turns a user selection into a flat file list:
    folders are walked recursively (supported extensions only); explicitly-picked files are
-   always included (an unsupported one surfaces later as `failed`).
+   always included (an unsupported one surfaces later as `failed`). The walk **follows
+   symlinked directories** (intended — ING-4), but guards against a **symlink cycle**
+   (`a/loop -> ..`): it tracks the `realpathSync` of every directory on the *current recursion
+   path* in a Set and skips a directory whose real path is already an ancestor (backend audit
+   2026-06-27, REL-9). This terminates a self-referential tree (which would otherwise recurse
+   until ENAMETOOLONG/ELOOP or a stack overflow, re-adding files via every looped path) while
+   leaving every acyclic walk's expansion set byte-identical — a symlink to a *distinct*
+   directory is not an ancestor, so it is still followed.
 2. **Queue.** `createQueuedDocument()` inserts a `documents` row (`status = queued`,
    `original_path`, guessed `mime_type`, `size_bytes`).
 3. **Extract.** `processDocument()` copies the original into the workspace
@@ -98,8 +105,31 @@ A parser returns `{ segments: ExtractedSegment[], mimeType }`, where each segmen
 optional `pageNumber` / `sectionLabel`. The chunker copies that structure onto every chunk it
 derives, so a chunk can always cite the page/section it came from. Parsers also receive an
 optional `ParseContext` carrying the injected `transcriber` / `ocrEngine` (the text parsers
-ignore it) plus `maxPages` and `maxInflatedBytes` (PDF page-count + DOCX zip-bomb caps, security
-audit M-2/M-3).
+ignore it), an optional `signal` (REL-1 cancellation, forwarded only by the AudioParser), plus
+`maxPages` and `maxInflatedBytes` (PDF page-count + DOCX zip-bomb caps, security audit M-2/M-3).
+
+### Cap stack — one enforcement point (`parseWithLimits`, MAINT-4 / REL-5)
+
+Every parse entry point — ingest (`prepareDocument`), the renderer preview
+(`extractDocumentPreview`), and the paged preview (`extractDocumentPreviewPage`, via the
+former) — routes through the **single `parseWithLimits(parser, source, ctx, limits)`
+decorator** so the resource cap stack can never silently diverge per path again. The decorator
+(1) injects the per-parser caps (`maxPages` / `maxInflatedBytes`) from the resolved
+`IngestionLimits` onto the context (a caller-set value — e.g. the bank-statement layout seam's
+own page cap — wins), and (2) races the parse against the wall-clock `parseTimeoutMs`, **except
+audio** (a long transcription legitimately runs for minutes; its `signal` + the transcriber's
+inactivity watchdog bound a wedged child instead). The pre-parse **byte ceiling** (M-1) stays a
+stat the ingest path runs before parser selection; the preview reads the already-import-capped
+stored copy, so the byte ceiling is in force on both paths without a re-stat.
+
+This closes **REL-5** (backend audit 2026-06-27): the preview re-parse formerly threaded *none*
+of the caps (only `maxPages`, and only in layout mode) and re-extracted the whole document per
+"Show more", so an already-indexed but pathological file (e.g. a 4000-page PDF) could wedge the
+main process on a user-triggered preview where import would have killed it. The preview path now
+enforces the same `maxPages` + `maxInflatedBytes` + timeout backstop on every page request. The
+timeout *message* differs by caller: the ingest path passes persist-canonical English (written
+to `documents.error_message`); the preview passes a localized `tMain(...)` emission (a transient
+IPC throw, never persisted).
 
 **PDF note (BUILD_STATE R3):** pdfjs-dist's **legacy** build (`pdfjs-dist/legacy/build/pdf.mjs`)
 runs in the Electron/Node main process with **no Web Worker and no DOM** — validated in
@@ -135,8 +165,20 @@ max_chunks_per_file: 1000
   `truncateToApproxTokens` budget clamp.
 - **No cross-segment chunks.** Chunking happens *within* a segment, so each chunk inherits
   exactly one `pageNumber` / `sectionLabel`.
-- **Cap.** The global chunk count is capped at `max_chunks_per_file`; once hit, remaining
-  text is dropped and the document still reaches `indexed`.
+- **Cap.** The global chunk count is capped at `max_chunks_per_file` (`MAX_CHUNKS_PER_DOCUMENT`,
+  1000). A document that would exceed it is **REJECTED at index time** — `processDocument` chunks
+  with `maxChunks = MAX_CHUNKS_PER_DOCUMENT + 1` and, when the result is over the real cap, throws
+  the friendly `main.ingest.tooManyChunks` ("too large to fully index — split it") *before* the
+  destructive chunk replacement, so a previously-searchable copy is never half-deleted (M13) and
+  any stale `fully_chunked` marker is cleared (C4). This **replaces** the legacy silent
+  truncation (where the cap dropped the document's tail and still reached `indexed`); the win is
+  that every *indexed* document is now the WHOLE document, which is what lets a deep index
+  honestly claim full coverage. `chunkSegments` itself still STOPS at its `maxChunks` argument as
+  a memory guard (it is no longer the honesty boundary), and callers that pass no `maxChunks` keep
+  the legacy truncate-at-1000 behaviour (tests only). (Distinct from the **pre-parse** resource
+  caps — byte ceiling / parse timeout / PDF page count / DOCX inflate — which bound the *parser*
+  before it ever produces segments; those are now applied uniformly on every parse entry point,
+  including the preview path, via the `parseWithLimits` decorator — see §2.)
 
 ### Chunk metadata → storage
 
@@ -170,7 +212,7 @@ retrieval time.
 | `importDocuments(paths)` | → `ImportJob { jobId, documentIds }` | queue + background ingest |
 | `getImportJob(jobId)` | → `ImportJobStatus` | poll job aggregate |
 | `listDocuments()` | → `DocumentInfo[]` | non-deleted docs, newest first, with chunk counts |
-| `deleteDocument(id)` | → `void` | remove chunks/embeddings/stored copy/row |
+| `deleteDocument(id)` | → `void` | atomic teardown: `purgeDocumentDerivatives` (chunks/embeddings/tree + bank/invoice rows) → row, in one txn; stored copy shredded after commit (audit DATA-1) |
 | `reindexDocument(id)` | → `DocumentInfo` | re-parse & re-chunk the stored copy |
 
 ---
@@ -578,11 +620,17 @@ the recorded E5 lesson) behind the `Reranker` interface. `LlamaReranker` is the 
 `LlamaServer` composition: same b9585 binary, `--rerank --device none` (CPU pin; chat
 args never reach it), lazy start on first `rerank()`, `/v1/rerank` Jina shape
 (`{ query, documents }` → `results: [{ index, relevance_score }]`, mapped back by
-`index`). Inputs are word-truncated (query ≤ 160, doc ≤ 320) to bound CPU latency.
+`index`). Inputs are truncated by **approx-token cost** (query ≤ 160, doc ≤ 320 approx tokens)
+to bound CPU latency *and* to fit the context — via the CJK/Thai-aware `truncateToApproxTokens`
+shared with the E5 embedder (`runtime/context-budget.ts`), NOT a whitespace word split. The old
+word split treated a space-less passage (CJK/Thai) as one "word" and never truncated it, so it
+overflowed `n_ctx`, the sidecar HTTP-500'd, and the rerank silently fell back to the fused order
+— a no-op reranker on those scripts (EMB-1, backend audit 2026-06-27; see §12.3). The per-field
+caps are derived from the context budget in the constructor, so they can never exceed `n_ctx`.
 The sidecar also passes `--batch-size`/`--ubatch-size` = the context (2048): in
 `--rerank`/embedding mode llama-server forces `n_batch = n_ubatch` and defaults them to
-**512**, but a query+document rerank input runs ~670 tokens and would otherwise HTTP-500
-the whole request on real-length chunks (found by `HILBERTRAUM_RERANK_SMOKE`; §12.1 R1).
+**512**, but a query+document rerank input runs ~1056 worst-case real tokens and would otherwise
+HTTP-500 the whole request on real-length chunks (found by `HILBERTRAUM_RERANK_SMOKE`; §12.1 R1).
 Selection is availability-driven (`createSelectedReranker` → real iff binary + GGUF,
 else **null**; no mock — null = today's ordering). Failure modes: a failed START latches
 for the session (fail-fast, no 60 s health stall per question); a failed CALL logs and
@@ -696,16 +744,16 @@ Reranker ≈ **1.3 GB RSS** when active (F16 1.08 GiB + ctx 2048); worst case al
 4B chat (~2.6 GB) + E5 (~0.35 GB) + Electron (~1 GB) ≈ 5.3 GB — workable because the
 reranker is lazy, CPU-pinned, and opt-in by provisioning (never bundled; manifest
 `recommended_min_ram_gb: 6`, profiles LITE/BALANCED/PRO). CPU latency bounded by the
-candidate cap (≤ 2×topKInitial) + word truncation.
+candidate cap (≤ 2×topKInitial) + the per-field approx-token truncation (§12.4).
 
 **Measured 2026-06-10 (`HILBERTRAUM_RERANK_SMOKE`, real F16 GGUF on b9585, Intel i7-1185G7,
 `--device none`, 4 threads):** the F16 GGUF LOADS clean (no q8_0 XLM-R warmup crash);
 relevance is correct (relevant invoice line **+8.82** vs irrelevant **−11.01**);
 **worst-case latency ≈ 24.7 s** for a 12-candidate batch at the full truncation budget
-(160-word query + 320-word docs, ~670 tokens/input). That worst case is ~2 s/candidate —
-significant on a CPU pin, so reranking visibly lengthens a documents query on a low-end
-laptop; the candidate cap keeps it bounded, and it stays opt-in by provisioning.
-Tightening `MAX_DOC_WORDS` / the candidate cap is the lever if the latency proves too high.
+(160 + 320 approx-token query+doc, ~670 tokens/input for English). That worst case is
+~2 s/candidate — significant on a CPU pin, so reranking visibly lengthens a documents query on a
+low-end laptop; the candidate cap keeps it bounded, and it stays opt-in by provisioning.
+Tightening `MAX_DOC_APPROX_TOKENS` / the candidate cap is the lever if the latency proves too high.
 
 **End-to-end quality validation 2026-06-10 (`HILBERTRAUM_RAG_QUALITY`, all three real backends on
 a 4-doc corpus — `tests/manual/rag-quality.test.ts`):** the evidence the reranker EARNS its
@@ -720,6 +768,33 @@ this prefix-less-E5 setup the reranker is not marginal polish — it rescued the
 answer from #3-behind-distractors to #1; the ~25 s worst-case cost buys real correctness.
 
 Gate at ship: typecheck clean, 601 tests, build green; phase commit `b8feb46`.
+
+### 12.4 Token-aware sidecar input truncation + vector-codec hardening (backend audit 2026-06-27)
+
+**The contract (EMB-1 / MAINT-2).** The two free-text llama-server sidecars — the E5 embedder and
+the reranker — truncate every input to fit the context **before** sending, measured by
+`approxTokenCount`, which charges space-less CJK/Thai ~1 token/char and an over-long glued run by
+length. The reranker formerly used a naive whitespace word split (`text.split(/\s+/).slice(...)`),
+so a space-less passage was a **single "word"** and was never truncated: it overflowed `n_ctx`,
+llama-server returned HTTP 500, and `rag/index.ts` caught it and silently kept the fused order — a
+**no-op reranker on those scripts**. Both subsystems now share one helper, `runtime/context-budget.ts`
+(`REAL_TOKENS_PER_APPROX_TOKEN = 2.2` worst-case multilingual factor, `maxInputApproxTokens(ctx)`,
+`truncateToContext(text, ctx)`), so they cannot diverge again. The reranker's per-field caps
+(query ≤ 160, doc ≤ 320 approx tokens; combined ≈ 1056 worst-case real tokens < 2048) are **derived
+from the context budget in the constructor**, so they can never exceed `n_ctx` even if a smaller
+context is configured. The fused-order fallback stays as a backstop but now rarely fires.
+
+**Vector codec (EMB-4 / MAINT-5 + DATA-2).** `embeddings/codec.ts` asserts the host is
+**little-endian at module load** (the BLOB encoding is locked LE Float32, spec §6 — a big-endian
+host would silently corrupt every vector, so it fails loudly at startup instead). `decodeVector`
+now returns **`Float32Array | null`**: a physically truncated `vector_blob` (`length < dimensions*4`,
+e.g. a partial write) or a non-positive `dimensions` yields `null` so **every** caller skips the row
+uniformly — including the two compare-path decodes (`doctasks/manager.ts`) that previously threw a
+`RangeError` and failed the whole compare task. The guard is one cheap length comparison, negligible
+on the hot resident-cache vector scan (§12 / D15). Tests: `reranker.test.ts` (CJK > ctx still
+reranks, no 500 fall-through), `embeddings.test.ts` (`decodeVector` truncated → null; resident-cache
+scan skips the bad row), `doctasks-compare.test.ts` (a truncated stored vector → the compare
+completes, not a thrown task) — all teeth-verified.
 
 ## 13. Collection-scoped retrieval & composite scope — design record (document organization, Phases A–F)
 
@@ -968,6 +1043,13 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   for a mapped pre-extracted type; everything else falls through to the existing relevance path
   **byte-unchanged**. An unmapped/ad-hoc "{X}" falls back to labelled relevance in v1 (no live full-scan —
   deferred), so the 0-call completeness claim is only ever made for a mapped type.
+- **"Whole document" wording gate (RAG-1, backend audit 2026-06-27):** `buildListingAnswer` says
+  *"across the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
+  chunking invariant holds AND every in-scope chunk actually carries a `__scan__` marker. `fullyChunked`
+  alone proves "stored chunks are complete," NOT "we scanned every in-scope document": in a multi-document
+  scope where extraction ran on only some docs, `fullyChunked` is true but `scannedChunks < totalChunks`,
+  so the wording honestly falls back to *"across N sections scanned"* (the over-claim H7 forbids). A
+  single fully-extracted document still satisfies both conditions, so its wording is unchanged.
 
 ### 14.6 Symmetric compare + lazy node vectors (Phase 4, plan §4.3/§3.1, H4/H5/H8/L6)
 

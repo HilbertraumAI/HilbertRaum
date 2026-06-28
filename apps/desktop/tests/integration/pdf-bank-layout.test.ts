@@ -11,6 +11,7 @@ import {
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
+import { resolvePageYear, type LayoutWord } from '../../src/main/services/ingestion/parsers/pdf-layout'
 import { makeColumnarPdf, type PdfCell } from '../helpers/fixtures'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AuditEventType, DocumentChunkRead, RetrievalScope } from '../../src/shared/types'
@@ -763,5 +764,28 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'summarize spending by category', pdfPath))
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 3 }))
+  })
+})
+
+// REL-10: resolvePageYear's header-band y-range fold USED to spread the whole page's y-array into
+// `Math.max(...ys)` / `Math.min(...ys)`. A crafted page with hundreds of thousands of positioned
+// fragments passes that many function arguments → `RangeError: Maximum call stack size exceeded`.
+// Reachable via the layout preview path (now timeout-backstopped per REL-5, but the allocation
+// itself must not throw). The single-pass loop is O(n) with no argument-count limit.
+describe('resolvePageYear (REL-10 — huge fragment count must not overflow the stack)', () => {
+  it('folds the page y-range in one pass and resolves the header year without a RangeError', () => {
+    const N = 500_000
+    const words: LayoutWord[] = new Array(N)
+    // Non-date, non-year fragments (so the full-date scan and the year-band loop both fall through to
+    // the y-range computation that REL-10 hardens).
+    for (let i = 0; i < N; i++) words[i] = { str: 'x', x: 0, y: i, w: 1 }
+    // One standalone year token at the very top of the page (the header-year fallback target).
+    words[N - 1] = { str: '2024', x: 0, y: N, w: 4 }
+
+    let year: number | null = null
+    expect(() => {
+      year = resolvePageYear(words)
+    }).not.toThrow()
+    expect(year).toBe(2024)
   })
 })

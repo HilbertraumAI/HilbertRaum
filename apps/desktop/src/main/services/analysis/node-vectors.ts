@@ -200,13 +200,11 @@ export function loadNodeVectors(
   }>
   const out: NodeVector[] = []
   for (const r of rows) {
-    if (!r.dimensions || r.embedding_blob.length < r.dimensions * 4) continue
-    out.push({
-      id: r.id,
-      ordinal: r.ordinal,
-      summaryText: r.summary_text,
-      vec: decodeVector(r.embedding_blob, r.dimensions)
-    })
+    // decodeVector returns null for a missing-dimension or physically truncated blob — skip it
+    // (DATA-2: the guard now lives in decodeVector; this preserves the old per-row skip).
+    const vec = decodeVector(r.embedding_blob, r.dimensions)
+    if (!vec) continue
+    out.push({ id: r.id, ordinal: r.ordinal, summaryText: r.summary_text, vec })
   }
   return out
 }

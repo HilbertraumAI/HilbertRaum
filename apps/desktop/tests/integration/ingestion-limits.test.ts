@@ -3,7 +3,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { createQueuedDocument, processDocument, documentsDir } from '../../src/main/services/ingestion'
+import {
+  createQueuedDocument,
+  processDocument,
+  documentsDir,
+  parseWithLimits,
+  extractDocumentPreview,
+  extractDocumentPreviewPage
+} from '../../src/main/services/ingestion'
 import {
   resolveIngestionLimits,
   withParseTimeout,
@@ -12,6 +19,11 @@ import {
 } from '../../src/main/services/ingestion/limits'
 import { PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
 import { DocxParser } from '../../src/main/services/ingestion/parsers/docx'
+import type {
+  DocumentParser,
+  ParseContext,
+  ParsedDocument
+} from '../../src/main/services/ingestion/parsers'
 import { t } from '../../src/shared/i18n'
 import { makeMixedPdf, makeDocx } from '../helpers/fixtures'
 
@@ -134,5 +146,131 @@ describe('DocxParser inflated-size ceiling (M-3)', () => {
     const docx = write('fine.docx', makeDocx(['a normal paragraph']))
     const out = await DocxParser.parse(docx, { maxInflatedBytes: DEFAULT_INGESTION_LIMITS.docxMaxInflatedBytes })
     expect(out.segments.map((s) => s.text).join(' ')).toContain('normal paragraph')
+  })
+})
+
+// MAINT-4 / REL-5 — the ONE cap-enforcement decorator. Every parse entry point (ingest +
+// both preview readers) routes through `parseWithLimits`, so the cap stack can never silently
+// diverge per path again. A fake parser lets us prove the decorator's contract in isolation.
+function fakeParser(
+  impl: (source: string, ctx?: ParseContext) => Promise<ParsedDocument>
+): DocumentParser {
+  return { name: 'Fake', extensions: ['.fake'], mimeType: 'text/fake', parse: impl }
+}
+
+describe('parseWithLimits (MAINT-4/REL-5)', () => {
+  it('injects maxPages/maxInflatedBytes from limits onto the parse context', async () => {
+    let seen: ParseContext | undefined
+    const parser = fakeParser(async (_s, ctx) => {
+      seen = ctx
+      return { segments: [], mimeType: 'text/fake' }
+    })
+    await parseWithLimits(
+      parser,
+      'doc.txt',
+      { ocrEngine: null },
+      { ...DEFAULT_INGESTION_LIMITS, pdfMaxPages: 11, docxMaxInflatedBytes: 22 }
+    )
+    expect(seen?.maxPages).toBe(11)
+    expect(seen?.maxInflatedBytes).toBe(22)
+  })
+
+  it('lets a caller-set context cap win over the limits default (the layout seam)', async () => {
+    let seen: ParseContext | undefined
+    const parser = fakeParser(async (_s, ctx) => {
+      seen = ctx
+      return { segments: [], mimeType: 'text/fake' }
+    })
+    await parseWithLimits(
+      parser,
+      'doc.txt',
+      { maxPages: 3 },
+      { ...DEFAULT_INGESTION_LIMITS, pdfMaxPages: 5000 }
+    )
+    expect(seen?.maxPages).toBe(3)
+  })
+
+  it('rejects a wedged non-audio parse on the wall-clock timeout instead of hanging', async () => {
+    const parser = fakeParser(() => new Promise<ParsedDocument>(() => {})) // never resolves
+    await expect(
+      parseWithLimits(parser, 'doc.txt', {}, { ...DEFAULT_INGESTION_LIMITS, parseTimeoutMs: 20 }, 'timed out')
+    ).rejects.toThrow('timed out')
+  })
+
+  it('exempts audio from the wall-clock timeout (a long transcription is not killed)', async () => {
+    const parser = fakeParser(async () => {
+      await new Promise((r) => setTimeout(r, 40))
+      return { segments: [{ text: 'hi' }], mimeType: 'audio/wav' }
+    })
+    // Timeout is 5 ms but the audio "parse" takes 40 ms — audio is exempt, so it still resolves.
+    const out = await parseWithLimits(
+      parser,
+      'rec.wav',
+      {},
+      { ...DEFAULT_INGESTION_LIMITS, parseTimeoutMs: 5 },
+      'timed out'
+    )
+    expect(out.segments[0].text).toBe('hi')
+  })
+
+  it('carries the abort signal and other caller-set fields through to the parser', async () => {
+    const ac = new AbortController()
+    let seen: ParseContext | undefined
+    // rec.wav (audio) keeps it out of the timeout wrapper so we test pure pass-through.
+    const parser = fakeParser(async (_s, ctx) => {
+      seen = ctx
+      return { segments: [], mimeType: 'audio/wav' }
+    })
+    await parseWithLimits(parser, 'rec.wav', { signal: ac.signal, workDir: '/w' }, DEFAULT_INGESTION_LIMITS)
+    expect(seen?.signal).toBe(ac.signal)
+    expect(seen?.workDir).toBe('/w')
+  })
+})
+
+describe('preview path cap stack (REL-5)', () => {
+  const threePagePdf = (): Buffer =>
+    makeMixedPdf([
+      { kind: 'text', lines: ['Page one has real readable content here.'] },
+      { kind: 'text', lines: ['Page two also has real readable content.'] },
+      { kind: 'text', lines: ['Page three would appear without the cap.'] }
+    ])
+
+  it('caps the preview re-parse at maxPages — formerly the preview ran uncapped', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const q = createQueuedDocument(db, write('multi.pdf', threePagePdf()))
+    await processDocument(db, storeDir, q.id) // generous default limits → all 3 pages indexed
+    const capped = await extractDocumentPreview(db, storeDir, q.id, {}, {
+      limits: { ...DEFAULT_INGESTION_LIMITS, pdfMaxPages: 2 }
+    })
+    expect(capped.segments).toHaveLength(2)
+    // The default (generous) preview still returns all three — proves a cap, not a parse failure.
+    const all = await extractDocumentPreview(db, storeDir, q.id)
+    expect(all.segments).toHaveLength(3)
+  })
+
+  it('enforces maxInflatedBytes on a DOCX preview', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const q = createQueuedDocument(db, write('doc.docx', makeDocx(['a paragraph that inflates past one byte'])))
+    await processDocument(db, storeDir, q.id)
+    await expect(
+      extractDocumentPreview(db, storeDir, q.id, {}, {
+        limits: { ...DEFAULT_INGESTION_LIMITS, docxMaxInflatedBytes: 1 }
+      })
+    ).rejects.toThrow(FILE_TOO_LARGE)
+  })
+
+  it('extractDocumentPreviewPage enforces the cap on every page request', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const q = createQueuedDocument(db, write('multi.pdf', threePagePdf()))
+    await processDocument(db, storeDir, q.id)
+    const page = await extractDocumentPreviewPage(db, storeDir, q.id, 0, 50, {}, {
+      limits: { ...DEFAULT_INGESTION_LIMITS, pdfMaxPages: 2 }
+    })
+    // The whole-document re-parse is bounded to 2 pages → the reported total reflects the cap, not 3.
+    expect(page.totalSegments).toBe(2)
+    expect(page.segments).toHaveLength(2)
   })
 })

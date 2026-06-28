@@ -81,16 +81,41 @@ export function resolveInScopeDocumentIds(db: Db, conversationId: string): strin
 }
 
 /**
+ * SEC-1 trust gate (backend-audit 2026-06-27, Phase 6): whether a skill is trusted to RUN the wired
+ * Tier-2 tools (bank/invoice extraction, redaction, CSV export). ONLY built-in app skills
+ * (`source === 'app'`, which the registry assigns from the app-skills/ folder — a self-declared trust
+ * in frontmatter is already ignored) may. A user-imported `kind:'tool'` skill may still DECLARE
+ * `allowedTools` (the S2 parser keeps them, and the import warning surfaces "reserves tools" — kept
+ * for a future per-tool grant UI) but it runs NONE of them until that grant UI exists.
+ *
+ * Why a named predicate, not an inline `=== 'app'`: the audit found the run/runnable surface gated on
+ * enabled/compatibility/confirm but NEVER on source, and `resolveEffectiveTools(declared, declared)`
+ * collapsed the "user grant" to "whatever the package declared" — so the trust decision was
+ * incidental. The blast radius is structurally bounded (the tool context holds no FS/DB/network
+ * handle, scope is a single frozen document, writes/exports are confirm-gated to a user-chosen path),
+ * so this is not closing an escape — it makes the "trusted product content only" posture DELIBERATE
+ * and self-documenting. See security-model.md "Skill-import defences" and architecture.md §7/§23.
+ */
+export function skillCanRunTools(skill: SkillRecord): boolean {
+  return skill.source === 'app'
+}
+
+/**
  * The wired tool names a skill may run (skills plan §12.2, S11c). The S11c flip makes the bank skill
  * `kind:'tool'`, so the S2 parser KEEPS its declared `allowedTools` (an instruction skill's stays []
  * — SL-1). The effective set is `declared ∩ registry ∩ grant`; v1 has no per-tool grant UI, so
- * enabling a `kind:'tool'` skill grants its declared tools (grant = declared). We then keep only the
- * tools actually wired to a `run.ts` seam below. An instruction skill (allowedTools []) gets none.
+ * enabling an APP `kind:'tool'` skill grants its declared tools (grant = declared). We then keep only
+ * the tools actually wired to a `run.ts` seam below. An instruction skill (allowedTools []) gets none.
+ *
+ * SEC-1 trust gate: a non-app skill runs NO tools regardless of what it declared (`skillCanRunTools`).
+ * This is THE choke point — both `listRunnableTools` and the run bar source their tool set here, so a
+ * user `kind:'tool'` skill never offers a runnable tool.
  *
  * §6.5/M1 gate at the use-site: a skill that now needs a newer app runs NO tools, even if its
  * `enabled` flag is stale (edited on disk after it was enabled). `appVersion` absent / '' ⇒ compatible.
  */
 export function runnableToolNames(skill: SkillRecord, appVersion = ''): string[] {
+  if (!skillCanRunTools(skill)) return []
   if (skillNeedsNewerApp(skill.manifest.compatibility.minAppVersion, appVersion)) return []
   const effective = resolveEffectiveTools(skill.manifest.allowedTools, skill.manifest.allowedTools)
   return effective.filter((n) => WIRED_TOOL_NAMES.includes(n))

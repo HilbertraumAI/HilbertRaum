@@ -6,10 +6,11 @@ import type { ExtractionListing, ExtractRecordType } from '../../../shared/types
 // (whole-document-analysis plan §4.2 step 2/3, Phase 3). ZERO model calls — the text is built
 // from `aggregateExtractions` output. Honesty (H7): the answer leads with the coverage line
 // ("across N sections scanned (k unparsed)"), labels itself exhaustive-over-sections — NOT
-// complete, and gates the "whole document" wording on the `fully_chunked` invariant (a legacy
-// truncated doc says "sections scanned", never "whole document"). Per-item provenance is the
-// source sections each item came from. The values are CONTENT and live only in the persisted
-// message (never logged/audited).
+// complete, and gates the "whole document" wording on the `fully_chunked` invariant AND actual
+// scan coverage (`scannedChunks >= totalChunks`, RAG-1): a legacy truncated doc, OR a multi-doc
+// scope where extraction ran on only some docs, says "sections scanned", never "whole document".
+// Per-item provenance is the source sections each item came from. The values are CONTENT and live
+// only in the persisted message (never logged/audited).
 
 const KIND_KEY: Record<ExtractRecordType, MessageKey> = {
   generic: 'analysis.kind.generic',
@@ -79,7 +80,15 @@ export function buildListingAnswer(
     return tr('analysis.listing.empty', headParams)
   }
 
-  const headKey: MessageKey = listing.fullyChunked
+  // RAG-1 (backend audit 2026-06-27): the "across the whole document" wording requires BOTH the
+  // chunking invariant (every in-scope indexed doc is `fully_chunked`) AND actual scan coverage —
+  // every in-scope chunk carries a `__scan__` marker (`scannedChunks >= totalChunks`). In a
+  // MULTI-document scope where extraction ran on only some docs, `fullyChunked` is true but
+  // `scannedChunks < totalChunks`, so we honestly fall back to the "sections scanned" wording
+  // rather than over-claiming whole-document coverage (H7). The single-document fully-extracted
+  // case still satisfies both conditions, so its wording is unchanged.
+  const coverageWhole = listing.fullyChunked && listing.scannedChunks >= listing.totalChunks
+  const headKey: MessageKey = coverageWhole
     ? 'analysis.listing.coverageWhole'
     : 'analysis.listing.coverageSections'
   const lines: string[] = [tr(headKey, headParams), '']

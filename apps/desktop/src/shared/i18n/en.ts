@@ -1283,6 +1283,7 @@ export const en = {
   'main.chat.emptyMessage': 'Cannot send an empty message.',
   'main.chat.emptyQuestion': 'Cannot send an empty question.',
   'main.chat.stopFirst': 'A response is still being generated for this conversation. Stop it first.',
+  'main.chat.locked': 'Workspace is locked. Unlock it to chat.',
   'main.task.unknownKind': 'Unknown document task.',
   'main.task.refusedChatStreaming':
     'An answer is being written right now. Wait for it to finish (or stop it), then try again.',

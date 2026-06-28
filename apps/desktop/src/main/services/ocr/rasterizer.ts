@@ -2,6 +2,8 @@ import { join } from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import { OCR_RASTER } from '../../../shared/ipc'
 import { log } from '../logging'
+import { installNavigationGuard } from '../navigation-guard'
+import { assertPageWithinByteCap } from './page-cap'
 import { pipelinePages } from './pipeline'
 
 // PDF → page-PNG rasterizer: rendering a PDF page
@@ -84,9 +86,12 @@ export async function rasterizePdfWithHiddenWindow(
     throw err
   }
   // Untrusted PDF bytes render here — deny any navigation/window-open the page attempts
-  // (defence in depth on top of the shared-session CSP), matching the main window.
+  // (defence in depth on top of the shared-session CSP), matching the main window. SEC-3
+  // (backend-audit-2026-06-27): the guard covers `will-redirect` alongside `will-navigate`
+  // (a server/<meta> redirect reaches a remote origin via `will-redirect` without firing
+  // `will-navigate`). This worker page only ever loads ocr.html, so ALL navigation is denied.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  win.webContents.on('will-navigate', (e) => e.preventDefault())
+  installNavigationGuard(win.webContents, () => false)
 
   // Collect replies addressed from OUR window only (defence in depth — the channels
   // are not exposed on the main window's bridge at all).
@@ -186,6 +191,9 @@ export async function rasterizePdfWithHiddenWindow(
         const msg = await withTimeout(pageP)
         const png = msg.png
         if (!(png instanceof Uint8Array)) throw new Error('The rendered page was empty')
+        // REL-4: reject an over-cap page before it is handed to recognition or held resident
+        // behind the 1-deep look-ahead.
+        assertPageWithinByteCap(png)
         return Buffer.from(png)
       },
       opts.onPage,

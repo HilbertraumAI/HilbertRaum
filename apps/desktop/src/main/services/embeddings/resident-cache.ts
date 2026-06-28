@@ -91,10 +91,11 @@ function build(db: Db, signature: Signature): ResidentVectors {
     .all() as unknown as VectorRow[]
   const byChunk = new Map<string, Float32Array>()
   for (const row of rows) {
-    // Skip a physically truncated blob (partial write) — decodeVector would throw a
-    // RangeError. The chunk is then absent from the map, exactly like the old per-row skip.
-    if (row.vector_blob.length < row.dimensions * 4) continue
-    byChunk.set(row.chunk_id, decodeVector(row.vector_blob, row.dimensions))
+    // decodeVector returns null for a physically truncated blob (partial write) — skip it so
+    // the chunk is simply absent from the map, exactly like the old per-row skip (DATA-2: the
+    // length guard now lives inside decodeVector, shared by every caller).
+    const vec = decodeVector(row.vector_blob, row.dimensions)
+    if (vec) byChunk.set(row.chunk_id, vec)
   }
   return { signature, byChunk }
 }

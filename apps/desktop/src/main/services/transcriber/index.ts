@@ -30,11 +30,13 @@ export interface TranscribeOptions {
   /** Coarse progress callback (0–100), parsed from the CLI's `-pp` output. */
   onProgress?: (percent: number) => void
   /**
-   * Directory for the transient transcript JSON the CLI writes (content!). Callers in
-   * the ingestion path pass the workspace documents dir — the transient carries the
-   * `.parse` infix there so the startup crash sweep covers it. Default: the OS tmpdir.
+   * Directory for the transient transcript JSON the CLI writes (content!). REQUIRED
+   * (REL-6): the transient must land in a swept directory — callers pass the workspace
+   * documents dir, where the `.parse` infix keeps it covered by the startup crash sweep.
+   * There is deliberately NO OS-tmpdir default: tmpdir is outside the sweep, so a forgotten
+   * `workDir` would strand recognised speech (content) on disk. Make it explicit, always.
    */
-  workDir?: string
+  workDir: string
   /** Abort: kills the CLI child; the returned promise rejects. */
   signal?: AbortSignal
 }
@@ -43,8 +45,9 @@ export interface TranscribeOptions {
 export interface Transcriber {
   /** The transcriber model id (manifest id) — diagnostics/logging only, never stored. */
   readonly id: string
-  /** Transcribe one audio file into ordered, timestamped segments. */
-  transcribe(filePath: string, opts?: TranscribeOptions): Promise<TranscriptSegment[]>
+  /** Transcribe one audio file into ordered, timestamped segments. `opts.workDir` is
+   *  REQUIRED (REL-6) so the transient transcript never lands outside the crash sweep. */
+  transcribe(filePath: string, opts: TranscribeOptions): Promise<TranscriptSegment[]>
   /** Release the backend PERMANENTLY (kills any in-flight CLI child). On `will-quit`. */
   stop?(): Promise<void>
   /** Interrupt for a workspace lock; the next use starts fresh (per-file CLI). */

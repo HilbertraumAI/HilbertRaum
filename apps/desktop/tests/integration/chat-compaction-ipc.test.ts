@@ -50,6 +50,7 @@ function compactingRuntime(window: number): ModelRuntime {
 function makeCtx(db: Db, runtime: ModelRuntime): AppContext {
   return {
     db,
+    workspace: { isUnlocked: () => true },
     runtime: { active: () => runtime, activeModelId: () => runtime.modelId }
   } as unknown as AppContext
 }

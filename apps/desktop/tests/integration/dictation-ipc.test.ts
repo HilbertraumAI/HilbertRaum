@@ -18,6 +18,7 @@ vi.mock('electron', () => ({
 
 import { IPC } from '../../src/shared/ipc'
 import {
+  DICTATION_BUSY_MESSAGE,
   DICTATION_FAILED_MESSAGE,
   DICTATION_MAX_BYTES,
   DICTATION_TOO_LONG_MESSAGE,
@@ -165,5 +166,64 @@ describe('registerDictationIpc', () => {
 
     const { result } = await invoke(handlers, IPC.transcribeDictation, Buffer.from([9, 9, 9]))
     expect(result).toBe('Hello there dictation works')
+  })
+
+  // REL-3 (TEST-4): whisper is not internally serialized, so a second mic press while the
+  // first dictation is in flight would spawn a concurrent child. The single-flight guard
+  // rejects the second invocation BEFORE it touches disk/spawns — no double-spawn.
+  it('rejects a concurrent dictation without double-spawning (REL-3)', async () => {
+    const workspacePath = freshWorkspacePath()
+    let calls = 0
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const transcriber: Transcriber = {
+      id: 'blocking',
+      async transcribe(_filePath: string, _opts?: TranscribeOptions) {
+        calls += 1
+        await gate
+        return [{ startMs: 0, endMs: 1, text: 'done' }]
+      }
+    }
+    registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
+
+    const first = invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
+    await new Promise((r) => setImmediate(r)) // let the first reach transcribe()
+    // The second press is refused with friendly copy and never reaches the transcriber.
+    await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6]))).rejects.toThrow(
+      DICTATION_BUSY_MESSAGE
+    )
+    expect(calls).toBe(1)
+    release()
+    const { result } = await first
+    expect(result).toBe('done')
+    // The guard is released after completion — its temp file is shredded too.
+    expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+  })
+
+  // REL-3 (TEST-4): a wedged child must not hang the mic spinner forever — the wall-clock
+  // ceiling aborts it (→ kills the whisper child) and the renderer gets the friendly copy.
+  it('a wedged child rejects on the wall-clock timeout, not a hang (REL-3)', async () => {
+    const workspacePath = freshWorkspacePath()
+    // Only settles when the dictation timeout aborts the signal (mimics a killed child).
+    const transcriber: Transcriber = {
+      id: 'wedged',
+      transcribe: (_filePath: string, opts: TranscribeOptions) =>
+        new Promise<never>((_resolve, reject) => {
+          opts.signal?.addEventListener(
+            'abort',
+            () => reject(new Error('Transcription was cancelled.')),
+            { once: true }
+          )
+        })
+    }
+    registerDictationIpc(ctxWith(workspacePath, transcriber).ctx, { maxDurationMs: 30 })
+
+    await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))).rejects.toThrow(
+      DICTATION_FAILED_MESSAGE
+    )
+    // The temp WAV is shredded even though the child wedged (finally ran).
+    expect(readdirSync(documentsDir(workspacePath))).toEqual([])
   })
 })

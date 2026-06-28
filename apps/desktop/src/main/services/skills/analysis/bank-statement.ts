@@ -258,6 +258,7 @@ function categoryLabel(tr: Tr, category: string): string {
 
 interface CategoryTotal {
   category: string
+  currency: string
   amount: number
   count: number
 }
@@ -267,24 +268,31 @@ interface CategoryTotal {
  * one (written by the LLM categorizer doctask or the deterministic rule pass) when present, else computed
  * on the fly via `categorizeRow` — so a breakdown is answerable even before any categorize run. Each
  * `RowWithCategory` carries its own category (one JOINed read), so no cross-array index alignment.
+ *
+ * Keyed by (category, CURRENCY) (audit BL-3): signed amounts are never summed ACROSS currencies into one
+ * figure — a EUR "Fees" row and a USD "Fees" row are distinct totals, each carrying its own currency. On
+ * the single-currency path (the only branch `buildBankAnswer` renders the breakdown) this collapses to
+ * one entry per category, byte-identical to before; the currency key only matters if a future caller
+ * reuses this on a mixed-currency statement.
  */
 function categoryTotals(paired: readonly RowWithCategory[]): CategoryTotal[] {
   const order: string[] = []
-  const byCat = new Map<string, CategoryTotal>()
+  const byKey = new Map<string, CategoryTotal>()
   for (const { row, category: persisted } of paired) {
     const category = persisted ?? categorizeRow(row)
-    let entry = byCat.get(category)
+    const key = `${row.currency} ${category}` // currency is a fixed 3-char code, so the split is unambiguous
+    let entry = byKey.get(key)
     if (!entry) {
-      entry = { category, amount: 0, count: 0 }
-      byCat.set(category, entry)
-      order.push(category)
+      entry = { category, currency: row.currency, amount: 0, count: 0 }
+      byKey.set(key, entry)
+      order.push(key)
     }
     entry.amount += row.amount
     entry.count += 1
   }
-  return order.map((c) => {
-    const e = byCat.get(c)!
-    return { category: c, amount: Math.round(e.amount * 100) / 100, count: e.count }
+  return order.map((k) => {
+    const e = byKey.get(k)!
+    return { category: e.category, currency: e.currency, amount: Math.round(e.amount * 100) / 100, count: e.count }
   })
 }
 
@@ -375,7 +383,9 @@ export function buildBankAnswer(
           tr('skills.bankAnalysis.categoryItem', {
             category: categoryLabel(tr, c.category),
             amount: fmt(c.amount),
-            currency: summary.currency,
+            // Each total carries its OWN currency (BL-3) — identical to `summary.currency` on this
+            // single-currency branch (the only one that renders the breakdown), but correct by construction.
+            currency: c.currency,
             count: c.count
           })
         )

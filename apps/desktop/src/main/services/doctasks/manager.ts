@@ -1171,35 +1171,41 @@ export class DocTaskManager {
     if (plan.windows.length === 0) throw new Error(tMain('main.task.documentNotReady'))
     task.status.progress.stepsTotal = plan.stepsTotal
 
-    const vectorByChunk = new Map(
-      aRows.map((r) => [r.id, decodeVector(r.vector_blob, r.dimensions)])
-    )
+    // Skip any physically truncated stored vector (DATA-2): decodeVector returns null, so the
+    // A-chunk is simply absent from the map and skipped in the window loop below — a corrupt row
+    // degrades the compare gracefully instead of throwing a RangeError that fails the task.
+    const vectorByChunk = new Map<string, Float32Array>()
+    for (const r of aRows) {
+      const vec = decodeVector(r.vector_blob, r.dimensions)
+      if (vec) vectorByChunk.set(r.id, vec)
+    }
     // RAG-2/ING-1 (perf audit 2026-06-18): load doc-B's chunks ONCE — text, chunk_index AND
     // vector together — and decode each B vector a single time. The previous code ran
     // VectorIndex.search per A-chunk, which re-issued `SELECT … FROM embeddings WHERE chunk_id
     // IN (…doc B…)` and re-decoded EVERY doc-B vector for each A-chunk (O(N_A × N_B) redundant
     // decodes + N_A full re-scans), then re-fetched B's text with a fresh IN(…) per window.
     // Mirrors the alignNodes approach (compare.ts:349): pre-decode both sides, cosine in memory.
-    const bChunks = (
-      db
-        .prepare(
-          `SELECT c.id, c.text, c.chunk_index, e.vector_blob, e.dimensions
-           FROM chunks c JOIN embeddings e ON e.chunk_id = c.id AND e.embedding_model_id = ?
-           WHERE c.document_id = ? ORDER BY c.chunk_index`
-        )
-        .all(embedder.id, docB.id) as unknown as Array<{
-        id: string
-        text: string
-        chunk_index: number
-        vector_blob: Uint8Array
-        dimensions: number
-      }>
-    ).map((r) => ({
-      id: r.id,
-      text: r.text,
-      chunkIndex: r.chunk_index,
-      vec: decodeVector(r.vector_blob, r.dimensions)
-    }))
+    const bRows = db
+      .prepare(
+        `SELECT c.id, c.text, c.chunk_index, e.vector_blob, e.dimensions
+         FROM chunks c JOIN embeddings e ON e.chunk_id = c.id AND e.embedding_model_id = ?
+         WHERE c.document_id = ? ORDER BY c.chunk_index`
+      )
+      .all(embedder.id, docB.id) as unknown as Array<{
+      id: string
+      text: string
+      chunk_index: number
+      vector_blob: Uint8Array
+      dimensions: number
+    }>
+    // Skip any physically truncated stored vector (DATA-2): a corrupt B row is simply not a
+    // pairing candidate instead of throwing a RangeError that fails the whole compare task.
+    const bChunks: Array<{ id: string; text: string; chunkIndex: number; vec: Float32Array }> = []
+    for (const r of bRows) {
+      const vec = decodeVector(r.vector_blob, r.dimensions)
+      if (!vec) continue
+      bChunks.push({ id: r.id, text: r.text, chunkIndex: r.chunk_index, vec })
+    }
     const bById = new Map(bChunks.map((b) => [b.id, b]))
     // Top-`topK` doc-B neighbors of one A-vector, scored against the resident decoded vectors —
     // same ranking VectorIndex.search produced (descending cosine, slice topK), no DB round-trip.

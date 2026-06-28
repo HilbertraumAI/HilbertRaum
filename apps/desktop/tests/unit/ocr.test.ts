@@ -234,6 +234,70 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     await expect(engine.recognize(Buffer.from('3'))).rejects.toThrow('stopped')
   })
 
+  // REL-2 (TEST-4): a per-page recognition that exceeds the timeout terminates the worker
+  // (a tesseract.js WASM job is not cooperatively cancellable) and rejects — so one wedged
+  // image can't block the serialized chain for the rest of the scan. The next page gets a
+  // fresh worker and succeeds. Teeth: a huge recognizeTimeoutMs makes page 1 hang forever.
+  it('terminates the worker on a per-page timeout and recovers on the next page (REL-2)', async () => {
+    let created = 0
+    let terminated = 0
+    type FakeResult = { data: { text: string; confidence: number } }
+    const mod = {
+      createWorker: async () => {
+        const myIndex = ++created
+        return {
+          recognize: (_img: Buffer): Promise<FakeResult> =>
+            myIndex === 1
+              ? new Promise<FakeResult>(() => undefined) // first worker: wedge forever
+              : Promise.resolve({ data: { text: 'recovered', confidence: 88 } }),
+          terminate: async () => {
+            terminated += 1
+          }
+        }
+      }
+    }
+    const engine = new TesseractOcrEngine({
+      langDir: '/ocr',
+      languages: ['eng'],
+      loadTesseract: async () => mod as never,
+      recognizeTimeoutMs: 20
+    })
+    // Page 1 wedges → times out → worker #1 terminated → rejects.
+    await expect(engine.recognize(Buffer.from('p1'))).rejects.toThrow(/timed out/i)
+    expect(terminated).toBe(1)
+    // The serialized chain recovered: page 2 lazily creates a fresh worker and succeeds.
+    const r = await engine.recognize(Buffer.from('p2'))
+    expect(r.text).toBe('recovered')
+    expect(created).toBe(2)
+  })
+
+  // REL-2 (TEST-4): an abort mid-recognition also terminates the worker and rejects, so the
+  // OCR task's Cancel takes effect WITHIN a page, not only between pages.
+  it('terminates the worker when a recognition is aborted in flight (REL-2)', async () => {
+    let terminated = 0
+    type FakeResult = { data: { text: string; confidence: number } }
+    const mod = {
+      createWorker: async () => ({
+        recognize: (_img: Buffer): Promise<FakeResult> => new Promise<FakeResult>(() => undefined),
+        terminate: async () => {
+          terminated += 1
+        }
+      })
+    }
+    const engine = new TesseractOcrEngine({
+      langDir: '/ocr',
+      languages: ['eng'],
+      loadTesseract: async () => mod as never,
+      recognizeTimeoutMs: 60_000 // long — the abort, not the timeout, is what fires
+    })
+    const controller = new AbortController()
+    const call = engine.recognize(Buffer.from('p'), { signal: controller.signal })
+    await new Promise((r) => setImmediate(r))
+    controller.abort()
+    await expect(call).rejects.toThrow(/abort/i)
+    expect(terminated).toBe(1)
+  })
+
   it('rewrites app.asar worker paths to app.asar.unpacked (packaged app)', () => {
     expect(
       resolveWorkerScriptPath('C:\\app\\resources\\app.asar\\node_modules\\tesseract.js\\w.js')

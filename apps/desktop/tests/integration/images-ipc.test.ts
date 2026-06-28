@@ -91,8 +91,22 @@ function immediateAnalyzer(answer = 'a local answer'): VisionAnalyzer {
   }
 }
 
+// A minimal VALID PNG: 8-byte signature + an IHDR with nonzero width@16/height@20. SEC-6
+// (backend-audit-2026-06-27) rejects a CLAIMED png/jpeg whose header won't parse (null pixel
+// count) as `decodeFailed`, so lifecycle/sentinel fixtures must carry a parseable header. `extra`
+// appends unique marker bytes so a sentinel image stays uniquely identifiable for leak checks.
+function validPngBytes(extra: number[] = []): Uint8Array {
+  const b = new Uint8Array(24 + extra.length)
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+  const dv = new DataView(b.buffer)
+  dv.setUint32(16, 2) // width
+  dv.setUint32(20, 2) // height
+  b.set(extra, 24)
+  return b
+}
+
 const goodReq = (): ImageAnalyzeRequest => ({
-  imageBytes: new Uint8Array([1, 2, 3, 4]),
+  imageBytes: validPngBytes(),
   mimeType: 'image/png',
   question: 'What is in this image?'
 })
@@ -345,7 +359,9 @@ describe('registerImagesIpc — chooseImage', () => {
 // + the completed turn; a follow-up reuses the session; the list/get/delete handlers behave;
 // a busy reject persists nothing; and everything requires an unlocked workspace.
 describe('registerImagesIpc — history persistence', () => {
-  const SENTINEL = new Uint8Array([0xab, 0xcd, 0xef, 0x10, 0x20, 0x30, 0x40, 0x50])
+  // Valid PNG header + a unique marker tail (SEC-6 requires a parseable header; the tail keeps
+  // the sentinel uniquely identifiable for the encrypted-at-rest / round-trip leak checks).
+  const SENTINEL = validPngBytes([0xab, 0xcd, 0xef, 0x10, 0x20, 0x30, 0x40, 0x50])
 
   function ctxWithDb(unlocked = true): { ctx: AppContext; db: Db; workspacePath: string; imagesPath: string } {
     const workspacePath = mkdtempSync(join(tmpdir(), 'hr-imghist-'))

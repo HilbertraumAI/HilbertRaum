@@ -107,6 +107,15 @@ const COMPLETE =
   'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
   '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
 
+// A 4-column DACH layout (Buchungstag + Valuta value date + Betrag + Saldo) with printed opening/closing
+// balances that tie out. Before the BL-1 fix the leading value date was read as the amount (the row
+// dropped or mis-valued); now every row parses with the real amount and feeds the VERIFIED total.
+const TWO_DATE_COMPLETE =
+  'Kontoauszug EUR\nAnfangssaldo 2.000,00\n' +
+  '06.06.2026 07.06.2026 Supermarkt Billa -45,90 1.954,10\n' +
+  '08.06.2026 09.06.2026 Gehalt ACME 2.500,00 4.454,10\n' +
+  'Endsaldo 4.454,10'
+
 describe('bank-statement analysis handler — applies() pre-flight (R2)', () => {
   it('applies on an analysis-shaped question over a single in-scope statement', () => {
     const db = freshDb()
@@ -197,6 +206,25 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).not.toContain('Net change')
     // The transaction listing still appears even on the refusal — the user can SEE the rows that were read.
     expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsHeading'))
+  })
+
+  it('4-column Buchung/Valuta statement: rows parse with the real amount and feed the verified total (BL-1 e2e)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, TWO_DATE_COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
+
+    // Both rows parsed (count 2) — neither dropped by the leading value-date column.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    // Money in 2500.00, out 45.90, net 2454.10 — the value date never became a 706.20-style amount.
+    expect(res.answer).toContain('2500.00')
+    expect(res.answer).toContain('45.90')
+    expect(res.answer).toContain('2454.10')
+    expect(res.answer).not.toContain('706.20') // no misread value-date fragment leaks as an amount
+    // opening 2000.00 + Σ 2454.10 == closing 4454.10 ties out → the VERIFIED (whole-document) caveat,
+    // not the unverified labelled-sum caveat and not the refusal.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 2 }))
   })
 
   it('mixed-currency statement reports NO single total (honesty)', async () => {
