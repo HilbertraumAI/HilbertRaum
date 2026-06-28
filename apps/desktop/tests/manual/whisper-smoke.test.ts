@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -35,9 +35,6 @@ import { packTranscriptSegments } from '../../src/main/services/ingestion/parser
 const ROOT = process.env.HILBERTRAUM_WHISPER_SMOKE?.trim() ?? ''
 const AUDIO_DIR = process.env.HILBERTRAUM_WHISPER_AUDIO?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT) && AUDIO_DIR.length > 0 && existsSync(AUDIO_DIR)
-// REL-6: workDir is required (the transient transcript must stay in a swept dir). A throwaway
-// temp dir is fine here — the transcript is shredded after each call regardless.
-const WORK = mkdtempSync(join(tmpdir(), 'whisper-smoke-'))
 
 function transcriberModel(root: string): string | null {
   const dir = join(root, 'models', 'transcriber')
@@ -49,6 +46,18 @@ function transcriberModel(root: string): string | null {
 describe.skipIf(!enabled)('Whisper smoke (manual, real v1.8.6 + real German audio)', () => {
   const binPath = enabled ? resolveWhisperCliPath(ROOT) : null
   const modelPath = enabled ? transcriberModel(ROOT) : null
+
+  // REL-6: workDir is required (the transient transcript must stay in a swept dir). A throwaway
+  // temp dir is fine here — the transcript is shredded after each call regardless. Created in
+  // beforeAll (not at module load) and removed in afterAll so a SKIPPED run — i.e. every CI run
+  // and any local run without the env gate — leaves no temp dir behind (TEST-N9).
+  let WORK = ''
+  beforeAll(() => {
+    WORK = mkdtempSync(join(tmpdir(), 'whisper-smoke-'))
+  })
+  afterAll(() => {
+    if (WORK) rmSync(WORK, { recursive: true, force: true })
+  })
 
   function makeReal() {
     expect(binPath, 'whisper-cli missing under runtime/whisper.cpp/<os>/').toBeTruthy()

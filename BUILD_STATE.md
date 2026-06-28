@@ -6,6 +6,75 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 0 (CI + test-infra safety net; TEST-N1 + TEST-N9)
+— FIRST remediation phase, the machine backstop every later phase relies on (branch
+`full-audit-2026-06-28-fixes`).** Suite **2335 passed / 39 skipped** (201 files, all collected), typecheck
+clean, build OK — both on the existing install AND through a clean `npm ci` with the CI env knobs set.
+This phase added CI infra + fixed one test-only side effect: **no application/runtime code changed.**
+Offline/no-telemetry posture held — CI is dev infrastructure (a GitHub Actions build pipeline), ships
+nothing to users, adds no telemetry/analytics, and performs no network egress beyond the npm registry
+install; nothing CI-related is wired into the app.
+- **Task A — `.github/workflows/ci.yml` (TEST-N1).** On `pull_request` and `push` to `master`, runs the
+  exact pre-release chain `npm ci → npm run typecheck → npm run build → npm test` on a matrix of
+  **`ubuntu-latest` + `windows-latest`** (Windows is first-class), Node **22.x** (engines `>=22.5`),
+  `actions/setup-node` npm cache keyed off the root lockfile, `concurrency: cancel-in-progress` per ref,
+  `fail-fast: false`, top-level `permissions: contents: read` (least privilege — hardened after the
+  adversarial review). **Two jobs:** the **`build-and-test`** matrix + a tiny stable **`ci-success`**
+  aggregate gate (`needs` the matrix, `if: always()`, fails unless every leg succeeded) — mark
+  **`ci-success`** the **required status check** (its name survives OS-label changes; the per-OS leg
+  names `build-and-test (ubuntu-latest)` / `(windows-latest)` do not).
+- **DECISIONS as built:** (1) **Lockfile** — root `package-lock.json` already exists and is in sync, so
+  `npm ci` works as-is; no lockfile generation / no fallback to `npm install` was needed. (2) **Matrix** —
+  both OSes from the start (a local Windows dry-run of the full `npm ci` chain passed, so windows-latest
+  was NOT deferred). (3) **Trigger scope** — `push` is scoped to `master` (post-merge green + direct
+  pushes) while `pull_request` validates every PR against its merge result; this avoids a duplicate CI run
+  on every push to a PR branch. Owner can broaden `push` to all branches if desired. (4) **Electron in CI**
+  — both `ELECTRON_SKIP_BINARY_DOWNLOAD=1` (skips Electron's own ~100 MB platform-binary download) and
+  `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` (short-circuits `scripts/verify-electron.mjs`) are set at workflow
+  level. The unit+integration suite is offline by construction (mock runtime + mock embedder, `electron`
+  mocked); nothing in typecheck/build/test launches Electron. **Verified locally: a `npm ci` with both vars
+  set leaves the Electron platform binary ABSENT (`path.txt` missing) and typecheck + build + test still
+  pass 2335/39.** (`ELECTRON_SKIP_BINARY_DOWNLOAD` alone already early-exits verify-electron; the second var
+  is explicit + belt-and-suspenders.)
+- **Task B — whisper-smoke temp-dir leak (TEST-N9).** `tests/manual/whisper-smoke.test.ts` ran a
+  module-scope `mkdtempSync(...)` at collection time on EVERY suite run (even though the `describe` is
+  `skipIf`-skipped) and never cleaned it up. Moved it into a `beforeAll` inside the gated `describe` with an
+  `afterAll` `rmSync(WORK, {recursive,force})` — placed inside the gated `describe` like
+  `dictation-smoke`/`rag-quality`, but ADDING the cleanup those two omit (the adversarial review found
+  both leak their own `mkdtemp` dir on an enabled run — recorded as an out-of-scope observation below).
+  Swept the other 17 `tests/manual/*` smokes: **whisper-smoke was the only import-time side effect** (the
+  rest do their `mkdtempSync`/`writeFileSync` inside test bodies/functions). **Verified: a full suite run
+  leaves zero `whisper-smoke-*` dirs in the OS temp dir.**
+- **Verification (all green):** (a) post-edit `typecheck`+`build`+`test` = 2335/39, exit 0. (b) Full
+  `npm ci` (env vars set) + chain = 2335/39, exit 0, binary absent (above). (c) **FullSuiteGuard teeth
+  proven** — temporarily added `exclude: ['tests/unit/smoke.test.ts']` to `vitest.config.ts`; the full run
+  reported **200 of 201** files and, although all 2333 collected tests PASSED, `tests/full-suite-guard.ts`
+  threw `Full-suite collection guard FAILED … 1 were dropped` and the run **exited 1** (false-green caught);
+  reverted → green again. (NB a *rename* would NOT prove teeth — the disk-walk `listTestFiles` drops the
+  file from `expected` too, so only a config `exclude` exercises the guard.) (d) `ci.yml` parsed/validated
+  with the `yaml` package (`actionlint` not installed locally). **Not yet proven: the workflow turning GREEN
+  on GitHub** — that requires the owner to push the branch / open a PR (see Next action).
+- **Docs.** New `## Continuous integration (CI)` section in `docs/packaging.md` (placed before the manual
+  pre-ship checklist): what CI gates, the two Electron skip knobs, and an explicit statement that the
+  `HILBERTRAUM_*` manual harness matrix (audit M-A5) remains a **SEPARATE human pre-release gate CI does NOT
+  cover**. CI is the automated floor; the manual matrix + pre-ship checklist stay required and human-run.
+- **Files changed:** `.github/workflows/ci.yml` (new), `apps/desktop/tests/manual/whisper-smoke.test.ts`,
+  `docs/packaging.md`, `BUILD_STATE.md`. No `package.json`/lockfile change was required.
+- **Observed (OUT of Phase 0 scope — flagged for the owner / a later MAINT phase):** the committed root
+  `package-lock.json` carries STALE metadata — root `version 0.1.27` / `license Apache-2.0` vs
+  `package.json`'s `0.1.34` / `GPL-3.0-or-later` (a plain `npm install` resyncs it). `npm ci` tolerates this
+  (only the dependency tree must match the manifest — verified green), so it is NOT a CI blocker; left
+  unchanged here because lockfile edits are out of scope unless needed for `npm ci`. **Also (test-infra
+  tidy, later phase):** `tests/manual/dictation-smoke.test.ts` and `rag-quality.test.ts` create an
+  `mkdtemp` dir in a test body and never `rmSync` it — they leak ONE dir each, but only when ENABLED (the
+  human pre-release gate), never at collection time and never in CI, so they are NOT the TEST-N9 class
+  (whisper-smoke's import-time leak) and were left for a later cleanup.
+- **Next action (owner):** push `full-audit-2026-06-28-fixes` / open a PR so the `build-and-test` checks run
+  on GitHub, confirm both OS legs go green, then mark **`ci-success`** a **required status check** on
+  `master` (branch protection). Then **Phase 1 — financial correctness** (BL-N1/2/3/4/5/6 + TEST-N2/N6;
+  characterization tests first). Do NOT auto-push/merge — owner merges._
+
+
 _2026-06-28 — **Backend audit 2026-06-27 — FULLY REMEDIATED (all 8 phases) + Phase 9 close-out
 (branch `backend-audit-2026-06-27-fixes`).** The multi-persona backend audit (2 High · 9 Medium · 14 Low ·
 8 Info; no Critical, no remote-exploitable issue) is closed out. Suite **2335 passed / 39 skipped**,
