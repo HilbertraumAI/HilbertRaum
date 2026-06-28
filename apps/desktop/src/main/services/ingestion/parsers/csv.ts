@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { extname } from 'node:path'
 import type { DocumentParser, ExtractedSegment, ParsedDocument } from './index'
 
 // CSV parser using papaparse (pure-JS). Rows are linearised into readable text so they
@@ -21,7 +22,13 @@ export const CsvParser: DocumentParser = {
   async parse(filePath: string): Promise<ParsedDocument> {
     const Papa = (await import('papaparse')).default
     const raw = await readFile(filePath, 'utf8')
-    const parsed = Papa.parse(raw, { skipEmptyLines: true }) as unknown as ParseResultLike
+    // RAG-N5: pin the delimiter by extension instead of relying on papaparse auto-detection. A
+    // .tsv whose cells contain commas (e.g. "Lovelace, Ada") otherwise auto-detects as comma —
+    // tab and comma can tie on field-count consistency and the auto-detector checks comma first —
+    // silently mis-pairing header:value while the document still reaches 'indexed'. Tab-delimited
+    // for .tsv, comma for .csv (and any other registered extension).
+    const delimiter = extname(filePath).toLowerCase() === '.tsv' ? '\t' : ','
+    const parsed = Papa.parse(raw, { skipEmptyLines: true, delimiter }) as unknown as ParseResultLike
 
     const rows = (parsed.data as unknown[][]).filter((r) => Array.isArray(r) && r.length > 0)
     if (rows.length === 0) return { segments: [], mimeType: 'text/csv' }

@@ -80,6 +80,40 @@ describe('MarkdownParser', () => {
     expect(out.segments[1].text).toContain('body a')
     expect(out.segments[2].text).toContain('body b')
   })
+
+  // RAG-N4: `#` lines INSIDE a fenced code block are code (shell comments, C `#define`, diff
+  // hunks), not headings. Without fence tracking they split the block + stamp bogus sectionLabels.
+  it('does not treat `#` lines inside a fenced code block as headings (RAG-N4)', async () => {
+    const md = [
+      '# Real Heading',
+      'intro prose',
+      '',
+      '```sh',
+      '# this is a shell comment, not a heading',
+      'echo hi',
+      '#define NOT_A_HEADING 1',
+      '```',
+      'more prose after the fence'
+    ].join('\n')
+    const p = write('fenced.md', md)
+    const out = await MarkdownParser.parse(p)
+    // Exactly ONE section ("Real Heading"); the fenced `#` lines do not fragment it.
+    expect(out.segments).toHaveLength(1)
+    expect(out.segments[0].sectionLabel).toBe('Real Heading')
+    // The whole fenced block (incl. its `#` lines) stays inside that one segment.
+    expect(out.segments[0].text).toContain('# this is a shell comment')
+    expect(out.segments[0].text).toContain('#define NOT_A_HEADING 1')
+    expect(out.segments[0].text).toContain('more prose after the fence')
+  })
+
+  // RAG-N4: a tilde fence behaves the same, and a heading AFTER a closed fence still splits.
+  it('still splits on a real heading after a closed ~~~ fence (RAG-N4 — no over-suppression)', async () => {
+    const md = ['# One', '~~~', '# not a heading', '~~~', '# Two', 'tail'].join('\n')
+    const p = write('tilde.md', md)
+    const out = await MarkdownParser.parse(p)
+    expect(out.segments.map((s) => s.sectionLabel)).toEqual(['One', 'Two'])
+    expect(out.segments[0].text).toContain('# not a heading')
+  })
 })
 
 describe('CsvParser', () => {
@@ -115,6 +149,29 @@ describe('CsvParser', () => {
     expect(text).toContain('name: Ada')
     expect(text).toContain('role: Engineer')
     expect(text).toContain('team:')
+  })
+
+  // RAG-N5: a .tsv is tab-delimited. papaparse delimiter auto-detection ties tab with comma on
+  // field-count consistency here and (checking comma first) picks COMMA, so a comma INSIDE a cell
+  // ("Lovelace, Ada") shatters the row and mis-pairs header:value — silently (the doc still
+  // 'indexed'). Pinning delimiter='\t' for .tsv keeps the tab columns correct.
+  it('parses a .tsv by TAB, not papaparse comma auto-detection (RAG-N5)', async () => {
+    const p = write('people.tsv', 'last, first\trole\nLovelace, Ada\tEngineer\nHopper, Grace\tAdmiral')
+    expect(selectParser('people.tsv')?.name).toBe('CsvParser')
+    const out = await CsvParser.parse(p)
+    const text = out.segments[0].text
+    expect(text).toContain('last, first: Lovelace, Ada')
+    expect(text).toContain('role: Engineer')
+    expect(text).toContain('last, first: Hopper, Grace')
+    expect(text).toContain('role: Admiral')
+  })
+
+  // Don't-regress: a .csv with comma-separated cells is still comma-parsed (unchanged path).
+  it('still parses a .csv by comma (RAG-N5 — no regression)', async () => {
+    const p = write('plain.csv', 'name,role\nAda,Engineer')
+    const out = await CsvParser.parse(p)
+    expect(out.segments[0].text).toContain('name: Ada')
+    expect(out.segments[0].text).toContain('role: Engineer')
   })
 })
 
