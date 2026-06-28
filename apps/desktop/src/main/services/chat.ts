@@ -687,12 +687,29 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): bool
  * Delete a conversation and all of its messages (chat and document Q&A alike — a
  * documents conversation only references documents via persisted citations, so the
  * documents/chunks/embeddings tables are untouched). Messages go first: the FK has
- * no ON DELETE CASCADE and foreign_keys is ON. Returns true when a row was deleted.
+ * no ON DELETE CASCADE and foreign_keys is ON.
+ *
+ * Atomicity (REL-4, full audit 2026-06-28): both deletes run in ONE transaction so a crash /
+ * lock / SQLITE_BUSY past the 5 s busy_timeout BETWEEN them rolls back instead of leaving the
+ * messages gone but the conversation row surviving — an empty thread that can't be repopulated
+ * (compaction checkpoint rows live in `messages` too). Mirrors `deleteDocument`'s DATA-1 wrap.
+ * Returns true when a conversation row was deleted.
  */
 export function deleteConversation(db: Db, conversationId: string): boolean {
-  db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(conversationId)
-  const result = db.prepare('DELETE FROM conversations WHERE id = ?').run(conversationId)
-  return Number(result.changes) > 0
+  db.exec('BEGIN')
+  try {
+    db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(conversationId)
+    const result = db.prepare('DELETE FROM conversations WHERE id = ?').run(conversationId)
+    db.exec('COMMIT')
+    return Number(result.changes) > 0
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
+    throw err
+  }
 }
 
 /** Most message hits one search returns (across all conversations). */

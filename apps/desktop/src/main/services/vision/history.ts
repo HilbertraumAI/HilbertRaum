@@ -216,13 +216,32 @@ export function getImageSession(
 }
 
 /**
- * Delete one history entry: shred the stored image (best-effort — a missing/locked copy must
- * not block the DB cleanup) then delete the row (turns cascade via ON DELETE CASCADE).
+ * Delete one history entry: delete the ROW first (turns cascade via ON DELETE CASCADE), THEN
+ * shred the stored image.
+ *
+ * Ordering (REL-5, full audit 2026-06-28): the previous order shredded the file BEFORE the row
+ * delete, so a failed delete left a row whose image was already gone — an undeletable/unopenable
+ * ghost session. This mirrors `deleteDocument`'s DATA-1 rule: never destroy the on-disk copy while
+ * the row delete could still fail. The delete is wrapped in a transaction (parity with
+ * deleteDocument/deleteConversation; the single statement is already atomic, but the wrap keeps the
+ * "row first, shred after commit" ordering explicit). The shred is best-effort AFTER the commit — a
+ * missing/locked copy must not resurrect the already-deleted row.
  */
 export function deleteImageSession(db: Db, dir: string, id: string): void {
   const row = getRow(db, id)
   if (!row) return
+  db.exec('BEGIN')
+  try {
+    db.prepare('DELETE FROM image_sessions WHERE id = ?').run(id)
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
+    throw err
+  }
   const stored = join(dir, row.stored_name)
   if (existsSync(stored)) shredFile(stored)
-  db.prepare('DELETE FROM image_sessions WHERE id = ?').run(id)
 }

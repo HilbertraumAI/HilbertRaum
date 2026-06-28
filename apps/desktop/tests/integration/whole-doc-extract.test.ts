@@ -179,6 +179,45 @@ describe('extract pass', () => {
     expect(extractStatus(id)).toBe('ready')
   })
 
+  it('re-extract is idempotent per chunk — the __scan__ marker count never doubles [DATA-3]', async () => {
+    const id = await importWords(1500)
+    const n = chunkCount(id)
+    expect(n).toBeGreaterThan(1)
+    const markerCount = (): number =>
+      (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM extraction_records WHERE document_id = ? AND record_type = ?`
+          )
+          .get(id, SCAN_MARKER_TYPE) as { n: number }
+      ).n
+
+    // First pass: exactly one __scan__ marker per chunk.
+    const m1 = makeManager(extractRuntime())
+    await waitTerminal(m1, m1.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(markerCount()).toBe(n)
+
+    // Second pass over the unchanged document: every chunk is a cache hit (matching marker) → it is
+    // SKIPPED, so no new markers are written. The audit's concern — markers doubling per generation.
+    const m2 = makeManager(extractRuntime())
+    await waitTerminal(m2, m2.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(markerCount()).toBe(n) // still one per chunk, NOT 2n
+
+    // Force the COMMIT path (not the cache skip): mutate one chunk's text so its content hash changes
+    // → the next pass MISSES the cache and re-commits that chunk. commitChunk deletes the chunk's
+    // prior rows before inserting, so its marker is REPLACED, never accumulated.
+    const firstChunk = db
+      .prepare('SELECT id FROM chunks WHERE document_id = ? ORDER BY chunk_index LIMIT 1')
+      .get(id) as { id: string }
+    db.prepare('UPDATE chunks SET text = ? WHERE id = ?').run(
+      'Totally different chunk text for re-extraction.',
+      firstChunk.id
+    )
+    const m3 = makeManager(extractRuntime())
+    await waitTerminal(m3, m3.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(markerCount()).toBe(n) // the re-commit replaced the chunk's marker — no doubling
+  })
+
   it('rolls back on an injected insert failure; the shared connection is not poisoned [H11]', async () => {
     const id = await importText('Body with @@alice@@ and @@bob@@.')
     let failOnce = true

@@ -103,13 +103,48 @@ batching — no behavior change.
   (every retrieval + stale-check filters it); `idx_extract_type_nv` on
   `extraction_records(record_type, normalized_value)` (the unscoped "list every date/amount" path the
   doc-leading `idx_extract_doc_type` can't serve); `idx_documents_status` on `documents(status)`;
-  `idx_bank_transactions_category` on `bank_transactions(category_id)`. **`run_id` indexes deliberately
+  `idx_bank_transactions_category` on `bank_transactions(category_id)`; `idx_messages_conv_kind` on
+  `messages(conversation_id, kind)` (full-audit-2026-06-28 PERF-3 — the per-turn `getLatestCheckpoint`
+  compaction lookup, `WHERE conversation_id=? AND kind='compaction' ORDER BY rowid DESC LIMIT 1`,
+  served with no SCAN/temp-B-tree because SQLite auto-appends the rowid; **not** `(…, kind, rowid)` —
+  naming rowid in an index is rejected, "no such column: rowid"); `idx_summary_cache_created` on
+  `summary_cache(created_at)` (PERF-4 — turns the age-ordered eviction delete into an ordered index
+  scan, replacing a full-table temp-B-tree sort). `idx_messages_conversation` (conversation_id alone) is
+  **retained** — it still serves `listConversationTurns` / the summary-marker lookup, whose `rowid>?`
+  range + `ORDER BY rowid` the composite can't satisfy (the non-equality `kind!='compaction'` blocks the
+  trailing rowid seek). **`run_id` indexes deliberately
   omitted** — `run_id` is only ever INSERTed, never joined/filtered, so an index would be pure
   write-amplification on USB; add one alongside the first query that joins on it.
 - **DB-3/ING-2 — `listDocuments` de-N+1'd.** The per-row chunk COUNT + per-indexed-row stale-embeddings
   COUNT+JOIN (up to 1+2N queries, polled at 400 ms during import) are now two grouped queries loaded
   into Maps (`GROUP BY document_id`), mirroring the memberships join beside them. Benefits from
   `idx_embeddings_model`.
+- **Data-layer hardening (full audit 2026-06-28, Phase 5).** Atomicity + a trigger guard + two pinned
+  invariants, all additive (no schema-shape change; indexes `IF NOT EXISTS`, the FTS trigger drop/recreate
+  the only non-index DDL).
+  - **REL-4/REL-5 — transactional parity with `deleteDocument`.** `deleteConversation` (chat.ts) now wraps
+    its two deletes (messages, then conversations — no `ON DELETE CASCADE`) in one `BEGIN…COMMIT` with
+    `ROLLBACK` on throw, so a crash / `SQLITE_BUSY` past the busy_timeout between them can't leave an
+    orphaned empty thread (compaction checkpoint rows live in `messages` too). `deleteImageSession`
+    (vision/history.ts) now deletes the ROW first (in a txn) and shreds the stored image only AFTER —
+    the DATA-1 "never destroy the on-disk copy while the row delete can still fail" ordering, closing the
+    undeletable-ghost-session window. Both run from IPC handlers with no outer transaction (no nested
+    BEGIN), exactly like `deleteDocument`.
+  - **DATA-1 — `messages_fts_au` kind guard + backfill.** The UPDATE trigger now guards its INSERT with
+    `WHERE new.kind IS NOT 'compaction'` (the DELETE stays unconditional, so a plain→compaction content
+    edit still purges the stale FTS row), matching the INSERT trigger. `ensureMessagesFtsUpdateKindFilter`
+    drop/recreates the trigger on existing DBs whose `au` trigger re-indexed updates unconditionally
+    (mirrors `ensureMessagesFtsKindFilter`) — so a future in-place edit of a checkpoint row can never leak
+    its summary text into conversation search, on old or new drives.
+  - **DATA-2 (invariant, no code change).** `tree_edges.child_id` is a polymorphic FK (chunks.id OR
+    tree_nodes.id) with no FK to chunks; the no-dangling-edge invariant holds only because every
+    chunk-delete path also tears down the document's `tree_nodes` (cascading the edges via `parent_id`).
+    Pinned by an integrity test (after a `deleteDocument`, zero `child_is_chunk=1` edges reference a gone
+    chunk; the forbidden chunks-only delete dangles them).
+  - **DATA-3 (idempotency confirmed, no code change).** `extract.ts` re-extract is idempotent per chunk:
+    the main loop skips a chunk whose `__scan__` marker matches the current content hash, and `commitChunk`
+    deletes the chunk's prior rows before inserting, so a forced re-commit replaces rather than doubles the
+    marker. Pinned by a no-double-count test.
 
 **Compare retrieval (`services/doctasks/manager.ts`).**
 - **RAG-2/ING-1 — decode doc-B once.** Section-matched compare (mode b) ran `VectorIndex.search` per

@@ -6,6 +6,71 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 5 (DATA-LAYER HARDENING; REL-4 Med, REL-5 Low,
+PERF-3 Med, PERF-4 Low, DATA-1/DATA-2/DATA-3 Low) — atomicity + two additive indexes + an FTS trigger
+guard + two pinned invariants, all additive (no schema-shape change; indexes `IF NOT EXISTS`, one FTS
+trigger drop/recreate the only non-index DDL).** Suite **2395 passed / 39 skipped** (was 2381/39 at Phase 4
+→ **+14 tests**), typecheck clean, build OK. Touched ONLY `db.ts`, `chat.ts`, `vision/history.ts`, their
+tests + a new `data-layer-hardening.test.ts`, and the architecture data-layer notes — no schema shape,
+FK, retrieval/ranking, business-logic, or renderer change; offline/no-telemetry posture held.
+- **REL-4 (`deleteConversation` atomic).** Its two auto-committed deletes (messages, then conversations —
+  no `ON DELETE CASCADE`) are now ONE `BEGIN…COMMIT` with `ROLLBACK` on throw (mirrors `deleteDocument`),
+  so a crash/`SQLITE_BUSY` between them can't leave an orphaned empty thread (compaction checkpoint rows
+  live in `messages` too).
+- **REL-5 (`deleteImageSession` reordered).** Deletes the ROW first (in a txn), shreds the stored image
+  only AFTER — the DATA-1 ordering — closing the "file shredded before a failed delete → undeletable ghost
+  session" window.
+- **PERF-3 (`idx_messages_conv_kind`).** `getLatestCheckpoint` runs every chat/grounded turn
+  (`conversation_id AND kind='compaction' ORDER BY rowid DESC LIMIT 1`); the new composite serves it with
+  no SCAN/temp-B-tree (EXPLAIN-pinned). **Correction to the audit's literal recommendation:** it specified
+  `(conversation_id, kind, rowid)`, but SQLite **rejects** naming rowid in an index ("no such column:
+  rowid") since `messages` has a TEXT PK + implicit rowid — verified empirically. `(conversation_id, kind)`
+  gives the identical plan because SQLite auto-appends the rowid. `idx_messages_conversation` is RETAINED
+  (still serves `listConversationTurns` / the summary-marker lookup; the composite can't, because their
+  `rowid>?` range + `ORDER BY rowid` is blocked by the non-equality `kind!='compaction'` — review-confirmed,
+  comment corrected).
+- **PERF-4 (`idx_summary_cache_created`).** Summary-cache eviction (`ORDER BY created_at ASC`) was a
+  full-scan + temp-B-tree sort; the index makes it an ordered index scan (EXPLAIN-pinned; residual partial
+  sort only the `content_hash` tiebreak).
+- **DATA-1 (`messages_fts_au` kind guard + backfill).** The UPDATE trigger now guards its INSERT with
+  `WHERE new.kind IS NOT 'compaction'` (DELETE stays unconditional → a plain→compaction edit still purges
+  the stale FTS row); `ensureMessagesFtsUpdateKindFilter` drop/recreates the trigger on pre-fix DBs
+  (mirrors `ensureMessagesFtsKindFilter`). A future in-place edit of a checkpoint row can't leak its
+  summary into conversation search — old or new drives.
+- **DATA-2 (invariant test, no code change).** `tree_edges.child_id` is a polymorphic FK with no FK to
+  chunks; the no-dangling-edge invariant holds because every chunk-delete path tears down `tree_nodes`
+  (cascading edges). Pinned: after `deleteDocument`, zero `child_is_chunk=1` edges reference a gone chunk;
+  the forbidden chunks-only delete dangles them (teeth).
+- **DATA-3 (idempotency confirmed, no code change).** `extract.ts` is idempotent per chunk (main loop skips
+  a matching-hash `__scan__` marker; `commitChunk` deletes-then-inserts). Pinned: re-extract — incl. a
+  forced re-commit via a changed chunk hash — never doubles the marker count.
+- **Tests (+14) + teeth.** New `data-layer-hardening.test.ts` (REL-4 rollback-on-injected-failure +
+  illustration; PERF-3 EXPLAIN + drop-index teeth + the rowid-rejection assertion; DATA-2 invariant +
+  forbidden-path teeth). `image-history.test.ts` (REL-5 failed-delete-leaves-file-intact).
+  `conversation-search.test.ts` (DATA-1 fresh-DB no-leak + pre-fix-DB backfill). `whole-doc-extract.test.ts`
+  (DATA-3 no-double). `summary-cache-eviction.test.ts` (PERF-4 EXPLAIN + teeth). **Teeth-verified** by
+  neutering each behavioral fix and watching its test fail, then restoring: REL-4 (half-delete), REL-5
+  (file shredded first), DATA-1 fresh + backfill (compaction text leaks), DATA-3 (marker doubles). The
+  PERF-3/PERF-4/DATA-2 tests carry inline drop-index / forbidden-path teeth.
+- **Adversarial review pass (5-dimension multi-agent workflow + per-finding verify).** Migration-safety,
+  transaction-correctness (incl. nested-BEGIN), and scope/regression returned ZERO findings. Three confirmed
+  LOW/nit comment-accuracy + test-label items, all fixed: (a) the PERF-3 comment over-claimed the composite
+  "serves" the listing/marker queries (the planner keeps `idx_messages_conversation`; could mislead a
+  maintainer into dropping it) → corrected; (b) PERF-4 "index range scan" → "ordered index scan
+  (LIMIT-bounded)"; (c) the REL-4 "TEETH" test never called `deleteConversation` (the real guard is the
+  injection test) → relabelled as an illustration.
+- **Files changed:** `apps/desktop/src/main/services/db.ts` (2 indexes, `messages_fts_au` guard +
+  `ensureMessagesFtsUpdateKindFilter` backfill), `chat.ts` (`deleteConversation` txn), `vision/history.ts`
+  (`deleteImageSession` reorder); tests `tests/integration/{data-layer-hardening(NEW),image-history,
+  conversation-search,whole-doc-extract}.test.ts`, `tests/unit/summary-cache-eviction.test.ts`;
+  `docs/architecture.md` (data-layer index inventory + Phase 5 hardening record). **Out of scope
+  (untouched):** `summary-cache.ts` / `extract.ts` code (DATA-3/PERF-4 are index/test-only), retrieval/
+  ranking (RAG-N3 — Phase 6), business logic, renderer.
+- **Next action (owner):** review/commit Phase 5 (do NOT auto-push/merge). Then **Phase 6 — reranker scoring
+  depth (RAG-N3 + DOC-N6)**, which per the audit §6/§7 should land AFTER the retrieval-order test **TEST-N4**
+  exists (graded-overlap ranking), so the quality change is measurable._
+
+
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 3 (RENDERER ROBUSTNESS; FE-1 High +
 FE-2…FE-9) — the renderer was the least-audited surface (prior rounds were backend-only); the headline
 gap was that ANY screen render throw blanked the whole offline app with no recovery (branch

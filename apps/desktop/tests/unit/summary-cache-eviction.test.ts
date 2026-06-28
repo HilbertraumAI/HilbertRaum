@@ -96,3 +96,31 @@ describe('evictSummaryCache (DATA-3/MAINT-3)', () => {
     expect(rowCount(db)).toBe(20)
   })
 })
+
+describe('summary_cache eviction index (PERF-4, full audit 2026-06-28)', () => {
+  // Mirrors the DELETE in evictSummaryCache (summary-cache.ts): the oldest rows by created_at.
+  const EVICT_SQL = `DELETE FROM summary_cache WHERE rowid IN (
+         SELECT rowid FROM summary_cache ORDER BY created_at ASC, content_hash ASC LIMIT ?
+       )`
+  const plan = (db: Db): string =>
+    (db.prepare('EXPLAIN QUERY PLAN ' + EVICT_SQL).all(10) as Array<{ detail: string }>)
+      .map((r) => r.detail)
+      .join(' | ')
+
+  it('uses idx_summary_cache_created (an index scan, not a full scan + full sort)', () => {
+    const db = freshDb()
+    const p = plan(db)
+    expect(p).toContain('idx_summary_cache_created')
+    // The residual is only a partial sort for the content_hash tiebreak within an identical
+    // created_at — not the full-table temp B-tree sort PERF-4 removes.
+  })
+
+  it('TEETH: without the index, eviction falls back to a full scan + temp B-tree sort', () => {
+    const db = freshDb()
+    db.exec('DROP INDEX idx_summary_cache_created')
+    const p = plan(db)
+    expect(p).not.toContain('idx_summary_cache_created')
+    expect(p).toMatch(/SCAN summary_cache(?! USING INDEX)/) // a bare full table scan
+    expect(p).toMatch(/USE TEMP B-TREE FOR ORDER BY/) // the full sort
+  })
+})

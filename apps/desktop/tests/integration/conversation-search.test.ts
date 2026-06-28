@@ -22,7 +22,8 @@ import {
   appendMessage,
   createConversation,
   deleteConversation,
-  searchMessages
+  searchMessages,
+  writeCheckpoint
 } from '../../src/main/services/chat'
 import { buildFtsMatchQuery } from '../../src/main/services/fts'
 import { buildFtsMatchQuery as buildFtsMatchQueryFromHybrid } from '../../src/main/services/rag/hybrid'
@@ -141,6 +142,96 @@ describe('messages_fts trigger sync', () => {
     const msg = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'original text' })
     db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('edited text', msg.id)
     expect(ftsRows(db).map((r) => r.content)).toEqual(['edited text'])
+  })
+})
+
+// ---- DATA-1: messages_fts_au kind guard (full audit 2026-06-28) ----------------------
+
+describe('messages_fts_au compaction guard (DATA-1)', () => {
+  it('an in-place edit of a compaction row never enters conversation search (fresh DB)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'visible question apple' })
+    writeCheckpoint(db, {
+      conversationId: conv.id,
+      summary: 'hidden checkpoint summary banana',
+      coversThroughRowid: 0
+    })
+    // The checkpoint row was never indexed (the insert trigger's kind guard skipped it).
+    expect(searchMessages(db, 'banana')).toEqual([])
+
+    // A future in-place edit of the checkpoint content must STILL not leak into search — the update
+    // trigger's INSERT carries the same kind guard, while its DELETE still runs.
+    const cp = db.prepare("SELECT id FROM messages WHERE kind = 'compaction'").get() as { id: string }
+    db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('edited summary cherry', cp.id)
+    expect(searchMessages(db, 'cherry')).toEqual([])
+
+    // …but a plain message update still re-indexes (the defense-in-depth path is intact).
+    const plain = db
+      .prepare("SELECT id FROM messages WHERE kind IS NOT 'compaction' LIMIT 1")
+      .get() as { id: string }
+    db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('updated answer durian', plain.id)
+    expect(searchMessages(db, 'durian')).toHaveLength(1)
+  })
+
+  it('backfills the kind guard onto a pre-DATA-1 database whose au trigger was unconditional', () => {
+    // A DB whose messages_fts_au is the OLD unconditional form (re-indexes ANY content update,
+    // even a compaction row) — what every DB created before this fix carries on disk.
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-search-au-mig-'))
+    const path = join(dir, 'old-au.sqlite')
+    const nodeRequire = createRequire(process.execPath)
+    const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')
+    const old = new DatabaseSync(path)
+    old.exec(`CREATE TABLE conversations (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL, model_id TEXT, mode TEXT NOT NULL DEFAULT 'chat')`)
+    old.exec(`CREATE TABLE messages (
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+      content TEXT NOT NULL, created_at TEXT NOT NULL, token_count INTEGER,
+      citations_json TEXT, kind TEXT)`)
+    old.exec(`
+CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);
+CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages WHEN new.kind IS NOT 'compaction' BEGIN
+  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+END;
+CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+END;
+CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+END;`)
+    old.prepare(
+      `INSERT INTO conversations (id, title, created_at, updated_at) VALUES ('c1', 'Chat', '2026-01-01', '2026-01-01')`
+    ).run()
+    old.prepare(
+      `INSERT INTO messages (id, conversation_id, role, content, created_at, kind)
+       VALUES ('cp1', 'c1', 'system', 'secret checkpoint elderberry', '2026-01-01', 'compaction')`
+    ).run()
+    // Sanity: the pre-fix update trigger has no kind guard.
+    const before = old
+      .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'")
+      .get() as { sql: string }
+    expect(before.sql).not.toContain('new.kind')
+    old.close()
+
+    const db = openDatabase(path)
+    // The backfill rewrote the update trigger to carry the guard…
+    const after = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'")
+      .get() as { sql: string }
+    expect(after.sql).toContain('new.kind')
+
+    // …so an in-place edit of the checkpoint content no longer leaks into conversation search.
+    db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('edited checkpoint fig', 'cp1')
+    expect(searchMessages(db, 'fig')).toEqual([])
+
+    // Idempotent: re-opening keeps the guarded trigger (no needless churn, still no leak).
+    const again = openDatabase(path)
+    const reopened = again
+      .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'")
+      .get() as { sql: string }
+    expect(reopened.sql).toContain('new.kind')
   })
 })
 

@@ -143,4 +143,43 @@ describe('image history — delete', () => {
     // Reopening a deleted session is a clean null.
     expect(getImageSession(db, dir, id, cipher)).toBeNull()
   })
+
+  it('REL-5: a failed row delete leaves the image intact — no undeletable ghost session', () => {
+    // The fix deletes the ROW first, then shreds. Inject a failure on the row delete and assert the
+    // file was NOT already shredded (the pre-fix shred-then-delete order would leave a row whose
+    // image is gone — an unopenable, self-only-healing ghost). With the reorder, a failed delete
+    // means nothing was destroyed: the session stays fully openable.
+    const { db, workspacePath } = freshWorkspace()
+    const dir = imagesDir(workspacePath)
+    const id = createImageSession(
+      db,
+      dir,
+      { imageBytes: SENTINEL, mimeType: 'image/png', name: 'keep.png' },
+      null
+    )
+    const storedPath = join(dir, readdirSync(dir)[0])
+    expect(existsSync(storedPath)).toBe(true)
+
+    // Only the image_sessions DELETE throws; getRow's SELECT + BEGIN/ROLLBACK hit the real db.
+    const wrapped = {
+      exec: (sql: string) => db.exec(sql),
+      prepare(sql: string) {
+        if (sql.startsWith('DELETE FROM image_sessions')) {
+          return {
+            run: () => {
+              throw new Error('injected: image_sessions delete failed')
+            }
+          }
+        }
+        return db.prepare(sql)
+      }
+    } as unknown as Db
+
+    expect(() => deleteImageSession(wrapped, dir, id)).toThrow(/injected/)
+
+    // File never shredded (delete ran first and failed) → the session is still whole + openable.
+    expect(existsSync(storedPath)).toBe(true)
+    expect(listImageSessions(db)).toHaveLength(1)
+    expect(getImageSession(db, dir, id, null)).not.toBeNull()
+  })
 })
