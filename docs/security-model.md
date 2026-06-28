@@ -550,8 +550,13 @@ staging dir and only places it on a clean pass. Each defence:
   signatures (zip `PK`, gzip, xz, zstd, tar `ustar`), so a zip renamed `data.csv` is rejected even
   though its extension is allowlisted.
 - **Extension allowlist (§6.3)** — `.md`/`.txt`/`.json`/`.csv` only.
-- **§6.4 caps** — per-file / total-uncompressed / file-count / path-length / folder-depth, all
-  env-overridable (`services/skills/limits.ts`), mirroring the malicious-document caps above.
+- **§6.4 caps** — six resource ceilings, all env-overridable (`services/skills/limits.ts`),
+  mirroring the malicious-document caps above and named here in full (DOC-N1, full audit 2026-06-28):
+  per-file (`HILBERTRAUM_SKILL_MAX_FILE_BYTES`, default 1 MiB), total-uncompressed
+  (`HILBERTRAUM_SKILL_MAX_TOTAL_BYTES`, default 8 MiB), file-count (`HILBERTRAUM_SKILL_MAX_FILES`,
+  default 200), path-length (`HILBERTRAUM_SKILL_MAX_PATH_LEN`, default 255), folder-depth
+  (`HILBERTRAUM_SKILL_MAX_DEPTH`, default 4), and SKILL.md body length
+  (`HILBERTRAUM_SKILL_MAX_BODY`, default 64 KiB).
 
 Every rejection is a **fixed, structural English string** (`SKILL_IMPORT_ERRORS`) — it never
 interpolates a member path, file name, or body text, so a malicious package can never echo its
@@ -882,7 +887,11 @@ the **original** bytes to the sidecar — so a small (<20 MiB) **decompression b
 decodes to billions of pixels passed the guard and OOM'd the sidecar. The renderer's `MAX_DIMENSION`
 downscale is display-only and doesn't bound what the sidecar decodes. The main guard now parses the
 image **header** (PNG IHDR / JPEG SOF) for `width*height` — no full decode — and rejects above a
-**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable) as `tooLarge`.
+**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable via
+`HILBERTRAUM_MAX_IMAGE_PIXELS`) as `tooLarge`. This sits alongside the **byte cap** that bounds the
+raw input before any decode (`VISION_MAX_IMAGE_BYTES`, ~20 MiB default, env-overridable via
+`HILBERTRAUM_MAX_IMAGE_BYTES`; named here per DOC-N1, full audit 2026-06-28 — only the sibling
+pixel cap was documented before).
 
 **SEC-6 (backend-audit-2026-06-27) — a `null` pixel count for a claimed png/jpeg is now rejected.**
 `validateAnalyzeRequest` previously let an *unknown* pixel count fall through to the byte cap. But the

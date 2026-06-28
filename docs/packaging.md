@@ -163,9 +163,14 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise) + build + test smoke. |
 | `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Verifies Electron's platform binary actually extracted; force-re-extracts from the cached download when a half-extract is detected (the silent NTFS-on-Linux `extract-zip` failure), else fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Cross-platform Node (not a shell mirror). Skips via `ELECTRON_SKIP_BINARY_DOWNLOAD` / `ELECTRON_OVERRIDE_DIST_PATH` / `HILBERTRAUM_SKIP_ELECTRON_CHECK`. |
 
-The asset-planning + verify logic is mirrored from the unit-tested
-`apps/desktop/src/main/services/assets.ts` (the canonical reference — keep in sync), exactly as
-`prepare-drive` mirrors `drive.ts`. (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+The asset **download / verify / plan** logic is mirrored from the unit-tested
+`apps/desktop/src/main/services/assets.ts` (the canonical reference for *that* logic — keep in sync),
+exactly as `prepare-drive` mirrors `drive.ts`. **The default-set model-id list itself, however, is
+NOT in `assets.ts`** (DOC-N4, full audit 2026-06-28): it lives only in `scripts/prepare-drive.ps1`
+(`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
+**between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
+does not change which models `--with-assets` fetches (a parity test,
+`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
@@ -401,6 +406,20 @@ Treat this as part of the gate, not optional polish:
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
+
+**Optional harness *inputs* (point a harness at a specific artifact).** Distinct from the on-switch
+env vars in the table above, several harnesses additionally read an **artifact-pointer input**,
+documented before only as inline test-file comments (DOC-N7, full audit 2026-06-28). All are
+optional — each has a default or is only needed by its harness:
+
+| Input var | Read by | Points at |
+| --- | --- | --- |
+| `HILBERTRAUM_SMOKE_MODEL` | `bringup-smoke` / `gpu-smoke` / `thinking-smoke` | one chat-model `.gguf` filename (else the smallest chat model) |
+| `HILBERTRAUM_GEMMA_MODEL` | `gemma-thinking` | the Gemma model filename (default `gemma4-12b-it-qat-q4.gguf`) |
+| `HILBERTRAUM_OCR_IMAGE` | `ocr-smoke` | a real German scan image (png/jpg) — **never committed** |
+| `HILBERTRAUM_REAL_MODEL_PATH` | `real-model/wave3` | the chat GGUF path (default `D:/models/chat/qwen3.5-4b-ud-q4kxl.gguf`; sibling `HILBERTRAUM_LLAMA_BIN` points at the binary) |
+| `HILBERTRAUM_RESIDENT_REAL_N` | `resident-cache-real` | real chunk count to embed (default 2000) |
+| `HILBERTRAUM_EVAL_DIR` | `model-eval` | override the `eval/` data dir |
 
 **Canned-real-output regression-fixture policy:** because these never run in CI, an
 upstream format change (SSE shape, `--list-devices` lines, whisper JSON) would otherwise

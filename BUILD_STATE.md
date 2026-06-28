@@ -6,6 +6,63 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-28 — CLOSE-OUT (Phase 8: DOCUMENTATION RECONCILIATION + audit fold).
+The full multi-perspective audit (`audits/full-audit-2026-06-28.md`) is now FULLY REMEDIATED across
+Phases 0–8 on branch `full-audit-2026-06-28-fixes`.** Final suite **2417 passed / 39 skipped** (was
+2415/39 at Phase 7 → **+2** from the new DOC-N4 parity test); **typecheck + build green**, verified by ONE
+full-suite run at close-out — no phase regressed another across the cumulative branch. Phase 8 is
+docs/close-out: the ONLY code touches are the DOC-N2 comment fix (×2) + the DOC-N4 parity test;
+offline/no-telemetry/behavior-preserving posture held.
+- **The §-LEDGER (key deliverable).** New `docs/architecture.md` **§25 "Full audit (2026-06-28) —
+  remediation close-out"** (mirrors §24): a per-finding table dispositioning **ALL 54 findings** from the
+  report's §1 severity index (REL×5, BL×6, FE×9, TEST×9, PERF×6, RAG×6, DATA×3, SEC×3, DOC×7 — the report's
+  "48" headline miscounts its own table; 5 High) → phase → disposition (fixed / docs-only / invariant-only /
+  accepted-residual / not-remediated) → the topic-doc § where each as-built record lives. Plus the accepted
+  residuals, the not-remediated items, and a verified-clean inventory so the next audit doesn't re-investigate.
+- **Two items NOT fully remediated (explicitly dispositioned, surfaced for follow-up):** **REL-3** (Low,
+  HYPOTHESIS) — the OCR rasterizer reply waiter stays channel-only (no request-id correlation), bounded by
+  the per-step `withTimeout`; never scoped to a phase, accepted. **TEST-N3** (Med) — partially remediated:
+  the manual smoke matrix is a deliberate separate human gate (accepted) and the canned-fixture policy +
+  the `gpu --list-devices` fixture exist, but the **SSE + whisper-JSON parser fixtures remain OUTSTANDING**
+  (open follow-up). Also still open by owner/tracked decision: **PERF-5 Part B** (list windowing, re-deferred)
+  and the **E5 prefix-migration TODO** (RAG-N3/DOC-N6 — re-embeds the whole corpus, its own phase).
+- **PART 1 — DOC-N1…N7 applied.** DOC-N1: security-model.md now names all SIX `HILBERTRAUM_SKILL_MAX_*`
+  caps (was 2/6) + the `HILBERTRAUM_MAX_IMAGE_BYTES`/`_PIXELS` image caps. DOC-N2: `§21 → §22` for the
+  bank-statement LLM categorizer in `doctasks/manager.ts` AND `skills/categorizer.ts` (a SECOND stale
+  citation the §-anchor sweep found — only manager.ts was named in the report). DOC-N3: README Qwen3.5-4B
+  `~2.6 → ~2.9 GB` (manifest = 2,912,109,728 B) + RAM tiers clarified as recommended best-fit vs the
+  table's Min-RAM floor. DOC-N4: scoped the "mirrored from assets.ts" claim to the download/verify/plan
+  logic; the default-set ids live ONLY in `prepare-drive.{ps1,sh}` (`$DefaultModelIds`/`DEFAULT_MODEL_IDS`)
+  — packaging.md + drive-layout.md fixed, and a new `tests/unit/prepare-drive-default-set.test.ts` pins the
+  two shells' parity (the optional test, taken). DOC-N5: single-test commands (`npx vitest run <file>`,
+  `-t "<name>"`) + `test:watch` added to CONTRIBUTING + README. DOC-N6: VERIFIED already landed (Phase 6 §11
+  ceilings note). DOC-N7: packaging.md harness matrix gains an "optional inputs" table for the six
+  `HILBERTRAUM_*` artifact-pointer vars (SMOKE_MODEL/GEMMA_MODEL/OCR_IMAGE/REAL_MODEL_PATH/RESIDENT_REAL_N/
+  EVAL_DIR).
+- **PART 2 — every earlier phase's doc rider verified landed** (a 6-agent read-only verification workflow +
+  the §-anchor sweep). All landed as-built EXCEPT one gap, now filled: **BL-N2** was named in the
+  known-limitations header/changelog but lacked a prose sub-bullet — added the "Balance/total lines scrub a
+  trailing date" sub-bullet. Confirmed landed: REL-1 (§5.3), FE-1 (renderer record), PERF-3/4 + DATA-1/2/3
+  (§10 + index inventory), the §24/§10 BL-1 immunity-claim correction, BL-N1/N3/N4/N6 (known-lim),
+  RAG-N1/N2/N3/N4/N5/N6 + DOC-N6 (rag-design §2/§3/§11/§12.3/§13.6), SEC-N1/N2/N3 (security-model), TEST-N1
+  CI section + TEST-N9. **§-anchor integrity:** 28 distinct code-comment doc-§ citations checked — the ONLY
+  dangling one was the DOC-N2 §21 slip (both instances now fixed); all others resolve.
+- **PART 5 — report retired (owner ratified commit-then-delete).** `audits/full-audit-2026-06-28.md` turned
+  out to be ALREADY tracked/committed in git (since `f1fce73`, contrary to the phase brief's "untracked"
+  assumption), so the full original is already recoverable in history; it is `git rm`'d in the Phase-8
+  close-out commit (the "commit" half was already satisfied). The folded topic-doc §§ + the §25 ledger are
+  the durable record.
+- **Headline per phase:** P0 CI pipeline + whisper-smoke leak; P1 financial correctness (date-locale
+  inference, trailing-date scrub, amount-by-position, phone/IBAN, grouped figures); P2 GPU crash
+  `forceRestart`; P3 React error boundary + renderer lifecycle; P4 CJK/Thai audio+chunker token-awareness;
+  P5 data-layer atomicity + 2 indexes + FTS guard; P6 reranker full-chunk scoring depth; P7 ingestion edge
+  cases + security/test/perf polish; P8 docs reconciliation + this close-out.
+- **NEXT ACTION (owner):** **merge `full-audit-2026-06-28-fixes` to `master` when ready — do NOT
+  auto-merge/push.** Before merge, optionally run the `HILBERTRAUM_*` manual smoke matrix (the separate
+  human pre-release gate CI does not cover). Outstanding follow-ups for a future wave: the TEST-N3 SSE +
+  whisper-JSON canned fixtures, PERF-5 Part B windowing, and the E5 prefix migration._
+
+
 _2026-06-29 — **Full audit 2026-06-28 remediation — Phase 7 (INGESTION EDGE CASES + SECURITY / TEST / PERF
 POLISH; the catch-all of remaining Low/Med items — 13 findings in 4 independent groups: RAG-N4/N5/N6,
 SEC-N1/N2/N3, TEST-N5/N7/N8, PERF-1/2/5/6) — branch `full-audit-2026-06-28-fixes`.** Suite **2415 passed /

@@ -3607,6 +3607,133 @@ logged/audited — the new lock message and the eviction counter carry **counts 
 additive (or fresh-schema CASCADE); the Electron + vision/OCR caps are defense-in-depth with **no new
 DB/FS/net capability**. Final suite **2335 passed / 39 skipped**.
 
+### §25 Full audit (2026-06-28) — remediation close-out
+
+A **multi-persona read-only full audit** (report `audits/full-audit-2026-06-28.md`), run after the
+backend audit 2026-06-27 close-out (§24) merged to `master`, swept `apps/desktop` (~47k LOC app, ~52k LOC
+tests), `docs/`, `scripts/`, and `model-manifests/` across **seven personas** — security, backend /
+architecture, data layer, RAG / ingestion, business logic, frontend, testing, documentation — focusing
+where the backend-only prior round did **not** look: the renderer, financial-extraction locale
+correctness, CI, and CJK / Thai ingestion. **No Critical, no remote-exploitable issue** (offline by
+construction; only loopback sidecars + the two user-gated downloaders touch the network, prod CSP
+`connect-src 'self'`). The §1 severity index enumerates **54 findings** — by area REL×5, BL×6, FE×9,
+TEST×9, PERF×6, RAG×6, DATA×3, SEC×3, DOC×7 (5 High; the report's "48" headline miscounts its own table).
+**All 9 phases (0–8) are landed** on branch `full-audit-2026-06-28-fixes`. The working-paper report was
+**deleted** under the CLAUDE.md doc-lifecycle rule once every finding was dispositioned; it had already
+been committed to the repo (since `f1fce73`), so the full original stays **recoverable in git history**
+(the parent of the Phase-8 close-out commit), mirroring the §24 / 2026-06-27 precedent. Each phase's
+decisions were folded into the topic-doc §§ as it landed, and the report's lasting content (the
+per-finding dispositions, the **verified-clean inventory**, and the accepted residuals) lives in **this
+section**. This ledger is the durable index — resolve a code comment's `full-audit-2026-06-28 <ID>`
+citation through it.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **TEST-N1** (High) | 0 | **fixed** — `.github/workflows/ci.yml`: `npm ci → typecheck → build → test` on ubuntu+windows / Node 22.x, stable `ci-success` aggregate gate (the first machine backstop) | packaging.md "Continuous integration (CI)"; BUILD_STATE Phase 0 |
+| TEST-N9 (Low) | 0 | **fixed** — `whisper-smoke` `mkdtempSync` moved into `beforeAll` + `afterAll` cleanup (no import-time temp leak in a skipped file) | this ledger; BUILD_STATE Phase 0 |
+| **BL-N1** (High), TEST-N2 (High) | 1 | **fixed** — per-document **date-locale inference** (de-AT day-first default; flips to mm/dd only on an unambiguously US-ordered date) stops the silent row-drop / wrong-month; adversarial whole-string tests now drive the real `extractTransactionRows`/`parseLineItem` path (closing the pre-isolated-token gap); grouped figures (`1.000`, `1 234 567,89`, `1'234.56`) fully supported | known-lim "LINE PARSER" bullet; arch §10 (DECISIONS as built) |
+| BL-N2 (Med) | 1 | **fixed** — `stripDateTokens` scrubs date tokens at **either** end before the last-money balance/total scan, so `Endsaldo … per 30.06.2026` no longer reads the date as the balance | known-lim "LINE PARSER" BL-N2 sub-bullet; §10 / §24 immunity claim corrected |
+| BL-N3 (Med) | 1 | **fixed** — amount column chosen by **position** (second-to-last figure when a balance is present), not the first money-shaped token | known-lim "LINE PARSER" bullet |
+| BL-N4 (Med), TEST-N6 (Med) | 1 | **fixed** — redaction masks punctuated US/national phones + case-insensitive IBANs; characterization tests pin the residual under-detection (US-order / 2-digit-year / names-addresses) | known-lim redaction "Phone and IBAN coverage" sub-bullet |
+| BL-N5 (Low) | 1 | **fixed (code-only, no residual)** — `reconcileBalances` compares in integer cents, matching `assessCompleteness` | this ledger |
+| BL-N6 (Low) | 1 | **docs-only / accepted** — redaction masks every date and deliberately does NOT infer locale (US `12/31` leaks while EU `31/12` masks); by-design best-effort, no leak path to any log | known-lim redaction date-masking sub-bullet |
+| **REL-1** (High) | 2 | **fixed** — crash-only `RuntimeManager.forceRestart(opts)` does `doStop()` (clears `current`/`last` so `status()` stops reporting the dead server healthy) then `doStart()`, bypassing only the same-model idempotency guard; bounded to one fallback by persisted `gpuAutoDisabled` | arch §5.3 (corrected) |
+| REL-2 (Low) | 2 | **fixed** — `LlamaServer.start()` instance-level `starting` single-flight latch (a 2nd concurrent direct caller joins the one start + waits for health) | arch §5.3 record (runtime) |
+| **FE-1** (High) | 3 | **fixed** — `ErrorBoundary` (per-screen inside `<main>` keyed by `screen` + outer last-resort), localized fallback, **local-only** log (no network), nav rail stays alive | arch "Renderer robustness — design record (Phase 3)" |
+| FE-2, FE-3, FE-4 (Med) | 3 | **fixed** — unhandled IPC rejections → `friendlyIpcError`/toast; per-skill in-flight Switch guard; `let active`/`mountedRef` unmount guards on every poll | arch renderer record |
+| FE-5, FE-6, FE-7, FE-8, FE-9 (Low) | 3 | **fixed** — identity-stable `applyLanguageSetting`; stable React keys (name+index / monotonic id); tracked toast timers; `friendlyIpcError` + localized `UNKNOWN`; explicit Home/End edge select | arch renderer record |
+| RAG-N1 (Med) | 4 | **fixed** — audio packing caps on `approxTokenCount` (CJK/Thai-aware) keyed off the chunk window; an over-budget single segment is char-split (space-less-safe), preserving the one-segment-per-chunk / no-overlap invariant | rag-design §2 (audio packing) |
+| RAG-N2 (Low) | 4 | **fixed** — chunker char-slices space-less runs at `gcd(size, overlap)` so consecutive CJK/Thai chunks gain the ~80-token overlap (was zero) | rag-design §3 (windowing) |
+| REL-4 (Med) | 5 | **fixed** — `deleteConversation` wrapped in one txn (ROLLBACK on throw), mirroring `deleteDocument` | arch §10 (data-layer hardening, Phase 5) |
+| REL-5 (Low) | 5 | **fixed** — `deleteImageSession` deletes the row first (in a txn), shreds the file after (DATA-1 ordering) | arch §10 (Phase 5) |
+| PERF-3 (Med) | 5 | **fixed** — `idx_messages_conv_kind` serves the per-turn `getLatestCheckpoint` compaction lookup with no SCAN (EXPLAIN-pinned) | arch data-layer index inventory |
+| PERF-4 (Low) | 5 | **fixed** — `idx_summary_cache_created` turns the age-ordered eviction into an ordered index scan | arch data-layer index inventory |
+| DATA-1 (Low) | 5 | **fixed** — `messages_fts_au` UPDATE trigger gains the `kind IS NOT 'compaction'` guard + `ensureMessagesFtsUpdateKindFilter` backfill | arch §10 (Phase 5) |
+| DATA-2 (Low) | 5 | **invariant-only (no code change)** — `tree_edges.child_id` polymorphic-FK no-dangling-edge invariant pinned by an integrity test | arch §10 (Phase 5) |
+| DATA-3 (Low) | 5 | **verify-only (no code change)** — `extract.ts` `__scan__` per-chunk idempotency confirmed + pinned by a no-double-count test | arch §10 (Phase 5) |
+| RAG-N3 (Med), DOC-N6 (Low), TEST-N4 (Med) | 6 | **fixed** — reranker `MAX_DOC_APPROX_TOKENS` raised 320 → whole chunk window (500 = `CHUNK_DEFAULTS.chunkSizeTokens`) so it scores every chunk in full (n_ctx-safe via the existing clamp); graded-overlap ranking-order test replaces exact-match-only; the E5 prefix-less + reranker-prefix **ceilings** documented with the prefix-migration TODO | rag-design §11 "Known retrieval-quality ceilings" + §12.3 |
+| RAG-N4 (Low) | 7 | **fixed** — `MarkdownParser` in-fence flag (a `#` inside a fenced block is code, not a heading) | rag-design §2 |
+| RAG-N5 (Low) | 7 | **fixed** — CSV/TSV delimiter pinned by extension (`\t` / `,`), not papaparse auto-detect | rag-design §2 |
+| RAG-N6 (Low) | 7 | **already-correct (no code change)** — `corpusNeedsReindex` routes through the shared `buildScopeFilter` (archived parity); pinned by a new `includeArchived` regression test | rag-design §13.6 |
+| SEC-N1 (Low) | 7 | **fixed** — `safeRelPath` rejects a NUL member name (fixed `invalidPath`) before any write; `previewSkillPackage` wraps its body in a catch mapping residual throws to a fixed reason (sentinel-grep teeth) | security-model "Skill-import defences" |
+| SEC-N2 (Low) | 7 | **fixed** — benchmark IPC (`runBenchmark`/`tryGpuAgain`) gains explicit `requireUnlocked()` parity (localized `main.benchmark.locked`) | security-model "Phase-7 security polish" |
+| SEC-N3 (Info) | 7 | **accepted Info residual** — sidecar `serverMessage` 500-char tail is structural-only (our loopback llama.cpp, never user content); pinned by an `INVARIANT (SEC-N3)` comment at the cap | security-model "Phase-7 security polish" |
+| TEST-N5 (Med) | 7 | **fixed (tests-only)** — assert observables not mechanisms (key-buffer-zero vs `Buffer.fill` spy; `≤ 1` read counts; `toContain` event arrays) | this ledger |
+| TEST-N7 (Low) | 7 | **fixed (tests-only)** — fixed LE byte-layout assertion for `decodeVector` (`[00 00 80 3f] → [1.0]`), independent of encode | this ledger |
+| TEST-N8 (Low) | 7 | **fixed (tests-only)** — structural lock test over every registered DB-touching chat/benchmark handler + a retrieve()-level rejecting-embedder test (failure propagates) | this ledger |
+| PERF-1 (Med) | 7 | **fixed** — picker image read → `fs/promises` (open → stat → read loop → close in finally), preserving the same-handle TOCTOU invariant + byte cap | this ledger (ING-8 convention) |
+| PERF-2 (Med) | 7 | **fixed** — dictation WAV write → `await writeFile` (finally still shreds) | this ledger (ING-8 convention) |
+| PERF-6 (Low) | 7 | **fixed** — `AnswerThread` memoized `TurnRow`; the in-flight turn renders plain text, markdown parsed once on completion | this ledger |
+| PERF-5 (Med) | 7 | **partially fixed (Part A)** — `DocRow = memo(...)` with stable callbacks so a poll tick / menu open / sibling-select re-renders only the affected row; **Part B (list windowing) re-deferred** (owner decision — no virt lib; variable-height rows + scroll/find/a11y behavior-sensitive) | arch renderer-tail note |
+| **DOC-N1** (Med) | 8 | **docs-only** — security-model.md now names all **six** `HILBERTRAUM_SKILL_MAX_*` caps + the `HILBERTRAUM_MAX_IMAGE_BYTES` / `_PIXELS` image caps | security-model.md §6.4 caps bullet + D4 |
+| DOC-N2 (Low) | 8 | **fixed (comment)** — `§21 → §22` for the bank-statement LLM categorizer in `doctasks/manager.ts` **and** `skills/categorizer.ts` (2nd instance found by the anchor sweep) | code comments → arch §22 |
+| DOC-N3 (Low) | 8 | **docs-only** — README Qwen3.5-4B size `~2.6 → ~2.9 GB`; RAM tiers clarified as *recommended best-fit* vs the table's lower **Min RAM** floor | README.md |
+| DOC-N4 (Low) | 8 | **docs-only + parity test** — scoped the "mirrored from assets.ts" claim to the download/verify/plan logic; the default-set ids live only in the two prepare-drive shells (new `prepare-drive-default-set.test.ts` pins their parity) | packaging.md; drive-layout.md |
+| DOC-N5 (Low) | 8 | **docs-only** — single-test commands (`npx vitest run <file>`, `-t "<name>"`) + `test:watch` added | CONTRIBUTING.md; README.md |
+| DOC-N7 (Low) | 8 | **docs-only** — packaging.md harness matrix gains an "optional inputs" table for the six `HILBERTRAUM_*` artifact-pointer vars | packaging.md |
+| REL-3 (Low) | — | **not remediated (accepted)** — rasterizer reply waiter stays channel-only (no request-id correlation); a Low-confidence **HYPOTHESIS** whose impact is bounded by the per-step `withTimeout`; deferred as a correctness margin | this ledger (accepted residuals) |
+| TEST-N3 (Med) | 0 / 8 | **partially remediated (accepted)** — the "manual smokes never run in CI" half is accepted-by-design (separate human gate, documented); the canned-fixture **policy** + the `gpu --list-devices` fixture exist, but the SSE + whisper-JSON parser fixtures remain **OUTSTANDING** (follow-up) | packaging.md harness matrix / fixture policy |
+
+**Accepted residuals & non-code dispositions** (on record, deliberately not changed):
+
+- **REL-3** (Low, HYPOTHESIS) — **not remediated**: the OCR rasterizer's hidden-window reply waiter matches
+  on channel only (no request/page-id correlation). Impact is a correctness margin (any hang is bounded by
+  the per-step `withTimeout`), confidence is Low, and it was never scoped to a phase; deferred as a future
+  nicety, not a live defect.
+- **TEST-N3** (Med) — **partially remediated**: the manual `HILBERTRAUM_*` smoke matrix is a deliberate
+  **separate human pre-release gate** (it can't run in offline CI); the canned-real-output fixture-parser
+  **policy** and the b9585 `--list-devices` fixture exist, but the promised **SSE** and **whisper-JSON**
+  parser fixtures are still outstanding — an open follow-up so those parse layers gain CI coverage.
+- **PERF-5 Part B (list windowing)** — **re-deferred** (owner decision): no virtualization lib is in deps,
+  and variable-height rows + scroll / find-in-page / a11y are behavior-sensitive; Part A (row memoization)
+  shipped.
+- **E5 `query:`/`passage:` prefix migration** (RAG-N3 / DOC-N6) — **tracked TODO, not done**: it re-embeds
+  the whole corpus (its own phase) and would re-enable a meaningful `ragMinSimilarity` floor; the reranker
+  full-chunk fix was the smaller-blast-radius lever taken now.
+- **DATA-2 / DATA-3** — **invariant-only / verify-only** (no code change): both are pinned by tests, not
+  altered behavior.
+- **SEC-N3** — **accepted Info residual**: the sidecar `serverMessage` tail is structural-only by upstream
+  (loopback llama.cpp) convention, pinned by an invariant comment at the 500-char cap.
+- **BL-N5** — a clean code-only fix with **no residual limitation** (not a trade-off), so deliberately
+  absent from known-limitations.md.
+- **Residual caveats inside fixed findings** (documented in known-limitations.md): BL-N1 — a doc whose dates
+  are **all** fully ambiguous reads day-first (silent; the tool output schema is frozen); BL-N3 — an unusual
+  layout (two amount columns / a description figure in the amount slot) can still mis-pick; BL-N4 — bare
+  un-punctuated phone runs + space-grouped IBANs still slip (best-effort).
+
+**Verified-clean inventory (attested 2026-06-28 — recorded so it is not re-investigated next round).** The
+audit read each of these and found them correct and well-tested; they are deliberately **not** findings:
+
+- **Crypto / vault** — lifecycle, key-zeroing on lock / wrong password, journaled v1→v2 rekey: re-attested
+  (the §24 crypto inventory still holds end-to-end).
+- **The full IPC `requireUnlocked()` surface** — every DB-touching handler is guarded; TEST-N8 added a
+  **structural** test enumerating them and SEC-N2 closed the one benchmark parity gap.
+- **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
+  allow-list, CSP `connect-src 'self'`, OCR window deny-all.
+- **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
+  `windowsHide` / `child.unref()` on the probe.
+- **Offline / SSRF posture** — IPv4-anchored loopback guard (fails safe), per-redirect-hop re-validation
+  (https-only + private-range deny), streamed-size cap; only the two user-gated downloaders + loopback
+  sidecars use `fetch`.
+- **RRF fusion determinism** — the pure `rrfFuse` units stay strong, and the pass-through guarantee (no
+  keyword / no reranker ⇒ byte-identical to vector-only) was re-verified in Phase 6.
+- **Vector codec hardening** — `decodeVector` truncated-blob guard + module-load LE assert; TEST-N7 added a
+  fixed-byte-layout test pinning the on-disk LE contract.
+- **FTS injection-safety** — FTS5 triggers synced + VACUUM-safe, identifier-validated migrations; DATA-1
+  added the UPDATE-trigger `kind` guard.
+- **The SEC-1 Tier-2 app-skill gate** — Tier-2 tools run for built-in **app** skills only
+  (`skillCanRunTools`, re-checked at `startSkillRun`): re-attested.
+- **Chat-stream lifecycle** — error / abort / destroyed-renderer / key-reuse paths, IPC subscriptions torn
+  down in `finally`.
+
+**Posture held across all 9 phases (load-bearing):** offline / no telemetry / no new network egress;
+behavior-preserving (every behavioral fix teeth-checked neuter→fail→restore, then restored byte-identical);
+the **content class** (document text + titles/filenames, chat, extracted figures, redacted text) is never
+logged / audited / exported; schema changes are additive (two `IF NOT EXISTS` indexes + one FTS-trigger
+guard); the only Phase-8 code touches are the DOC-N2 comment fix (×2) + the DOC-N4 parity test. Final suite
+**2417 passed / 39 skipped** (typecheck + build green across the cumulative branch; no phase regressed
+another, verified by one full-suite run at close-out).
+
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 

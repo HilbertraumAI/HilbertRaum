@@ -28,9 +28,20 @@ and a map of the docs, see the **[README](README.md)** ("For developers" + "Docu
 ```bash
 npm install
 npm run dev
-npm test
+npm test            # the whole suite (root; delegates to the apps/desktop workspace)
 npm run typecheck
 ```
+
+**Faster test iteration** (run from the app workspace — the whole suite is large):
+```bash
+cd apps/desktop
+npx vitest run tests/unit/some-file.test.ts   # one file
+npx vitest -t "a test-name substring"          # one test (by name filter)
+npm run test:watch                              # watch mode (re-runs affected tests on save)
+```
+The same `typecheck`/`build`/`test` chain runs in CI on every push/PR (`.github/workflows/ci.yml`);
+the env-gated `HILBERTRAUM_*` manual smoke matrix stays a separate human gate (see
+[`docs/packaging.md`](docs/packaging.md)).
 
 **Don't put `node_modules` on an NTFS volume mounted on Linux.** `npm install` downloads
 Electron's ~100 MB platform binary and unpacks it with `extract-zip`; on an ntfs-3g/FUSE mount

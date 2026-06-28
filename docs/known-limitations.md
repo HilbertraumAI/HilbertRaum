@@ -436,6 +436,14 @@ password recovery — are documented in
     These are recall/precision trade-offs on the
     plain-text path, never a wrong **verified** statement total (the completeness gate still requires the
     printed opening + Σ == closing to tie out).
+  - **Balance/total lines scrub a TRAILING date before reading the last figure (BL-N2).** Opening/closing
+    balances and invoice totals are read as the **last** money token on the line, so a figure followed by a
+    trailing date — `Endsaldo 1.234,56 EUR per 30.06.2026` — would otherwise mis-read the date
+    (`30.06.20` → 3006.20) as the balance. The last-money readers (`lastMoneyOnLine` / invoice `lastMoney`,
+    `tools/money.ts`) now call `stripDateTokens` first, removing every date-shaped token at **either** end
+    before the money scan, so the printed figure wins for both the date-leading `Kontostand per <date>
+    <figure>` and the date-trailing shape. (This is why the backend-audit §24/§10 "last-token readers were
+    never affected" claim was wrong — corrected there: only the *date-first* shape was ever safe.)
 - **Bank-statement categories are model-assisted, not verified (Phase 33).** The per-category breakdown
   is assigned by a local LLM constrained to a **fixed category set** (it can never invent a label; any
   uncertain/unparseable output drops to `Uncategorized`), so a category may be **wrong** — but a mislabel

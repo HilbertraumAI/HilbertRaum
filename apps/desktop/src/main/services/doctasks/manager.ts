@@ -1541,7 +1541,7 @@ export class DocTaskManager {
   }
 
   /**
-   * The bank-statement LLM categorizer task (Phase 33; architecture.md §21). It lives in the doctask
+   * The bank-statement LLM categorizer task (Phase 33; architecture.md §22). It lives in the doctask
    * lane PURELY for the chat↔task one-job-at-a-time exclusion (D26) — the `SkillRunController` and the
    * `ModelSlotArbiter` are separate lanes that wouldn't stop two `chatStream` calls hitting the one
    * llama-server at once. Steps: (1) locate the latest statement for the document and AUTO-EXTRACT it

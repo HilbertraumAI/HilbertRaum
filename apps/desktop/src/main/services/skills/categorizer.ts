@@ -10,7 +10,7 @@ import {
 } from './tools/bank-statement'
 import { wordIncludes } from './tools/money'
 
-// The bank-statement LLM categorizer (Phase 33; architecture.md "Skills — design record" §21). It
+// The bank-statement LLM categorizer (Phase 33; architecture.md "Skills — design record" §22). It
 // assigns each transaction a category from a FIXED set, picking ONLY from that set — the reply is
 // grammar-constrained to a `json_schema` whose category field is an enum, so the model can never emit
 // a category outside the list. Anything the model leaves out, returns out of range, or that comes back
