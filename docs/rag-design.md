@@ -94,10 +94,10 @@ heavy libraries are imported lazily inside `parse()`.
 | Format | Parser | Library | Segment granularity | Metadata |
 |---|---|---|---|---|
 | `.txt`/`.text`/`.log` | `TxtParser` | `node:fs` | whole file = 1 segment | — |
-| `.md`/`.markdown`/`.mdown` | `MarkdownParser` | hand-rolled | one segment per ATX heading section | `sectionLabel` = heading text |
+| `.md`/`.markdown`/`.mdown` | `MarkdownParser` | hand-rolled | one segment per ATX heading section (fenced-code-aware, RAG-N4) | `sectionLabel` = heading text |
 | `.pdf` | `PdfParser` | `pdfjs-dist` (legacy build) | one segment per page | `pageNumber` (1-based) |
 | `.docx` | `DocxParser` | `mammoth` (raw text) | one segment per paragraph | — |
-| `.csv`/`.tsv` | `CsvParser` | `papaparse` | whole table = 1 segment | — (rows → `header: value` lines) |
+| `.csv`/`.tsv` | `CsvParser` | `papaparse` | whole table = 1 segment | — (rows → `header: value` lines; delimiter pinned by extension, RAG-N5) |
 | `audio/*` (`.wav`/`.mp3`/`.flac`/`.ogg`) | `AudioParser` | injected transcriber engine | transcript packed into segments ≤ the chunk window (token-based, space-less-script-safe) | `sectionLabel` = time range `mm:ss–mm:ss` → `Citation.section` |
 | `image/*` (`.png`/`.jpg`/`.jpeg`) | `ImageParser` | injected OCR engine | whole photo = 1 segment | — |
 
@@ -126,6 +126,20 @@ trailing remainder that merges into the prior window normalizes its `\n\n` bound
 space in a space-less script — never duplicating or losing text (a pre-existing benign property of
 the chunker's coalesce, now reached by long CJK/Thai utterances too). Existing CJK/Thai audio keeps
 its old chunks until re-indexed (re-index self-heals); no migration.
+
+**Markdown fence-awareness (RAG-N4, full audit 2026-06-28).** `MarkdownParser` splits sections at ATX
+headings (`/^(#{1,6})\s+/`) but tracks an in-fence flag toggled on every code-fence line (a
+triple-backtick or `~~~` run, optionally indented). A `#`-prefixed line INSIDE a fenced block — a
+shell comment, a C `#define`, a diff/patch hunk — is therefore treated as code, not a heading; without
+this the fenced block fragmented into bogus sections stamped with garbage `sectionLabel`s (→ wrong
+citations). Non-fenced Markdown is byte-identical. It is a simple toggle: it does not model nested
+fences of differing backtick lengths, which Markdown disallows anyway.
+
+**CSV/TSV delimiter pinned by extension (RAG-N5, full audit 2026-06-28).** `CsvParser` passes
+`delimiter: '\t'` for `.tsv` and `','` for `.csv` to papaparse instead of relying on auto-detection. A
+`.tsv` whose cells contain commas (e.g. "Lovelace, Ada") could otherwise tie tab with comma on
+field-count consistency and — papaparse checking comma first — auto-detect as comma, silently
+mis-pairing `header: value` while the document still reached `indexed`.
 
 ### Cap stack — one enforcement point (`parseWithLimits`, MAINT-4 / REL-5)
 
@@ -965,6 +979,16 @@ honesty story holds on the **legacy doc-id path too**, not only the composite-`s
 bare `null`/`undefined` still normalizes to the whole-corpus check (the archived exclusion only),
 byte-identical to before; only the legacy `scopeDocumentIds` array path changes — from a wrong
 whole-corpus diagnosis to the correct scoped one.
+
+**`includeArchived` parity now regression-tested (RAG-N6, full audit 2026-06-28).** Because both
+`corpusNeedsReindex` and retrieval route through the shared `buildScopeFilter` (which adds the
+document-level archived `NOT EXISTS` whenever `includeArchived` is falsy), an **all-archived scope** is
+already diagnosed correctly. `rag-scope.test.ts` pins it with teeth: a single archived doc embedded
+under a *different* model, scoped with `includeArchived:false`, answers `NO_DOCUMENT_CONTEXT` (the
+archived doc is out of scope, so the corpus is empty — re-index wouldn't help), and flips to
+`REINDEX_NEEDED` only with `includeArchived:true` (then it is in scope and invisible to the embedder).
+Neutering the archived exclusion in `buildScopeFilter` flips the false case to a stale "needs reindex"
+misdiagnosis — the test fails, confirming the parity is load-bearing.
 
 ### 13.7 Persistence & smart-view-as-scope (out of v1)
 

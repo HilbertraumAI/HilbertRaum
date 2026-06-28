@@ -612,11 +612,17 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   while switching to a fixed reserve changes the fence-SIZING formula, a prompt-assembly change that could
   alter the fence (and thus the output) for a near-budget skill. Disallowed under the behavior-preserving
   mandate; revisit when a trimming skill ships (§17).
-- **FE-3 / FE-4 / FE-5 (renderer tail).** Unchanged from Wave P2/P5: Composer-`input` move (needs footer
-  handler stabilization first), `DocRow` extraction (a ~25-prop memoized row with a high stale-closure
-  surface), and list windowing (no virtualization lib in deps; windowing variable-height Markdown while
-  preserving scroll-to-bottom, find-in-page, and a11y is behavior-sensitive). Left deferred — not
-  confidently safe under the behavior-preserving mandate.
+- **FE-3 / FE-5 (renderer tail).** `DocRow` extraction **LANDED** in the full-audit-2026-06-28 **Phase 7
+  (PERF-5 Part A)**: a module-level `memo(DocRow)` fed PER-ROW BOOLEANS (`selected`/`menuOpen`) and a
+  parent-narrowed `rowTask` (+ a stable `anyTaskActive` boolean), so a 400 ms task-progress tick — or
+  opening one row's ⋯ menu, or toggling another row's selection — re-renders ONLY the targeted row, not
+  the whole list. The latest-ref `useEventCallback` was extracted to a shared `renderer/lib/` module and
+  feeds stable handlers; render-count tests pin the win (teeth: dropping `memo`, or passing the whole
+  `selected` Set / `menuOpenId` string, re-renders every row). Still deferred as behavior-sensitive: the
+  Composer-`input` move (needs footer handler stabilization first) and **FE-5 list windowing**
+  (no virtualization lib in deps; windowing variable-height rows while preserving scroll-to-bottom,
+  find-in-page, and a11y is behavior-sensitive) — **PERF-5 Part B was re-deferred by owner decision**,
+  not confidently safe under the behavior-preserving mandate.
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +

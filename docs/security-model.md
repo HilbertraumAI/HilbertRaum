@@ -511,6 +511,18 @@ staging dir and only places it on a clean pass. Each defence:
 - **Path traversal / absolute / drive-letter / UNC** — every member name is normalized to forward
   slashes and rejected if it contains `..`/`.`, is absolute, or carries a drive letter; after the
   final `join` the resolved path must still sit inside the target (belt-and-braces).
+- **NUL / control-character member names (SEC-N1, full audit 2026-06-28).** `safeRelPath` also rejects
+  a member name containing a NUL (`\u0000`) with the fixed structural `invalidPath` reason, **before any
+  write**. A NUL passes the `..`/drive/depth checks but makes the path invalid for the OS, so
+  `writeFileSync` would throw `ERR_INVALID_ARG_VALUE` whose **raw message embeds the attacker-controlled
+  path** — which `previewSkillPackage` (its materialize step had a `try/finally` with no catch, and the
+  preview IPC handler none) would have serialized to the renderer, breaking both its documented "never
+  throws / returns `ok:false`" contract and the §22-M1 content-free posture. As defence in depth,
+  `previewSkillPackage` now also wraps its materialize/validate body in a catch that maps **any** residual
+  throw to a fixed structural reason; `importSkill` was already protected by its IPC `try/catch`. The
+  §22-M1 sentinel-grep test pushes a NUL-bearing member name through preview and asserts the path/sentinel
+  never appears in the payload (teeth: neuter the `safeRelPath` check → the code falls to the generic
+  `unreadableZip`; neuter both layers → preview throws the raw error).
 - **Symlink rejection** — a member whose UNIX mode word (zip external attributes) is `S_IFLNK` is
   refused outright (no "safe handling" in v1); the placed tree is re-walked with `lstat` afterwards
   so no symlink can survive.
@@ -961,6 +973,26 @@ file changing under them. The exposure window is one app session on a drive an a
 to (who, as above, can usually tamper the app's own Electron code too); a relaunch re-hashes from cold.
 Accepted as-is; a future hardening could re-hash on every chat-sidecar spawn if the consistency concern is
 otherwise solved.
+
+## Phase-7 security polish (full audit 2026-06-28)
+
+**Benchmark IPC `requireUnlocked` parity (SEC-N2).** `registerBenchmarkIpc`'s `runBenchmark` /
+`tryGpuAgain` touch `ctx.db` (via `updateSettings`/`getSettings`) and were *fail-closed* already — the
+`ctx.db` getter throws when the workspace is locked — but surfaced the **raw English** "Workspace is
+locked — unlock it first." string instead of the friendly localized copy. They now call an explicit
+`requireUnlocked()` preamble (the same pattern as every other DB-backed channel), surfacing the
+localized `main.benchmark.locked`. A structural lock test (`chat-ipc.test.ts`, TEST-N8) enumerates every
+registered DB-touching handler — chat + these benchmark handlers — and asserts each refuses with the
+friendly copy (never the raw string) when locked.
+
+**Sidecar `serverMessage` is structural-only — accepted Info residual (SEC-N3).** `ChatRequestError`
+(runtime/`llama.ts`) keeps up to 500 chars of a non-JSON error body as `serverMessage`, surfaced via
+`chat-stream.ts` and `doctasks/manager.ts`. The sidecar is **our own loopback llama.cpp server** and its
+error bodies are upstream-structural (an HTTP status + a reason code/type), never user document/prompt
+content, so the tail carries nothing content-bearing. This is **accepted as an Info residual**: the
+500-char cap bounds size and a one-line `INVARIANT (SEC-N3)` comment at the cap pins the expectation and
+asks for a re-verify on every llama.cpp pin bump; if a future server ever echoed request content into an
+error body, the fallback should be sanitized to a fixed structural string + numeric status.
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

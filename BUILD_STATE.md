@@ -6,6 +6,71 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-28 remediation — Phase 7 (INGESTION EDGE CASES + SECURITY / TEST / PERF
+POLISH; the catch-all of remaining Low/Med items — 13 findings in 4 independent groups: RAG-N4/N5/N6,
+SEC-N1/N2/N3, TEST-N5/N7/N8, PERF-1/2/5/6) — branch `full-audit-2026-06-28-fixes`.** Suite **2415 passed /
+39 skipped** (was 2398/39 at Phase 6 → **+17 tests**); typecheck + build clean after every group. Committed
+incrementally per group (e9a26ba A, 013e2be B, 1380cb0 C, fa9a6b2 + 036c8cc D). Every behavioral fix got a
+test, teeth-checked (neuter → fail → restore) and restored byte-identical; offline / no-telemetry /
+behavior-preserving posture held.
+- **GROUP A — ingestion edge cases (e9a26ba; +6 tests).** RAG-N4: `MarkdownParser` tracks an in-fence flag
+  (toggled on each triple-backtick / `~~~` line) and suppresses ATX-heading detection inside a fenced block,
+  so a `#` shell-comment / C `#define` / diff hunk no longer fragments the code block + stamps a bogus
+  sectionLabel; non-fenced Markdown byte-identical. RAG-N5: `CsvParser` pins the delimiter by extension (`\t`
+  for .tsv, `,` for .csv) instead of papaparse auto-detection, which could tie tab with comma on a .tsv whose
+  cells contain commas and mis-pair header:value silently. RAG-N6: **already fixed** — `corpusNeedsReindex`
+  routes through the shared `buildScopeFilter` (Collections core 5c70021), which applies the same archived
+  exclusion as retrieval; **no code change**, added regression tests pinning that an all-archived
+  (embedder-invisible) scope answers NO_DOCUMENT_CONTEXT (not REINDEX_NEEDED), with `includeArchived` flipping
+  the verdict. Teeth: neuter the fence flag / the .tsv delimiter / the archived `NOT EXISTS` — each fails its test.
+- **GROUP B — security polish (013e2be; +1 test).** SEC-N1: a `.skill.zip` member name with an embedded NUL
+  passed `safeRelPath` (it checked ../ /drive/depth, not control chars), reached `writeFileSync`, and threw
+  ERR_INVALID_ARG_VALUE whose RAW message embeds the attacker path — `previewSkillPackage` (no catch around the
+  write; IPC handler none) serialized it to the renderer, breaking the "never throws / returns ok:false"
+  contract + §22-M1. Fix, two layers: `safeRelPath` rejects a NUL with a fixed `invalidPath` reason BEFORE any
+  write, AND `previewSkillPackage` wraps its materialize/validate body in a catch mapping any residual throw to
+  a fixed reason; the new `invalidPath` is wired through the renderer error-code map + en/de i18n. SEC-N2:
+  benchmark handlers (`runBenchmark`/`tryGpuAgain`) gained an explicit `requireUnlocked()` (localized
+  `main.benchmark.locked`, new en/de key) for parity. SEC-N3 (Info): the `serverMessage` structural-only
+  invariant pinned with a comment + accepted as an Info residual (local loopback sidecar, structural bodies,
+  500-char cap) in security-model.md. Teeth: neuter `safeRelPath`'s NUL check → falls to `unreadableZip`;
+  neuter both layers → preview throws the raw error.
+- **GROUP C — test quality (1380cb0; +5 tests, no source change).** TEST-N5: workspace-vault L-6 now asserts
+  the OBSERVABLE (the actual key buffer is all-zero after the wrong-password throw, via a passthrough deriveKey
+  spy) instead of spying `Buffer.prototype.fill`; skills-analysis bank/invoice read-count `=== 1` relaxed to
+  `≤ 1`; skills tool audit-event exact ARRAYS → toContain/not.toContain. TEST-N7: a fixed LE byte-layout
+  assertion for `decodeVector` (`[00 00 80 3f] → [1.0]`) independent of encode (catches a symmetric endianness
+  bug). TEST-N8: a STRUCTURAL locked-vault test enumerating every registered chat handler (+ the benchmark
+  handlers from SEC-N2) asserts each DB-touching one refuses with the friendly copy (never the raw vault
+  string), with the 2 in-memory handlers an asserted exemption; plus a retrieve()-level rejecting-embedder test
+  asserting the query-embed failure PROPAGATES (not a silent "no documents"). Teeth: swallow the retrieve embed
+  reject / drop `key.fill(0)` / neuter the chat guard — each fails its test.
+- **GROUP D — performance (fa9a6b2 PERF-1/2/6; 036c8cc PERF-5; +5 tests).** PERF-1: `imageReadBytes` converted
+  to fs/promises (open → fh.stat() → fh.read() loop → fh.close() in finally), PRESERVING the SEC-3/TOCTOU
+  same-handle invariant + byte cap + content-free open-failure log. PERF-2: dictation WAV write → `await
+  writeFile` (handler already async; finally still shreds). PERF-6: `AnswerThread` extracts a memoized TurnRow;
+  the in-flight turn renders PLAIN TEXT and Markdown is parsed once on completion (chat FE-1 split). PERF-5
+  **Part A only**: `DocRow = memo(...)` fed per-row booleans (`selected`/`menuOpen`) + a parent-narrowed
+  `rowTask` (+ stable `anyTaskActive`) + stable `useEventCallback` handlers (extracted to a shared
+  `renderer/lib/` module), so a 400 ms task tick / menu-open / sibling-selection re-renders ONLY the affected
+  row; FE-7 poll cadence + FE-4 mount guards untouched. **OWNER DECISION: PERF-5 Part B (list windowing)
+  RE-DEFERRED** — no virtualization lib in deps; variable-height rows + scroll/find-in-page/a11y are
+  behavior-sensitive (the thrice-deferred FE-5; recorded in architecture.md). Teeth: drop `await fh.close()`
+  (close-on-throw, observed via a mocked `open` — NOT unlink, since libuv opens FILE_SHARE_DELETE on win32 so a
+  leaked-handle unlink does not throw) / force the in-flight branch back through AssistantMarkdown / drop
+  `memo(DocRow)` — each fails its test.
+- **Docs.** rag-design.md §2 (markdown fence-awareness + TSV/CSV delimiter notes) + §13.6 (the RAG-N6
+  includeArchived parity regression test); security-model.md (SEC-N1 NUL rejection under skill-import defences;
+  a new Phase-7 polish section for SEC-N2 benchmark `requireUnlocked` parity + the SEC-N3 accepted Info
+  residual); architecture.md renderer-tail note (PERF-5 Part A landed; Part B / FE-5 windowing re-deferred).
+  Code comments cite ING-8 for the async I/O conversions.
+- **Out of scope (untouched).** No Phase 8 work (no doc-folding into topic-doc §§ / no deleting the audit
+  file). No E5 prefix migration, no chunk-size change. `registerRagIpc`/`askDocuments` lock guard NOT added
+  (not a named Phase-7 finding). PERF-5 Part B (windowing) deferred.
+- **Next action (owner):** review/commit Phase 7 (do NOT auto-push/merge). Then **Phase 8 — docs
+  reconciliation + audit close-out** (fold finished records into topic-doc §§, delete the audit file)._
+
+
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 6 (RERANKER SCORING DEPTH, retrieval quality;
 RAG-N3 Med + DOC-N6 Low, with the dependency TEST-N4 Med folded in) — the load-bearing reranker
 (rag-design §12.3) scored only the FIRST 320 approx-tokens of each 500-token chunk, so a chunk whose
