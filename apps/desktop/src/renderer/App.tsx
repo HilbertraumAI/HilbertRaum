@@ -270,7 +270,19 @@ function AppShell(): JSX.Element {
         <ErrorBoundary
           key={screen}
           fallback={(reset) => (
-            <ScreenErrorFallback t={t} onRetry={reset} onHome={() => navigate('home')} />
+            // onHome resets the boundary AND navigates: if HOME itself threw, navigate('home') is
+            // a same-value setScreen no-op (no key change → no re-mount), so reset() is what
+            // actually clears the error; on any other screen the navigate changes the key and
+            // reset() is harmless. Without the reset, "Go to Home" would be a dead no-op when the
+            // throwing screen is Home (the default screen).
+            <ScreenErrorFallback
+              t={t}
+              onRetry={reset}
+              onHome={() => {
+                reset()
+                navigate('home')
+              }}
+            />
           )}
         >
           {screen === 'home' && <HomeScreen onNavigate={navigate} />}

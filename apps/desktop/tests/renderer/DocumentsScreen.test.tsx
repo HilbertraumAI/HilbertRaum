@@ -667,20 +667,17 @@ describe('DocumentsScreen', () => {
     vi.useFakeTimers()
     try {
       const listDocuments = vi.fn(async () => [doc({})])
-      // The poll's getImportJob: resolves immediately while `live` is false; once armed it hands
-      // back a promise we resolve BY HAND, so a tick can go in-flight, straddle the unmount, and
-      // THEN resolve — exercising the post-await mounted guard.
+      // getImportJob parks on its FIRST poll call: it hands back a promise we resolve BY HAND, so
+      // the tick goes in-flight, straddles the unmount, and THEN resolves with a transition
+      // (completed -1 → 2) that would normally trigger refresh() — exercising the post-await guard.
       type Job = { jobId: string; total: number; completed: number; failed: number; done: boolean }
-      let live = false
-      const parked: Array<() => void> = []
-      const getImportJob = vi.fn((): Promise<Job> => {
-        if (!live) {
-          return Promise.resolve({ jobId: 'j1', total: 2, completed: 0, failed: 0, done: false })
-        }
-        return new Promise<Job>((res) => {
-          parked.push(() => res({ jobId: 'j1', total: 2, completed: 2, failed: 0, done: false }))
-        })
-      })
+      let release: (() => void) | null = null
+      const getImportJob = vi.fn(
+        (): Promise<Job> =>
+          new Promise<Job>((res) => {
+            release = () => res({ jobId: 'j1', total: 2, completed: 2, failed: 0, done: false })
+          })
+      )
       stubApi({
         listDocuments,
         pickDocuments: vi.fn(async () => ({ token: 't', paths: ['/u/a.pdf', '/u/b.pdf'] })),
@@ -694,27 +691,23 @@ describe('DocumentsScreen', () => {
         })
       }
       const { unmount } = render(<DocumentsScreen />)
-      await flush() // mount refresh + ocr status
+      await flush() // mount refresh
       fireEvent.click(screen.getByRole('button', { name: /import files/i }))
       await flush() // pick → preflight → import → watchJob armed (no tick yet)
 
-      // First real tick (live=false): completed 0, the -1 → 0 transition refreshes the list once.
+      // Fire the first poll tick → getImportJob parks mid-await (in-flight).
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400)
       })
-      // Arm the deferred path, fire the next tick so it parks mid-await.
-      live = true
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(400)
-      })
-      expect(parked).toHaveLength(1)
+      expect(release).not.toBeNull()
       const listBefore = listDocuments.mock.calls.length
 
-      // Unmount mid-poll (clears the interval), THEN resolve the parked tick. The post-await
-      // guard drops it: no extra listDocuments refresh on the dead component.
+      // Unmount mid-poll (clears the interval), THEN resolve the parked tick. The post-await guard
+      // drops it: no extra listDocuments refresh on the dead component (teeth: without the guard the
+      // -1 → 2 transition would call refresh() → listDocuments again).
       unmount()
       await act(async () => {
-        parked[0]()
+        release!()
         await vi.advanceTimersByTimeAsync(0)
       })
       expect(listDocuments.mock.calls.length).toBe(listBefore)

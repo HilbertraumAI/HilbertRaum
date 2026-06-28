@@ -9,7 +9,7 @@
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 3 (RENDERER ROBUSTNESS; FE-1 High +
 FE-2…FE-9) — the renderer was the least-audited surface (prior rounds were backend-only); the headline
 gap was that ANY screen render throw blanked the whole offline app with no recovery (branch
-`full-audit-2026-06-28-fixes`).** Suite **2372 passed / 39 skipped** (was 2356/39 at Phase 2 → **+16
+`full-audit-2026-06-28-fixes`).** Suite **2374 passed / 39 skipped** (was 2356/39 at Phase 2 → **+18
 tests**), typecheck clean, build OK. **Renderer-only** (plus the shared i18n catalogs) — no IPC surface,
 no main-process behavior, no data-layer change; offline/no-telemetry posture held. Touched only the
 listed renderer files + their tests + the architecture renderer record.
@@ -32,8 +32,9 @@ listed renderer files + their tests + the architecture renderer record.
   active` guard / a `mountedRef` applied to the Documents import poll, PrivacyTab, DiagnosticsTab
   refreshers, SkillsTab settings load, General tab. FE-5 — `applyLanguageSetting` is now
   `useCallback([])` (identity-stable) so a UI-language switch no longer re-fires App's
-  `getPolicy()`+`getSettings()` effect. FE-6 — ScopePopover pending chips key by file name; ChatScreen
-  optimistic id uses a monotonic counter (not `Date.now()`). FE-7 — ToastProvider tracks its dismiss
+  `getPolicy()`+`getSettings()` effect. FE-6 — ScopePopover pending chips key by `name+index`
+  (unique even for two cross-folder files sharing a base name, and content-aware); ChatScreen optimistic
+  id uses a monotonic counter (not `Date.now()`). FE-7 — ToastProvider tracks its dismiss
   timers in a ref + clears them on unmount. FE-8 — DiagnosticsTab benchmark failure → `friendlyIpcError`,
   `'UNKNOWN'` literal → `t('diag.app.unknown')`. FE-9 — SegmentedControl Home/End select the first/last
   ENABLED segment directly (`moveToEdge`), not via the arrow-key modulo wrap.
@@ -57,6 +58,15 @@ listed renderer files + their tests + the architecture renderer record.
   9 test files above; `docs/architecture.md` (new "Renderer robustness — design record (full audit
   2026-06-28, Phase 3)" §). **Out of scope (untouched):** main-process (PERF-1/PERF-2 deferred to
   Phase 7), data-layer, RAG, perf items PERF-5/PERF-6.
+- **Teeth-verified** by neutering each meaningful fix and watching its test fail, then restoring
+  (FE-1 fallback+reset, FE-3, FE-4, FE-5, FE-7, FE-8, FE-9, plus the two review-fix tests below).
+- **Adversarial review pass (6-dimension multi-agent workflow + per-finding verify) found 3 real issues,
+  all fixed in a follow-up:** (a) the FE-6 pending-chip key (originally name-only) collided on duplicate
+  base names → changed to `name+index`; (b) its test had no teeth (a key only affects reconciliation) →
+  added a duplicate-name no-warning teeth test; (c) the FE-1 fallback's "Go to Home" was a no-op when
+  Home itself threw (same-value navigate, no key change) → `onHome` now `reset()` + `navigate('home')`,
+  with a recovery teeth test. The review's other "findings" were the transient teeth-check neuters in the
+  working tree (correctly dismissed by the verify agents; committed HEAD was clean).
 - **Next action (owner):** review/commit Phase 3 (do NOT auto-push/merge). Then **Phase 4 — CJK/Thai
   token-vs-word wave (RAG-N1, RAG-N2)** per `audits/full-audit-2026-06-28.md` §6._
 

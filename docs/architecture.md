@@ -204,7 +204,9 @@ force-quit. The contract now:
   by `screen`**, so navigating to any other destination re-mounts the subtree and clears a captured
   error. The boundary is INSIDE `<main>`, so the nav rail (rendered outside it) stays alive — the user
   is never trapped. The localized fallback (`ScreenErrorFallback`, `role="alert"`) offers an in-place
-  **Try again** (`reset`) and a **Go to Home** escape.
+  **Try again** (`reset`) and a **Go to Home** escape — the latter calls `reset()` *and*
+  `navigate('home')`, since when Home is itself the throwing screen `navigate('home')` is a same-value
+  no-op (the key never changes), so `reset()` is what actually clears the boundary.
 - **Outer last-resort boundary (`main.tsx`).** Wraps `<App/>` so a throw ABOVE the per-screen boundary
   (the gate, the i18n provider, AppShell itself) still shows a localized reload prompt
   (`RootErrorFallback`) instead of a blank window. It sits OUTSIDE `I18nProvider`, so it resolves the
@@ -230,9 +232,10 @@ force-quit. The contract now:
   `useCallback([])` (identity-stable; it only needs `setLang`), so App's policy/settings effect, which
   lists it in deps, no longer re-fires `getPolicy()`+`getSettings()` purely because the UI language
   changed.
-- **FE-6 (unstable keys).** ScopePopover pending-attachment chips key by file name (not array index);
-  the ChatScreen optimistic user-message id uses a monotonic counter (not `Date.now()`, which collides
-  within a millisecond).
+- **FE-6 (unstable keys).** ScopePopover pending-attachment chips key by `name+index` (name-aware so a
+  new import re-mounts a changed slot, index-disambiguated so two cross-folder files with the same base
+  name don't collide on a duplicate key); the ChatScreen optimistic user-message id uses a monotonic
+  counter (not `Date.now()`, which collides within a millisecond).
 - **FE-7 (untracked toast timer).** `ToastProvider` tracks its auto-dismiss `setTimeout` ids in a ref
   and clears them in a cleanup effect.
 - **FE-8 (raw English in localized copy).** `DiagnosticsTab` benchmark failures route through

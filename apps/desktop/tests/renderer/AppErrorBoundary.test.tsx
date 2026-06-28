@@ -5,11 +5,14 @@ import userEvent from '@testing-library/user-event'
 
 // Audit FE-1 (integration) — a screen render throw must show the localized per-screen fallback
 // while the nav rail (rendered OUTSIDE the boundary) stays alive, and navigating away must
-// re-mount the boundary and clear the error. Force the default Home screen to throw, and give a
-// lightweight stand-in for a second destination to prove the reset-on-nav.
+// re-mount the boundary and clear the error. The default Home screen throws (toggleable via the
+// hoisted flag so we can prove the fallback's own "Go to Home" recovers), and a lightweight
+// stand-in for a second destination proves the reset-on-nav.
+const hoisted = vi.hoisted(() => ({ homeThrows: true }))
 vi.mock('../../src/renderer/screens/HomeScreen', () => ({
   HomeScreen: (): JSX.Element => {
-    throw new Error('home screen render boom')
+    if (hoisted.homeThrows) throw new Error('home screen render boom')
+    return <div>home recovered</div>
   }
 }))
 vi.mock('../../src/renderer/screens/SkillsScreen', () => ({
@@ -42,6 +45,7 @@ function stubShell(settings: AppSettings = DEFAULT_SETTINGS): void {
 // React logs the caught render error to console.error — silence the noise.
 let errSpy: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
+  hoisted.homeThrows = true // default: Home throws (toggled off by the recovery test)
   errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 afterEach(() => {
@@ -79,5 +83,19 @@ describe('App — per-screen error boundary (FE-1)', () => {
     expect(
       await screen.findByText('Auf diesem Bildschirm ist etwas schiefgelaufen')
     ).toBeInTheDocument()
+  })
+
+  it('"Go to Home" recovers even when Home itself is the throwing screen', async () => {
+    // Home is the default screen, so navigate('home') is a same-value setScreen no-op (no key
+    // change → no re-mount). The fallback's onHome must therefore also reset() the boundary;
+    // without that, "Go to Home" is a dead no-op exactly when Home is what threw.
+    const user = userEvent.setup()
+    stubShell()
+    render(<App />)
+    await screen.findByText('Something went wrong on this screen')
+    hoisted.homeThrows = false // Home will render cleanly once the boundary is cleared
+    await user.click(screen.getByRole('button', { name: 'Go to Home' }))
+    expect(await screen.findByText('home recovered')).toBeInTheDocument()
+    expect(screen.queryByText('Something went wrong on this screen')).not.toBeInTheDocument()
   })
 })
