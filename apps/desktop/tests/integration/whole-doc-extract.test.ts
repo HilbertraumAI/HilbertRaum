@@ -279,6 +279,29 @@ describe('aggregateExtractions', () => {
     expect(answer).toMatch(/bob/)
   })
 
+  it('a multi-doc scope with extraction on only ONE doc says "sections scanned", NOT "whole document" [RAG-1]', async () => {
+    // Two indexed, fully-chunked documents, but extraction ran on only A. `fullyChunked` is
+    // true (neither doc is missing the marker), yet only A's chunks carry a `__scan__` marker
+    // → scannedChunks < totalChunks. The over-claim the H7 invariant forbids is "across the
+    // whole document"; the honest wording is "across N sections scanned".
+    const a = await importText('Pay @@alice@@ and @@bob@@.', 'a.txt')
+    const b = await importText('Some unrelated text with no tokens to extract.', 'b.txt')
+    await extractOf(a) // NOT b
+
+    const listing = aggregateExtractions(db, { documentIds: [a, b] }, 'party')
+    expect(listing.items.length).toBeGreaterThan(0) // alice/bob, so we hit the coverage branch
+    expect(listing.fullyChunked).toBe(true) // both docs are fully chunked (the chunking invariant)
+    expect(listing.scannedChunks).toBeLessThan(listing.totalChunks) // but B was never scanned
+
+    const answer = buildListingAnswer(db, listing, tr)
+    expect(answer).not.toMatch(/whole document/) // RAG-1: no over-claim
+    expect(answer).toMatch(/sections scanned/) // honest coverage wording
+
+    // The single-document fully-extracted scope is unchanged: it DOES say "whole document".
+    const soloAnswer = buildListingAnswer(db, aggregateExtractions(db, { documentIds: [a] }, 'party'), tr)
+    expect(soloAnswer).toMatch(/whole document/)
+  })
+
   it('an unparsed section is surfaced in the listing answer, never silently dropped [H7]', async () => {
     const id = await importText('@@BADJSON@@')
     await extractOf(id)

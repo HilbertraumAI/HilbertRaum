@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { createSelectedReranker } from '../../src/main/services/reranker/factory'
+import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
@@ -45,6 +46,34 @@ function rerankFetch(scores: number[], recorded?: Array<{ query: string; documen
         .slice(0, body.documents.length)
         .map((relevance_score, index) => ({ index, relevance_score }))
         .sort((a, b) => b.relevance_score - a.relevance_score)
+      return { ok: true, status: 200, json: async () => ({ results }) } as Response
+    }
+    throw new Error(`unexpected url ${u}`)
+  }) as typeof fetch
+}
+
+/**
+ * Reproduces llama-server's n_ctx 500: a query+document sequence whose combined approx-token
+ * cost exceeds the context makes the real server reply HTTP 500 ("input … is too large to
+ * process"). With a space-less passage left untruncated this 500 → rerank() throws → the caller
+ * (rag/index.ts) silently keeps the fused order — the reranker no-ops on CJK/Thai (EMB-1). The
+ * token-aware truncation must keep the sent inputs under the context so this never fires.
+ */
+function ctxBoundedRerankFetch(
+  contextTokens: number,
+  recorded: Array<{ query: string; documents: string[] }>
+): typeof fetch {
+  return (async (url: string | URL, init?: RequestInit) => {
+    const u = String(url)
+    if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+    if (u.endsWith('/v1/rerank')) {
+      const body = JSON.parse(String(init?.body)) as { query: string; documents: string[] }
+      recorded.push(body)
+      const overflows = body.documents.some(
+        (d) => approxTokenCount(body.query) + approxTokenCount(d) > contextTokens
+      )
+      if (overflows) return { ok: false, status: 500 } as Response
+      const results = body.documents.map((_d, index) => ({ index, relevance_score: index }))
       return { ok: true, status: 200, json: async () => ({ results }) } as Response
     }
     throw new Error(`unexpected url ${u}`)
@@ -127,7 +156,7 @@ describe('LlamaReranker', () => {
     expect(child.killed).toBe(true)
   })
 
-  it('truncates query and documents to the word budget before sending', async () => {
+  it('truncates query and documents to the approx-token budget before sending', async () => {
     const recorded: Array<{ query: string; documents: string[] }> = []
     const reranker = new LlamaReranker({
       ...base,
@@ -138,9 +167,34 @@ describe('LlamaReranker', () => {
     const longQuery = Array.from({ length: 500 }, (_, i) => `q${i}`).join(' ')
     await reranker.rerank(longQuery, [longDoc])
     await reranker.stop()
+    // English words are ~1 approx token each, so the default caps (160/320) are unchanged.
     expect(recorded[0].query.split(' ').length).toBeLessThanOrEqual(160)
     expect(recorded[0].documents[0].split(' ').length).toBeLessThanOrEqual(320)
     expect(recorded[0].documents[0].startsWith('word0 word1')).toBe(true) // head kept
+  })
+
+  // EMB-1 (backend audit 2026-06-27): the OLD whitespace word-split treated a space-less CJK/Thai
+  // passage as a SINGLE "word" and never truncated it → it overflowed n_ctx, the sidecar 500'd,
+  // and rerank() threw, so rag/index.ts silently fell back to the fused order (a no-op reranker on
+  // those scripts). The token-aware truncation (shared with the E5 embedder) keeps it under ctx.
+  it('truncates a space-less CJK passage so the rerank does not overflow n_ctx and silently no-op [EMB-1]', async () => {
+    const DEFAULT_CTX = 2048 // the reranker's default contextTokens
+    const recorded: Array<{ query: string; documents: string[] }> = []
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn: fakeSpawn().spawn,
+      fetchImpl: ctxBoundedRerankFetch(DEFAULT_CTX, recorded)
+    })
+    const cjk = '東'.repeat(5000) // one giant space-less "word", far over the context
+    expect(approxTokenCount(cjk)).toBeGreaterThan(DEFAULT_CTX) // would 500 if sent untruncated
+    const hits = await reranker.rerank('質問', [cjk, '短い文書'])
+    await reranker.stop()
+
+    // The reranker returned a real reordering — it did NOT 500 and fall through to fused order.
+    expect(hits).toHaveLength(2)
+    // The sent passage was truncated by token COST (CJK ~1 token/char), not left whole.
+    expect(recorded[0].documents[0].length).toBeLessThan(cjk.length)
+    expect(approxTokenCount(recorded[0].documents[0])).toBeLessThanOrEqual(DEFAULT_CTX)
   })
 
   it('returns [] for an empty batch without starting the server', async () => {

@@ -6,6 +6,62 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 5 (RAG/embeddings honesty & quality;
+RAG-1, EMB-1, DATA-2/EMB-2, EMB-4, MAINT-2/MAINT-5, TEST-3/5/7) — RETRIEVAL/ANSWER-HONESTY + VECTOR
+HANDLING PHASE, no renderer surface, no schema change, no new capability (branch
+`backend-audit-2026-06-27-fixes`).** Suite **2315 passed / 39 skipped (+4 tests)**, typecheck clean,
+build OK. Content-class data (chunk text, node summaries, listing values) stays content-class —
+nothing new logged/audited; offline posture held. **The problems:** the coverage listing over-claimed
+"across the whole document" in a multi-doc scope where extraction ran on only one doc; the reranker
+silently no-op'd on CJK/Thai (a space-less passage is one "word" → never truncated → 500 → fused-order
+fallback); the compare path decoded vectors without the truncated-blob guard every other call site has;
+`codec.ts` assumed native LE with no guard.
+- **RAG-1 — "whole document" wording gated on ACTUAL scan coverage.** `buildListingAnswer`
+  (`analysis/listing-answer.ts`) now picks `coverageWhole` only when `fullyChunked && scannedChunks >=
+  totalChunks` (was `fullyChunked` alone). `fullyChunked` proves stored chunks are complete, NOT that
+  every in-scope doc was scanned; a 2-doc scope extracted on one doc has `fullyChunked=true` but
+  `scannedChunks < totalChunks` → honestly falls to `coverageSections` ("N sections scanned"). The
+  single-doc fully-extracted path satisfies both → wording unchanged. `aggregateExtractions` untouched
+  (the field keeps its chunking-invariant meaning; the gate combines both conditions at the wording site).
+- **EMB-1 + MAINT-2 — token-aware reranker truncation via a SHARED budget helper.** New
+  `runtime/context-budget.ts` (`REAL_TOKENS_PER_APPROX_TOKEN=2.2`, `maxInputApproxTokens(ctx)`,
+  `truncateToContext(text, ctx)`) is the single home for sidecar input budgeting; the E5 embedder and the
+  reranker both route through it (can't diverge again). The reranker dropped its naive whitespace
+  `truncateWords` for the CJK/Thai-aware `truncateToApproxTokens`; per-field caps renamed
+  `MAX_QUERY_APPROX_TOKENS`(160)/`MAX_DOC_APPROX_TOKENS`(320) and **clamped to the context budget in the
+  constructor** (default 2048 → exactly 160/320, no behaviour change for English; a smaller configured
+  context shrinks them so a rerank can't exceed n_ctx). The fused-order fallback (`rag/index.ts`) stays as
+  a backstop but now rarely fires.
+- **DATA-2/EMB-2 — the truncated-blob guard moved INTO `decodeVector`.** `decodeVector` now returns
+  `Float32Array | null` — `dimensions <= 0` or `blob.length < dimensions*4` → `null` so EVERY caller skips
+  the row uniformly. The two compare-path decodes (`doctasks/manager.ts`) now null-check-and-skip (a
+  corrupt vector degrades the compare gracefully instead of throwing a `RangeError` that fails the task);
+  the redundant pre-guards in `resident-cache.ts`/`node-vectors.ts` were replaced by the null-check (one
+  guard point). Guard is one cheap branch — negligible on the hot resident-cache scan.
+- **EMB-4/MAINT-5 — LE endianness assert.** `codec.ts` asserts the host is little-endian at module load
+  (the BLOB encoding is locked LE Float32, spec §6) so a big-endian host fails loudly rather than silently
+  corrupting every vector.
+- **Tests (TEST-3/5/7, +4, all teeth-verified then restored).** `whole-doc-extract.test.ts`: multi-doc
+  scope extracted on one doc → wording is `coverageSections`, never "whole document" (single-doc still
+  says "whole document"). `reranker.test.ts`: a CJK passage > ctx still returns a reordering (mock 500s on
+  overflow — proves no silent fall-through). `embeddings.test.ts`: `decodeVector` truncated/zero-dim →
+  null, boundary decodes normally. `doctasks-compare.test.ts`: a truncated stored vector → the compare
+  completes (no thrown RangeError). **Teeth:** reverting each fix failed the matching test — RAG-1
+  printed "whole document"; EMB-1 word-split → mock HTTP 500 → rerank threw; DATA-2 guard off → RangeError
+  failed the compare + the existing resident-cache scan test; all restored.
+- **Data contracts (changed/new):** `decodeVector(blob, dimensions): Float32Array | null` (was non-null —
+  `null` = skip a truncated/zero-dim blob; all callers null-check). New `runtime/context-budget.ts`:
+  `export const REAL_TOKENS_PER_APPROX_TOKEN = 2.2`; `export function maxInputApproxTokens(contextTokens:
+  number, minTokens=16): number`; `export function truncateToContext(text: string, contextTokens: number,
+  minTokens=16): string`. No IPC/schema-shape change; renderer untouched.
+- **Docs:** `rag-design.md` §11 (reranker prose — token-aware truncation + EMB-1), new §12.4 (token-aware
+  sidecar truncation contract + codec LE assert + DATA-2 guard), §14.5 (RAG-1 wording gate). **DOC-3**
+  (E5 no-prefix retrieval ceiling) deliberately LEFT for Phase 8 (its scope). **Eyeball:** none — a
+  main-side retrieval/answer/vector phase, no UI surface.
+  **Next: Phase 6 — Skills trust model (SEC-1 user `kind:tool` gate, API-3 documentCount note) — ⚠️ has a
+  product DECISION (gate to app skills vs allow+document) to resolve before coding.** See
+  `docs/backend-audit-2026-06-27-remediation-plan.md` Phase 6._
+
 _2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 4 (Ingestion robustness & cap enforcement;
 REL-5, REL-9, REL-10, BL-5, MAINT-4) — MAIN-SIDE PARSING/WALK PHASE, no renderer surface, no schema
 change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2311 passed / 39 skipped

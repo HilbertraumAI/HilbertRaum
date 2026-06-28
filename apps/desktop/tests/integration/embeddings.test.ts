@@ -131,7 +131,8 @@ describe('vector BLOB encoding', () => {
     const original = new Float32Array([0.5, -0.25, 0.125, 1, -1, 0])
     const blob = encodeVector(original)
     const decoded = decodeVector(blob, original.length)
-    expect(Array.from(decoded)).toEqual(Array.from(original))
+    expect(decoded).not.toBeNull()
+    expect(Array.from(decoded!)).toEqual(Array.from(original))
   })
 
   it('decodes correctly even from an unaligned blob offset', () => {
@@ -141,7 +142,21 @@ describe('vector BLOB encoding', () => {
     const padded = Buffer.concat([Buffer.from([0]), raw])
     const unaligned = padded.subarray(1) // byteOffset = 1 (unaligned)
     const decoded = decodeVector(unaligned, original.length)
-    expect(Array.from(decoded)).toEqual(Array.from(original))
+    expect(decoded).not.toBeNull()
+    expect(Array.from(decoded!)).toEqual(Array.from(original))
+  })
+
+  it('returns null (does not throw) for a physically truncated blob — DATA-2 guard', () => {
+    // A blob shorter than dimensions*4 bytes (e.g. a partial write). The OLD decodeVector
+    // would throw a RangeError building the Float32Array view, crashing the caller's scan;
+    // the guard now lives inside decodeVector so every call site can skip the row uniformly.
+    expect(decodeVector(Buffer.alloc(16), 384)).toBeNull() // 16 bytes ≪ 384*4
+    expect(decodeVector(new Uint8Array(0), 4)).toBeNull()
+    // A non-positive dimension is also unusable (preserves node-vectors' `!dimensions` skip).
+    expect(decodeVector(Buffer.alloc(16), 0)).toBeNull()
+    // The boundary: exactly dimensions*4 bytes decodes normally.
+    const exact = encodeVector(new Float32Array([1, 2, 3, 4]))
+    expect(decodeVector(exact, 4)).not.toBeNull()
   })
 })
 

@@ -1,6 +1,6 @@
 import type { Embedder, EmbedOptions } from './index'
 import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
-import { approxTokenCount, truncateToApproxTokens } from '../ingestion/chunker'
+import { truncateToContext } from '../runtime/context-budget'
 
 // Real on-device embedder (spec §6, §9.2). Drops in behind the existing
 // `Embedder` interface with the SAME id/dimensions as the E5-small manifest, so the
@@ -15,25 +15,13 @@ import { approxTokenCount, truncateToApproxTokens } from '../ingestion/chunker'
 
 const DEFAULT_DIMENSIONS = 384
 const DEFAULT_CONTEXT_TOKENS = 512
-/**
- * Chunks are sized by `approxTokenCount` (~500), but the embedding sidecar context is
- * real BPE tokens (E5-small caps at 512), and the real-token cost of a chunk is heavier
- * than the estimate — so unmodified chunks routinely overflowed the context and the
- * sidecar failed the request (HTTP 500). Inputs are therefore truncated to fit, measured
- * by `approxTokenCount` (which already handles space-less CJK/Thai) and divided by a
- * real-BPE safety factor.
- *
- * The factor must cover the WORST case, not English: this is the *multilingual* E5, and a
- * machine translation into German — the very feature that surfaced the original HTTP 500
- * — is subword-heavy at ~2 real tokens per word (see translation.ts). `approxTokenCount`
- * charges an ordinary word ~1 token, so a German chunk's real-token cost is ~2× its
- * estimate. 2.2 keeps even worst-case German (and a fortiori English/space-less text)
- * comfortably under 512 with ~50 tokens of headroom for BOS/EOS + estimate slop. The cost
- * is embedding only the head of a long German chunk — acceptable (the vector covers the
- * chunk's head regardless, and adjacent chunks overlap), and strictly better than a
- * wedged document.
- */
-const REAL_TOKENS_PER_APPROX_TOKEN = 2.2
+// Inputs are truncated to fit the sidecar context BEFORE sending: chunks are sized by
+// `approxTokenCount` (~500), but the embedding sidecar context is real BPE tokens (E5-small caps
+// at 512) and a chunk's real-token cost is heavier than the estimate, so unmodified inputs
+// routinely 500'd the request. The truncation is CJK/Thai-aware and uses the SHARED real-BPE
+// safety factor (`REAL_TOKENS_PER_APPROX_TOKEN`) so the embedder and the reranker can't diverge
+// (MAINT-2). See `runtime/context-budget.ts` for the factor's rationale (worst-case multilingual
+// German ~2 real tokens/word).
 /** Embed in bounded batches instead of one giant request (up to 1000 chunks). */
 const DEFAULT_EMBED_BATCH_SIZE = 32
 /**
@@ -172,25 +160,20 @@ export class E5Embedder implements Embedder {
     return this.server
   }
 
-  /** Most `approxTokenCount` tokens that safely fit the sidecar's real-token context. */
-  private maxInputApproxTokens(): number {
-    const ctx = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
-    return Math.max(16, Math.floor(ctx / REAL_TOKENS_PER_APPROX_TOKEN))
-  }
-
   /**
-   * Truncate an input to the context budget (the vector covers the chunk's head).
-   * Measured by `approxTokenCount` so space-less scripts (CJK/Thai) and subword-heavy
-   * languages can't slip past a naive word count and overflow the sidecar (HTTP 500).
+   * Truncate an input to the context budget (the vector covers the chunk's head). CJK/Thai-aware
+   * via the shared `truncateToContext` so space-less scripts and subword-heavy languages can't
+   * slip past a naive word count and overflow the sidecar (HTTP 500); the budget uses the shared
+   * real-BPE safety factor (`runtime/context-budget.ts`).
    */
   private truncateForContext(text: string): string {
-    return truncateToApproxTokens(text, this.maxInputApproxTokens())
+    return truncateToContext(text, this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
   }
 
   /**
    * Embed texts → L2-normalized `Float32Array`s, one per input, in order. Inputs are
-   * truncated to the sidecar context (see REAL_TOKENS_PER_APPROX_TOKEN), sent in bounded
-   * batches, and each request carries a timeout so a wedged sidecar cannot park a
+   * truncated to the sidecar context (see `truncateForContext` / `runtime/context-budget.ts`),
+   * sent in bounded batches, and each request carries a timeout so a wedged sidecar cannot park a
    * document in `embedding` forever. `opts.signal` (a user "Stop") is combined with
    * the timeout so query embedding cancels promptly (M-C5).
    */
