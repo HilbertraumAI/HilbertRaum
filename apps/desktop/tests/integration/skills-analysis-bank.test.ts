@@ -116,6 +116,16 @@ const TWO_DATE_COMPLETE =
   '08.06.2026 09.06.2026 Gehalt ACME 2.500,00 4.454,10\n' +
   'Endsaldo 4.454,10'
 
+// A TYING statement whose closing line carries a TRAILING date (BL-N2) and whose first row hides a
+// money-shaped reference (100,00 EUR) before the real amount (BL-N3). opening 2000 + (−100 + 2500) ==
+// closing 4400 must read as a VERIFIED total. Before the Phase-1 fixes the in-description 100,00 became
+// the amount AND the closing read '30.06.20' → 3006.20, so the tie failed → a false refusal.
+const TRAILING_DATE_COMPLETE =
+  'Kontoauszug EUR\nAnfangssaldo 2.000,00\n' +
+  '2026-01-02 Betrag 100,00 EUR -100,00 1.900,00\n' +
+  '2026-01-03 Gehalt 2.500,00 4.400,00\n' +
+  'Endsaldo 4.400,00 EUR per 30.06.2026'
+
 describe('bank-statement analysis handler — applies() pre-flight (R2)', () => {
   it('applies on an analysis-shaped question over a single in-scope statement', () => {
     const db = freshDb()
@@ -225,6 +235,22 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 2 }))
+  })
+
+  it('trailing-date closing + in-description money: the TYING statement presents the VERIFIED total (BL-N2/BL-N3 e2e)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, TRAILING_DATE_COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
+
+    // Both rows parse with the real amounts (−100 + 2500); the in-description 100,00 never became the amount.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    expect(res.answer).toContain('2500.00') // money in
+    expect(res.answer).toContain('100.00') // money out (the real −100 amount, not the 100,00 reference)
+    expect(res.answer).toContain('2400.00') // net change
+    expect(res.answer).not.toContain('3006.20') // the trailing date never became the closing balance
+    // opening 2000 + Σ 2400 == closing 4400 ties out → the VERIFIED caveat, not the refusal.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
   })
 
   it('mixed-currency statement reports NO single total (honesty)', async () => {

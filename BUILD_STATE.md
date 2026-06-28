@@ -6,6 +6,76 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 1 (FINANCIAL CORRECTNESS; BL-N1…N6 + the
+TEST-N2/N6 test gaps) — the highest user-impact bug cluster: the bank/invoice/redaction tools silently
+lost or mis-stated money/dates/PII (branch `full-audit-2026-06-28-fixes`).** Suite **2353 passed / 39
+skipped** (was 2335/39 at Phase 0 → **+18 tests**), typecheck clean, build OK. Parsing/aggregation only —
+**no schema, IPC, trust-model, or audit-payload change**; figures/redacted text stay content-class (never
+logged/audited/exported). Offline/no-telemetry posture held. Touched only the four tool files + their
+tests + the two listed docs. Methodology: **characterization tests FIRST** (corrected-behavior tests driven
+through the REAL entry points — `extractTransactionRows`/`extractStatementBalances`/`reconcileBalances`/
+`parseLineItem`/the redaction tool — confirmed failing against the unmodified code, closing the TEST-N2
+"pre-isolated token" gap), THEN the code, THEN green; every behavioral fix teeth-verified by neutering it
+and watching its test fail.
+- **TWO OWNER DECISIONS (resolved via AskUserQuestion before implementing):**
+  - **DECISION 1 (BL-N1) — ambiguous/US-ordered dates: _per-document locale inference_.** de-AT day-first
+    stays the DEFAULT; the whole document flips to month-first only when it has an unambiguously US-ordered
+    date (a `nn/nn/yyyy` whose **second** field is 13–31) and no unambiguously EU-ordered one. A
+    fully-ambiguous / self-contradictory doc keeps day-first. **NB the audit's BL-N1 prose stated the
+    trigger with the fields swapped** ("first field >12 → mm/dd"), which is inverted — a first field >12 can
+    only be a day, forcing day-first; the mechanically-correct rule shipped and is recorded in
+    architecture.md §10 so it is not re-litigated. (Option b/c's result-attached caveat was out of scope —
+    the tool output schema is frozen.)
+  - **DECISION 2 (TEST-N2) — grouped figures: _full support_.** Bare `1.000`/`2.500` → 1000/2500 (de-AT dot
+    = thousands), space-grouped `1 234 567,89` → 1234567.89, Swiss apostrophe `1'234.56` → 1234.56.
+- **Per-finding (before → after, verified reproductions):**
+  - **BL-N1** `parseDate('12/31/2026')` → null → **whole row silently DROPPED**; `'03/05/2026'` → 3 May
+    (wrong). Now a US-ordered statement infers mm/dd: `12/31` parses (not dropped), `03/05` → 5 Mar; an EU
+    statement keeps day-first. `inferDateOrder` threaded through bank + invoice extractors. **Redaction does
+    NOT infer** (stays day-first — BL-N6).
+  - **BL-N2** `Endsaldo 1.234,56 EUR per 30.06.2026` → closing read the trailing date `30.06.20` → **3006.20**
+    (flipping the completeness gate). New `stripDateTokens` scrubs date tokens before the last-money
+    balance/total scan (`lastMoneyOnLine`, invoice `lastMoney`); date at EITHER end handled, so the de-AT
+    date-first `Kontostand per <date> <figure>` shape is unaffected. **This disproved the §24/§10 BL-1
+    "last-token readers were never affected" claim — corrected in both places.**
+  - **BL-N3** `Betrag 100,00 EUR -100,00 900,00` → amount = first token = **100** (value AND sign wrong).
+    `parseLine` now takes the second-to-last figure as the amount and the last as the balance when a balance
+    is present (byte-identical on a normal 2-figure row).
+  - **TEST-N2/DECISION 2** `Grocery 1.000` → **€1** (1000×); `1 234 567,89` → 567.89; `1'234.56` → 234.56.
+    `MONEY_RE` rewritten to three ordered alternatives (space / decimal / bare-thousands) with a trailing
+    `(?!\d)` + leading `(?<!\d)` anchor + a `(?<![A-Za-z0-9])` boundary on the space form; `parseAmount`
+    unchanged. Stays bounded/ReDoS-safe.
+  - **BL-N5** `reconcileBalances` now compares in integer cents (`Math.round(x*100)`), identical to
+    `assessCompleteness` (C-3). Consistency/defensive — no realistic 2-dp input distinguishes the two (its
+    test is a regression guard; teeth are structural).
+  - **BL-N4** redaction now masks punctuated US/national phones (`555-123-4567`, `1-800-555-1234`) and a
+    lowercase compact IBAN (`de89…`, case-insensitive); both conservative (punctuation required; standalone
+    token + per-country length re-validated).
+  - **BL-N6** redaction masks every `parseDate`-valid date and does NOT infer locale, so a US `12/31/2026`
+    leaks while EU `31/12/2026` masks — DOCUMENTED (lowest priority, kept best-effort, no leak path to any
+    log/audit). TEST-N6 pins this + names/addresses-not-masked as accepted limitations.
+- **Geometry regression caught + fixed mid-phase:** the first full-suite run flagged
+  `pdf-bank-layout.test.ts` (a continuation line `…778899 300,00` fused to **899300** via the new
+  space-group form). Fixed with the leading `(?<!\d)` anchor; pinned by a new unit test. The
+  **adversarial multi-lens review** (4 agents) then surfaced the *letter*-preceded variant
+  (`Ref123 456,78` → 123456.78), fixed with the `(?<![A-Za-z0-9])` boundary + a second unit test. The
+  review's other findings were triaged: the "stripDateTokens broken" critical was a **false alarm** (an
+  agent read the file during a transient teeth-check neuter — the code is correct); the IBAN glued-prose
+  case needs separator-less glue that real extracted text never has (validation-guarded, documented); the
+  US-date redaction leak IS BL-N6 (kept documented per the owner's "don't over-engineer" scoping).
+- **Docs (ritual):** known-limitations.md — extended the redaction BL-4 bullet (BL-N6 asymmetry +
+  phone/IBAN coverage + the IBAN residual) and added a new "bank/invoice LINE PARSER assumptions" bullet
+  (date-locale inference residual, amount-column-by-position, grouping trade-offs). architecture.md §10 —
+  corrected the BL-1 immunity claim and added the full-audit-2026-06-28 Phase-1 record with both DECISIONS
+  "as built (owner)".
+- **Files changed:** `tools/money.ts`, `tools/bank-statement.ts`, `tools/invoice.ts`, `tools/redaction.ts`;
+  `tests/unit/skills-{bank-statement,invoice,redaction}-tool.test.ts`,
+  `tests/integration/skills-analysis-bank.test.ts`; `docs/architecture.md`, `docs/known-limitations.md`,
+  `BUILD_STATE.md`.
+- **Next action (owner):** review/commit Phase 1 (do NOT auto-push/merge). Then **Phase 2 — GPU crash
+  auto-fallback (reliability, REL-1)** per `audits/full-audit-2026-06-28.md` §6._
+
+
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 0 (CI + test-infra safety net; TEST-N1 + TEST-N9)
 — FIRST remediation phase, the machine backstop every later phase relies on (branch
 `full-audit-2026-06-28-fixes`).** Suite **2335 passed / 39 skipped** (201 files, all collected), typecheck

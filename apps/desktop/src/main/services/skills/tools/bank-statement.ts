@@ -4,7 +4,18 @@ import type {
   SkillTool,
   ToolResult
 } from '../../../../shared/types'
-import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate, splitLeadingDates, wordIncludes } from './money'
+import {
+  MONEY_RE,
+  csvField,
+  detectCurrency,
+  inferDateOrder,
+  parseAmount,
+  parseDate,
+  splitLeadingDates,
+  stripDateTokens,
+  wordIncludes,
+  type DateOrder
+} from './money'
 
 // The deterministic money/date/CSV parsing primitives are shared with the invoice tools (one parser
 // per locale rule, §8). Re-exported here so existing import sites (`tools/bank-statement`) and the
@@ -100,21 +111,34 @@ export interface ExtractTransactionsOutput {
 
 // ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
 
-function parseLine(line: string, page: number | null, statementCurrency: string | null): ExtractedTransaction | null {
+function parseLine(
+  line: string,
+  page: number | null,
+  statementCurrency: string | null,
+  order: DateOrder = 'dmy'
+): ExtractedTransaction | null {
   // Strip the leading DATE column(s) before the money scan (BL-1): the FIRST is the booking date, a
   // SECOND consecutive date token is the value date (Wertstellung/Valuta). Reading only the first token
   // left a value-date column in `rest`, where MONEY_RE reads its `dd.mm.20yy` tail as a 2-decimal amount —
   // dropping the row (empty description) or mis-valuing it. `splitLeadingDates` consumes the whole leading
-  // date run; the description then starts at the first non-date token. (Shared with the invoice parser.)
-  const { dates, rest } = splitLeadingDates(line)
+  // date run; the description then starts at the first non-date token. `order` is the per-document date
+  // ordering (BL-N1), so a US `mm/dd/yyyy` booking date is recognised (not dropped) on a US statement.
+  const { dates, rest } = splitLeadingDates(line, order)
   if (dates.length === 0) return null
   const date = dates[0]
   const matches = [...rest.matchAll(MONEY_RE)]
   if (matches.length === 0) return null
-  const first = matches[0]
-  const description = rest.slice(0, first.index).trim()
+  // The description is the text before the FIRST money token (everything to the left of the figure run).
+  const description = rest.slice(0, matches[0].index).trim()
   if (!description) return null
-  const amount = parseAmount(first[0])
+  // BL-N3 — choose the amount column by POSITION, not the first money token. The de-AT layout is
+  // `<description> <amount> <running balance>`, so with ≥2 figures the LAST is the balance and the
+  // SECOND-TO-LAST is the movement amount; a money-shaped reference inside the description (e.g. an
+  // "…100,00 EUR…" note) therefore no longer steals the amount (and its sign). With exactly one figure
+  // there is no balance column, so that figure is the amount. (For the normal 2-figure row the
+  // second-to-last IS the first, so this is byte-identical to before on every existing fixture.)
+  const hasBalance = matches.length >= 2
+  const amount = parseAmount(matches[hasBalance ? matches.length - 2 : 0][0])
   if (amount === null) return null
   const currency = detectCurrency(line) ?? statementCurrency
   if (!currency) return null
@@ -122,7 +146,7 @@ function parseLine(line: string, page: number | null, statementCurrency: string 
   // A value-date column (the second leading date), when present, is captured as `valueDate` — the
   // schema/CSV already carry it; the booking date (de-AT Buchungstag) is conventionally printed first.
   if (dates.length >= 2) row.valueDate = dates[1]
-  if (matches.length >= 2) {
+  if (hasBalance) {
     const bal = parseAmount(matches[matches.length - 1][0])
     if (bal !== null) row.balanceAfter = bal
   }
@@ -174,17 +198,22 @@ function isBalanceLabelLine(lowerLine: string): boolean {
   return BALANCE_LABELS.some((l) => lowerLine.includes(l))
 }
 
-/** The last money token on a line as a number, or null when the line carries no parseable figure. */
+/**
+ * The last money token on a line as a number, or null when the line carries no parseable figure. Date
+ * tokens are SCRUBBED first (BL-N2): a balance line shaped `Endsaldo 1.234,56 EUR per 30.06.2026` would
+ * otherwise read the trailing date's `30.06.20` as the figure (→ 3006.20). Stripping handles a date at
+ * EITHER end, so the de-AT date-FIRST `Kontostand per <date> <figure>` shape still reads its figure too.
+ */
 function lastMoneyOnLine(line: string): number | null {
-  const matches = [...line.matchAll(MONEY_RE)]
+  const matches = [...stripDateTokens(line).matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   return parseAmount(matches[matches.length - 1][0])
 }
 
 /** The first whitespace-token on a line that parses as a date (ISO `YYYY-MM-DD`), or null. */
-function firstDateOnLine(line: string): string | null {
+function firstDateOnLine(line: string, order: DateOrder = 'dmy'): string | null {
   for (const token of line.split(/\s+/)) {
-    const d = parseDate(token)
+    const d = parseDate(token, order)
     if (d) return d
   }
   return null
@@ -201,10 +230,15 @@ function firstDateOnLine(line: string): string | null {
  * Explicit labels win over the date-derived pair where both appear. Returns only what is confidently
  * found; a missing balance stays undefined and the completeness gate (§3.5) then downgrades to honesty.
  */
-export function extractStatementBalances(chunks: DocumentChunkRead[]): {
+export function extractStatementBalances(
+  chunks: DocumentChunkRead[],
+  order?: DateOrder
+): {
   openingBalance?: number
   closingBalance?: number
 } {
+  // Per-document date ordering (BL-N1) — so a US-ordered `Kontostand per <date>` line sorts correctly.
+  const dateOrder = order ?? inferDateOrder(chunks.map((c) => c.text).join('\n'))
   let explicitOpening: number | undefined
   let explicitClosing: number | undefined
   // Every `Kontostand per <date>` line with its (parsed) period date — resolved to opening/closing below.
@@ -217,7 +251,7 @@ export function extractStatementBalances(chunks: DocumentChunkRead[]): {
       if (lower.includes(KONTOSTAND_PER)) {
         // A dual-role label — never matched against the opening/closing lists; resolved by date below.
         const value = lastMoneyOnLine(line)
-        if (value !== null) kontostand.push({ date: firstDateOnLine(line), value })
+        if (value !== null) kontostand.push({ date: firstDateOnLine(line, dateOrder), value })
         continue
       }
       if (explicitOpening === undefined && OPENING_LABELS.some((l) => lower.includes(l))) {
@@ -329,8 +363,12 @@ export function isStatementComplete(args: {
 /** Pure extractor over already-read chunks — emits only fully-valid rows (ambiguous lines dropped). */
 export function extractTransactionRows(
   chunks: DocumentChunkRead[],
-  statementCurrency: string | null
+  statementCurrency: string | null,
+  order?: DateOrder
 ): ExtractedTransaction[] {
+  // Infer the document's date ordering ONCE over the whole text (BL-N1) so a US-ordered statement parses
+  // mm/dd consistently across rows (no silent drop of day>12 rows, no confidently-wrong month).
+  const dateOrder = order ?? inferDateOrder(chunks.map((c) => c.text).join('\n'))
   const rows: ExtractedTransaction[] = []
   for (const chunk of chunks) {
     for (const rawLine of chunk.text.split(/\r?\n/)) {
@@ -339,7 +377,7 @@ export function extractTransactionRows(
       // A printed opening/closing balance line is a summary, not a transaction — skip it even though
       // it may carry a booking-column date + figure (it is read by `extractStatementBalances` instead).
       if (isBalanceLabelLine(line.toLowerCase())) continue
-      const row = parseLine(line, chunk.page, statementCurrency)
+      const row = parseLine(line, chunk.page, statementCurrency, dateOrder)
       if (row) {
         rows.push(row)
         if (rows.length >= MAX_TRANSACTIONS) return rows
@@ -379,9 +417,12 @@ export const extractTransactionsTool: SkillTool = {
       // Out-of-scope / unreadable — friendly + content-free; the technical reason is the seam's log.
       return { ok: false, error: 'This statement could not be read.' }
     }
-    const statementCurrency = detectCurrency(chunks.map((c) => c.text).join('\n'))
-    const transactions = extractTransactionRows(chunks, statementCurrency)
-    const balances = extractStatementBalances(chunks)
+    const joined = chunks.map((c) => c.text).join('\n')
+    const statementCurrency = detectCurrency(joined)
+    // Infer the document's date ordering ONCE and hand it to both extractors so they agree (BL-N1).
+    const dateOrder = inferDateOrder(joined)
+    const transactions = extractTransactionRows(chunks, statementCurrency, dateOrder)
+    const balances = extractStatementBalances(chunks, dateOrder)
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     const output: ExtractTransactionsOutput = { transactions }
     if (statementCurrency) output.currency = statementCurrency
@@ -460,6 +501,12 @@ export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
   if (new Set(rows.map((r) => r.currency)).size > 1) {
     return { reconciled: false, rows: rows.map((_, i) => ({ index: i, status: 'unknown' as const })) }
   }
+  // Compare in INTEGER CENTS, not a float epsilon (BL-N5) — the SAME `Math.round(x*100)` path
+  // `assessCompleteness` uses (audit C-3). Every figure is exactly 2-dp, so the cent value is exact and
+  // the running-balance check is an exact integer test; a per-row float epsilon could otherwise flip the
+  // very gate the integer sum was made to stabilise (a `mismatch` forces `assessCompleteness` to
+  // `contradicted`). Faithful to the old `< MONEY_EPS` for 2-dp figures (they differ by whole cents).
+  const toCents = (n: number): number => Math.round(n * 100)
   const out: ReconcileRow[] = []
   let prevBalance: number | null = null
   let okCount = 0
@@ -474,8 +521,8 @@ export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
       // genuine check — flagged `unknown` so a lone baseline can never report `reconciled: true`.
       status = 'unknown'
     } else {
-      const expected = prevBalance + row.amount
-      if (Math.abs(printed - expected) < MONEY_EPS) {
+      const expected = toCents(prevBalance) + toCents(row.amount)
+      if (toCents(printed) === expected) {
         status = 'ok'
         okCount++
       } else {
