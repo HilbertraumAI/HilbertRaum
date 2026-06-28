@@ -11,6 +11,26 @@ import { randomBytes } from 'node:crypto'
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 const dialogState = vi.hoisted(() => ({ result: { canceled: true, filePaths: [] as string[] } }))
+// PERF-1: wrap fs/promises `open` so a test can observe that the readBytes handler CLOSES the
+// FileHandle on every path (incl. the over-cap reject). `vi.spyOn` on a Node-builtin named import is
+// not reliably intercepted by the SUT, so we mock the module (delegating everything to the real impl;
+// only the returned handle's close is counted). `fhState.closes` is reset per relevant test.
+const fhState = vi.hoisted(() => ({ closes: 0 }))
+vi.mock('node:fs/promises', async (importActual) => {
+  const actual = await importActual<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const fh = await actual.open(...args)
+      const realClose = fh.close.bind(fh)
+      fh.close = async (): Promise<void> => {
+        fhState.closes += 1
+        return realClose()
+      }
+      return fh
+    }
+  }
+})
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
@@ -298,6 +318,20 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     registerImagesIpc(ctxFor(dir))
     const token = await tokenFor(file)
     await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_TOO_LARGE_MESSAGE)
+  })
+
+  // PERF-1: the read now runs on a fs/promises FileHandle. The over-cap reject must still close the
+  // handle in the `finally` (a leaked-handle unlink does NOT throw on win32 — libuv opens with
+  // FILE_SHARE_DELETE — so observe the close directly via the mocked `open`, above).
+  it('closes the file handle on the over-cap reject path — no leaked fd (PERF-1)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
+    const file = join(dir, 'big2.jpg')
+    writeFileSync(file, Buffer.alloc(20 * 1024 * 1024 + 1))
+    registerImagesIpc(ctxFor(dir))
+    const token = await tokenFor(file)
+    fhState.closes = 0
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_TOO_LARGE_MESSAGE)
+    expect(fhState.closes).toBe(1) // the finally closed the handle even though the size guard rejected
   })
 
   it('refuses readBytes when the workspace is locked', async () => {

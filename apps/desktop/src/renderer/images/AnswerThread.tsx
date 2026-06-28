@@ -1,6 +1,7 @@
+import { memo } from 'react'
 import { Banner, Button, Spinner } from '../components'
 import { AssistantMarkdown } from '../chat'
-import { useT } from '../i18n'
+import { useT, type I18n } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
 import type { VisionErrorCode } from '@shared/types'
 
@@ -30,6 +31,81 @@ const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
   decodeFailed: 'images.err.decodeFailed'
 }
 
+// PERF-6: one memoized row per turn, keyed by turn id. While a turn is IN FLIGHT we render its
+// answer as PLAIN TEXT (the streaming token deltas) and run the Markdown parser only ONCE, on
+// completion — mirroring the chat-transcript FE-1 split — so a long answer isn't re-parsed on every
+// stream flush. `memo` also keeps settled turns from re-rendering while a sibling streams (it bites
+// when the parent passes referentially-stable handlers; the plain-text win holds regardless).
+const TurnRow = memo(function TurnRow({
+  turn,
+  t,
+  onCopy,
+  onTryAgain,
+  onStop
+}: {
+  turn: ImageTurn
+  t: I18n['t']
+  onCopy: (text: string) => void
+  onTryAgain: (question: string) => void
+  onStop: () => void
+}): JSX.Element {
+  const running = turn.state === 'starting' || turn.state === 'analyzing'
+  return (
+    <div className="image-turn">
+      <p className="image-turn-question">{turn.question}</p>
+      <div className="image-turn-answer">
+        {turn.answer &&
+          (running ? (
+            // In-flight: plain text + caret. No per-flush Markdown re-parse; parsed once when done.
+            <div className="image-turn-text">
+              {turn.answer}
+              <span className="stream-caret" aria-hidden="true">
+                ▍
+              </span>
+            </div>
+          ) : (
+            // Settled: parse Markdown once (AssistantMarkdown is itself memoized on its text).
+            <div className="image-turn-text md">
+              <AssistantMarkdown text={turn.answer} />
+            </div>
+          ))}
+        {running && (
+          <div className="image-turn-running" role="status">
+            {!turn.answer && (
+              <span className="image-turn-reading">
+                <Spinner />{' '}
+                {turn.state === 'starting' ? t('images.answer.starting') : t('images.answer.reading')}
+              </span>
+            )}
+            <Button size="sm" onClick={onStop}>
+              {t('images.answer.stop')}
+            </Button>
+          </div>
+        )}
+        {turn.state === 'cancelled' && (
+          <p className="hint image-turn-stopped">{t('images.answer.stopped')}</p>
+        )}
+        {turn.state === 'failed' && turn.error && turn.error !== 'cancelled' && (
+          <Banner tone="error">{t(ERR_KEY[turn.error] ?? 'images.err.runtimeFailed')}</Banner>
+        )}
+        {turn.state === 'done' && (
+          <>
+            <p className="hint image-local-note">{t('images.answer.localNote')}</p>
+            <div className="image-turn-actions">
+              <Button size="sm" onClick={() => onCopy(turn.answer)}>
+                {t('images.answer.copy')}
+              </Button>
+              <Button size="sm" onClick={() => onTryAgain(turn.question)}>
+                {t('images.answer.tryAgain')}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+})
+
 export function AnswerThread({
   turns,
   onCopy,
@@ -44,56 +120,9 @@ export function AnswerThread({
   const { t } = useT()
   return (
     <div className="image-thread">
-      {turns.map((turn) => {
-        const running = turn.state === 'starting' || turn.state === 'analyzing'
-        return (
-          <div className="image-turn" key={turn.id}>
-            <p className="image-turn-question">{turn.question}</p>
-            <div className="image-turn-answer">
-              {turn.answer && (
-                <div className="image-turn-text md">
-                  <AssistantMarkdown text={turn.answer} />
-                  {running && <span className="stream-caret" aria-hidden="true">▍</span>}
-                </div>
-              )}
-              {running && (
-                <div className="image-turn-running" role="status">
-                  {!turn.answer && (
-                    <span className="image-turn-reading">
-                      <Spinner />{' '}
-                      {turn.state === 'starting'
-                        ? t('images.answer.starting')
-                        : t('images.answer.reading')}
-                    </span>
-                  )}
-                  <Button size="sm" onClick={onStop}>
-                    {t('images.answer.stop')}
-                  </Button>
-                </div>
-              )}
-              {turn.state === 'cancelled' && (
-                <p className="hint image-turn-stopped">{t('images.answer.stopped')}</p>
-              )}
-              {turn.state === 'failed' && turn.error && turn.error !== 'cancelled' && (
-                <Banner tone="error">{t(ERR_KEY[turn.error] ?? 'images.err.runtimeFailed')}</Banner>
-              )}
-              {turn.state === 'done' && (
-                <>
-                  <p className="hint image-local-note">{t('images.answer.localNote')}</p>
-                  <div className="image-turn-actions">
-                    <Button size="sm" onClick={() => onCopy(turn.answer)}>
-                      {t('images.answer.copy')}
-                    </Button>
-                    <Button size="sm" onClick={() => onTryAgain(turn.question)}>
-                      {t('images.answer.tryAgain')}
-                    </Button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )
-      })}
+      {turns.map((turn) => (
+        <TurnRow key={turn.id} turn={turn} t={t} onCopy={onCopy} onTryAgain={onTryAgain} onStop={onStop} />
+      ))}
     </div>
   )
 }

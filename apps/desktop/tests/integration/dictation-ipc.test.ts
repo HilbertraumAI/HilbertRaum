@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -125,6 +125,34 @@ describe('registerDictationIpc', () => {
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
   })
 
+  // PERF-2: the WAV write is now `await writeFile` (off the main thread). The write-failure path must
+  // still behave: friendly copy (never the raw reason), the transcriber never reached, the temp shred
+  // runs (no-op here — the file was never created), and inFlight is reset so a later dictation works.
+  it('returns friendly copy + recovers when the temp write itself fails (PERF-2)', async () => {
+    const workspacePath = freshWorkspacePath()
+    const { transcriber, seen } = fakeTranscriber()
+    registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
+    const docsDir = join(workspacePath, 'documents') // the storeDir captured at registration
+
+    // Remove the documents dir so `await writeFile(<docsDir>/uuid.wav)` rejects (ENOENT) before transcribe.
+    rmSync(docsDir, { recursive: true, force: true })
+    const err = await invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3])).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(String(err)).toContain(DICTATION_FAILED_MESSAGE)
+    // Never the raw fs reason (the path/errno stays in the local log only).
+    expect(String(err)).not.toMatch(/ENOENT|no such file/i)
+    // The write threw BEFORE transcribe — the transcriber was never reached.
+    expect(seen.length).toBe(0)
+
+    // inFlight was reset by the `finally` even on the write-failure path: a second dictation works.
+    mkdirSync(docsDir, { recursive: true })
+    const { result } = await invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6]))
+    expect(result).toBe('Hello there dictation works')
+    expect(seen.length).toBe(1)
+  })
+
   it('refuses with friendly copy when no transcriber is selected', async () => {
     const workspacePath = freshWorkspacePath()
     registerDictationIpc(ctxWith(workspacePath, null).ctx)
@@ -189,7 +217,11 @@ describe('registerDictationIpc', () => {
     registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
 
     const first = invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
-    await new Promise((r) => setImmediate(r)) // let the first reach transcribe()
+    // PERF-2: the async `await writeFile` now precedes transcribe(), so a single tick no longer
+    // guarantees the first has reached it — poll until it does (inFlight is set synchronously, so the
+    // BUSY refusal below holds regardless of this timing).
+    for (let i = 0; calls === 0 && i < 100; i++) await new Promise((r) => setImmediate(r))
+    expect(calls).toBe(1)
     // The second press is refused with friendly copy and never reaches the transcriber.
     await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6]))).rejects.toThrow(
       DICTATION_BUSY_MESSAGE
