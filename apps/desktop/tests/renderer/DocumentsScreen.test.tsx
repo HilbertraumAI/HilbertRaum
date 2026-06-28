@@ -7,7 +7,8 @@ import {
   friendlyMimeLabel,
   isRetryableFailure,
   RAIL_COLLAPSED_KEY,
-  VIEWS_MORE_KEY
+  VIEWS_MORE_KEY,
+  __docRowRenderCounts
 } from '../../src/renderer/screens/DocumentsScreen'
 import { t as translate } from '../../src/shared/i18n'
 import type { Collection, DocumentInfo } from '../../src/shared/types'
@@ -1025,5 +1026,70 @@ describe('DocumentsScreen — sub-nav (section rail) regroup', () => {
     await user.click(show)
     expect(screen.getByRole('button', { name: 'All documents' })).toBeInTheDocument()
     expect(window.localStorage.getItem(RAIL_COLLAPSED_KEY)).toBe('0')
+  })
+})
+
+// ---- PERF-5 (Part A): DocRow memoization -----------------------------------------------
+// A render-count test WITH TEETH: an unrelated parent re-render (toggling another row's selection
+// / opening another row's ⋯ menu) must re-render ONLY the affected row, not every row. The probe
+// is the module-scoped `__docRowRenderCounts` Map that DocRow bumps by id in its body. Removing
+// `memo(...)`, or passing the whole `selected` Set / `menuOpenId` string instead of the per-row
+// boolean, makes the untouched row re-render too → these assertions fail.
+describe('DocumentsScreen — row memoization (PERF-5)', () => {
+  it('re-renders ONLY the toggled row when another row’s selection changes', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'alpha.pdf' }),
+        doc({ id: 'd2', title: 'beta.pdf' }),
+        doc({ id: 'd3', title: 'gamma.pdf' })
+      ])
+    })
+    // onAskSelected makes the per-row select checkboxes appear (indexed rows only).
+    render(<DocumentsScreen onAskSelected={() => {}} />)
+    await screen.findByText('alpha.pdf')
+    // Let the post-mount refresh's selection-pruning setState settle before snapshotting.
+    await screen.findByText('gamma.pdf')
+
+    // Snapshot render counts AFTER the list is stable, then toggle d2's selection only.
+    const before = new Map(__docRowRenderCounts)
+    await user.click(screen.getByRole('checkbox', { name: /select beta.pdf/i }))
+
+    const delta = (id: string): number =>
+      (__docRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
+    // The toggled row re-rendered (its `selected` boolean flipped)…
+    expect(delta('d2')).toBeGreaterThan(0)
+    // …while the untouched rows held their memo (their props are Object.is-unchanged). With
+    // memo removed (or the whole Set passed), these would be > 0 and the test fails — the teeth.
+    expect(delta('d1')).toBe(0)
+    expect(delta('d3')).toBe(0)
+  })
+
+  it('re-renders ONLY the opened row when another row’s ⋯ menu opens', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'alpha.pdf' }),
+        doc({ id: 'd2', title: 'beta.pdf' }),
+        doc({ id: 'd3', title: 'gamma.pdf' })
+      ])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('alpha.pdf')
+    await screen.findByText('gamma.pdf')
+
+    const before = new Map(__docRowRenderCounts)
+    // Opening d2's overflow flips the parent's `menuOpenId` to 'd2'.
+    await user.click(screen.getByRole('button', { name: 'More actions for beta.pdf' }))
+
+    const delta = (id: string): number =>
+      (__docRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
+    expect(delta('d2')).toBeGreaterThan(0)
+    // d1/d3 receive `menuOpen={false}` unchanged → their memo holds. (Teeth: passing the
+    // whole menuOpenId string, or dropping memo, re-renders them too.)
+    expect(delta('d1')).toBe(0)
+    expect(delta('d3')).toBe(0)
   })
 })

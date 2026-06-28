@@ -26,6 +26,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
+import { useEventCallback } from '../lib/useEventCallback'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
@@ -85,20 +86,6 @@ interface Props {
   initialMode?: Mode
   /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
   initialScopeDocumentIds?: string[] | null
-}
-
-/**
- * Stable-identity wrapper for an event handler (perf audit FE-3). Returns a function whose
- * identity never changes but which always invokes the LATEST closure passed in — so a handler can
- * be passed to a `React.memo` child without busting the memo on every keystroke / streaming flush,
- * yet never captures stale state. The standard "latest ref" pattern.
- */
-function useEventCallback<A extends unknown[]>(fn: (...args: A) => unknown): (...args: A) => void {
-  const ref = useRef(fn)
-  ref.current = fn
-  return useCallback((...args: A) => {
-    ref.current(...args)
-  }, [])
 }
 
 export function ChatScreen({
