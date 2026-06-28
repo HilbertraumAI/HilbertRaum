@@ -1974,6 +1974,21 @@ and exposes no live capability. It is the minimal reference the gate tests exerc
 halves are pinned: `skills-tool-registry.test.ts` asserts it is registered; `skills-tool-run-ipc.test.ts`
 asserts `buildToolRunner` returns `null` for it — so removing it OR wiring it up both fail a test.)*
 
+*(Audit SEC-1, backend-audit 2026-06-27 Phase 6 — **the trust gate at the runnable-tools surface**.
+The `kind:'tool'` flip (§8) made a declared `allowedTools` effective for any non-instruction skill, and
+the run surface gated on enabled/compatibility/confirm but **not on `source`** — so the deliberate
+posture "**Tier-2 tools run for `source === 'app'` skills only**" is now enforced explicitly. A single
+named predicate `skillCanRunTools(skill)` (`tool-runs.ts`, `source === 'app'`) is the gate; it short-
+circuits `runnableToolNames` to `[]` for a non-app skill (so `listRunnableTools` + the run bar offer
+nothing) and is re-checked at `startSkillRun` (defense-in-depth: a **forged IPC** call with a user
+skill's id is refused with the generic, content-free `run.unavailable` string — no title/path leaks,
+audit posture intact). A user `kind:'tool'` skill still **keeps** its declared `allowedTools` (the
+parser is untouched) for a future per-tool grant UI — it just runs none of them until that UI exists.
+Full rationale in [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)" → SEC-1.
+**API-3:** the audit/run-state `documentCount` is the v1 constant `1` because every wired tool is
+single-document; an in-code TODO at `registerSkillsIpc.ts` marks that it must become a **real count**
+if a multi-document tool ever lands, else the audit would understate scope.)*
+
 ### §8 Bank-statement tools + the run seam (S11)
 
 S11 wires the first Tier-2 *feature*. The bank specifics live in
@@ -3239,6 +3254,17 @@ bodies, the draft question, extracted figures, redacted text, document text **an
 never logged / audited / echoed — only ids/counts cross the IPC/audit boundary; the audit payload stays
 `{skillId, toolName, documentCount}`; schema changes are additive; the Tier-2 gate gained **no new
 DB/FS/net capability**; i18n parity is compile-enforced (LLM prompts stay English).
+
+**Backend-audit 2026-06-27 follow-ups on this surface (Phase 6 — SEC-1 / API-3).** A later backend
+audit re-examined the same skills surface and landed two dispositions, recorded in §7 (full rationale
+in [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)" → SEC-1): **SEC-1** — the
+run/runnable surface now gates on `source` via `skillCanRunTools(skill)` (`source === 'app'`), so
+**Tier-2 tools run for built-in app skills only**; a user-imported `kind:'tool'` skill may declare
+`allowedTools` (kept for a future per-tool grant UI) but runs none until that UI exists — enforced at
+`runnableToolNames` (the choke point) and re-checked at `startSkillRun` (forged-IPC defense, content-
+free refusal). **API-3** — `documentCount` stays the v1 constant `1` (single-document tools) with an
+in-code TODO to make it a real count if a multi-document tool lands. The §22 posture above is
+unchanged (no new capability; audit payload still `{skillId, toolName, documentCount}`).
 
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)

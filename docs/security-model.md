@@ -703,6 +703,33 @@ originally compiled the glob to a bounded RegExp with a >10-`*` wildcard cap; **
 replaced that compile with the linear matcher** — see the parsing-DoS section below.) The B1/B2 cancel-semantics and I1/I2
 localization fixes added no content to any log/audit and no new capability.
 
+**SEC-1 (backend-audit 2026-06-27, Phase 6) — Tier-2 tools run for APP skills only; the trust
+decision is now explicit.** The `kind:'tool'` flip above made a declared `allowedTools` *effective*
+for any non-instruction skill, and the run/runnable surface gated on enabled/compatibility/confirm but
+**never on `source`** — while `resolveEffectiveTools(declared, declared)` collapsed the "user grant"
+to "whatever the package declared." So a user could import a `.skill.zip` with
+`kind: tool` + `allowedTools: [extract_transactions, redact_document, export_transactions_csv, …]`,
+enable it, and drive the bank/invoice/redaction machinery over their own documents. The blast radius
+**is** structurally bounded (the §14 ceiling: no `Db`/SQL/FS/net handle, a single frozen-scope
+document, writes/exports confirm-gated to a user-chosen path), so this was **not** a privilege escape
+— but the trust posture was *incidental*, not deliberate (DOC-5).
+
+The deliberate posture, now enforced and tested: **only built-in `source === 'app'` skills may run
+the wired Tier-2 tools.** A user-imported `kind:'tool'` skill may still **declare** `allowedTools`
+(the S2 parser keeps them; the import warning surfaces "reserves tools") — kept for a future
+**per-tool user-grant UI** — but it runs **none** of them until that UI exists. The gate is a single
+named predicate `skillCanRunTools(skill)` (`source === 'app'`; the registry assigns trust from the
+folder, so a self-declared frontmatter `trust` is irrelevant), applied at the **runnable-tools choke
+point** `runnableToolNames` — so `listRunnableTools` and the run bar offer a user tool skill nothing —
+and again, defense-in-depth, at `startSkillRun` so a **forged IPC call** carrying a user skill's id is
+refused before anything runs. The refusal reuses the generic, **content-free** `run.unavailable`
+string (no skill title/id/path interpolated), so nothing content-bearing is surfaced or logged (the
+§22-M1 ids/counts-only posture holds; the privacy sentinel-grep stays green). App skills are
+completely unaffected. The gate is **not** at parse time: a user skill keeps its declared `allowedTools`
+so the future grant UI can reason about what it asked for. Pinned by `skills-tool-run-ipc.test.ts`
+(user tool skill ⇒ `runnableToolNames`/`listRunnableTools` `[]`, `startSkillRun` refused + nothing
+audited; an app skill with the same tools unchanged — teeth-verified by flipping the gate).
+
 > **§-anchor note.** This section cites the original skills-plan's section numbers (`§12`, `§14`,
 > `§9.5`, `§13`, `§22-*`); those were not renumbered into the design record's §1–§12. The
 > **§-anchor legend** at the end of architecture.md "Skills — design record" maps each to where it now

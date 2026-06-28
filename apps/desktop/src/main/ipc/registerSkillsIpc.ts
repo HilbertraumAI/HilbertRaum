@@ -25,6 +25,7 @@ import {
   resolveInScopeDocumentIds,
   runnableToolNames,
   runnableToolsForSkill,
+  skillCanRunTools,
   toSkillToolAudit,
   toolRunNeedsConfirmation
 } from '../services/skills/tool-runs'
@@ -305,6 +306,15 @@ export function registerSkillsIpc(ctx: AppContext): void {
     if (!skill || skill.unavailableAt != null || !skill.enabled) {
       return { started: false, error: tMain('main.skills.run.unavailable') }
     }
+    // SEC-1 trust gate (defense in depth): refuse a forged IPC call carrying a USER skill's id before
+    // anything runs. `runnableToolNames` below already returns [] for a non-app skill (so the next
+    // check also refuses), but making the trust decision explicit at the run entry keeps it from being
+    // an emergent property of one filter. The refusal reuses the generic, content-free
+    // `run.unavailable` string — no skill title/path is interpolated, so nothing content-bearing is
+    // surfaced or logged (the §22-M1 ids/counts-only posture; the privacy sentinel-grep stays green).
+    if (!skillCanRunTools(skill)) {
+      return { started: false, error: tMain('main.skills.run.unavailable') }
+    }
     // §6.5/M1 gate at the use-site (airtight): an enabled-but-incompatible skill refuses to run —
     // `runnableToolNames` returns [] for it, so the tool is not in the wired set.
     if (!runnableToolNames(skill, appVersion).includes(toolName)) {
@@ -338,6 +348,10 @@ export function registerSkillsIpc(ctx: AppContext): void {
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
     try {
+      // API-3 (backend-audit 2026-06-27): `documentCount` is the v1 constant 1 because every wired
+      // tool is single-document (`buildToolRunner` targets exactly `targetId`). TODO: when a
+      // multi-document tool lands, set this to the real target count (e.g. the resolved scope size)
+      // so the run state + audit don't understate scope — it must become a count, not a constant.
       const run = runController.start({ skillInstallId, toolName, documentCount: 1, runner })
       return { started: true, run }
     } catch {

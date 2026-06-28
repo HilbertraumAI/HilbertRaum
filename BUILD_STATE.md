@@ -6,6 +6,52 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 6 (Skills trust model; SEC-1, API-3, DOC-5,
+TEST-8) — SKILLS-RUN TRUST-GATE PHASE, no renderer surface, no schema change, no new capability (branch
+`backend-audit-2026-06-27-fixes`).** Suite **2319 passed / 39 skipped (+4 tests)**, typecheck clean, build
+OK. The gate decides on ids/source only — skill bodies, document titles/content, and figures stay out of
+logs/audit (the run payload remains `{skillId, toolName, documentCount}`); offline posture held.
+**The problem (SEC-1, Medium):** `startSkillRun`/`runnableToolNames` gated on enabled/compatibility/confirm
+but NOT on `source`/`trusted_level`; `resolveEffectiveTools(declared, declared)` collapsed the "user grant"
+to "whatever the package declared"; and the manifest parser keeps `allowedTools` for any non-instruction
+kind regardless of source. So a user could import a `.skill.zip` with `kind: tool` + `allowedTools: [...]`,
+enable it, and drive the app's bank/invoice/redaction machinery over their own documents. The blast radius
+is structurally bounded (the tool context has no FS/DB/net handle, scope is a single frozen document,
+writes/exports are confirm-gated to a user-chosen path) — NOT an escape — but the trust decision was
+incidental, not deliberate.
+- **DECISION as built (owner): gate Tier-2 tools to APP skills.** Only built-in `source === 'app'` skills
+  may run the wired Tier-2 tools (bank/invoice extraction, redaction, CSV export). A user-imported
+  `kind: tool` skill may still DECLARE `allowedTools` (parser untouched — kept for a future per-tool
+  user-grant UI; the import warning still says "reserves tools") but runs NONE of them until that UI
+  exists. No grant UI built this phase — just the trust decision made explicit and enforced.
+- **SEC-1 — one named gate at the runnable-tools choke point.** New `skillCanRunTools(skill)`
+  (`skills/tool-runs.ts`, `source === 'app'`) with a comment citing audit SEC-1.
+  `runnableToolNames` returns `[]` when `!skillCanRunTools(skill)` — so BOTH `listRunnableTools` and the
+  run bar offer a user tool skill nothing. **Belt-and-braces:** `startSkillRun` (`registerSkillsIpc.ts`)
+  re-checks `skillCanRunTools` and refuses a forged IPC call carrying a user skill's id with the generic,
+  content-free `main.skills.run.unavailable` string (no title/path interpolated — the §22-M1 posture and
+  the privacy sentinel-grep hold). App skills are completely unaffected. **Parser NOT changed** (the gate
+  is at the run/runnable surface, not at parse time).
+- **API-3 — `documentCount` left as the v1 constant `1`** (every wired tool is single-document) with an
+  in-code TODO at `registerSkillsIpc.ts` that it must become a real count if a multi-document tool lands.
+  No behaviour change.
+- **Tests (TEST-8, +4, teeth-verified then restored).** `skills-tool-run-ipc.test.ts`: a user-imported
+  `kind: tool` skill (declared `allowedTools`, force-enabled) → `runnableToolNames`/`runnableToolsForSkill`/
+  `listRunnableTools` return `[]`, `startSkillRun` refused (friendly, content-free, NOTHING audited — the
+  title sentinel never leaks); an APP skill with the same tools is unaffected (still runnable end-to-end).
+  **Teeth:** flipping `skillCanRunTools` to `return true` failed exactly the three user-skill assertions
+  (the app-skill test correctly stayed green); restored. The existing instruction-skill→[] (manifest) and
+  `count_selected_documents` registry-only canary tests stay green.
+- **Data contract (new):** `export function skillCanRunTools(skill: SkillRecord): boolean` in
+  `skills/tool-runs.ts` — THE Tier-2 trust predicate (`source === 'app'`). No IPC/schema-shape change;
+  renderer untouched (a user tool skill simply has no runnable tools to render).
+- **Docs:** `security-model.md` "Skill tool ceiling (Tier-2)" — new SEC-1 record (app-skills-only posture,
+  the named gate at both surfaces, user skills declare-but-don't-run, DOC-5). `architecture.md` §7 (Tier-2
+  tool gate — SEC-1 trust gate + API-3 documentCount TODO) and §23 (close-out ledger — a backend-audit
+  2026-06-27 follow-up note pointing at §7). **Eyeball:** none — a main-side trust-gate phase, no UI surface.
+  **Next: Phase 7 — Electron + vision/runtime hardening (SEC-2/3/4/5/6, REL-4/7/8) — Low cluster.** See
+  `docs/backend-audit-2026-06-27-remediation-plan.md` Phase 7._
+
 _2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 5 (RAG/embeddings honesty & quality;
 RAG-1, EMB-1, DATA-2/EMB-2, EMB-4, MAINT-2/MAINT-5, TEST-3/5/7) — RETRIEVAL/ANSWER-HONESTY + VECTOR
 HANDLING PHASE, no renderer surface, no schema change, no new capability (branch
