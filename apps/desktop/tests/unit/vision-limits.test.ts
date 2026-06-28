@@ -80,4 +80,16 @@ describe('validateAnalyzeRequest pixel budget (D4)', () => {
     )
     expect(validateAnalyzeRequest(pngHeader(100, 100), 'image/png', Q, undefined, 20000)).toBeNull()
   })
+
+  it('rejects a CLAIMED png/jpeg whose header will not parse (SEC-6 — no byte-cap-only fall-through)', () => {
+    // A non-empty payload (passes the empty/byte-cap checks) that CLAIMS png/jpeg but whose header
+    // is unparseable → null pixel count. Previously this fell through to byte-cap-only, disabling
+    // the pixel-bomb guard; it must now be rejected as undecodable.
+    const garbagePng = new Uint8Array(64).fill(0x41) // "AAAA…", not a PNG signature
+    const garbageJpeg = new Uint8Array([0xff, 0xd8, 0x12, 0x34, 0x56, 0x78]) // SOI then junk, no SOF
+    expect(decodedPixelCount(garbagePng, 'image/png')).toBeNull() // precondition
+    expect(decodedPixelCount(garbageJpeg, 'image/jpeg')).toBeNull()
+    expect(validateAnalyzeRequest(garbagePng, 'image/png', Q)).toBe('decodeFailed')
+    expect(validateAnalyzeRequest(garbageJpeg, 'image/jpeg', Q)).toBe('decodeFailed')
+  })
 })

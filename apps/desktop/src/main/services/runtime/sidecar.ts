@@ -141,6 +141,9 @@ export interface ChildProcessLike {
   /** Present when spawned with a piped stderr; absent in tests' fake children. */
   readonly stderr?: ReadableLike | null
   kill(signal?: NodeJS.Signals | number): boolean
+  /** Detach the child from the parent's event loop so it can't keep Electron alive on quit
+   *  (REL-8). Optional: test fakes omit it, so call sites use `child.unref?.()`. */
+  unref?(): void
   on(event: string, listener: (...args: unknown[]) => void): unknown
   once(event: string, listener: (...args: unknown[]) => void): unknown
 }
@@ -327,7 +330,10 @@ export class LlamaServer {
     // the same deadlock, and the captured tail explains a failed start (e.g. a port
     // conflict's "bind: address already in use").
     const child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
-      stdio: ['ignore', 'ignore', 'pipe']
+      stdio: ['ignore', 'ignore', 'pipe'],
+      // REL-7: never flash a console window on Windows for this high-frequency spawn (every
+      // model start), matching the tar / transcriber / runtime-download spawns. No-op off Windows.
+      windowsHide: true
     })
     this.child = child
     child.stderr?.on('data', (chunk: unknown) => {

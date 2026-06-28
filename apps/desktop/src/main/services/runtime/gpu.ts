@@ -115,11 +115,20 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
   return new Promise((resolve) => {
     let child: ChildProcessLike
     try {
-      child = spawn(binPath, ['--list-devices'], { stdio: ['ignore', 'pipe', 'ignore'] })
+      // REL-7: windowsHide so the once-per-session probe never flashes a console window on
+      // Windows (matching the sidecar / tar / transcriber spawns). No-op off Windows.
+      child = spawn(binPath, ['--list-devices'], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
+      })
     } catch {
       resolve([])
       return
     }
+    // REL-8: detach from the parent event loop so a wedged probe (cold/hung driver) can never
+    // delay or block app quit — shutdown() doesn't track this child, and Electron must be able
+    // to exit without waiting on it. The probe's own kill-timeout (below) still reaps it.
+    child.unref?.()
 
     let stdout = ''
     let settled = false

@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n } from './services/i18n'
-import { installPermissionRequestHandler } from './services/permissions'
+import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
+import { installNavigationGuard } from './services/navigation-guard'
 import { getSettings, updateSettings } from './services/settings'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
@@ -396,13 +397,19 @@ function createWindow(): void {
     })
   })
 
-  // Deny-by-default permission handler. Electron GRANTS permission requests when no
-  // handler is installed; this renderer needs exactly one: audio-only `media` from
-  // OUR OWN window for voice dictation. Everything else — video, other permissions,
-  // other WebContents — is refused.
+  // Deny-by-default permission handlers. Electron GRANTS permissions when no handler is
+  // installed; this renderer needs exactly one: audio-only `media` from OUR OWN window for
+  // voice dictation. Everything else — video, other permissions, other WebContents — is
+  // refused. SEC-2 (backend-audit-2026-06-27): install BOTH the async *request* handler
+  // AND the synchronous *check* handler (`navigator.permissions.query` / the internal
+  // pre-getUserMedia check), which otherwise falls back to Electron's default-grant. Both
+  // share one grant predicate (permissions.ts), so they can never disagree.
   installPermissionRequestHandler(mainWindow.webContents.session, {
     allowMicrophoneFor: mainWindow.webContents,
     onDeny: (permission) => log.warn('Renderer permission request denied', { permission })
+  })
+  installPermissionCheckHandler(mainWindow.webContents.session, {
+    allowMicrophoneFor: mainWindow.webContents
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
@@ -420,11 +427,14 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // Block in-app navigation to remote origins (defence in depth).
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    const allowed = isDev ? url.startsWith('http://localhost') : url.startsWith('file://')
-    if (!allowed) event.preventDefault()
-  })
+  // Block in-app navigation to remote origins (defence in depth). SEC-3
+  // (backend-audit-2026-06-27): the guard covers BOTH `will-navigate` and `will-redirect`
+  // (a server/<meta> redirect reaches a remote origin via `will-redirect` without firing
+  // `will-navigate`). Only the app's own shell may navigate — Vite's localhost in dev, the
+  // bundled `file://` page in prod.
+  installNavigationGuard(mainWindow.webContents, (url) =>
+    isDev ? url.startsWith('http://localhost') : url.startsWith('file://')
+  )
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)

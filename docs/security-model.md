@@ -27,10 +27,10 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 |---|---|
 | Context isolation, no node integration, sandboxed renderer | `main/index.ts` `webPreferences` |
 | Renderer talks only to a typed `contextBridge` (`window.api`) | `preload/index.ts` |
-| `will-navigate` blocks remote origins | `main/index.ts` |
+| `will-navigate` **and `will-redirect`** block remote origins (SEC-3) | `services/navigation-guard.ts`, installed in `main/index.ts` + OCR window |
 | `setWindowOpenHandler` opens external links in the OS browser, denies in-app | `main/index.ts` |
 | **Content-Security-Policy** (meta tag + response header) | `renderer/index.html`, `main/index.ts` |
-| **Deny-by-default permission-request handler** (Phase 31; single scoped microphone allow added in Phase 37) | `services/permissions.ts`, installed in `main/index.ts` |
+| **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
 | **Encrypted workspace** (AES-256-GCM at rest, Argon2id KDF — scrypt still supported, password never stored) | `services/security/crypto.ts`, `services/workspace-vault.ts` |
@@ -46,18 +46,44 @@ the `index.html` meta tag (defence in depth).
   `http://localhost:*`, and adds `'unsafe-inline'`/`'unsafe-eval'` to `script-src` (and
   `'unsafe-inline'` to `style-src`) for Vite hot-reload. Without this split, `npm run dev` would break.
 
-### Renderer permission requests: deny by default, one scoped exception (Phases 31 + 37)
-Electron's default with **no** `session.setPermissionRequestHandler` installed is to **GRANT**
-every permission request (geolocation, notifications, media, …) — found by the 2026-06-11 wave-3
-plan audit. `services/permissions.ts` `installPermissionRequestHandler` therefore installs a
-deny-by-default handler on the window's session (next to the CSP setup in `main/index.ts`,
-identical in dev and prod). Since Phase 37 there is exactly **one** exception, for voice
-dictation: a `media` request is granted **iff** it comes from the app's **own WebContents**
-(reference-compared against the main window) **and** its `mediaTypes` name **audio and nothing
-else**. Video capture, screen capture, a missing/empty `mediaTypes` (unverifiable scope), every
-other permission, and any other WebContents stay denied — the unit test drives the full scope
-matrix against a fake session, so the allow cannot silently widen. Denials are logged by
-permission *name* only — never content.
+### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
+Electron's default with **no** permission handler installed is to **GRANT** every permission
+(geolocation, notifications, media, …) — found by the 2026-06-11 wave-3 plan audit. `services/
+permissions.ts` therefore installs a deny-by-default handler on the window's session (next to the
+CSP setup in `main/index.ts`, identical in dev and prod). Since Phase 37 there is exactly **one**
+exception, for voice dictation: `media` is granted **iff** it comes from the app's **own
+WebContents** (reference-compared against the main window) **and** the requested capture is
+**audio and nothing else**. Video capture, screen capture, an unverifiable scope, every other
+permission, and any other WebContents stay denied — the unit test drives the full scope matrix
+against a fake session, so the allow cannot silently widen. Denials are logged by permission
+*name* only — never content.
+
+**Both Electron permission paths are covered (SEC-2, backend-audit-2026-06-27).** Electron exposes
+two *independent* paths and the default-grant pitfall applies to both: the asynchronous **request**
+path (`setPermissionRequestHandler`, e.g. `getUserMedia`'s prompt) and the synchronous **check**
+path (`setPermissionCheckHandler`, e.g. `navigator.permissions.query` and the internal
+pre-`getUserMedia` capability check). Previously only the request handler was installed, so the
+check path fell back to Electron's default. `installPermissionCheckHandler` now installs the
+synchronous counterpart on the same session. **Both handlers share one grant predicate
+(`grantsMicrophone`)** — only `media`, audio-scoped, from the app's own WebContents — so request
+and check can never drift out of sync; both are deny-by-default except app-origin audio. (The
+check path carries a *scalar* `mediaType`, not the request path's `mediaTypes` array; the shared
+predicate takes the path-specific audio test as an argument so the core decision stays identical.)
+The check handler does **not** log denials: the check path is high-frequency (e.g. `permissions.
+query` polling) and the request handler already records denials.
+
+### In-app navigation: block remote origins on *both* navigation events (SEC-3)
+A strict prod CSP + `file://` origin already bound what the renderer can reach, but the standard
+hardening is to refuse any top-level navigation the window has no business making.
+`services/navigation-guard.ts` `installNavigationGuard` attaches one deny-by-default predicate to
+**both** `will-navigate` **and `will-redirect`** (SEC-3, backend-audit-2026-06-27). The pair must
+be guarded together: a server-side (3xx) or `<meta http-equiv="refresh">` redirect can reach a
+remote origin via `will-redirect` **without ever firing `will-navigate`** — guarding only
+`will-navigate` (the prior state) left the redirect path on Electron's default (allow). The **main
+window** allows only its own shell (Vite's localhost in dev, the bundled `file://` page in prod);
+the **OCR rasterizer's hidden window** — which renders untrusted PDF bytes and only ever loads
+`ocr.html` — denies *all* navigation (`() => false`). The installer is unit-tested with a fake
+WebContents that proves both events are registered and a remote redirect is prevented.
 
 ### Voice dictation data path (Phase 37, decision D30)
 The composer mic records **in the renderer** (`getUserMedia` → `MediaRecorder`), resamples to
@@ -844,8 +870,28 @@ the **original** bytes to the sidecar — so a small (<20 MiB) **decompression b
 decodes to billions of pixels passed the guard and OOM'd the sidecar. The renderer's `MAX_DIMENSION`
 downscale is display-only and doesn't bound what the sidecar decodes. The main guard now parses the
 image **header** (PNG IHDR / JPEG SOF) for `width*height` — no full decode — and rejects above a
-**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable) as `tooLarge`. Unknown
-dimensions fall through to the byte cap.
+**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable) as `tooLarge`.
+
+**SEC-6 (backend-audit-2026-06-27) — a `null` pixel count for a claimed png/jpeg is now rejected.**
+`validateAnalyzeRequest` previously let an *unknown* pixel count fall through to the byte cap. But the
+MIME is already known to be png/jpeg at that point, so a `null` from `decodedPixelCount` means a
+**claimed** png/jpeg whose header won't parse — malformed or forged bytes that silently disabled the D4
+pixel-bomb guard. It is now treated as undecodable (`decodeFailed`) and rejected before its bytes reach
+the sidecar. (`decodedPixelCount` still returns `null` for a genuinely unknown MIME; that path is
+unreachable from `validateAnalyzeRequest`, which validates the MIME to png/jpeg first.)
+
+### Accepted residual — `imageAnalyze` raw bytes are not bound to the picker token (SEC-5, backend-audit-2026-06-27)
+The picker capability token (D2) protects **path-based** reads: `chooseImage` returns an opaque token and
+`imageReadBytes` only reads the file that token names, so a code-exec'd renderer can't make main read an
+arbitrary path. But `imageAnalyze` takes `req.imageBytes` **directly** — required for the drag-drop path,
+where the renderer reads the dropped `File`'s bytes itself and never touches a path — and validates only
+size / MIME / pixels (the D4 + SEC-6 guards above), not provenance. So a renderer running attacker code
+(the stated threat) could still submit **arbitrary bytes** for analysis + history persistence. **Accepted,
+because the impact is bounded:** the offline posture means those bytes never leave the device; analysis is
+local; the answer/image are content-class and never logged/audited (the vision sentinel test enforces
+this); and binding picker-sourced analyses to a token would not help the drag-drop case, which is
+legitimately raw-bytes. Requiring a token *only* for picker-sourced analyses (so drag-drop alone uses raw
+bytes) remains a possible future tightening; the boundary is recorded here rather than changed.
 
 ## Re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, item B — design record)
 
@@ -903,6 +949,18 @@ Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provision
 predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there
 still rests on drive provisioning + filesystem integrity (and an attacker who can write the runtime dir
 can usually also tamper the app's own Electron code). See `known-limitations.md`.
+
+**Accepted residual — verification is session-cached by path, not per-spawn (SEC-4, backend-audit-2026-06-27).**
+`verifyBinaryBeforeSpawn` memoises its verdict per resolved path **for the whole session**, so only the
+*first* spawn of a given binary re-hashes; later model switches / fallback restarts reuse the cached `ok`.
+A tamper that lands *after* the first spawn (then a model switch re-spawns the same path) is not
+re-detected within that session. This is a **deliberate** trade-off: the GPU probe and the server start
+race for the very same path (`factory.ts` kicks the probe concurrently with the start), and the cache is
+exactly what makes them read **one consistent decision** off a single hash rather than disagreeing on a
+file changing under them. The exposure window is one app session on a drive an adversary can already write
+to (who, as above, can usually tamper the app's own Electron code too); a relaunch re-hashes from cold.
+Accepted as-is; a future hardening could re-hash on every chat-sidecar spawn if the consistency concern is
+otherwise solved.
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

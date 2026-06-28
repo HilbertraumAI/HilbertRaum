@@ -207,13 +207,31 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   files — strictly shortening plaintext lifetime. **New data contract:** `prepareDocument` /
   `finalizeDocument` / `PreparedDocument` are exported alongside `processDocument`.
 
-**OCR (`services/ocr/pipeline.ts`, `services/ocr/rasterizer.ts`).**
+**OCR (`services/ocr/pipeline.ts`, `services/ocr/rasterizer.ts`, `services/ocr/page-cap.ts`).**
 - **ING-5 — 1-deep render/recognize look-ahead.** OCR rendered page N (pdfjs, hidden window) then
   awaited recognize(N) (WASM tesseract) before rendering N+1 — two different engines run strictly
   serially. A new pure `pipelinePages(pageCount, renderPage, onPage, opts)` helper renders page N+1
   **while** page N recognizes, keeping recognitions serial and in order. Memory stays bounded (at most
   one extra rendered PNG resident); page ordering, progress %, and cancellation are unchanged. The
   helper is Electron-free so it is unit-testable with fake render/recognize functions.
+- **REL-4 — per-page PNG byte cap (backend-audit-2026-06-27).** The hidden window caps render
+  *dimensions* at `MAX_RENDER_PIXELS` (4096/side), but the *encoded* PNG it returned over IPC was
+  previously unbounded — unlike the vision subsystem, which enforces `VISION_MAX_IMAGE_BYTES`. With
+  the 1-deep look-ahead holding up to **two** page PNGs resident, a crafted PDF rasterising near the
+  worst case across many pages could drive main-process memory. `services/ocr/page-cap.ts`
+  (`assertPageWithinByteCap`, `OCR_MAX_PAGE_PNG_BYTES`, electron-free + unit-tested) now rejects an
+  over-cap page the moment the rasterizer receives it — before it is handed to recognition or held
+  behind the look-ahead — and the OCR task downgrades to a friendly failure. The cap is **96 MiB**,
+  sized to the WORST CASE of a *legitimate* page (a 4096×4096 RGBA bitmap is 64 MiB raw and a
+  near-incompressible scan PNG-encodes to about that), **not** the vision path's 20 MiB, which would
+  reject real dense color scans; env-overridable via `HILBERTRAUM_MAX_OCR_PAGE_BYTES`. (The vision
+  vs OCR caps differ on purpose: vision images are arbitrary user files, OCR pages are bounded by
+  the render-dimension cap, so their worst cases — and thus their byte ceilings — differ.)
+- **SEC-3 — navigation guard on the hidden window.** The rasterizer's worker window renders
+  untrusted PDF bytes; it denies window-open and, via `installNavigationGuard(win.webContents,
+  () => false)` (`services/navigation-guard.ts`), **all** navigation on both `will-navigate` *and*
+  `will-redirect` (see security-model.md — a redirect reaches a remote origin without firing
+  `will-navigate`).
 
 **Grounded-answer prompt (`services/rag/index.ts`).**
 - **RT-2 — cacheable grounding prompt (updates §17 (a) to implemented).** The stable grounding rules +
@@ -1111,7 +1129,10 @@ files**.
     (`--host 127.0.0.1 --port <random> --model <gguf> --ctx-size <n> --threads <n>` + optional extra
     args), polls `/health` with a **timeout** before reporting ready (never hangs on a wedged server),
     exposes a loopback `fetch`, and `stop()` kills the child **and waits for exit** so no orphan
-    survives. A child that crashes or never gets healthy makes `start()` throw a clear error.
+    survives. A child that crashes or never gets healthy makes `start()` throw a clear error. The
+    spawn passes **`windowsHide: true`** (REL-7, backend-audit-2026-06-27) so this high-frequency
+    spawn (every model start — chat, embedder, reranker, vision all funnel through here) never
+    flashes a console window on Windows, matching the tar / transcriber / runtime-download spawns.
 - **`services/runtime/llama.ts`** — `LlamaRuntime implements ModelRuntime`, composing a `LlamaServer`.
   `chatStream` POSTs to the server's **OpenAI-compatible** `/v1/chat/completions` with `stream: true`,
   sending `messages` as plain role/content (the server applies the model's chat template — we never
@@ -1136,7 +1157,11 @@ adds is the safety machinery:
 - **`services/runtime/gpu.ts`** — `probeGpuDevices(binPath)` spawns the drive's own
   `llama-server --list-devices` (offline, no model, sub-second, kill-timeout-bounded (10 s);
   resolves on the child's `close` event so late-buffered stdout is never truncated; never
-  throws — any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested).
+  throws — any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested). The
+  spawn passes **`windowsHide: true`** (REL-7) so the once-per-session probe never flashes a
+  console window on Windows, and the child is **`unref()`'d** right after spawn (REL-8): the
+  probe is not tracked by `shutdown()`, so detaching it from the parent event loop means a
+  wedged/cold driver can never delay app quit — the probe's own 10 s kill-timeout still reaps it.
   `looksIntegrated(name)` is the conservative iGPU heuristic for the Phase-16 profile bump
   (covers Windows + RADV APU names and Meteor-Lake Arc). `createCachedGpuProbe()` memoizes per
   binary per session and exposes `invalidate()` (wired to "Try GPU again"). The ladder kicks
@@ -3349,7 +3374,11 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   → installed`), the lazy `skipHash` path, and the `(path,size,mtime)` two-tier checksum cache.
 - **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible →
   available; cheap, lazy, lock-safe), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
-  guards + `validateAnalyzeRequest` — the SEC-3 main-side re-validation `importDocuments` lacks),
+  guards + the D4 header pixel-bomb cap + `validateAnalyzeRequest` — the SEC-3 main-side re-validation
+  `importDocuments` lacks). **SEC-6 (backend-audit-2026-06-27):** `validateAnalyzeRequest` now rejects
+  a **claimed** png/jpeg whose header won't parse (`decodedPixelCount` → `null`) as `decodeFailed`
+  instead of falling through to byte-cap-only — a `null` pixel count for a known-png/jpeg MIME means
+  malformed/forged bytes and previously silently disabled the D4 pixel-bomb guard.
   `runtime.ts` (`VisionRuntime` on `LlamaServer` directly with the §1 args; lazy single-flight
   `ensureStarted`; `analyze` builds the base64 `image_url` request + `readChatSSE`; the §6
   idle-teardown interlock), `index.ts` (`VisionService`: ephemeral job map, own one-job

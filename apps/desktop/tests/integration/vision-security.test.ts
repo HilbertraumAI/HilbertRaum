@@ -39,7 +39,18 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 // Recognizable sentinels — no real prompt/answer/image would contain these exact strings.
 const SENTINEL_PROMPT = 'ZZSENTINELZZ what is the secret account number in this image'
 const SENTINEL_ANSWER = 'ZZSENTINELZZ the secret account number is 4444-3333-2222'
-const SENTINEL_BYTES = new Uint8Array([0xab, 0xcd, 0xef, 0x10, 0x20, 0x30])
+// A valid PNG header (8-byte signature + IHDR width@16/height@20) so the analyze passes the
+// main-side guard — SEC-6 (backend-audit-2026-06-27) rejects a claimed png/jpeg with an
+// unparseable header — followed by a unique marker tail kept distinct for the leak checks.
+const SENTINEL_BYTES = (() => {
+  const b = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+    0, 0, 0, 0, 0, 0, 0, 0, // IHDR length + "IHDR" tag (not parsed by the header guard)
+    0, 0, 0, 2, 0, 0, 0, 2, // width@16 = 2, height@20 = 2
+    0xab, 0xcd, 0xef, 0x10, 0x20, 0x30 // unique sentinel tail
+  ])
+  return b
+})()
 
 class FakeChild extends EventEmitter {
   pid = 9

@@ -6,6 +6,71 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 7 (Electron + vision/runtime hardening;
+SEC-2/3/4/5/6, REL-4/7/8) — HARDENING/LIFECYCLE PHASE (Low cluster), no renderer surface, no schema
+change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2330 passed / 39 skipped
+(+11 tests)**, typecheck clean, build OK. All hardening/lifecycle only — nothing new logged/audited;
+offline posture held; the permission-check handler does NOT weaken the request handler (they share one
+predicate). **The problems (all Low, none exploitable given offline + prod-CSP):** only the async
+permission-*request* handler was installed (the synchronous *check* path fell back to Electron's
+default-grant — SEC-2); `will-navigate` was guarded but `will-redirect` was not, so a server/`<meta>`
+redirect could reach a remote origin without firing `will-navigate` (SEC-3); the sidecar + GPU-probe
+spawns omitted `windowsHide` → a console window could flash on Windows (REL-7); a `null` pixel count for
+a *claimed* png/jpeg fell through to byte-cap-only, disabling the D4 pixel-bomb cap (SEC-6); the OCR page
+PNG returned to main had no byte cap before recognition, unlike the vision path (REL-4); the GPU probe
+child wasn't tracked by `shutdown()` (REL-8); plus two doc-only residuals (SEC-5 imageAnalyze raw-bytes,
+SEC-4 session-scoped binary-verifier TOCTOU).
+- **SEC-2 — permission CHECK handler, sharing the request handler's logic.** New
+  `installPermissionCheckHandler` (`services/permissions.ts`) installs the synchronous counterpart on the
+  same session. BOTH handlers route through ONE `grantsMicrophone(permission, webContents, options,
+  audioScoped)` predicate — grant only `media`, audio-scoped, from the app's own WebContents — so request
+  and check can never drift. The check path carries a SCALAR `mediaType` (not the request path's
+  `mediaTypes` array); the shared predicate takes the path-specific audio test as an arg. The check
+  handler does NOT log denials (high-frequency `permissions.query` polling; the request handler already
+  records them). Wired in `index.ts` next to the request handler.
+- **SEC-3 — one navigation guard, both events, both windows.** New `services/navigation-guard.ts`
+  `installNavigationGuard(target, isAllowed)` attaches a single deny-by-default predicate to BOTH
+  `will-navigate` AND `will-redirect`. Main window allows only its own shell (`http://localhost` dev /
+  `file://` prod); the OCR rasterizer's hidden window denies ALL navigation (`() => false`). Structural
+  `on` interface so it's unit-testable without `electron` and assignable from the real `WebContents`.
+- **REL-7 — `windowsHide: true`** on the sidecar spawn (`sidecar.ts`, funnels every llama-server start —
+  chat/embedder/reranker/vision) and the GPU-probe spawn (`gpu.ts`). No-op off Windows.
+- **SEC-6 — reject the unparseable claimed image.** `validateAnalyzeRequest` (`vision/limits.ts`) now
+  returns `decodeFailed` when `decodedPixelCount` is `null` for an already-known png/jpeg MIME (malformed/
+  forged header) instead of admitting it to the sidecar on byte-cap-only.
+- **REL-4 — OCR page PNG byte cap.** New electron-free `services/ocr/page-cap.ts`
+  (`assertPageWithinByteCap`, `OCR_MAX_PAGE_PNG_BYTES`); the rasterizer rejects an over-cap page the
+  moment it's received (before recognition / before the look-ahead holds it). Cap = **96 MiB**, sized to
+  the WORST CASE of a *legitimate* 4096² RGBA page (≈64 MiB raw, ~that PNG-encoded), NOT the vision
+  path's 20 MiB which would reject real dense scans; env `HILBERTRAUM_MAX_OCR_PAGE_BYTES`.
+- **REL-8 — `child.unref()`** the GPU probe right after spawn so a wedged/cold-driver probe (not tracked
+  by `shutdown()`) can never delay app quit; its own 10 s kill-timeout still reaps it.
+- **SEC-5 + SEC-4 — accepted residuals, documented.** SEC-5 (`imageAnalyze` takes raw `req.imageBytes`
+  for drag-drop, not token-bound) and SEC-4 (binary-verifier verdict is session-cached per path, not
+  re-hashed every spawn — a deliberate consistency trade-off) recorded in `security-model.md`, not changed.
+- **Tests (+11, teeth-verified then restored).** `permissions.test.ts` (+4): the check handler denies a
+  non-audio/video/empty-scope permission + a foreign/null WebContents, allows audio from the app
+  WebContents, and agrees with the request handler. `navigation-guard.test.ts` (+3): registers BOTH
+  events; a remote `will-redirect` is prevented (and a deny-all worker blocks everything). `ocr-page-cap.
+  test.ts` (+3): at/under cap passes, over throws, default cap ≥ 64 MiB. `vision-limits.test.ts` (+1): a
+  claimed png/jpeg with an unparseable header → `decodeFailed`. **Teeth:** neutering each fix failed the
+  matching test (check→`true`; drop will-redirect; remove the page-cap throw; remove the null-pixel
+  reject), all restored. **Collateral:** the vision integration fixtures (`images-ipc.test.ts`,
+  `vision-security.test.ts`) used placeholder image bytes that SEC-6 now correctly rejects — updated to
+  valid minimal PNG headers (+ unique sentinel tails for the leak checks).
+- **Data contracts (new):** `installPermissionCheckHandler(session, options)` +
+  `PermissionCheckSessionLike`/`PermissionCheckDetails` (`permissions.ts`); `installNavigationGuard(
+  target, isAllowed)` + `NavigationGuardTarget` (`navigation-guard.ts`); `assertPageWithinByteCap(png,
+  maxBytes?)` + `OCR_MAX_PAGE_PNG_BYTES` (`ocr/page-cap.ts`); `ChildProcessLike.unref?()` (`sidecar.ts`).
+  No IPC/schema-shape change; renderer untouched.
+- **Docs:** `security-model.md` (baseline table rows for redirect + check handler; the perm-check §, the
+  navigation-guard §, SEC-6 in the D4 vision §, SEC-5 + SEC-4 accepted-residual paragraphs).
+  `architecture.md` (sidecar + probe `windowsHide`, probe `unref()` lifecycle in the GPU record, the OCR
+  page byte cap + SEC-3 hidden-window note, the vision SEC-6 note). **Eyeball:** none — a main-side
+  hardening phase, no UI surface. **Next: Phase 8 — API consistency, doc drift & housekeeping (API-1,
+  BL-4, DATA-3/MAINT-3, DOC-2/3/4, DATA-4, API-2) — Low/Info.** See
+  `docs/backend-audit-2026-06-27-remediation-plan.md` Phase 8._
+
 _2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 6 (Skills trust model; SEC-1, API-3, DOC-5,
 TEST-8) — SKILLS-RUN TRUST-GATE PHASE, no renderer surface, no schema change, no new capability (branch
 `backend-audit-2026-06-27-fixes`).** Suite **2319 passed / 39 skipped (+4 tests)**, typecheck clean, build
