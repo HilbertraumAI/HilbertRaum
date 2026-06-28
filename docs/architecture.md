@@ -1177,9 +1177,11 @@ adds is the safety machinery:
   `RuntimeStatus` now carries `backend: 'gpu' | 'cpu' | 'mock'` + `gpuName`.
 - **Mid-generation crash auto-fallback** (§5.3): `LlamaServer` gained an `onUnexpectedExit` hook
   (fires only for a *healthy* server dying outside `stop()`). When the active backend was GPU,
-  `createGpuCrashAutoFallback` persists the flags, **restarts the same model once at CPU**, and
-  broadcasts the friendly §11.4 notice (`runtime:notice` event → preload `onRuntimeNotice`):
-  *"Switched to compatibility mode for stability…"* — never "GPU failed".
+  `createGpuCrashAutoFallback` persists the flags, **forces a one-shot restart at CPU via
+  `RuntimeManager.forceRestart`** — NOT `start()`, whose same-model idempotency guard would
+  otherwise swallow the restart entirely (§5.3) — and broadcasts the friendly §11.4 notice
+  (`runtime:notice` event → preload `onRuntimeNotice`): *"Switched to compatibility mode for
+  stability…"* — never "GPU failed".
 - **The E5 embedder is pinned to CPU** (`--device none` in its `extraArgs`, §7 — decided): the
   384-dim model gains little from a GPU, and the pin keeps ingestion immune to driver flakiness
   and VRAM contention with the chat model.
@@ -1326,6 +1328,49 @@ start(model), settings.gpuMode = 'auto' (default)
 ├─ Rung 3 — pure-CPU safety-net build <os>/cpu/llama-server (if present)
 └─ Rung 4 — MockRuntime (existing graceful-fallback rule — never stuck)
 ```
+
+**§5.3 Mid-session crash auto-fallback (corrected — full-audit 2026-06-28, REL-1):**
+
+A GPU-backed `llama-server` can die *after* it became healthy — a driver crash, VRAM stolen by
+another process. `LlamaServer`'s `onUnexpectedExit` hook fires (only for a healthy server dying
+outside `stop()`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
+was `gpu`** (factory.ts:137-139). `createGpuCrashAutoFallback` then, in order: persists
+`gpuAutoDisabled` + `gpuLastError`, surfaces the friendly compatibility-mode notice, and restarts
+the model once at CPU — so the user's *next* message just works.
+
+**The idempotency interaction (the bug this record previously mis-described).** The restart can
+**not** go through `RuntimeManager.start()`. After a mid-session crash the manager has not observed
+the child's exit: the crashed `LadderRuntime` is still `this.current` with the *same* `modelId`, and
+`this.last` still holds the health snapshot cached at start. `start()`'s same-model idempotency guard
+(`runtime/index.ts`, "already running / start in flight → no-op") then early-returns a stale status
+read — the "restart at CPU" never stops-and-restarts, `status()` keeps reporting the **dead** server
+as running/healthy, and the next chat/RAG/doctask turn routes to it and fails. (The earlier wording
+here — "restarts the same model once at CPU" — was therefore false; the restart was silently
+swallowed. The unit tests missed it because the ladder test injected a *fake* `restart` and the
+manager test proved the guard in isolation; nothing wired the real crash path through the real
+manager.)
+
+**The fix (option b — a crash-only `forceRestart`).** `RuntimeManager.forceRestart(opts)` runs
+`doStop()` (clearing `current`/`last`, so `status()` immediately stops reporting the dead server as
+healthy) then `doStart(opts)` inside **one** enqueued op, bypassing **only** the same-model guard.
+Normal `start()` idempotency is untouched — a double-click or an AI-Model-screen revisit still must
+not restart; only the crash path forces it. `startingModelId` is set synchronously (exactly as
+`start()` does) so a concurrent manual `start(sameModel)` *joins* the in-flight restart instead of
+queueing a second one. The crash wiring in `main/index.ts` calls `runtimeRef.forceRestart`, not
+`start`. (Alternatives weighed: (a) wiring-level `stop()`-then-`start()` — rejected, the two ops
+enqueue separately so a concurrent user start could interleave between them; (c) have the manager
+subscribe to the runtime's unexpected-exit and clear `current`/`last` itself — more plumbing for no
+extra guarantee. `forceRestart` is atomic within the queue and easiest to test.)
+
+**Retry bound (no restart loop).** `gpuAutoDisabled` is persisted **before** the restart, so the
+ladder rebuilt inside `doStart` skips rung 1 and lands on CPU (`--device none`). A later crash is
+then a *CPU* crash, which `LadderRuntime` does **not** route to `onGpuCrash` (`backend !== 'gpu'`) —
+so a GPU session auto-falls-back **at most once**, never in a loop. Re-entrant crash reports while a
+restart is in flight are also dropped by `createGpuCrashAutoFallback`'s `restarting` latch.
+
+(`LlamaServer.start()` additionally carries its own single-flight latch (REL-2): two overlapping
+direct `start()` calls now share one spawn instead of the second orphaning the first — so the
+crash-restart's stop-then-start can never race a stray direct start into a leaked sidecar.)
 
 **§5.4 Where GPU state lives:**
 

@@ -6,6 +6,67 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 2 (GPU MID-SESSION CRASH AUTO-FALLBACK,
+reliability; REL-1 High + REL-2 Low) — the advertised self-healing CPU fallback was a silent no-op
+(branch `full-audit-2026-06-28-fixes`).** Suite **2356 passed / 39 skipped** (was 2353/39 at Phase 1 →
+**+3 tests**), typecheck clean, build OK. Runtime-lifecycle only — **no IPC surface, GPU probe/ladder
+selection, or settings-schema change**; offline/no-telemetry posture held. Touched only the runtime
+files + their tests + the architecture §5.3 record. Methodology: the crux **integration test FIRST**
+(driven through the REAL `RuntimeManager` + `createSelectingRuntimeFactory` + `createGpuCrashAutoFallback`
+with a fake child at the spawn seam, **no fake `restart`**), confirmed FAILING against the pre-fix
+wiring, THEN the fix, THEN green; both behavioral fixes teeth-verified by neutering them.
+- **THE BUG (REL-1, verified High).** When a GPU-backed `llama-server` dies mid-session, the crash hook
+  called `restart(opts) = runtimeRef.start(opts)` with the SAME `modelId`. But the crashed `LadderRuntime`
+  is still `RuntimeManager.current` (the manager never observes the child exit; it caches `this.last` at
+  start and never re-polls), so `start()` hit its same-model **idempotency guard** (`runtime/index.ts`) and
+  early-returned a stale status read — it NEVER stopped-and-restarted. Net: `gpuAutoDisabled` got persisted
+  and the friendly "compatibility mode" notice showed, but no restart happened; `status()` kept reporting
+  the **dead** server as running/healthy; the next chat/RAG/doctask turn routed to it and failed (user had
+  to manually Stop/Start). The tests missed it because `runtime-ladder.test.ts` injects a FAKE `restart`
+  (real manager never exercised) and `runtime-manager.test.ts` proves the guard in isolation — nothing
+  wired the real crash path THROUGH the real manager.
+- **ENGINEERING DECISION — option (b): a crash-only `RuntimeManager.forceRestart(opts)`.** Inside ONE
+  enqueued op it does `doStop()` (clears `current`/`last` → `status()` immediately stops reporting the dead
+  server healthy) then `doStart(opts)`, bypassing **only** the same-model guard. Chosen over (a) wiring-level
+  `stop()`-then-`start()` — its two ops enqueue separately, so a concurrent user start could interleave —
+  and (c) manager-subscribes-to-unexpected-exit (more plumbing, no extra guarantee). `forceRestart` is
+  atomic within the op-queue, explicit, and easiest to test. **Normal `start()` idempotency is PRESERVED**
+  (a double-click / AI-Model-screen revisit still no-ops — the existing idempotency tests stay green); only
+  the crash path bypasses it. `forceRestart` sets `startingModelId` synchronously (exactly as `start()`), so
+  a concurrent manual `start(sameModel)` JOINS the restart instead of queueing a second one. Wiring:
+  `main/index.ts` crash `restart` now calls `runtimeRef.forceRestart`, not `start`.
+- **Retry bound (no loop):** `gpuAutoDisabled` is persisted BEFORE the restart, so the ladder rebuilt inside
+  `doStart` skips rung 1 → CPU (`--device none`); a later CPU crash does NOT route through `onGpuCrash`
+  (`LadderRuntime` gates it on `backend === 'gpu'`), so a GPU session auto-falls-back **at most once**. A
+  dedicated "does NOT loop" test pins this (CPU crash after the fallback triggers no second restart).
+- **THE CRUX TEST (`tests/integration/runtime-manager.test.ts`).** Real manager + real factory + real crash
+  fallback; fake `FakeServerChild` at the `spawn` seam and a loopback `fetch` that **refuses a dead child's
+  port** (so a chat routed to the crashed runtime genuinely fails — that gives the post-crash chat assertion
+  its teeth). Flow: (1) start a GPU runtime → `backend:'gpu'`, healthy; (2) emit an unexpected child `exit`;
+  (3) assert exactly **one stop + one start** (one new spawn — not zero=swallowed, not a loop; dead runtime
+  stopped once; restarted one still live), the new backend is **cpu** (`--device none` on the 2nd spawn),
+  `gpuAutoDisabled` persisted, the compatibility notice fired, and `status().{backend,healthy,port}` reflect
+  the **NEW** server (port ≠ the dead one); (4) a chat turn after the crash streams `'hello'` from the
+  restarted CPU server. **Teeth:** with the pre-fix wiring (`restart → start`) the test FAILS at "expected
+  `children` length 2, got 1" (restart swallowed); with `forceRestart` it passes.
+- **REL-2 (Low, bundled — same `sidecar.ts`).** `LlamaServer.start()` guarded only on `if (this.child)`,
+  but `this.child` is assigned AFTER `await verifyBinary` + `await findPort`, so two overlapping direct
+  `start()` calls both spawned (the 2nd orphaning the 1st — port + RAM, never stopped). Not reachable in
+  prod today (every composer wraps it in its own latch) but latent. Fix: an instance
+  `private starting: Promise<void> | null` returned when set (mirrors `e5.ts`/`reranker/llama.ts`/
+  `vision/runtime.ts`); a second caller now shares the one start AND waits for HEALTH, not just the child
+  handle. Unit test: two concurrent `start()` → exactly one spawn (teeth: pre-fix spawns 2).
+- **Files changed:** `services/runtime/index.ts` (forceRestart), `main/index.ts` (crash wiring →
+  forceRestart), `services/runtime/sidecar.ts` (single-flight latch); `tests/integration/runtime-manager.test.ts`
+  (REL-1 integration + no-loop + REL-2 unit tests); `docs/architecture.md` (GPU record §5.3 corrected + a new
+  explicit "§5.3 Mid-session crash auto-fallback" subsection documenting the idempotency interaction, the
+  chosen fix, and the retry bound); `BUILD_STATE.md`. **Out of scope (untouched):** the GPU probe/ladder
+  selection logic, the IPC surface, the settings schema — and no other audit phase.
+- **Next action (owner):** review/commit Phase 2 (do NOT auto-push/merge). Then **Phase 3 — renderer
+  robustness (FE-1…FE-9: top-level React error boundary + unhandled-rejection / lifecycle fixes)** per
+  `audits/full-audit-2026-06-28.md` §6._
+
+
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 1 (FINANCIAL CORRECTNESS; BL-N1…N6 + the
 TEST-N2/N6 test gaps) — the highest user-impact bug cluster: the bank/invoice/redaction tools silently
 lost or mis-stated money/dates/PII (branch `full-audit-2026-06-28-fixes`).** Suite **2353 passed / 39

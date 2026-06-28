@@ -178,7 +178,12 @@ function initBackend(): void {
   // late-bind through a ref.
   let runtimeRef: RuntimeManager | null = null
   const gpuCrashFallback = createGpuCrashAutoFallback({
-    restart: (opts) => runtimeRef?.start(opts) ?? Promise.resolve(),
+    // REL-1: a mid-session GPU crash must FORCE a real stop-then-start. `start()` would hit
+    // the same-model idempotency guard (the crashed runtime is still `current`) and no-op, so
+    // the restart is silently swallowed and `status()` keeps reporting the dead server healthy.
+    // `forceRestart` bypasses that guard atomically; `persistGpuFailure` (below) runs first, so
+    // the rebuilt ladder lands on CPU and the fallback can fire at most once (no restart loop).
+    restart: (opts) => runtimeRef?.forceRestart(opts) ?? Promise.resolve(),
     persistFailure: (reason) => {
       // A mid-session crash is its own audit event; persistGpuFailure then records the
       // compatibility-mode fallback it triggers.
