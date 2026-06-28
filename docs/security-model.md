@@ -511,6 +511,18 @@ staging dir and only places it on a clean pass. Each defence:
 - **Path traversal / absolute / drive-letter / UNC** — every member name is normalized to forward
   slashes and rejected if it contains `..`/`.`, is absolute, or carries a drive letter; after the
   final `join` the resolved path must still sit inside the target (belt-and-braces).
+- **NUL / control-character member names (SEC-N1, full audit 2026-06-28).** `safeRelPath` also rejects
+  a member name containing a NUL (`\u0000`) with the fixed structural `invalidPath` reason, **before any
+  write**. A NUL passes the `..`/drive/depth checks but makes the path invalid for the OS, so
+  `writeFileSync` would throw `ERR_INVALID_ARG_VALUE` whose **raw message embeds the attacker-controlled
+  path** — which `previewSkillPackage` (its materialize step had a `try/finally` with no catch, and the
+  preview IPC handler none) would have serialized to the renderer, breaking both its documented "never
+  throws / returns `ok:false`" contract and the §22-M1 content-free posture. As defence in depth,
+  `previewSkillPackage` now also wraps its materialize/validate body in a catch that maps **any** residual
+  throw to a fixed structural reason; `importSkill` was already protected by its IPC `try/catch`. The
+  §22-M1 sentinel-grep test pushes a NUL-bearing member name through preview and asserts the path/sentinel
+  never appears in the payload (teeth: neuter the `safeRelPath` check → the code falls to the generic
+  `unreadableZip`; neuter both layers → preview throws the raw error).
 - **Symlink rejection** — a member whose UNIX mode word (zip external attributes) is `S_IFLNK` is
   refused outright (no "safe handling" in v1); the placed tree is re-walked with `lstat` afterwards
   so no symlink can survive.
@@ -538,8 +550,13 @@ staging dir and only places it on a clean pass. Each defence:
   signatures (zip `PK`, gzip, xz, zstd, tar `ustar`), so a zip renamed `data.csv` is rejected even
   though its extension is allowlisted.
 - **Extension allowlist (§6.3)** — `.md`/`.txt`/`.json`/`.csv` only.
-- **§6.4 caps** — per-file / total-uncompressed / file-count / path-length / folder-depth, all
-  env-overridable (`services/skills/limits.ts`), mirroring the malicious-document caps above.
+- **§6.4 caps** — six resource ceilings, all env-overridable (`services/skills/limits.ts`),
+  mirroring the malicious-document caps above and named here in full (DOC-N1, full audit 2026-06-28):
+  per-file (`HILBERTRAUM_SKILL_MAX_FILE_BYTES`, default 1 MiB), total-uncompressed
+  (`HILBERTRAUM_SKILL_MAX_TOTAL_BYTES`, default 8 MiB), file-count (`HILBERTRAUM_SKILL_MAX_FILES`,
+  default 200), path-length (`HILBERTRAUM_SKILL_MAX_PATH_LEN`, default 255), folder-depth
+  (`HILBERTRAUM_SKILL_MAX_DEPTH`, default 4), and SKILL.md body length
+  (`HILBERTRAUM_SKILL_MAX_BODY`, default 64 KiB).
 
 Every rejection is a **fixed, structural English string** (`SKILL_IMPORT_ERRORS`) — it never
 interpolates a member path, file name, or body text, so a malicious package can never echo its
@@ -870,7 +887,11 @@ the **original** bytes to the sidecar — so a small (<20 MiB) **decompression b
 decodes to billions of pixels passed the guard and OOM'd the sidecar. The renderer's `MAX_DIMENSION`
 downscale is display-only and doesn't bound what the sidecar decodes. The main guard now parses the
 image **header** (PNG IHDR / JPEG SOF) for `width*height` — no full decode — and rejects above a
-**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable) as `tooLarge`.
+**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable via
+`HILBERTRAUM_MAX_IMAGE_PIXELS`) as `tooLarge`. This sits alongside the **byte cap** that bounds the
+raw input before any decode (`VISION_MAX_IMAGE_BYTES`, ~20 MiB default, env-overridable via
+`HILBERTRAUM_MAX_IMAGE_BYTES`; named here per DOC-N1, full audit 2026-06-28 — only the sibling
+pixel cap was documented before).
 
 **SEC-6 (backend-audit-2026-06-27) — a `null` pixel count for a claimed png/jpeg is now rejected.**
 `validateAnalyzeRequest` previously let an *unknown* pixel count fall through to the byte cap. But the
@@ -961,6 +982,26 @@ file changing under them. The exposure window is one app session on a drive an a
 to (who, as above, can usually tamper the app's own Electron code too); a relaunch re-hashes from cold.
 Accepted as-is; a future hardening could re-hash on every chat-sidecar spawn if the consistency concern is
 otherwise solved.
+
+## Phase-7 security polish (full audit 2026-06-28)
+
+**Benchmark IPC `requireUnlocked` parity (SEC-N2).** `registerBenchmarkIpc`'s `runBenchmark` /
+`tryGpuAgain` touch `ctx.db` (via `updateSettings`/`getSettings`) and were *fail-closed* already — the
+`ctx.db` getter throws when the workspace is locked — but surfaced the **raw English** "Workspace is
+locked — unlock it first." string instead of the friendly localized copy. They now call an explicit
+`requireUnlocked()` preamble (the same pattern as every other DB-backed channel), surfacing the
+localized `main.benchmark.locked`. A structural lock test (`chat-ipc.test.ts`, TEST-N8) enumerates every
+registered DB-touching handler — chat + these benchmark handlers — and asserts each refuses with the
+friendly copy (never the raw string) when locked.
+
+**Sidecar `serverMessage` is structural-only — accepted Info residual (SEC-N3).** `ChatRequestError`
+(runtime/`llama.ts`) keeps up to 500 chars of a non-JSON error body as `serverMessage`, surfaced via
+`chat-stream.ts` and `doctasks/manager.ts`. The sidecar is **our own loopback llama.cpp server** and its
+error bodies are upstream-structural (an HTTP status + a reason code/type), never user document/prompt
+content, so the tail carries nothing content-bearing. This is **accepted as an Info residual**: the
+500-char cap bounds size and a one-line `INVARIANT (SEC-N3)` comment at the cap pins the expectation and
+asks for a re-verify on every llama.cpp pin bump; if a future server ever echoed request content into an
+error body, the fallback should be sanitized to a fixed structural string + numeric status.
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

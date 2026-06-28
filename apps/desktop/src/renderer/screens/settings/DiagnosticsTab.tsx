@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Banner, Button, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
+import { friendlyIpcError } from '../../lib/errors'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
@@ -135,7 +136,7 @@ function buildAppRuntimeReport(
     t('diag.app.title'),
     `${t('diag.app.version')}: ${app ? `${app.appName} ${app.appVersion}` : t('diag.app.unknown')}`,
     `${t('diag.app.selectedModel')}: ${app?.activeModelId ?? t('diag.app.noneSelected')}`,
-    `${t('diag.app.profile')}: ${app?.hardwareProfile ?? 'UNKNOWN'}`,
+    `${t('diag.app.profile')}: ${app?.hardwareProfile ?? t('diag.app.unknown')}`,
     `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, t)}`,
     `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, settings, t)}`,
     `${t('diag.app.runtimeBuild')}: ${
@@ -183,15 +184,25 @@ export function DiagnosticsTab(): JSX.Element {
   const [typeFilter, setTypeFilter] = useState<string>('all')
   // "Saved" confirmations are transient toasts (guidelines §6).
   const toast = useToast()
+  // The refreshers below run on mount AND from buttons, so a single component-level mounted
+  // flag (checked before each setState) is cleaner than per-effect `active` guards here and
+  // prevents a setState after unmount when a late IPC reply resolves (audit FE-4).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const refreshStatus = useCallback(async (): Promise<void> => {
-    window.api?.getAppStatus().then(setApp).catch(() => setApp(null))
-    window.api?.getRuntimeStatus().then(setRuntime).catch(() => setRuntime(null))
-    window.api?.getSettings().then(setSettings).catch(() => setSettings(null))
+    window.api?.getAppStatus().then((s) => mountedRef.current && setApp(s)).catch(() => mountedRef.current && setApp(null))
+    window.api?.getRuntimeStatus().then((s) => mountedRef.current && setRuntime(s)).catch(() => mountedRef.current && setRuntime(null))
+    window.api?.getSettings().then((s) => mountedRef.current && setSettings(s)).catch(() => mountedRef.current && setSettings(null))
   }, [])
 
   const refreshLogs = useCallback(async (): Promise<void> => {
-    window.api?.getLogTail().then(setLogTail).catch(() => setLogTail([]))
+    window.api?.getLogTail().then((l) => mountedRef.current && setLogTail(l)).catch(() => mountedRef.current && setLogTail([]))
   }, [])
 
   const loadActivity = useCallback(async (): Promise<void> => {
@@ -265,13 +276,14 @@ export function DiagnosticsTab(): JSX.Element {
   }
 
   useEffect(() => {
-    window.api?.getDriveStatus().then(setDrive).catch(() => setDrive(null))
-    window.api?.getRuntimeInstall().then(setInstall).catch(() => setInstall(null))
+    // Late IPC replies are dropped after unmount via the shared mountedRef (audit FE-4).
+    window.api?.getDriveStatus().then((d) => mountedRef.current && setDrive(d)).catch(() => mountedRef.current && setDrive(null))
+    window.api?.getRuntimeInstall().then((i) => mountedRef.current && setInstall(i)).catch(() => mountedRef.current && setInstall(null))
     // Show the last benchmark, if one has been run before, so the profile persists across launches.
     window.api
       ?.getSettings()
-      .then((s) => setBench(s.lastBenchmark))
-      .catch(() => setBench(null))
+      .then((s) => mountedRef.current && setBench(s.lastBenchmark))
+      .catch(() => mountedRef.current && setBench(null))
     void refreshStatus()
   }, [refreshStatus])
 
@@ -294,7 +306,10 @@ export function DiagnosticsTab(): JSX.Element {
       // Acceleration line reflects it without a manual "Refresh".
       void refreshStatus()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      // friendlyIpcError strips the Electron transport prefix + Error-class name so the
+      // localized diag.bench.failed copy interpolates a clean message, not raw English
+      // boilerplate (audit FE-8).
+      setError(friendlyIpcError(err))
     } finally {
       setRunning(false)
     }
@@ -312,7 +327,7 @@ export function DiagnosticsTab(): JSX.Element {
           <dt>{t('diag.app.selectedModel')}</dt>
           <dd>{app?.activeModelId ?? t('diag.app.noneSelected')}</dd>
           <dt>{t('diag.app.profile')}</dt>
-          <dd>{app?.hardwareProfile ?? 'UNKNOWN'}</dd>
+          <dd>{app?.hardwareProfile ?? t('diag.app.unknown')}</dd>
           <dt>{t('diag.app.runtime')}</dt>
           <dd>{runtimeStatusLine(runtime, t)}</dd>
           <dt>{t('diag.app.acceleration')}</dt>

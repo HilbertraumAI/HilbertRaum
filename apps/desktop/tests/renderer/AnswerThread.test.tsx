@@ -11,8 +11,8 @@ afterEach(cleanup)
 
 const noop = (): void => {}
 
-function renderThread(answer: string): void {
-  const turn: ImageTurn = { id: 't1', question: 'What is in this image?', answer, state: 'done', error: null }
+function renderThread(answer: string, state: ImageTurn['state'] = 'done'): void {
+  const turn: ImageTurn = { id: 't1', question: 'What is in this image?', answer, state, error: null }
   render(<AnswerThread turns={[turn]} onCopy={noop} onTryAgain={noop} onStop={noop} />)
 }
 
@@ -29,5 +29,14 @@ describe('AnswerThread — markdown rendering', () => {
     renderThread('1. First\n2. Second')
     const items = screen.getAllByRole('listitem')
     expect(items.map((li) => li.textContent)).toEqual(['First', 'Second'])
+  })
+
+  // PERF-6: while a turn is IN FLIGHT (starting/analyzing) the streaming answer renders as PLAIN
+  // TEXT — Markdown is parsed once, on completion. So an analyzing turn shows the LITERAL "**bold**"
+  // and produces NO <strong>; the DONE tests above prove the parse-on-completion still works.
+  it('renders an in-flight (analyzing) answer as plain text, not parsed markdown (PERF-6)', () => {
+    renderThread('A **bold** finding.', 'analyzing')
+    expect(document.body.textContent).toContain('**bold**')
+    expect(document.querySelector('strong')).toBeNull()
   })
 })

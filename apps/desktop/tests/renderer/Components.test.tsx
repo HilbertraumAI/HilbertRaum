@@ -193,6 +193,44 @@ describe('SegmentedControl', () => {
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     expect(screen.getByRole('radio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true')
   })
+
+  // FE-9: Home/End land on the FIRST/LAST ENABLED segment directly, skipping disabled ends —
+  // not as a side effect of the arrow-key modulo wrap. Disabled segments bracket the row.
+  it('Home/End jump to the first/last ENABLED segment, skipping disabled ends', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    function EdgeHarness(): JSX.Element {
+      const [value, setValue] = useState('b')
+      return (
+        <SegmentedControl
+          ariaLabel="Edge"
+          options={[
+            { value: 'a', label: 'A', disabled: true },
+            { value: 'b', label: 'B' },
+            { value: 'c', label: 'C' },
+            { value: 'd', label: 'D', disabled: true }
+          ]}
+          value={value}
+          onChange={(v) => {
+            setValue(v)
+            onChange(v)
+          }}
+        />
+      )
+    }
+    render(<EdgeHarness />)
+    screen.getByRole('radio', { name: 'B' }).focus()
+
+    await user.keyboard('{End}')
+    // Last ENABLED is C (index 2) — NOT the disabled D at the end.
+    expect(onChange).toHaveBeenLastCalledWith('c')
+    expect(screen.getByRole('radio', { name: 'C' })).toHaveAttribute('aria-checked', 'true')
+
+    await user.keyboard('{Home}')
+    // First ENABLED is B (index 1) — NOT the disabled A at the start.
+    expect(onChange).toHaveBeenLastCalledWith('b')
+    expect(screen.getByRole('radio', { name: 'B' })).toHaveAttribute('aria-checked', 'true')
+  })
 })
 
 // ---- Toast -----------------------------------------------------------------------
@@ -232,6 +270,21 @@ describe('Toast', () => {
     render(<SaveButton />)
     fireEvent.click(screen.getByRole('button', { name: 'save' }))
     expect(screen.queryByText('Saved')).not.toBeInTheDocument()
+  })
+
+  // FE-7: the auto-dismiss setTimeout is tracked and cancelled on unmount, so a provider that
+  // unmounts within the 4 s window leaves no pending timer firing setState on a dead tree.
+  it('cancels the pending auto-dismiss timer when the provider unmounts', () => {
+    vi.useFakeTimers()
+    const { unmount } = render(
+      <ToastProvider>
+        <SaveButton />
+      </ToastProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    expect(vi.getTimerCount()).toBe(1) // the 4 s dismiss timer is pending
+    unmount()
+    expect(vi.getTimerCount()).toBe(0) // …and the cleanup cancelled it
   })
 })
 

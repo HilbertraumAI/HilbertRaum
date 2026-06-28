@@ -32,6 +32,7 @@ import {
   deserializeBlob,
   type KdfParams
 } from '../../src/main/services/security/crypto'
+import * as vaultCrypto from '../../src/main/services/security/crypto'
 
 // Fast KDF so the suite stays quick — unlock reads the params back from the descriptor,
 // so creating with cheap params keeps the round-trip honest while shaving scrypt cost.
@@ -98,14 +99,20 @@ describe('encrypted vault lifecycle', () => {
   it('zeroes the KDF-derived key on the wrong-password path (L-6)', () => {
     const vp = freshVault()
     createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const fillSpy = vi.spyOn(Buffer.prototype, 'fill')
+    // TEST-N5: assert the OBSERVABLE (the actual key bytes are all zero after the throw), not the
+    // zeroing MECHANISM. A passthrough spy captures the very Buffer deriveKey returned — which the
+    // unlock path zeroes IN PLACE before throwing — so this holds for fill(0)/.set/randomFill alike
+    // and fails if the key is left intact. (The old test spied Buffer.prototype.fill and passed on
+    // ANY fill(0) anywhere, while breaking on a non-fill zeroing — both wrong.)
+    const deriveSpy = vi.spyOn(vaultCrypto, 'deriveKey')
     try {
       expect(() => unlockEncryptedVault(vp, 'wrong-password')).toThrow(WrongPasswordError)
-      // The derived key buffer is zeroed (fill(0)) before the throw — for symmetry with
-      // the data-key paths that zero the KEK/old keys after use.
-      expect(fillSpy.mock.calls.some((args) => args[0] === 0)).toBe(true)
+      const derived = deriveSpy.mock.results.find((r) => r.type === 'return')?.value as Buffer | undefined
+      expect(derived).toBeInstanceOf(Buffer)
+      expect(derived!.length).toBe(FAST_KDF.keyLen)
+      expect(derived!.every((b) => b === 0)).toBe(true)
     } finally {
-      fillSpy.mockRestore()
+      deriveSpy.mockRestore()
     }
   })
 

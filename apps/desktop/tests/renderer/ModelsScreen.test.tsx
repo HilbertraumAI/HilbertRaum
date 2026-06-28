@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, within } from '@testing-library/react'
+import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import {
@@ -391,5 +391,69 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     expect(start).toBeEnabled()
     await user.click(start)
     expect(downloadModel).toHaveBeenCalledWith('qwen3-4b-instruct-q4', { licenseAccepted: true })
+  })
+
+  // FE-2: the Cancel control now has a .catch, so a rejecting cancelDownload surfaces a friendly
+  // error instead of an unhandled promise rejection.
+  it('surfaces a friendly error (no unhandled rejection) when cancelling a download rejects', async () => {
+    // A unique model id so a job remembered by an earlier test in this file (module-level
+    // `rememberedJob`, keyed by the default qwen id) can't render a stale live download over our
+    // card. Our model starts at the Download affordance.
+    const myModel = model({ id: 'cancel-test-model', displayName: 'Cancel Test Model' })
+    const downloadModel = vi.fn(async (): Promise<DownloadJob> => ({
+      jobId: 'jc',
+      modelId: 'cancel-test-model',
+      status: 'queued',
+      receivedBytes: 0,
+      totalBytes: 1000,
+      unverified: false,
+      error: null
+    }))
+    // Keep OUR job ('jc') live so the Cancel control stays mounted; drain any leaked job
+    // (different jobId) to a terminal state so it disappears.
+    const getDownloadJob = vi.fn(
+      async (jobId: string): Promise<DownloadJob> =>
+        jobId === 'jc'
+          ? {
+              jobId: 'jc',
+              modelId: 'cancel-test-model',
+              status: 'downloading',
+              receivedBytes: 100,
+              totalBytes: 1000,
+              unverified: false,
+              error: null
+            }
+          : {
+              jobId,
+              modelId: 'qwen3-4b-instruct-q4',
+              status: 'cancelled',
+              receivedBytes: 0,
+              totalBytes: null,
+              unverified: false,
+              error: null
+            }
+    )
+    const cancelDownload = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'cancelDownload': Error: cancel exploded")
+    })
+    stub({ models: [myModel], downloadModel, getDownloadJob })
+    ;(window.api as unknown as { cancelDownload: typeof cancelDownload }).cancelDownload =
+      cancelDownload
+    const user = userEvent.setup()
+    render(<ModelsScreen />)
+
+    // A live job remembered by an earlier test would disable every Download button (the global
+    // "another download is running" gate); our getDownloadJob drains it on the first poll, so
+    // wait for the button to enable before clicking.
+    const downloadBtn = await screen.findByRole('button', { name: 'Download' })
+    await waitFor(() => expect(downloadBtn).toBeEnabled(), { timeout: 3000 })
+    await user.click(downloadBtn)
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    await user.click(await screen.findByRole('button', { name: 'Cancel download' }))
+    // friendlyIpcError strips the transport + Error-class prefix → only the message shows; the
+    // .catch means the rejection never escapes as an unhandled promise rejection.
+    expect(await screen.findByText('cancel exploded')).toBeInTheDocument()
+    // This is the last test in the file, so the still-live remembered job leaks into no later
+    // test; cleanup() unmounts the screen and clears the poll interval.
   })
 })

@@ -161,7 +161,9 @@ describe('invoice analysis handler — run()', () => {
     })
     // Was TWO before Phase 4 (the validate seam's loadInvoice + the handler's own loadInvoice); now the
     // handler loads the invoice once and hands it to the validate seam as `preloaded` (no re-query).
-    expect(reads).toBe(1)
+    // TEST-N5: assert the OUTCOME (no DUPLICATE load) rather than an exact count — a safe refactor
+    // that loads zero extra times still passes; a regression that re-queries (2+) still fails.
+    expect(reads).toBeLessThanOrEqual(1)
   })
 
   it('figures are quoted, never invented — only the invoice’s printed totals appear', async () => {

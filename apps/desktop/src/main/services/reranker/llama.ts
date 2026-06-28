@@ -1,7 +1,7 @@
 import type { Reranker, RerankedHit, RerankOptions } from './index'
 import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
 import { maxInputApproxTokens } from '../runtime/context-budget'
-import { truncateToApproxTokens } from '../ingestion/chunker'
+import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
 
 // Real on-device reranker (rag-design §11). The THIRD `LlamaServer`
 // composition (after the chat runtime and the E5 embedder): the SAME shipped b9585
@@ -20,19 +20,31 @@ import { truncateToApproxTokens } from '../ingestion/chunker'
 
 const DEFAULT_CONTEXT_TOKENS = 2048
 /**
- * Approx-token caps per rerank FIELD (rag-design §12.3). A rerank task is ONE query+document
- * pair that the server combines into a SINGLE sequence, so the combined cost must fit the
- * context: (160 + 320) approx tokens × REAL_TOKENS_PER_APPROX_TOKEN ≈ 1056 real tokens, well
- * under 2048. The doc cap also bounds CPU latency per candidate (the reranker is CPU-pinned).
+ * Approx-token caps per rerank FIELD (rag-design §11 / §12.3). A rerank task is ONE query+document
+ * pair the server combines into a SINGLE sequence, so the combined cost must fit the context:
+ * (160 + 500) approx tokens × REAL_TOKENS_PER_APPROX_TOKEN ≈ 1452 real tokens — under the 2048
+ * context AND the 2048 physical batch. The constructor additionally CLAMPS both caps to the context
+ * budget (usable − queryCap ≈ 754 at the default ctx, ≥ 500), so they can never exceed `n_ctx` even
+ * at a smaller configured context.
+ *
+ * RAG-N3 (full audit 2026-06-28): the doc cap is the WHOLE chunk window
+ * (`CHUNK_DEFAULTS.chunkSizeTokens`), not the former 320, so the reranker scores every chunk in
+ * full. At 320 the last ~36 % of a 500-token chunk was invisible to the load-bearing relevance
+ * separator (§12.3), and that truncated score drove BOTH the final order AND the dedup-by-page
+ * winner (`rag/index.ts`). Cost: the worst-case CPU latency per candidate rises with the larger doc
+ * budget (reasoned ~+38 %; §12.3) — bounded by the small candidate cap, CPU-pinned, and opt-in by
+ * provisioning. Tightening this cap (or the candidate cap) stays the lever if latency proves high.
  *
  * EMB-1 (backend audit 2026-06-27): inputs are truncated by the CJK/Thai-aware
  * `truncateToApproxTokens` (shared with the E5 embedder), NOT a whitespace word split. The old
  * split treated a space-less passage (CJK/Thai) as ONE "word" and never truncated it, so it
  * overflowed `n_ctx`, the sidecar 500'd, and the rerank silently fell back to the fused order.
- * The constructor clamps these caps to the context budget so they can never exceed `n_ctx`.
  */
 const MAX_QUERY_APPROX_TOKENS = 160
-const MAX_DOC_APPROX_TOKENS = 320
+/** The reranker scores the WHOLE chunk: the doc cap equals the chunk window so a chunk's tail is
+ *  never dropped before scoring (RAG-N3). Keyed off the chunker's source of truth, so a future
+ *  chunk-size change carries the rerank budget with it. */
+const MAX_DOC_APPROX_TOKENS = CHUNK_DEFAULTS.chunkSizeTokens
 /** Approx-token headroom reserved for BOS/EOS + the query↔document separator the server inserts. */
 const RERANK_SPECIALS_APPROX_TOKENS = 16
 /** Per-request bound so a wedged sidecar fails the question's rerank pass, not the app. */
@@ -79,8 +91,8 @@ export class LlamaReranker implements Reranker {
     this.id = opts.id
     // Query+document ride ONE sequence server-side, so derive the per-field caps from the SHARED
     // context budget (so they can never exceed n_ctx), then clamp to the latency-oriented
-    // defaults. At the default 2048 context this yields exactly 160/320 — no behaviour change for
-    // ordinary inputs; a smaller configured context shrinks the caps so a rerank can't 500.
+    // defaults. At the default 2048 context this yields 160/500 (query cap / whole-chunk doc cap,
+    // RAG-N3); a smaller configured context shrinks the caps so a rerank can't 500.
     const contextTokens = opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
     const usable = Math.max(2, maxInputApproxTokens(contextTokens) - RERANK_SPECIALS_APPROX_TOKENS)
     this.queryApproxTokens = Math.min(MAX_QUERY_APPROX_TOKENS, Math.max(1, Math.floor(usable / 3)))
@@ -109,7 +121,7 @@ export class LlamaReranker implements Reranker {
         // "embeddings enabled
         // with n_batch (2048) > n_ubatch (512) ... setting n_batch = n_ubatch = 512").
         // A rerank input is query+document in ONE sequence — up to
-        // (MAX_QUERY_APPROX_TOKENS + MAX_DOC_APPROX_TOKENS) approx tokens ≈ 1056 real tokens — so
+        // (MAX_QUERY_APPROX_TOKENS + MAX_DOC_APPROX_TOKENS) approx tokens ≈ 1452 real tokens — so
         // the 512 default makes the server 500 the WHOLE request ("input (… tokens) is too large to
         // process. increase the physical batch size"), which would silently drop every
         // rerank pass back to the fused order on real-length chunks. Sizing the physical

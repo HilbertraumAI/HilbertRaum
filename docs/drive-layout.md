@@ -166,7 +166,10 @@ Windows-only/best-effort); the user pulls any other models (larger chat models) 
 Model screen on demand. Add `--all-models`/`-AllModels` to provision every model up front (runtimes
 either way). You can still drop artifacts in by hand (R5). `verify-models`
 SHA-256s each present weight against its manifest hash, and `--generate` captures real hashes into
-`config/checksums.json`. The asset logic mirrors the unit-tested `services/assets.ts`; the sidecar
+`config/checksums.json`. The asset **download/verify/plan** logic mirrors the unit-tested
+`services/assets.ts`, but the **default-set model-id list** lives only in the two `prepare-drive`
+shells (`$DefaultModelIds` in `.ps1`, `DEFAULT_MODEL_IDS` in `.sh`), kept in sync with each other and
+with `model-manifests/` — *not* in `assets.ts` (DOC-N4, full audit 2026-06-28). The sidecar
 build comes from `model-manifests/runtime-sources.yaml`. See
 [`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md) for the full flow + license gate.
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
 import { SourcesDisclosure } from '../chat/SourcesDisclosure'
@@ -24,10 +24,12 @@ import {
   getActiveDocTask,
   isDocTaskTerminal,
   startTask,
-  subscribeDocTask
+  subscribeDocTask,
+  type ActiveDocTask
 } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
 import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
+import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
 import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
 
@@ -74,6 +76,15 @@ const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
 ])
 
 /**
+ * Perf-test seam (PERF-5): a module-scoped per-id render counter that {@link DocRow} bumps in its
+ * body. It lets the memoization test assert that an unrelated parent re-render (toggling another
+ * row's selection / opening another row's ⋯ menu) re-renders ONLY the affected row. It is a Map
+ * write per row render — effectively free — and is the ONLY observability hook here; production
+ * behaviour is identical with or without it. Reset by the test between renders.
+ */
+export const __docRowRenderCounts = new Map<string, number>()
+
+/**
  * Per-document status badge. Audio in `extracting` is honestly "Transcribing…" —
  * listening to a recording takes real time — with the coarse percent the
  * docs IPC merges in while whisper works.
@@ -85,6 +96,78 @@ function badgeFor(d: DocumentInfo, t: I18n['t']): { label: string; tone: BadgeTo
     return { tone: base.tone, icon: base.icon, label: `${t('docs.status.transcribing')}${pct}` }
   }
   return { tone: base.tone, icon: base.icon, label: t(base.labelKey) }
+}
+
+/** A source document's title for a provenance line (the source may be gone). FE-8: resolve via
+ *  the `sourcesById` Map instead of a linear `docs.find` per provenance line (called once per
+ *  generated row + the preview modal). */
+function titleOf(id: string, sourcesById: ReadonlyMap<string, DocumentInfo>, t: I18n['t']): string {
+  return sourcesById.get(id)?.title ?? t('docs.removedDocFallback')
+}
+
+/**
+ * Quiet provenance line for a generated document, rendered from the structured
+ * `GeneratedProvenance` view (kind + source ids) so old and new rows take one path
+ * (plan §15.3). Source titles resolve tolerantly — a deleted source falls back to the
+ * "removed document" copy. Module-scope (PERF-5) so {@link DocRow} can call it with props.
+ */
+function provenanceLine(d: DocumentInfo, sourcesById: ReadonlyMap<string, DocumentInfo>, t: I18n['t']): ReactNode {
+  if (!d.origin) return null
+  const { kind, sourceDocumentIds } = provenanceView(d.origin)
+  if (kind === 'compare') {
+    const [a, b] = sourceDocumentIds
+    return (
+      <>
+        {t('docs.provenance.compareBefore')}
+        <b>{titleOf(a, sourcesById, t)}</b>
+        {t('docs.provenance.compareMiddle')}
+        <b>{titleOf(b, sourcesById, t)}</b>
+      </>
+    )
+  }
+  const before =
+    kind === 'translation'
+      ? t('docs.provenance.translatedBefore')
+      : kind === 'summary'
+        ? t('docs.provenance.summaryBefore')
+        : t('docs.provenance.generatedBefore')
+  return (
+    <>
+      {before}
+      <b>{titleOf(sourceDocumentIds[0], sourcesById, t)}</b>
+    </>
+  )
+}
+
+/**
+ * The uniform location/project chips for a row (Task 3): Library / Temporary / Generated /
+ * Archived AND project tags all render as the SAME neutral Chip — location is never a status
+ * badge or a blue pill. Deduped, in a stable order. Returns plain labels; the caller renders
+ * them as <Chip>. Module-scope (PERF-5) so {@link DocRow} can call it with `t`.
+ */
+function rowChips(d: DocumentInfo, t: I18n['t']): string[] {
+  const labels: string[] = []
+  const push = (s: string): void => {
+    if (s && !labels.includes(s)) labels.push(s)
+  }
+  for (const c of d.collections ?? []) {
+    if (c.type === 'library') push(t('docs.chip.library'))
+    else if (c.type === 'temporary') push(t('docs.chip.temporary'))
+    else push(c.name)
+  }
+  if ((d.lifecycle ?? 'permanent') === 'temporary') push(t('docs.chip.temporary'))
+  if ((d.lifecycle ?? 'permanent') === 'archived') push(t('docs.chip.archived'))
+  if (d.origin) push(t('docs.chip.generated'))
+  return labels
+}
+
+/** Compact muted meta line: "PDF · 2.0 KB · 7 sections" (§5/§6 — technical, visually secondary).
+ *  Module-scope (PERF-5) so {@link DocRow} can call it with `lang`/`tCount`. */
+function metaLine(d: DocumentInfo, lang: UiLanguage, tCount: I18n['tCount']): string {
+  const parts: string[] = [friendlyMimeLabel(d.mimeType)]
+  if (d.sizeBytes != null) parts.push(formatSize(d.sizeBytes, lang))
+  if (d.chunkCount > 0) parts.push(tCount('docs.meta.sectionsCount', d.chunkCount))
+  return parts.join(' · ')
 }
 
 /**
@@ -263,6 +346,16 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // chat ConversationList pattern). Holds the open row id, or null.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Mounted flag (audit FE-4): the import poll's in-flight `getImportJob`/`refresh` can resolve
+  // AFTER the interval is cleared on unmount; clearing the interval doesn't abort that tick's
+  // promise, so guard every setState behind this flag.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   // The single active document task — module-level store so a running summary's
   // busy/progress state survives navigating away and back.
   const activeTask = useSyncExternalStore(subscribeDocTask, getActiveDocTask)
@@ -277,6 +370,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   const refresh = useCallback(async (): Promise<void> => {
     const next = await window.api.listDocuments()
+    if (!mountedRef.current) return // unmounted while the list was loading (FE-4)
     setDocs(next)
     void refreshCollections()
     // Drop selected ids that no longer exist or are no longer indexed.
@@ -314,6 +408,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       pollRef.current = setInterval(async () => {
         try {
           const job = await window.api.getImportJob(jobId)
+          // The interval may have been cleared (unmount) while this tick was awaiting — drop
+          // the late result instead of setState-ing on an unmounted component (audit FE-4).
+          if (!mountedRef.current) return
           const settled = job.completed + job.failed
           const transitioned = settled !== lastSettled
           lastSettled = settled
@@ -321,11 +418,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           if (job.done) {
             if (pollRef.current) clearInterval(pollRef.current)
             pollRef.current = null
-            setBusy(null)
+            if (mountedRef.current) setBusy(null)
           }
         } catch (e) {
           if (pollRef.current) clearInterval(pollRef.current)
           pollRef.current = null
+          if (!mountedRef.current) return
           setBusy(null)
           setError(friendlyIpcError(e))
         }
@@ -534,48 +632,6 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  /** A source document's title for a provenance line (the source may be gone). FE-8: resolve via
-   *  the `sourcesById` Map instead of a linear `docs.find` per provenance line (called once per
-   *  generated row + the preview modal). Only ever invoked during row/modal render, after the
-   *  `sourcesById` const below is initialized. */
-  function titleOf(id: string): string {
-    return sourcesById.get(id)?.title ?? t('docs.removedDocFallback')
-  }
-
-  /**
-   * Quiet provenance line for a generated document, rendered from the structured
-   * `GeneratedProvenance` view (kind + source ids) so old and new rows take one path
-   * (plan §15.3). Source titles resolve tolerantly — a deleted source falls back to the
-   * "removed document" copy.
-   */
-  function provenanceLine(d: DocumentInfo): ReactNode {
-    if (!d.origin) return null
-    const { kind, sourceDocumentIds } = provenanceView(d.origin)
-    if (kind === 'compare') {
-      const [a, b] = sourceDocumentIds
-      return (
-        <>
-          {t('docs.provenance.compareBefore')}
-          <b>{titleOf(a)}</b>
-          {t('docs.provenance.compareMiddle')}
-          <b>{titleOf(b)}</b>
-        </>
-      )
-    }
-    const before =
-      kind === 'translation'
-        ? t('docs.provenance.translatedBefore')
-        : kind === 'summary'
-          ? t('docs.provenance.summaryBefore')
-          : t('docs.provenance.generatedBefore')
-    return (
-      <>
-        {before}
-        <b>{titleOf(sourceDocumentIds[0])}</b>
-      </>
-    )
-  }
-
   // Derived collections (plan §12) — memoized so the render body (re-run on every 400 ms import
   // poll + every unrelated state change: menu/hover/modal) doesn't re-filter the whole list each
   // time (FE-2). Keyed only on the inputs each derivation actually reads.
@@ -729,36 +785,6 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  /**
-   * The uniform location/project chips for a row (Task 3): Library / Temporary / Generated /
-   * Archived AND project tags all render as the SAME neutral Chip — location is never a status
-   * badge or a blue pill. Deduped, in a stable order. Returns plain labels; the caller renders
-   * them as <Chip>.
-   */
-  function rowChips(d: DocumentInfo): string[] {
-    const labels: string[] = []
-    const push = (s: string): void => {
-      if (s && !labels.includes(s)) labels.push(s)
-    }
-    for (const c of d.collections ?? []) {
-      if (c.type === 'library') push(t('docs.chip.library'))
-      else if (c.type === 'temporary') push(t('docs.chip.temporary'))
-      else push(c.name)
-    }
-    if ((d.lifecycle ?? 'permanent') === 'temporary') push(t('docs.chip.temporary'))
-    if ((d.lifecycle ?? 'permanent') === 'archived') push(t('docs.chip.archived'))
-    if (d.origin) push(t('docs.chip.generated'))
-    return labels
-  }
-
-  /** Compact muted meta line: "PDF · 2.0 KB · 7 sections" (§5/§6 — technical, visually secondary). */
-  function metaLine(d: DocumentInfo): string {
-    const parts: string[] = [friendlyMimeLabel(d.mimeType)]
-    if (d.sizeBytes != null) parts.push(formatSize(d.sizeBytes, lang))
-    if (d.chunkCount > 0) parts.push(tCount('docs.meta.sectionsCount', d.chunkCount))
-    return parts.join(' · ')
-  }
-
   // Collapse/expand the sub-nav and remember it across sessions (best-effort persist).
   function setRailCollapsedPersistent(collapsed: boolean): void {
     setRailCollapsed(collapsed)
@@ -801,6 +827,24 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       await refresh().catch(() => undefined)
     }
   }
+
+  // Stable row-handler identities for the memoized DocRow (perf audit PERF-5). The latest-ref
+  // wrappers keep each handler's identity constant across the 400 ms task-progress ticks (which
+  // re-run this body via the `activeTask` store) and unrelated state changes, so a row's React.memo
+  // holds unless ITS OWN props change. useState setters (setMenuOpenId/setTranslateDoc/
+  // setAddToProjectFor/setProjectModal/setConfirmDelete) and the imported cancelActiveDocTask are
+  // already stable, so they pass through directly. The impl functions above are hoisted, so
+  // referencing them here is fine.
+  const handleToggleSelected = useEventCallback(toggleSelected)
+  const handlePreview = useEventCallback(onPreview)
+  const handleRun = useEventCallback(run)
+  const handleSummarize = useEventCallback(onSummarize)
+  const handleMakeSearchable = useEventCallback(onMakeSearchable)
+  const handleBuildDeepIndex = useEventCallback(onBuildDeepIndex)
+  const handleExport = useEventCallback(onExport)
+  const handleKeepInLibrary = useEventCallback(onKeepInLibrary)
+  const handleSetLifecycle = useEventCallback(onSetLifecycle)
+  const handleRemoveFromCollection = useEventCallback(onRemoveFromCollection)
 
   return (
     <div className="screen docs-screen">
@@ -979,288 +1023,56 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           the right-aligned Preview/⋯ column never drifts to a far edge on wide displays. */}
       <div className="doc-list">
       {visibleDocs.map((d) => {
-        // One task occupies the runtime at a time; while it targets THIS row, the row shows a
-        // busy/cancel pair instead of the Preview + "⋯" pair. `rowTask` is the active task (so
-        // it narrows) or null.
+        // Derive the per-row task in the PARENT (perf audit PERF-5): the activeTask module store
+        // changes on EVERY 400 ms progress tick, so passing it whole would re-render every row each
+        // tick. `rowTask` is the active task narrowed to THIS row (so it shows the busy/cancel pair)
+        // or `null` — and `null` is Object.is-stable across ticks, so the ~all rows with no active
+        // task keep their memo while only the one targeted row re-renders.
         const rowTask =
           activeTask != null &&
           activeTask.documentIds.includes(d.id) &&
           !isDocTaskTerminal(activeTask.status)
             ? activeTask
             : null
-        const status = badgeFor(d, t)
-        const chips = rowChips(d)
-        const canDocTasks = d.status === 'indexed' && d.chunkCount > 0
-        const canDeepIndex = canDocTasks && !d.origin && d.treeStatus !== 'ready'
-        const showOcr = Boolean(d.scanDetected && ocrAvailable)
-        const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
-        const rowBusyLabel = rowTask
-          ? `${t(TASK_BUSY_LABEL[rowTask.kind])}${
-              rowTask.status && rowTask.status.progress.stepsTotal > 1
-                ? ` (${rowTask.status.progress.stepsDone}/${rowTask.status.progress.stepsTotal})`
-                : ''
-            }`
-          : ''
         return (
-          <div
-            className={`doc-row ${selected.has(d.id) ? 'selected' : ''}`}
+          <DocRow
             key={d.id}
-            onContextMenu={(e) => {
-              // Right-click opens the same "⋯" overflow (mirrors the chat list). A failed row
-              // has no overflow (just inline Remove / Try again), so leave the native menu.
-              if (rowTask || d.status === 'failed') return
-              e.preventDefault()
-              setMenuOpenId(d.id)
-            }}
-          >
-            {onAskSelected && d.status === 'indexed' && (
-              <input
-                type="checkbox"
-                className="doc-select"
-                checked={selected.has(d.id)}
-                aria-label={t('docs.selectAria', { title: d.title })}
-                title={t('docs.selectTitle')}
-                onChange={() => toggleSelected(d.id)}
-              />
-            )}
-            <Icon name="file" className="doc-row-icon" />
-            <div className="doc-row-main">
-              <div className="doc-row-title" title={d.originalPath ?? d.title}>
-                {d.title}
-              </div>
-              <div className="doc-row-meta">{metaLine(d)}</div>
-              {/* Provenance for a generated document stays a quiet caption, not a badge (Task 2). */}
-              {d.origin && <p className="hint doc-row-cap">{provenanceLine(d)}</p>}
-              {/* Quiet staleness caption on a generated row (plan §15.3): a warning Badge (icon
-                  + word, never color-only) when a source changed/was removed after generation. */}
-              {stale.stale && (
-                <p className="hint doc-row-cap">
-                  <Badge tone="warning" icon="⟳">
-                    {t('docs.provenance.staleBadge')}
-                  </Badge>{' '}
-                  {t(
-                    stale.reason === 'source-removed'
-                      ? 'docs.provenance.staleRemoved'
-                      : 'docs.provenance.staleChanged'
-                  )}
-                </p>
-              )}
-              {d.status === 'failed' && d.errorMessage && (
-                <Banner tone={d.scanDetected ? 'warning' : 'error'}>
-                  {/* error_message is persisted canonical English; the D-L4 display map
-                      translates the known constants — unknown strings render as-is. */}
-                  {localizeServerCopy(t, d.errorMessage)}
-                  {d.scanDetected && (
-                    <> {ocrAvailable ? t('docs.scan.ocrOffer') : t('docs.scan.ocrMissing')}</>
-                  )}
-                </Banner>
-              )}
-              {d.staleEmbeddings && <Banner tone="warning">{t('docs.stale.banner')}</Banner>}
-            </div>
-            {/* Trailing cluster (§11.6 refinement): right-aligned, shrink:0 — tag chips, then
-                status badges, then Preview + "⋯". The cluster never shrinks and the name column
-                (.doc-row-main) takes the flex space, so names breathe and only ellipsize when
-                genuinely out of room, while the Preview/⋯ pair lines up in a clean column down
-                the list. */}
-            <div className="doc-row-trailing">
-            {/* Uniform location/project chips (Task 3): a quiet, borderless filled Chip —
-                visibly quieter than the bordered Secondary Preview button so a tag never reads
-                as clickable. Grouped, visually separate from the status badges. */}
-            {chips.length > 0 && (
-              <div className="doc-row-chips">
-                {chips.map((label) => (
-                  <Chip key={label}>{label}</Chip>
-                ))}
-              </div>
-            )}
-            {/* Status badge cluster (Task 2 + §11.6 refinement): readiness is the ONLY green
-                (success) badge. "Summary" and "Deeply indexed" are NEUTRAL capability badges,
-                each with its own glyph — separating "is it ready" (green) from "what's been done
-                to it" (neutral). All keep icon + word (1.4.1). */}
-            <div className="doc-row-badges">
-              <Badge tone={status.tone} icon={status.icon}>
-                {status.label}
-              </Badge>
-              {d.summary && (
-                <Badge tone="neutral" icon="≡">
-                  {t('docs.meta.summary')}
-                </Badge>
-              )}
-              {d.treeStatus === 'ready' && !d.origin && (
-                <Badge tone="neutral" icon="▦" title={t('docs.deepIndex.readyTitle')}>
-                  {t('docs.deepIndex.ready')}
-                </Badge>
-              )}
-            </div>
-            {/* Inline action + overflow (Task 1). While a task runs on this row, a busy/cancel
-                pair takes their place. */}
-            <div className="doc-row-actions">
-              {rowTask ? (
-                <>
-                  <Button size="sm" disabled title={t(TASK_BUSY_TITLE[rowTask.kind])}>
-                    <Spinner /> {rowBusyLabel}
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => void cancelActiveDocTask()}
-                    title={t(rowTask.kind === 'ocr' ? 'docs.cancelOcrTitle' : 'docs.cancelTaskTitle')}
-                  >
-                    {t('docs.cancel')}
-                  </Button>
-                </>
-              ) : d.status === 'failed' ? (
-                // A failed import never produced extracted text, so Preview is meaningless
-                // (§11.6 follow-up). Inline Remove clears the failed entry (reuses the delete
-                // handler); Try again re-indexes — offered ONLY when the failure is retryable
-                // (a read/parse error), never for an unsupported type. Works in both the
-                // All-documents list and the "Failed imports" view (same row markup).
-                <>
-                  {isRetryableFailure(d.errorMessage) && (
-                    <Button
-                      size="sm"
-                      disabled={busy !== null}
-                      title={t('docs.failed.retryTitle')}
-                      onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
-                    >
-                      {t('docs.failed.retry')}
-                    </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    disabled={busy !== null}
-                    title={t('docs.failed.removeTitle')}
-                    onClick={() => void run(`delete-${d.id}`, () => window.api.deleteDocument(d.id))}
-                  >
-                    {t('docs.failed.remove')}
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button
-                    size="sm"
-                    disabled={busy !== null || previewLoading || ACTIVE_STATUSES.has(d.status)}
-                    onClick={() => void onPreview(d)}
-                    title={t('docs.previewTitle')}
-                  >
-                    {previewLoading ? t('docs.previewBusy') : t('docs.preview')}
-                  </Button>
-                  <DropdownMenu.Root
-                    open={menuOpenId === d.id}
-                    onOpenChange={(open) => setMenuOpenId(open ? d.id : null)}
-                  >
-                    <DropdownMenu.Trigger asChild>
-                      <button
-                        type="button"
-                        className="doc-row-menu-btn"
-                        disabled={busy !== null}
-                        aria-label={t('docs.moreActions', { title: d.title })}
-                      >
-                        ⋯
-                      </button>
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content className="menu" align="end" sideOffset={4}>
-                        {canDocTasks && (
-                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => void onSummarize(d)}>
-                            {d.summary ? t('docs.summarizeAgain') : t('docs.summarize')}
-                          </DropdownMenu.Item>
-                        )}
-                        {canDocTasks && (
-                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => setTranslateDoc(d)}>
-                            {t('docs.translate')}
-                          </DropdownMenu.Item>
-                        )}
-                        {/* Contextual: make a detected scan searchable (OCR). */}
-                        {showOcr && (
-                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => void onMakeSearchable(d)}>
-                            {t('docs.makeSearchable')}
-                          </DropdownMenu.Item>
-                        )}
-                        {/* Build deep index — disappears once the doc is deeply indexed (Task 2);
-                            C4: a legacy not-fully-chunked doc offers "Re-index for deep index". */}
-                        {canDeepIndex && (
-                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => void onBuildDeepIndex(d)}>
-                            {t(d.fullyChunked === false ? 'docs.deepIndex.reindexFirst' : 'docs.deepIndex.build')}
-                          </DropdownMenu.Item>
-                        )}
-                        <DropdownMenu.Item
-                          className="menu-item"
-                          disabled={ACTIVE_STATUSES.has(d.status) || activeTask !== null}
-                          onSelect={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
-                        >
-                          {t('docs.reindex')}
-                        </DropdownMenu.Item>
-                        {d.origin && (
-                          <DropdownMenu.Item
-                            className="menu-item"
-                            disabled={ACTIVE_STATUSES.has(d.status)}
-                            onSelect={() => void onExport(d)}
-                          >
-                            {t('docs.export')}
-                          </DropdownMenu.Item>
-                        )}
-                        {/* Organize (plan §12.3): add to a project, keep in Library, lifecycle,
-                            or remove from the current project. Indexed docs only. */}
-                        {d.status === 'indexed' && (
-                          <>
-                            <DropdownMenu.Separator className="menu-sep" />
-                            {activeProjects.length > 0 ? (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => setAddToProjectFor([d.id])}>
-                                {t('docs.action.moveToProject')}
-                              </DropdownMenu.Item>
-                            ) : (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => setProjectModal({ mode: 'create', name: '' })}>
-                                {t('docs.section.newProject')}
-                              </DropdownMenu.Item>
-                            )}
-                            {!(d.collections ?? []).some((c) => c.type === 'library') && (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => void onKeepInLibrary(d.id)}>
-                                {t('docs.action.addToLibrary')}
-                              </DropdownMenu.Item>
-                            )}
-                            {(d.lifecycle ?? 'permanent') !== 'temporary' ? (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'temporary')}>
-                                {t('docs.action.markTemporary')}
-                              </DropdownMenu.Item>
-                            ) : (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
-                                {t('docs.action.markPermanent')}
-                              </DropdownMenu.Item>
-                            )}
-                            {(d.lifecycle ?? 'permanent') !== 'archived' ? (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'archived')}>
-                                {t('docs.action.archive')}
-                              </DropdownMenu.Item>
-                            ) : (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
-                                {t('docs.action.unarchive')}
-                              </DropdownMenu.Item>
-                            )}
-                            {section.kind === 'project' && (d.collections ?? []).some((c) => c.id === section.id) && (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => void onRemoveFromCollection(d.id, section.id)}>
-                                {t('docs.action.removeFromProject')}
-                              </DropdownMenu.Item>
-                            )}
-                          </>
-                        )}
-                        {/* Destructive Delete: separated, danger-styled, behind the ConfirmDialog
-                            (icon + word, never color alone). Never an equal-weight surface button. */}
-                        <DropdownMenu.Separator className="menu-sep" />
-                        <DropdownMenu.Item
-                          className="menu-item danger"
-                          disabled={ACTIVE_STATUSES.has(d.status)}
-                          onSelect={() => setConfirmDelete(d)}
-                        >
-                          <span aria-hidden="true">🗑</span> {t('docs.delete')}
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
-                </>
-              )}
-            </div>
-            </div>{/* /doc-row-trailing */}
-          </div>
+            d={d}
+            // Per-row BOOLEANS, never the whole Set/string (PERF-5): an unrelated row's selection
+            // or menu change can't bust this row's memo.
+            selected={selected.has(d.id)}
+            menuOpen={menuOpenId === d.id}
+            rowTask={rowTask}
+            // `activeTask !== null` is a stable boolean across progress ticks (the menu items only
+            // care whether ANY task runs, to disable themselves) — not the changing store object.
+            anyTaskActive={activeTask !== null}
+            t={t}
+            tCount={tCount}
+            lang={lang}
+            sourcesById={sourcesById}
+            ocrAvailable={ocrAvailable}
+            busy={busy}
+            previewLoading={previewLoading}
+            showCheckbox={Boolean(onAskSelected)}
+            isProjectSection={section.kind === 'project'}
+            projectSectionId={section.kind === 'project' ? section.id : null}
+            hasActiveProjects={activeProjects.length > 0}
+            onToggleSelected={handleToggleSelected}
+            setMenuOpenId={setMenuOpenId}
+            onPreview={handlePreview}
+            run={handleRun}
+            onSummarize={handleSummarize}
+            setTranslateDoc={setTranslateDoc}
+            onMakeSearchable={handleMakeSearchable}
+            onBuildDeepIndex={handleBuildDeepIndex}
+            onExport={handleExport}
+            setAddToProjectFor={setAddToProjectFor}
+            setProjectModal={setProjectModal}
+            onKeepInLibrary={handleKeepInLibrary}
+            onSetLifecycle={handleSetLifecycle}
+            onRemoveFromCollection={handleRemoveFromCollection}
+            setConfirmDelete={setConfirmDelete}
+          />
         )
       })}
       </div>{/* /doc-list */}
@@ -1437,7 +1249,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           ocr={previewDoc?.ocr ?? null}
           summary={previewDoc?.summary ?? null}
           treeReady={previewDoc?.treeStatus === 'ready'}
-          originLine={previewDoc ? provenanceLine(previewDoc) : null}
+          originLine={previewDoc ? provenanceLine(previewDoc, sourcesById, t) : null}
           regenerateDisabled={busy !== null || activeTask !== null}
           onLoadMore={onPreviewLoadMore}
           onRegenerate={() => {
@@ -1454,6 +1266,373 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     </div>
   )
 }
+
+/**
+ * One document row (perf audit PERF-5): the checkbox + name/meta/provenance column + the trailing
+ * cluster (chips, status badges, Preview + "⋯" overflow / busy-cancel pair). Memoized so an
+ * unrelated parent re-render — a 400 ms task-progress tick on ANOTHER row, opening another row's ⋯
+ * menu, toggling another row's selection — re-renders ONLY the affected row, not every row. The
+ * crux (mirroring the chat `ConvRow`): the parent passes PER-ROW BOOLEANS (`selected`, `menuOpen`)
+ * and a row-narrowed `rowTask` (null — Object.is-stable — for the rows with no active task), plus
+ * stable handler identities (useEventCallback / setState setters), so this row's memo holds unless
+ * ITS OWN props change. The DOM/classes/aria/conditionals are byte-identical to the former inline
+ * map — only the data SOURCE changed (closure vars → props).
+ */
+const DocRow = memo(function DocRow({
+  d,
+  selected,
+  menuOpen,
+  rowTask,
+  anyTaskActive,
+  t,
+  tCount,
+  lang,
+  sourcesById,
+  ocrAvailable,
+  busy,
+  previewLoading,
+  showCheckbox,
+  isProjectSection,
+  projectSectionId,
+  hasActiveProjects,
+  onToggleSelected,
+  setMenuOpenId,
+  onPreview,
+  run,
+  onSummarize,
+  setTranslateDoc,
+  onMakeSearchable,
+  onBuildDeepIndex,
+  onExport,
+  setAddToProjectFor,
+  setProjectModal,
+  onKeepInLibrary,
+  onSetLifecycle,
+  onRemoveFromCollection,
+  setConfirmDelete,
+  __onRender
+}: {
+  d: DocumentInfo
+  /** Per-row boolean — NOT the whole `selected` Set (PERF-5). */
+  selected: boolean
+  /** Per-row boolean — NOT the whole `menuOpenId` string (PERF-5). */
+  menuOpen: boolean
+  /** The active task narrowed to THIS row, or null (Object.is-stable across ticks for inactive rows). */
+  rowTask: ActiveDocTask | null
+  /** Whether ANY task is active (a stable boolean) — gates the overflow items, not the live store. */
+  anyTaskActive: boolean
+  t: I18n['t']
+  tCount: I18n['tCount']
+  lang: UiLanguage
+  sourcesById: ReadonlyMap<string, DocumentInfo>
+  ocrAvailable: boolean
+  busy: string | null
+  previewLoading: boolean
+  /** Whether the screen offers selection (i.e. `onAskSelected` is set) — gates the checkbox. */
+  showCheckbox: boolean
+  isProjectSection: boolean
+  projectSectionId: string | null
+  hasActiveProjects: boolean
+  onToggleSelected: (id: string) => void
+  setMenuOpenId: (id: string | null) => void
+  onPreview: (d: DocumentInfo) => void
+  run: (key: string, fn: () => Promise<unknown>) => void
+  onSummarize: (d: DocumentInfo) => void
+  setTranslateDoc: (d: DocumentInfo | null) => void
+  onMakeSearchable: (d: DocumentInfo) => void
+  onBuildDeepIndex: (d: DocumentInfo) => void
+  onExport: (d: DocumentInfo) => void
+  setAddToProjectFor: (ids: string[] | null) => void
+  setProjectModal: (m: { mode: 'create' | 'rename'; id?: string; name: string } | null) => void
+  onKeepInLibrary: (id: string) => void
+  onSetLifecycle: (id: string, lifecycle: DocumentLifecycle) => void
+  onRemoveFromCollection: (documentId: string, collectionId: string) => void
+  setConfirmDelete: (d: DocumentInfo | null) => void
+  /** Perf-test seam (PERF-5): an optional render probe; undefined (a no-op) in production. */
+  __onRender?: (id: string) => void
+}): JSX.Element {
+  // Perf-test render probe (PERF-5): bumps the module-scoped per-id counter so the memoization test
+  // can assert an untouched row did NOT re-render. A Map write — effectively free; production
+  // behaviour is identical with or without it.
+  __docRowRenderCounts.set(d.id, (__docRowRenderCounts.get(d.id) ?? 0) + 1)
+  __onRender?.(d.id)
+
+  // Per-row derived values (moved inside DocRow, PERF-5) — pure functions of `d` + the stable
+  // inputs (t/tCount/lang/sourcesById/ocrAvailable). Byte-identical output to the former inline map.
+  const status = badgeFor(d, t)
+  const chips = rowChips(d, t)
+  const canDocTasks = d.status === 'indexed' && d.chunkCount > 0
+  const canDeepIndex = canDocTasks && !d.origin && d.treeStatus !== 'ready'
+  const showOcr = Boolean(d.scanDetected && ocrAvailable)
+  const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
+  const rowBusyLabel = rowTask
+    ? `${t(TASK_BUSY_LABEL[rowTask.kind])}${
+        rowTask.status && rowTask.status.progress.stepsTotal > 1
+          ? ` (${rowTask.status.progress.stepsDone}/${rowTask.status.progress.stepsTotal})`
+          : ''
+      }`
+    : ''
+  return (
+    <div
+      className={`doc-row ${selected ? 'selected' : ''}`}
+      onContextMenu={(e) => {
+        // Right-click opens the same "⋯" overflow (mirrors the chat list). A failed row
+        // has no overflow (just inline Remove / Try again), so leave the native menu.
+        if (rowTask || d.status === 'failed') return
+        e.preventDefault()
+        setMenuOpenId(d.id)
+      }}
+    >
+      {showCheckbox && d.status === 'indexed' && (
+        <input
+          type="checkbox"
+          className="doc-select"
+          checked={selected}
+          aria-label={t('docs.selectAria', { title: d.title })}
+          title={t('docs.selectTitle')}
+          onChange={() => onToggleSelected(d.id)}
+        />
+      )}
+      <Icon name="file" className="doc-row-icon" />
+      <div className="doc-row-main">
+        <div className="doc-row-title" title={d.originalPath ?? d.title}>
+          {d.title}
+        </div>
+        <div className="doc-row-meta">{metaLine(d, lang, tCount)}</div>
+        {/* Provenance for a generated document stays a quiet caption, not a badge (Task 2). */}
+        {d.origin && <p className="hint doc-row-cap">{provenanceLine(d, sourcesById, t)}</p>}
+        {/* Quiet staleness caption on a generated row (plan §15.3): a warning Badge (icon
+            + word, never color-only) when a source changed/was removed after generation. */}
+        {stale.stale && (
+          <p className="hint doc-row-cap">
+            <Badge tone="warning" icon="⟳">
+              {t('docs.provenance.staleBadge')}
+            </Badge>{' '}
+            {t(
+              stale.reason === 'source-removed'
+                ? 'docs.provenance.staleRemoved'
+                : 'docs.provenance.staleChanged'
+            )}
+          </p>
+        )}
+        {d.status === 'failed' && d.errorMessage && (
+          <Banner tone={d.scanDetected ? 'warning' : 'error'}>
+            {/* error_message is persisted canonical English; the D-L4 display map
+                translates the known constants — unknown strings render as-is. */}
+            {localizeServerCopy(t, d.errorMessage)}
+            {d.scanDetected && (
+              <> {ocrAvailable ? t('docs.scan.ocrOffer') : t('docs.scan.ocrMissing')}</>
+            )}
+          </Banner>
+        )}
+        {d.staleEmbeddings && <Banner tone="warning">{t('docs.stale.banner')}</Banner>}
+      </div>
+      {/* Trailing cluster (§11.6 refinement): right-aligned, shrink:0 — tag chips, then
+          status badges, then Preview + "⋯". The cluster never shrinks and the name column
+          (.doc-row-main) takes the flex space, so names breathe and only ellipsize when
+          genuinely out of room, while the Preview/⋯ pair lines up in a clean column down
+          the list. */}
+      <div className="doc-row-trailing">
+      {/* Uniform location/project chips (Task 3): a quiet, borderless filled Chip —
+          visibly quieter than the bordered Secondary Preview button so a tag never reads
+          as clickable. Grouped, visually separate from the status badges. */}
+      {chips.length > 0 && (
+        <div className="doc-row-chips">
+          {chips.map((label) => (
+            <Chip key={label}>{label}</Chip>
+          ))}
+        </div>
+      )}
+      {/* Status badge cluster (Task 2 + §11.6 refinement): readiness is the ONLY green
+          (success) badge. "Summary" and "Deeply indexed" are NEUTRAL capability badges,
+          each with its own glyph — separating "is it ready" (green) from "what's been done
+          to it" (neutral). All keep icon + word (1.4.1). */}
+      <div className="doc-row-badges">
+        <Badge tone={status.tone} icon={status.icon}>
+          {status.label}
+        </Badge>
+        {d.summary && (
+          <Badge tone="neutral" icon="≡">
+            {t('docs.meta.summary')}
+          </Badge>
+        )}
+        {d.treeStatus === 'ready' && !d.origin && (
+          <Badge tone="neutral" icon="▦" title={t('docs.deepIndex.readyTitle')}>
+            {t('docs.deepIndex.ready')}
+          </Badge>
+        )}
+      </div>
+      {/* Inline action + overflow (Task 1). While a task runs on this row, a busy/cancel
+          pair takes their place. */}
+      <div className="doc-row-actions">
+        {rowTask ? (
+          <>
+            <Button size="sm" disabled title={t(TASK_BUSY_TITLE[rowTask.kind])}>
+              <Spinner /> {rowBusyLabel}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void cancelActiveDocTask()}
+              title={t(rowTask.kind === 'ocr' ? 'docs.cancelOcrTitle' : 'docs.cancelTaskTitle')}
+            >
+              {t('docs.cancel')}
+            </Button>
+          </>
+        ) : d.status === 'failed' ? (
+          // A failed import never produced extracted text, so Preview is meaningless
+          // (§11.6 follow-up). Inline Remove clears the failed entry (reuses the delete
+          // handler); Try again re-indexes — offered ONLY when the failure is retryable
+          // (a read/parse error), never for an unsupported type. Works in both the
+          // All-documents list and the "Failed imports" view (same row markup).
+          <>
+            {isRetryableFailure(d.errorMessage) && (
+              <Button
+                size="sm"
+                disabled={busy !== null}
+                title={t('docs.failed.retryTitle')}
+                onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
+              >
+                {t('docs.failed.retry')}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              disabled={busy !== null}
+              title={t('docs.failed.removeTitle')}
+              onClick={() => void run(`delete-${d.id}`, () => window.api.deleteDocument(d.id))}
+            >
+              {t('docs.failed.remove')}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              size="sm"
+              disabled={busy !== null || previewLoading || ACTIVE_STATUSES.has(d.status)}
+              onClick={() => void onPreview(d)}
+              title={t('docs.previewTitle')}
+            >
+              {previewLoading ? t('docs.previewBusy') : t('docs.preview')}
+            </Button>
+            <DropdownMenu.Root
+              open={menuOpen}
+              onOpenChange={(open) => setMenuOpenId(open ? d.id : null)}
+            >
+              <DropdownMenu.Trigger asChild>
+                <button
+                  type="button"
+                  className="doc-row-menu-btn"
+                  disabled={busy !== null}
+                  aria-label={t('docs.moreActions', { title: d.title })}
+                >
+                  ⋯
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content className="menu" align="end" sideOffset={4}>
+                  {canDocTasks && (
+                    <DropdownMenu.Item className="menu-item" disabled={anyTaskActive} onSelect={() => void onSummarize(d)}>
+                      {d.summary ? t('docs.summarizeAgain') : t('docs.summarize')}
+                    </DropdownMenu.Item>
+                  )}
+                  {canDocTasks && (
+                    <DropdownMenu.Item className="menu-item" disabled={anyTaskActive} onSelect={() => setTranslateDoc(d)}>
+                      {t('docs.translate')}
+                    </DropdownMenu.Item>
+                  )}
+                  {/* Contextual: make a detected scan searchable (OCR). */}
+                  {showOcr && (
+                    <DropdownMenu.Item className="menu-item" disabled={anyTaskActive} onSelect={() => void onMakeSearchable(d)}>
+                      {t('docs.makeSearchable')}
+                    </DropdownMenu.Item>
+                  )}
+                  {/* Build deep index — disappears once the doc is deeply indexed (Task 2);
+                      C4: a legacy not-fully-chunked doc offers "Re-index for deep index". */}
+                  {canDeepIndex && (
+                    <DropdownMenu.Item className="menu-item" disabled={anyTaskActive} onSelect={() => void onBuildDeepIndex(d)}>
+                      {t(d.fullyChunked === false ? 'docs.deepIndex.reindexFirst' : 'docs.deepIndex.build')}
+                    </DropdownMenu.Item>
+                  )}
+                  <DropdownMenu.Item
+                    className="menu-item"
+                    disabled={ACTIVE_STATUSES.has(d.status) || anyTaskActive}
+                    onSelect={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
+                  >
+                    {t('docs.reindex')}
+                  </DropdownMenu.Item>
+                  {d.origin && (
+                    <DropdownMenu.Item
+                      className="menu-item"
+                      disabled={ACTIVE_STATUSES.has(d.status)}
+                      onSelect={() => void onExport(d)}
+                    >
+                      {t('docs.export')}
+                    </DropdownMenu.Item>
+                  )}
+                  {/* Organize (plan §12.3): add to a project, keep in Library, lifecycle,
+                      or remove from the current project. Indexed docs only. */}
+                  {d.status === 'indexed' && (
+                    <>
+                      <DropdownMenu.Separator className="menu-sep" />
+                      {hasActiveProjects ? (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => setAddToProjectFor([d.id])}>
+                          {t('docs.action.moveToProject')}
+                        </DropdownMenu.Item>
+                      ) : (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => setProjectModal({ mode: 'create', name: '' })}>
+                          {t('docs.section.newProject')}
+                        </DropdownMenu.Item>
+                      )}
+                      {!(d.collections ?? []).some((c) => c.type === 'library') && (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => void onKeepInLibrary(d.id)}>
+                          {t('docs.action.addToLibrary')}
+                        </DropdownMenu.Item>
+                      )}
+                      {(d.lifecycle ?? 'permanent') !== 'temporary' ? (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'temporary')}>
+                          {t('docs.action.markTemporary')}
+                        </DropdownMenu.Item>
+                      ) : (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
+                          {t('docs.action.markPermanent')}
+                        </DropdownMenu.Item>
+                      )}
+                      {(d.lifecycle ?? 'permanent') !== 'archived' ? (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'archived')}>
+                          {t('docs.action.archive')}
+                        </DropdownMenu.Item>
+                      ) : (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
+                          {t('docs.action.unarchive')}
+                        </DropdownMenu.Item>
+                      )}
+                      {isProjectSection && (d.collections ?? []).some((c) => c.id === projectSectionId) && (
+                        <DropdownMenu.Item className="menu-item" onSelect={() => void onRemoveFromCollection(d.id, projectSectionId!)}>
+                          {t('docs.action.removeFromProject')}
+                        </DropdownMenu.Item>
+                      )}
+                    </>
+                  )}
+                  {/* Destructive Delete: separated, danger-styled, behind the ConfirmDialog
+                      (icon + word, never color alone). Never an equal-weight surface button. */}
+                  <DropdownMenu.Separator className="menu-sep" />
+                  <DropdownMenu.Item
+                    className="menu-item danger"
+                    disabled={ACTIVE_STATUSES.has(d.status)}
+                    onSelect={() => setConfirmDelete(d)}
+                  >
+                    <span aria-hidden="true">🗑</span> {t('docs.delete')}
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </>
+        )}
+      </div>
+      </div>{/* /doc-row-trailing */}
+    </div>
+  )
+})
 
 /** The rare, diagnostic smart views — folded behind the Views "More" disclosure so the
  *  common filters stay visible and empty diagnostics don't sit on screen. */

@@ -55,6 +55,57 @@ describe('windowByTokens (content-preserving, space-less safe)', () => {
     expect(wins.length).toBeGreaterThan(1)
   })
 
+  // RAG-N2: a space-less run is hard-cut into window-sized character slices; the overlap
+  // step-back can only re-include a WHOLE atom that is ≤ overlap, so a single 500-token slice
+  // was never stepped back into → consecutive CJK windows shared ZERO tokens. Now the slices are
+  // gcd(size, overlap) chars, so consecutive windows overlap by ~`overlap` tokens, like Latin.
+  it('overlaps consecutive windows of a space-less (CJK) run by ~overlap tokens', () => {
+    const cjk = '情'.repeat(1100) // one space-less run, 1100 approx-tokens
+    const wins = windowByTokens(cjk, 500, 80)
+    expect(wins.length).toBeGreaterThan(1)
+    for (const w of wins) expect(approxTokenCount(w)).toBeLessThanOrEqual(500)
+    // Each adjacent pair shares ~80 tokens: the tail of window k equals the head of window k+1.
+    for (let k = 0; k < wins.length - 1; k += 1) {
+      const ov = 80 // pure CJK ⇒ 1 token/char ⇒ 80 shared characters
+      expect(wins[k].slice(-ov)).toBe(wins[k + 1].slice(0, ov))
+    }
+    // No content lost: stitching the windows on their overlap reproduces the original run.
+    let stitched = wins[0]
+    for (let k = 1; k < wins.length; k += 1) stitched += wins[k].slice(80)
+    expect(stitched).toBe(cjk)
+  })
+
+  // Don't-regress: with overlap 0 a space-less run is still a lossless partition (the prior
+  // behavior the audio split and `truncateToApproxTokens` rely on — no characters inserted).
+  it('partitions a space-less run losslessly when overlap is 0', () => {
+    const cjk = '報'.repeat(1234)
+    const wins = windowByTokens(cjk, 500, 0)
+    for (const w of wins) expect(approxTokenCount(w)).toBeLessThanOrEqual(500)
+    expect(wins.join('')).toBe(cjk)
+  })
+
+  // RAG-N2 applies to an over-long no-space LATIN run too (base64 / a giant URL / a glued
+  // PDF-extraction run) — those ARE space-less runs. The `glued` join reproduces them verbatim
+  // (NO injected spaces), which also fixes a latent bug: the old char-slice path space-joined the
+  // pieces, corrupting the run and breaking lossless reconstruction. Ordinary prose (words ≤ size)
+  // is untouched — pinned byte-exact by the overlap tests above.
+  it('glues an over-long no-space Latin run (no injected spaces) and gives it overlap', () => {
+    const run = Array.from({ length: 2400 }, (_, i) => String.fromCharCode(65 + (i % 26))).join('') // no spaces
+    // overlap 0: a lossless partition with NO injected spaces (old code space-joined the slices).
+    const w0 = windowByTokens(run, 500, 0)
+    expect(w0.join('')).toBe(run)
+    for (const w of w0) expect(w.includes(' ')).toBe(false)
+    // overlap 80: still verbatim (no spaces), each ≤ budget, and consecutive windows now overlap
+    // by ~80 tokens (= 320 Latin chars at ~4 chars/token) — previously the run got zero overlap.
+    const w80 = windowByTokens(run, 500, 80)
+    expect(w80.length).toBeGreaterThan(1)
+    for (const w of w80) {
+      expect(w.includes(' ')).toBe(false)
+      expect(approxTokenCount(w)).toBeLessThanOrEqual(500)
+    }
+    expect(w80[0].slice(-320)).toBe(w80[1].slice(0, 320))
+  })
+
   it('truncateToApproxTokens keeps a leading prefix within budget', () => {
     expect(approxTokenCount(truncateToApproxTokens(words(1000), 50))).toBeLessThanOrEqual(50)
     expect(truncateToApproxTokens('', 50)).toBe('')

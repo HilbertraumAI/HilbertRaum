@@ -455,7 +455,8 @@ licenses), `user-guide.md` §7 ("Import an audio recording"), `known-limitations
 - **`AudioParser`** (`.wav/.mp3/.flac/.ogg` — R-W2's verified list; m4a descoped):
   transcriber arrives per call via the ADDITIVE `ParseContext` second parameter on
   `DocumentParser.parse` (from `IngestionDeps.transcriber` — the embedder precedent).
-  Whisper segments are **packed** (~180-word target, hard cap 400) into time-labeled
+  Whisper segments are **packed** (~180-token target, hard cap 400 approx-tokens, CJK/Thai-aware
+  — RAG-N1, full audit 2026-06-28 Phase 4) into time-labeled
   `ExtractedSegment{ sectionLabel: "mm:ss–mm:ss" }` (D29 — `h:mm:ss` above an hour):
   packing prevents thousands of tiny chunks (distinct labels never coalesce) AND makes
   every audio chunk exactly one packed segment verbatim — so

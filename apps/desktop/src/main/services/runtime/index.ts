@@ -149,6 +149,39 @@ export class RuntimeManager {
     return this.enqueue(() => this.doStop())
   }
 
+  /**
+   * Crash-only restart that DELIBERATELY bypasses the same-model idempotency guard in
+   * `start()` (REL-1, audit 2026-06-28). `start()` no-ops when the requested model is
+   * already `this.current` — correct for a double-click or an AI-Model-screen revisit, but
+   * fatal for the GPU mid-session crash auto-fallback (architecture.md GPU record §5.3): the
+   * crashed `LadderRuntime` is still `this.current` (the manager never observes the child's
+   * exit — it caches `this.last` at start and never re-polls), so wiring the crash restart to
+   * `start(sameModel)` early-returns a stale status read, never stops-and-restarts, and leaves
+   * `status()` reporting the DEAD server as running/healthy while the next chat/RAG turn routes
+   * to it and fails.
+   *
+   * `forceRestart` instead does `doStop()` (if a runtime is live) then `doStart(opts)` inside
+   * ONE enqueued op (`doStart` already stops a live `current` first), so `current`/`last` are
+   * cleared atomically — no concurrent queued op can interleave between the stop and the start,
+   * and `doStop` nulls `this.last` so `status()` immediately stops reporting the dead server as
+   * healthy. `startingModelId` is set synchronously (exactly as `start()` does) so a concurrent
+   * user `start(sameModel)` JOINS this restart via the idempotency guard rather than queueing a
+   * second one. Normal `start()` idempotency is untouched — only this crash path bypasses it.
+   *
+   * Retry bound (no restart loop): the caller (`createGpuCrashAutoFallback`) persists
+   * `gpuAutoDisabled` BEFORE invoking this, so the ladder rebuilt inside `doStart` skips rung 1
+   * and lands on CPU; a later CPU crash does NOT route through `onGpuCrash` (LadderRuntime gates
+   * it on `backend === 'gpu'`, factory.ts:137-139), so a GPU session auto-falls-back at most once.
+   */
+  async forceRestart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+    this.startingModelId = opts.modelId
+    try {
+      return await this.enqueue(() => this.doStart(opts))
+    } finally {
+      if (this.startingModelId === opts.modelId) this.startingModelId = null
+    }
+  }
+
   private async doStart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
     // Restart cleanly on a model switch (spec §7.5).
     if (this.current) await this.doStop()

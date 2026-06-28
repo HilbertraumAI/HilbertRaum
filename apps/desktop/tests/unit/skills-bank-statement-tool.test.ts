@@ -355,7 +355,13 @@ describe('extract_transactions through the gate', () => {
       expect(out.currency).toBe('EUR')
       expect(validateToolOutput(extractTransactionsTool, result.output)).toEqual([])
     }
-    expect(events.map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
+    // TEST-N5: assert the OUTCOME (a successful run records start + done, and never a failure)
+    // via membership rather than an exact, order-pinned array that a benign new lifecycle event
+    // would break while still passing if `done` silently stopped firing.
+    const eventTypes = events.map((e) => e.type)
+    expect(eventTypes).toContain('skill_run_started')
+    expect(eventTypes).toContain('skill_run_done')
+    expect(eventTypes).not.toContain('skill_run_failed')
   })
 
   it('refuses invalid input (no documentId) without running', async () => {
@@ -602,5 +608,134 @@ describe('export_transactions_csv (S11c)', () => {
     })
     expect(ok.ok).toBe(true)
     if (ok.ok) expect(validateToolOutput(exportTransactionsCsvTool, ok.output)).toEqual([])
+  })
+})
+
+// full-audit-2026-06-28 Phase 1 (financial correctness): adversarial WHOLE-STRING tests driven through
+// the REAL entry points (extractTransactionRows / extractStatementBalances / reconcileBalances /
+// assessCompleteness), not pre-isolated tokens (TEST-N2). Each pins a fixed reproduction from §2.
+describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
+  it('BL-N1: a US-ordered statement is inferred month-first — no dropped rows, correct month', () => {
+    // The 12/31 row has day 31 > 12, so it can ONLY be mm/dd → the whole document infers month-first;
+    // the otherwise-ambiguous 03/05 then resolves to the US reading (3 March → '2026-03-05').
+    const us = [
+      'Statement USD',
+      '12/31/2026 Year-end fee -5,00 95,00',
+      '03/05/2026 Service charge -6,00 89,00'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(us, 1)], 'USD')
+    expect(rows).toHaveLength(2) // BEFORE: 12/31 → null → the whole row was SILENTLY DROPPED (length 1)
+    expect(rows[0].date).toBe('2026-12-31') // not dropped
+    expect(rows[1].date).toBe('2026-03-05') // US month — BEFORE: '2026-05-03' (a confidently-wrong May)
+  })
+
+  it('BL-N1: the de-AT day-first default holds on an EU statement (and when nothing disambiguates)', () => {
+    const eu = [
+      'Statement EUR',
+      '31/12/2026 Jahresgebühr -5,00 95,00', // day 31 > 12 confirms day-first
+      '03/05/2026 Lastschrift -6,00 89,00' // ⇒ 5 May, the de-AT reading
+    ].join('\n')
+    expect(extractTransactionRows([chunk(eu, 1)], 'EUR').map((r) => r.date)).toEqual([
+      '2026-12-31',
+      '2026-05-03'
+    ])
+  })
+
+  it('BL-N2: a trailing-date closing line reads the FIGURE, not the date, as the balance', () => {
+    const c = chunk(
+      'Kontoauszug EUR\nAnfangssaldo 2.000,00\n' +
+        '2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10\n' +
+        'Endsaldo 4.454,10 EUR per 30.06.2026'
+    )
+    // BEFORE: the closing read the last money token '30.06.20' → 3006.20 (the date mis-read as the balance).
+    expect(extractStatementBalances([c])).toEqual({ openingBalance: 2000, closingBalance: 4454.1 })
+  })
+
+  it('BL-N2: the de-AT date-FIRST `Kontostand per <date> <figure>` shape is unaffected', () => {
+    const c = chunk('Kontostand per 31.03.2025 35.037,04\n... rows ...\nKontostand per 23.06.2025 30.647,07')
+    expect(extractStatementBalances([c])).toEqual({ openingBalance: 35037.04, closingBalance: 30647.07 })
+  })
+
+  it('BL-N3: a money-shaped token in the description does not steal the amount (column by position)', () => {
+    const rows = extractTransactionRows(
+      [chunk('Statement EUR\n2026-01-02 Betrag 100,00 EUR -100,00 900,00', 1)],
+      'EUR'
+    )
+    expect(rows).toHaveLength(1)
+    // BEFORE: amount = the FIRST money token = 100 (wrong value AND wrong sign); now amount is the
+    // second-to-last token (the amount column) and the last is the running balance.
+    expect(rows[0]).toMatchObject({ amount: -100, balanceAfter: 900 })
+  })
+
+  it('TEST-N2: a bare grouped figure with no 2-dp tail is read as thousands, not €1 (DECISION 2)', () => {
+    // de-AT '.' = thousands. BEFORE: MONEY_RE grabbed '1.00' out of '1.000' → €1 (a 1000× understatement).
+    const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Miete 1.000 9.000', 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ amount: 1000, balanceAfter: 9000 })
+  })
+
+  it('TEST-N2: space-grouped and apostrophe-grouped amounts are read whole (DECISION 2)', () => {
+    const space = extractTransactionRows(
+      [chunk('Statement EUR\n2026-01-02 Bonus 1 234 567,89 1 300 000,00', 1)],
+      'EUR'
+    )
+    expect(space[0].amount).toBe(1234567.89) // BEFORE: 567.89 (only the trailing space-group survived)
+    const apo = extractTransactionRows(
+      [chunk("Statement CHF\n2026-01-02 Zahlung 1'234.56 9'999.00", 1)],
+      'CHF'
+    )
+    expect(apo[0].amount).toBe(1234.56) // BEFORE: 234.56 (the apostrophe group was dropped)
+  })
+
+  it('TEST-N2: space grouping does not merge across a digit boundary (the pdf-layout continuation hazard)', () => {
+    // A reference number's 3-digit TAIL must not fuse with a following amount across a space — the
+    // `(?<!\d)` anchor on MONEY_RE prevents "…778899 300,00" from reading "899 300,00" → 899300.
+    const rows = extractTransactionRows(
+      [chunk('Statement EUR\n2026-01-02 Sender GmbH Auftrag 778899 300,00 1.255,00', 1)],
+      'EUR'
+    )
+    expect(rows[0]).toMatchObject({ amount: 300, balanceAfter: 1255 })
+  })
+
+  it('TEST-N2: space grouping does not fuse a LETTER-preceded digit tail with the amount (adversarial review)', () => {
+    // A reference like "Ref123" abuts a space-grouped amount: the `(?<![A-Za-z0-9])` boundary on the
+    // space-grouped form prevents "Ref123 456,78" from reading "123 456,78" → 123456.78.
+    const rows = extractTransactionRows(
+      [chunk('Statement EUR\n2026-01-02 Zahlung Ref123 456,78 1.000,00', 1)],
+      'EUR'
+    )
+    expect(rows[0]).toMatchObject({ amount: 456.78, balanceAfter: 1000 })
+  })
+
+  it('TEST-N2 e2e: a TYING statement stays complete through a trailing-date closing + in-description money', () => {
+    // Combines BL-N2 (trailing-date closing) and BL-N3 (in-description money). opening 2000 +
+    // (−100 + 2500) == closing 4400. BEFORE: the in-description 100,00 became the amount AND the closing
+    // read '30.06.20' → 3006.20, so the tie failed → a false 'contradicted' (an honest total suppressed).
+    const text = [
+      'Kontoauszug EUR',
+      'Anfangssaldo 2.000,00',
+      '2026-01-02 Betrag 100,00 EUR -100,00 1.900,00',
+      '2026-01-03 Gehalt 2.500,00 4.400,00',
+      'Endsaldo 4.400,00 EUR per 30.06.2026'
+    ].join('\n')
+    const chunks = [chunk(text, 1)]
+    const rows = extractTransactionRows(chunks, 'EUR')
+    expect(rows.map((r) => r.amount)).toEqual([-100, 2500])
+    const { openingBalance, closingBalance } = extractStatementBalances(chunks)
+    expect({ openingBalance, closingBalance }).toEqual({ openingBalance: 2000, closingBalance: 4400 })
+    const reconcile = reconcileBalances(rows)
+    expect(assessCompleteness({ rows, openingBalance, closingBalance, reconcile })).toBe('complete')
+  })
+
+  it('BL-N5: reconcileBalances compares in integer cents (consistent with assessCompleteness, audit C-3)', () => {
+    // A clean per-row chain still reconciles; the comparison is now cent-exact rather than a float epsilon
+    // (no realistic 2-dp input distinguishes the two — this is the consistency the audit asked for; the
+    // teeth are structural: reconcile and assessCompleteness now use the identical Math.round(x*100) path).
+    const rows: TransactionInput[] = [
+      tx({ amount: -45.9, balanceAfter: 1954.1 }),
+      tx({ amount: 2500, balanceAfter: 4454.1 })
+    ]
+    const res = reconcileBalances(rows)
+    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+    expect(res.reconciled).toBe(true)
   })
 })

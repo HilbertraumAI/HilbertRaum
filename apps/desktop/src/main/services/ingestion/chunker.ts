@@ -12,8 +12,10 @@ import type { ExtractedSegment } from './parsers'
 // paragraph collapses to "1 word". So `approxTokenCount` counts space-less scripts
 // per-character and charges long no-space runs by length, biased to slightly OVER-count
 // (over-filling never 400s; under-filling does). Windowing (`windowByTokens`) likewise
-// hard-cuts space-less runs by character instead of leaving them whole. A real tokenizer
-// can still replace these without changing the chunk-metadata shape.
+// hard-cuts space-less runs by character instead of leaving them whole — and (RAG-N2) slices
+// them small enough that consecutive windows still OVERLAP for space-less scripts (a single
+// window-sized slice can never be stepped back into, so CJK/Thai chunks used to get zero
+// overlap). A real tokenizer can still replace these without changing the chunk-metadata shape.
 //
 // Chunking is done WITHIN each segment, so a chunk never straddles a page or section
 // boundary — every chunk inherits exactly one `pageNumber`/`sectionLabel` from its
@@ -117,33 +119,58 @@ function wordTokenCount(word: string): number {
   return approxTokenCount(word)
 }
 
-/** One atom of text for windowing: a substring plus its approx token cost. */
+/** Greatest common divisor (non-negative inputs). Sizes character slices so an over-long
+ * space-less run packs into windows that fill to exactly `cap` and overlap by exactly
+ * `overlap` tokens — e.g. gcd(500, 80) = 20 (see `atomize` / `windowByTokens`). The production
+ * config is always 500/80 (CHUNK_DEFAULTS) ⇒ 20-char slices; a hypothetical overlap coprime with
+ * `cap` would degrade to 1-char slices (more atoms, still O(n) and correct) — no current caller
+ * passes such a value (every windowByTokens call uses overlap 0 or CHUNK_DEFAULTS.chunkOverlapTokens). */
+function gcd(a: number, b: number): number {
+  let x = Math.max(0, Math.floor(a))
+  let y = Math.max(0, Math.floor(b))
+  while (y > 0) {
+    ;[x, y] = [y, x % y]
+  }
+  return x
+}
+
+/** One atom of text for windowing: a substring plus its approx token cost. `glued` marks a
+ * character-slice piece that continues the previous atom with NO separating whitespace, so the
+ * window assembler re-joins it without a space — the raw substring is reproduced exactly. */
 interface TokenAtom {
   text: string
   tokens: number
+  glued: boolean
 }
 
 /**
- * Split `text` into atoms (whitespace words), hard-cutting any single word longer than
- * `maxAtomTokens` tokens into character pieces that each fit — so a space-less run yields
- * MANY atoms instead of one giant one. Each atom's text is a raw substring (no characters
- * inserted), so re-joining the pieces of one cut word reproduces it exactly.
+ * Split `text` into atoms (whitespace words), hard-cutting any single word longer than `cap`
+ * tokens into character pieces that each fit — so a space-less run yields MANY atoms instead of
+ * one giant one. Each atom's text is a raw substring (no characters inserted).
+ *
+ * Slice size (RAG-N2): with `overlap = 0` the pieces are `cap` chars each (one per window — they
+ * concatenate back losslessly). With `overlap > 0` they are `gcd(cap, overlap)` chars each, small
+ * enough that the windower's whole-atom step-back can re-include ~`overlap` tokens of the previous
+ * window; a single `cap`-sized slice can never be stepped back into (`back + cap <= overlap` is
+ * never true), which is why space-less chunks formerly had ZERO overlap. Every slice but the first
+ * of a run is `glued`, so the assembler re-joins the pieces with no separating space.
  */
-function atomize(text: string, maxAtomTokens: number): TokenAtom[] {
-  const cap = Math.max(1, Math.floor(maxAtomTokens))
+function atomize(text: string, cap: number, overlap = 0): TokenAtom[] {
+  const maxAtom = Math.max(1, Math.floor(cap))
+  const sliceChars = overlap > 0 ? Math.max(1, gcd(maxAtom, overlap)) : maxAtom
   const atoms: TokenAtom[] = []
   for (const word of text.split(/\s+/)) {
     if (word.length === 0) continue
     const tokens = wordTokenCount(word)
-    if (tokens <= cap) {
-      atoms.push({ text: word, tokens })
+    if (tokens <= maxAtom) {
+      atoms.push({ text: word, tokens, glued: false })
       continue
     }
-    // Over-long word (no whitespace to break on): cut by character. `cap` chars is a
-    // safe slice length — even all-CJK (1 token/char) yields ≤ cap tokens per piece.
-    for (let i = 0; i < word.length; i += cap) {
-      const piece = word.slice(i, i + cap)
-      atoms.push({ text: piece, tokens: approxTokenCount(piece) })
+    // Over-long word (no whitespace to break on): cut by character. A `sliceChars`-char slice is
+    // ≤ sliceChars ≤ maxAtom tokens (≤ 1 token/char), so every piece fits a window.
+    for (let i = 0; i < word.length; i += sliceChars) {
+      const piece = word.slice(i, i + sliceChars)
+      atoms.push({ text: piece, tokens: approxTokenCount(piece), glued: i > 0 })
     }
   }
   return atoms
@@ -155,12 +182,13 @@ function atomize(text: string, maxAtomTokens: number): TokenAtom[] {
  * single space, like the pre-existing chunker; a space-less run is character-sliced with
  * nothing inserted). Unlike a raw word split, this never yields a window larger than the
  * budget for text without spaces — the bug that let document prompts overflow the model
- * context. With `overlap = 0` it is a plain non-overlapping split.
+ * context. With `overlap = 0` it is a plain non-overlapping split; with `overlap > 0` even a
+ * space-less run gets ~`overlap` shared tokens between consecutive windows (RAG-N2).
  */
 export function windowByTokens(text: string, size: number, overlap = 0): string[] {
   const sz = Math.max(1, Math.floor(size))
   const ov = Math.max(0, Math.min(Math.floor(overlap), sz - 1))
-  const atoms = atomize(text, sz)
+  const atoms = atomize(text, sz, ov)
   if (atoms.length === 0) return []
 
   const windows: string[] = []
@@ -173,12 +201,7 @@ export function windowByTokens(text: string, size: number, overlap = 0): string[
       sum += atoms[j].tokens
       j += 1
     }
-    windows.push(
-      atoms
-        .slice(i, j)
-        .map((a) => a.text)
-        .join(' ')
-    )
+    windows.push(assembleAtoms(atoms, i, j))
     if (j >= atoms.length) break
     // Step the next window back to re-include ~`ov` tokens, but advance at least one atom.
     let start = j
@@ -190,6 +213,17 @@ export function windowByTokens(text: string, size: number, overlap = 0): string[
     i = start
   }
   return windows
+}
+
+/** Re-join atoms `[i, j)` into one window. A `glued` atom (a non-first character slice of an
+ * over-long run) is appended with NO separating space so its raw substring is reproduced exactly;
+ * every other atom is space-joined (the pre-existing whitespace-word behavior). */
+function assembleAtoms(atoms: TokenAtom[], i: number, j: number): string {
+  let out = atoms[i].text
+  for (let k = i + 1; k < j; k += 1) {
+    out += (atoms[k].glued ? '' : ' ') + atoms[k].text
+  }
+  return out
 }
 
 /** The leading prefix of `text` that fits in `maxTokens` approx tokens (the rest is

@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-28 (backend audit 2026-06-27 Phase 3: transcription/dictation/OCR now self-recover from a wedged or cancelled operation via inactivity watchdog / wall-clock timeout / per-page timeout — REL-1/2/3; added under the respective sections). Prior: 2026-06-20 (Image understanding section)._
+_Last updated: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6). Prior: 2026-06-28 (backend audit 2026-06-27 Phase 3: transcription/dictation/OCR self-recovery — REL-1/2/3)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -135,14 +135,30 @@ password recovery — are documented in
   values never reach any log/audit/`skill_runs` row, and only per-category **counts** are surfaced
   (architecture.md "Skills — design record" §8). A higher-recall redactor (NER, address/name lexicons)
   is a deferred wave.
-  - **Date masking is day-first and four-digit-year only (backend-audit-2026-06-27 BL-4).** A date
-    candidate is masked only when the shared `parseDate` (the bank/invoice **day-first** primitive)
-    accepts it, so a **US-ordered** `mm/dd/yyyy` value like `04/13/2026` (read as day 4, month 13 →
-    invalid) is left unmasked, and a **two-digit-year** form like `01.02.26` is not even a candidate
-    (the regex requires a 4-digit year). This is asymmetry in **under-detection**, consistent with the
-    conservative "false-negative over over-masking" posture above — there is **no path where masked
-    text is un-masked or a detected value reaches a log/audit** (the privacy posture is unchanged). A
-    locale-aware / 2-digit-year date matcher is part of the same deferred higher-recall wave.
+  - **Date masking is day-first and four-digit-year only; locale-asymmetric by design
+    (backend-audit-2026-06-27 BL-4; full-audit-2026-06-28 BL-N6).** A date candidate is masked only when
+    the shared `parseDate` (the bank/invoice **day-first** primitive) accepts it, so a **US-ordered**
+    `mm/dd/yyyy` value like `12/31/2026` (read day-first as day 12, month 31 → invalid) is left **unmasked**
+    while its EU counterpart `31/12/2026` masks, and a **two-digit-year** form like `01.02.26` is not even a
+    candidate (the regex requires a 4-digit year). Redaction **deliberately does NOT infer the document's
+    date locale** the way *extraction* now does (full-audit-2026-06-28 BL-N1; see the bank/invoice
+    line-parser note under "Document tasks & summaries") — masking every `parseDate`-valid token with no
+    context is the conservative best-effort posture, and a locale-aware redactor would also mask *more*
+    dates, against the "false-negative over over-masking" stance. The result is asymmetry in
+    **under-detection** of the *output content*; there is **no path where masked text is un-masked or a
+    detected value reaches a log/audit** (the privacy posture is unchanged). A locale-aware / 2-digit-year /
+    opt-in-by-category date matcher is part of the same deferred higher-recall wave.
+  - **Phone and IBAN coverage is broader but still pattern-bound (full-audit-2026-06-28 BL-N4).** Phone
+    masking now also catches **punctuated US/national 3-3-4 numbers** (`555-123-4567`, `1-800-555-1234`,
+    `555.123.4567`) on top of the `+`-country and leading-`0` forms — but punctuation is **required** (a
+    bare 10-digit run is left alone to avoid masking account/ID numbers), so a space-only or run-together
+    national number can still slip. IBAN detection is now **case-insensitive** (a lowercase compact
+    `de89…` is masked), but a *mixed-case space-grouped* IBAN (unconventional) is not specially handled.
+    The case-insensitive compact candidate matches a standalone alphanumeric run and is re-validated by
+    per-country length after compacting, so a real IBAN **glued** to following alphanumerics with no
+    separator (`de89…013000extra`, which does not occur in space-separated extracted text) fails the length
+    check for a known country and is left unmasked — a documented residual, surfaced by the adversarial
+    review. These remain best-effort regex detectors — the conservative miss-over-over-mask posture stands.
 
 ## Spec features intentionally not built (MVP scope)
 
@@ -389,6 +405,45 @@ password recovery — are documented in
   x-adjacency money re-merge (deferred). The same `architecture.md` §21 entry pins the
   two tuning-constant boundaries (a row whose baselines jitter past the 3-pt tolerance loses its amount; a
   Datum/Valuta gap under 12 pt merges, allowing a spurious row).
+- **The bank/invoice LINE PARSER makes deliberate locale/column assumptions (full-audit-2026-06-28
+  Phase 1, BL-N1/N2/N3 + DECISION 2).** The deterministic line parser shared by the bank and invoice tools
+  (`tools/money.ts`, distinct from the geometry pass above) carries these accepted behaviors, all pinned by
+  adversarial whole-string tests:
+  - **Date locale is INFERRED per document, with day-first as the default.** A document is read month-first
+    (US `mm/dd/yyyy`) only when it contains an **unambiguously** US-ordered date (a `nn/nn/yyyy` whose
+    *second* field is 13–31) and no unambiguously EU-ordered one; otherwise the de-AT **day-first** default
+    holds. So a US statement no longer **silently drops** day>12 rows or attaches a wrong month — BUT a
+    document whose dates are **all** fully ambiguous (every field ≤ 12, e.g. only `03/05/2026`) is read with
+    the day-first default and a genuinely US value there reads as the wrong month. There is no per-row caveat
+    channel (the tool output schema is frozen), so this residual is silent; widening it needs the schema/UI
+    work deferred past Phase 1. **Redaction does not infer locale** (it stays day-first — see the redaction
+    bullet's BL-N6 note).
+  - **The amount column is chosen by POSITION, not the first money-shaped token.** With a running balance
+    present (≥2 figures on the row) the parser takes the **second-to-last** figure as the movement amount
+    and the last as the balance; with one figure that figure is the amount. So a money-shaped reference in
+    the *description* no longer steals the amount/sign — but on an unusual layout (e.g. two amount columns
+    and no balance, or a description figure that lands in the amount slot) the position heuristic can still
+    pick wrong. The **geometry column model** (above) is the stronger separator where it runs; this is the
+    plain-text / CSV / invoice fallback.
+  - **Grouped figures without a 2-dp decimal are read as thousands.** A bare `1.000`/`2.500` (de-AT dot =
+    thousands), space-grouped `1 234 567,89`, and Swiss-apostrophe `1'234.56` are now read whole. The
+    trade-off (accepted, DECISION 2): a **dotted/grouped reference number** in a description — `Rechnung
+    2.024` — is now money-shaped (2024) where before it was not, and **space**-grouping can fuse a
+    *standalone* 1–3-digit token with a following 3-digit-led figure across a space (`12 300,00` →
+    12300,00). A digit group that is the **tail** of a longer token — whether after a digit
+    (`778899 300,00`) or a letter (`Ref123 456,78`) — is prevented from fusing by the parser's
+    word-boundary anchors; only a genuinely *standalone* short group abutting the amount can still fuse.
+    These are recall/precision trade-offs on the
+    plain-text path, never a wrong **verified** statement total (the completeness gate still requires the
+    printed opening + Σ == closing to tie out).
+  - **Balance/total lines scrub a TRAILING date before reading the last figure (BL-N2).** Opening/closing
+    balances and invoice totals are read as the **last** money token on the line, so a figure followed by a
+    trailing date — `Endsaldo 1.234,56 EUR per 30.06.2026` — would otherwise mis-read the date
+    (`30.06.20` → 3006.20) as the balance. The last-money readers (`lastMoneyOnLine` / invoice `lastMoney`,
+    `tools/money.ts`) now call `stripDateTokens` first, removing every date-shaped token at **either** end
+    before the money scan, so the printed figure wins for both the date-leading `Kontostand per <date>
+    <figure>` and the date-trailing shape. (This is why the backend-audit §24/§10 "last-token readers were
+    never affected" claim was wrong — corrected there: only the *date-first* shape was ever safe.)
 - **Bank-statement categories are model-assisted, not verified (Phase 33).** The per-category breakdown
   is assigned by a local LLM constrained to a **fixed category set** (it can never invent a label; any
   uncertain/unparseable output drops to `Uncategorized`), so a category may be **wrong** — but a mislabel

@@ -242,6 +242,15 @@ export class LlamaServer {
   private ready = false
   /** True while stop() is tearing the child down — an exit then is EXPECTED. */
   private stopping = false
+  /**
+   * The in-flight `start()` (REL-2, audit 2026-06-28). `this.child` alone can't gate a
+   * single-flight start because it is assigned only AFTER `verifyBinary` + `findPort`
+   * resolve — two overlapping `start()` calls both passed the `if (this.child)` guard and
+   * both spawned, the second orphaning the first (port + RAM, never stopped). Holding the
+   * promise lets a concurrent caller share the one start AND wait for HEALTH, not just for
+   * the child handle. Mirrors the latch in `e5.ts`, `reranker/llama.ts`, `vision/runtime.ts`.
+   */
+  private starting: Promise<void> | null = null
 
   private readonly host: string
   private readonly spawn: SpawnFn
@@ -304,9 +313,26 @@ export class LlamaServer {
     return this.fetchImpl(`${this.baseUrl()}${path}`, init)
   }
 
-  /** Spawn the server and block until it is healthy (or throw on timeout/crash). */
+  /**
+   * Spawn the server and block until it is healthy (or throw on timeout/crash). Single-flight
+   * (REL-2): a second concurrent `start()` returns the in-flight start instead of spawning a
+   * second child. An already-started server (latch cleared, child set) short-circuits.
+   */
   async start(): Promise<void> {
+    if (this.starting) return this.starting
     if (this.child) return
+    const run = this.doStart()
+    this.starting = run
+    try {
+      await run
+    } finally {
+      // Clear on both success and failure: a failed start cleans up `this.child` (via
+      // waitForHealthy → stop()), so a later retry must be able to begin a fresh start.
+      this.starting = null
+    }
+  }
+
+  private async doStart(): Promise<void> {
     // Re-hash the binary against its install marker BEFORE we spawn it (vuln-scan B). A
     // packaged-build tamper (`mismatch`) throws here, before any port/child is allocated,
     // so the ladder cleanly falls to the next rung / MockRuntime. Dev + legacy drives

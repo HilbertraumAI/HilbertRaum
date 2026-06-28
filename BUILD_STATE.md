@@ -6,6 +6,613 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-28 — CLOSE-OUT (Phase 8: DOCUMENTATION RECONCILIATION + audit fold).
+The full multi-perspective audit (`audits/full-audit-2026-06-28.md`) is now FULLY REMEDIATED across
+Phases 0–8 on branch `full-audit-2026-06-28-fixes`.** Final suite **2417 passed / 39 skipped** (was
+2415/39 at Phase 7 → **+2** from the new DOC-N4 parity test); **typecheck + build green**, verified by ONE
+full-suite run at close-out — no phase regressed another across the cumulative branch. Phase 8 is
+docs/close-out: the ONLY code touches are the DOC-N2 comment fix (×2) + the DOC-N4 parity test;
+offline/no-telemetry/behavior-preserving posture held.
+- **The §-LEDGER (key deliverable).** New `docs/architecture.md` **§25 "Full audit (2026-06-28) —
+  remediation close-out"** (mirrors §24): a per-finding table dispositioning **ALL 54 findings** from the
+  report's §1 severity index (REL×5, BL×6, FE×9, TEST×9, PERF×6, RAG×6, DATA×3, SEC×3, DOC×7 — the report's
+  "48" headline miscounts its own table; 5 High) → phase → disposition (fixed / docs-only / invariant-only /
+  accepted-residual / not-remediated) → the topic-doc § where each as-built record lives. Plus the accepted
+  residuals, the not-remediated items, and a verified-clean inventory so the next audit doesn't re-investigate.
+- **Two items NOT fully remediated (explicitly dispositioned, surfaced for follow-up):** **REL-3** (Low,
+  HYPOTHESIS) — the OCR rasterizer reply waiter stays channel-only (no request-id correlation), bounded by
+  the per-step `withTimeout`; never scoped to a phase, accepted. **TEST-N3** (Med) — partially remediated:
+  the manual smoke matrix is a deliberate separate human gate (accepted) and the canned-fixture policy +
+  the `gpu --list-devices` fixture exist, but the **SSE + whisper-JSON parser fixtures remain OUTSTANDING**
+  (open follow-up). Also still open by owner/tracked decision: **PERF-5 Part B** (list windowing, re-deferred)
+  and the **E5 prefix-migration TODO** (RAG-N3/DOC-N6 — re-embeds the whole corpus, its own phase).
+- **PART 1 — DOC-N1…N7 applied.** DOC-N1: security-model.md now names all SIX `HILBERTRAUM_SKILL_MAX_*`
+  caps (was 2/6) + the `HILBERTRAUM_MAX_IMAGE_BYTES`/`_PIXELS` image caps. DOC-N2: `§21 → §22` for the
+  bank-statement LLM categorizer in `doctasks/manager.ts` AND `skills/categorizer.ts` (a SECOND stale
+  citation the §-anchor sweep found — only manager.ts was named in the report). DOC-N3: README Qwen3.5-4B
+  `~2.6 → ~2.9 GB` (manifest = 2,912,109,728 B) + RAM tiers clarified as recommended best-fit vs the
+  table's Min-RAM floor. DOC-N4: scoped the "mirrored from assets.ts" claim to the download/verify/plan
+  logic; the default-set ids live ONLY in `prepare-drive.{ps1,sh}` (`$DefaultModelIds`/`DEFAULT_MODEL_IDS`)
+  — packaging.md + drive-layout.md fixed, and a new `tests/unit/prepare-drive-default-set.test.ts` pins the
+  two shells' parity (the optional test, taken). DOC-N5: single-test commands (`npx vitest run <file>`,
+  `-t "<name>"`) + `test:watch` added to CONTRIBUTING + README. DOC-N6: VERIFIED already landed (Phase 6 §11
+  ceilings note). DOC-N7: packaging.md harness matrix gains an "optional inputs" table for the six
+  `HILBERTRAUM_*` artifact-pointer vars (SMOKE_MODEL/GEMMA_MODEL/OCR_IMAGE/REAL_MODEL_PATH/RESIDENT_REAL_N/
+  EVAL_DIR).
+- **PART 2 — every earlier phase's doc rider verified landed** (a 6-agent read-only verification workflow +
+  the §-anchor sweep). All landed as-built EXCEPT one gap, now filled: **BL-N2** was named in the
+  known-limitations header/changelog but lacked a prose sub-bullet — added the "Balance/total lines scrub a
+  trailing date" sub-bullet. Confirmed landed: REL-1 (§5.3), FE-1 (renderer record), PERF-3/4 + DATA-1/2/3
+  (§10 + index inventory), the §24/§10 BL-1 immunity-claim correction, BL-N1/N3/N4/N6 (known-lim),
+  RAG-N1/N2/N3/N4/N5/N6 + DOC-N6 (rag-design §2/§3/§11/§12.3/§13.6), SEC-N1/N2/N3 (security-model), TEST-N1
+  CI section + TEST-N9. **§-anchor integrity:** 28 distinct code-comment doc-§ citations checked — the ONLY
+  dangling one was the DOC-N2 §21 slip (both instances now fixed); all others resolve.
+- **PART 5 — report retired (owner ratified commit-then-delete).** `audits/full-audit-2026-06-28.md` turned
+  out to be ALREADY tracked/committed in git (since `f1fce73`, contrary to the phase brief's "untracked"
+  assumption), so the full original is already recoverable in history; it is `git rm`'d in the Phase-8
+  close-out commit (the "commit" half was already satisfied). The folded topic-doc §§ + the §25 ledger are
+  the durable record.
+- **Headline per phase:** P0 CI pipeline + whisper-smoke leak; P1 financial correctness (date-locale
+  inference, trailing-date scrub, amount-by-position, phone/IBAN, grouped figures); P2 GPU crash
+  `forceRestart`; P3 React error boundary + renderer lifecycle; P4 CJK/Thai audio+chunker token-awareness;
+  P5 data-layer atomicity + 2 indexes + FTS guard; P6 reranker full-chunk scoring depth; P7 ingestion edge
+  cases + security/test/perf polish; P8 docs reconciliation + this close-out.
+- **NEXT ACTION (owner):** **merge `full-audit-2026-06-28-fixes` to `master` when ready — do NOT
+  auto-merge/push.** Before merge, optionally run the `HILBERTRAUM_*` manual smoke matrix (the separate
+  human pre-release gate CI does not cover). Outstanding follow-ups for a future wave: the TEST-N3 SSE +
+  whisper-JSON canned fixtures, PERF-5 Part B windowing, and the E5 prefix migration._
+
+
+_2026-06-29 — **Full audit 2026-06-28 remediation — Phase 7 (INGESTION EDGE CASES + SECURITY / TEST / PERF
+POLISH; the catch-all of remaining Low/Med items — 13 findings in 4 independent groups: RAG-N4/N5/N6,
+SEC-N1/N2/N3, TEST-N5/N7/N8, PERF-1/2/5/6) — branch `full-audit-2026-06-28-fixes`.** Suite **2415 passed /
+39 skipped** (was 2398/39 at Phase 6 → **+17 tests**); typecheck + build clean after every group. Committed
+incrementally per group (e9a26ba A, 013e2be B, 1380cb0 C, fa9a6b2 + 036c8cc D). Every behavioral fix got a
+test, teeth-checked (neuter → fail → restore) and restored byte-identical; offline / no-telemetry /
+behavior-preserving posture held.
+- **GROUP A — ingestion edge cases (e9a26ba; +6 tests).** RAG-N4: `MarkdownParser` tracks an in-fence flag
+  (toggled on each triple-backtick / `~~~` line) and suppresses ATX-heading detection inside a fenced block,
+  so a `#` shell-comment / C `#define` / diff hunk no longer fragments the code block + stamps a bogus
+  sectionLabel; non-fenced Markdown byte-identical. RAG-N5: `CsvParser` pins the delimiter by extension (`\t`
+  for .tsv, `,` for .csv) instead of papaparse auto-detection, which could tie tab with comma on a .tsv whose
+  cells contain commas and mis-pair header:value silently. RAG-N6: **already fixed** — `corpusNeedsReindex`
+  routes through the shared `buildScopeFilter` (Collections core 5c70021), which applies the same archived
+  exclusion as retrieval; **no code change**, added regression tests pinning that an all-archived
+  (embedder-invisible) scope answers NO_DOCUMENT_CONTEXT (not REINDEX_NEEDED), with `includeArchived` flipping
+  the verdict. Teeth: neuter the fence flag / the .tsv delimiter / the archived `NOT EXISTS` — each fails its test.
+- **GROUP B — security polish (013e2be; +1 test).** SEC-N1: a `.skill.zip` member name with an embedded NUL
+  passed `safeRelPath` (it checked ../ /drive/depth, not control chars), reached `writeFileSync`, and threw
+  ERR_INVALID_ARG_VALUE whose RAW message embeds the attacker path — `previewSkillPackage` (no catch around the
+  write; IPC handler none) serialized it to the renderer, breaking the "never throws / returns ok:false"
+  contract + §22-M1. Fix, two layers: `safeRelPath` rejects a NUL with a fixed `invalidPath` reason BEFORE any
+  write, AND `previewSkillPackage` wraps its materialize/validate body in a catch mapping any residual throw to
+  a fixed reason; the new `invalidPath` is wired through the renderer error-code map + en/de i18n. SEC-N2:
+  benchmark handlers (`runBenchmark`/`tryGpuAgain`) gained an explicit `requireUnlocked()` (localized
+  `main.benchmark.locked`, new en/de key) for parity. SEC-N3 (Info): the `serverMessage` structural-only
+  invariant pinned with a comment + accepted as an Info residual (local loopback sidecar, structural bodies,
+  500-char cap) in security-model.md. Teeth: neuter `safeRelPath`'s NUL check → falls to `unreadableZip`;
+  neuter both layers → preview throws the raw error.
+- **GROUP C — test quality (1380cb0; +5 tests, no source change).** TEST-N5: workspace-vault L-6 now asserts
+  the OBSERVABLE (the actual key buffer is all-zero after the wrong-password throw, via a passthrough deriveKey
+  spy) instead of spying `Buffer.prototype.fill`; skills-analysis bank/invoice read-count `=== 1` relaxed to
+  `≤ 1`; skills tool audit-event exact ARRAYS → toContain/not.toContain. TEST-N7: a fixed LE byte-layout
+  assertion for `decodeVector` (`[00 00 80 3f] → [1.0]`) independent of encode (catches a symmetric endianness
+  bug). TEST-N8: a STRUCTURAL locked-vault test enumerating every registered chat handler (+ the benchmark
+  handlers from SEC-N2) asserts each DB-touching one refuses with the friendly copy (never the raw vault
+  string), with the 2 in-memory handlers an asserted exemption; plus a retrieve()-level rejecting-embedder test
+  asserting the query-embed failure PROPAGATES (not a silent "no documents"). Teeth: swallow the retrieve embed
+  reject / drop `key.fill(0)` / neuter the chat guard — each fails its test.
+- **GROUP D — performance (fa9a6b2 PERF-1/2/6; 036c8cc PERF-5; +5 tests).** PERF-1: `imageReadBytes` converted
+  to fs/promises (open → fh.stat() → fh.read() loop → fh.close() in finally), PRESERVING the SEC-3/TOCTOU
+  same-handle invariant + byte cap + content-free open-failure log. PERF-2: dictation WAV write → `await
+  writeFile` (handler already async; finally still shreds). PERF-6: `AnswerThread` extracts a memoized TurnRow;
+  the in-flight turn renders PLAIN TEXT and Markdown is parsed once on completion (chat FE-1 split). PERF-5
+  **Part A only**: `DocRow = memo(...)` fed per-row booleans (`selected`/`menuOpen`) + a parent-narrowed
+  `rowTask` (+ stable `anyTaskActive`) + stable `useEventCallback` handlers (extracted to a shared
+  `renderer/lib/` module), so a 400 ms task tick / menu-open / sibling-selection re-renders ONLY the affected
+  row; FE-7 poll cadence + FE-4 mount guards untouched. **OWNER DECISION: PERF-5 Part B (list windowing)
+  RE-DEFERRED** — no virtualization lib in deps; variable-height rows + scroll/find-in-page/a11y are
+  behavior-sensitive (the thrice-deferred FE-5; recorded in architecture.md). Teeth: drop `await fh.close()`
+  (close-on-throw, observed via a mocked `open` — NOT unlink, since libuv opens FILE_SHARE_DELETE on win32 so a
+  leaked-handle unlink does not throw) / force the in-flight branch back through AssistantMarkdown / drop
+  `memo(DocRow)` — each fails its test.
+- **Docs.** rag-design.md §2 (markdown fence-awareness + TSV/CSV delimiter notes) + §13.6 (the RAG-N6
+  includeArchived parity regression test); security-model.md (SEC-N1 NUL rejection under skill-import defences;
+  a new Phase-7 polish section for SEC-N2 benchmark `requireUnlocked` parity + the SEC-N3 accepted Info
+  residual); architecture.md renderer-tail note (PERF-5 Part A landed; Part B / FE-5 windowing re-deferred).
+  Code comments cite ING-8 for the async I/O conversions.
+- **Out of scope (untouched).** No Phase 8 work (no doc-folding into topic-doc §§ / no deleting the audit
+  file). No E5 prefix migration, no chunk-size change. `registerRagIpc`/`askDocuments` lock guard NOT added
+  (not a named Phase-7 finding). PERF-5 Part B (windowing) deferred.
+- **Next action (owner):** review/commit Phase 7 (do NOT auto-push/merge). Then **Phase 8 — docs
+  reconciliation + audit close-out** (fold finished records into topic-doc §§, delete the audit file)._
+
+
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 6 (RERANKER SCORING DEPTH, retrieval quality;
+RAG-N3 Med + DOC-N6 Low, with the dependency TEST-N4 Med folded in) — the load-bearing reranker
+(rag-design §12.3) scored only the FIRST 320 approx-tokens of each 500-token chunk, so a chunk whose
+key sentence lived in its second half was under-scored, could lose its page's dedup slot, or drop out of
+the final top-k (branch `full-audit-2026-06-28-fixes`).** Suite **2398 passed / 39 skipped** (was 2395/39
+at Phase 5 → **+3 tests**), typecheck clean, build OK. **Reranker-only behavior change** (one constant) +
+retrieval tests + the rag-design notes — **NO re-index, no embedding/FTS/chunk-count/schema change, no
+ranking-algorithm change**; offline/no-telemetry posture held. Methodology per the audit: the measurable
+tests were built FIRST, the RAG-N3 test confirmed FAILING on the 320 cap, THEN a DELIBERATE owner decision,
+THEN the fix, THEN the ceiling documented either way.
+- **OWNER DECISION — option (a): raise `MAX_DOC_APPROX_TOKENS` to the WHOLE chunk window.** Set
+  `MAX_DOC_APPROX_TOKENS = CHUNK_DEFAULTS.chunkSizeTokens` (500), keyed off the chunker's source of truth
+  (so a future chunk-size change carries the rerank budget with it), NOT a standalone literal. Chosen over
+  (b) shrink chunks toward 320 (BIG blast radius — re-index every corpus, changes granularity/embeddings/
+  FTS/chunk counts; its own phase), (c) head+tail (more complex, can miss the middle), (d) keep 320 +
+  document only. **Smallest blast radius** (one constant, no re-index, no embedding/FTS impact) and the
+  faithful fix (reranker sees every chunk in full).
+- **n_ctx is SAFE (concrete).** The constructor already CLAMPS `docApproxTokens = min(MAX_DOC, usable −
+  queryCap)`; at the default 2048 ctx `usable = floor(2048/2.2) − 16 = 914`, queryCap 160 ⇒ clamp ceiling
+  754 ≥ 500, so the cap lands at exactly 500. Worst-case pair `(160 + 500) × 2.2 ≈ 1452 real tokens` < the
+  2048 context AND the 2048 physical batch (the `n_batch=n_ubatch` rerank-mode constraint). The clamp
+  guarantees no overflow even at a smaller configured context.
+- **Latency — REASONED, not measured (no provisioned drive / real bge-reranker weights in CI/dev; the
+  GGUF is never committed).** From §12.3 the OLD worst case was 24.7 s for a 12-candidate batch at full
+  320-token docs (~2 s/candidate, CPU-pinned i7-1185G7). Doc budget 320→500 grows per-pair input
+  ~480→660 approx tokens (~1.38×); CPU prefill ≈ linear ⇒ absolute worst case ~34 s for 12 full-500-token
+  candidates. Typical queries (shorter chunks, fused union usually < 12) scale proportionally less; stays
+  opt-in-by-provisioning, CPU-pinned, candidate-cap-bounded. The candidate cap / `MAX_DOC_APPROX_TOKENS`
+  remain the levers if latency proves high. The §12.3 "rescued #3→#1" validation was itself measured under
+  the OLD 320 truncation — now disclosed in the docs.
+- **TEST-N4 (the dependency, folded in) — graded-overlap ranking.** The prior ordering tests all queried
+  text BYTE-IDENTICAL to the target chunk (the mock embedder is feature-hashing), so "exact match ranks
+  #1" was the only assertion a broken cosine couldn't fail. New CI test (`rag.test.ts`): a query sharing
+  4/2/1 tokens with chunks A/B/C (NONE equal to the query, all 6 tokens for comparable norms) asserts the
+  FULL order [A,B,C] with STRICT `<` between adjacent fused scores. Mock cosines empirically verified
+  strictly monotone (~0.83 > 0.42 > 0.22) before fixing the token set. The assembled rescue test
+  (`hybrid-search.test.ts`) now asserts RELATIVE RANK, not membership: a keyword-rescued exact-code chunk
+  is lifted to **#1** ahead of a vector-only distractor (RRF rewards the chunk present in both lists;
+  `minSimilarity: -1` keeps both as candidates so the rank — not mere presence — is pinned).
+- **RAG-N3 behavioral test (the proof) — `reranker.test.ts` [RAG-N3].** Using the fake-server harness, a
+  ~404-approx-token doc with a `TAILSENTINEL` past the old 320 budget asserts the WHOLE chunk (incl. its
+  tail) reaches the sidecar. **Confirmed FAILING on the 320 cap** (received text stopped at `h319`), passes
+  after the fix. The existing truncation test's doc assertion was updated 320 → `CHUNK_DEFAULTS.chunkSizeTokens`.
+- **Dedup-winner verification — `rag.test.ts` [RAG-N3].** End-to-end through the REAL `LlamaReranker` (its
+  internal truncation runs) wired to a content-scoring fake sidecar: two chunks on the SAME page, the
+  lexical favorite (`headMiss`) vs a chunk hiding the answer SENTINEL in its TAIL (`tailHit`). The sidecar
+  scores a candidate 10 iff the RECEIVED text contains the sentinel — so `tailHit` can only win the page's
+  dedup slot if its tail was sent. Asserts `tailHit` wins (text contains the sentinel, score 10). This
+  pins that the dedup-by-page winner now rests on the whole-chunk score.
+- **TEETH (neuter → fail → restore).** Reverting the cap to 320 fails BOTH RAG-N3 tests (tail dropped,
+  dedup winner flips); restored. Reversing the `rrfFuse` sort fails BOTH TEST-N4 tests (graded order +
+  rescue rank); restored. The src diff is teeth-leftover-clean.
+- **Docs (DOC-N6) — `docs/rag-design.md`.** New "Known retrieval-quality ceilings" note in §11 stating
+  (1) E5 runs PREFIX-LESS → compressed cosines (R3) → WHY the reranker is load-bearing, with the
+  `query:`/`passage:` prefix migration recorded as a **tracked TODO** (re-embeds the whole corpus — its own
+  phase; would re-enable a meaningful `ragMinSimilarity` floor); (2) the reranker scores the leading N
+  approx-tokens, N raised 320 → 500 (whole chunk) by RAG-N3, with the clamp caveat. §11 reranker para, §12.2
+  D10, §12.3 (worst-case budget + the "measured under 320" disclosure + the reasoned ~34 s), and §12.4
+  (combined 1056 → 1452 real tokens) updated accordingly.
+- **Files changed:** `apps/desktop/src/main/services/reranker/llama.ts` (the cap + its rationale comments);
+  tests `tests/integration/{reranker,rag,hybrid-search}.test.ts`; `docs/rag-design.md`. **Out of scope
+  (untouched):** `chunker.ts` (option b not chosen — no chunk-size change), `rag/index.ts` (the dedup/ordering
+  algorithm is unchanged; only its score BASIS improved — verified by the fixture), the E5 prefix migration
+  (recorded as a TODO only), embedder/FTS/schema, all other audit phases.
+- **Don't-regress confirmed:** RRF determinism + the pass-through guarantee (no keyword/no reranker ⇒
+  byte-identical to vector-only) and the reranker index→result mapping contract stayed green; the n_batch
+  headroom holds (1452 < 2048).
+- **Next action (owner):** review/commit Phase 6 (do NOT auto-push/merge). Then **Phase 7 — ingestion edge
+  cases + small security/test/perf polish** (RAG-N4 markdown fences, RAG-N5 TSV delimiter, RAG-N6 archived,
+  SEC-N1/N2/N3, TEST-N5/N7/N8, PERF-1/2 async I/O, PERF-5/6 render) per `audits/full-audit-2026-06-28.md` §6._
+
+
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 5 (DATA-LAYER HARDENING; REL-4 Med, REL-5 Low,
+PERF-3 Med, PERF-4 Low, DATA-1/DATA-2/DATA-3 Low) — atomicity + two additive indexes + an FTS trigger
+guard + two pinned invariants, all additive (no schema-shape change; indexes `IF NOT EXISTS`, one FTS
+trigger drop/recreate the only non-index DDL).** Suite **2395 passed / 39 skipped** (was 2381/39 at Phase 4
+→ **+14 tests**), typecheck clean, build OK. Touched ONLY `db.ts`, `chat.ts`, `vision/history.ts`, their
+tests + a new `data-layer-hardening.test.ts`, and the architecture data-layer notes — no schema shape,
+FK, retrieval/ranking, business-logic, or renderer change; offline/no-telemetry posture held.
+- **REL-4 (`deleteConversation` atomic).** Its two auto-committed deletes (messages, then conversations —
+  no `ON DELETE CASCADE`) are now ONE `BEGIN…COMMIT` with `ROLLBACK` on throw (mirrors `deleteDocument`),
+  so a crash/`SQLITE_BUSY` between them can't leave an orphaned empty thread (compaction checkpoint rows
+  live in `messages` too).
+- **REL-5 (`deleteImageSession` reordered).** Deletes the ROW first (in a txn), shreds the stored image
+  only AFTER — the DATA-1 ordering — closing the "file shredded before a failed delete → undeletable ghost
+  session" window.
+- **PERF-3 (`idx_messages_conv_kind`).** `getLatestCheckpoint` runs every chat/grounded turn
+  (`conversation_id AND kind='compaction' ORDER BY rowid DESC LIMIT 1`); the new composite serves it with
+  no SCAN/temp-B-tree (EXPLAIN-pinned). **Correction to the audit's literal recommendation:** it specified
+  `(conversation_id, kind, rowid)`, but SQLite **rejects** naming rowid in an index ("no such column:
+  rowid") since `messages` has a TEXT PK + implicit rowid — verified empirically. `(conversation_id, kind)`
+  gives the identical plan because SQLite auto-appends the rowid. `idx_messages_conversation` is RETAINED
+  (still serves `listConversationTurns` / the summary-marker lookup; the composite can't, because their
+  `rowid>?` range + `ORDER BY rowid` is blocked by the non-equality `kind!='compaction'` — review-confirmed,
+  comment corrected).
+- **PERF-4 (`idx_summary_cache_created`).** Summary-cache eviction (`ORDER BY created_at ASC`) was a
+  full-scan + temp-B-tree sort; the index makes it an ordered index scan (EXPLAIN-pinned; residual partial
+  sort only the `content_hash` tiebreak).
+- **DATA-1 (`messages_fts_au` kind guard + backfill).** The UPDATE trigger now guards its INSERT with
+  `WHERE new.kind IS NOT 'compaction'` (DELETE stays unconditional → a plain→compaction edit still purges
+  the stale FTS row); `ensureMessagesFtsUpdateKindFilter` drop/recreates the trigger on pre-fix DBs
+  (mirrors `ensureMessagesFtsKindFilter`). A future in-place edit of a checkpoint row can't leak its
+  summary into conversation search — old or new drives.
+- **DATA-2 (invariant test, no code change).** `tree_edges.child_id` is a polymorphic FK with no FK to
+  chunks; the no-dangling-edge invariant holds because every chunk-delete path tears down `tree_nodes`
+  (cascading edges). Pinned: after `deleteDocument`, zero `child_is_chunk=1` edges reference a gone chunk;
+  the forbidden chunks-only delete dangles them (teeth).
+- **DATA-3 (idempotency confirmed, no code change).** `extract.ts` is idempotent per chunk (main loop skips
+  a matching-hash `__scan__` marker; `commitChunk` deletes-then-inserts). Pinned: re-extract — incl. a
+  forced re-commit via a changed chunk hash — never doubles the marker count.
+- **Tests (+14) + teeth.** New `data-layer-hardening.test.ts` (REL-4 rollback-on-injected-failure +
+  illustration; PERF-3 EXPLAIN + drop-index teeth + the rowid-rejection assertion; DATA-2 invariant +
+  forbidden-path teeth). `image-history.test.ts` (REL-5 failed-delete-leaves-file-intact).
+  `conversation-search.test.ts` (DATA-1 fresh-DB no-leak + pre-fix-DB backfill). `whole-doc-extract.test.ts`
+  (DATA-3 no-double). `summary-cache-eviction.test.ts` (PERF-4 EXPLAIN + teeth). **Teeth-verified** by
+  neutering each behavioral fix and watching its test fail, then restoring: REL-4 (half-delete), REL-5
+  (file shredded first), DATA-1 fresh + backfill (compaction text leaks), DATA-3 (marker doubles). The
+  PERF-3/PERF-4/DATA-2 tests carry inline drop-index / forbidden-path teeth.
+- **Adversarial review pass (5-dimension multi-agent workflow + per-finding verify).** Migration-safety,
+  transaction-correctness (incl. nested-BEGIN), and scope/regression returned ZERO findings. Three confirmed
+  LOW/nit comment-accuracy + test-label items, all fixed: (a) the PERF-3 comment over-claimed the composite
+  "serves" the listing/marker queries (the planner keeps `idx_messages_conversation`; could mislead a
+  maintainer into dropping it) → corrected; (b) PERF-4 "index range scan" → "ordered index scan
+  (LIMIT-bounded)"; (c) the REL-4 "TEETH" test never called `deleteConversation` (the real guard is the
+  injection test) → relabelled as an illustration.
+- **Files changed:** `apps/desktop/src/main/services/db.ts` (2 indexes, `messages_fts_au` guard +
+  `ensureMessagesFtsUpdateKindFilter` backfill), `chat.ts` (`deleteConversation` txn), `vision/history.ts`
+  (`deleteImageSession` reorder); tests `tests/integration/{data-layer-hardening(NEW),image-history,
+  conversation-search,whole-doc-extract}.test.ts`, `tests/unit/summary-cache-eviction.test.ts`;
+  `docs/architecture.md` (data-layer index inventory + Phase 5 hardening record). **Out of scope
+  (untouched):** `summary-cache.ts` / `extract.ts` code (DATA-3/PERF-4 are index/test-only), retrieval/
+  ranking (RAG-N3 — Phase 6), business logic, renderer.
+- **Next action (owner):** review/commit Phase 5 (do NOT auto-push/merge). Then **Phase 6 — reranker scoring
+  depth (RAG-N3 + DOC-N6)**, which per the audit §6/§7 should land AFTER the retrieval-order test **TEST-N4**
+  exists (graded-overlap ranking), so the quality change is measurable._
+
+
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 4 (CJK/THAI TOKEN-vs-WORD wave; RAG-N1
+Medium + RAG-N2 Low) — the prior backend audit made the EMBEDDER/RERANKER token-aware (counting
+approx-TOKENS, not whitespace words); the SAME confusion still lived UPSTREAM in two ingestion spots,
+fixed here as one root-cause wave (branch `full-audit-2026-06-28-fixes`).** Suite **2381 passed / 39
+skipped** (was 2374/39 at Phase 3 → **+7 tests**), typecheck clean, build OK. **Ingestion-only**
+(audio parser + chunker) — no IPC surface, schema, embedder/reranker, or retrieval/fusion change;
+offline/no-telemetry posture held. Touched only `parsers/audio.ts`, `chunker.ts`, their tests, and the
+rag-design / architecture / wave-3-plan doc notes (no `index.ts` change was needed — the reconstruction
+path is unchanged).
+- **RAG-N1 (audio packing counted WORDS → CJK/Thai overflow).** `packTranscriptSegments` capped a
+  packed segment at `AUDIO_SEGMENT_MAX_WORDS = 400` via `text.split(/\s+/).length`. For a space-less
+  script a 1,200-char phrase is a few "words" but ~1,200 approx-tokens, so a packed segment blew past
+  the 500-token chunk window → the chunker WINDOWED it with 80-token overlap → the
+  one-segment-per-chunk/no-overlap invariant broke → `audioSegmentsFromChunks` emitted DUPLICATED text
+  at every overlap boundary in the preview/translate/compare output (retrieval was unaffected — overlap
+  is benign there). **Fix:** measure with `approxTokenCount` (the CJK/Thai-aware counter the chunker
+  budgets with); cap on tokens; split an over-budget single whisper segment via
+  `windowByTokens(text, MAX, 0)` (CHARACTER boundaries for space-less scripts, overlap 0 = lossless
+  partition), not a whitespace split.
+- **RAG-N2 (chunker overlap DROPPED for space-less scripts).** `atomize` hard-cut a space-less run into
+  char atoms of `cap` (500) tokens; `windowByTokens`'s step-back only re-includes a whole atom ≤ `ov`
+  (80), so a 500-token atom was never stepped back into → consecutive CJK/Thai chunks had **zero**
+  overlap (a boundary-straddling fact could be missed; Latin was fine). **Fix:** char-slice an over-long
+  space-less run at `gcd(cap, overlap)` chars (= 20 for 500/80) with a `glued` flag, and reassemble
+  glued atoms with NO separating space; the existing whole-atom step-back then re-includes exactly
+  `overlap` tokens. `overlap = 0` recovers the prior `cap`-sized slicing exactly.
+- **ENGINEERING DECISIONS (made + documented here — no owner sign-off).** (1) **Audio cap value:**
+  `AUDIO_SEGMENT_MAX_TOKENS = CHUNK_DEFAULTS.chunkSizeTokens − 100 = 400` (a 20 % margin below the 500
+  window), keyed off the chunk-window constant rather than a standalone literal; `AUDIO_SEGMENT_TARGET_TOKENS
+  = 180`. (2) **RAG-N2 approach:** `gcd(cap, overlap)`-sized glued char-slices (chosen over cut-at-`cap−overlap`,
+  which still can't be stepped back into) — it reuses the existing step-back unchanged, fills windows to
+  exactly `cap`, overlaps by exactly `overlap`, and is byte-identical at `overlap = 0`.
+- **THE INTERACTION GUARANTEE (verified).** RAG-N2 ADDS overlap to char-sliced TEXT chunks; RAG-N1 needs
+  AUDIO to stay NO-overlap. Compatible because every packed audio segment is guaranteed
+  `approxTokenCount ≤ 400 < 500`, so the chunker emits exactly ONE window per audio segment (it never
+  char-cuts or overlaps audio — the char-slice/overlap path is never reached). Proven: a long CJK AUDIO
+  transcript round-trips through `audioSegmentsFromChunks` with **no duplicated spans**, while a long CJK
+  TEXT document now gains overlap, and Latin prose is byte-identical. (`approxTokenCount` is additive
+  across a single-space join of trimmed parts, so the packer's running token total equals what the
+  chunker measures — the cap holds exactly.)
+- **One documented nuance (benign, no dup).** A single over-budget whisper segment is split into pieces
+  that SHARE one time-range label, so the chunker's `coalesceSegments` re-merges them and a small trailing
+  remainder can normalize a `\n\n` boundary to a SINGLE space in a space-less script. Empirically verified
+  across token counts: reconstruction is always byte-identical **up to whitespace** — never a duplicated
+  or dropped span. Pre-existing property of coalesce (the old word-based Latin oversize path had it too);
+  documented in rag-design §2 + the audio.ts note rather than papered over.
+- **Tests (+7) + teeth.** chunker: CJK consecutive-window overlap ≈ `overlap`; space-less lossless partition
+  at overlap 0; an over-long no-space LATIN run (base64/URL) is glued (NO injected spaces) and gains overlap.
+  audio: JA + Thai oversize single segment char-split ≤ MAX; JA + Thai transcripts pack to one-window
+  segments (1:1 chunks); oversize single CJK segment round-trips with no dup/loss (n = 800/900/1250, covering
+  the remainder-merge case). integration: a long Japanese transcript round-trips through chunk storage with
+  each unique marker exactly once (no dup). **Teeth-verified** by neutering each fix and watching its test
+  fail, then restoring: RAG-N2 gcd-slice (CJK overlap test failed), RAG-N1 token cap (round-trip + one-window
+  tests failed with markers duplicated).
+- **Latin "don't-regress" — precise.** Ordinary space-separated prose is byte-identical (words ≤ `size` are
+  never sliced — pinned by the unchanged Latin window/overlap tests). The ONLY Latin change is for an
+  over-long NO-SPACE run (> ~2000 chars: base64/URL/glued-PDF) — it is now treated as the space-less run it
+  is (glued + overlapped), which also **fixes a latent bug**: the old char-slice path space-joined those
+  pieces, injecting spaces into the run and breaking lossless reconstruction. And audio packing's word→token
+  switch shifts a boundary only for a rare > 16-char word (the more-accurate measure). Both are intended and
+  documented, not regressions.
+- **Adversarial review pass (6-dimension multi-agent workflow + per-finding verify).** Surfaced and fixed:
+  (a) stale word-based audio descriptions in `architecture.md` and `functionality-wave-3-plan.md` that
+  contradicted the token-based code (doc-drift); (b) my oversize round-trip test had cherry-picked n = 800
+  (exact 2×400, no remainder) → broadened to n = 800/900/1250 asserting the precise no-dup/no-loss guarantee;
+  (c) over-claimed "LOSSLESSLY" wording → scoped to "no duplicated/dropped spans" with the whitespace-nuance
+  documented; (d) a latent gcd-coprime slice-size footgun noted (not reachable — all callers use overlap 0 or
+  80). The review's "Latin not byte-identical" findings were correctly dismissed by the verify agents as the
+  intended, documented over-long-no-space-run fix.
+- **Re-index self-heal (owner note).** These are NEW-ingestion changes: existing audio/CJK documents keep
+  their old chunks until a document/audio is re-indexed (re-index re-transcribes/re-chunks and self-heals).
+  No migration needed.
+- **Files changed:** `apps/desktop/src/main/services/ingestion/parsers/audio.ts` (token-based packing,
+  char-split), `chunker.ts` (gcd glued char-slice overlap + `assembleAtoms` + `gcd`); tests
+  `tests/unit/{chunker,audio-parser}.test.ts`, `tests/integration/audio-ingestion.test.ts`;
+  `docs/rag-design.md` (§2 audio row + "Audio packing" note, §3 windowing), `docs/architecture.md` (audio
+  packing record), `docs/functionality-wave-3-plan.md` (audio framing); `BUILD_STATE.md`. **Out of scope
+  (untouched):** embedder/reranker token logic (already CJK-aware), retrieval/fusion, schema, MAX_CHUNKS
+  reject path, RAG-N3 (reranker depth — Phase 6).
+- **Next action (owner):** review/commit Phase 4 (do NOT auto-push/merge). Then **Phase 5 — data-layer
+  hardening (REL-4, REL-5, PERF-3, PERF-4, DATA-1, DATA-2, DATA-3)** per `audits/full-audit-2026-06-28.md` §6._
+
+
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 3 (RENDERER ROBUSTNESS; FE-1 High +
+FE-2…FE-9) — the renderer was the least-audited surface (prior rounds were backend-only); the headline
+gap was that ANY screen render throw blanked the whole offline app with no recovery (branch
+`full-audit-2026-06-28-fixes`).** Suite **2374 passed / 39 skipped** (was 2356/39 at Phase 2 → **+18
+tests**), typecheck clean, build OK. **Renderer-only** (plus the shared i18n catalogs) — no IPC surface,
+no main-process behavior, no data-layer change; offline/no-telemetry posture held. Touched only the
+listed renderer files + their tests + the architecture renderer record.
+- **THE FIX (FE-1, verified High) — top-level React error boundary.** Before: zero
+  `ErrorBoundary`/`componentDidCatch`/`getDerivedStateFromError` anywhere, so a screen render throw
+  (`react-markdown` on malformed model output, a Radix portal edge) unmounted the whole tree → blank
+  window, force-quit. Now: new `renderer/components/ErrorBoundary.tsx` (class component,
+  `getDerivedStateFromError` + `componentDidCatch`, `fallback(reset)` render-prop). **LOGGING IS
+  LOCAL-ONLY** (`console.error`; no renderer→main log IPC exists — preload has only READ-only
+  `getLogTail`/`exportLog`; never a network call — CLAUDE.md hard rule). **Per-screen boundary** in
+  `App.tsx` wraps the active screen KEYED by `screen` (navigating away re-mounts → clears the error)
+  INSIDE `<main>` so the nav rail stays alive; localized `ScreenErrorFallback` (role="alert") offers
+  in-place **Try again** (reset) + **Go to Home**. **Outer last-resort boundary** in `main.tsx` wraps
+  `<App/>` (catches the gate/provider/AppShell) with a localized `RootErrorFallback` resolved via the
+  pre-unlock language (it sits outside `I18nProvider`).
+- **FE-2…FE-9 (the cluster).** FE-2 unhandled IPC rejections — `ModelsScreen` cancel `.catch` →
+  `friendlyIpcError`, `SkillsTab.pick()` moved `pickSkillPackage` inside the try → toast. FE-3 skill
+  toggle double-submit — per-skill in-flight `Set` disables the Switch while pending + ignores stale
+  submits; `refresh()` reconciles to server state. FE-4 setState-after-unmount — the HomeScreen `let
+  active` guard / a `mountedRef` applied to the Documents import poll, PrivacyTab, DiagnosticsTab
+  refreshers, SkillsTab settings load, General tab. FE-5 — `applyLanguageSetting` is now
+  `useCallback([])` (identity-stable) so a UI-language switch no longer re-fires App's
+  `getPolicy()`+`getSettings()` effect. FE-6 — ScopePopover pending chips key by `name+index`
+  (unique even for two cross-folder files sharing a base name, and content-aware); ChatScreen optimistic
+  id uses a monotonic counter (not `Date.now()`). FE-7 — ToastProvider tracks its dismiss
+  timers in a ref + clears them on unmount. FE-8 — DiagnosticsTab benchmark failure → `friendlyIpcError`,
+  `'UNKNOWN'` literal → `t('diag.app.unknown')`. FE-9 — SegmentedControl Home/End select the first/last
+  ENABLED segment directly (`moveToEdge`), not via the arrow-key modulo wrap.
+- **New i18n keys (en + de, parity typecheck-enforced):** `errorBoundary.title`, `.body`, `.retry`,
+  `.home`, `.app.title`, `.app.body`, `.app.reload`.
+- **Tests added (+16) + teeth.** New `ErrorBoundary.test.tsx` (3: children pass-through; throw → local
+  log + onError + fallback; reset re-mounts), `AppErrorBoundary.test.tsx` (3: screen throw → localized
+  fallback + nav rail alive; nav re-mount clears; **de** fallback render), `DiagnosticsErrors.test.tsx`
+  (2: friendly bench error has no transport/Error prefix; profile row shows localized "unknown" not
+  'UNKNOWN'), `ScopePopover.test.tsx` (1: name-keyed pending chips). Extended `Components.test.tsx`
+  (FE-9 Home/End skip disabled ends; FE-7 timer cancelled on unmount via `vi.getTimerCount()`),
+  `SkillsTab.test.tsx` (FE-3 second toggle suppressed + Switch disabled + ends on server state; FE-2
+  picker reject → friendly toast), `ModelsScreen.test.tsx` (FE-2 cancel reject → friendly error),
+  `I18n.test.tsx` (FE-5 `applyLanguageSetting` referentially stable across a language switch),
+  `DocumentsScreen.test.tsx` (FE-4 in-flight poll tick after unmount does NOT refresh the list —
+  deferred-promise harness gives it teeth despite React-18's silent no-op).
+- **Files changed:** new `renderer/components/ErrorBoundary.tsx` (+ barrel export); `renderer/App.tsx`,
+  `renderer/main.tsx`, `renderer/i18n.tsx`, `renderer/components/{Toast,SegmentedControl}.tsx`,
+  `renderer/chat/ScopePopover.tsx`, `renderer/screens/{ChatScreen,ModelsScreen,DocumentsScreen,SettingsScreen}.tsx`,
+  `renderer/screens/settings/{SkillsTab,PrivacyTab,DiagnosticsTab}.tsx`; `shared/i18n/{en,de}.ts`; the
+  9 test files above; `docs/architecture.md` (new "Renderer robustness — design record (full audit
+  2026-06-28, Phase 3)" §). **Out of scope (untouched):** main-process (PERF-1/PERF-2 deferred to
+  Phase 7), data-layer, RAG, perf items PERF-5/PERF-6.
+- **Teeth-verified** by neutering each meaningful fix and watching its test fail, then restoring
+  (FE-1 fallback+reset, FE-3, FE-4, FE-5, FE-7, FE-8, FE-9, plus the two review-fix tests below).
+- **Adversarial review pass (6-dimension multi-agent workflow + per-finding verify) found 3 real issues,
+  all fixed in a follow-up:** (a) the FE-6 pending-chip key (originally name-only) collided on duplicate
+  base names → changed to `name+index`; (b) its test had no teeth (a key only affects reconciliation) →
+  added a duplicate-name no-warning teeth test; (c) the FE-1 fallback's "Go to Home" was a no-op when
+  Home itself threw (same-value navigate, no key change) → `onHome` now `reset()` + `navigate('home')`,
+  with a recovery teeth test. The review's other "findings" were the transient teeth-check neuters in the
+  working tree (correctly dismissed by the verify agents; committed HEAD was clean).
+- **Next action (owner):** review/commit Phase 3 (do NOT auto-push/merge). Then **Phase 4 — CJK/Thai
+  token-vs-word wave (RAG-N1, RAG-N2)** per `audits/full-audit-2026-06-28.md` §6._
+
+
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 2 (GPU MID-SESSION CRASH AUTO-FALLBACK,
+reliability; REL-1 High + REL-2 Low) — the advertised self-healing CPU fallback was a silent no-op
+(branch `full-audit-2026-06-28-fixes`).** Suite **2356 passed / 39 skipped** (was 2353/39 at Phase 1 →
+**+3 tests**), typecheck clean, build OK. Runtime-lifecycle only — **no IPC surface, GPU probe/ladder
+selection, or settings-schema change**; offline/no-telemetry posture held. Touched only the runtime
+files + their tests + the architecture §5.3 record. Methodology: the crux **integration test FIRST**
+(driven through the REAL `RuntimeManager` + `createSelectingRuntimeFactory` + `createGpuCrashAutoFallback`
+with a fake child at the spawn seam, **no fake `restart`**), confirmed FAILING against the pre-fix
+wiring, THEN the fix, THEN green; both behavioral fixes teeth-verified by neutering them.
+- **THE BUG (REL-1, verified High).** When a GPU-backed `llama-server` dies mid-session, the crash hook
+  called `restart(opts) = runtimeRef.start(opts)` with the SAME `modelId`. But the crashed `LadderRuntime`
+  is still `RuntimeManager.current` (the manager never observes the child exit; it caches `this.last` at
+  start and never re-polls), so `start()` hit its same-model **idempotency guard** (`runtime/index.ts`) and
+  early-returned a stale status read — it NEVER stopped-and-restarted. Net: `gpuAutoDisabled` got persisted
+  and the friendly "compatibility mode" notice showed, but no restart happened; `status()` kept reporting
+  the **dead** server as running/healthy; the next chat/RAG/doctask turn routed to it and failed (user had
+  to manually Stop/Start). The tests missed it because `runtime-ladder.test.ts` injects a FAKE `restart`
+  (real manager never exercised) and `runtime-manager.test.ts` proves the guard in isolation — nothing
+  wired the real crash path THROUGH the real manager.
+- **ENGINEERING DECISION — option (b): a crash-only `RuntimeManager.forceRestart(opts)`.** Inside ONE
+  enqueued op it does `doStop()` (clears `current`/`last` → `status()` immediately stops reporting the dead
+  server healthy) then `doStart(opts)`, bypassing **only** the same-model guard. Chosen over (a) wiring-level
+  `stop()`-then-`start()` — its two ops enqueue separately, so a concurrent user start could interleave —
+  and (c) manager-subscribes-to-unexpected-exit (more plumbing, no extra guarantee). `forceRestart` is
+  atomic within the op-queue, explicit, and easiest to test. **Normal `start()` idempotency is PRESERVED**
+  (a double-click / AI-Model-screen revisit still no-ops — the existing idempotency tests stay green); only
+  the crash path bypasses it. `forceRestart` sets `startingModelId` synchronously (exactly as `start()`), so
+  a concurrent manual `start(sameModel)` JOINS the restart instead of queueing a second one. Wiring:
+  `main/index.ts` crash `restart` now calls `runtimeRef.forceRestart`, not `start`.
+- **Retry bound (no loop):** `gpuAutoDisabled` is persisted BEFORE the restart, so the ladder rebuilt inside
+  `doStart` skips rung 1 → CPU (`--device none`); a later CPU crash does NOT route through `onGpuCrash`
+  (`LadderRuntime` gates it on `backend === 'gpu'`), so a GPU session auto-falls-back **at most once**. A
+  dedicated "does NOT loop" test pins this (CPU crash after the fallback triggers no second restart).
+- **THE CRUX TEST (`tests/integration/runtime-manager.test.ts`).** Real manager + real factory + real crash
+  fallback; fake `FakeServerChild` at the `spawn` seam and a loopback `fetch` that **refuses a dead child's
+  port** (so a chat routed to the crashed runtime genuinely fails — that gives the post-crash chat assertion
+  its teeth). Flow: (1) start a GPU runtime → `backend:'gpu'`, healthy; (2) emit an unexpected child `exit`;
+  (3) assert exactly **one stop + one start** (one new spawn — not zero=swallowed, not a loop; dead runtime
+  stopped once; restarted one still live), the new backend is **cpu** (`--device none` on the 2nd spawn),
+  `gpuAutoDisabled` persisted, the compatibility notice fired, and `status().{backend,healthy,port}` reflect
+  the **NEW** server (port ≠ the dead one); (4) a chat turn after the crash streams `'hello'` from the
+  restarted CPU server. **Teeth:** with the pre-fix wiring (`restart → start`) the test FAILS at "expected
+  `children` length 2, got 1" (restart swallowed); with `forceRestart` it passes.
+- **REL-2 (Low, bundled — same `sidecar.ts`).** `LlamaServer.start()` guarded only on `if (this.child)`,
+  but `this.child` is assigned AFTER `await verifyBinary` + `await findPort`, so two overlapping direct
+  `start()` calls both spawned (the 2nd orphaning the 1st — port + RAM, never stopped). Not reachable in
+  prod today (every composer wraps it in its own latch) but latent. Fix: an instance
+  `private starting: Promise<void> | null` returned when set (mirrors `e5.ts`/`reranker/llama.ts`/
+  `vision/runtime.ts`); a second caller now shares the one start AND waits for HEALTH, not just the child
+  handle. Unit test: two concurrent `start()` → exactly one spawn (teeth: pre-fix spawns 2).
+- **Files changed:** `services/runtime/index.ts` (forceRestart), `main/index.ts` (crash wiring →
+  forceRestart), `services/runtime/sidecar.ts` (single-flight latch); `tests/integration/runtime-manager.test.ts`
+  (REL-1 integration + no-loop + REL-2 unit tests); `docs/architecture.md` (GPU record §5.3 corrected + a new
+  explicit "§5.3 Mid-session crash auto-fallback" subsection documenting the idempotency interaction, the
+  chosen fix, and the retry bound); `BUILD_STATE.md`. **Out of scope (untouched):** the GPU probe/ladder
+  selection logic, the IPC surface, the settings schema — and no other audit phase.
+- **Next action (owner):** review/commit Phase 2 (do NOT auto-push/merge). Then **Phase 3 — renderer
+  robustness (FE-1…FE-9: top-level React error boundary + unhandled-rejection / lifecycle fixes)** per
+  `audits/full-audit-2026-06-28.md` §6._
+
+
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 1 (FINANCIAL CORRECTNESS; BL-N1…N6 + the
+TEST-N2/N6 test gaps) — the highest user-impact bug cluster: the bank/invoice/redaction tools silently
+lost or mis-stated money/dates/PII (branch `full-audit-2026-06-28-fixes`).** Suite **2353 passed / 39
+skipped** (was 2335/39 at Phase 0 → **+18 tests**), typecheck clean, build OK. Parsing/aggregation only —
+**no schema, IPC, trust-model, or audit-payload change**; figures/redacted text stay content-class (never
+logged/audited/exported). Offline/no-telemetry posture held. Touched only the four tool files + their
+tests + the two listed docs. Methodology: **characterization tests FIRST** (corrected-behavior tests driven
+through the REAL entry points — `extractTransactionRows`/`extractStatementBalances`/`reconcileBalances`/
+`parseLineItem`/the redaction tool — confirmed failing against the unmodified code, closing the TEST-N2
+"pre-isolated token" gap), THEN the code, THEN green; every behavioral fix teeth-verified by neutering it
+and watching its test fail.
+- **TWO OWNER DECISIONS (resolved via AskUserQuestion before implementing):**
+  - **DECISION 1 (BL-N1) — ambiguous/US-ordered dates: _per-document locale inference_.** de-AT day-first
+    stays the DEFAULT; the whole document flips to month-first only when it has an unambiguously US-ordered
+    date (a `nn/nn/yyyy` whose **second** field is 13–31) and no unambiguously EU-ordered one. A
+    fully-ambiguous / self-contradictory doc keeps day-first. **NB the audit's BL-N1 prose stated the
+    trigger with the fields swapped** ("first field >12 → mm/dd"), which is inverted — a first field >12 can
+    only be a day, forcing day-first; the mechanically-correct rule shipped and is recorded in
+    architecture.md §10 so it is not re-litigated. (Option b/c's result-attached caveat was out of scope —
+    the tool output schema is frozen.)
+  - **DECISION 2 (TEST-N2) — grouped figures: _full support_.** Bare `1.000`/`2.500` → 1000/2500 (de-AT dot
+    = thousands), space-grouped `1 234 567,89` → 1234567.89, Swiss apostrophe `1'234.56` → 1234.56.
+- **Per-finding (before → after, verified reproductions):**
+  - **BL-N1** `parseDate('12/31/2026')` → null → **whole row silently DROPPED**; `'03/05/2026'` → 3 May
+    (wrong). Now a US-ordered statement infers mm/dd: `12/31` parses (not dropped), `03/05` → 5 Mar; an EU
+    statement keeps day-first. `inferDateOrder` threaded through bank + invoice extractors. **Redaction does
+    NOT infer** (stays day-first — BL-N6).
+  - **BL-N2** `Endsaldo 1.234,56 EUR per 30.06.2026` → closing read the trailing date `30.06.20` → **3006.20**
+    (flipping the completeness gate). New `stripDateTokens` scrubs date tokens before the last-money
+    balance/total scan (`lastMoneyOnLine`, invoice `lastMoney`); date at EITHER end handled, so the de-AT
+    date-first `Kontostand per <date> <figure>` shape is unaffected. **This disproved the §24/§10 BL-1
+    "last-token readers were never affected" claim — corrected in both places.**
+  - **BL-N3** `Betrag 100,00 EUR -100,00 900,00` → amount = first token = **100** (value AND sign wrong).
+    `parseLine` now takes the second-to-last figure as the amount and the last as the balance when a balance
+    is present (byte-identical on a normal 2-figure row).
+  - **TEST-N2/DECISION 2** `Grocery 1.000` → **€1** (1000×); `1 234 567,89` → 567.89; `1'234.56` → 234.56.
+    `MONEY_RE` rewritten to three ordered alternatives (space / decimal / bare-thousands) with a trailing
+    `(?!\d)` + leading `(?<!\d)` anchor + a `(?<![A-Za-z0-9])` boundary on the space form; `parseAmount`
+    unchanged. Stays bounded/ReDoS-safe.
+  - **BL-N5** `reconcileBalances` now compares in integer cents (`Math.round(x*100)`), identical to
+    `assessCompleteness` (C-3). Consistency/defensive — no realistic 2-dp input distinguishes the two (its
+    test is a regression guard; teeth are structural).
+  - **BL-N4** redaction now masks punctuated US/national phones (`555-123-4567`, `1-800-555-1234`) and a
+    lowercase compact IBAN (`de89…`, case-insensitive); both conservative (punctuation required; standalone
+    token + per-country length re-validated).
+  - **BL-N6** redaction masks every `parseDate`-valid date and does NOT infer locale, so a US `12/31/2026`
+    leaks while EU `31/12/2026` masks — DOCUMENTED (lowest priority, kept best-effort, no leak path to any
+    log/audit). TEST-N6 pins this + names/addresses-not-masked as accepted limitations.
+- **Geometry regression caught + fixed mid-phase:** the first full-suite run flagged
+  `pdf-bank-layout.test.ts` (a continuation line `…778899 300,00` fused to **899300** via the new
+  space-group form). Fixed with the leading `(?<!\d)` anchor; pinned by a new unit test. The
+  **adversarial multi-lens review** (4 agents) then surfaced the *letter*-preceded variant
+  (`Ref123 456,78` → 123456.78), fixed with the `(?<![A-Za-z0-9])` boundary + a second unit test. The
+  review's other findings were triaged: the "stripDateTokens broken" critical was a **false alarm** (an
+  agent read the file during a transient teeth-check neuter — the code is correct); the IBAN glued-prose
+  case needs separator-less glue that real extracted text never has (validation-guarded, documented); the
+  US-date redaction leak IS BL-N6 (kept documented per the owner's "don't over-engineer" scoping).
+- **Docs (ritual):** known-limitations.md — extended the redaction BL-4 bullet (BL-N6 asymmetry +
+  phone/IBAN coverage + the IBAN residual) and added a new "bank/invoice LINE PARSER assumptions" bullet
+  (date-locale inference residual, amount-column-by-position, grouping trade-offs). architecture.md §10 —
+  corrected the BL-1 immunity claim and added the full-audit-2026-06-28 Phase-1 record with both DECISIONS
+  "as built (owner)".
+- **Files changed:** `tools/money.ts`, `tools/bank-statement.ts`, `tools/invoice.ts`, `tools/redaction.ts`;
+  `tests/unit/skills-{bank-statement,invoice,redaction}-tool.test.ts`,
+  `tests/integration/skills-analysis-bank.test.ts`; `docs/architecture.md`, `docs/known-limitations.md`,
+  `BUILD_STATE.md`.
+- **Next action (owner):** review/commit Phase 1 (do NOT auto-push/merge). Then **Phase 2 — GPU crash
+  auto-fallback (reliability, REL-1)** per `audits/full-audit-2026-06-28.md` §6._
+
+
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 0 (CI + test-infra safety net; TEST-N1 + TEST-N9)
+— FIRST remediation phase, the machine backstop every later phase relies on (branch
+`full-audit-2026-06-28-fixes`).** Suite **2335 passed / 39 skipped** (201 files, all collected), typecheck
+clean, build OK — both on the existing install AND through a clean `npm ci` with the CI env knobs set.
+This phase added CI infra + fixed one test-only side effect: **no application/runtime code changed.**
+Offline/no-telemetry posture held — CI is dev infrastructure (a GitHub Actions build pipeline), ships
+nothing to users, adds no telemetry/analytics, and performs no network egress beyond the npm registry
+install; nothing CI-related is wired into the app.
+- **Task A — `.github/workflows/ci.yml` (TEST-N1).** On `pull_request` and `push` to `master`, runs the
+  exact pre-release chain `npm ci → npm run typecheck → npm run build → npm test` on a matrix of
+  **`ubuntu-latest` + `windows-latest`** (Windows is first-class), Node **22.x** (engines `>=22.5`),
+  `actions/setup-node` npm cache keyed off the root lockfile, `concurrency: cancel-in-progress` per ref,
+  `fail-fast: false`, top-level `permissions: contents: read` (least privilege — hardened after the
+  adversarial review). **Two jobs:** the **`build-and-test`** matrix + a tiny stable **`ci-success`**
+  aggregate gate (`needs` the matrix, `if: always()`, fails unless every leg succeeded) — mark
+  **`ci-success`** the **required status check** (its name survives OS-label changes; the per-OS leg
+  names `build-and-test (ubuntu-latest)` / `(windows-latest)` do not).
+- **DECISIONS as built:** (1) **Lockfile** — root `package-lock.json` already exists and is in sync, so
+  `npm ci` works as-is; no lockfile generation / no fallback to `npm install` was needed. (2) **Matrix** —
+  both OSes from the start (a local Windows dry-run of the full `npm ci` chain passed, so windows-latest
+  was NOT deferred). (3) **Trigger scope** — `push` is scoped to `master` (post-merge green + direct
+  pushes) while `pull_request` validates every PR against its merge result; this avoids a duplicate CI run
+  on every push to a PR branch. Owner can broaden `push` to all branches if desired. (4) **Electron in CI**
+  — both `ELECTRON_SKIP_BINARY_DOWNLOAD=1` (skips Electron's own ~100 MB platform-binary download) and
+  `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` (short-circuits `scripts/verify-electron.mjs`) are set at workflow
+  level. The unit+integration suite is offline by construction (mock runtime + mock embedder, `electron`
+  mocked); nothing in typecheck/build/test launches Electron. **Verified locally: a `npm ci` with both vars
+  set leaves the Electron platform binary ABSENT (`path.txt` missing) and typecheck + build + test still
+  pass 2335/39.** (`ELECTRON_SKIP_BINARY_DOWNLOAD` alone already early-exits verify-electron; the second var
+  is explicit + belt-and-suspenders.)
+- **Task B — whisper-smoke temp-dir leak (TEST-N9).** `tests/manual/whisper-smoke.test.ts` ran a
+  module-scope `mkdtempSync(...)` at collection time on EVERY suite run (even though the `describe` is
+  `skipIf`-skipped) and never cleaned it up. Moved it into a `beforeAll` inside the gated `describe` with an
+  `afterAll` `rmSync(WORK, {recursive,force})` — placed inside the gated `describe` like
+  `dictation-smoke`/`rag-quality`, but ADDING the cleanup those two omit (the adversarial review found
+  both leak their own `mkdtemp` dir on an enabled run — recorded as an out-of-scope observation below).
+  Swept the other 17 `tests/manual/*` smokes: **whisper-smoke was the only import-time side effect** (the
+  rest do their `mkdtempSync`/`writeFileSync` inside test bodies/functions). **Verified: a full suite run
+  leaves zero `whisper-smoke-*` dirs in the OS temp dir.**
+- **Verification (all green):** (a) post-edit `typecheck`+`build`+`test` = 2335/39, exit 0. (b) Full
+  `npm ci` (env vars set) + chain = 2335/39, exit 0, binary absent (above). (c) **FullSuiteGuard teeth
+  proven** — temporarily added `exclude: ['tests/unit/smoke.test.ts']` to `vitest.config.ts`; the full run
+  reported **200 of 201** files and, although all 2333 collected tests PASSED, `tests/full-suite-guard.ts`
+  threw `Full-suite collection guard FAILED … 1 were dropped` and the run **exited 1** (false-green caught);
+  reverted → green again. (NB a *rename* would NOT prove teeth — the disk-walk `listTestFiles` drops the
+  file from `expected` too, so only a config `exclude` exercises the guard.) (d) `ci.yml` parsed/validated
+  with the `yaml` package (`actionlint` not installed locally). **Not yet proven: the workflow turning GREEN
+  on GitHub** — that requires the owner to push the branch / open a PR (see Next action).
+- **Docs.** New `## Continuous integration (CI)` section in `docs/packaging.md` (placed before the manual
+  pre-ship checklist): what CI gates, the two Electron skip knobs, and an explicit statement that the
+  `HILBERTRAUM_*` manual harness matrix (audit M-A5) remains a **SEPARATE human pre-release gate CI does NOT
+  cover**. CI is the automated floor; the manual matrix + pre-ship checklist stay required and human-run.
+- **Files changed:** `.github/workflows/ci.yml` (new), `apps/desktop/tests/manual/whisper-smoke.test.ts`,
+  `docs/packaging.md`, `BUILD_STATE.md`. No `package.json`/lockfile change was required.
+- **Observed (OUT of Phase 0 scope — flagged for the owner / a later MAINT phase):** the committed root
+  `package-lock.json` carries STALE metadata — root `version 0.1.27` / `license Apache-2.0` vs
+  `package.json`'s `0.1.34` / `GPL-3.0-or-later` (a plain `npm install` resyncs it). `npm ci` tolerates this
+  (only the dependency tree must match the manifest — verified green), so it is NOT a CI blocker; left
+  unchanged here because lockfile edits are out of scope unless needed for `npm ci`. **Also (test-infra
+  tidy, later phase):** `tests/manual/dictation-smoke.test.ts` and `rag-quality.test.ts` create an
+  `mkdtemp` dir in a test body and never `rmSync` it — they leak ONE dir each, but only when ENABLED (the
+  human pre-release gate), never at collection time and never in CI, so they are NOT the TEST-N9 class
+  (whisper-smoke's import-time leak) and were left for a later cleanup.
+- **Next action (owner):** push `full-audit-2026-06-28-fixes` / open a PR so the `build-and-test` checks run
+  on GitHub, confirm both OS legs go green, then mark **`ci-success`** a **required status check** on
+  `master` (branch protection). Then **Phase 1 — financial correctness** (BL-N1/2/3/4/5/6 + TEST-N2/N6;
+  characterization tests first). Do NOT auto-push/merge — owner merges._
+
+
 _2026-06-28 — **Backend audit 2026-06-27 — FULLY REMEDIATED (all 8 phases) + Phase 9 close-out
 (branch `backend-audit-2026-06-27-fixes`).** The multi-persona backend audit (2 High · 9 Medium · 14 Low ·
 8 Info; no Critical, no remote-exploitable issue) is closed out. Suite **2335 passed / 39 skipped**,

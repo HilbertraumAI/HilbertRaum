@@ -67,6 +67,7 @@ export const SKILL_IMPORT_ERRORS = {
   unsupportedCompression: 'The skill package uses an unsupported compression method.',
   pathTraversal: 'The package contains a file whose path escapes the package folder.',
   absolutePath: 'The package contains a file with an absolute or drive-letter path.',
+  invalidPath: 'The package contains a file with an invalid path.',
   symlink: 'The package contains a symbolic link, which is not allowed.',
   tooDeep: 'The package nests folders more deeply than allowed.',
   pathTooLong: 'The package contains a file path that is too long.',
@@ -255,6 +256,14 @@ function inflateEntry(buf: Buffer, e: ZipEntry, maxFileBytes: number): Buffer {
 /** Normalize a stored member name to forward slashes and reject path attacks (skills plan §9.2). */
 function safeRelPath(rawName: string, limits: SkillLimits): string {
   const name = rawName.replace(/\\/g, '/')
+  // SEC-N1: a NUL byte passes the ../-/drive-/depth checks but makes the path invalid for the OS —
+  // writeFileSync throws ERR_INVALID_ARG_VALUE whose RAW message embeds the (attacker-controlled)
+  // path, which would leak package content into an IPC error payload (breaking the §22-M1
+  // content-free posture). Reject it structurally, BEFORE any write. Skill packages are text files
+  // with ordinary names, so a NUL is never legitimate. (Any other OS-level path throw is caught and
+  // remapped to a fixed structural reason by previewSkillPackage / the import IPC handler — defence
+  // in depth.)
+  if (name.includes('\u0000')) throw new SkillImportError(SKILL_IMPORT_ERRORS.invalidPath)
   if (name.length > limits.maxPathLen) throw new SkillImportError(SKILL_IMPORT_ERRORS.pathTooLong)
   // Absolute / drive-letter / UNC.
   if (name.startsWith('/') || /^[a-zA-Z]:/.test(name) || name.startsWith('//')) {
@@ -586,6 +595,12 @@ export function previewSkillPackage(
       errors: [],
       notes: parsed.notes
     }
+  } catch (e) {
+    // SEC-N1 — defence in depth for the documented "never throws / returns ok:false" contract
+    // (§22-M1). A structural failure is a SkillImportError (its message is content-free). Map ANY
+    // other throw — e.g. an OS path error whose RAW message embeds the attacker-controlled member
+    // path — to a fixed structural reason so no package content can escape into the IPC payload.
+    return fail(e instanceof SkillImportError ? e.message : SKILL_IMPORT_ERRORS.unreadableZip)
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

@@ -28,18 +28,38 @@ export function detectCurrency(text: string): string | null {
 
 // ---- Amounts ----
 
-// A money token MUST end in a 2-digit minor unit (e.g. ",56" / ".56"), so plain integers embedded
-// in a description are not mistaken for amounts. Optional leading sign / paren and trailing minus.
+// A money token is either a figure ending in a 2-digit minor unit (",56" / ".56") OR a bare GROUPED
+// integer (a thousands-grouped figure with no decimal tail, e.g. de-AT "1.000" = 1000). A plain
+// UNGROUPED integer ("2026", "100") is never a money token, so an account/reference number embedded in
+// a description is not mistaken for an amount. Optional leading sign / paren and trailing minus.
 //
-// ReDoS hardening (S12 audit / vuln-scan 2026-06-21): every repeating quantifier is BOUNDED so the
-// scan is provably linear. The earlier `\s*\d[\d.,]*` form backtracked quadratically (O(N²)) on a
-// long digit/separator (or whitespace) run lacking a valid decimal tail — a hostile statement/invoice
-// whose chunk is one giant line could freeze the main process. Bounding the integer/grouping run to 30
-// chars (a 30-digit figure is ~10²³ — far beyond any real printed amount) and the leading gap to 4
-// spaces makes each match attempt O(1), so the global `matchAll` is O(N). The trailing `\s*` is left
-// unbounded: only OPTIONAL atoms follow it, so it can never drive a failure-backtrack. The accepted
-// token set is unchanged for every realistic figure (the unit tests pin the parse behaviour).
-export const MONEY_RE = /[-+(]?\s{0,4}\d[\d.,]{0,30}[.,]\d{2}\s*\)?-?/g
+// THREE alternatives, tried in order (full-audit-2026-06-28 DECISION 2 / TEST-N2 — grouping support):
+//   (A) space-grouped:  `\d{1,3}( \d{3})+` with an optional ",dd"/".dd" decimal → "1 234 567,89", "1 234"
+//   (B) decimal form:   a digit run (incl. '.'/','/apostrophe grouping) ending in `[.,]\d{2}` →
+//                       "1.234,56", "1'234.56", "100,00" (the original form + the Swiss apostrophe sep)
+//   (C) bare thousands: `\d{1,3}([.,']\d{3})+` with NO decimal tail → "1.000", "2.500", "1.234.000"
+// The trailing `(?!\d)` makes (B) REJECT "1.00" out of "1.000" (it would be followed by a digit), so the
+// figure falls through to (C) and reads 1000 — fixing the 1000× understatement where a de-AT "1.000"
+// read as €1. The leading `(?<!\d)` anchors a match to a non-digit boundary so a token can never START in
+// the MIDDLE of a digit run; the space-grouped form (A) additionally carries `(?<![A-Za-z0-9])` so its
+// leading 1–3-digit group only fires at a clean WORD boundary. Together they stop (A) from grabbing the
+// 3-digit TAIL of a preceding token and fusing it across the space — whether that tail follows a digit
+// (`778899 300.00` → "899 300.00" → 899300, the pdf-layout continuation hazard) or a letter
+// (`ref123 456,78` → "123 456,78" → 123456.78, a reference column abutting the amount). `parseAmount`
+// then normalises any of these (it already strips spaces/apostrophes and applies the 3-trailing-digit
+// thousands rule), so the parse side is unchanged.
+//
+// ReDoS hardening (S12 audit / vuln-scan 2026-06-21; PRESERVED here): every repeating quantifier is
+// BOUNDED or unambiguous, so the scan stays provably linear. The earlier `\s*\d[\d.,]*` form backtracked
+// quadratically (O(N²)) on a long digit/separator run lacking a valid decimal tail — a hostile chunk on
+// one giant line could freeze the main process. (B)'s grouping run is bounded to 30 chars (a 30-digit
+// figure is ~10²³, far beyond any real amount); (A) and (C) repeat a group PINNED by its separator +
+// exactly three digits, so the `+` cannot backtrack ambiguously; the leading gap is bounded to 4 spaces
+// and the trailing `\s*` is followed only by OPTIONAL atoms. Each match attempt is therefore O(1) /
+// non-backtracking and the global `matchAll` is O(N) (the ReDoS regression tests pin this on 200k-char
+// adversarial lines). The accepted token set is unchanged for every realistic 2-dp figure.
+export const MONEY_RE =
+  /(?<!\d)[-+(]?\s{0,4}(?:(?<![A-Za-z0-9])\d{1,3}(?: \d{3})+(?:[.,]\d{2})?|\d[\d.,']{0,30}[.,]\d{2}|\d{1,3}(?:[.,']\d{3})+)(?!\d)\s*\)?-?/g
 
 /** Money equality within half a cent (printed figures carry 2 minor digits). */
 export const MONEY_EPS = 0.005
@@ -91,19 +111,59 @@ function isValidYmd(y: number, m: number, d: number): boolean {
 }
 
 /**
- * Normalize a printed date to ISO `YYYY-MM-DD`, or null if unsupported/invalid. ISO passes through;
- * dotted/slashed forms are read DAY-FIRST (the de-AT target locale). Two-digit years are unsupported
- * (dropped) rather than guessed.
+ * Whether dotted/slashed dates in a document are day-first (de-AT default) or month-first (US). Inferred
+ * per-document by `inferDateOrder`; `parseDate` / `splitLeadingDates` take it as a parameter (BL-N1).
  */
-export function parseDate(token: string): string | null {
+export type DateOrder = 'dmy' | 'mdy'
+
+// A dotted/slashed `nn[./]nn[./]yyyy` token (ISO `yyyy-mm-dd` is unambiguous, so excluded). Used ONLY to
+// sniff the document's date ordering in `inferDateOrder` — never to validate a date.
+const AMBIGUOUS_DATE_RE = /\b(\d{1,2})[./](\d{1,2})[./]\d{4}\b/g
+
+/**
+ * Infer a document's date ordering (full-audit-2026-06-28 BL-N1, DECISION 1a — per-document locale
+ * inference). de-AT day-first (`'dmy'`) is the DEFAULT, overridden to month-first (`'mdy'`) ONLY when the
+ * document contains at least one UNAMBIGUOUSLY US-ordered date (its SECOND field is 13–31, so it can only
+ * be a day → the token must be mm/dd) AND no unambiguously EU-ordered date contradicts it (a token whose
+ * FIRST field is 13–31 can only be dd/mm). A document with only fully-ambiguous tokens (every field ≤ 12)
+ * — or a self-contradictory mix — keeps the conservative de-AT default. This stops the silent row-drop
+ * (a US `12/31/2026` no longer parses to null) and the confidently-wrong month (`03/05/2026` reads as the
+ * doc's inferred locale), without guessing on a genuinely ambiguous document.
+ *
+ * NB: the audit's BL-N1 prose stated the trigger with the fields SWAPPED ("first field > 12 → mm/dd"),
+ * which is logically inverted — a first field > 12 can only be a DAY, forcing day-first. The
+ * mechanically-correct rule (a SECOND field > 12 forces month-first) is implemented here; the
+ * discrepancy is recorded in architecture.md §24 so it is not re-litigated.
+ */
+export function inferDateOrder(text: string): DateOrder {
+  let us = 0
+  let eu = 0
+  for (const m of text.matchAll(AMBIGUOUS_DATE_RE)) {
+    const a = +m[1]
+    const b = +m[2]
+    if (b > 12 && b <= 31 && a <= 12) us++ // second field can only be a day ⇒ month-first
+    else if (a > 12 && a <= 31 && b <= 12) eu++ // first field can only be a day ⇒ day-first
+  }
+  return us > 0 && eu === 0 ? 'mdy' : 'dmy'
+}
+
+/**
+ * Normalize a printed date to ISO `YYYY-MM-DD`, or null if unsupported/invalid. ISO passes through.
+ * Dotted/slashed forms are read DAY-FIRST by default (the de-AT target locale); pass `order: 'mdy'` to
+ * read them month-first (the US ordering inferred per-document by `inferDateOrder`, BL-N1). Two-digit
+ * years are unsupported (dropped) rather than guessed.
+ */
+export function parseDate(token: string, order: DateOrder = 'dmy'): string | null {
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(token)
   if (iso) return isValidYmd(+iso[1], +iso[2], +iso[3]) ? token : null
-  const dmy = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(token)
-  if (dmy) {
-    const d = +dmy[1]
-    const m = +dmy[2]
-    const y = +dmy[3]
-    return isValidYmd(y, m, d) ? `${y}-${pad2(m)}-${pad2(d)}` : null
+  const m = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(token)
+  if (m) {
+    const f1 = +m[1]
+    const f2 = +m[2]
+    const y = +m[3]
+    const d = order === 'mdy' ? f2 : f1
+    const mo = order === 'mdy' ? f1 : f2
+    return isValidYmd(y, mo, d) ? `${y}-${pad2(mo)}-${pad2(d)}` : null
   }
   return null
 }
@@ -125,22 +185,43 @@ export function parseDate(token: string): string | null {
  * Conservative by construction: it stops at the first NON-date token, so a description is never consumed,
  * and it is capped at two dates (booking + value) so a date-shaped FIRST word of a description cannot eat
  * the whole row. `dates` is empty when the line does not begin with a date (the caller then drops it).
- * The money scanner's other users (`lastMoneyOnLine`/balance/invoice-total readers) take the LAST token,
- * not the first, so they were never affected and are deliberately left untouched.
+ * `order` (default day-first) is the per-document ordering from `inferDateOrder` (BL-N1).
+ *
+ * The money scanner's OTHER users (`lastMoneyOnLine` / balance / invoice-total readers) take the LAST
+ * token, which a TRAILING date can corrupt — a balance line shaped `Endsaldo 1.234,56 EUR per 30.06.2026`
+ * read `30.06.20` → 3006.20 (full-audit-2026-06-28 BL-N2, correcting the earlier "never affected" claim).
+ * Those readers therefore scrub ALL date tokens via `stripDateTokens` BEFORE the money scan (handling a
+ * date at EITHER end), rather than splitting only leading dates here.
  */
-export function splitLeadingDates(line: string): { dates: string[]; rest: string } {
+export function splitLeadingDates(line: string, order: DateOrder = 'dmy'): { dates: string[]; rest: string } {
   const dates: string[] = []
   let rest = line
   // Cap at two leading dates (booking + value) — a third date-shaped leading token is not a real column.
   while (dates.length < 2) {
     const m = /^(\S+)\s+(.*)$/.exec(rest)
     if (!m) break
-    const d = parseDate(m[1])
+    const d = parseDate(m[1], order)
     if (!d) break
     dates.push(d)
     rest = m[2]
   }
   return { dates, rest }
+}
+
+// A date-shaped token: dotted/slashed `d?d[./]m?m[./]yyyy` or ISO `yyyy-mm-dd`. Order-agnostic — it
+// removes the whole token regardless of dmy/mdy (it never parses the fields). It is intentionally
+// stricter than a money token: a grouped figure like `1.234,56` / `35.037,04` is NOT a date (its third
+// group is not a bare 4-digit year), so scrubbing dates never eats a real amount.
+const DATE_TOKEN_RE = /\b\d{1,2}[./]\d{1,2}[./]\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/g
+
+/**
+ * Remove every date-shaped token from a line, replacing it with a space (BL-N2). The LAST-money balance/
+ * total readers (`lastMoneyOnLine`, invoice `lastMoney`) call this first, so a date at EITHER end of the
+ * line — the de-AT `Kontostand per <date> <figure>` (date leads) AND the `Endsaldo <figure> EUR per
+ * <date>` (date trails) — can never be the token the money scan reads.
+ */
+export function stripDateTokens(line: string): string {
+  return line.replace(DATE_TOKEN_RE, ' ')
 }
 
 // ---- Word-bounded substring test (shared by both categorization paths) ----

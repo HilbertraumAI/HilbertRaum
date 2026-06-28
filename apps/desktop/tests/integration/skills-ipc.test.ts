@@ -222,4 +222,36 @@ describe('skills IPC — content-class sentinel grep (§22-M1)', () => {
     expect(audit).toContain('skill_imported')
     expect(audit).not.toContain(SENTINEL)
   })
+
+  // SEC-N1: a member name with an embedded NUL passes the ../-/drive-/depth checks but would reach
+  // writeFileSync, whose ERR_INVALID_ARG_VALUE embeds the RAW (sentinel-bearing) path. Preview must
+  // honour its "never throws / returns ok:false" contract AND never leak the path (§22-M1).
+  it('a NUL-byte member name (SEC-N1) → preview returns ok:false structurally, never throws or leaks the path', async () => {
+    const { db } = makeHarness()
+    const NUL = String.fromCharCode(0)
+    const nul = await writeZip([
+      { name: 'SKILL.md', content: skillMd('nul-evil', SENTINEL) },
+      { name: `${SENTINEL}${NUL}.txt`, content: SENTINEL }
+    ])
+    let threw = false
+    let preview: SkillPreview | undefined
+    try {
+      const { result } = await invoke(handlers, IPC.previewSkillPackage, nul)
+      preview = result as SkillPreview
+    } catch {
+      threw = true
+    }
+    // Contract: preview NEVER throws — it returns a structural failure instead.
+    expect(threw).toBe(false)
+    expect(preview?.ok).toBe(false)
+    // safeRelPath rejected the NUL STRUCTURALLY (the fixed `invalidPath` reason), not via the
+    // generic inner-catch fallback (`unreadableZip`).
+    expect(preview?.errorCodes).toContain('invalidPath')
+    // Neither the attacker sentinel nor the NUL byte appears anywhere in the serialized payload.
+    const serialized = JSON.stringify(preview)
+    expect(serialized).not.toContain(SENTINEL)
+    expect(serialized.includes(NUL)).toBe(false)
+    // The DB audit log never recorded the sentinel either.
+    expect(allAuditText(db)).not.toContain(SENTINEL)
+  })
 })

@@ -277,3 +277,29 @@ describe('export_invoice_csv', () => {
     if (ok.ok) expect(validateToolOutput(exportInvoiceCsvTool, ok.output)).toEqual([])
   })
 })
+
+// full-audit-2026-06-28 Phase 1 (financial correctness): adversarial whole-string tests through the real
+// invoice entry points (extractInvoice / parseLineItem). The invoice path shares money.ts with the bank
+// path, so the same locale/grouping/trailing-date fixes apply.
+describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
+  it('BL-N1: infers month-first invoice/due dates on a US-ordered invoice', () => {
+    const inv = extractInvoice(
+      [chunk('Invoice\nInvoice date 06/15/2026\nDue date 07/20/2026\nWidget 50,00', 1)],
+      'EUR'
+    )
+    // BEFORE: 06/15 read day-first (day 6, month 15) → invalid → null → the header date silently dropped.
+    expect(inv.header.invoiceDate).toBe('2026-06-15')
+    expect(inv.header.dueDate).toBe('2026-07-20')
+  })
+
+  it('BL-N2: a trailing-date total line reads the FIGURE, not the date, as the total', () => {
+    const inv = extractInvoice([chunk('Invoice\nGross total 390,00 EUR per 30.06.2026', 1)], 'EUR')
+    expect(inv.totals.grossTotal).toBe(390) // BEFORE: lastMoney read '30.06.20' → 3006.20
+  })
+
+  it('TEST-N2: parseLineItem reads grouped figures (thousands / space / apostrophe) whole (DECISION 2)', () => {
+    expect(parseLineItem('Maschine 12.500', 'EUR')).toMatchObject({ lineTotal: 12500 }) // BEFORE: 12.5
+    expect(parseLineItem('Charge 1 234 567,89', 'EUR')).toMatchObject({ lineTotal: 1234567.89 }) // BEFORE: 567.89
+    expect(parseLineItem("Pos 1'234.56", 'CHF')).toMatchObject({ lineTotal: 1234.56 }) // BEFORE: 234.56
+  })
+})

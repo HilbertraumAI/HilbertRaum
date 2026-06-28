@@ -46,6 +46,19 @@ export const de: Record<keyof typeof en, string> = {
   'app.fatal.hintAfter': ' auf deinem Laufwerk und sieh in docs/troubleshooting.md nach.',
   'app.loadingWorkspace': 'Arbeitsbereich wird geladen…',
 
+  // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
+  'errorBoundary.title': 'Auf diesem Bildschirm ist etwas schiefgelaufen',
+  'errorBoundary.body':
+    'Dieser Bildschirm ist auf ein unerwartetes Problem gestoßen. Deine Arbeit und deine Daten ' +
+    'sind sicher — es ist nichts verloren gegangen. Versuch es noch einmal oder geh zurück zum Start.',
+  'errorBoundary.retry': 'Noch einmal versuchen',
+  'errorBoundary.home': 'Zum Start',
+  'errorBoundary.app.title': 'Die App ist auf ein Problem gestoßen',
+  'errorBoundary.app.body':
+    'Etwas Unerwartetes ist passiert. Deine Daten auf dem Laufwerk sind sicher. Lade neu, um ' +
+    'fortzufahren.',
+  'errorBoundary.app.reload': 'Neu laden',
+
   // ---- Home ----
   'home.headline.ready': 'Bereit zum Chatten.',
   'home.headline.starting': 'Gleich bereit…',
@@ -920,6 +933,7 @@ export const de: Record<keyof typeof en, string> = {
   'skills.import.error.unsupportedCompression': 'Das Skill-Paket nutzt eine nicht unterstützte Komprimierungsmethode.',
   'skills.import.error.pathTraversal': 'Das Paket enthält eine Datei, deren Pfad aus dem Paketordner ausbricht.',
   'skills.import.error.absolutePath': 'Das Paket enthält eine Datei mit einem absoluten oder Laufwerksbuchstaben-Pfad.',
+  'skills.import.error.invalidPath': 'Das Paket enthält eine Datei mit einem ungültigen Pfad.',
   'skills.import.error.symlink': 'Das Paket enthält einen symbolischen Link, was nicht erlaubt ist.',
   'skills.import.error.tooDeep': 'Das Paket verschachtelt Ordner tiefer als erlaubt.',
   'skills.import.error.pathTooLong': 'Das Paket enthält einen zu langen Dateipfad.',
@@ -1290,6 +1304,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.benchmark.warnSlowDrive':
     'Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber ' +
     'länger dauern.',
+  'main.benchmark.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um den Benchmark auszuführen.',
 
   // Emission set (D-L5): localized at the emission site via tMain().
   'main.workspace.wrongPassword':

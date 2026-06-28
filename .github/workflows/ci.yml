@@ -1,0 +1,88 @@
+# CI — offline build + test gate (fixes audit finding TEST-N1).
+#
+# Runs the exact pre-release command chain (npm ci -> typecheck -> build -> test) on every
+# pull request and on pushes to master, on Ubuntu and Windows. The unit+integration suite is
+# fully OFFLINE: it uses the mock runtime + mock embedder and mocks `electron`, so it needs no
+# weights, no sidecar binaries, and no network — nothing here launches Electron.
+#
+# This is dev infrastructure only. It ships nothing to users, adds no telemetry/analytics, and
+# performs no network egress beyond the npm registry install. It does NOT replace the
+# HILBERTRAUM_* manual smoke matrix — that real-binary / real-model pre-release gate is a
+# SEPARATE human step (see docs/packaging.md — the "Continuous integration (CI)" section and the
+# "HILBERTRAUM_* manual harness matrix", audit M-A5); those smokes are env-gated and skip here.
+
+name: CI
+
+# Every PR is validated against its merge result; pushes to master give post-merge green +
+# catch direct pushes. A branch pushed WITHOUT an open PR intentionally gets no CI — the PR is
+# the gate (open a draft PR to run CI on a WIP branch).
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# One in-flight run per ref. A new push to a branch/PR cancels the previous, still-running CI.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: these jobs only read the repo and run npm — nothing else. This matters most
+# for fork PRs, where an unset (default) GITHUB_TOKEN scope would be handed to whatever code runs
+# during npm ci / build / test. Grant more narrowly at the job level if a future step needs it.
+permissions:
+  contents: read
+
+# Keep CI fast and free of network flakiness: skip the ~100 MB Electron platform-binary
+# download (nothing here launches Electron) and short-circuit the repo's verify-electron
+# postinstall (scripts/verify-electron.mjs early-exits on either of these). See packaging.md.
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  HILBERTRAUM_SKIP_ELECTRON_CHECK: '1'
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both OSes even if one fails — the ci-success gate below aggregates the legs.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          # engines require >=22.5 (node:sqlite is a built-in that needs it).
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install (lockfile-pinned, offline-capable)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  # Single stable gate to mark as the branch-protection required status check. The per-OS matrix
+  # legs publish as "build-and-test (ubuntu-latest)" / "(windows-latest)" — names that shift if
+  # the OS labels ever change; "ci-success" does not, so it stays matched in branch protection.
+  ci-success:
+    name: ci-success
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: always()
+    steps:
+      - name: Require every build-and-test leg to have succeeded
+        run: |
+          result='${{ needs.build-and-test.result }}'
+          echo "build-and-test aggregate result: $result"
+          test "$result" = "success"

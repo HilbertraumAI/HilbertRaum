@@ -80,7 +80,9 @@ describe('redaction detectors (each in isolation)', () => {
 
   it('maskDates masks supported printed forms (validated) and leaves an impossible date alone', () => {
     expect(maskDates('on 2026-03-15 and 15.03.2026 and 03/15/2026').count).toBe(2) // ISO + dotted day-first
-    // 03/15/2026 is day-first → day 15? no, "03/15" parses as day 3, month 15 → invalid → left alone.
+    // 03/15/2026 reads day-first as day 3, month 15 → invalid → left alone. This is the documented
+    // BL-N6 under-detection: redaction is day-first only (it does NOT infer locale like extraction does),
+    // so a US-ordered date LEAKS into the redacted copy (known-limitations.md "Document redaction").
     expect(maskDates('on 2026-03-15 and 15.03.2026 and 03/15/2026').text).toBe(
       'on [DATE] and [DATE] and 03/15/2026'
     )
@@ -157,7 +159,13 @@ describe('redact_document through the gate', () => {
       expect(out.redactedText).not.toContain('jane.doe@example.com')
       expect(validateToolOutput(redactDocumentTool, result.output)).toEqual([])
     }
-    expect(events.map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
+    // TEST-N5: assert the OUTCOME (a successful run records start + done, and never a failure)
+    // via membership rather than an exact, order-pinned array that a benign new lifecycle event
+    // would break while still passing if `done` silently stopped firing.
+    const eventTypes = events.map((e) => e.type)
+    expect(eventTypes).toContain('skill_run_started')
+    expect(eventTypes).toContain('skill_run_done')
+    expect(eventTypes).not.toContain('skill_run_failed')
   })
 
   it('is confirm-gated: the gate refuses it without confirmation', async () => {
@@ -199,5 +207,39 @@ describe('redact_document through the gate', () => {
     const { ctx } = makeCtx([chunk(PII_TEXT, 1)], { signal: controller.signal })
     const result = await redactDocumentTool.run({ documentId: 'd1' }, ctx)
     expect(result.ok).toBe(false)
+  })
+})
+
+// full-audit-2026-06-28 Phase 1 (financial correctness wave): redaction under-masking (BL-N4) +
+// characterization of the accepted limitations (TEST-N6 / BL-N6). Detection stays conservative.
+describe('redaction coverage (full-audit-2026-06-28 Phase 1)', () => {
+  it('BL-N4: masks common US/national phone formats (punctuated, with optional leading 1)', () => {
+    expect(maskPhones('call 555-123-4567 today').text).toBe('call [PHONE] today') // BEFORE: unmatched
+    expect(maskPhones('toll free 1-800-555-1234 now').text).toBe('toll free [PHONE] now') // BEFORE: unmatched
+    expect(maskPhones('dotted 555.123.4567 here').text).toBe('dotted [PHONE] here')
+    // Still conservative: a bare 10-digit run with no separators is NOT a phone (account/ID numbers).
+    expect(maskPhones('id 5551234567 end')).toEqual({ text: 'id 5551234567 end', count: 0 })
+  })
+
+  it('BL-N4: masks a lowercase / fully-lower compact IBAN (case-insensitive detection)', () => {
+    expect(maskIbans('iban de89370400440532013000 ok').count).toBe(1) // BEFORE: 0 (case-sensitive)
+    expect(maskIbans('konto at611904300234573201 bitte').count).toBe(1) // AT length 20, lowercased
+    // The space-grouped uppercase form still does not eat a trailing lowercase prose word.
+    expect(maskIbans('IBAN AT61 1904 3002 3457 3201 please')).toEqual({
+      text: 'IBAN [IBAN] please',
+      count: 1
+    })
+  })
+
+  it('TEST-N6: documented under-detection is pinned — names/addresses unmasked, US-ordered date leaks', () => {
+    // No name/address detection (best-effort posture; known-limitations.md "Document redaction").
+    const r = redactText('Jane Doe, 42 Main Street, Springfield, signed the contract.')
+    expect(r.totalRedactions).toBe(0)
+    expect(r.text).toContain('Jane Doe') // names are NOT masked (accepted limitation)
+    expect(r.text).toContain('42 Main Street') // postal addresses are NOT masked (accepted limitation)
+    // BL-N6 locale asymmetry: an EU-ordered date masks; the US-ordered counterpart LEAKS (redaction
+    // keeps the day-first parseDate default — it does NOT infer locale; that is extraction-only).
+    expect(maskDates('signed 31/12/2026').text).toBe('signed [DATE]')
+    expect(maskDates('signed 12/31/2026').text).toBe('signed 12/31/2026') // leaks — documented, not masked
   })
 })

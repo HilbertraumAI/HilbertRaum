@@ -516,11 +516,17 @@ INSERT INTO chunks_fts(text, chunk_id) SELECT text, id FROM chunks;
 // The FTS5 index over message text, used by conversation search.
 // Mirrors `ensureChunksFts` exactly — self-contained (NOT external-content,
 // same VACUUM rationale), trigger-synced so no chat code path can miss it (message
-// content is never UPDATEd by current code; the third trigger is cheap
+// content is never UPDATEd by current code; the update trigger is cheap
 // defense-in-depth), and a one-time guarded backfill makes an older workspace
 // searchable on first open after upgrade. Messages are persisted with think blocks
 // already stripped, so reasoning text can never be indexed. FTS5 +
 // snippet()/highlight() availability in BOTH runtimes is verified.
+//
+// The compaction `kind` guard (R8) lives on BOTH the insert AND the update trigger so a
+// checkpoint summary can never enter conversation search through either path (DATA-1, full
+// audit 2026-06-28). The update trigger guards its INSERT (not the whole trigger via WHEN) so
+// its DELETE still runs unconditionally — a plain row that is converted to a compaction row in
+// the same content UPDATE still has its old FTS entry purged.
 function ensureMessagesFts(db: Db): void {
   const exists = db
     .prepare("SELECT name FROM sqlite_master WHERE name = 'messages_fts'")
@@ -539,7 +545,8 @@ END;
 
 CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages BEGIN
   DELETE FROM messages_fts WHERE message_id = old.id;
-  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+  INSERT INTO messages_fts(content, message_id)
+    SELECT new.content, new.id WHERE new.kind IS NOT 'compaction';
 END;
 
 INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages WHERE kind IS NOT 'compaction';
@@ -565,6 +572,32 @@ CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages WHEN new.kind IS NOT 'co
   INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
 END;
 DELETE FROM messages_fts WHERE message_id IN (SELECT id FROM messages WHERE kind = 'compaction');
+`)
+}
+
+/**
+ * DATA-1 (full audit 2026-06-28) — the UPDATE-trigger twin of `ensureMessagesFtsKindFilter`.
+ * `ensureMessagesFts` builds `messages_fts_au` with the `kind` guard on its INSERT for fresh DBs;
+ * this upgrades a DB whose `messages_fts_au` re-indexed updated content UNCONDITIONALLY, so a
+ * future in-place edit of a `kind='compaction'` row can never leak its summary text into
+ * user-facing conversation search. Idempotent: rewrites only when the live trigger lacks the
+ * guard (`new.kind` absent), mirroring the insert-trigger backfill precedent. The DELETE stays
+ * unconditional (a kind-transition still purges the stale entry). Any already-indexed compaction
+ * row is pruned by `ensureMessagesFtsKindFilter`, which runs on the same open. Runs after
+ * `ensureMessagesFts` so the table + `kind` column already exist.
+ */
+function ensureMessagesFtsUpdateKindFilter(db: Db): void {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'")
+    .get() as unknown as { sql: string } | undefined
+  if (!row || row.sql.includes('new.kind')) return
+  db.exec(`
+DROP TRIGGER messages_fts_au;
+CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+  INSERT INTO messages_fts(content, message_id)
+    SELECT new.content, new.id WHERE new.kind IS NOT 'compaction';
+END;
 `)
 }
 
@@ -726,12 +759,36 @@ export function openDatabase(path: string): Db {
     // DB-7: bank_transactions.category_id (a migrated column) — joined as transaction volume grows.
     'CREATE INDEX IF NOT EXISTS idx_bank_transactions_category ON bank_transactions(category_id);'
   )
+  db.exec(
+    // PERF-3 (full audit 2026-06-28): getLatestCheckpoint runs on EVERY chat + grounded turn,
+    // filtering `conversation_id AND kind='compaction' ORDER BY rowid DESC LIMIT 1`. The only prior
+    // key was idx_messages_conversation (conversation_id alone), forcing an O(messages-in-conv)
+    // partial scan per turn on a high-latency USB drive. This composite turns it into an index
+    // SEARCH with no SCAN and no temp B-tree: SQLite appends the rowid to every index, so trailing
+    // `(conversation_id, kind)` already satisfies the `ORDER BY rowid DESC LIMIT 1` — naming rowid
+    // explicitly is REJECTED by SQLite ("no such column: rowid") since messages has a TEXT PK and
+    // only an implicit rowid. This index targets getLatestCheckpoint specifically;
+    // listConversationTurns and getConversationSummaryMarker keep using idx_messages_conversation
+    // (their `rowid > ?` range + `ORDER BY rowid` can't be served here — the non-equality
+    // `kind IS NOT 'compaction'` predicate sits before the trailing rowid and blocks the seek), so
+    // idx_messages_conversation must NOT be treated as redundant.
+    'CREATE INDEX IF NOT EXISTS idx_messages_conv_kind ON messages(conversation_id, kind);'
+  )
+  db.exec(
+    // PERF-4 (full audit 2026-06-28): summary_cache eviction deletes the oldest rows
+    // `ORDER BY created_at ASC`, but the table's only key was the PK (content_hash, model_id), so
+    // each over-cap tree build did a full scan + temp B-tree sort of up to 50k rows. This makes
+    // eviction an ordered index scan (LIMIT-bounded — the residual partial sort is only the
+    // content_hash tiebreak within an identical created_at).
+    'CREATE INDEX IF NOT EXISTS idx_summary_cache_created ON summary_cache(created_at);'
+  )
   // run_id indexes (DB-7) deliberately OMITTED: run_id is only ever INSERTed, never joined or
   // filtered anywhere in the codebase, so an index would be pure write-amplification on USB with
   // no read benefit. Add one alongside the first query that joins on run_id.
   ensureChunksFts(db)
   ensureMessagesFts(db)
   ensureMessagesFtsKindFilter(db)
+  ensureMessagesFtsUpdateKindFilter(db)
   seedCollections(db)
   return db
 }

@@ -76,12 +76,18 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,}\b/
 // left alone. (Case-insensitive scheme.)
 const URL_RE = /\b(?:https?:\/\/|www\.)[^\s,;<>()]+/gi
 
-// IBAN candidate: a 2-letter country code + 2 check digits, then UPPERCASE-alphanumeric BBAN chars in
-// groups of up to four (the common space-grouped print form). Groups are uppercase-only on purpose —
-// IBANs are conventionally printed uppercase, so a following lowercase prose word ("…3201 please")
-// cannot be mis-read as another group and eaten. Each candidate is re-validated after compacting
-// (length + per-country length where known), so the loose candidate never masks more than a real IBAN.
-const IBAN_CANDIDATE_RE = /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{1,4}){2,8}\b/g
+// IBAN candidate — TWO alternatives so a lowercase / mixed-case IBAN is detected WITHOUT re-introducing
+// the "trailing prose word eaten" hazard (full-audit-2026-06-28 BL-N4):
+//   (1) space-GROUPED, UPPERCASE-only: a 2-letter country code + 2 check digits, then uppercase BBAN
+//       chars in groups of up to four (the common space-grouped print form). Uppercase-only on purpose —
+//       a following lowercase prose word ("…3201 please") cannot be mis-read as another group and eaten.
+//   (2) COMPACT, ANY-CASE: a contiguous (space-less) 2-letter + 2-digit + 11–30 alphanumeric run; it
+//       cannot span a space, so a lowercase compact IBAN like "de89370400440532013000" is caught while
+//       prose (which has spaces, or lacks the 2-letter+2-digit lead) is not.
+// `maskIbans` uppercases each candidate before validating, and re-validates after compacting (length +
+// per-country length where known), so a loose candidate never masks more than a real IBAN.
+const IBAN_CANDIDATE_RE =
+  /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{1,4}){2,8}\b|\b[A-Za-z]{2}\d{2}[A-Za-z0-9]{11,30}\b/g
 
 // Per-country IBAN lengths (the common European set). A known country must match its exact total
 // length; an unknown country falls back to the generic 15–34 range (a documented best-effort limit).
@@ -90,11 +96,16 @@ const IBAN_LENGTHS: Record<string, number> = {
   HU: 28, IE: 22, IT: 27, LI: 21, LU: 20, NL: 18, NO: 15, PL: 28, PT: 25, SE: 24, SI: 19, SK: 24
 }
 
-// Phone: conservative international/German shapes only — a `+`-prefixed country code OR a leading `0`,
-// then 7–15 digits with optional single separators. Plain numbers (amounts, years, account numbers
-// without a leading 0) are intentionally NOT matched. Dates are masked BEFORE phones (see redactText)
-// so a dotted date like "01.02.2026" can never be eaten here.
-const PHONE_RE = /(?<!\d)(?:\+\d{1,3}[\s.\-/]?\d(?:[\s.\-/]?\d){5,13}|0\d(?:[\s.\-/]?\d){5,12})(?!\d)/g
+// Phone: conservative international/German/US shapes only — (a) a `+`-prefixed country code, (b) a
+// leading `0`, then 7–15 digits with optional single separators, OR (c) a US/national 3-3-4 number that
+// is PUNCTUATED ("555-123-4567", "1-800-555-1234", "555.123.4567"), optional leading "1" country code
+// (full-audit-2026-06-28 BL-N4). Punctuation is REQUIRED on (c): a bare 10-digit run with no separators
+// is NOT matched (it would mask account/ID numbers), and `[.\-]` excludes spaces and slashes so a prose
+// triple ("100 200 3000") and a slashed date are left alone. Plain numbers (amounts, years, account
+// numbers without a leading 0) are intentionally NOT matched. Dates are masked BEFORE phones (see
+// redactText) so a dotted date like "01.02.2026" can never be eaten here.
+const PHONE_RE =
+  /(?<!\d)(?:\+\d{1,3}[\s.\-/]?\d(?:[\s.\-/]?\d){5,13}|0\d(?:[\s.\-/]?\d){5,12}|(?:1[.\-])?\d{3}[.\-]\d{3}[.\-]\d{4})(?!\d)/g
 
 // Date candidate: the three supported printed forms; each is re-validated with the shared `parseDate`
 // (the bank/invoice date primitive) so an impossible date like 99/99/9999 is left untouched.
@@ -120,12 +131,13 @@ export function maskUrls(text: string): { text: string; count: number } {
   return { text: out, count }
 }
 
-/** Mask every IBAN — a candidate is masked only when, with its print spaces removed, it is a real
- *  IBAN shape (2 letters + 2 check digits + 11–30 alphanumerics ⇒ 15–34 chars). */
+/** Mask every IBAN — a candidate is masked only when, with its print spaces removed and uppercased, it is
+ *  a real IBAN shape (2 letters + 2 check digits + 11–30 alphanumerics ⇒ 15–34 chars). Uppercasing makes
+ *  detection case-insensitive (BL-N4) — a lowercase `de89…` IBAN is masked like its uppercase form. */
 export function maskIbans(text: string): { text: string; count: number } {
   let count = 0
   const out = text.replace(IBAN_CANDIDATE_RE, (m) => {
-    const compact = m.replace(/\s+/g, '')
+    const compact = m.replace(/\s+/g, '').toUpperCase()
     // Structural shape first (2 letters + 2 check digits + 11–30 BBAN chars ⇒ 15–34 total)…
     if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(compact)) return m
     // …then the exact per-country length where known (an unknown country keeps the generic shape).

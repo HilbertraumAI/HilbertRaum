@@ -163,9 +163,14 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise) + build + test smoke. |
 | `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Verifies Electron's platform binary actually extracted; force-re-extracts from the cached download when a half-extract is detected (the silent NTFS-on-Linux `extract-zip` failure), else fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Cross-platform Node (not a shell mirror). Skips via `ELECTRON_SKIP_BINARY_DOWNLOAD` / `ELECTRON_OVERRIDE_DIST_PATH` / `HILBERTRAUM_SKIP_ELECTRON_CHECK`. |
 
-The asset-planning + verify logic is mirrored from the unit-tested
-`apps/desktop/src/main/services/assets.ts` (the canonical reference — keep in sync), exactly as
-`prepare-drive` mirrors `drive.ts`. (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+The asset **download / verify / plan** logic is mirrored from the unit-tested
+`apps/desktop/src/main/services/assets.ts` (the canonical reference for *that* logic — keep in sync),
+exactly as `prepare-drive` mirrors `drive.ts`. **The default-set model-id list itself, however, is
+NOT in `assets.ts`** (DOC-N4, full audit 2026-06-28): it lives only in `scripts/prepare-drive.ps1`
+(`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
+**between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
+does not change which models `--with-assets` fetches (a parity test,
+`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
@@ -312,6 +317,42 @@ provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) �
 real signed build + notarization + a USB-drive §17 demo on a fresh laptop with Wi-Fi off, and the
 second-laptop continuity check.
 
+## Continuous integration (CI) — the automated green gate
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the **exact pre-release command
+chain** — `npm ci` → `npm run typecheck` → `npm run build` → `npm test` — on every pull request
+and on pushes to `master`, across a matrix of **`ubuntu-latest` and `windows-latest`** (Windows is
+first-class for this project) on **Node 22.x** (engines require `>=22.5`). It is the machine
+backstop the audit asked for (TEST-N1): before CI, the suite was green only by author discipline,
+and the repo's own anti-false-green check ([`tests/full-suite-guard.ts`](../apps/desktop/tests/full-suite-guard.ts))
+only mattered if something ran it. CI runs the two per-OS matrix legs (`build-and-test
+(ubuntu-latest)` / `(windows-latest)`) plus a tiny **`ci-success`** aggregate job that passes only
+when both legs pass — mark **`ci-success`** the **required status check** on `master`. Its name is
+stable even if the OS matrix labels change later, so branch protection never silently stops matching.
+
+**Why it can run with zero weights / zero network / zero binaries:** the unit + integration suite
+is offline by construction — mock runtime, mock embedder, `electron` mocked — and nothing in
+`typecheck`/`build`/`test` launches Electron. So CI sets two env knobs to skip the ~100 MB Electron
+platform-binary download and the repo's `verify-electron` postinstall (which only guards the
+dev-time NTFS half-extract bug):
+
+| Env var (CI only) | Effect |
+| --- | --- |
+| `ELECTRON_SKIP_BINARY_DOWNLOAD=1` | Electron's own postinstall skips the platform-binary download. |
+| `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` | [`scripts/verify-electron.mjs`](../scripts/verify-electron.mjs) early-exits (it also early-exits on the var above). |
+
+npm downloads are cached via `actions/setup-node` (`cache: npm`, keyed off the root
+`package-lock.json`); `concurrency: cancel-in-progress` cancels a superseded run when a branch/PR
+is pushed again. This is **dev infrastructure only** — it ships nothing to users, adds no
+telemetry/analytics, and performs no network egress beyond the registry install (the "no cloud /
+no telemetry" hard rule governs the shipped app at runtime).
+
+**What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
+CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the
+`HILBERTRAUM_*` manual harness matrix below (audit M-A5), which is env-gated and skips in CI. CI is
+the automated floor; the manual pre-ship checklist and harness matrix remain a required, human-run
+pre-release gate. The two do not substitute for each other.
+
 ## Manual pre-ship checklist (real hardware — not covered by CI)
 
 The green gate (`typecheck`/`test`/`build`) runs on mocks with zero weight files, so real-runtime /
@@ -365,6 +406,20 @@ Treat this as part of the gate, not optional polish:
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
+
+**Optional harness *inputs* (point a harness at a specific artifact).** Distinct from the on-switch
+env vars in the table above, several harnesses additionally read an **artifact-pointer input**,
+documented before only as inline test-file comments (DOC-N7, full audit 2026-06-28). All are
+optional — each has a default or is only needed by its harness:
+
+| Input var | Read by | Points at |
+| --- | --- | --- |
+| `HILBERTRAUM_SMOKE_MODEL` | `bringup-smoke` / `gpu-smoke` / `thinking-smoke` | one chat-model `.gguf` filename (else the smallest chat model) |
+| `HILBERTRAUM_GEMMA_MODEL` | `gemma-thinking` | the Gemma model filename (default `gemma4-12b-it-qat-q4.gguf`) |
+| `HILBERTRAUM_OCR_IMAGE` | `ocr-smoke` | a real German scan image (png/jpg) — **never committed** |
+| `HILBERTRAUM_REAL_MODEL_PATH` | `real-model/wave3` | the chat GGUF path (default `D:/models/chat/qwen3.5-4b-ud-q4kxl.gguf`; sibling `HILBERTRAUM_LLAMA_BIN` points at the binary) |
+| `HILBERTRAUM_RESIDENT_REAL_N` | `resident-cache-real` | real chunk count to embed (default 2000) |
+| `HILBERTRAUM_EVAL_DIR` | `model-eval` | override the `eval/` data dir |
 
 **Canned-real-output regression-fixture policy:** because these never run in CI, an
 upstream format change (SSE shape, `--list-devices` lines, whisper JSON) would otherwise

@@ -3,8 +3,8 @@ import {
   AudioParser,
   AUDIO_EXTENSIONS,
   AUDIO_NEEDS_TRANSCRIBER_MESSAGE,
-  AUDIO_SEGMENT_MAX_WORDS,
-  AUDIO_SEGMENT_TARGET_WORDS,
+  AUDIO_SEGMENT_MAX_TOKENS,
+  AUDIO_SEGMENT_TARGET_TOKENS,
   AUDIO_TRANSCRIPTION_FAILED_MESSAGE,
   AUDIO_UNREADABLE_MESSAGE,
   audioRangeLabel,
@@ -12,7 +12,7 @@ import {
   packTranscriptSegments
 } from '../../src/main/services/ingestion/parsers/audio'
 import { isAudioPath, selectParser, supportedExtensions } from '../../src/main/services/ingestion/parsers'
-import { chunkSegments } from '../../src/main/services/ingestion/chunker'
+import { chunkSegments, approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/services/ingestion/chunker'
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/cli'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
 
@@ -64,20 +64,60 @@ describe('packTranscriptSegments', () => {
     expect(packedWords).toEqual(allWords)
   })
 
-  it('keeps every packed segment at or below MAX words (the one-chunk invariant)', () => {
+  it('keeps every packed segment at or below MAX approx-tokens (the one-chunk invariant)', () => {
     const input = Array.from({ length: 100 }, (_, i) => seg(i * 5, i * 5 + 5, 37))
     for (const p of packTranscriptSegments(input)) {
-      expect(p.text.split(/\s+/).length).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_WORDS)
+      expect(approxTokenCount(p.text)).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_TOKENS)
     }
   })
 
   it('splits an oversized single whisper segment instead of overflowing', () => {
-    const big = seg(0, 600, AUDIO_SEGMENT_MAX_WORDS * 2 + 50)
+    // ~2.1× the cap in short (1-token) words → 3 word-boundary pieces, each ≤ MAX tokens.
+    const big = seg(0, 600, AUDIO_SEGMENT_MAX_TOKENS * 2 + 50)
     const packed = packTranscriptSegments([big])
     expect(packed.length).toBe(3)
     for (const p of packed) {
-      expect(p.text.split(/\s+/).length).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_WORDS)
+      expect(approxTokenCount(p.text)).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_TOKENS)
       expect(p.sectionLabel).toBe(audioRangeLabel(0, 600_000))
+    }
+  })
+
+  // RAG-N1: the SAME oversize path on a space-less script. A whitespace split (the old code)
+  // would leave a CJK/Thai run as ONE "word" far over the chunk window; it must char-split.
+  it('char-splits an oversized space-less (Japanese / Thai) whisper segment to ≤ MAX tokens', () => {
+    for (const run of ['情報'.repeat(600), 'ส'.repeat(1300)]) {
+      const packed = packTranscriptSegments([{ startMs: 0, endMs: 60_000, text: run }])
+      expect(packed.length).toBeGreaterThan(1)
+      for (const p of packed) {
+        expect(approxTokenCount(p.text)).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_TOKENS)
+        // Pieces are a LOSSLESS partition (overlap 0) — no characters inserted or dropped.
+        expect(p.sectionLabel).toBe(audioRangeLabel(0, 60_000))
+      }
+      expect(packed.map((p) => p.text).join('')).toBe(run)
+    }
+  })
+
+  // The load-bearing RAG-N1 guarantee: every packed CJK/Thai segment fits in ONE chunk window,
+  // so the chunker never windows audio (which is what keeps reconstruction lossless). A pure
+  // space-less transcript packed by the OLD word cap (400 words) would be ~thousands of tokens.
+  it('packs space-less (Japanese / Thai) transcripts to segments that each fit one chunk window', () => {
+    for (const unit of ['この文は日本語のテストです', 'นี่คือประโยคภาษาไทยสำหรับการทดสอบ']) {
+      // 60 short space-less whisper segments → far over the window in tokens, a few "words".
+      const input = Array.from({ length: 60 }, (_, i) => ({
+        startMs: i * 5000,
+        endMs: i * 5000 + 5000,
+        text: unit
+      }))
+      const packed = packTranscriptSegments(input)
+      expect(packed.length).toBeGreaterThan(1)
+      for (const p of packed) {
+        expect(approxTokenCount(p.text)).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_TOKENS)
+        expect(approxTokenCount(p.text)).toBeLessThan(CHUNK_DEFAULTS.chunkSizeTokens)
+      }
+      // …and the chunker maps each packed segment onto exactly ONE chunk, verbatim, no overlap.
+      const chunks = chunkSegments(packed)
+      expect(chunks.length).toBe(packed.length)
+      chunks.forEach((c, i) => expect(c.text).toBe(packed[i].text))
     }
   })
 
@@ -98,8 +138,34 @@ describe('packTranscriptSegments', () => {
     })
   })
 
-  it('target stays below the max (packing sanity)', () => {
-    expect(AUDIO_SEGMENT_TARGET_WORDS).toBeLessThan(AUDIO_SEGMENT_MAX_WORDS)
+  // The subtle interaction: an oversize single whisper segment is split into pieces that SHARE one
+  // time-range label, so `coalesceSegments` re-merges them (joined by '\n\n') and re-windows before
+  // chunking. The guarantee that matters (RAG-N1) is that the round-trip never DUPLICATES or DROPS
+  // content — it stays byte-identical up to whitespace. (A small trailing remainder that merges into
+  // the prior 500-token window normalizes its '\n\n' boundary to a single space in a space-less
+  // script — n=800 is an exact 2×400 split with no remainder, n=900/1250 leave a merging remainder.)
+  it('round-trips an oversize single CJK whisper segment with no duplicated or dropped content', () => {
+    for (const n of [800, 900, 1250]) {
+      const big = Array.from({ length: n }, (_, i) => String.fromCharCode(0x4e00 + i)).join('') // n DISTINCT CJK chars
+      const packed = packTranscriptSegments([{ startMs: 0, endMs: 120_000, text: big }])
+      expect(packed.length).toBeGreaterThan(1)
+      for (const p of packed) expect(approxTokenCount(p.text)).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_TOKENS)
+      const recon = chunkSegments(packed)
+        .map((c) => c.text)
+        .join('')
+      const reconNoWs = recon.replace(/\s/g, '')
+      // No loss + no duplication: stripped of whitespace the round-trip is byte-identical to the source…
+      expect(reconNoWs).toBe(big)
+      // …and no span is repeated (distinct chars ⇒ any duplicated overlap would repeat a char).
+      expect(new Set(reconNoWs).size).toBe(reconNoWs.length)
+    }
+  })
+
+  it('target stays below the max, and the max stays a margin below the chunk window', () => {
+    expect(AUDIO_SEGMENT_TARGET_TOKENS).toBeLessThan(AUDIO_SEGMENT_MAX_TOKENS)
+    // The interaction guarantee: a packed segment (≤ MAX) is strictly under the chunk window,
+    // so the chunker emits one window per segment (no split, no overlap) — lossless round-trip.
+    expect(AUDIO_SEGMENT_MAX_TOKENS).toBeLessThan(CHUNK_DEFAULTS.chunkSizeTokens)
   })
 })
 

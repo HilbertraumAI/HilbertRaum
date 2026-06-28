@@ -75,8 +75,10 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 ## What you need (DIY)
 
 - **A computer:** Windows (first-class), macOS, or Linux.
-- **RAM decides which model you can run** (the app benchmarks your machine and recommends one):
-  ≤12 GB → Qwen3-4B · 16–24 GB → Ministral 8B · ≥32 GB → Gemma 4 12B (or the 30B-A3B MoE, opt-in).
+- **RAM decides which model the benchmark recommends** (the app benchmarks your machine and picks the
+  best *fit*): ≤12 GB → Qwen3-4B · 16–24 GB → Ministral 8B · ≥32 GB → Gemma 4 12B (or the 30B-A3B MoE,
+  opt-in). These are *recommended best-fit* tiers, **not** hard minimums — each model's actual floor is
+  the lower **Min RAM** column in the model table below (e.g. Ministral 8B already runs from 12 GB).
 - **Disk space:** ~**3 GB** for the smallest usable setup (the 4B chat model + the embeddings model),
   up to ~**10 GB** for the 14B or ~**19 GB** for the 30B-A3B MoE. A **USB-3 SSD** is recommended for
   a portable drive.
@@ -177,7 +179,8 @@ policy in **[`docs/model-policy.md`](docs/model-policy.md)**.
 **The default set** (`-WithAssets`) is enough for everyday use: a chat model + **embeddings**
 (document Q&A) + **reranker** (retrieval quality) + **Whisper** (audio). The benchmark
 auto-recommends the best chat model that fits your RAM: **≤12 GB → Qwen3-4B, 16–24 GB → Ministral
-8B, ≥32 GB → Gemma 4 12B**. The **30B-A3B MoE** is opt-in (≈30B quality at ≈3.3B *active*
+8B, ≥32 GB → Gemma 4 12B** (best-*fit* tiers; the table's **Min RAM** column is each model's lower
+hard floor). The **30B-A3B MoE** is opt-in (≈30B quality at ≈3.3B *active*
 params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 
 ### Chat models
@@ -186,7 +189,7 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 |---|---|---|---|---|
 | Qwen3 4B Instruct Q4 | Bundled default (smallest; keeps **Deep** answer mode) | ~2.7 GB | 8 GB | Apache-2.0 |
 | Qwen3 4B Instruct 2507 Q4 | Better 4B quality (no Deep) | ~2.5 GB | 8 GB | Apache-2.0 |
-| Qwen3.5 4B (UD-Q4_K_XL) | Newest 4B (not auto-recommended yet) | ~2.6 GB | 8 GB | Apache-2.0 |
+| Qwen3.5 4B (UD-Q4_K_XL) | Newest 4B (not auto-recommended yet) | ~2.9 GB | 8 GB | Apache-2.0 |
 | Qwen3 8B Instruct Q4 | 12 GB+ laptops | ~5.0 GB | 12 GB | Apache-2.0 |
 | Ministral 3 8B Instruct (2512) Q4 | **Recommended 8B** — benchmark winner | ~5.2 GB | 12 GB | Apache-2.0 |
 | Granite 4.1 8B Q4 | Challenger (selectable, not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 |
@@ -254,9 +257,10 @@ ai_drive/
 npm install        # install (dev-time only; needs internet once for the Electron binary)
 npm run dev        # launch the app
 npm run build      # production build
-npm test           # unit + integration tests
+npm test           # unit + integration tests (whole suite)
 npm run typecheck  # TypeScript checking
 npm run package:win # portable Windows .exe (electron-builder)
+# Faster iteration (from apps/desktop/): npx vitest run <file> · npx vitest -t "<name>" · npm run test:watch
 ```
 
 New here? Read [`BUILD_STATE.md`](BUILD_STATE.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md) first —

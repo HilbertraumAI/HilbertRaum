@@ -103,13 +103,48 @@ batching — no behavior change.
   (every retrieval + stale-check filters it); `idx_extract_type_nv` on
   `extraction_records(record_type, normalized_value)` (the unscoped "list every date/amount" path the
   doc-leading `idx_extract_doc_type` can't serve); `idx_documents_status` on `documents(status)`;
-  `idx_bank_transactions_category` on `bank_transactions(category_id)`. **`run_id` indexes deliberately
+  `idx_bank_transactions_category` on `bank_transactions(category_id)`; `idx_messages_conv_kind` on
+  `messages(conversation_id, kind)` (full-audit-2026-06-28 PERF-3 — the per-turn `getLatestCheckpoint`
+  compaction lookup, `WHERE conversation_id=? AND kind='compaction' ORDER BY rowid DESC LIMIT 1`,
+  served with no SCAN/temp-B-tree because SQLite auto-appends the rowid; **not** `(…, kind, rowid)` —
+  naming rowid in an index is rejected, "no such column: rowid"); `idx_summary_cache_created` on
+  `summary_cache(created_at)` (PERF-4 — turns the age-ordered eviction delete into an ordered index
+  scan, replacing a full-table temp-B-tree sort). `idx_messages_conversation` (conversation_id alone) is
+  **retained** — it still serves `listConversationTurns` / the summary-marker lookup, whose `rowid>?`
+  range + `ORDER BY rowid` the composite can't satisfy (the non-equality `kind!='compaction'` blocks the
+  trailing rowid seek). **`run_id` indexes deliberately
   omitted** — `run_id` is only ever INSERTed, never joined/filtered, so an index would be pure
   write-amplification on USB; add one alongside the first query that joins on it.
 - **DB-3/ING-2 — `listDocuments` de-N+1'd.** The per-row chunk COUNT + per-indexed-row stale-embeddings
   COUNT+JOIN (up to 1+2N queries, polled at 400 ms during import) are now two grouped queries loaded
   into Maps (`GROUP BY document_id`), mirroring the memberships join beside them. Benefits from
   `idx_embeddings_model`.
+- **Data-layer hardening (full audit 2026-06-28, Phase 5).** Atomicity + a trigger guard + two pinned
+  invariants, all additive (no schema-shape change; indexes `IF NOT EXISTS`, the FTS trigger drop/recreate
+  the only non-index DDL).
+  - **REL-4/REL-5 — transactional parity with `deleteDocument`.** `deleteConversation` (chat.ts) now wraps
+    its two deletes (messages, then conversations — no `ON DELETE CASCADE`) in one `BEGIN…COMMIT` with
+    `ROLLBACK` on throw, so a crash / `SQLITE_BUSY` past the busy_timeout between them can't leave an
+    orphaned empty thread (compaction checkpoint rows live in `messages` too). `deleteImageSession`
+    (vision/history.ts) now deletes the ROW first (in a txn) and shreds the stored image only AFTER —
+    the DATA-1 "never destroy the on-disk copy while the row delete can still fail" ordering, closing the
+    undeletable-ghost-session window. Both run from IPC handlers with no outer transaction (no nested
+    BEGIN), exactly like `deleteDocument`.
+  - **DATA-1 — `messages_fts_au` kind guard + backfill.** The UPDATE trigger now guards its INSERT with
+    `WHERE new.kind IS NOT 'compaction'` (the DELETE stays unconditional, so a plain→compaction content
+    edit still purges the stale FTS row), matching the INSERT trigger. `ensureMessagesFtsUpdateKindFilter`
+    drop/recreates the trigger on existing DBs whose `au` trigger re-indexed updates unconditionally
+    (mirrors `ensureMessagesFtsKindFilter`) — so a future in-place edit of a checkpoint row can never leak
+    its summary text into conversation search, on old or new drives.
+  - **DATA-2 (invariant, no code change).** `tree_edges.child_id` is a polymorphic FK (chunks.id OR
+    tree_nodes.id) with no FK to chunks; the no-dangling-edge invariant holds only because every
+    chunk-delete path also tears down the document's `tree_nodes` (cascading the edges via `parent_id`).
+    Pinned by an integrity test (after a `deleteDocument`, zero `child_is_chunk=1` edges reference a gone
+    chunk; the forbidden chunks-only delete dangles them).
+  - **DATA-3 (idempotency confirmed, no code change).** `extract.ts` re-extract is idempotent per chunk:
+    the main loop skips a chunk whose `__scan__` marker matches the current content hash, and `commitChunk`
+    deletes the chunk's prior rows before inserting, so a forced re-commit replaces rather than doubles the
+    marker. Pinned by a no-double-count test.
 
 **Compare retrieval (`services/doctasks/manager.ts`).**
 - **RAG-2/ING-1 — decode doc-B once.** Section-matched compare (mode b) ran `VectorIndex.search` per
@@ -183,6 +218,66 @@ needs the footer's `ScopePopover`/`DepthMenu`/`SkillPicker` handlers stabilized 
 refactor); the FE-4 `DocRow` extraction (a ~25-prop memoized row — high stale-closure surface); and
 **FE-5** list windowing of the transcript + document list (needs a measured approach to preserve
 scroll-to-bottom + a11y; the cheap scroll-thrash half of FE-5 is already done under FE-1).
+
+## Renderer robustness — design record (full audit 2026-06-28, Phase 3)
+The renderer was the least-audited surface (prior rounds were backend-only). Phase 3 closes a
+top-level robustness gap plus a cluster of unhandled-rejection / effect-lifecycle / key / i18n / a11y
+items. All changes are renderer-only (plus the shared i18n catalogs); no IPC surface, no main-process
+behavior. The labels below are the audit's **FE-1…FE-9** (full-audit-2026-06-28 — distinct from the
+Wave-P2 perf FE-* record above).
+
+**Error boundary (FE-1 — the one High).** Before Phase 3 there was **no** error boundary anywhere, so
+any screen render throw (e.g. `react-markdown` on malformed model output, a Radix portal edge)
+unmounted the whole tree → a blank window with no recovery, in an offline app the user must
+force-quit. The contract now:
+- **Component:** `renderer/components/ErrorBoundary.tsx` — a class component with
+  `getDerivedStateFromError` + `componentDidCatch`. It takes a `fallback(reset)` render-prop and an
+  optional `onError` sink. **Logging is LOCAL-ONLY** (CLAUDE.md hard rule: no cloud/telemetry/remote
+  crash reporting): there is no renderer→main log IPC (the preload exposes only the READ-only
+  `getLogTail`/`exportLog`), so it logs via `console.error` — never a network call.
+- **Per-screen boundary (`App.tsx`).** AppShell wraps the active screen in an `<ErrorBoundary>` **keyed
+  by `screen`**, so navigating to any other destination re-mounts the subtree and clears a captured
+  error. The boundary is INSIDE `<main>`, so the nav rail (rendered outside it) stays alive — the user
+  is never trapped. The localized fallback (`ScreenErrorFallback`, `role="alert"`) offers an in-place
+  **Try again** (`reset`) and a **Go to Home** escape — the latter calls `reset()` *and*
+  `navigate('home')`, since when Home is itself the throwing screen `navigate('home')` is a same-value
+  no-op (the key never changes), so `reset()` is what actually clears the boundary.
+- **Outer last-resort boundary (`main.tsx`).** Wraps `<App/>` so a throw ABOVE the per-screen boundary
+  (the gate, the i18n provider, AppShell itself) still shows a localized reload prompt
+  (`RootErrorFallback`) instead of a blank window. It sits OUTSIDE `I18nProvider`, so it resolves the
+  pre-unlock language itself (`resolvePreUnlockLanguage` + the standalone `t`).
+- **New i18n keys** (en + de, parity typecheck-enforced): `errorBoundary.title/body/retry/home` and
+  `errorBoundary.app.title/body/reload`.
+
+**The FE-2…FE-9 cluster.**
+- **FE-2 (unhandled IPC rejections).** `ModelsScreen` cancel now `.catch`es → `friendlyIpcError` into
+  the error banner; `SkillsTab.pick()` moved `pickSkillPackage` INSIDE its `try` → a rejecting picker
+  shows the `skills.import.failed` toast, not an unhandled rejection.
+- **FE-3 (skill toggle double-submit).** A per-skill in-flight `Set` (`toggling`) disables the row
+  Switch while an enable/disable is pending and ignores a second submit for the same skill;
+  `refresh()` reconciles to the server state in `finally`. Disable-while-pending over optimistic UI
+  (simpler, robust).
+- **FE-4 (setState-after-unmount).** The HomeScreen `let active` guard (or a component `mountedRef`
+  where the async setState lives in a shared callback/interval) is applied uniformly: the
+  DocumentsScreen import poll (guard checked after each `await` before any setState), `PrivacyTab`,
+  `DiagnosticsTab` refreshers, `SkillsTab` settings load, and the General tab. (React 18 makes a
+  post-unmount setState a silent no-op, so this is defensive correctness; the DocumentsScreen test has
+  teeth by asserting `listDocuments` is not re-fetched after unmount.)
+- **FE-5 (effect re-run on language change).** `I18nProvider.applyLanguageSetting` is now
+  `useCallback([])` (identity-stable; it only needs `setLang`), so App's policy/settings effect, which
+  lists it in deps, no longer re-fires `getPolicy()`+`getSettings()` purely because the UI language
+  changed.
+- **FE-6 (unstable keys).** ScopePopover pending-attachment chips key by `name+index` (name-aware so a
+  new import re-mounts a changed slot, index-disambiguated so two cross-folder files with the same base
+  name don't collide on a duplicate key); the ChatScreen optimistic user-message id uses a monotonic
+  counter (not `Date.now()`, which collides within a millisecond).
+- **FE-7 (untracked toast timer).** `ToastProvider` tracks its auto-dismiss `setTimeout` ids in a ref
+  and clears them in a cleanup effect.
+- **FE-8 (raw English in localized copy).** `DiagnosticsTab` benchmark failures route through
+  `friendlyIpcError` (no transport/Error-class prefix in `diag.bench.failed`); the literal `'UNKNOWN'`
+  is replaced with `t('diag.app.unknown')`.
+- **FE-9 (SegmentedControl Home/End).** Home/End now select the FIRST/LAST **enabled** segment directly
+  (`moveToEdge`), instead of relying on the arrow-key modulo wrap to land there incidentally.
 
 ## Performance — design record (perf audit 2026-06-18, Wave P3)
 Pipeline throughput & latency on the two hottest operations — **import a document** and **ask a
@@ -517,11 +612,17 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   while switching to a fixed reserve changes the fence-SIZING formula, a prompt-assembly change that could
   alter the fence (and thus the output) for a near-budget skill. Disallowed under the behavior-preserving
   mandate; revisit when a trimming skill ships (§17).
-- **FE-3 / FE-4 / FE-5 (renderer tail).** Unchanged from Wave P2/P5: Composer-`input` move (needs footer
-  handler stabilization first), `DocRow` extraction (a ~25-prop memoized row with a high stale-closure
-  surface), and list windowing (no virtualization lib in deps; windowing variable-height Markdown while
-  preserving scroll-to-bottom, find-in-page, and a11y is behavior-sensitive). Left deferred — not
-  confidently safe under the behavior-preserving mandate.
+- **FE-3 / FE-5 (renderer tail).** `DocRow` extraction **LANDED** in the full-audit-2026-06-28 **Phase 7
+  (PERF-5 Part A)**: a module-level `memo(DocRow)` fed PER-ROW BOOLEANS (`selected`/`menuOpen`) and a
+  parent-narrowed `rowTask` (+ a stable `anyTaskActive` boolean), so a 400 ms task-progress tick — or
+  opening one row's ⋯ menu, or toggling another row's selection — re-renders ONLY the targeted row, not
+  the whole list. The latest-ref `useEventCallback` was extracted to a shared `renderer/lib/` module and
+  feeds stable handlers; render-count tests pin the win (teeth: dropping `memo`, or passing the whole
+  `selected` Set / `menuOpenId` string, re-renders every row). Still deferred as behavior-sensitive: the
+  Composer-`input` move (needs footer handler stabilization first) and **FE-5 list windowing**
+  (no virtualization lib in deps; windowing variable-height rows while preserving scroll-to-bottom,
+  find-in-page, and a11y is behavior-sensitive) — **PERF-5 Part B was re-deferred by owner decision**,
+  not confidently safe under the behavior-preserving mandate.
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
@@ -819,14 +920,20 @@ it fails with friendly convert-to-WAV/MP3 copy.
   transcriber injected per call via the ADDITIVE `ParseContext` (carried from
   `IngestionDeps.transcriber` — the embedder-injection precedent; text parsers ignore
   it). Whisper segments are **packed** into paragraph-sized `ExtractedSegment`s
-  (~180-word target, hard cap 400 < the 500-token chunk window) labeled
-  `sectionLabel: "mm:ss–mm:ss"` (`h:mm:ss` above an hour) — D29: the time range rides
-  the EXISTING `Citation.section`, zero citation-path changes. Packing matters twice:
-  distinct labels never coalesce in the chunker (raw whisper segments would mean
-  thousands of tiny chunks), and the ≤400-word cap makes **every audio chunk exactly one
-  packed segment, verbatim, no overlap** — which is why `extractDocumentPreview` (and
-  through it translate/compare re-extraction) reads audio text from the STORED CHUNKS
-  instead of re-transcribing for minutes.
+  (~180-token target, hard cap `AUDIO_SEGMENT_MAX_TOKENS` = `chunkSizeTokens − 100` = 400,
+  a margin below the 500-token chunk window) labeled `sectionLabel: "mm:ss–mm:ss"`
+  (`h:mm:ss` above an hour) — D29: the time range rides the EXISTING `Citation.section`,
+  zero citation-path changes. The cap is measured in **approx-tokens** (`approxTokenCount`,
+  CJK/Thai-aware), NOT whitespace words (RAG-N1, full audit 2026-06-28 Phase 4): a space-less
+  phrase is a few "words" but hundreds of tokens, so a word cap let an audio segment overflow
+  the window and the chunker then windowed+overlapped it. Packing matters twice: distinct
+  labels never coalesce in the chunker (raw whisper segments would mean thousands of tiny
+  chunks), and the ≤`AUDIO_SEGMENT_MAX_TOKENS` cap makes **each audio chunk one packed
+  segment, verbatim, no overlap** — so reconstruction has **no duplicated/dropped spans** —
+  which is why `extractDocumentPreview` (and through it translate/compare re-extraction) reads
+  audio text from the STORED CHUNKS instead of re-transcribing for minutes. (Exception: the rare
+  oversize-single-segment split re-coalesces and may normalize a piece boundary to one whitespace
+  — never a dup/loss; see `rag-design.md` §2 "Audio packing" / §3 windowing.)
 - **D35: the audio original is KEPT** (the locked Phase-4 copy-into-workspace contract +
   `reindexDocument` re-parsing the stored file force it), encrypted (`.enc`) on
   encrypted workspaces; **a re-index of an audio document is a full re-transcription**
@@ -1177,9 +1284,11 @@ adds is the safety machinery:
   `RuntimeStatus` now carries `backend: 'gpu' | 'cpu' | 'mock'` + `gpuName`.
 - **Mid-generation crash auto-fallback** (§5.3): `LlamaServer` gained an `onUnexpectedExit` hook
   (fires only for a *healthy* server dying outside `stop()`). When the active backend was GPU,
-  `createGpuCrashAutoFallback` persists the flags, **restarts the same model once at CPU**, and
-  broadcasts the friendly §11.4 notice (`runtime:notice` event → preload `onRuntimeNotice`):
-  *"Switched to compatibility mode for stability…"* — never "GPU failed".
+  `createGpuCrashAutoFallback` persists the flags, **forces a one-shot restart at CPU via
+  `RuntimeManager.forceRestart`** — NOT `start()`, whose same-model idempotency guard would
+  otherwise swallow the restart entirely (§5.3) — and broadcasts the friendly §11.4 notice
+  (`runtime:notice` event → preload `onRuntimeNotice`): *"Switched to compatibility mode for
+  stability…"* — never "GPU failed".
 - **The E5 embedder is pinned to CPU** (`--device none` in its `extraArgs`, §7 — decided): the
   384-dim model gains little from a GPU, and the pin keeps ingestion immune to driver flakiness
   and VRAM contention with the chat model.
@@ -1326,6 +1435,49 @@ start(model), settings.gpuMode = 'auto' (default)
 ├─ Rung 3 — pure-CPU safety-net build <os>/cpu/llama-server (if present)
 └─ Rung 4 — MockRuntime (existing graceful-fallback rule — never stuck)
 ```
+
+**§5.3 Mid-session crash auto-fallback (corrected — full-audit 2026-06-28, REL-1):**
+
+A GPU-backed `llama-server` can die *after* it became healthy — a driver crash, VRAM stolen by
+another process. `LlamaServer`'s `onUnexpectedExit` hook fires (only for a healthy server dying
+outside `stop()`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
+was `gpu`** (factory.ts:137-139). `createGpuCrashAutoFallback` then, in order: persists
+`gpuAutoDisabled` + `gpuLastError`, surfaces the friendly compatibility-mode notice, and restarts
+the model once at CPU — so the user's *next* message just works.
+
+**The idempotency interaction (the bug this record previously mis-described).** The restart can
+**not** go through `RuntimeManager.start()`. After a mid-session crash the manager has not observed
+the child's exit: the crashed `LadderRuntime` is still `this.current` with the *same* `modelId`, and
+`this.last` still holds the health snapshot cached at start. `start()`'s same-model idempotency guard
+(`runtime/index.ts`, "already running / start in flight → no-op") then early-returns a stale status
+read — the "restart at CPU" never stops-and-restarts, `status()` keeps reporting the **dead** server
+as running/healthy, and the next chat/RAG/doctask turn routes to it and fails. (The earlier wording
+here — "restarts the same model once at CPU" — was therefore false; the restart was silently
+swallowed. The unit tests missed it because the ladder test injected a *fake* `restart` and the
+manager test proved the guard in isolation; nothing wired the real crash path through the real
+manager.)
+
+**The fix (option b — a crash-only `forceRestart`).** `RuntimeManager.forceRestart(opts)` runs
+`doStop()` (clearing `current`/`last`, so `status()` immediately stops reporting the dead server as
+healthy) then `doStart(opts)` inside **one** enqueued op, bypassing **only** the same-model guard.
+Normal `start()` idempotency is untouched — a double-click or an AI-Model-screen revisit still must
+not restart; only the crash path forces it. `startingModelId` is set synchronously (exactly as
+`start()` does) so a concurrent manual `start(sameModel)` *joins* the in-flight restart instead of
+queueing a second one. The crash wiring in `main/index.ts` calls `runtimeRef.forceRestart`, not
+`start`. (Alternatives weighed: (a) wiring-level `stop()`-then-`start()` — rejected, the two ops
+enqueue separately so a concurrent user start could interleave between them; (c) have the manager
+subscribe to the runtime's unexpected-exit and clear `current`/`last` itself — more plumbing for no
+extra guarantee. `forceRestart` is atomic within the queue and easiest to test.)
+
+**Retry bound (no restart loop).** `gpuAutoDisabled` is persisted **before** the restart, so the
+ladder rebuilt inside `doStart` skips rung 1 and lands on CPU (`--device none`). A later crash is
+then a *CPU* crash, which `LadderRuntime` does **not** route to `onGpuCrash` (`backend !== 'gpu'`) —
+so a GPU session auto-falls-back **at most once**, never in a loop. Re-entrant crash reports while a
+restart is in flight are also dropped by `createGpuCrashAutoFallback`'s `restarting` latch.
+
+(`LlamaServer.start()` additionally carries its own single-flight latch (REL-2): two overlapping
+direct `start()` calls now share one spawn instead of the second orphaning the first — so the
+crash-restart's stop-then-start can never race a stray direct start into a leaked sidecar.)
 
 **§5.4 Where GPU state lives:**
 
@@ -2200,8 +2352,11 @@ audited/exported).
   as the optional `valueDate` (schema/CSV already carry it), `parseLineItem` strips and discards (line
   items have no date field). Capped at two leading dates (booking + value), stops at the first non-date
   token (a description is never consumed), handles either column order. The money scanner's **last-token**
-  readers (`lastMoneyOnLine` / balance / invoice-total) take the trailing figure, so they were never
-  affected and are untouched. This is the **line-parser fallback** (plain-text statements, CSV, and the
+  readers (`lastMoneyOnLine` / balance / invoice-total) take the trailing figure — but a **TRAILING** date
+  token corrupts that (`Endsaldo 1.234,56 EUR per 30.06.2026` read `30.06.20` → 3006.20), so the original
+  "they were never affected" claim was **WRONG**: corrected by **full-audit-2026-06-28 BL-N2** (those
+  readers now scrub date tokens via `money.ts stripDateTokens` before the money scan — see the
+  full-audit-2026-06-28 record below). This is the **line-parser fallback** (plain-text statements, CSV, and the
   invoice path — which has no geometry pass); the geometry layout's own out-of-column value-date handling
   is §21 (the booking-date column model), a separate seam. Pinned by the 4-column `Buchung Valuta Betrag
   Saldo` fixtures (`skills-bank-statement-tool.test.ts` unit + `skills-analysis-bank.test.ts` end-to-end);
@@ -2224,6 +2379,73 @@ audited/exported).
   with `c.currency`. The breakdown is only ever rendered on the **single-currency branch** (so the live
   output is byte-identical, confirmed by the unchanged category tests); the fix removes the latent
   currency-blindness for any future reuse.
+
+**Financial correctness (full-audit-2026-06-28, Phase 1 — BL-N1…N6 / TEST-N2/N6).** A follow-up
+multi-persona audit found the §22-D1 honesty posture undermined by locale/grouping parse bugs in the SAME
+line-parser layer (silent row loss + confidently-wrong figures) plus under-masking in redaction. Two of the
+findings (BL-N1, BL-N2) directly contradicted the just-closed §24 claims. Parsing/aggregation only — no
+schema, IPC, or audit-payload change (figures stay content-class). All driven by **adversarial WHOLE-STRING
+tests through the real entry points** (closing the TEST-N2 gap: the prior tests fed pre-isolated tokens and
+missed the live `MONEY_RE`/`parseDate` bugs). Two owner decisions were taken before implementing:
+- **BL-N1 — per-document date-order inference (`money.ts inferDateOrder` → `parseDate(token, order)`,
+  threaded through `splitLeadingDates` / `extractTransactionRows` / `extractStatementBalances` /
+  `extractInvoice` / `parseLineItem`).** `parseDate` was day-first only, so a US `mm/dd/yyyy` statement
+  either **dropped the whole row** (`12/31/2026` → null → `parseLine` returns null) or attached a
+  **confidently-wrong month** (`03/05/2026` → 3 May). **DECISION 1 as built (owner): per-document locale
+  inference.** `inferDateOrder` scans the document's `nn[./]nn[./]yyyy` tokens and switches the WHOLE
+  document to month-first ONLY when one is unambiguously US-ordered (its **second** field is 13–31) AND none
+  is unambiguously EU-ordered; otherwise the de-AT **day-first DEFAULT** holds (a fully-ambiguous or
+  self-contradictory document is never guessed). This stops the silent row-drop and the wrong month without
+  a result-attached caveat (the output schema is frozen for Phase 1). **NB:** the audit's BL-N1 prose stated
+  the trigger with the fields **swapped** ("first field > 12 → mm/dd"), which is logically inverted — a
+  first field > 12 can only be a **day**, forcing day-first; the mechanically-correct rule (a **second**
+  field > 12 forces month-first) is what shipped. **Redaction deliberately does NOT infer** (it stays
+  day-first — see BL-N6).
+- **BL-N2 — trailing-date balance/total lines (`money.ts stripDateTokens`, used by `lastMoneyOnLine` and
+  invoice `lastMoney`).** The last-token balance/total readers read a **TRAILING** date as the figure:
+  `Endsaldo 1.234,56 EUR per 30.06.2026` → last MONEY_RE match `30.06.20` → **3006.20** — a wrong
+  opening/closing that flips `assessCompleteness` between `complete`/`contradicted` (it can suppress an
+  honest total or bless a partial one). This **disproves** the BL-1 "last-token readers were never affected"
+  claim (corrected above). Fix: scrub every date-shaped token before the money scan, so a date at **EITHER**
+  end is removed — the de-AT date-FIRST `Kontostand per <date> <figure>` shape still reads its figure.
+- **BL-N3 — amount column by POSITION (`bank-statement.ts parseLine`).** The amount was `matches[0]` (the
+  FIRST money token), so a money-shaped reference in the description stole the amount **and its sign**
+  (`Betrag 100,00 EUR -100,00 900,00` → 100, not −100). Fix: with a running balance present (≥2 figures) the
+  amount is the **second-to-last** figure and the balance is the last; with one figure it is the amount.
+  **Byte-identical on the normal 2-figure row.** (The geometry column model, §21, remains the stronger
+  separator; this is the plain-text fallback — a money-shaped token *in* a description is a documented
+  residual, known-limitations.)
+- **DECISION 2 as built (owner): full grouping support (`MONEY_RE`, TEST-N2).** `MONEY_RE` required a 2-dp
+  decimal tail, so a bare de-AT thousands figure `1.000` matched `1.00` → **€1 (a 1000× understatement)**,
+  space-grouped `1 234 567,89` read 567.89, and Swiss apostrophe `1'234.56` read 234.56. `MONEY_RE` now has
+  three ordered alternatives — space-grouped, the original `.`/`,`/apostrophe **decimal** form, and a bare
+  `[.,']`-grouped **thousands** form — with a trailing `(?!\d)` so `1.000` falls through to the thousands
+  form → 1000, a **leading `(?<!\d)` anchor** so a match can never start mid-digit-run, and a
+  **`(?<![A-Za-z0-9])` boundary on the space-grouped form** so its leading 1–3-digit group only fires at a
+  clean word boundary. Together the two boundaries stop the space-grouped form from fusing the 3-digit
+  **tail** of a preceding token across a space — whether that tail follows a digit (the geometry
+  continuation-line `…778899 300,00` → "899 300,00" → 899300, caught in the pre-merge full-suite run) or a
+  letter (`Ref123 456,78` → "123 456,78" → 123456.78, surfaced by the adversarial review). `parseAmount`
+  was already correct (it strips spaces/apostrophes and applies the 3-trailing-digit thousands rule), so
+  **only the capture changed**. Quantifiers stay bounded/non-backtracking — the ReDoS guarantee holds (the
+  200k-char regression tests pass).
+- **BL-N5 — integer-cents reconcile (`reconcileBalances`).** The per-row running-balance check compared
+  `Math.abs(printed − expected) < MONEY_EPS` in **floats** while `assessCompleteness` (audit C-3) uses
+  **integer cents**; a per-row `mismatch` forces `contradicted`. Reconcile now uses the IDENTICAL
+  `Math.round(x*100)` integer path — a **consistency/defensive** fix (no realistic 2-dp input distinguishes
+  the two; the teeth are structural, so its test is a regression guard, not a before/after flip).
+- **BL-N4 — redaction under-masking (`redaction.ts`).** `PHONE_RE` matched only `+`/`0`-prefixed numbers,
+  and IBAN detection was case-sensitive (`de89…` survived). Added a **PUNCTUATED** US/national 3-3-4 phone
+  alternative (optional leading `1`; `[.\-]` only — so a bare 10-digit run, a prose space-triple, and a
+  slashed date are left alone) and a **second case-insensitive COMPACT IBAN** candidate (`maskIbans`
+  uppercases before per-country length validation) that catches a lowercase compact IBAN without the
+  space-grouped form eating a trailing lowercase prose word. Detection stays conservative (prefer a miss
+  over over-masking).
+- **BL-N6 — redaction date-masking asymmetry (DOCUMENTED, lowest priority).** `maskDates` masks every
+  `parseDate`-valid token and **does not infer locale** (unlike extraction — by design), so an EU
+  `31/12/2026` masks while a US `12/31/2026` **leaks** — a locale-asymmetric OUTPUT. Kept best-effort and
+  documented in known-limitations; a date-category toggle is a deferred higher-recall wave. There is **no**
+  path where masked text is un-masked or a detected value reaches a log/audit (privacy posture unchanged).
 
 ### §11 IPC / audit surface
 
@@ -3384,6 +3606,133 @@ audit read each of these and found them correct and well-tested; they are delibe
 logged/audited — the new lock message and the eviction counter carry **counts only**; schema changes were
 additive (or fresh-schema CASCADE); the Electron + vision/OCR caps are defense-in-depth with **no new
 DB/FS/net capability**. Final suite **2335 passed / 39 skipped**.
+
+### §25 Full audit (2026-06-28) — remediation close-out
+
+A **multi-persona read-only full audit** (report `audits/full-audit-2026-06-28.md`), run after the
+backend audit 2026-06-27 close-out (§24) merged to `master`, swept `apps/desktop` (~47k LOC app, ~52k LOC
+tests), `docs/`, `scripts/`, and `model-manifests/` across **seven personas** — security, backend /
+architecture, data layer, RAG / ingestion, business logic, frontend, testing, documentation — focusing
+where the backend-only prior round did **not** look: the renderer, financial-extraction locale
+correctness, CI, and CJK / Thai ingestion. **No Critical, no remote-exploitable issue** (offline by
+construction; only loopback sidecars + the two user-gated downloaders touch the network, prod CSP
+`connect-src 'self'`). The §1 severity index enumerates **54 findings** — by area REL×5, BL×6, FE×9,
+TEST×9, PERF×6, RAG×6, DATA×3, SEC×3, DOC×7 (5 High; the report's "48" headline miscounts its own table).
+**All 9 phases (0–8) are landed** on branch `full-audit-2026-06-28-fixes`. The working-paper report was
+**deleted** under the CLAUDE.md doc-lifecycle rule once every finding was dispositioned; it had already
+been committed to the repo (since `f1fce73`), so the full original stays **recoverable in git history**
+(the parent of the Phase-8 close-out commit), mirroring the §24 / 2026-06-27 precedent. Each phase's
+decisions were folded into the topic-doc §§ as it landed, and the report's lasting content (the
+per-finding dispositions, the **verified-clean inventory**, and the accepted residuals) lives in **this
+section**. This ledger is the durable index — resolve a code comment's `full-audit-2026-06-28 <ID>`
+citation through it.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **TEST-N1** (High) | 0 | **fixed** — `.github/workflows/ci.yml`: `npm ci → typecheck → build → test` on ubuntu+windows / Node 22.x, stable `ci-success` aggregate gate (the first machine backstop) | packaging.md "Continuous integration (CI)"; BUILD_STATE Phase 0 |
+| TEST-N9 (Low) | 0 | **fixed** — `whisper-smoke` `mkdtempSync` moved into `beforeAll` + `afterAll` cleanup (no import-time temp leak in a skipped file) | this ledger; BUILD_STATE Phase 0 |
+| **BL-N1** (High), TEST-N2 (High) | 1 | **fixed** — per-document **date-locale inference** (de-AT day-first default; flips to mm/dd only on an unambiguously US-ordered date) stops the silent row-drop / wrong-month; adversarial whole-string tests now drive the real `extractTransactionRows`/`parseLineItem` path (closing the pre-isolated-token gap); grouped figures (`1.000`, `1 234 567,89`, `1'234.56`) fully supported | known-lim "LINE PARSER" bullet; arch §10 (DECISIONS as built) |
+| BL-N2 (Med) | 1 | **fixed** — `stripDateTokens` scrubs date tokens at **either** end before the last-money balance/total scan, so `Endsaldo … per 30.06.2026` no longer reads the date as the balance | known-lim "LINE PARSER" BL-N2 sub-bullet; §10 / §24 immunity claim corrected |
+| BL-N3 (Med) | 1 | **fixed** — amount column chosen by **position** (second-to-last figure when a balance is present), not the first money-shaped token | known-lim "LINE PARSER" bullet |
+| BL-N4 (Med), TEST-N6 (Med) | 1 | **fixed** — redaction masks punctuated US/national phones + case-insensitive IBANs; characterization tests pin the residual under-detection (US-order / 2-digit-year / names-addresses) | known-lim redaction "Phone and IBAN coverage" sub-bullet |
+| BL-N5 (Low) | 1 | **fixed (code-only, no residual)** — `reconcileBalances` compares in integer cents, matching `assessCompleteness` | this ledger |
+| BL-N6 (Low) | 1 | **docs-only / accepted** — redaction masks every date and deliberately does NOT infer locale (US `12/31` leaks while EU `31/12` masks); by-design best-effort, no leak path to any log | known-lim redaction date-masking sub-bullet |
+| **REL-1** (High) | 2 | **fixed** — crash-only `RuntimeManager.forceRestart(opts)` does `doStop()` (clears `current`/`last` so `status()` stops reporting the dead server healthy) then `doStart()`, bypassing only the same-model idempotency guard; bounded to one fallback by persisted `gpuAutoDisabled` | arch §5.3 (corrected) |
+| REL-2 (Low) | 2 | **fixed** — `LlamaServer.start()` instance-level `starting` single-flight latch (a 2nd concurrent direct caller joins the one start + waits for health) | arch §5.3 record (runtime) |
+| **FE-1** (High) | 3 | **fixed** — `ErrorBoundary` (per-screen inside `<main>` keyed by `screen` + outer last-resort), localized fallback, **local-only** log (no network), nav rail stays alive | arch "Renderer robustness — design record (Phase 3)" |
+| FE-2, FE-3, FE-4 (Med) | 3 | **fixed** — unhandled IPC rejections → `friendlyIpcError`/toast; per-skill in-flight Switch guard; `let active`/`mountedRef` unmount guards on every poll | arch renderer record |
+| FE-5, FE-6, FE-7, FE-8, FE-9 (Low) | 3 | **fixed** — identity-stable `applyLanguageSetting`; stable React keys (name+index / monotonic id); tracked toast timers; `friendlyIpcError` + localized `UNKNOWN`; explicit Home/End edge select | arch renderer record |
+| RAG-N1 (Med) | 4 | **fixed** — audio packing caps on `approxTokenCount` (CJK/Thai-aware) keyed off the chunk window; an over-budget single segment is char-split (space-less-safe), preserving the one-segment-per-chunk / no-overlap invariant | rag-design §2 (audio packing) |
+| RAG-N2 (Low) | 4 | **fixed** — chunker char-slices space-less runs at `gcd(size, overlap)` so consecutive CJK/Thai chunks gain the ~80-token overlap (was zero) | rag-design §3 (windowing) |
+| REL-4 (Med) | 5 | **fixed** — `deleteConversation` wrapped in one txn (ROLLBACK on throw), mirroring `deleteDocument` | arch §10 (data-layer hardening, Phase 5) |
+| REL-5 (Low) | 5 | **fixed** — `deleteImageSession` deletes the row first (in a txn), shreds the file after (DATA-1 ordering) | arch §10 (Phase 5) |
+| PERF-3 (Med) | 5 | **fixed** — `idx_messages_conv_kind` serves the per-turn `getLatestCheckpoint` compaction lookup with no SCAN (EXPLAIN-pinned) | arch data-layer index inventory |
+| PERF-4 (Low) | 5 | **fixed** — `idx_summary_cache_created` turns the age-ordered eviction into an ordered index scan | arch data-layer index inventory |
+| DATA-1 (Low) | 5 | **fixed** — `messages_fts_au` UPDATE trigger gains the `kind IS NOT 'compaction'` guard + `ensureMessagesFtsUpdateKindFilter` backfill | arch §10 (Phase 5) |
+| DATA-2 (Low) | 5 | **invariant-only (no code change)** — `tree_edges.child_id` polymorphic-FK no-dangling-edge invariant pinned by an integrity test | arch §10 (Phase 5) |
+| DATA-3 (Low) | 5 | **verify-only (no code change)** — `extract.ts` `__scan__` per-chunk idempotency confirmed + pinned by a no-double-count test | arch §10 (Phase 5) |
+| RAG-N3 (Med), DOC-N6 (Low), TEST-N4 (Med) | 6 | **fixed** — reranker `MAX_DOC_APPROX_TOKENS` raised 320 → whole chunk window (500 = `CHUNK_DEFAULTS.chunkSizeTokens`) so it scores every chunk in full (n_ctx-safe via the existing clamp); graded-overlap ranking-order test replaces exact-match-only; the E5 prefix-less + reranker-prefix **ceilings** documented with the prefix-migration TODO | rag-design §11 "Known retrieval-quality ceilings" + §12.3 |
+| RAG-N4 (Low) | 7 | **fixed** — `MarkdownParser` in-fence flag (a `#` inside a fenced block is code, not a heading) | rag-design §2 |
+| RAG-N5 (Low) | 7 | **fixed** — CSV/TSV delimiter pinned by extension (`\t` / `,`), not papaparse auto-detect | rag-design §2 |
+| RAG-N6 (Low) | 7 | **already-correct (no code change)** — `corpusNeedsReindex` routes through the shared `buildScopeFilter` (archived parity); pinned by a new `includeArchived` regression test | rag-design §13.6 |
+| SEC-N1 (Low) | 7 | **fixed** — `safeRelPath` rejects a NUL member name (fixed `invalidPath`) before any write; `previewSkillPackage` wraps its body in a catch mapping residual throws to a fixed reason (sentinel-grep teeth) | security-model "Skill-import defences" |
+| SEC-N2 (Low) | 7 | **fixed** — benchmark IPC (`runBenchmark`/`tryGpuAgain`) gains explicit `requireUnlocked()` parity (localized `main.benchmark.locked`) | security-model "Phase-7 security polish" |
+| SEC-N3 (Info) | 7 | **accepted Info residual** — sidecar `serverMessage` 500-char tail is structural-only (our loopback llama.cpp, never user content); pinned by an `INVARIANT (SEC-N3)` comment at the cap | security-model "Phase-7 security polish" |
+| TEST-N5 (Med) | 7 | **fixed (tests-only)** — assert observables not mechanisms (key-buffer-zero vs `Buffer.fill` spy; `≤ 1` read counts; `toContain` event arrays) | this ledger |
+| TEST-N7 (Low) | 7 | **fixed (tests-only)** — fixed LE byte-layout assertion for `decodeVector` (`[00 00 80 3f] → [1.0]`), independent of encode | this ledger |
+| TEST-N8 (Low) | 7 | **fixed (tests-only)** — structural lock test over every registered DB-touching chat/benchmark handler + a retrieve()-level rejecting-embedder test (failure propagates) | this ledger |
+| PERF-1 (Med) | 7 | **fixed** — picker image read → `fs/promises` (open → stat → read loop → close in finally), preserving the same-handle TOCTOU invariant + byte cap | this ledger (ING-8 convention) |
+| PERF-2 (Med) | 7 | **fixed** — dictation WAV write → `await writeFile` (finally still shreds) | this ledger (ING-8 convention) |
+| PERF-6 (Low) | 7 | **fixed** — `AnswerThread` memoized `TurnRow`; the in-flight turn renders plain text, markdown parsed once on completion | this ledger |
+| PERF-5 (Med) | 7 | **partially fixed (Part A)** — `DocRow = memo(...)` with stable callbacks so a poll tick / menu open / sibling-select re-renders only the affected row; **Part B (list windowing) re-deferred** (owner decision — no virt lib; variable-height rows + scroll/find/a11y behavior-sensitive) | arch renderer-tail note |
+| **DOC-N1** (Med) | 8 | **docs-only** — security-model.md now names all **six** `HILBERTRAUM_SKILL_MAX_*` caps + the `HILBERTRAUM_MAX_IMAGE_BYTES` / `_PIXELS` image caps | security-model.md §6.4 caps bullet + D4 |
+| DOC-N2 (Low) | 8 | **fixed (comment)** — `§21 → §22` for the bank-statement LLM categorizer in `doctasks/manager.ts` **and** `skills/categorizer.ts` (2nd instance found by the anchor sweep) | code comments → arch §22 |
+| DOC-N3 (Low) | 8 | **docs-only** — README Qwen3.5-4B size `~2.6 → ~2.9 GB`; RAM tiers clarified as *recommended best-fit* vs the table's lower **Min RAM** floor | README.md |
+| DOC-N4 (Low) | 8 | **docs-only + parity test** — scoped the "mirrored from assets.ts" claim to the download/verify/plan logic; the default-set ids live only in the two prepare-drive shells (new `prepare-drive-default-set.test.ts` pins their parity) | packaging.md; drive-layout.md |
+| DOC-N5 (Low) | 8 | **docs-only** — single-test commands (`npx vitest run <file>`, `-t "<name>"`) + `test:watch` added | CONTRIBUTING.md; README.md |
+| DOC-N7 (Low) | 8 | **docs-only** — packaging.md harness matrix gains an "optional inputs" table for the six `HILBERTRAUM_*` artifact-pointer vars | packaging.md |
+| REL-3 (Low) | — | **not remediated (accepted)** — rasterizer reply waiter stays channel-only (no request-id correlation); a Low-confidence **HYPOTHESIS** whose impact is bounded by the per-step `withTimeout`; deferred as a correctness margin | this ledger (accepted residuals) |
+| TEST-N3 (Med) | 0 / 8 | **partially remediated (accepted)** — the "manual smokes never run in CI" half is accepted-by-design (separate human gate, documented); the canned-fixture **policy** + the `gpu --list-devices` fixture exist, but the SSE + whisper-JSON parser fixtures remain **OUTSTANDING** (follow-up) | packaging.md harness matrix / fixture policy |
+
+**Accepted residuals & non-code dispositions** (on record, deliberately not changed):
+
+- **REL-3** (Low, HYPOTHESIS) — **not remediated**: the OCR rasterizer's hidden-window reply waiter matches
+  on channel only (no request/page-id correlation). Impact is a correctness margin (any hang is bounded by
+  the per-step `withTimeout`), confidence is Low, and it was never scoped to a phase; deferred as a future
+  nicety, not a live defect.
+- **TEST-N3** (Med) — **partially remediated**: the manual `HILBERTRAUM_*` smoke matrix is a deliberate
+  **separate human pre-release gate** (it can't run in offline CI); the canned-real-output fixture-parser
+  **policy** and the b9585 `--list-devices` fixture exist, but the promised **SSE** and **whisper-JSON**
+  parser fixtures are still outstanding — an open follow-up so those parse layers gain CI coverage.
+- **PERF-5 Part B (list windowing)** — **re-deferred** (owner decision): no virtualization lib is in deps,
+  and variable-height rows + scroll / find-in-page / a11y are behavior-sensitive; Part A (row memoization)
+  shipped.
+- **E5 `query:`/`passage:` prefix migration** (RAG-N3 / DOC-N6) — **tracked TODO, not done**: it re-embeds
+  the whole corpus (its own phase) and would re-enable a meaningful `ragMinSimilarity` floor; the reranker
+  full-chunk fix was the smaller-blast-radius lever taken now.
+- **DATA-2 / DATA-3** — **invariant-only / verify-only** (no code change): both are pinned by tests, not
+  altered behavior.
+- **SEC-N3** — **accepted Info residual**: the sidecar `serverMessage` tail is structural-only by upstream
+  (loopback llama.cpp) convention, pinned by an invariant comment at the 500-char cap.
+- **BL-N5** — a clean code-only fix with **no residual limitation** (not a trade-off), so deliberately
+  absent from known-limitations.md.
+- **Residual caveats inside fixed findings** (documented in known-limitations.md): BL-N1 — a doc whose dates
+  are **all** fully ambiguous reads day-first (silent; the tool output schema is frozen); BL-N3 — an unusual
+  layout (two amount columns / a description figure in the amount slot) can still mis-pick; BL-N4 — bare
+  un-punctuated phone runs + space-grouped IBANs still slip (best-effort).
+
+**Verified-clean inventory (attested 2026-06-28 — recorded so it is not re-investigated next round).** The
+audit read each of these and found them correct and well-tested; they are deliberately **not** findings:
+
+- **Crypto / vault** — lifecycle, key-zeroing on lock / wrong password, journaled v1→v2 rekey: re-attested
+  (the §24 crypto inventory still holds end-to-end).
+- **The full IPC `requireUnlocked()` surface** — every DB-touching handler is guarded; TEST-N8 added a
+  **structural** test enumerating them and SEC-N2 closed the one benchmark parity gap.
+- **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
+  allow-list, CSP `connect-src 'self'`, OCR window deny-all.
+- **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
+  `windowsHide` / `child.unref()` on the probe.
+- **Offline / SSRF posture** — IPv4-anchored loopback guard (fails safe), per-redirect-hop re-validation
+  (https-only + private-range deny), streamed-size cap; only the two user-gated downloaders + loopback
+  sidecars use `fetch`.
+- **RRF fusion determinism** — the pure `rrfFuse` units stay strong, and the pass-through guarantee (no
+  keyword / no reranker ⇒ byte-identical to vector-only) was re-verified in Phase 6.
+- **Vector codec hardening** — `decodeVector` truncated-blob guard + module-load LE assert; TEST-N7 added a
+  fixed-byte-layout test pinning the on-disk LE contract.
+- **FTS injection-safety** — FTS5 triggers synced + VACUUM-safe, identifier-validated migrations; DATA-1
+  added the UPDATE-trigger `kind` guard.
+- **The SEC-1 Tier-2 app-skill gate** — Tier-2 tools run for built-in **app** skills only
+  (`skillCanRunTools`, re-checked at `startSkillRun`): re-attested.
+- **Chat-stream lifecycle** — error / abort / destroyed-renderer / key-reuse paths, IPC subscriptions torn
+  down in `finally`.
+
+**Posture held across all 9 phases (load-bearing):** offline / no telemetry / no new network egress;
+behavior-preserving (every behavioral fix teeth-checked neuter→fail→restore, then restored byte-identical);
+the **content class** (document text + titles/filenames, chat, extracted figures, redacted text) is never
+logged / audited / exported; schema changes are additive (two `IF NOT EXISTS` indexes + one FTS-trigger
+guard); the only Phase-8 code touches are the DOC-N2 comment fix (×2) + the DOC-N4 parity test. Final suite
+**2417 passed / 39 skipped** (typecheck + build green across the cumulative branch; no phase regressed
+another, verified by one full-suite run at close-out).
 
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)

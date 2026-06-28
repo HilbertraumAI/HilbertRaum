@@ -1,4 +1,5 @@
-import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs'
+import { statSync } from 'node:fs'
+import { open, type FileHandle } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
@@ -135,15 +136,15 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
   // NOT a path — so it cannot make main read an arbitrary file (confused deputy, threat #1).
   // We still re-validate extension + byte cap in MAIN (SEC-3), now on the OPEN fd so the cap
   // can't be bypassed by growing the file between stat and read (TOCTOU).
-  ipcMain.handle(IPC.imageReadBytes, (_e, token: unknown): Uint8Array => {
+  ipcMain.handle(IPC.imageReadBytes, async (_e, token: unknown): Promise<Uint8Array> => {
     requireUnlocked()
     const path = consumeImageToken(token)
     if (path === null || !isSupportedImagePath(path)) {
       throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
     }
-    let fd: number
+    let fh: FileHandle
     try {
-      fd = openSync(path, 'r')
+      fh = await open(path, 'r')
     } catch (err) {
       // SEC-1 / §12: keep vision logs to a content-free minimum — the file EXTENSION and the
       // errno code only. `String(err)` of an fs error embeds the full path; never log that.
@@ -152,21 +153,23 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
       throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
     }
     try {
-      const st = fstatSync(fd)
+      // PERF-1: read off the main thread with fs/promises (mirrors the ING-8 async conversion in
+      // doctasks/manager.ts) so a slow drive can't block the event loop on an up-to-~20 MiB read.
+      // The SEC-3/TOCTOU invariant is unchanged — we fstat THIS handle then read THE SAME handle, so
+      // the size guard is authoritative for these exact bytes; a concurrent truncation yields fewer.
+      const st = await fh.stat()
       if (!st.isFile()) throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
       if (st.size > VISION_MAX_IMAGE_BYTES) throw new Error(IMAGE_TOO_LARGE_MESSAGE)
-      // Read the whole file from the SAME fd we fstat'd — the size guard above is authoritative
-      // for these exact bytes; a concurrent truncation only ever yields fewer bytes.
       const buf = Buffer.allocUnsafe(st.size)
       let off = 0
       while (off < st.size) {
-        const n = readSync(fd, buf, off, st.size - off, off)
-        if (n === 0) break
-        off += n
+        const { bytesRead } = await fh.read(buf, off, st.size - off, off)
+        if (bytesRead === 0) break
+        off += bytesRead
       }
       return off === st.size ? buf : buf.subarray(0, off)
     } finally {
-      closeSync(fd)
+      await fh.close()
     }
   })
 

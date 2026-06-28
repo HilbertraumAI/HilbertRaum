@@ -216,7 +216,13 @@ export function ScopePopover({
                   </span>
                 ))}
                 {pendingAttachmentNames.map((name, i) => (
-                  <span className="doc-chip scope-attachment pending" key={`pending-${i}`}>
+                  // Key by name AND index (audit FE-6): the name makes the key content-aware (a new
+                  // import with a different file at the same slot re-mounts the chip rather than
+                  // reusing a stale node), while the index keeps it unique — two cross-folder files
+                  // can share a base name (`fileBaseName` keeps only the last segment), so a
+                  // name-only key would collide and trip React's duplicate-key warning. The list is
+                  // set/cleared wholesale (never reordered item-by-item), so the index is stable.
+                  <span className="doc-chip scope-attachment pending" key={`pending-${i}-${name}`}>
                     {t('chat.attach.processing', { name })}
                   </span>
                 ))}

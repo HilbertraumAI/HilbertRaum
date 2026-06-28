@@ -90,8 +90,16 @@ function GeneralTab(): JSX.Element {
   const toast = useToast()
   const { t, lang, applyLanguageSetting } = useT()
 
+  // The `active` guard avoids a setState after unmount if the read resolves late (audit FE-4).
   useEffect(() => {
-    window.api?.getSettings().then(setSettings).catch(() => setSettings(null))
+    let active = true
+    window.api
+      ?.getSettings()
+      .then((s) => active && setSettings(s))
+      .catch(() => active && setSettings(null))
+    return () => {
+      active = false
+    }
   }, [])
 
   async function patch(p: Partial<AppSettings>): Promise<void> {

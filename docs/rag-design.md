@@ -94,11 +94,11 @@ heavy libraries are imported lazily inside `parse()`.
 | Format | Parser | Library | Segment granularity | Metadata |
 |---|---|---|---|---|
 | `.txt`/`.text`/`.log` | `TxtParser` | `node:fs` | whole file = 1 segment | — |
-| `.md`/`.markdown`/`.mdown` | `MarkdownParser` | hand-rolled | one segment per ATX heading section | `sectionLabel` = heading text |
+| `.md`/`.markdown`/`.mdown` | `MarkdownParser` | hand-rolled | one segment per ATX heading section (fenced-code-aware, RAG-N4) | `sectionLabel` = heading text |
 | `.pdf` | `PdfParser` | `pdfjs-dist` (legacy build) | one segment per page | `pageNumber` (1-based) |
 | `.docx` | `DocxParser` | `mammoth` (raw text) | one segment per paragraph | — |
-| `.csv`/`.tsv` | `CsvParser` | `papaparse` | whole table = 1 segment | — (rows → `header: value` lines) |
-| `audio/*` (`.wav`/`.mp3`/`.flac`/`.ogg`) | `AudioParser` | injected transcriber engine | transcript packed into paragraph-sized segments | `sectionLabel` = time range `mm:ss–mm:ss` → `Citation.section` |
+| `.csv`/`.tsv` | `CsvParser` | `papaparse` | whole table = 1 segment | — (rows → `header: value` lines; delimiter pinned by extension, RAG-N5) |
+| `audio/*` (`.wav`/`.mp3`/`.flac`/`.ogg`) | `AudioParser` | injected transcriber engine | transcript packed into segments ≤ the chunk window (token-based, space-less-script-safe) | `sectionLabel` = time range `mm:ss–mm:ss` → `Citation.section` |
 | `image/*` (`.png`/`.jpg`/`.jpeg`) | `ImageParser` | injected OCR engine | whole photo = 1 segment | — |
 
 A parser returns `{ segments: ExtractedSegment[], mimeType }`, where each segment carries its
@@ -107,6 +107,39 @@ derives, so a chunk can always cite the page/section it came from. Parsers also 
 optional `ParseContext` carrying the injected `transcriber` / `ocrEngine` (the text parsers
 ignore it), an optional `signal` (REL-1 cancellation, forwarded only by the AudioParser), plus
 `maxPages` and `maxInflatedBytes` (PDF page-count + DOCX zip-bomb caps, security audit M-2/M-3).
+
+**Audio packing — token-based, space-less-script-safe (RAG-N1).** `packTranscriptSegments`
+coalesces whisper's tiny per-phrase segments into paragraph-sized ones, capped at
+`AUDIO_SEGMENT_MAX_TOKENS` (= `CHUNK_DEFAULTS.chunkSizeTokens − 100`, a ~20 % margin below the
+chunk window). The cap is measured in **approx-tokens** (`approxTokenCount`, the same CJK/Thai-aware
+counter the chunker budgets with), not whitespace words — a space-less phrase (Japanese/Chinese/Thai)
+is a few "words" but hundreds of tokens, so a word cap let an audio segment blow past the window.
+A single over-budget whisper segment is split via `windowByTokens(text, max, 0)`, which cuts
+**space-less scripts on character boundaries** (overlap 0 ⇒ a lossless partition). Because every
+packed segment is guaranteed `≤ AUDIO_SEGMENT_MAX_TOKENS < chunkSizeTokens`, the chunker emits
+**one chunk per packed segment, verbatim, with no overlap** — which is what lets
+`audioSegmentsFromChunks` rebuild the transcript from stored chunks with **no duplicated or dropped
+spans** (preview / translate / compare without re-transcribing). The reconstruction is byte-exact
+in the common case; the one exception is the *oversize-single-segment* path: its split pieces share
+one time-range label, so the chunker's `coalesceSegments` re-merges and re-windows them, and a small
+trailing remainder that merges into the prior window normalizes its `\n\n` boundary to a single
+space in a space-less script — never duplicating or losing text (a pre-existing benign property of
+the chunker's coalesce, now reached by long CJK/Thai utterances too). Existing CJK/Thai audio keeps
+its old chunks until re-indexed (re-index self-heals); no migration.
+
+**Markdown fence-awareness (RAG-N4, full audit 2026-06-28).** `MarkdownParser` splits sections at ATX
+headings (`/^(#{1,6})\s+/`) but tracks an in-fence flag toggled on every code-fence line (a
+triple-backtick or `~~~` run, optionally indented). A `#`-prefixed line INSIDE a fenced block — a
+shell comment, a C `#define`, a diff/patch hunk — is therefore treated as code, not a heading; without
+this the fenced block fragmented into bogus sections stamped with garbage `sectionLabel`s (→ wrong
+citations). Non-fenced Markdown is byte-identical. It is a simple toggle: it does not model nested
+fences of differing backtick lengths, which Markdown disallows anyway.
+
+**CSV/TSV delimiter pinned by extension (RAG-N5, full audit 2026-06-28).** `CsvParser` passes
+`delimiter: '\t'` for `.tsv` and `','` for `.csv` to papaparse instead of relying on auto-detection. A
+`.tsv` whose cells contain commas (e.g. "Lovelace, Ada") could otherwise tie tab with comma on
+field-count consistency and — papaparse checking comma first — auto-detect as comma, silently
+mis-pairing `header: value` while the document still reached `indexed`.
 
 ### Cap stack — one enforcement point (`parseWithLimits`, MAINT-4 / REL-5)
 
@@ -161,8 +194,19 @@ max_chunks_per_file: 1000
   overlapping by `overlap` (clamped to `size − 1`); a window that reaches the segment end
   stops it (no redundant tail chunk). A space-less run with no word breaks is hard-cut by
   character so a window is never larger than the budget — content is preserved (pieces are
-  raw substrings). The same windower backs the summary/translation/compare planners and the
-  `truncateToApproxTokens` budget clamp.
+  raw substrings). **Overlap for space-less scripts (RAG-N2):** the character slices are sized
+  `gcd(size, overlap)` (e.g. `gcd(500, 80) = 20`) so the windower's whole-atom step-back can
+  re-include ~`overlap` tokens — a single window-sized slice can never be stepped back into, so
+  CJK/Thai chunks formerly got **zero** overlap (a boundary-straddling fact could be missed). The
+  re-joined slices carry a `glued` flag so they stitch back with no inserted space. With `overlap
+  = 0` the slices are `size` chars again — a lossless partition (what the audio split and
+  `truncateToApproxTokens` rely on). **Ordinary space-separated prose is byte-identical** to before
+  (words ≤ `size` are never sliced); an **over-long no-space run** longer than `size` tokens —
+  base64, a giant URL, a glued PDF-extraction run — is now treated as the space-less run it is and
+  likewise gets glued/overlapped, which also FIXES a latent bug: the old char-slice path
+  space-joined those pieces, injecting spaces into the run (corrupting a base64/URL and breaking
+  lossless reconstruction). The same windower backs the summary/translation/compare planners and
+  the `truncateToApproxTokens` clamp.
 - **No cross-segment chunks.** Chunking happens *within* a segment, so each chunk inherits
   exactly one `pageNumber` / `sectionLabel`.
 - **Cap.** The global chunk count is capped at `max_chunks_per_file` (`MAX_CHUNKS_PER_DOCUMENT`,
@@ -620,17 +664,22 @@ the recorded E5 lesson) behind the `Reranker` interface. `LlamaReranker` is the 
 `LlamaServer` composition: same b9585 binary, `--rerank --device none` (CPU pin; chat
 args never reach it), lazy start on first `rerank()`, `/v1/rerank` Jina shape
 (`{ query, documents }` → `results: [{ index, relevance_score }]`, mapped back by
-`index`). Inputs are truncated by **approx-token cost** (query ≤ 160, doc ≤ 320 approx tokens)
-to bound CPU latency *and* to fit the context — via the CJK/Thai-aware `truncateToApproxTokens`
-shared with the E5 embedder (`runtime/context-budget.ts`), NOT a whitespace word split. The old
-word split treated a space-less passage (CJK/Thai) as one "word" and never truncated it, so it
-overflowed `n_ctx`, the sidecar HTTP-500'd, and the rerank silently fell back to the fused order
-— a no-op reranker on those scripts (EMB-1, backend audit 2026-06-27; see §12.3). The per-field
-caps are derived from the context budget in the constructor, so they can never exceed `n_ctx`.
+`index`). Inputs are truncated by **approx-token cost** (query ≤ 160, doc ≤ **500 = the WHOLE chunk
+window**, `CHUNK_DEFAULTS.chunkSizeTokens`) to fit the context — via the CJK/Thai-aware
+`truncateToApproxTokens` shared with the E5 embedder (`runtime/context-budget.ts`), NOT a whitespace
+word split. **The doc cap was 320 before RAG-N3 (full audit 2026-06-28); it is now the whole chunk
+window so the reranker scores every chunk in full** (a key sentence in a chunk's second half was
+previously invisible — see "Known retrieval-quality ceilings" below and §12.3). The old word split
+treated a space-less passage (CJK/Thai) as one "word" and never truncated it, so it overflowed
+`n_ctx`, the sidecar HTTP-500'd, and the rerank silently fell back to the fused order — a no-op
+reranker on those scripts (EMB-1, backend audit 2026-06-27; see §12.3). The per-field caps are
+derived from the context budget in the constructor, so they can never exceed `n_ctx`; per-candidate
+CPU latency is bounded by the small candidate cap (≤ 2×topKInitial), not by clipping each chunk.
 The sidecar also passes `--batch-size`/`--ubatch-size` = the context (2048): in
 `--rerank`/embedding mode llama-server forces `n_batch = n_ubatch` and defaults them to
-**512**, but a query+document rerank input runs ~1056 worst-case real tokens and would otherwise
-HTTP-500 the whole request on real-length chunks (found by `HILBERTRAUM_RERANK_SMOKE`; §12.1 R1).
+**512**, but a query+document rerank input runs ~1452 worst-case real tokens (160 + 500 approx ×
+2.2; RAG-N3 raised the doc cap to the whole chunk window) and would otherwise HTTP-500 the whole
+request on real-length chunks (found by `HILBERTRAUM_RERANK_SMOKE`; §12.1 R1).
 Selection is availability-driven (`createSelectedReranker` → real iff binary + GGUF,
 else **null**; no mock — null = today's ordering). Failure modes: a failed START latches
 for the session (fail-fast, no 60 s health stall per question); a failed CALL logs and
@@ -645,6 +694,38 @@ irrelevant best-chunk cosine distributions OVERLAP (E5 runs without query:/passa
 → everything lands in a narrow ~0.87–0.94 band), so no positive floor separates them without
 dropping real hits (§12.1 R3; `tests/manual/minsim-measure.test.ts`). Relevance separation
 is the reranker's job, not the floor's.
+
+### Known retrieval-quality ceilings (DOC-N6, full audit 2026-06-28)
+
+Two properties of the current stack bound retrieval quality and explain WHY the reranker is the
+load-bearing relevance separator — recorded here so future work invests in the right lever:
+
+1. **E5 runs PREFIX-LESS → compressed cosines.** The embedder sends raw chunk/query text with no
+   `query:` / `passage:` prefixes, so every best-chunk cosine compresses into a narrow ~0.87–0.94
+   band and relevant/irrelevant distributions OVERLAP (R3, §12.1, measured on the real drive). That
+   is why `ragMinSimilarity` is empirically pinned at **0** (a positive floor drops real hits) and
+   why **relevance separation is delegated to the reranker, not the cosine floor**. The §12.3
+   reranker win ("rescued #3-behind-distractors → #1") was measured on exactly this prefix-less
+   setup — the reranker is doing the heavy lifting *because* the cosines barely separate.
+   - **TODO (tracked — NOT done; the real lever, separate larger work):** add the E5
+     `query:`/`passage:` prefixes. *Expected impact:* spreads the cosine distribution, makes a
+     meaningful `ragMinSimilarity` floor possible again, and reduces how much the reranker must
+     carry. It requires **RE-EMBEDDING the whole corpus** (every stored vector changes), so it is
+     its own migration phase — do NOT bundle it with a reranker tweak. See §12.1 R3 + §10 (the
+     Phase-30 Track B revisit trigger).
+
+2. **The reranker scores the leading N approx-tokens of each chunk.** N is the doc truncation cap.
+   Before RAG-N3 (full audit 2026-06-28) N = 320 while chunks are 500 approx tokens, so the last
+   ~36 % of every chunk — a key sentence in a chunk's second half — was invisible to the reranker,
+   and that truncated score drove BOTH final ordering AND the dedup-by-page winner (`rag/index.ts`).
+   **RAG-N3 (owner decision (a)) raised N to the whole chunk window
+   (500 = `CHUNK_DEFAULTS.chunkSizeTokens`)**, so this ceiling is now lifted on the doc side; the
+   cost is more per-candidate CPU at rerank time (§12.3, reasoned ~+38 % worst case, not
+   re-measured — no provisioned drive in CI/dev). The query cap stays 160 (questions are short). If
+   a future chunk size were to exceed the rerank context budget, the constructor clamp
+   (`usable − queryCap`) would silently re-introduce this ceiling — keep N ≥ `chunkSizeTokens` or
+   re-document. CI pins this: `reranker.test.ts` [RAG-N3] (the whole chunk, incl. its tail, is sent)
+   and `rag.test.ts` [RAG-N3] (the dedup-by-page winner now rests on the whole-chunk score).
 
 ### Tested behaviour (Phase 21)
 
@@ -731,7 +812,7 @@ spread the distribution and make a floor meaningful; revisit only with a prefix 
 |---|---|---|
 | D8 | Reranker model + license | **bge-reranker-v2-m3** (Apache-2.0 base, HF-API-verified 2026-06-10) — GGUF `gpustack/bge-reranker-v2-m3-GGUF` `bge-reranker-v2-m3-FP16.gguf` (1 159 776 896 B). **FP16, not q8_0** (the recorded b9585 XLM-R q8_0 warmup crash, BUILD_STATE §9). Qwen3-Reranker-0.6B rejected: no official GGUF (HF 401), template-path dependency, slower causal arch. Manifest `role: reranker` with `download` block + approved `license_review` |
 | D9 | Sidecar lifecycle | Third **`LlamaServer` composition** (E5 pattern): `--rerank --device none` (CPU pin), lazy start, `stop()` on will-quit / `suspend()` on lock, NO chat args. **Factory default = `null`** (not a mock) ⇒ retrieval byte-identical (graceful-fallback rule). Query-time failure ⇒ log + fused order; start failure ⇒ session latch |
-| D10 | Resource budget (8 GB) | ~1.3 GB RSS when active; lazy + opt-in-by-provisioning + CPU-pinned ⇒ 8 GB worst case ≈ 5.3 GB. NOT bundled for TINY. Latency bounded by candidate cap + word truncation (q ≤ 160, doc ≤ 320); real numbers in §12.3 |
+| D10 | Resource budget (8 GB) | ~1.3 GB RSS when active; lazy + opt-in-by-provisioning + CPU-pinned ⇒ 8 GB worst case ≈ 5.3 GB. NOT bundled for TINY. Latency bounded by the candidate cap + per-field truncation (q ≤ 160, doc ≤ **500 = whole chunk window**, raised from 320 by RAG-N3 / full audit 2026-06-28); real numbers in §12.3 |
 | D11 | Rerank placement + topKInitial | Between fusion and dedup — dedup keeps the best-by-rerank chunk per page. **`topKInitial` does NOT rise** when a reranker is active (CPU latency linear in candidates; the fused union already reaches ≤ 2×topKInitial; the settings knob remains for tuning) |
 | D12 | `minSimilarity` pre- vs post-rerank | **PRE-rerank, cosine-only** (status quo site + meaning): applied to vector hits before fusion. Rerank `relevance_score` is an unbounded logit — never compared to the floor. Keyword hits carry no cosine and bypass the floor by design. R3 measured ⇒ default stays 0 |
 | D13 | FTS index shape + sync + fusion | Self-contained `fts5(text, chunk_id UNINDEXED)` (NOT external-content on the implicit rowid — VACUUM foot-gun); 3 sync triggers; guarded additive migration + backfill (scope_json precedent). Fusion = **RRF, k = 60**, sanitized phrase-OR MATCH (`fts.ts` `buildFtsMatchQuery`, shared with conversation search). **Visibility rule: keyword hits require a vector under the active embedder** — `REINDEX_NEEDED_ANSWER` semantics intact |
@@ -749,11 +830,23 @@ candidate cap (≤ 2×topKInitial) + the per-field approx-token truncation (§12
 **Measured 2026-06-10 (`HILBERTRAUM_RERANK_SMOKE`, real F16 GGUF on b9585, Intel i7-1185G7,
 `--device none`, 4 threads):** the F16 GGUF LOADS clean (no q8_0 XLM-R warmup crash);
 relevance is correct (relevant invoice line **+8.82** vs irrelevant **−11.01**);
-**worst-case latency ≈ 24.7 s** for a 12-candidate batch at the full truncation budget
+**worst-case latency ≈ 24.7 s** for a 12-candidate batch at the *then-current* truncation budget
 (160 + 320 approx-token query+doc, ~670 tokens/input for English). That worst case is
 ~2 s/candidate — significant on a CPU pin, so reranking visibly lengthens a documents query on a
 low-end laptop; the candidate cap keeps it bounded, and it stays opt-in by provisioning.
 Tightening `MAX_DOC_APPROX_TOKENS` / the candidate cap is the lever if the latency proves too high.
+
+**RAG-N3 update (full audit 2026-06-28, owner decision (a)).** The 24.7 s above AND the
+"rescued #3→#1" validation below were both measured under the OLD **320**-token doc truncation. The
+doc cap is now the **whole chunk window (500 approx tokens, `CHUNK_DEFAULTS.chunkSizeTokens`)** so the
+reranker scores every chunk in full (RAG-N3 — a discriminating sentence in a chunk's tail was
+previously dropped before scoring, under-ranking the chunk and skewing the dedup-by-page winner).
+Per-candidate input grows ~480→660 approx tokens (~1.38×); CPU prefill is ≈linear, so the absolute
+worst case (12 full-500-token candidates) is **reasoned at ~34 s — NOT re-measured** (no provisioned
+drive in CI/dev; the §12.3 quality fixture is env-gated). Latency stays bounded by the candidate cap
+and opt-in by provisioning; `MAX_DOC_APPROX_TOKENS` / the candidate cap remain the levers. **n_ctx is
+safe:** (160 + 500) × `REAL_TOKENS_PER_APPROX_TOKEN` (2.2) ≈ **1452 real tokens < the 2048 context and
+the 2048 physical batch**, and the constructor clamp (`usable − queryCap` ≈ 754 ≥ 500) guarantees it.
 
 **End-to-end quality validation 2026-06-10 (`HILBERTRAUM_RAG_QUALITY`, all three real backends on
 a 4-doc corpus — `tests/manual/rag-quality.test.ts`):** the evidence the reranker EARNS its
@@ -780,9 +873,10 @@ llama-server returned HTTP 500, and `rag/index.ts` caught it and silently kept t
 **no-op reranker on those scripts**. Both subsystems now share one helper, `runtime/context-budget.ts`
 (`REAL_TOKENS_PER_APPROX_TOKEN = 2.2` worst-case multilingual factor, `maxInputApproxTokens(ctx)`,
 `truncateToContext(text, ctx)`), so they cannot diverge again. The reranker's per-field caps
-(query ≤ 160, doc ≤ 320 approx tokens; combined ≈ 1056 worst-case real tokens < 2048) are **derived
-from the context budget in the constructor**, so they can never exceed `n_ctx` even if a smaller
-context is configured. The fused-order fallback stays as a backstop but now rarely fires.
+(query ≤ 160, doc ≤ **500** approx tokens — the whole chunk window, raised from 320 by RAG-N3 / full
+audit 2026-06-28; combined ≈ **1452** worst-case real tokens < 2048) are **derived from the context
+budget in the constructor**, so they can never exceed `n_ctx` even if a smaller context is configured.
+The fused-order fallback stays as a backstop but now rarely fires.
 
 **Vector codec (EMB-4 / MAINT-5 + DATA-2).** `embeddings/codec.ts` asserts the host is
 **little-endian at module load** (the BLOB encoding is locked LE Float32, spec §6 — a big-endian
@@ -885,6 +979,16 @@ honesty story holds on the **legacy doc-id path too**, not only the composite-`s
 bare `null`/`undefined` still normalizes to the whole-corpus check (the archived exclusion only),
 byte-identical to before; only the legacy `scopeDocumentIds` array path changes — from a wrong
 whole-corpus diagnosis to the correct scoped one.
+
+**`includeArchived` parity now regression-tested (RAG-N6, full audit 2026-06-28).** Because both
+`corpusNeedsReindex` and retrieval route through the shared `buildScopeFilter` (which adds the
+document-level archived `NOT EXISTS` whenever `includeArchived` is falsy), an **all-archived scope** is
+already diagnosed correctly. `rag-scope.test.ts` pins it with teeth: a single archived doc embedded
+under a *different* model, scoped with `includeArchived:false`, answers `NO_DOCUMENT_CONTEXT` (the
+archived doc is out of scope, so the corpus is empty — re-index wouldn't help), and flips to
+`REINDEX_NEEDED` only with `includeArchived:true` (then it is in scope and invisible to the embedder).
+Neutering the archived exclusion in `buildScopeFilter` flips the false case to a stale "needs reindex"
+misdiagnosis — the test fails, confirming the parity is load-bearing.
 
 ### 13.7 Persistence & smart-view-as-scope (out of v1)
 

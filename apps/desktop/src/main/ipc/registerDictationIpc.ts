@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
@@ -87,7 +87,9 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
 
     const tempPath = join(storeDir, `${randomUUID()}.parse-dictation.wav`)
     try {
-      writeFileSync(tempPath, audio)
+      // PERF-2: write the up-to-64 MiB WAV off the main thread (the handler is already async); the
+      // existing try/finally still shreds tempPath on any failure, including a write rejection.
+      await writeFile(tempPath, audio)
       const segments = await transcriber.transcribe(tempPath, {
         workDir: storeDir,
         signal: controller.signal

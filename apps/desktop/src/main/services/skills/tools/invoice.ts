@@ -1,5 +1,16 @@
 import type { DocumentChunkRead, JsonSchema, SkillTool, ToolResult } from '../../../../shared/types'
-import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate, splitLeadingDates } from './money'
+import {
+  MONEY_EPS,
+  MONEY_RE,
+  csvField,
+  detectCurrency,
+  inferDateOrder,
+  parseAmount,
+  parseDate,
+  splitLeadingDates,
+  stripDateTokens,
+  type DateOrder
+} from './money'
 
 // Invoice Tier-2 tools — the SECOND Tier-2 content-class domain (architecture.md "Skills — design
 // record" §8). It mirrors the bank-statement tools layer-for-layer to prove the gate generalizes:
@@ -151,15 +162,18 @@ function startsWithAny(lower: string, labels: readonly string[]): boolean {
   return labels.some((l) => lower.startsWith(l))
 }
 
-/** Parse the first ISO / day-first date token out of a value, or null. */
-function parseDateInText(text: string): string | null {
+/** Parse the first ISO / dotted-slashed date token out of a value, or null. `order` is the per-document
+ *  date ordering (BL-N1), so a US `mm/dd/yyyy` header date parses on a US-ordered invoice. */
+function parseDateInText(text: string, order: DateOrder = 'dmy'): string | null {
   const m = DATE_TOKEN_RE.exec(text)
-  return m ? parseDate(m[0]) : null
+  return m ? parseDate(m[0], order) : null
 }
 
-/** The last money token on a line (the printed figure), or null if none parses. */
+/** The last money token on a line (the printed figure), or null if none parses. Date tokens are scrubbed
+ *  first (BL-N2) so a trailing date on a totals line — `Gross total 390,00 EUR per 30.06.2026` — can't
+ *  be read as the figure (it would otherwise yield `30.06.20` → 3006.20). */
 function lastMoney(line: string): number | null {
-  const matches = [...line.matchAll(MONEY_RE)]
+  const matches = [...stripDateTokens(line).matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   return parseAmount(matches[matches.length - 1][0])
 }
@@ -173,7 +187,7 @@ function parsePercent(line: string): number | null {
 }
 
 /** Apply a header label to the line; returns true when the line WAS a header line (consumed). */
-function applyHeader(line: string, header: InvoiceHeader): boolean {
+function applyHeader(line: string, header: InvoiceHeader, order: DateOrder = 'dmy'): boolean {
   const vendor = labeledValue(line, VENDOR_LABELS)
   if (vendor !== null) {
     if (!header.vendor) header.vendor = vendor
@@ -186,13 +200,13 @@ function applyHeader(line: string, header: InvoiceHeader): boolean {
   }
   const dueRaw = labeledValue(line, DUE_LABELS)
   if (dueRaw !== null) {
-    const d = parseDateInText(dueRaw)
+    const d = parseDateInText(dueRaw, order)
     if (d && !header.dueDate) header.dueDate = d
     return true
   }
   const dateRaw = labeledValue(line, INVOICE_DATE_LABELS)
   if (dateRaw !== null) {
-    const d = parseDateInText(dateRaw)
+    const d = parseDateInText(dateRaw, order)
     if (d && !header.invoiceDate) header.invoiceDate = d
     return true
   }
@@ -229,12 +243,17 @@ function applyTotals(line: string, totals: InvoiceTotals): boolean {
  * and the last is the line total; with one, only the line total is set. A line with no detectable
  * currency is dropped (never invents one).
  */
-export function parseLineItem(line: string, documentCurrency: string | null): InvoiceLineItem | null {
+export function parseLineItem(
+  line: string,
+  documentCurrency: string | null,
+  order: DateOrder = 'dmy'
+): InvoiceLineItem | null {
   // Strip any leading DATE column(s) (e.g. a service-/delivery-date column) before the money scan so a
   // `dd.mm.yyyy` token's `.20yy` tail can't be read as a price (shared BL-1 fix; see bank `parseLine`).
   // An invoice line item rarely leads with a date, so this is usually a no-op; when it does, the date is
   // dropped (line items carry no date field) and the description starts at the first non-date token.
-  const { rest } = splitLeadingDates(line)
+  // `order` is the per-document date ordering (BL-N1), so a US `mm/dd/yyyy` lead column is recognised.
+  const { rest } = splitLeadingDates(line, order)
   const matches = [...rest.matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   const amounts: number[] = []
@@ -270,7 +289,13 @@ export function parseLineItem(line: string, documentCurrency: string | null): In
 }
 
 /** Pure extractor over already-read chunks — header + line items + totals, ambiguous data dropped. */
-export function extractInvoice(chunks: DocumentChunkRead[], documentCurrency: string | null): ExtractedInvoice {
+export function extractInvoice(
+  chunks: DocumentChunkRead[],
+  documentCurrency: string | null,
+  order?: DateOrder
+): ExtractedInvoice {
+  // Infer the document's date ordering ONCE (BL-N1) so US-ordered header dates parse mm/dd consistently.
+  const dateOrder = order ?? inferDateOrder(chunks.map((c) => c.text).join('\n'))
   const header: InvoiceHeader = {}
   const lineItems: InvoiceLineItem[] = []
   const totals: InvoiceTotals = {}
@@ -278,9 +303,9 @@ export function extractInvoice(chunks: DocumentChunkRead[], documentCurrency: st
     for (const rawLine of chunk.text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
-      if (applyHeader(line, header)) continue
+      if (applyHeader(line, header, dateOrder)) continue
       if (applyTotals(line, totals)) continue
-      const item = parseLineItem(line, documentCurrency)
+      const item = parseLineItem(line, documentCurrency, dateOrder)
       if (item) {
         lineItems.push(item)
         if (lineItems.length >= MAX_LINE_ITEMS) {
@@ -324,8 +349,9 @@ export const extractInvoiceTool: SkillTool = {
       // Out-of-scope / unreadable — friendly + content-free; the technical reason is the seam's log.
       return { ok: false, error: 'This invoice could not be read.' }
     }
-    const currency = detectCurrency(chunks.map((c) => c.text).join('\n'))
-    const invoice = extractInvoice(chunks, currency)
+    const joined = chunks.map((c) => c.text).join('\n')
+    const currency = detectCurrency(joined)
+    const invoice = extractInvoice(chunks, currency, inferDateOrder(joined))
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     return { ok: true, output: invoice }
   }

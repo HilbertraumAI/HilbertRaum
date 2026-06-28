@@ -198,6 +198,53 @@ describe('corpusNeedsReindex + REINDEX_NEEDED_ANSWER', () => {
   })
 })
 
+// ---- RAG-N6: corpusNeedsReindex honours the SAME archived exclusion retrieval applies ----------
+//
+// retrieve() (and VectorIndex/keyword search) drop `lifecycle='archived'` documents unless
+// scope.includeArchived is set, via the shared buildScopeFilter. corpusNeedsReindex must use the
+// SAME filter, or an all-archived scope (where retrieval returns nothing) would be diagnosed as a
+// STALE corpus (REINDEX_NEEDED) instead of an empty one (NO_DOCUMENT_CONTEXT). The check already
+// routes through buildScopeFilter (Collections core); these tests pin that parity with teeth.
+describe('corpusNeedsReindex includeArchived parity (RAG-N6)', () => {
+  it('an all-archived, embedder-invisible scope is EMPTY (false), not stale, by default', async () => {
+    const { db } = freshDb()
+    const embedder = new MockEmbedder()
+    // One indexed doc, embedded under a DIFFERENT model AND archived. Under the active embedder it
+    // is invisible (would read as "stale") — but it is also archived, so an includeArchived-false
+    // scope must treat it as out of scope entirely.
+    const docId = await seedDocument(db, embedder, 'old-archived.txt', ['alpha words'], 'old-model')
+    db.prepare("UPDATE documents SET lifecycle = 'archived' WHERE id = ?").run(docId)
+
+    const scope = { documentIds: [docId], collectionIds: null, includeArchived: false }
+    // Archived excluded ⇒ indexed count 0 ⇒ false. (Without the archived exclusion this reads
+    // indexed=1/visible=0 ⇒ wrongly true ⇒ stale "needs reindex" diagnosis.)
+    expect(corpusNeedsReindex(db, embedder.id, scope)).toBe(false)
+    // With includeArchived the archived doc IS in scope and is invisible to the active embedder, so
+    // the honest answer flips to "needs reindex" — proving the flag (not a blanket rule) drives it.
+    expect(corpusNeedsReindex(db, embedder.id, { ...scope, includeArchived: true })).toBe(true)
+  })
+
+  it('generateGroundedAnswer over an all-archived scope answers NO_DOCUMENT_CONTEXT, not REINDEX_NEEDED', async () => {
+    const { db } = freshDb()
+    const embedder = new MockEmbedder()
+    const docId = await seedDocument(db, embedder, 'old-archived.txt', ['alpha words'], 'old-model')
+    db.prepare("UPDATE documents SET lifecycle = 'archived' WHERE id = ?").run(docId)
+
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'alpha words' })
+    const runtime = createMockRuntime({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 1024 })
+    const chatSpy = vi.spyOn(runtime, 'chatStream')
+
+    const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, 'alpha words', SETTINGS, {
+      scope: { documentIds: [docId], collectionIds: null, includeArchived: false }
+    })
+    // Retrieval excluded the archived doc → no chunks. The empty-context diagnosis must match that
+    // exclusion: the scope is empty (NO_DOCUMENT_CONTEXT), not stale (REINDEX_NEEDED).
+    expect(msg.content).toBe(NO_DOCUMENT_CONTEXT_ANSWER)
+    expect(chatSpy).not.toHaveBeenCalled()
+  })
+})
+
 // ---- Conversation scope persistence (chat service + migration) --------------------
 
 describe('conversation scope persistence', () => {
