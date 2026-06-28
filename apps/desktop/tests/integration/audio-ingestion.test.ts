@@ -142,6 +142,39 @@ describe('audio ingestion (Phase 36)', () => {
     expect(t.calls).toHaveLength(1)
   })
 
+  // RAG-N1 (the user-visible bug): a CJK/Thai transcript packed by the OLD whitespace-word cap
+  // stayed one over-the-window packed segment, the chunker WINDOWED it (with 80-token overlap),
+  // and `audioSegmentsFromChunks` then rebuilt the transcript with DUPLICATED spans at every
+  // overlap boundary. Token-based packing keeps each segment under the window, so the chunker
+  // emits one chunk per segment and the round-trip is lossless. Teeth: reverting
+  // `packTranscriptSegments` to a word cap makes this fail (markers appear twice).
+  it('round-trips a long Japanese transcript through chunks with NO duplicated spans (RAG-N1)', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    // 40 space-less whisper segments, each opening with a UNIQUE fixed-width marker (章000…章039)
+    // so a duplicated overlap span is detectable. ~28 space-less tokens each ⇒ ~1100 tokens total,
+    // far past the 500-token chunk window when (wrongly) packed as one segment.
+    const marker = (i: number): string => `章${String(i).padStart(3, '0')}`
+    const segments: TranscriptSegment[] = Array.from({ length: 40 }, (_, i) => ({
+      startMs: i * 5000,
+      endMs: i * 5000 + 5000,
+      text: `${marker(i)}${'の'.repeat(24)}`
+    }))
+    const t = fakeTranscriber(segments)
+    const doc = createQueuedDocument(db, writeAudioSource())
+    await processDocument(db, store, doc.id, { transcriber: t })
+
+    const preview = await extractDocumentPreview(db, store, doc.id, {})
+    // It actually split into several packed segments (not one over-the-window blob).
+    expect(preview.segments.length).toBeGreaterThan(1)
+    const joined = preview.segments.map((s) => s.text).join('\n')
+    // Every marker present exactly once: no span lost, none duplicated by chunk overlap. Pre-fix
+    // the overlap re-included whole segments, so the boundary markers appeared twice.
+    for (let i = 0; i < 40; i += 1) {
+      expect(joined.split(marker(i)).length - 1).toBe(1)
+    }
+  })
+
   it('preview of a failed (chunkless) audio document fails friendly', async () => {
     const db = freshDb()
     const store = freshStore()

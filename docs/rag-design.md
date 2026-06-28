@@ -98,7 +98,7 @@ heavy libraries are imported lazily inside `parse()`.
 | `.pdf` | `PdfParser` | `pdfjs-dist` (legacy build) | one segment per page | `pageNumber` (1-based) |
 | `.docx` | `DocxParser` | `mammoth` (raw text) | one segment per paragraph | — |
 | `.csv`/`.tsv` | `CsvParser` | `papaparse` | whole table = 1 segment | — (rows → `header: value` lines) |
-| `audio/*` (`.wav`/`.mp3`/`.flac`/`.ogg`) | `AudioParser` | injected transcriber engine | transcript packed into paragraph-sized segments | `sectionLabel` = time range `mm:ss–mm:ss` → `Citation.section` |
+| `audio/*` (`.wav`/`.mp3`/`.flac`/`.ogg`) | `AudioParser` | injected transcriber engine | transcript packed into segments ≤ the chunk window (token-based, space-less-script-safe) | `sectionLabel` = time range `mm:ss–mm:ss` → `Citation.section` |
 | `image/*` (`.png`/`.jpg`/`.jpeg`) | `ImageParser` | injected OCR engine | whole photo = 1 segment | — |
 
 A parser returns `{ segments: ExtractedSegment[], mimeType }`, where each segment carries its
@@ -107,6 +107,25 @@ derives, so a chunk can always cite the page/section it came from. Parsers also 
 optional `ParseContext` carrying the injected `transcriber` / `ocrEngine` (the text parsers
 ignore it), an optional `signal` (REL-1 cancellation, forwarded only by the AudioParser), plus
 `maxPages` and `maxInflatedBytes` (PDF page-count + DOCX zip-bomb caps, security audit M-2/M-3).
+
+**Audio packing — token-based, space-less-script-safe (RAG-N1).** `packTranscriptSegments`
+coalesces whisper's tiny per-phrase segments into paragraph-sized ones, capped at
+`AUDIO_SEGMENT_MAX_TOKENS` (= `CHUNK_DEFAULTS.chunkSizeTokens − 100`, a ~20 % margin below the
+chunk window). The cap is measured in **approx-tokens** (`approxTokenCount`, the same CJK/Thai-aware
+counter the chunker budgets with), not whitespace words — a space-less phrase (Japanese/Chinese/Thai)
+is a few "words" but hundreds of tokens, so a word cap let an audio segment blow past the window.
+A single over-budget whisper segment is split via `windowByTokens(text, max, 0)`, which cuts
+**space-less scripts on character boundaries** (overlap 0 ⇒ a lossless partition). Because every
+packed segment is guaranteed `≤ AUDIO_SEGMENT_MAX_TOKENS < chunkSizeTokens`, the chunker emits
+**one chunk per packed segment, verbatim, with no overlap** — which is what lets
+`audioSegmentsFromChunks` rebuild the transcript from stored chunks with **no duplicated or dropped
+spans** (preview / translate / compare without re-transcribing). The reconstruction is byte-exact
+in the common case; the one exception is the *oversize-single-segment* path: its split pieces share
+one time-range label, so the chunker's `coalesceSegments` re-merges and re-windows them, and a small
+trailing remainder that merges into the prior window normalizes its `\n\n` boundary to a single
+space in a space-less script — never duplicating or losing text (a pre-existing benign property of
+the chunker's coalesce, now reached by long CJK/Thai utterances too). Existing CJK/Thai audio keeps
+its old chunks until re-indexed (re-index self-heals); no migration.
 
 ### Cap stack — one enforcement point (`parseWithLimits`, MAINT-4 / REL-5)
 
@@ -161,8 +180,19 @@ max_chunks_per_file: 1000
   overlapping by `overlap` (clamped to `size − 1`); a window that reaches the segment end
   stops it (no redundant tail chunk). A space-less run with no word breaks is hard-cut by
   character so a window is never larger than the budget — content is preserved (pieces are
-  raw substrings). The same windower backs the summary/translation/compare planners and the
-  `truncateToApproxTokens` budget clamp.
+  raw substrings). **Overlap for space-less scripts (RAG-N2):** the character slices are sized
+  `gcd(size, overlap)` (e.g. `gcd(500, 80) = 20`) so the windower's whole-atom step-back can
+  re-include ~`overlap` tokens — a single window-sized slice can never be stepped back into, so
+  CJK/Thai chunks formerly got **zero** overlap (a boundary-straddling fact could be missed). The
+  re-joined slices carry a `glued` flag so they stitch back with no inserted space. With `overlap
+  = 0` the slices are `size` chars again — a lossless partition (what the audio split and
+  `truncateToApproxTokens` rely on). **Ordinary space-separated prose is byte-identical** to before
+  (words ≤ `size` are never sliced); an **over-long no-space run** longer than `size` tokens —
+  base64, a giant URL, a glued PDF-extraction run — is now treated as the space-less run it is and
+  likewise gets glued/overlapped, which also FIXES a latent bug: the old char-slice path
+  space-joined those pieces, injecting spaces into the run (corrupting a base64/URL and breaking
+  lossless reconstruction). The same windower backs the summary/translation/compare planners and
+  the `truncateToApproxTokens` clamp.
 - **No cross-segment chunks.** Chunking happens *within* a segment, so each chunk inherits
   exactly one `pageNumber` / `sectionLabel`.
 - **Cap.** The global chunk count is capped at `max_chunks_per_file` (`MAX_CHUNKS_PER_DOCUMENT`,

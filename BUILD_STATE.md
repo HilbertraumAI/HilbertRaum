@@ -71,6 +71,89 @@ FK, retrieval/ranking, business-logic, or renderer change; offline/no-telemetry 
   exists (graded-overlap ranking), so the quality change is measurable._
 
 
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 4 (CJK/THAI TOKEN-vs-WORD wave; RAG-N1
+Medium + RAG-N2 Low) — the prior backend audit made the EMBEDDER/RERANKER token-aware (counting
+approx-TOKENS, not whitespace words); the SAME confusion still lived UPSTREAM in two ingestion spots,
+fixed here as one root-cause wave (branch `full-audit-2026-06-28-fixes`).** Suite **2381 passed / 39
+skipped** (was 2374/39 at Phase 3 → **+7 tests**), typecheck clean, build OK. **Ingestion-only**
+(audio parser + chunker) — no IPC surface, schema, embedder/reranker, or retrieval/fusion change;
+offline/no-telemetry posture held. Touched only `parsers/audio.ts`, `chunker.ts`, their tests, and the
+rag-design / architecture / wave-3-plan doc notes (no `index.ts` change was needed — the reconstruction
+path is unchanged).
+- **RAG-N1 (audio packing counted WORDS → CJK/Thai overflow).** `packTranscriptSegments` capped a
+  packed segment at `AUDIO_SEGMENT_MAX_WORDS = 400` via `text.split(/\s+/).length`. For a space-less
+  script a 1,200-char phrase is a few "words" but ~1,200 approx-tokens, so a packed segment blew past
+  the 500-token chunk window → the chunker WINDOWED it with 80-token overlap → the
+  one-segment-per-chunk/no-overlap invariant broke → `audioSegmentsFromChunks` emitted DUPLICATED text
+  at every overlap boundary in the preview/translate/compare output (retrieval was unaffected — overlap
+  is benign there). **Fix:** measure with `approxTokenCount` (the CJK/Thai-aware counter the chunker
+  budgets with); cap on tokens; split an over-budget single whisper segment via
+  `windowByTokens(text, MAX, 0)` (CHARACTER boundaries for space-less scripts, overlap 0 = lossless
+  partition), not a whitespace split.
+- **RAG-N2 (chunker overlap DROPPED for space-less scripts).** `atomize` hard-cut a space-less run into
+  char atoms of `cap` (500) tokens; `windowByTokens`'s step-back only re-includes a whole atom ≤ `ov`
+  (80), so a 500-token atom was never stepped back into → consecutive CJK/Thai chunks had **zero**
+  overlap (a boundary-straddling fact could be missed; Latin was fine). **Fix:** char-slice an over-long
+  space-less run at `gcd(cap, overlap)` chars (= 20 for 500/80) with a `glued` flag, and reassemble
+  glued atoms with NO separating space; the existing whole-atom step-back then re-includes exactly
+  `overlap` tokens. `overlap = 0` recovers the prior `cap`-sized slicing exactly.
+- **ENGINEERING DECISIONS (made + documented here — no owner sign-off).** (1) **Audio cap value:**
+  `AUDIO_SEGMENT_MAX_TOKENS = CHUNK_DEFAULTS.chunkSizeTokens − 100 = 400` (a 20 % margin below the 500
+  window), keyed off the chunk-window constant rather than a standalone literal; `AUDIO_SEGMENT_TARGET_TOKENS
+  = 180`. (2) **RAG-N2 approach:** `gcd(cap, overlap)`-sized glued char-slices (chosen over cut-at-`cap−overlap`,
+  which still can't be stepped back into) — it reuses the existing step-back unchanged, fills windows to
+  exactly `cap`, overlaps by exactly `overlap`, and is byte-identical at `overlap = 0`.
+- **THE INTERACTION GUARANTEE (verified).** RAG-N2 ADDS overlap to char-sliced TEXT chunks; RAG-N1 needs
+  AUDIO to stay NO-overlap. Compatible because every packed audio segment is guaranteed
+  `approxTokenCount ≤ 400 < 500`, so the chunker emits exactly ONE window per audio segment (it never
+  char-cuts or overlaps audio — the char-slice/overlap path is never reached). Proven: a long CJK AUDIO
+  transcript round-trips through `audioSegmentsFromChunks` with **no duplicated spans**, while a long CJK
+  TEXT document now gains overlap, and Latin prose is byte-identical. (`approxTokenCount` is additive
+  across a single-space join of trimmed parts, so the packer's running token total equals what the
+  chunker measures — the cap holds exactly.)
+- **One documented nuance (benign, no dup).** A single over-budget whisper segment is split into pieces
+  that SHARE one time-range label, so the chunker's `coalesceSegments` re-merges them and a small trailing
+  remainder can normalize a `\n\n` boundary to a SINGLE space in a space-less script. Empirically verified
+  across token counts: reconstruction is always byte-identical **up to whitespace** — never a duplicated
+  or dropped span. Pre-existing property of coalesce (the old word-based Latin oversize path had it too);
+  documented in rag-design §2 + the audio.ts note rather than papered over.
+- **Tests (+7) + teeth.** chunker: CJK consecutive-window overlap ≈ `overlap`; space-less lossless partition
+  at overlap 0; an over-long no-space LATIN run (base64/URL) is glued (NO injected spaces) and gains overlap.
+  audio: JA + Thai oversize single segment char-split ≤ MAX; JA + Thai transcripts pack to one-window
+  segments (1:1 chunks); oversize single CJK segment round-trips with no dup/loss (n = 800/900/1250, covering
+  the remainder-merge case). integration: a long Japanese transcript round-trips through chunk storage with
+  each unique marker exactly once (no dup). **Teeth-verified** by neutering each fix and watching its test
+  fail, then restoring: RAG-N2 gcd-slice (CJK overlap test failed), RAG-N1 token cap (round-trip + one-window
+  tests failed with markers duplicated).
+- **Latin "don't-regress" — precise.** Ordinary space-separated prose is byte-identical (words ≤ `size` are
+  never sliced — pinned by the unchanged Latin window/overlap tests). The ONLY Latin change is for an
+  over-long NO-SPACE run (> ~2000 chars: base64/URL/glued-PDF) — it is now treated as the space-less run it
+  is (glued + overlapped), which also **fixes a latent bug**: the old char-slice path space-joined those
+  pieces, injecting spaces into the run and breaking lossless reconstruction. And audio packing's word→token
+  switch shifts a boundary only for a rare > 16-char word (the more-accurate measure). Both are intended and
+  documented, not regressions.
+- **Adversarial review pass (6-dimension multi-agent workflow + per-finding verify).** Surfaced and fixed:
+  (a) stale word-based audio descriptions in `architecture.md` and `functionality-wave-3-plan.md` that
+  contradicted the token-based code (doc-drift); (b) my oversize round-trip test had cherry-picked n = 800
+  (exact 2×400, no remainder) → broadened to n = 800/900/1250 asserting the precise no-dup/no-loss guarantee;
+  (c) over-claimed "LOSSLESSLY" wording → scoped to "no duplicated/dropped spans" with the whitespace-nuance
+  documented; (d) a latent gcd-coprime slice-size footgun noted (not reachable — all callers use overlap 0 or
+  80). The review's "Latin not byte-identical" findings were correctly dismissed by the verify agents as the
+  intended, documented over-long-no-space-run fix.
+- **Re-index self-heal (owner note).** These are NEW-ingestion changes: existing audio/CJK documents keep
+  their old chunks until a document/audio is re-indexed (re-index re-transcribes/re-chunks and self-heals).
+  No migration needed.
+- **Files changed:** `apps/desktop/src/main/services/ingestion/parsers/audio.ts` (token-based packing,
+  char-split), `chunker.ts` (gcd glued char-slice overlap + `assembleAtoms` + `gcd`); tests
+  `tests/unit/{chunker,audio-parser}.test.ts`, `tests/integration/audio-ingestion.test.ts`;
+  `docs/rag-design.md` (§2 audio row + "Audio packing" note, §3 windowing), `docs/architecture.md` (audio
+  packing record), `docs/functionality-wave-3-plan.md` (audio framing); `BUILD_STATE.md`. **Out of scope
+  (untouched):** embedder/reranker token logic (already CJK-aware), retrieval/fusion, schema, MAX_CHUNKS
+  reject path, RAG-N3 (reranker depth — Phase 6).
+- **Next action (owner):** review/commit Phase 4 (do NOT auto-push/merge). Then **Phase 5 — data-layer
+  hardening (REL-4, REL-5, PERF-3, PERF-4, DATA-1, DATA-2, DATA-3)** per `audits/full-audit-2026-06-28.md` §6._
+
+
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 3 (RENDERER ROBUSTNESS; FE-1 High +
 FE-2…FE-9) — the renderer was the least-audited surface (prior rounds were backend-only); the headline
 gap was that ANY screen render throw blanked the whole offline app with no recovery (branch

@@ -914,14 +914,20 @@ it fails with friendly convert-to-WAV/MP3 copy.
   transcriber injected per call via the ADDITIVE `ParseContext` (carried from
   `IngestionDeps.transcriber` — the embedder-injection precedent; text parsers ignore
   it). Whisper segments are **packed** into paragraph-sized `ExtractedSegment`s
-  (~180-word target, hard cap 400 < the 500-token chunk window) labeled
-  `sectionLabel: "mm:ss–mm:ss"` (`h:mm:ss` above an hour) — D29: the time range rides
-  the EXISTING `Citation.section`, zero citation-path changes. Packing matters twice:
-  distinct labels never coalesce in the chunker (raw whisper segments would mean
-  thousands of tiny chunks), and the ≤400-word cap makes **every audio chunk exactly one
-  packed segment, verbatim, no overlap** — which is why `extractDocumentPreview` (and
-  through it translate/compare re-extraction) reads audio text from the STORED CHUNKS
-  instead of re-transcribing for minutes.
+  (~180-token target, hard cap `AUDIO_SEGMENT_MAX_TOKENS` = `chunkSizeTokens − 100` = 400,
+  a margin below the 500-token chunk window) labeled `sectionLabel: "mm:ss–mm:ss"`
+  (`h:mm:ss` above an hour) — D29: the time range rides the EXISTING `Citation.section`,
+  zero citation-path changes. The cap is measured in **approx-tokens** (`approxTokenCount`,
+  CJK/Thai-aware), NOT whitespace words (RAG-N1, full audit 2026-06-28 Phase 4): a space-less
+  phrase is a few "words" but hundreds of tokens, so a word cap let an audio segment overflow
+  the window and the chunker then windowed+overlapped it. Packing matters twice: distinct
+  labels never coalesce in the chunker (raw whisper segments would mean thousands of tiny
+  chunks), and the ≤`AUDIO_SEGMENT_MAX_TOKENS` cap makes **each audio chunk one packed
+  segment, verbatim, no overlap** — so reconstruction has **no duplicated/dropped spans** —
+  which is why `extractDocumentPreview` (and through it translate/compare re-extraction) reads
+  audio text from the STORED CHUNKS instead of re-transcribing for minutes. (Exception: the rare
+  oversize-single-segment split re-coalesces and may normalize a piece boundary to one whitespace
+  — never a dup/loss; see `rag-design.md` §2 "Audio packing" / §3 windowing.)
 - **D35: the audio original is KEPT** (the locked Phase-4 copy-into-workspace contract +
   `reindexDocument` re-parsing the stored file force it), encrypted (`.enc`) on
   encrypted workspaces; **a re-index of an audio document is a full re-transcription**
