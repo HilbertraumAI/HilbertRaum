@@ -439,11 +439,21 @@ export function resolvePageYear(words: readonly LayoutWord[]): number | null {
       }
     }
   }
-  // Header band: the top quarter of the page by y.
-  const ys = words.map((w) => w.y).filter((y) => Number.isFinite(y))
-  if (ys.length === 0) return null
-  const maxY = Math.max(...ys)
-  const minY = Math.min(...ys)
+  // Header band: the top quarter of the page by y. REL-10: fold the page's y-range in ONE pass
+  // instead of `Math.max(...ys)` / `Math.min(...ys)` — the spread passes every fragment's y as a
+  // function argument, and a crafted page with hundreds of thousands of fragments overflows the
+  // call stack (`RangeError`). A loop is O(n) with no arg-count limit. (Contrast the per-row
+  // `Math.min(...money.map(...))` above, which is bounded by tokens-per-row and stays a spread.)
+  let maxY = -Infinity
+  let minY = Infinity
+  let anyY = false
+  for (const w of words) {
+    if (!Number.isFinite(w.y)) continue
+    anyY = true
+    if (w.y > maxY) maxY = w.y
+    if (w.y < minY) minY = w.y
+  }
+  if (!anyY) return null
   const bandFloor = maxY - (maxY - minY) * 0.25
   for (const w of words) {
     if (w.y < bandFloor) continue

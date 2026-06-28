@@ -6,6 +6,64 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 4 (Ingestion robustness & cap enforcement;
+REL-5, REL-9, REL-10, BL-5, MAINT-4) — MAIN-SIDE PARSING/WALK PHASE, no renderer surface, no schema
+change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2311 passed / 39 skipped
+(+11 tests, +1 skipped = the symlink-cycle test, skips locally where dir-symlinks need elevation)**,
+typecheck clean, build OK. Content-extraction changes only — nothing new logged/audited; offline posture
+held. **The problems:** the preview re-parse bypassed the whole import cap stack (a 4000-page PDF could
+wedge the main process on a user "Show more"); `expandPaths` could recurse forever on a symlink cycle;
+`resolvePageYear` spread a whole page's y-array into `Math.max(...)` (RangeError on a crafted page); a CSV
+data row wider than its header silently dropped the overflow cells.
+- **MAINT-4 + REL-5 — ONE cap-enforcement decorator, now covering preview.** New
+  `parseWithLimits(parser, source, ctx, limits, timeoutMessage?)` in `ingestion/index.ts` is the single
+  point every parse entry routes through: ingest (`prepareDocument`), `extractDocumentPreview`, and
+  `extractDocumentPreviewPage` (via the former). It injects `maxPages`/`maxInflatedBytes` from the
+  resolved limits (a caller-set ctx cap — the layout seam — WINS) and races non-audio parses against the
+  wall-clock `parseTimeoutMs`; **audio stays exempt** (its `signal` + the transcriber idle watchdog bound
+  it). The **ingest path is byte-for-byte unchanged** (decorator injects the same caps it set inline
+  before; verified via the unchanged ingestion/limits suite). The preview formerly threaded none of the
+  caps (only `maxPages`, layout-only) → REL-5 closed: the preview now enforces `maxPages` +
+  `maxInflatedBytes` + a timeout backstop on every page. The byte ceiling (M-1) stays the ingest path's
+  pre-selection stat (the preview reads the already-import-capped stored copy). Timeout *message* differs
+  by caller: ingest passes persist-canonical English (→ `error_message`); preview passes a localized
+  `tMain(...)` emission (transient IPC throw, never persisted).
+- **REL-9 — symlink-cycle guard in `expandPaths`.** `walk()` tracks the `realpathSync` of every dir on
+  the *current recursion path* in a Set and skips a dir whose real path is already an ancestor — precise
+  cycle detection: every acyclic walk's expansion set is byte-identical (a symlink to a *distinct* dir is
+  not an ancestor → still followed per the ING-4 intent), only a true cycle (`a/loop -> ..`) is cut.
+- **REL-10 — single-pass y-range fold in `resolvePageYear` (`pdf-layout.ts`).** Replaced
+  `Math.max(...ys)`/`Math.min(...ys)` with an O(n) loop (no arg-count limit). The per-row
+  `Math.min(...money.map(...))` at `pdf-layout.ts:384` is bounded by tokens-per-row → left as a spread
+  (noted in-code).
+- **BL-5 — ragged CSV (`csv.ts`).** The header→value emit now iterates `Math.max(header.length,
+  row.length)`; overflow cells (beyond the header) ride along under a generated `colN:` label (empty
+  overflow cells skipped → no trailing-comma noise). The in-header and narrower-than-header cases are
+  unchanged (byte-identical emit rule).
+- **Tests (+11, all teeth-verified then restored).** `ingestion-limits.test.ts`: `parseWithLimits`
+  decorator unit suite (cap injection; caller-cap wins; wedged non-audio → timeout not hang; audio
+  exempt; signal+fields pass-through) + preview cap stack (PDF `maxPages` bounded; DOCX `maxInflatedBytes`
+  throws; `extractDocumentPreviewPage` caps per page). `ingestion.test.ts`: ragged-CSV overflow kept
+  (BL-5) + narrower-than-header unchanged; symlink-cycle terminates + file found exactly once (REL-9,
+  `it.skipIf(!symlinkOk)` — runs in CI). `pdf-bank-layout.test.ts`: `resolvePageYear` over 500k fragments
+  → no RangeError (REL-10). **Teeth:** reverting each fix failed the matching test — REL-9 file-count
+  1→64 (junction repro), REL-10 RangeError, BL-5 cols dropped, cap-injection 4 tests, timeout 15 s hang,
+  audio "timed out", preview-page 3≠2; all restored.
+- **Data contract (new, additive):** `export function parseWithLimits(parser: DocumentParser, source:
+  string, ctx: ParseContext, limits: IngestionLimits, timeoutMessage?: string): Promise<ParsedDocument>`
+  — THE parse-with-caps enforcement point (default `timeoutMessage` = persist-canonical
+  `main.ingest.parseTimeout`). `ExtractPreviewOptions` gains optional `limits?: IngestionLimits` (test
+  seam; omit → `resolveIngestionLimits()`); `extractDocumentPreviewPage` gains a trailing optional
+  `opts: ExtractPreviewOptions` (forwarded to `extractDocumentPreview`). No IPC/schema-shape change; the
+  renderer preview callers are untouched (default limits).
+- **Docs:** `rag-design.md` §1 (expandPaths symlink-cycle guard), §2 (new "Cap stack — one enforcement
+  point (`parseWithLimits`)" record + preview coverage), §3 Cap bullet (pre-parse vs chunk-cap pointer);
+  `architecture.md` ING-4 record (symlink-cycle guard + teeth) and FE-6/preview record (preview cap
+  stack). **Eyeball:** none — a main-side parsing/walk phase, no UI surface.
+  **Next: Phase 5 — RAG/embeddings honesty & quality (RAG-1 coverage wording, EMB-1 reranker CJK/Thai
+  truncation, DATA-2 `decodeVector` guard, EMB-4 LE assert).** See
+  `docs/backend-audit-2026-06-27-remediation-plan.md` Phase 5._
+
 _2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 3 (Cancellation & timeouts; REL-1, REL-2,
 REL-3, REL-6, TEST-4) — MAIN-SIDE RELIABILITY PHASE, no renderer surface, no schema change, no new
 capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2300 passed / 38 skipped (+8)**,

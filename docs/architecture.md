@@ -374,7 +374,13 @@ Condensed from `docs/performance-audit-2026-06-18.md` §4 after Wave P5 shipped 
   dirs/files take the cheap `Dirent` path; a symlink (or any special entry) falls back to
   `statSync(full)`, reproducing the exact link-following expansion set. Tests prove a dir-symlink is
   still walked and a file-symlink still added (skipped where the OS denies symlink creation, e.g.
-  Windows without the privilege). **SKIPPED — the optional cross-call cache** (reuse the preflight's
+  Windows without the privilege). **Symlink-cycle guard (backend audit 2026-06-27, REL-9):** the
+  link-following fallback above could recurse forever on a self-referential tree (`a/loop -> ..`),
+  so `walk()` now tracks the `realpathSync` of every directory on the *current recursion path* in a
+  Set and skips a directory whose real path is already an ancestor. This terminates the cycle while
+  keeping every acyclic walk's expansion set byte-identical (a symlink to a *distinct* directory is
+  not an ancestor → still followed). Teeth: a junction cycle re-adds the same file 64× without the
+  guard, exactly once with it. **SKIPPED — the optional cross-call cache** (reuse the preflight's
   expansion on import to avoid the second walk): preflight and import are separate IPC calls and the
   filesystem can change between them, so a cross-call cache carries a real staleness risk for a modest
   gain; the per-walk syscall win is the safe, unconditional part.
@@ -394,6 +400,17 @@ Condensed from `docs/performance-audit-2026-06-18.md` §4 after Wave P5 shipped 
   better (same one parse, tiny payload), and only reading a huge doc page-by-page re-parses per "Show
   more" — bounded to one parse per interaction (what the old code paid up front). `requireNotProcessing`
   + deterministic parse keep `totalSegments`/slices stable across page calls.
+- **Preview cap stack (backend audit 2026-06-27, REL-5 / MAINT-4).** The preview re-parse formerly
+  threaded *none* of the ingest cap stack (only `maxPages`, and only in layout mode), so a pathological
+  but already-indexed file (e.g. a 4000-page PDF) could wedge the main process on a "Show more" where
+  import would have killed it. Both `extractDocumentPreview` and `extractDocumentPreviewPage` now route
+  the re-parse through the **single `parseWithLimits(parser, source, ctx, limits)` decorator** shared
+  with the ingest path (`prepareDocument`) — the ONE cap-enforcement point (MAINT-4). It injects
+  `maxPages` + `maxInflatedBytes` from the resolved `IngestionLimits` and applies the wall-clock parse
+  timeout (audio exempt — its `signal` + the transcriber watchdog bound it instead); the byte ceiling
+  stays the ingest path's pre-selection stat (the preview reads the already-import-capped stored copy).
+  The ingest path is byte-for-byte unchanged (the decorator injects the same caps it set inline before);
+  `ExtractPreviewOptions.limits` is a test seam to dial the caps down.
 
 Deferred with explicit, unmet triggers (recorded, not built): P4b worker/`SharedArrayBuffer` scan
 (trigger: cached main-thread scan >100 ms routinely; measured ≤70 ms @10k chunks), P4c ANN/sqlite-vec

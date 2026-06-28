@@ -41,7 +41,14 @@ valid and lets the real embedder swap in unchanged (Phase 10).
 
 1. **Select / expand.** `expandPaths()` turns a user selection into a flat file list:
    folders are walked recursively (supported extensions only); explicitly-picked files are
-   always included (an unsupported one surfaces later as `failed`).
+   always included (an unsupported one surfaces later as `failed`). The walk **follows
+   symlinked directories** (intended — ING-4), but guards against a **symlink cycle**
+   (`a/loop -> ..`): it tracks the `realpathSync` of every directory on the *current recursion
+   path* in a Set and skips a directory whose real path is already an ancestor (backend audit
+   2026-06-27, REL-9). This terminates a self-referential tree (which would otherwise recurse
+   until ENAMETOOLONG/ELOOP or a stack overflow, re-adding files via every looped path) while
+   leaving every acyclic walk's expansion set byte-identical — a symlink to a *distinct*
+   directory is not an ancestor, so it is still followed.
 2. **Queue.** `createQueuedDocument()` inserts a `documents` row (`status = queued`,
    `original_path`, guessed `mime_type`, `size_bytes`).
 3. **Extract.** `processDocument()` copies the original into the workspace
@@ -98,8 +105,31 @@ A parser returns `{ segments: ExtractedSegment[], mimeType }`, where each segmen
 optional `pageNumber` / `sectionLabel`. The chunker copies that structure onto every chunk it
 derives, so a chunk can always cite the page/section it came from. Parsers also receive an
 optional `ParseContext` carrying the injected `transcriber` / `ocrEngine` (the text parsers
-ignore it) plus `maxPages` and `maxInflatedBytes` (PDF page-count + DOCX zip-bomb caps, security
-audit M-2/M-3).
+ignore it), an optional `signal` (REL-1 cancellation, forwarded only by the AudioParser), plus
+`maxPages` and `maxInflatedBytes` (PDF page-count + DOCX zip-bomb caps, security audit M-2/M-3).
+
+### Cap stack — one enforcement point (`parseWithLimits`, MAINT-4 / REL-5)
+
+Every parse entry point — ingest (`prepareDocument`), the renderer preview
+(`extractDocumentPreview`), and the paged preview (`extractDocumentPreviewPage`, via the
+former) — routes through the **single `parseWithLimits(parser, source, ctx, limits)`
+decorator** so the resource cap stack can never silently diverge per path again. The decorator
+(1) injects the per-parser caps (`maxPages` / `maxInflatedBytes`) from the resolved
+`IngestionLimits` onto the context (a caller-set value — e.g. the bank-statement layout seam's
+own page cap — wins), and (2) races the parse against the wall-clock `parseTimeoutMs`, **except
+audio** (a long transcription legitimately runs for minutes; its `signal` + the transcriber's
+inactivity watchdog bound a wedged child instead). The pre-parse **byte ceiling** (M-1) stays a
+stat the ingest path runs before parser selection; the preview reads the already-import-capped
+stored copy, so the byte ceiling is in force on both paths without a re-stat.
+
+This closes **REL-5** (backend audit 2026-06-27): the preview re-parse formerly threaded *none*
+of the caps (only `maxPages`, and only in layout mode) and re-extracted the whole document per
+"Show more", so an already-indexed but pathological file (e.g. a 4000-page PDF) could wedge the
+main process on a user-triggered preview where import would have killed it. The preview path now
+enforces the same `maxPages` + `maxInflatedBytes` + timeout backstop on every page request. The
+timeout *message* differs by caller: the ingest path passes persist-canonical English (written
+to `documents.error_message`); the preview passes a localized `tMain(...)` emission (a transient
+IPC throw, never persisted).
 
 **PDF note (BUILD_STATE R3):** pdfjs-dist's **legacy** build (`pdfjs-dist/legacy/build/pdf.mjs`)
 runs in the Electron/Node main process with **no Web Worker and no DOM** — validated in
@@ -136,7 +166,10 @@ max_chunks_per_file: 1000
 - **No cross-segment chunks.** Chunking happens *within* a segment, so each chunk inherits
   exactly one `pageNumber` / `sectionLabel`.
 - **Cap.** The global chunk count is capped at `max_chunks_per_file`; once hit, remaining
-  text is dropped and the document still reaches `indexed`.
+  text is dropped and the document still reaches `indexed`. (Distinct from the **pre-parse**
+  resource caps — byte ceiling / parse timeout / PDF page count / DOCX inflate — which bound the
+  *parser* before it ever produces segments; those are now applied uniformly on every parse
+  entry point, including the preview path, via the `parseWithLimits` decorator — see §2.)
 
 ### Chunk metadata → storage
 

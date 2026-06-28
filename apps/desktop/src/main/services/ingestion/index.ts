@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync
 } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
@@ -37,7 +38,9 @@ import {
   isPdfPath,
   selectParser,
   supportedExtensions,
-  type ParseContext
+  type DocumentParser,
+  type ParseContext,
+  type ParsedDocument
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
@@ -499,6 +502,45 @@ export interface PreparedDocument {
 }
 
 /**
+ * THE single parse-with-caps enforcement point (MAINT-4 / REL-5). Every parse entry point —
+ * ingest (`prepareDocument`), the renderer preview (`extractDocumentPreview`), and the paged
+ * preview (`extractDocumentPreviewPage`, via the former) — routes through here, so the resource
+ * cap stack can never silently diverge per path again. REL-5 was exactly that divergence: the
+ * preview re-parse threaded NONE of the caps (only `maxPages` in layout mode), so a 4000-page
+ * PDF that import would have killed could wedge the main process on a user-triggered preview.
+ *
+ * It (1) injects the per-parser caps (M-2 `maxPages` / M-3 `maxInflatedBytes`) from `limits`
+ * onto the context — a caller-set value (e.g. the layout seam's own page cap) WINS — and
+ * (2) races the parse against the wall-clock timeout (M-2), EXCEPT for audio: a long recording
+ * legitimately transcribes for many minutes and the whisper child manages its own lifecycle
+ * (its inactivity watchdog + the caller's `signal`), so killing the wait would orphan the child
+ * and reject valid imports. The caller's `signal` (REL-1 cancellation) and every other
+ * caller-set field (transcriber, ocrEngine, ocrPages, onProgress, layout, …) are carried
+ * through untouched.
+ *
+ * NOTE — the pre-parse BYTE ceiling (M-1) is intentionally NOT applied here: it is a cheap stat
+ * the ingest path runs before parser selection, and the preview reads the already-import-capped
+ * stored copy, so the byte ceiling is in force on both paths without a re-stat. The default
+ * `timeoutMessage` is the persist-canonical English the ingest path writes to `error_message`;
+ * the preview path overrides it with the localized `tMain(...)` emission (it is never persisted).
+ */
+export function parseWithLimits(
+  parser: DocumentParser,
+  source: string,
+  ctx: ParseContext,
+  limits: IngestionLimits,
+  timeoutMessage: string = t('en', 'main.ingest.parseTimeout')
+): Promise<ParsedDocument> {
+  const cappedCtx: ParseContext = {
+    ...ctx,
+    maxPages: ctx.maxPages ?? limits.pdfMaxPages,
+    maxInflatedBytes: ctx.maxInflatedBytes ?? limits.docxMaxInflatedBytes
+  }
+  if (isAudioPath(source)) return parser.parse(source, cappedCtx)
+  return withParseTimeout(parser.parse(source, cappedCtx), limits.parseTimeoutMs, timeoutMessage)
+}
+
+/**
  * Parse + chunk phase (ING-3 pipeline, front half). Runs setup → parse → chunk → persist
  * chunks, leaving the document in `embedding`. CPU- and disk-bound; independent of the embed
  * sidecar (the embed phase reads the chunks back from the DB), so the import loop overlaps
@@ -628,24 +670,13 @@ export async function prepareDocument(
       workDir: storeDir,
       onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent),
       // REL-1: cancellation for an unbounded audio transcription. Audio stays EXEMPT from
-      // the wall-clock parse timeout below, so the signal (+ the transcriber's own idle
-      // watchdog) is the only way to stop a wedged/cancelled whisper child.
-      signal: deps.signal,
-      // Per-parser caps (M-2/M-3): bound the PDF page loop and the DOCX inflate.
-      maxPages: limits.pdfMaxPages,
-      maxInflatedBytes: limits.docxMaxInflatedBytes
+      // the wall-clock parse timeout, so the signal (+ the transcriber's own idle watchdog)
+      // is the only way to stop a wedged/cancelled whisper child.
+      signal: deps.signal
+      // Per-parser caps (M-2/M-3) and the audio-exempt wall-clock timeout are applied by
+      // parseWithLimits — the ONE cap-enforcement point shared with the preview path (MAINT-4).
     }
-    // Wall-clock parse timeout (M-2): bound a wedged/pathological parser so it fails the
-    // one document instead of hanging the import loop. Audio is EXEMPT — a long recording
-    // legitimately transcribes for many minutes, and the whisper child manages its own
-    // lifecycle; killing the wait would orphan that process and reject valid imports.
-    const parsed = isAudioPath(row.title)
-      ? await parser.parse(parseSource, parseCtx)
-      : await withParseTimeout(
-          parser.parse(parseSource, parseCtx),
-          limits.parseTimeoutMs,
-          t('en', 'main.ingest.parseTimeout')
-        )
+    const parsed = await parseWithLimits(parser, parseSource, parseCtx, limits)
 
     setStatus(db, documentId, 'chunking')
     // Over-cap gate (whole-document-analysis plan C1/C2/M13). Chunk with cap + 1 so an
@@ -907,6 +938,12 @@ export interface ExtractPreviewOptions {
   layout?: boolean
   /** Page cap for the layout path (plan §3.1) — threaded only when `layout` is set. */
   maxPages?: number
+  /**
+   * Resource caps for the preview re-parse (REL-5). The preview now enforces the SAME cap stack
+   * as ingest, via `parseWithLimits`. Omit → `resolveIngestionLimits()` (env-overridable
+   * defaults). Injected mainly so tests can dial the caps down to prove the preview is bounded.
+   */
+  limits?: IngestionLimits
 }
 
 export async function extractDocumentPreview(
@@ -964,14 +1001,25 @@ export async function extractDocumentPreview(
     // An OCR'd PDF previews its STORED recognition (the same ocrPages hook
     // re-index uses — never a silent re-OCR); a photo re-recognizes the stored copy
     // (one small image, the audio-preview trade-off inverted: cheap enough to redo).
-    const parsed = await parser.parse(parseSource, {
+    const previewCtx: ParseContext = {
       ocrEngine: deps.ocrEngine,
       ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
       // Geometry-aware layout reconstruction (plan §3.1, D51) — opt-in, bank-statement-only (D58).
-      // The page cap rides along ONLY in layout mode (per-page clustering across an uncapped page
-      // count is a perf amplifier, plan §3.1); the default preview path stays uncapped + byte-unchanged.
+      // In layout mode the caller passes its own page cap; otherwise parseWithLimits injects the
+      // default `pdfMaxPages` below — REL-5: the preview path now caps too (it formerly ran uncapped).
       ...(opts.layout ? { layout: true, maxPages: opts.maxPages } : {})
-    })
+    }
+    // REL-5 / MAINT-4: route the preview re-parse through the SAME cap stack as ingest
+    // (`maxPages` + `maxInflatedBytes` + a wall-clock timeout). A pathological-but-indexed file can
+    // no longer wedge the main process on a "Show more". The timeout message is a TRANSIENT IPC
+    // emission (§3.3 rule 2) — localized via tMain, never persisted (unlike the ingest path's English).
+    const parsed = await parseWithLimits(
+      parser,
+      parseSource,
+      previewCtx,
+      opts.limits ?? resolveIngestionLimits(),
+      tMain('main.ingest.parseTimeout')
+    )
     return {
       id: row.id,
       title: row.title,
@@ -1010,9 +1058,12 @@ export async function extractDocumentPreviewPage(
   documentId: string,
   offset: number,
   limit: number,
-  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {}
+  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {},
+  opts: ExtractPreviewOptions = {}
 ): Promise<DocumentPreview> {
-  const full = await extractDocumentPreview(db, storeDir, documentId, deps)
+  // REL-5: forward the cap stack so EACH "Show more" page re-parse is bounded (the whole-document
+  // re-extract this paging wrapper does per call now enforces maxPages/maxInflatedBytes + timeout).
+  const full = await extractDocumentPreview(db, storeDir, documentId, deps, opts)
   const safeOffset = Math.max(0, Math.floor(offset))
   const safeLimit = Math.max(1, Math.floor(limit))
   const end = safeOffset + safeLimit
@@ -1462,31 +1513,53 @@ export function expandPaths(paths: string[]): string[] {
   // added (intentional, audit L3/L5). So only plain dirs/files use the cheap Dirent type;
   // anything else (a symlink, or a special entry) falls back to statSync(full) to reproduce the
   // exact follow-the-link expansion set. Net: same set of files, fewer syscalls in the common case.
+  // REL-9: real paths of the directories on the CURRENT recursion path — the cycle guard.
+  // A symlinked directory can resolve back into one of its own ancestors (`a/loop -> ..`), and
+  // the link-following fallback below would then recurse on it forever → stack overflow on a
+  // hostile/looped tree (user-initiated, but a self-referential tree hangs the walk). Skipping a
+  // dir whose real path already appears on the path defeats EXACTLY the cycle while leaving every
+  // terminating (acyclic) walk's expansion set byte-identical: a symlink to a DISTINCT directory
+  // is not an ancestor, so it is still followed (the intended ING-4 link-following behaviour).
+  const onPath = new Set<string>()
   const walk = (dir: string): void => {
-    let entries: Dirent[]
+    // realpathSync collapses the link chain to the cycle's identity; a failure (race/permission)
+    // falls back to the literal path so a normal dir is still walked.
+    let real: string
     try {
-      entries = readdirSync(dir, { withFileTypes: true })
+      real = realpathSync(dir)
     } catch {
-      return
+      real = dir
     }
-    for (const entry of entries) {
-      const full = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        walk(full)
-      } else if (entry.isFile()) {
-        if (supported.has(extname(full).toLowerCase())) add(full)
-      } else {
-        // Symlink or special entry — resolve it the old (link-following) way so the expanded
-        // set is byte-identical to the pre-ING-4 statSync walk.
-        let stat
-        try {
-          stat = statSync(full)
-        } catch {
-          continue
-        }
-        if (stat.isDirectory()) walk(full)
-        else if (supported.has(extname(full).toLowerCase())) add(full)
+    if (onPath.has(real)) return
+    onPath.add(real)
+    try {
+      let entries: Dirent[]
+      try {
+        entries = readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
       }
+      for (const entry of entries) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          walk(full)
+        } else if (entry.isFile()) {
+          if (supported.has(extname(full).toLowerCase())) add(full)
+        } else {
+          // Symlink or special entry — resolve it the old (link-following) way so the expanded
+          // set is byte-identical to the pre-ING-4 statSync walk.
+          let stat
+          try {
+            stat = statSync(full)
+          } catch {
+            continue
+          }
+          if (stat.isDirectory()) walk(full)
+          else if (supported.has(extname(full).toLowerCase())) add(full)
+        }
+      }
+    } finally {
+      onPath.delete(real)
     }
   }
 

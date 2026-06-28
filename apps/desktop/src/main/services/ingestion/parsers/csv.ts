@@ -32,9 +32,23 @@ export const CsvParser: DocumentParser = {
     const lines: string[] = []
     if (hasHeader) {
       for (const row of rows.slice(1)) {
-        const pairs = header
-          .map((h, i) => `${h}: ${cell(row[i])}`)
-          .filter((_, i) => cell(row[i]).length > 0 || header[i].length > 0)
+        // BL-5: iterate the WIDER of header/row so a data row with MORE cells than the header (a
+        // ragged CSV) does not silently drop its overflow cells from the extracted/embedded text.
+        const pairs: string[] = []
+        const width = Math.max(header.length, row.length)
+        for (let i = 0; i < width; i++) {
+          const value = cell(row[i])
+          if (i < header.length) {
+            // Unchanged in-header rule: keep a named column even when its value is empty (so an
+            // empty cell under a real header still reads as "Header: "), drop a fully-empty pair.
+            if (value.length > 0 || header[i].length > 0) pairs.push(`${header[i]}: ${value}`)
+          } else if (value.length > 0) {
+            // An overflow cell (beyond the header) has no name — label it `colN` (1-based) so the
+            // value stays searchable instead of vanishing. Empty overflow cells carry no data, so
+            // they are skipped (no `colN: ` noise from a trailing comma).
+            pairs.push(`col${i + 1}: ${value}`)
+          }
+        }
         lines.push(pairs.join('; '))
       }
     } else {

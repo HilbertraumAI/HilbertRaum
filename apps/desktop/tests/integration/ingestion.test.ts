@@ -91,6 +91,31 @@ describe('CsvParser', () => {
     expect(out.segments[0].text).toContain('name: Ada')
     expect(out.segments[0].text).toContain('role: Admiral')
   })
+
+  // BL-5: a data row WIDER than the header used to drop its overflow cells (header.map only),
+  // losing content silently — unsearchable, no failure signal. Now every overflow cell rides
+  // along under a generated `colN` label.
+  it('keeps cells in rows wider than the header (BL-5 — no silent truncation)', async () => {
+    const p = write('ragged.csv', 'name,role\nAda,Engineer,extra-note,second-extra')
+    const out = await CsvParser.parse(p)
+    const text = out.segments[0].text
+    expect(text).toContain('name: Ada')
+    expect(text).toContain('role: Engineer')
+    // The two cells beyond the 2-column header are labelled colN (1-based), not dropped.
+    expect(text).toContain('col3: extra-note')
+    expect(text).toContain('col4: second-extra')
+  })
+
+  // The narrower-than-header case is unchanged: a named column with no value still reads as
+  // "Header: " (so a sparse row keeps its column structure).
+  it('still emits empty named columns for a row narrower than the header', async () => {
+    const p = write('narrow.csv', 'name,role,team\nAda,Engineer')
+    const out = await CsvParser.parse(p)
+    const text = out.segments[0].text
+    expect(text).toContain('name: Ada')
+    expect(text).toContain('role: Engineer')
+    expect(text).toContain('team:')
+  })
 })
 
 describe('PdfParser', () => {
@@ -380,5 +405,22 @@ describe('expandPaths', () => {
     const files = expandPaths([root])
     // inside.txt is only reachable by walking through the directory symlink.
     expect(files.some((f) => f.endsWith('inside.txt'))).toBe(true)
+  })
+
+  // REL-9: a symlinked directory pointing back into one of its own ancestors (`a/loop -> root`)
+  // is a cycle the link-following fallback would recurse on forever → stack overflow. The
+  // recursion-path realpath guard must TERMINATE the walk (and still find the real file once).
+  it.skipIf(!symlinkOk)('terminates on a symlink cycle without a stack overflow (REL-9)', () => {
+    const root = join(dir(), 'cycleroot')
+    mkdirSync(root)
+    const a = join(root, 'a')
+    mkdirSync(a)
+    writeFileSync(join(a, 'real.txt'), 'x')
+    symlinkSync(root, join(a, 'loop'), 'dir') // a/loop -> root (an ancestor) ⇒ a cycle
+    // The walk must terminate AND discover the genuine file EXACTLY ONCE. Without the guard the
+    // cycle re-walks `a` via every `…/loop/a` literal path, re-adding real.txt on each pass (and,
+    // depending on the OS path/symlink limit, recursing until ENAMETOOLONG/ELOOP/stack overflow).
+    const files = expandPaths([root])
+    expect(files.filter((f) => f.endsWith('real.txt'))).toHaveLength(1)
   })
 })
