@@ -7,6 +7,9 @@ System Volume Information/
 #deepsec
 .deepsec
 
+#local claude skills
+.claude
+
 # Build output
 dist/
 out/
