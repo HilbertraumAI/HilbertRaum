@@ -297,7 +297,7 @@ function fakeReranker(scoreFor: (text: string) => number): Reranker & { calls: s
 }
 
 describe('retrieve() — hybrid pipeline', () => {
-  it('a keyword hit rescues an exact-term chunk the vector pass missed', async () => {
+  it('a keyword hit rescues an exact-term chunk to #1, ahead of a vector-only distractor [TEST-N4]', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     await seedDocument(db, embedder, 'similar.txt', ['solar panels convert light to power cleanly'])
@@ -306,18 +306,21 @@ describe('retrieve() — hybrid pipeline', () => {
     ])
     // Simulate the real failure mode hybrid search exists for: the chunk's EMBEDDING
     // does not capture the literal code (here: overwrite it with an unrelated vector,
-    // still visible under the active embedder), so the vector pass cannot rank it.
+    // still visible under the active embedder), so the vector pass cannot rank it on the code.
     const [unrelated] = await embedder.embed(['completely unrelated padding text'])
     db.prepare('UPDATE embeddings SET vector_blob = ? WHERE chunk_id = ?').run(
       encodeVector(unrelated),
       invoice.chunkIds[0]
     )
 
-    // topKInitial 1: the vector slot goes to the semantically closest chunk; the
-    // exact-term chunk can only arrive through the keyword path.
-    const settings = { ...SETTINGS, topKInitial: 1 }
+    // TEST-N4: assert relative RANK, not just membership. minSimilarity -1 keeps BOTH chunks as
+    // vector candidates (the distractor's noise cosine vs the code query is slightly negative);
+    // only the invoice chunk is ALSO a keyword hit for the exact code. RRF rewards the chunk
+    // present in BOTH lists, so the keyword path lifts the invoice chunk to #1 over the
+    // vector-only distractor — deterministically, regardless of the noise-cosine vector order.
+    const settings = { ...SETTINGS, minSimilarity: -1 }
     const { chunks } = await retrieve(db, embedder, 'INV-2024-001', settings)
-    expect(chunks.map((c) => c.sourceTitle)).toContain('invoice.txt')
+    expect(chunks.map((c) => c.sourceTitle)).toEqual(['invoice.txt', 'similar.txt'])
   })
 
   it('applies the reranker ordering between fusion and dedup', async () => {

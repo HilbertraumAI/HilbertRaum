@@ -6,6 +6,78 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Full audit 2026-06-28 remediation — Phase 6 (RERANKER SCORING DEPTH, retrieval quality;
+RAG-N3 Med + DOC-N6 Low, with the dependency TEST-N4 Med folded in) — the load-bearing reranker
+(rag-design §12.3) scored only the FIRST 320 approx-tokens of each 500-token chunk, so a chunk whose
+key sentence lived in its second half was under-scored, could lose its page's dedup slot, or drop out of
+the final top-k (branch `full-audit-2026-06-28-fixes`).** Suite **2398 passed / 39 skipped** (was 2395/39
+at Phase 5 → **+3 tests**), typecheck clean, build OK. **Reranker-only behavior change** (one constant) +
+retrieval tests + the rag-design notes — **NO re-index, no embedding/FTS/chunk-count/schema change, no
+ranking-algorithm change**; offline/no-telemetry posture held. Methodology per the audit: the measurable
+tests were built FIRST, the RAG-N3 test confirmed FAILING on the 320 cap, THEN a DELIBERATE owner decision,
+THEN the fix, THEN the ceiling documented either way.
+- **OWNER DECISION — option (a): raise `MAX_DOC_APPROX_TOKENS` to the WHOLE chunk window.** Set
+  `MAX_DOC_APPROX_TOKENS = CHUNK_DEFAULTS.chunkSizeTokens` (500), keyed off the chunker's source of truth
+  (so a future chunk-size change carries the rerank budget with it), NOT a standalone literal. Chosen over
+  (b) shrink chunks toward 320 (BIG blast radius — re-index every corpus, changes granularity/embeddings/
+  FTS/chunk counts; its own phase), (c) head+tail (more complex, can miss the middle), (d) keep 320 +
+  document only. **Smallest blast radius** (one constant, no re-index, no embedding/FTS impact) and the
+  faithful fix (reranker sees every chunk in full).
+- **n_ctx is SAFE (concrete).** The constructor already CLAMPS `docApproxTokens = min(MAX_DOC, usable −
+  queryCap)`; at the default 2048 ctx `usable = floor(2048/2.2) − 16 = 914`, queryCap 160 ⇒ clamp ceiling
+  754 ≥ 500, so the cap lands at exactly 500. Worst-case pair `(160 + 500) × 2.2 ≈ 1452 real tokens` < the
+  2048 context AND the 2048 physical batch (the `n_batch=n_ubatch` rerank-mode constraint). The clamp
+  guarantees no overflow even at a smaller configured context.
+- **Latency — REASONED, not measured (no provisioned drive / real bge-reranker weights in CI/dev; the
+  GGUF is never committed).** From §12.3 the OLD worst case was 24.7 s for a 12-candidate batch at full
+  320-token docs (~2 s/candidate, CPU-pinned i7-1185G7). Doc budget 320→500 grows per-pair input
+  ~480→660 approx tokens (~1.38×); CPU prefill ≈ linear ⇒ absolute worst case ~34 s for 12 full-500-token
+  candidates. Typical queries (shorter chunks, fused union usually < 12) scale proportionally less; stays
+  opt-in-by-provisioning, CPU-pinned, candidate-cap-bounded. The candidate cap / `MAX_DOC_APPROX_TOKENS`
+  remain the levers if latency proves high. The §12.3 "rescued #3→#1" validation was itself measured under
+  the OLD 320 truncation — now disclosed in the docs.
+- **TEST-N4 (the dependency, folded in) — graded-overlap ranking.** The prior ordering tests all queried
+  text BYTE-IDENTICAL to the target chunk (the mock embedder is feature-hashing), so "exact match ranks
+  #1" was the only assertion a broken cosine couldn't fail. New CI test (`rag.test.ts`): a query sharing
+  4/2/1 tokens with chunks A/B/C (NONE equal to the query, all 6 tokens for comparable norms) asserts the
+  FULL order [A,B,C] with STRICT `<` between adjacent fused scores. Mock cosines empirically verified
+  strictly monotone (~0.83 > 0.42 > 0.22) before fixing the token set. The assembled rescue test
+  (`hybrid-search.test.ts`) now asserts RELATIVE RANK, not membership: a keyword-rescued exact-code chunk
+  is lifted to **#1** ahead of a vector-only distractor (RRF rewards the chunk present in both lists;
+  `minSimilarity: -1` keeps both as candidates so the rank — not mere presence — is pinned).
+- **RAG-N3 behavioral test (the proof) — `reranker.test.ts` [RAG-N3].** Using the fake-server harness, a
+  ~404-approx-token doc with a `TAILSENTINEL` past the old 320 budget asserts the WHOLE chunk (incl. its
+  tail) reaches the sidecar. **Confirmed FAILING on the 320 cap** (received text stopped at `h319`), passes
+  after the fix. The existing truncation test's doc assertion was updated 320 → `CHUNK_DEFAULTS.chunkSizeTokens`.
+- **Dedup-winner verification — `rag.test.ts` [RAG-N3].** End-to-end through the REAL `LlamaReranker` (its
+  internal truncation runs) wired to a content-scoring fake sidecar: two chunks on the SAME page, the
+  lexical favorite (`headMiss`) vs a chunk hiding the answer SENTINEL in its TAIL (`tailHit`). The sidecar
+  scores a candidate 10 iff the RECEIVED text contains the sentinel — so `tailHit` can only win the page's
+  dedup slot if its tail was sent. Asserts `tailHit` wins (text contains the sentinel, score 10). This
+  pins that the dedup-by-page winner now rests on the whole-chunk score.
+- **TEETH (neuter → fail → restore).** Reverting the cap to 320 fails BOTH RAG-N3 tests (tail dropped,
+  dedup winner flips); restored. Reversing the `rrfFuse` sort fails BOTH TEST-N4 tests (graded order +
+  rescue rank); restored. The src diff is teeth-leftover-clean.
+- **Docs (DOC-N6) — `docs/rag-design.md`.** New "Known retrieval-quality ceilings" note in §11 stating
+  (1) E5 runs PREFIX-LESS → compressed cosines (R3) → WHY the reranker is load-bearing, with the
+  `query:`/`passage:` prefix migration recorded as a **tracked TODO** (re-embeds the whole corpus — its own
+  phase; would re-enable a meaningful `ragMinSimilarity` floor); (2) the reranker scores the leading N
+  approx-tokens, N raised 320 → 500 (whole chunk) by RAG-N3, with the clamp caveat. §11 reranker para, §12.2
+  D10, §12.3 (worst-case budget + the "measured under 320" disclosure + the reasoned ~34 s), and §12.4
+  (combined 1056 → 1452 real tokens) updated accordingly.
+- **Files changed:** `apps/desktop/src/main/services/reranker/llama.ts` (the cap + its rationale comments);
+  tests `tests/integration/{reranker,rag,hybrid-search}.test.ts`; `docs/rag-design.md`. **Out of scope
+  (untouched):** `chunker.ts` (option b not chosen — no chunk-size change), `rag/index.ts` (the dedup/ordering
+  algorithm is unchanged; only its score BASIS improved — verified by the fixture), the E5 prefix migration
+  (recorded as a TODO only), embedder/FTS/schema, all other audit phases.
+- **Don't-regress confirmed:** RRF determinism + the pass-through guarantee (no keyword/no reranker ⇒
+  byte-identical to vector-only) and the reranker index→result mapping contract stayed green; the n_batch
+  headroom holds (1452 < 2048).
+- **Next action (owner):** review/commit Phase 6 (do NOT auto-push/merge). Then **Phase 7 — ingestion edge
+  cases + small security/test/perf polish** (RAG-N4 markdown fences, RAG-N5 TSV delimiter, RAG-N6 archived,
+  SEC-N1/N2/N3, TEST-N5/N7/N8, PERF-1/2 async I/O, PERF-5/6 render) per `audits/full-audit-2026-06-28.md` §6._
+
+
 _2026-06-28 — **Full audit 2026-06-28 remediation — Phase 5 (DATA-LAYER HARDENING; REL-4 Med, REL-5 Low,
 PERF-3 Med, PERF-4 Low, DATA-1/DATA-2/DATA-3 Low) — atomicity + two additive indexes + an FTS trigger
 guard + two pinned invariants, all additive (no schema-shape change; indexes `IF NOT EXISTS`, one FTS

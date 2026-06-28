@@ -3,11 +3,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { LlamaReranker } from '../../src/main/services/reranker/llama'
+import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import {
   buildGroundedChatMessages,
   buildGroundedPrompt,
@@ -89,6 +92,45 @@ async function seedDocument(
 afterEach(() => {
   vi.restoreAllMocks()
 })
+
+class FakeRerankChild extends EventEmitter implements ChildProcessLike {
+  pid = 9
+  killed = false
+  kill(): boolean {
+    this.killed = true
+    queueMicrotask(() => this.emit('exit', 0, null))
+    return true
+  }
+}
+
+/**
+ * A REAL `LlamaReranker` (so its internal per-field truncation runs) wired to a fake sidecar that
+ * scores each candidate by `scoreOf(receivedDocText)` — i.e. by the text that actually SURVIVED
+ * truncation and reached the server. Used to prove the dedup-by-page winner rests on the
+ * whole-chunk rerank score (RAG-N3): a sentinel in a chunk's tail only influences the score if the
+ * tail was sent.
+ */
+function contentScoringReranker(scoreOf: (receivedDocText: string) => number): LlamaReranker {
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    const u = String(url)
+    if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+    if (u.endsWith('/v1/rerank')) {
+      const body = JSON.parse(String(init?.body)) as { documents: string[] }
+      const results = body.documents.map((d, index) => ({ index, relevance_score: scoreOf(d) }))
+      return { ok: true, status: 200, json: async () => ({ results }) } as Response
+    }
+    throw new Error(`unexpected url ${u}`)
+  }) as typeof fetch
+  return new LlamaReranker({
+    id: 'fake-content-reranker',
+    binPath: '/bin/llama-server',
+    modelPath: '/models/reranker.gguf',
+    findPort: async () => 53001,
+    healthIntervalMs: 1,
+    spawn: () => new FakeRerankChild(),
+    fetchImpl
+  })
+}
 
 // ---- Grounded prompt assembly (spec §7.8 template) ------------------------------
 
@@ -202,6 +244,36 @@ describe('retrieve', () => {
     expect(chunks[0].text).toContain('alpha')
   })
 
+  // TEST-N4 (full audit 2026-06-28): the other ordering tests all query text BYTE-IDENTICAL
+  // to the target chunk, so "the exact match ranks #1" is the only thing asserted — a broken
+  // cosine that merely got the identity case right would still pass. This drives GRADED token
+  // overlap: the query shares 4 / 2 / 1 tokens with chunks A / B / C, NONE of which equals the
+  // query, and asserts the FULL relative order with a STRICT gap between adjacent fused scores.
+  // The mock embedder's cosines for this token set were verified strictly monotone
+  // (~0.83 > 0.42 > 0.22; all chunks 6 tokens so their norms are comparable). Both the vector
+  // and the keyword lists rank A>B>C, so the fused order is [A,B,C] and each chunk keeps its
+  // cosine as `score` (the pass-through rule) — a degenerate cosine that only ranked the exact
+  // match could not keep B strictly above C here.
+  it('orders chunks by graded token overlap with strictly decreasing fused scores [TEST-N4]', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'graded.txt', [
+      { text: 'alpha bravo charlie delta foxtrot golf' }, // A: 4 shared with the query
+      { text: 'alpha bravo mike november hotel india' }, // B: 2 shared
+      { text: 'alpha oscar papa quebec romeo sierra' } // C: 1 shared
+    ])
+    const { chunks } = await retrieve(db, embedder, 'alpha bravo charlie delta', SETTINGS)
+    expect(chunks).toHaveLength(3)
+    // Full order A, B, C by graded overlap (the query is byte-identical to NONE of them).
+    expect(chunks[0].text.startsWith('alpha bravo charlie delta')).toBe(true)
+    expect(chunks[1].text.startsWith('alpha bravo mike')).toBe(true)
+    expect(chunks[2].text.startsWith('alpha oscar papa')).toBe(true)
+    // Strict < between adjacent fused scores — the assertion a monotone-only / exact-match-only
+    // cosine cannot satisfy.
+    expect(chunks[0].score).toBeGreaterThan(chunks[1].score)
+    expect(chunks[1].score).toBeGreaterThan(chunks[2].score)
+  })
+
   it('dedups by document/page, keeping the best-scoring chunk per page', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
@@ -214,6 +286,33 @@ describe('retrieve', () => {
     const page4 = chunks.filter((c) => c.pageNumber === 4)
     expect(page4).toHaveLength(1)
     expect(page4[0].text).toBe('alpha beta gamma delta')
+  })
+
+  // RAG-N3 (full audit 2026-06-28): the reranked score decides which chunk REPRESENTS a page
+  // (rag/index.ts dedup) — so now that the reranker scores the WHOLE chunk, a chunk whose
+  // discriminating sentence sits in its TAIL (past the old 320-token budget) can win the page's
+  // dedup slot. This drives the REAL LlamaReranker (its internal truncation runs) through retrieve():
+  // the fake sidecar scores a candidate 10 iff the text it RECEIVED contains the tail sentinel, else
+  // 1. Under the old 320 cap the sentinel was truncated away → tailHit scored 1, tied the lexical
+  // favorite, and lost the page on fused order; with the whole chunk scored it wins. The reranker.ts
+  // RAG-N3 test gives the truncation itself teeth; this pins the end-to-end dedup consequence.
+  it('dedup-by-page winner rests on whole-chunk rerank scores (a tail sentence wins its page) [RAG-N3]', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    const pad = Array.from({ length: 400 }, (_, i) => `pad${i}`).join(' ')
+    // Two chunks on the SAME page → they compete for ONE dedup slot. headMiss is the lexical/vector
+    // favorite (repeats the query word 'cap'); tailHit hides the answer SENTINEL past the old budget.
+    await seedDocument(db, embedder, 'contract.pdf', [
+      { text: 'cap cap cap cap generic preamble about a cap', pageNumber: 1 }, // headMiss
+      { text: `${pad} the liability cap is one million dollars TAILANSWER`, pageNumber: 1 } // tailHit
+    ])
+    const reranker = contentScoringReranker((d) => (d.includes('TAILANSWER') ? 10 : 1))
+    const { chunks } = await retrieve(db, embedder, 'cap', SETTINGS, null, reranker)
+    await reranker.stop()
+    const page1 = chunks.filter((c) => c.pageNumber === 1)
+    expect(page1).toHaveLength(1) // dedup kept exactly one chunk for the page
+    expect(page1[0].text).toContain('TAILANSWER') // the tail-matching chunk won the slot
+    expect(page1[0].score).toBe(10) // ...via its whole-chunk rerank score, not the truncated prefix
   })
 
   it('trims to topKFinal under the max-context-tokens budget', async () => {

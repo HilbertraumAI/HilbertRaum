@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { createSelectedReranker } from '../../src/main/services/reranker/factory'
-import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
+import { approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/services/ingestion/chunker'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
@@ -167,9 +167,10 @@ describe('LlamaReranker', () => {
     const longQuery = Array.from({ length: 500 }, (_, i) => `q${i}`).join(' ')
     await reranker.rerank(longQuery, [longDoc])
     await reranker.stop()
-    // English words are ~1 approx token each, so the default caps (160/320) are unchanged.
+    // English words are ~1 approx token each. The query cap is 160; the doc cap is the WHOLE chunk
+    // window (CHUNK_DEFAULTS.chunkSizeTokens, RAG-N3) so a chunk's tail is never dropped before scoring.
     expect(recorded[0].query.split(' ').length).toBeLessThanOrEqual(160)
-    expect(recorded[0].documents[0].split(' ').length).toBeLessThanOrEqual(320)
+    expect(recorded[0].documents[0].split(' ').length).toBeLessThanOrEqual(CHUNK_DEFAULTS.chunkSizeTokens)
     expect(recorded[0].documents[0].startsWith('word0 word1')).toBe(true) // head kept
   })
 
@@ -195,6 +196,33 @@ describe('LlamaReranker', () => {
     // The sent passage was truncated by token COST (CJK ~1 token/char), not left whole.
     expect(recorded[0].documents[0].length).toBeLessThan(cjk.length)
     expect(approxTokenCount(recorded[0].documents[0])).toBeLessThanOrEqual(DEFAULT_CTX)
+  })
+
+  // RAG-N3 (full audit 2026-06-28): chunks are sized to CHUNK_DEFAULTS.chunkSizeTokens (500)
+  // approx tokens, but the reranker used to truncate every candidate to 320 before scoring — so a
+  // chunk whose discriminating sentence sits in its SECOND HALF was scored on a prefix that never
+  // contained it, and that truncated score drives BOTH the final order AND the dedup-by-page winner
+  // (rag/index.ts:303-312). This pins that the WHOLE chunk reaches the sidecar: a chunk-sized doc
+  // with a sentinel in its TAIL (past the old 320-token budget) is sent in full.
+  // TEETH: PRE-FIX (doc cap 320) this FAILS — the tail is dropped before sending; the fix (cap =
+  // chunkSizeTokens) makes it pass. Any future change that re-narrows the budget breaks it again.
+  it('sends the WHOLE chunk to the reranker, including the tail past the old 320-token budget [RAG-N3]', async () => {
+    const recorded: Array<{ query: string; documents: string[] }> = []
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn: fakeSpawn().spawn,
+      fetchImpl: rerankFetch([1], recorded)
+    })
+    // ~400 head tokens, then a sentinel landing well past the old 320-token doc budget but still
+    // within one 500-token chunk window — the exact RAG-N3 case (key sentence in the chunk's tail).
+    const head = Array.from({ length: 400 }, (_, i) => `h${i}`).join(' ')
+    const doc = `${head} TAILSENTINEL trailing context words`
+    expect(approxTokenCount(doc)).toBeGreaterThan(320) // the tail is BEYOND the old doc budget
+    expect(approxTokenCount(doc)).toBeLessThanOrEqual(CHUNK_DEFAULTS.chunkSizeTokens) // ...but within a chunk
+    await reranker.rerank('which chunk is most relevant?', [doc])
+    await reranker.stop()
+    expect(recorded[0].documents[0].startsWith('h0 h1')).toBe(true) // head still kept
+    expect(recorded[0].documents[0]).toContain('TAILSENTINEL') // the tail is now scored too
   })
 
   it('returns [] for an empty batch without starting the server', async () => {
