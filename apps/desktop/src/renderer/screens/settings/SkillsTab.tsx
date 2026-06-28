@@ -35,6 +35,7 @@ const IMPORT_ERROR_KEY: Record<string, MessageKey> = {
   unsupportedCompression: 'skills.import.error.unsupportedCompression',
   pathTraversal: 'skills.import.error.pathTraversal',
   absolutePath: 'skills.import.error.absolutePath',
+  invalidPath: 'skills.import.error.invalidPath',
   symlink: 'skills.import.error.symlink',
   tooDeep: 'skills.import.error.tooDeep',
   pathTooLong: 'skills.import.error.pathTooLong',

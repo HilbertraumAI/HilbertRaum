@@ -7,6 +7,7 @@ import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
+import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 
 // IPC for the hardware benchmark + model recommendation (spec §9.1, §11).
@@ -105,6 +106,19 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
 }
 
 export function registerBenchmarkIpc(ctx: AppContext): void {
-  ipcMain.handle(IPC.runBenchmark, (): Promise<BenchmarkResult> => runAndPersistBenchmark(ctx))
-  ipcMain.handle(IPC.tryGpuAgain, (): Promise<AppSettings> => tryGpuAgain(ctx))
+  // SEC-N2: both handlers touch ctx.db (via updateSettings/getSettings). The ctx.db getter already
+  // fail-closes when the workspace is locked, but it throws a raw English string; mirror every other
+  // DB-touching handler with an explicit requireUnlocked() so a locked call surfaces the localized
+  // main.benchmark.locked instead (parity, and the parametrized lock test now covers these too).
+  const requireUnlocked = (): void => {
+    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.benchmark.locked'))
+  }
+  ipcMain.handle(IPC.runBenchmark, (): Promise<BenchmarkResult> => {
+    requireUnlocked()
+    return runAndPersistBenchmark(ctx)
+  })
+  ipcMain.handle(IPC.tryGpuAgain, (): Promise<AppSettings> => {
+    requireUnlocked()
+    return tryGpuAgain(ctx)
+  })
 }

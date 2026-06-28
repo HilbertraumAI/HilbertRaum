@@ -917,6 +917,7 @@ export const en = {
   'skills.import.error.unsupportedCompression': 'The skill package uses an unsupported compression method.',
   'skills.import.error.pathTraversal': 'The package contains a file whose path escapes the package folder.',
   'skills.import.error.absolutePath': 'The package contains a file with an absolute or drive-letter path.',
+  'skills.import.error.invalidPath': 'The package contains a file with an invalid path.',
   'skills.import.error.symlink': 'The package contains a symbolic link, which is not allowed.',
   'skills.import.error.tooDeep': 'The package nests folders more deeply than allowed.',
   'skills.import.error.pathTooLong': 'The package contains a file path that is too long.',
@@ -1272,6 +1273,7 @@ export const en = {
     'Drive speed could not be measured, so the recommendation uses RAM and CPU only.',
   'main.benchmark.warnSlowDrive':
     'This drive is on the slower side. Models will still work, but loading them may take longer.',
+  'main.benchmark.locked': 'Workspace is locked. Unlock it to run the benchmark.',
 
   // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()
   // — IPC throws, runtime notices, preflight problems, task-status errors, dialog

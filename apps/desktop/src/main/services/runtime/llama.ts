@@ -278,7 +278,17 @@ export class LlamaRuntime implements ModelRuntime {
   }
 }
 
-/** Cap on how much of a non-JSON error body we keep in the message. */
+/**
+ * Cap on how much of a non-JSON error body we keep in the message.
+ *
+ * INVARIANT (SEC-N3, §22-M1): `serverMessage` must stay STRUCTURAL ONLY. The sidecar is our own
+ * loopback llama.cpp server and its error bodies are upstream-structural (an HTTP status + a reason
+ * code/type), never user document/prompt content — so this 500-char tail surfaced via chat-stream.ts
+ * and doctasks/manager.ts carries nothing content-bearing. RE-VERIFY this on every runtime/llama.cpp
+ * pin bump; if a future server ever echoed request content into an error body, sanitize the fallback
+ * here to a fixed structural string + numeric status. Recorded as an accepted Info residual in
+ * docs/security-model.md.
+ */
 const ERROR_BODY_MAX_CHARS = 500
 
 /**
