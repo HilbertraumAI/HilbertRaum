@@ -135,6 +135,14 @@ password recovery — are documented in
   values never reach any log/audit/`skill_runs` row, and only per-category **counts** are surfaced
   (architecture.md "Skills — design record" §8). A higher-recall redactor (NER, address/name lexicons)
   is a deferred wave.
+  - **Date masking is day-first and four-digit-year only (backend-audit-2026-06-27 BL-4).** A date
+    candidate is masked only when the shared `parseDate` (the bank/invoice **day-first** primitive)
+    accepts it, so a **US-ordered** `mm/dd/yyyy` value like `04/13/2026` (read as day 4, month 13 →
+    invalid) is left unmasked, and a **two-digit-year** form like `01.02.26` is not even a candidate
+    (the regex requires a 4-digit year). This is asymmetry in **under-detection**, consistent with the
+    conservative "false-negative over over-masking" posture above — there is **no path where masked
+    text is un-masked or a detected value reaches a log/audit** (the privacy posture is unchanged). A
+    locale-aware / 2-digit-year date matcher is part of the same deferred higher-recall wave.
 
 ## Spec features intentionally not built (MVP scope)
 
@@ -202,12 +210,17 @@ password recovery — are documented in
 
 ## Retrieval quality (Phase 21, [`rag-design.md`](rag-design.md) §11)
 
-- **`ragMinSimilarity` stays 0 — a positive cosine floor is impossible under prefix-less E5
-  (MEASURED 2026-06-10, [`rag-design.md`](rag-design.md) §12.1 R3).** On the real `D:\` drive the
-  relevant and irrelevant best-chunk cosine distributions OVERLAP (everything compresses into a
-  ~0.87–0.94 band because E5 runs without its `query:`/`passage:` prefixes), so any positive floor
-  drops real hits. Relevance separation is delegated to RRF + the reranker (D12). Latent
-  improvement: a prefix migration would spread the distribution and make a floor meaningful, but
+- **The E5 embedder runs WITHOUT its `query:`/`passage:` prefixes — a retrieval-quality ceiling,
+  not just a floor problem (backend-audit-2026-06-27 DOC-3; [`rag-design.md`](rag-design.md)
+  §12.1).** The model card prescribes asymmetric prefixes; omitting them compresses every
+  embedding into a narrow cosine band, which has two consequences a maintainer hunting a
+  retrieval-quality caveat should know. **(1) `ragMinSimilarity` stays 0 — a positive cosine floor
+  is impossible (MEASURED 2026-06-10, §12.1 R3):** on the real `D:\` drive the relevant and
+  irrelevant best-chunk cosine distributions OVERLAP (the ~0.87–0.94 band), so any positive floor
+  drops real hits. **(2) The reranker is load-bearing for relevance, not optional polish:**
+  relevance separation is delegated to RRF + the reranker (D12), so a workspace without the
+  reranker GGUF provisioned keeps the raw, less-separated ordering. Latent improvement: a prefix
+  migration would spread the distribution and make a floor meaningful (and lift the ceiling), but
   forces re-embedding every corpus — revisit only as a deliberate migration.
 - **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
   batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
@@ -258,6 +271,18 @@ password recovery — are documented in
   be cancelled from the busy banner (which lets the queued task run); a cancelled build is
   resumable from the warm cache. An explicit model Stop/switch also aborts it (it re-builds
   under the new model). Finer task-vs-build prioritisation is a later phase.
+- **The deep-index summary cache (`summary_cache`) is bounded by a row-count cap, not kept
+  forever (backend-audit-2026-06-27 DATA-3/MAINT-3).** The cache maps a tree group's content
+  hash → its computed summary so a rebuild — or a different document with identical boilerplate
+  — skips the model call. It carries no `document_id` and deliberately survives node/tree/document
+  deletion (so a rebuild stays cheap), which means no foreign key ever prunes it. To keep a
+  long-lived portable drive from growing the table without bound, each tree build opportunistically
+  evicts the oldest rows past **`SUMMARY_CACHE_MAX_ROWS`** (50 000 by default; env
+  `HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS`) via `evictSummaryCache`. It is a cache, so an evicted row
+  only costs a future re-summarize, never data loss; the per-session evicted-row count is exposed
+  as content-free diagnostics (`summaryCacheEvictedThisSession`). v1 had no eviction at all (the
+  audit's DATA-3) — this bounds it cheaply rather than precisely (eviction runs once per build,
+  not on a timer).
 - **"List every X" answers are exhaustive over the SECTIONS SCANNED — not guaranteed complete
   (whole-document-analysis Phase 3, H7).** When a document has been through the structured-extract
   pass (a manual, yielding background task like the deep index), a "list every / how many {X}"

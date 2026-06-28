@@ -6,6 +6,59 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 8 (API consistency, doc drift & housekeeping;
+API-1, DATA-3/MAINT-3, DATA-4, DOC-2/3/4, BL-4, API-2) — LOW/INFO CLEANUP PHASE, no renderer surface, no
+schema change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2335 passed / 39
+skipped (+5 tests)**, typecheck clean, build OK. Offline/no-telemetry posture held: the lock message and
+the eviction diagnostics counter carry no content; eviction deletes summary_cache ROWS by age/count and
+never reads/logs the summary text. **The problems (all Low/Info):** the chat IPC handlers had no
+`requireUnlocked()` guard, so a locked-vault chat call reached `ctx.db` and threw the raw English
+"Workspace is locked — unlock it first." instead of the friendly localized message every other DB-backed
+module uses (API-1); `summary_cache` had no eviction → unbounded growth on a long-lived drive (DATA-3/
+MAINT-3); plus doc drift (DOC-2/3/4, BL-4) and a harmless read-shape note (DATA-4).
+- **API-1 — `requireUnlocked()` preamble on the chat IPC handlers.** New `requireUnlocked()` in
+  `registerChatIpc.ts` (throws `tMain('main.chat.locked')` — new i18n key in `en.ts`/`de.ts`) added to
+  EVERY DB-touching handler (create/set/update scope+collection+defaultSkill, list/search/listMessages,
+  contextUsage, summary, sendChatMessage, delete, export). The two in-memory-only handlers
+  (`stopGeneration`, `getActiveStream`) stay workspace-agnostic by design (mirrors `registerImagesIpc`'s
+  `getStatus` note). Matches the docs/collections/doctasks pattern exactly.
+- **DATA-3/MAINT-3 — DECISION as built: cheap row-count eviction (NOT document-only).** New
+  electron-free `services/analysis/summary-cache.ts`: `evictSummaryCache(db, maxRows?)` deletes the OLDEST
+  rows (by `created_at`) past `SUMMARY_CACHE_MAX_ROWS` (**50 000** default; env
+  `HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS`) — one COUNT, then a single bounded DELETE only when over cap.
+  Called **opportunistically once per tree build** at the end of `buildTree` (amortizes the COUNT over the
+  whole build, never per cache row; not inside a transaction). It's a cache → an evicted row only costs a
+  future re-summarize. Diagnostics counter `summaryCacheEvictedThisSession()` + one content-free
+  `log.info('Summary cache pruned', {evicted, kept, sessionTotal})` line (counts only, local log).
+- **DATA-4 — `ORDER BY chunk_index`** added to `documentApproxTokenTotal` (`rag/index.ts`) for read-shape
+  parity with `retrieveWholeDocument`. The sum is order-independent → ZERO behaviour change.
+- **API-2 — no code change.** `importPreflight` raw-paths remain a documented accepted residual
+  (`security-model.md`), confirmed and left as-is.
+- **Docs.** `rag-design.md` §3 "Cap" rewritten to describe over-cap **rejection** (`main.ingest.tooManyChunks`,
+  reject-before-destructive-replace, M13/C4) instead of the legacy silent truncation (DOC-2).
+  `known-limitations.md`: new summary_cache eviction bullet under "Document tasks & summaries" (DOC-4); the
+  redaction date-locale asymmetry (US-ordered `mm/dd/yyyy` + 2-digit-year slip through; names/addresses
+  never masked — under-detection, no un-mask path) folded into the redaction bullet (BL-4); **DOC-3** — the
+  prefix-less-E5 ceiling already had a substantive Phase-21 bullet (NOT folded by Phase 5, which deferred
+  it), so the existing "Retrieval quality" bullet was reframed to surface the retrieval-quality CEILING
+  explicitly (floor-stays-0 **and** reranker-is-load-bearing) rather than add a near-duplicate. `db.ts`
+  summary_cache schema comment updated (eviction now implemented, no longer "future policy").
+- **Tests (+5, teeth-verified then restored).** `chat-ipc.test.ts` (+1): a locked-vault call to
+  list/send/delete → the friendly `'Workspace is locked. Unlock it to chat.'`, never the raw engine string.
+  `summary-cache-eviction.test.ts` (+4, new): past-cap pruned to cap keeping the NEWEST rows + counter
+  advances; at/under cap a no-op (recent entry survives); env override honored; default cap generous.
+  **Teeth:** neutering `requireUnlocked`→no-op failed the locked-vault test; `evictSummaryCache`→`return 0`
+  failed the prune + env-override tests (the under-cap/default tests correctly stayed green); both restored.
+  **Collateral:** `chat-compaction-ipc.test.ts` + `conversation-search.test.ts` ctx stubs gained
+  `workspace: { isUnlocked: () => true }` (they register chat IPC).
+- **Data contracts (new):** `evictSummaryCache(db, maxRows?): number`, `summaryCacheEvictedThisSession():
+  number`, `SUMMARY_CACHE_MAX_ROWS` (`analysis/summary-cache.ts`); new i18n key `main.chat.locked`
+  (en+de). No IPC/schema-shape change; renderer untouched.
+- **Eyeball:** none — a main-side cleanup phase, no UI surface. **Next: Phase 9 — close-out** (fold the
+  audit's per-finding dispositions into the relevant topic-doc §, mark the remediation complete in
+  BUILD_STATE, delete the plan file per the CLAUDE.md doc-lifecycle rule). All implementation phases (1–8)
+  are now ✅._
+
 _2026-06-28 — **Backend audit 2026-06-27 remediation — Phase 7 (Electron + vision/runtime hardening;
 SEC-2/3/4/5/6, REL-4/7/8) — HARDENING/LIFECYCLE PHASE (Low cluster), no renderer surface, no schema
 change, no new capability (branch `backend-audit-2026-06-27-fixes`).** Suite **2330 passed / 39 skipped

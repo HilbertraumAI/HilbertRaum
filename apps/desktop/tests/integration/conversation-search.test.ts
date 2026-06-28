@@ -254,6 +254,7 @@ describe('chat:search IPC', () => {
     const audit = createAuditRecorder(() => db)
     const ctx = {
       db,
+      workspace: { isUnlocked: () => true },
       runtime: { active: () => null, activeModelId: () => null },
       audit
     } as unknown as AppContext

@@ -165,11 +165,20 @@ max_chunks_per_file: 1000
   `truncateToApproxTokens` budget clamp.
 - **No cross-segment chunks.** Chunking happens *within* a segment, so each chunk inherits
   exactly one `pageNumber` / `sectionLabel`.
-- **Cap.** The global chunk count is capped at `max_chunks_per_file`; once hit, remaining
-  text is dropped and the document still reaches `indexed`. (Distinct from the **pre-parse**
-  resource caps — byte ceiling / parse timeout / PDF page count / DOCX inflate — which bound the
-  *parser* before it ever produces segments; those are now applied uniformly on every parse
-  entry point, including the preview path, via the `parseWithLimits` decorator — see §2.)
+- **Cap.** The global chunk count is capped at `max_chunks_per_file` (`MAX_CHUNKS_PER_DOCUMENT`,
+  1000). A document that would exceed it is **REJECTED at index time** — `processDocument` chunks
+  with `maxChunks = MAX_CHUNKS_PER_DOCUMENT + 1` and, when the result is over the real cap, throws
+  the friendly `main.ingest.tooManyChunks` ("too large to fully index — split it") *before* the
+  destructive chunk replacement, so a previously-searchable copy is never half-deleted (M13) and
+  any stale `fully_chunked` marker is cleared (C4). This **replaces** the legacy silent
+  truncation (where the cap dropped the document's tail and still reached `indexed`); the win is
+  that every *indexed* document is now the WHOLE document, which is what lets a deep index
+  honestly claim full coverage. `chunkSegments` itself still STOPS at its `maxChunks` argument as
+  a memory guard (it is no longer the honesty boundary), and callers that pass no `maxChunks` keep
+  the legacy truncate-at-1000 behaviour (tests only). (Distinct from the **pre-parse** resource
+  caps — byte ceiling / parse timeout / PDF page count / DOCX inflate — which bound the *parser*
+  before it ever produces segments; those are now applied uniformly on every parse entry point,
+  including the preview path, via the `parseWithLimits` decorator — see §2.)
 
 ### Chunk metadata → storage
 

@@ -217,7 +217,10 @@ CREATE INDEX IF NOT EXISTS idx_tree_edges_child ON tree_edges(child_id, child_is
 -- (content_hash, model_id) so a chat-model change doesn't reuse an older model's summary. The
 -- node vector (embedding_blob) is NULL at build time, embedded lazily on first use (L6,
 -- rag-design §14.6). Carries no document_id; survives node/tree deletion; never pruned by FK.
--- Not size/age-pruned in v1 — the cache grows unbounded (eviction is a future policy).
+-- Growth is bounded by a row-count cap (backend-audit-2026-06-27 DATA-3/MAINT-3): each tree
+-- build opportunistically evicts the oldest rows past SUMMARY_CACHE_MAX_ROWS via
+-- evictSummaryCache (analysis/summary-cache.ts). It is a cache, so eviction only costs a
+-- future re-summarize, never data loss.
 CREATE TABLE IF NOT EXISTS summary_cache (
   content_hash TEXT NOT NULL,
   model_id TEXT NOT NULL,             -- chat model that produced summary_text

@@ -61,6 +61,17 @@ export function registerChatIpc(ctx: AppContext): void {
   // Active stream cancellers (shared with the RAG path so stopGeneration cancels either).
   const inFlight = inFlightStreams
 
+  // DB-backed handlers require an unlocked workspace; surface the friendly localized message
+  // instead of the raw English "Workspace is locked" the `ctx.db` getter throws mid-operation
+  // (audit API-1 — matching the docs/collections/doctasks pattern). Guard throws are ephemeral
+  // IPC emissions — localized via tMain (i18n record §3.3). The in-memory-only handlers
+  // (stopGeneration, getActiveStream) are workspace-agnostic and intentionally skip this.
+  const requireUnlocked = (): void => {
+    if (!ctx.workspace.isUnlocked()) {
+      throw new Error(tMain('main.chat.locked'))
+    }
+  }
+
   ipcMain.handle(
     IPC.createConversation,
     (
@@ -75,6 +86,7 @@ export function registerChatIpc(ctx: AppContext): void {
         scope?: DocumentScope | null
       }
     ): Conversation => {
+      requireUnlocked()
       const conv = createConversation(ctx.db, {
         title: opts?.title,
         mode: opts?.mode,
@@ -98,6 +110,7 @@ export function registerChatIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.setConversationScope,
     (_e, conversationId: string, scope: DocumentScope | null): Conversation => {
+      requireUnlocked()
       const conv = setScope(ctx.db, conversationId, scope ?? null)
       log.info('Conversation scope set', {
         conversationId,
@@ -111,8 +124,10 @@ export function registerChatIpc(ctx: AppContext): void {
   // Persist a conversation's creation-anchor project (plan §13.4).
   ipcMain.handle(
     IPC.setConversationCollection,
-    (_e, conversationId: string, collectionId: string | null): Conversation =>
-      setConversationCollection(ctx.db, conversationId, collectionId ?? null)
+    (_e, conversationId: string, collectionId: string | null): Conversation => {
+      requireUnlocked()
+      return setConversationCollection(ctx.db, conversationId, collectionId ?? null)
+    }
   )
 
   // Replace the "ask selected documents" scope (spec §10.4) — chip removal
@@ -120,6 +135,7 @@ export function registerChatIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.updateConversationScope,
     (_e, conversationId: string, documentIds: string[] | null): Conversation => {
+      requireUnlocked()
       const conv = updateConversationScope(ctx.db, conversationId, documentIds)
       log.info('Conversation scope updated', {
         conversationId,
@@ -136,6 +152,7 @@ export function registerChatIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.setConversationDefaultSkill,
     (_e, conversationId: string, installId: string | null): void => {
+      requireUnlocked()
       let next: string | null = null
       if (typeof installId === 'string' && installId.length > 0 && ctx.skills) {
         const record = ctx.skills.get(installId)
@@ -145,7 +162,10 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.listConversations, (): Conversation[] => listConversations(ctx.db))
+  ipcMain.handle(IPC.listConversations, (): Conversation[] => {
+    requireUnlocked()
+    return listConversations(ctx.db)
+  })
 
   // A conversation's temporary chat attachments (plan C3/§16 — `conversation_documents`):
   // the docs dropped/attached into THIS chat, for the composer's read-only "Files in this
@@ -153,6 +173,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // user later Keeps in Library still shows here. Only indexed+linked docs appear; a
   // still-processing attachment is surfaced by the renderer's pending chip (import polling).
   ipcMain.handle(IPC.listAttachments, (_e, conversationId: string): DocumentInfo[] => {
+    requireUnlocked()
     const ids = new Set(conversationAttachmentIds(ctx.db, conversationId))
     if (ids.size === 0) return []
     return listDocuments(ctx.db, ctx.embedder.id).filter((d) => ids.has(d.id))
@@ -161,13 +182,15 @@ export function registerChatIpc(ctx: AppContext): void {
   // Full-text search across conversations. The query and the returned snippets are
   // chat CONTENT: this handler must never log them and never writes an audit event
   // (reads are not audited — the audit privacy rule).
-  ipcMain.handle(IPC.searchConversations, (_e, query: string): ConversationSearchResult[] =>
-    searchMessages(ctx.db, typeof query === 'string' ? query : '')
-  )
+  ipcMain.handle(IPC.searchConversations, (_e, query: string): ConversationSearchResult[] => {
+    requireUnlocked()
+    return searchMessages(ctx.db, typeof query === 'string' ? query : '')
+  })
 
-  ipcMain.handle(IPC.listMessages, (_e, conversationId: string): Message[] =>
-    listMessages(ctx.db, conversationId)
-  )
+  ipcMain.handle(IPC.listMessages, (_e, conversationId: string): Message[] => {
+    requireUnlocked()
+    return listMessages(ctx.db, conversationId)
+  })
 
   // Resting-state context-window usage for the composer meter (context-compaction plan §5.1).
   // Read-only, no model call: the assembled-prompt estimate over the launched window. Falls back to
@@ -176,6 +199,7 @@ export function registerChatIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.getConversationContextUsage,
     (_e, conversationId: string): ContextUsage | null => {
+      requireUnlocked()
       if (!getConversation(ctx.db, conversationId)) return null
       return getConversationContextUsage(ctx.db, ctx.runtime.active(), conversationId)
     }
@@ -186,8 +210,10 @@ export function registerChatIpc(ctx: AppContext): void {
   // local context — this read is never logged or audited (chat content, like listMessages).
   ipcMain.handle(
     IPC.getConversationSummary,
-    (_e, conversationId: string): ConversationSummaryMarker | null =>
-      getConversationSummaryMarker(ctx.db, conversationId)
+    (_e, conversationId: string): ConversationSummaryMarker | null => {
+      requireUnlocked()
+      return getConversationSummaryMarker(ctx.db, conversationId)
+    }
   )
 
   ipcMain.handle(
@@ -198,6 +224,7 @@ export function registerChatIpc(ctx: AppContext): void {
       content: string,
       options?: ChatOptions
     ): Promise<Message> => {
+      requireUnlocked()
       // Shared guard preamble + stream lifecycle (M-A2): conv exists, runtime active,
       // no blocking doc task / stream in flight. A yielding deep-index build is paused (not
       // refused) via the slot arbiter inside withChatStream. DOC_TASK_BUSY_MESSAGE stays
@@ -261,6 +288,7 @@ export function registerChatIpc(ctx: AppContext): void {
   )
 
   ipcMain.handle(IPC.deleteConversation, (_e, conversationId: string): void => {
+    requireUnlocked()
     // A stream writing into this conversation would persist its assistant turn after
     // the delete (FK violation / resurrection) — refuse while one is in flight; the
     // renderer disables Delete during streaming, this guards other windows/callers.
@@ -295,6 +323,7 @@ export function registerChatIpc(ctx: AppContext): void {
   // runs in MAIN (the renderer has no fs/dialog access); returns the saved path, or
   // null when the user cancelled.
   ipcMain.handle(IPC.exportConversation, async (_e, conversationId: string): Promise<string | null> => {
+    requireUnlocked()
     const { title, markdown } = exportTranscript(ctx.db, conversationId)
     const safeName = title.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 60) || 'chat'
     const filePath = await saveTextExport(
