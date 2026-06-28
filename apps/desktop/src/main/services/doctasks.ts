@@ -1,4 +1,5 @@
-// Document task service (docs/functionality-wave-3-plan.md §6–§8) — the shared engine for
+// Document task service (architecture.md "Document tasks"; wave-3 plan §6–§8, now in
+// architecture.md "Functionality wave 3 — design record") — the shared engine for
 // summary, translation, and compare. The former 1582-line monolith was split (audit M-A4)
 // into a `doctasks/` directory behind this barrel, which preserves the public import
 // surface byte-for-byte so every `from '../services/doctasks'` caller is unchanged:

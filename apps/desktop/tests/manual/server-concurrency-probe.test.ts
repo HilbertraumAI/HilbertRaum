@@ -14,7 +14,7 @@ import type { ChatMessage } from '../../src/main/services/runtime'
 // INFORMATIONAL ONLY: D26 already resolved concurrency app-side (strict one-at-a-time —
 // the app never sends two requests). This probe confirms the app-side guard is airtight
 // (what WOULD happen if it weren't) and banks the facts for a future parallelism
-// revisit. Record the findings in functionality-wave-3-plan §14.
+// revisit. Findings recorded in architecture.md "Functionality wave 3 — design record" §14 (R-T1).
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
 // HILBERTRAUM_CONCURRENCY_PROBE points at a provisioned drive root (the HILBERTRAUM_GPU_SMOKE shape):

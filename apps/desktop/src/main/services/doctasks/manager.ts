@@ -97,7 +97,8 @@ import {
   compareDocumentTitle
 } from './compare'
 
-// The document-task manager (docs/functionality-wave-3-plan.md §6–§8) — the shared engine
+// The document-task manager (architecture.md "Document tasks"; wave-3 plan §6–§8, now in
+// architecture.md "Functionality wave 3 — design record") — the shared engine
 // for summary, translation, and compare: an async-with-polling job state machine. The
 // window-math + prompt templates for each pipeline live in the sibling
 // summary/translation/compare modules (audit M-A4); this file is the orchestration.

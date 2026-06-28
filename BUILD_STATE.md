@@ -6,6 +6,17 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Doc cleanup: retired `docs/functionality-wave-3-plan.md`.** The wave was complete
+(Phases 31–38, 2026-06-11) and its per-feature mechanisms already lived in the topic docs; the unique
+"cited-as-a-unit" content (the §13 decisions D23–D37 + the §14 research-gate evidence R-S1/R-T1/R-T2/
+R-W1–4/R-O1–3) was folded into a new `docs/architecture.md` **"Functionality wave 3 — design record"**
+section (§13 + §14 verbatim) with a **§-anchor legend** mapping the historical `wave-3 plan §4–§15` to
+their current homes — the Skills/Image-understanding retirement pattern. The ~30 in-code `wave-3 plan §N`
+comments were left unchurned (the legend keeps them resolvable); only the three filename citations
+(`doctasks.ts`, `doctasks/manager.ts`, `server-concurrency-probe.test.ts`), the two BUILD_STATE ledger
+links (above), and the CLAUDE.md doc-lifecycle rule (which had named the file as its example) were
+repointed. The full original plan stays in git history. No code/behavior change; comments + docs only._
+
 _2026-06-29 — **Full audit 2026-06-28 — CLOSE-OUT (Phase 8: DOCUMENTATION RECONCILIATION + audit fold).
 The full multi-perspective audit (`audits/full-audit-2026-06-28.md`) is now FULLY REMEDIATED across
 Phases 0–8 on branch `full-audit-2026-06-28-fixes`.** Final suite **2417 passed / 39 skipped** (was
@@ -6283,8 +6294,11 @@ design record per the CLAUDE.md doc lifecycle rule:
   recommendation + the disqualified-candidates list).
 - **Functionality wave 3 (Phases 31–38):** conversation search · vault password change ·
   document tasks + summary · translation · compare · audio transcription · dictation · OCR —
-  [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (D23–D37; research
-  gates R-S1/R-T1–2/R-W1–4/R-O1–3 with their banked findings in its §14).
+  [`docs/architecture.md`](docs/architecture.md) "Functionality wave 3 — design record"
+  (decisions D23–D37 in its §13; research gates R-S1/R-T1–2/R-W1–4/R-O1–3 with their banked
+  findings in its §14; the per-feature as-built sections are elsewhere in `architecture.md` +
+  `security-model.md`/`model-policy.md`/`drive-layout.md`/`known-limitations.md`). The plan file
+  was retired into that record in the 2026-06-29 doc cleanup.
 - **i18n wave (Phases 39–42):** English + German UI (`uiLanguage` setting + picker,
   pre-unlock gate language, full renderer sweep, the two-rule main-process boundary,
   German QA) — `docs/architecture.md` "Internationalization — design record" (D-L1–L8)
@@ -6866,8 +6880,9 @@ Repo root: `f:\_coding\ai_drive`.
   best); grounded EM saturates (~96–98 %) — the D27 eval-hardening motivation. Only the
   optional dev-box speed sweep remains (QA + RSS are machine-independent).
 - **Functionality wave 3 — Phases 31–38 (2026-06-11) — design record
-  [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (per-phase
-  records §4–§11, decisions D23–D37 resolved in §13, research-gate findings banked in §14):**
+  [`docs/architecture.md`](docs/architecture.md) "Functionality wave 3 — design record"
+  (decisions D23–D37 in §13, research-gate findings banked in §14, plus the §-anchor legend
+  mapping the retired plan's per-phase §4–§11 to their topic-doc homes):**
   **31** conversation search (`messages_fts` mirroring the D13 index shape, bm25 ranking,
   `chat:search`, ConversationList search UI; + the deny-by-default
   `setPermissionRequestHandler` session-hardening rider) · **32** vault password change

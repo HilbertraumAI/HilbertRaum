@@ -16,8 +16,11 @@ full original stays in git history. Don't let finished plans linger; they drift 
 the code. Keep the record's §-anchors stable: code comments cite them. Templates:
 `docs/rag-design.md` §12 (Phase-21 record) and `docs/architecture.md` "GPU acceleration —
 design record" (§1–§8). A standalone plan file should only exist for work that is still open
-(e.g. `docs/big-slot-embeddings-plan.md`) or for a just-closed wave whose record is still
-heavily cited as a unit (`docs/functionality-wave-3-plan.md`).
+(e.g. `docs/big-slot-embeddings-plan.md`). Even a just-closed wave whose plan is heavily cited
+as a unit can be retired: fold its decisions + research into the topic doc and add a
+**§-anchor legend** that keeps the historical `§N` citations resolvable without churning the
+comments — see `docs/architecture.md` "Functionality wave 3 — design record" (its §-anchor
+legend), and the Skills / Image-understanding records.
 
 ## Hard rules (from spec §0)
 - **No cloud dependencies. No telemetry. No analytics. No remote crash reporting.**
