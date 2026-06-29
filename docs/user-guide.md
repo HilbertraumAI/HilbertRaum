@@ -135,9 +135,9 @@ can turn this off under **Settings → Load the selected model automatically**.
 > scratch whenever you want.
 
 > **No model installed?** You can still try the interface: a model without a weight file shows
-> a **Start mock runtime** button (in developer mode) that runs a built-in mock model. Mock
-> answers are placeholders, not real AI responses — add a real model file for genuine answers
-> (see Troubleshooting).
+> a **Try in demo mode** button (in developer mode) that runs a built-in demo model. Demo
+> answers are simulated placeholders, not real AI responses — add a real model file for genuine
+> answers (see Troubleshooting).
 
 ### Downloading a model (optional, off by default)
 
@@ -498,10 +498,13 @@ different tool from reading scanned documents (that's **Make searchable (OCR)** 
    it before sending. Press **Enter** to send.
 4. The answer streams in, with a quiet *"Generated locally from the selected image."* note,
    **Copy**, and **Try again**. Ask **follow-up** questions about the same image and they stack up
-   as a short thread; **Remove** the image (or pick a new one) clears the thread.
+   as a short thread; **Remove** the image (or pick a new one) returns you to the start of the
+   screen — your saved analysis isn't lost, it stays in your image history.
 
-Everything stays on the drive — the picture, your question, and the answer are never uploaded and
-**are not saved**: they live only on the screen and are gone when you remove the image or leave.
+Everything stays on the drive — the picture, your question, and the answer are **never uploaded**.
+They **are saved** to your image history (under `workspace/images/`, encrypted at rest on an
+encrypted workspace) so you can revisit them: the Images screen lists your past analyses, and you
+can reopen or **delete** any of them at any time.
 
 A few honest notes:
 

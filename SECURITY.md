@@ -75,7 +75,8 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **No password recovery.** The workspace password is never stored; if it is lost, the encrypted
   workspace cannot be opened.
 - Local-model answers can be wrong or incomplete (hallucination risk); the app is honest about this.
-- Scanned-PDF OCR is **not** included in Lite.
+- OCR ("Make searchable") runs **on-device only** — bundled German + English tesseract language
+  files, no cloud OCR. Recognition quality varies with scan quality and is not guaranteed.
 
 ## Out of scope (MVP)
 - Multi-user access controls, enterprise admin/policy enforcement, hardware DRM/dongles.

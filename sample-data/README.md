@@ -20,4 +20,4 @@ files in code (`apps/desktop/tests/helpers/fixtures.ts`) so coverage stays fully
    (Vectors are written by the active embedder — the deterministic mock when no real embedding
    model is installed, the real E5 when it is.)
 3. To ask questions about them, start a chat model on the **Models** screen first (with no
-   weights present, **Start mock runtime** works in developer mode).
+   weights present, **Try in demo mode** works in developer mode).
