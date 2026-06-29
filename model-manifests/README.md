@@ -6,7 +6,10 @@ Each YAML file here describes one model. Manifests are committed to git; **model
 
 - `chat/` — chat/instruct models (Qwen3 4B / 8B / 14B Q4 + 30B-A3B MoE, Qwen3-4B-2507, Qwen3.5 4B,
   Granite 4.1 8B, Ministral 8B, Gemma 4 12B)
-- `embeddings/` — embedding models (Multilingual E5 Small, Q8)
+- `embeddings/` — embedding models (Multilingual E5 Small, F16; the manifest `id`/`local_path`
+  keep a `-q8` suffix for historical stability — it tags stored vectors and is referenced across
+  tests/docs, **not** a quant claim. Q8 is *not* the shipping quant — its q8_0 conversion crashes
+  the pinned runtime; see [`../docs/model-policy.md`](../docs/model-policy.md).)
 - `reranker/` — reranker models (BGE Reranker v2 m3)
 - `transcriber/` — speech-to-text models (Whisper Small multilingual; `whisper_cpp`/`ggml`)
 - `vision/` — vision models (Qwen2.5-VL 3B Instruct Q4; GGUF + mmproj projector)

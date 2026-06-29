@@ -54,7 +54,7 @@ marker and uses the drive's `models/` and `workspace/` directly, so the same wor
 laptops (spec success criterion #10).
 
 ```
-PRIVATE_AI_DRIVE/
+HILBERTRAUM/
 ├── Start HilbertRaum.cmd                  # Windows launcher (Phase 13) ── DOUBLE-CLICK THIS
 ├── Start HilbertRaum.command              # macOS launcher (Phase 13)
 ├── start-hilbertraum.sh                   # Linux launcher (Phase 13)
@@ -146,10 +146,10 @@ The `scripts/` directory lays out and verifies a drive. The scripts are **self-c
 ```
 ```bash
 # macOS / Linux
-scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE --dry-run
-scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE
-scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE --with-assets --accept-license
-scripts/verify-models.sh  --target /Volumes/PRIVATE_AI_DRIVE --generate
+scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM --dry-run
+scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM
+scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM --with-assets --accept-license
+scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 ```
 
 `prepare-drive` creates the directory tree, copies the committed manifests + user docs onto the

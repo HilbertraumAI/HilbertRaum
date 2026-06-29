@@ -15,8 +15,8 @@
 - **Auditor note:** This is a **documentation-only** audit. No application code was modified. Code
   and config were read **only** to verify factual documentation claims (npm scripts, script files,
   runtime pin, the image-history persistence behavior, the demo-mode button label).
-- **Report status:** IN PROGRESS — Phase 1 (DOC-001, DOC-002, DOC-003) Fixed (2026-06-29);
-  remaining phases (2–6) Open. See the Remediation log.
+- **Report status:** IN PROGRESS — Phase 1 (DOC-001, DOC-002, DOC-003) and Phase 2 (DOC-004,
+  DOC-005, DOC-012) Fixed (2026-06-29); remaining phases (3–6) Open. See the Remediation log.
 
 ## How to use this report
 
@@ -53,13 +53,14 @@ banned by a copy-tone test).
 
 **Most important missing docs:** `CHANGELOG.md` (DOC-013) and `CODE_OF_CONDUCT.md` (DOC-014).
 
-**Brand drift:** a stale pre-rebrand product name survives in `packaging.md` ("Private AI Drive
+**Brand drift:** ~~a stale pre-rebrand product name survives in `packaging.md` ("Private AI Drive
 Lite.app", DOC-004) and the example macOS volume label is inconsistent across docs
-(`HILBERTRAUM` vs `PRIVATE_AI_DRIVE`, DOC-005).
+(`HILBERTRAUM` vs `PRIVATE_AI_DRIVE`, DOC-005).~~ ✅ **Fixed in Phase 2 (2026-06-29).**
 
 **Recommended first phase:** ~~**Phase 1 — user-facing accuracy fixes** (DOC-001, DOC-002,
-DOC-003)~~ ✅ **DONE (2026-06-29)**. **Next:** Phase 2 — brand & naming consistency (DOC-004,
-DOC-005, DOC-012): `/docs-fix phase 2`.
+DOC-003)~~ ✅ **DONE (2026-06-29)**. ~~Phase 2 — brand & naming consistency (DOC-004, DOC-005,
+DOC-012)~~ ✅ **DONE (2026-06-29)**. **Next:** Phase 3 — cross-link & anchor hygiene (DOC-006,
+DOC-008, DOC-009): `/docs-fix phase 3`.
 
 **Estimated effort:** Phase 1 ≈ 30 min. Whole remediation ≈ 3–4 hours, most of it the two new files
 (CHANGELOG, CODE_OF_CONDUCT) and the header-freshness sweep.
@@ -83,14 +84,14 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 | `docs/design-guidelines.md` | UI/UX + brand + copy guidelines | Needs update | DOC-010: §11.2 superseded blue accent not flagged. |
 | `docs/model-policy.md` | Manifest schema, roles, license gate | Good | Detailed and consistent. |
 | `docs/model-benchmarks.md` | Measured speed/RAM/quality + harness | Needs update | DOC-008: broken intra-doc anchor "§4.6". |
-| `docs/packaging.md` | Portable build, sidecars, drive build | Needs update | DOC-004: stale "Private AI Drive Lite.app" example. |
-| `docs/drive-layout.md` | On-drive directory layout | Needs update | DOC-005: `PRIVATE_AI_DRIVE` example volume label. |
+| `docs/packaging.md` | Portable build, sidecars, drive build | Good | DOC-004 (macOS `.app` example) fixed (Phase 2). No open findings. |
+| `docs/drive-layout.md` | On-drive directory layout | Good | DOC-005 (`PRIVATE_AI_DRIVE`→`HILBERTRAUM`) fixed (Phase 2). No open findings. |
 | `docs/user-guide.md` | End-user walkthrough of every screen | Needs update | DOC-001 (images) + DOC-003 fixed (Phase 1); DOC-011 remains (Phase 4). |
-| `docs/troubleshooting.md` | Common problems & fixes | Needs update | DOC-001 (images) + DOC-003 fixed (Phase 1); DOC-005 remains (Phase 2). |
+| `docs/troubleshooting.md` | Common problems & fixes | Good | DOC-001 (images) + DOC-003 fixed (Phase 1); DOC-005 fixed (Phase 2). No open findings. |
 | `docs/benchmark.md` | Hardware benchmark & recommendation | Good | Consistent with `model-benchmarks.md`. |
 | `docs/big-slot-embeddings-plan.md` | Open Phase-30 plan (working paper) | Unclear | DOC-015: "not started" since 2026-06-11; verify still open vs superseded. |
 | `docs/design-review/skills-s12/README.md` | Design-review screenshot index | Good | Not deeply audited (review artifact). |
-| `model-manifests/README.md` | Manifest authoring guide | Needs update | DOC-012: embeddings described as "Q8" (shipped is F16). |
+| `model-manifests/README.md` | Manifest authoring guide | Good | DOC-012 (embeddings F16, not "Q8") fixed (Phase 2). No open findings. |
 
 ## Findings index
 
@@ -99,15 +100,15 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 | DOC-001 | Image history documented as "not saved" (contradicts persisted encrypted history) | High | High | Accuracy / Privacy | Fixed | `user-guide.md`, `troubleshooting.md` | 1 |
 | DOC-002 | `SECURITY.md` says OCR "not included in Lite" (OCR shipped) | High | High | Accuracy / Security | Fixed | `SECURITY.md` | 1 |
 | DOC-003 | "Start mock runtime" button label renamed to "Try in demo mode" | Medium | High | Accuracy / Consistency | Fixed | `README.md`, `user-guide.md`, `troubleshooting.md`, `sample-data/README.md` | 1 |
-| DOC-004 | Stale pre-rebrand product name "Private AI Drive Lite.app" | Medium | High | Consistency / Accuracy | Open | `packaging.md` | 2 |
-| DOC-005 | Inconsistent example volume label (`HILBERTRAUM` vs `PRIVATE_AI_DRIVE`) | Medium | High | Consistency | Open | `drive-layout.md`, `troubleshooting.md` | 2 |
+| DOC-004 | Stale pre-rebrand product name "Private AI Drive Lite.app" | Medium | High | Consistency / Accuracy | Fixed | `packaging.md` | 2 |
+| DOC-005 | Inconsistent example volume label (`HILBERTRAUM` vs `PRIVATE_AI_DRIVE`) | Medium | High | Consistency | Fixed | `drive-layout.md`, `troubleshooting.md` | 2 |
 | DOC-006 | `BUILD_STATE.md` broken links to retired plans + source files | Low | High | Navigation | Open | `BUILD_STATE.md` | 3 |
 | DOC-007 | Stale "Last updated" headers (content newer than header) | Low | High | Maintainability | Open | `architecture.md`, `rag-design.md`, `security-model.md`, `SECURITY.md` | 4 |
 | DOC-008 | Broken intra-doc anchor "§4.6" (should be §7.3) | Low | High | Navigation | Open | `model-benchmarks.md` | 3 |
 | DOC-009 | Reranker size "1.08 GiB" contradicts §26 ledger "1.16 GB" | Low | Medium | Consistency | Open | `rag-design.md` | 3 |
 | DOC-010 | §11.2 present-tense blue accent superseded by teal, not flagged | Low | Medium | Accuracy / Clarity | Open | `design-guidelines.md` | 4 |
 | DOC-011 | User guide documents a "Not recommended" status never produced | Low | Medium | Accuracy | Open | `user-guide.md` | 4 |
-| DOC-012 | Manifests README calls embeddings "Q8" (shipped is F16) | Low | Medium | Clarity / Accuracy | Open | `model-manifests/README.md` | 2 |
+| DOC-012 | Manifests README calls embeddings "Q8" (shipped is F16) | Low | Medium | Clarity / Accuracy | Fixed | `model-manifests/README.md` | 2 |
 | DOC-013 | Missing `CHANGELOG.md` | Medium | High | Completeness | Open | (new file) | 5 |
 | DOC-014 | Missing `CODE_OF_CONDUCT.md` | Low | High | Completeness | Open | (new file) | 5 |
 | DOC-015 | `big-slot-embeddings-plan.md` status reconcile ("not started" since 06-11) | Low | Medium | Accuracy / Maintainability | Open | `big-slot-embeddings-plan.md` | 6 |
@@ -241,7 +242,12 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 
 ### DOC-004: Stale pre-rebrand product name "Private AI Drive Lite.app" in `packaging.md`
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Changed the macOS `--app-artifact` example at `packaging.md:309`
+  from `./apps/desktop/release/Private\ AI\ Drive\ Lite.app` to
+  `./apps/desktop/release/HilbertRaum.app`, matching the rebrand and the Windows
+  `HilbertRaum-0.1.0-portable.exe` example three lines above. Validation: grep docs for
+  `Private AI Drive` → only the `BUILD_STATE.md` historical rebrand note and this audit report
+  remain (both intended). No code touched.
 - **Severity:** Medium
 - **Confidence:** High
 - **Category:** Consistency / Accuracy
@@ -264,7 +270,18 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 
 ### DOC-005: Inconsistent example macOS volume label across docs (`HILBERTRAUM` vs `PRIVATE_AI_DRIVE`)
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Standardized the example macOS volume label on `HILBERTRAUM`:
+  `drive-layout.md` prepared-drive sketch header `PRIVATE_AI_DRIVE/` → `HILBERTRAUM/` (line 57) and
+  all four `/Volumes/PRIVATE_AI_DRIVE` prepare/verify examples (lines 149–152) → `/Volumes/HILBERTRAUM`;
+  `troubleshooting.md:92` checksum example likewise. Now consistent with `README.md` and
+  `packaging.md`. Validation: grep docs for `PRIVATE_AI_DRIVE` → only the frozen spec
+  `CLAUDE_HilbertRaum_MVP.md` (per DOC-016), the `BUILD_STATE.md` historical note, and this report
+  remain (all intended). Verified no script *logic* depends on the literal — `PRIVATE_AI_DRIVE` in
+  `scripts/*.sh` (`fetch-models.sh`, `fetch-runtime.sh`, `prepare-drive.sh`, `verify-models.sh`,
+  `setup-dev.sh`) appears **only** in `#` usage-comment examples and one `echo` help string (it is
+  the user-supplied `--target` value). Those shell-script comments are outside the `/docs-fix`
+  documentation scope and were left unchanged — see follow-up note in the Remediation log. No code
+  touched.
 - **Severity:** Medium
 - **Confidence:** High
 - **Category:** Consistency
@@ -413,7 +430,14 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 
 ### DOC-012: `model-manifests/README.md` describes the embeddings model as "Q8" (shipped is F16)
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Rewrote `model-manifests/README.md:9` from "(Multilingual E5
+  Small, Q8)" to "(Multilingual E5 Small, F16; the manifest `id`/`local_path` keep a `-q8` suffix
+  for historical stability … **not** a quant claim. Q8 is *not* the shipping quant — its q8_0
+  conversion crashes the pinned runtime; see `../docs/model-policy.md`.)". Verified against the
+  embeddings manifest (`multilingual-e5-small-q8.yaml`: `display_name: Multilingual E5 Small (F16)`,
+  plus the header comment explaining the `-q8` id is a stable opaque identifier) and `model-policy.md`
+  (line 32 "Multilingual E5 Small (F16)"; lines 37–46 "uses an F16 GGUF, not Q8 — the q8_0
+  conversions … crash llama.cpp b9585"). No code touched.
 - **Severity:** Low
 - **Confidence:** Medium
 - **Category:** Clarity / Accuracy
@@ -515,8 +539,8 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 | C1 | `user-guide.md` / `troubleshooting.md` **vs** `PRIVACY.md` / `README.md` / `security-model.md` / `known-limitations.md` / code | "images … **are not saved** / **never saved** … gone when you leave" vs "image-analysis history **is saved** … encrypted … deletable" | The persisted-history docs + `vision/history.ts` ("revised from 'nothing persists'") | Rewrite the two guide passages to the persisted posture | DOC-001 (**Resolved**, Phase 1) |
 | C2 | `SECURITY.md` **vs** `model-policy.md` / `drive-layout.md` / `troubleshooting.md` / `known-limitations.md` | "Scanned-PDF OCR is **not** included in Lite" vs "OCR asset class (Phase 38)" / "Make searchable (OCR)" | OCR is shipped (Phase 38, code + 5 docs) | Delete/rewrite the SECURITY.md line | DOC-002 (**Resolved**, Phase 1) |
 | C3 | `README.md` / `user-guide.md` / `troubleshooting.md` **vs** app (`en.ts`) | "Start mock runtime" vs UI label "Try in demo mode" (literal banned by copy-tone test) | The app's i18n label | Replace label in all docs (also `sample-data/README.md`) | DOC-003 (**Resolved**, Phase 1) |
-| C4 | `packaging.md` (macOS example) **vs** the rebrand + the `.exe` example | "Private AI Drive Lite.app" vs "HilbertRaum" | Rebrand → HilbertRaum | Rename the example artifact | DOC-004 |
-| C5 | `drive-layout.md` / `troubleshooting.md` **vs** `README.md` / `packaging.md` | `/Volumes/PRIVATE_AI_DRIVE` vs `/Volumes/HILBERTRAUM` | Rebrand → HILBERTRAUM | Standardize on HILBERTRAUM | DOC-005 |
+| C4 | `packaging.md` (macOS example) **vs** the rebrand + the `.exe` example | "Private AI Drive Lite.app" vs "HilbertRaum" | Rebrand → HilbertRaum | Rename the example artifact | DOC-004 (**Resolved**, Phase 2) |
+| C5 | `drive-layout.md` / `troubleshooting.md` **vs** `README.md` / `packaging.md` | `/Volumes/PRIVATE_AI_DRIVE` vs `/Volumes/HILBERTRAUM` | Rebrand → HILBERTRAUM | Standardize on HILBERTRAUM | DOC-005 (**Resolved**, Phase 2) |
 | C6 | `rag-design.md` §12.3 **vs** `architecture.md` §26 ledger | reranker "1.08 GiB" vs "changed to 1.16 GB" | Manifest `size_on_disk_gb: 1.16` | Reconcile to 1.16 GB | DOC-009 |
 | C7 | `design-guidelines.md` §11.2 **vs** §4.2/§13 | present-tense blue `#2f6fed` vs retired-for-teal | §13 brand refresh (teal) | Mark §11.2 superseded | DOC-010 |
 | C8 | `user-guide.md` **vs** `known-limitations.md` | documents a "Not recommended" status vs "declared but never produced" | known-limitations.md / code | Remove or footnote the status | DOC-011 |
@@ -579,10 +603,10 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 - **Risks:** Very low (wording-only).
 - **Rollback notes:** Single-commit revert; no code touched.
 
-### Phase 2: Brand & naming consistency
+### Phase 2: Brand & naming consistency — ✅ DONE (2026-06-29)
 
 - **Goal:** Finish the rebrand and remove naming drift.
-- **Findings included:** DOC-004, DOC-005, DOC-012.
+- **Findings included:** DOC-004, DOC-005, DOC-012 — all Fixed.
 - **Documents affected:** `packaging.md`, `drive-layout.md`, `troubleshooting.md`,
   `model-manifests/README.md`.
 - **Exact intended changes:** Rename `Private AI Drive Lite.app` → `HilbertRaum.app` (packaging.md:309);
@@ -651,9 +675,11 @@ DOC-005, DOC-012): `/docs-fix phase 2`.
 
 1. ~~**Phase 1**~~ ✅ **DONE (2026-06-29)** — fixed the statements that actively misled users about
    **privacy** (images on disk) and **capability** (OCR), and corrected the front-door README.
-2. **Phase 2** (NEXT) — finishing the rebrand is cheap and removes confusion for drive-builders.
-3. **Phase 3** — reference hygiene; small and mechanical (defer the 815 KB BUILD_STATE edits or make
-   them a policy decision to avoid churn).
+2. ~~**Phase 2**~~ ✅ **DONE (2026-06-29)** — finished the rebrand (macOS `.app` example, the
+   `PRIVATE_AI_DRIVE`→`HILBERTRAUM` volume label, embeddings F16-not-Q8), removing drive-builder
+   confusion.
+3. **Phase 3** (NEXT) — reference hygiene; small and mechanical (defer the 815 KB BUILD_STATE edits or
+   make them a policy decision to avoid churn).
 4. **Phase 4** — header/freshness truthfulness; do after content fixes so dates reflect the final state.
 5. **Phase 5** — additive new files; no risk to existing docs.
 6. **Phase 6** — clarity polish on historical docs; least urgent.
@@ -666,3 +692,4 @@ with others (it carries the user-trust risk and deserves a focused review).
 | Date | Phase / Finding | Files changed | Summary | Validation performed | Result | Follow-up needed |
 |---|---|---|---|---|---|---|
 | 2026-06-29 | Phase 1 — DOC-001, DOC-002, DOC-003 | `docs/user-guide.md`, `docs/troubleshooting.md`, `SECURITY.md`, `README.md`, `sample-data/README.md`, `docs/audits/docs-audit.md` | **DOC-001:** rewrote the user-guide §8 and troubleshooting image passages from "are not saved / never saved" to the persisted-encrypted-deletable image-history posture (`workspace/images/`, encrypted at rest, revisit + delete from Images screen); clarified that `Remove` returns to the landing view and does not delete the saved session. **DOC-002:** replaced `SECURITY.md:78` false "OCR not included in Lite" with an accurate on-device-only (deu+eng tesseract, no cloud OCR) statement. **DOC-003:** "Start mock runtime" → "Try in demo mode" + de-jargoned nearby prose in README/user-guide/troubleshooting **and** the audit-missed `sample-data/README.md`. | Re-read edited passages against `PRIVACY.md`, `vision/history.ts`, `ImagesScreen.tsx` (Remove vs Delete), `drive-layout.md`/`model-policy.md` (OCR scope), `en.ts:700`, `copy-tone.test.ts`. Greps: image `not saved/never saved` → only unrelated voice-dictation remains; `SECURITY.md` OCR → only corrected line; `Start mock runtime` → only intentional historical rename records remain. | Fixed | DOC-007 (SECURITY.md stale 2026-06-15 header) still open → Phase 4. No code changed; doc suite/links unaffected. |
+| 2026-06-29 | Phase 2 — DOC-004, DOC-005, DOC-012 | `docs/packaging.md`, `docs/drive-layout.md`, `docs/troubleshooting.md`, `model-manifests/README.md`, `docs/audits/docs-audit.md` | **DOC-004:** macOS `--app-artifact` example `packaging.md:309` `Private\ AI\ Drive\ Lite.app` → `HilbertRaum.app` (matches the `.exe` example + the rebrand). **DOC-005:** standardized the example macOS volume label on `HILBERTRAUM` — `drive-layout.md` sketch header `PRIVATE_AI_DRIVE/`→`HILBERTRAUM/` (line 57) + all four `/Volumes/PRIVATE_AI_DRIVE` examples (lines 149–152), and `troubleshooting.md:92`. **DOC-012:** `model-manifests/README.md:9` embeddings "Q8" → "F16" with a note that the `-q8` manifest id is a stable opaque identifier, not a quant claim, and that Q8 crashes the pinned runtime. | Greps after fix: `Private AI Drive` → only `BUILD_STATE.md` historical note + this report; `PRIVATE_AI_DRIVE` (docs) → only the frozen spec `CLAUDE_HilbertRaum_MVP.md` (DOC-016) + `BUILD_STATE.md` note + this report. DOC-012 verified against `multilingual-e5-small-q8.yaml` (`display_name: …(F16)`) and `model-policy.md` (lines 32, 37–46). | Fixed | **Follow-up (out of `/docs-fix` scope):** the same stale `/Volumes/PRIVATE_AI_DRIVE` example string appears in `#` usage-comments + one `echo` in `scripts/{fetch-models,fetch-runtime,prepare-drive,verify-models,setup-dev}.sh`; no script *logic* depends on it (it is the user-supplied `--target`). Update those comments in a separate code-touching pass if desired. The frozen spec `CLAUDE_HilbertRaum_MVP.md` retains the old label by design (DOC-016, Phase 6). No code changed. |
