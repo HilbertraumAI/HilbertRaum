@@ -811,4 +811,46 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
     const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Auszahlung 500,00-', 1)], 'EUR')
     expect(rows[0]).toMatchObject({ amount: -500 })
   })
+
+  // ---- BL-2: a currency token in a payee description must not disable totals/reconciliation ----
+  it('BL-2: a currency WORD in a description no longer suppresses the single-currency total', () => {
+    // BEFORE: per-row `detectCurrency(line)` scanned the WHOLE line incl. the free-text description, so a
+    // memo containing "USD"/"$" tagged the row that currency → the row-currency set gained a member →
+    // summarizeCashflow returned no single total, reconcileBalances marked EVERY row `unknown`, and
+    // assessCompleteness dropped to `unverified`. One description string silently killed totalling for the
+    // whole EUR statement. Per-row detection now scans only the FIGURE REGION (from the first money token
+    // on), so a currency word LEFT of the amount is ignored.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Netflix USD subscription -12,99 1.187,01', // "USD" in the memo
+      '2026-01-03 Amazon $ gift card -20,00 1.167,01', // "$" in the memo
+      '2026-01-04 Gehalt ACME 2.000,00 3.167,01'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(3)
+    expect(rows.every((r) => r.currency === 'EUR')).toBe(true) // BEFORE: ['USD','USD','EUR']
+    // A single EUR total is computed (BEFORE: currency undefined — the "no single total" refusal).
+    const summary = summarizeCashflow(rows)
+    expect(summary.currency).toBe('EUR')
+    expect(summary).toMatchObject({ totalIn: 2000, totalOut: 32.99, net: 1967.01 })
+    // Reconciliation runs in EUR (BEFORE: every row `unknown`).
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.reconciled).toBe(true)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok', 'ok'])
+    expect(assessCompleteness({ rows, reconcile })).toBe('unverified') // no opening/closing pair, but not from a phantom mix
+  })
+
+  it('BL-2: a GENUINELY mixed-currency row (currency ADJACENT to the figure) still refuses a single total', () => {
+    // The figure region runs from the first money token onward, so a currency printed NEXT TO the amount is
+    // still detected per-row — a genuinely mixed statement keeps its honest "no single total" refusal
+    // (mixed-currency honesty intact, the reason this is figure-region rather than `statementCurrency ?? …`).
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Coffee -3,50 1.000,00',
+      '2026-01-03 Foreign purchase -20,00 USD' // a real foreign-currency row: USD sits next to the figure
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows.map((r) => r.currency)).toEqual(['EUR', 'USD'])
+    expect(summarizeCashflow(rows).currency).toBeUndefined() // honest mixed-currency refusal preserved
+  })
 })

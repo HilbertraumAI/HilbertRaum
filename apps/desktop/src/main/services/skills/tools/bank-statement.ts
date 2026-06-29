@@ -140,7 +140,16 @@ function parseLine(
   const hasBalance = matches.length >= 2
   const amount = parseAmount(matches[hasBalance ? matches.length - 2 : 0][0])
   if (amount === null) return null
-  const currency = detectCurrency(line) ?? statementCurrency
+  // Per-row currency detection is restricted to the FIGURE REGION — the text from the FIRST money token
+  // onward (audit BL-2). Scanning the whole line let a currency WORD in the free-text description (a EUR
+  // row whose memo says "Netflix USD subscription") tag the row USD, growing the row-currency set so
+  // summarizeCashflow/reconcileBalances/assessCompleteness all fell back to the mixed-currency refusal —
+  // one description string silently suppressed totalling for the whole statement. A GENUINE foreign-
+  // currency row prints its code/symbol NEXT TO the amount (inside the figure region), so it is still
+  // detected and mixed-currency honesty is preserved (this is why we slice the figure region rather than
+  // simply preferring statementCurrency, which would silently sum a truly-mixed line in one currency).
+  const figureRegion = rest.slice(matches[0].index)
+  const currency = detectCurrency(figureRegion) ?? statementCurrency
   if (!currency) return null
   const row: ExtractedTransaction = { date, description, amount, currency }
   // A value-date column (the second leading date), when present, is captured as `valueDate` — the
