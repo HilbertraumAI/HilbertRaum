@@ -588,6 +588,15 @@ export interface CategoryRule {
   category: string
   matchKind: 'description-substring' | 'amount-sign'
   pattern: string
+  /**
+   * German closed-compound keyword (full-audit-2026-06-29 BL-3): match INSIDE a compound (a one-sided
+   * word boundary via `wordIncludes(..., true)`) because German fuses keywords into closed compounds
+   * (`kontoführungs+gebühr`). Off (default) keeps the STRICT two-sided boundary for short, ambiguous
+   * English tokens (`fee`⊂`coffee`, `atm`⊂`atmos`) and for `lohn` (⊂`muehlohn`/`Belohnung`). The flag is
+   * matching-only — `run.ts` seeds just `match_kind`/`pattern` into `bank_category_rules` (transparency),
+   * so it is not persisted.
+   */
+  compound?: boolean
 }
 
 export const UNCATEGORIZED = 'Uncategorized'
@@ -597,19 +606,23 @@ export const UNCATEGORIZED = 'Uncategorized'
  * match wins; a row that matches nothing falls back by sign (negative → Spending, else
  * Uncategorized). Substring matches are case-insensitive; EN + DE keywords for the de-AT target.
  */
+// `compound: true` marks the UNAMBIGUOUS German keywords that must match inside a closed compound (BL-3):
+// gebühr/gehalt/überweisung/bargeld. The short English tokens (fee/charge/atm/…) and the ambiguous
+// `lohn` (⊂ muehlohn/Belohnung) stay STRICT — income from salary is still covered by the positive-amount
+// sign fallback, so `lohn` need not (and must not) be relaxed.
 export const BUILTIN_CATEGORY_RULES: readonly CategoryRule[] = [
   { category: 'Fees', matchKind: 'description-substring', pattern: 'fee' },
-  { category: 'Fees', matchKind: 'description-substring', pattern: 'gebühr' },
+  { category: 'Fees', matchKind: 'description-substring', pattern: 'gebühr', compound: true },
   { category: 'Fees', matchKind: 'description-substring', pattern: 'charge' },
   { category: 'Income', matchKind: 'description-substring', pattern: 'salary' },
-  { category: 'Income', matchKind: 'description-substring', pattern: 'gehalt' },
+  { category: 'Income', matchKind: 'description-substring', pattern: 'gehalt', compound: true },
   { category: 'Income', matchKind: 'description-substring', pattern: 'lohn' },
   { category: 'Income', matchKind: 'description-substring', pattern: 'payroll' },
   { category: 'Transfer', matchKind: 'description-substring', pattern: 'transfer' },
-  { category: 'Transfer', matchKind: 'description-substring', pattern: 'überweisung' },
+  { category: 'Transfer', matchKind: 'description-substring', pattern: 'überweisung', compound: true },
   { category: 'Transfer', matchKind: 'description-substring', pattern: 'sepa' },
   { category: 'Cash', matchKind: 'description-substring', pattern: 'atm' },
-  { category: 'Cash', matchKind: 'description-substring', pattern: 'bargeld' },
+  { category: 'Cash', matchKind: 'description-substring', pattern: 'bargeld', compound: true },
   { category: 'Cash', matchKind: 'description-substring', pattern: 'withdrawal' },
   { category: 'Income', matchKind: 'amount-sign', pattern: 'positive' }
 ]
@@ -629,7 +642,7 @@ export function categorizeRow(row: TransactionInput): string {
   const desc = row.description.toLowerCase()
   for (const rule of BUILTIN_CATEGORY_RULES) {
     if (rule.matchKind === 'description-substring') {
-      if (wordIncludes(desc, rule.pattern)) return rule.category
+      if (wordIncludes(desc, rule.pattern, rule.compound)) return rule.category
     } else if (rule.pattern === 'positive' && row.amount > 0) {
       return rule.category
     } else if (rule.pattern === 'negative' && row.amount < 0) {

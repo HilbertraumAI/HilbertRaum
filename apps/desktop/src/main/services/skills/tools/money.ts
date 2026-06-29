@@ -247,19 +247,31 @@ export function stripDateTokens(line: string): string {
 // ---- Word-bounded substring test (shared by both categorization paths) ----
 
 /**
- * A WORD-bounded substring test (case-folded by the caller): the needle must be flanked by a
- * non-letter/digit (or a string edge) on both sides. `\b` is ASCII-only and would mishandle the German
- * keywords (`gebühr`, `überweisung`), so the boundary is checked against the Unicode letter/number
- * classes. This stops a coincidental substring from a confident WRONG match (`fee` ⊂ `coffee`,
- * `atm` ⊂ `atmos`, `lohn` ⊂ `mühlohn`). Shared so the DETERMINISTIC categorizer (`categorizeRow`) and
- * the LLM PRE-FILTER (`prefilterCategory`) agree on every description rule (audit C-1).
+ * A WORD-bounded substring test (case-folded by the caller). `\b` is ASCII-only and would mishandle the
+ * German keywords (`gebühr`, `überweisung`), so the boundary is checked against the Unicode letter/number
+ * classes. Shared so the DETERMINISTIC categorizer (`categorizeRow`) and the LLM PRE-FILTER
+ * (`prefilterCategory`) agree on every description rule (audit C-1).
+ *
+ * Two modes (full-audit-2026-06-29 BL-3):
+ *  - STRICT (default): the needle must be flanked by a non-letter/digit (or a string edge) on BOTH sides
+ *    — a standalone word. Required for short, ambiguous tokens where a coincidental substring would be a
+ *    confident WRONG match (`fee` ⊂ `coffee`, `atm` ⊂ `atmos`, and `lohn` ⊂ `muehlohn`/`Belohnung`).
+ *  - COMPOUND (`compound=true`): a boundary on EITHER side suffices. German forms CLOSED compounds, so a
+ *    keyword sits at a morpheme seam that is a word edge on only one side (`kontoführungs+GEBÜHR`,
+ *    `BARGELD+behebung`, `GEHALTS+zahlung`). The C-1 strict rule made these never match, dropping de-AT
+ *    fees/transfers into the generic Spending bucket. One-sided (not raw substring) still rejects a
+ *    keyword buried with letters on BOTH sides, so it is the conservative relaxation. Reserved for the
+ *    unambiguous DE compound-prone keywords (the rule table opts in per-keyword) — NOT the short English
+ *    tokens, which keep STRICT.
  */
-export function wordIncludes(haystack: string, needle: string): boolean {
+export function wordIncludes(haystack: string, needle: string, compound = false): boolean {
   const isLetterDigit = (c: string): boolean => c !== '' && /[\p{L}\p{N}]/u.test(c)
   for (let i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
     const before = i === 0 ? '' : haystack[i - 1]
     const after = i + needle.length >= haystack.length ? '' : haystack[i + needle.length]
-    if (!isLetterDigit(before) && !isLetterDigit(after)) return true
+    const beforeOk = !isLetterDigit(before)
+    const afterOk = !isLetterDigit(after)
+    if (compound ? beforeOk || afterOk : beforeOk && afterOk) return true
   }
   return false
 }

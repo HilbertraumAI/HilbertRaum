@@ -23,6 +23,7 @@ import {
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
+import { prefilterCategory } from '../../src/main/services/skills/categorizer'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
 
 // architecture.md "Skills — design record" §8 (S11a) — the bank-statement extract_transactions tool, proven in
@@ -495,15 +496,13 @@ describe('categorize_transactions (S11c)', () => {
     expect(categorizeRow(tx({ description: 'Zero', amount: 0 }))).toBe(UNCATEGORIZED)
   })
 
-  it('categorizeRow matches description rules on WORD boundaries, not raw substrings (audit C-1)', () => {
-    // A coincidental substring no longer mis-files: 'fee'⊂'coffee', 'atm'⊂'atmosphere', 'lohn'⊂'mühlohn'.
+  it('categorizeRow keeps the strict two-sided boundary for short English tokens (audit C-1)', () => {
+    // The short, ambiguous English tokens still need BOTH sides bounded so a coincidental substring does
+    // not mis-file: 'fee'⊂'coffee', 'atm'⊂'atmosphere', and 'lohn' (kept strict) ⊄ 'muehlohn'.
     expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).not.toBe('Fees')
     expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).toBe('Spending') // sign fallback
     expect(categorizeRow(tx({ description: 'Atmosphere Bar', amount: -12 }))).not.toBe('Cash')
     expect(categorizeRow(tx({ description: 'Baeckerei Muehlohn', amount: -3.1 }))).not.toBe('Income')
-    // A COMPOUND that merely contains a keyword no longer matches — so it now agrees with the LLM
-    // prefilter (which sends such a row to the model): 'Kontoführungsgebühr' has no standalone 'gebühr'.
-    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Spending')
     // The keyword as its OWN word still matches.
     expect(categorizeRow(tx({ description: 'Coffee and a fee', amount: -3.5 }))).toBe('Fees')
   })
@@ -852,5 +851,41 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
     const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
     expect(rows.map((r) => r.currency)).toEqual(['EUR', 'USD'])
     expect(summarizeCashflow(rows).currency).toBeUndefined() // honest mixed-currency refusal preserved
+  })
+
+  // ---- BL-3: German closed-compounds must reach the deterministic categorizer (de-AT target locale) ----
+  it('BL-3: German closed-compound keywords categorize inside a compound (de-AT)', () => {
+    // The C-1 two-sided word boundary stopped 'fee'⊂'coffee' but ALSO stopped the de-AT keywords from
+    // ever matching, because German forms closed compounds where the keyword sits at a morpheme seam that
+    // is a word edge on only ONE side. The compound-prone DE keywords (gebühr/gehalt/überweisung/bargeld)
+    // now match on a one-sided boundary, so account/bank fees and salary/transfer compounds bucket
+    // correctly instead of falling through to the generic negative→Spending bucket.
+    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Fees') // BEFORE: Spending
+    expect(categorizeRow(tx({ description: 'Bankgebühr Auslandseinsatz', amount: -2.5 }))).toBe('Fees')
+    expect(categorizeRow(tx({ description: 'SEPA-Überweisung Miete', amount: -800 }))).toBe('Transfer')
+    expect(categorizeRow(tx({ description: 'Dauerüberweisung Sparen', amount: -100 }))).toBe('Transfer')
+    expect(categorizeRow(tx({ description: 'Gehaltszahlung Juni', amount: 2500 }))).toBe('Income')
+    expect(categorizeRow(tx({ description: 'Bargeldbehebung Bankomat', amount: -150 }))).toBe('Cash')
+  })
+
+  it('BL-3: the LLM prefilter agrees with categorizeRow on the German compounds (audit C-1 invariant)', () => {
+    // Both deterministic paths share `wordIncludes` + the same compound flag, so they must still agree:
+    // a compound that NOW categorizes deterministically must ALSO be confidently pre-filtered (kept off
+    // the model), and a coincidental English substring must skip BOTH (go to the model).
+    for (const desc of ['Kontoführungsgebühr', 'Gehaltszahlung Juni', 'SEPA-Überweisung']) {
+      expect(prefilterCategory(tx({ description: desc, amount: -3 }))).toBe(categorizeRow(tx({ description: desc, amount: -3 })))
+      expect(prefilterCategory(tx({ description: desc, amount: -3 }))).not.toBeNull()
+    }
+  })
+
+  it('BL-3: the C-1 English/ambiguous guards still hold (no reintroduced false positives)', () => {
+    // The relaxation is German-only: short English tokens keep the strict two-sided boundary, and 'lohn'
+    // (the ambiguous DE token — muehlohn/Belohnung) stays strict too (salary is covered by the positive-
+    // amount sign fallback). So a coincidental substring is still NOT mis-filed.
+    expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).not.toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Atmosphere Bar', amount: -12 }))).not.toBe('Cash')
+    expect(categorizeRow(tx({ description: 'Baeckerei Muehlohn', amount: -3.1 }))).not.toBe('Income')
+    expect(prefilterCategory(tx({ description: 'Coffee Fellows', amount: -4.2 }))).toBeNull()
+    expect(prefilterCategory(tx({ description: 'ATMOS Sportswear', amount: -89 }))).toBeNull()
   })
 })
