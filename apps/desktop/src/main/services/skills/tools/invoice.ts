@@ -65,6 +65,24 @@ export type InvoiceInput = ExtractedInvoice
 /** A hard cap so a pathological document can never produce an unbounded array (the gate also validates). */
 export const MAX_LINE_ITEMS = 10000
 
+/**
+ * The deterministic invoice extractor version (F5 — mirrors `BANK_EXTRACTOR_VERSION`). Stamped onto
+ * every `invoices` row (`invoice-run.ts` `runInvoiceExtraction`) and compared on reuse: an invoice whose
+ * stored `extractor_version` is NULL (legacy / extracted before versioning) or LESS than this is STALE —
+ * the analysis read-back RE-EXTRACTS it (`replaceExisting`, replacing the rows) rather than keep serving
+ * figures a since-fixed parser bug mis-read. An invoice at the current version is FRESH and reused.
+ *
+ * BUMP THIS by one whenever a change alters the extractor's OUTPUT for the same input — in the line
+ * parser (`extractInvoice`/`parseLineItem`) or the header/totals readers. A pure refactor that cannot
+ * change any output does NOT need a bump.
+ *
+ * History (each entry = the output-affecting work that warranted the value):
+ *   1 — baseline: the invoice parser as built through full-audit-2026-06-29-postmerge Phase 1 (F1 the
+ *       statement-context-aware amount-column drop, F3 figure-region currency + single-currency guard,
+ *       F6 space-column fusion drop, F8 qty-split corroboration). Pre-versioning rows are NULL → stale.
+ */
+export const INVOICE_EXTRACTOR_VERSION = 1
+
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,

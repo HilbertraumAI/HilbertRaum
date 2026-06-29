@@ -44,7 +44,7 @@ but wasn't applied here."
 | **F2** ✅ | `regenerate` **deletes the prior assistant reply (committed) before** the stream slot is claimed | Medium | High | A non-abort failure (context-exceeded HTTP 400, slot/sidecar fault) destroys the previous answer with nothing in its place. **REMEDIATED (Phase 2).** |
 | **F3** | Invoice line-item **currency detected from the whole line** (BL-2 fix never applied to invoices) | Medium | High | Wrong per-line currency + mixed-currency totals reconcile against a meaningless cross-currency sum (no single-currency guard). |
 | **F4** ✅ | Embedder **`startFailed` latch armed for a transient bind-race** | Medium | High | A double-unlucky startup port race **silently disables all document indexing** for the session until lock/unlock. **REMEDIATED (Phase 2).** |
-| **F5** | Invoice extraction **re-inserts a fresh invoice + line items on every analysis question** | Medium | High | Unbounded growth of the content-class tables; no reuse/replace/staleness (bank path has all three). |
+| **F5** ✅ | Invoice extraction **re-inserts a fresh invoice + line items on every analysis question** | Medium | High | Unbounded growth of the content-class tables; no reuse/replace/staleness (bank path has all three). **REMEDIATED (Phase 3).** |
 
 ### Biggest opportunities for improvement
 
@@ -240,6 +240,13 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   distinction.
 
 ### F5 — Invoice extraction re-inserts a fresh invoice + line items on every analysis question (no reuse / replace / staleness)
+> **✅ REMEDIATED — Phase 3 (branch `audit-postmerge-phase3-invoice-lifecycle`).** The invoice path now mirrors
+> the bank reuse gate: `invoices` gained an additive nullable `extractor_version` column (`db.ts`,
+> `ensureColumn` — old workspaces open cleanly), `runInvoiceExtraction` stamps `INVOICE_EXTRACTOR_VERSION`
+> (`tools/invoice.ts`) and accepts `replaceExisting`, and `analysis/invoice.ts` REUSES `latestInvoiceId` unless
+> `isInvoiceStale` (NULL/legacy or `<` current), else re-extracts with `replaceExisting: true` — the shared
+> `deleteInvoicesForDocument` runs in FK order INSIDE the persist `BEGIN/COMMIT` before the INSERT. N questions
+> now persist exactly one invoice + one line-item set. Disposition: architecture.md §29 + §8.
 - **Category:** Data-integrity
 - **Severity:** Medium · **Confidence:** High
 - **Location:** `apps/desktop/src/main/services/skills/analysis/invoice.ts:276` (calls
@@ -758,6 +765,11 @@ current behavior is load-bearing (financial parsing especially).
   delete ordering.
 
 ### Phase 3 — Invoice data lifecycle (reuse/replace parity with bank)
+> **✅ COMPLETE (branch `audit-postmerge-phase3-invoice-lifecycle`).** F5 closed by mirroring the bank
+> reuse/replace/staleness machinery onto the invoice path: additive nullable `invoices.extractor_version`,
+> `INVOICE_EXTRACTOR_VERSION` + `isInvoiceStale`, and `replaceExisting` (atomic delete-then-insert inside the
+> existing `BEGIN/COMMIT`). Suite **2495 passed / 39 skipped**, typecheck + build green. Durable record:
+> architecture.md §29 + §8 (invoice reuse/replace/staleness parity); §27 ledger F5 row flipped to fixed.
 - **Goal:** close F5.
 - **Scope/files:** `skills/invoice-run.ts`, `skills/analysis/invoice.ts`, schema (add
   `extractor_version` to `invoices`), `skills/run.ts` (purge ordering).

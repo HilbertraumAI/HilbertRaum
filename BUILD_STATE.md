@@ -6,6 +6,41 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 3 (INVOICE DATA LIFECYCLE — reuse/replace/staleness PARITY with
+the bank path; F5) — branch `audit-postmerge-phase3-invoice-lifecycle`.** Suite **2495 passed / 39 skipped
+(2534 collected)** (was 2492/39 after Phase 2 → **+3 tests**), typecheck clean, `npm run build` green. Theme
+(again): **"apply the fix that already exists next door."** Every fix is **test-first (red on current code →
+green)**. ONE additive nullable schema column; no IPC-channel/audit-payload change; figures stay content-class.
+- **F5 (MED, data-integrity) — invoice extraction re-inserted a fresh invoice + line items on EVERY analysis
+  question.** The bank path reuses a fresh extraction and gates re-extraction on `extractor_version` +
+  `isBankStatementStale` + `replaceExisting`; the invoice path had **none** of it — `analysis/invoice.ts`
+  called `runInvoiceExtraction` unconditionally and `invoice-run.ts` always `INSERT`ed a new `invoices` row
+  with no preceding delete, so N questions about one invoice persisted N invoices + N×line-item sets (silent
+  content-table bloat for a deterministic re-extraction producing identical rows; `purgeSkillDataForDocument`
+  still cleaned them on document delete, so no FK/orphan hazard — bloat + wasted recompute, not corruption).
+- **Fix — mirror the bank design exactly (parity, not a new lifecycle).** (1) Schema: `invoices` gained an
+  additive nullable `extractor_version INTEGER` via the existing idempotent `ensureColumn` in `db.ts` (copy of
+  the `bank_statements.extractor_version` migration — old workspaces open cleanly; pre-existing rows are NULL →
+  stale; the bank table is untouched). (2) `INVOICE_EXTRACTOR_VERSION` (=**1**, baseline = the parser as built
+  through Phase 1's F1/F3/F6/F8 hardening) + `isInvoiceStale` predicate in `tools/invoice.ts` / `invoice-run.ts`,
+  mirroring `BANK_EXTRACTOR_VERSION` / `isBankStatementStale`. (3) `runInvoiceExtraction` stamps the version on
+  INSERT and accepts `replaceExisting`; the analysis handler **REUSES** `latestInvoiceId` when present and not
+  stale, else re-extracts with `replaceExisting: true` — which calls the shared `deleteInvoicesForDocument`
+  (exported from `run.ts`, the SAME ordered FK delete `purgeSkillDataForDocument` uses) **inside** the persist
+  `BEGIN/COMMIT` before the INSERT (atomic swap; `node:sqlite` is synchronous → no await between BEGIN/COMMIT).
+  The old `totals_reconciled` flag goes with the replaced row (the validate seam recomputes it).
+- **Staleness semantics = the bank's, verbatim:** stale ⟺ stored `extractor_version` is NULL (legacy /
+  pre-versioning) OR `<` current. Reuse on a fresh (current-version) invoice; re-extract+replace on a stale one
+  or when none exists. `purgeSkillDataForDocument`'s ordered delete is unchanged (same shared helper).
+- **Durable record:** architecture.md **§29 ledger** (disposition F5) + **§8 "Invoice reuse / replace /
+  staleness — parity with the bank path"**; the §27 ledger's F5 row flips from "not started" → "fixed (Phase
+  3)". Tests: `skills-analysis-invoice.test.ts` (N questions → exactly one invoice + one line-item set; fresh
+  invoice reused, no duplicate; version-NULL invoice detected stale → re-extracted + replaced in place at the
+  current version). The audit report marks F5 remediated + Phase 3 DONE.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase3-invoice-lifecycle`; do NOT auto-merge/push.**
+  Then Phase 4 (security F11–F19) per the report's phased plan. Phases 5–8 (test seams T1–T9, renderer a11y
+  F20–F24, docs D1–D8, concurrency) still open._
+
 _2026-06-29 — **Post-merge full audit — Phase 2 (CHAT-REGENERATE DATA-LOSS + SIDECAR BIND-RACE RELIABILITY;
 F2/F4/F7/F9) — branch `audit-postmerge-phase2-runtime-reliability`.** Suite **2492 passed / 39 skipped (2531
 collected)** (was 2483/39 after Phase 1 → **+9 tests**), typecheck clean, `npm run build` green. No

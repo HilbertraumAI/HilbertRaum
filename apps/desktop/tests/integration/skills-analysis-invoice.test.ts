@@ -156,6 +156,9 @@ describe('invoice analysis handler — run()', () => {
   it('issues ONE invoice line-items read per analysis question (audit P-1): the validate seam reuses the single load', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
+    // Warm-up extracts a FRESH invoice so the measured run REUSES it (F5): no re-extraction — and so no
+    // `replaceExisting` DELETE FROM invoice_line_items — in the measured window, only the genuine load.
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
     const reads = await countPrepares(db, /FROM invoice_line_items\b/i, async () => {
       await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
     })
@@ -233,6 +236,82 @@ describe('invoice analysis handler — run()', () => {
     // The snippets come from the document's own lines (line items + header), not a synthesised total.
     expect(snippets).toContain('Widget')
     expect(snippets).toContain('Acme GmbH')
+  })
+})
+
+describe('invoice analysis handler — data lifecycle (reuse / replace / staleness parity, F5)', () => {
+  it('asking N questions persists exactly ONE invoice + ONE line-item set (no bloat)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    // Three analysis questions over the SAME document — extraction is deterministic, so the rows are
+    // identical each time. The fix REUSES the fresh invoice instead of re-inserting (F5: the bank path's
+    // reuse/replace parity). Before the fix this persisted three invoices + three line-item sets.
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the gross total?'))
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'reconcile the totals'))
+
+    const invoices = db.prepare('SELECT COUNT(*) AS n FROM invoices WHERE document_id = ?').get(id) as {
+      n: number
+    }
+    expect(invoices.n).toBe(1)
+    const lineItems = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id IN
+           (SELECT id FROM invoices WHERE document_id = ?)`
+      )
+      .get(id) as { n: number }
+    expect(lineItems.n).toBe(2) // the two CLEAN line items, not 6
+  })
+
+  it('REUSES a fresh (current-version) invoice — no re-extraction, no duplicate', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    const first = db.prepare('SELECT id FROM invoices WHERE document_id = ?').get(id) as { id: string }
+    // The second run reuses the same invoice (it is at the current version → not stale).
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    const rows = db.prepare('SELECT id FROM invoices WHERE document_id = ?').all(id) as Array<{ id: string }>
+    expect(rows.length).toBe(1)
+    expect(rows[0].id).toBe(first.id) // same invoice, not re-extracted
+  })
+
+  it('re-extracts and REPLACES an invoice produced by an outdated extractor (staleness)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    // First run extracts → an invoice stamped with the current extractor version.
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    const before = db
+      .prepare('SELECT id, extractor_version AS v FROM invoices WHERE document_id = ?')
+      .get(id) as { id: string; v: number }
+    expect(before.v).toBeGreaterThanOrEqual(1)
+
+    // Simulate it having been produced by an OLDER parser: blank the version, and tamper a figure so we
+    // can prove the rows are actually re-read (a reuse would keep the bogus 99999).
+    db.prepare('UPDATE invoices SET extractor_version = NULL, gross_total = 99999 WHERE id = ?').run(before.id)
+    db.prepare(
+      `UPDATE invoice_line_items SET line_total = 99999 WHERE invoice_id = ?`
+    ).run(before.id)
+
+    // The second run sees the stale invoice → re-extracts, REPLACING it in place (no duplicate).
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
+
+    const rows = db
+      .prepare('SELECT id, extractor_version AS v FROM invoices WHERE document_id = ?')
+      .all(id) as Array<{ id: string; v: number }>
+    expect(rows.length).toBe(1) // the stale one was deleted, not left alongside a fresh copy
+    expect(rows[0].id).not.toBe(before.id) // a fresh invoice replaced it
+    expect(rows[0].v).toBeGreaterThanOrEqual(1) // re-stamped at the current version (no longer stale)
+    // The tampered figure is gone; the answer reflects the correctly re-extracted rows.
+    expect(res.answer).not.toContain('99999')
+    expect(res.answer).toContain('144.00') // the real gross
+    // And the line items were replaced too (no orphans, no duplicates).
+    const lineItems = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id IN
+           (SELECT id FROM invoices WHERE document_id = ?)`
+      )
+      .get(id) as { n: number }
+    expect(lineItems.n).toBe(2)
   })
 })
 

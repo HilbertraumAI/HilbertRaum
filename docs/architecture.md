@@ -3170,6 +3170,25 @@ mixed-currency / missing-figure case — so a drift in **either** the body or th
   The invoice schema records no per-figure source page, so citations are the document's leading
   source chunks (still real chunks, M2-safe). i18n: `skills.invoiceAnalysis.*` (EN+DE parity), reusing
   the shared `coverage.extract.*` meter + `skills.analysis.refusePartial` refuse copy.
+- **Invoice reuse / replace / staleness — parity with the bank path (F5, post-merge audit Phase 3).**
+  The invoice analysis handler now uses the **same** reuse-or-re-extract decision as
+  `analysis/bank-statement.ts` (it previously re-extracted + INSERTed a fresh `invoices` row on **every**
+  analysis question — unbounded content-table bloat for a deterministic re-extraction). `invoices` gained
+  an `extractor_version` column (additive nullable migration in `db.ts`, mirroring
+  `bank_statements.extractor_version`); every extraction stamps it with `INVOICE_EXTRACTOR_VERSION`
+  (`tools/invoice.ts`). The handler resolves `latestInvoiceId(db, docId)` and **REUSES** it when present
+  and **not stale**; it re-extracts only when none exists OR `isInvoiceStale` (stored version NULL/legacy
+  or `<` current). A re-extract passes `replaceExisting: true`, so `runInvoiceExtraction` calls the shared
+  `deleteInvoicesForDocument` (the SAME ordered FK delete `purgeSkillDataForDocument` uses — invoice line
+  items, then invoices) **inside** the persist `BEGIN/COMMIT` before the INSERT (atomic swap; a failure
+  rolls back to the old). The old `totals_reconciled` flag goes with the replaced row (the validate seam
+  recomputes it). `latestInvoiceId` is the single shared "latest invoice" helper (`invoice-run.ts`,
+  `created_at DESC, id DESC` tie-break) across both call sites — the downstream run seam and this read-back.
+  **Bump `INVOICE_EXTRACTOR_VERSION` whenever the invoice parser changes output for the same input** (it is
+  at **1** — baseline = the parser as built through the post-merge Phase 1 F1/F3/F6/F8 hardening; legacy
+  NULL rows are stale and re-extract on next reuse). Tests: `skills-analysis-invoice.test.ts` (N questions
+  persist exactly one invoice + one line-item set; a fresh invoice is reused with no duplicate; a
+  version-NULL invoice is detected stale → re-extracted + replaced in place at the current version).
 
 **Scope resolution (audit X-1, Phase 10).** Each handler's `applies()`/`run()` resolve the in-scope
 documents through the **one shared** `documentsInScope(db, scope, { requireChunks })` helper
@@ -4104,7 +4123,8 @@ started** — carried in the report.
 | T5 (test/invariant) | 1 | **pinned** — `parseAmount` rounds every figure to the nearest cent (`Math.round(\|value\|*100)`) so the integer-cent invariant holds by construction; a >2-dp `1.234,567` reads `1234.57` (normalised, not dropped). T4 (parens-negative) + T9 (negative line totals / Gutschrift/Rabatt) now pinned through the real scanner | arch §8 (T5); known-limitations (2-dp bullet) |
 | F10 (Low) | 1 | **acknowledged (no code change)** — the invoice path runs without geometry layout reconstruction (D58 is bank-only), so it is the most parse-fragile money path; Phase 1 prioritised its robustness (F1 right-side drop, F6 fusion drop) since it has no backstop, and the asymmetry is recorded | arch §8 (F1/F6); known-limitations (invoice geometry note) |
 | F2, F4, F7, F9 | 2 | **fixed (Phase 2)** — chat-regenerate data-loss (F2) + embedder/reranker bind-race start-latch (F4/F7) + compaction-failure log (F9); see the **§28 ledger** | arch §28; arch "Chat & streaming"; GPU record §5.5b |
-| F5, F11–F19, F20–F24, D1–D8, T1–T9 | — | **not started** — F5 invoice re-insert (Phase 3), RAG/security/concurrency F11–F19 (Phase 4/8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7), test seams T1–T9 (Phase 5); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
+| F5 | 3 | **fixed (Phase 3)** — invoice extraction re-inserted a fresh invoice + line items on every analysis question (no reuse/replace/staleness, where the bank path has all three); now mirrors the bank reuse-or-re-extract gate (`extractor_version` + `isInvoiceStale` + `replaceExisting` atomic swap); see the **§29 ledger** | arch §29; arch §8 (invoice reuse/replace/staleness parity) |
+| F11–F19, F20–F24, D1–D8, T1–T9 | — | **not started** — RAG/security/concurrency F11–F19 (Phase 4/8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7), test seams T1–T9 (Phase 5); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
 
 **Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
 class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
@@ -4141,9 +4161,35 @@ and asserts the prior reply survives + a service-level delete→restore round-tr
 inject a double-bind-race at the real spawn/health seam (`e5-embedder.test.ts`, `reranker.test.ts`) and assert
 the latch stays null + a later call retries (F7 also pins survives-`suspend` vs a genuine fault persisting);
 F9 spies `log.warn` on a non-abort summarizer throw and asserts the abort path stays silent
-(`chat-compaction.test.ts`). **Open (later phases):** F5 invoice re-insert (Phase 3), F11–F19 RAG/security/
-concurrency (Phase 4/8), F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1–T9 test seams
-(Phase 5).
+(`chat-compaction.test.ts`). **Open (later phases):** F11–F19 RAG/security/concurrency (Phase 4/8), F20–F24
+renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1–T9 test seams (Phase 5).
+
+### §29 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 3 — invoice data lifecycle parity)
+
+**Phase 3** closes the single data-integrity finding F5 — again the "apply the fix that already exists next
+door" pattern: the **bank** path reuses a fresh extraction and gates re-extraction on a version + staleness
+check; the **invoice** path had none of it and re-inserted a brand-new `invoices` row (+ line items) on
+**every** analysis-shaped question. The fix is **parity, not a new design** — the invoice path now mirrors
+`analysis/bank-statement.ts` exactly. Branch `audit-postmerge-phase3-invoice-lifecycle` (suite **2495 passed
+/ 39 skipped**, typecheck + build green). The design record is **§8 "Invoice reuse / replace / staleness —
+parity with the bank path"**; resolve a `full-audit-2026-06-29-postmerge F5` code comment through this ledger.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F5** (Med, data-integrity) | 3 | **fixed** — the invoice analysis handler re-extracted + INSERTed a fresh `invoices` row on every question (silent content-table bloat; a deterministic re-extraction producing identical rows, N questions → N invoices + N×line-items). Now mirrors the bank reuse gate: `invoices` gained an additive nullable `extractor_version` column (`db.ts`, copy of the `bank_statements` migration); `runInvoiceExtraction` stamps `INVOICE_EXTRACTOR_VERSION` (`tools/invoice.ts`) and accepts `replaceExisting`; the handler **REUSES** `latestInvoiceId` when present and **not** `isInvoiceStale`, else re-extracts with `replaceExisting: true` — which DELETEs the prior invoice + line items (FK order, the shared `deleteInvoicesForDocument`) **inside** the persist `BEGIN/COMMIT` before the INSERT (atomic swap). `purgeSkillDataForDocument`'s ordered delete is unchanged (same helper) | arch §8 (invoice reuse/replace/staleness parity); arch §27 (F5 row) |
+
+**Posture held (Phase 3):** offline / no telemetry / no new network egress; the **content class** (extracted
+invoice figures) is never logged/audited/exported (`extractor_version` is a provenance int, content-class
+adjacent — never surfaced). The schema change is a **single additive nullable column** added through the
+existing idempotent `ensureColumn` mechanism: an old on-disk workspace opens cleanly (pre-existing rows are
+NULL → stale → re-extracted on next reuse), and the bank table is untouched. `node:sqlite` is synchronous, so
+the `replaceExisting` delete-then-insert stays inside one `BEGIN/COMMIT` with no await between. Every fix is
+**test-first** (red on current code → green after): `skills-analysis-invoice.test.ts` reproduces the bloat (N
+questions persisted N invoices) and now asserts exactly one invoice + one line-item set survive, a fresh
+invoice is reused (same id, no duplicate), and a version-NULL invoice is detected stale → re-extracted +
+replaced in place at the current version (the tampered figure is gone). **Open (later phases):** F11–F19
+RAG/security/concurrency (Phase 4/8), F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1–T9
+test seams (Phase 5).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

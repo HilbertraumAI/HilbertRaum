@@ -407,11 +407,13 @@ function deleteBankStatementsForDocument(db: Db, documentId: string): void {
 
 /**
  * Delete every `invoices` row for a document plus its line items in FK order. Mirrors
- * `deleteBankStatementsForDocument` for the second Tier-2 content domain (the invoice path has no
- * re-extract "replace" today, but document teardown needs the same authoritative ordered delete).
- * Runs inside the caller's transaction.
+ * `deleteBankStatementsForDocument` for the second Tier-2 content domain. Used by document teardown
+ * (`purgeSkillDataForDocument`) AND by the invoice re-extraction "replace" half (F5 — `invoice-run.ts`
+ * `runInvoiceExtraction` with `replaceExisting`, the parity with the bank path). Exported so the single
+ * authoritative ordered delete is shared by both call sites — never copied. Runs inside the caller's
+ * transaction.
  */
-function deleteInvoicesForDocument(db: Db, documentId: string): void {
+export function deleteInvoicesForDocument(db: Db, documentId: string): void {
   db.prepare(
     `DELETE FROM invoice_line_items WHERE invoice_id IN (
        SELECT id FROM invoices WHERE document_id = ?)`
