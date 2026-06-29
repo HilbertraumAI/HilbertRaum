@@ -9,7 +9,7 @@ import {
 } from '../../shared/types'
 import {
   appendMessage,
-  deleteLastAssistantMessage,
+  hasRegenerableAssistantReply,
   listMessages,
   maybeSetTitleFromFirstMessage
 } from '../services/chat'
@@ -26,7 +26,7 @@ import { routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
-import { assertChatStreamReady, withChatStream } from './chat-stream'
+import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
 import type { Db } from '../services/db'
 
 // The indexed, answerable documents WITHIN a resolved scope (id + title only — no vectors),
@@ -152,9 +152,15 @@ export function registerRagIpc(ctx: AppContext): void {
       // regenerate): drop the previous assistant reply and RE-USE the existing last user turn as the
       // question — never append a duplicate user row. The renderer passes `skillInstallId: null` to
       // re-run skill-free; with no prior assistant reply there is nothing to regenerate.
+      const isRegenerate = regenerate === true
       let text: string
-      if (regenerate === true) {
-        if (!deleteLastAssistantMessage(ctx.db, conversationId)) {
+      if (isRegenerate) {
+        // Only CHECK (read-only) that a prior assistant reply exists, then recover the last USER
+        // turn as the question. The DESTRUCTIVE delete is deferred into each withChatStream runFn
+        // below via withRegenerateGuard (F2): committing it here, before the slot was claimed, lost
+        // the prior answer on a non-abort failure. Finding the last user turn does NOT require
+        // deleting the assistant reply first — the reverse-find skips the assistant row regardless.
+        if (!hasRegenerableAssistantReply(ctx.db, conversationId)) {
           throw new Error(tMain('main.chat.nothingToRegenerate'))
         }
         const history = listMessages(ctx.db, conversationId)
@@ -218,7 +224,9 @@ export function registerRagIpc(ctx: AppContext): void {
             event,
             conversationId,
             'Document analysis refused',
-            async (_signal, sendToken): Promise<Message> => {
+            // F2: on regenerate the destructive delete runs inside the runFn (slot held) and is
+            // restored on a non-abort failure — symmetric with the chat channel.
+            withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (_signal, sendToken): Promise<Message> => {
               sendToken(refusal)
               // Honest coverage on a refusal: NULL (omitted) — we make NO breadth claim. Stamp the
               // skill (A1) so the re-routed turn still carries its glyph + auto-fire provenance.
@@ -229,7 +237,7 @@ export function registerRagIpc(ctx: AppContext): void {
                 skillId: turnSkill.installId,
                 autoFired: turnSkill.autoFired === true
               })
-            },
+            }),
             (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
           )
         }
@@ -247,7 +255,7 @@ export function registerRagIpc(ctx: AppContext): void {
               event,
               conversationId,
               'Document answer failed',
-              (signal, sendToken, _sendReasoning, sendCompaction) =>
+              withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
                 generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
                   signal,
                   onCompactionStart: sendCompaction,
@@ -258,7 +266,7 @@ export function registerRagIpc(ctx: AppContext): void {
                   skill: turnSkill,
                   wholeDocument: { documentId },
                   onToken: sendToken
-                }),
+                })),
               (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
             )
           }
@@ -278,7 +286,7 @@ export function registerRagIpc(ctx: AppContext): void {
               event,
               conversationId,
               'Document answer failed',
-              (signal, sendToken, _sendReasoning, sendCompaction) =>
+              withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
                 generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
                   signal,
                   onCompactionStart: sendCompaction,
@@ -287,7 +295,7 @@ export function registerRagIpc(ctx: AppContext): void {
                   skill: turnSkill,
                   wholeDocumentCompare: { documentIds },
                   onToken: sendToken
-                }),
+                })),
               (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
             )
           }
@@ -304,7 +312,7 @@ export function registerRagIpc(ctx: AppContext): void {
             event,
             conversationId,
             'Document analysis failed',
-            async (signal, sendToken): Promise<Message> => {
+            withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken): Promise<Message> => {
               const result = await runHandler({
                 db: ctx.db,
                 question: text,
@@ -329,7 +337,7 @@ export function registerRagIpc(ctx: AppContext): void {
                 skillId: turnSkill.installId,
                 autoFired: turnSkill.autoFired === true
               })
-            },
+            }),
             (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
           )
         }
@@ -354,7 +362,7 @@ export function registerRagIpc(ctx: AppContext): void {
           event,
           conversationId,
           'Document listing failed',
-          async (_signal, sendToken): Promise<Message> => {
+          withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (_signal, sendToken): Promise<Message> => {
             // 0 model calls: emit the deterministic listing as one chunk, then persist it.
             sendToken(answer)
             return appendMessage(ctx.db, {
@@ -362,7 +370,7 @@ export function registerRagIpc(ctx: AppContext): void {
               role: 'assistant',
               content: answer
             })
-          },
+          }),
           // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
           // though we make no model call (keeps the single locked contract).
           (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
@@ -373,7 +381,8 @@ export function registerRagIpc(ctx: AppContext): void {
         event,
         conversationId,
         'Document answer failed',
-        (signal, sendToken, _sendReasoning, sendCompaction) =>
+        // F2: defer the regenerate delete into the runFn (slot held) + restore on a non-abort failure.
+        withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
           generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
             signal,
             // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);
@@ -390,7 +399,7 @@ export function registerRagIpc(ctx: AppContext): void {
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,
             onToken: sendToken
-          }),
+          })),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )
     }

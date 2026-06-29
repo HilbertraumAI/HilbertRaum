@@ -208,8 +208,11 @@ password recovery — are documented in
 - `getSettings` does not type-guard stored JSON values (the privacy-critical network path is
   double-gated by the policy AND).
 - `expandPaths` follows directory symlinks during import expansion.
-- Sidecar port selection has a small TOCTOU window between `findFreePort()` and the spawn (no
-  retry-on-bind-failure); the startup error is diagnosable via the captured stderr tail.
+- Sidecar port selection has a small TOCTOU window between `findFreePort()` and the spawn.
+  `LlamaServer.start` retries a bind-class immediate exit ONCE on a fresh port (REL-1), and a
+  transient bind race no longer arms the embedder/reranker start-latch (F4/F7) — so a single port
+  collision self-heals; a losing-twice race fails just that one call (the next retries). The startup
+  error is diagnosable via the captured stderr tail.
 - The shell scripts re-implement logic whose canonical source is TypeScript (`drive.ts`,
   `assets.ts`, `commercial-drive.ts`, `launcher.ts`). Parity is maintained by convention + review,
   not code generation — see the rule in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
@@ -245,6 +248,18 @@ password recovery — are documented in
   budgets (the tuning levers); the reranker stays an opt-in (provision-the-GGUF) feature, never
   bundled by default. The `HILBERTRAUM_RAG_QUALITY` run is the evidence it earns the cost
   (rag-design §12.3).
+- **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
+  race no longer arms it (full-audit-2026-06-29-postmerge F4/F7; arch GPU record §5.5b).** Each
+  sidecar latches a failed start so it doesn't re-await the full health timeout on every call. That
+  latch is meant for a corrupt/incompatible GGUF; it previously also armed for a transient
+  port-bind race (the bind retry is bounded to ONE attempt, so a near-simultaneous chat + embedder +
+  reranker + vision startup can lose the port twice). That **silently disabled all imports** (the
+  embedder has no graceful degradation) / **all reranking** (a silent fall-back to fused order that
+  even survived `suspend()`) for the session until lock/unlock. A bind-class start error is now
+  excluded from the latch (`isBindRaceError`), so the next `embed()`/`rerank()` re-attempts on a
+  fresh port. Residual: a GENUINE load fault still latches — for the embedder it clears on a
+  workspace lock/unlock (replace the weight file and retry); for the reranker it persists for the
+  session (reranking stays off, retrieval keeps the fused order) by design.
 - **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
   chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by
   the 1 000-chunk/file cap; encrypted at rest with the same DB file.

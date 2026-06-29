@@ -1,5 +1,5 @@
 import type { Reranker, RerankedHit, RerankOptions } from './index'
-import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
+import { LlamaServer, combineSignals, isBindRaceError, type LlamaServerOptions } from '../runtime/sidecar'
 import { maxInputApproxTokens } from '../runtime/context-budget'
 import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
 
@@ -80,10 +80,13 @@ export class LlamaReranker implements Reranker {
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
   /**
-   * Failed-start latch: a sidecar that could not start (e.g. an
+   * Failed-start latch: a sidecar that could not start for a PERMANENT fault (e.g. an
    * incompatible GGUF quantization) must not be re-spawned and re-awaited for
    * the full health timeout on EVERY question. First failure disables this instance
-   * for the session; rerank() then fails fast and retrieval keeps the fused order.
+   * for the session; rerank() then fails fast and retrieval keeps the fused order. A
+   * TRANSIENT port-bind race does NOT arm it (F7 — see `ensureStarted`'s `.catch`): the latch
+   * SURVIVES `suspend()` (unlike the embedder's), so latching a race would silently disable
+   * reranking for the whole session — leaving it null lets the next rerank() retry on a fresh port.
    */
   private startFailed: Error | null = null
 
@@ -150,8 +153,15 @@ export class LlamaReranker implements Reranker {
           this.server = server
         })
         .catch((err) => {
-          this.startFailed = err instanceof Error ? err : new Error(String(err))
-          throw this.startFailed
+          const error = err instanceof Error ? err : new Error(String(err))
+          // F7 (post-merge audit): a TRANSIENT port-bind race must NOT arm the latch (same fix as
+          // the embedder, F4). This latch is more persistent than the embedder's — `suspend()`
+          // KEEPS it (a bad GGUF won't load after unlock either) — so arming it for a race killed
+          // reranking for the whole session (a silent quality regression: retrieval falls back to
+          // fused order, rag/index.ts). Forgiving the race makes the keep-on-suspend policy correct:
+          // only a genuine load fault persists. Leave it null so the next rerank() re-attempts.
+          if (!isBindRaceError(error.message)) this.startFailed = error
+          throw error
         })
         .finally(() => {
           this.starting = null
@@ -223,8 +233,10 @@ export class LlamaReranker implements Reranker {
 
   /**
    * Kill the sidecar but allow a lazy restart on the next `rerank()` — used on
-   * workspace lock, like the E5 embedder's `suspend()`. The failed-start latch survives
-   * a suspend: a GGUF the server could not load will not load any better after unlock.
+   * workspace lock, like the E5 embedder's `suspend()`. A PERMANENT failed-start latch survives
+   * a suspend: a GGUF the server could not load will not load any better after unlock. A transient
+   * bind race never armed the latch (F7), so a port race no longer wrongly disables reranking past
+   * a lock/unlock — only a genuine load fault persists.
    */
   async suspend(): Promise<void> {
     await this.teardown()

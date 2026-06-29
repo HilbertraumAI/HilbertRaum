@@ -663,24 +663,123 @@ export function setConversationDefaultSkill(
 }
 
 /**
- * Remove the conversation's last message IF it is an assistant turn (used by
- * "regenerate"). Returns true if one was deleted.
+ * A snapshot of a deleted message, sufficient to re-insert it byte-faithfully via
+ * `restoreMessage`. Powers the regenerate data-loss guard (F2, post-merge audit): the
+ * destructive regenerate delete runs only after the stream slot is held, and the prior reply
+ * is restored from this snapshot if generation then fails for a non-abort reason — so a failed
+ * regenerate never leaves the turn answer-less.
+ */
+export interface DeletedMessage {
+  readonly id: string
+  readonly conversationId: string
+  readonly role: string
+  readonly content: string
+  readonly createdAt: string
+  readonly tokenCount: number | null
+  readonly citationsJson: string | null
+  readonly skillId: string | null
+  readonly autoFired: number | null
+  readonly coverageJson: string | null
+  readonly kind: string | null
+  readonly coversThroughRowid: number | null
+}
+
+interface DeletedMessageRow {
+  id: string
+  conversation_id: string
+  role: string
+  content: string
+  created_at: string
+  token_count: number | null
+  citations_json: string | null
+  skill_id: string | null
+  auto_fired: number | null
+  coverage_json: string | null
+  kind: string | null
+  covers_through_rowid: number | null
+}
+
+/**
+ * Read-only precondition for "regenerate": is the conversation's last message an assistant turn
+ * (so there is a prior reply to drop and re-stream)? Mirrors `deleteLastAssistantMessage`'s
+ * last-message-must-be-assistant rule so the pre-stream "nothing to regenerate" bail and the
+ * in-stream delete (F2) agree. Non-destructive — safe to call before the stream slot is held.
+ */
+export function hasRegenerableAssistantReply(db: Db, conversationId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT role FROM messages WHERE conversation_id = ?
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`
+    )
+    .get(conversationId) as unknown as { role: string } | undefined
+  return row?.role === 'assistant'
+}
+
+/**
+ * Remove the conversation's last message IF it is an assistant turn (used by "regenerate") and
+ * return a snapshot `restoreMessage` can re-insert byte-faithfully; returns null when the last
+ * message is not an assistant turn (nothing deleted).
  *
  * Deliberately scoped to the LAST message, not the last *assistant* message: after
  * a failed generation the conversation ends in a user turn — deleting the most recent
  * assistant message would then permanently destroy the answer to a *previous* question.
  * In that case regenerate just re-streams from history without deleting anything.
  */
-export function deleteLastAssistantMessage(db: Db, conversationId: string): boolean {
+export function deleteLastAssistantMessage(db: Db, conversationId: string): DeletedMessage | null {
   const row = db
     .prepare(
-      `SELECT id, role FROM messages WHERE conversation_id = ?
+      `SELECT id, conversation_id, role, content, created_at, token_count, citations_json,
+              skill_id, auto_fired, coverage_json, kind, covers_through_rowid
+       FROM messages WHERE conversation_id = ?
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
-    .get(conversationId) as unknown as { id: string; role: string } | undefined
-  if (!row || row.role !== 'assistant') return false
+    .get(conversationId) as unknown as DeletedMessageRow | undefined
+  if (!row || row.role !== 'assistant') return null
   db.prepare('DELETE FROM messages WHERE id = ?').run(row.id)
-  return true
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    role: row.role,
+    content: row.content,
+    createdAt: row.created_at,
+    tokenCount: row.token_count,
+    citationsJson: row.citations_json,
+    skillId: row.skill_id,
+    autoFired: row.auto_fired,
+    coverageJson: row.coverage_json,
+    kind: row.kind,
+    coversThroughRowid: row.covers_through_rowid
+  }
+}
+
+/**
+ * Re-insert a previously-deleted message exactly (same id, timestamp, citations, coverage, skill
+ * stamp). Restores a regenerate's prior reply after a non-abort generation failure (F2). The
+ * row keeps its original `created_at`, so it sorts back to the tail of the transcript; the FTS
+ * triggers re-index it on insert. A fresh rowid is assigned (rowid is identity-free here — no
+ * checkpoint coverage points at a tail assistant reply).
+ */
+export function restoreMessage(db: Db, m: DeletedMessage): void {
+  prepareCached(
+    db,
+    `INSERT INTO messages
+       (id, conversation_id, role, content, created_at, token_count, citations_json,
+        skill_id, auto_fired, coverage_json, kind, covers_through_rowid)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    m.id,
+    m.conversationId,
+    m.role,
+    m.content,
+    m.createdAt,
+    m.tokenCount,
+    m.citationsJson,
+    m.skillId,
+    m.autoFired,
+    m.coverageJson,
+    m.kind,
+    m.coversThroughRowid
+  )
 }
 
 /**

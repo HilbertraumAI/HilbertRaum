@@ -41,9 +41,9 @@ but wasn't applied here."
 | # | Finding | Sev | Conf | Why it matters |
 |---|---------|-----|------|----------------|
 | **F1** ✅ | Unmatched amount column → running **balance read as the transaction amount** | **High** | High | Confidently-wrong money — the app's cardinal harm. Reachable on whole-euro / single-decimal / pasted-CSV rows; **worst on the invoice path** (no geometry backstop). **REMEDIATED (Phase 1).** |
-| **F2** | `regenerate` **deletes the prior assistant reply (committed) before** the stream slot is claimed | Medium | High | A non-abort failure (context-exceeded HTTP 400, slot/sidecar fault) destroys the previous answer with nothing in its place. |
+| **F2** ✅ | `regenerate` **deletes the prior assistant reply (committed) before** the stream slot is claimed | Medium | High | A non-abort failure (context-exceeded HTTP 400, slot/sidecar fault) destroys the previous answer with nothing in its place. **REMEDIATED (Phase 2).** |
 | **F3** | Invoice line-item **currency detected from the whole line** (BL-2 fix never applied to invoices) | Medium | High | Wrong per-line currency + mixed-currency totals reconcile against a meaningless cross-currency sum (no single-currency guard). |
-| **F4** | Embedder **`startFailed` latch armed for a transient bind-race** | Medium | High | A double-unlucky startup port race **silently disables all document indexing** for the session until lock/unlock. |
+| **F4** ✅ | Embedder **`startFailed` latch armed for a transient bind-race** | Medium | High | A double-unlucky startup port race **silently disables all document indexing** for the session until lock/unlock. **REMEDIATED (Phase 2).** |
 | **F5** | Invoice extraction **re-inserts a fresh invoice + line items on every analysis question** | Medium | High | Unbounded growth of the content-class tables; no reuse/replace/staleness (bank path has all three). |
 
 ### Biggest opportunities for improvement
@@ -133,6 +133,13 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   with the corrected rule + chosen behavior; record in architecture.md §8 + a new §-ledger entry.
 
 ### F2 — `regenerate` deletes the prior assistant reply before the stream slot is claimed → data loss on a non-abort failure
+> **✅ REMEDIATED — Phase 2 (branch `audit-postmerge-phase2-runtime-reliability`).** The IPC layer now does
+> only the read-only `hasRegenerableAssistantReply` precondition (the unchanged "nothing to regenerate" bail)
+> BEFORE the stream; the destructive delete runs INSIDE `withChatStream`'s `runFn` via `withRegenerateGuard`
+> (`ipc/chat-stream.ts`) — slot held + controller registered — and the snapshot is re-inserted byte-faithfully
+> (`restoreMessage`) on a non-abort failure. A user Stop keeps the delete. Applied symmetrically to BOTH the
+> chat and RAG channels. Tests: `chat-ipc.test.ts`, `rag-regenerate-ipc.test.ts`, `chat.test.ts` (round-trip).
+> Disposition: architecture.md §28 + "Chat & streaming".
 - **Category:** Data-integrity / Concurrency
 - **Severity:** Medium · **Confidence:** High
 - **Location:** `apps/desktop/src/main/ipc/registerChatIpc.ts:239` (the committed DELETE) vs `:269`
@@ -198,6 +205,12 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   bank path.
 
 ### F4 — Embedder's `startFailed` latch is armed for a transient bind-race → all imports fail until lock/unlock
+> **✅ REMEDIATED — Phase 2 (branch `audit-postmerge-phase2-runtime-reliability`).** `e5.ts`'s start `.catch`
+> now skips arming `startFailed` when `isBindRaceError(message)` (reusing the REL-1 classifier — the retry and
+> the latch agree), so a transient double-bind-race leaves the latch null and the next `embed()` re-attempts on
+> a fresh port. A genuine load fault still latches (and still clears on `suspend()`). Test:
+> `e5-embedder.test.ts` (double-bind-race at the real spawn/health seam). Disposition: architecture.md §28 +
+> GPU record §5.5b; known-limitations (embedder latch).
 - **Category:** Reliability
 - **Severity:** Medium · **Confidence:** High
 - **Location:** `apps/desktop/src/main/services/embeddings/e5.ts:150-153` (the `.catch` arms
@@ -279,6 +292,11 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** Extend the known-limitations grouping bullet to name the invoice/no-geometry path.
 
 ### F7 — Reranker's `startFailed` latch survives `suspend()` → a transient bind-race kills reranking for the whole session
+> **✅ REMEDIATED — Phase 2 (branch `audit-postmerge-phase2-runtime-reliability`).** Same `isBindRaceError`
+> exclusion applied to `reranker/llama.ts`'s start `.catch`, which makes the deliberate keep-the-latch-across-
+> `suspend()` policy correct again (only a genuine load fault persists; a port race is forgiven and retried).
+> Tests: `reranker.test.ts` (bind-race forgiven + survives suspend; a genuine fault still persists across
+> suspend). Disposition: architecture.md §28 + GPU record §5.5b; known-limitations (reranker latch).
 - **Category:** Reliability
 - **Severity:** Low · **Confidence:** High
 - **Location:** `apps/desktop/src/main/services/reranker/llama.ts:152-154` (arms on any error) and
@@ -317,6 +335,10 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** known-limitations invoice line-parser bullet.
 
 ### F9 — Compaction summarizer failure is swallowed with no log → real bugs masquerade as "below threshold"
+> **✅ REMEDIATED — Phase 2 (branch `audit-postmerge-phase2-runtime-reliability`).** `chat/compaction.ts`'s
+> empty `catch {}` now `log.warn`s the NON-abort case (`conversationId` + the error message — no chat content)
+> while keeping the L1 fallback; an `AbortError` (user Stop) still does not log. Test: `chat-compaction.test.ts`
+> (non-abort throw logs warn; abort stays silent). Disposition: architecture.md §28.
 - **Category:** Error-handling
 - **Severity:** Low · **Confidence:** High
 - **Location:** `apps/desktop/src/main/services/chat/compaction.ts:128-134` (empty `catch {}`)
@@ -713,7 +735,12 @@ current behavior is load-bearing (financial parsing especially).
 - **Risk/rollback:** parser changes are behavior-sensitive — the characterization-first ordering is
   the safety net; each fix is one commit, revertable independently.
 
-### Phase 2 — Chat regenerate data-loss + sidecar bind-race reliability
+### Phase 2 — Chat regenerate data-loss + sidecar bind-race reliability — ✅ DONE
+> **✅ COMPLETE (branch `audit-postmerge-phase2-runtime-reliability`).** F2/F4/F7/F9 all landed test-first
+> (red→green); suite **2492 passed / 39 skipped**, typecheck + build green. No schema/IPC-channel/audit-payload
+> change. F2 reuses the REL-3 slot semantics (delete deferred into `withChatStream`'s `runFn` + byte-faithful
+> restore on a non-abort failure, both channels); F4/F7 reuse the REL-1 `isBindRaceError` classifier in the
+> start-latch. Disposition: architecture.md §28 + "Chat & streaming" + GPU record §5.5b.
 - **Goal:** close F2, F4, F7, F9.
 - **Scope/files:** `ipc/registerChatIpc.ts`, `ipc/registerRagIpc.ts`, `services/chat.ts`,
   `embeddings/e5.ts`, `reranker/llama.ts`, `chat/compaction.ts`.

@@ -262,6 +262,79 @@ describe('LlamaReranker', () => {
     await reranker.stop()
   })
 
+  // F7 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch. The
+  // reranker's latch is more persistent than the embedder's — suspend() deliberately keeps it (a
+  // bad GGUF won't load after unlock either) — so arming it for a race killed reranking for the
+  // WHOLE session (a silent quality regression: rag/index.ts falls back to fused order). With the
+  // fix the latch stays null for a race, so the next rerank() retries AND it survives suspend.
+  it('does NOT latch a transient bind-race; rerank retries and stays available across suspend (F7)', async () => {
+    const calls: Array<{ args: string[] }> = []
+    let portFree = false
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+      child.stderr = new EventEmitter()
+      if (!portFree) {
+        // A port-bind race: stderr reports EADDRINUSE and the child exits before health.
+        queueMicrotask(() => {
+          child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
+          child.emit('exit', 1, null)
+        })
+      }
+      return child
+    }
+    // /health stays 503 while the port is contended so waitForHealthy observes the bind-race exit.
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: portFree, status: portFree ? 200 : 503 } as Response
+      if (u.endsWith('/v1/rerank')) {
+        return { ok: true, status: 200, json: async () => ({ results: [{ index: 0, relevance_score: 1 }] }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl })
+
+    // Doubly-unlucky startup: both the initial start and its single bind-retry lose the port.
+    await expect(reranker.rerank('q', ['a'])).rejects.toThrow(/address already in use/)
+    expect(calls.length).toBe(2)
+
+    // The latch must NOT arm for a transient race: a later rerank re-attempts a fresh start.
+    portFree = true
+    expect(await reranker.rerank('q', ['a'])).toHaveLength(1)
+    expect(calls.length).toBe(3) // re-spawned, not fast-failed on a cached error
+
+    // …and because a bind race never latched, reranking survives a suspend (workspace lock) — the
+    // suspend()-keeps-latch policy is now correct (it forgives a race, persists a genuine fault).
+    await reranker.suspend()
+    expect(await reranker.rerank('q', ['b'])).toHaveLength(1)
+    expect(calls.length).toBe(4)
+    await reranker.stop()
+  })
+
+  it('a GENUINE load-fault latch still survives suspend — only transient races are forgiven (F7)', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      queueMicrotask(() => child.emit('exit', 1, null)) // a generic crash (bad GGUF), NOT a bind race
+      return child
+    }
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl: (async () => {
+        throw new Error('connection refused')
+      }) as unknown as typeof fetch
+    })
+    await expect(reranker.rerank('q', ['a'])).rejects.toThrow()
+    expect(calls.length).toBe(1) // armed — no bind-retry for a non-race fault
+    // suspend() must NOT clear a genuine load fault: a bad GGUF won't load after unlock either.
+    await reranker.suspend()
+    await expect(reranker.rerank('q', ['a'])).rejects.toThrow()
+    expect(calls.length).toBe(1) // still latched — no re-spawn
+    await reranker.stop()
+  })
+
   it('stop() during the in-flight lazy start kills the sidecar and blocks restarts', async () => {
     const { spawn, child } = fakeSpawn()
     const health: { release: (() => void) | null } = { release: null }

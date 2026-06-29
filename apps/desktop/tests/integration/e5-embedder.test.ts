@@ -370,6 +370,53 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // F4 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch.
+  // LlamaServer.start retries a bind race only ONCE (REL-1); if the embedder loses the port
+  // twice during the near-simultaneous chat+embedder+reranker+vision startup, start() throws a
+  // bind-class error. The latch is for a PERMANENT fault (a bad GGUF) — arming it for a bind
+  // race silently disabled ALL imports for the session until lock/unlock. With the fix the
+  // latch stays null, so the next embed() re-attempts a fresh start on a new port.
+  it('does NOT latch a transient bind-race; a later embed retries on a fresh port (F4)', async () => {
+    const calls: Array<{ args: string[] }> = []
+    let portFree = false
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+      child.stderr = new EventEmitter()
+      if (!portFree) {
+        // A port-bind race: stderr reports EADDRINUSE and the child exits before health.
+        queueMicrotask(() => {
+          child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
+          child.emit('exit', 1, null)
+        })
+      }
+      return child
+    }
+    // /health stays unhealthy (503) while the port is contended, so waitForHealthy loops until it
+    // observes the bind-race exit (a 200 here would mask it). Once the port is free it serves ok.
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: portFree, status: portFree ? 200 : 503 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+
+    // The doubly-unlucky startup: BOTH the initial start and its single bind-retry lose the port.
+    await expect(embedder.embed(['a'])).rejects.toThrow(/address already in use/)
+    expect(calls.length).toBe(2) // one start + one bind-retry, both raced — NOT a permanent fault
+
+    // The latch must NOT be armed for a transient race: the next embed re-attempts a fresh start
+    // (it does not throw a cached error). The port is now free, so it starts and embeds.
+    portFree = true
+    const [v] = await embedder.embed(['b'])
+    expect(Array.from(v)).toEqual([1, 0])
+    expect(calls.length).toBe(3) // re-spawned a fresh start, rather than fast-failing on the latch
+    await embedder.stop()
+  })
+
   // L4: suspend() must clear the failed-start latch AFTER teardown, not before. If a
   // first-start is in flight when suspend() runs, teardown awaits it; should that start
   // then FAIL, it re-arms `startFailed`. Clearing the latch last guarantees a post-suspend

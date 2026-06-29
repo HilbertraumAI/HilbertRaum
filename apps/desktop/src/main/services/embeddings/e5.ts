@@ -1,5 +1,5 @@
 import type { Embedder, EmbedOptions } from './index'
-import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
+import { LlamaServer, combineSignals, isBindRaceError, type LlamaServerOptions } from '../runtime/sidecar'
 import { truncateToContext } from '../runtime/context-budget'
 
 // Real on-device embedder (spec §6, §9.2). Drops in behind the existing
@@ -88,12 +88,13 @@ export class E5Embedder implements Embedder {
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
   /**
-   * Failed-start latch (the LlamaReranker's pattern): a sidecar that could not start
-   * (e.g. a corrupt/incompatible GGUF) must not be re-spawned and re-awaited for the
-   * full health timeout on EVERY embed. Unlike the reranker's, this latch CLEARS on
-   * `suspend()` (workspace lock): the embedder has no graceful degradation — a latched
-   * failure blocks all imports — so the user must be able to replace the weight file
-   * and retry via lock/unlock without restarting the app.
+   * Failed-start latch (the LlamaReranker's pattern): a sidecar that could not start for a
+   * PERMANENT fault (e.g. a corrupt/incompatible GGUF) must not be re-spawned and re-awaited for
+   * the full health timeout on EVERY embed. A TRANSIENT port-bind race does NOT arm it (F4 — see
+   * `ensureStarted`'s `.catch`): leaving it null lets the next embed() re-attempt a fresh start.
+   * Unlike the reranker's, this latch CLEARS on `suspend()` (workspace lock): the embedder has no
+   * graceful degradation — a latched failure blocks all imports — so the user must be able to
+   * replace the weight file and retry via lock/unlock without restarting the app.
    */
   private startFailed: Error | null = null
 
@@ -148,8 +149,16 @@ export class E5Embedder implements Embedder {
           this.server = server
         })
         .catch((err) => {
-          this.startFailed = err instanceof Error ? err : new Error(String(err))
-          throw this.startFailed
+          const error = err instanceof Error ? err : new Error(String(err))
+          // F4 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch.
+          // LlamaServer.start retries a bind race only ONCE (REL-1); losing the port twice during
+          // the near-simultaneous chat+embedder+reranker+vision startup throws a bind-class error.
+          // The latch is for a PERMANENT fault (a bad/incompatible GGUF) — arming it for a race
+          // silently disabled ALL imports for the session (the embedder has no graceful
+          // degradation) until lock/unlock. Leave it null so the next embed() re-attempts a fresh
+          // start on a new port — mirroring the GPU ladder's transient treatment of the same class.
+          if (!isBindRaceError(error.message)) this.startFailed = error
+          throw error
         })
         .finally(() => {
           this.starting = null

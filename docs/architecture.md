@@ -776,6 +776,22 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   now *throws the mapped friendly message* (not a raw rethrow) on overflow, and `friendlyIpcError`
   strips any `WordError:` class-name prefix (not just `Error:`). Before this, the carefully-built
   friendly copy was dead for the chat/RAG path and users saw the raw `ChatRequestError: … HTTP 400`.
+- **Regenerate is delete-after-slot (F2, post-merge audit 2026-06-29).** "Regenerate" re-answers the
+  last user turn by dropping the previous assistant reply. The destructive delete must NOT commit
+  before the stream slot is claimed: `node:sqlite` is synchronous, so a pre-slot
+  `deleteLastAssistantMessage` was durable the instant it ran, and any non-abort failure between it
+  and the first persisted token — `acquireSlot` rejecting, a sidecar that died mid-session, or (most
+  reachably) an `exceed_context_size_error` HTTP 400 because regenerate replays the full history near
+  the window — left the turn **answer-less and irrecoverable**. The IPC layer now only does the
+  read-only `hasRegenerableAssistantReply` precondition (the unchanged "nothing to regenerate" bail)
+  **before** the stream; the delete itself runs **inside** `withChatStream`'s `runFn` via
+  `withRegenerateGuard` (`ipc/chat-stream.ts`) — after the slot is held + the controller registered —
+  and the snapshot it returns is **re-inserted byte-faithfully** (`restoreMessage`: same id, timestamp,
+  citations, coverage, skill stamp) if generation fails for a NON-abort reason. A user Stop (abort)
+  keeps the delete (the new partial/empty reply stands). Applied symmetrically to **both** channels —
+  `registerChatIpc` (`generateAssistantMessage`) and every `registerRagIpc` `withChatStream` site
+  (grounded / whole-doc / compare / exhaustive-run / listing / refusal). The slot/stream semantics are
+  otherwise identical; the only change is WHEN the regenerate delete runs.
 - **Streaming contract (LOCKED).** Main → renderer over per-conversation IPC event channels
   keyed by the conversation id: `chat:token:<id>` (one token per event), `chat:done:<id>`
   (the final assistant `Message`), `chat:error:<id>` (an error string) — helpers in
@@ -1464,7 +1480,9 @@ adds is the safety machinery:
   The E5 embedder carries the same failed-start latch, with one deliberate difference: its
   latch **clears on `suspend()`** — the embedder has no graceful degradation (a latched
   failure blocks all imports), so replacing a bad GGUF + lock/unlock must make imports
-  retryable without an app restart.
+  retryable without an app restart. A **transient port-bind race never arms either latch**
+  (F4/F7, `isBindRaceError` — see GPU record §5.5b): only a genuine load fault latches, so a
+  double-unlucky startup port race no longer silently disables imports / reranking for the session.
 - **Hybrid keyword retrieval (Phase 21)** — `chunks_fts` (FTS5, `text` + `chunk_id UNINDEXED`,
   trigger-synced from `chunks`, guarded migration + backfill in `db.ts`) gives `rag.retrieve` a
   BM25 keyword pass fused with the cosine pass by reciprocal rank (k = 60, `rag/hybrid.ts`).
@@ -1616,6 +1634,23 @@ surfaces; this covers the chat runtime AND the embedder/reranker/vision (which c
 directly and previously had no retry at all). (b) `LadderRuntime` no longer persists `gpuAutoDisabled`
 when a rung-1 failure message is a bind race rather than a device/driver/model fault — so one unlucky
 port collision can never disable GPU for the whole session. Only a real device failure auto-disables.
+
+**§5.5b Bind-race aware START-LATCH for the embedder + reranker (full-audit-2026-06-29-postmerge, F4/F7).**
+The bind retry above is bounded to ONE attempt, so during the documented near-simultaneous chat + embedder
++ reranker + vision startup a sidecar can still lose the port **twice** and have `start()` throw a
+bind-class error. The embedder (`embeddings/e5.ts`) and reranker (`reranker/llama.ts`) each carry a
+**failed-start latch** that fails fast (no health-timeout stall) on every subsequent call — intended for a
+PERMANENT fault (a corrupt/incompatible GGUF). The latch's `.catch` previously armed for **any** rejection,
+so a transient double-bind-race latched a permanent-looking failure: the embedder then **silently disabled
+ALL imports for the session** (it has no graceful degradation) until lock/unlock, and the reranker **disabled
+reranking for the whole session** (a silent quality regression — `rag/index.ts` falls back to fused order) and
+its latch even **survives `suspend()`**. Both `.catch`es now reuse the same `isBindRaceError` classifier as
+the retry (the retry and the latch must agree): a bind-class message leaves `startFailed` **null**, so the
+next `embed()`/`rerank()` re-attempts a fresh start on a new port. Only a genuine load fault latches — which
+makes the reranker's deliberate **keep-the-latch-across-`suspend()`** policy correct again (a bad GGUF won't
+load after unlock; a port race must not be remembered). The embedder additionally **clears** its latch on
+`suspend()` (its one deliberate difference — see "Models & runtime"), so a replaced weight file is retryable
+via lock/unlock.
 
 **§5.4 Where GPU state lives:**
 
@@ -4068,7 +4103,8 @@ started** — carried in the report.
 | F8 (Low) | 1 | **fixed** — the invoice `quantity` split now requires a unit token (a captured `QTY_TRAIL_RE` group) OR a corroborating unit-price column; `iPhone 15 1.799,00` keeps "iPhone 15", `Widget A 2 12,50 25,00` still reads qty 2. Metadata-only (lineTotal unaffected) | arch §8 (F8); known-limitations (qty bullet) |
 | T5 (test/invariant) | 1 | **pinned** — `parseAmount` rounds every figure to the nearest cent (`Math.round(\|value\|*100)`) so the integer-cent invariant holds by construction; a >2-dp `1.234,567` reads `1234.57` (normalised, not dropped). T4 (parens-negative) + T9 (negative line totals / Gutschrift/Rabatt) now pinned through the real scanner | arch §8 (T5); known-limitations (2-dp bullet) |
 | F10 (Low) | 1 | **acknowledged (no code change)** — the invoice path runs without geometry layout reconstruction (D58 is bank-only), so it is the most parse-fragile money path; Phase 1 prioritised its robustness (F1 right-side drop, F6 fusion drop) since it has no backstop, and the asymmetry is recorded | arch §8 (F1/F6); known-limitations (invoice geometry note) |
-| F2, F4, F5, F7, F9, F11–F19, F20–F24, D1–D8, T1–T9 | — | **not started** — reliability (F2 regenerate data-loss, F4/F7 sidecar bind-race latch, F5 invoice re-insert, F9 compaction log), RAG/security/concurrency (F11–F19), renderer a11y/lifecycle (F20–F24), docs (D1–D8), test seams (T1–T9); carried in the report's phased plan (Phases 2–8) | `audits/full-audit-2026-06-29-postmerge.md` |
+| F2, F4, F7, F9 | 2 | **fixed (Phase 2)** — chat-regenerate data-loss (F2) + embedder/reranker bind-race start-latch (F4/F7) + compaction-failure log (F9); see the **§28 ledger** | arch §28; arch "Chat & streaming"; GPU record §5.5b |
+| F5, F11–F19, F20–F24, D1–D8, T1–T9 | — | **not started** — F5 invoice re-insert (Phase 3), RAG/security/concurrency F11–F19 (Phase 4/8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7), test seams T1–T9 (Phase 5); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
 
 **Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
 class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
@@ -4077,6 +4113,37 @@ post-fix value → red on current code → green after the fix) through the real
 `parseLineItem`/`validateInvoiceTotals` entry points (TEST-N2 discipline: whole strings, never pre-isolated
 tokens). The normal 2-figure de-AT row is byte-identical; the HVB no-balance geometry case
 (`pdf-bank-layout.test.ts`) stays green (the F1 divergence exists to protect it).
+
+### §28 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 2 — chat-regenerate data-loss + sidecar bind-race reliability)
+
+**Phase 2** of the post-merge audit closes the reliability cluster — all four "apply the fix that already
+exists next door" findings: the regenerate path commits a destructive delete before the REL-3-protected slot
+is claimed (F2), and the embedder/reranker start-latches never received the REL-1 bind-race classifier
+(F4/F7), plus the silent compaction-failure swallow (F9). Branch `audit-postmerge-phase2-runtime-reliability`
+(suite **2492 passed / 39 skipped**, typecheck + build green). No schema/IPC-channel/audit-payload change.
+Design records: **"Chat & streaming" (regenerate is delete-after-slot)** + **GPU record §5.5b (bind-race aware
+start-latch)**; resolve a `full-audit-2026-06-29-postmerge <ID>` code comment through this ledger.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F2** (Med, data-loss) | 2 | **fixed** — regenerate dropped the prior assistant reply (committed; `node:sqlite` is synchronous) BEFORE the stream slot was claimed, so a non-abort failure (a context-exceeded 400, a dead sidecar, a rejected slot) left the turn answer-less. The IPC layer now does only the read-only `hasRegenerableAssistantReply` precondition before the stream; the delete runs INSIDE `withChatStream`'s `runFn` via `withRegenerateGuard` (slot held + controller registered) and the snapshot is **re-inserted byte-faithfully** (`restoreMessage`) on a non-abort failure. A user Stop keeps the delete. Applied to **both** channels (`registerChatIpc` + every `registerRagIpc` `withChatStream` site); slot/stream semantics otherwise identical | arch "Chat & streaming" (regenerate is delete-after-slot) |
+| **F4** (Med) | 2 | **fixed** — the embedder start-latch (`e5.ts`) armed for ANY rejection, so a transient double-bind-race (REL-1 retries only once) latched a permanent-looking failure and **silently disabled all imports** for the session until lock/unlock. The `.catch` now skips arming when `isBindRaceError(message)` — leaving `startFailed` null so the next `embed()` re-attempts on a fresh port. The latch still arms (and still clears on `suspend()`) for a genuine load fault | arch GPU record §5.5b; known-limitations (embedder latch) |
+| **F7** (Low) | 2 | **fixed** — same bind-race exclusion for the reranker (`reranker/llama.ts`). Its latch is more persistent (it deliberately SURVIVES `suspend()`), so latching a race disabled reranking for the whole session (a silent quality regression — retrieval falls back to fused order). Forgiving the race makes the keep-on-`suspend()` policy correct again: only a genuine load fault persists | arch GPU record §5.5b; known-limitations (reranker latch) |
+| **F9** (Low) | 2 | **fixed** — `chat/compaction.ts`'s `catch {}` around `summarizeRegion` was fully empty, so a repeatable summarizer BUG (not a user Stop) compacted never, silently, forever (offline/no-telemetry). The fallback to L1 is unchanged; the NON-abort case now `log.warn`s (`conversationId` + the error message — no chat content), an `AbortError` still does not | arch "Chat & streaming" (compaction) |
+
+**Posture held (Phase 2):** offline / no telemetry / no new network egress; the **content class** (chat
+text, document text, extracted figures) is never logged/audited/exported (F9's diagnostic carries only the
+conversation id + the underlying error message); no schema/IPC-channel/audit-payload change. The bind-race
+classifier is **reused, not re-invented** — the retry (§5.5) and the latch (§5.5b) share `isBindRaceError`, so
+they can't drift. Every fix is **test-first** (red on current code → green after): F2 drives the real chat +
+RAG IPC handlers (`chat-ipc.test.ts`, `rag-regenerate-ipc.test.ts`) with a runtime that 400s on a regenerate
+and asserts the prior reply survives + a service-level delete→restore round-trip (`chat.test.ts`); F4/F7
+inject a double-bind-race at the real spawn/health seam (`e5-embedder.test.ts`, `reranker.test.ts`) and assert
+the latch stays null + a later call retries (F7 also pins survives-`suspend` vs a genuine fault persisting);
+F9 spies `log.warn` on a non-abort summarizer throw and asserts the abort path stays silent
+(`chat-compaction.test.ts`). **Open (later phases):** F5 invoice re-insert (Phase 3), F11–F19 RAG/security/
+concurrency (Phase 4/8), F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1–T9 test seams
+(Phase 5).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

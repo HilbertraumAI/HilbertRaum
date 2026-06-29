@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,7 +31,12 @@ import {
   selfSummaryPrompt
 } from '../../src/main/services/chat/compaction'
 import { buildGroundedChatMessages, GROUNDED_SYSTEM_PROMPT } from '../../src/main/services/rag'
+import { log } from '../../src/main/services/logging'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 function freshDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-compaction-'))
@@ -208,6 +213,39 @@ describe('ensureCompacted — fallback safety (a failure never breaks the turn)'
     ac.abort()
     await ensureCompacted(db, rt, conv.id, 2000, { signal: ac.signal })
     expect(getLatestCheckpoint(db, conv.id)).toBeNull()
+  })
+
+  // F9 (post-merge audit): a NON-abort summarizer failure (a real bug — TypeError, malformed
+  // checkpoint) used to be swallowed by an empty `catch {}`. On an offline, no-telemetry app a
+  // repeatable summarizer bug then compacts NEVER, silently, forever — long-context quality
+  // degrades with zero diagnostic surface. The fallback to L1 stays; the non-abort case now logs.
+  it('logs a warning (and still falls back to L1) when the summarizer fails for a non-abort reason', async () => {
+    const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    appendTurns(db, conv.id, 14, 90)
+    const rt = scriptedRuntime({ window: 2000, failSummary: true })
+
+    await expect(ensureCompacted(db, rt, conv.id, 2000, {})).resolves.toBeUndefined()
+    expect(getLatestCheckpoint(db, conv.id)).toBeNull() // fallback intact — no checkpoint
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    const [message, meta] = warnSpy.mock.calls[0]
+    expect(message).toMatch(/compaction summary failed/i)
+    // The diagnostic carries the conversation id + the underlying error message (no chat content).
+    expect(meta).toMatchObject({ conversationId: conv.id, message: 'summary boom' })
+  })
+
+  it('does NOT log when the summary is abandoned by a user Stop (abort is expected, not a bug)', async () => {
+    const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    appendTurns(db, conv.id, 14, 90)
+    const rt = scriptedRuntime({ window: 2000 })
+    const ac = new AbortController()
+    ac.abort()
+    await ensureCompacted(db, rt, conv.id, 2000, { signal: ac.signal })
+    expect(getLatestCheckpoint(db, conv.id)).toBeNull()
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   it('generateAssistantMessage still answers when summarization fails (no error, no checkpoint)', async () => {

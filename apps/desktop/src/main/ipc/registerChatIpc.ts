@@ -15,10 +15,10 @@ import {
   appendMessage,
   createConversation,
   deleteConversation,
-  deleteLastAssistantMessage,
   exportTranscript,
   generateAssistantMessage,
   getConversation,
+  hasRegenerableAssistantReply,
   getConversationContextUsage,
   getConversationSummaryMarker,
   listConversations,
@@ -37,7 +37,7 @@ import type { DocumentInfo } from '../../shared/types'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
-import { assertChatStreamReady, withChatStream } from './chat-stream'
+import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
 import { saveTextExport } from './save-export'
 
 // IPC for conversation CRUD + streaming chat (spec §9.1, §7.6).
@@ -233,10 +233,13 @@ export function registerChatIpc(ctx: AppContext): void {
 
       const regenerate = options?.regenerate === true
       if (regenerate) {
-        // Re-answer the last user turn: drop the previous assistant reply, keep history.
-        // With no prior assistant reply there is nothing to regenerate — bail rather than
-        // re-prompting on stale context.
-        if (!deleteLastAssistantMessage(ctx.db, conversationId)) {
+        // Re-answer the last user turn: the previous assistant reply is dropped, history kept.
+        // Only CHECK here (read-only) that a prior reply exists — with none there is nothing to
+        // regenerate, so bail early with no stream churn. The DESTRUCTIVE delete is deferred into
+        // withChatStream's runFn via withRegenerateGuard (F2): committing it here, before the slot
+        // is claimed, lost the prior answer when generation then failed for a non-abort reason
+        // (a context-exceeded 400, a dead sidecar) with nothing in its place.
+        if (!hasRegenerableAssistantReply(ctx.db, conversationId)) {
           throw new Error(tMain('main.chat.nothingToRegenerate'))
         }
       } else {
@@ -270,7 +273,9 @@ export function registerChatIpc(ctx: AppContext): void {
         event,
         conversationId,
         'Chat generation failed',
-        (signal, sendToken, sendReasoning, sendCompaction) =>
+        // F2: on regenerate the destructive delete runs INSIDE this runFn (slot held) and is
+        // restored on a non-abort failure, so a failed regenerate never leaves the turn answer-less.
+        withRegenerateGuard(ctx.db, conversationId, regenerate, (signal, sendToken, sendReasoning, sendCompaction) =>
           generateAssistantMessage(ctx.db, runtime, conversationId, {
             signal,
             mode,
@@ -281,7 +286,7 @@ export function registerChatIpc(ctx: AppContext): void {
             // Fires the one-shot ephemeral "summarizing…" notice when the compaction pre-pass
             // starts (§5.2); isDestroyed-guarded inside withChatStream, never buffered (R14).
             onCompactionStart: sendCompaction
-          }),
+          })),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )
     }

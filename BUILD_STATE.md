@@ -6,6 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 2 (CHAT-REGENERATE DATA-LOSS + SIDECAR BIND-RACE RELIABILITY;
+F2/F4/F7/F9) — branch `audit-postmerge-phase2-runtime-reliability`.** Suite **2492 passed / 39 skipped (2531
+collected)** (was 2483/39 after Phase 1 → **+9 tests**), typecheck clean, `npm run build` green. No
+schema/IPC-channel/audit-payload change. Theme: **"apply the fix that already exists next door"** — reuse the
+REL-3 abort-aware slot semantics (F2) and the REL-1 `isBindRaceError` classifier (F4/F7) the §26 round
+established. Every fix is **test-first (red on current code → green)**.
+- **F2 (MED, data-loss) — regenerate deleted the prior assistant reply BEFORE the stream slot was claimed.**
+  `node:sqlite` is synchronous, so the pre-slot `deleteLastAssistantMessage` was durable instantly; any
+  non-abort failure before the first token (a context-exceeded 400 — regenerate replays the full history near
+  the window — a dead sidecar, a rejected slot) left the turn **answer-less**. **Fix (decision):** the IPC
+  layer does only the read-only `hasRegenerableAssistantReply` precondition (the unchanged "nothing to
+  regenerate" bail) BEFORE the stream; the destructive delete runs **inside** `withChatStream`'s `runFn` via
+  the new `withRegenerateGuard` (`ipc/chat-stream.ts`) — slot held + controller registered — and the snapshot
+  it returns is **re-inserted byte-faithfully** (`restoreMessage`: same id, timestamp, citations, coverage,
+  skill stamp) on a non-abort failure. A user Stop (abort) keeps the delete. `deleteLastAssistantMessage` now
+  returns a `DeletedMessage | null` snapshot (was boolean). Applied symmetrically to **both** channels —
+  `registerChatIpc` + every `registerRagIpc` `withChatStream` site (grounded / whole-doc / compare /
+  exhaustive-run / listing / refusal). Slot/stream semantics otherwise identical (the only change is WHEN the
+  delete runs). RAG `text` recovery (the last user turn) does NOT need the assistant reply deleted first — the
+  reverse-find skips the assistant row.
+- **F4/F7 (MED/LOW) — embedder + reranker `startFailed` latch armed for a transient bind-race.** The bind
+  retry (REL-1) is bounded to ONE attempt, so a near-simultaneous chat+embedder+reranker+vision startup can
+  lose the port twice → `start()` throws bind-class. The `.catch` armed for ANY rejection, so the embedder
+  **silently disabled all imports** (no graceful degradation) until lock/unlock, and the reranker **disabled
+  reranking** for the session (silent fall-back to fused order, even surviving `suspend()`). **Fix:** both
+  `.catch`es skip arming `startFailed` when `isBindRaceError(message)` (the retry + the latch now share ONE
+  classifier — can't drift). Only a genuine load fault latches — which makes the reranker's deliberate
+  keep-the-latch-across-`suspend()` correct again. Embedder still clears its latch on `suspend()`.
+- **F9 (LOW) — compaction summarizer failure swallowed by an empty `catch {}`.** A repeatable summarizer BUG
+  compacted never, silently, forever (offline/no-telemetry). **Fix:** keep the L1 fallback; `log.warn` the
+  NON-abort case (`conversationId` + the error message — no chat content); an `AbortError` still doesn't log.
+- **Durable record:** architecture.md **§28 ledger** (dispositions F2/F4/F7/F9) + "Chat & streaming"
+  (regenerate is delete-after-slot) + GPU record **§5.5b** (bind-race aware start-latch); known-limitations
+  embedder/reranker latch bullet + the corrected TOCTOU bullet. The audit report marks F2/F4/F7/F9 remediated
+  + Phase 2 DONE.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase2-runtime-reliability`; do NOT auto-merge/push.**
+  Then Phase 3 (F5 invoice reuse/replace parity). Phases 4–8 (security F11–F19, renderer F20–F24, docs D1–D8,
+  test seams T1–T9) still open per the report's phased plan._
+
 _2026-06-29 — **Post-merge full audit — Phase 1 (MONEY-PARSER CORRECTNESS, the release-blocker class;
 F1/F3/F6/F8 + T5/T4/T9) — branch `audit-postmerge-phase1-money`.** Suite **2483 passed / 39 skipped (2522
 collected)** (was 2463/39 → **+20 tests**), typecheck clean, `npm run build` green. Parsing-only — no

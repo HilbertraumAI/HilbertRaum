@@ -54,6 +54,22 @@ function gatedRuntime(): { runtime: ModelRuntime; release: () => void; started: 
   return { runtime, release, started }
 }
 
+/** A runtime whose generation fails with a NON-abort error before any token — models the most
+ *  reachable regenerate failure: an `exceed_context_size_error` HTTP 400 because regenerate
+ *  replays the full history near the window. */
+function throwingRuntime(): ModelRuntime {
+  return {
+    modelId: 'throwing',
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+    // eslint-disable-next-line require-yield
+    async *chatStream(): AsyncGenerator<string> {
+      throw new Error('Chat request failed: HTTP 400 exceed_context_size_error')
+    }
+  }
+}
+
 function makeCtx(db: Db, runtime: ModelRuntime | null, unlocked = true): AppContext {
   return {
     db,
@@ -212,6 +228,52 @@ describe('registerChatIpc', () => {
     await expect(
       invoke(handlers, IPC.sendChatMessage, conv.id, '', { regenerate: true })
     ).rejects.toThrow(/Nothing to regenerate/)
+  })
+
+  // F2 (post-merge audit): the regenerate DELETE used to COMMIT before the stream slot was
+  // claimed, so a non-abort failure (a context-exceeded 400, a dead sidecar, a rejected slot)
+  // destroyed the prior answer with nothing in its place. The destructive delete is now deferred
+  // into the stream's runFn (slot held) and the prior reply is RESTORED on a non-abort failure.
+  it('regenerate whose generation fails restores the prior assistant reply — no answer-less turn (F2)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const prior = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the original answer' })
+    registerChatIpc(makeCtx(db, throwingRuntime()))
+
+    // The failing regenerate rejects (the renderer surfaces a toast)…
+    await expect(
+      invoke(handlers, IPC.sendChatMessage, conv.id, '', { regenerate: true })
+    ).rejects.toThrow(/HTTP 400|too large/i)
+
+    // …but the prior answer is NOT destroyed: the conversation still ends in the assistant reply,
+    // restored byte-faithfully (same id), not left answer-less.
+    const history = listMessages(db, conv.id)
+    expect(history.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(history.at(-1)?.content).toBe('the original answer')
+    expect(history.at(-1)?.id).toBe(prior.id)
+    // The in-flight registry is clean (the slot was claimed and released).
+    expect(inFlightStreams.has(conv.id)).toBe(false)
+  })
+
+  it('a successful regenerate still replaces the prior reply — the F2 guard does not block the happy path', async () => {
+    const db = freshDb()
+    const { runtime, release } = gatedRuntime()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const prior = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'old answer' })
+    registerChatIpc(makeCtx(db, runtime))
+
+    const event = makeEvent()
+    const p = invokeWithEvent(handlers, IPC.sendChatMessage, event, conv.id, '', { regenerate: true }) as Promise<unknown>
+    release()
+    const msg = (await p) as { id: string; content: string }
+
+    const history = listMessages(db, conv.id)
+    expect(history.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(history.at(-1)?.content).toBe('first second') // the freshly generated reply
+    expect(history.at(-1)?.id).toBe(msg.id)
+    expect(history.at(-1)?.id).not.toBe(prior.id) // the old reply is gone
   })
 
   it('deletes a conversation and its messages (chat and documents mode alike)', async () => {
