@@ -181,8 +181,10 @@ process on every start (architecture.md "In-app model downloader"):
    postures, so prepared drives stay download-disabled unless the drive builder edits
    `config/policy.json`. Policy only restricts, never expands.
 2. **User setting** — the spec §3.6 Settings checkbox ("Allow internet access for model
-   downloads and updates"), **default OFF**. While the workspace is locked the setting is
-   unreadable and treated as off.
+   downloads and updates"), **default ON** for a fresh DIY/developer install
+   (`DEFAULT_SETTINGS.allowNetwork: true`); the policy ceiling in gate 1 still wins, so a prepared
+   commercial drive stays download-disabled regardless of this toggle. While the workspace is
+   locked the setting is unreadable and treated as off.
 3. **Per-download confirmation** — a dialog showing size, license (+ `license_url` link), and the
    upstream URL. When `license_review.status != approved`, an explicit license-acknowledgement
    checkbox is additionally required (the in-app mirror of `--accept-license`).

@@ -138,14 +138,15 @@ can turn this off under **Settings → Load the selected model automatically**.
 > answers are simulated placeholders, not real AI responses — add a real model file for genuine
 > answers (see Troubleshooting).
 
-### Downloading a model (optional, off by default)
+### Downloading a model (optional)
 
 A model marked **Not downloaded** can be fetched from inside the app — for example the larger
 8B model after you upgrade to a 16 GB laptop. This is the **only** thing the app ever uses the
 internet for, and it never happens by itself:
 
-1. Open **Settings** and turn on **Allow internet access for model downloads and updates**
-   (it is off by default; the app is fully usable without it).
+1. Open **Settings** and make sure **Allow internet access for model downloads and updates**
+   is on (it is **on by default on a fresh install**, unless this drive's policy disables it —
+   common on prepared commercial drives; the app is fully usable without it either way).
 2. On **AI Model**, click **Download** on the model you want. A confirmation shows the size,
    the license (with a link), and the address the file comes from. If the model's license
    hasn't been pre-reviewed, you'll also tick a box accepting it.

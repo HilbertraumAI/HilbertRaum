@@ -16,7 +16,8 @@
   verify factual doc claims (commands, scripts, package names, env vars, folder structure, the
   `allowNetwork` default). No application code was modified and no code changes are recommended except
   where a doc disagrees with how the code actually behaves.
-- **Report status:** **Open** — findings recorded, none yet remediated.
+- **Report status:** **In progress** — Phase 1 remediated (DOC-001, DOC-006 fixed 2026-06-29).
+  Phases 2–3 still open.
 
 ## How to use this report
 
@@ -84,17 +85,17 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 | `CODE_OF_CONDUCT.md` | Contributor Covenant 2.1 | Good | Standard, internally consistent. |
 | `CLAUDE_HilbertRaum_MVP.md` | Frozen original spec (intent) | Good | Clearly banner-marked as frozen; deviations reconciled. |
 | `BUILD_STATE.md` | Live dev log of record | Needs update | ~9 broken links to deleted plan files (DOC-002). Otherwise the authoritative state file. |
-| `docs/architecture.md` | System design + audit design-record ledgers | Good | Current (2026-06-29); cross-refs valid. |
+| `docs/architecture.md` | System design + audit design-record ledgers | Good | Current (2026-06-29); cross-refs valid. Gate-2 "default off" line fixed to ON (DOC-001, found during Phase-1 fix). |
 | `docs/rag-design.md` | Retrieval pipeline design + records | Good | Current (2026-06-29). |
 | `docs/security-model.md` | Threat model, vault, offline guard, audit log | Good | Current (2026-06-29); matches SECURITY.md + code. |
 | `docs/design-guidelines.md` | Design system + UI design records | Needs update | Header "ADOPTED 2026-06-10" lags body (records to 2026-06-19) — DOC-005. Not in README index — DOC-004. |
 | `docs/known-limitations.md` | Consciously-accepted gaps | Good | Current (2026-06-29). |
-| `docs/user-guide.md` | End-user walkthrough | Contradictory | Last updated 2026-06-20. §5 vs §10 self-contradiction on network default (DOC-001). |
+| `docs/user-guide.md` | End-user walkthrough | Good | §5-vs-§10 network-default self-contradiction fixed (DOC-001); §5 now agrees with §10. |
 | `docs/packaging.md` | Portable build, sidecars, scripts, CI, manual gate | Good | Verified scripts, flags, b9585, CI section vs `ci.yml`. |
-| `docs/model-policy.md` | Manifest schema, catalog, license/runtime pinning | Contradictory | "User setting default OFF" disagrees with code + other docs (DOC-001). Otherwise accurate. |
+| `docs/model-policy.md` | Manifest schema, catalog, license/runtime pinning | Good | Gate-2 "default OFF" fixed to ON to match code + other docs (DOC-001). |
 | `docs/model-benchmarks.md` | Benchmark protocol + measured results | Good | Phase-29 record; historical counts (e.g. "10 catalog weights") are correctly phase-scoped. |
 | `docs/drive-layout.md` | On-drive layout + how the app finds data | Good | Last updated 2026-06-20; matches `drive.ts` layout. |
-| `docs/troubleshooting.md` | Common problems and fixes | Good | One soft network-default phrasing note (DOC-006, low confidence). |
+| `docs/troubleshooting.md` | Common problems and fixes | Good | DOC-006 network-default phrasing scoped to the model-download feature (fixed in Phase 1). |
 | `docs/benchmark.md` | In-app hardware-benchmark feature (Phase 7) | Good | Accurate, but not in README index + name-collides with `model-benchmarks.md` (DOC-004). |
 | `docs/big-slot-embeddings-plan.md` | The one sanctioned **open** plan (Phase 30) | Good | Reconfirmed open 2026-06-29; correctly exempt from the delete-when-done rule. |
 | `docs/design-review/skills-s12/README.md` | Deferred run-surface eyeball residual | Good | Honest "deferred, not faked" residual; intentional open item. |
@@ -103,22 +104,23 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 
 | ID | Title | Severity | Confidence | Category | Status | Affected document(s) | Phase |
 |---|---|---|---|---|---|---|---|
-| DOC-001 | Model-download default documented as OFF; code + other docs say ON | Medium | High | Accuracy / Consistency | Open | `docs/model-policy.md`, `docs/user-guide.md` | 1 |
+| DOC-001 | Model-download default documented as OFF; code + other docs say ON | Medium | High | Accuracy / Consistency | Fixed | `docs/model-policy.md`, `docs/user-guide.md`, `docs/architecture.md` | 1 |
 | DOC-002 | `BUILD_STATE.md` links to ~9 deleted `*-plan.md` files | Low | High | Navigation | Open | `BUILD_STATE.md` | 2 |
 | DOC-003 | PRIVACY.md circular "described under *Encryption* below" reference | Low | High | Clarity / Navigation | Open | `PRIVACY.md` | 2 |
 | DOC-004 | README doc index omits `benchmark.md` + `design-guidelines.md`; benchmark name collision | Low | Medium | Navigation / Completeness | Open | `README.md`, `docs/benchmark.md`, `docs/design-guidelines.md` | 3 |
 | DOC-005 | `design-guidelines.md` header date lags its body (~9 days) | Low | High | Accuracy / Staleness | Open | `docs/design-guidelines.md` | 3 |
-| DOC-006 | troubleshooting.md "network access is off by default" phrasing | Low | Low | Clarity | Open | `docs/troubleshooting.md` | 3 |
+| DOC-006 | troubleshooting.md "network access is off by default" phrasing | Low | Low | Clarity | Fixed | `docs/troubleshooting.md` | 1 (folded in) |
 
 ## Detailed findings
 
 ### DOC-001: Model-download user-setting default documented as OFF; code and other docs say ON
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29, Phase 1)
 - **Severity:** Medium
 - **Confidence:** High
 - **Category:** Accuracy / Consistency
-- **Affected document(s):** `docs/model-policy.md`, `docs/user-guide.md`
+- **Affected document(s):** `docs/model-policy.md`, `docs/user-guide.md`, `docs/architecture.md`
+  (the architecture.md occurrence was **not** in the original affected-doc list — see Fix note)
 - **Affected section(s):** `model-policy.md` → "The in-app downloader (Phase 18)" gate 2;
   `user-guide.md` → §5 "Downloading a model (optional, off by default)" (heading + body) vs §10
   "Privacy & offline".
@@ -157,6 +159,24 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
   `registerDownloadIpc.ts:16`'s "default off" comment should be corrected (code change, not part of
   this docs phase).
 - **Suggested phase:** 1
+- **Fix applied (2026-06-29):**
+  - `docs/model-policy.md` gate 2: "**default OFF**" → "**default ON** for a fresh DIY/developer
+    install (`DEFAULT_SETTINGS.allowNetwork: true`); the policy ceiling in gate 1 still wins, so a
+    prepared commercial drive stays download-disabled regardless of this toggle." The "locked
+    workspace reads as off" clause was preserved.
+  - `docs/user-guide.md §5`: heading "(optional, off by default)" → "(optional)"; step 1 body
+    changed from "turn on … (it is off by default …)" to "make sure … is on (it is **on by default
+    on a fresh install**, unless this drive's policy disables it — common on prepared commercial
+    drives …)". §5 now agrees with §10 (verified). §10 left unchanged (already correct).
+  - `docs/architecture.md` "In-app model downloader (Phase 18)" gate 2 (line ~1934): "the spec §3.6
+    checkbox, **default off**" → "**default on** for a fresh DIY/dev install
+    (`DEFAULT_SETTINGS.allowNetwork: true`); gate 1's policy ceiling still wins …". **This was a
+    fourth occurrence the audit's affected-doc list missed** — surfaced by the validation grep. It
+    directly contradicted architecture.md's own §-record note ("`settings.allowNetwork` now defaults
+    ON (2026-06-13)", line ~1958), confirming the gate-2 line was the stale one. Fixed under DOC-001
+    since it is the same contradiction and Phase-1 acceptance requires no doc saying "off by default".
+  - Code unchanged. `registerDownloadIpc.ts:16`'s stale "default off" comment remains a code-owner
+    follow-up (out of scope for docs).
 
 ### DOC-002: `BUILD_STATE.md` links to ~9 deleted plan files
 
@@ -278,7 +298,7 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 
 ### DOC-006: troubleshooting.md "network access is off by default" phrasing
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29, folded into Phase 1)
 - **Severity:** Low
 - **Confidence:** Low
 - **Category:** Clarity
@@ -303,6 +323,12 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 - **Documentation update notes:** Bundle with DOC-001 if convenient (same theme), or skip if the
   commercial-audience framing is judged sufficient.
 - **Suggested phase:** 3 (or fold into Phase 1 with DOC-001)
+- **Fix applied (2026-06-29):** Folded into Phase 1. `docs/troubleshooting.md` "Offline Mode is ON"
+  section — "It does not need the internet and **network access is off by default**." → "The core
+  app — chat, documents, search — never goes online; the only optional network feature, model/engine
+  downloads, is off on a prepared commercial drive (and always asks before any download otherwise)."
+  Removes the blanket "off by default" claim and scopes it to the download feature/posture, aligning
+  with DOC-001.
 
 ## Contradictions
 
@@ -311,6 +337,13 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 | 1 | `model-policy.md`, `user-guide.md §5` **vs** README, PRIVACY, security-model, architecture, `user-guide.md §10`, **and code** | "model-download user setting **default OFF**" / "off by default" vs "**on by default** on a fresh install" | **Code** (`DEFAULT_SETTINGS.allowNetwork: true`) + the majority of docs | Fix the two stale docs to "on by default for DIY/dev; off via policy on commercial drives" | DOC-001 |
 | 2 | `user-guide.md §5` **vs** `user-guide.md §10` | Same document states both "off by default" (§5) and "on by default on a fresh install" (§10) | §10 (matches code) | Correct §5 | DOC-001 |
 | 3 | `troubleshooting.md` **vs** PRIVACY/user-guide §10 (soft) | "network access is off by default" vs "on by default on a fresh install" | Context-dependent (commercial vs DIY) | Scope the phrasing to the download feature/posture | DOC-006 |
+
+> **Resolved 2026-06-29 (Phase 1):** Contradictions 1, 2, and 3 are all **fixed**. The
+> network-default wording now reads "on by default for a fresh DIY/dev install; off via policy on
+> prepared commercial drives" consistently across `model-policy.md`, `user-guide.md §5`/§10,
+> `architecture.md` gate 2, and `troubleshooting.md` — matching the code
+> (`DEFAULT_SETTINGS.allowNetwork: true`). A fourth occurrence in `architecture.md` gate 2 (not in
+> the original tables) was found and fixed during remediation; see DOC-001 Fix note.
 
 No contradictions were found among the large design docs (`architecture.md`, `rag-design.md`,
 `security-model.md`, `design-guidelines.md`, `known-limitations.md`), nor between them and the root
@@ -351,11 +384,13 @@ user-guide is intentional reinforcement, not drift — except where it has gone 
 
 ## Documentation remediation plan
 
-### Phase 1: Fix the model-download-default contradiction (DOC-001)
+### Phase 1: Fix the model-download-default contradiction (DOC-001) — ✅ COMPLETE (2026-06-29)
 
 - **Goal:** Make every doc agree with the code that the model-download user setting defaults **ON** for
   a fresh DIY/dev install (and **off via policy** on commercial drives).
-- **Findings included:** DOC-001 (and, if convenient, the DOC-006 phrasing).
+- **Findings included:** DOC-001 + DOC-006 (DOC-006 was folded in, as anticipated). **Also fixed a
+  fourth, previously-unlisted occurrence in `architecture.md` gate 2** (surfaced by the validation
+  grep; tracked under DOC-001).
 - **Documents affected:** `docs/model-policy.md` (downloader gate 2), `docs/user-guide.md` (§5 heading
   + body; verify §10 unchanged). Optionally `docs/troubleshooting.md` (DOC-006).
 - **Exact intended changes:**
@@ -409,16 +444,16 @@ user-guide is intentional reinforcement, not drift — except where it has gone 
 
 ## Recommended execution order
 
-1. **Phase 1 (DOC-001)** first — it is the only finding that disagrees with the code, it is
-   privacy-relevant, and it resolves a self-contradiction a user would actually hit. Highest value,
-   lowest risk.
+1. ~~**Phase 1 (DOC-001)** first~~ — ✅ **DONE (2026-06-29).** Resolved the only code-disagreeing
+   finding plus the user-guide self-contradiction; DOC-006 folded in; a fourth architecture.md
+   occurrence found and fixed.
 2. **Phase 2 (DOC-002, DOC-003)** next — mechanical link hygiene; clears the entire repo's broken-link
-   surface and one circular reference.
-3. **Phase 3 (DOC-004, DOC-005, DOC-006)** last — navigation/freshness polish; nice-to-have, no
-   correctness impact. DOC-006 may be folded into Phase 1 since it shares the network-default theme.
+   surface and one circular reference. **← recommended next.**
+3. **Phase 3 (DOC-004, DOC-005)** last — navigation/freshness polish; nice-to-have, no correctness
+   impact. (DOC-006 already done in Phase 1.)
 
 ## Remediation log
 
 | Date | Phase / finding | Files changed | Summary | Validation performed | Result | Follow-up needed |
 |---|---|---|---|---|---|---|
-| _(empty — no fixes applied yet)_ | | | | | | |
+| 2026-06-29 | Phase 1 — DOC-001 + DOC-006 | `docs/model-policy.md`, `docs/user-guide.md`, `docs/architecture.md`, `docs/troubleshooting.md`, `docs/audits/docs-audit.md` | Fixed the model-download user-setting default everywhere it was stale: model-policy gate 2 and architecture gate 2 "default OFF/off" → ON; user-guide §5 heading+body now matches §10 (no more self-contradiction); troubleshooting "network off by default" scoped to the download feature (DOC-006). All mirror code `DEFAULT_SETTINGS.allowNetwork: true` and the policy-AND-setting rule. | Verified code (`types.ts:251` `allowNetwork: true`); grepped `docs/` for "off by default" / "default OFF" / `allowNetwork` — remaining hits are legitimate (skills auto-fire toggle, prepared-drive policy deny, the report itself); re-read user-guide §5 vs §10 (now agree); confirmed architecture's own §-record note (line ~1958) corroborates ON. | **Fixed** (4 occurrences, incl. one architecture.md occurrence not in the original affected-doc list). | Code-owner: correct stale `registerDownloadIpc.ts:16` "default off" comment (out of docs scope). |

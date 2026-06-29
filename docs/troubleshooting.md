@@ -46,8 +46,10 @@ should not appear at all.
 ## "Offline Mode is ON — is something wrong?"
 
 **No. That is the intended state.** HilbertRaum runs the AI model on your laptop and
-keeps your data local. It does not need the internet and network access is off by default. You
-can confirm this in **Settings → Privacy & data**.
+keeps your data local. The core app — chat, documents, search — never goes online; the only
+optional network feature, model/engine downloads, is off on a prepared commercial drive (and
+always asks before any download otherwise). You can confirm the current state in
+**Settings → Privacy & data**.
 
 ---
 
