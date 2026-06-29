@@ -5,7 +5,7 @@ portable drive. No cloud, no telemetry, all user data local.
 
 ## Read these first, in order
 1. [`BUILD_STATE.md`](BUILD_STATE.md) — the live handoff/state file. **Always read first.** It says what is done, current decisions, data contracts, and the next actions.
-2. [`CLAUDE_HilbertRaum_MVP.md`](CLAUDE_HilbertRaum_MVP.md) — the original product/architecture spec (source of truth for *what* to build).
+2. [`CLAUDE_HilbertRaum_MVP.md`](CLAUDE_HilbertRaum_MVP.md) — the **frozen** original product/architecture spec (source of truth for *what* to build / intent). For the **as-built** system the topic docs below and `BUILD_STATE.md` supersede any specific that has since changed — see the banner at the top of that file.
 3. Topic docs under [`docs/`](docs/) (architecture, drive layout, packaging, model policy, …) as the task requires.
 
 ## Doc lifecycle rule

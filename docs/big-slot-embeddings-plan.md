@@ -1,6 +1,12 @@
 # Big Slot + Embeddings — plan (Phase 30)
 
-_Status: **WORKING PAPER — not started (created 2026-06-11).** Continues the model-catalog work:
+_Status: **WORKING PAPER — still open / not started (created 2026-06-11; reconfirmed open 2026-06-29).**
+Reconcile (2026-06-29): both tracks remain unstarted — the shipped catalog still defaults to the **E5**
+embedder (`multilingual-e5-small`, the only `model-manifests/embeddings/` entry) and none of the
+Track-A chat candidates (Gemma 4 26B-A4B, Mistral Small 3.2 24B, Granite 4.0 H-Small) or Track-B's
+Granite Embedding R2 have been added. Per the CLAUDE.md doc-lifecycle rule this is the one sanctioned
+standalone open plan (work still open) — nothing here is implemented yet, so there is nothing to fold
+into a topic-doc design record or delete. Continues the model-catalog work:
 the wave-1 catalog + benchmark (Phases 28–29) shipped and were condensed into
 [`model-benchmarks.md`](model-benchmarks.md) §7 (decision **D21** deferred
 this to Phase 30). Decision numbering continues the repo series after the document-task wave's

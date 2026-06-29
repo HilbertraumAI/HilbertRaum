@@ -2,6 +2,20 @@
 
 _Last updated: 2026-06-09_
 
+> **⚠️ Frozen original spec — read as intent, not as the as-built system.**
+> This is the project's **original** product/architecture spec (last substantive update 2026-06-09;
+> only the 2026-06-13 rebrand has touched it since). `CLAUDE.md` points here as the source of truth for
+> **what** to build — but the **as-built** system is described by the topic docs under [`docs/`](docs/)
+> and [`BUILD_STATE.md`](BUILD_STATE.md), which **supersede any specific here that has since changed.**
+> Known superseded specifics include: the dropped **Qwen3 1.7B** "chat small" model and the **F16**
+> (not Q8) embeddings — both already flagged in the inline "Deviations from this spec as built" note
+> below; the on-drive directory layout and the example macOS volume label (now `HILBERTRAUM`, not
+> `PRIVATE_AI_DRIVE`) per [`docs/drive-layout.md`](docs/drive-layout.md); **scanned-PDF OCR, which has
+> since shipped** ("Make searchable", Phase 38), reversing this spec's "OCR is not included in this Lite
+> MVP"; and several §20 "Open questions" now **decided** (Electron over Tauri, `node:sqlite` storage,
+> the E5 embedder, an encrypted workspace). When a detail here conflicts with a topic doc or
+> `BUILD_STATE.md`, **the topic doc wins.**
+
 This file is the working instruction document for building the **HilbertRaum** MVP with Claude Code. It is intentionally detailed so that implementation context is preserved across coding sessions.
 
 The project goal is to create an open-source local/offline AI application that can be installed on a user-owned USB-C SSD / NVMe drive and launched on a normal laptop. The commercial product will be a preconfigured drive sold to non-technical users, while advanced users can clone the GitHub repository and prepare their own drive.
