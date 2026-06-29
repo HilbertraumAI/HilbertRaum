@@ -346,11 +346,14 @@ MVP = **linear scan**: score every stored chunk vector by dot product against th
 Rows whose `dimensions` differ from the query (e.g. mid-migration) are skipped, not compared. The
 query is embedded with the **same** embedder, so a query equal to a chunk's text scores ≈ 1.0 and
 ranks first. The decoded vectors are held **process-resident** (`embeddings/resident-cache.ts`, perf
-audit Wave P4) so a query reads no `vector_blob` and re-decodes nothing — the cache invalidates on a
-cheap whole-table `(count, maxRowid)` signature + explicit hooks at the `embeddings` write sites, and
-is purged on workspace lock (vectors derive from chunk text). **Upgrade path** (still behind this same
-`search` signature, D15): an off-main-thread worker scan and/or an ANN index (sqlite-vec / HNSW) when a
-corpus outgrows the linear scan.
+audit Wave P4; maintained **incrementally** since PERF-1 / full-audit-2026-06-29 Phase 5) so a query
+reads no `vector_blob` and re-decodes nothing. The write-site hooks mark the cache dirty and the next
+query RECONCILES the delta on the unique `chunk_id` — decoding only the new chunks (a pure-add of K into
+N decodes K, not N), and correct even when a re-index reuses a freed rowid; a cheap whole-table
+`(count, maxRowid)` signature is the self-healing backstop that full-rebuilds on an out-of-band write,
+and the cache is purged on workspace lock (vectors derive from chunk text). **Upgrade path** (still
+behind this same `search` signature, D15): an off-main-thread worker scan and/or an ANN index
+(sqlite-vec / HNSW) when a corpus outgrows the linear scan.
 
 `searchText` embeds the query through `embedQueryCached` (RAG-5): a small per-embedder LRU
 (`QUERY_VECTOR_CACHE_MAX = 32`, keyed by exact query string, held in a `WeakMap` by embedder

@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 5 (RESIDENT-CACHE INCREMENTAL MAINTENANCE;
+PERF-1, the one real scalability item) — branch `full-audit-2026-06-29-fixes`.** Suite now **2463 passed /
+39 skipped (2502 collected)** (was 2456/39 at Phase 4 → **+7 tests**), typecheck clean, `npm run build`
+green, full suite green 3× consecutively. PERF-1 was Medium/High-confidence — the only finding with
+user-visible impact at scale.
+- **The problem (PERF-1).** `embeddings/resident-cache.ts` held the decoded
+  `Map<chunkId,Float32Array>` that `VectorIndex.search` ranks against, but every `embeddings` INSERT/
+  DELETE called `invalidateResidentVectors` = `caches.delete(db)` — DROPPING THE WHOLE MAP. The next
+  query rebuilt it by `SELECT`-ing + `decodeVector`-ing **all** rows synchronously on the Electron main
+  thread (~150 MB read + ~580 ms decode at the ~100k-vector bound), and it recurred after EVERY import/
+  re-index/delete (a heavy "import N docs, ask between each" session paid N full rebuilds).
+- **The fix — incremental delta + retained signature backstop.** `invalidate` now MARKS the cache dirty
+  (no longer drops it); the next `getResidentVectors` RECONCILES: an `ids-only` scan (`SELECT chunk_id`,
+  no `vector_blob`, no decode) drops gone ids, and ONLY the genuinely-new chunk ids are point-looked-up +
+  decoded. A pure-add of K into an N-corpus decodes **exactly K rows, not N**. Reconcile keys on the
+  UNIQUE `chunk_id` (PRIMARY KEY), so it is correct even when a re-index reuses a freed rowid (new id →
+  old out / new in). **Retained (NON-NEGOTIABLE):** the cheap `(count, maxRowid)` signature is the
+  self-healing backstop — a table change with NO hook (out-of-band write) full-rebuilds; and `purge`
+  still DROPS the map on workspace lock (security; distinct from `invalidate`). The three in-band write
+  sites (`ingestion/index.ts` finalize-insert + reindex chunk-phase delete + `deleteDocument`) are
+  unchanged calls; only the comments were updated.
+- **Equivalence guarantee (the correctness contract).** The incremental map is byte-identical to a
+  from-scratch rebuild for every insert/delete/reindex/same-rowid sequence (an in-band write never
+  mutates a vector under a *surviving* chunk_id; re-index mints fresh ids). Proven, not asserted.
+- **Tests (`tests/integration/resident-cache-incremental.test.ts`, NEW, +7).** (1) equivalence vs a cold
+  rebuild byte-for-byte across insert→insert→delete→reindex; (2) decode-count speedup — insert K decodes
+  K, with a `purge`→full-decode-of-N+K teeth contrast; (3) delete drops only the deleted ids; (4)
+  delete-then-reinsert-SAME-rowid — the test CONFIRMS node:sqlite reuses the freed rowid with an
+  identical `(count,maxRowid)`, so the fast path returns STALE without the hook and the hook then
+  reconciles to the NEW vector; (5) signature backstop self-heals an out-of-band write; (6) lock-purge
+  DROPS the map (decode-count contrast: `invalidate` decodes 0, `purge` re-decodes N) + post-lock empty.
+  Teeth manually verified by neutering: removing the signature-mismatch full-rebuild branch reds the
+  backstop test; reverting `invalidate` to `caches.delete` reds the speedup + lock-purge contrast.
+- **Docs:** `architecture.md` "Performance — design record … Wave P4" Invalidation-contract subsection
+  superseded (per-write full rebuild → incremental delta + backstop; the three mechanisms restated) + a
+  PERF-1 Phase-5 note; the "cold rebuild once per mutation" measurement phrasing corrected. `rag-design.md`
+  §11 retrieval note updated. P4b worker / P4c ANN / D15 linear-scan deferral all UNCHANGED — Phase 5 only
+  removes the per-write full rebuild.
+- **NEXT ACTION (owner):** P5 closes PERF-1 (the real scalability ceiling). Remaining on this branch:
+  **P6 — docs reconciliation (DOC-1…DOC-4, SEC-1 doc half) + audit close-out (the §26 ledger, `git rm`
+  the report) + optionally REL-5**. Do NOT auto-merge/push — left to the owner._
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 4 (RENDERER LIFECYCLE + DETERMINISM/ROBUSTNESS
 LOW-HANGERS; FE-1/RAG-1/RAG-2/REL-4) — branch `full-audit-2026-06-29-fixes`.** Suite now **2456 passed /
 39 skipped (2495 collected)** (was 2446/39 at Phase 3 → **+10 tests**), typecheck clean, `npm run build`

@@ -407,22 +407,45 @@ simply absent from the map). The vector ↔ BLOB codec moved to `embeddings/code
 decode without an `index ↔ resident-cache` import cycle (re-exported from the barrel).
 
 **Invalidation contract (the highest-risk surface — a stale buffer silently corrupts ranking).**
-Belt-and-suspenders:
-- **Staleness (primary):** a cheap whole-table signature `(COUNT(*), MAX(rowid))` is recomputed at the
-  top of every `search`; any change rebuilds the map. `MAX(rowid)` is O(1) (rightmost btree leaf) and
-  `COUNT(*)` is a fast index count — negligible vs the scan they gate. Catches inserts (import),
-  deletes (doc delete), and reindex (delete+insert raises `maxRowid`) — i.e. **every `embeddings`
-  mutation, including direct SQL writes that bypass the hooks** (so test seeding stays correct).
-- **Explicit (belt):** `invalidateResidentVectors(db)` is also called at the three `embeddings` write
-  sites — `ingestion/index.ts` finalize-insert + reindex chunk-phase delete + `deleteDocument`. This
-  closes the one signature blind spot (delete the single max-rowid row, then insert exactly one row
-  reusing that rowid → `(count, maxRowid)` unchanged).
+Belt-and-suspenders, three mechanisms (the per-write *full rebuild* was removed in Phase 5 — see the
+PERF-1 note below; the original mechanism descriptions are folded into the three bullets):
+- **Incremental delta (primary in-band path, PERF-1 / full-audit-2026-06-29 Phase 5):**
+  `invalidateResidentVectors(db)` is called at the three `embeddings` write sites — `ingestion/index.ts`
+  finalize-insert + reindex chunk-phase delete + `deleteDocument`. It now MARKS the cache dirty (it no
+  longer drops it); the next `getResidentVectors` RECONCILES the delta — an `ids-only` scan
+  (`SELECT chunk_id`, no `vector_blob`, no decode) drops cached ids that are gone, and ONLY the
+  genuinely-new chunk ids are point-looked-up + `decodeVector`'d. So a pure-add of K vectors into an
+  N-vector corpus decodes exactly **K rows, not N**. The reconcile keys on the UNIQUE `chunk_id`, so it
+  is correct even when a deleted row's rowid is reused by a re-index (the new row carries a NEW
+  `chunk_id` → old id out, new id in) — this is also what closes the one signature blind spot: deleting
+  the single max-rowid row then inserting one row reusing that rowid leaves `(count, maxRowid)` unchanged,
+  so only the explicit flag (not the signature) can see it. The result is byte-identical to a
+  from-scratch rebuild for every insert/delete/reindex/same-rowid sequence (an in-band write never
+  mutates a vector under a *surviving* chunk_id; re-index mints fresh ids).
+- **Staleness signature (self-healing backstop):** a cheap whole-table signature `(COUNT(*), MAX(rowid))`
+  is recomputed at the top of every `search`. If the table changed but NO write went through the explicit
+  hook (a direct SQL / out-of-band writer — e.g. test seeding), the dirty flag is clear yet the signature
+  mismatches → **fall back to a FULL REBUILD**. `MAX(rowid)` is O(1) (rightmost btree leaf) and `COUNT(*)`
+  a fast index count — negligible vs the scan they gate. This is the path that makes a missed/buggy
+  incremental update self-heal on the next query; it is also the cold first build.
 - **Security (lock):** `purgeResidentVectors(db)` drops the map outright on workspace LOCK
-  (`registerWorkspaceIpc`, beside the embedder's `suspend()`). The vectors are derived from chunk text
-  and must not linger in main-process RAM after the vault re-encrypts — a requirement the staleness
-  signature does NOT cover (the table is unchanged on lock). No embedder-switch purge is needed: the
-  cache is per-`Db` and per-chunk (model-agnostic), the SQL model-id filter scopes results, and unlock
-  reopens the `Db` → a fresh (empty) cache.
+  (`registerWorkspaceIpc`, beside the embedder's `suspend()`). Distinct from `invalidate` (which only
+  marks dirty): the vectors are derived from chunk text and must not linger in main-process RAM after the
+  vault re-encrypts — a requirement the staleness signature does NOT cover (the table is unchanged on
+  lock). No embedder-switch purge is needed: the cache is per-`Db` and per-chunk (model-agnostic), the
+  SQL model-id filter scopes results, and unlock reopens the `Db` → a fresh (empty) cache.
+
+**PERF-1 (full-audit-2026-06-29, Phase 5) — per-write rebuild → incremental.** The original cache DROPPED
+the whole map on every `embeddings` write (each insert/delete/reindex `invalidate` = `caches.delete`), so
+the next query paid a full ~150 MB re-read + ~580 ms re-decode at the 100k bound — and it recurred after
+*every* import/re-index/delete (a heavy "import N docs, ask between each" session paid N full rebuilds).
+The incremental delta above removes that: a mutation now only pays the ids-only scan + a decode of the
+new rows. The off-main-thread worker (P4b) and ANN (P4c) remain the longer-term paths and the linear-scan
+ANN deferral (D15) is unchanged — Phase 5 only removes the per-write full rebuild. Proven in
+`tests/integration/resident-cache-incremental.test.ts`: equivalence (incremental map == a from-scratch
+rebuild byte-for-byte across insert/delete/reindex/same-rowid), the decode-count speedup (K not N, with a
+purge→full-decode teeth contrast), the same-rowid blind spot (signature unchanged → only the hook catches
+it), the signature backstop self-heal, and the lock-purge drop (decode-count contrast vs `invalidate`).
 
 **Measurement — confirmed on the PAID drive (D:, b9585; the "real E5-runtime numbers PENDING" item is
 now closed).** Two legs, because the scan is **data-independent** (N dot-products of 384-dim Float32 +
@@ -430,8 +453,9 @@ sort — identical timing for random unit vectors and real E5 outputs); only the
 query-embed round-trip are real-hardware variables.
 - **Scan scaling, DB on the real drive (synthetic vectors).** Warm cached scan vs the old
   decode-every-query path: 13.6 ms vs 22.4 ms @ 5k chunks (1.7×), 52.5 ms vs 63.3 ms @ 10k (1.2×),
-  164.6 ms vs 225 ms @ 30k (1.4×), 605 ms vs 753 ms @ 100k (1.2×). Cold rebuild (once per mutation,
-  not per query) 33 ms @ 5k … 1.48 s @ 100k. These track the earlier mock/SSD projection (~14/50/167/
+  164.6 ms vs 225 ms @ 30k (1.4×), 605 ms vs 753 ms @ 100k (1.2×). Cold rebuild (the from-scratch full
+  build — now only on the first build or the out-of-band signature-backstop path; an in-band mutation
+  pays the incremental reconcile instead, Phase 5) 33 ms @ 5k … 1.48 s @ 100k. These track the earlier mock/SSD projection (~14/50/167/
   580 ms) within noise — mmap (DB-2) keeps the cold build off USB cheap, so the drive does not move the
   numbers.
 - **Real E5 vectors, end-to-end on the drive** (genuine `multilingual-e5-small-q8` outputs from the
