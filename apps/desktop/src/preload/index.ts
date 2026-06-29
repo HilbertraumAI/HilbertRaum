@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { EVENTS, IPC, STREAM, type CompactionNotice, type ScopeNotice } from '../shared/ipc'
 import type {
   ActiveStreamSnapshot,
@@ -307,6 +307,13 @@ const api = {
    *  + a one-time capability token to pass back as `importDocuments`' `options.pickerToken`. */
   pickDocuments: (mode?: 'files' | 'folder'): Promise<PickDocumentsResult> =>
     ipcRenderer.invoke(IPC.pickDocuments, mode),
+  /** Resolve a DROPPED file's absolute path. Electron removed the non-standard `File.path` in
+   *  v32 (FE-A); `webUtils.getPathForFile` is the replacement and is only callable from the
+   *  (sandboxed) preload — never the renderer. NOT an IPC round-trip: webUtils is synchronous
+   *  and in-process here, so this is a plain bridge function (no new IPC channel). Returns ''
+   *  for a File with no on-disk path (a browser-origin drag); main re-validates every path
+   *  (existence + supported extension) on import, so a spoofed value simply fails to import. */
+  getDroppedFilePath: (file: File): string => webUtils.getPathForFile(file),
   /** Import files. `options.destination` routes them (Library / a project / Temporary / a
    *  chat attachment, plan §11.3); omitted ⇒ Library, byte-for-byte with old callers. For a
    *  PICKER import pass `options.pickerToken` from `pickDocuments` (D1) — main then ignores

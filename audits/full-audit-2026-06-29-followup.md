@@ -120,6 +120,7 @@ system.
 ---
 
 ### FE-A — Chat drag-and-drop file attach is silently dead in the packaged app (Electron 37 removed `File.path`)
+- ✅ **REMEDIATED (2026-06-29, Phase 2)** — preload bridge `window.api.getDroppedFilePath` (wraps `webUtils.getPathForFile`, runs in the sandboxed preload); `pathsFromDrop` calls it instead of the removed `File.path`; tests rewired to the real bridge shape + a preload-surface contract test; real-Electron 37.10.3 availability verified. No new IPC channel. See architecture.md "Renderer robustness" → "Drag-drop intake (Phase 2)".
 - **Category:** Frontend / platform boundary · **Severity:** High · **Confidence:** High (verified firsthand)
 - **Location:** `renderer/screens/ChatScreen.tsx:1466-1475` (`pathsFromDrop`), used by `onDrop` `:1158-1164`; preload `preload/index.ts` (no `webUtils` shim).
 - **Description.** `pathsFromDrop` reads `(files[i] as { path?: string }).path`. Electron removed the non-standard `File.path` in **v32**; the replacement is `webUtils.getPathForFile(file)`, which must be called from the **preload** (not the sandboxed renderer). Installed Electron is **37.10.3** (pin `^37.0.0`); `webUtils`/`getPathForFile` appears **nowhere** in source.
@@ -138,6 +139,7 @@ system.
 - **Tests needed.** `mode:'tree'` message renders the provenance label (not "Sources (N)") and caps the list; a relevance message still renders "Sources (N)" 1:1.
 
 ### FE-C — `onDrop` swallows a drop that yields no usable path with no user feedback
+- ✅ **REMEDIATED (2026-06-29, Phase 2)** — `onDrop` now shows a friendly banner (`chat.attach.dropUnsupported`, EN+DE) when a Files-bearing drop resolves to zero importable paths; empty-drop test added. See architecture.md "Renderer robustness" → "Drag-drop intake (Phase 2)".
 - **Category:** Forms / error surfacing · **Severity:** Medium · **Confidence:** High
 - **Location:** `ChatScreen.tsx:1158-1164` + `:1466-1475`.
 - **Description.** `if (paths.length > 0) void attachFiles(paths)` has no `else` — a drop producing zero importable paths (now *always*, per FE-A, but also any browser-origin drag) is indistinguishable from "nothing happened." Contrast the Images screen, which surfaces `multiDrop`/`unsupportedType` banners.
@@ -314,7 +316,20 @@ and **teeth-checked** where a guard is added.
 - **Risks/rollback:** parsing changes can regress edge formats — mitigated by characterization-first + the
   existing gold fixtures. Version bump is the rollback boundary.
 
-### Phase 2 — Electron-37 drag-drop regression (FE-A + FE-C) — **shipped feature dead, do early**
+### Phase 2 — Electron-37 drag-drop regression (FE-A + FE-C) — **shipped feature dead, do early** — ✅ REMEDIATED 2026-06-29
+> **Done on branch `audit-followup-phase2-dragdrop`.** Restored chat drag-drop attach + the
+> zero-path feedback; suite **2551 passed / 39 skipped** (+4), typecheck + build green.
+> FE-A: a preload bridge `window.api.getDroppedFilePath` wraps `webUtils.getPathForFile` (the
+> sandboxed-preload replacement for the removed `File.path`); `pathsFromDrop` calls it. **No new
+> IPC channel** — webUtils is synchronous/in-process in the preload, so the resolver is a plain
+> bridge function (nothing added to `shared/ipc.ts`; renderer typed via `PreloadApi`). FE-C: a
+> friendly `chat.attach.dropUnsupported` banner (EN+DE) on a Files-bearing drop that yields no
+> path. Tests rewired off the fabricated `File.path` to the real bridge shape + a preload-surface
+> contract test, all teeth-checked (RED→GREEN verified). Real-Electron 37.10.3 leg confirmed
+> (bridge exposes the resolver in the actual renderer; `webUtils.getPathForFile` callable in the
+> sandboxed preload). Durable record: architecture.md "Renderer robustness" → "Drag-drop intake
+> (full-audit-2026-06-29 follow-up, Phase 2 — FE-A / FE-C)". The **Images** drop reads File bytes,
+> not `File.path` — unaffected, confirmed.
 - **Goal:** restore chat drag-drop attach; surface feedback on an unusable drop.
 - **Scope/files:** `preload/index.ts` (expose `webUtils.getPathForFile`), `shared/ipc.ts` (preload surface
   type), `renderer/screens/ChatScreen.tsx` (`pathsFromDrop`, `onDrop` else-branch + stale comment),

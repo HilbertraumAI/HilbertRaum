@@ -1590,6 +1590,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.attach.added': '{name} zu diesem Chat hinzugefügt',
   'chat.attach.newDocChat': 'Neuer Dokument-Chat für {name} gestartet',
   'chat.attach.failed': '{name} konnte diesem Chat nicht hinzugefügt werden.',
+  // FE-C: ein Drop mit Dateien, der keine Datei auf der Festplatte ergab (z. B. aus dem Browser
+  // gezogen) – wird angezeigt statt still zu scheitern (Begleitung zur FE-A-Korrektur).
+  'chat.attach.dropUnsupported':
+    'Konnte das nicht hinzufügen – bitte eine auf dem Computer gespeicherte Datei hierher ziehen.',
 
   // ---- Bilder — „Frag ein Bild" (image-understanding §5/§11, Phase V3) ----
   // Visuelles Verstehen EINES lokalen PNG/JPEG über ein lokales KI-Modell — getrennt von

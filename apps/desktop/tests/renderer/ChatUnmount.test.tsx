@@ -36,11 +36,19 @@ function docConv(): Conversation {
   }
 }
 
-/** Fire a native-style file drop (Electron exposes `File.path`) on the chat surface. */
+// FE-A (full-audit-2026-06-29 follow-up, Phase 2): Electron 37 removed `File.path`; the dropped
+// path is resolved through the preload bridge (`window.api.getDroppedFilePath`). The File carries
+// no `.path` — its path is registered for the resolver, the way webUtils maps File→path in main.
+const droppedPaths = new WeakMap<object, string>()
+const getDroppedFilePath = vi.fn((file: object): string => droppedPaths.get(file) ?? '')
+
+/** Fire a native-style file drop on the chat surface (no `.path` — resolved via the bridge). */
 function dropFile(name: string, path: string): void {
   const target = document.querySelector('.chat-main')
   if (!target) throw new Error('no .chat-main drop target')
-  fireEvent.drop(target, { dataTransfer: { files: [{ name, path }], types: ['Files'] } })
+  const file = { name }
+  droppedPaths.set(file, path)
+  fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
 }
 
 beforeAll(() => {
@@ -82,6 +90,7 @@ describe('ChatScreen — FE-1 setState-after-unmount guards (import poll + strea
       const askDocuments = vi.fn(() => new Promise<Message>(() => {}))
 
       stubApi({
+        getDroppedFilePath: getDroppedFilePath as never,
         listConversations: vi.fn(async () => [docConv()]),
         getRuntimeStatus: vi.fn(async () => runningStatus),
         listMessages: vi.fn(async () => []),

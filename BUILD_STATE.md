@@ -6,6 +6,43 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 2 (ELECTRON-37 DRAG-DROP REGRESSION; FE-A/FE-C) — branch
+`audit-followup-phase2-dragdrop` (unmerged; do NOT auto-merge/push).** Restored a shipped, advertised
+feature that was DEAD in the packaged app: dragging a file onto the chat surface silently did nothing, and
+no test caught it. Suite **2551 passed / 39 skipped** (was 2547/39 after Phase 1 → **+4**: FE-A explicit +
+FE-C banner in `ChatAttach.test.tsx`, ×2 `preload-attach.test.ts`), typecheck + `npm run build` green.
+Renderer + preload + i18n only — **no IPC surface change, no main-process behavior change**; contextIsolation/
+sandbox intact.
+- **FE-A (High) — drag-drop attach silently dead.** `ChatScreen.pathsFromDrop` read `(file).path` — the
+  non-standard `File.path` Electron **removed in v32** (pin `^37.0.0`, installed 37.10.3). At runtime `.path`
+  is `undefined` → `[]` → `attachFiles` never called → no import, no chip, no error. Hidden by a test that
+  **fabricated** `dataTransfer.files = [{ name, path }]` (a property real Electron 37 lacks). FIX: a preload
+  bridge `window.api.getDroppedFilePath(file)` wrapping `webUtils.getPathForFile` (only callable in the
+  sandboxed preload); `pathsFromDrop` calls it. **No new IPC channel** — webUtils is synchronous/in-process
+  in the preload, so the resolver is a plain bridge function (nothing added to `shared/ipc.ts`; renderer
+  typed via `PreloadApi = typeof api`). Main still re-validates every path on import. The paperclip picker
+  (`pickDocuments`) and the **Images** drop (reads File bytes, not `.path`) were both unaffected (confirmed).
+- **FE-C (Med) — silent zero-path drop.** `onDrop` had no `else`. Now a Files-bearing drop that resolves to
+  zero importable paths surfaces a friendly banner (`chat.attach.dropUnsupported`, EN+DE — parity
+  typecheck-enforced), matching the Images screen's drop feedback.
+- **Tests / eyeball.** `ChatAttach.test.tsx` + `ChatUnmount.test.tsx` rewired off the fabricated `File.path`
+  to the **real bridge shape** (dropped File has no `.path`; a WeakMap stands in for webUtils' File→path
+  resolution); added explicit FE-A drop-without-`.path`, FE-C empty-drop banner, and `preload-attach.test.ts`
+  surface-contract tests — all **teeth-checked** (revert the bridge wiring → 10 red, verified RED→GREEN).
+  jsdom can't exercise `webUtils`, so the unit tests prove the **wiring**; the real-Electron leg (bridge
+  exposes the resolver in the actual renderer; `webUtils.getPathForFile` callable in the sandboxed preload on
+  37.10.3 — a renderer-built File → `''`, no throw) was verified by launching the built preload under the
+  app's exact `webPreferences`. A true native OS drag (Explorer → chat) isn't faithfully automatable
+  (synthetic File has no on-disk path) — disk→path success rests on that availability proof + the wiring tests.
+- **Durable record:** architecture.md **"Renderer robustness" → "Drag-drop intake (full-audit-2026-06-29
+  follow-up, Phase 2 — FE-A / FE-C)"**. `audits/full-audit-2026-06-29-followup.md` marks FE-A/FE-C / Phase 2
+  ✅ remediated (report KEPT — Phases 3–8 remain open). No known-limitations entry (this is a fix, not a
+  deferral). Stale `pathsFromDrop` "Electron exposes `File.path`" comment corrected.
+- **NEXT ACTION (owner): review/merge `audit-followup-phase2-dragdrop`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 3** PERF-1/PERF-4 main-thread import I/O, **Phases 4–8** per the
+  audit §6 plan._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 1 (FINANCIAL CORRECTNESS; FIN-1/2/3/4) — branch
 `audit-followup-phase1-financial` (unmerged; do NOT auto-merge/push).** The release-blocking
 "confidently-wrong figure / wrong currency / wrong date" class at the STATEMENT/DOCUMENT tier above the

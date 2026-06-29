@@ -1159,8 +1159,15 @@ export function ChatScreen({
     e.preventDefault()
     setDragOver(false)
     if (busyStreaming) return
+    const hadFiles = (e.dataTransfer?.files?.length ?? 0) > 0
     const paths = pathsFromDrop(e)
-    if (paths.length > 0) void attachFiles(paths)
+    if (paths.length > 0) {
+      void attachFiles(paths)
+    } else if (hadFiles) {
+      // A Files-bearing drop that resolved to zero importable paths (a browser-origin drag, or
+      // any drop with no on-disk file). Don't fail silently — tell the user (FE-C).
+      setError(t('chat.attach.dropUnsupported'))
+    }
   }
 
   function onDragOver(e: DragEvent): void {
@@ -1459,16 +1466,19 @@ function fileBaseName(path: string): string {
 }
 
 /**
- * Absolute paths of dropped files. Electron exposes `File.path` on a native drag/drop; the
- * main process re-validates every path (existence + supported extension) downstream, so a
- * spoofed entry simply fails to import. Files without a path (a browser drag) are skipped.
+ * Absolute paths of dropped files. Electron removed the non-standard `File.path` in v32
+ * (installed: 37.x — FE-A), so the path is resolved in the PRELOAD via
+ * `window.api.getDroppedFilePath` (which wraps `webUtils.getPathForFile`) — `webUtils` is not
+ * available to the sandboxed renderer. The main process re-validates every path (existence +
+ * supported extension) downstream, so a spoofed entry simply fails to import. A File with no
+ * on-disk path (a browser-origin drag) resolves to '' and is skipped.
  */
 function pathsFromDrop(e: DragEvent): string[] {
   const files = e.dataTransfer?.files
   if (!files) return []
   const out: string[] = []
   for (let i = 0; i < files.length; i++) {
-    const p = (files[i] as unknown as { path?: string }).path
+    const p = window.api.getDroppedFilePath(files[i])
     if (typeof p === 'string' && p.length > 0) out.push(p)
   }
   return out

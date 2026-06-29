@@ -86,11 +86,43 @@ function skill(over: Partial<SkillInfo> = {}): SkillInfo {
   }
 }
 
-/** Fire a native-style file drop (Electron exposes `File.path`) on the chat surface. */
+// FE-A (full-audit-2026-06-29 follow-up, Phase 2): Electron removed the non-standard
+// `File.path` in v32 (installed: 37.x). A dropped File carries NO `.path`; the renderer must
+// resolve the on-disk path through the preload bridge (`window.api.getDroppedFilePath`, which
+// wraps `webUtils.getPathForFile` — only callable in the preload). These tests therefore drive
+// the *real* bridge shape: the dropped File is a bare `{ name }` with no `.path`, and a WeakMap
+// stands in for webUtils' File→path resolution (registered via `dropFile`). This is the lesson
+// of FE-A — never fabricate a platform property the renderer could read directly, or the test
+// goes green while production (where `.path` is undefined) silently fails.
+const droppedPaths = new WeakMap<object, string>()
+
+/** The preload resolver as the renderer sees it: maps a dropped File to its real path the way
+ *  `webUtils.getPathForFile` does in main. Wired into every stub by `stubChatApi` below. */
+const getDroppedFilePath = vi.fn((file: object): string => droppedPaths.get(file) ?? '')
+
+/** `stubApi` + the drag-drop path resolver every drop test needs (the bridge that replaced the
+ *  removed `File.path` — without it `pathsFromDrop` resolves nothing and no import fires). */
+function stubChatApi(overrides: Parameters<typeof stubApi>[0]): void {
+  stubApi({ getDroppedFilePath: getDroppedFilePath as never, ...overrides })
+}
+
+/** Fire a native-style file drop on the chat surface. The File has NO `.path` (Electron 37);
+ *  its real path is registered for the bridge resolver, exactly as webUtils would resolve it. */
 function dropFile(name: string, path: string): void {
   const target = document.querySelector('.chat-main')
   if (!target) throw new Error('no .chat-main drop target')
-  fireEvent.drop(target, { dataTransfer: { files: [{ name, path }], types: ['Files'] } })
+  const file = { name } // deliberately NO `.path` — Electron 37 doesn't expose it (FE-A)
+  droppedPaths.set(file, path)
+  fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
+}
+
+/** Fire a Files-bearing drop whose File resolves to NO path (a browser-origin drag, or any
+ *  drop with no on-disk file) — the FE-C "unusable drop" case. */
+function dropUnresolvableFile(name: string): void {
+  const target = document.querySelector('.chat-main')
+  if (!target) throw new Error('no .chat-main drop target')
+  // Not registered in `droppedPaths` → the bridge resolver returns '' for it.
+  fireEvent.drop(target, { dataTransfer: { files: [{ name }], types: ['Files'] } })
 }
 
 beforeAll(() => {
@@ -104,6 +136,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  getDroppedFilePath.mockClear() // a plain vi.fn() isn't reset by restoreAllMocks
   window.localStorage.clear()
 })
 
@@ -112,7 +145,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
     const createConversation = vi.fn(async () => created)
     const importDocuments = vi.fn(async () => job)
-    stubApi({
+    stubChatApi({
       listConversations: vi.fn(async () => []),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => []),
@@ -166,7 +199,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     const createConversation = vi.fn(async () => created)
     const importDocuments = vi.fn(async () => job)
     const setConversationDefaultSkill = vi.fn(async () => {})
-    stubApi({
+    stubChatApi({
       listConversations: vi.fn(async () => []),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => []),
@@ -211,7 +244,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
   it('converts a pending attachment to a live "Files in this chat" entry once indexed (N4)', async () => {
     const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
     // The link exists once the job completes; the import finishes immediately here.
-    stubApi({
+    stubChatApi({
       listConversations: vi.fn(async () => []),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => []),
@@ -252,7 +285,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
       createdAt: '2026-01-01T00:00:00Z',
       tokenCount: null
     }
-    stubApi({
+    stubChatApi({
       listConversations: vi.fn(async () => [conv({})]),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => [msg]),
@@ -297,7 +330,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
     const createConversation = vi.fn(async () => created)
     const importDocuments = vi.fn(async () => job)
-    stubApi({
+    stubChatApi({
       listConversations: vi.fn(async () => []),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => []),
@@ -337,7 +370,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
   it('shows linked attachments as a read-only "Files in this chat" line', async () => {
     const user = userEvent.setup()
     const docConv = conv({ id: 'c9', title: 'Doc Q&A', mode: 'documents' })
-    stubApi({
+    stubChatApi({
       listConversations: vi.fn(async () => [docConv]),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => []),
@@ -351,5 +384,69 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     await user.click(await screen.findByRole('button', { name: /files? in this chat/i }))
     expect(await screen.findByText('Files in this chat')).toBeInTheDocument()
     expect(screen.getAllByText('invoice.pdf').length).toBeGreaterThan(0)
+  })
+
+  // FE-A (full-audit-2026-06-29 follow-up, Phase 2): the drop path must resolve the on-disk
+  // path through the preload bridge, NOT a `.path` Electron 37 no longer puts on a File.
+  it('resolves a dropped File without `.path` through the preload bridge (Electron 37 — FE-A)', async () => {
+    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
+    const importDocuments = vi.fn(async () => job)
+    stubChatApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => []),
+      createConversation: vi.fn(async () => created),
+      importDocuments,
+      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
+      listAttachments: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen onNavigate={() => {}} />
+      </ToastProvider>
+    )
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+
+    dropFile('statement.pdf', '/tmp/statement.pdf')
+
+    // The renderer asked the bridge for the path (the dropped File carries no `.path`)…
+    await waitFor(() =>
+      expect(getDroppedFilePath).toHaveBeenCalledWith(expect.objectContaining({ name: 'statement.pdf' }))
+    )
+    // …and imported the path the bridge returned. On the old `File.path` code this stays []
+    // (the File has no `.path`) → importDocuments is never called → this test reds (teeth).
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith(['/tmp/statement.pdf'], {
+        destination: { kind: 'conversation', conversationId: 'c2' }
+      })
+    )
+  })
+
+  // FE-C: a Files-bearing drop that resolves to ZERO importable paths (a browser-origin drag,
+  // or any drop with no on-disk file) must not fail silently — it surfaces a friendly banner.
+  it('shows a friendly error when a Files-bearing drop resolves to no usable path (FE-C)', async () => {
+    const importDocuments = vi.fn(async () => job)
+    stubChatApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => []),
+      importDocuments,
+      listAttachments: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen onNavigate={() => {}} />
+      </ToastProvider>
+    )
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+
+    dropUnresolvableFile('clipping.png')
+
+    // The error banner explains the drop couldn't be used (en copy of chat.attach.dropUnsupported).
+    expect(await screen.findByText(/couldn't add that/i)).toBeInTheDocument()
+    // Nothing was imported — a zero-path drop must not start a phantom import.
+    expect(importDocuments).not.toHaveBeenCalled()
   })
 })

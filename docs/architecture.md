@@ -298,6 +298,41 @@ force-quit. The contract now:
 - **FE-9 (SegmentedControl Home/End).** Home/End now select the FIRST/LAST **enabled** segment directly
   (`moveToEdge`), instead of relying on the arrow-key modulo wrap to land there incidentally.
 
+**Drag-drop intake (full-audit-2026-06-29 follow-up, Phase 2 — FE-A / FE-C).** Chat drag-and-drop
+attach was **silently dead in the shipped app**: `ChatScreen.pathsFromDrop` read `(file).path`, the
+non-standard `File.path` Electron **removed in v32** (the app pins `^37.0.0`; installed 37.10.3). At
+runtime `.path` is `undefined`, so the loop produced `[]`, `attachFiles` was never called, and a drop
+did nothing — no import, no pending chip, no error. It went unnoticed because the only intake test
+(`ChatAttach.test.tsx`) **fabricated** `dataTransfer.files = [{ name, path }]`, injecting a property
+real Electron 37 doesn't provide → green test, broken product (the round's headline test lesson:
+never fabricate a platform property the renderer could read directly).
+- **FE-A — resolve the path in the PRELOAD.** The replacement, `webUtils.getPathForFile(file)`, is
+  only callable from the (sandboxed) preload, never the renderer. A new preload bridge method
+  `window.api.getDroppedFilePath(file)` (`preload/index.ts`, next to `pickDocuments`) wraps it;
+  `pathsFromDrop` now calls the bridge per dropped `File`. **NOT a new IPC channel** — `webUtils` is
+  synchronous and in-process in the preload, so the resolver is a plain bridge function (no
+  `ipcRenderer.invoke`, nothing added to `shared/ipc.ts`); the renderer call site is typed via
+  `PreloadApi = typeof api`. `File` objects cross `contextBridge` to the function; `contextIsolation`/
+  `sandbox` stay intact. Main still re-validates every path (existence + supported extension) on
+  import, so a spoofed value simply fails to import (unchanged trust model). The paperclip picker
+  (`pickDocuments` → main dialog → real paths) was always unaffected. The **Images** drop zone reads
+  `File` bytes (`FileReader`/`arrayBuffer`), never `File.path`, so it needed no change (confirmed).
+- **FE-C — no silent zero-path drop.** `onDrop` had no `else`: a Files-bearing drop resolving to zero
+  importable paths (now any browser-origin drag, and — pre-FE-A — *every* drop) was indistinguishable
+  from "nothing happened." It now surfaces a friendly banner (`chat.attach.dropUnsupported`, EN+DE)
+  when a drop carried Files but yielded no path, matching the Images screen's drop feedback.
+- **Tests / verification.** `ChatAttach.test.tsx` now drives the **real bridge shape** — the dropped
+  `File` carries no `.path` and a WeakMap stands in for webUtils' File→path resolution — plus an
+  explicit FE-A drop-without-`.path` test and the FE-C empty-drop banner test; `ChatUnmount.test.tsx`
+  updated to the same shape; `preload-attach.test.ts` is the preload-surface contract (resolver
+  exposed + forwards to `webUtils.getPathForFile`). All are teeth-checked (revert the bridge wiring →
+  red, verified). jsdom can't exercise `webUtils`, so the unit tests prove the **wiring**; the
+  real-Electron leg (bridge exposes the resolver in the actual renderer; `webUtils.getPathForFile` is
+  callable in the sandboxed preload on 37.10.3 — a renderer-built File resolves to `''` without
+  throwing) was confirmed by launching the built preload under the app's exact `webPreferences`. A
+  true native OS drag (Explorer → chat) isn't faithfully automatable (a synthetic File has no on-disk
+  path), so the disk→path success leg rests on that availability proof + the wiring tests.
+
 ## Performance — design record (perf audit 2026-06-18, Wave P3)
 Pipeline throughput & latency on the two hottest operations — **import a document** and **ask a
 question** — plus runtime-startup knobs. Unlike P2 (pure memoization), several P3 items are
