@@ -2,7 +2,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { STREAM, type CompactionNotice } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message } from '../../shared/types'
-import { getConversation } from '../services/chat'
+import { emptyAssistantMessage, getConversation } from '../services/chat'
 import type { ModelRuntime } from '../services/runtime'
 import { isExceedContextError } from '../services/runtime/llama'
 import { tMain } from '../services/i18n'
@@ -89,8 +89,9 @@ export async function withChatStream(
    * node), returning a release fn that resumes the build. Called AFTER the in-flight entry
    * is registered and ALWAYS released in `finally`, so a build can never be left paused by
    * a failed/aborted chat turn. With no build active it resolves to a no-op immediately.
+   * Receives the turn's abort `signal` (REL-3) so a "Stop" while parked unwinds at once.
    */
-  acquireSlot?: () => Promise<() => void>
+  acquireSlot?: (signal: AbortSignal) => Promise<() => void>
 ): Promise<Message> {
   const controller = new AbortController()
   inFlightStreams.set(conversationId, controller)
@@ -118,13 +119,28 @@ export async function withChatStream(
   }
   try {
     // Hand the model slot off from a yielding build before any model call (no-op when none).
-    if (acquireSlot) releaseSlot = await acquireSlot()
+    // The abort signal is threaded in (REL-3) so a Stop while parked waiting for the build's
+    // handoff rejects this acquire instead of blocking for up to one tree-node summarization.
+    if (acquireSlot) releaseSlot = await acquireSlot(controller.signal)
     const assistant = await runFn(controller.signal, sendToken, sendReasoning, sendCompaction)
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.done(conversationId), assistant)
     }
     return assistant
   } catch (err) {
+    // REL-3: a user Stop that landed while we were waiting to acquire the slot rejects the
+    // acquire BEFORE generation began. That is a clean cancellation, not a failure: resolve
+    // exactly like an in-generation Stop that produced no token — emit `done` with an empty
+    // message, never `chat:error` (the renderer surfaces a toast on any invoke rejection).
+    // An in-generation Stop never reaches here (generateAssistantMessage swallows the abort
+    // and returns the partial); this only fires for a Stop during the pre-generation park.
+    if (controller.signal.aborted) {
+      const assistant = emptyAssistantMessage(conversationId)
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(STREAM.done(conversationId), assistant)
+      }
+      return assistant
+    }
     const raw = err instanceof Error ? err.message : String(err)
     // A grounded/chat answer whose prompt overflows the model is an HTTP 400; show the
     // actionable "too large for this model" copy to the user (the raw reason still goes to

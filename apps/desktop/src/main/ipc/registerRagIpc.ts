@@ -230,7 +230,7 @@ export function registerRagIpc(ctx: AppContext): void {
                 autoFired: turnSkill.autoFired === true
               })
             },
-            () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+            (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
           )
         }
         // `grounded-whole-doc` (skill-whole-doc engine, Wave 2): an INSTRUCTION skill whose
@@ -259,7 +259,7 @@ export function registerRagIpc(ctx: AppContext): void {
                   wholeDocument: { documentId },
                   onToken: sendToken
                 }),
-              () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+              (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
             )
           }
           // Defensive: applies() requires a single in-scope doc, so this is unreachable; fall through
@@ -288,7 +288,7 @@ export function registerRagIpc(ctx: AppContext): void {
                   wholeDocumentCompare: { documentIds },
                   onToken: sendToken
                 }),
-              () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+              (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
             )
           }
           // Defensive: applies() requires exactly two in-scope docs; otherwise fall through.
@@ -330,7 +330,7 @@ export function registerRagIpc(ctx: AppContext): void {
                 autoFired: turnSkill.autoFired === true
               })
             },
-            () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+            (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
           )
         }
       }
@@ -365,7 +365,7 @@ export function registerRagIpc(ctx: AppContext): void {
           },
           // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
           // though we make no model call (keeps the single locked contract).
-          () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+          (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
         )
       }
 
@@ -391,7 +391,7 @@ export function registerRagIpc(ctx: AppContext): void {
             skill,
             onToken: sendToken
           }),
-        () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+        (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )
     }
   )

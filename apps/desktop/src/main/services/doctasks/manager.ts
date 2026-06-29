@@ -224,10 +224,11 @@ export class DocTaskManager {
    * Chat side: claim the model slot before streaming. If a yielding build holds it, this
    * requests a pause and resolves once the builder parks (worst case ≈ one node); returns
    * a release fn the caller MUST invoke when the stream ends (it resumes the build). With
-   * no build active it resolves immediately to a no-op. Idempotent release.
+   * no build active it resolves immediately to a no-op. Idempotent release. REL-3: the chat
+   * turn's abort `signal` is threaded through so a "Stop" during the park unwinds at once.
    */
-  acquireChatSlot(): Promise<() => void> {
-    return this.arbiter.acquireForChat()
+  acquireChatSlot(signal?: AbortSignal): Promise<() => void> {
+    return this.arbiter.acquireForChat(signal)
   }
 
   /**

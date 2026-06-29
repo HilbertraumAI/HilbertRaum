@@ -282,7 +282,7 @@ export function registerChatIpc(ctx: AppContext): void {
             // starts (§5.2); isDestroyed-guarded inside withChatStream, never buffered (R14).
             onCompactionStart: sendCompaction
           }),
-        () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+        (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )
     }
   )
