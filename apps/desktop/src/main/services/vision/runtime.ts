@@ -226,25 +226,32 @@ export class VisionRuntime {
       cache_prompt: true
     })
     const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    const res = await server.fetch('/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body,
-      signal: combineSignals(opts.signal, timeoutMs)
-    })
-    if (!res.ok) {
-      void res.body?.cancel().catch(() => undefined)
-      throw new Error(`Vision request failed: HTTP ${res.status}`)
+    // REL-4: own the (long, 300 s) timeout so it is cleared the instant the stream finishes,
+    // rather than living out its full duration after an early-completing analysis.
+    const combined = combineSignals(opts.signal, timeoutMs)
+    try {
+      const res = await server.fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+        signal: combined.signal
+      })
+      if (!res.ok) {
+        void res.body?.cancel().catch(() => undefined)
+        throw new Error(`Vision request failed: HTTP ${res.status}`)
+      }
+      if (!res.body) throw new Error('Vision request returned an empty response body')
+      // The vision SSE frames are byte-identical to chat (V1-confirmed) — readChatSSE parses
+      // them unchanged. A non-reasoning VLM emits no reasoning frames, so no onReasoning sink.
+      let answer = ''
+      for await (const delta of readChatSSE(res.body, opts.signal)) {
+        answer += delta
+        opts.onToken?.(delta)
+      }
+      return answer
+    } finally {
+      combined.clear()
     }
-    if (!res.body) throw new Error('Vision request returned an empty response body')
-    // The vision SSE frames are byte-identical to chat (V1-confirmed) — readChatSSE parses
-    // them unchanged. A non-reasoning VLM emits no reasoning frames, so no onReasoning sink.
-    let answer = ''
-    for await (const delta of readChatSSE(res.body, opts.signal)) {
-      answer += delta
-      opts.onToken?.(delta)
-    }
-    return answer
   }
 
   /** Kill the sidecar (no-op if never started). Permanent for this instance; the orchestrator

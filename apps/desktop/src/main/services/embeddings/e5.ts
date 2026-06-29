@@ -187,17 +187,25 @@ export class E5Embedder implements Embedder {
     const out: Float32Array[] = []
     for (let start = 0; start < prepared.length; start += batchSize) {
       const batch = prepared.slice(start, start + batchSize)
-      const res = await server.fetch('/v1/embeddings', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model: this.id, input: batch }),
-        signal: combineSignals(opts?.signal, timeoutMs)
-      })
-      if (!res.ok) {
-        void res.body?.cancel().catch(() => undefined) // release the connection
-        throw new Error(`Embedding request failed: HTTP ${res.status}`)
+      // REL-4: own the per-batch timeout so it is cleared the instant the request settles —
+      // hundreds of batches in a large ingestion otherwise leave hundreds of live timers.
+      const combined = combineSignals(opts?.signal, timeoutMs)
+      let json!: EmbeddingResponse
+      try {
+        const res = await server.fetch('/v1/embeddings', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: this.id, input: batch }),
+          signal: combined.signal
+        })
+        if (!res.ok) {
+          void res.body?.cancel().catch(() => undefined) // release the connection
+          throw new Error(`Embedding request failed: HTTP ${res.status}`)
+        }
+        json = (await res.json()) as EmbeddingResponse
+      } finally {
+        combined.clear()
       }
-      const json = (await res.json()) as EmbeddingResponse
       const data = json.data ?? []
       if (data.length !== batch.length) {
         throw new Error(`Embedding count mismatch: expected ${batch.length}, got ${data.length}`)

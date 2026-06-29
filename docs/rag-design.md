@@ -639,6 +639,17 @@ relevance logit after a rerank. Citations never persist scores (locked).
 alone) keeps a #1 keyword-only exact-match hit — invoice numbers / codes, the case hybrid search
 exists to catch — from always losing an RRF tie to a #1 vector hit.
 
+**Per-list tie-break (full-audit-2026-06-29 RAG-1).** `rrfFuse` breaks the *final* tie on
+`chunkId`, but the *per-list rank* each chunk feeds in (1/(k+rank)) is only deterministic if each
+input list is. Under prefix-less E5 the cosines compress into a narrow band (§12.1 R3), so
+equal-score ties are realistic — and without a secondary key the vector list inherited V8 sort
+stability while the keyword list inherited SQLite's unspecified `bm25()` tie order, so which chunk
+won a page-dedup slot could flip across SQLite versions/query plans (a reproducibility/test-flake
+risk, not a hallucination). Both input lists now carry a `chunkId` tiebreak — the vector sort in
+`embeddings/index.ts` (`score desc, chunkId asc`) and the FTS `ORDER BY bm25(chunks_fts),
+chunks_fts.chunk_id` — so the ranks into RRF and the page-dedup winner are pinned. (`chunkId` is
+unique, so the order is total.)
+
 ### Keyword index (`chunks_fts`)
 
 Self-contained FTS5 table `fts5(text, chunk_id UNINDEXED)` — NOT external-content on

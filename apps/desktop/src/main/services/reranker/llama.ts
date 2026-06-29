@@ -173,21 +173,28 @@ export class LlamaReranker implements Reranker {
   async rerank(query: string, documents: string[], opts?: RerankOptions): Promise<RerankedHit[]> {
     if (documents.length === 0) return []
     const server = await this.ensureStarted()
-    const res = await server.fetch('/v1/rerank', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: this.id,
-        query: truncateToApproxTokens(query, this.queryApproxTokens),
-        documents: documents.map((d) => truncateToApproxTokens(d, this.docApproxTokens))
-      }),
-      signal: combineSignals(opts?.signal, this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
-    })
-    if (!res.ok) {
-      void res.body?.cancel().catch(() => undefined) // release the connection
-      throw new Error(`Rerank request failed: HTTP ${res.status}`)
+    // REL-4: own the timeout so it is cleared the instant the request settles (no lingering timer).
+    const combined = combineSignals(opts?.signal, this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
+    let json!: RerankResponse
+    try {
+      const res = await server.fetch('/v1/rerank', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: this.id,
+          query: truncateToApproxTokens(query, this.queryApproxTokens),
+          documents: documents.map((d) => truncateToApproxTokens(d, this.docApproxTokens))
+        }),
+        signal: combined.signal
+      })
+      if (!res.ok) {
+        void res.body?.cancel().catch(() => undefined) // release the connection
+        throw new Error(`Rerank request failed: HTTP ${res.status}`)
+      }
+      json = (await res.json()) as RerankResponse
+    } finally {
+      combined.clear()
     }
-    const json = (await res.json()) as RerankResponse
     const results = json.results ?? []
     const hits: RerankedHit[] = []
     const seen = new Set<number>()

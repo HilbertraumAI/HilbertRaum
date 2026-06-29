@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 4 (RENDERER LIFECYCLE + DETERMINISM/ROBUSTNESS
+LOW-HANGERS; FE-1/RAG-1/RAG-2/REL-4) — branch `full-audit-2026-06-29-fixes`.** Suite now **2456 passed /
+39 skipped (2495 collected)** (was 2446/39 at Phase 3 → **+10 tests**), typecheck clean, `npm run build`
+green. All four are LOW (quality/reproducibility/robustness, not user-harm); each was test-first
+teeth-checked (write the failing/observable test → confirm it reddens on current code → fix → green →
+revert→fail→restore). Two commits: FE-1 (renderer), then RAG-1/RAG-2/REL-4 (main-process
+determinism/robustness).
+- **FE-1 (LOW) — `ChatScreen` setState-after-unmount in the attach poll + stream flush
+  (`ChatUnmount.test.tsx`, NEW, +1).** The FE-4-class gap the sibling screens already guard: the
+  attach-import poll (`watchAttachJob`) and the streamed-token flush (`flushStream`) both resolve after
+  the user can navigate away mid-import / mid-generation. Added a `mountedRef` (gating the poll/flush
+  setStates) and a flush-timer `clearTimeout` on unmount. **Hard constraint honoured:** the main-side
+  stream is NOT torn down — it is intentionally recovered on remount via `getActiveStream`; the change is
+  guard-only. Test unmounts with a poll tick AND a flush timer in flight; teeth on both (the late tick must
+  not re-fetch `listDocuments`; the flush timer must be `clearTimeout`'d).
+- **RAG-1 (LOW) — tied vector/keyword scores got nondeterministic per-list ranks before RRF
+  (`hybrid-search.test.ts`, +2; `resident-cache.test.ts` oracle aligned).** Neither input list had a
+  secondary key, so equal-score ties inherited V8 sort stability (vector) / SQLite's unspecified `bm25()`
+  order (keyword) — which chunk won a page-dedup slot could flip across SQLite versions/query plans (a
+  reproducibility/flake risk, NOT a hallucination). Added a `chunkId` tiebreak to BOTH: the vector sort in
+  `embeddings/index.ts` (`score desc, chunkId asc`) and the FTS `ORDER BY bm25(...), chunks_fts.chunk_id`.
+  The resident-cache equivalence oracle was updated to the same deterministic order (it is the reference
+  ranking). Teeth: dropping either tiebreak reddens the new equal-score tests; the other 19 hybrid tests
+  stay green (ranking algorithm unchanged — only ties are now total).
+- **RAG-2 (LOW) — `truncateSnippet` could split a surrogate pair (`snippet-truncate.test.ts`, NEW, +2).**
+  `String.slice(0, 600)` cuts on a UTF-16 code unit; an astral char (emoji/CJK ext-B/math) straddling the
+  boundary left the citation snippet ending in a lone surrogate (`�`, display-only). Now counts AND slices
+  by code point (`[...trimmed]`). Teeth: revert to `.slice` → the snippet carries a lone surrogate.
+- **REL-4 (LOW) — `combineSignals` accrued uncleared per-request timeout timers
+  (`combine-signals.test.ts`, NEW, +5).** Each embed/rerank/vision request built `AbortSignal.timeout` +
+  `AbortSignal.any`; an early completion (the norm) left the timer (120 s embed/rerank, 300 s vision) and
+  its `any`-listener alive for the full duration — a large ingestion accrued thousands. `combineSignals`
+  now owns an `AbortController` + explicit `setTimeout` and returns `{ signal, clear }`; all three call
+  sites `clear()` in a `finally`. Behaviour preserved (caller-abort AND timeout still abort; timeout reason
+  still `TimeoutError`; timer still unref'd). Teeth: skip the `clearTimeout` → a pending timer survives.
+- **Docs:** `architecture.md` renderer record (FE-4 bullet) extended with the FE-1 ChatScreen guard;
+  `rag-design.md` §11 gained a per-list tie-break determinism note (RAG-1). RAG-2/REL-4 are captured by
+  source comments + this entry.
+- **NEXT ACTION (owner):** P4 closes the renderer/determinism low-hangers. Remaining phases on this branch:
+  P5 resident-cache incremental (PERF-1), P6 docs + close-out (the §26 ledger) + REL-5. Do NOT
+  auto-merge/push — left to the owner. (PERF-5 Part B / FE-5 list-windowing stays deferred, untouched.)_
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 3 (TEST-ENFORCEMENT GAPS; TEST-2/3/4/5 +
 TEST-6 docs) — branch `full-audit-2026-06-29-fixes`.** Suite now **2446 passed / 39 skipped (2485 collected)**
 (was 2437/39 at Phase 2 → **+9 tests**; TEST-5 was a conversion, not an addition), typecheck clean,

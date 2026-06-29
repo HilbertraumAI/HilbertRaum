@@ -335,9 +335,20 @@ export async function retrieve(
   return { chunks, citations }
 }
 
-function truncateSnippet(text: string): string {
+/**
+ * Cap a citation snippet to keep `citations_json` small. Counts and slices by CODE POINT, not
+ * UTF-16 code unit (full-audit-2026-06-29 RAG-2): a raw `String.slice` can cut inside a
+ * surrogate pair (emoji, CJK ext-B, math symbols) and leave the snippet ending in a lone
+ * surrogate that renders as `�`. Spreading iterates whole code points, so the cut always lands
+ * on a code-point boundary. (Code points, not graphemes — a combining mark could still be split,
+ * but that never produces an invalid string; the goal here is only "never end mid-code-point".)
+ * Exported for the RAG-2 boundary unit test.
+ */
+export function truncateSnippet(text: string): string {
   const trimmed = text.trim()
-  return trimmed.length <= SNIPPET_MAX_CHARS ? trimmed : trimmed.slice(0, SNIPPET_MAX_CHARS).trimEnd() + '…'
+  const codePoints = [...trimmed]
+  if (codePoints.length <= SNIPPET_MAX_CHARS) return trimmed
+  return codePoints.slice(0, SNIPPET_MAX_CHARS).join('').trimEnd() + '…'
 }
 
 /** The whole-document read for a skill-aware analysis answer (skill-whole-doc engine, Wave 2). */

@@ -129,15 +129,54 @@ export function isBindRaceError(message: string): boolean {
   return /address already in use|EADDRINUSE|only one usage of each socket address/i.test(message)
 }
 
+/** A request abort signal plus a `clear()` that cancels its backing timeout timer. */
+export interface CombinedAbort {
+  /** Aborts on EITHER the per-request timeout OR the optional caller signal. */
+  readonly signal: AbortSignal
+  /**
+   * Cancel the timeout timer (and detach the caller listener). Call in a `finally` once the
+   * request settles, so an early completion — the norm — does not leave the timer pending for
+   * its full `timeoutMs` (REL-4: a large ingestion runs hundreds of embed/rerank batches; an
+   * unref'd-but-uncleared timer + `any`-listener per batch would otherwise pile up by the
+   * thousand before they age out). Idempotent.
+   */
+  clear(): void
+}
+
 /**
- * A request abort signal that fires on EITHER the per-request timeout OR an optional
- * caller signal (a user "Stop"). When no caller signal is given it's just the timeout,
- * so existing callers are unchanged. Used by the embedder + reranker loopback fetches so
- * a "Stop" during query embedding / rerank cancels promptly, not only on timeout (M-C5).
+ * A request abort that fires on EITHER the per-request timeout OR an optional caller signal
+ * (a user "Stop"). Used by the embedder + reranker + vision loopback fetches so a "Stop" during
+ * query embedding / rerank / vision cancels promptly, not only on timeout (M-C5).
+ *
+ * Unlike a bare `AbortSignal.timeout`, the timer is OWNED here so the caller can `clear()` it the
+ * instant the request settles (REL-4). The timeout still aborts with a `TimeoutError` DOMException
+ * and is unref'd, so behaviour and quit-blocking are unchanged — only the lifetime is bounded.
  */
-export function combineSignals(caller: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs)
-  return caller ? AbortSignal.any([caller, timeout]) : timeout
+export function combineSignals(caller: AbortSignal | undefined, timeoutMs: number): CombinedAbort {
+  const controller = new AbortController()
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')),
+    timeoutMs
+  )
+  // Don't let a pending request timeout keep the process alive (matches AbortSignal.timeout).
+  ;(timer as { unref?: () => void }).unref?.()
+
+  const onCallerAbort = (): void => controller.abort(caller!.reason)
+  if (caller) {
+    if (caller.aborted) controller.abort(caller.reason)
+    else caller.addEventListener('abort', onCallerAbort, { once: true })
+  }
+
+  let cleared = false
+  return {
+    signal: controller.signal,
+    clear(): void {
+      if (cleared) return
+      cleared = true
+      clearTimeout(timer)
+      caller?.removeEventListener('abort', onCallerAbort)
+    }
+  }
 }
 
 // ---- Injectable seams (so the server can be unit-tested with no real binary) -----

@@ -79,7 +79,10 @@ function oracleRanking(db: Db, query: Float32Array, modelId: string): string[] {
     .filter((r) => r.dimensions === query.length && r.vector_blob.length >= r.dimensions * 4)
     // The filter guarantees a full-length blob, so decodeVector is non-null here.
     .map((r) => ({ id: r.chunk_id, s: dotProduct(query, decodeVector(r.vector_blob, r.dimensions)!) }))
-    .sort((a, b) => b.s - a.s)
+    // Mirror VectorIndex.search's deterministic ranking: score desc, then chunkId asc as the
+    // tiebreak (full-audit-2026-06-29 RAG-1). Without the tiebreak here, equal-score chunks would
+    // diverge from production purely on V8 sort stability vs. SQLite scan order.
+    .sort((a, b) => b.s - a.s || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((h) => h.id)
 }
 
