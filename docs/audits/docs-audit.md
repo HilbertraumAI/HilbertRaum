@@ -16,8 +16,8 @@
   verify factual doc claims (commands, scripts, package names, env vars, folder structure, the
   `allowNetwork` default). No application code was modified and no code changes are recommended except
   where a doc disagrees with how the code actually behaves.
-- **Report status:** **In progress** — Phase 1 remediated (DOC-001, DOC-006 fixed 2026-06-29).
-  Phases 2–3 still open.
+- **Report status:** **In progress** — Phases 1–2 remediated (DOC-001, DOC-006 fixed 2026-06-29;
+  DOC-002, DOC-003 fixed 2026-06-29). Phase 3 (DOC-004, DOC-005) still open.
 
 ## How to use this report
 
@@ -79,12 +79,12 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 | `CLAUDE.md` | Operating manual: read-order, doc-lifecycle rule, hard rules, stack, per-phase ritual, commands | Good | Commands verified against `package.json`. Accurate. |
 | `README.md` | Front door: status, DIY setup, model catalog, dev map, doc index | Good | Verified scripts, structure, model table (9 chat models), Node ≥22.5, b9585 pin. Doc index omits 2 docs (DOC-004). |
 | `SECURITY.md` | Security policy + local threat model summary | Good | Last updated 2026-06-29; consistent with `security-model.md`. |
-| `PRIVACY.md` | Plain-language privacy notice | Needs update | Last updated 2026-06-20. One circular "below" cross-reference (DOC-003). Network-default wording is correct here. |
+| `PRIVACY.md` | Plain-language privacy notice | Good | Last updated 2026-06-20. Circular "below" cross-reference removed (DOC-003, Phase 2). Network-default wording is correct here. |
 | `CONTRIBUTING.md` | Ground rules + dev workflow | Good | Verified CI path, Node version, script↔TS mirror rule. |
 | `CHANGELOG.md` | Pre-1.0 release history | Good | Version `0.1.34` matches `package.json`. Tag range dated to 2026-06-22 (informational; see note). |
 | `CODE_OF_CONDUCT.md` | Contributor Covenant 2.1 | Good | Standard, internally consistent. |
 | `CLAUDE_HilbertRaum_MVP.md` | Frozen original spec (intent) | Good | Clearly banner-marked as frozen; deviations reconciled. |
-| `BUILD_STATE.md` | Live dev log of record | Needs update | ~9 broken links to deleted plan files (DOC-002). Otherwise the authoritative state file. |
+| `BUILD_STATE.md` | Live dev log of record | Good | 29 dead links to 9 deleted plan files de-linked to plain code-span text (DOC-002, Phase 2). The authoritative state file. |
 | `docs/architecture.md` | System design + audit design-record ledgers | Good | Current (2026-06-29); cross-refs valid. Gate-2 "default off" line fixed to ON (DOC-001, found during Phase-1 fix). |
 | `docs/rag-design.md` | Retrieval pipeline design + records | Good | Current (2026-06-29). |
 | `docs/security-model.md` | Threat model, vault, offline guard, audit log | Good | Current (2026-06-29); matches SECURITY.md + code. |
@@ -105,8 +105,8 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 | ID | Title | Severity | Confidence | Category | Status | Affected document(s) | Phase |
 |---|---|---|---|---|---|---|---|
 | DOC-001 | Model-download default documented as OFF; code + other docs say ON | Medium | High | Accuracy / Consistency | Fixed | `docs/model-policy.md`, `docs/user-guide.md`, `docs/architecture.md` | 1 |
-| DOC-002 | `BUILD_STATE.md` links to ~9 deleted `*-plan.md` files | Low | High | Navigation | Open | `BUILD_STATE.md` | 2 |
-| DOC-003 | PRIVACY.md circular "described under *Encryption* below" reference | Low | High | Clarity / Navigation | Open | `PRIVACY.md` | 2 |
+| DOC-002 | `BUILD_STATE.md` links to ~9 deleted `*-plan.md` files | Low | High | Navigation | Fixed | `BUILD_STATE.md` | 2 |
+| DOC-003 | PRIVACY.md circular "described under *Encryption* below" reference | Low | High | Clarity / Navigation | Fixed | `PRIVACY.md` | 2 |
 | DOC-004 | README doc index omits `benchmark.md` + `design-guidelines.md`; benchmark name collision | Low | Medium | Navigation / Completeness | Open | `README.md`, `docs/benchmark.md`, `docs/design-guidelines.md` | 3 |
 | DOC-005 | `design-guidelines.md` header date lags its body (~9 days) | Low | High | Accuracy / Staleness | Open | `docs/design-guidelines.md` | 3 |
 | DOC-006 | troubleshooting.md "network access is off by default" phrasing | Low | Low | Clarity | Fixed | `docs/troubleshooting.md` | 1 (folded in) |
@@ -180,7 +180,7 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 
 ### DOC-002: `BUILD_STATE.md` links to ~9 deleted plan files
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29, Phase 2)
 - **Severity:** Low
 - **Confidence:** High
 - **Category:** Navigation
@@ -210,10 +210,26 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
 - **Documentation update notes:** Confirm each repointed §-anchor actually exists in the target doc
   before linking to it.
 - **Suggested phase:** 2
+- **Fix applied (2026-06-29, Phase 2):** Took option (a) — de-linked, not repointed. A precise scan
+  confirmed exactly **9 distinct** missing targets and **29** markdown-link occurrences, every one in
+  the identical uniform form `` [`docs/<name>.md`](docs/<name>.md) `` (link text == target). Each was
+  converted to plain code-span text `` `docs/<name>.md` `` via 9 `replace_all` edits, dropping only the
+  link wrapper. The historical prose (including its in-text `§N` plan citations) was left untouched, and
+  the filenames remain visible as code spans — matching `BUILD_STATE.md`'s own established convention for
+  its many other retired-plan references (which were already plain code spans, never links). The plans'
+  full text remains recoverable via git history (and most of these log entries already carry an inline
+  `git show <sha>:docs/…` pointer). The 9 targets de-linked: `image-understanding-plan.md` (×4),
+  `context-compaction-plan.md` (×3), `performance-audit-2026-06-18.md` (×1), `brand-refresh-plan.md`
+  (×5), `full-doc-skills-plan.md` (×3), `skills-s11-plan.md` (×2), `skills-plan.md` (×2),
+  `whole-document-analysis-plan.md` (×3), `document-organization-plan.md` (×6). **Validation:** repo-wide
+  relative-`.md`-link scan (root + `docs/` + `BUILD_STATE.md`) now returns **zero** broken links (the
+  one remaining scan hit is a false positive — the literal illustrative pattern
+  `` `[…](docs/<name>-plan.md)` `` inside this report's own DOC-002 description, a code-span example, not
+  a navigational link); a targeted grep confirms 0 remaining markdown links to the 9 dead targets.
 
 ### DOC-003: PRIVACY.md circular "described under *Encryption* below" reference
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29, Phase 2)
 - **Severity:** Low
 - **Confidence:** High
 - **Category:** Clarity / Navigation
@@ -236,6 +252,12 @@ restructuring. ~1–2 short `/docs-fix` sessions total.
   forward-references itself.
 - **Documentation update notes:** None.
 - **Suggested phase:** 2
+- **Fix applied (2026-06-29, Phase 2):** Took the simplest recommended option — removed the redundant
+  misdirection clause "described under *Encryption* below". `PRIVACY.md:114-116` now reads "…the salt,
+  KDF parameters, verifier, and password-wrapped data key — it must be readable before you unlock, and
+  holds no password or plaintext data." The four fields remain enumerated inline (no information lost),
+  and the sentence no longer forward-references the section it already sits in. **Validation:** re-read
+  the paragraph in place; reads cleanly, no self-reference.
 
 ### DOC-004: README doc index omits `benchmark.md` and `design-guidelines.md`; benchmark name collision
 
@@ -374,9 +396,11 @@ user-guide is intentional reinforcement, not drift — except where it has gone 
 
 - **Broken links (published docs root + `docs/`):** none. A deterministic relative-`.md`-link scan of
   every root and `docs/` markdown file returned **zero** broken links.
-- **Broken links (`BUILD_STATE.md`):** ~9 distinct deleted `docs/*-plan.md` targets (DOC-002).
-- **Weak/circular reference:** `PRIVACY.md` "described under *Encryption* below" points into its own
-  section, wrong direction (DOC-003).
+- **Broken links (`BUILD_STATE.md`):** ~~~9 distinct deleted `docs/*-plan.md` targets~~ **RESOLVED
+  (DOC-002, Phase 2)** — 29 occurrences of 9 dead targets de-linked to plain code-span text; repo-wide
+  link scan now clean.
+- **Weak/circular reference:** ~~`PRIVACY.md` "described under *Encryption* below" points into its own
+  section, wrong direction~~ **RESOLVED (DOC-003, Phase 2)** — the misdirection clause was removed.
 - **Missing cross-links:** `benchmark.md` and `design-guidelines.md` are not linked from the README doc
   index (DOC-004).
 - **References to old commands/workflows:** none found — verified `npm` scripts, `scripts/*` names and
@@ -409,7 +433,7 @@ user-guide is intentional reinforcement, not drift — except where it has gone 
   correct.
 - **Rollback notes:** Revert the two/three edited sections.
 
-### Phase 2: Repair dead/circular references (DOC-002, DOC-003)
+### Phase 2: Repair dead/circular references (DOC-002, DOC-003) — ✅ COMPLETE (2026-06-29)
 
 - **Goal:** Eliminate broken and circular links.
 - **Findings included:** DOC-002, DOC-003.
@@ -421,8 +445,11 @@ user-guide is intentional reinforcement, not drift — except where it has gone 
   exist.
 - **Validation steps:** Re-run the relative-`.md`-link scan over root + `docs/` + `BUILD_STATE.md`;
   expect zero broken links.
-- **Acceptance criteria:** Link scan is clean repo-wide; PRIVACY paragraph reads correctly.
+- **Acceptance criteria:** Link scan is clean repo-wide; PRIVACY paragraph reads correctly. **Met:**
+  repo-wide relative-`.md`-link scan returns zero broken links; PRIVACY.md "What is not encrypted"
+  paragraph reads cleanly with no self-reference.
 - **Risks:** Low. Do not alter historical prose in `BUILD_STATE.md` beyond neutralizing the links.
+  **Honored** — only the link wrapper was dropped; prose (incl. in-text `§N` plan citations) untouched.
 - **Rollback notes:** Revert edited lines.
 
 ### Phase 3: Navigation & freshness polish (DOC-004, DOC-005, DOC-006)
@@ -447,13 +474,14 @@ user-guide is intentional reinforcement, not drift — except where it has gone 
 1. ~~**Phase 1 (DOC-001)** first~~ — ✅ **DONE (2026-06-29).** Resolved the only code-disagreeing
    finding plus the user-guide self-contradiction; DOC-006 folded in; a fourth architecture.md
    occurrence found and fixed.
-2. **Phase 2 (DOC-002, DOC-003)** next — mechanical link hygiene; clears the entire repo's broken-link
-   surface and one circular reference. **← recommended next.**
+2. ~~**Phase 2 (DOC-002, DOC-003)** next~~ — ✅ **DONE (2026-06-29).** Mechanical link hygiene; cleared
+   the entire repo's broken-link surface (29 dead links de-linked) and the one circular reference.
 3. **Phase 3 (DOC-004, DOC-005)** last — navigation/freshness polish; nice-to-have, no correctness
-   impact. (DOC-006 already done in Phase 1.)
+   impact. (DOC-006 already done in Phase 1.) **← recommended next.**
 
 ## Remediation log
 
 | Date | Phase / finding | Files changed | Summary | Validation performed | Result | Follow-up needed |
 |---|---|---|---|---|---|---|
 | 2026-06-29 | Phase 1 — DOC-001 + DOC-006 | `docs/model-policy.md`, `docs/user-guide.md`, `docs/architecture.md`, `docs/troubleshooting.md`, `docs/audits/docs-audit.md` | Fixed the model-download user-setting default everywhere it was stale: model-policy gate 2 and architecture gate 2 "default OFF/off" → ON; user-guide §5 heading+body now matches §10 (no more self-contradiction); troubleshooting "network off by default" scoped to the download feature (DOC-006). All mirror code `DEFAULT_SETTINGS.allowNetwork: true` and the policy-AND-setting rule. | Verified code (`types.ts:251` `allowNetwork: true`); grepped `docs/` for "off by default" / "default OFF" / `allowNetwork` — remaining hits are legitimate (skills auto-fire toggle, prepared-drive policy deny, the report itself); re-read user-guide §5 vs §10 (now agree); confirmed architecture's own §-record note (line ~1958) corroborates ON. | **Fixed** (4 occurrences, incl. one architecture.md occurrence not in the original affected-doc list). | Code-owner: correct stale `registerDownloadIpc.ts:16` "default off" comment (out of docs scope). |
+| 2026-06-29 | Phase 2 — DOC-002 + DOC-003 | `BUILD_STATE.md`, `PRIVACY.md`, `docs/audits/docs-audit.md` | DOC-002: de-linked all 29 markdown links to 9 deleted `docs/*-plan.md` files (uniform form `` [`docs/x.md`](docs/x.md) `` → plain code-span `` `docs/x.md` ``), via 9 `replace_all` edits; historical prose + in-text `§N` plan citations untouched; matches BUILD_STATE.md's own convention for other retired-plan refs. DOC-003: removed the circular/misdirected "described under *Encryption* below" clause in PRIVACY.md (fields stay enumerated inline). | Pre-fix scan confirmed exactly 9 distinct missing targets / 29 link occurrences; post-fix repo-wide relative-`.md`-link scan (root + `docs/` + `BUILD_STATE.md`) returns **zero** broken links (sole remaining hit is a false positive: the literal example `` `[…](docs/<name>-plan.md)` `` in this report's DOC-002 text); targeted grep confirms 0 remaining markdown links to the 9 dead targets; re-read PRIVACY §"What is not encrypted" (reads cleanly, no self-reference). | **Fixed** (both findings). | None. (Phase 3 — DOC-004, DOC-005 — remains open.) |

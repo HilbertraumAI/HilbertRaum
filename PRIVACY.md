@@ -112,8 +112,8 @@ in memory only and never reach disk.)
 
 **What is not encrypted:** the AI model files (public weights, not your data), the app itself, and
 the vault descriptor `config/workspace.json` (the salt, KDF parameters, verifier, and
-password-wrapped data key described under *Encryption* below — it must be readable before you unlock,
-and holds no password or plaintext data).
+password-wrapped data key — it must be readable before you unlock, and holds no password or
+plaintext data).
 While the workspace is **unlocked**, a decrypted working copy of the
 database exists on disk (and a transient decrypted copy of a document or image exists briefly during
 re-indexing or when you open an image-analysis entry); these are shredded on lock/quit, and any
