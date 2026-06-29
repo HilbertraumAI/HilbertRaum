@@ -6,6 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 6 (FINAL: DOCUMENTATION RECONCILIATION + AUDIT
+CLOSE-OUT; DOC-1/DOC-3/DOC-4 + SEC-1 doc half) — branch `full-audit-2026-06-29-fixes`.** Suite unchanged at
+**2463 passed / 39 skipped (2502 collected)**, typecheck clean, `npm run build` green. **Docs/comments-only +
+the report retirement — no behavior change** (the only `src/`/test edits were two comment fixes: the DOC-1
+`collections.ts` header and the DOC-4 `benchmark.test.ts` citation). This phase closes the six-phase audit.
+- **The six phases, one line each.** P0 TEST-1 (de-flaked the iteration-capped dictation poll → wall-clock
+  deadline); P1 BL-1/BL-2/BL-3 (financial correctness — leading-minus sign theft, figure-region currency,
+  German closed-compound categorization); P2 REL-1/REL-2/REL-3 + DOC-2 (port-race retry / whisper SIGKILL /
+  abort-aware slot handoff + the 180 s GPU-timeout doc fix); P3 TEST-2/3/4/5 + TEST-6 docs (test-enforcement
+  seams — prove the controls stay *wired*); P4 FE-1/RAG-1/RAG-2/REL-4 (renderer unmount guard + determinism /
+  robustness low-hangers); P5 PERF-1 (resident-cache incremental delta + signature backstop). The release-
+  blockers (BL-1 wrong-money, TEST-1 red-suite) and the strong should-fix (REL-2 hang-on-quit) all closed.
+- **Phase-6 doc fixes applied.** DOC-1 — `collections.ts` header no longer calls the *shipped* C2
+  delete-with-documents "left out of v1"; repointed to **architecture.md §1 C2**. DOC-3 — `bge-reranker-v2-m3.yaml`
+  `size_on_disk_gb` 1.08 (GiB mislabel) → **1.16** (decimal GB) + `model-policy.md` "~1.16 GB". DOC-4 — dropped
+  the dangling `/§11.1` from `benchmark.test.ts` (GPU record is §1–§8; §8 resolves). SEC-1 doc half —
+  `security-model.md` gained an **accepted-residual** note on offline password guessing (no unlock rate-limit /
+  8-char floor; the at-rest Argon2id+AES-GCM is the primary mitigation; the code half is an open follow-up).
+  DOC-2 verified already landed in P2 (GPU table "180 s (3 min)").
+- **Verified every earlier phase's doc rider landed** (P1 arch §8 + known-limitations; P2 GPU record §5.5 +
+  the doc-task/arbiter record; P3 "Test-enforcement seams" record; P4 renderer FE-4 bullet + rag-design §11
+  tie-break; P5 "Performance … Wave P4" incremental note) and ran a **§-anchor sweep** — DOC-1 (→ §1 C2) and
+  DOC-4 (→ §8) resolve; all audit-introduced code/test comments cite by finding-ID. The sweep surfaced **two
+  pre-existing dangling `§11.1` citations** (`gpu.test.ts`, `runtime-ladder.test.ts`) the report did not name;
+  per the scope guard they were **left as-is and reported** (a future doc-comment-pass candidate).
+- **Durable record:** new **architecture.md "§26 Full audit (2026-06-29) — remediation close-out"** ledger
+  (mirrors §25) dispositions EVERY finding → phase → as-built §. The working-paper report
+  `audits/full-audit-2026-06-29.md` was already committed (recoverable in git history) and is **`git rm`'d** in
+  this close-out commit per the CLAUDE.md doc-lifecycle rule.
+- **NEXT ACTION (owner): merge `full-audit-2026-06-29-fixes` to `master` when ready; do NOT auto-merge/push.**
+  Unscheduled follow-ups carried in §26 (none release-blocking): **SEC-1 code half** (unlock rate-limit /
+  strength floor), **SEC-2** (`previewSkillPackage` stages to OS temp), **SEC-3** (dialog-opener
+  `requireUnlocked()` parity), **REL-5** (`BEGIN IMMEDIATE` + `withTransaction` — its own phase), **PERF-5 Part
+  B** (list windowing), **E5 `query:`/`passage:` prefix migration**. The two pre-existing `§11.1` citations are
+  a minor doc-comment cleanup._
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 5 (RESIDENT-CACHE INCREMENTAL MAINTENANCE;
 PERF-1, the one real scalability item) — branch `full-audit-2026-06-29-fixes`.** Suite now **2463 passed /
 39 skipped (2502 collected)** (was 2456/39 at Phase 4 → **+7 tests**), typecheck clean, `npm run build`

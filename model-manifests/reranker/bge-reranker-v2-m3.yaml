@@ -5,7 +5,7 @@ role: reranker
 format: gguf
 runtime: llama_cpp
 license: apache-2.0
-size_on_disk_gb: 1.08
+size_on_disk_gb: 1.16
 recommended_min_ram_gb: 6
 recommended_ram_gb: 8
 recommended_context_tokens: 2048

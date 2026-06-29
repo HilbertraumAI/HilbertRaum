@@ -18,8 +18,8 @@ import type {
 // The full document-organization feature (project-management IPC, the multi-select scope
 // picker, chat attachments via conversation_documents) shipped across Phases A–F; this module
 // is its backend half. (The Phase-F rule-based filing-suggestion engine was removed 2026-06-15
-// — filing is manual.) Delete-with-documents (shredding genuinely
-// project-only docs) is the one piece left out of v1 (rag-design.md §13.7). Built-ins
+// — filing is manual.) Delete-with-documents (shredding genuinely project-only docs via the
+// `projectOnlyDocumentIds` C2 predicate below) shipped — see architecture.md §1 C2. Built-ins
 // (Library/Temporary) are seeded in db.ts.
 
 function nowIso(): string {

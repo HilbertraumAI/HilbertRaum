@@ -301,6 +301,22 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
   `p = 1`. Because the params are stored alongside the salt, unlock derives **exactly** the same key —
   derivation is deterministic. The params are tunable without changing the on-disk format.
 
+**Accepted residual — offline password guessing on a lost/stolen drive (full-audit-2026-06-29 SEC-1, Low).**
+The unlock IPC path (`unlockWorkspace`) has **no attempt counter, escalating delay, or lockout**, and the
+only password floor is **length ≥ 8** (`MIN_PASSWORD_LENGTH`); there is no strength meter at create/change
+time. Against the explicitly-modeled lost/stolen-drive threat, an attacker who has the drive can ignore the
+IPC layer entirely and brute-force the descriptor's authenticated verifier offline, so a UI rate-limit would
+not bind them — a weak-but-≥8 password (e.g. a dictionary word + two digits) is realistically guessable
+offline at the **interactive-minimum** Argon2id cost (`m≈19 MiB, t=2, p=1`, ~0.5 s/derive, chosen for unlock
+latency on portable hardware). The **at-rest Argon2id + AES-256-GCM encryption is the primary mitigation**
+(the plaintext DB and document copies never rest on the drive — only the encrypted blobs + the small
+verifier descriptor), and there is **no leak path** for a wrong guess (a wrong key fails the GCM tag without
+touching the DB). On an offline, single-user, local-only product this is a **defensible trade-off and is
+recorded here as an accepted residual.** *Optional, unscheduled follow-up:* an escalating-delay / attempt
+counter on the IPC unlock path (cheap defence against scripted GUI guessing, not against raw offline
+attack) plus a create/change-time strength meter/floor — the **code half of SEC-1**, deliberately **not**
+implemented in the Phase-6 docs-only close-out (see architecture.md §26).
+
 ### AEAD (encryption at rest)
 - **AES-256-GCM.** Every encryption uses a fresh random 12-byte IV; the 16-byte auth tag is stored
   alongside the ciphertext. A wrong key or any tampering fails the GCM tag → `decrypt` throws, which
