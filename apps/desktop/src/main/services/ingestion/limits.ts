@@ -8,10 +8,22 @@
 // large recording or scan should still import — and every cap is overridable via an
 // env var so a power user / a constrained machine can retune without a rebuild.
 
-/** The four ingestion resource ceilings. */
+/** The ingestion resource ceilings. */
 export interface IngestionLimits {
   /** Max bytes of the file handed to a parser (pre-parse, before read). */
   maxBytes: number
+  /**
+   * Max bytes for a format whose parser reads the WHOLE file into a single JS string
+   * (text / Markdown / CSV — see `readsWholeFileToString`). PERF-4: those parsers
+   * materialize the file as one UTF-16 string and derive more full copies (CSV alone holds
+   * the raw string + papaparse's row array + the rebuilt `lines.join` ≈ 3× at once), so the
+   * generous `maxBytes` (1 GiB) would blow past V8's ~512 MB string/heap ceiling and OOM-CRASH
+   * the main process instead of hitting the friendly `fileTooLarge` reject. This conservative
+   * cap (well under that ceiling, with headroom for the derived copies) keeps an oversize text
+   * file a clean reject. The streaming/page-bounded formats (PDF/DOCX/audio/image) are unaffected
+   * — they keep the full `maxBytes`.
+   */
+  textMaxBytes: number
   /** Wall-clock budget for a single `parser.parse()` call (non-audio — see processDocument). */
   parseTimeoutMs: number
   /** Max PDF pages the text-extraction loop will walk (M-2). */
@@ -24,10 +36,13 @@ export interface IngestionLimits {
  * Defaults. 1 GiB on disk / inflated covers a long stereo recording or a big scan; the
  * 30-minute parse budget is a backstop for a pathological hang, not a tight SLA (a long
  * audio transcription is excluded from it in processDocument). 5 000 pages is far beyond
- * any real office document.
+ * any real office document. `textMaxBytes` is 64 MiB (PERF-4): a string-safe ceiling for the
+ * read-whole-file-to-string formats — comfortably under V8's ~512 MB string limit even after
+ * CSV's 2–3× derived copies, while still admitting any realistic text/Markdown/CSV document.
  */
 export const DEFAULT_INGESTION_LIMITS: IngestionLimits = {
   maxBytes: 1024 * 1024 * 1024,
+  textMaxBytes: 64 * 1024 * 1024,
   parseTimeoutMs: 30 * 60_000,
   pdfMaxPages: 5_000,
   docxMaxInflatedBytes: 1024 * 1024 * 1024
@@ -43,12 +58,13 @@ function envInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number 
 
 /**
  * Resolve the effective limits, applying env overrides over the defaults:
- * `HILBERTRAUM_MAX_DOC_BYTES`, `HILBERTRAUM_PARSE_TIMEOUT_MS`,
+ * `HILBERTRAUM_MAX_DOC_BYTES`, `HILBERTRAUM_TEXT_MAX_BYTES`, `HILBERTRAUM_PARSE_TIMEOUT_MS`,
  * `HILBERTRAUM_PDF_MAX_PAGES`, `HILBERTRAUM_DOCX_MAX_INFLATED_BYTES`.
  */
 export function resolveIngestionLimits(env: NodeJS.ProcessEnv = process.env): IngestionLimits {
   return {
     maxBytes: envInt(env, 'HILBERTRAUM_MAX_DOC_BYTES', DEFAULT_INGESTION_LIMITS.maxBytes),
+    textMaxBytes: envInt(env, 'HILBERTRAUM_TEXT_MAX_BYTES', DEFAULT_INGESTION_LIMITS.textMaxBytes),
     parseTimeoutMs: envInt(env, 'HILBERTRAUM_PARSE_TIMEOUT_MS', DEFAULT_INGESTION_LIMITS.parseTimeoutMs),
     pdfMaxPages: envInt(env, 'HILBERTRAUM_PDF_MAX_PAGES', DEFAULT_INGESTION_LIMITS.pdfMaxPages),
     docxMaxInflatedBytes: envInt(

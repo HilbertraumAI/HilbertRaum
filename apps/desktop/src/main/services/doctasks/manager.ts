@@ -929,7 +929,7 @@ export class DocTaskManager {
           if (!cipher) throw new Error(tMain('main.task.sourceUnreadable'))
           const transient = join(this.deps.getStoreDir(), `${documentId}.parse-ocr.pdf`)
           try {
-            cipher.decryptFile(row.stored_path, transient)
+            await cipher.decryptFileAsync(row.stored_path, transient) // PERF-1: yields between chunks
             return await readFile(transient)
           } finally {
             shredFile(transient)

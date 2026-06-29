@@ -12,6 +12,7 @@ import {
   closeSync,
   fsyncSync
 } from 'node:fs'
+import { open as openFileAsync, rename as renameAsync, rm as rmAsync } from 'node:fs/promises'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { tMain } from './i18n'
@@ -187,11 +188,34 @@ export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor)
 // locked (shutdown would silently leave plaintext on disk) or re-opened. The streaming
 // versions write the EXACT same on-disk frame (`MAGIC | iv | tag | ciphertext`), so
 // existing vaults are unaffected.
+//
+// SYNC vs ASYNC (PERF-1, full-audit-2026-06-29 follow-up, Phase 3). Two flavours exist;
+// both produce/consume the IDENTICAL on-disk frame (cross-verified by the vault tests), so a
+// file written by either decrypts with either:
+//   • `encryptFile`/`decryptFile` (SYNC) — the original `readSync`/`writeSync` loop. Used by the
+//     DB-`.enc` lifecycle (create/unlock/lock/checkpoint/rekey) and the crash-only lock, which
+//     must run to completion BEFORE `process.exit` in the `uncaughtException` handler (an async
+//     lock can't finish before exit → committed in-session data would be lost), and by the
+//     bounded, user-triggered image-history / text-export paths reached through SYNCHRONOUS
+//     callers (the vision streaming emitter; the export reader). These are NOT the per-import freeze.
+//   • `encryptFileAsync`/`decryptFileAsync` (ASYNC) — the same loop on `fs.promises` FileHandles,
+//     awaiting each chunk so it YIELDS to the event loop between chunks (AES-GCM `update` on an
+//     8 MiB chunk is sub-ms). Used by the document-CACHE import/re-index/preview/OCR path — the
+//     "freeze on every import" PERF-1 targets (a large scanned PDF over USB, paid twice in an
+//     encrypted workspace). DIVERGENCE from the audit's "convert the vault loop" wording: rather
+//     than make the shared functions async-in-place (which cascades into the DB lock/unlock/rekey
+//     lifecycle + the synchronous crash-lock + the synchronous vision emitter — the highest-stakes,
+//     most-tested code, with a real vault-corruption blast radius the audit itself flagged), we
+//     ADDED async siblings used by the actual per-import harm and left the session-boundary DB
+//     lifecycle + bounded sync paths on the sync functions. See architecture.md §35.
 
 /** Chunk size for streaming crypto + shredding. Bounds memory regardless of file size. */
-const FILE_CHUNK_BYTES = 8 * 1024 * 1024
+export const FILE_CHUNK_BYTES = 8 * 1024 * 1024
 
-/** Encrypt `srcPath` → `destPath` (atomic) with `key`. Streams; constant memory. */
+/**
+ * Encrypt `srcPath` → `destPath` (atomic) with `key`. Streams; constant memory. SYNCHRONOUS —
+ * blocks until done; see the section header for when to prefer {@link encryptFileAsync}.
+ */
 export function encryptFile(srcPath: string, destPath: string, key: Buffer): void {
   const tmp = `${destPath}.tmp`
   const iv = randomBytes(BLOB_IV_BYTES)
@@ -294,6 +318,106 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
       /* already closed */
     }
     if (out !== null) closeSync(out)
+  }
+}
+
+/**
+ * ASYNC twin of {@link encryptFile} (PERF-1): the SAME streaming AES-256-GCM loop on a
+ * `fs.promises` FileHandle, awaiting each chunk read/write so it yields to the event loop
+ * between chunks — a large document import no longer freezes the Electron main process/IPC.
+ * Writes the byte-IDENTICAL frame (`MAGIC | iv | tag-placeholder | ciphertext`, with the GCM
+ * tag patched into its reserved slot at `tagPos` AFTER `final()` via a positional write), so a
+ * file written here decrypts via the sync path / in-memory blob path and vice versa.
+ */
+export async function encryptFileAsync(srcPath: string, destPath: string, key: Buffer): Promise<void> {
+  const tmp = `${destPath}.tmp`
+  const iv = randomBytes(BLOB_IV_BYTES)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const src = await openFileAsync(srcPath, 'r')
+  let out: Awaited<ReturnType<typeof openFileAsync>> | null = null
+  try {
+    out = await openFileAsync(tmp, 'w')
+    // Header: MAGIC | iv | tag placeholder. GCM's tag is only known after the whole stream is
+    // processed, so reserve its slot and patch it in at the end (same as the sync path).
+    await out.write(BLOB_MAGIC, 0, BLOB_MAGIC.length, null)
+    await out.write(iv, 0, iv.length, null)
+    const tagPos = BLOB_MAGIC.length + BLOB_IV_BYTES
+    await out.write(Buffer.alloc(BLOB_TAG_BYTES), 0, BLOB_TAG_BYTES, null)
+
+    const buf = Buffer.alloc(FILE_CHUNK_BYTES)
+    for (;;) {
+      const { bytesRead } = await src.read(buf, 0, buf.length, null)
+      if (bytesRead <= 0) break
+      const ct = cipher.update(buf.subarray(0, bytesRead))
+      if (ct.length > 0) await out.write(ct, 0, ct.length, null)
+    }
+    const fin = cipher.final()
+    if (fin.length > 0) await out.write(fin, 0, fin.length, null)
+    const tag = cipher.getAuthTag()
+    await out.write(tag, 0, tag.length, tagPos)
+    await out.close()
+    out = null
+    await renameAsync(tmp, destPath)
+  } catch (err) {
+    if (out !== null) {
+      await out.close().catch(() => {})
+      out = null
+    }
+    await rmAsync(tmp, { force: true }).catch(() => {})
+    throw err
+  } finally {
+    await src.close().catch(() => {})
+    if (out !== null) await out.close().catch(() => {})
+  }
+}
+
+/**
+ * ASYNC twin of {@link decryptFile} (PERF-1): the SAME streaming loop on `fs.promises`
+ * FileHandles, yielding between chunks. Throws on a wrong key/tamper (GCM auth failure in
+ * `final()`); on failure the partial output is shredded — note callers verify the password
+ * against the descriptor verifier BEFORE decrypting, so a wrong-key decrypt never happens in
+ * normal flow. Reads the byte-identical frame the sync path writes (and vice versa).
+ */
+export async function decryptFileAsync(srcPath: string, destPath: string, key: Buffer): Promise<void> {
+  const tmp = `${destPath}.tmp`
+  const src = await openFileAsync(srcPath, 'r')
+  let out: Awaited<ReturnType<typeof openFileAsync>> | null = null
+  try {
+    const headerLen = BLOB_MAGIC.length + BLOB_IV_BYTES + BLOB_TAG_BYTES
+    const header = Buffer.alloc(headerLen)
+    const { bytesRead: got } = await src.read(header, 0, headerLen, null)
+    if (got < headerLen) throw new Error('Encrypted blob is too short or corrupt')
+    if (!header.subarray(0, BLOB_MAGIC.length).equals(BLOB_MAGIC)) {
+      throw new Error('Encrypted blob has an unrecognised header')
+    }
+    const iv = header.subarray(BLOB_MAGIC.length, BLOB_MAGIC.length + BLOB_IV_BYTES)
+    const tag = header.subarray(BLOB_MAGIC.length + BLOB_IV_BYTES, headerLen)
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(tag)
+
+    out = await openFileAsync(tmp, 'w')
+    const buf = Buffer.alloc(FILE_CHUNK_BYTES)
+    for (;;) {
+      const { bytesRead } = await src.read(buf, 0, buf.length, null)
+      if (bytesRead <= 0) break
+      const pt = decipher.update(buf.subarray(0, bytesRead))
+      if (pt.length > 0) await out.write(pt, 0, pt.length, null)
+    }
+    const fin = decipher.final() // throws here on wrong key / tampered ciphertext
+    if (fin.length > 0) await out.write(fin, 0, fin.length, null)
+    await out.close()
+    out = null
+    await renameAsync(tmp, destPath)
+  } catch (err) {
+    if (out !== null) {
+      await out.close().catch(() => {})
+      out = null
+    }
+    shredFile(tmp) // unauthenticated partial plaintext must not linger
+    throw err
+  } finally {
+    await src.close().catch(() => {})
+    if (out !== null) await out.close().catch(() => {})
   }
 }
 
@@ -565,10 +689,16 @@ export function rewrapVaultKey(
  * bytes of every imported file would otherwise stay readable on a lost drive).
  */
 export interface DocumentCipher {
-  /** Encrypt the plaintext file at `srcPath` → framed ciphertext at `destPath`. */
+  /** Encrypt the plaintext file at `srcPath` → framed ciphertext at `destPath`. SYNCHRONOUS —
+   *  for the bounded, sync-reached paths (image-history via the vision emitter; text export). */
   encryptFile(srcPath: string, destPath: string): void
-  /** Decrypt the framed ciphertext at `srcPath` → plaintext at `destPath`. */
+  /** Decrypt the framed ciphertext at `srcPath` → plaintext at `destPath`. SYNCHRONOUS. */
   decryptFile(srcPath: string, destPath: string): void
+  /** Async encrypt (PERF-1): yields to the event loop between chunks. Use on the document-cache
+   *  import/re-index path so a large import never freezes the main process. */
+  encryptFileAsync(srcPath: string, destPath: string): Promise<void>
+  /** Async decrypt (PERF-1): yields between chunks. Use on the import/preview/OCR read path. */
+  decryptFileAsync(srcPath: string, destPath: string): Promise<void>
 }
 
 // ---- create / unlock / lock ------------------------------------------------------
@@ -967,7 +1097,9 @@ export class WorkspaceController {
     if (!key || this._mode !== 'encrypted') return null
     return {
       encryptFile: (src, dest) => encryptFile(src, dest, key),
-      decryptFile: (src, dest) => decryptFile(src, dest, key)
+      decryptFile: (src, dest) => decryptFile(src, dest, key),
+      encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
+      decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
     }
   }
 

@@ -56,7 +56,7 @@ import type {
 } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { encryptFile, decryptFile } from '../../src/main/services/workspace-vault'
+import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -410,7 +410,9 @@ describe('registerImagesIpc — history persistence', () => {
         isUnlocked: () => unlocked,
         documentCipher: () => ({
           encryptFile: (s: string, d: string) => encryptFile(s, d, key),
-          decryptFile: (s: string, d: string) => decryptFile(s, d, key)
+          decryptFile: (s: string, d: string) => decryptFile(s, d, key),
+          encryptFileAsync: (s: string, d: string) => encryptFileAsync(s, d, key),
+          decryptFileAsync: (s: string, d: string) => decryptFileAsync(s, d, key)
         })
       }
     } as unknown as AppContext

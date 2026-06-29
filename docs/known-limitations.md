@@ -204,6 +204,21 @@ password recovery — are documented in
 
 ## Engineering trade-offs (noted, intentionally unchanged)
 
+- **Text / Markdown / CSV imports are capped at 64 MiB, separately from the 1 GiB document ceiling
+  (PERF-4, full-audit-2026-06-29-followup; [`architecture.md`](architecture.md) §35).** Those parsers
+  read the whole file into one UTF-16 JS string (CSV then derives the papaparse row array + the rebuilt
+  joined text — ≈3 full copies at once), so a file near the 1 GiB `maxBytes` would exceed V8's ~512 MB
+  string limit and OOM-crash the main process. The `textMaxBytes` ceiling (env `HILBERTRAUM_TEXT_MAX_BYTES`)
+  makes an oversize text/CSV file hit the friendly "file too large" reject instead. PDF/DOCX/audio/image
+  keep the full `maxBytes` (they stream / are page-bounded). A streaming line/row parser would lift the
+  cap; the byte ceiling is the safe interim win.
+- **The session-boundary DB unlock/lock decrypt is still synchronous (PERF-1 scope; [`architecture.md`](architecture.md)
+  §35).** The per-**import** document-cache crypto was made async (yields between 8 MiB chunks, so a large
+  import no longer freezes the main process). The whole-DB decrypt on unlock / encrypt on lock — once per
+  session, not per import — stays on the synchronous path because the `uncaughtException` crash-lock must
+  re-encrypt the working DB *before* `process.exit` (an async lock couldn't finish first). On a very large
+  workspace DB the unlock screen / "Lock now" can therefore still pause briefly; adopting the async vault
+  siblings there (keeping a synchronous crash-lock) is a tracked follow-up.
 - The per-import `jobs` map in `registerDocsIpc` is never pruned (tiny, ephemeral, per-process).
 - `getSettings` does not type-guard stored JSON values (the privacy-critical network path is
   double-gated by the policy AND).

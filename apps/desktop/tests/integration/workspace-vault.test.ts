@@ -17,6 +17,9 @@ import {
   shredStalePlaintext,
   encryptFile,
   decryptFile,
+  encryptFileAsync,
+  decryptFileAsync,
+  FILE_CHUNK_BYTES,
   shredFile,
   applyPendingRekey,
   REKEY_SUFFIX,
@@ -187,6 +190,88 @@ describe('streaming file crypto (M5)', () => {
     const p = tmpFile('shred-me.bin', randomBytes(1024 * 1024))
     shredFile(p)
     expect(existsSync(p)).toBe(false)
+  })
+})
+
+// ---- PERF-1: async vault crypto — byte-identical frame + yields to the event loop ----
+//
+// The async twins (encryptFileAsync/decryptFileAsync) MUST produce/consume the EXACT same
+// on-disk frame as the sync ones (the on-disk format is load-bearing — old vaults must still
+// read), and must NOT block the main thread (the whole point). These tests pin both.
+
+describe('async vault crypto (PERF-1)', () => {
+  function tmpFile(name: string, data: Buffer | string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-async-crypto-'))
+    const p = join(dir, name)
+    writeFileSync(p, data)
+    return p
+  }
+
+  it('async-encrypted file decrypts via the SYNC path AND the in-memory blob path (identical frame)', async () => {
+    const key = randomBytes(32)
+    const plaintext = randomBytes(2 * FILE_CHUNK_BYTES + 11) // spans multiple chunk boundaries
+    const src = tmpFile('plain.bin', plaintext)
+    const enc = `${src}.enc`
+    await encryptFileAsync(src, enc, key)
+
+    // The OLD synchronous reader decrypts what the NEW async writer produced …
+    const out = `${enc}.plain`
+    decryptFile(enc, out, key)
+    expect(readFileSync(out).equals(plaintext)).toBe(true)
+    // … and so does the in-memory framed-blob path (same MAGIC|iv|tag|ct layout).
+    expect(decrypt(key, deserializeBlob(readFileSync(enc))).equals(plaintext)).toBe(true)
+  })
+
+  it('SYNC-encrypted file (old vaults) decrypts via the async path', async () => {
+    const key = randomBytes(32)
+    const plaintext = randomBytes(FILE_CHUNK_BYTES + 5)
+    const src = tmpFile('plain2.bin', plaintext)
+    const enc = `${src}.enc`
+    encryptFile(src, enc, key) // OLD synchronous writer
+    const out = `${enc}.plain`
+    await decryptFileAsync(enc, out, key) // NEW async reader
+    expect(readFileSync(out).equals(plaintext)).toBe(true)
+  })
+
+  it('async round-trips its own output and rejects a tampered .enc (GCM auth), leaving no plaintext', async () => {
+    const key = randomBytes(32)
+    const src = tmpFile('plain3.bin', randomBytes(256 * 1024))
+    const enc = `${src}.enc`
+    await encryptFileAsync(src, enc, key)
+
+    // Flip a ciphertext byte past the 36-byte header → GCM auth must fail.
+    const blob = readFileSync(enc)
+    blob[100] ^= 0xff
+    writeFileSync(enc, blob)
+    const out = `${enc}.plain`
+    await expect(decryptFileAsync(enc, out, key)).rejects.toThrow()
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(`${out}.tmp`)).toBe(false) // partial output shredded
+  })
+
+  it('yields to the event loop between chunks (the sync version blocks it)', async () => {
+    const key = randomBytes(32)
+    const data = randomBytes(FILE_CHUNK_BYTES * 3 + 7) // several chunk boundaries → several awaits
+    const src = tmpFile('big.bin', data)
+
+    // SYNC: a macrotask scheduled right before a synchronous call cannot run until it returns.
+    // JS is single-threaded, so this is deterministic — the timer can't preempt the sync loop.
+    let firedDuringSync = false
+    const ts = setTimeout(() => {
+      firedDuringSync = true
+    }, 0)
+    encryptFile(src, `${src}.s.enc`, key)
+    expect(firedDuringSync).toBe(false)
+    clearTimeout(ts)
+
+    // ASYNC: the same macrotask DOES run, because each chunk read/write awaits (yields the loop).
+    let firedDuringAsync = false
+    const ta = setTimeout(() => {
+      firedDuringAsync = true
+    }, 0)
+    await encryptFileAsync(src, `${src}.a.enc`, key)
+    clearTimeout(ta)
+    expect(firedDuringAsync).toBe(true)
   })
 })
 

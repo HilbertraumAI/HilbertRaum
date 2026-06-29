@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -57,11 +57,13 @@ describe('resolveIngestionLimits', () => {
   it('applies positive-integer env overrides and ignores junk', () => {
     const limits = resolveIngestionLimits({
       HILBERTRAUM_MAX_DOC_BYTES: '1000',
+      HILBERTRAUM_TEXT_MAX_BYTES: '500',
       HILBERTRAUM_PDF_MAX_PAGES: '7',
       HILBERTRAUM_PARSE_TIMEOUT_MS: 'not-a-number',
       HILBERTRAUM_DOCX_MAX_INFLATED_BYTES: '-5'
     })
     expect(limits.maxBytes).toBe(1000)
+    expect(limits.textMaxBytes).toBe(500)
     expect(limits.pdfMaxPages).toBe(7)
     // Junk / non-positive values fall back to the defaults (never weaken to 0/NaN).
     expect(limits.parseTimeoutMs).toBe(DEFAULT_INGESTION_LIMITS.parseTimeoutMs)
@@ -115,6 +117,56 @@ describe('processDocument byte ceiling (M-1)', () => {
     const info = await processDocument(db, storeDir, queued.id, {
       limits: { ...DEFAULT_INGESTION_LIMITS, maxBytes: 1024 }
     })
+    expect(info.status).toBe('indexed')
+  })
+})
+
+// PERF-4 — text/Markdown/CSV parsers read the whole file into ONE JS string (+ derived copies),
+// so a near-`maxBytes` (1 GiB) file would blow V8's ~512 MB string limit and OOM-CRASH the main
+// process. The string-safe `textMaxBytes` ceiling turns that into the EXISTING friendly
+// `fileTooLarge` reject. Tested with a tiny injected `textMaxBytes` (no need to materialize 64 MiB):
+// the cap is FORMAT-SCOPED — it bites text/CSV but not the streaming/page-bounded formats.
+describe('text/CSV string-safe cap (PERF-4)', () => {
+  // maxBytes stays huge; only the string-parser ceiling is tightened, so a reject here can ONLY
+  // come from the format-narrowed textMaxBytes — not the generic byte ceiling.
+  const TEXT_CAP = { ...DEFAULT_INGESTION_LIMITS, textMaxBytes: 100 }
+
+  it('rejects an over-cap .txt with the friendly fileTooLarge message (no crash)', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const queued = createQueuedDocument(db, write('big.txt', 'x'.repeat(200)))
+    const info = await processDocument(db, storeDir, queued.id, { limits: TEXT_CAP })
+    expect(info.status).toBe('failed')
+    expect(info.errorMessage).toBe(FILE_TOO_LARGE)
+  })
+
+  it('rejects an over-cap .csv with the friendly fileTooLarge message (no crash)', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const queued = createQueuedDocument(db, write('big.csv', `name,value\n${'a,1\n'.repeat(80)}`))
+    const info = await processDocument(db, storeDir, queued.id, { limits: TEXT_CAP })
+    expect(info.status).toBe('failed')
+    expect(info.errorMessage).toBe(FILE_TOO_LARGE)
+  })
+
+  it('still imports a text file UNDER the string-safe cap', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const queued = createQueuedDocument(db, write('ok.txt', 'plenty of room under one hundred bytes'))
+    const info = await processDocument(db, storeDir, queued.id, { limits: TEXT_CAP })
+    expect(info.status).toBe('indexed')
+  })
+
+  it('does NOT apply the text cap to a non-string format (PDF keeps the full maxBytes)', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    // A real PDF is comfortably larger than the 100-byte TEXT_CAP, yet PDF is page-bounded (not a
+    // whole-file-to-string parser), so it must NOT be rejected for size — proving the cap is
+    // format-scoped, not a global tightening of maxBytes.
+    const pdf = write('doc.pdf', makeMixedPdf([{ kind: 'text', lines: ['Real readable PDF body text content here.'] }]))
+    expect(statSync(pdf).size).toBeGreaterThan(TEXT_CAP.textMaxBytes)
+    const queued = createQueuedDocument(db, pdf)
+    const info = await processDocument(db, storeDir, queued.id, { limits: TEXT_CAP })
     expect(info.status).toBe('indexed')
   })
 })

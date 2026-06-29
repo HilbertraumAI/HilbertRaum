@@ -6,6 +6,58 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 3 (MAIN-THREAD IMPORT I/O + PARSER MEMORY CAPS; PERF-1/PERF-4) —
+branch `audit-followup-phase3-import-io` (unmerged; do NOT auto-merge/push).** Removed the synchronous
+document-import freeze and turned an oversize-text OOM crash into the existing friendly reject. Suite **2559
+passed / 39 skipped** (was 2551/39 after Phase 2 → **+8**: PERF-4 ×4 + PERF-1 async-crypto ×4), typecheck +
+`npm run build` green. No schema / IPC / audit-payload change; the encrypted-at-rest guarantee and the exact
+on-disk vault frame are preserved byte-for-byte (cross-read tests pin it).
+- **PERF-1 (High) — async document-cache crypto on the import path.** The import / re-index / preview /
+  OCR-read path encrypted/decrypted the stored copy through a fully SYNCHRONOUS `readSync`/`writeSync` +
+  `cipher.update` chunk loop on the Electron MAIN thread — multi-second on a large scanned PDF over USB, paid
+  TWICE in an encrypted workspace, freezing UI/IPC + starving the embedder. FIX: added async siblings
+  `encryptFileAsync`/`decryptFileAsync` in `workspace-vault.ts` (same streaming AES-GCM loop on `fs.promises`
+  FileHandles, awaiting each 8 MiB chunk → yields between chunks; GCM `update` is sub-ms so no worker thread).
+  Byte-IDENTICAL frame (`MAGIC | iv | tag@tagPos | ciphertext`). The `DocumentCipher` gained the two async
+  methods; the already-async import callers (`ingestion processDocument` ×3, `extractDocumentPreview`,
+  `doctasks readStoredPdfBytes`) now `await` them; the plaintext copy went `copyFileSync` → `await copyFile`.
+- **CONTRACT DECISION (DIVERGENCE from the audit's "make encryptFile/decryptFile async" framing — deliberate,
+  recorded in architecture.md §35).** I did **NOT** change the sync→async contract of the shared
+  `encryptFile`/`decryptFile`; I **added async siblings** and converted only the per-import callers. Reason:
+  making the shared functions async cascades into the **DB-`.enc` lock/unlock/create/rekey lifecycle** (a
+  session boundary, NOT "every import"), the **synchronous crash-only lock** (the `uncaughtException` handler
+  must re-encrypt the working DB before `process.exit` — an async lock can't finish first → committed
+  in-session data would be lost), and the **synchronous vision streaming emitter** (`createImageSession` is
+  reached through a non-awaitable `emit.done`) — the highest-stakes, most-tested code, the exact
+  vault-corruption blast radius the audit's CRITICAL-RISK note flagged. So those + the bounded sync paths
+  (image-history, text export) stay on the sync `encryptFile`/`decryptFile` (which is also kept available for
+  exactly the crash-lock). The per-import freeze (the audit's stated harm) is gone; the once-per-session
+  unlock/lock decrypt freeze is a tracked follow-up (adopt the async siblings there once the crash-lock keeps
+  a sync path). Net: every caller of the SYNC functions is unchanged (no silently-dropped awaits); only the
+  import-path callers of the new ASYNC siblings await.
+- **PERF-4 (Med) — string-safe text/CSV/Markdown byte cap.** Those parsers read the whole file into one
+  UTF-16 JS string (CSV ≈3 copies at once), so a near-1 GiB file blows V8's ~512 MB string limit → OOM crash
+  instead of the friendly reject. FIX: `textMaxBytes` (64 MiB, env `HILBERTRAUM_TEXT_MAX_BYTES`) +
+  `readsWholeFileToString` parser flag; `effectiveMaxBytes(title, limits)` narrows the EXISTING pre-parse
+  byte checks for those formats so an oversize file hits the unchanged `fileTooLarge` reject. Format-scoped
+  (PDF/DOCX/audio/image keep full `maxBytes`).
+- **Tests.** PERF-4: oversize .txt/.csv → friendly reject, under-cap .txt parses, the cap does NOT apply to a
+  non-string format (PDF), + the new env override — all through the real `processDocument`. PERF-1: async↔sync
+  cross-read (a file written by either flavour decrypts with the other + the in-memory blob path), GCM auth on
+  a tampered async-written `.enc` (no plaintext left), and an event-loop-yield test (a macrotask cannot fire
+  during the sync encrypt but DOES fire during the async one). Both fixes **teeth-checked** (neuter → red →
+  restore): the cap neuter reds the over-cap tests; the non-yielding async neuter reds ONLY the yield test
+  while the frame-identity tests stay green (proving the separation).
+- **Durable record:** architecture.md **§35 "Full audit (2026-06-29, follow-up) — Phase 3"** (per-finding
+  ledger + the divergence); known-limitations.md (text/CSV 64 MiB cap + the session-boundary sync unlock/lock
+  residual). `audits/full-audit-2026-06-29-followup.md` marks PERF-1/PERF-4 / Phase 3 ✅ remediated (report
+  KEPT — Phases 4–8 remain open).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase3-import-io`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 4** documents-list scale (PERF-3/PERF-2/PERF-6), **Phase 5** RAG
+  provenance honesty (FE-B/FE-D), **Phase 6** reliability hardening, **Phase 7** test seams, **Phase 8**
+  maintainability + close-out — per the audit §6 plan._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 2 (ELECTRON-37 DRAG-DROP REGRESSION; FE-A/FE-C) — branch
 `audit-followup-phase2-dragdrop` (unmerged; do NOT auto-merge/push).** Restored a shipped, advertised
 feature that was DEAD in the packaged app: dragging a file onto the chat surface silently did nothing, and

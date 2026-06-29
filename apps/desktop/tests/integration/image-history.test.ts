@@ -18,7 +18,13 @@ import {
   imagesDir,
   listImageSessions
 } from '../../src/main/services/vision/history'
-import { encryptFile, decryptFile, type DocumentCipher } from '../../src/main/services/workspace-vault'
+import {
+  encryptFile,
+  decryptFile,
+  encryptFileAsync,
+  decryptFileAsync,
+  type DocumentCipher
+} from '../../src/main/services/workspace-vault'
 
 // A recognizable image-byte pattern no real PNG header would contain — lets us assert the
 // ENCRYPTED copy never leaks the plaintext bytes to disk.
@@ -33,7 +39,9 @@ function testCipher(): DocumentCipher {
   const key = randomBytes(32)
   return {
     encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key)
+    decryptFile: (src, dest) => decryptFile(src, dest, key),
+    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
+    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
   }
 }
 

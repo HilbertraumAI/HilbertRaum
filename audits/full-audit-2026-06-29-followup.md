@@ -153,6 +153,7 @@ system.
 ---
 
 ### PERF-1 — Synchronous whole-file copy / encrypt / decrypt blocks the main process on every import
+- ✅ **REMEDIATED (2026-06-29, Phase 3)** — added async `encryptFileAsync`/`decryptFileAsync` (the same streaming AES-GCM loop on `fs.promises` FileHandles, awaiting each 8 MiB chunk → yields to the event loop; byte-identical frame) used by the document-import/preview/OCR path; `copyFileSync` → `await fs.promises.copyFile`. **DIVERGENCE** (deliberate): added async siblings rather than converting the shared sync `encryptFile`/`decryptFile` in place — the DB-`.enc` lock/unlock/rekey lifecycle (once per session, NOT every import), the synchronous crash-only lock (`uncaughtException` must finish before `process.exit`), and the synchronous vision emitter stay on the sync functions. See architecture.md §35.
 - **Category:** Event-loop blocking · **Severity:** High · **Confidence:** High (verified firsthand)
 - **Location:** `ingestion/index.ts:608` (`copyFileSync`), `:603/:623/:631` → `workspace-vault.ts:210-219` (`encryptFile`) & `:268-275` (`decryptFile`).
 - **Description.** Plaintext import does `copyFileSync`; encrypted import/re-index stream in 8 MiB chunks (memory bounded — good) but via a **synchronous** `readSync`/`writeSync` + `cipher.update` loop with no `await`/yield. All on the Electron main thread.
@@ -178,6 +179,7 @@ system.
 - **Validate.** 50 × 2000-page scans present; time `listDocuments` before/after projecting away `ocr_json`.
 
 ### PERF-4 — Text/CSV parsers read the whole file into one JS string; the 1 GiB cap exceeds V8's string limit → OOM crash instead of friendly reject
+- ✅ **REMEDIATED (2026-06-29, Phase 3)** — new `textMaxBytes` ceiling (64 MiB, env `HILBERTRAUM_TEXT_MAX_BYTES`) + a `readsWholeFileToString` parser flag; `effectiveMaxBytes` narrows the existing pre-parse byte checks for txt/markdown/csv so an oversize text/CSV file hits the friendly `fileTooLarge` reject instead of an OOM crash. Format-scoped (PDF/DOCX/audio/image keep full `maxBytes`). Streaming parse remains the better long-term fix (out of scope). See architecture.md §35 + known-limitations.
 - **Category:** Memory · **Severity:** Medium · **Confidence:** Med-High
 - **Location:** `parsers/txt.ts:10`, `parsers/markdown.ts:24-25`, `parsers/csv.ts:24,31,39-65`.
 - **Description.** Reads are async (good) but materialize the whole file as one UTF-16 string, then derive more full copies (`raw.split`, `Papa.parse` → row array → rebuilt `lines.join`). `maxChunks=1000` caps output, not these intermediates. A file approaching `maxBytes` (1 GiB) exceeds V8's ~512 MB string/heap limit → hard crash, not the friendly `fileTooLarge`.
@@ -344,7 +346,19 @@ and **teeth-checked** where a guard is added.
   recipe); the new test reds on the old `File.path` code.
 - **Risks:** must run `getPathForFile` in the preload (not the sandboxed renderer) — low risk, standard pattern.
 
-### Phase 3 — Main-thread import I/O + parser memory caps (PERF-1 + PERF-4)
+### Phase 3 — Main-thread import I/O + parser memory caps (PERF-1 + PERF-4) — ✅ REMEDIATED 2026-06-29
+> **Done on branch `audit-followup-phase3-import-io`** (unmerged; do NOT auto-merge/push). Suite
+> **2559 passed / 39 skipped** (was 2551/39 → **+8**: PERF-4 ×4 + PERF-1 async-crypto ×4), typecheck
+> + `npm run build` green. Durable record: **architecture.md §35** (per-finding ledger + the divergence).
+> **PERF-1:** added async `encryptFileAsync`/`decryptFileAsync` (FileHandle, per-chunk yield, byte-identical
+> on-disk frame) on the document-import path; `copyFileSync` → async. **DIVERGENCE** (recorded in §35):
+> added async siblings instead of converting the shared sync functions in place — the DB-`.enc` lifecycle
+> (session-boundary, not per-import), the synchronous crash-only lock (must complete before `process.exit`),
+> and the synchronous vision emitter stay on the sync path; the per-import freeze (the audit's stated harm)
+> is gone. **PERF-4:** `textMaxBytes` (64 MiB) + `readsWholeFileToString` flag narrows the byte cap for
+> txt/markdown/csv → friendly `fileTooLarge` reject. Both teeth-checked (neuter → red → restore); cross-read
+> tests pin sync↔async frame equivalence + GCM auth on tamper. The on-disk vault frame + encrypted-at-rest
+> guarantee are preserved byte-for-byte; no schema/IPC/audit change.
 - **Goal:** remove the synchronous import freeze; turn oversize text/CSV into a friendly reject.
 - **Scope/files:** `workspace-vault.ts` (`encryptFile`/`decryptFile`), `ingestion/index.ts` (`copyFileSync`),
   `parsers/{txt,markdown,csv}.ts`, `ingestion/limits.ts`.

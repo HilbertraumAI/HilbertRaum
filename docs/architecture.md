@@ -4532,6 +4532,64 @@ cancel semantics (F18), and the stop()/suspend() teardown semantics (F19) are al
 **2532 passed / 39 skipped (2571 collected)**; typecheck + `npm run build` green.
 
 
+### §35 Full audit (2026-06-29, follow-up) — Phase 3 (main-thread import I/O + parser memory caps; PERF-1 / PERF-4)
+
+The follow-up audit (`audits/full-audit-2026-06-29-followup.md`) found the gaps had moved *outward* from the
+fortified core into main-thread I/O. **Phase 3** removes the synchronous import freeze (PERF-1) and turns an
+oversize-text OOM crash into the existing friendly reject (PERF-4). Both are behavior-class fixes with **no
+schema / IPC / audit-payload change**; the encrypted-at-rest guarantee and the exact on-disk vault frame are
+preserved byte-for-byte. Suite **2559 passed / 39 skipped** (was 2551/39 → **+8**: PERF-4 ×4 + PERF-1
+async-crypto ×4); typecheck + `npm run build` green.
+
+- **PERF-1 (High) — async document-cache crypto on the import path.** The document-import / re-index /
+  preview / OCR-read path encrypted/decrypted the stored copy through a fully **synchronous** `readSync` /
+  `writeSync` + `cipher.update` chunk loop on the Electron **main thread** — multi-second on a large scanned
+  PDF over USB, paid **twice** in an encrypted workspace (encrypt-on-store + decrypt-to-parse), freezing the
+  UI/IPC and starving the embedder sidecar. FIX: added **async siblings** `encryptFileAsync` /
+  `decryptFileAsync` in `workspace-vault.ts` — the SAME streaming AES-256-GCM loop on `fs.promises`
+  FileHandles, awaiting each 8 MiB chunk read/write so the event loop runs between chunks (GCM `update` on a
+  chunk is sub-ms — per-chunk yielding suffices, no worker thread). They write/read the **byte-identical**
+  frame (`MAGIC | iv | tag-placeholder | ciphertext`, the GCM tag positionally patched into its reserved
+  slot at `tagPos` after `final()`), cross-verified so a file written by either flavour decrypts with the
+  other (and the in-memory blob path). The `DocumentCipher` gained `encryptFileAsync`/`decryptFileAsync`; the
+  three already-async import callers (`ingestion processDocument` ×3, `extractDocumentPreview`,
+  `doctasks readStoredPdfBytes`) now `await` them, and the plaintext copy went `copyFileSync` →
+  `await fs.promises.copyFile`.
+  - **DIVERGENCE from the audit's "convert the vault loop" wording (deliberate, mechanically-correct).**
+    Rather than make the shared `encryptFile`/`decryptFile` async *in place* — which cascades into the
+    **DB-`.enc` lock/unlock/create/rekey lifecycle**, the **synchronous crash-only lock** (the
+    `uncaughtException` handler must re-encrypt the working DB **before** `process.exit`; an async lock can't
+    finish first → committed in-session data would be lost), and the **synchronous vision streaming emitter**
+    (`createImageSession` is reached through a non-awaitable `emit.done`) — i.e. the highest-stakes,
+    most-tested code, with the real vault-corruption blast radius the audit itself flagged in its CRITICAL
+    RISK note — we **added** async siblings used only by the actual per-import harm. The **session-boundary
+    DB lifecycle** (unlock decrypts the whole DB once per session; lock once on lock/quit — NOT "every
+    import") and the **bounded, sync-reached paths** (image-history via the vision emitter; text export) stay
+    on the synchronous functions. Net effect: the PERF-1 "freeze on **every import**" is gone; the
+    once-per-session unlock/lock decrypt freeze is an available follow-up (adopt the async siblings there once
+    the crash-lock keeps a synchronous path — `encryptFile` is retained for exactly that).
+- **PERF-4 (Medium) — string-safe byte cap for the read-whole-file-to-string formats.** The text / Markdown /
+  CSV parsers materialize the file as one UTF-16 JS string (CSV then derives the papaparse row array + the
+  rebuilt `lines.join` ≈ 3 full copies at once), so a file approaching the generous 1 GiB `maxBytes` exceeds
+  V8's ~512 MB string/heap ceiling and **OOM-crashes** the main process instead of producing the friendly
+  `fileTooLarge` reject. FIX: a new `textMaxBytes` ceiling (default **64 MiB**, env `HILBERTRAUM_TEXT_MAX_BYTES`)
+  + a `readsWholeFileToString` flag on the txt/markdown/csv parsers; `effectiveMaxBytes(title, limits)` narrows
+  the **existing** pre-parse byte checks in `processDocument` to that ceiling for those formats only — so an
+  oversize text/CSV file hits the unchanged friendly reject, while the streaming / page-bounded formats
+  (PDF/DOCX/audio/image) keep the full `maxBytes`. Streaming parse remains the better long-term fix; the cap
+  is the safe win (recorded in known-limitations).
+
+| Finding | Sev | Disposition (one line) | Record / files |
+|---|---|---|---|
+| **PERF-1** | High | **fixed** — async `encryptFileAsync`/`decryptFileAsync` (FileHandle, per-chunk yield, byte-identical frame) on the document-import path; `copyFileSync` → async `copyFile`. DIVERGED: added async siblings instead of converting the shared sync functions (DB lifecycle + crash-lock + vision emitter stay sync). Teeth: a non-yielding neuter reddens the event-loop-yield test while the frame-identity tests stay green | this §35; `workspace-vault.ts`, `ingestion/index.ts`, `doctasks/manager.ts`; known-limitations |
+| **PERF-4** | Med | **fixed** — `textMaxBytes` (64 MiB) + `readsWholeFileToString` flag + `effectiveMaxBytes` narrows the pre-parse byte cap for txt/markdown/csv → friendly `fileTooLarge` reject, not an OOM crash. Format-scoped (PDF keeps full `maxBytes`). Teeth: neuter the narrowing → the over-cap .txt/.csv tests redden | this §35; `ingestion/limits.ts`, `parsers/{index,txt,markdown,csv}.ts`, `ingestion/index.ts`; known-limitations |
+
+**Posture (load-bearing):** offline / no telemetry / no new network egress; encrypted-at-rest + the exact
+on-disk vault frame preserved (cross-read tests pin sync↔async equivalence + GCM auth on tamper); content
+class never logged. Behavior-preserving: both fixes are **teeth-checked** (neuter → red → restore
+byte-identical). Branch `audit-followup-phase3-import-io` (unmerged; do NOT auto-merge/push).
+
+
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 
 The 2026-06-29 audit's testing review flagged a class of gap distinct from a bug: a **security/reliability

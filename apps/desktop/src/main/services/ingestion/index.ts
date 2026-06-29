@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import {
-  copyFileSync,
   type Dirent,
   existsSync,
   mkdirSync,
@@ -9,6 +8,7 @@ import {
   realpathSync,
   statSync
 } from 'node:fs'
+import { copyFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
@@ -36,6 +36,7 @@ import type { OcrEngine, OcrPage } from '../ocr'
 import {
   isAudioPath,
   isPdfPath,
+  readsWholeFileToString,
   selectParser,
   supportedExtensions,
   type DocumentParser,
@@ -502,6 +503,19 @@ export interface PreparedDocument {
 }
 
 /**
+ * PERF-4: the pre-parse byte ceiling for THIS document, narrowed by format. The text/Markdown/CSV
+ * parsers read the whole file into ONE UTF-16 JS string (CSV then derives the papaparse row array +
+ * the rebuilt `lines.join` — ≈3 full copies at once), so the generous `maxBytes` (1 GiB) would blow
+ * past V8's ~512 MB string/heap ceiling and OOM-CRASH the main process instead of producing the
+ * friendly `fileTooLarge` reject. Those formats get the string-safe `textMaxBytes`; the streaming /
+ * page-bounded formats (PDF/DOCX/audio/image) keep the full `maxBytes`. Decided by `row.title` (the
+ * canonical name/extension), not the possibly-transient `parseSource`.
+ */
+function effectiveMaxBytes(title: string, limits: IngestionLimits): number {
+  return readsWholeFileToString(title) ? Math.min(limits.maxBytes, limits.textMaxBytes) : limits.maxBytes
+}
+
+/**
  * THE single parse-with-caps enforcement point (MAINT-4 / REL-5). Every parse entry point —
  * ingest (`prepareDocument`), the renderer preview (`extractDocumentPreview`), and the paged
  * preview (`extractDocumentPreviewPage`, via the former) — routes through here, so the resource
@@ -571,11 +585,12 @@ export async function prepareDocument(
   try {
     setStatus(db, documentId, 'extracting')
 
-    // Pre-parse byte ceiling (M-1): reject an oversized file BEFORE any copy/decrypt/parse
-    // work, using the size recorded at queue time. A friendly, persist-canonical message
-    // lands on the row (display-mapped at render). A null size_bytes falls through to the
-    // authoritative pre-parse stat below.
-    if (row.size_bytes != null && row.size_bytes > limits.maxBytes) {
+    // Pre-parse byte ceiling (M-1, narrowed by PERF-4): reject an oversized file BEFORE any
+    // copy/decrypt/parse work, using the size recorded at queue time. Text/Markdown/CSV use the
+    // string-safe `textMaxBytes` (a 1 GiB text file would OOM-crash V8's string limit, not reject).
+    // A friendly, persist-canonical message lands on the row (display-mapped at render). A null
+    // size_bytes falls through to the authoritative pre-parse stat below.
+    if (row.size_bytes != null && row.size_bytes > effectiveMaxBytes(row.title, limits)) {
       throw new Error(t('en', 'main.ingest.fileTooLarge'))
     }
 
@@ -600,12 +615,15 @@ export async function prepareDocument(
       const size = statSync(origin).size
       if (cipher) {
         storedPath = join(storeDir, documentId + ext + ENCRYPTED_DOC_SUFFIX)
-        cipher.encryptFile(origin, storedPath)
+        // PERF-1: async encrypt yields to the event loop between 8 MiB chunks, so a large import
+        // (paid twice in an encrypted workspace) no longer blocks the main process + IPC.
+        await cipher.encryptFileAsync(origin, storedPath)
         // Parse the original directly (it is still on disk) — no decrypt round-trip.
         parseSource = origin
       } else {
         storedPath = join(storeDir, documentId + ext)
-        copyFileSync(origin, storedPath)
+        // PERF-1: async whole-file copy off the main event loop (was synchronous copyFileSync).
+        await copyFile(origin, storedPath)
         parseSource = storedPath
       }
       db.prepare('UPDATE documents SET stored_path = ?, sha256 = ?, size_bytes = ? WHERE id = ?').run(
@@ -620,7 +638,7 @@ export async function prepareDocument(
       // the stored copy: encrypt it, point the row at the `.enc`, parse the old
       // plaintext one last time, then shred it.
       const encPath = `${storedPath}${ENCRYPTED_DOC_SUFFIX}`
-      cipher.encryptFile(storedPath, encPath)
+      await cipher.encryptFileAsync(storedPath, encPath) // PERF-1: yields between chunks
       db.prepare('UPDATE documents SET stored_path = ? WHERE id = ?').run(encPath, documentId)
       parseSource = storedPath
       transients.push(storedPath)
@@ -628,7 +646,7 @@ export async function prepareDocument(
     } else if (cipher) {
       // Encrypted stored copy: decrypt to a transient working file for the parser.
       parseSource = join(storeDir, `${documentId}.parse${ext}`)
-      cipher.decryptFile(storedPath, parseSource)
+      await cipher.decryptFileAsync(storedPath, parseSource) // PERF-1: yields between chunks
       transients.push(parseSource)
     } else {
       parseSource = storedPath
@@ -639,7 +657,7 @@ export async function prepareDocument(
     // was unknown at queue time). Cheap `statSync`; a stat failure here is non-fatal — the
     // parser will surface its own read error.
     try {
-      if (statSync(parseSource).size > limits.maxBytes) {
+      if (statSync(parseSource).size > effectiveMaxBytes(row.title, limits)) {
         throw new Error(t('en', 'main.ingest.fileTooLarge'))
       }
     } catch (err) {
@@ -992,7 +1010,7 @@ export async function extractDocumentPreview(
       if (cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
         const ext = extname(row.title).toLowerCase()
         parseSource = join(storeDir, `${documentId}.parse-preview${ext}`)
-        cipher.decryptFile(row.stored_path, parseSource)
+        await cipher.decryptFileAsync(row.stored_path, parseSource) // PERF-1: yields between chunks
         transients.push(parseSource)
       } else if (!cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
         // Emission (§3.3 rule 2): IPC throws below are transient — localized via tMain.
