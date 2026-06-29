@@ -1442,6 +1442,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.models.autoSelected':
     'Dieses Modell wird automatisch verwendet, sobald es installiert ist — es gibt nichts ' +
     'auszuwählen.',
+  // F16 (audit-postmerge-2026-06-29) — siehe en.ts.
+  'main.models.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um KI-Modelle zu verwalten.',
+  'main.audit.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Aktivität anzuzeigen.',
+  'main.settings.locked':
+    'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Einstellungen zu ändern.',
   'main.preflight.readOnly':
     'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
     'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in der ' +

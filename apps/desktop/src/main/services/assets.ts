@@ -3,7 +3,7 @@ import { createWriteStream, existsSync, readFileSync, statSync, writeFileSync } 
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
-import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest } from '../../shared/manifest'
+import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
 import { mmprojPath, sha256File, verifyChecksum, weightPath, type HashStore } from './models'
 
@@ -42,6 +42,8 @@ export interface ModelDownloadTask {
   /** True when the expected hash is still a placeholder (cannot verify after fetch). */
   placeholderHash: boolean
   sizeBytes: number | null
+  /** The model's role — selects the default download ceiling when `sizeBytes` is absent (F17). */
+  role: ModelRole
   license: string
   licenseUrl: string | null
   licenseApproved: boolean
@@ -148,6 +150,7 @@ async function planOneFile(
     expectedSha256,
     placeholderHash,
     sizeBytes: download.sizeBytes,
+    role: manifest.role,
     license: manifest.license,
     licenseUrl: download.licenseUrl,
     licenseApproved,
@@ -394,8 +397,50 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const MAX_REDIRECTS = 5
 /** Tolerance over the known size for header rounding / multipart framing. */
 const SIZE_CAP_MARGIN = 1024 * 1024
-/** Backstop when NOTHING bounds the body (no Content-Length AND no caller `maxBytes`). */
-const DOWNLOAD_HARD_MAX_BYTES = 64 * 1024 * 1024 * 1024
+/** Backstop when NOTHING bounds the body (no Content-Length AND no caller `maxBytes`). F17 lowered
+ *  this from 64 GiB toward a realistic max single weight; both in-app downloaders now ALWAYS pass a
+ *  `maxBytes` (engine: a per-family ceiling; model: the manifest size or a per-role default), so the
+ *  backstop is unreachable from production and exists only as defence-in-depth for a future caller. */
+const DOWNLOAD_HARD_MAX_BYTES = 48 * 1024 * 1024 * 1024
+
+/** Per-family ceiling for an ENGINE (sidecar) archive download (F17). Engine release archives are
+ *  tens-to-low-hundreds of MB (the llama.cpp Vulkan/CUDA zips, the whisper.cpp builds); 2 GiB is a
+ *  generous bound that still stops a redirected / Content-Length-less endpoint from filling a small
+ *  USB drive. The archive SHA verify rejects wrong bytes afterwards; this just caps how many land. */
+export const ENGINE_DOWNLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+/** Default per-ROLE ceiling for a model-weight download when the manifest omits `size_bytes` (F17).
+ *  When `size_bytes` IS present the exact (tight) cap applies; this only bounds the under-specified
+ *  case so a hostile/redirected endpoint can't fall through to the multi-GiB backstop. Chat/vision
+ *  are generous (a large quantized GGUF — up to ~70B Q4); the small roles are tight. */
+const MODEL_WEIGHT_MAX_BYTES: Record<ModelRole, number> = {
+  chat: 40 * 1024 * 1024 * 1024,
+  vision: 40 * 1024 * 1024 * 1024,
+  transcriber: 8 * 1024 * 1024 * 1024,
+  embeddings: 4 * 1024 * 1024 * 1024,
+  reranker: 4 * 1024 * 1024 * 1024
+}
+
+/**
+ * The effective byte cap for ONE response body: the smallest known bound (Content-Length and/or the
+ * caller's `maxBytes`) plus a margin, else the finite hard backstop. Extracted so the cap policy is
+ * unit-testable (F17) and shared by `downloadToFile`.
+ */
+export function effectiveDownloadCap(contentLength: number | null, maxBytes?: number): number {
+  const bounds: number[] = []
+  if (contentLength != null) bounds.push(contentLength)
+  if (typeof maxBytes === 'number' && maxBytes > 0) bounds.push(maxBytes)
+  return bounds.length > 0 ? Math.min(...bounds) + SIZE_CAP_MARGIN : DOWNLOAD_HARD_MAX_BYTES
+}
+
+/**
+ * The `maxBytes` to pass to `downloadToFile` for a MODEL weight (F17): the manifest's exact
+ * `size_bytes` when known, else the role's bounded default ceiling — NEVER unbounded (so the body is
+ * always capped well below the hard backstop even for a manifest that omits `size_bytes`).
+ */
+export function modelWeightMaxBytes(role: ModelRole, sizeBytes: number | null): number {
+  return sizeBytes != null ? sizeBytes : MODEL_WEIGHT_MAX_BYTES[role]
+}
 
 /**
  * True for a hostname that must never be a download target: loopback, RFC-1918 private ranges,
@@ -403,7 +448,7 @@ const DOWNLOAD_HARD_MAX_BYTES = 64 * 1024 * 1024 * 1024
  * host matching only (no DNS resolution — DNS-rebinding is out of scope), which is enough to stop
  * a hostile redirect `Location: http://169.254.169.254/...` or `http://router.local/`.
  */
-function isPrivateOrLoopbackHost(hostname: string): boolean {
+export function isPrivateOrLoopbackHost(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
   if (h === 'localhost' || h.endsWith('.localhost')) return true
   const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
@@ -419,8 +464,13 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
   if (h === '::1' || h === '::') return true // IPv6 loopback / unspecified
   if (h.startsWith('fe80:')) return true // IPv6 link-local
   if (h.startsWith('fc') || h.startsWith('fd')) return true // IPv6 unique-local fc00::/7
-  const mapped = h.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
-  if (mapped) return isPrivateOrLoopbackHost(mapped[1])
+  // F15 (audit-postmerge-2026-06-29): IPv4-mapped IPv6. `new URL()` CANONICALIZES the literal to
+  // the hex-compressed form (`[::ffff:127.0.0.1]` → host `::ffff:7f00:1`, `[::ffff:169.254.169.254]`
+  // → `::ffff:a9fe:a9fe`), so the old dotted-decimal-only regex never matched and mapped loopback /
+  // RFC-1918 / the 169.254.169.254 metadata IP slipped the deny-list. No legitimate download target
+  // uses a mapped-IPv6 literal, so deny the whole form (the substring also matches the rare
+  // still-dotted `::ffff:1.2.3.4` spelling). Robust against every canonicalization the parser emits.
+  if (h.includes('::ffff:')) return true
   return false
 }
 
@@ -496,10 +546,7 @@ export async function downloadToFile(
   // Effective cap for THIS response body: the smallest known bound + a margin, else the global
   // backstop. (For a 206 resume, contentLength is the remaining bytes and `received` excludes the
   // on-disk prefix, so capping `received` against the smaller of the two bounds is correct.)
-  const bounds: number[] = []
-  if (contentLength != null) bounds.push(contentLength)
-  if (typeof deps.maxBytes === 'number' && deps.maxBytes > 0) bounds.push(deps.maxBytes)
-  const cap = bounds.length > 0 ? Math.min(...bounds) + SIZE_CAP_MARGIN : DOWNLOAD_HARD_MAX_BYTES
+  const cap = effectiveDownloadCap(contentLength, deps.maxBytes)
   await mkdir(dirname(dest), { recursive: true })
   // Append only when the caller asked to resume AND the server actually honoured the
   // Range request — appending a full 200 body onto a partial file would corrupt it.

@@ -16,7 +16,7 @@ import {
   type ExtractFn
 } from '../../src/main/services/runtime-download'
 import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
-import { runtimeMarkerPath } from '../../src/main/services/assets'
+import { runtimeMarkerPath, ENGINE_DOWNLOAD_MAX_BYTES } from '../../src/main/services/assets'
 import type { FetchFn } from '../../src/main/services/assets'
 import type { EngineDownloadJob } from '../../src/shared/types'
 
@@ -207,6 +207,29 @@ describe('EngineDownloadManager install flow', () => {
     const job = await runToEnd(mgr, started.jobId)
     expect(job.status).toBe('done')
     expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(true)
+  })
+
+  // F17 (audit-postmerge-2026-06-29): the engine downloader passed NO maxBytes, so a redirected /
+  // Content-Length-less archive endpoint fell through to the multi-GiB backstop. Assert it now
+  // applies the bounded per-family ceiling.
+  it('applies the bounded ENGINE_DOWNLOAD_MAX_BYTES cap to the archive download (F17)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const GiB = 1024 * 1024 * 1024
+    let captured: unknown = 'unset'
+    const mgr = new EngineDownloadManager({
+      extractImpl: fakeExtract,
+      downloadImpl: async (_url, dest, deps) => {
+        captured = deps?.maxBytes
+        writeFileSync(dest, BODY) // matches REAL_SHA so verify passes
+        return { status: 200, received: BODY.length, contentLength: BODY.length }
+      }
+    })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('done')
+    expect(captured).toBe(ENGINE_DOWNLOAD_MAX_BYTES)
+    expect(captured as number).toBeGreaterThan(0)
+    expect(captured as number).toBeLessThan(64 * GiB)
   })
 
   it('completes but marks UNVERIFIED when the sources hash is a placeholder', async () => {

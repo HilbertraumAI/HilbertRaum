@@ -102,6 +102,12 @@ describe('registerCoreIpc', () => {
 })
 
 describe('registerModelIpc', () => {
+  // F16 (audit-postmerge-2026-06-29): the DB-touching model handlers now require an unlocked
+  // workspace. These fixtures predate that guard and omit `workspace`; default them to unlocked
+  // (the locked-refusal behaviour is enumerated separately in ipc-lock-coverage.test.ts).
+  const reg = (ctx: AppContext): void =>
+    registerModelIpc({ workspace: { isUnlocked: () => true }, ...(ctx as object) } as AppContext)
+
   // Model handlers resolve the drive policy from `paths.configPath` (M10); a missing
   // config dir means "no policy file" → developer-friendly defaults.
   const noWeightPaths = (): { rootPath: string; configPath: string } => ({
@@ -126,7 +132,7 @@ describe('registerModelIpc', () => {
 
   it('returns an empty model list when no manifests directory is configured', async () => {
     const ctx = { db: seededDb(), manifestsDir: null } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     const { result } = await invoke(handlers, IPC.listModels)
     expect(result).toEqual([])
   })
@@ -139,7 +145,7 @@ describe('registerModelIpc', () => {
       isDev: false,
       runtime: { activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     const { result } = await invoke(handlers, IPC.listModels)
     const models = result as ModelInfo[]
     // The committed manifests are discovered; with no weights on disk they are 'missing'.
@@ -157,7 +163,7 @@ describe('registerModelIpc', () => {
       isDev: false,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model')).rejects.toThrow(
       /Unknown model id/
     )
@@ -185,7 +191,7 @@ describe('registerModelIpc', () => {
         activeModelId: () => null
       }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')
     expect(startedWith).not.toBeNull()
   })
@@ -203,7 +209,7 @@ describe('registerModelIpc', () => {
       isDev: false,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
       /can't be started/
     )
@@ -224,7 +230,7 @@ describe('registerModelIpc', () => {
         activeModelId: () => null
       }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')
     expect(started).toBe(true)
   })
@@ -237,7 +243,7 @@ describe('registerModelIpc', () => {
       isDev: false,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
       /can't be started/
     )
@@ -263,7 +269,7 @@ describe('registerModelIpc', () => {
       isDev: true,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
       /can't be started/
     )
@@ -277,7 +283,7 @@ describe('registerModelIpc', () => {
       isDev: true,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
       /not a chat model/
     )
@@ -320,7 +326,7 @@ describe('registerModelIpc', () => {
       isDev: true,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'huge-model')).rejects.toThrow(
       /needs at least 9999 GB RAM/
     )
@@ -343,7 +349,7 @@ describe('registerModelIpc', () => {
       isDev: true,
       runtime: { status: () => ({ ...status }), activeModelId: () => status.modelId }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
 
     const { result } = await invoke(handlers, IPC.getRuntimeStatus)
     // All four bundled Qwen3 chat manifests declare supports_thinking_mode: true.
@@ -359,7 +365,7 @@ describe('registerModelIpc', () => {
       isDev: true,
       runtime: { status: () => ({ ...stopped }), activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
 
     const { result } = await invoke(handlers, IPC.getRuntimeStatus)
     expect((result as { supportsThinkingMode?: boolean }).supportsThinkingMode).toBeUndefined()
@@ -373,7 +379,7 @@ describe('registerModelIpc', () => {
       isDev: true,
       runtime: { activeModelId: () => null }
     } as unknown as AppContext
-    registerModelIpc(ctx)
+    reg(ctx)
     const { result } = await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
     expect(result).toBe('missing') // no weights on disk in this fixture
     await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)

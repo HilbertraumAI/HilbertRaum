@@ -3997,15 +3997,23 @@ audit read each of these and found them correct and well-tested; they are delibe
 
 - **Crypto / vault** — lifecycle, key-zeroing on lock / wrong password, journaled v1→v2 rekey: re-attested
   (the §24 crypto inventory still holds end-to-end).
-- **The full IPC `requireUnlocked()` surface** — every DB-touching handler is guarded; TEST-N8 added a
-  **structural** test enumerating them and SEC-N2 closed the one benchmark parity gap.
+- **The full IPC `requireUnlocked()` surface** — every DB-touching handler **fail-closes** when locked
+  (the `ctx.db` getter throws); TEST-N8 added a **structural** lock test over the **chat + benchmark**
+  handlers and SEC-N2 closed the one benchmark parity gap. *(Correction, post-merge §30/F16: the
+  original TEST-N8 enumerated only chat+benchmark — not "every" module. The audit/core-settings/model/rag
+  groups touched `ctx.db` with no **explicit** `requireUnlocked()` preamble, so they fail-closed but
+  surfaced the raw English vault string. §30 added the localized preamble to those four groups and
+  **generalized** the structural test across the core/model/audit/rag/benchmark/collections modules — see
+  `tests/integration/ipc-lock-coverage.test.ts`; the rest (docs/doctasks/images) keep their own dedicated
+  locked-vault tests.)*
 - **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
   allow-list, CSP `connect-src 'self'`, OCR window deny-all.
 - **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
   `windowsHide` / `child.unref()` on the probe.
 - **Offline / SSRF posture** — IPv4-anchored loopback guard (fails safe), per-redirect-hop re-validation
   (https-only + private-range deny), streamed-size cap; only the two user-gated downloaders + loopback
-  sidecars use `fetch`.
+  sidecars use `fetch`. *(Post-merge §30: the private-range deny also now covers the **IPv4-mapped IPv6**
+  form — F15 — and the streamed-size cap is now **always bounded** on both downloaders — F17.)*
 - **RRF fusion determinism** — the pure `rrfFuse` units stay strong, and the pass-through guarantee (no
   keyword / no reranker ⇒ byte-identical to vector-only) was re-verified in Phase 6.
 - **Vector codec hardening** — `decodeVector` truncated-blob guard + module-load LE assert; TEST-N7 added a
@@ -4124,7 +4132,8 @@ started** — carried in the report.
 | F10 (Low) | 1 | **acknowledged (no code change)** — the invoice path runs without geometry layout reconstruction (D58 is bank-only), so it is the most parse-fragile money path; Phase 1 prioritised its robustness (F1 right-side drop, F6 fusion drop) since it has no backstop, and the asymmetry is recorded | arch §8 (F1/F6); known-limitations (invoice geometry note) |
 | F2, F4, F7, F9 | 2 | **fixed (Phase 2)** — chat-regenerate data-loss (F2) + embedder/reranker bind-race start-latch (F4/F7) + compaction-failure log (F9); see the **§28 ledger** | arch §28; arch "Chat & streaming"; GPU record §5.5b |
 | F5 | 3 | **fixed (Phase 3)** — invoice extraction re-inserted a fresh invoice + line items on every analysis question (no reuse/replace/staleness, where the bank path has all three); now mirrors the bank reuse-or-re-extract gate (`extractor_version` + `isInvoiceStale` + `replaceExisting` atomic swap); see the **§29 ledger** | arch §29; arch §8 (invoice reuse/replace/staleness parity) |
-| F11–F19, F20–F24, D1–D8, T1–T9 | — | **not started** — RAG/security/concurrency F11–F19 (Phase 4/8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7), test seams T1–T9 (Phase 5); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
+| F14, F15, F16, F17 | 4 | **fixed (Phase 4)** — security consistency: F15 mapped-IPv6 SSRF deny-list bypass, F14 diagnostics-log buffer readable after lock, F16 IPC lock-guard parity + generalized structural test (subsumes **T3**), F17 download size caps always bounded; see the **§30 ledger** | arch §30; security-model §D3 + "encrypted log" record; §25 inventory correction |
+| F11–F13, F18, F19, F20–F24, D1–D8, T1–T9 | — | **not started** — RAG/perf/concurrency F11–F13/F18/F19 (Phase 8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7), test seams T1/T2/T4/T5/T6/T7/T8/T9 (Phase 5; **T3 subsumed by F16**, T4/T5 done in Phase 1); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
 
 **Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
 class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
@@ -4190,6 +4199,33 @@ invoice is reused (same id, no duplicate), and a version-NULL invoice is detecte
 replaced in place at the current version (the tampered figure is gone). **Open (later phases):** F11–F19
 RAG/security/concurrency (Phase 4/8), F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1–T9
 test seams (Phase 5).
+
+### §30 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 4 — security consistency hardening)
+
+**Phase 4** closes the four security-consistency findings F15/F14/F16/F17. None is a remote exploit (the app
+is **offline by construction**); each is a **gap where a documented control didn't fully hold** — a deny-list
+that missed one host spelling, a buffer that outlived its lock, lock-guards that fail-closed but spoke the raw
+string, and a size cap that could collapse to the backstop. Branch `audit-postmerge-phase4-security-consistency`
+(suite **2515 passed / 39 skipped**, typecheck + build green). Every fix is **test-first** (red on current code
+→ green). Resolve `full-audit-2026-06-29-postmerge F14/F15/F16/F17` code comments through this ledger.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F15** (Low→Med, SSRF) | 4 | **fixed** — IPv4-mapped IPv6 bypassed the download deny-list: `new URL()` canonicalizes `[::ffff:127.0.0.1]` → host `::ffff:7f00:1` / `[::ffff:169.254.169.254]` → `::ffff:a9fe:a9fe`, which the dotted-decimal-only regex never matched, so mapped loopback / RFC-1918 / the cloud-metadata IP slipped the guard (reachable via a hostile manifest `download.url` or a redirect `Location:`). `isPrivateOrLoopbackHost` now **denies any host containing `::ffff:`**. The detection-only `offlineGuard.isLoopbackHost` is left as-is (gates no enforcement). Tests: `assets.test.ts` (unit on each spelling + redirect-hop + a public-host positive control) | security-model §D3 (F15) |
+| **F14** (Low, data-handling) | 4 | **fixed** — `detachVaultKey()` dropped+zeroed the vault key and reverted to `buffering` but left the in-memory `buffer` holding the just-ended session's metadata (file names/paths/model ids/settings keys — never document/chat text); the buffering read path + the intentionally-ungated `getLogTail`/`exportLog` let a still-mounted Diagnostics screen read/export it **after** lock. **Option (a):** zero the buffer **after** the final encrypted flush (next unlock repopulates from `app.log.enc` — nothing lost); guarded on `mode==='encrypted'` so the pre-FIRST-unlock diagnostics window is preserved. Test: `logging.test.ts` | security-model "Design record — encrypted log" (F14) |
+| **F16** (Low, defense-in-depth + doc) | 4 | **fixed** — the §25 inventory overstated "TEST-N8 enumerates every DB-touching handler" (it covered only chat+benchmark); rag/audit/core-settings/model touched `ctx.db` with **no explicit** `requireUnlocked()` (fail-closed via the getter, but raw English string). Added the localized preamble (`main.audit.locked`/`main.settings.locked`/`main.models.locked`; rag reuses `main.chat.locked`) to those four groups and **generalized** the structural lock test across the core/model/audit/rag/benchmark/collections modules (`tests/integration/ipc-lock-coverage.test.ts`), asserting refusal + that the read-only channels (`getLogTail`/`getRuntimeStatus`) still resolve when locked. **Subsumes Phase-5 item T3** (rag:ask lock-rejection). §25 wording corrected | this ledger; §25 inventory correction |
+| **F17** (Low, disk-fill) | 4 | **fixed** — `downloadToFile`'s cap fell to the 64 GiB backstop when nothing bounded the body; the **engine** downloader passed no `maxBytes` and the **model** downloader passed one only when `size_bytes` was present. Both now **always** pass a bounded cap: engine = `ENGINE_DOWNLOAD_MAX_BYTES` (2 GiB), model = `modelWeightMaxBytes(role, sizeBytes)` (exact size, else a per-role default: chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB). Backstop lowered 64→48 GiB (now unreachable from production). The cap policy is extracted to the unit-testable `effectiveDownloadCap`. Tests: `assets.test.ts` (pure helpers), `downloads.test.ts` + `engine-download.test.ts` (injected `downloadImpl` captures the applied cap) | security-model §D3 (F17) |
+
+**Posture held (Phase 4):** offline / no telemetry / no new network egress / no new IPC channel. The only
+schema-adjacent change is an additive `role: ModelRole` field on the internal `ModelDownloadTask` (set from
+the manifest; the DIY `fetch-*` scripts don't use the TS type). Three new localized i18n keys
+(`main.audit.locked`/`main.settings.locked`/`main.models.locked`) added to en + de. The new size-cap
+constants live in `assets.ts` (the canonical reference module). Every fix is **test-first** with genuine teeth
+— the generalized lock test reddens if any module's `requireUnlocked()` is removed; the SSRF and size-cap
+tests red on the pre-fix code. **Open (later phases):** F11–F13/F18/F19 RAG/perf/concurrency (Phase 8),
+F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1/T2/T6/T7/T8 test seams (Phase 5; **T3 now
+subsumed by F16's generalized lock test**); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 remain
+deferred to their own phase.
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

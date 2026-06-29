@@ -126,8 +126,17 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
 }
 
 export function registerModelIpc(ctx: AppContext): void {
+  // F16 (audit-postmerge-2026-06-29): the DB-touching model handlers (list/select/verify/start all
+  // read ctx.db via getSettings/selectModel/computeInstallState) fail-close when locked but throw
+  // the raw English vault string; gate them with the localized copy (parity). stopRuntime + the two
+  // read-only runtime channels (status/install) touch the in-memory runtime / disk marker, never
+  // ctx.db, and must stay usable at the gate, so they are intentionally NOT gated.
+  const requireUnlocked = (): void => {
+    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.models.locked'))
+  }
 
   ipcMain.handle(IPC.listModels, async (event, lazyVerify?: boolean): Promise<ModelInfo[]> => {
+    requireUnlocked()
     if (!ctx.manifestsDir) {
       log.warn('No model-manifests directory found; returning empty model list')
       return []
@@ -160,6 +169,7 @@ export function registerModelIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.selectModel, (_e, modelId: string) => {
+    requireUnlocked()
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     log.info('Select model', { modelId })
     const result = selectModel(ctx.db, ctx.manifestsDir, modelId)
@@ -171,6 +181,7 @@ export function registerModelIpc(ctx: AppContext): void {
   // model's weight file and re-hash it for real. `listModels` alone would read the
   // cache back and confirm nothing.
   ipcMain.handle(IPC.verifyModel, async (_e, modelId: string): Promise<ModelState> => {
+    requireUnlocked()
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
@@ -187,6 +198,7 @@ export function registerModelIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.startRuntime, (_e, modelId: string): Promise<RuntimeStatus> => {
+    requireUnlocked()
     // Starting/switching the runtime tears down the current llama-server. A yielding
     // deep-index build holds that slot and is pinned to the current model (M12) — abort it
     // first so it doesn't keep calling a stopped/replaced runtime, and a parked build (waiting

@@ -1379,6 +1379,12 @@ export const en = {
     'No model list was found on this drive — the model-manifests folder is missing.',
   'main.models.autoSelected':
     'This model is used automatically once installed — there is nothing to select.',
+  // F16 (audit-postmerge-2026-06-29): localized lock copy for the model / activity / settings
+  // DB-touching handler groups, so a locked call surfaces the friendly message instead of the raw
+  // vault-getter string (parity with chat/docs/benchmark).
+  'main.models.locked': 'Workspace is locked. Unlock it to manage AI models.',
+  'main.audit.locked': 'Workspace is locked. Unlock it to view activity.',
+  'main.settings.locked': 'Workspace is locked. Unlock it to change settings.',
   'main.preflight.readOnly':
     'This drive appears to be read-only, so the app cannot create its workspace. ' +
     'Try a different USB port, or see the troubleshooting guide.',

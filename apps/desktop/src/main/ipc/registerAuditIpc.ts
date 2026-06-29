@@ -13,18 +13,29 @@ import { saveTextExport } from './save-export'
 // exporting are the only ways it leaves the workspace DB, both user actions.
 
 export function registerAuditIpc(ctx: AppContext): void {
+  // F16 (audit-postmerge-2026-06-29): both handlers touch ctx.db (listAuditEvents). The ctx.db
+  // getter already fail-closes when locked, but it throws the raw English vault-getter string;
+  // mirror every other DB-touching handler with an explicit requireUnlocked() so a locked call
+  // surfaces the localized main.audit.locked instead (the generalized lock test now covers these).
+  const requireUnlocked = (): void => {
+    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.audit.locked'))
+  }
+
   // Newest-first page; `beforeId` is the pagination cursor ("Load more"). The type
   // filter lives in the renderer (client-side over loaded pages).
   ipcMain.handle(
     IPC.getAuditEvents,
-    (_e, limit?: number, beforeId?: string | null): AuditEvent[] =>
-      listAuditEvents(ctx.db, { limit, beforeId })
+    (_e, limit?: number, beforeId?: string | null): AuditEvent[] => {
+      requireUnlocked()
+      return listAuditEvents(ctx.db, { limit, beforeId })
+    }
   )
 
   // Save the whole retained log to a user-chosen file (the exportConversation
   // precedent: dialog in MAIN, returns the path or null on cancel). JSON — the log is
   // structured data; a compliance reader wants machine-readable.
   ipcMain.handle(IPC.exportAuditLog, async (): Promise<string | null> => {
+    requireUnlocked()
     const events = listAuditEvents(ctx.db, { limit: AUDIT_MAX_ROWS })
     const filePath = await saveTextExport(
       {

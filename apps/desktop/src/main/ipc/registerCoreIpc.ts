@@ -20,6 +20,15 @@ export function registerCoreIpc(ctx: AppContext): void {
   const allowNetworkSetting = (): boolean =>
     ctx.workspace.isUnlocked() ? getSettings(ctx.db).allowNetwork : false
 
+  // F16 (audit-postmerge-2026-06-29): the settings get/update handlers touch ctx.db. The getter
+  // fail-closes when locked but throws the raw English vault string; gate them with the localized
+  // copy (parity with the other DB-touching handler groups). The status/policy/preflight/clipboard
+  // and the pre-unlock diagnostics-log channels stay usable while locked BY DESIGN — they are
+  // workspace-agnostic or read their value safely (allowNetworkSetting() guards the locked case).
+  const requireUnlocked = (): void => {
+    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.settings.locked'))
+  }
+
   ipcMain.handle(IPC.getAppStatus, (): AppStatus => {
     const ws = ctx.workspace.getState()
     const unlocked = ctx.workspace.isUnlocked()
@@ -102,9 +111,13 @@ export function registerCoreIpc(ctx: AppContext): void {
     return filePath
   })
 
-  ipcMain.handle(IPC.getSettings, () => getSettings(ctx.db))
+  ipcMain.handle(IPC.getSettings, () => {
+    requireUnlocked()
+    return getSettings(ctx.db)
+  })
 
   ipcMain.handle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
+    requireUnlocked()
     log.info('Settings updated', Object.keys(patch))
     const result = updateSettings(ctx.db, patch)
     // Keep the main-side cached UI language in step with the setting (D-L3) — the

@@ -228,7 +228,16 @@ therefore runs as a three-state machine (`services/logging.ts`):
   removal, no `uncaughtException` flush) loses the `info`/`warn` accumulated since the last flush;
   the price of not thrashing the drive on the hot path. Both the live `.enc` and the rotated
   `app.1.log.enc` are written **atomically** (temp + fsync + rename). `readLogTail` reads the
-  in-memory buffer (the on-disk copy is ciphertext). **Rotation keeps one prior generation**:
+  in-memory buffer (the on-disk copy is ciphertext). **On lock (`detachVaultKey()`), after the final
+  encrypted flush, the in-memory buffer is ZEROED** (audit-postmerge-2026-06-29 **F14**): the buffer
+  still holds the just-ended session's lines (file names, paths, model ids, settings keys — metadata,
+  never document/chat text), and because the read path falls back to `buffering` mode and
+  `getLogTail`/`exportLog` are deliberately not lock-gated (they must work pre-unlock for
+  troubleshooting), leaving it would let a still-mounted Diagnostics screen / compromised renderer read or *export* the
+  prior session after lock. The lines are persisted to `app.log.enc` first, so the next unlock
+  repopulates the tail from disk — nothing is lost, only the post-lock RAM residue is cleared. The
+  zeroing is guarded on `mode === 'encrypted'`, so the pre-FIRST-unlock `buffering` window (logs
+  deliberately readable for troubleshooting) is untouched. **Rotation keeps one prior generation**:
   `app.1.log.enc` is recovery-only — `readLogTail`/`loadEncrypted` read only the live `.enc`/buffer,
   so the Diagnostics tail shows the current generation (mirroring the plaintext rotation, whose tail
   reads only `app.log`).
@@ -893,9 +902,33 @@ TLS was enforced only on the **initial** URL; `fetch` then followed redirects au
 re-checked by `assertSafeDownloadUrl`: **https-only** *and* a **loopback/private-range deny**
 (127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, `localhost`, IPv6 `::1`/`fe80:`/`fc`/`fd`), with a
 **max-redirect** cap. The body is rejected once it exceeds the smallest of {`Content-Length`,
-caller `maxBytes`} + margin (the model downloader passes the manifest's planned size), with a
-generous global backstop when neither is known. All callers (model weights, runtime sidecar, OCR
-files) get this for free because they share the seam.
+caller `maxBytes`} + margin, with a global backstop when neither is known. All callers (model
+weights, runtime sidecar, OCR files) get this for free because they share the seam.
+
+**F15 (audit-postmerge-2026-06-29) — IPv4-mapped IPv6 closed.** The deny-list classifier
+(`isPrivateOrLoopbackHost`) matched the mapped form only in its **dotted-decimal** spelling
+(`::ffff:127.0.0.1`), but `new URL()` **canonicalizes** the literal to the hex-compressed form
+(`[::ffff:127.0.0.1]` → host `::ffff:7f00:1`, `[::ffff:169.254.169.254]` → `::ffff:a9fe:a9fe`), which
+matched neither the dotted regex nor the `::1`/`fe80:`/`fc`/`fd` checks — so mapped loopback, RFC-1918,
+and the `169.254.169.254` cloud-metadata address **slipped the deny-list** (reachable via a hostile
+model-manifest `download.url` or a redirect `Location:`). The classifier now **denies any host
+containing `::ffff:`** (no legitimate download target uses a mapped-IPv6 literal), robust against
+every canonicalization the parser emits. (The detection-only `offlineGuard.isLoopbackHost` is
+deliberately left as-is — it gates no enforcement decision, so an under-match there only ever costs an
+audit line.)
+
+**F17 (audit-postmerge-2026-06-29) — size cap always bounded.** The backstop was the disk-fill
+escape hatch: the **engine** downloader passed **no** `maxBytes`, and the **model** downloader passed
+one only when the manifest carried `size_bytes`, so a redirected / `Content-Length`-less endpoint
+collapsed the cap to the 64 GiB backstop (a disk-fill nuisance on small USB drives; the bytes fail
+SHA verify afterwards). Now **both downloaders always pass a bounded cap**: the engine path passes a
+per-family ceiling (`ENGINE_DOWNLOAD_MAX_BYTES` = 2 GiB — engine archives are tens-to-low-hundreds of
+MB), and the model path passes the manifest's exact `size_bytes` when known, else a bounded **per-role
+default** (`modelWeightMaxBytes`: chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB).
+The backstop itself was lowered 64 → 48 GiB and is now unreachable from production (defence-in-depth
+for a future caller). Residual: the cap is a disk-fill bound, not an integrity control — wrong bytes
+are still caught by the post-download SHA verify; and the DIY `fetch-*` scripts use the OS-native
+downloader (curl), not this seam.
 
 ### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
 `validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines

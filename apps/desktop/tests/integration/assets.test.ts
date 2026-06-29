@@ -18,6 +18,10 @@ import {
   writeRuntimeMarker,
   runtimeInstallCurrent,
   runtimeMarkerPath,
+  isPrivateOrLoopbackHost,
+  effectiveDownloadCap,
+  modelWeightMaxBytes,
+  ENGINE_DOWNLOAD_MAX_BYTES,
   type FetchFn
 } from '../../src/main/services/assets'
 import { validateManifest, isRealSha256, type ModelManifest } from '../../src/shared/manifest'
@@ -729,6 +733,105 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
         })
       ).rejects.toThrow(/size cap/)
     })
+
+    // F15 (audit-postmerge-2026-06-29): the WHATWG URL parser canonicalizes an IPv4-mapped IPv6
+    // literal to the hex-compressed form (`[::ffff:127.0.0.1]` → host `::ffff:7f00:1`), which the
+    // old dotted-decimal-only regex (`^::ffff:(\d+\.\d+\.\d+\.\d+)$`) never matched — so mapped
+    // loopback / RFC-1918 / 169.254.169.254 slipped the deny-list. The fix denies the mapped form.
+    it('blocks a redirect to a mapped-IPv6 loopback address (F15 SSRF bypass)', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      const dest = join(root, 'x.gguf')
+      await expect(
+        downloadToFile('https://cdn.example.test/a', dest, {
+          fetchImpl: routeFetch(() => redirectTo('https://[::ffff:127.0.0.1]/x'))
+        })
+      ).rejects.toThrow(/private\/loopback/)
+      expect(existsSync(dest)).toBe(false)
+    })
+
+    it('blocks a redirect to the mapped-IPv6 cloud-metadata address (F15)', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      const dest = join(root, 'x.gguf')
+      await expect(
+        downloadToFile('https://cdn.example.test/a', dest, {
+          fetchImpl: routeFetch(() => redirectTo('https://[::ffff:169.254.169.254]/latest/meta-data'))
+        })
+      ).rejects.toThrow(/private\/loopback/)
+      expect(existsSync(dest)).toBe(false)
+    })
+  })
+
+  // F15 — direct unit coverage on the host classifier. Feed it exactly what the enforcement seam
+  // feeds it: `new URL(raw).hostname` (the canonicalized host), not the raw bracketed literal.
+  describe('isPrivateOrLoopbackHost — IPv4-mapped IPv6 deny-list (F15)', () => {
+    const hostOf = (raw: string): string => new URL(raw).hostname
+
+    it('denies mapped-IPv6 loopback / private / link-local in every spelling', () => {
+      // All of these canonicalize to `::ffff:<hex>:<hex>` and were NOT blocked before the fix.
+      expect(isPrivateOrLoopbackHost(hostOf('https://[::ffff:127.0.0.1]/x'))).toBe(true)
+      expect(isPrivateOrLoopbackHost(hostOf('https://[::ffff:169.254.169.254]/x'))).toBe(true)
+      expect(isPrivateOrLoopbackHost(hostOf('https://[::ffff:10.0.0.1]/x'))).toBe(true)
+      expect(isPrivateOrLoopbackHost(hostOf('https://[::ffff:192.168.1.1]/x'))).toBe(true)
+      // The fully-expanded long form canonicalizes to the same `::ffff:7f00:1`.
+      expect(isPrivateOrLoopbackHost(hostOf('https://[0:0:0:0:0:ffff:127.0.0.1]/x'))).toBe(true)
+    })
+
+    it('still denies the pre-existing IPv4 + bare-IPv6 cases', () => {
+      expect(isPrivateOrLoopbackHost(hostOf('https://127.0.0.1/x'))).toBe(true)
+      expect(isPrivateOrLoopbackHost(hostOf('https://169.254.169.254/x'))).toBe(true)
+      expect(isPrivateOrLoopbackHost(hostOf('https://10.0.0.5/x'))).toBe(true)
+      expect(isPrivateOrLoopbackHost('::1')).toBe(true)
+      expect(isPrivateOrLoopbackHost('localhost')).toBe(true)
+    })
+
+    it('still passes a legitimate public https host (positive control — no over-block)', () => {
+      expect(isPrivateOrLoopbackHost(hostOf('https://huggingface.co/x'))).toBe(false)
+      expect(isPrivateOrLoopbackHost(hostOf('https://cdn-lfs.huggingface.co/x'))).toBe(false)
+      expect(isPrivateOrLoopbackHost(hostOf('https://8.8.8.8/x'))).toBe(false)
+    })
+  })
+})
+
+// F17 (audit-postmerge-2026-06-29): the body size cap must always be BOUNDED — a redirected /
+// Content-Length-less endpoint must never fall through to a multi-GiB disk-fill. The hard backstop
+// is now only reached when NOTHING bounds the body, and both in-app downloaders always pass a cap.
+describe('download size caps (F17)', () => {
+  const GiB = 1024 * 1024 * 1024
+  const MARGIN = 1024 * 1024
+
+  it('effectiveDownloadCap composes the smallest known bound + margin', () => {
+    // Content-Length only.
+    expect(effectiveDownloadCap(500, undefined)).toBe(500 + MARGIN)
+    // maxBytes only.
+    expect(effectiveDownloadCap(null, 100)).toBe(100 + MARGIN)
+    // Both → the smaller wins.
+    expect(effectiveDownloadCap(900, 100)).toBe(100 + MARGIN)
+    expect(effectiveDownloadCap(100, 900)).toBe(100 + MARGIN)
+  })
+
+  it('effectiveDownloadCap falls back to a FINITE backstop (never unbounded) when nothing bounds the body', () => {
+    const cap = effectiveDownloadCap(null, undefined)
+    expect(Number.isFinite(cap)).toBe(true)
+    expect(cap).toBeGreaterThan(0)
+    // The backstop was lowered toward a realistic max single weight (≤ the old 64 GiB).
+    expect(cap).toBeLessThanOrEqual(64 * GiB)
+  })
+
+  it('modelWeightMaxBytes uses the exact size when known, else a bounded per-role default', () => {
+    // Known size → exact (the tight cap).
+    expect(modelWeightMaxBytes('chat', 1234)).toBe(1234)
+    // Absent size → a bounded role default (never null/unbounded), below the hard backstop.
+    const chatDefault = modelWeightMaxBytes('chat', null)
+    expect(chatDefault).toBeGreaterThan(0)
+    expect(chatDefault).toBeLessThan(64 * GiB)
+    // The small roles get a TIGHTER ceiling than chat/vision.
+    expect(modelWeightMaxBytes('embeddings', null)).toBeLessThan(chatDefault)
+    expect(modelWeightMaxBytes('reranker', null)).toBeLessThan(chatDefault)
+  })
+
+  it('ENGINE_DOWNLOAD_MAX_BYTES is bounded well below the hard backstop', () => {
+    expect(ENGINE_DOWNLOAD_MAX_BYTES).toBeGreaterThan(0)
+    expect(ENGINE_DOWNLOAD_MAX_BYTES).toBeLessThan(64 * GiB)
   })
 })
 

@@ -428,6 +428,13 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** Add a one-line caveat to the E5-prefix migration TODO (rag-design §12.1 R3).
 
 ### F14 — Diagnostics log tail/export remain readable from the renderer after the vault is locked
+> **✅ REMEDIATED — Phase 4 (branch `audit-postmerge-phase4-security-consistency`).** Option (a):
+> `detachVaultKey()` now **zeroes the in-memory `buffer` after the final encrypted flush** (guarded on
+> `mode==='encrypted'`, so the pre-FIRST-unlock diagnostics window is preserved). The lines are persisted to
+> `app.log.enc` first, so the next unlock repopulates the tail — nothing is lost, only the post-lock RAM
+> residue is cleared. `getLogTail`/`exportLog` stay ungated (pre-unlock diagnostics). Test: `logging.test.ts`
+> (attach → write metadata lines → detach → tail/full empty → re-unlock repopulates). Disposition:
+> architecture.md §30; security-model.md "Design record — encrypted log".
 - **Category:** Data-handling
 - **Severity:** Low · **Confidence:** Medium
 - **Location:** `apps/desktop/src/main/services/logging.ts` (`detachVaultKey` drops the key + sets
@@ -448,6 +455,13 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** security-model.md log-lifecycle — state the chosen post-lock behavior.
 
 ### F15 — IPv4-mapped IPv6 addresses bypass the download SSRF / private-range deny-list
+> **✅ REMEDIATED — Phase 4 (branch `audit-postmerge-phase4-security-consistency`).** `isPrivateOrLoopbackHost`
+> (`assets.ts`) now **denies any host containing `::ffff:`** — robust against the hex-compressed form
+> `new URL()` canonicalizes to (`::ffff:7f00:1` / `::ffff:a9fe:a9fe`), which the dotted-decimal-only regex
+> missed. The detection-only `offlineGuard.isLoopbackHost` was left as-is (gates no enforcement). Tests:
+> `assets.test.ts` (unit on `[::ffff:127.0.0.1]` / `[::ffff:169.254.169.254]` / `[::ffff:10.0.0.1]` / the long
+> `[0:0:0:0:0:ffff:127.0.0.1]` form + a redirect-hop + a public-host positive control). Disposition:
+> architecture.md §30 + §25 SSRF inventory line; security-model.md §D3.
 - **Category:** Security
 - **Severity:** Low (Medium under the documented "a hostile model-manifest is attacker #1" model) ·
   **Confidence:** High (empirically verified)
@@ -480,6 +494,15 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** security-model.md §D3 + architecture.md §25/§26 SSRF lines.
 
 ### F16 — IPC lock-guard coverage is overstated; several DB-touching handlers lack the explicit `requireUnlocked()` preamble
+> **✅ REMEDIATED — Phase 4 (branch `audit-postmerge-phase4-security-consistency`).** Added the localized
+> `requireUnlocked()` preamble to the four DB-touching groups — `registerRagIpc` (rag:ask, reuses
+> `main.chat.locked`), `registerAuditIpc` (`main.audit.locked`), `registerCoreIpc` settings get/update
+> (`main.settings.locked`), `registerModelIpc` list/select/verify/start (`main.models.locked`) — and
+> **generalized** TEST-N8 into `tests/integration/ipc-lock-coverage.test.ts`, which drives the
+> core/model/audit/rag/benchmark/collections modules against a locked ctx (refusal enumerated; a missing
+> guard reddens it) and asserts the read-only channels (`getLogTail`/`getRuntimeStatus`) still resolve when
+> locked. The §25 "enumerates them" wording is corrected. **This generalized test SUBSUMES Phase-5 item T3
+> (rag:ask lock-rejection).** Disposition: architecture.md §30 + §25 inventory correction.
 - **Category:** Security (defense-in-depth + doc accuracy)
 - **Severity:** Low · **Confidence:** High
 - **Location:** `registerRagIpc.ts` (0 `requireUnlocked()`; first DB touch `ctx.db` at line 129),
@@ -501,6 +524,13 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** architecture.md §25 inventory line on TEST-N8.
 
 ### F17 — Engine download applies no caller-side size cap; model download falls back to the 64 GiB backstop when `size_bytes` is absent
+> **✅ REMEDIATED — Phase 4 (branch `audit-postmerge-phase4-security-consistency`).** Both downloaders now
+> ALWAYS pass a bounded cap: the engine path passes `ENGINE_DOWNLOAD_MAX_BYTES` (2 GiB), the model path
+> passes the manifest's exact `size_bytes` when known else a bounded per-role default (`modelWeightMaxBytes`:
+> chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB). `DOWNLOAD_HARD_MAX_BYTES` lowered
+> 64→48 GiB (now unreachable from production). The cap policy is extracted to the unit-testable
+> `effectiveDownloadCap`. Tests: `assets.test.ts` (pure helpers) + `downloads.test.ts` / `engine-download.test.ts`
+> (injected `downloadImpl` captures the applied cap). Disposition: architecture.md §30; security-model.md §D3.
 - **Category:** Security (resource exhaustion / disk-fill)
 - **Severity:** Low · **Confidence:** High
 - **Location:** `runtime-download.ts` (never passes `maxBytes`); `downloads.ts:328` (passes
@@ -663,7 +693,7 @@ false-green defense. Env-gating of real-model/real-data via `describe.runIf` (fi
 |----|---------|-----|----------|
 | **T1** | `sidecar.test.ts` `FakeChild` **exits on ANY signal** → the LlamaServer **unit** suite can never exercise the SIGTERM-ignore→SIGKILL escalation (only the integration tier does). A regression re-gating escalation on `child.killed` instead of `this.exited` reddens nothing in the file that appears to own LlamaServer lifecycle. | Medium | tests/unit/sidecar.test.ts:27-35 |
 | **T2** | **Resident-cache lock-purge** (a stated security requirement) is wired but **never asserted at the IPC layer** — `workspace-ipc.test.ts` lock tests assert the sidecar stops fired but never that `purgeResidentVectors` ran. A refactor dropping the purge leaves plaintext-derived vectors resident after lock with zero failure. | Medium | tests/integration/workspace-ipc.test.ts:150-204 |
-| **T3** | **`registerRagIpc` (rag:ask)** has **no lock-gate and no lock-rejection test** — the only DB-touching streaming handler without either (relies on the `ctx.db` getter throwing raw English). | Medium | src/main/ipc/registerRagIpc.ts |
+| **T3** ✅ | **`registerRagIpc` (rag:ask)** had **no lock-gate and no lock-rejection test** — the only DB-touching streaming handler without either (relied on the `ctx.db` getter throwing raw English). **SUBSUMED (Phase 4)** — F16 added the localized `requireUnlocked()` to rag:ask and the generalized `ipc-lock-coverage.test.ts` drives it against a locked ctx; no separate Phase-5 test needed. | Medium | src/main/ipc/registerRagIpc.ts |
 | **T4** ✅ | **Parens-negative money** is only tested as a bare token (`parseAmount('(45.00)')`), never through the real `MONEY_RE` scanner — the whole-string treatment BL-1 got but parens-negative didn't. **ADDRESSED (Phase 1)** — pinned through `extractTransactionRows`. | Medium | tests/unit/skills-bank-statement-tool.test.ts:73 |
 | **T5** ✅ | **Amounts with 3+ decimals** have unpinned behavior; the load-bearing "every figure is 2-dp" integer-cent invariant (`Math.round(x*100)`) is **never enforced by a test** (a 3-dp token silently drops its third decimal). **FIXED + PINNED (Phase 1)** — `parseAmount` rounds to nearest cent; tested. | Medium | money.ts:81-119 (no covering test) |
 | **T6** | **GPU-probe timeout test uses real wall-clock** (`timeoutMs:20` + real setTimeout) — a TEST-1-family flake surface. | Low | tests/unit/gpu.test.ts:178-187 |
@@ -780,7 +810,14 @@ current behavior is load-bearing (financial parsing especially).
 - **Docs:** architecture.md §8 (invoice/bank parity).
 - **Acceptance:** no table growth across repeated questions; full suite green.
 
-### Phase 4 — Security consistency hardening
+### Phase 4 — Security consistency hardening — ✅ DONE
+> **✅ COMPLETE (branch `audit-postmerge-phase4-security-consistency`).** F15/F14/F16/F17 all landed
+> test-first (red→green); suite **2515 passed / 39 skipped**, typecheck + build green. F15 denies any
+> `::ffff:` host; F14 zeroes the log buffer on lock (option a); F16 added the localized `requireUnlocked()` to
+> the four DB-touching groups + a generalized structural lock test (**subsumes T3**); F17 makes both
+> downloaders always pass a bounded cap (engine 2 GiB; model exact-size-or-per-role-default). The optional
+> SEC-1 code half / SEC-2 / SEC-3 were **NOT** taken in this phase (left for their own phase). Disposition:
+> architecture.md §30 + §27 ledger row; security-model.md §D3 + "encrypted log" record + §25 inventory fix.
 - **Goal:** close F15, F14, F16, F17 (and optionally the §26-deferred SEC-1 code half / SEC-2 / SEC-3).
 - **Scope/files:** `services/assets.ts`, `services/logging.ts`, `services/runtime-download.ts`,
   `services/downloads.ts`, `ipc/registerRagIpc.ts` + `registerAuditIpc.ts`/`registerCoreIpc.ts`/

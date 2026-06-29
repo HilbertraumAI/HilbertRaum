@@ -166,7 +166,19 @@ export function attachVaultKey(key: Buffer): void {
  * in-memory buffer both survive, so a later re-unlock continues the same log.
  */
 export function detachVaultKey(): void {
-  if (mode === 'encrypted') persistEncrypted()
+  if (mode === 'encrypted') {
+    persistEncrypted()
+    // F14 (audit-postmerge-2026-06-29): the in-memory buffer still holds this unlocked session's
+    // lines (file names, paths, model ids, settings keys — METADATA, never document/chat text, by
+    // the no-content-in-logs rule). In `buffering` mode readLogTail/readLogFull return the buffer,
+    // and getLogTail/exportLog are intentionally NOT lock-gated (pre-unlock diagnostics), so leaving
+    // it would let a still-mounted Diagnostics screen / compromised renderer read or EXPORT the
+    // just-ended session AFTER lock. Zero it AFTER the final encrypted flush; the next unlock
+    // repopulates it from `app.log.enc` via loadEncrypted(). The guard is `mode === 'encrypted'`,
+    // so the pre-FIRST-unlock `buffering` window (where logs are deliberately readable for
+    // troubleshooting) never reaches this branch and is preserved.
+    buffer = ''
+  }
   vaultKey = null
   mode = 'buffering'
 }

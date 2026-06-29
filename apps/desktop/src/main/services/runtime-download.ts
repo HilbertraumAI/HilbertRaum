@@ -22,6 +22,7 @@ import {
   selectRuntimeBuild,
   verifyDownloadedFile,
   writeRuntimeMarker,
+  ENGINE_DOWNLOAD_MAX_BYTES,
   WHISPER_BINARY_BASE,
   type FetchFn,
   type RuntimeDownloadPlan
@@ -221,6 +222,8 @@ export const extractWithTar: ExtractFn = (archivePath, destDir) =>
 
 export interface EngineDownloadDeps {
   fetchImpl?: FetchFn
+  /** Injected downloader (default `downloadToFile`) — tests capture the applied size cap (F17). */
+  downloadImpl?: typeof downloadToFile
   extractImpl?: ExtractFn
   log?: (msg: string, meta?: unknown) => void
 }
@@ -381,9 +384,14 @@ export class EngineDownloadManager {
       // multi-GB weight, and a corrupt partial must never be extracted) — a fresh archive
       // each attempt; a stale one from a cancelled run is overwritten.
       job.status = 'downloading'
-      const result = await downloadToFile(plan.url, plan.zipDest, {
+      const download = this.deps.downloadImpl ?? downloadToFile
+      const result = await download(plan.url, plan.zipDest, {
         fetchImpl: this.deps.fetchImpl,
         signal: controller.signal,
+        // F17: engine archives are tens-to-low-hundreds of MB; pass a bounded per-family ceiling so
+        // a redirected / Content-Length-less endpoint can't fall through to the multi-GiB backstop
+        // and fill the drive (the archive SHA verify rejects wrong bytes afterwards).
+        maxBytes: ENGINE_DOWNLOAD_MAX_BYTES,
         onResponse: ({ contentLength }) => {
           if (contentLength != null) job.totalBytes = contentLength
         },

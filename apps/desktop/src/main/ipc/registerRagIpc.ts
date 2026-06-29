@@ -144,6 +144,11 @@ export function registerRagIpc(ctx: AppContext): void {
       skillInstallId?: string | null,
       regenerate?: boolean
     ): Promise<Message> => {
+      // F16 (audit-postmerge-2026-06-29): rag:ask is the document-grounded sibling of
+      // sendChatMessage and touches ctx.db throughout; gate it FIRST with the same localized chat
+      // lock copy so a locked call refuses friendly instead of throwing the raw vault-getter string
+      // deep inside assertChatStreamReady. (Generalized lock test covers this — subsumes T3.)
+      if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.chat.locked'))
       // Shared guard preamble (M-A2): conv exists, runtime active, no blocking doc task /
       // stream already in flight (a yielding deep-index build is paused, not refused).
       const { runtime } = await assertChatStreamReady(ctx, conversationId)

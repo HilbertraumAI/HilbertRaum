@@ -6,6 +6,51 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 4 (SECURITY CONSISTENCY HARDENING; F15/F14/F16/F17) — branch
+`audit-postmerge-phase4-security-consistency`.** Suite **2515 passed / 39 skipped (2554 collected)** (was
+2495/39 after Phase 3 → **+20 tests**), typecheck clean, `npm run build` green. Theme: **consistency gaps where
+a documented control didn't fully hold** — none is a remote exploit (offline by construction). No new IPC
+channel; one additive internal `ModelDownloadTask.role` field; three new localized i18n keys. Every fix is
+**test-first (red on current code → green)**.
+- **F15 (SSRF deny-list bypass) — IPv4-mapped IPv6 slipped the download private-range deny.** `new URL()`
+  CANONICALIZES `[::ffff:127.0.0.1]` → host `::ffff:7f00:1` and `[::ffff:169.254.169.254]` → `::ffff:a9fe:a9fe`,
+  which the old **dotted-decimal-only** regex never matched → mapped loopback / RFC-1918 / the cloud-metadata
+  IP were not blocked (reachable via a hostile manifest `download.url` or a redirect `Location:`). **Fix:**
+  `isPrivateOrLoopbackHost` (`assets.ts`) now **denies any host containing `::ffff:`** (no legit target uses a
+  mapped-IPv6 literal). The detection-only `offlineGuard.isLoopbackHost` is left as-is (gates no enforcement).
+- **F14 (log readable after lock) — `detachVaultKey()` left the in-memory buffer holding the locked session.**
+  The buffer carried the just-ended session's METADATA (file names/paths/model ids/settings keys — never
+  document/chat text); the buffering read path + the intentionally-ungated `getLogTail`/`exportLog` let a
+  still-mounted Diagnostics screen read/export it after lock. **Fix (option a):** zero the buffer **after** the
+  final encrypted flush, guarded on `mode==='encrypted'` (the pre-FIRST-unlock diagnostics window is
+  preserved); the next unlock repopulates from `app.log.enc`, so nothing is lost.
+- **F16 (IPC lock-guard parity + overstated doc) — rag/audit/core-settings/model touched `ctx.db` with no
+  explicit `requireUnlocked()`.** They were fail-closed (the getter throws when locked) but surfaced the RAW
+  English string, and the §25 "TEST-N8 enumerates every DB-touching handler" claim was false (it covered only
+  chat+benchmark). **Fix:** added the localized preamble to those four groups (`main.audit.locked` /
+  `main.settings.locked` / `main.models.locked`; rag reuses `main.chat.locked`) AND **generalized** the
+  structural lock test (`tests/integration/ipc-lock-coverage.test.ts`) across core/model/audit/rag/benchmark/
+  collections — refusal enumerated (a missing guard reddens it) + the read-only channels (`getLogTail`/
+  `getRuntimeStatus`) still resolve when locked. §25 wording corrected. **Subsumes Phase-5 T3 (rag:ask
+  lock-rejection).**
+- **F17 (download size caps) — the body cap could collapse to the 64 GiB backstop.** The **engine** downloader
+  passed no `maxBytes`; the **model** downloader passed one only when the manifest carried `size_bytes`. A
+  redirected / `Content-Length`-less endpoint then streamed up to the backstop (disk-fill on a small USB
+  drive; the bytes fail SHA verify after). **Fix:** both downloaders now ALWAYS pass a bounded cap — engine =
+  `ENGINE_DOWNLOAD_MAX_BYTES` (2 GiB), model = `modelWeightMaxBytes(role, sizeBytes)` (exact size, else a
+  per-role default: chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB). `DOWNLOAD_HARD_MAX_BYTES`
+  lowered 64→48 GiB (now unreachable from production). Cap policy extracted to the unit-testable
+  `effectiveDownloadCap`; the two managers gained an injected `downloadImpl` seam so the applied cap is
+  teeth-checked.
+- **Durable record:** architecture.md **§30 ledger** (F15/F14/F16/F17) + §27 master-ledger row + the §25
+  inventory correction (TEST-N8 enumeration) + the §25 SSRF inventory line; security-model.md **§D3** (F15
+  mapped-IPv6 + F17 always-bounded cap) + the **"encrypted log"** design record (F14 buffer-zeroing). The
+  audit report marks F14/F15/F16/F17 remediated + Phase 4 DONE + T3 subsumed.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase4-security-consistency`; do NOT auto-merge/push.**
+  Then Phase 5 (test seams T1/T2/T6/T7/T8 — **T3 now subsumed**, T4/T5 done Phase 1). Phases 6–8 (renderer
+  a11y F20–F24, docs D1–D8, RAG/perf/concurrency F11–F13/F18/F19) still open. The §26-carried SEC-1 code half /
+  SEC-2 / SEC-3 remain deferred to their own phase (NOT taken in Phase 4)._
+
 _2026-06-29 — **Post-merge full audit — Phase 3 (INVOICE DATA LIFECYCLE — reuse/replace/staleness PARITY with
 the bank path; F5) — branch `audit-postmerge-phase3-invoice-lifecycle`.** Suite **2495 passed / 39 skipped
 (2534 collected)** (was 2492/39 after Phase 2 → **+3 tests**), typecheck clean, `npm run build` green. Theme
