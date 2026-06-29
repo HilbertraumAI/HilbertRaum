@@ -6,6 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 0 (DE-FLAKE THE SUITE; TEST-1) — branch
+`full-audit-2026-06-29-fixes`.** Suite now reliably **2417 passed / 39 skipped (2456 collected)**,
+confirmed stable across **3 consecutive full `npm test` runs**; `npm run build` green. Test-only change
+(nothing under `src/` touched), so the test count is unchanged from the previous headline — the fix
+removed the flake, not any tests; the "2417 passed" claim that the audit flagged as stale/optimistic is
+now genuinely held.
+- **TEST-1 (High).** `tests/integration/dictation-ipc.test.ts:223` (the REL-3 concurrency test) polled with
+  an **iteration cap** (`for (let i = 0; calls === 0 && i < 100; i++) …`) instead of a wall-clock deadline.
+  Commit `fa9a6b2` (2026-06-28 audit, PERF-2) moved `await writeFile` to run BEFORE `transcribe()`, so under
+  full-suite CPU contention (vitest forked pool) the off-event-loop write didn't complete within 100
+  `setImmediate` ticks → `calls` stayed 0 → `expect(calls).toBe(1)` flaked RED. Passed in isolation, flaked
+  only under whole-suite load. It was the lone iteration-capped poll in the integration suite.
+- **Fix.** Replaced the cap with a wall-clock deadline matching the rest of the suite:
+  `const start = Date.now(); while (calls === 0 && Date.now() - start < 5000) await new Promise((r) => setImmediate(r))`.
+  Comment updated to explain the deadline + cite TEST-1. The synchronous-`inFlight` BUSY-refusal assertions
+  below it (the actual single-flight contract) were untouched — they don't depend on this timing.
+- **NEXT ACTION (owner):** Phase 0 unblocks a trustworthy `npm test` baseline for the rest of the audit.
+  Remaining phases on this branch: P1 financial correctness (BL-1/2/3, the release-blocking sign-theft),
+  P2 runtime reliability (REL-1/2/3), P3 test-enforcement gaps (TEST-2…5), P4 renderer/determinism low-hangers,
+  P5 resident-cache incremental, P6 docs + close-out. Do NOT auto-merge/push — left to the owner._
+
+
 _2026-06-29 — **Doc cleanup: retired `docs/functionality-wave-3-plan.md`.** The wave was complete
 (Phases 31–38, 2026-06-11) and its per-feature mechanisms already lived in the topic docs; the unique
 "cited-as-a-unit" content (the §13 decisions D23–D37 + the §14 research-gate evidence R-S1/R-T1/R-T2/
