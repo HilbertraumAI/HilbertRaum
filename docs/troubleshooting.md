@@ -53,11 +53,11 @@ can confirm this in **Settings → Privacy & data**.
 
 ## The answers look like placeholders / "echo" replies
 
-The app is running its built-in **mock** runtime — started via **Start mock runtime** on the
+The app is running its built-in **demo mode** — started via **Try in demo mode** on the
 AI Model screen, or used as a first-run fallback on a **developer** build when no model weight is
 installed yet. (On a prepared drive without developer mode, a missing weight shows an error rather
-than falling back to the mock.) The mock lets you explore the interface, but it does not produce real
-AI answers.
+than falling back to demo mode.) Demo mode lets you explore the interface, but it does not produce
+real AI answers.
 
 **Fix:** add a real model file:
 1. On the **AI Model** screen, note the model marked *Recommended*.
@@ -250,8 +250,9 @@ That's expected the first time, and on the first question about a large picture:
   can't run.
 - **One image, one question at a time.** You can only ask one question at a time — wait for the
   current answer (or press **Stop**) before asking the next; a question asked while one is still
-  running is declined, not queued. The picture and answers are never saved — they clear when you
-  remove the image or leave the screen.
+  running is declined, not queued. The picture and answers are **never uploaded**; they are saved
+  to your image history (under `workspace/images/`, encrypted at rest on an encrypted workspace) so
+  you can revisit them, and you can delete any saved analysis at any time from the Images screen.
 
 ---
 
