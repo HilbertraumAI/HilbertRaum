@@ -377,6 +377,84 @@ describe('LlamaReranker', () => {
     expect(calls.length).toBe(2)
     await reranker.stop()
   })
+
+  // F19 (full-audit-2026-06-29-postmerge): the reranker mirror of the embedder's guard. suspend()
+  // (workspace lock) sets no `stopped`-style latch, so a suspend() that interleaves with a concurrent
+  // rerank() could tear down the OLD sidecar while a fresh ensureStarted SPAWNS and RETAINS a new one
+  // — surviving the lock with query/chunk-text-derived state in RAM. The `tearingDown` guard closes
+  // it. Deterministic interleave via a gated-exit child; TEETH: drop the guard → child2 spawns,
+  // is never killed, calls.length === 2 → red.
+  it('suspend() does not retain a sidecar spawned by a concurrent rerank during teardown (F19)', async () => {
+    class GatedChild extends EventEmitter implements ChildProcessLike {
+      pid = 9
+      killed = false
+      private wantExit = false
+      private released = false
+      kill(): boolean {
+        this.killed = true
+        this.wantExit = true
+        if (this.released) this.emit('exit', 0, null)
+        return true
+      }
+      releaseExit(): void {
+        this.released = true
+        if (this.wantExit) this.emit('exit', 0, null)
+      }
+    }
+    const children: GatedChild[] = []
+    const calls: string[][] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push(args)
+      const c = new GatedChild()
+      children.push(c)
+      return c
+    }
+    const firstHealth = { release: null as null | (() => void) }
+    let firstHealthDone = false
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        if (!firstHealthDone) {
+          await new Promise<void>((r) => (firstHealth.release = r))
+          firstHealthDone = true
+        }
+        return { ok: true, status: 200 } as Response
+      }
+      if (u.endsWith('/v1/rerank')) {
+        return { ok: true, status: 200, json: async () => ({ results: [{ index: 0, relevance_score: 1 }] }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
+    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl })
+
+    // start1 in flight, parks on the gated first /health. Under the guard rerank1 itself rejects
+    // (its post-start re-check sees tearingDown), so attach the catch up front.
+    const rerank1 = reranker.rerank('q', ['a']).catch(() => undefined)
+    while (!firstHealth.release) await new Promise((r) => setTimeout(r, 1))
+    expect(children.length).toBe(1)
+
+    const suspendP = reranker.suspend() // teardown: tearingDown=true, awaits this.starting (start1)
+    await new Promise((r) => setTimeout(r, 1))
+
+    firstHealth.release!() // start1 resolves → teardown advances to server.stop()
+    while (!children[0].killed) await new Promise((r) => setTimeout(r, 1)) // teardown parked on the gated exit
+
+    const rerank2 = reranker.rerank('q', ['b']).then(
+      () => 'ok',
+      () => 'rejected'
+    )
+    await new Promise((r) => setTimeout(r, 25))
+
+    children[0].releaseExit()
+    await suspendP
+    await rerank1
+    await rerank2
+
+    expect(calls.length).toBe(1)
+    for (const c of children) expect(c.killed).toBe(true)
+    await reranker.stop()
+  })
 })
 
 // ---- Reranker selector ------------------------------------------------------------

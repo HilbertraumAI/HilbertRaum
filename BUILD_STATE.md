@@ -6,6 +6,55 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 8 (FINAL / CLOSE-OUT; F12 + F18 + F19, then the audit report
+RETIRED) — branch `audit-postmerge-phase8-closeout`.** The post-merge full audit is now **COMPLETE (all 8
+phases)**. Suite **2532 passed / 39 skipped (2571 collected)** (was 2523/39 after Phase 7 → **+9**: F12 ×5,
+F18 ×2, F19 ×2), typecheck clean, `npm run build` green. Each Part-A fix is **teeth-checked** (neuter → red →
+restore). The durable record is the new **architecture.md §34 master close-out ledger** (dispositions EVERY
+F1–F24 / T1–T9 / D1–D8 → its phase → as-built §/file, + the carried-forward open items); the working-paper
+report `audits/full-audit-2026-06-29-postmerge.md` was **`git rm`'d** (recoverable in git history — the parent
+of this commit), per the CLAUDE.md doc-lifecycle rule (mirrors §24/§25/§26).
+- **F12 (Low, perf) — the resident-cache reconcile's O(N) `SELECT chunk_id` scan is gone for the in-band
+  paths.** PERF-1 removed the per-write full *decode* but the reconcile still scanned every id + built an
+  N-entry Set on the first query after every write. The three write sites (`ingestion/index.ts` finalize-insert
+  + reindex chunk-phase delete + `deleteDocument`) now pass the **exact** added/removed chunk_ids
+  (`invalidateResidentVectors(db, { added/removed })`; the delete sites capture them via the new
+  `embeddingChunkIdsForDocument` BEFORE the delete) → the reconcile decodes only the named-new rows by point
+  lookup, **no whole-table scan**. A `Map.size === COUNT(*)` gate falls back to the full scan for a delta-less
+  `invalidate(db)` (out-of-band writers — tests/bench), a missed/wrong delta, or a truncated-blob omission
+  (fails SAFE → self-heal). **NON-NEGOTIABLE preserved:** byte-identical to a cold rebuild for every
+  insert/delete/reindex/same-rowid sequence (PERF-1 contract), the `(count,maxRowid)` signature backstop, and
+  the lock-purge. Tests in `resident-cache-incremental.test.ts` (named-delta equivalence, no-`SELECT chunk_id`
+  assertion, composition, size-gate self-heal — teeth-checked) + a `resident-cache-bench.test.ts` reconcile leg.
+  Disposition: arch §34 + Performance/Wave-P4 record.
+- **F18 (Low, latent concurrency) — VisionService terminal `done` write now routes through the cancelled-guarded
+  `set()`** (returns whether it applied) so a concurrent `cancel()` can't be silently overwritten by `done`
+  (nor re-fire `emit.done`). Latent today (no `await` between the abort check and the write); hardened against a
+  refactor that inserts one. Test `vision-cancel.test.ts` pins the end-state; the **dual-neuter** (remove the
+  abort check AND the `set()` guard → resurrection) is the recorded teeth-check. Disposition: arch §34 +
+  Image-understanding §5.
+- **F19 (Low, latent concurrency) — `tearingDown` race guard on the embedder + reranker `suspend()`/`teardown()`.**
+  `stop()` arms `stopped` before teardown so a racing `ensureStarted` can't orphan a sidecar; `suspend()` (lock)
+  had no such latch, so a suspend interleaving a concurrent `embed()`/`rerank()` could stop the OLD sidecar while
+  a fresh start spawned and was **retained** past the lock (chunk/query-text-derived state in RAM). A
+  `tearingDown` flag (set at the top of `teardown()`, cleared in `finally`) makes `ensureStarted` refuse (top +
+  re-check after `await this.starting`) — giving `suspend()` the orphan protection `stop()` has. Both
+  `embeddings/e5.ts` + `reranker/llama.ts`. Deterministic gated-exit interleave test in `e5-embedder.test.ts` /
+  `reranker.test.ts` (teeth-checked). Disposition: arch §34 + GPU §5.5c.
+- **All 8 phases (one line each):** P1 money-parser correctness (F1/F3/F6/F8 + invoice single-currency guard +
+  T4/T5; §27/§8) · P2 runtime reliability (F2/F4/F7/F9; §28) · P3 invoice lifecycle parity (F5; §29) · P4
+  security consistency (F14/F15/F16/F17, F16 subsumes T3; §30) · P5 test-enforcement seams (T1/T2/T6/T7/T8/T9;
+  §31, test-only) · P6 renderer a11y + lifecycle (F20–F24; §32) · P7 docs reconciliation (D1–D8 + F11/F13
+  doc-notes; §33) · P8 low-hangers F12/F18/F19 + report retirement (§34).
+- **Carried-forward open items (NOT taken; recorded in §34):** the **F11 renderer half** (present `mode:'tree'`
+  answers as whole-document provenance — the rag-design §14.4 doc-note stands); the **F13 code** (floor-before-cut,
+  a precondition of the deferred E5 `query:`/`passage:` prefix migration; inert at the pinned floor 0); and the
+  §26-carried **SEC-1 code half / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix migration**.
+- **NEXT ACTION (owner): merge the audit branches `audit-postmerge-phase1-money` … `phase8-closeout` to `master`
+  when ready — they are stacked/unmerged. Do NOT auto-merge or push.** The post-merge audit is closed; the next
+  audit starts from a clean tree with §34 as the durable record._
+
+
 _2026-06-29 — **Post-merge full audit — Phase 7 (DOCUMENTATION RECONCILIATION; D1–D8 + the F11/F13 doc-notes +
 a fresh §-anchor sweep) — branch `audit-postmerge-phase7-docs`.** **Docs- and code-comment-ONLY — `git diff`
 shows only `.md`/`.yaml` files and code COMMENTS; no `src/` logic change.** Suite **2523 passed / 39 skipped**

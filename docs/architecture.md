@@ -420,19 +420,25 @@ decode without an `index ↔ resident-cache` import cycle (re-exported from the 
 **Invalidation contract (the highest-risk surface — a stale buffer silently corrupts ranking).**
 Belt-and-suspenders, three mechanisms (the per-write *full rebuild* was removed in Phase 5 — see the
 PERF-1 note below; the original mechanism descriptions are folded into the three bullets):
-- **Incremental delta (primary in-band path, PERF-1 / full-audit-2026-06-29 Phase 5):**
-  `invalidateResidentVectors(db)` is called at the three `embeddings` write sites — `ingestion/index.ts`
-  finalize-insert + reindex chunk-phase delete + `deleteDocument`. It now MARKS the cache dirty (it no
-  longer drops it); the next `getResidentVectors` RECONCILES the delta — an `ids-only` scan
-  (`SELECT chunk_id`, no `vector_blob`, no decode) drops cached ids that are gone, and ONLY the
-  genuinely-new chunk ids are point-looked-up + `decodeVector`'d. So a pure-add of K vectors into an
-  N-vector corpus decodes exactly **K rows, not N**. The reconcile keys on the UNIQUE `chunk_id`, so it
-  is correct even when a deleted row's rowid is reused by a re-index (the new row carries a NEW
-  `chunk_id` → old id out, new id in) — this is also what closes the one signature blind spot: deleting
-  the single max-rowid row then inserting one row reusing that rowid leaves `(count, maxRowid)` unchanged,
-  so only the explicit flag (not the signature) can see it. The result is byte-identical to a
-  from-scratch rebuild for every insert/delete/reindex/same-rowid sequence (an in-band write never
-  mutates a vector under a *surviving* chunk_id; re-index mints fresh ids).
+- **Incremental delta (primary in-band path, PERF-1 / full-audit-2026-06-29 Phase 5; named-delta fast
+  path, F12 / post-merge close-out):** `invalidateResidentVectors(db, delta?)` is called at the three
+  `embeddings` write sites — `ingestion/index.ts` finalize-insert + reindex chunk-phase delete +
+  `deleteDocument`. It MARKS the cache pending (it no longer drops it); the next `getResidentVectors`
+  RECONCILES. PERF-1 removed the per-write full *decode*; **F12** removed the per-write O(N) *id-scan*
+  for the in-band paths: each write site now passes the **exact** chunk_ids it added/removed (the
+  pure-add finalize knows them from its insert; the two delete sites capture them via
+  `embeddingChunkIdsForDocument` before the delete), so the reconcile drops the named removed ids and
+  `decodeVector`'s only the named added ids by point lookup on the `chunk_id` PRIMARY KEY — **no
+  whole-table scan**. A pure-add of K decodes K and reads 0 extra rows. A cheap `Map.size === COUNT(*)`
+  gate then confirms consistency; a delta-less `invalidate(db)` (a direct/out-of-band writer — tests,
+  the manual bench), a missed/wrong delta, or a truncated-blob omission falls back to the FULL chunk-id
+  scan (`SELECT chunk_id`, no decode) — the self-healing path. Both paths key on the UNIQUE `chunk_id`,
+  so they stay correct when a deleted row's rowid is reused by a re-index (new row → NEW `chunk_id` →
+  old id out, new id in) — also what closes the one signature blind spot: deleting the single max-rowid
+  row then inserting one row reusing that rowid leaves `(count, maxRowid)` unchanged, so only the
+  explicit flag (not the signature) can see it. The result is byte-identical to a from-scratch rebuild
+  for every insert/delete/reindex/same-rowid sequence (an in-band write never mutates a vector under a
+  *surviving* chunk_id; re-index mints fresh ids).
 - **Staleness signature (self-healing backstop):** a cheap whole-table signature `(COUNT(*), MAX(rowid))`
   is recomputed at the top of every `search`. If the table changed but NO write went through the explicit
   hook (a direct SQL / out-of-band writer — e.g. test seeding), the dirty flag is clear yet the signature
@@ -451,12 +457,18 @@ the whole map on every `embeddings` write (each insert/delete/reindex `invalidat
 the next query paid a full ~150 MB re-read + ~580 ms re-decode at the 100k bound — and it recurred after
 *every* import/re-index/delete (a heavy "import N docs, ask between each" session paid N full rebuilds).
 The incremental delta above removes that: a mutation now only pays the ids-only scan + a decode of the
-new rows. The off-main-thread worker (P4b) and ANN (P4c) remain the longer-term paths and the linear-scan
-ANN deferral (D15) is unchanged — Phase 5 only removes the per-write full rebuild. Proven in
-`tests/integration/resident-cache-incremental.test.ts`: equivalence (incremental map == a from-scratch
-rebuild byte-for-byte across insert/delete/reindex/same-rowid), the decode-count speedup (K not N, with a
-purge→full-decode teeth contrast), the same-rowid blind spot (signature unchanged → only the hook catches
-it), the signature backstop self-heal, and the lock-purge drop (decode-count contrast vs `invalidate`).
+new rows. **F12 (full-audit-2026-06-29-postmerge close-out)** then removed the ids-only scan too for the
+in-band paths — the named delta (above) decodes the new rows by point lookup with no whole-table scan,
+falling back to the scan only for a delta-less/out-of-band write or a tripped size gate. The
+off-main-thread worker (P4b) and ANN (P4c) remain the longer-term paths and the linear-scan ANN deferral
+(D15) is unchanged. Proven in `tests/integration/resident-cache-incremental.test.ts`: equivalence
+(incremental map == a from-scratch rebuild byte-for-byte across insert/delete/reindex/same-rowid), the
+decode-count speedup (K not N, with a purge→full-decode teeth contrast), the same-rowid blind spot
+(signature unchanged → only the hook catches it), the signature backstop self-heal, and the lock-purge
+drop; F12 adds the **named-delta equivalence** (delta == cold rebuild), a **no-`SELECT chunk_id`-scan**
+assertion (the delta path issues no whole-table scan), delta-composition (add-then-delete nets out), and
+the **size-gate self-heal** (a wrong/incomplete delta falls back to the full scan, teeth-checked).
+`tests/manual/resident-cache-bench.test.ts` adds the reconcile-cost leg (FULL id-scan vs DELTA no-scan).
 
 **Measurement — confirmed on the PAID drive (D:, b9585; the "real E5-runtime numbers PENDING" item is
 now closed).** Two legs, because the scan is **data-independent** (N dot-products of 384-dim Float32 +
@@ -1662,6 +1674,21 @@ makes the reranker's deliberate **keep-the-latch-across-`suspend()`** policy cor
 load after unlock; a port race must not be remembered). The embedder additionally **clears** its latch on
 `suspend()` (its one deliberate difference — see "Models & runtime"), so a replaced weight file is retryable
 via lock/unlock.
+
+**§5.5c `tearingDown` guard — suspend() gets the orphan protection stop() has (full-audit-2026-06-29-postmerge, F19).**
+`stop()` (will-quit) sets `this.stopped = true` BEFORE `teardown()`, so a racing lazy `ensureStarted` refuses
+to spawn and can't leave an orphan. `suspend()` (workspace LOCK) sets no such latch, so a `suspend()` that
+interleaved with a concurrent `embed()`/`rerank()` — a RAG-query or tree-build embedding, which are NOT in
+`inFlightStreams` and which `abortActiveBuild()` only *cooperatively* cancels — could stop the OLD sidecar
+while a fresh `ensureStarted` spawned and **retained** a new one, surviving the lock with chunk/query-text-
+derived state in process RAM. Fix (both `embeddings/e5.ts` and `reranker/llama.ts`): a `tearingDown` flag is
+set at the top of `teardown()` and cleared in its `finally`; `ensureStarted` refuses (throws "is suspending")
+while it is set — at the top AND re-checked after `await this.starting` (a teardown may begin during that
+await and null the server it would return). Cleared in `finally`, so a normal post-suspend `embed()`/`rerank()`
+still lazily restarts (only `stop()`'s separate, permanent `stopped` latch blocks that). Deterministically
+teeth-tested (`e5-embedder.test.ts` / `reranker.test.ts`, F19): a gated-exit child parks teardown's
+`server.stop()`, a concurrent embed/rerank fires in that window, and the assertion is that NO sidecar survives
+the lock (one spawn, killed) — red without the flag (the concurrent start spawns + is retained).
 
 **§5.4 Where GPU state lives:**
 
@@ -4147,7 +4174,7 @@ started** — carried in the report.
 | T1, T2, T6, T7, T8, T9, T3 | 5 | **closed (Phase 5, test-only)** — test-enforcement seams: T1 SIGKILL escalation unit test, T2 resident-cache lock-purge IPC wiring, T6/T7 two TEST-1-family flakes de-flaked (fake timers / `vi.waitFor`), T8 crash-fallback real-reap assertion, T9 truncated-ciphertext nit; T3 verified subsumed by F16; T4/T5 done in Phase 1. `git diff src/` empty; see the **§31 ledger** | arch §31; "Test-enforcement seams" record (Phase-5 subsection) |
 | F20, F21, F22, F23, F24 | 6 | **fixed (Phase 6, renderer-only)** — frontend a11y + lifecycle: F20 first-run gate phase-focus management (the `finishing` step had no focus target — the real gap; welcome→password & →starter already focused via `autoFocus`), F21 mic-stream leak when getUserMedia resolves after unmount, F22 ModelsScreen poll + DiagnosticsTab activity refreshers join the FE-4 `mountedRef` discipline (the claim now holds), F23 StreamAnnouncer `aria-atomic` drop, F24 Composer fallback caret-timer cleared on unmount; see the **§32 ledger** | arch §32; "Renderer robustness" FE-4 reconciliation |
 | D1–D8 + F11/F13 doc-notes | 7 | **fixed / recorded (Phase 7, docs + comments-only)** — the D1–D8 documentation contradictions reconciled to one source of truth + the F11/F13 as-built distinctions carried into the topic docs + a clean §-anchor sweep; see the **§33 ledger** | arch §33; rag-design §14.4 (F11) + §12.1 R3 (F13) |
-| F12, F18, F19 + the F11 renderer half | — | **not started** — RAG/perf/concurrency low-hangers (Phase 8, the close-out); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
+| F12, F18, F19 | 8 | **fixed (Phase 8, the close-out)** — F12 named-delta resident-cache reconcile (no O(N) id-scan), F18 vision terminal-write cancelled-guard, F19 `tearingDown` race guard on embedder+reranker `suspend()`; the audit report was RETIRED here. The **F11 renderer half** + **F13 code** are carried forward. See the **§34 close-out ledger** | arch §34 (master close-out); Performance/Wave-P4 (F12); GPU §5.5c (F19); Image-understanding §5 (F18) |
 
 **Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
 class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
@@ -4325,6 +4352,92 @@ every `§` citation now resolves.
 **Posture held (Phase 7):** offline / no telemetry; no `src/` LOGIC change (docs + code-comments only);
 typecheck + `npm test` + `npm run build` re-run green to confirm the comment edits broke no source-grepping
 test. **Open (Phase 8, the close-out):** F12/F18/F19 + the F11 renderer half, then retire this audit report.
+
+### §34 Full audit (2026-06-29, post-merge) — remediation CLOSE-OUT
+
+The **post-merge full audit** (report `audits/full-audit-2026-06-29-postmerge.md`) is **COMPLETE** — all
+eight phases landed. Its pattern was *"the fix exists next door but wasn't applied here"*: the prior
+round (§26) hardened the **bank** parser and the **chat** runtime, and this pass found the **invoice**
+parser, the **embedder/reranker** sidecars, and the **regenerate** path had not received the sibling
+hardening. **No Critical, no remote exploit** (offline by construction); 1 High (F1), ~9 Medium, ~13 Low,
+9 test-seam items (T1–T9), 8 doc items (D1–D8). Each phase folded its decisions into the topic docs as it
+landed (the per-phase ledgers **§27–§33**, plus the named records); **this section is the durable master
+index** — resolve a `full-audit-2026-06-29-postmerge <ID>` code comment through it. The working-paper
+report was **retired** under the CLAUDE.md doc-lifecycle rule once every finding was dispositioned (it was
+committed first, so the original stays **recoverable in git history** — the parent of the Phase-8 close-out
+commit), mirroring the §24/§25/§26 precedent. Phases ran on stacked, unmerged branches
+(`audit-postmerge-phase1-money` … `phase8-closeout`); owner merges when ready.
+
+**Per-phase one-liners:** **P1** money-parser correctness (F1/F3/F6/F8 + the invoice single-currency
+guard + the T5 2-dp invariant; §27, §8). **P2** runtime reliability (F2 regenerate data-loss / F4+F7
+bind-race start-latch / F9 compaction log; §28). **P3** invoice lifecycle parity (F5 reuse/replace/
+staleness; §29). **P4** security consistency (F15 mapped-IPv6 SSRF / F14 log-buffer-on-lock / F16 IPC
+lock-guard parity — subsumes T3 / F17 download caps; §30). **P5** test-enforcement seams (T1/T2/T6/T7/T8 +
+T9; §31, test-only). **P6** renderer a11y + lifecycle (F20–F24; §32, renderer-only). **P7** docs
+reconciliation (D1–D8 + F11/F13 doc-notes; §33, docs/comments-only). **P8** (this close-out) the
+low-hangers F12/F18/F19 + report retirement.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F1** (High) | 1 | **fixed** — uncaptured amount column read the running BALANCE as the amount; bank flags `ambiguousAmount` + drops only when a balance column exists (statement-context-aware — DIVERGED from the literal unconditional drop, which regressed the HVB no-balance format); invoice mirror drops the right-side uncaptured column | §27; §8 (F1); known-limitations |
+| F3 (Med) | 1 | **fixed** — invoice per-line `detectCurrency` scans only the figure region + `validateInvoiceTotals` single-currency guard (the BL-2 fix applied to invoices) | §27; §8 (F3) |
+| F6 (Med) | 1 | **fixed** — geometry-less invoice space-grouped token w/o a 2-dp tail dropped (`isFusedSpaceGroup`) | §27; §8 (F6) |
+| F8 (Low) | 1 | **fixed** — invoice qty split requires a unit token or a corroborating unit-price column | §27; §8 (F8) |
+| F10 (Low) | 1 | **acknowledged (no code)** — invoice path runs without geometry (D58 = bank-only); its robustness was prioritised since it has no backstop | §27; §8 |
+| **F2** (Med) | 2 | **fixed** — regenerate delete deferred INSIDE `withChatStream` (`withRegenerateGuard`) + byte-faithful restore on non-abort failure; both chat + RAG channels | §28; "Chat & streaming" |
+| F4 (Med) | 2 | **fixed** — embedder start-latch skips arming on `isBindRaceError` (a transient double-bind-race no longer silently disables imports) | §28; GPU §5.5b |
+| F7 (Low) | 2 | **fixed** — same bind-race exclusion for the reranker (makes the keep-latch-across-`suspend()` policy correct) | §28; GPU §5.5b |
+| F9 (Low) | 2 | **fixed** — `compaction.ts` `catch {}` now `log.warn`s the non-abort case (no chat content); abort stays silent | §28; "Chat & streaming" |
+| **F5** (Med) | 3 | **fixed** — invoice reuse/replace/staleness parity with bank (`extractor_version` + `isInvoiceStale` + `replaceExisting` atomic swap) | §29; §8 |
+| **F15** (Low→Med, SSRF) | 4 | **fixed** — `isPrivateOrLoopbackHost` denies any `::ffff:` host (the mapped-IPv6 form `new URL()` canonicalizes to) | §30; security-model §D3 |
+| F14 (Low) | 4 | **fixed** — `detachVaultKey()` zeroes the log buffer after the final encrypted flush (option a; next unlock repopulates) | §30; security-model "encrypted log" |
+| F16 (Low) | 4 | **fixed** — localized `requireUnlocked()` on rag/audit/settings/model + generalized `ipc-lock-coverage.test.ts` (**subsumes T3**); §25 wording corrected | §30; §25 inventory |
+| F17 (Low) | 4 | **fixed** — both downloaders always pass a bounded cap (engine 2 GiB; model exact-size or per-role default); backstop 64→48 GiB | §30; security-model §D3 |
+| **T1** (Med) | 5 | **closed (test)** — LlamaServer unit SIGKILL-escalation test (stubborn child); teeth-checked | §31; "Test-enforcement seams" |
+| T2 (Med) | 5 | **closed (test)** — resident-cache lock-purge wiring asserted at the IPC layer against the live db | §31; "Test-enforcement seams" |
+| **T3** (Med) | 4 | **subsumed by F16** — `ipc-lock-coverage.test.ts` enumerates `rag:ask` against a locked ctx | §30 (F16); §31 |
+| T4 (Med) | 1 | **addressed** — parens-negative pinned through the real `extractTransactionRows` | §27; §8 |
+| T5 (Med) | 1 | **fixed + pinned** — `parseAmount` rounds to the nearest cent (the 2-dp integer-cent invariant) | §27; §8 |
+| T6 (Low) | 5 | **closed (de-flake)** — GPU-probe timeout → fake timers; teeth-checked | §31 |
+| T7 (Low) | 5 | **closed (de-flake)** — privacy-guard poll → `vi.waitFor` | §31 |
+| T8 (Low) | 5 | **closed (test)** — crash-fallback pins a REAL child reap (DIVERGED: the crashed child already exited) | §31 |
+| T9 (Low nit) | 1/5 | **partially closed** — invoice negative totals/Gutschrift (P1) + AES-GCM truncated-ciphertext (P5); the tautological-tripwire + mock score-band nits accepted | §31; §8 |
+| **F20** (Med, a11y) | 6 | **fixed** — first-run gate steers focus per `phase` (the `finishing` step had none — DIVERGED from the welcome→password framing) | §32 |
+| F21 (Low) | 6 | **fixed** — `DictationButton` cancels a mic capture acquired after unmount (`mountedRef`) | §32 |
+| F22 (Low) | 6 | **fixed** — ModelsScreen polls + DiagnosticsTab refreshers join the FE-4 `mountedRef` discipline | §32; "Renderer robustness" |
+| F23 (Low, a11y) | 6 | **fixed** — `StreamAnnouncer` drops `aria-atomic` (additive `role="log"` reads only the new sentence) | §32 |
+| F24 (Low) | 6 | **fixed** — Composer fallback caret timer tracked + cleared on unmount | §32 |
+| **D1–D8** (Med/Low, docs) | 7 | **fixed (docs)** — D1 TEST-6 record corrected (S13b IS a live CI gate) · D2 downloader fetches GGUF+mmproj · D3 reranker bundling reconciled · D4/D5/D6 four stray comment fragments · D7 whisper RTF two regimes · D8 README disk sizing | §33 |
+| **F11** (Low) | 7 / — | **doc-note recorded (P7)**; renderer half **NOT taken (P8)** — the `mode:'tree'` answer's `[Sn]` are whole-document leaf provenance, not inline-grounded excerpts (rag-design §14.4); differentiating the renderer presentation stays the **carried-forward** follow-up (the documented distinction stands) | §33; rag-design §14.4 |
+| **F12** (Low, perf) | **8** | **fixed** — the resident-cache reconcile's O(N) `SELECT chunk_id` scan is gone for the in-band paths: the three write sites pass named added/removed chunk_ids → delta fast path (decode only the new rows, no scan), with a `Map.size === COUNT(*)` gate falling back to the full scan (delta-less / out-of-band / wrong delta) — byte-identical to a cold rebuild (PERF-1 contract). Bench leg added | this ledger; Performance/Wave-P4 record |
+| **F13** (Low, latent) | 7 / — | **doc-note recorded (P7)**; code **carried forward** — re-enabling a positive `ragMinSimilarity` floor must first move it BEFORE the `topKInitial` cut; coupled to the deferred E5 `query:`/`passage:` prefix migration (inert at the pinned default 0) | §33; rag-design §12.1 R3 |
+| **F18** (Low, concurrency) | **8** | **fixed** — VisionService terminal `done` write routes through the cancelled-guarded `set()` (returns whether applied) so a concurrent cancel isn't overwritten / re-emitted. Latent (no await before it today); dual-neuter teeth-check recorded | this ledger; Image-understanding §5 |
+| **F19** (Low, concurrency) | **8** | **fixed** — `tearingDown` flag (the `suspend()` analogue of `stop()`'s `stopped`) bars a racing `ensureStarted` from spawning a sidecar that would survive the lock; both embedder + reranker; deterministic interleave teeth-test | this ledger; GPU §5.5c |
+
+**Carried-forward open items (deliberately NOT taken; on record for the next pass):**
+
+- **F11 renderer half** — present `mode:'tree'` answers as whole-document provenance (or cap the persisted
+  leaf list) rather than identically to inline-cited answers. The doc-note (rag-design §14.4) is the
+  current truth; the renderer change was scoped out of Phase 8 (non-trivial vs the Low severity).
+- **F13 code (floor-before-cut)** — a **precondition** of the deferred E5 `query:`/`passage:` prefix
+  migration (its own phase): re-enabling a positive `ragMinSimilarity` floor must over-fetch then floor,
+  or push the floor into the scan. Inert today (floor pinned at 0).
+- **§26-carried (re-verified, still valid):** **SEC-1 code half** (unlock rate-limit/attempt-counter +
+  create-time strength meter — the at-rest KDF is the binding mitigation against the offline attacker, so a
+  UI rate-limit doesn't bind the real threat); **SEC-2** (preview-temp staging under `userSkillsDir`);
+  **SEC-3** (dialog-opener capability tokens inert until the consuming `requireUnlocked()` gate); **REL-5**
+  (`BEGIN IMMEDIATE` + a single `withTransaction` guard — the no-`await`-in-txn invariant re-verified true
+  at every BEGIN site, so a defense-in-depth margin, its own characterized phase); **PERF-5 Part B** list
+  windowing (Documents + Diagnostics activity are the highest-value targets) + the **E5-prefix migration**.
+
+**Posture held across all eight phases (load-bearing):** offline / no telemetry / no new network egress; no
+schema change beyond the single additive nullable `invoices.extractor_version` (P3) + the internal
+`ModelDownloadTask.role` field (P4); content class (document/chat text, extracted figures, redacted text)
+never logged/audited/exported. Behavior-preserving: every behavioral fix (P1/P2/P3/P4/P6/P8) is
+**teeth-checked** (neuter the guard → red → restore byte-identical); P5 was test-only (`git diff src/`
+empty); P7 was docs/comments-only. The F12 byte-equivalence + signature backstop + lock-purge, the vision
+cancel semantics (F18), and the stop()/suspend() teardown semantics (F19) are all preserved. Final suite
+**2532 passed / 39 skipped (2571 collected)**; typecheck + `npm run build` green.
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
@@ -4549,7 +4662,13 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   `runtime.ts` (`VisionRuntime` on `LlamaServer` directly with the §1 args; lazy single-flight
   `ensureStarted`; `analyze` builds the base64 `image_url` request + `readChatSSE`; the §6
   idle-teardown interlock), `index.ts` (`VisionService`: ephemeral job map, own one-job
-  serialization, busy-reject, cancel via AbortController, lock/quit `stop()`).
+  serialization, busy-reject, cancel via AbortController, lock/quit `stop()`). **F18
+  (full-audit-2026-06-29-postmerge):** the terminal success `done` write routes through the
+  cancelled-guarded `set()` helper (which now returns whether it applied) — not a raw `jobs.set` — so a
+  concurrent `cancel()` can't be silently overwritten by `done` (nor re-fire `emit.done`). Latent today
+  (no `await` between the `signal.aborted` check and the write), it hardens the path against a refactor
+  that inserts one; `tests/integration/vision-cancel.test.ts` pins the contract and the dual-neuter
+  (remove the abort check AND the `set()` guard → resurrection) is the recorded teeth-check.
 - **`ipc/registerImagesIpc.ts`** — `images:getStatus|chooseImage|readBytes|analyze|cancel|getJob` +
   `STREAM.imgToken/imgDone/imgError(jobId)`. `getStatus` needs no unlock; file/runtime handlers
   `requireUnlocked`. `chooseImage` returns `{path,name,sizeBytes}` (IPC-2); `readBytes`/`analyze`

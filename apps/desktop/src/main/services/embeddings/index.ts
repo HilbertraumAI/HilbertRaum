@@ -281,6 +281,7 @@ export {
   invalidateResidentVectors,
   purgeResidentVectors
 } from './resident-cache'
+export type { EmbeddingDelta } from './resident-cache'
 export { MockEmbedder, createMockEmbedder, MOCK_EMBEDDING_DIMENSIONS, MOCK_EMBEDDING_MODEL_ID } from './mock'
 export { E5Embedder, createE5Embedder } from './e5'
 export type { E5EmbedderOptions } from './e5'

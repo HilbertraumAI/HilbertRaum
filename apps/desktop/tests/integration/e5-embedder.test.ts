@@ -460,6 +460,92 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // F19 (full-audit-2026-06-29-postmerge): suspend() (workspace lock) sets no `stopped`-style latch,
+  // so a suspend() that interleaves with a concurrent embed() could tear down the OLD sidecar while a
+  // fresh ensureStarted SPAWNS and RETAINS a new one — surviving the lock with chunk-text-derived
+  // state in RAM. The `tearingDown` guard gives suspend() the orphan protection stop() gets from
+  // `stopped`. Deterministic interleave: a gated-exit child PARKS teardown's server.stop(), and a
+  // concurrent embed() fires in that window. TEETH: drop the `tearingDown` guard → the concurrent
+  // embed spawns child2, it is never killed, and `calls.length` is 2 → both assertions red.
+  it('suspend() does not retain a sidecar spawned by a concurrent embed during teardown (F19)', async () => {
+    // kill() marks `killed` but HOLDS the 'exit' event until releaseExit(), so server.stop() parks.
+    class GatedChild extends EventEmitter implements ChildProcessLike {
+      pid = 9
+      killed = false
+      private wantExit = false
+      private released = false
+      kill(): boolean {
+        this.killed = true
+        this.wantExit = true
+        if (this.released) this.emit('exit', 0, null)
+        return true
+      }
+      releaseExit(): void {
+        this.released = true
+        if (this.wantExit) this.emit('exit', 0, null)
+      }
+    }
+    const children: GatedChild[] = []
+    const calls: string[][] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push(args)
+      const c = new GatedChild()
+      children.push(c)
+      return c
+    }
+    // The FIRST start's /health is gated (the start stays in flight); later starts are healthy at once.
+    const firstHealth = { release: null as null | (() => void) }
+    let firstHealthDone = false
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        if (!firstHealthDone) {
+          await new Promise<void>((r) => (firstHealth.release = r))
+          firstHealthDone = true
+        }
+        return { ok: true, status: 200 } as Response
+      }
+      if (u.endsWith('/v1/embeddings')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+
+    // start1 in flight, parks on the gated first /health. Under the guard embed1 itself rejects
+    // (its post-start re-check sees tearingDown), so attach the catch up front to avoid an
+    // unhandled rejection while the test orchestrates the interleave.
+    const embed1 = embedder.embed(['a']).catch(() => undefined)
+    while (!firstHealth.release) await new Promise((r) => setTimeout(r, 1))
+    expect(children.length).toBe(1)
+
+    const suspendP = embedder.suspend() // teardown: tearingDown=true, awaits this.starting (start1)
+    await new Promise((r) => setTimeout(r, 1)) // let teardown register its await on start1
+
+    firstHealth.release!() // start1 resolves → this.server set → teardown advances to server.stop()
+    // teardown calls child1.kill() (exit gated) then PARKS — wait until that observable kill happens.
+    while (!children[0].killed) await new Promise((r) => setTimeout(r, 1))
+
+    // THE RACE: a concurrent embed in the teardown window. With the F19 guard ensureStarted refuses
+    // (tearingDown); without it, it spawns child2 and retains it past the lock.
+    const embed2 = embedder.embed(['b']).then(
+      () => 'ok',
+      () => 'rejected'
+    )
+    await new Promise((r) => setTimeout(r, 25)) // ample for child2 to spawn + go healthy if it were allowed
+
+    children[0].releaseExit() // unblock teardown's server.stop()
+    await suspendP
+    await embed1
+    await embed2
+
+    // No sidecar survives the lock: only child1 was ever spawned, and it was killed.
+    expect(calls.length).toBe(1)
+    for (const c of children) expect(c.killed).toBe(true)
+    await embedder.stop()
+  })
+
   it('throws on a wrong-width vector instead of storing a 0/short-dim embedding', async () => {
     const { spawn } = fakeSpawn()
     // Declares 384 dims but the server returns a 2-dim (or empty) vector → reject, so the

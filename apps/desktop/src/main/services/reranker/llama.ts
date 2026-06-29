@@ -80,6 +80,17 @@ export class LlamaReranker implements Reranker {
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
   /**
+   * Set WHILE `teardown()` runs (the lock/quit kill path) and cleared when it finishes — the
+   * `suspend()` analogue of `stopped` (F19, full-audit-2026-06-29-postmerge). `stop()` arms the
+   * permanent `stopped` latch before tearing down so a racing `ensureStarted` can't spawn an
+   * orphan; `suspend()` (workspace lock) does NOT, so without this flag a `suspend()` that
+   * interleaves with a concurrent `rerank()` could stop the OLD sidecar while a fresh
+   * `ensureStarted` spawns and RETAINS a new one — surviving the lock with query/chunk-text-derived
+   * state in process memory. `ensureStarted` refuses while it is set; cleared in teardown's
+   * `finally` so a post-suspend `rerank()` still lazily restarts.
+   */
+  private tearingDown = false
+  /**
    * Failed-start latch: a sidecar that could not start for a PERMANENT fault (e.g. an
    * incompatible GGUF quantization) must not be re-spawned and re-awaited for
    * the full health timeout on EVERY question. First failure disables this instance
@@ -105,6 +116,9 @@ export class LlamaReranker implements Reranker {
   /** Lazily spawn the rerank sidecar (once). Concurrent callers share one start. */
   private async ensureStarted(): Promise<LlamaServer> {
     if (this.stopped) throw new Error('Reranker is stopped (app is shutting down)')
+    // F19: refuse to spawn while a teardown (lock/quit) is in progress — a sidecar started here
+    // would survive the lock. The `suspend()` analogue of the `stopped` guard for `stop()`.
+    if (this.tearingDown) throw new Error('Reranker is suspending (workspace is locking)')
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
@@ -168,6 +182,11 @@ export class LlamaReranker implements Reranker {
         })
     }
     await this.starting
+    // F19: a teardown (lock/quit) may have begun during the await above and already nulled the
+    // server we'd return — re-check rather than hand back a sidecar that's being / about to be
+    // stopped (mirrors the top-of-function guards).
+    if (this.stopped) throw new Error('Reranker is stopped (app is shutting down)')
+    if (this.tearingDown) throw new Error('Reranker is suspending (workspace is locking)')
     if (!this.server) throw new Error('Rerank server failed to start')
     return this.server
   }
@@ -243,14 +262,24 @@ export class LlamaReranker implements Reranker {
   }
 
   private async teardown(): Promise<void> {
-    // A lazy start may be in flight (first rerank() racing app quit); wait for it to
-    // settle so the spawned child cannot outlive the app as an orphan.
-    if (this.starting) {
-      await this.starting.catch(() => undefined)
+    // F19: bar a racing ensureStarted from spawning a sidecar that would outlive this teardown
+    // (and survive the lock). `stop()` already has the permanent `stopped` latch; `suspend()` does
+    // not, so this flag gives the lock path the same protection for the duration of the teardown.
+    this.tearingDown = true
+    try {
+      // A lazy start may be in flight (first rerank() racing app quit); wait for it to
+      // settle so the spawned child cannot outlive the app as an orphan.
+      if (this.starting) {
+        await this.starting.catch(() => undefined)
+      }
+      const server = this.server
+      this.server = null
+      if (server) await server.stop()
+    } finally {
+      // Cleared so a post-suspend rerank() can lazily restart (suspend() permits a fresh start;
+      // only stop()'s separate, permanent `stopped` latch blocks that).
+      this.tearingDown = false
     }
-    const server = this.server
-    this.server = null
-    if (server) await server.stop()
   }
 }
 

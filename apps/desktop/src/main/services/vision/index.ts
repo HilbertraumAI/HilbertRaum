@@ -129,7 +129,12 @@ export class VisionService {
         return
       }
       const done: ImageJob = { jobId, state: 'done', answer }
-      this.jobs.set(jobId, done)
+      // F18 (full-audit-2026-06-29-postmerge): route the terminal write through the cancelled-guarded
+      // `set()` (not a raw `this.jobs.set`) so a concurrent cancel() that landed between the abort
+      // check above and here is not silently overwritten by `done` (and emit.done not re-fired).
+      // Latent today (no await between the abort check and this write), hardened against a refactor
+      // that inserts one — see the architecture §-ledger (F18).
+      if (!this.set(jobId, done)) return
       this.evictOldJobs()
       log.info('Vision analyze done', { jobId })
       emit.done(jobId, done)
@@ -197,10 +202,15 @@ export class VisionService {
     this.activeJobId = null
   }
 
-  private set(jobId: string, job: ImageJob): void {
-    // Don't resurrect a job the user cancelled mid-flight.
-    if (this.jobs.get(jobId)?.state === 'cancelled') return
+  /**
+   * Write a job state UNLESS the user cancelled it mid-flight (don't resurrect a `cancelled` job).
+   * Returns whether the write was applied, so the terminal `done` path (F18) can also skip
+   * `emit.done`/eviction when the job was cancelled — not just avoid the resurrection.
+   */
+  private set(jobId: string, job: ImageJob): boolean {
+    if (this.jobs.get(jobId)?.state === 'cancelled') return false
     this.jobs.set(jobId, job)
+    return true
   }
 
   private fail(jobId: string, error: VisionErrorCode, emit: VisionStreamEmitter): void {
