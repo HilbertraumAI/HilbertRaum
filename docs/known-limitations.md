@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-29 (full-audit-2026-06-29 Phase 1 — financial correctness: space-disambiguated sign reading (BL-1), figure-region per-row currency (BL-2), German closed-compound categorization (BL-3); extended the bank/invoice line-parser + categorizer bullets under "Document tasks & summaries"). Prior: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6)._
+_Last updated: 2026-06-29 (full-audit-2026-06-29 Phase 2 — runtime reliability: whisper SIGKILL escalation + bounded teardown (REL-2) extended the audio-transcription watchdog bullet; the REL-1 port-race retry and REL-3 abort-aware slot handoff are recorded in the architecture.md GPU/runtime + doc-task records). Prior 2026-06-29: Phase 1 — financial correctness: space-disambiguated sign reading (BL-1), figure-region per-row currency (BL-2), German closed-compound categorization (BL-3); extended the bank/invoice line-parser + categorizer bullets under "Document tasks & summaries"). Prior: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -589,7 +589,12 @@ password recovery — are documented in
   `-pp` progress continuously, this only trips on a genuinely spinning/hung child, never a
   slow-but-advancing one. Cancelling the import (e.g. locking the vault mid-job) also aborts
   the in-flight child immediately. Either way the one document fails friendly and the import
-  loop continues.
+  loop continues. **The watchdog/abort/suspend kills now escalate SIGTERM → SIGKILL after a
+  2 s grace (full-audit-2026-06-29, REL-2)**, so a `whisper-cli` wedged in native code that
+  ignores SIGTERM is still forced down and the ingestion slot freed. `suspend()`/`stop()` (vault
+  lock / app quit) additionally bound their cleanup wait at 10 s: in the vanishingly-rare case a
+  child ignores even SIGKILL, teardown returns anyway rather than hanging quit, and the unshredded
+  `.parse` transcript transient is reclaimed by the next startup crash-sweep (the documented backstop).
 - **Re-indexing an audio document is a FULL re-transcription** (D35). The stored copy is
   the audio itself (the locked copy-into-workspace contract — also what makes the drive
   self-contained), and there is no separate transcript cache; a sha256-keyed cache is the

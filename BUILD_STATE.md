@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 2 (RUNTIME RELIABILITY; REL-1/REL-2/REL-3 +
+DOC-2) — branch `full-audit-2026-06-29-fixes`.** Suite now **2437 passed / 39 skipped (2476 collected)**
+(was 2426/39 at Phase 1 → **+11 tests**), typecheck clean, `npm run build` green. Process-lifecycle /
+concurrency fixes only — no schema, IPC, or audit-payload change. Each finding fixed **test-first** through
+the real seams (FakeChild / llama-runtime / transcriber / arbiter harnesses), reproduction confirmed RED
+before the fix (the REL-2 tests hung→timed-out RED; the REL-3 chat-stream test threw on the un-threaded
+signal), with the existing GPU-ladder / forceRestart / LlamaServer.stop / dictation suites green after each.
+One commit per finding (fed7464 REL-1, e8f92d0 REL-2, 4061d7c REL-3, + the docs commit for DOC-2 / folding).
+- **REL-1 (MEDIUM) — port-race TOCTOU mis-attributed to "GPU broke" (`runtime/sidecar.ts`, `factory.ts`).**
+  `findFreePort` binds port 0, reads the port, then CLOSES the listener before the child binds — a sibling
+  sidecar (chat+embedder+reranker+vision start near-simultaneously) can steal it → child exits "address
+  already in use". (a) `LlamaServer.start` now retries `doStart` **once** on a bind-class immediate exit
+  (`isBindRaceError`) on a fresh port — covers chat AND the embedder/reranker/vision (which had NO retry).
+  (b) The GPU ladder no longer persists `gpuAutoDisabled` when a rung-1 failure is a bind race rather than a
+  device fault, so one port collision can't disable GPU for the session. **Diverged from the audit's literal
+  `…(?:-(?!…))` regex suggestion? No — that was BL-1; here the audit's directional `onGpuFailure`-narrowing
+  was implemented via the shared `isBindRaceError` classifier so the retry and the ladder agree.**
+- **REL-2 (MEDIUM) — whisper kill never escalated to SIGKILL → wedged child hangs quit/lock
+  (`transcriber/cli.ts`).** The watchdog, abort handler, and `suspend()`/`stop()` sent bare `child.kill()`
+  (SIGTERM) and awaited `close`; a child wedged in native code that ignores SIGTERM never emits `close`, so
+  the slot stayed held and teardown hung indefinitely with the transcript transient on disk. New
+  `killWithEscalation` mirrors `LlamaServer.stop()` (SIGTERM → SIGKILL after `killGraceMs`=2 s, grace timer
+  unref'd + cleared on clean exit), wired into all three kill sites; `suspend()`/`stop()` bound the cleanup
+  await with `suspendTimeoutMs`=10 s (crash-sweep is the shred backstop past the cap).
+- **REL-3 (MEDIUM) — "Stop" unresponsive while a deep-index build holds the slot (`ipc/chat-stream.ts`,
+  `analysis/model-slot-arbiter.ts`, `doctasks/manager.ts`).** `withChatStream` awaited `acquireSlot()` with
+  no signal; a Stop during the multi-second node-`generate` park aborted a controller nobody watched.
+  `acquireForChat(signal?)` now threads the turn's signal (new `waitForHandoff`): a Stop during the park
+  rejects at once, removing the waiter from the queue + giving back its `chatHolders` slot + dropping the
+  pause when it was the last waiter. `withChatStream` resolves that Stop cleanly via `done` (empty message),
+  never `chat:error`. All 7 call sites (registerChatIpc + 6 registerRagIpc) forward `controller.signal`.
+- **DOC-2 (LOW) — `architecture.md` GPU table said "60 s health timeout"; code is 180 s
+  (`DEFAULT_HEALTH_TIMEOUT_MS`).** Corrected to "180 s (3 min)". Folded the REL-1 (§5.5), REL-2 (transcriber
+  watchdog bullet), and REL-3 (doc-task arbiter bullet) as-built notes into `architecture.md`;
+  `known-limitations.md` extended with the REL-2 SIGKILL/teardown residual.
+- **REL-5 (LOW) — DEFERRED (per the audit's own recommendation).** `BEGIN IMMEDIATE` + a `withTransaction`
+  guard touches every `db.exec('BEGIN')` site (chat/doctasks/tree-build/node-vectors/skills) — a broad,
+  correctness-sensitive refactor that deserves its own characterized phase, not a ride-along here. **Still open.**
+- **NEXT ACTION (owner):** REL-2 (hang-on-quit) was the strongest should-fix here — closed. Remaining phases:
+  P3 test-enforcement gaps (TEST-2…5), P4 renderer/determinism (FE-1/RAG-1/RAG-2/REL-4), P5 resident-cache
+  incremental (PERF-1), P6 docs + close-out (the §26 ledger) + REL-5. Do NOT auto-merge/push — left to the owner._
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 1 (FINANCIAL CORRECTNESS; BL-1/BL-2/BL-3) —
 branch `full-audit-2026-06-29-fixes`.** Suite now **2426 passed / 39 skipped (2465 collected)** (was
 2417/39 at Phase 0 → **+9 fixtures**), typecheck clean, `npm run build` green. Parsing/categorization only

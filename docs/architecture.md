@@ -916,6 +916,16 @@ it fails with friendly convert-to-WAV/MP3 copy.
   is now **required** (no OS-tmpdir default) — the transient transcript is recognised speech
   (content) and must stay inside the `.parse` crash sweep; an empty `workDir` fails closed
   before any spawn. The watchdog/timeout errors carry only durations, never any transcript.
+  **SIGKILL escalation (full-audit 2026-06-29, REL-2):** the watchdog, the abort handler, and
+  `suspend()`/`stop()` previously sent a bare `child.kill()` (SIGTERM) and waited on `close` —
+  with no escalation. A `whisper-cli` wedged in native decode code that ignores SIGTERM never
+  emits `close`, so the watchdog "fired" but the slot stayed held, and `suspend()`/`stop()`
+  (on lock/quit) `await`ed an exit that never came — hanging teardown indefinitely with the
+  transient still on disk. All three kill sites now route through `killWithEscalation`, which
+  mirrors `LlamaServer.stop()`: SIGTERM, then **SIGKILL after `killGraceMs`** (default 2 s) if
+  the child hasn't gone (grace timer `unref`'d + cleared on a clean exit). And `suspend()`/`stop()`
+  **bound** their cleanup `await` with `suspendTimeoutMs` (default 10 s) so a child that ignores
+  even SIGKILL can't hang quit/lock — past the cap the `.parse` crash-sweep is the shred backstop.
 - **`AudioParser` implements `DocumentParser`.** `parse(filePath, ctx)` uses the
   transcriber injected per call via the ADDITIVE `ParseContext` (carried from
   `IngestionDeps.transcriber` — the embedder-injection precedent; text parsers ignore
@@ -1082,7 +1092,17 @@ sentinel-tested), zero native deps.
   long, resumable background builds that **cede the model slot to an incoming chat** via the
   `ModelSlotArbiter` (`services/analysis/model-slot-arbiter.ts`): the builder parks after the
   current node, chat acquires the slot (`acquireChatSlot`), streams, and the build resumes
-  in-session — so chat is not refused during a deep-index/extract build (rag-design §14.3). The **R-T1 probe**
+  in-session — so chat is not refused during a deep-index/extract build (rag-design §14.3).
+  **Abort-aware handoff (full-audit 2026-06-29, REL-3):** the builder parks only *between*
+  `generate` calls, and a single node's `generate` is a multi-second CPU summarization. Before
+  the fix `acquireForChat` had no `signal`, so a user "Stop" landing while a chat was parked
+  waiting for the handoff aborted a controller nobody was watching — "Stop" appeared dead for up
+  to one tree-node. The chat turn's `AbortController.signal` is now threaded
+  `withChatStream → acquireChatSlot → acquireForChat`: an abort during the park rejects the wait
+  at once (removing the waiter from the queue and giving back its holder slot, and dropping the
+  pause when it was the last waiter — so the builder doesn't park for a chat that's gone).
+  `withChatStream` treats that rejection like a no-token Stop: it resolves cleanly via `done`
+  with an empty message rather than surfacing `chat:error`. The **R-T1 probe**
   (`tests/manual/server-concurrency-probe.test.ts`, `HILBERTRAUM_CONCURRENCY_PROBE`) showed the
   pinned b9585 would serve two requests on PARALLEL slots at our default args — the
   app-side guard is the only serialization, which is exactly why it exists.
@@ -1553,6 +1573,18 @@ restart is in flight are also dropped by `createGpuCrashAutoFallback`'s `restart
 direct `start()` calls now share one spawn instead of the second orphaning the first — so the
 crash-restart's stop-then-start can never race a stray direct start into a leaked sidecar.)
 
+**§5.5 Port-race retry + bind-vs-device classification (full-audit 2026-06-29, REL-1).** `findFreePort`
+binds port 0, reads the assigned port, then **closes** the listener before handing the number to
+`llama-server --port N`. In that TOCTOU window another process — or a sibling in-app sidecar (chat +
+embedder + reranker + vision start near-simultaneously) — can grab the port, so the child exits
+"address already in use". Two corrections: (a) `LlamaServer.start()` now **retries `doStart()` once** on
+a bind-class immediate exit (`isBindRaceError`, matched against the start error message which carries
+the stderr tail), acquiring a *fresh* free port — bounded to one retry so a genuine failure still
+surfaces; this covers the chat runtime AND the embedder/reranker/vision (which compose `LlamaServer`
+directly and previously had no retry at all). (b) `LadderRuntime` no longer persists `gpuAutoDisabled`
+when a rung-1 failure message is a bind race rather than a device/driver/model fault — so one unlucky
+port collision can never disable GPU for the whole session. Only a real device failure auto-disables.
+
 **§5.4 Where GPU state lives:**
 
 | Datum | Home |
@@ -1619,7 +1651,7 @@ benchmark-card GPU row. Never "GPU failed" / "your hardware is bad".
 |---|---|
 | No Vulkan loader / 1.2 driver / RDP session | backend lib doesn't load or 0 devices → the default binary runs on its CPU backends; probe shows CPU |
 | Driver enumerates but crashes at model load | rung-1 exit → rung 2 (`--device none`), `gpuAutoDisabled` persisted |
-| Driver hangs (never healthy) | 60 s health timeout → rung 2; cost = one slow first start, then never again (flag persisted) |
+| Driver hangs (never healthy) | 180 s (3 min) health timeout (`DEFAULT_HEALTH_TIMEOUT_MS`; the chat runtime never overrides it) → rung 2; cost = one slow first start, then never again (flag persisted) |
 | Driver crash mid-generation / VRAM stolen mid-run | §5.3 auto-restart at CPU + friendly notice; next message works |
 | VRAM too small at load | upstream `--fit` partial offload — no special casing |
 | Vulkan present but slower than CPU (weak iGPU) | no crash; honest §8 copy; Settings toggle exists; no auto-benchmark in v1 |
