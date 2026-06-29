@@ -229,8 +229,10 @@ are in **[`docs/model-benchmarks.md`](docs/model-benchmarks.md)**.
 | [`docs/architecture.md`](docs/architecture.md) | System design, services, IPC, runtimes, design records |
 | [`docs/rag-design.md`](docs/rag-design.md) | Retrieval pipeline: ingestion, chunking, hybrid search, rerank |
 | [`docs/security-model.md`](docs/security-model.md) | Threat model, encrypted vault, offline guard, audit log |
+| [`docs/design-guidelines.md`](docs/design-guidelines.md) | Design system: tokens, components, UI/UX design records |
 | [`docs/model-policy.md`](docs/model-policy.md) | Manifest schema, roles, license policy, runtime pinning |
-| [`docs/model-benchmarks.md`](docs/model-benchmarks.md) | Measured speed / RAM / quality + the harness |
+| [`docs/model-benchmarks.md`](docs/model-benchmarks.md) | Measured **model** speed / RAM / quality + the offline harness (not the hardware probe) |
+| [`docs/benchmark.md`](docs/benchmark.md) | In-app **hardware** benchmark & model recommendation (the machine-capability probe) |
 | [`docs/drive-layout.md`](docs/drive-layout.md) | On-drive directory layout and how the app finds its data |
 | [`docs/packaging.md`](docs/packaging.md) | Preparing a drive, fetch scripts, portable builds |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and fixes |

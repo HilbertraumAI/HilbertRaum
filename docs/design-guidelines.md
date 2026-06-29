@@ -1,6 +1,7 @@
 # Design & UI/UX Guidelines — HilbertRaum
 
-**Status:** ADOPTED 2026-06-10. Source: external design research (Claude web, 2026-06-10),
+**Status:** ADOPTED 2026-06-10. **Last updated:** 2026-06-19 (brand refresh §13; Home CTA
+follow-up §11.7, 2026-06-16). Source: external design research (Claude web, 2026-06-10),
 reviewed and adapted to this repo's constraints — adaptations are marked **[adapted]**.
 This is the durable reference for all UI work. The UI polish wave (Phases 23–27) that rolled
 these guidelines out is IMPLEMENTED; its condensed design record (decisions D-UI1–D-UI4,

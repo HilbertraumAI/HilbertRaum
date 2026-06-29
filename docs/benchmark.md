@@ -3,6 +3,10 @@
 _Last updated: 2026-06-10 — Phase 7 (updated Phase 10: real tokens/sec; Phase 16 + GPU audit
 round: injected GPU probe, conservative profile bump, per-session probe refresh)._
 
+> **Not to be confused with** [`model-benchmarks.md`](model-benchmarks.md) — that doc is the
+> offline **model-quality** protocol and measured results; this doc is the in-app **hardware**
+> probe that recommends which model a given machine can run.
+
 The benchmark answers the spec §11.1 questions — *can this machine run a model, which
 model, what context is safe, is the drive fast enough* — using **only local signals**. It
 touches **zero network**: `node:os` + `node:fs` + `node:crypto` only, no `child_process`,

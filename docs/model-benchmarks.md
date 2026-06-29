@@ -5,6 +5,10 @@ given laptop in ~a day, with numbers comparable across machines and re-runs. Aut
 Phase 29; decisions D19/D20 and the catalog design record are §7; apply the §5 decision rule
 with the results._
 
+> **Not to be confused with** [`benchmark.md`](benchmark.md) — that doc is the in-app
+> **hardware** probe (can this machine run a model); this doc is the offline **model-quality**
+> protocol and measured speed/RAM/quality results.
+
 ## 0. Hard constraints (do not violate)
 
 - **Offline, Wi-Fi OFF.** All eval data is committed (`eval/`); all weights + the runtime are
