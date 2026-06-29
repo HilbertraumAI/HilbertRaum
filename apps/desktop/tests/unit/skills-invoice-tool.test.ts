@@ -303,3 +303,135 @@ describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
     expect(parseLineItem("Pos 1'234.56", 'CHF')).toMatchObject({ lineTotal: 1234.56 }) // BEFORE: 234.56
   })
 })
+
+// full-audit-2026-06-29-postmerge Phase 1 (money-parser correctness): the invoice path is the more
+// exposed money path (no geometry backstop, F10). F1 (uncaptured line-total column), F3 (per-line
+// currency from the whole line + the missing single-currency guard), F6 (space-column fusion), F8
+// (greedy qty split), T5 (2-dp invariant), T9 (negative line totals). Whole-string fixtures through the
+// real `parseLineItem` / `validateInvoiceTotals`.
+describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', () => {
+  // ---- F1: an uncaptured line-total column (the real total to the RIGHT) must not yield a wrong total ----
+  it('F1: a row whose REAL line total is an uncaptured whole-number column is DROPPED', () => {
+    // `Hosting 12,50 500`: the unit price `12,50` matches but the line total `500` is a bare integer
+    // MONEY_RE rejects, so it collapses to ONE money token. BEFORE (F1 bug): lineTotal = amounts[last] =
+    // 12.50 (the unit price read as the line total — the real 500 lost). NOW: an uncaptured numeric column
+    // to the RIGHT of the last money token (invoices read the line total as the LAST figure) makes the
+    // line total ambiguous → DROP (honesty). The bank mirror drops on a LEFT-side uncaptured column
+    // because the bank reads the amount as the second-to-last figure — the asymmetry is intentional.
+    expect(parseLineItem('Hosting 12,50 500', 'EUR')).toBeNull()
+  })
+
+  it('F1: a clean line item with the line total LAST (no uncaptured column) still parses', () => {
+    // The drop is scoped to an uncaptured numeric column abutting the figures: an ordinary single-total
+    // line is unaffected.
+    expect(parseLineItem('Flat service fee 50,00', 'EUR')).toEqual({
+      description: 'Flat service fee',
+      lineTotal: 50,
+      currency: 'EUR'
+    })
+  })
+
+  // ---- F6: space-separated columns must not fuse into one figure on the geometry-less invoice path ----
+  it('F6: space-separated columns are DROPPED, never fused into one ~100×-too-large figure', () => {
+    // `Widget 10 100`: MONEY_RE's space-grouped alternative reads `10 100` as ONE figure → 10100 (qty 10 +
+    // amount 100 fused). BEFORE: lineTotal = 10100. NOW: a space-grouped token WITHOUT a 2-dp decimal tail
+    // is column-fusion-prone on the geometry-less invoice path → the row is DROPPED. A decimal-anchored
+    // space group (`1 234 567,89`) is a real figure and is preserved (next test).
+    expect(parseLineItem('Widget 10 100', 'EUR')).toBeNull()
+  })
+
+  it('F6: a decimal-anchored space-grouped figure is still read whole (not a false fusion drop)', () => {
+    expect(parseLineItem('Charge 1 234 567,89', 'EUR')).toMatchObject({ lineTotal: 1234567.89 })
+  })
+
+  // ---- F8: a trailing number is split as quantity ONLY with a unit token or a corroborating column ----
+  it('F8: a product-coded description does NOT split a trailing number as quantity', () => {
+    // `iPhone 15 1.799,00`: BEFORE the trailing `15` was split off as quantity (description "iPhone"), with
+    // no unit word and no unit-price column to corroborate. NOW the split requires a unit token OR a
+    // second money column (a unit price) → "iPhone 15" stays the description, no quantity. (lineTotal was
+    // always correct — this is a metadata fix. The thousands-dot price keeps the `15` from fusing across
+    // the space into the figure — see the F6 fusion trade-off.)
+    expect(parseLineItem('iPhone 15 1.799,00', 'EUR')).toEqual({
+      description: 'iPhone 15',
+      lineTotal: 1799,
+      currency: 'EUR'
+    })
+  })
+
+  it('F8: a trailing quantity WITH a unit token still splits', () => {
+    expect(parseLineItem('Cable 3 x 50,00', 'EUR')).toMatchObject({
+      description: 'Cable',
+      quantity: 3,
+      lineTotal: 50
+    })
+  })
+
+  it('F8: a quantity corroborated by a unit-price column still splits (the columnar happy path)', () => {
+    // `Widget A 2 12,50 25,00`: two money columns (unit price 12,50 + line total 25,00) corroborate the
+    // bare `2` as a quantity, so the split is allowed even without a unit word.
+    expect(parseLineItem('Widget A 2 12,50 25,00', 'EUR')).toEqual({
+      description: 'Widget A',
+      quantity: 2,
+      unitPrice: 12.5,
+      lineTotal: 25,
+      currency: 'EUR'
+    })
+  })
+
+  // ---- F3: per-line currency is detected only in the FIGURE REGION (mirror of the bank BL-2 fix) ----
+  it('F3: a currency WORD in the description no longer overrides the document currency', () => {
+    // `USD adapter cable 12,50` on a EUR invoice: detectCurrency scans ISO codes before symbols, so the
+    // description "USD" used to beat the document currency. BEFORE: currency "USD". NOW: detection scans
+    // only the figure region (from the first money token on), so the description "USD" is ignored →
+    // falls back to the document currency EUR.
+    expect(parseLineItem('USD adapter cable 12,50', 'EUR')).toMatchObject({ currency: 'EUR' })
+  })
+
+  it('F3: a GENUINELY figure-adjacent foreign currency is still detected', () => {
+    // A foreign code printed NEXT TO the amount (inside the figure region) is still honoured — mixed-
+    // currency honesty preserved.
+    expect(parseLineItem('Imported part 20,00 USD', 'EUR')).toMatchObject({ currency: 'USD', lineTotal: 20 })
+  })
+
+  it('F3: validateInvoiceTotals returns lineItemsSumToNet:unknown for MIXED line-item currencies', () => {
+    // Without a single-currency guard the line totals were summed across currencies and reconciled against
+    // a meaningless cross-currency figure (a spurious ok/mismatch). NOW a >1 currency set → unknown
+    // (mirrors assessCompleteness/reconcileBalances).
+    const res = validateInvoiceTotals({
+      header: {},
+      lineItems: [
+        { description: 'A', lineTotal: 100, currency: 'EUR' },
+        { description: 'B', lineTotal: 50, currency: 'USD' }
+      ],
+      totals: { netTotal: 150 } // 100 + 50 == 150 would spuriously pass if summed across currencies
+    })
+    const byName = Object.fromEntries(res.checks.map((c) => [c.name, c.status]))
+    expect(byName.lineItemsSumToNet).toBe('unknown')
+  })
+
+  it('F3: a single-currency invoice still reconciles its line items to the net (guard does not over-fire)', () => {
+    const res = validateInvoiceTotals({
+      header: { currency: 'EUR' },
+      lineItems: [
+        { description: 'A', lineTotal: 100, currency: 'EUR' },
+        { description: 'B', lineTotal: 50, currency: 'EUR' }
+      ],
+      totals: { netTotal: 150 }
+    })
+    const byName = Object.fromEntries(res.checks.map((c) => [c.name, c.status]))
+    expect(byName.lineItemsSumToNet).toBe('ok')
+  })
+
+  // ---- T5: the 2-dp integer-cent invariant on the invoice path ----
+  it('T5: a >2-dp line total is normalised to the nearest cent', () => {
+    const li = parseLineItem('Pos 1.234,567', 'EUR')
+    expect(li?.lineTotal).toBe(1234.57) // BEFORE: 1234.567
+    expect(li?.lineTotal).toBe(Math.round((li?.lineTotal ?? 0) * 100) / 100) // exactly 2-dp
+  })
+
+  // ---- T9: negative line totals / credit notes (Gutschrift / Rabatt) ----
+  it('T9: a negative line total (Rabatt / Gutschrift) parses with the correct sign', () => {
+    expect(parseLineItem('Rabatt -50,00', 'EUR')).toMatchObject({ lineTotal: -50 })
+    expect(parseLineItem('Gutschrift (30,00)', 'EUR')).toMatchObject({ lineTotal: -30 })
+  })
+})

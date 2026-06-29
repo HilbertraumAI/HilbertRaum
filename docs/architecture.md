@@ -2636,6 +2636,54 @@ the de-AT target locale).
   The flag is **matching-only** — `run.ts` seeds just `match_kind`/`pattern` into `bank_category_rules`
   (transparency), so nothing is persisted and no schema change is needed.
 
+**Financial correctness (full-audit-2026-06-29-postmerge, Phase 1 — F1/F3/F6/F8 + T5).** A post-merge
+fresh pass found the prior round's **bank** hardening (BL-1/2/3) had not propagated to the sibling
+**invoice** path, plus a HIGH amount-column hazard on both. Parsing-only (no schema/IPC/audit-payload
+change); all fixed **test-first** through the real `extractTransactionRows`/`parseLineItem`/
+`validateInvoiceTotals` entry points (characterization-first, then flipped to the correct values).
+- **F1 — uncaptured amount column read the running BALANCE as the amount (`bank-statement.ts parseLine`
+  + `invoice.ts parseLineItem`), HIGH.** A whole-euro amount (`50`) or single-decimal (`12,5`) is rejected
+  by the 2-dp `MONEY_RE`, so `Sparen 50 1.234,56` collapses to ONE money token — the *balance* — and the
+  position heuristic took it as the movement amount (off by the whole balance magnitude; `reconcileBalances`
+  cannot catch it because the row records no `balanceAfter`). **Fix — STATEMENT-CONTEXT-AWARE drop (diverged
+  from the audit's literal "drop whenever a left digit-run remains").** `parseLine` now FLAGS
+  `ambiguousAmount` (one money token + a description ending in a bare number); `extractTransactionRows` drops
+  the flagged row **only when the statement has a balance column** (`rows.some(r => r.balanceAfter !==
+  undefined)`). The unconditional drop the audit suggested **regressed the flagship HVB "Umsätze"** no-balance
+  format (`pdf-bank-layout.test.ts`), where a numeric-ending payee (`REWE … 1234 -19,15`) is a single-token
+  row whose lone figure genuinely IS the amount — so it must be kept. The **invoice** mirror drops on the
+  OPPOSITE side: it reads the line total as the LAST figure, so it drops a row with an uncaptured numeric
+  column to the **RIGHT** of the last money token (`Hosting 12,50 500` → the real total `500` lost), while a
+  bare number to the LEFT is a quantity (kept). Residual: a *lone* `Sparen 50 1.234,56` with no balance-column
+  row to establish context keeps the old read; and a balance-column row that legitimately has a missing
+  balance + numeric payee is dropped (recall loss, never a wrong figure) — both documented in known-limitations.
+- **F3 — invoice per-line currency from the WHOLE line + missing single-currency guard (`invoice.ts`),
+  MEDIUM.** The BL-2 figure-region fix was never applied to the invoice path: `detectCurrency(line)` scanned
+  the description, so `USD adapter cable 12,50` on a EUR invoice tagged the line USD (ISO codes scan before
+  symbols). **Fix:** detect on the figure region (`rest.slice(matches[0].index)`) with `documentCurrency`
+  fallback — mirror of `bank-statement.ts`. Separately, `validateInvoiceTotals` gained the bank gate's
+  **single-currency guard**: a line-item currency set of size > 1 returns `lineItemsSumToNet: 'unknown'`
+  rather than summing `lineTotal` across currencies into a meaningless cross-currency figure.
+- **F6 — space-column FUSION on the geometry-less invoice path (`invoice.ts isFusedSpaceGroup`), MEDIUM.**
+  `MONEY_RE`'s space-grouped alternative reads `<1-3 digits> <3 digits>` as one figure, so `Widget 10 100`
+  fuses to `10 100` → 10100 (~100× too large). The bank path is mitigated by the geometry column model (D58);
+  the invoice path has no backstop (F10). **Fix:** a matched token with an interior space and NO 2-dp decimal
+  tail is the fusion-prone form (a real line total prints cents) → drop the row. A decimal-anchored space group
+  (`1 234 567,89`) is kept; a space group WITH a decimal (`15 799,00`) stays the accepted DECISION-2 trade-off.
+- **F8 — greedy `quantity` split (`invoice.ts QTY_TRAIL_RE`), LOW (metadata).** A trailing number was split off
+  the description as `quantity` even with no unit word, so `iPhone 15` → "iPhone" qty 15. **Fix:** the unit
+  token is now a CAPTURING group; the split fires only when a unit token is present OR a unit-price column
+  (`amounts.length >= 2`) corroborates it. The columnar `Widget A 2 12,50 25,00` still reads quantity 2.
+  `lineTotal` was never affected.
+- **T5 — the 2-dp integer-cent invariant (`money.ts parseAmount`).** `parseAmount` now rounds every figure to
+  the nearest cent (`Math.round(|value|*100)`), so `Math.round(x*100)` is its EXACT cent value — the
+  load-bearing premise of `assessCompleteness`/`reconcileBalances` (which tie out in integer cents) and CSV
+  `toFixed(2)`. **Decision:** a >2-dp printed figure (only reachable via the both-separator `1.234,567` form)
+  is read to the nearest cent (`1234.57`), **not dropped** — a sub-cent normalisation, never a
+  confidently-wrong magnitude. (Single-separator 3-digit-group thousands forms `1.000`/`12.345` are integers,
+  unaffected — DECISION 2.) Parens-negative through the real scanner (T4) and negative line totals / credit
+  notes (Gutschrift/Rabatt, T9) are now pinned by whole-string tests.
+
 ### §11 IPC / audit surface
 
 `skills:list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning` +
@@ -3999,6 +4047,36 @@ were test-only with no `src/` behavior change; Phase 6 was docs/comments-only + 
 / audited / exported; no schema/IPC/audit-payload change in any phase. Final suite **2463 passed / 39 skipped
 (2502 collected)** (typecheck + build green; the Phase-6 docs/comments change touched no test and the suite is
 unchanged from Phase 5).
+
+### §27 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 1 — money-parser correctness)
+
+A **fresh post-merge full audit** (report `audits/full-audit-2026-06-29-postmerge.md`), run after §26 was
+merged, found the prior round's **bank** hardening had not propagated to the sibling **invoice** path. The
+pattern: *the fix exists next door but wasn't applied here.* It enumerated **1 High, ~9 Medium, ~13 Low**;
+**Phase 1 — the release-blocker money-parser class — is remediated** on branch `audit-postmerge-phase1-money`
+(suite **2483 passed / 39 skipped**, typecheck + build green). Parsing-only; no schema/IPC/audit-payload
+change. The design record is **§8 "Financial correctness (full-audit-2026-06-29-postmerge, Phase 1)"**;
+resolve a `full-audit-2026-06-29-postmerge <ID>` code comment through this ledger. Later phases (F2/F4/F5/F7/
+F9 reliability, F11–F19 RAG/security/concurrency, F20–F24 renderer, D1–D8 docs, T1–T9 test seams) are **not
+started** — carried in the report.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F1** (High, release-blocking) | 1 | **fixed** — an uncaptured amount column read the running BALANCE as the movement amount (`Sparen 50 1.234,56` → 1234.56). Bank: `parseLine` FLAGS `ambiguousAmount` (one money token + bare-number-trailing description); `extractTransactionRows` drops it **only when the statement has a balance column**. **DIVERGED from the audit's literal "drop whenever a left digit-run remains"** — the unconditional drop regressed the HVB "Umsätze" no-balance numeric-payee format (`REWE … 1234 -19,15`), so the drop is statement-context-aware. Invoice mirror drops on the **RIGHT** (line total = LAST figure): `Hosting 12,50 500` → drop | arch §8 (F1); known-limitations LINE PARSER (F1 + residuals) |
+| F3 (Med) | 1 | **fixed** — invoice per-line `detectCurrency` now scans only the **figure region** (`rest.slice(matches[0].index)`) with `documentCurrency` fallback (the BL-2 fix, never applied to invoices); `validateInvoiceTotals` gained the bank gate's **single-currency guard** (`lineItemsSumToNet: 'unknown'` for a >1 line-item currency set) | arch §8 (F3); known-limitations (figure-region currency bullet) |
+| F6 (Med) | 1 | **fixed** — on the geometry-less invoice path a space-grouped token WITHOUT a 2-dp decimal tail (`Widget 10 100` → 10100) is a likely column fusion → the row is **DROPPED** (`isFusedSpaceGroup`); a decimal-anchored `1 234 567,89` is kept; `15 799,00` stays the accepted DECISION-2 trade-off | arch §8 (F6); known-limitations (grouping bullet) |
+| F8 (Low) | 1 | **fixed** — the invoice `quantity` split now requires a unit token (a captured `QTY_TRAIL_RE` group) OR a corroborating unit-price column; `iPhone 15 1.799,00` keeps "iPhone 15", `Widget A 2 12,50 25,00` still reads qty 2. Metadata-only (lineTotal unaffected) | arch §8 (F8); known-limitations (qty bullet) |
+| T5 (test/invariant) | 1 | **pinned** — `parseAmount` rounds every figure to the nearest cent (`Math.round(\|value\|*100)`) so the integer-cent invariant holds by construction; a >2-dp `1.234,567` reads `1234.57` (normalised, not dropped). T4 (parens-negative) + T9 (negative line totals / Gutschrift/Rabatt) now pinned through the real scanner | arch §8 (T5); known-limitations (2-dp bullet) |
+| F10 (Low) | 1 | **acknowledged (no code change)** — the invoice path runs without geometry layout reconstruction (D58 is bank-only), so it is the most parse-fragile money path; Phase 1 prioritised its robustness (F1 right-side drop, F6 fusion drop) since it has no backstop, and the asymmetry is recorded | arch §8 (F1/F6); known-limitations (invoice geometry note) |
+| F2, F4, F5, F7, F9, F11–F19, F20–F24, D1–D8, T1–T9 | — | **not started** — reliability (F2 regenerate data-loss, F4/F7 sidecar bind-race latch, F5 invoice re-insert, F9 compaction log), RAG/security/concurrency (F11–F19), renderer a11y/lifecycle (F20–F24), docs (D1–D8), test seams (T1–T9); carried in the report's phased plan (Phases 2–8) | `audits/full-audit-2026-06-29-postmerge.md` |
+
+**Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
+class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
+change. Every fix is **characterization-first then test-first** (pin current behaviour → assert the correct
+post-fix value → red on current code → green after the fix) through the real `extractTransactionRows`/
+`parseLineItem`/`validateInvoiceTotals` entry points (TEST-N2 discipline: whole strings, never pre-isolated
+tokens). The normal 2-figure de-AT row is byte-identical; the HVB no-balance geometry case
+(`pdf-bank-layout.test.ts`) stays green (the F1 divergence exists to protect it).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

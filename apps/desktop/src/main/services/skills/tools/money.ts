@@ -89,6 +89,16 @@ export const MONEY_EPS = 0.005
  * parentheses-negative, and `.`/`,` thousand/decimal separators: with both present (or a single
  * separator followed by 1–2 digits) the LAST separator is the decimal point; a single separator
  * followed by exactly 3 digits is treated as a thousands separator.
+ *
+ * **2-dp integer-cent invariant (full-audit-2026-06-29-postmerge T5).** Every returned figure is
+ * normalised to the nearest cent (`Math.round(value*100)/100`), so `Math.round(x*100)` is its EXACT
+ * cent value — the load-bearing premise of `assessCompleteness`/`reconcileBalances` (which tie out in
+ * integer cents) and of CSV `toFixed(2)`. Almost every printed money token is already 2-dp (MONEY_RE's
+ * decimal alternative ends in `[.,]\d{2}`); the ONLY way a 3rd decimal reaches here is the
+ * both-separator form `1.234,567` (`.` thousands + `,` decimal with a 3-digit minor group), which now
+ * reads as 1234.57 rather than 1234.567. **Decision (T5): a >2-dp printed figure is read to the nearest
+ * cent — a sub-cent normalisation, never a confidently-wrong magnitude — not dropped.** (The
+ * single-separator 3-digit-group thousands forms `1.000`/`12.345` are integers, unaffected — DECISION 2.)
  */
 export function parseAmount(raw: string): number | null {
   const s = raw.trim()
@@ -115,7 +125,10 @@ export function parseAmount(raw: string): number | null {
   }
   const value = Number(normalized)
   if (!Number.isFinite(value)) return null
-  return negative ? -Math.abs(value) : value
+  // Pin the 2-dp integer-cent invariant (T5): collapse any sub-cent residue (a >2-dp `1.234,567` form,
+  // or float-representation noise) so every emitted figure is exactly k/100 for an integer k.
+  const cents = Math.round(Math.abs(value) * 100)
+  return (negative ? -cents : cents) / 100
 }
 
 // ---- Dates ----

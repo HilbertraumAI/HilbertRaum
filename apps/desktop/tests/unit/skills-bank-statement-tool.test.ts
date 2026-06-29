@@ -889,3 +889,93 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
     expect(prefilterCategory(tx({ description: 'ATMOS Sportswear', amount: -89 }))).toBeNull()
   })
 })
+
+// full-audit-2026-06-29-postmerge Phase 1 (money-parser correctness): F1 (unmatched amount column →
+// balance read as amount) + T4 (parens-negative through the real scanner) + T5 (the 2-dp integer-cent
+// invariant). Adversarial WHOLE-STRING fixtures through the real `extractTransactionRows`, not
+// pre-isolated `parseAmount` tokens. Written CHARACTERIZATION-FIRST (pinning today's behaviour, the BUG
+// assertions labelled) then flipped to the correct values once the fix landed.
+describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', () => {
+  // ---- F1: on a BALANCE-COLUMN statement an uncaptured amount must not let the balance be read as the
+  //      amount; the keep/drop is statement-context-aware so a no-balance numeric-payee listing survives.
+  it('F1: on a balance-column statement, a whole-euro amount + 2-dp balance row is DROPPED', () => {
+    // `Sparen 50 1.234,56`: the amount `50` is a bare whole-euro integer MONEY_RE rejects (no 2-dp tail,
+    // not grouped), so the row collapses to ONE money match — the BALANCE `1.234,56`. BEFORE (F1 bug):
+    // amount = matches[0] = 1234.56 (the running balance silently read as the movement amount — the
+    // cardinal "confidently-wrong money" harm, off by the whole running-balance magnitude). NOW: the
+    // statement HAS a balance column (the Grocery row prints one), so the ambiguous row — one money token
+    // with a bare number abutting it on the left — is DROPPED rather than promote the balance (§22-D1).
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-01 Grocery -45,90 1.954,10', // a normal 2-figure row → establishes the balance column
+      '2026-01-02 Sparen 50 1.234,56' // amount `50` uncaptured; `1.234,56` is the BALANCE → drop
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ description: 'Grocery', amount: -45.9, balanceAfter: 1954.1 })
+    expect(rows.some((r) => r.amount === 1234.56)).toBe(false) // the balance never becomes an amount
+  })
+
+  it('F1: on a balance-column statement, a single-decimal amount row is DROPPED', () => {
+    // `Zinsen 12,5 1.000,00`: `12,5` is a single-decimal figure MONEY_RE rejects (it needs a 2-digit minor
+    // tail), so only the balance `1.000,00` matches. BEFORE: amount = 1000 (the balance). NOW: dropped.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-01 Grocery -45,90 1.954,10',
+      '2026-01-03 Zinsen 12,5 1.000,00'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows.map((r) => r.description)).toEqual(['Grocery'])
+    expect(rows.some((r) => r.amount === 1000)).toBe(false)
+  })
+
+  it('F1: a NO-balance "Umsätze" listing keeps a numeric-ending payee (the lone token IS the amount)', () => {
+    // The crucial false-positive guard. No row prints a running balance → the statement has no balance
+    // column → a single money token is the AMOUNT, even when the payee ends in a store id. This is the HVB
+    // "Umsätze" shape the geometry feature was built for; dropping the numeric-payee row here would regress
+    // the flagship real case. `REWE … 1234 -19,15` parses with amount −19,15, NOT a dropped/blanked row.
+    const text = [
+      'Kontoumsaetze EUR',
+      '2026-01-20 KARTENZAHLUNG REWE SAGT DANKE 1234 -19,15',
+      '2026-01-29 SEPA-GUTSCHRIFT Arbeitgeber 34,39'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ description: 'KARTENZAHLUNG REWE SAGT DANKE 1234', amount: -19.15 })
+    expect(rows[1]).toMatchObject({ amount: 34.39 })
+  })
+
+  it('F1: a genuine single-figure no-balance row (description has no trailing number) still parses', () => {
+    const rows = extractTransactionRows([chunk('Kontoauszug EUR\n2026-01-02 Mystery shop -45,90', 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ description: 'Mystery shop', amount: -45.9 })
+    expect(rows[0].balanceAfter).toBeUndefined()
+  })
+
+  it('F1: the normal 2-figure de-AT row is byte-identical to before (no over-drop on a real amount column)', () => {
+    // The fix must not touch the common `<desc> <amount> <balance>` row: both figures match MONEY_RE, so
+    // there is no uncaptured column and the position logic stands unchanged.
+    const rows = extractTransactionRows([chunk('Kontoauszug EUR\n2026-01-02 Grocery -45,90 1.954,10', 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ description: 'Grocery', amount: -45.9, balanceAfter: 1954.1 })
+  })
+
+  // ---- T4: parens-negative through the REAL MONEY_RE scanner (not a pre-isolated parseAmount token) ----
+  it('T4: a parentheses-negative amount parses through the real extractor', () => {
+    const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Refund (45,00) 1.000,00', 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ amount: -45, balanceAfter: 1000 })
+  })
+
+  // ---- T5: the 2-dp integer-cent invariant — every emitted figure is exactly 2 decimal places ----
+  it('T5: a >2-dp figure is normalised to the nearest cent (the integer-cent invariant holds)', () => {
+    // A both-separator `1.234,567` is the only form that reaches a 3rd decimal (the single-separator
+    // 3-digit-group thousands forms `1.000`/`12.345` are integers — DECISION 2). parseAmount now rounds
+    // every figure to 2-dp, so `Math.round(amount*100)` is its EXACT cent value (the load-bearing premise
+    // of assessCompleteness/reconcileBalances). Decision (T5): a >2-dp printed figure is read to the
+    // nearest cent — a sub-cent normalisation, never a confidently-wrong magnitude — not dropped.
+    const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Posten 1.234,567 9.999,99', 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].amount).toBe(1234.57) // BEFORE: 1234.567 (a 3-dp value escaping the cent invariant)
+    expect(rows[0].amount).toBe(Math.round(rows[0].amount * 100) / 100) // exactly 2-dp
+  })
+})

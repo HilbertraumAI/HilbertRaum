@@ -425,6 +425,27 @@ password recovery — are documented in
     and no balance, or a description figure that lands in the amount slot) the position heuristic can still
     pick wrong. The **geometry column model** (above) is the stronger separator where it runs; this is the
     plain-text / CSV / invoice fallback.
+  - **An UNCAPTURED amount column drops the row rather than promote the balance (full-audit-2026-06-29-
+    postmerge F1).** A whole-euro amount (`50`) or single-decimal (`12,5`) is rejected by the 2-dp money
+    scan, so a `Sparen 50 1.234,56` row collapses to ONE money token — the *balance* — and the position
+    heuristic above would otherwise read the running **balance as the movement amount** (off by the whole
+    balance magnitude — the cardinal confidently-wrong-money harm). The fix is **statement-context-aware**:
+    a row with one money token whose description ends in a bare number is *flagged ambiguous* and dropped
+    **only when the statement has a balance column** (some other row prints a running balance). On a
+    **no-balance "Umsätze" listing** the lone token genuinely IS the amount, so a numeric-ending payee
+    (`KARTENZAHLUNG REWE … 1234 -19,15`) is **kept** — dropping it would regress the flagship geometry case.
+    **Residual:** a balance-column statement whose row legitimately has a missing balance AND a numeric-
+    ending payee is dropped (a recall loss, never a wrong figure); and a *lone* `Sparen 50 1.234,56` with no
+    other balance-column row to establish context keeps the old read (it cannot be distinguished in
+    isolation). The invoice path mirrors this on the **opposite** side — it reads the line total as the LAST
+    figure, so it drops a row with an uncaptured numeric column to the **RIGHT** of the line total
+    (`Hosting 12,50 500` → the real total `500` lost) and a bare number to the LEFT is treated as a quantity.
+  - **Every parsed figure is normalised to 2 decimal places (full-audit-2026-06-29-postmerge T5).**
+    `parseAmount` rounds each figure to the nearest cent so `Math.round(x*100)` is its EXACT integer-cent
+    value — the load-bearing premise of the completeness/reconcile tie-out math and the CSV `toFixed(2)`.
+    A printed figure with a 3rd decimal (only reachable via the both-separator `1.234,567` form) is read to
+    the nearest cent (`1234.57`), **not dropped** — a sub-cent normalisation, never a confidently-wrong
+    magnitude. (Single-separator 3-digit-group thousands forms `1.000`/`12.345` are integers, unaffected.)
   - **A figure's sign is read by the SPACE around a minus (full-audit-2026-06-29 BL-1).** A **glued**
     trailing minus is a de-AT debit (`45,90-` → −45,90, even with a running balance after it); a `-<digit>`
     after a space is the next figure's **leading** sign (`2.500,00 -500,00` → +2500 then −500). This
@@ -433,14 +454,19 @@ password recovery — are documented in
     by reconciliation). **Residual:** the genuinely-ambiguous **spaced** trailing minus immediately before a
     balance figure (`45,90 - 1.908,20`) reads as a *positive* amount — no parser can distinguish it from
     subtraction; the glued de-AT convention (`45,90-`) is the unambiguous one and is read correctly.
-  - **Per-row currency is detected only in the FIGURE REGION (full-audit-2026-06-29 BL-2).** The row's
-    currency is read from the text **at/after the first money token**, not the free-text description, so a
-    payee memo mentioning `USD`/`$` on a EUR statement no longer tags that row a foreign currency (which
-    used to suppress the whole statement's total + reconciliation). A genuine foreign-currency row whose
-    code/symbol prints **next to** the amount is still detected (mixed-currency honesty preserved).
-    **Residual:** a foreign symbol **glued immediately before** the only figure with no other adjacency
-    (`$50,00` as a row's sole token) can be missed and falls back to the statement currency — harmless on a
-    single-currency statement, a rare mis-tag on a truly mixed one.
+  - **Per-row currency is detected only in the FIGURE REGION (full-audit-2026-06-29 BL-2; extended to the
+    invoice path by full-audit-2026-06-29-postmerge F3).** The row's currency is read from the text
+    **at/after the first money token**, not the free-text description, so a payee memo mentioning `USD`/`$`
+    on a EUR statement no longer tags that row a foreign currency (which used to suppress the whole
+    statement's total + reconciliation). The **invoice line parser** now matches the bank path (the BL-2 fix
+    was never applied to it): `USD adapter cable 12,50` on a EUR invoice reads EUR, not USD. A genuine
+    foreign-currency row whose code/symbol prints **next to** the amount is still detected (mixed-currency
+    honesty preserved). `validateInvoiceTotals` gained the **single-currency guard** the bank gate already
+    had — line totals across **mixed** currencies are reported `lineItemsSumToNet: unknown` rather than
+    summed into a meaningless cross-currency figure. **Residual:** a foreign symbol **glued immediately
+    before** the only figure with no other adjacency (`$50,00` as a row's sole token) can be missed and
+    falls back to the document currency — harmless on a single-currency document, a rare mis-tag on a truly
+    mixed one.
   - **Grouped figures without a 2-dp decimal are read as thousands.** A bare `1.000`/`2.500` (de-AT dot =
     thousands), space-grouped `1 234 567,89`, and Swiss-apostrophe `1'234.56` are now read whole. The
     trade-off (accepted, DECISION 2): a **dotted/grouped reference number** in a description — `Rechnung
@@ -451,7 +477,18 @@ password recovery — are documented in
     word-boundary anchors; only a genuinely *standalone* short group abutting the amount can still fuse.
     These are recall/precision trade-offs on the
     plain-text path, never a wrong **verified** statement total (the completeness gate still requires the
-    printed opening + Σ == closing to tie out).
+    printed opening + Σ == closing to tie out). **On the geometry-less INVOICE path** (no completeness gate,
+    no balance backstop) a space-grouped token **without a 2-dp decimal tail** (`Widget 10 100` → `10 100`
+    → 10100) is treated as a likely column fusion and the row is **DROPPED** (full-audit-2026-06-29-postmerge
+    F6) — a real line total almost always prints cents. A decimal-anchored space group (`1 234 567,89`) is a
+    real figure and is kept; a space group **with** a decimal (`15 799,00`) stays the accepted trade-off
+    (indistinguishable from a real 15 799,00).
+  - **A trailing number is split as `quantity` only with corroboration (full-audit-2026-06-29-postmerge
+    F8, invoice path).** A product-coded description (`iPhone 15`, `Calendar 2026`) used to have its
+    trailing number greedily read as a quantity. The split now requires a **unit token** (`x`/`Stk`/`pcs`/…)
+    OR a **unit-price column** (a second money token) to corroborate it — so `iPhone 15 1.799,00` keeps
+    "iPhone 15" as the description while the columnar `Widget A 2 12,50 25,00` still reads quantity 2. The
+    financial `lineTotal` was never affected — this is a metadata fix.
   - **Balance/total lines scrub a TRAILING date before reading the last figure (BL-N2).** Opening/closing
     balances and invoice totals are read as the **last** money token on the line, so a figure followed by a
     trailing date — `Endsaldo 1.234,56 EUR per 30.06.2026` — would otherwise mis-read the date

@@ -6,6 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 1 (MONEY-PARSER CORRECTNESS, the release-blocker class;
+F1/F3/F6/F8 + T5/T4/T9) — branch `audit-postmerge-phase1-money`.** Suite **2483 passed / 39 skipped (2522
+collected)** (was 2463/39 → **+20 tests**), typecheck clean, `npm run build` green. Parsing-only — no
+schema/IPC/audit-payload change; figures stay content-class. Source of truth for the findings is the new
+working-paper report `audits/full-audit-2026-06-29-postmerge.md` (the prior round's bank hardening had not
+propagated to the sibling **invoice** path). Closes **F1 (High), F3/F6 (Med), F8 (Low)** + the invoice
+single-currency guard + the T5 2-dp invariant; F2/F4/F5/F7/F9 and the rest are **not started** (later phases).
+- **F1 (HIGH, release-blocker) — uncaptured amount column → running balance read as the amount.** A
+  whole-euro `50` / single-decimal `12,5` amount is rejected by the 2-dp `MONEY_RE`, so `Sparen 50 1.234,56`
+  collapses to ONE token (the *balance*) and the old position logic took the **balance as the amount**. **Key
+  decision (DIVERGED from the audit):** the bank drop is **statement-context-aware**, not unconditional —
+  `parseLine` flags `ambiguousAmount`; `extractTransactionRows` drops the flagged row **only when the
+  statement has a balance column**. The audit's literal "drop whenever a left digit-run remains" regressed the
+  flagship HVB "Umsätze" no-balance numeric-payee format (`REWE … 1234 -19,15`, a single-token row whose lone
+  figure IS the amount — `pdf-bank-layout.test.ts`). The **invoice** mirror drops on the RIGHT side (line total
+  = LAST figure): `Hosting 12,50 500` (real total `500` uncaptured to the right) → drop; a bare number to the
+  LEFT is a quantity, kept.
+- **F3 (MED) — invoice currency from the figure region + single-currency guard.** `detectCurrency` now scans
+  `rest.slice(matches[0].index)` (mirror of the bank BL-2 fix) so a `USD` WORD in a description no longer beats
+  the document currency; `validateInvoiceTotals` returns `lineItemsSumToNet: 'unknown'` for a mixed line-item
+  currency set (never sums across currencies).
+- **F6 (MED) — invoice space-column fusion.** A matched token with an interior space and NO 2-dp decimal tail
+  (`Widget 10 100` → 10100) is dropped (`isFusedSpaceGroup`); `1 234 567,89` (decimal-anchored) is kept;
+  `15 799,00` stays the accepted DECISION-2 trade-off.
+- **F8 (LOW) — qty split corroboration.** A trailing number splits as `quantity` only with a unit token OR a
+  unit-price column; `iPhone 15 1.799,00` keeps "iPhone 15". Metadata-only.
+- **T5 decision — 2-dp integer-cent invariant.** `parseAmount` rounds every figure to the nearest cent, so
+  `Math.round(x*100)` is exact (the completeness/reconcile premise). A >2-dp `1.234,567` reads `1234.57`
+  (**normalised, NOT dropped**). T4 (parens-negative) + T9 (negative line totals) pinned via whole-string tests.
+- **Durable record:** arch §8 "Financial correctness (full-audit-2026-06-29-postmerge, Phase 1)" + the new
+  **§27 ledger** (dispositions each finding); known-limitations LINE PARSER bullets updated (F1 statement-
+  context drop + residuals, figure-region currency extended to invoices, space-fusion invoice drop, qty
+  corroboration, 2-dp invariant). The audit report marks F1/F3/F6/F8 remediated.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase1-money`; do NOT auto-merge/push.** Then Phase 2
+  (F2 regenerate data-loss + F4/F7 sidecar bind-race latch + F9 compaction log) per the report's phased plan._
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 6 (FINAL: DOCUMENTATION RECONCILIATION + AUDIT
 CLOSE-OUT; DOC-1/DOC-3/DOC-4 + SEC-1 doc half) — branch `full-audit-2026-06-29-fixes`.** Suite unchanged at
 **2463 passed / 39 skipped (2502 collected)**, typecheck clean, `npm run build` green. **Docs/comments-only +

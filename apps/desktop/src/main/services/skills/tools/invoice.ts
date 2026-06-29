@@ -141,8 +141,28 @@ const GROSS_LABELS = [
 const DATE_TOKEN_RE = /\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4}/
 const PERCENT_RE = /(\d+(?:[.,]\d+)?)\s*%/
 // A bare quantity at the end of the description region: an integer/decimal, optionally with a unit
-// word (x / × / Stk / pcs / units). Captures the cleaned description + the numeric quantity.
-const QTY_TRAIL_RE = /^(.*?)\s+(\d+(?:[.,]\d+)?)\s*(?:x|×|stk\.?|stück|pcs?\.?|units?)?\s*$/i
+// word (x / × / Stk / pcs / units). Captures the cleaned description, the numeric quantity, AND the unit
+// token (group 3) — the F8 split fires only when group 3 is present OR a unit-price column corroborates.
+const QTY_TRAIL_RE = /^(.*?)\s+(\d+(?:[.,]\d+)?)\s*(x|×|stk\.?|stück|pcs?\.?|units?)?\s*$/i
+
+// F1 (full-audit-2026-06-29-postmerge) — a bare numeric token AFTER the last money match: an uncaptured
+// figure column to the RIGHT of the line total (the invoice reads the line total as the LAST figure). A
+// trailing currency code (`EUR`) carries no digit, so it does not trigger the drop.
+const UNCAPTURED_NUMBER_AFTER = /(?:^|\s)[-+(]?\d/
+
+/**
+ * F6 (full-audit-2026-06-29-postmerge) — whether a matched money token is the FUSION-prone space-grouped
+ * form WITHOUT a 2-dp decimal tail (`10 100` → 10100). MONEY_RE's space-grouped alternative reads
+ * `<1-3 digits> <3 digits>` as one figure, so two separate columns can fuse across a space on the
+ * geometry-less invoice path. A decimal-anchored space group (`1 234 567,89`) is a real figure and is
+ * NOT flagged. The leading sign/paren/space and trailing sign/paren/space are stripped first so a signed
+ * `1 234,56-` keeps its `,56` tail and passes. (A space group WITH a decimal — `15 799,00` — is
+ * indistinguishable from a real 15 799,00 and stays the documented DECISION-2 accepted trade-off.)
+ */
+function isFusedSpaceGroup(token: string): boolean {
+  const core = token.replace(/^[-+(\s]+/, '').replace(/[-+)\s]+$/, '')
+  return / /.test(core) && !/[.,]\d{2}$/.test(core)
+}
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 
@@ -256,6 +276,11 @@ export function parseLineItem(
   const { rest } = splitLeadingDates(line, order)
   const matches = [...rest.matchAll(MONEY_RE)]
   if (matches.length === 0) return null
+  // F6 — DROP a space-column FUSION (`Widget 10 100` → `10 100` → 10100, ~100× too large). The bank path
+  // is mitigated by the geometry column model (D58); the invoice path has NO geometry backstop (F10), so
+  // a fusion-prone space-grouped token (no 2-dp decimal tail) on ANY column makes the row ambiguous.
+  if (matches.some((m) => isFusedSpaceGroup(m[0]))) return null
+
   const amounts: number[] = []
   for (const m of matches) {
     const a = parseAmount(m[0])
@@ -263,14 +288,37 @@ export function parseLineItem(
   }
   if (amounts.length === 0) return null
 
+  // F1 — DROP an ambiguous line total. The invoice reads the line total as the LAST money token; if the
+  // REAL rightmost figure is a bare integer MONEY_RE rejected (`Hosting 12,50 500` → the unit price 12,50
+  // read as the line total, the real 500 lost), an uncaptured numeric column sits to the RIGHT of the
+  // last match and we cannot tell which figure is the total → drop (the §22-D1 honesty posture). Mirror
+  // of the bank `parseLine` drop, but RIGHT-side: the bank amount is the second-to-last figure whereas the
+  // invoice line total is the LAST, so the dangerous uncaptured column is on the opposite side.
+  const lastMatch = matches[matches.length - 1]
+  const afterLast = rest.slice((lastMatch.index ?? 0) + lastMatch[0].length)
+  if (UNCAPTURED_NUMBER_AFTER.test(afterLast)) return null
+
   let description = rest.slice(0, matches[0].index).trim()
   if (!description) return null
-  const currency = detectCurrency(line) ?? documentCurrency
+  // F3 — detect the per-line currency only in the FIGURE REGION (the text from the first money token on),
+  // mirroring the bank `parseLine` BL-2 fix. detectCurrency scans ISO codes before symbols, so scanning
+  // the whole `line` let a currency WORD in the free-text description (`USD adapter cable 12,50` on a EUR
+  // invoice) beat the figure-adjacent symbol and tag the line USD; the line totals then summed across a
+  // phantom mixed-currency set in `validateInvoiceTotals`. A genuine foreign-currency line prints its
+  // code/symbol NEXT TO the amount (inside the figure region) and is still detected (mixed-currency
+  // honesty preserved) — preferred over `documentCurrency ?? detectCurrency`, which would silently fold a
+  // truly-mixed line into the document currency.
+  const figureRegion = rest.slice(matches[0].index)
+  const currency = detectCurrency(figureRegion) ?? documentCurrency
   if (!currency) return null
 
+  // F8 — split a trailing number off the description as `quantity` ONLY when a unit token is present
+  // (QTY_TRAIL_RE group 3) OR a second money column (a unit price, `amounts.length >= 2`) corroborates
+  // it. Without either, a product-coded description (`iPhone 15`, `Calendar 2026`) had its trailing
+  // number greedily read as a quantity. (lineTotal is unaffected — this is a metadata fix.)
   let quantity: number | undefined
   const qtyMatch = QTY_TRAIL_RE.exec(description)
-  if (qtyMatch && qtyMatch[1].trim()) {
+  if (qtyMatch && qtyMatch[1].trim() && (qtyMatch[3] !== undefined || amounts.length >= 2)) {
     const q = Number(qtyMatch[2].replace(',', '.'))
     if (Number.isFinite(q)) {
       quantity = q
@@ -400,8 +448,12 @@ export function validateInvoiceTotals(invoice: InvoiceInput): InvoiceTotalsResul
   }
   const agree = (a: number, b: number): boolean => Math.abs(a - b) < MONEY_EPS
 
-  // 1. line items sum to the net total.
-  if (totals.netTotal !== undefined && lineItems.length > 0) {
+  // 1. line items sum to the net total — only when every line item shares ONE currency (F3
+  // single-currency guard, mirroring assessCompleteness/reconcileBalances on the bank side). Summing
+  // `lineTotal` across currencies yields a meaningless cross-currency figure that would reconcile (or
+  // fail) against the net spuriously, so a >1 currency set is reported `unknown` rather than ok/mismatch.
+  const lineCurrencies = new Set(lineItems.map((li) => li.currency))
+  if (totals.netTotal !== undefined && lineItems.length > 0 && lineCurrencies.size <= 1) {
     const sum = round2(lineItems.reduce((acc, li) => acc + li.lineTotal, 0))
     record('lineItemsSumToNet', agree(sum, totals.netTotal) ? 'ok' : 'mismatch')
   } else {
