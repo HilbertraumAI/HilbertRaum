@@ -2287,7 +2287,11 @@ primitives (`parseAmount`/`parseDate`/`detectCurrency`) and the CSV formula-inje
 rule, one audited export boundary. The Unicode **word-boundary** matcher `wordIncludes` lives here too
 (audit C-1, Phase 2): both the deterministic `categorizeRow` and the LLM `prefilterCategory` now call it,
 so a coincidental substring (`coffee`⊃`fee`, `atmosphere`⊃`atm`, `mühlohn`⊃`lohn`) can no longer mis-file
-a row to *Fees*/*Cash*/*Income* — and the two categorization paths agree on every description rule. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
+a row to *Fees*/*Cash*/*Income* — and the two categorization paths agree on every description rule. It now
+has a **two-sided STRICT** mode (the short, ambiguous English tokens) and a **one-sided COMPOUND** mode
+(full-audit-2026-06-29 BL-3) the rule table opts the unambiguous German keywords
+(`gebühr`/`gehalt`/`überweisung`/`bargeld`) into, so a de-AT closed compound (`kontoführungsgebühr`)
+categorizes while the C-1 guards hold (see the 2026-06-29 Phase 1 note below). The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
 `run.ts`'s `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, same no-partial-persist
 (BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
 (no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
@@ -2520,6 +2524,53 @@ missed the live `MONEY_RE`/`parseDate` bugs). Two owner decisions were taken bef
   `31/12/2026` masks while a US `12/31/2026` **leaks** — a locale-asymmetric OUTPUT. Kept best-effort and
   documented in known-limitations; a date-category toggle is a deferred higher-recall wave. There is **no**
   path where masked text is un-masked or a detected value reaches a log/audit (privacy posture unchanged).
+
+**Financial correctness (full-audit-2026-06-29, Phase 1 — BL-1/BL-2/BL-3).** A fresh 7-persona audit found
+three more correctness bugs in the SAME shared line-parser / categorizer layer, all verified by direct
+trace and fixed **test-first** through the real entry points (parsing/categorization only — no schema, IPC,
+or audit-payload change). One is HIGH (wrong figures); two are MEDIUM (silent suppression / mis-bucketing on
+the de-AT target locale).
+- **BL-1 — leading-minus sign theft (`money.ts MONEY_RE`), HIGH.** The trailing `\s*\)?-?` reached ACROSS
+  the column gap and consumed the LEADING minus of the next money token, so `2.500,00 -500,00` parsed as
+  amount −2500 / balance +500 (**BOTH** signs flipped). Because every figure flipped UNIFORMLY the running
+  chain still tied out, so `reconcileBalances` reported `ok` on confidently-wrong figures — the safety net
+  could not catch it. It triggers on ANY negative running balance / leading-minus amount (overdrafts,
+  US/international statements, and the §21 PDF-geometry path, which emits a negative balance verbatim). The
+  team's own fixtures never used a negative balance, which is why it slipped past the BL-N* round. **Fix:**
+  the trailing sign/paren region is now **SPACE-DISAMBIGUATED** — `(?:-|\s*\)|\s+-(?!\s*[-+(]?\d))?` — a
+  **glued** trailing minus (`45,90-`, the de-AT debit sign) is always consumed, a paren close is consumed,
+  and a **spaced** trailing minus is consumed only when NOT immediately followed by a figure. The
+  disambiguator is the SPACE: a glued `-` belongs to the figure on its LEFT, a `-<digit>` after a space is
+  the next figure's leading sign. This deliberately **differs** from the audit's first-pass
+  `(?:-(?!\s*[-+(]?\d))?` suggestion: once that form's `\s*` has run it also refuses the glued case and
+  would have **regressed** the common de-AT row `45,90- 1.908,20` (glued debit + running balance) to
+  +45,90. The trailing scans stay UNAMBIGUOUS (each whitespace run is followed by a disjoint atom) and the
+  lookahead is zero-width, so MONEY_RE remains ReDoS-linear (the 200k-char regression test stays green).
+  Residual: a SPACED trailing minus immediately before a balance figure (`45,90 - 1.908,20`) reads positive
+  — genuinely indistinguishable from subtraction (known-limitations).
+- **BL-2 — figure-region currency (`bank-statement.ts parseLine`), MEDIUM.** Per-row `detectCurrency(line)`
+  scanned the WHOLE line including the free-text description, so a EUR row whose memo read `Netflix USD
+  subscription` was tagged USD → the row-currency set grew → `summarizeCashflow` returned no single total,
+  `reconcileBalances` marked **every** row `unknown`, and `assessCompleteness` dropped to `unverified`. One
+  description string silently killed totalling for the whole statement. **Fix:** detect the per-row currency
+  only in the **figure region** (`rest.slice(matches[0].index)` — the text from the first money token on),
+  falling back to the statement currency. A currency WORD in the description is ignored; a GENUINE
+  foreign-currency row (code/symbol printed NEXT TO the amount, inside the figure region) is still detected,
+  so mixed-currency honesty is preserved — preferred over `statementCurrency ?? detectCurrency`, which would
+  silently sum a truly-mixed line in one currency.
+- **BL-3 — German closed-compound categorization (`money.ts wordIncludes`), MEDIUM (de-AT target locale).**
+  The C-1 two-sided word boundary (which stopped `fee`⊂`coffee`) ALSO stopped the de-AT keywords from ever
+  matching, because German fuses keywords into closed compounds where the keyword sits at a word edge on
+  only ONE side (`kontoführungs+gebühr`, `gehalts+zahlung`) — so account/bank **fees** fell through to the
+  generic Spending bucket and überweisung/gehalt compounds missed. **Fix:** `wordIncludes(haystack, needle,
+  compound)` gains a **COMPOUND** mode (a boundary on EITHER side suffices — one-sided, not raw substring,
+  so a keyword buried with letters on both sides is still rejected); the rule table opts the **unambiguous**
+  DE keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`) in via a per-rule `compound: true`. Short English
+  tokens (`fee`/`atm`/…) and the ambiguous `lohn` (⊂ `muehlohn`/`Belohnung`; income is covered by the
+  positive-sign fallback) stay **STRICT**, so no C-1 false positive returns. Both `categorizeRow` and
+  `prefilterCategory` thread the flag, so the two deterministic paths still **agree** (the C-1 invariant).
+  The flag is **matching-only** — `run.ts` seeds just `match_kind`/`pattern` into `bank_category_rules`
+  (transparency), so nothing is persisted and no schema change is needed.
 
 ### §11 IPC / audit surface
 

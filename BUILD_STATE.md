@@ -6,6 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 1 (FINANCIAL CORRECTNESS; BL-1/BL-2/BL-3) —
+branch `full-audit-2026-06-29-fixes`.** Suite now **2426 passed / 39 skipped (2465 collected)** (was
+2417/39 at Phase 0 → **+9 fixtures**), typecheck clean, `npm run build` green. Parsing/categorization only
+— no schema, IPC, or audit-payload change (figures stay content-class). Each finding fixed **test-first**
+through the REAL entry points (`extractTransactionRows`/`reconcileBalances`/`summarizeCashflow`/
+`categorizeRow`/`prefilterCategory`), reproduction confirmed RED before the fix, with the pre-existing
+money/bank/invoice suite green after each. One commit per finding (6d5eea2 BL-1, 71c3fb8 BL-2, 3a3e93a BL-3).
+- **BL-1 (HIGH, release-blocking) — leading-minus sign theft (`money.ts MONEY_RE`).** The trailing
+  `\s*\)?-?` reached across the column gap and stole the NEXT figure's leading minus, so `2.500,00 -500,00`
+  parsed as amount −2500 / balance +500 (BOTH flipped); the uniform flip kept the running chain consistent,
+  so `reconcileBalances` blessed the wrong figures `ok`. Fixed with a **space-disambiguated** trailing region
+  `(?:-|\s*\)|\s+-(?!\s*[-+(]?\d))?`: a GLUED `-` is a de-AT debit (always consumed), a `-<digit>` after a
+  space is the next figure's leading sign (left alone). **Deliberately diverged from the audit's literal
+  `(?:-(?!\s*[-+(]?\d))?` suggestion**, which would have regressed the common de-AT row `45,90- 1.908,20`
+  (glued debit + running balance) to +45,90 — verified by trace. Stays ReDoS-linear (200k-char test green).
+  Residual (known-limitations): a SPACED trailing minus before a balance (`45,90 - 1.908,20`) reads positive
+  — indistinguishable from subtraction.
+- **BL-2 (MEDIUM) — figure-region currency (`bank-statement.ts parseLine`).** Per-row `detectCurrency(line)`
+  scanned the whole line incl. the description, so a `USD`/`$` in a payee memo tagged a EUR row foreign →
+  the whole statement's total/reconciliation collapsed to the mixed-currency refusal. Now detects only in the
+  **figure region** (`rest.slice(matches[0].index)`), falling back to the statement currency; a genuine
+  foreign-currency row (code/symbol next to the amount) is still detected, so mixed-currency honesty holds.
+- **BL-3 (MEDIUM, de-AT target) — German closed-compound categorization (`money.ts wordIncludes`).** The C-1
+  two-sided boundary stopped de-AT keywords from ever matching a closed compound (`kontoführungsgebühr`),
+  dropping fees into Spending. Added a **one-sided COMPOUND** mode to `wordIncludes`; the rule table opts the
+  unambiguous DE keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`) in via `compound: true`. English tokens
+  and the ambiguous `lohn` stay STRICT (no C-1 regression); `categorizeRow` + `prefilterCategory` thread the
+  flag so the two paths still agree (C-1 invariant). Matching-only — not persisted (`run.ts` seeds only
+  `match_kind`/`pattern`). The prior test pinning the now-buggy `Kontoführungsgebühr→Spending` was corrected.
+- **Docs:** `architecture.md` §8 — new "Financial correctness (full-audit-2026-06-29, Phase 1)" subsection +
+  the `wordIncludes` paragraph; `docs/known-limitations.md` — sign-by-space + figure-region-currency +
+  compound-categorization bullets and the residuals, "Last updated" bumped.
+- **NEXT ACTION (owner):** BL-1 was the release-blocking item — it is closed. Remaining phases on this branch:
+  P2 runtime reliability (REL-1/2/3), P3 test-enforcement gaps (TEST-2…5), P4 renderer/determinism, P5
+  resident-cache incremental, P6 docs + close-out (the §26 ledger). Do NOT auto-merge/push — left to the owner._
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 0 (DE-FLAKE THE SUITE; TEST-1) — branch
 `full-audit-2026-06-29-fixes`.** Suite now reliably **2417 passed / 39 skipped (2456 collected)**,
 confirmed stable across **3 consecutive full `npm test` runs**; `npm run build` green. Test-only change

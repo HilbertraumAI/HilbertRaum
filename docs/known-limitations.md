@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6). Prior: 2026-06-28 (backend audit 2026-06-27 Phase 3: transcription/dictation/OCR self-recovery — REL-1/2/3)._
+_Last updated: 2026-06-29 (full-audit-2026-06-29 Phase 1 — financial correctness: space-disambiguated sign reading (BL-1), figure-region per-row currency (BL-2), German closed-compound categorization (BL-3); extended the bank/invoice line-parser + categorizer bullets under "Document tasks & summaries"). Prior: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -425,6 +425,22 @@ password recovery — are documented in
     and no balance, or a description figure that lands in the amount slot) the position heuristic can still
     pick wrong. The **geometry column model** (above) is the stronger separator where it runs; this is the
     plain-text / CSV / invoice fallback.
+  - **A figure's sign is read by the SPACE around a minus (full-audit-2026-06-29 BL-1).** A **glued**
+    trailing minus is a de-AT debit (`45,90-` → −45,90, even with a running balance after it); a `-<digit>`
+    after a space is the next figure's **leading** sign (`2.500,00 -500,00` → +2500 then −500). This
+    replaced an earlier trailing `-?` that reached across the column gap and stole the next figure's leading
+    minus, flipping both signs while the running chain still tied out (a confidently-wrong total `ok`-rated
+    by reconciliation). **Residual:** the genuinely-ambiguous **spaced** trailing minus immediately before a
+    balance figure (`45,90 - 1.908,20`) reads as a *positive* amount — no parser can distinguish it from
+    subtraction; the glued de-AT convention (`45,90-`) is the unambiguous one and is read correctly.
+  - **Per-row currency is detected only in the FIGURE REGION (full-audit-2026-06-29 BL-2).** The row's
+    currency is read from the text **at/after the first money token**, not the free-text description, so a
+    payee memo mentioning `USD`/`$` on a EUR statement no longer tags that row a foreign currency (which
+    used to suppress the whole statement's total + reconciliation). A genuine foreign-currency row whose
+    code/symbol prints **next to** the amount is still detected (mixed-currency honesty preserved).
+    **Residual:** a foreign symbol **glued immediately before** the only figure with no other adjacency
+    (`$50,00` as a row's sole token) can be missed and falls back to the statement currency — harmless on a
+    single-currency statement, a rare mis-tag on a truly mixed one.
   - **Grouped figures without a 2-dp decimal are read as thousands.** A bare `1.000`/`2.500` (de-AT dot =
     thousands), space-grouped `1 234 567,89`, and Swiss-apostrophe `1'234.56` are now read whole. The
     trade-off (accepted, DECISION 2): a **dotted/grouped reference number** in a description — `Rechnung
@@ -450,6 +466,13 @@ password recovery — are documented in
   only shifts the breakdown, never the **verified statement total** or the **D56 completeness gate** (which
   read the signed amounts, not the labels). The breakdown is shown with an explicit "model-assisted" note.
   With **no model loaded** it degrades to the deterministic rule pass (a smaller, coarser category set).
+  The deterministic rules match German keywords **inside closed compounds** (full-audit-2026-06-29 BL-3:
+  `kontoführungsgebühr`→Fees, `gehaltszahlung`→Income) via a one-sided word boundary on the unambiguous DE
+  keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`), while short English tokens (`fee`/`atm`) and the
+  ambiguous `lohn` keep a strict two-sided boundary. **Residuals:** `lohn` is NOT compound-matched (so a
+  `monatslohn` *debit* is not deterministically Income — a positive salary is still caught by the sign
+  fallback), and the compound `gehalt` could in principle over-match a non-salary compound
+  (`alkoholgehalt`) — neither moves a verified figure, only the model-assisted breakdown.
   Categorization runs in the **doctask lane** (D26 — one job at a time), so it cannot run while chat
   streams. Categories are grouped on a **canonical English identifier** (stable across UI locale — the
   enum and the model-assisted detection key on it), but the breakdown **display labels are localized**
