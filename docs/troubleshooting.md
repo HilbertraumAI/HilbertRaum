@@ -89,7 +89,7 @@ may be incomplete or corrupted. Re-copy the weight file, then run the verifier:
 .\scripts\verify-models.ps1 -Target E:\         # Windows
 ```
 ```bash
-scripts/verify-models.sh --target /Volumes/PRIVATE_AI_DRIVE   # macOS/Linux
+scripts/verify-models.sh --target /Volumes/HILBERTRAUM   # macOS/Linux
 ```
 
 On a developer drive, unverified models are allowed; a commercial drive requires a matching

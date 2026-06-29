@@ -306,7 +306,7 @@ final check: commercial posture (encrypted, network denied) + all weights VERIFI
 ```
 ```bash
 # macOS / Linux
-scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --app-artifact ./apps/desktop/release/Private\ AI\ Drive\ Lite.app
+scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --app-artifact ./apps/desktop/release/HilbertRaum.app
 ```
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
