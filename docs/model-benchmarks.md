@@ -154,7 +154,7 @@ accumulate dead multi-GB downloads. Then update:
   catalog table (drop the "challenger — not auto-recommended" note),
 - every manifest's `recommended_min_ram_gb` with the Part-C measured value,
 - **D18:** decide whether `qwen3-4b-instruct-2507-q4` beats the original 4B (and the original
-  8B) — especially on `em_rate_de` / `f1_de` (the §4.6 German wobble). Promoting it to default
+  8B) — especially on `em_rate_de` / `f1_de` (the §7.3 German wobble). Promoting it to default
   is a product call because 2507 has no hybrid thinking (Deep becomes a no-op on the default).
 - **Gemma flag:** decide whether to flip `gemma4-12b-it-qat-q4`'s `supports_thinking_mode` to
   `true` based on its Deep-mode quality numbers (it already honours `enable_thinking`; §7.3).

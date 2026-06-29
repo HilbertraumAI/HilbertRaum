@@ -845,7 +845,7 @@ spread the distribution and make a floor meaningful; revisit only with a prefix 
 
 ### 12.3 Resource budget (8 GB machines) + measured validation
 
-Reranker ≈ **1.3 GB RSS** when active (F16 1.08 GiB + ctx 2048); worst case alongside
+Reranker ≈ **1.3 GB RSS** when active (F16 1.16 GB + ctx 2048); worst case alongside
 4B chat (~2.6 GB) + E5 (~0.35 GB) + Electron (~1 GB) ≈ 5.3 GB — workable because the
 reranker is lazy, CPU-pinned, and opt-in by provisioning — it IS in the DIY `prepare-drive
 --with-assets` default fetch set, but is flagged `bundled_on_preconfigured_drive: false`

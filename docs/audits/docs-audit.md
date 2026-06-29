@@ -15,8 +15,9 @@
 - **Auditor note:** This is a **documentation-only** audit. No application code was modified. Code
   and config were read **only** to verify factual documentation claims (npm scripts, script files,
   runtime pin, the image-history persistence behavior, the demo-mode button label).
-- **Report status:** IN PROGRESS — Phase 1 (DOC-001, DOC-002, DOC-003) and Phase 2 (DOC-004,
-  DOC-005, DOC-012) Fixed (2026-06-29); remaining phases (3–6) Open. See the Remediation log.
+- **Report status:** IN PROGRESS — Phase 1 (DOC-001, DOC-002, DOC-003), Phase 2 (DOC-004,
+  DOC-005, DOC-012), and Phase 3 (DOC-008, DOC-009 Fixed; DOC-006 Superseded / accepted-by-policy)
+  done (2026-06-29); remaining phases (4–6) Open. See the Remediation log.
 
 ## How to use this report
 
@@ -59,8 +60,10 @@ Lite.app", DOC-004) and the example macOS volume label is inconsistent across do
 
 **Recommended first phase:** ~~**Phase 1 — user-facing accuracy fixes** (DOC-001, DOC-002,
 DOC-003)~~ ✅ **DONE (2026-06-29)**. ~~Phase 2 — brand & naming consistency (DOC-004, DOC-005,
-DOC-012)~~ ✅ **DONE (2026-06-29)**. **Next:** Phase 3 — cross-link & anchor hygiene (DOC-006,
-DOC-008, DOC-009): `/docs-fix phase 3`.
+DOC-012)~~ ✅ **DONE (2026-06-29)**. ~~Phase 3 — cross-link & anchor hygiene (DOC-006, DOC-008,
+DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded / accepted-by-policy).
+**Next:** Phase 4 — header freshness & superseded markers (DOC-007, DOC-010, DOC-011):
+`/docs-fix phase 4`.
 
 **Estimated effort:** Phase 1 ≈ 30 min. Whole remediation ≈ 3–4 hours, most of it the two new files
 (CHANGELOG, CODE_OF_CONDUCT) and the header-freshness sweep.
@@ -76,14 +79,14 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 | `PRIVACY.md` | Plain-language privacy notice | Good | Correct on image-history persistence. |
 | `LICENSE` | GPL-3.0-or-later full text | Good | Matches `package.json` `license`. |
 | `CLAUDE_HilbertRaum_MVP.md` | Original frozen product/architecture spec | Unclear | DOC-016: frozen historical spec; resolved "open questions" + superseded specifics may mislead. |
-| `BUILD_STATE.md` | Live build-state / handoff log (~815 KB) | Needs update | DOC-006: 32 broken links (retired plans + `filing-suggestions.ts`). |
+| `BUILD_STATE.md` | Live build-state / handoff log (~815 KB) | Good | DOC-006 (32 broken links — retired plans + logged-as-deleted `filing-suggestions.ts`) **Superseded / accepted-by-policy** (Phase 3): correct as a chronological record; not rewritten. |
 | `docs/architecture.md` | System design + design records (~477 KB) | Needs update | DOC-007 stale header (06-28 vs 06-29 content). Otherwise consistent. |
-| `docs/rag-design.md` | Retrieval pipeline design records | Needs update | DOC-007 stale header; DOC-009 reranker size vs ledger. |
+| `docs/rag-design.md` | Retrieval pipeline design records | Needs update | DOC-009 reranker size fixed (Phase 3); DOC-007 stale header remains (Phase 4). |
 | `docs/security-model.md` | Threat model, vault, offline guard, audit log | Needs update | DOC-007 stale header. Content otherwise correct. |
 | `docs/known-limitations.md` | Consciously-accepted gaps | Good | Correct on OCR + image history. References an unwritten `update-bundles-plan.md` (intended). |
 | `docs/design-guidelines.md` | UI/UX + brand + copy guidelines | Needs update | DOC-010: §11.2 superseded blue accent not flagged. |
 | `docs/model-policy.md` | Manifest schema, roles, license gate | Good | Detailed and consistent. |
-| `docs/model-benchmarks.md` | Measured speed/RAM/quality + harness | Needs update | DOC-008: broken intra-doc anchor "§4.6". |
+| `docs/model-benchmarks.md` | Measured speed/RAM/quality + harness | Good | DOC-008 (broken intra-doc anchor "§4.6"→"§7.3") fixed (Phase 3). No open findings. |
 | `docs/packaging.md` | Portable build, sidecars, drive build | Good | DOC-004 (macOS `.app` example) fixed (Phase 2). No open findings. |
 | `docs/drive-layout.md` | On-drive directory layout | Good | DOC-005 (`PRIVATE_AI_DRIVE`→`HILBERTRAUM`) fixed (Phase 2). No open findings. |
 | `docs/user-guide.md` | End-user walkthrough of every screen | Needs update | DOC-001 (images) + DOC-003 fixed (Phase 1); DOC-011 remains (Phase 4). |
@@ -102,10 +105,10 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 | DOC-003 | "Start mock runtime" button label renamed to "Try in demo mode" | Medium | High | Accuracy / Consistency | Fixed | `README.md`, `user-guide.md`, `troubleshooting.md`, `sample-data/README.md` | 1 |
 | DOC-004 | Stale pre-rebrand product name "Private AI Drive Lite.app" | Medium | High | Consistency / Accuracy | Fixed | `packaging.md` | 2 |
 | DOC-005 | Inconsistent example volume label (`HILBERTRAUM` vs `PRIVATE_AI_DRIVE`) | Medium | High | Consistency | Fixed | `drive-layout.md`, `troubleshooting.md` | 2 |
-| DOC-006 | `BUILD_STATE.md` broken links to retired plans + source files | Low | High | Navigation | Open | `BUILD_STATE.md` | 3 |
+| DOC-006 | `BUILD_STATE.md` broken links to retired plans + source files | Low | High | Navigation | Superseded | `BUILD_STATE.md` | 3 |
 | DOC-007 | Stale "Last updated" headers (content newer than header) | Low | High | Maintainability | Open | `architecture.md`, `rag-design.md`, `security-model.md`, `SECURITY.md` | 4 |
-| DOC-008 | Broken intra-doc anchor "§4.6" (should be §7.3) | Low | High | Navigation | Open | `model-benchmarks.md` | 3 |
-| DOC-009 | Reranker size "1.08 GiB" contradicts §26 ledger "1.16 GB" | Low | Medium | Consistency | Open | `rag-design.md` | 3 |
+| DOC-008 | Broken intra-doc anchor "§4.6" (should be §7.3) | Low | High | Navigation | Fixed | `model-benchmarks.md` | 3 |
+| DOC-009 | Reranker size "1.08 GiB" contradicts §26 ledger "1.16 GB" | Low | Medium | Consistency | Fixed | `rag-design.md` | 3 |
 | DOC-010 | §11.2 present-tense blue accent superseded by teal, not flagged | Low | Medium | Accuracy / Clarity | Open | `design-guidelines.md` | 4 |
 | DOC-011 | User guide documents a "Not recommended" status never produced | Low | Medium | Accuracy | Open | `user-guide.md` | 4 |
 | DOC-012 | Manifests README calls embeddings "Q8" (shipped is F16) | Low | Medium | Clarity / Accuracy | Fixed | `model-manifests/README.md` | 2 |
@@ -307,7 +310,27 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 
 ### DOC-006: `BUILD_STATE.md` has broken links to retired plan files and a renamed source file
 
-- **Status:** Open
+- **Status:** Superseded / accepted-by-policy (2026-06-29) — **No `BUILD_STATE.md` edit made; this is
+  the deliberate disposition, per the finding's own doc-update note** ("mark this finding `Superseded`
+  … rather than churning 800 KB of history"). Both broken-link classes are correct as a chronological
+  record and should not be rewritten:
+  - **Retired-plan links** (`image-understanding-plan.md`, `context-compaction-plan.md`,
+    `brand-refresh-plan.md`, `full-doc-skills-plan.md`, `skills-s11-plan.md`, `skills-plan.md`,
+    `whole-document-analysis-plan.md`, `document-organization-plan.md`,
+    `performance-audit-2026-06-18.md`) break **by design** under the `CLAUDE.md` doc-lifecycle rule:
+    finished plans are condensed into §-numbered topic-doc design records and **deleted**, with the
+    full original kept in git history. The links breaking is the expected outcome of that rule, not a
+    defect.
+  - **`filing-suggestions.ts` (+ its two test files)** links live in **historical log entries**
+    (`BUILD_STATE.md:6312/6343/6345`) that were accurate when written — the file existed then. Its
+    later deletion is itself recorded **in the same log** at `BUILD_STATE.md:5660`
+    ("`services/filing-suggestions.ts` (**deleted**)"). Rewriting the older entries to chase the
+    deleted file would falsify the chronological handoff record.
+  - **Decision recorded so future `/docs-audit` runs skip it:** broken relative links **inside
+    `BUILD_STATE.md`** that point to (a) plan files retired under the doc-lifecycle rule or (b) source
+    paths whose later rename/deletion is logged elsewhere in the same file are **accepted by policy**.
+    A future audit should re-flag only **new** broken-link classes in `BUILD_STATE.md`, or any broken
+    link in a *non-`BUILD_STATE.md`* doc (those must stay at zero). No file changed.
 - **Severity:** Low
 - **Confidence:** High
 - **Category:** Navigation
@@ -361,7 +384,12 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 
 ### DOC-008: Broken intra-doc anchor "§4.6" in `model-benchmarks.md` (should be §7.3)
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Changed `model-benchmarks.md:157` "(the **§4.6** German wobble)" →
+  "(the **§7.3** German wobble)". Verified §7.3 exists (`### 7.3 Phase 28 — catalog wave 1`) and is the
+  section that documents the wobble: "2507 looked factually wobbly in German on *open* knowledge — it
+  did **not** recur on the grounded RAG path." The same file already cited "§7.3" correctly at line 209,
+  so the doc is now internally consistent. Validation: grep `model-benchmarks.md` for `§4.6` → no
+  matches. No code touched.
 - **Severity:** Low
 - **Confidence:** High
 - **Category:** Navigation
@@ -378,7 +406,16 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 
 ### DOC-009: Reranker RSS "1.08 GiB" in `rag-design.md` contradicts the §26 ledger ("changed to 1.16 GB")
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Changed `rag-design.md` §12.3 (line 848) "(F16 **1.08 GiB** + ctx
+  2048)" → "(F16 **1.16 GB** + ctx 2048)", matching the manifest unit and the other reconciled docs.
+  Verified the canonical figures: `bge-reranker-v2-m3.yaml` `size_on_disk_gb: 1.16` /
+  `display_name: BGE Reranker v2 M3 (F16)`, and `model-policy.md:33` already reads "~1.16 GB"
+  (reconciled by the §26 ledger). **Clarification of the finding's premise:** the architecture.md §26
+  ledger entry **DOC-3** actually records that it corrected the *manifest* (`size_on_disk_gb` 1.08
+  GiB-mislabel → 1.16) and *`model-policy.md`* ("~1.08 GB" → "~1.16 GB") — it did **not** name
+  `rag-design.md` §12.3. So the ledger did not over-claim; §12.3 was simply the remaining laggard,
+  now aligned (decimal GB, `1159776896 B / 1e9 ≈ 1.16`). Validation: grep `rag-design.md` for `1.08`
+  → no matches. No code touched.
 - **Severity:** Low
 - **Confidence:** Medium
 - **Category:** Consistency
@@ -541,7 +578,7 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 | C3 | `README.md` / `user-guide.md` / `troubleshooting.md` **vs** app (`en.ts`) | "Start mock runtime" vs UI label "Try in demo mode" (literal banned by copy-tone test) | The app's i18n label | Replace label in all docs (also `sample-data/README.md`) | DOC-003 (**Resolved**, Phase 1) |
 | C4 | `packaging.md` (macOS example) **vs** the rebrand + the `.exe` example | "Private AI Drive Lite.app" vs "HilbertRaum" | Rebrand → HilbertRaum | Rename the example artifact | DOC-004 (**Resolved**, Phase 2) |
 | C5 | `drive-layout.md` / `troubleshooting.md` **vs** `README.md` / `packaging.md` | `/Volumes/PRIVATE_AI_DRIVE` vs `/Volumes/HILBERTRAUM` | Rebrand → HILBERTRAUM | Standardize on HILBERTRAUM | DOC-005 (**Resolved**, Phase 2) |
-| C6 | `rag-design.md` §12.3 **vs** `architecture.md` §26 ledger | reranker "1.08 GiB" vs "changed to 1.16 GB" | Manifest `size_on_disk_gb: 1.16` | Reconcile to 1.16 GB | DOC-009 |
+| C6 | `rag-design.md` §12.3 **vs** `architecture.md` §26 ledger | reranker "1.08 GiB" vs "changed to 1.16 GB" | Manifest `size_on_disk_gb: 1.16` | Reconcile to 1.16 GB | DOC-009 (**Resolved**, Phase 3) |
 | C7 | `design-guidelines.md` §11.2 **vs** §4.2/§13 | present-tense blue `#2f6fed` vs retired-for-teal | §13 brand refresh (teal) | Mark §11.2 superseded | DOC-010 |
 | C8 | `user-guide.md` **vs** `known-limitations.md` | documents a "Not recommended" status vs "declared but never produced" | known-limitations.md / code | Remove or footnote the status | DOC-011 |
 
@@ -565,14 +602,18 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 
 ## Broken or weak references
 
-- **Broken relative links:** 32, **all in `BUILD_STATE.md`** (DOC-006) — retired plan files
+- **Broken relative links:** 32, **all in `BUILD_STATE.md`** (DOC-006, **Superseded / accepted-by-policy**
+  Phase 3) — retired plan files
   (`image-understanding-plan.md`, `context-compaction-plan.md`, `brand-refresh-plan.md`,
   `full-doc-skills-plan.md`, `skills-s11-plan.md`, `skills-plan.md`,
   `whole-document-analysis-plan.md`, `document-organization-plan.md`,
   `performance-audit-2026-06-18.md`) + source paths `apps/desktop/src/main/services/filing-suggestions.ts`
-  and its two test files. **All other docs: zero broken links.**
-- **Broken intra-doc anchor:** `model-benchmarks.md:157` "§4.6" (no such section; should be §7.3) —
-  DOC-008.
+  and its two test files. These break **as a correct chronological record** (retired plans live in git
+  history per the doc-lifecycle rule; the `filing-suggestions.ts` deletion is itself logged at
+  `BUILD_STATE.md:5660`) and are accepted by policy — not rewritten. **All other docs: zero broken
+  links.**
+- **Broken intra-doc anchor:** `model-benchmarks.md:157` "§4.6" → "§7.3" — DOC-008 (**Resolved**,
+  Phase 3).
 - **References to not-yet-written docs (intended, not defects):** `known-limitations.md:199` →
   `docs/update-bundles-plan.md` (Phase 22 is explicitly still open; the doc is to be written before
   that code). No action.
@@ -619,20 +660,27 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 - **Acceptance criteria:** Example brand/volume names consistent with `README.md`.
 - **Risks:** Low. **Rollback:** single-commit revert.
 
-### Phase 3: Cross-link & anchor hygiene
+### Phase 3: Cross-link & anchor hygiene — ✅ DONE (2026-06-29)
 
 - **Goal:** Fix dead/contradictory references.
-- **Findings included:** DOC-006, DOC-008, DOC-009.
-- **Documents affected:** `BUILD_STATE.md`, `model-benchmarks.md`, `rag-design.md`.
-- **Exact intended changes:** Fix `model-benchmarks.md:157` "§4.6"→"§7.3"; reconcile rag-design.md
-  §12.3 reranker size to "1.16 GB"; decide BUILD_STATE.md retired-plan-link policy (de-link with a
-  "retired" note, or record an accepted-by-policy decision here) and fix/de-link `filing-suggestions.ts`.
-- **Code/config verification required:** Confirm `filing-suggestions.ts` current path; confirm reranker
-  manifest size.
-- **Validation steps:** Re-run the relative-link scan; confirm §7.3 exists.
-- **Acceptance criteria:** Link scan count for non-BUILD_STATE docs stays 0; BUILD_STATE policy
-  recorded; anchor + reranker figure consistent.
-- **Risks:** Low (BUILD_STATE is large — prefer minimal edits). **Rollback:** revert.
+- **Findings included:** DOC-006 (**Superseded / accepted-by-policy**), DOC-008 (Fixed), DOC-009 (Fixed).
+- **Documents affected:** `docs/model-benchmarks.md`, `docs/rag-design.md` (`BUILD_STATE.md` left
+  unchanged by policy).
+- **Changes made:** `model-benchmarks.md:157` "§4.6"→"§7.3" (verified §7.3 documents the German
+  wobble); `rag-design.md` §12.3 reranker size "1.08 GiB"→"1.16 GB" (matches manifest
+  `size_on_disk_gb: 1.16` + the already-reconciled `model-policy.md:33` "~1.16 GB"); **DOC-006
+  decided accepted-by-policy** — the 32 broken `BUILD_STATE.md` links are correct as a chronological
+  record (retired plans live in git history per the doc-lifecycle rule; the `filing-suggestions.ts`
+  deletion is logged at `BUILD_STATE.md:5660`), so the 815 KB log was **not** churned. Decision
+  recorded under DOC-006 so future audits skip these and re-flag only *new* `BUILD_STATE.md`
+  broken-link classes / any broken link in a non-`BUILD_STATE.md` doc.
+- **Code/config verification done:** `filing-suggestions.ts` confirmed deleted (logged at
+  `BUILD_STATE.md:5660`); reranker manifest `bge-reranker-v2-m3.yaml` confirmed `size_on_disk_gb: 1.16`.
+- **Validation performed:** grep `model-benchmarks.md` `§4.6` → 0; grep `rag-design.md` `1.08` → 0;
+  §7.3 confirmed present and on-topic; non-`BUILD_STATE.md` broken-link count unchanged at 0.
+- **Acceptance criteria:** Met — anchor + reranker figure consistent; BUILD_STATE policy recorded;
+  non-BUILD_STATE link scan stays 0.
+- **Risks:** Low (BUILD_STATE deliberately untouched). **Rollback:** revert the two doc edits.
 
 ### Phase 4: Header freshness & superseded markers
 
@@ -678,9 +726,11 @@ DOC-008, DOC-009): `/docs-fix phase 3`.
 2. ~~**Phase 2**~~ ✅ **DONE (2026-06-29)** — finished the rebrand (macOS `.app` example, the
    `PRIVATE_AI_DRIVE`→`HILBERTRAUM` volume label, embeddings F16-not-Q8), removing drive-builder
    confusion.
-3. **Phase 3** (NEXT) — reference hygiene; small and mechanical (defer the 815 KB BUILD_STATE edits or
-   make them a policy decision to avoid churn).
-4. **Phase 4** — header/freshness truthfulness; do after content fixes so dates reflect the final state.
+3. ~~**Phase 3**~~ ✅ **DONE (2026-06-29)** — reference hygiene: fixed the `model-benchmarks.md` §4.6→§7.3
+   anchor and the `rag-design.md` §12.3 reranker figure; the 815 KB `BUILD_STATE.md` edits were resolved
+   as a **policy decision** (broken retired-plan / logged-as-deleted links accepted-by-policy) rather
+   than churned.
+4. **Phase 4** (NEXT) — header/freshness truthfulness; do after content fixes so dates reflect the final state.
 5. **Phase 5** — additive new files; no risk to existing docs.
 6. **Phase 6** — clarity polish on historical docs; least urgent.
 
@@ -693,3 +743,4 @@ with others (it carries the user-trust risk and deserves a focused review).
 |---|---|---|---|---|---|---|
 | 2026-06-29 | Phase 1 — DOC-001, DOC-002, DOC-003 | `docs/user-guide.md`, `docs/troubleshooting.md`, `SECURITY.md`, `README.md`, `sample-data/README.md`, `docs/audits/docs-audit.md` | **DOC-001:** rewrote the user-guide §8 and troubleshooting image passages from "are not saved / never saved" to the persisted-encrypted-deletable image-history posture (`workspace/images/`, encrypted at rest, revisit + delete from Images screen); clarified that `Remove` returns to the landing view and does not delete the saved session. **DOC-002:** replaced `SECURITY.md:78` false "OCR not included in Lite" with an accurate on-device-only (deu+eng tesseract, no cloud OCR) statement. **DOC-003:** "Start mock runtime" → "Try in demo mode" + de-jargoned nearby prose in README/user-guide/troubleshooting **and** the audit-missed `sample-data/README.md`. | Re-read edited passages against `PRIVACY.md`, `vision/history.ts`, `ImagesScreen.tsx` (Remove vs Delete), `drive-layout.md`/`model-policy.md` (OCR scope), `en.ts:700`, `copy-tone.test.ts`. Greps: image `not saved/never saved` → only unrelated voice-dictation remains; `SECURITY.md` OCR → only corrected line; `Start mock runtime` → only intentional historical rename records remain. | Fixed | DOC-007 (SECURITY.md stale 2026-06-15 header) still open → Phase 4. No code changed; doc suite/links unaffected. |
 | 2026-06-29 | Phase 2 — DOC-004, DOC-005, DOC-012 | `docs/packaging.md`, `docs/drive-layout.md`, `docs/troubleshooting.md`, `model-manifests/README.md`, `docs/audits/docs-audit.md` | **DOC-004:** macOS `--app-artifact` example `packaging.md:309` `Private\ AI\ Drive\ Lite.app` → `HilbertRaum.app` (matches the `.exe` example + the rebrand). **DOC-005:** standardized the example macOS volume label on `HILBERTRAUM` — `drive-layout.md` sketch header `PRIVATE_AI_DRIVE/`→`HILBERTRAUM/` (line 57) + all four `/Volumes/PRIVATE_AI_DRIVE` examples (lines 149–152), and `troubleshooting.md:92`. **DOC-012:** `model-manifests/README.md:9` embeddings "Q8" → "F16" with a note that the `-q8` manifest id is a stable opaque identifier, not a quant claim, and that Q8 crashes the pinned runtime. | Greps after fix: `Private AI Drive` → only `BUILD_STATE.md` historical note + this report; `PRIVATE_AI_DRIVE` (docs) → only the frozen spec `CLAUDE_HilbertRaum_MVP.md` (DOC-016) + `BUILD_STATE.md` note + this report. DOC-012 verified against `multilingual-e5-small-q8.yaml` (`display_name: …(F16)`) and `model-policy.md` (lines 32, 37–46). | Fixed | **Follow-up (out of `/docs-fix` scope):** the same stale `/Volumes/PRIVATE_AI_DRIVE` example string appears in `#` usage-comments + one `echo` in `scripts/{fetch-models,fetch-runtime,prepare-drive,verify-models,setup-dev}.sh`; no script *logic* depends on it (it is the user-supplied `--target`). Update those comments in a separate code-touching pass if desired. The frozen spec `CLAUDE_HilbertRaum_MVP.md` retains the old label by design (DOC-016, Phase 6). No code changed. |
+| 2026-06-29 | Phase 3 — DOC-006, DOC-008, DOC-009 | `docs/model-benchmarks.md`, `docs/rag-design.md`, `docs/audits/docs-audit.md` | **DOC-008:** `model-benchmarks.md:157` broken intra-doc anchor "(the **§4.6** German wobble)" → "(the **§7.3** German wobble)" — §4 has no subsections; §7.3 is where the wobble is documented (line 209 already cited §7.3). **DOC-009:** `rag-design.md` §12.3 (line 848) reranker size "(F16 **1.08 GiB** + ctx 2048)" → "(F16 **1.16 GB** + ctx 2048)", aligning the lone laggard with the manifest unit and `model-policy.md`. **DOC-006:** **Superseded / accepted-by-policy** — the 32 broken `BUILD_STATE.md` links (retired plans + `filing-suggestions.ts`) are correct as a chronological record; decision recorded so future audits skip them. `BUILD_STATE.md` left unchanged (815 KB log not churned). | grep `model-benchmarks.md` `§4.6` → 0; grep `rag-design.md` `1.08` → 0; §7.3 confirmed present and documents the wobble; reranker figure cross-checked against `bge-reranker-v2-m3.yaml` (`size_on_disk_gb: 1.16`) + `model-policy.md:33` ("~1.16 GB"); `filing-suggestions.ts` deletion confirmed logged at `BUILD_STATE.md:5660`; non-BUILD_STATE broken-link count unchanged at 0. | Fixed (DOC-008, DOC-009); Superseded (DOC-006) | DOC-007 (`rag-design.md`/`SECURITY.md`/etc. stale `_Last updated:_` headers) still open → Phase 4. No code changed. |
