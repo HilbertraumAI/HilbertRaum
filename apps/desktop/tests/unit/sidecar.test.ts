@@ -530,6 +530,45 @@ describe('LlamaServer', () => {
     expect(signals).toContain('SIGKILL')
   })
 
+  // T1 (post-merge audit Phase 5): the SIGTERM-ignore → SIGKILL escalation must be teeth-tested
+  // at the UNIT tier. The file's `FakeChild.kill()` exits on ANY signal, so stop() always settles
+  // on the "exited" branch and never reaches the escalation — the one path the line-572 comment
+  // warns can be silently unwired (gating on `child.killed`, which is true the instant a signal is
+  // SENT, would skip the SIGKILL entirely and orphan a process that ignored SIGTERM). This child
+  // RECORDS each signal but only dies on SIGKILL — the LlamaServer mirror of the transcriber's
+  // `makeStubbornChild(['SIGKILL'])` (REL-2). Teeth-checked: reverting the line-576 gate from
+  // `this.exited` to `child.killed` drops the SIGKILL → `signals` stays `[undefined]` → this reds.
+  it('stop() escalates SIGTERM→SIGKILL when the child ignores the polite signal (T1/REL-2)', async () => {
+    const signals: Array<NodeJS.Signals | number | undefined> = []
+    class StubbornChild extends EventEmitter implements ChildProcessLike {
+      pid = 12
+      killed = false
+      kill(signal?: NodeJS.Signals | number): boolean {
+        signals.push(signal)
+        this.killed = true // real ChildProcess sets killed once a signal is SENT — even if ignored
+        if (signal === 'SIGKILL') queueMicrotask(() => this.emit('exit', null, 'SIGKILL'))
+        return true // the polite SIGTERM (no arg) is recorded but the child lives on
+      }
+    }
+    const child = new StubbornChild()
+    const spawn = (): ChildProcessLike => child
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50012,
+      healthIntervalMs: 1,
+      killGraceMs: 1 // SIGTERM is ignored → the grace window elapses → SIGKILL escalation
+    })
+    await server.start()
+    await server.stop() // resolves only via the SIGKILL escalation, not the ignored SIGTERM
+    expect(signals).toEqual([undefined, 'SIGKILL']) // polite SIGTERM first, then forceful SIGKILL
+    expect(child.killed).toBe(true)
+  })
+
   it('does NOT fire onUnexpectedExit for an exit during stop()', async () => {
     const { spawn } = fakeSpawn()
     const { fetchImpl } = healthFetch(0)

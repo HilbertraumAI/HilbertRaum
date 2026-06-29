@@ -120,6 +120,15 @@ describe('AES-256-GCM encrypt/decrypt', () => {
     blob.tag[0] ^= 0xff
     expect(() => decrypt(key, blob)).toThrow()
   })
+
+  it('rejects a length-reduced (truncated) ciphertext (T9 — unit-tier GCM truncation)', () => {
+    // Distinct from the bit-flip cases above: shortening the ciphertext changes its LENGTH, but the
+    // GCM tag was computed over the full ciphertext, so decrypt must still fail authentication. The
+    // streaming layer already covers a truncated on-disk frame; this pins the core `decrypt` itself.
+    const blob = encrypt(key, Buffer.from('truncate me — the last byte is about to vanish'))
+    blob.ciphertext = blob.ciphertext.subarray(0, blob.ciphertext.length - 1)
+    expect(() => decrypt(key, blob)).toThrow()
+  })
 })
 
 describe('serializeBlob / deserializeBlob', () => {

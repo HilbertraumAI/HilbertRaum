@@ -456,6 +456,17 @@ describe('GPU mid-session crash auto-fallback through the real manager (REL-1)',
       tokens.push(tok)
     }
     expect(tokens.join('')).toBe('hello')
+
+    // 5. T8 (post-merge audit Phase 5): `made[0].stops===1` above only counts the stop() WRAPPER —
+    //    it would still hold if stop() stopped reaching the child kill (an orphan). Pin the REAL
+    //    reap on observable child state. The crashed child already exited, so the manager correctly
+    //    does NOT re-kill it (no orphan to reap) — its `killed` stays false; what must hold is that
+    //    the LIVE restarted CPU child is genuinely killed by the manager's stop(). (DIVERGES from the
+    //    audit's literal "crashed child killed===true", which is false on correct code — the crashed
+    //    child is already dead, so stop() early-returns on `this.exited` before any kill.)
+    expect(h.children[0].child.exited).toBe(true) // the crashed GPU child is genuinely dead
+    await h.mgr.stop()
+    expect(h.children[1].child.killed).toBe(true) // stop() reached the LIVE child's kill — real reap
   })
 
   it('does NOT loop: a CPU restart that itself crashes does not auto-fall-back again', async () => {

@@ -330,12 +330,15 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     const controller = new SkillRunController()
     const runner = buildToolRunner(db, 'extract_transactions', { skillInstallId, conversationId: '', documentId: docId }, audit)!
 
-    let snapshot = controller.start({ skillInstallId, toolName: 'extract_transactions', documentCount: 1, runner })
-    for (let i = 0; i < 50 && snapshot.state === 'running'; i++) {
-      await new Promise((r) => setTimeout(r, 5))
-      snapshot = controller.get(snapshot.runHandle) ?? snapshot
-    }
-    expect(snapshot.state).toBe('done')
+    const started = controller.start({ skillInstallId, toolName: 'extract_transactions', documentCount: 1, runner })
+    // T7 (post-merge audit Phase 5): the old `for (i<50 && running) sleep(5)` was a TEST-1 sibling —
+    // bounded iterations × a fixed 5 ms sleep over mutable state (flaky under load, slow when not).
+    // vi.waitFor re-polls until the run settles (or its own deadline) — deterministic, no fixed cap.
+    let snapshot = started
+    await vi.waitFor(() => {
+      snapshot = controller.get(started.runHandle) ?? snapshot
+      expect(snapshot.state).toBe('done')
+    })
     expect(snapshot.transactionCount).toBe(1)
     expect(JSON.stringify(snapshot)).not.toContain(SENTINEL)
   })

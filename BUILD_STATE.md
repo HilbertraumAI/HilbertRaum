@@ -6,6 +6,50 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 5 (TEST-ENFORCEMENT SEAMS — prove the controls stay WIRED;
+T1/T2/T6/T7/T8 + T9 nit + T3 verify) — branch `audit-postmerge-phase5-test-seams`.** Suite **2518 passed / 39
+skipped (2557 collected)** (was 2515/39 after Phase 4 → **+3 tests**; T6/T7/T8 were conversions/strengthenings,
+not additions), typecheck clean, `npm run build` green. **TEST-ONLY phase — `git diff src/` is EMPTY** (the
+only source edits were the temporary teeth-check neuters, each restored byte-identical). Theme: **close the
+seams where a security/reliability control is correct today but no test proves it stays *wired*** — a silent
+unwiring (the control stops being called) must redden a test. Every wiring proof is **teeth-checked** (neuter
+the guarded control → the test reds → restore).
+- **T1 (Med) — SIGTERM-ignore→SIGKILL escalation, now teeth-tested at the UNIT tier.** The file's `FakeChild`
+  exits on ANY signal, so `LlamaServer.stop()` always settled on the "exited" branch and never reached the
+  escalation. New `sidecar.test.ts` test with a **stubborn child** (records each signal, dies only on SIGKILL,
+  sets `killed` when a signal is *sent*) asserts `signals == [undefined,'SIGKILL']`. **Teeth:** revert the
+  line-576 gate `this.exited` → `child.killed` → SIGKILL dropped → reds.
+- **T2 (Med) — resident-cache lock-PURGE wiring asserted at the IPC layer.** `purgeResidentVectors` (RAG-6
+  SECURITY req) was proven only at the unit tier. `workspace-ipc.test.ts` now seeds a real resident map
+  (doc→chunk→embedding→`getResidentVectors`), locks via the real IPC handler, and asserts the purge fired
+  against the LIVE db (spy delegates to the real impl, shared `caches`; arg asserted by reference — the
+  post-lock db's `isTransaction` getter throws under a deep-compare). **Teeth:** drop the purge call → spy 0× →
+  reds.
+- **T6/T7 (Low) — two TEST-1-family flakes de-flaked.** T6: GPU-probe timeout converted to fake timers
+  (`vi.advanceTimersByTimeAsync`, injected trivial `verify`); kill-on-timeout assertion preserved + teeth-
+  checked. T7: privacy-guard snapshot poll converted from `for(i<50){sleep(5)}` to `vi.waitFor`; no-secret
+  assertions preserved. (The optional `vision-runtime.test.ts` real-timer copies left — need the fakeClock
+  seam.) Verified stable across repeated runs.
+- **T8 (Low) — crash-fallback pins a REAL child reap, not just the stop()-wrapper count.** Added a final
+  `mgr.stop()` + `children[1].child.killed===true` (the LIVE restarted CPU child's genuine reap). **DIVERGED**
+  from the audit's literal "crashed child killed===true": empirically the crashed child already `exited`, so
+  `stop()` correctly early-returns on `this.exited` before any kill and its `killed` stays false (asserting
+  true reds on correct code). **Teeth:** early-return `stop()` before the kill → the live child's `killed`
+  stays false → reds (while `made[0].stops===1` still passes — exactly the gap).
+- **T9 (Low nit) — AES-GCM truncated-ciphertext unit case** added to `crypto.test.ts` (length-reduced cipher
+  still fails GCM auth; distinct from the bit-flip cases). Other T9 nits dispositioned in Phase 1 or accepted.
+- **T3 (Med, verify-only) — subsumed by F16.** `ipc-lock-coverage.test.ts` drives `registerRagIpc` against a
+  locked ctx with no exemptions → `rag:ask` is enumerated and asserted to reject with the localized copy. No
+  separate test added (confirmed green).
+- **Durable record:** architecture.md **§31 ledger** (T1/T2/T6/T7/T8/T9/T3) + the **"Test-enforcement seams"**
+  record (new **Phase-5 subsection**) + the §27 summary-row update. The audit report marks T1/T2/T6/T7/T8 closed
+  + T3 verified + Phase 5 DONE. No behavior-doc change (nothing shipped changed).
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase5-test-seams`; do NOT auto-merge/push.** Then the
+  remaining open phases: Phase 6 (renderer a11y/lifecycle F20–F24), Phase 7 (docs D1–D8), Phase 8 (RAG/perf +
+  latent-concurrency F11–F13/F18/F19). The §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part
+  B / E5-prefix remain deferred to their own phases._
+
+
 _2026-06-29 — **Post-merge full audit — Phase 4 (SECURITY CONSISTENCY HARDENING; F15/F14/F16/F17) — branch
 `audit-postmerge-phase4-security-consistency`.** Suite **2515 passed / 39 skipped (2554 collected)** (was
 2495/39 after Phase 3 → **+20 tests**), typecheck clean, `npm run build` green. Theme: **consistency gaps where

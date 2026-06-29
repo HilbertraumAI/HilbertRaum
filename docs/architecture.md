@@ -4133,7 +4133,8 @@ started** — carried in the report.
 | F2, F4, F7, F9 | 2 | **fixed (Phase 2)** — chat-regenerate data-loss (F2) + embedder/reranker bind-race start-latch (F4/F7) + compaction-failure log (F9); see the **§28 ledger** | arch §28; arch "Chat & streaming"; GPU record §5.5b |
 | F5 | 3 | **fixed (Phase 3)** — invoice extraction re-inserted a fresh invoice + line items on every analysis question (no reuse/replace/staleness, where the bank path has all three); now mirrors the bank reuse-or-re-extract gate (`extractor_version` + `isInvoiceStale` + `replaceExisting` atomic swap); see the **§29 ledger** | arch §29; arch §8 (invoice reuse/replace/staleness parity) |
 | F14, F15, F16, F17 | 4 | **fixed (Phase 4)** — security consistency: F15 mapped-IPv6 SSRF deny-list bypass, F14 diagnostics-log buffer readable after lock, F16 IPC lock-guard parity + generalized structural test (subsumes **T3**), F17 download size caps always bounded; see the **§30 ledger** | arch §30; security-model §D3 + "encrypted log" record; §25 inventory correction |
-| F11–F13, F18, F19, F20–F24, D1–D8, T1–T9 | — | **not started** — RAG/perf/concurrency F11–F13/F18/F19 (Phase 8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7), test seams T1/T2/T4/T5/T6/T7/T8/T9 (Phase 5; **T3 subsumed by F16**, T4/T5 done in Phase 1); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
+| T1, T2, T6, T7, T8, T9, T3 | 5 | **closed (Phase 5, test-only)** — test-enforcement seams: T1 SIGKILL escalation unit test, T2 resident-cache lock-purge IPC wiring, T6/T7 two TEST-1-family flakes de-flaked (fake timers / `vi.waitFor`), T8 crash-fallback real-reap assertion, T9 truncated-ciphertext nit; T3 verified subsumed by F16; T4/T5 done in Phase 1. `git diff src/` empty; see the **§31 ledger** | arch §31; "Test-enforcement seams" record (Phase-5 subsection) |
+| F11–F13, F18, F19, F20–F24, D1–D8 | — | **not started** — RAG/perf/concurrency F11–F13/F18/F19 (Phase 8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
 
 **Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
 class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
@@ -4227,6 +4228,33 @@ F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1/T2/T6/T7
 subsumed by F16's generalized lock test**); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 remain
 deferred to their own phase.
 
+### §31 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 5 — test-enforcement seams)
+
+**Phase 5** is **TEST-ONLY** — it closes the seams where a security/reliability control is correct today but
+no test proves it stays *wired* (a silent unwiring would redden nothing). Branch
+`audit-postmerge-phase5-test-seams` (suite **2518 passed / 39 skipped**, typecheck + build green). **`git diff
+src/` is empty** — the only source edits were the temporary teeth-check neuters, each restored byte-identical.
+Every new/strengthened test is **teeth-checked**: neuter the guarded control → the test reds → restore. The
+disposition for each is in the **"Test-enforcement seams"** record below (extended with a Phase-5 subsection);
+resolve a `full-audit-2026-06-29-postmerge T<n>` code comment through that record. T4/T5 landed in Phase 1; T3
+was subsumed by F16 (Phase 4).
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **T1** (Med) | 5 | **closed** — the LlamaServer **unit** suite couldn't exercise SIGTERM-ignore→SIGKILL escalation (its `FakeChild.kill()` exits on ANY signal, so `stop()` always settled on the "exited" branch). New `sidecar.test.ts` test with a **stubborn child** (records each signal, dies only on SIGKILL) asserts `signals == [undefined,'SIGKILL']`. Teeth: revert the line-576 gate `this.exited` → `child.killed` → SIGKILL dropped → reds | "Test-enforcement seams" (T1) |
+| **T2** (Med) | 5 | **closed** — the resident-cache lock-PURGE (RAG-6 SECURITY requirement) was proven only at the unit tier, never that the lock IPC *calls* it. `workspace-ipc.test.ts` now seeds a real resident map, locks, and asserts `purgeResidentVectors` fired against the LIVE db (spy delegates to the real impl, shared `caches`). Teeth: drop the purge call from the lock handler → spy 0× → reds | "Test-enforcement seams" (T2) |
+| **T6** (Low) | 5 | **closed (de-flake)** — the GPU-probe timeout test awaited a real 20 ms `setTimeout` (a TEST-1-family wall-clock flake). Converted to fake timers (`vi.advanceTimersByTimeAsync`, the combine-signals idiom) with an injected trivial `verify`; the kill-on-timeout assertion is preserved. Teeth: neuter the timeout `child.kill('SIGKILL')` → `child.killed` stays false → reds | "Test-enforcement seams" (T6) |
+| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the gpu-ipc idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
+| **T8** (Low) | 5 | **closed** — the crash-fallback test counted a monkey-patched `stop()` wrapper (`made[0].stops===1`), which still holds if `stop()` stops reaching the child kill (orphan). `runtime-manager.test.ts` now also pins the REAL reap on observable child state: a final `mgr.stop()` + `children[1].child.killed===true` (the LIVE restarted child is genuinely killed). **DIVERGED from the audit's literal "crashed child killed===true"** — the crashed child already `exited`, so `stop()` correctly early-returns before any kill (its `killed` stays false; asserting true would red on correct code). Teeth: early-return `stop()` before the kill → the live child's `killed` stays false → reds | "Test-enforcement seams" (T8) |
+| **T3** (Med) | 4 | **verified subsumed** — `ipc-lock-coverage.test.ts` (F16) drives `registerRagIpc` against a locked ctx with NO exemptions, so `rag:ask` is enumerated and asserted to reject with the localized lock copy. No separate Phase-5 test added | §30 (F16); "Test-enforcement seams" (T3) |
+| **T9** (Low, nit) | 1/5 | **partially closed** — invoice negative line totals / Gutschrift/Rabatt were pinned in Phase 1; the AES-GCM **truncated (length-reduced) ciphertext** case is added at the `crypto.ts` unit tier (`crypto.test.ts`, one assertion — distinct from the existing bit-flip cases). The `BANK_EXTRACTOR_VERSION` tautological-tripwire and the mock-embedder score-band nits are left as accepted | "Test-enforcement seams" (T9); arch §8 (Phase 1 T9) |
+
+**Posture held (Phase 5):** **no `src/` behavior change** — nothing shipped changed, so no behavior-doc
+change. Test-only. The de-flake conversions (T6/T7) removed two real-wall-clock waits (verified stable across
+repeated runs); the wiring proofs (T1/T2/T8) each redden on a one-line neuter of the control they guard.
+**Open (later phases):** F11–F13/F18/F19 RAG/perf/concurrency (Phase 8), F20–F24 renderer a11y/lifecycle
+(Phase 6), D1–D8 docs (Phase 7); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 remain deferred.
+
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 
@@ -4291,6 +4319,72 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
 Suite after Phase 3: **2446 passed / 39 skipped (2485 collected)** (was 2437/39 → **+9 tests**; TEST-5 was a
 conversion, not an addition). No `src/` behavior change — the only source edits were the temporary
 teeth-check neuters, each restored byte-identical.
+
+### Post-merge audit (2026-06-29), Phase 5 — five more seams (T1/T2/T6/T7/T8), one nit (T9), one verify (T3)
+
+The post-merge audit's §4 testing review found the same *class* recurring — a control correct in isolation but
+not proven *wired* — at five more seams. Phase 5 closes them with the same discipline (real seam, inject only
+at the boundary, every closure teeth-checked). **Test-only; `git diff src/` empty.** The §31 ledger above
+carries the one-line disposition for each; the detail and teeth:
+
+- **T1 — SIGTERM-ignore → SIGKILL escalation, now teeth-tested at the UNIT tier
+  (`tests/unit/sidecar.test.ts`, +1).** The file's `FakeChild.kill()` exits on ANY signal, so
+  `LlamaServer.stop()` always settled on the "exited" branch and never reached the escalation — the integration
+  tier was the only place it was genuinely exercised. The new test uses a **stubborn child** (the LlamaServer
+  mirror of the transcriber's `makeStubbornChild(['SIGKILL'])`): it records each kill signal, sets `killed`
+  the moment a signal is *sent* (real `ChildProcess` semantics), but only emits `exit` on `SIGKILL`. With a
+  1 ms `killGraceMs` it asserts `signals == [undefined,'SIGKILL']` (polite SIGTERM first, then forceful
+  escalation). Teeth: revert the line-576 escalation gate `if (!this.exited)` → `if (!child.killed)` (the exact
+  bug the line-572 comment warns about — `child.killed` is true the instant a signal is sent) → SIGKILL is
+  never sent → `signals` stays `[undefined]` → reds.
+- **T2 — resident-cache lock-PURGE wiring, now asserted at the IPC layer
+  (`tests/integration/workspace-ipc.test.ts`, +1).** `purgeResidentVectors` (RAG-6, a stated SECURITY
+  requirement — chunk-text-derived vectors must not linger in main-process RAM after the vault re-encrypts) was
+  proven only at the unit tier (`resident-cache-incremental.test.ts`); the lock IPC's *call* to it was
+  unasserted. The new test seeds a REAL resident map (doc → chunk → embedding → `getResidentVectors`), locks
+  via the real IPC handler, and asserts the purge fired against the LIVE workspace db. The spy delegates to the
+  real `purgeResidentVectors` (sharing the real `caches` singleton, the resident-cache-incremental decode-spy
+  idiom), so the genuine purge still runs; the captured arg is asserted by **reference** (`toBe`, not
+  `toHaveBeenCalledWith`) because the post-lock db is closed and a deep-compare would touch its throwing
+  `isTransaction` getter. Teeth: drop `purgeResidentVectors(ctx.db)` from the lock handler → spy 0× → reds.
+- **T6 — GPU-probe timeout, de-flaked to fake timers (`tests/unit/gpu.test.ts`, converted in place).** The old
+  test awaited a real 20 ms `setTimeout` against a never-exiting child — a TEST-1-family wall-clock flake. It
+  now drives the probe's own kill-timeout through `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(20)` (the
+  `combine-signals.test.ts` idiom), with `verify` injected as a trivial resolver so only the timeout path is
+  under fake-timer control (no real fs/microtask racing the timer; the verify path has its own test). The
+  assertion is preserved (probe resolves `[]` on timeout AND the child is killed). Teeth: neuter the timeout's
+  `child.kill('SIGKILL')` → `child.killed` stays false → reds.
+- **T7 — privacy-guard snapshot poll, de-flaked to `vi.waitFor`
+  (`tests/integration/skills-privacy-guard.test.ts`, converted in place).** The old `for(i<50 &&
+  running){sleep(5)}` was a structural TEST-1 sibling (bounded iterations × a fixed sleep over mutable state).
+  It now re-polls via `vi.waitFor` (the `gpu-ipc.test.ts` idiom) until the run settles, no fixed cap; the
+  no-secret-in-snapshot assertions are preserved. (The optional redundant real-timer copies in
+  `vision-runtime.test.ts` were left as-is — converting them needs the fakeClock injection seam, beyond a quick
+  nit.)
+- **T8 — crash-fallback now pins a REAL child reap, not just a stop()-wrapper count
+  (`tests/integration/runtime-manager.test.ts`, +2 assertions).** The crash test counted a monkey-patched
+  `stop()` wrapper (`made[0].stops===1`), which still holds if a regression makes `stop()` stop reaching the
+  child kill (an orphan). The test now also asserts observable child state: a final `mgr.stop()` +
+  `children[1].child.killed===true` (the LIVE restarted CPU child is genuinely killed). This **DIVERGED from
+  the audit's literal "crashed child `killed===true`"** — empirically the crashed GPU child already `exited`
+  (via `crash()`), so the manager's `stop()` correctly early-returns on `this.exited` *before* any kill and the
+  crashed child's `killed` stays **false** (asserting true would red on correct code — verified). The genuine
+  "stop reaches the kill / no orphan" property lives on the live child instead. Teeth: early-return `stop()`
+  before the kill → the live child's `killed` stays false → reds (while `made[0].stops===1` still passes —
+  exactly the gap T8 closes).
+- **T9 (nit) — AES-GCM truncated-ciphertext at the `crypto.ts` unit tier (`tests/unit/crypto.test.ts`, +1).** A
+  length-reduced ciphertext (distinct from the existing bit-flip cases) must still fail GCM authentication
+  (the tag was computed over the full ciphertext); the streaming layer already covers a truncated on-disk
+  frame, this pins core `decrypt` itself. The other T9 nits were dispositioned in Phase 1 (invoice negative
+  line totals / Gutschrift/Rabatt) or left as accepted (the tautological `BANK_EXTRACTOR_VERSION` tripwire;
+  the mock-embedder score-band).
+- **T3 (verify only) — subsumed by F16.** `tests/integration/ipc-lock-coverage.test.ts` drives
+  `registerRagIpc` against a locked ctx with no exemptions, so `rag:ask` is enumerated and asserted to reject
+  with the localized lock copy. No separate Phase-5 test added (confirmed green).
+
+Suite after Phase 5: **2518 passed / 39 skipped (2557 collected)** (was 2515/39 after Phase 4 → **+3 tests**;
+T6/T7/T8 were conversions/strengthenings, not additions). **No `src/` behavior change** — the only source
+edits were the temporary teeth-check neuters, each restored byte-identical (`git diff src/` empty).
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 
