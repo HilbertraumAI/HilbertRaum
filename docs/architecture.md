@@ -263,6 +263,14 @@ force-quit. The contract now:
   `DiagnosticsTab` refreshers, `SkillsTab` settings load, and the General tab. (React 18 makes a
   post-unmount setState a silent no-op, so this is defensive correctness; the DocumentsScreen test has
   teeth by asserting `listDocuments` is not re-fetched after unmount.)
+  **Extended (full audit 2026-06-29, FE-1):** `ChatScreen` was the remaining FE-4-class gap — its
+  attach-import poll (`watchAttachJob`) and streamed-token flush (`flushStream`) both resolve after the
+  user can navigate away mid-import / mid-generation. It now carries the same `mountedRef` (gating the
+  poll/flush setStates) and clears the pending flush timer on unmount. **Hard constraint:** the
+  main-side stream is *not* torn down — it is intentionally recovered on remount via `getActiveStream`
+  (see "Stream recovery across navigation" below); the fix is guard-only. Teeth: `ChatUnmount.test.tsx`
+  unmounts with a poll tick AND a flush timer in flight, then asserts `listDocuments` is not re-fetched
+  and the flush timer was `clearTimeout`'d.
 - **FE-5 (effect re-run on language change).** `I18nProvider.applyLanguageSetting` is now
   `useCallback([])` (identity-stable; it only needs `setLang`), so App's policy/settings effect, which
   lists it in deps, no longer re-fires `getPolicy()`+`getSettings()` purely because the UI language
