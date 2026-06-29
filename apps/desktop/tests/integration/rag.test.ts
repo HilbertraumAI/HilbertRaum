@@ -479,6 +479,38 @@ describe('generateGroundedAnswer', () => {
     expect(chatSpy).not.toHaveBeenCalled()
   })
 
+  // TEST-3 (full-audit-2026-06-29, Phase 3): the COMPLEMENT of the empty-corpus test above. TEST-N8
+  // proves retrieve() REJECTS on a failing embedder, but generateGroundedAnswer awaits retrieve and
+  // early-returns NO_DOCUMENT_CONTEXT/REINDEX_NEEDED on empty chunks — so a regression wrapping
+  // retrieve in `try/catch → []` would make a transient embed fault MASQUERADE as "no documents"
+  // (a falsely-empty corpus) and redden nothing. This asserts the fault PROPAGATES out of
+  // generateGroundedAnswer rather than being swallowed into the friendly no-context answer.
+  // TEETH: wrap the `await retrieve(...)` in rag/index.ts in `try/catch → { chunks: [], citations: [] }`
+  // → generateGroundedAnswer then RESOLVES with the no-context answer and this test reddens.
+  it('REJECTS on a query-embed failure instead of masquerading as no documents (TEST-3)', async () => {
+    const db = freshDb()
+    const indexer = new MockEmbedder()
+    // NON-EMPTY corpus, so the genuine "empty ⇒ []" early-return can't masquerade as the reject path.
+    await seedDocument(db, indexer, 'a.txt', [{ text: 'alpha beta gamma delta' }])
+    const conv = createConversation(db, { mode: 'documents' })
+    const question = 'alpha beta gamma delta'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+
+    // A FRESH failing embedder instance (so the per-instance query-vector LRU can't mask the reject)
+    // sharing the indexed model id (so scope/corpus checks match) that rejects on the query embed.
+    const failing = {
+      id: indexer.id,
+      dimensions: indexer.dimensions,
+      embed: async (): Promise<never> => {
+        throw new Error('embed boom (simulated query-embed failure)')
+      }
+    }
+
+    await expect(
+      generateGroundedAnswer(db, runtime(), failing, conv.id, question, SETTINGS)
+    ).rejects.toThrow(/embed boom/)
+  })
+
   // Phase 20: document answers always run 'balanced' — no mode is sent to the runtime
   // (chatStream's omitted-mode default IS balanced), and persisted grounded answers
   // get the same think-block hygiene as plain chat (D6).
