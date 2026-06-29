@@ -288,3 +288,139 @@ describe('resident cache (incremental) — lock purge', () => {
     expect(getResidentVectors(db).size).toBe(0) // rebuilt empty — no lingering decoded vector
   })
 })
+
+// ---- F12: the NAMED-DELTA fast path (no O(N) chunk-id scan) ------------------------------------
+//
+// F12 (full-audit-2026-06-29-postmerge close-out): the PERF-1 reconcile removed the per-write full
+// DECODE but still paid an O(N) `SELECT chunk_id FROM embeddings` scan + Set build on the first
+// query after EVERY write. The production write sites now pass the exact added/removed chunk_ids, so
+// the reconcile applies the delta WITHOUT the scan. These tests prove the delta path is (1) BYTE-
+// IDENTICAL to a cold rebuild across the same insert/delete/reindex/same-rowid sequences, (2) issues
+// NO whole-table id-scan, (3) decodes only the K added rows, and (4) SELF-HEALS a wrong/missed delta
+// via the size gate (the load-bearing fall-through to the full scan).
+
+const range = (lo: number, hi: number): number[] => Array.from({ length: hi - lo }, (_, i) => lo + i)
+const ids = (lo: number, hi: number): string[] => range(lo, hi).map((i) => `c${i}`)
+
+describe('resident cache (F12 named delta) — equivalence with a full rebuild', () => {
+  it('matches a cold rebuild byte-for-byte across insert → insert → delete → reindex via NAMED deltas', () => {
+    const db = freshDb()
+    const docId = seedDocRow(db)
+
+    // 1. Initial 10, named add → cold build.
+    for (let i = 0; i < 10; i++) insertVec(db, docId, `c${i}`, makeVec(i))
+    invalidateResidentVectors(db, { added: ids(0, 10) })
+    getResidentVectors(db)
+
+    // 2. Pure add of 5, named.
+    for (let i = 10; i < 15; i++) insertVec(db, docId, `c${i}`, makeVec(i))
+    invalidateResidentVectors(db, { added: ids(10, 15) })
+    getResidentVectors(db)
+
+    // 3. Delete 3, named.
+    for (const id of ['c1', 'c7', 'c13']) deleteVec(db, id)
+    invalidateResidentVectors(db, { removed: ['c1', 'c7', 'c13'] })
+    getResidentVectors(db)
+
+    // 4. "Reindex": delete 4 survivors + insert 4 brand-new ids, named in ONE delta.
+    for (const id of ['c2', 'c3', 'c11', 'c14']) deleteVec(db, id)
+    for (let i = 100; i < 104; i++) insertVec(db, docId, `c${i}`, makeVec(i))
+    invalidateResidentVectors(db, {
+      removed: ['c2', 'c3', 'c11', 'c14'],
+      added: ['c100', 'c101', 'c102', 'c103']
+    })
+    const incremental = snapshot(getResidentVectors(db))
+
+    expect(incremental).toEqual(freshRebuild(db))
+    expect(Object.keys(incremental).sort()).toEqual(
+      ['c0', 'c4', 'c5', 'c6', 'c8', 'c9', 'c10', 'c12', 'c100', 'c101', 'c102', 'c103'].sort()
+    )
+  })
+
+  it('composes multiple deltas before one read (add then delete of the same id nets to absent)', () => {
+    const db = freshDb()
+    const docId = seedDocRow(db)
+    insertVec(db, docId, 'A', makeVec(1))
+    invalidateResidentVectors(db, { added: ['A'] })
+    expect(getResidentVectors(db).size).toBe(1)
+
+    // Add B, then delete B again — both BEFORE the next read. The net delta must drop B.
+    insertVec(db, docId, 'B', makeVec(2))
+    invalidateResidentVectors(db, { added: ['B'] })
+    deleteVec(db, 'B')
+    invalidateResidentVectors(db, { removed: ['B'] })
+    const map = getResidentVectors(db)
+
+    expect([...map.keys()].sort()).toEqual(['A'])
+    expect(snapshot(map)).toEqual(freshRebuild(db))
+  })
+
+  it('reflects a delete-then-reinsert-same-rowid via the named delta (the signature blind spot)', () => {
+    const db = freshDb()
+    const docId = seedDocRow(db)
+    insertVec(db, docId, 'A', makeVec(1))
+    insertVec(db, docId, 'B', makeVec(2))
+    insertVec(db, docId, 'C', makeVec(3)) // max-rowid row
+    invalidateResidentVectors(db, { added: ['A', 'B', 'C'] })
+    expect(getResidentVectors(db).size).toBe(3)
+
+    const before = signature(db)
+    deleteVec(db, 'C')
+    insertVec(db, docId, 'D', makeVec(999)) // SQLite reuses C's freed rowid
+    expect(signature(db)).toEqual(before) // (count, maxRowid) IDENTICAL — signature can't see it
+
+    invalidateResidentVectors(db, { removed: ['C'], added: ['D'] })
+    const map = getResidentVectors(db)
+    expect([...map.keys()].sort()).toEqual(['A', 'B', 'D'])
+    expect(Array.from(map.get('D')!)).toEqual(Array.from(makeVec(999)))
+    expect(snapshot(map)).toEqual(freshRebuild(db))
+  })
+})
+
+describe('resident cache (F12 named delta) — no whole-table scan, decodes only K', () => {
+  it('issues NO `SELECT chunk_id FROM embeddings` and decodes only the K added rows', () => {
+    const db = freshDb()
+    const docId = seedDocRow(db)
+    const N = 40
+    for (let i = 0; i < N; i++) insertVec(db, docId, `c${i}`, makeVec(i))
+    invalidateResidentVectors(db, { added: ids(0, N) })
+    expect(getResidentVectors(db).size).toBe(N) // cold build
+
+    // Spy AFTER the cold build so only the reconcile's statements are observed.
+    const prepareSpy = vi.spyOn(db, 'prepare')
+    decodeSpy.mockClear()
+
+    const K = 5
+    for (let i = N; i < N + K; i++) insertVec(db, docId, `c${i}`, makeVec(i))
+    invalidateResidentVectors(db, { added: ids(N, N + K) })
+    expect(getResidentVectors(db).size).toBe(N + K)
+
+    // The delta path decodes only the K new rows…
+    expect(decodeSpy).toHaveBeenCalledTimes(K)
+    // …and never runs the O(N) whole-table id-scan that the FULL reconcile would.
+    const scanned = prepareSpy.mock.calls.some((c) =>
+      String(c[0]).includes('SELECT chunk_id FROM embeddings')
+    )
+    expect(scanned).toBe(false)
+    prepareSpy.mockRestore()
+  })
+})
+
+describe('resident cache (F12 named delta) — size gate self-heals a wrong/missed delta', () => {
+  it('falls back to the full scan when the named delta is incomplete (still equals a cold rebuild)', () => {
+    const db = freshDb()
+    const docId = seedDocRow(db)
+    for (let i = 0; i < 5; i++) insertVec(db, docId, `c${i}`, makeVec(i))
+    invalidateResidentVectors(db, { added: ids(0, 5) })
+    expect(getResidentVectors(db).size).toBe(5)
+
+    // Insert 3 rows but LIE: flag an EMPTY delta. The post-delta size (5) disagrees with COUNT(*)
+    // (8) → the size gate trips → the reconcile self-heals via the full chunk-id scan.
+    for (let i = 5; i < 8; i++) insertVec(db, docId, `c${i}`, makeVec(i))
+    invalidateResidentVectors(db, { added: [] }) // wrong: names none of the 3 new rows
+    const map = getResidentVectors(db)
+
+    expect(map.size).toBe(8) // self-healed: the 3 unnamed rows are present
+    expect(snapshot(map)).toEqual(freshRebuild(db)) // byte-identical to a cold rebuild
+  })
+})

@@ -2,7 +2,14 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { STREAM, type CompactionNotice } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message } from '../../shared/types'
-import { emptyAssistantMessage, getConversation } from '../services/chat'
+import {
+  deleteLastAssistantMessage,
+  emptyAssistantMessage,
+  getConversation,
+  isAbortError,
+  restoreMessage
+} from '../services/chat'
+import type { Db } from '../services/db'
 import type { ModelRuntime } from '../services/runtime'
 import { isExceedContextError } from '../services/runtime/llama'
 import { tMain } from '../services/i18n'
@@ -61,6 +68,51 @@ export type SendReasoning = (delta: string) => void
  */
 export type SendCompaction = () => void
 
+/** The generation body run under the locked streaming contract — handed the turn's abort signal
+ *  and the three guarded senders, resolving with the persisted assistant Message. */
+export type ChatStreamRunFn = (
+  signal: AbortSignal,
+  sendToken: SendToken,
+  sendReasoning: SendReasoning,
+  sendCompaction: SendCompaction
+) => Promise<Message>
+
+/**
+ * F2 (post-merge audit) — make a regenerate turn's destructive delete safe. The previous
+ * assistant reply must NOT be dropped until the stream slot is held: the old ordering committed
+ * the delete (node:sqlite is synchronous) before `withChatStream` claimed the slot, so a
+ * non-abort failure between the delete and the first persisted token — `acquireSlot` rejecting,
+ * a sidecar that died mid-session, or (most reachably) an `exceed_context_size_error` HTTP 400
+ * because regenerate replays the full history near the window — destroyed the prior answer with
+ * nothing in its place.
+ *
+ * This wraps a `runFn` so the delete runs INSIDE the stream (slot held, controller registered)
+ * and the snapshot is RESTORED if generation fails for a NON-abort reason. A user Stop (abort)
+ * keeps the delete: the new partial/empty reply stands, exactly as before. A no-op passthrough
+ * when `regenerate` is false — the only change is WHEN the regenerate delete runs. The caller is
+ * expected to have already bailed (read-only `hasRegenerableAssistantReply`) when there is no
+ * prior reply; the snapshot being null here is a benign race (nothing deleted, nothing to
+ * restore).
+ */
+export function withRegenerateGuard(
+  db: Db,
+  conversationId: string,
+  regenerate: boolean,
+  runFn: ChatStreamRunFn
+): ChatStreamRunFn {
+  if (!regenerate) return runFn
+  return async (signal, sendToken, sendReasoning, sendCompaction) => {
+    const deleted = deleteLastAssistantMessage(db, conversationId)
+    try {
+      return await runFn(signal, sendToken, sendReasoning, sendCompaction)
+    } catch (err) {
+      // Restore the prior reply only on a real failure; a user Stop (abort) keeps the delete.
+      if (deleted && !isAbortError(err, signal)) restoreMessage(db, deleted)
+      throw err
+    }
+  }
+}
+
 /**
  * Run a streaming generation under the LOCKED streaming contract: register an
  * AbortController in the shared in-flight registry, run `runFn` (handed the abort signal,
@@ -77,12 +129,7 @@ export async function withChatStream(
   event: IpcMainInvokeEvent,
   conversationId: string,
   logLabel: string,
-  runFn: (
-    signal: AbortSignal,
-    sendToken: SendToken,
-    sendReasoning: SendReasoning,
-    sendCompaction: SendCompaction
-  ) => Promise<Message>,
+  runFn: ChatStreamRunFn,
   /**
    * Optional model-slot claim (plan §4.1/H10): when a yielding deep-index build holds the
    * one chat runtime, this requests a pause and resolves once the builder parks (≈ one

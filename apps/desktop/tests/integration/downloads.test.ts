@@ -449,4 +449,49 @@ describe('DownloadManager jobs', () => {
     expect(job.status).toBe('failed')
     expect(job.error).toMatch(/Unknown/)
   })
+
+  // F17 (audit-postmerge-2026-06-29): the model downloader must ALWAYS pass a bounded `maxBytes` to
+  // downloadToFile — the manifest's exact size when known, else a per-role default — so a redirected
+  // / Content-Length-less endpoint can't fall through to the multi-GiB backstop and fill the drive.
+  describe('size cap (F17)', () => {
+    const GiB = 1024 * 1024 * 1024
+
+    it('passes a bounded per-role maxBytes even when the manifest omits size_bytes', async () => {
+      const body = 'weights-with-no-declared-size'
+      const m = manifest({
+        sha256: sha256(body),
+        // download block WITHOUT size_bytes → planOneFile sets sizeBytes:null.
+        download: { url: 'https://example.test/x.gguf', sha256: sha256(body), license_url: 'https://example.test/l' }
+      })
+      let captured: unknown = 'unset'
+      const mgr = new DownloadManager({
+        downloadImpl: async (_url, dest, deps) => {
+          captured = deps?.maxBytes
+          writeFileSync(dest, body)
+          return { status: 200, received: body.length, contentLength: null }
+        }
+      })
+      const job = await mgr.start({ rootPath: tempRoot(), manifest: m, gates: OPEN })
+      await waitForTerminal(mgr, job.jobId)
+      expect(typeof captured).toBe('number')
+      expect(captured as number).toBeGreaterThan(0)
+      expect(captured as number).toBeLessThan(64 * GiB)
+    })
+
+    it('passes the EXACT manifest size_bytes as the cap when known (tight)', async () => {
+      const body = 'exactly-sized-weights'
+      const m = verifiedManifest(body) // size_bytes = body.length
+      let captured: unknown = 'unset'
+      const mgr = new DownloadManager({
+        downloadImpl: async (_url, dest, deps) => {
+          captured = deps?.maxBytes
+          writeFileSync(dest, body)
+          return { status: 200, received: body.length, contentLength: body.length }
+        }
+      })
+      const job = await mgr.start({ rootPath: tempRoot(), manifest: m, gates: OPEN })
+      await waitForTerminal(mgr, job.jobId)
+      expect(captured).toBe(body.length)
+    })
+  })
 })

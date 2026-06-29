@@ -13,9 +13,11 @@ import {
   effectiveContextWindow,
   fitMessagesToContext,
   generateAssistantMessage,
+  hasRegenerableAssistantReply,
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
+  restoreMessage,
   stripThinkBlocks
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
@@ -379,7 +381,8 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(listMessages(db, conv.id)).toHaveLength(2)
 
     const deleted = deleteLastAssistantMessage(db, conv.id)
-    expect(deleted).toBe(true)
+    expect(deleted).not.toBeNull() // returns the snapshot it deleted (F2 — restorable on failure)
+    expect(deleted?.content).toBe(first.content)
     expect(listMessages(db, conv.id)).toHaveLength(1) // back to just the user turn
 
     const second = await generateAssistantMessage(db, runtime(), conv.id, {})
@@ -414,10 +417,54 @@ describe('generateAssistantMessage (streaming)', () => {
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'second question' })
 
     const deleted = deleteLastAssistantMessage(db, conv.id)
-    expect(deleted).toBe(false) // last turn is a user message — nothing to delete
+    expect(deleted).toBeNull() // last turn is a user message — nothing to delete
     const history = listMessages(db, conv.id)
     expect(history).toHaveLength(3)
     expect(history.some((m) => m.id === answer.id)).toBe(true) // the earlier answer survives
+  })
+
+  // F2 (post-merge audit): the regenerate guard restores the prior reply byte-faithfully on a
+  // non-abort failure. The delete returns a snapshot; restoreMessage re-inserts it exactly so
+  // citations / coverage / the skill stamp / the original id all survive a failed regenerate.
+  it('delete → restore round-trips a rich assistant reply (id, citations, coverage, skill stamp)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'what does it say?' })
+    const coverage: CoverageInfo = { mode: 'extract', fullyChunked: true, chunksCovered: 3, chunksTotal: 3 }
+    const original = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'a grounded answer [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 2 }],
+      coverage,
+      skillId: 'app:bank-statement',
+      autoFired: true
+    })
+
+    const snapshot = deleteLastAssistantMessage(db, conv.id)
+    expect(snapshot).not.toBeNull()
+    expect(hasRegenerableAssistantReply(db, conv.id)).toBe(false) // gone — back to the user turn
+    expect(listMessages(db, conv.id)).toHaveLength(1)
+
+    restoreMessage(db, snapshot!)
+    const restored = listMessages(db, conv.id).at(-1)
+    expect(restored?.id).toBe(original.id) // same identity
+    expect(restored?.content).toBe('a grounded answer [S1]')
+    expect(restored?.createdAt).toBe(original.createdAt) // sorts back to the tail
+    expect(restored?.citations).toEqual(original.citations)
+    // Coverage survives the round-trip (the re-read fills the count defaults via parseCoverage).
+    expect(restored?.coverage?.mode).toBe('extract')
+    expect(restored?.coverage?.fullyChunked).toBe(true)
+    expect(restored?.coverage?.chunksCovered).toBe(3)
+    expect(restored?.coverage?.chunksTotal).toBe(3)
+    // The skill stamp survives at the column level (listMessages resolves skillId via a LEFT JOIN
+    // on the skills table, which is empty here — so assert the restored columns directly).
+    const raw = db
+      .prepare('SELECT skill_id, auto_fired FROM messages WHERE id = ?')
+      .get(original.id) as { skill_id: string | null; auto_fired: number | null }
+    expect(raw.skill_id).toBe('app:bank-statement')
+    expect(raw.auto_fired).toBe(1)
+    expect(hasRegenerableAssistantReply(db, conv.id)).toBe(true) // a regenerable reply again
   })
 })
 

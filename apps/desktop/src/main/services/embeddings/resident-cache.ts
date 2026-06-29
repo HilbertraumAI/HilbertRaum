@@ -25,30 +25,39 @@ import { decodeVector } from './codec'
 // next query paid a full ~150 MB re-read + ~580 ms re-decode — and that recurred after *every*
 // import/re-index/delete (a heavy "import N docs, ask between each" session paid N full rebuilds).
 // Now a write only MARKS the cache dirty, and the next query RECONCILES the delta instead of
-// re-decoding the corpus:
-//   • an `ids-only` scan (`SELECT chunk_id` — no `vector_blob`, no decode) yields the current id
-//     set; cached ids no longer present are DELETED from the map, and
-//   • ONLY the ids present now but absent from the map (the genuinely-new chunks) are fetched +
-//     `decodeVector`'d (a point lookup per new id on the `chunk_id` PRIMARY-KEY index).
-// So a pure-add of K vectors into an N-vector corpus DECODES exactly K rows, never N — the
-// PERF-1 win. The reconcile keys on the UNIQUE `chunk_id` (PRIMARY KEY), not on rowid, so it is
-// correct even when a deleted row's rowid is reused by a re-index (the documented blind spot
-// below) — a reused rowid still carries a NEW `chunk_id`, so the old id is removed and the new id
-// decoded. The result is byte-identical to a from-scratch `build` for every insert/delete/reindex
-// sequence (an in-band write never mutates a vector under a *surviving* chunk_id; re-index mints
-// fresh ids).
+// re-decoding the corpus. There are two reconcile paths, both byte-identical to a from-scratch
+// `build`:
+//   • DELTA RECONCILE (F12 fast path): an in-band write site names the exact chunk_ids it added /
+//     removed (`invalidate(db, { added, removed })`). The next read drops the removed ids and
+//     `decodeVector`'s ONLY the added ids (a point lookup per id on the `chunk_id` PRIMARY KEY) —
+//     NO whole-table scan. So a pure-add of K vectors into an N-vector corpus touches K rows, never
+//     N. A cheap `Map.size === COUNT(*)` gate then confirms the result is consistent; a mismatch
+//     (a missed/wrong delta, or a truncated-blob row that build also omits) falls back to ↓.
+//   • FULL RECONCILE (self-heal / delta-less write): an `ids-only` scan (`SELECT chunk_id` — no
+//     `vector_blob`, no decode) yields the current id set; cached ids no longer present are deleted
+//     and only the ids absent from the map are decoded. This is what a delta-less `invalidate(db)`
+//     (a direct/out-of-band SQL writer — tests, the manual bench) takes, and what the size gate
+//     self-heals to. It is O(N) in id marshalling but does NOT re-decode (the PERF-1 win still
+//     holds); the delta path avoids even the id-scan.
+// Both paths key on the UNIQUE `chunk_id`, not on rowid, so they stay correct even when a deleted
+// row's rowid is reused by a re-index (the documented blind spot below) — a reused rowid carries a
+// NEW chunk_id, so the old id is removed and the new id decoded. The result is byte-identical to a
+// from-scratch `build` for every insert/delete/reindex sequence (an in-band write never mutates a
+// vector under a *surviving* chunk_id; re-index mints fresh ids).
 //
 // CORRECTNESS — the resident buffer MUST never serve a stale or post-lock vector. Three
 // mechanisms, belt-and-suspenders (the ranking-corruption surface is the highest risk here):
 //
-//   • EXPLICIT DELTA (primary): `invalidate(db)` is called at the three `embeddings` write sites
-//     (`ingestion/index.ts` finalize-insert + reindex-delete + doc-delete). It now sets a `dirty`
-//     flag (instead of dropping the map); the next `getResidentVectors` runs the chunk-id
-//     reconcile above. This is the in-band path that every production mutation takes, and it is
-//     what closes the one signature blind spot — deleting the single max-rowid row then inserting
-//     exactly one row that REUSES that rowid leaves `(count, maxRowid)` unchanged, so only the
-//     explicit flag (not the signature) can see it; the reconcile's chunk-id diff then swaps the
-//     old id out and the new id in.
+//   • EXPLICIT DELTA (primary): `invalidate(db, delta?)` is called at the three `embeddings` write
+//     sites (`ingestion/index.ts` finalize-insert + reindex-delete + doc-delete), each passing the
+//     exact chunk_ids it changed so the next read takes the F12 delta fast path above. It sets a
+//     pending delta (instead of dropping the map); the next `getResidentVectors` reconciles. This
+//     is the in-band path that every production mutation takes, and it is what closes the one
+//     signature blind spot — deleting the single max-rowid row then inserting exactly one row that
+//     REUSES that rowid leaves `(count, maxRowid)` unchanged, so only the explicit flag (not the
+//     signature) can see it; the reconcile's chunk-id diff then swaps the old id out and the new id
+//     in. A delta-less `invalidate(db)` (a caller that can't name the ids) is honoured too — it
+//     forces the full chunk-id scan.
 //   • STALENESS SIGNATURE (backstop / self-heal): a cheap whole-table `(count, maxRowid)` is
 //     recomputed at the top of every search. If the table changed but NO write went through the
 //     explicit hook (an out-of-band writer — a test, a future code path), the flag is clear yet
@@ -65,12 +74,33 @@ import { decodeVector } from './codec'
 // Everything stays in-process and offline: no network, no native dependency, no worker — the
 // off-main-thread scan (P4b) and an ANN index (P4c / sqlite-vec) remain deferred behind the
 // unchanged `VectorIndex.search` signature (see architecture.md "Performance — design record
-// … Wave P4" and rag-design.md §12.2 D15). Phase 5 only removes the per-write FULL rebuild.
+// … Wave P4" and rag-design.md §12.2 D15). Phase 5 removed the per-write FULL rebuild; F12 (the
+// post-merge close-out) removed the O(N) `chunk_id` scan too for the in-band write paths.
 
 /** Cheap whole-table fingerprint that changes on any insert/delete (see module header). */
 interface Signature {
   count: number
   maxRowid: number
+}
+
+/** A named chunk-id delta from an in-band `embeddings` write site (F12). Empty / absent fields
+ *  mean "no change of that kind"; a delta-LESS `invalidate(db)` forces the full chunk-id scan. */
+export interface EmbeddingDelta {
+  added?: Iterable<string>
+  removed?: Iterable<string>
+}
+
+/**
+ * The NET chunk-id change accumulated by `invalidate` calls since the last read (F12). `added` and
+ * `removed` are kept DISJOINT (an add then a delete of the same id nets to neither). `full` is set
+ * by a delta-less `invalidate(db)` (a writer that didn't name the ids — tests, the manual bench) or
+ * left for the size-gate self-heal: the next reconcile then takes the whole-table chunk-id scan and
+ * `added`/`removed` are ignored.
+ */
+interface PendingDelta {
+  added: Set<string>
+  removed: Set<string>
+  full: boolean
 }
 
 interface ResidentVectors {
@@ -83,11 +113,11 @@ interface ResidentVectors {
    */
   byChunk: Map<string, Float32Array>
   /**
-   * Set by an explicit `invalidate` at an `embeddings` write site: the next `getResidentVectors`
-   * reconciles the delta (chunk-id diff) rather than trusting the staleness signature, which
-   * cannot see a delete-then-reuse-same-rowid write. Cleared once the reconcile runs.
+   * Non-null once an explicit `invalidate` at an `embeddings` write site has flagged the cache: the
+   * next `getResidentVectors` RECONCILES this delta rather than trusting the staleness signature,
+   * which cannot see a delete-then-reuse-same-rowid write. Cleared (→ null) once the reconcile runs.
    */
-  dirty: boolean
+  pending: PendingDelta | null
 }
 
 /** One resident cache per open database connection. WeakMap ⇒ a closed Db is GC-eligible. */
@@ -134,19 +164,33 @@ function build(db: Db, signature: Signature): ResidentVectors {
     const vec = decodeVector(row.vector_blob, row.dimensions)
     if (vec) byChunk.set(row.chunk_id, vec)
   }
-  return { signature, byChunk, dirty: false }
+  return { signature, byChunk, pending: null }
+}
+
+/** Decode `chunkId`'s stored vector by a point lookup on the `chunk_id` PRIMARY-KEY index and set
+ *  it on `byChunk` (omitting a truncated/missing row, exactly like `build`). Shared by both
+ *  reconcile paths. */
+function decodeInto(
+  byChunk: Map<string, Float32Array>,
+  fetch: ReturnType<Db['prepare']>,
+  chunkId: string
+): void {
+  const row = fetch.get(chunkId) as unknown as { vector_blob: Uint8Array; dimensions: number } | undefined
+  if (!row) return // raced delete — left absent; the size gate / next signature mismatch self-heals
+  const vec = decodeVector(row.vector_blob, row.dimensions)
+  if (vec) byChunk.set(chunkId, vec) // truncated blob → omitted, exactly like build()
 }
 
 /**
- * Apply the embeddings delta to an existing cache IN PLACE, decoding only the genuinely-new rows
- * (PERF-1). Keyed on the unique `chunk_id`, so it is correct across insert / delete / re-index /
- * delete-then-reinsert-same-rowid and is byte-identical to a from-scratch `build` for any in-band
- * write sequence. Mutates and returns `cached`.
+ * FULL reconcile: an `ids-only` whole-table scan (`SELECT chunk_id` — no `vector_blob`, no decode)
+ * drops cached ids no longer present and decodes only the ids absent from the map. O(N) in id
+ * marshalling but never re-decodes the corpus (the PERF-1 win). Keyed on the unique `chunk_id`, so
+ * correct across insert / delete / re-index / delete-then-reinsert-same-rowid and byte-identical to
+ * a from-scratch `build` for any in-band sequence. Used for a delta-less `invalidate(db)` and as
+ * the self-heal when the delta path's size gate trips. Mutates `cached.byChunk` in place.
  */
-function reconcile(db: Db, cached: ResidentVectors, signature: Signature): ResidentVectors {
+function reconcileFull(db: Db, cached: ResidentVectors): void {
   const byChunk = cached.byChunk
-  // ids-only scan: read just the `chunk_id` column (no `vector_blob` → no 150 MB read, no decode).
-  // Served from the `chunk_id` PRIMARY-KEY index; far cheaper than decoding every blob.
   const idRows = db.prepare('SELECT chunk_id FROM embeddings').all() as unknown as ChunkIdRow[]
   const currentIds = new Set<string>()
   for (const r of idRows) currentIds.add(r.chunk_id)
@@ -156,28 +200,52 @@ function reconcile(db: Db, cached: ResidentVectors, signature: Signature): Resid
     if (!currentIds.has(id)) byChunk.delete(id)
   }
 
-  // Decode ONLY ids present now but absent from the map — the new vectors. A point lookup per id
-  // on the PK index; decode count == number of genuinely-new rows (== K for a pure-add of K).
+  // Decode ONLY ids present now but absent from the map — the new vectors.
   const fetch = db.prepare('SELECT vector_blob, dimensions FROM embeddings WHERE chunk_id = ?')
   for (const id of currentIds) {
     if (byChunk.has(id)) continue
-    const row = fetch.get(id) as unknown as { vector_blob: Uint8Array; dimensions: number } | undefined
-    if (!row) continue // raced delete — left absent, the next signature mismatch self-heals
-    const vec = decodeVector(row.vector_blob, row.dimensions)
-    if (vec) byChunk.set(id, vec) // truncated blob → omitted, exactly like build()
+    decodeInto(byChunk, fetch, id)
   }
+}
 
-  cached.signature = signature
-  cached.dirty = false
-  return cached
+/**
+ * DELTA reconcile (F12): apply the NAMED chunk-id delta IN PLACE, decoding ONLY the added ids — no
+ * whole-table `chunk_id` scan. Returns whether the result is CONSISTENT with the table's COUNT(*)
+ * (`signature.count`): a correct in-band delta over a correct base always is (a missed add → too
+ * few entries, a missed/extra delete → too many — both caught), so a `false` return tells the
+ * caller to fall back to the self-healing `reconcileFull`. A truncated-blob row (build omits it
+ * too) also returns `false` → a full scan that likewise omits it, i.e. fails SAFE. For every
+ * in-band insert/delete/reindex/same-rowid sequence the result is byte-identical to a cold `build`
+ * (a surviving chunk_id's vector never mutates; re-index mints fresh ids — see the module header).
+ */
+function reconcileDelta(
+  db: Db,
+  cached: ResidentVectors,
+  pending: PendingDelta,
+  signature: Signature
+): boolean {
+  const byChunk = cached.byChunk
+  for (const id of pending.removed) byChunk.delete(id)
+  if (pending.added.size > 0) {
+    const fetch = db.prepare('SELECT vector_blob, dimensions FROM embeddings WHERE chunk_id = ?')
+    for (const id of pending.added) {
+      if (byChunk.has(id)) continue // a surviving chunk_id's vector never mutates in-band
+      decodeInto(byChunk, fetch, id)
+    }
+  }
+  // Cheap consistency gate (one `Map.size` compare): a correct delta over a correct base leaves
+  // size == COUNT(*); any drift (or a truncated-blob omission) trips it → the caller self-heals.
+  return byChunk.size === signature.count
 }
 
 /**
  * Return the resident decoded-vector map for `db`. The cheap `(count, maxRowid)` signature is
- * recomputed every call; combined with the `dirty` flag set by the write-site hooks it routes to:
- *   • the FAST PATH — nothing changed (clean flag + matching signature) → return the cached map;
- *   • the INCREMENTAL RECONCILE — an explicit write hook fired (`dirty`) → apply only the delta
- *     (decode only new chunks; PERF-1); or
+ * recomputed every call; combined with the pending delta set by the write-site hooks it routes to:
+ *   • the FAST PATH — nothing changed (no pending delta + matching signature) → return the map;
+ *   • the DELTA RECONCILE (F12) — an in-band write named its added/removed ids → apply just that
+ *     (decode only the new chunks, NO id-scan), with a size-gate fall-through to ↓ on any drift;
+ *   • the FULL RECONCILE — a delta-less write (or a size-gate trip) → ids-only scan, decode only
+ *     the new chunks (no re-decode of the corpus); or
  *   • a FULL REBUILD — the table changed with NO hook (out-of-band write) so the signature
  *     mismatches → rebuild from scratch (the self-healing backstop); also the cold first build.
  * The returned map is the live cache — callers MUST treat it read-only (never mutate it).
@@ -190,9 +258,17 @@ export function getResidentVectors(db: Db): ReadonlyMap<string, Float32Array> {
     caches.set(db, fresh)
     return fresh.byChunk
   }
-  if (cached.dirty) {
-    // An in-band write flagged the cache: reconcile the delta (correct even for a reused rowid).
-    reconcile(db, cached, signature)
+  const pending = cached.pending
+  if (pending) {
+    // An in-band write flagged the cache. Take the F12 delta fast path when the ids were named and
+    // the post-delta size agrees with COUNT(*); otherwise fall back to the self-healing full scan
+    // (a delta-less write, a missed/wrong delta, or a truncated-blob omission). Both are
+    // byte-identical to a cold rebuild for every in-band sequence (the PERF-1 contract).
+    if (pending.full || !reconcileDelta(db, cached, pending, signature)) {
+      reconcileFull(db, cached)
+    }
+    cached.signature = signature
+    cached.pending = null
     return cached.byChunk
   }
   if (signaturesEqual(cached.signature, signature)) {
@@ -207,15 +283,43 @@ export function getResidentVectors(db: Db): ReadonlyMap<string, Float32Array> {
 }
 
 /**
- * Mark the cached map for `db` dirty so the next `getResidentVectors` RECONCILES the embeddings
- * delta (decoding only new chunks) instead of re-decoding the corpus. Called at every `embeddings`
- * write site (the explicit, in-band delta signal). A no-op if nothing is cached — the next read
- * then does the cold build. NOTE: this no longer drops the map (that was the PERF-1 per-write
- * full rebuild); the map is only fully discarded by `purge` (lock) or the signature backstop.
+ * Flag the cached map for `db` so the next `getResidentVectors` RECONCILES the embeddings delta
+ * instead of re-decoding the corpus. Called at every `embeddings` write site (the explicit, in-band
+ * delta signal).
+ *
+ *   • With a NAMED `delta` (the production sites pass the chunk_ids they added/removed) the next
+ *     read takes the F12 delta fast path — decode only the new chunks, NO O(N) `chunk_id` scan.
+ *   • WITHOUT a delta (a direct/out-of-band SQL writer that can't name the ids — tests, the manual
+ *     bench) the next read takes the full chunk-id scan. Conservative and backward-compatible.
+ *
+ * A no-op if nothing is cached — the next read does the cold build (which reads the post-write
+ * table). NOTE: this never drops the map (that was the PERF-1 per-write rebuild); the map is fully
+ * discarded only by `purge` (lock) or the signature backstop.
  */
-export function invalidateResidentVectors(db: Db): void {
+export function invalidateResidentVectors(db: Db, delta?: EmbeddingDelta): void {
   const cached = caches.get(db)
-  if (cached) cached.dirty = true
+  if (!cached) return
+  const pending = (cached.pending ??= { added: new Set<string>(), removed: new Set<string>(), full: false })
+  if (!delta) {
+    // The caller didn't name the changed ids → force the full chunk-id scan on the next read.
+    pending.full = true
+    return
+  }
+  // Merge into the NET delta, keeping `added`/`removed` disjoint: a delete supersedes a pending add
+  // of the same id, and a (re-)add supersedes a pending delete — so multiple writes before one read
+  // compose correctly.
+  if (delta.removed) {
+    for (const id of delta.removed) {
+      pending.added.delete(id)
+      pending.removed.add(id)
+    }
+  }
+  if (delta.added) {
+    for (const id of delta.added) {
+      pending.removed.delete(id)
+      pending.added.add(id)
+    }
+  }
 }
 
 /**

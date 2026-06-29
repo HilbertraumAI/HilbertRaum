@@ -42,6 +42,11 @@ export function DictationButton({
   const { t } = useT()
   const [state, setState] = useState<DictationState>('idle')
   const captureRef = useRef<DictationCapture | null>(null)
+  // Mounted flag (mirror ChatScreen/DocumentsScreen FE-4): `start()` assigns captureRef only
+  // AFTER awaiting getUserMedia, so an unmount while the OS mic prompt is open runs the cleanup
+  // FIRST (it sees no capture to release) — then the await resolves a live stream on a dead
+  // component. This latch lets the resolved start() release that stream instead of leaking it (F21).
+  const mountedRef = useRef(true)
 
   // lib/dictation stays t-free (a pure module); its canonical mic-blocked English is
   // exact-matched here and localized at display (renderer-ephemeral, never persisted).
@@ -57,9 +62,12 @@ export function DictationButton({
   const onRecordingRef = useRef(onRecording)
   onRecordingRef.current = onRecording
 
-  // Leaving the screen mid-recording must release the microphone (and clear the wave).
+  // Leaving the screen mid-recording must release the microphone (and clear the wave). The
+  // mounted latch is dropped FIRST so an in-flight start() that resolves after this sees it.
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       captureRef.current?.cancel()
       captureRef.current = null
       onRecordingRef.current?.(null, false)
@@ -70,11 +78,19 @@ export function DictationButton({
     setState('starting')
     try {
       const capture = await (captureImpl ?? captureDictation)()
+      // Unmounted while the mic prompt was open (F21): the cleanup already ran and found no
+      // capture to release, so release THIS just-acquired live stream now and touch nothing on
+      // the dead component — otherwise the OS recording indicator stays lit until GC.
+      if (!mountedRef.current) {
+        capture.cancel()
+        return
+      }
       captureRef.current = capture
       setState('recording')
       onRecording?.(capture.analyser, true)
     } catch (e) {
       captureRef.current = null
+      if (!mountedRef.current) return
       setState('idle')
       onError?.(friendlyCaptureError(e))
     }

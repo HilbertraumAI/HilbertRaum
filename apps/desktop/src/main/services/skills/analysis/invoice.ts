@@ -5,6 +5,8 @@ import { documentsInScope } from '../scope-documents'
 import { documentChunkCount } from '../../analysis/coverage'
 import { skillInstallId } from '../registry'
 import {
+  isInvoiceStale,
+  latestInvoiceId,
   runInvoiceExtraction,
   runInvoiceTotalsValidation,
   type InvoiceRunArgs,
@@ -270,19 +272,27 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         readDocumentSegments: ctx.readDocumentSegments
       }
 
-      // Auto-run the READ-ONLY tools through the run seam (D46) — extract first, then validate the totals
-      // for its lifecycle + the persisted `totals_reconciled` flag. Export is excluded by construction
-      // (`runInvoiceCsvExport` is never imported).
-      const extraction = await runInvoiceExtraction(db, args, deps)
-      if (!extraction.ok || !extraction.invoiceId) {
-        return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+      // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted invoice when
+      // one exists and is FRESH (extraction is deterministic, so reusing avoids a duplicate — F5, the
+      // parity with the bank path). Re-extract only when NONE exists yet, OR when the latest was produced
+      // by an outdated extractor (`isInvoiceStale`): a since-fixed parser bug must not keep serving
+      // mis-read figures. A re-extract REPLACES the stale invoice in place (`replaceExisting`) — the old
+      // `totals_reconciled` flag goes with it (the validate seam below recomputes it). Export is excluded
+      // by construction (`runInvoiceCsvExport` is never imported).
+      let invoiceId = latestInvoiceId(db, target.id)
+      if (!invoiceId || isInvoiceStale(db, invoiceId)) {
+        const extraction = await runInvoiceExtraction(db, args, { ...deps, replaceExisting: true })
+        if (!extraction.ok || !extraction.invoiceId) {
+          return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+        }
+        invoiceId = extraction.invoiceId
       }
 
       // Reconstruct the invoice ONCE from the persisted rows (the single invoice read — audit P-1), hand
       // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
       // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
       // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
-      const invoice = loadInvoice(db, extraction.invoiceId)
+      const invoice = loadInvoice(db, invoiceId)
       const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
       const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 

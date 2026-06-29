@@ -6,6 +6,346 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 8 (FINAL / CLOSE-OUT; F12 + F18 + F19, then the audit report
+RETIRED) — branch `audit-postmerge-phase8-closeout`.** The post-merge full audit is now **COMPLETE (all 8
+phases)**. Suite **2532 passed / 39 skipped (2571 collected)** (was 2523/39 after Phase 7 → **+9**: F12 ×5,
+F18 ×2, F19 ×2), typecheck clean, `npm run build` green. Each Part-A fix is **teeth-checked** (neuter → red →
+restore). The durable record is the new **architecture.md §34 master close-out ledger** (dispositions EVERY
+F1–F24 / T1–T9 / D1–D8 → its phase → as-built §/file, + the carried-forward open items); the working-paper
+report `audits/full-audit-2026-06-29-postmerge.md` was **`git rm`'d** (recoverable in git history — the parent
+of this commit), per the CLAUDE.md doc-lifecycle rule (mirrors §24/§25/§26).
+- **F12 (Low, perf) — the resident-cache reconcile's O(N) `SELECT chunk_id` scan is gone for the in-band
+  paths.** PERF-1 removed the per-write full *decode* but the reconcile still scanned every id + built an
+  N-entry Set on the first query after every write. The three write sites (`ingestion/index.ts` finalize-insert
+  + reindex chunk-phase delete + `deleteDocument`) now pass the **exact** added/removed chunk_ids
+  (`invalidateResidentVectors(db, { added/removed })`; the delete sites capture them via the new
+  `embeddingChunkIdsForDocument` BEFORE the delete) → the reconcile decodes only the named-new rows by point
+  lookup, **no whole-table scan**. A `Map.size === COUNT(*)` gate falls back to the full scan for a delta-less
+  `invalidate(db)` (out-of-band writers — tests/bench), a missed/wrong delta, or a truncated-blob omission
+  (fails SAFE → self-heal). **NON-NEGOTIABLE preserved:** byte-identical to a cold rebuild for every
+  insert/delete/reindex/same-rowid sequence (PERF-1 contract), the `(count,maxRowid)` signature backstop, and
+  the lock-purge. Tests in `resident-cache-incremental.test.ts` (named-delta equivalence, no-`SELECT chunk_id`
+  assertion, composition, size-gate self-heal — teeth-checked) + a `resident-cache-bench.test.ts` reconcile leg.
+  Disposition: arch §34 + Performance/Wave-P4 record.
+- **F18 (Low, latent concurrency) — VisionService terminal `done` write now routes through the cancelled-guarded
+  `set()`** (returns whether it applied) so a concurrent `cancel()` can't be silently overwritten by `done`
+  (nor re-fire `emit.done`). Latent today (no `await` between the abort check and the write); hardened against a
+  refactor that inserts one. Test `vision-cancel.test.ts` pins the end-state; the **dual-neuter** (remove the
+  abort check AND the `set()` guard → resurrection) is the recorded teeth-check. Disposition: arch §34 +
+  Image-understanding §5.
+- **F19 (Low, latent concurrency) — `tearingDown` race guard on the embedder + reranker `suspend()`/`teardown()`.**
+  `stop()` arms `stopped` before teardown so a racing `ensureStarted` can't orphan a sidecar; `suspend()` (lock)
+  had no such latch, so a suspend interleaving a concurrent `embed()`/`rerank()` could stop the OLD sidecar while
+  a fresh start spawned and was **retained** past the lock (chunk/query-text-derived state in RAM). A
+  `tearingDown` flag (set at the top of `teardown()`, cleared in `finally`) makes `ensureStarted` refuse (top +
+  re-check after `await this.starting`) — giving `suspend()` the orphan protection `stop()` has. Both
+  `embeddings/e5.ts` + `reranker/llama.ts`. Deterministic gated-exit interleave test in `e5-embedder.test.ts` /
+  `reranker.test.ts` (teeth-checked). Disposition: arch §34 + GPU §5.5c.
+- **All 8 phases (one line each):** P1 money-parser correctness (F1/F3/F6/F8 + invoice single-currency guard +
+  T4/T5; §27/§8) · P2 runtime reliability (F2/F4/F7/F9; §28) · P3 invoice lifecycle parity (F5; §29) · P4
+  security consistency (F14/F15/F16/F17, F16 subsumes T3; §30) · P5 test-enforcement seams (T1/T2/T6/T7/T8/T9;
+  §31, test-only) · P6 renderer a11y + lifecycle (F20–F24; §32) · P7 docs reconciliation (D1–D8 + F11/F13
+  doc-notes; §33) · P8 low-hangers F12/F18/F19 + report retirement (§34).
+- **Carried-forward open items (NOT taken; recorded in §34):** the **F11 renderer half** (present `mode:'tree'`
+  answers as whole-document provenance — the rag-design §14.4 doc-note stands); the **F13 code** (floor-before-cut,
+  a precondition of the deferred E5 `query:`/`passage:` prefix migration; inert at the pinned floor 0); and the
+  §26-carried **SEC-1 code half / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix migration**.
+- **NEXT ACTION (owner): merge the audit branches `audit-postmerge-phase1-money` … `phase8-closeout` to `master`
+  when ready — they are stacked/unmerged. Do NOT auto-merge or push.** The post-merge audit is closed; the next
+  audit starts from a clean tree with §34 as the durable record._
+
+
+_2026-06-29 — **Post-merge full audit — Phase 7 (DOCUMENTATION RECONCILIATION; D1–D8 + the F11/F13 doc-notes +
+a fresh §-anchor sweep) — branch `audit-postmerge-phase7-docs`.** **Docs- and code-comment-ONLY — `git diff`
+shows only `.md`/`.yaml` files and code COMMENTS; no `src/` logic change.** Suite **2523 passed / 39 skipped**
+(unchanged from Phase 6 — comment edits only), typecheck clean, `npm run build` green. Theme: **make the docs
+match the code as built** — every contradiction re-verified against CURRENT code before fixing (Phases 1–6 had
+shifted line numbers, so each item was located by content).
+- **D1 (Med) — the TEST-6 record was stale.** It claimed the S13b skill-trigger precision bar was "owner-gated
+  on D1 / not yet landed"; `skill-triggers.test.ts` in fact asserts it as a **live CI gate** (`fired-wrong == 0`
+  AND `precision ≥ 0.95`, re-verified live, non-skipped). Corrected the §27 ledger row + the "Test-enforcement
+  seams" TEST-6 record + this file's TEST-6 bullet: the bar IS asserted; the remaining no-CI-floor gap is
+  **narrower** — real-model **RAG answer quality** + the env-gated quality benchmarks (still manual).
+- **D2 (Med) — known-limitations downloader note stale.** It said the in-app downloader "drives only `tasks[0]`
+  (the GGUF)"; the code fetches **both GGUF + mmproj as one job** (DIST-1; `downloads.test.ts` asserts
+  `totalBytes == gguf + mmproj` + the finish-just-the-projector case). Rewrote to the as-built reality.
+- **D3 (Med) — reranker "never bundled by default" contradiction.** Reconciled to ONE story: the reranker **IS**
+  in the DIY `prepare-drive --with-assets` default set (README/packaging/drive-layout — correct, unchanged) but
+  flagged `bundled_on_preconfigured_drive: false` (advisory / **unused by the validator**) as the sold/commercial
+  -drive intent. Fixed model-policy.md, rag-design §12.3, the reranker manifest comment. Left the **vision**
+  "never bundled" — it is genuinely opt-in / not in `--with-assets`.
+- **D4/D5/D6 (Low) — four stray test-comment fragments.** `gpu-smoke.test.ts` "60 s health timeout" → **180 s**
+  (`DEFAULT_HEALTH_TIMEOUT_MS`); dropped the dangling `/§11.1` from `gpu.test.ts`/`runtime-ladder.test.ts` and
+  `/§9` from `assets.test.ts` (GPU record is §1–§8; §5.1/§5.2/§6 resolve).
+- **D7 (Low) — whisper RTF figures.** Reconciled to **two annotated regimes** matching the R-W3/R-W4 source
+  measurements: a **long sustained file ≈ RTF 0.67** (÷1.5 / two-thirds; 52→35 min, 30→20 min) and a **short
+  clip ≈ RTF 0.46–0.5** (R-W3 benchmark clips + dictation). Annotated the short-vs-long distinction in
+  known-limitations.md (audio + dictation) and the whisper manifest comment.
+- **D8 (Low) — README disk sizing.** Clarified ~**3 GB** is the hand-built minimal footprint; the `--with-assets`
+  quick-start default set is ~**7 GB** (8B + embeddings + reranker + Whisper + runtimes), so a user does not
+  under-provision.
+- **F11 / F13 doc-notes (as-built reality carried into the topic docs).** rag-design **§14.4**: a `mode:'tree'`
+  answer's `[Sn]` citations are **whole-document LEAF PROVENANCE**, not the 1:1 inline-grounded excerpts of the
+  `generateGroundedAnswer` contract (renderer differentiation = Phase 8). rag-design **§12.1 R3**: a **PRECONDITION**
+  that re-enabling a positive `ragMinSimilarity` floor must move it **before** the `topKInitial` cut
+  (`rag/index.ts` filters after the cut today → silent recall loss), coupled to the deferred E5-prefix migration.
+- **§-anchor sweep (re-run): CLEAN.** §27–§32 ledgers exist + consecutively numbered; named-record citations
+  (GPU §5.5b, §22-D1, security-model `D3`, the Chat/encrypted-log/Renderer/Test-seam records) resolve. Residuals
+  fixed: the four D4/D5/D6 fragments **plus** one pre-existing dangler an independent sweep surfaced —
+  `image-understanding plan §16` (in `vision-runtime.test.ts`/`vision-smoke.test.ts`) was missing from the
+  image-understanding §-anchor legend → added a legend row (plan §16 → §6 + model-benchmarks §8). Every `§`
+  citation now resolves.
+- **Durable record:** architecture.md **§33 ledger** (D1–D8 + F11/F13 disposition + the sweep result) + the §27
+  master-ledger row flipped (D1–D8 + F11/F13 doc-notes → done; F12/F18/F19 + the F11 renderer half remain Phase
+  8). The audit report marks D1–D8 + the F11/F13 doc-notes resolved (report **KEPT** — Phase 8 retires it).
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase7-docs`; do NOT auto-merge/push.** Then **Phase 8**
+  (the close-out): F12 resident-cache reconcile fast-path + bench, F18 vision terminal-write guard, F19
+  `tearingDown` race guard, optionally the F11 renderer half — then **retire** the audit report (fold + `git rm`).
+  The §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix remain deferred._
+
+
+_2026-06-29 — **Post-merge full audit — Phase 6 (RENDERER ACCESSIBILITY + LIFECYCLE CONSISTENCY; F20/F21/F22/
+F23/F24) — branch `audit-postmerge-phase6-frontend-a11y`.** Suite **2523 passed / 39 skipped (2562 collected)**
+(was 2518/39 after Phase 5 → **+5 tests**: 3 F20 focus + 1 F21 mic-leak + 1 F22 unmount; F23 added an assertion
+to an existing test), typecheck clean, `npm run build` green. **Renderer-only** — no IPC surface, no
+main-process behavior, no new user-facing copy (no i18n change). Theme: **a keyboard/SR user is never dropped
+on `<body>`, and the FE-4 `mountedRef` discipline finally holds across EVERY screen.** Each observable fix is
+**test-first (red on current code → green)**.
+- **F20 (Med, a11y — the priority) — first-run gate didn't move focus on phase changes.** `WorkspaceGate`
+  swaps the whole card per `phase`; a `useEffect(…, [phase])` now focuses each step's primary control
+  (password input on `password`, Skip on `finishing`, primary action on `starter`; welcome keeps its
+  `autoFocus`). `PasswordField` gained an `inputRef` prop (mirror of `Composer`). **DIVERGED from the audit's
+  framing:** the audit called welcome→password the critical gap, but that field **already** had `autoFocus`
+  (the new test is green there pre-fix); the genuine deterministic gap was the **`finishing` step — NO focus
+  target at all** (the new test reds on it pre-fix). The effect also makes transitions re-entry-safe (autoFocus
+  only fires on first mount). WCAG 2.4.3/3.2.2.
+- **F21 (Low, privacy/lifecycle) — mic stream leaked if the component unmounted while getUserMedia was
+  pending.** `DictationButton.start()` stored `captureRef` only AFTER the await, so an unmount during the OS
+  mic prompt ran cleanup first (nothing to release), then a LIVE `MediaStream` landed on the dead component and
+  was never stopped (OS recording indicator stayed lit). A `mountedRef` now cancels the just-acquired capture +
+  skips `onRecording` when unmounted. Teeth-checked (neuter the guard → the late capture is stored + recording
+  entered → reds).
+- **F22 (Low, lifecycle consistency) — ModelsScreen poll + DiagnosticsTab activity refreshers lacked the FE-4
+  guard.** ModelsScreen's download/engine poll `.then`s (`setJob` + transitional `void refresh()`) and the
+  DiagnosticsTab `loadActivity`/`loadMoreActivity` setStates (listed as guarded but weren't) ran ungated.
+  Both now use a `mountedRef`; the architecture's "FE-4 applied uniformly" claim is **NARROWED + now actually
+  true**. Test parallels the DocumentsScreen FE-4 test (park a `getDownloadJob` tick → unmount → resolve →
+  assert no extra `listModels`).
+- **F23 (Low, a11y) — StreamAnnouncer re-announced the whole buffer each flush.** Dropped `aria-atomic="true"`
+  (an additive `role="log"` should read only what was ADDED; the sentence-slicing is untouched). Pinned by a
+  `not aria-atomic="true"` assertion.
+- **F24 (Low, consistency) — Composer fallback caret timer was untracked.** The non-`execCommand` fallback's
+  `setTimeout(…,0)` is now tracked in a ref and cleared on unmount (timer-cleanup consistency; benign in real
+  Electron where `execCommand` succeeds).
+- **Durable record:** architecture.md **§32 ledger** (F20–F24) + the **§27 master-ledger** Phase-6 row + the
+  **"Renderer robustness" FE-4 reconciliation** (ModelsScreen + DiagnosticsTab were the hold-outs; F20/F21
+  noted). The audit report marks F20–F24 remediated + Phase 6 DONE. No behavior-doc/known-limitations change
+  (nothing user-facing changed; F20 is a fix, not a deferral).
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase6-frontend-a11y`; do NOT auto-merge/push.** Then
+  the remaining open phases: Phase 7 (docs D1–D8), Phase 8 (RAG/perf + latent-concurrency F11–F13/F18/F19). The
+  §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix remain deferred to their
+  own phases._
+
+
+_2026-06-29 — **Post-merge full audit — Phase 5 (TEST-ENFORCEMENT SEAMS — prove the controls stay WIRED;
+T1/T2/T6/T7/T8 + T9 nit + T3 verify) — branch `audit-postmerge-phase5-test-seams`.** Suite **2518 passed / 39
+skipped (2557 collected)** (was 2515/39 after Phase 4 → **+3 tests**; T6/T7/T8 were conversions/strengthenings,
+not additions), typecheck clean, `npm run build` green. **TEST-ONLY phase — `git diff src/` is EMPTY** (the
+only source edits were the temporary teeth-check neuters, each restored byte-identical). Theme: **close the
+seams where a security/reliability control is correct today but no test proves it stays *wired*** — a silent
+unwiring (the control stops being called) must redden a test. Every wiring proof is **teeth-checked** (neuter
+the guarded control → the test reds → restore).
+- **T1 (Med) — SIGTERM-ignore→SIGKILL escalation, now teeth-tested at the UNIT tier.** The file's `FakeChild`
+  exits on ANY signal, so `LlamaServer.stop()` always settled on the "exited" branch and never reached the
+  escalation. New `sidecar.test.ts` test with a **stubborn child** (records each signal, dies only on SIGKILL,
+  sets `killed` when a signal is *sent*) asserts `signals == [undefined,'SIGKILL']`. **Teeth:** revert the
+  line-576 gate `this.exited` → `child.killed` → SIGKILL dropped → reds.
+- **T2 (Med) — resident-cache lock-PURGE wiring asserted at the IPC layer.** `purgeResidentVectors` (RAG-6
+  SECURITY req) was proven only at the unit tier. `workspace-ipc.test.ts` now seeds a real resident map
+  (doc→chunk→embedding→`getResidentVectors`), locks via the real IPC handler, and asserts the purge fired
+  against the LIVE db (spy delegates to the real impl, shared `caches`; arg asserted by reference — the
+  post-lock db's `isTransaction` getter throws under a deep-compare). **Teeth:** drop the purge call → spy 0× →
+  reds.
+- **T6/T7 (Low) — two TEST-1-family flakes de-flaked.** T6: GPU-probe timeout converted to fake timers
+  (`vi.advanceTimersByTimeAsync`, injected trivial `verify`); kill-on-timeout assertion preserved + teeth-
+  checked. T7: privacy-guard snapshot poll converted from `for(i<50){sleep(5)}` to `vi.waitFor`; no-secret
+  assertions preserved. (The optional `vision-runtime.test.ts` real-timer copies left — need the fakeClock
+  seam.) Verified stable across repeated runs.
+- **T8 (Low) — crash-fallback pins a REAL child reap, not just the stop()-wrapper count.** Added a final
+  `mgr.stop()` + `children[1].child.killed===true` (the LIVE restarted CPU child's genuine reap). **DIVERGED**
+  from the audit's literal "crashed child killed===true": empirically the crashed child already `exited`, so
+  `stop()` correctly early-returns on `this.exited` before any kill and its `killed` stays false (asserting
+  true reds on correct code). **Teeth:** early-return `stop()` before the kill → the live child's `killed`
+  stays false → reds (while `made[0].stops===1` still passes — exactly the gap).
+- **T9 (Low nit) — AES-GCM truncated-ciphertext unit case** added to `crypto.test.ts` (length-reduced cipher
+  still fails GCM auth; distinct from the bit-flip cases). Other T9 nits dispositioned in Phase 1 or accepted.
+- **T3 (Med, verify-only) — subsumed by F16.** `ipc-lock-coverage.test.ts` drives `registerRagIpc` against a
+  locked ctx with no exemptions → `rag:ask` is enumerated and asserted to reject with the localized copy. No
+  separate test added (confirmed green).
+- **Durable record:** architecture.md **§31 ledger** (T1/T2/T6/T7/T8/T9/T3) + the **"Test-enforcement seams"**
+  record (new **Phase-5 subsection**) + the §27 summary-row update. The audit report marks T1/T2/T6/T7/T8 closed
+  + T3 verified + Phase 5 DONE. No behavior-doc change (nothing shipped changed).
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase5-test-seams`; do NOT auto-merge/push.** Then the
+  remaining open phases: Phase 6 (renderer a11y/lifecycle F20–F24), Phase 7 (docs D1–D8), Phase 8 (RAG/perf +
+  latent-concurrency F11–F13/F18/F19). The §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part
+  B / E5-prefix remain deferred to their own phases._
+
+
+_2026-06-29 — **Post-merge full audit — Phase 4 (SECURITY CONSISTENCY HARDENING; F15/F14/F16/F17) — branch
+`audit-postmerge-phase4-security-consistency`.** Suite **2515 passed / 39 skipped (2554 collected)** (was
+2495/39 after Phase 3 → **+20 tests**), typecheck clean, `npm run build` green. Theme: **consistency gaps where
+a documented control didn't fully hold** — none is a remote exploit (offline by construction). No new IPC
+channel; one additive internal `ModelDownloadTask.role` field; three new localized i18n keys. Every fix is
+**test-first (red on current code → green)**.
+- **F15 (SSRF deny-list bypass) — IPv4-mapped IPv6 slipped the download private-range deny.** `new URL()`
+  CANONICALIZES `[::ffff:127.0.0.1]` → host `::ffff:7f00:1` and `[::ffff:169.254.169.254]` → `::ffff:a9fe:a9fe`,
+  which the old **dotted-decimal-only** regex never matched → mapped loopback / RFC-1918 / the cloud-metadata
+  IP were not blocked (reachable via a hostile manifest `download.url` or a redirect `Location:`). **Fix:**
+  `isPrivateOrLoopbackHost` (`assets.ts`) now **denies any host containing `::ffff:`** (no legit target uses a
+  mapped-IPv6 literal). The detection-only `offlineGuard.isLoopbackHost` is left as-is (gates no enforcement).
+- **F14 (log readable after lock) — `detachVaultKey()` left the in-memory buffer holding the locked session.**
+  The buffer carried the just-ended session's METADATA (file names/paths/model ids/settings keys — never
+  document/chat text); the buffering read path + the intentionally-ungated `getLogTail`/`exportLog` let a
+  still-mounted Diagnostics screen read/export it after lock. **Fix (option a):** zero the buffer **after** the
+  final encrypted flush, guarded on `mode==='encrypted'` (the pre-FIRST-unlock diagnostics window is
+  preserved); the next unlock repopulates from `app.log.enc`, so nothing is lost.
+- **F16 (IPC lock-guard parity + overstated doc) — rag/audit/core-settings/model touched `ctx.db` with no
+  explicit `requireUnlocked()`.** They were fail-closed (the getter throws when locked) but surfaced the RAW
+  English string, and the §25 "TEST-N8 enumerates every DB-touching handler" claim was false (it covered only
+  chat+benchmark). **Fix:** added the localized preamble to those four groups (`main.audit.locked` /
+  `main.settings.locked` / `main.models.locked`; rag reuses `main.chat.locked`) AND **generalized** the
+  structural lock test (`tests/integration/ipc-lock-coverage.test.ts`) across core/model/audit/rag/benchmark/
+  collections — refusal enumerated (a missing guard reddens it) + the read-only channels (`getLogTail`/
+  `getRuntimeStatus`) still resolve when locked. §25 wording corrected. **Subsumes Phase-5 T3 (rag:ask
+  lock-rejection).**
+- **F17 (download size caps) — the body cap could collapse to the 64 GiB backstop.** The **engine** downloader
+  passed no `maxBytes`; the **model** downloader passed one only when the manifest carried `size_bytes`. A
+  redirected / `Content-Length`-less endpoint then streamed up to the backstop (disk-fill on a small USB
+  drive; the bytes fail SHA verify after). **Fix:** both downloaders now ALWAYS pass a bounded cap — engine =
+  `ENGINE_DOWNLOAD_MAX_BYTES` (2 GiB), model = `modelWeightMaxBytes(role, sizeBytes)` (exact size, else a
+  per-role default: chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB). `DOWNLOAD_HARD_MAX_BYTES`
+  lowered 64→48 GiB (now unreachable from production). Cap policy extracted to the unit-testable
+  `effectiveDownloadCap`; the two managers gained an injected `downloadImpl` seam so the applied cap is
+  teeth-checked.
+- **Durable record:** architecture.md **§30 ledger** (F15/F14/F16/F17) + §27 master-ledger row + the §25
+  inventory correction (TEST-N8 enumeration) + the §25 SSRF inventory line; security-model.md **§D3** (F15
+  mapped-IPv6 + F17 always-bounded cap) + the **"encrypted log"** design record (F14 buffer-zeroing). The
+  audit report marks F14/F15/F16/F17 remediated + Phase 4 DONE + T3 subsumed.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase4-security-consistency`; do NOT auto-merge/push.**
+  Then Phase 5 (test seams T1/T2/T6/T7/T8 — **T3 now subsumed**, T4/T5 done Phase 1). Phases 6–8 (renderer
+  a11y F20–F24, docs D1–D8, RAG/perf/concurrency F11–F13/F18/F19) still open. The §26-carried SEC-1 code half /
+  SEC-2 / SEC-3 remain deferred to their own phase (NOT taken in Phase 4)._
+
+_2026-06-29 — **Post-merge full audit — Phase 3 (INVOICE DATA LIFECYCLE — reuse/replace/staleness PARITY with
+the bank path; F5) — branch `audit-postmerge-phase3-invoice-lifecycle`.** Suite **2495 passed / 39 skipped
+(2534 collected)** (was 2492/39 after Phase 2 → **+3 tests**), typecheck clean, `npm run build` green. Theme
+(again): **"apply the fix that already exists next door."** Every fix is **test-first (red on current code →
+green)**. ONE additive nullable schema column; no IPC-channel/audit-payload change; figures stay content-class.
+- **F5 (MED, data-integrity) — invoice extraction re-inserted a fresh invoice + line items on EVERY analysis
+  question.** The bank path reuses a fresh extraction and gates re-extraction on `extractor_version` +
+  `isBankStatementStale` + `replaceExisting`; the invoice path had **none** of it — `analysis/invoice.ts`
+  called `runInvoiceExtraction` unconditionally and `invoice-run.ts` always `INSERT`ed a new `invoices` row
+  with no preceding delete, so N questions about one invoice persisted N invoices + N×line-item sets (silent
+  content-table bloat for a deterministic re-extraction producing identical rows; `purgeSkillDataForDocument`
+  still cleaned them on document delete, so no FK/orphan hazard — bloat + wasted recompute, not corruption).
+- **Fix — mirror the bank design exactly (parity, not a new lifecycle).** (1) Schema: `invoices` gained an
+  additive nullable `extractor_version INTEGER` via the existing idempotent `ensureColumn` in `db.ts` (copy of
+  the `bank_statements.extractor_version` migration — old workspaces open cleanly; pre-existing rows are NULL →
+  stale; the bank table is untouched). (2) `INVOICE_EXTRACTOR_VERSION` (=**1**, baseline = the parser as built
+  through Phase 1's F1/F3/F6/F8 hardening) + `isInvoiceStale` predicate in `tools/invoice.ts` / `invoice-run.ts`,
+  mirroring `BANK_EXTRACTOR_VERSION` / `isBankStatementStale`. (3) `runInvoiceExtraction` stamps the version on
+  INSERT and accepts `replaceExisting`; the analysis handler **REUSES** `latestInvoiceId` when present and not
+  stale, else re-extracts with `replaceExisting: true` — which calls the shared `deleteInvoicesForDocument`
+  (exported from `run.ts`, the SAME ordered FK delete `purgeSkillDataForDocument` uses) **inside** the persist
+  `BEGIN/COMMIT` before the INSERT (atomic swap; `node:sqlite` is synchronous → no await between BEGIN/COMMIT).
+  The old `totals_reconciled` flag goes with the replaced row (the validate seam recomputes it).
+- **Staleness semantics = the bank's, verbatim:** stale ⟺ stored `extractor_version` is NULL (legacy /
+  pre-versioning) OR `<` current. Reuse on a fresh (current-version) invoice; re-extract+replace on a stale one
+  or when none exists. `purgeSkillDataForDocument`'s ordered delete is unchanged (same shared helper).
+- **Durable record:** architecture.md **§29 ledger** (disposition F5) + **§8 "Invoice reuse / replace /
+  staleness — parity with the bank path"**; the §27 ledger's F5 row flips from "not started" → "fixed (Phase
+  3)". Tests: `skills-analysis-invoice.test.ts` (N questions → exactly one invoice + one line-item set; fresh
+  invoice reused, no duplicate; version-NULL invoice detected stale → re-extracted + replaced in place at the
+  current version). The audit report marks F5 remediated + Phase 3 DONE.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase3-invoice-lifecycle`; do NOT auto-merge/push.**
+  Then Phase 4 (security F11–F19) per the report's phased plan. Phases 5–8 (test seams T1–T9, renderer a11y
+  F20–F24, docs D1–D8, concurrency) still open._
+
+_2026-06-29 — **Post-merge full audit — Phase 2 (CHAT-REGENERATE DATA-LOSS + SIDECAR BIND-RACE RELIABILITY;
+F2/F4/F7/F9) — branch `audit-postmerge-phase2-runtime-reliability`.** Suite **2492 passed / 39 skipped (2531
+collected)** (was 2483/39 after Phase 1 → **+9 tests**), typecheck clean, `npm run build` green. No
+schema/IPC-channel/audit-payload change. Theme: **"apply the fix that already exists next door"** — reuse the
+REL-3 abort-aware slot semantics (F2) and the REL-1 `isBindRaceError` classifier (F4/F7) the §26 round
+established. Every fix is **test-first (red on current code → green)**.
+- **F2 (MED, data-loss) — regenerate deleted the prior assistant reply BEFORE the stream slot was claimed.**
+  `node:sqlite` is synchronous, so the pre-slot `deleteLastAssistantMessage` was durable instantly; any
+  non-abort failure before the first token (a context-exceeded 400 — regenerate replays the full history near
+  the window — a dead sidecar, a rejected slot) left the turn **answer-less**. **Fix (decision):** the IPC
+  layer does only the read-only `hasRegenerableAssistantReply` precondition (the unchanged "nothing to
+  regenerate" bail) BEFORE the stream; the destructive delete runs **inside** `withChatStream`'s `runFn` via
+  the new `withRegenerateGuard` (`ipc/chat-stream.ts`) — slot held + controller registered — and the snapshot
+  it returns is **re-inserted byte-faithfully** (`restoreMessage`: same id, timestamp, citations, coverage,
+  skill stamp) on a non-abort failure. A user Stop (abort) keeps the delete. `deleteLastAssistantMessage` now
+  returns a `DeletedMessage | null` snapshot (was boolean). Applied symmetrically to **both** channels —
+  `registerChatIpc` + every `registerRagIpc` `withChatStream` site (grounded / whole-doc / compare /
+  exhaustive-run / listing / refusal). Slot/stream semantics otherwise identical (the only change is WHEN the
+  delete runs). RAG `text` recovery (the last user turn) does NOT need the assistant reply deleted first — the
+  reverse-find skips the assistant row.
+- **F4/F7 (MED/LOW) — embedder + reranker `startFailed` latch armed for a transient bind-race.** The bind
+  retry (REL-1) is bounded to ONE attempt, so a near-simultaneous chat+embedder+reranker+vision startup can
+  lose the port twice → `start()` throws bind-class. The `.catch` armed for ANY rejection, so the embedder
+  **silently disabled all imports** (no graceful degradation) until lock/unlock, and the reranker **disabled
+  reranking** for the session (silent fall-back to fused order, even surviving `suspend()`). **Fix:** both
+  `.catch`es skip arming `startFailed` when `isBindRaceError(message)` (the retry + the latch now share ONE
+  classifier — can't drift). Only a genuine load fault latches — which makes the reranker's deliberate
+  keep-the-latch-across-`suspend()` correct again. Embedder still clears its latch on `suspend()`.
+- **F9 (LOW) — compaction summarizer failure swallowed by an empty `catch {}`.** A repeatable summarizer BUG
+  compacted never, silently, forever (offline/no-telemetry). **Fix:** keep the L1 fallback; `log.warn` the
+  NON-abort case (`conversationId` + the error message — no chat content); an `AbortError` still doesn't log.
+- **Durable record:** architecture.md **§28 ledger** (dispositions F2/F4/F7/F9) + "Chat & streaming"
+  (regenerate is delete-after-slot) + GPU record **§5.5b** (bind-race aware start-latch); known-limitations
+  embedder/reranker latch bullet + the corrected TOCTOU bullet. The audit report marks F2/F4/F7/F9 remediated
+  + Phase 2 DONE.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase2-runtime-reliability`; do NOT auto-merge/push.**
+  Then Phase 3 (F5 invoice reuse/replace parity). Phases 4–8 (security F11–F19, renderer F20–F24, docs D1–D8,
+  test seams T1–T9) still open per the report's phased plan._
+
+_2026-06-29 — **Post-merge full audit — Phase 1 (MONEY-PARSER CORRECTNESS, the release-blocker class;
+F1/F3/F6/F8 + T5/T4/T9) — branch `audit-postmerge-phase1-money`.** Suite **2483 passed / 39 skipped (2522
+collected)** (was 2463/39 → **+20 tests**), typecheck clean, `npm run build` green. Parsing-only — no
+schema/IPC/audit-payload change; figures stay content-class. Source of truth for the findings is the new
+working-paper report `audits/full-audit-2026-06-29-postmerge.md` (the prior round's bank hardening had not
+propagated to the sibling **invoice** path). Closes **F1 (High), F3/F6 (Med), F8 (Low)** + the invoice
+single-currency guard + the T5 2-dp invariant; F2/F4/F5/F7/F9 and the rest are **not started** (later phases).
+- **F1 (HIGH, release-blocker) — uncaptured amount column → running balance read as the amount.** A
+  whole-euro `50` / single-decimal `12,5` amount is rejected by the 2-dp `MONEY_RE`, so `Sparen 50 1.234,56`
+  collapses to ONE token (the *balance*) and the old position logic took the **balance as the amount**. **Key
+  decision (DIVERGED from the audit):** the bank drop is **statement-context-aware**, not unconditional —
+  `parseLine` flags `ambiguousAmount`; `extractTransactionRows` drops the flagged row **only when the
+  statement has a balance column**. The audit's literal "drop whenever a left digit-run remains" regressed the
+  flagship HVB "Umsätze" no-balance numeric-payee format (`REWE … 1234 -19,15`, a single-token row whose lone
+  figure IS the amount — `pdf-bank-layout.test.ts`). The **invoice** mirror drops on the RIGHT side (line total
+  = LAST figure): `Hosting 12,50 500` (real total `500` uncaptured to the right) → drop; a bare number to the
+  LEFT is a quantity, kept.
+- **F3 (MED) — invoice currency from the figure region + single-currency guard.** `detectCurrency` now scans
+  `rest.slice(matches[0].index)` (mirror of the bank BL-2 fix) so a `USD` WORD in a description no longer beats
+  the document currency; `validateInvoiceTotals` returns `lineItemsSumToNet: 'unknown'` for a mixed line-item
+  currency set (never sums across currencies).
+- **F6 (MED) — invoice space-column fusion.** A matched token with an interior space and NO 2-dp decimal tail
+  (`Widget 10 100` → 10100) is dropped (`isFusedSpaceGroup`); `1 234 567,89` (decimal-anchored) is kept;
+  `15 799,00` stays the accepted DECISION-2 trade-off.
+- **F8 (LOW) — qty split corroboration.** A trailing number splits as `quantity` only with a unit token OR a
+  unit-price column; `iPhone 15 1.799,00` keeps "iPhone 15". Metadata-only.
+- **T5 decision — 2-dp integer-cent invariant.** `parseAmount` rounds every figure to the nearest cent, so
+  `Math.round(x*100)` is exact (the completeness/reconcile premise). A >2-dp `1.234,567` reads `1234.57`
+  (**normalised, NOT dropped**). T4 (parens-negative) + T9 (negative line totals) pinned via whole-string tests.
+- **Durable record:** arch §8 "Financial correctness (full-audit-2026-06-29-postmerge, Phase 1)" + the new
+  **§27 ledger** (dispositions each finding); known-limitations LINE PARSER bullets updated (F1 statement-
+  context drop + residuals, figure-region currency extended to invoices, space-fusion invoice drop, qty
+  corroboration, 2-dp invariant). The audit report marks F1/F3/F6/F8 remediated.
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase1-money`; do NOT auto-merge/push.** Then Phase 2
+  (F2 regenerate data-loss + F4/F7 sidecar bind-race latch + F9 compaction log) per the report's phased plan._
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 6 (FINAL: DOCUMENTATION RECONCILIATION + AUDIT
 CLOSE-OUT; DOC-1/DOC-3/DOC-4 + SEC-1 doc half) — branch `full-audit-2026-06-29-fixes`.** Suite unchanged at
 **2463 passed / 39 skipped (2502 collected)**, typecheck clean, `npm run build` green. **Docs/comments-only +
@@ -166,12 +506,13 @@ harness, recording `fetch`, the real `VisionRuntime`), never a new fake that re-
   (recording `fetch` + an SSE body) so the prompt + image bytes pass through `runAnalyze` → `server.fetch` →
   `readChatSSE`, then asserts no log line carries the prompt/answer/base64-image. Teeth confirmed: logging
   `opts.question`/the data-URL at the runtime layer reddens it.
-- **TEST-6 (INFO) — no automated answer-quality floor in CI (docs-only).** Recorded in `architecture.md`
-  "Test-enforcement seams — design record (Phase 3)": retrieval/answer/skill-trigger ACCURACY has no
-  automated floor that fails CI — the `eval/skill-triggers` harness prints precision as a MEASUREMENT (the
-  S13b precision-bar assertion is owner-gated on D1, §18) and the real-model quality benchmarks are
-  env-gated out of CI by design (model-benchmarks.md D19); accuracy regressions are caught only by the
-  manual smoke matrix. Follow-up: land the S13b bar once the owner sets D1.
+- **TEST-6 (INFO) — answer-quality floor in CI is partial, by design (docs-only).** Recorded in
+  `architecture.md` "Test-enforcement seams — design record (Phase 3)" *(wording corrected Phase 7 / D1)*:
+  the **S13b skill-trigger precision bar IS a live CI gate** — `eval/skill-triggers.test.ts` asserts
+  `fired-wrong == 0` AND `precision ≥ 0.95` (§18), so it reddens on any trigger-scoring regression. What
+  remains without a CI floor is narrower — real-model **RAG answer quality** + the real-model quality
+  benchmarks, env-gated out of CI by design (model-benchmarks.md D19) and caught only by the manual smoke
+  matrix.
 - **Docs:** new non-numbered `architecture.md` "Test-enforcement seams — design record (full audit
   2026-06-29, Phase 3)" subsection (records TEST-2…6 + the teeth-check rationale); Phase 6's §26 ledger can
   point to it. No new BUG surfaced by the added coverage (the controls are correct; only the wiring was

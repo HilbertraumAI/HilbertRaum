@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { Button } from './Button'
 import { englishTranslator, type Translator } from './translator'
 import type { MessageKey } from '@shared/i18n'
@@ -99,6 +99,8 @@ export interface PasswordFieldProps {
   placeholder: string
   value: string
   autoFocus?: boolean
+  /** Lets a parent steer focus to this input (WorkspaceGate's per-phase focus — F20). */
+  inputRef?: RefObject<HTMLInputElement>
   autoComplete: string
   /** Reveal the password (the toggle is shared between sibling fields). */
   show: boolean
@@ -117,6 +119,7 @@ export function PasswordField({
   placeholder,
   value,
   autoFocus,
+  inputRef,
   autoComplete,
   show,
   onToggleShow,
@@ -126,6 +129,7 @@ export function PasswordField({
   return (
     <div className="gate-pw-field">
       <input
+        ref={inputRef}
         type={show ? 'text' : 'password'}
         // Reserve room on the right so typed text never slides under the reveal button.
         className={onToggleShow ? 'gate-input gate-input-with-toggle' : 'gate-input'}

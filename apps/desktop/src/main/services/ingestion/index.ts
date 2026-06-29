@@ -698,6 +698,12 @@ export async function prepareDocument(
       throw new Error(t('en', 'main.ingest.tooManyChunks'))
     }
 
+    // F12 (post-merge close-out): the embeddings DELETE below removes this doc's prior vectors from
+    // the resident cache. Capture their exact chunk_ids NOW (before the delete) so the post-commit
+    // `invalidateResidentVectors` can apply a named delta instead of the O(N) chunk-id rescan.
+    // Empty on a first index (no prior embeddings) → the delta is a no-op.
+    const removedEmbeddingIds = embeddingChunkIdsForDocument(db, documentId)
+
     // Replace any prior chunks (supports re-indexing) then insert fresh. DB-1: wrap the whole
     // delete-then-insert phase in ONE transaction. With WAL + synchronous=NORMAL each bare
     // run() is otherwise its own fsync'd auto-commit, and every chunk also fires the
@@ -763,12 +769,13 @@ export async function prepareDocument(
       }
       throw err
     }
-    // RAG-6 (Wave P4) / PERF-1 (Phase 5) belt: the chunk-phase transaction above DELETEd this
-    // doc's stale embeddings (re-index path), so flag the resident decoded-vector cache dirty —
-    // the next search RECONCILES the delta (decoding only the re-inserted chunks), it no longer
-    // re-decodes the corpus. This explicit in-band hook is what closes the delete-then-equal-
-    // reinsert-same-rowid blind spot the signature can't see, and keeps the cache robust here.
-    invalidateResidentVectors(db)
+    // RAG-6 (Wave P4) / PERF-1 (Phase 5) / F12 (post-merge close-out) belt: the chunk-phase
+    // transaction above DELETEd this doc's stale embeddings (re-index path), so flag the resident
+    // decoded-vector cache with the exact REMOVED chunk_ids — the next search reconciles via the
+    // delta (drop these ids; the re-inserted chunks arrive as ADDs from `embedChunks`), no corpus
+    // re-decode and no chunk-id rescan. This explicit in-band hook is also what closes the
+    // delete-then-equal-reinsert-same-rowid blind spot the signature can't see.
+    invalidateResidentVectors(db, { removed: removedEmbeddingIds })
 
     // ING-3 pipeline boundary: chunks are now persisted and the document is in `embedding`.
     // The embed phase (finalizeDocument) reads the chunks back from the DB, so this phase is
@@ -913,10 +920,10 @@ async function embedChunks(
     }
     throw err
   }
-  // RAG-6 (Wave P4) / PERF-1 (Phase 5) belt: fresh vectors were just INSERTed — flag the resident
-  // decoded-vector cache dirty so the next search RECONCILES, decoding only these new chunks
-  // (a pure-add no longer re-decodes the corpus). This is the explicit in-band hook.
-  invalidateResidentVectors(db)
+  // RAG-6 (Wave P4) / PERF-1 (Phase 5) / F12 (post-merge close-out) belt: fresh vectors were just
+  // INSERTed — flag the resident decoded-vector cache with the EXACT added chunk_ids so the next
+  // search reconciles via the delta fast path (decode only these new chunks; no O(N) chunk-id scan).
+  invalidateResidentVectors(db, { added: rows.map((r) => r.id) })
 }
 
 /**
@@ -1434,6 +1441,20 @@ export function getDocument(db: Db, id: string): DocumentInfo | null {
  * bank/invoice tables carry no documents-CASCADE on drives created before the DATA-1 fix, so their
  * ordered delete is load-bearing there, not a belt. ids only — content is never logged/audited.
  */
+/**
+ * The chunk_ids of `documentId` that currently carry an embedding — the exact set a delete /
+ * re-index removes from the resident decoded-vector cache (F12). Letting the write sites name this
+ * set lets `invalidateResidentVectors` apply a delta instead of the O(N) `chunk_id` rescan. MUST be
+ * read BEFORE the embeddings/chunks are deleted. ids only — content is never logged/audited.
+ */
+function embeddingChunkIdsForDocument(db: Db, documentId: string): string[] {
+  return (
+    db
+      .prepare('SELECT chunk_id FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)')
+      .all(documentId) as unknown as Array<{ chunk_id: string }>
+  ).map((r) => r.chunk_id)
+}
+
 function purgeDocumentDerivatives(db: Db, id: string): void {
   db.prepare(
     'DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)'
@@ -1460,6 +1481,10 @@ function purgeDocumentDerivatives(db: Db, id: string): void {
 export function deleteDocument(db: Db, id: string): void {
   const row = getRow(db, id)
   if (!row) return
+  // F12 (post-merge close-out): capture this doc's embedding chunk_ids BEFORE the delete so the
+  // post-commit `invalidateResidentVectors` applies a named delta (drop these ids) rather than the
+  // O(N) chunk-id rescan.
+  const removedEmbeddingIds = embeddingChunkIdsForDocument(db, id)
   db.exec('BEGIN')
   try {
     purgeDocumentDerivatives(db, id)
@@ -1483,10 +1508,11 @@ export function deleteDocument(db: Db, id: string): void {
   if (row.stored_path && existsSync(row.stored_path)) {
     shredFile(row.stored_path)
   }
-  // RAG-6 (Wave P4) / PERF-1 (Phase 5) belt: this doc's vectors were just DELETEd — flag the
-  // resident decoded-vector cache dirty so the next search reconciles (drops these ids from the
-  // map via the chunk-id diff); closes the delete-then-equal-reinsert-same-rowid signature blind spot.
-  invalidateResidentVectors(db)
+  // RAG-6 (Wave P4) / PERF-1 (Phase 5) / F12 (post-merge close-out) belt: this doc's vectors were
+  // just DELETEd — flag the resident decoded-vector cache with the exact REMOVED chunk_ids so the
+  // next search reconciles via the delta (drop these ids), no chunk-id rescan; also closes the
+  // delete-then-equal-reinsert-same-rowid signature blind spot.
+  invalidateResidentVectors(db, { removed: removedEmbeddingIds })
 }
 
 /**

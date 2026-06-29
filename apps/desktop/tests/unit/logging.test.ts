@@ -218,6 +218,29 @@ describe('logging service (L17)', () => {
       expect(text).toContain('quiet line')
     })
 
+    it('detachVaultKey clears the in-memory buffer so the locked session is unreadable after lock (F14)', () => {
+      const key = randomBytes(32)
+      initLogging(dir)
+      attachVaultKey(key)
+      log.info('imported /home/user/secret-plan.pdf') // metadata: a filename/path
+      log.info('model qwen3-4b-instruct-q4 started')
+      // While unlocked the Diagnostics tail shows the session.
+      expect(readLogTail().some((l) => l.includes('secret-plan.pdf'))).toBe(true)
+
+      detachVaultKey() // "Lock now": flush to app.log.enc, drop the key — and zero the residue.
+
+      // F14: after lock, mode is `buffering` and the buffer no longer holds the just-ended
+      // session, so a still-mounted Diagnostics screen / compromised renderer reads nothing.
+      expect(readLogTail()).toEqual([])
+      expect(readLogFull()).toBe('')
+
+      // But the lines were FLUSHED, not lost: a re-unlock repopulates the tail from app.log.enc.
+      attachVaultKey(key)
+      const tail = readLogTail()
+      expect(tail.some((l) => l.includes('secret-plan.pdf'))).toBe(true)
+      expect(tail.some((l) => l.includes('qwen3-4b-instruct-q4'))).toBe(true)
+    })
+
     it('rekeyVaultLog (v2 password change, key unchanged) re-seals without doubling history', () => {
       const key = randomBytes(32)
       initLogging(dir)

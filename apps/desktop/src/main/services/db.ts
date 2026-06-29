@@ -738,6 +738,13 @@ export function openDatabase(path: string): Db {
   // on every extraction; bumped whenever the line parser OR the geometry reconstruction changes output.
   // CONTENT-CLASS adjacent (a provenance int): never logged/audited/exported.
   ensureColumn(db, 'bank_statements', 'extractor_version', 'extractor_version INTEGER')
+  // The deterministic INVOICE extractor version (F5 — the same reuse/replace/staleness machinery as the
+  // bank `extractor_version` above, mirrored for the second Tier-2 content class). Additive + nullable:
+  // NULL = extracted before versioning → STALE, so the invoice analysis read-back RE-EXTRACTS (replacing
+  // the rows) instead of serving figures a since-fixed parser bug mis-read. Stamped with
+  // `INVOICE_EXTRACTOR_VERSION` on every extraction; bumped whenever the invoice parser changes output.
+  // CONTENT-CLASS adjacent (a provenance int): never logged/audited/exported.
+  ensureColumn(db, 'invoices', 'extractor_version', 'extractor_version INTEGER')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

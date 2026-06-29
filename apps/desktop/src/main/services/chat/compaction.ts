@@ -2,6 +2,7 @@ import type { Db } from '../db'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import {
   getLatestCheckpoint,
+  isAbortError,
   listConversationTurns,
   messageTokens,
   stripThinkBlocks,
@@ -9,6 +10,7 @@ import {
   type ConversationTurn
 } from '../chat'
 import { packIntoWindows, summaryBudgetWords } from '../doctasks/summary'
+import { log } from '../logging'
 
 // L2 — conversation compaction (context-compaction-plan §4.4). When a conversation's history
 // approaches the model's context window we summarize the OLDER turns once into a cached checkpoint
@@ -127,9 +129,18 @@ export async function ensureCompacted(
   let summary: string
   try {
     summary = await summarizeRegion(runtime, input, window, opts.signal)
-  } catch {
-    // R4/R6 — any summarizer failure (incl. an AbortError) falls back to L1 with no checkpoint and
-    // no user-visible error. The turn still proceeds.
+  } catch (err) {
+    // R4/R6 — any summarizer failure falls back to L1 with no checkpoint and no user-visible error;
+    // the turn still proceeds. F9 (post-merge audit): LOG the NON-abort case (a real bug — a
+    // TypeError, a malformed checkpoint) so a repeatable summarizer failure isn't silently masked as
+    // "below threshold" forever on this offline, no-telemetry app (every other chat-stack error path
+    // logs under a label). A user Stop (AbortError) is expected and must NOT log.
+    if (!isAbortError(err, opts.signal)) {
+      log.warn('Compaction summary failed; falling back to L1 trim', {
+        conversationId,
+        message: err instanceof Error ? err.message : String(err)
+      })
+    }
     return
   }
   // A cancel that resolved the stream cleanly (the mock returns on abort) still means "abandon".

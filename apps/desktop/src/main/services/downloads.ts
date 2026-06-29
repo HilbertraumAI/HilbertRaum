@@ -7,6 +7,7 @@ import type { DownloadJob } from '../../shared/types'
 import {
   planModelDownloads,
   downloadToFile,
+  modelWeightMaxBytes,
   verifyDownloadedFile,
   type FetchFn,
   type ModelDownloadTask
@@ -81,6 +82,8 @@ export type DownloadAuditType =
 export interface DownloadManagerDeps {
   /** Injected fetch — production passes the global `fetch`; tests pass a fake. */
   fetchImpl?: FetchFn
+  /** Injected downloader (default `downloadToFile`) — tests capture the applied size cap (F17). */
+  downloadImpl?: typeof downloadToFile
   log?: (msg: string, meta?: unknown) => void
   /**
    * Audit hook: the IPC layer injects the app recorder so the background verify/fail
@@ -320,12 +323,15 @@ export class DownloadManager {
       let prefix = resumeFrom
       job.status = 'downloading'
       job.receivedBytes = baseBytes + prefix
-      const result = await downloadToFile(task.url, part, {
+      const download = this.deps.downloadImpl ?? downloadToFile
+      const result = await download(task.url, part, {
         fetchImpl: this.deps.fetchImpl,
         signal: controller.signal,
-        // D3: cap the body to the manifest's planned size so a redirected/hostile endpoint
-        // can't stream past it and fill the drive (the SHA verify already rejects wrong bytes).
-        ...(task.sizeBytes != null ? { maxBytes: task.sizeBytes } : {}),
+        // D3 + F17: cap the body so a redirected/hostile endpoint can't stream past it and fill the
+        // drive (the SHA verify already rejects wrong bytes). The cap is the manifest's exact
+        // `size_bytes` when known, else a bounded per-role default — never unbounded (so a manifest
+        // that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
+        maxBytes: modelWeightMaxBytes(task.role, task.sizeBytes),
         ...(resumeFrom > 0 ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true } : {}),
         onResponse: ({ status, contentLength }) => {
           // A 200 means the server ignored the Range request → the file restarts.

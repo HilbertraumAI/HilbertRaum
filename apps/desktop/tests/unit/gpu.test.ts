@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,7 +10,7 @@ import {
 } from '../../src/main/services/runtime/gpu'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 
-// Phase 15 GPU probe (architecture.md GPU record §5.1/§11.1). Zero GPUs, zero binaries: the
+// Phase 15 GPU probe (architecture.md GPU record §5.1). Zero GPUs, zero binaries: the
 // probe is driven entirely through the fake-spawn seam.
 
 // L19 (audit-2026-06-13): a captured-real-output regression fixture. This is the verbatim
@@ -136,6 +136,8 @@ function probeSpawn(behavior: (child: FakeProbeChild) => void): {
 }
 
 describe('probeGpuDevices', () => {
+  afterEach(() => vi.useRealTimers()) // T6: timeout test uses fake timers; restore for the rest
+
   it('parses devices from a successful probe and passes --list-devices', async () => {
     const { spawn, calls } = probeSpawn((child) => {
       child.stdout.emit('data', RTX_3080TI_OUTPUT)
@@ -175,13 +177,26 @@ describe('probeGpuDevices', () => {
     expect(await probeGpuDevices('/missing/llama-server', { spawn })).toEqual([])
   })
 
-  it('kills a hung probe on timeout and resolves []', async () => {
+  it('kills a hung probe on timeout and resolves [] (T6 — fake timers, no wall-clock flake)', async () => {
+    // T6 (post-merge audit Phase 5): the prior version awaited a REAL 20 ms setTimeout against a
+    // never-exiting child — a TEST-1-family wall-clock flake. Drive the probe's own kill-timeout
+    // through fake timers instead (the combine-signals.test.ts idiom) so it fires deterministically.
+    // `verify` is injected as a trivial resolver so only the timeout path is under fake-timer
+    // control (no real fs/microtask racing the timer); the verify path has its own test below.
+    vi.useFakeTimers()
     let child!: FakeProbeChild
     const spawn: SpawnFn = () => {
       child = new FakeProbeChild() // never exits on its own
       return child
     }
-    const devices = await probeGpuDevices('/bin/llama-server', { spawn, timeoutMs: 20 })
+    const probe = probeGpuDevices('/bin/llama-server', {
+      spawn,
+      timeoutMs: 20,
+      verify: async () => 'skip-dev'
+    })
+    // Flush the pre-spawn verify() microtask (arming the timer), then trip the kill-timeout.
+    await vi.advanceTimersByTimeAsync(20)
+    const devices = await probe
     expect(devices).toEqual([])
     expect(child.killed).toBe(true)
   })

@@ -271,6 +271,17 @@ force-quit. The contract now:
   (see "Stream recovery across navigation" below); the fix is guard-only. Teeth: `ChatUnmount.test.tsx`
   unmounts with a poll tick AND a flush timer in flight, then asserts `listDocuments` is not re-fetched
   and the flush timer was `clearTimeout`'d.
+  **Reconciled (full audit 2026-06-29 postmerge, F22 — the "applied uniformly" claim was overstated):**
+  two hold-outs remained when this record was written. `ModelsScreen`'s download/engine poll callbacks
+  (`setJob` + a transitional `void refresh()`) had **no** guard, and the `DiagnosticsTab`
+  `loadActivity`/`loadMoreActivity` refreshers — though this bullet listed "DiagnosticsTab refreshers" as
+  covered — guarded only `refreshStatus`/`refreshLogs`/the mount effect, not the activity-page setStates.
+  Phase 6 gives `ModelsScreen` its own `mountedRef` (guarding `refresh()` after its `await` + both poll
+  `.then`s) and routes the two `DiagnosticsTab` activity setStates through the existing component
+  `mountedRef`, so the discipline is **now actually uniform across every screen**. Teeth:
+  `ModelsScreenUnmount.test.tsx` (see §32). Sibling renderer lifecycle/a11y fixes landed the same phase:
+  **F21** (DictationButton mic-stream released when `getUserMedia` resolves after unmount — same
+  `mountedRef` idiom) and **F20** (WorkspaceGate per-`phase` focus management — `useEffect([phase])`).
 - **FE-5 (effect re-run on language change).** `I18nProvider.applyLanguageSetting` is now
   `useCallback([])` (identity-stable; it only needs `setLang`), so App's policy/settings effect, which
   lists it in deps, no longer re-fires `getPolicy()`+`getSettings()` purely because the UI language
@@ -409,19 +420,25 @@ decode without an `index ↔ resident-cache` import cycle (re-exported from the 
 **Invalidation contract (the highest-risk surface — a stale buffer silently corrupts ranking).**
 Belt-and-suspenders, three mechanisms (the per-write *full rebuild* was removed in Phase 5 — see the
 PERF-1 note below; the original mechanism descriptions are folded into the three bullets):
-- **Incremental delta (primary in-band path, PERF-1 / full-audit-2026-06-29 Phase 5):**
-  `invalidateResidentVectors(db)` is called at the three `embeddings` write sites — `ingestion/index.ts`
-  finalize-insert + reindex chunk-phase delete + `deleteDocument`. It now MARKS the cache dirty (it no
-  longer drops it); the next `getResidentVectors` RECONCILES the delta — an `ids-only` scan
-  (`SELECT chunk_id`, no `vector_blob`, no decode) drops cached ids that are gone, and ONLY the
-  genuinely-new chunk ids are point-looked-up + `decodeVector`'d. So a pure-add of K vectors into an
-  N-vector corpus decodes exactly **K rows, not N**. The reconcile keys on the UNIQUE `chunk_id`, so it
-  is correct even when a deleted row's rowid is reused by a re-index (the new row carries a NEW
-  `chunk_id` → old id out, new id in) — this is also what closes the one signature blind spot: deleting
-  the single max-rowid row then inserting one row reusing that rowid leaves `(count, maxRowid)` unchanged,
-  so only the explicit flag (not the signature) can see it. The result is byte-identical to a
-  from-scratch rebuild for every insert/delete/reindex/same-rowid sequence (an in-band write never
-  mutates a vector under a *surviving* chunk_id; re-index mints fresh ids).
+- **Incremental delta (primary in-band path, PERF-1 / full-audit-2026-06-29 Phase 5; named-delta fast
+  path, F12 / post-merge close-out):** `invalidateResidentVectors(db, delta?)` is called at the three
+  `embeddings` write sites — `ingestion/index.ts` finalize-insert + reindex chunk-phase delete +
+  `deleteDocument`. It MARKS the cache pending (it no longer drops it); the next `getResidentVectors`
+  RECONCILES. PERF-1 removed the per-write full *decode*; **F12** removed the per-write O(N) *id-scan*
+  for the in-band paths: each write site now passes the **exact** chunk_ids it added/removed (the
+  pure-add finalize knows them from its insert; the two delete sites capture them via
+  `embeddingChunkIdsForDocument` before the delete), so the reconcile drops the named removed ids and
+  `decodeVector`'s only the named added ids by point lookup on the `chunk_id` PRIMARY KEY — **no
+  whole-table scan**. A pure-add of K decodes K and reads 0 extra rows. A cheap `Map.size === COUNT(*)`
+  gate then confirms consistency; a delta-less `invalidate(db)` (a direct/out-of-band writer — tests,
+  the manual bench), a missed/wrong delta, or a truncated-blob omission falls back to the FULL chunk-id
+  scan (`SELECT chunk_id`, no decode) — the self-healing path. Both paths key on the UNIQUE `chunk_id`,
+  so they stay correct when a deleted row's rowid is reused by a re-index (new row → NEW `chunk_id` →
+  old id out, new id in) — also what closes the one signature blind spot: deleting the single max-rowid
+  row then inserting one row reusing that rowid leaves `(count, maxRowid)` unchanged, so only the
+  explicit flag (not the signature) can see it. The result is byte-identical to a from-scratch rebuild
+  for every insert/delete/reindex/same-rowid sequence (an in-band write never mutates a vector under a
+  *surviving* chunk_id; re-index mints fresh ids).
 - **Staleness signature (self-healing backstop):** a cheap whole-table signature `(COUNT(*), MAX(rowid))`
   is recomputed at the top of every `search`. If the table changed but NO write went through the explicit
   hook (a direct SQL / out-of-band writer — e.g. test seeding), the dirty flag is clear yet the signature
@@ -440,12 +457,18 @@ the whole map on every `embeddings` write (each insert/delete/reindex `invalidat
 the next query paid a full ~150 MB re-read + ~580 ms re-decode at the 100k bound — and it recurred after
 *every* import/re-index/delete (a heavy "import N docs, ask between each" session paid N full rebuilds).
 The incremental delta above removes that: a mutation now only pays the ids-only scan + a decode of the
-new rows. The off-main-thread worker (P4b) and ANN (P4c) remain the longer-term paths and the linear-scan
-ANN deferral (D15) is unchanged — Phase 5 only removes the per-write full rebuild. Proven in
-`tests/integration/resident-cache-incremental.test.ts`: equivalence (incremental map == a from-scratch
-rebuild byte-for-byte across insert/delete/reindex/same-rowid), the decode-count speedup (K not N, with a
-purge→full-decode teeth contrast), the same-rowid blind spot (signature unchanged → only the hook catches
-it), the signature backstop self-heal, and the lock-purge drop (decode-count contrast vs `invalidate`).
+new rows. **F12 (full-audit-2026-06-29-postmerge close-out)** then removed the ids-only scan too for the
+in-band paths — the named delta (above) decodes the new rows by point lookup with no whole-table scan,
+falling back to the scan only for a delta-less/out-of-band write or a tripped size gate. The
+off-main-thread worker (P4b) and ANN (P4c) remain the longer-term paths and the linear-scan ANN deferral
+(D15) is unchanged. Proven in `tests/integration/resident-cache-incremental.test.ts`: equivalence
+(incremental map == a from-scratch rebuild byte-for-byte across insert/delete/reindex/same-rowid), the
+decode-count speedup (K not N, with a purge→full-decode teeth contrast), the same-rowid blind spot
+(signature unchanged → only the hook catches it), the signature backstop self-heal, and the lock-purge
+drop; F12 adds the **named-delta equivalence** (delta == cold rebuild), a **no-`SELECT chunk_id`-scan**
+assertion (the delta path issues no whole-table scan), delta-composition (add-then-delete nets out), and
+the **size-gate self-heal** (a wrong/incomplete delta falls back to the full scan, teeth-checked).
+`tests/manual/resident-cache-bench.test.ts` adds the reconcile-cost leg (FULL id-scan vs DELTA no-scan).
 
 **Measurement — confirmed on the PAID drive (D:, b9585; the "real E5-runtime numbers PENDING" item is
 now closed).** Two legs, because the scan is **data-independent** (N dot-products of 384-dim Float32 +
@@ -776,6 +799,22 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   now *throws the mapped friendly message* (not a raw rethrow) on overflow, and `friendlyIpcError`
   strips any `WordError:` class-name prefix (not just `Error:`). Before this, the carefully-built
   friendly copy was dead for the chat/RAG path and users saw the raw `ChatRequestError: … HTTP 400`.
+- **Regenerate is delete-after-slot (F2, post-merge audit 2026-06-29).** "Regenerate" re-answers the
+  last user turn by dropping the previous assistant reply. The destructive delete must NOT commit
+  before the stream slot is claimed: `node:sqlite` is synchronous, so a pre-slot
+  `deleteLastAssistantMessage` was durable the instant it ran, and any non-abort failure between it
+  and the first persisted token — `acquireSlot` rejecting, a sidecar that died mid-session, or (most
+  reachably) an `exceed_context_size_error` HTTP 400 because regenerate replays the full history near
+  the window — left the turn **answer-less and irrecoverable**. The IPC layer now only does the
+  read-only `hasRegenerableAssistantReply` precondition (the unchanged "nothing to regenerate" bail)
+  **before** the stream; the delete itself runs **inside** `withChatStream`'s `runFn` via
+  `withRegenerateGuard` (`ipc/chat-stream.ts`) — after the slot is held + the controller registered —
+  and the snapshot it returns is **re-inserted byte-faithfully** (`restoreMessage`: same id, timestamp,
+  citations, coverage, skill stamp) if generation fails for a NON-abort reason. A user Stop (abort)
+  keeps the delete (the new partial/empty reply stands). Applied symmetrically to **both** channels —
+  `registerChatIpc` (`generateAssistantMessage`) and every `registerRagIpc` `withChatStream` site
+  (grounded / whole-doc / compare / exhaustive-run / listing / refusal). The slot/stream semantics are
+  otherwise identical; the only change is WHEN the regenerate delete runs.
 - **Streaming contract (LOCKED).** Main → renderer over per-conversation IPC event channels
   keyed by the conversation id: `chat:token:<id>` (one token per event), `chat:done:<id>`
   (the final assistant `Message`), `chat:error:<id>` (an error string) — helpers in
@@ -1464,7 +1503,9 @@ adds is the safety machinery:
   The E5 embedder carries the same failed-start latch, with one deliberate difference: its
   latch **clears on `suspend()`** — the embedder has no graceful degradation (a latched
   failure blocks all imports), so replacing a bad GGUF + lock/unlock must make imports
-  retryable without an app restart.
+  retryable without an app restart. A **transient port-bind race never arms either latch**
+  (F4/F7, `isBindRaceError` — see GPU record §5.5b): only a genuine load fault latches, so a
+  double-unlucky startup port race no longer silently disables imports / reranking for the session.
 - **Hybrid keyword retrieval (Phase 21)** — `chunks_fts` (FTS5, `text` + `chunk_id UNINDEXED`,
   trigger-synced from `chunks`, guarded migration + backfill in `db.ts`) gives `rag.retrieve` a
   BM25 keyword pass fused with the cosine pass by reciprocal rank (k = 60, `rag/hybrid.ts`).
@@ -1616,6 +1657,38 @@ surfaces; this covers the chat runtime AND the embedder/reranker/vision (which c
 directly and previously had no retry at all). (b) `LadderRuntime` no longer persists `gpuAutoDisabled`
 when a rung-1 failure message is a bind race rather than a device/driver/model fault — so one unlucky
 port collision can never disable GPU for the whole session. Only a real device failure auto-disables.
+
+**§5.5b Bind-race aware START-LATCH for the embedder + reranker (full-audit-2026-06-29-postmerge, F4/F7).**
+The bind retry above is bounded to ONE attempt, so during the documented near-simultaneous chat + embedder
++ reranker + vision startup a sidecar can still lose the port **twice** and have `start()` throw a
+bind-class error. The embedder (`embeddings/e5.ts`) and reranker (`reranker/llama.ts`) each carry a
+**failed-start latch** that fails fast (no health-timeout stall) on every subsequent call — intended for a
+PERMANENT fault (a corrupt/incompatible GGUF). The latch's `.catch` previously armed for **any** rejection,
+so a transient double-bind-race latched a permanent-looking failure: the embedder then **silently disabled
+ALL imports for the session** (it has no graceful degradation) until lock/unlock, and the reranker **disabled
+reranking for the whole session** (a silent quality regression — `rag/index.ts` falls back to fused order) and
+its latch even **survives `suspend()`**. Both `.catch`es now reuse the same `isBindRaceError` classifier as
+the retry (the retry and the latch must agree): a bind-class message leaves `startFailed` **null**, so the
+next `embed()`/`rerank()` re-attempts a fresh start on a new port. Only a genuine load fault latches — which
+makes the reranker's deliberate **keep-the-latch-across-`suspend()`** policy correct again (a bad GGUF won't
+load after unlock; a port race must not be remembered). The embedder additionally **clears** its latch on
+`suspend()` (its one deliberate difference — see "Models & runtime"), so a replaced weight file is retryable
+via lock/unlock.
+
+**§5.5c `tearingDown` guard — suspend() gets the orphan protection stop() has (full-audit-2026-06-29-postmerge, F19).**
+`stop()` (will-quit) sets `this.stopped = true` BEFORE `teardown()`, so a racing lazy `ensureStarted` refuses
+to spawn and can't leave an orphan. `suspend()` (workspace LOCK) sets no such latch, so a `suspend()` that
+interleaved with a concurrent `embed()`/`rerank()` — a RAG-query or tree-build embedding, which are NOT in
+`inFlightStreams` and which `abortActiveBuild()` only *cooperatively* cancels — could stop the OLD sidecar
+while a fresh `ensureStarted` spawned and **retained** a new one, surviving the lock with chunk/query-text-
+derived state in process RAM. Fix (both `embeddings/e5.ts` and `reranker/llama.ts`): a `tearingDown` flag is
+set at the top of `teardown()` and cleared in its `finally`; `ensureStarted` refuses (throws "is suspending")
+while it is set — at the top AND re-checked after `await this.starting` (a teardown may begin during that
+await and null the server it would return). Cleared in `finally`, so a normal post-suspend `embed()`/`rerank()`
+still lazily restarts (only `stop()`'s separate, permanent `stopped` latch blocks that). Deterministically
+teeth-tested (`e5-embedder.test.ts` / `reranker.test.ts`, F19): a gated-exit child parks teardown's
+`server.stop()`, a concurrent embed/rerank fires in that window, and the assertion is that NO sidecar survives
+the lock (one spawn, killed) — red without the flag (the concurrent start spawns + is retained).
 
 **§5.4 Where GPU state lives:**
 
@@ -2636,6 +2709,54 @@ the de-AT target locale).
   The flag is **matching-only** — `run.ts` seeds just `match_kind`/`pattern` into `bank_category_rules`
   (transparency), so nothing is persisted and no schema change is needed.
 
+**Financial correctness (full-audit-2026-06-29-postmerge, Phase 1 — F1/F3/F6/F8 + T5).** A post-merge
+fresh pass found the prior round's **bank** hardening (BL-1/2/3) had not propagated to the sibling
+**invoice** path, plus a HIGH amount-column hazard on both. Parsing-only (no schema/IPC/audit-payload
+change); all fixed **test-first** through the real `extractTransactionRows`/`parseLineItem`/
+`validateInvoiceTotals` entry points (characterization-first, then flipped to the correct values).
+- **F1 — uncaptured amount column read the running BALANCE as the amount (`bank-statement.ts parseLine`
+  + `invoice.ts parseLineItem`), HIGH.** A whole-euro amount (`50`) or single-decimal (`12,5`) is rejected
+  by the 2-dp `MONEY_RE`, so `Sparen 50 1.234,56` collapses to ONE money token — the *balance* — and the
+  position heuristic took it as the movement amount (off by the whole balance magnitude; `reconcileBalances`
+  cannot catch it because the row records no `balanceAfter`). **Fix — STATEMENT-CONTEXT-AWARE drop (diverged
+  from the audit's literal "drop whenever a left digit-run remains").** `parseLine` now FLAGS
+  `ambiguousAmount` (one money token + a description ending in a bare number); `extractTransactionRows` drops
+  the flagged row **only when the statement has a balance column** (`rows.some(r => r.balanceAfter !==
+  undefined)`). The unconditional drop the audit suggested **regressed the flagship HVB "Umsätze"** no-balance
+  format (`pdf-bank-layout.test.ts`), where a numeric-ending payee (`REWE … 1234 -19,15`) is a single-token
+  row whose lone figure genuinely IS the amount — so it must be kept. The **invoice** mirror drops on the
+  OPPOSITE side: it reads the line total as the LAST figure, so it drops a row with an uncaptured numeric
+  column to the **RIGHT** of the last money token (`Hosting 12,50 500` → the real total `500` lost), while a
+  bare number to the LEFT is a quantity (kept). Residual: a *lone* `Sparen 50 1.234,56` with no balance-column
+  row to establish context keeps the old read; and a balance-column row that legitimately has a missing
+  balance + numeric payee is dropped (recall loss, never a wrong figure) — both documented in known-limitations.
+- **F3 — invoice per-line currency from the WHOLE line + missing single-currency guard (`invoice.ts`),
+  MEDIUM.** The BL-2 figure-region fix was never applied to the invoice path: `detectCurrency(line)` scanned
+  the description, so `USD adapter cable 12,50` on a EUR invoice tagged the line USD (ISO codes scan before
+  symbols). **Fix:** detect on the figure region (`rest.slice(matches[0].index)`) with `documentCurrency`
+  fallback — mirror of `bank-statement.ts`. Separately, `validateInvoiceTotals` gained the bank gate's
+  **single-currency guard**: a line-item currency set of size > 1 returns `lineItemsSumToNet: 'unknown'`
+  rather than summing `lineTotal` across currencies into a meaningless cross-currency figure.
+- **F6 — space-column FUSION on the geometry-less invoice path (`invoice.ts isFusedSpaceGroup`), MEDIUM.**
+  `MONEY_RE`'s space-grouped alternative reads `<1-3 digits> <3 digits>` as one figure, so `Widget 10 100`
+  fuses to `10 100` → 10100 (~100× too large). The bank path is mitigated by the geometry column model (D58);
+  the invoice path has no backstop (F10). **Fix:** a matched token with an interior space and NO 2-dp decimal
+  tail is the fusion-prone form (a real line total prints cents) → drop the row. A decimal-anchored space group
+  (`1 234 567,89`) is kept; a space group WITH a decimal (`15 799,00`) stays the accepted DECISION-2 trade-off.
+- **F8 — greedy `quantity` split (`invoice.ts QTY_TRAIL_RE`), LOW (metadata).** A trailing number was split off
+  the description as `quantity` even with no unit word, so `iPhone 15` → "iPhone" qty 15. **Fix:** the unit
+  token is now a CAPTURING group; the split fires only when a unit token is present OR a unit-price column
+  (`amounts.length >= 2`) corroborates it. The columnar `Widget A 2 12,50 25,00` still reads quantity 2.
+  `lineTotal` was never affected.
+- **T5 — the 2-dp integer-cent invariant (`money.ts parseAmount`).** `parseAmount` now rounds every figure to
+  the nearest cent (`Math.round(|value|*100)`), so `Math.round(x*100)` is its EXACT cent value — the
+  load-bearing premise of `assessCompleteness`/`reconcileBalances` (which tie out in integer cents) and CSV
+  `toFixed(2)`. **Decision:** a >2-dp printed figure (only reachable via the both-separator `1.234,567` form)
+  is read to the nearest cent (`1234.57`), **not dropped** — a sub-cent normalisation, never a
+  confidently-wrong magnitude. (Single-separator 3-digit-group thousands forms `1.000`/`12.345` are integers,
+  unaffected — DECISION 2.) Parens-negative through the real scanner (T4) and negative line totals / credit
+  notes (Gutschrift/Rabatt, T9) are now pinned by whole-string tests.
+
 ### §11 IPC / audit surface
 
 `skills:list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning` +
@@ -3087,6 +3208,25 @@ mixed-currency / missing-figure case — so a drift in **either** the body or th
   The invoice schema records no per-figure source page, so citations are the document's leading
   source chunks (still real chunks, M2-safe). i18n: `skills.invoiceAnalysis.*` (EN+DE parity), reusing
   the shared `coverage.extract.*` meter + `skills.analysis.refusePartial` refuse copy.
+- **Invoice reuse / replace / staleness — parity with the bank path (F5, post-merge audit Phase 3).**
+  The invoice analysis handler now uses the **same** reuse-or-re-extract decision as
+  `analysis/bank-statement.ts` (it previously re-extracted + INSERTed a fresh `invoices` row on **every**
+  analysis question — unbounded content-table bloat for a deterministic re-extraction). `invoices` gained
+  an `extractor_version` column (additive nullable migration in `db.ts`, mirroring
+  `bank_statements.extractor_version`); every extraction stamps it with `INVOICE_EXTRACTOR_VERSION`
+  (`tools/invoice.ts`). The handler resolves `latestInvoiceId(db, docId)` and **REUSES** it when present
+  and **not stale**; it re-extracts only when none exists OR `isInvoiceStale` (stored version NULL/legacy
+  or `<` current). A re-extract passes `replaceExisting: true`, so `runInvoiceExtraction` calls the shared
+  `deleteInvoicesForDocument` (the SAME ordered FK delete `purgeSkillDataForDocument` uses — invoice line
+  items, then invoices) **inside** the persist `BEGIN/COMMIT` before the INSERT (atomic swap; a failure
+  rolls back to the old). The old `totals_reconciled` flag goes with the replaced row (the validate seam
+  recomputes it). `latestInvoiceId` is the single shared "latest invoice" helper (`invoice-run.ts`,
+  `created_at DESC, id DESC` tie-break) across both call sites — the downstream run seam and this read-back.
+  **Bump `INVOICE_EXTRACTOR_VERSION` whenever the invoice parser changes output for the same input** (it is
+  at **1** — baseline = the parser as built through the post-merge Phase 1 F1/F3/F6/F8 hardening; legacy
+  NULL rows are stale and re-extract on next reuse). Tests: `skills-analysis-invoice.test.ts` (N questions
+  persist exactly one invoice + one line-item set; a fresh invoice is reused with no duplicate; a
+  version-NULL invoice is detected stale → re-extracted + replaced in place at the current version).
 
 **Scope resolution (audit X-1, Phase 10).** Each handler's `applies()`/`run()` resolve the in-scope
 documents through the **one shared** `documentsInScope(db, scope, { requireChunks })` helper
@@ -3895,15 +4035,23 @@ audit read each of these and found them correct and well-tested; they are delibe
 
 - **Crypto / vault** — lifecycle, key-zeroing on lock / wrong password, journaled v1→v2 rekey: re-attested
   (the §24 crypto inventory still holds end-to-end).
-- **The full IPC `requireUnlocked()` surface** — every DB-touching handler is guarded; TEST-N8 added a
-  **structural** test enumerating them and SEC-N2 closed the one benchmark parity gap.
+- **The full IPC `requireUnlocked()` surface** — every DB-touching handler **fail-closes** when locked
+  (the `ctx.db` getter throws); TEST-N8 added a **structural** lock test over the **chat + benchmark**
+  handlers and SEC-N2 closed the one benchmark parity gap. *(Correction, post-merge §30/F16: the
+  original TEST-N8 enumerated only chat+benchmark — not "every" module. The audit/core-settings/model/rag
+  groups touched `ctx.db` with no **explicit** `requireUnlocked()` preamble, so they fail-closed but
+  surfaced the raw English vault string. §30 added the localized preamble to those four groups and
+  **generalized** the structural test across the core/model/audit/rag/benchmark/collections modules — see
+  `tests/integration/ipc-lock-coverage.test.ts`; the rest (docs/doctasks/images) keep their own dedicated
+  locked-vault tests.)*
 - **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
   allow-list, CSP `connect-src 'self'`, OCR window deny-all.
 - **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
   `windowsHide` / `child.unref()` on the probe.
 - **Offline / SSRF posture** — IPv4-anchored loopback guard (fails safe), per-redirect-hop re-validation
   (https-only + private-range deny), streamed-size cap; only the two user-gated downloaders + loopback
-  sidecars use `fetch`.
+  sidecars use `fetch`. *(Post-merge §30: the private-range deny also now covers the **IPv4-mapped IPv6**
+  form — F15 — and the streamed-size cap is now **always bounded** on both downloaders — F17.)*
 - **RRF fusion determinism** — the pure `rrfFuse` units stay strong, and the pass-through guarantee (no
   keyword / no reranker ⇒ byte-identical to vector-only) was re-verified in Phase 6.
 - **Vector codec hardening** — `decodeVector` truncated-blob guard + module-load LE assert; TEST-N7 added a
@@ -3963,7 +4111,7 @@ lives in **this section**. This ledger is the durable index — resolve a code c
 | DOC-3 (Low) | 6 | **fixed (docs)** — `bge-reranker-v2-m3.yaml` `size_on_disk_gb` 1.08 (GiB mislabel) → **1.16** (decimal GB, matching `size_bytes 1159776896 / 1e9` and the other twelve manifests); `model-policy.md` "~1.08 GB" → "~1.16 GB" | model-manifest + model-policy.md reranker row |
 | DOC-4 (Low) | 6 | **fixed (docs)** — dropped the dangling `/§11.1` from `benchmark.test.ts`'s "GPU record §8/§11.1" comment (the GPU record is §1–§8; §8 resolves) | code comment → arch GPU record §8 |
 | SEC-1 doc half (Low) | 6 | **docs-only** — added an **accepted-residual** note: vault unlock has no attempt counter / rate-limit and only an 8-char floor, so against the lost/stolen-drive threat a weak-but-≥8 password is offline-guessable at interactive-minimum Argon2id cost; at-rest Argon2id+AES-GCM is the primary mitigation; recorded as a defensible offline trade-off | security-model.md "Accepted residual — offline password guessing" |
-| TEST-6 (Info) | 3 | **docs-only / by-design** — no automated answer-quality floor in CI (the eval harness prints precision as a measurement; the S13b bar is owner-gated on D1; real-model benchmarks are env-gated out of CI by design); caught only by the manual smoke matrix | arch test-enforcement record TEST-6 |
+| TEST-6 (Info) | 3 | **docs-only / by-design** — the **S13b skill-trigger precision bar IS a live CI gate** (`fired-wrong == 0` ∧ `precision ≥ 0.95`, `skill-triggers.test.ts`); the remaining no-automated-floor gap is narrower: **RAG answer-quality + real-model output** (env-gated out of CI by design), caught only by the manual smoke matrix. *(Wording corrected Phase 7 / D1 — the original "owner-gated on D1" claim went stale once the S13b bar landed.)* | arch test-enforcement record TEST-6 |
 | **SEC-1 code half** (Low) | — | **accepted residual / open follow-up** — unlock-path rate-limit/attempt-counter + create-time strength meter/floor; deliberately **not** built in the docs-only close-out (a UI rate-limit doesn't bind the offline attacker that is the real threat; the at-rest KDF is the mitigation) | security-model.md residual note |
 | SEC-2 (Low) | — | **accepted residual / open follow-up** — `previewSkillPackage` stages path-/size-validated, finally-cleaned content to the shared OS `tmpdir()`; not an escape (skill packages aren't secret). Follow-up: stage under `userSkillsDir` for trust-zone consistency | this ledger |
 | SEC-3 (Info) | — | **accepted residual / open follow-up** — the dialog-opener IPCs (`pickSkillPackage`/`pickDocuments`/`imageChooseImage`) mint a capability token pre-unlock, but every **consuming** handler is `requireUnlocked()`-gated so the token is inert until unlock; a consistency gap, not an exploit | this ledger |
@@ -3999,6 +4147,297 @@ were test-only with no `src/` behavior change; Phase 6 was docs/comments-only + 
 / audited / exported; no schema/IPC/audit-payload change in any phase. Final suite **2463 passed / 39 skipped
 (2502 collected)** (typecheck + build green; the Phase-6 docs/comments change touched no test and the suite is
 unchanged from Phase 5).
+
+### §27 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 1 — money-parser correctness)
+
+A **fresh post-merge full audit** (report `audits/full-audit-2026-06-29-postmerge.md`), run after §26 was
+merged, found the prior round's **bank** hardening had not propagated to the sibling **invoice** path. The
+pattern: *the fix exists next door but wasn't applied here.* It enumerated **1 High, ~9 Medium, ~13 Low**;
+**Phase 1 — the release-blocker money-parser class — is remediated** on branch `audit-postmerge-phase1-money`
+(suite **2483 passed / 39 skipped**, typecheck + build green). Parsing-only; no schema/IPC/audit-payload
+change. The design record is **§8 "Financial correctness (full-audit-2026-06-29-postmerge, Phase 1)"**;
+resolve a `full-audit-2026-06-29-postmerge <ID>` code comment through this ledger. Later phases (F2/F4/F5/F7/
+F9 reliability, F11–F19 RAG/security/concurrency, F20–F24 renderer, D1–D8 docs, T1–T9 test seams) are **not
+started** — carried in the report.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F1** (High, release-blocking) | 1 | **fixed** — an uncaptured amount column read the running BALANCE as the movement amount (`Sparen 50 1.234,56` → 1234.56). Bank: `parseLine` FLAGS `ambiguousAmount` (one money token + bare-number-trailing description); `extractTransactionRows` drops it **only when the statement has a balance column**. **DIVERGED from the audit's literal "drop whenever a left digit-run remains"** — the unconditional drop regressed the HVB "Umsätze" no-balance numeric-payee format (`REWE … 1234 -19,15`), so the drop is statement-context-aware. Invoice mirror drops on the **RIGHT** (line total = LAST figure): `Hosting 12,50 500` → drop | arch §8 (F1); known-limitations LINE PARSER (F1 + residuals) |
+| F3 (Med) | 1 | **fixed** — invoice per-line `detectCurrency` now scans only the **figure region** (`rest.slice(matches[0].index)`) with `documentCurrency` fallback (the BL-2 fix, never applied to invoices); `validateInvoiceTotals` gained the bank gate's **single-currency guard** (`lineItemsSumToNet: 'unknown'` for a >1 line-item currency set) | arch §8 (F3); known-limitations (figure-region currency bullet) |
+| F6 (Med) | 1 | **fixed** — on the geometry-less invoice path a space-grouped token WITHOUT a 2-dp decimal tail (`Widget 10 100` → 10100) is a likely column fusion → the row is **DROPPED** (`isFusedSpaceGroup`); a decimal-anchored `1 234 567,89` is kept; `15 799,00` stays the accepted DECISION-2 trade-off | arch §8 (F6); known-limitations (grouping bullet) |
+| F8 (Low) | 1 | **fixed** — the invoice `quantity` split now requires a unit token (a captured `QTY_TRAIL_RE` group) OR a corroborating unit-price column; `iPhone 15 1.799,00` keeps "iPhone 15", `Widget A 2 12,50 25,00` still reads qty 2. Metadata-only (lineTotal unaffected) | arch §8 (F8); known-limitations (qty bullet) |
+| T5 (test/invariant) | 1 | **pinned** — `parseAmount` rounds every figure to the nearest cent (`Math.round(\|value\|*100)`) so the integer-cent invariant holds by construction; a >2-dp `1.234,567` reads `1234.57` (normalised, not dropped). T4 (parens-negative) + T9 (negative line totals / Gutschrift/Rabatt) now pinned through the real scanner | arch §8 (T5); known-limitations (2-dp bullet) |
+| F10 (Low) | 1 | **acknowledged (no code change)** — the invoice path runs without geometry layout reconstruction (D58 is bank-only), so it is the most parse-fragile money path; Phase 1 prioritised its robustness (F1 right-side drop, F6 fusion drop) since it has no backstop, and the asymmetry is recorded | arch §8 (F1/F6); known-limitations (invoice geometry note) |
+| F2, F4, F7, F9 | 2 | **fixed (Phase 2)** — chat-regenerate data-loss (F2) + embedder/reranker bind-race start-latch (F4/F7) + compaction-failure log (F9); see the **§28 ledger** | arch §28; arch "Chat & streaming"; GPU record §5.5b |
+| F5 | 3 | **fixed (Phase 3)** — invoice extraction re-inserted a fresh invoice + line items on every analysis question (no reuse/replace/staleness, where the bank path has all three); now mirrors the bank reuse-or-re-extract gate (`extractor_version` + `isInvoiceStale` + `replaceExisting` atomic swap); see the **§29 ledger** | arch §29; arch §8 (invoice reuse/replace/staleness parity) |
+| F14, F15, F16, F17 | 4 | **fixed (Phase 4)** — security consistency: F15 mapped-IPv6 SSRF deny-list bypass, F14 diagnostics-log buffer readable after lock, F16 IPC lock-guard parity + generalized structural test (subsumes **T3**), F17 download size caps always bounded; see the **§30 ledger** | arch §30; security-model §D3 + "encrypted log" record; §25 inventory correction |
+| T1, T2, T6, T7, T8, T9, T3 | 5 | **closed (Phase 5, test-only)** — test-enforcement seams: T1 SIGKILL escalation unit test, T2 resident-cache lock-purge IPC wiring, T6/T7 two TEST-1-family flakes de-flaked (fake timers / `vi.waitFor`), T8 crash-fallback real-reap assertion, T9 truncated-ciphertext nit; T3 verified subsumed by F16; T4/T5 done in Phase 1. `git diff src/` empty; see the **§31 ledger** | arch §31; "Test-enforcement seams" record (Phase-5 subsection) |
+| F20, F21, F22, F23, F24 | 6 | **fixed (Phase 6, renderer-only)** — frontend a11y + lifecycle: F20 first-run gate phase-focus management (the `finishing` step had no focus target — the real gap; welcome→password & →starter already focused via `autoFocus`), F21 mic-stream leak when getUserMedia resolves after unmount, F22 ModelsScreen poll + DiagnosticsTab activity refreshers join the FE-4 `mountedRef` discipline (the claim now holds), F23 StreamAnnouncer `aria-atomic` drop, F24 Composer fallback caret-timer cleared on unmount; see the **§32 ledger** | arch §32; "Renderer robustness" FE-4 reconciliation |
+| D1–D8 + F11/F13 doc-notes | 7 | **fixed / recorded (Phase 7, docs + comments-only)** — the D1–D8 documentation contradictions reconciled to one source of truth + the F11/F13 as-built distinctions carried into the topic docs + a clean §-anchor sweep; see the **§33 ledger** | arch §33; rag-design §14.4 (F11) + §12.1 R3 (F13) |
+| F12, F18, F19 | 8 | **fixed (Phase 8, the close-out)** — F12 named-delta resident-cache reconcile (no O(N) id-scan), F18 vision terminal-write cancelled-guard, F19 `tearingDown` race guard on embedder+reranker `suspend()`; the audit report was RETIRED here. The **F11 renderer half** + **F13 code** are carried forward. See the **§34 close-out ledger** | arch §34 (master close-out); Performance/Wave-P4 (F12); GPU §5.5c (F19); Image-understanding §5 (F18) |
+
+**Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
+class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
+change. Every fix is **characterization-first then test-first** (pin current behaviour → assert the correct
+post-fix value → red on current code → green after the fix) through the real `extractTransactionRows`/
+`parseLineItem`/`validateInvoiceTotals` entry points (TEST-N2 discipline: whole strings, never pre-isolated
+tokens). The normal 2-figure de-AT row is byte-identical; the HVB no-balance geometry case
+(`pdf-bank-layout.test.ts`) stays green (the F1 divergence exists to protect it).
+
+### §28 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 2 — chat-regenerate data-loss + sidecar bind-race reliability)
+
+**Phase 2** of the post-merge audit closes the reliability cluster — all four "apply the fix that already
+exists next door" findings: the regenerate path commits a destructive delete before the REL-3-protected slot
+is claimed (F2), and the embedder/reranker start-latches never received the REL-1 bind-race classifier
+(F4/F7), plus the silent compaction-failure swallow (F9). Branch `audit-postmerge-phase2-runtime-reliability`
+(suite **2492 passed / 39 skipped**, typecheck + build green). No schema/IPC-channel/audit-payload change.
+Design records: **"Chat & streaming" (regenerate is delete-after-slot)** + **GPU record §5.5b (bind-race aware
+start-latch)**; resolve a `full-audit-2026-06-29-postmerge <ID>` code comment through this ledger.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F2** (Med, data-loss) | 2 | **fixed** — regenerate dropped the prior assistant reply (committed; `node:sqlite` is synchronous) BEFORE the stream slot was claimed, so a non-abort failure (a context-exceeded 400, a dead sidecar, a rejected slot) left the turn answer-less. The IPC layer now does only the read-only `hasRegenerableAssistantReply` precondition before the stream; the delete runs INSIDE `withChatStream`'s `runFn` via `withRegenerateGuard` (slot held + controller registered) and the snapshot is **re-inserted byte-faithfully** (`restoreMessage`) on a non-abort failure. A user Stop keeps the delete. Applied to **both** channels (`registerChatIpc` + every `registerRagIpc` `withChatStream` site); slot/stream semantics otherwise identical | arch "Chat & streaming" (regenerate is delete-after-slot) |
+| **F4** (Med) | 2 | **fixed** — the embedder start-latch (`e5.ts`) armed for ANY rejection, so a transient double-bind-race (REL-1 retries only once) latched a permanent-looking failure and **silently disabled all imports** for the session until lock/unlock. The `.catch` now skips arming when `isBindRaceError(message)` — leaving `startFailed` null so the next `embed()` re-attempts on a fresh port. The latch still arms (and still clears on `suspend()`) for a genuine load fault | arch GPU record §5.5b; known-limitations (embedder latch) |
+| **F7** (Low) | 2 | **fixed** — same bind-race exclusion for the reranker (`reranker/llama.ts`). Its latch is more persistent (it deliberately SURVIVES `suspend()`), so latching a race disabled reranking for the whole session (a silent quality regression — retrieval falls back to fused order). Forgiving the race makes the keep-on-`suspend()` policy correct again: only a genuine load fault persists | arch GPU record §5.5b; known-limitations (reranker latch) |
+| **F9** (Low) | 2 | **fixed** — `chat/compaction.ts`'s `catch {}` around `summarizeRegion` was fully empty, so a repeatable summarizer BUG (not a user Stop) compacted never, silently, forever (offline/no-telemetry). The fallback to L1 is unchanged; the NON-abort case now `log.warn`s (`conversationId` + the error message — no chat content), an `AbortError` still does not | arch "Chat & streaming" (compaction) |
+
+**Posture held (Phase 2):** offline / no telemetry / no new network egress; the **content class** (chat
+text, document text, extracted figures) is never logged/audited/exported (F9's diagnostic carries only the
+conversation id + the underlying error message); no schema/IPC-channel/audit-payload change. The bind-race
+classifier is **reused, not re-invented** — the retry (§5.5) and the latch (§5.5b) share `isBindRaceError`, so
+they can't drift. Every fix is **test-first** (red on current code → green after): F2 drives the real chat +
+RAG IPC handlers (`chat-ipc.test.ts`, `rag-regenerate-ipc.test.ts`) with a runtime that 400s on a regenerate
+and asserts the prior reply survives + a service-level delete→restore round-trip (`chat.test.ts`); F4/F7
+inject a double-bind-race at the real spawn/health seam (`e5-embedder.test.ts`, `reranker.test.ts`) and assert
+the latch stays null + a later call retries (F7 also pins survives-`suspend` vs a genuine fault persisting);
+F9 spies `log.warn` on a non-abort summarizer throw and asserts the abort path stays silent
+(`chat-compaction.test.ts`). **Open (later phases):** F11–F19 RAG/security/concurrency (Phase 4/8), F20–F24
+renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1–T9 test seams (Phase 5).
+
+### §29 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 3 — invoice data lifecycle parity)
+
+**Phase 3** closes the single data-integrity finding F5 — again the "apply the fix that already exists next
+door" pattern: the **bank** path reuses a fresh extraction and gates re-extraction on a version + staleness
+check; the **invoice** path had none of it and re-inserted a brand-new `invoices` row (+ line items) on
+**every** analysis-shaped question. The fix is **parity, not a new design** — the invoice path now mirrors
+`analysis/bank-statement.ts` exactly. Branch `audit-postmerge-phase3-invoice-lifecycle` (suite **2495 passed
+/ 39 skipped**, typecheck + build green). The design record is **§8 "Invoice reuse / replace / staleness —
+parity with the bank path"**; resolve a `full-audit-2026-06-29-postmerge F5` code comment through this ledger.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F5** (Med, data-integrity) | 3 | **fixed** — the invoice analysis handler re-extracted + INSERTed a fresh `invoices` row on every question (silent content-table bloat; a deterministic re-extraction producing identical rows, N questions → N invoices + N×line-items). Now mirrors the bank reuse gate: `invoices` gained an additive nullable `extractor_version` column (`db.ts`, copy of the `bank_statements` migration); `runInvoiceExtraction` stamps `INVOICE_EXTRACTOR_VERSION` (`tools/invoice.ts`) and accepts `replaceExisting`; the handler **REUSES** `latestInvoiceId` when present and **not** `isInvoiceStale`, else re-extracts with `replaceExisting: true` — which DELETEs the prior invoice + line items (FK order, the shared `deleteInvoicesForDocument`) **inside** the persist `BEGIN/COMMIT` before the INSERT (atomic swap). `purgeSkillDataForDocument`'s ordered delete is unchanged (same helper) | arch §8 (invoice reuse/replace/staleness parity); arch §27 (F5 row) |
+
+**Posture held (Phase 3):** offline / no telemetry / no new network egress; the **content class** (extracted
+invoice figures) is never logged/audited/exported (`extractor_version` is a provenance int, content-class
+adjacent — never surfaced). The schema change is a **single additive nullable column** added through the
+existing idempotent `ensureColumn` mechanism: an old on-disk workspace opens cleanly (pre-existing rows are
+NULL → stale → re-extracted on next reuse), and the bank table is untouched. `node:sqlite` is synchronous, so
+the `replaceExisting` delete-then-insert stays inside one `BEGIN/COMMIT` with no await between. Every fix is
+**test-first** (red on current code → green after): `skills-analysis-invoice.test.ts` reproduces the bloat (N
+questions persisted N invoices) and now asserts exactly one invoice + one line-item set survive, a fresh
+invoice is reused (same id, no duplicate), and a version-NULL invoice is detected stale → re-extracted +
+replaced in place at the current version (the tampered figure is gone). **Open (later phases):** F11–F19
+RAG/security/concurrency (Phase 4/8), F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1–T9
+test seams (Phase 5).
+
+### §30 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 4 — security consistency hardening)
+
+**Phase 4** closes the four security-consistency findings F15/F14/F16/F17. None is a remote exploit (the app
+is **offline by construction**); each is a **gap where a documented control didn't fully hold** — a deny-list
+that missed one host spelling, a buffer that outlived its lock, lock-guards that fail-closed but spoke the raw
+string, and a size cap that could collapse to the backstop. Branch `audit-postmerge-phase4-security-consistency`
+(suite **2515 passed / 39 skipped**, typecheck + build green). Every fix is **test-first** (red on current code
+→ green). Resolve `full-audit-2026-06-29-postmerge F14/F15/F16/F17` code comments through this ledger.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F15** (Low→Med, SSRF) | 4 | **fixed** — IPv4-mapped IPv6 bypassed the download deny-list: `new URL()` canonicalizes `[::ffff:127.0.0.1]` → host `::ffff:7f00:1` / `[::ffff:169.254.169.254]` → `::ffff:a9fe:a9fe`, which the dotted-decimal-only regex never matched, so mapped loopback / RFC-1918 / the cloud-metadata IP slipped the guard (reachable via a hostile manifest `download.url` or a redirect `Location:`). `isPrivateOrLoopbackHost` now **denies any host containing `::ffff:`**. The detection-only `offlineGuard.isLoopbackHost` is left as-is (gates no enforcement). Tests: `assets.test.ts` (unit on each spelling + redirect-hop + a public-host positive control) | security-model §D3 (F15) |
+| **F14** (Low, data-handling) | 4 | **fixed** — `detachVaultKey()` dropped+zeroed the vault key and reverted to `buffering` but left the in-memory `buffer` holding the just-ended session's metadata (file names/paths/model ids/settings keys — never document/chat text); the buffering read path + the intentionally-ungated `getLogTail`/`exportLog` let a still-mounted Diagnostics screen read/export it **after** lock. **Option (a):** zero the buffer **after** the final encrypted flush (next unlock repopulates from `app.log.enc` — nothing lost); guarded on `mode==='encrypted'` so the pre-FIRST-unlock diagnostics window is preserved. Test: `logging.test.ts` | security-model "Design record — encrypted log" (F14) |
+| **F16** (Low, defense-in-depth + doc) | 4 | **fixed** — the §25 inventory overstated "TEST-N8 enumerates every DB-touching handler" (it covered only chat+benchmark); rag/audit/core-settings/model touched `ctx.db` with **no explicit** `requireUnlocked()` (fail-closed via the getter, but raw English string). Added the localized preamble (`main.audit.locked`/`main.settings.locked`/`main.models.locked`; rag reuses `main.chat.locked`) to those four groups and **generalized** the structural lock test across the core/model/audit/rag/benchmark/collections modules (`tests/integration/ipc-lock-coverage.test.ts`), asserting refusal + that the read-only channels (`getLogTail`/`getRuntimeStatus`) still resolve when locked. **Subsumes Phase-5 item T3** (rag:ask lock-rejection). §25 wording corrected | this ledger; §25 inventory correction |
+| **F17** (Low, disk-fill) | 4 | **fixed** — `downloadToFile`'s cap fell to the 64 GiB backstop when nothing bounded the body; the **engine** downloader passed no `maxBytes` and the **model** downloader passed one only when `size_bytes` was present. Both now **always** pass a bounded cap: engine = `ENGINE_DOWNLOAD_MAX_BYTES` (2 GiB), model = `modelWeightMaxBytes(role, sizeBytes)` (exact size, else a per-role default: chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB). Backstop lowered 64→48 GiB (now unreachable from production). The cap policy is extracted to the unit-testable `effectiveDownloadCap`. Tests: `assets.test.ts` (pure helpers), `downloads.test.ts` + `engine-download.test.ts` (injected `downloadImpl` captures the applied cap) | security-model §D3 (F17) |
+
+**Posture held (Phase 4):** offline / no telemetry / no new network egress / no new IPC channel. The only
+schema-adjacent change is an additive `role: ModelRole` field on the internal `ModelDownloadTask` (set from
+the manifest; the DIY `fetch-*` scripts don't use the TS type). Three new localized i18n keys
+(`main.audit.locked`/`main.settings.locked`/`main.models.locked`) added to en + de. The new size-cap
+constants live in `assets.ts` (the canonical reference module). Every fix is **test-first** with genuine teeth
+— the generalized lock test reddens if any module's `requireUnlocked()` is removed; the SSRF and size-cap
+tests red on the pre-fix code. **Open (later phases):** F11–F13/F18/F19 RAG/perf/concurrency (Phase 8),
+F20–F24 renderer a11y/lifecycle (Phase 6), D1–D8 docs (Phase 7), T1/T2/T6/T7/T8 test seams (Phase 5; **T3 now
+subsumed by F16's generalized lock test**); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 remain
+deferred to their own phase.
+
+### §31 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 5 — test-enforcement seams)
+
+**Phase 5** is **TEST-ONLY** — it closes the seams where a security/reliability control is correct today but
+no test proves it stays *wired* (a silent unwiring would redden nothing). Branch
+`audit-postmerge-phase5-test-seams` (suite **2518 passed / 39 skipped**, typecheck + build green). **`git diff
+src/` is empty** — the only source edits were the temporary teeth-check neuters, each restored byte-identical.
+Every new/strengthened test is **teeth-checked**: neuter the guarded control → the test reds → restore. The
+disposition for each is in the **"Test-enforcement seams"** record below (extended with a Phase-5 subsection);
+resolve a `full-audit-2026-06-29-postmerge T<n>` code comment through that record. T4/T5 landed in Phase 1; T3
+was subsumed by F16 (Phase 4).
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **T1** (Med) | 5 | **closed** — the LlamaServer **unit** suite couldn't exercise SIGTERM-ignore→SIGKILL escalation (its `FakeChild.kill()` exits on ANY signal, so `stop()` always settled on the "exited" branch). New `sidecar.test.ts` test with a **stubborn child** (records each signal, dies only on SIGKILL) asserts `signals == [undefined,'SIGKILL']`. Teeth: revert the line-576 gate `this.exited` → `child.killed` → SIGKILL dropped → reds | "Test-enforcement seams" (T1) |
+| **T2** (Med) | 5 | **closed** — the resident-cache lock-PURGE (RAG-6 SECURITY requirement) was proven only at the unit tier, never that the lock IPC *calls* it. `workspace-ipc.test.ts` now seeds a real resident map, locks, and asserts `purgeResidentVectors` fired against the LIVE db (spy delegates to the real impl, shared `caches`). Teeth: drop the purge call from the lock handler → spy 0× → reds | "Test-enforcement seams" (T2) |
+| **T6** (Low) | 5 | **closed (de-flake)** — the GPU-probe timeout test awaited a real 20 ms `setTimeout` (a TEST-1-family wall-clock flake). Converted to fake timers (`vi.advanceTimersByTimeAsync`, the combine-signals idiom) with an injected trivial `verify`; the kill-on-timeout assertion is preserved. Teeth: neuter the timeout `child.kill('SIGKILL')` → `child.killed` stays false → reds | "Test-enforcement seams" (T6) |
+| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the gpu-ipc idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
+| **T8** (Low) | 5 | **closed** — the crash-fallback test counted a monkey-patched `stop()` wrapper (`made[0].stops===1`), which still holds if `stop()` stops reaching the child kill (orphan). `runtime-manager.test.ts` now also pins the REAL reap on observable child state: a final `mgr.stop()` + `children[1].child.killed===true` (the LIVE restarted child is genuinely killed). **DIVERGED from the audit's literal "crashed child killed===true"** — the crashed child already `exited`, so `stop()` correctly early-returns before any kill (its `killed` stays false; asserting true would red on correct code). Teeth: early-return `stop()` before the kill → the live child's `killed` stays false → reds | "Test-enforcement seams" (T8) |
+| **T3** (Med) | 4 | **verified subsumed** — `ipc-lock-coverage.test.ts` (F16) drives `registerRagIpc` against a locked ctx with NO exemptions, so `rag:ask` is enumerated and asserted to reject with the localized lock copy. No separate Phase-5 test added | §30 (F16); "Test-enforcement seams" (T3) |
+| **T9** (Low, nit) | 1/5 | **partially closed** — invoice negative line totals / Gutschrift/Rabatt were pinned in Phase 1; the AES-GCM **truncated (length-reduced) ciphertext** case is added at the `crypto.ts` unit tier (`crypto.test.ts`, one assertion — distinct from the existing bit-flip cases). The `BANK_EXTRACTOR_VERSION` tautological-tripwire and the mock-embedder score-band nits are left as accepted | "Test-enforcement seams" (T9); arch §8 (Phase 1 T9) |
+
+**Posture held (Phase 5):** **no `src/` behavior change** — nothing shipped changed, so no behavior-doc
+change. Test-only. The de-flake conversions (T6/T7) removed two real-wall-clock waits (verified stable across
+repeated runs); the wiring proofs (T1/T2/T8) each redden on a one-line neuter of the control they guard.
+**Open (later phases):** F11–F13/F18/F19 RAG/perf/concurrency (Phase 8), F20–F24 renderer a11y/lifecycle
+(Phase 6), D1–D8 docs (Phase 7); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 remain deferred.
+
+### §32 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 6 — renderer accessibility + lifecycle consistency)
+
+**Phase 6** closes the renderer cluster F20–F24 — frontend accessibility + effect-lifecycle consistency.
+**Renderer-only** (plus one test file / case per finding); **no IPC surface, no main-process behavior, no new
+user-facing copy** (so no i18n catalog change). Branch `audit-postmerge-phase6-frontend-a11y` (suite **2523
+passed / 39 skipped**, typecheck + build green). The FE-4 reconciliation is folded into the **"Renderer
+robustness" record** (FE-4 bullet, below); resolve a `full-audit-2026-06-29-postmerge F2<n>` code comment
+through this ledger. Test-first where observable in jsdom (F20/F21/F22 each red on current code → green).
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F20** (Med, a11y) | 6 | **fixed** — the first-run gate swaps the entire card per `phase`; focus is now steered to each step's primary control via `useEffect(…, [phase])` (`WorkspaceGate.tsx` — password input on `password`, Skip on `finishing`, primary action on `starter`; the welcome CTA keeps its mount-time `autoFocus`). `PasswordField` gained an `inputRef` prop (mirroring `Composer`'s pattern). **DIVERGED from the audit's framing** — the audit called `welcome → password` the critical gap, but that field already carried `autoFocus` (the new test is green there pre-fix); the real deterministic gap was the **`finishing` step (no focus target at all → focus reset to `<body>`)**, which the new test reds on pre-fix. The effect also makes every transition re-entry-safe (`autoFocus` fires only on first mount). WCAG 2.4.3 / 3.2.2 | arch §32; `WorkspaceGateFocus.test.tsx` |
+| **F21** (Low, privacy/lifecycle) | 6 | **fixed** — `DictationButton.start()` assigned `captureRef` only AFTER `await getUserMedia`, so unmounting while the OS mic prompt was open ran the cleanup first (nothing to release), then stored a LIVE `MediaStream` on the dead component and never `.stop()`d it (OS recording indicator stayed lit). A `mountedRef` (mirroring ChatScreen/DocumentsScreen) now cancels the just-acquired capture and skips `onRecording` when unmounted. Teeth: `Dictation.test.tsx` resolves an injected capture AFTER unmount → asserts `cancel()` fired + recording was never entered | arch §32; "Renderer robustness" FE-4 |
+| **F22** (Low, lifecycle) | 6 | **fixed** — `ModelsScreen` was the lone FE-4 hold-out: its download/engine poll callbacks ran `setJob` + (on a live→terminal transition) `void refresh()` with no mounted guard, and the `DiagnosticsTab` `loadActivity`/`loadMoreActivity` refreshers (listed as guarded but weren't) ran `setEvents`/`setMoreAvailable` ungated. Both now carry the `mountedRef` guard, so the architecture's "FE-4 applied uniformly" claim now genuinely holds. Teeth: `ModelsScreenUnmount.test.tsx` parks a `getDownloadJob` tick, unmounts, resolves it → asserts no extra `listModels` (no refresh on a dead component) | arch §32; "Renderer robustness" FE-4 (narrowed) |
+| **F23** (Low, a11y) | 6 | **fixed** — the `StreamAnnouncer` live region carefully feeds only newly-completed sentences into a `role="log" aria-live="polite"` region, but `aria-atomic="true"` told the AT to re-read the ENTIRE region on every change (re-announcing prior sentences; double-speak on fast boundaries). Dropped `aria-atomic` (`role="log"` defaults to atomic=false); the sentence-slicing is untouched. `StreamAnnouncer.test.tsx` pins `not aria-atomic="true"` | arch §32; `StreamAnnouncer.test.tsx` |
+| **F24** (Low, lifecycle nit) | 6 | **fixed** — `Composer.insertDictation`'s non-`execCommand` fallback (jsdom / future removal) deferred caret restoration via an untracked `setTimeout(…, 0)`. Now tracked in a ref and cleared on unmount (consistency with FE-7/FE-1 timer cleanup). Benign in real Electron (`execCommand` succeeds there), so this is consistency-only; the Dictation insert-at-caret test still passes | arch §32 |
+
+**Posture held (Phase 6):** offline / no telemetry / no new network egress; renderer-only; no IPC channel,
+main-process, schema, or i18n-catalog change; the **content class** is untouched (no logging/audit/export
+surface added). No happy-path regression — the mic capture (F21), the streaming announcer slicing (F23), the
+poll-driven refresh (F22), and the dictation caret-restore (F24) all still work (their existing suites stay
+green). Every lifecycle guard **reuses the existing `mountedRef` idiom** (ChatScreen/DocumentsScreen/
+DiagnosticsTab), not a new discipline. **Open (later phases):** F11–F13/F18/F19 RAG/perf/concurrency (Phase
+8), D1–D8 docs (Phase 7); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix
+remain deferred.
+
+### §33 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 7 — documentation reconciliation)
+
+**Phase 7** is **docs- and code-comment-only — no behavior change** (`git diff` shows only `.md`/`.yaml`
+files and code COMMENTS; no `src/` logic edit). It reconciles the §3 documentation findings D1–D8 to a single
+source of truth, carries the F11/F13 as-built realities into the topic docs, and re-runs the §-anchor sweep.
+Branch `audit-postmerge-phase7-docs`. The audit report stays (Phase 8 retires it).
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **D1** (Med) | 7 | **fixed (docs)** — the TEST-6 record claimed the S13b skill-trigger precision bar was "owner-gated on D1 / not yet landed"; it is in fact a **live CI gate** (`skill-triggers.test.ts` asserts `fired-wrong == 0` AND `precision ≥ 0.95`, re-verified live). Corrected the §27 ledger row + the "Test-enforcement seams" TEST-6 record + the BUILD_STATE TEST-6 bullet: the bar IS asserted; the remaining no-CI-floor gap is narrower — real-model **RAG answer quality** + the env-gated quality benchmarks | arch TEST-6 record + §27 row; BUILD_STATE |
+| **D2** (Med) | 7 | **fixed (docs)** — `known-limitations.md` claimed the in-app downloader "drives only `tasks[0]` (the GGUF)"; the code fetches **both GGUF + mmproj as one job** (DIST-1, `downloads.ts` `planDownload`; `downloads.test.ts` asserts `totalBytes == gguf + mmproj` + the finish-just-the-projector case). Rewrote the limitation to the as-built reality; user-guide §8 / troubleshooting carry no contradicting claim | known-limitations.md (image-understanding) |
+| **D3** (Med) | 7 | **fixed (docs)** — reconciled the reranker "**never bundled by default**" contradiction to ONE story: the reranker **IS** in the DIY `prepare-drive --with-assets` default fetch set (README/packaging/drive-layout — correct, unchanged), but is flagged `bundled_on_preconfigured_drive: false` (advisory/**unused by the validator**) as the intent for a sold/commercial preconfigured drive. Fixed the phrasing in model-policy.md, rag-design.md §12.3, and the reranker manifest comment. The **vision** "never bundled by default" was left — it is genuinely NOT in `--with-assets` (opt-in, true) | model-policy.md; rag-design §12.3; reranker manifest |
+| **D4/D5/D6** (Low) | 7 | **fixed (comments)** — four stray test-comment fragments cleaned: `gpu-smoke.test.ts` "60 s health timeout" → **180 s** (`DEFAULT_HEALTH_TIMEOUT_MS`); dropped the dangling `/§11.1` from `gpu.test.ts` (→ §5.1) and `runtime-ladder.test.ts` (→ §5.2) and the dangling `/§9` from `assets.test.ts` (→ §6). The GPU design record is §1–§8; §9/§11.1 never existed (`benchmark.test.ts` was already fixed by DOC-4) | code comments → GPU record §5.1/§5.2/§6 + sidecar `DEFAULT_HEALTH_TIMEOUT_MS` |
+| **D7** (Low) | 7 | **fixed (docs)** — reconciled the whisper RTF figures to **two annotated regimes** matching the R-W3/R-W4 source measurements: a **long sustained file ≈ RTF 0.67** (real-time÷1.5 / two-thirds; R-W4 52-min → 35 min, user-guide 30-min → 20-min) and a **short clip ≈ RTF 0.46–0.5** (R-W3 benchmark clips + dictation). Annotated the short-vs-long distinction in known-limitations.md (audio + dictation) and the whisper manifest comment so the figures no longer read as contradictory | known-limitations.md; whisper manifest |
+| **D8** (Low) | 7 | **fixed (docs)** — clarified README disk-space: the ~**3 GB** figure is the **hand-built** minimal footprint (4B + embeddings only); the one-command `--with-assets` quick-start default set (8B + embeddings + reranker + Whisper + both runtimes) is ~**7 GB**, so a user sizing a drive from the 3 GB line does not under-provision | README.md |
+| **F11** (doc-note) | 7 | **recorded (docs)** — rag-design §14.4: a `mode:'tree'` answer's `[Sn]` citations are **whole-document LEAF PROVENANCE** (`documentLeafProvenance`, up to ~1000 leaves), NOT the 1:1 inline-grounded excerpts of the `generateGroundedAnswer` contract (the tree prompt carries no `[Sn]` markers). A deliberate coverage choice; differentiating the renderer presentation is the Phase-8 follow-up — recorded as a known distinction | rag-design §14.4 |
+| **F13** (doc-note) | 7 | **recorded (docs)** — rag-design §12.1 R3: added a one-line **PRECONDITION** that re-enabling a positive `ragMinSimilarity` floor (a goal of the deferred E5 `query:`/`passage:` prefix migration) MUST first move the floor **before** the `topKInitial` cut — `rag/index.ts` applies it after the cut today, so a positive floor would silently lose recall. Coupled to that migration phase | rag-design §12.1 R3 |
+
+**§-anchor sweep (re-run, Phase 7).** Swept every `§` citation in `docs/**`, `README.md`, `BUILD_STATE.md`,
+and the `apps/desktop/{src,tests}` comment tree. The §27–§32 post-merge ledgers (Phases 1–6) exist,
+are consecutively numbered, and the named-record citations they added (GPU record §5.5b, §22-D1 honesty
+posture, security-model `D3`, the "Chat & streaming" / "encrypted log" / "Renderer robustness" / "Test-
+enforcement seams" records) all resolve. **Residuals fixed:** the four D4/D5/D6 fragments above, **plus** one
+pre-existing dangler the independent sweep surfaced — `image-understanding plan §16` (cited in
+`vision-runtime.test.ts` / `vision-smoke.test.ts`) was missing from the image-understanding §-anchor legend;
+added a legend row mapping plan §16 → §6 (V4/V5 runtime hardening) + model-benchmarks §8. **Result: clean** —
+every `§` citation now resolves.
+
+**Posture held (Phase 7):** offline / no telemetry; no `src/` LOGIC change (docs + code-comments only);
+typecheck + `npm test` + `npm run build` re-run green to confirm the comment edits broke no source-grepping
+test. **Open (Phase 8, the close-out):** F12/F18/F19 + the F11 renderer half, then retire this audit report.
+
+### §34 Full audit (2026-06-29, post-merge) — remediation CLOSE-OUT
+
+The **post-merge full audit** (report `audits/full-audit-2026-06-29-postmerge.md`) is **COMPLETE** — all
+eight phases landed. Its pattern was *"the fix exists next door but wasn't applied here"*: the prior
+round (§26) hardened the **bank** parser and the **chat** runtime, and this pass found the **invoice**
+parser, the **embedder/reranker** sidecars, and the **regenerate** path had not received the sibling
+hardening. **No Critical, no remote exploit** (offline by construction); 1 High (F1), ~9 Medium, ~13 Low,
+9 test-seam items (T1–T9), 8 doc items (D1–D8). Each phase folded its decisions into the topic docs as it
+landed (the per-phase ledgers **§27–§33**, plus the named records); **this section is the durable master
+index** — resolve a `full-audit-2026-06-29-postmerge <ID>` code comment through it. The working-paper
+report was **retired** under the CLAUDE.md doc-lifecycle rule once every finding was dispositioned (it was
+committed first, so the original stays **recoverable in git history** — the parent of the Phase-8 close-out
+commit), mirroring the §24/§25/§26 precedent. Phases ran on stacked, unmerged branches
+(`audit-postmerge-phase1-money` … `phase8-closeout`); owner merges when ready.
+
+**Per-phase one-liners:** **P1** money-parser correctness (F1/F3/F6/F8 + the invoice single-currency
+guard + the T5 2-dp invariant; §27, §8). **P2** runtime reliability (F2 regenerate data-loss / F4+F7
+bind-race start-latch / F9 compaction log; §28). **P3** invoice lifecycle parity (F5 reuse/replace/
+staleness; §29). **P4** security consistency (F15 mapped-IPv6 SSRF / F14 log-buffer-on-lock / F16 IPC
+lock-guard parity — subsumes T3 / F17 download caps; §30). **P5** test-enforcement seams (T1/T2/T6/T7/T8 +
+T9; §31, test-only). **P6** renderer a11y + lifecycle (F20–F24; §32, renderer-only). **P7** docs
+reconciliation (D1–D8 + F11/F13 doc-notes; §33, docs/comments-only). **P8** (this close-out) the
+low-hangers F12/F18/F19 + report retirement.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F1** (High) | 1 | **fixed** — uncaptured amount column read the running BALANCE as the amount; bank flags `ambiguousAmount` + drops only when a balance column exists (statement-context-aware — DIVERGED from the literal unconditional drop, which regressed the HVB no-balance format); invoice mirror drops the right-side uncaptured column | §27; §8 (F1); known-limitations |
+| F3 (Med) | 1 | **fixed** — invoice per-line `detectCurrency` scans only the figure region + `validateInvoiceTotals` single-currency guard (the BL-2 fix applied to invoices) | §27; §8 (F3) |
+| F6 (Med) | 1 | **fixed** — geometry-less invoice space-grouped token w/o a 2-dp tail dropped (`isFusedSpaceGroup`) | §27; §8 (F6) |
+| F8 (Low) | 1 | **fixed** — invoice qty split requires a unit token or a corroborating unit-price column | §27; §8 (F8) |
+| F10 (Low) | 1 | **acknowledged (no code)** — invoice path runs without geometry (D58 = bank-only); its robustness was prioritised since it has no backstop | §27; §8 |
+| **F2** (Med) | 2 | **fixed** — regenerate delete deferred INSIDE `withChatStream` (`withRegenerateGuard`) + byte-faithful restore on non-abort failure; both chat + RAG channels | §28; "Chat & streaming" |
+| F4 (Med) | 2 | **fixed** — embedder start-latch skips arming on `isBindRaceError` (a transient double-bind-race no longer silently disables imports) | §28; GPU §5.5b |
+| F7 (Low) | 2 | **fixed** — same bind-race exclusion for the reranker (makes the keep-latch-across-`suspend()` policy correct) | §28; GPU §5.5b |
+| F9 (Low) | 2 | **fixed** — `compaction.ts` `catch {}` now `log.warn`s the non-abort case (no chat content); abort stays silent | §28; "Chat & streaming" |
+| **F5** (Med) | 3 | **fixed** — invoice reuse/replace/staleness parity with bank (`extractor_version` + `isInvoiceStale` + `replaceExisting` atomic swap) | §29; §8 |
+| **F15** (Low→Med, SSRF) | 4 | **fixed** — `isPrivateOrLoopbackHost` denies any `::ffff:` host (the mapped-IPv6 form `new URL()` canonicalizes to) | §30; security-model §D3 |
+| F14 (Low) | 4 | **fixed** — `detachVaultKey()` zeroes the log buffer after the final encrypted flush (option a; next unlock repopulates) | §30; security-model "encrypted log" |
+| F16 (Low) | 4 | **fixed** — localized `requireUnlocked()` on rag/audit/settings/model + generalized `ipc-lock-coverage.test.ts` (**subsumes T3**); §25 wording corrected | §30; §25 inventory |
+| F17 (Low) | 4 | **fixed** — both downloaders always pass a bounded cap (engine 2 GiB; model exact-size or per-role default); backstop 64→48 GiB | §30; security-model §D3 |
+| **T1** (Med) | 5 | **closed (test)** — LlamaServer unit SIGKILL-escalation test (stubborn child); teeth-checked | §31; "Test-enforcement seams" |
+| T2 (Med) | 5 | **closed (test)** — resident-cache lock-purge wiring asserted at the IPC layer against the live db | §31; "Test-enforcement seams" |
+| **T3** (Med) | 4 | **subsumed by F16** — `ipc-lock-coverage.test.ts` enumerates `rag:ask` against a locked ctx | §30 (F16); §31 |
+| T4 (Med) | 1 | **addressed** — parens-negative pinned through the real `extractTransactionRows` | §27; §8 |
+| T5 (Med) | 1 | **fixed + pinned** — `parseAmount` rounds to the nearest cent (the 2-dp integer-cent invariant) | §27; §8 |
+| T6 (Low) | 5 | **closed (de-flake)** — GPU-probe timeout → fake timers; teeth-checked | §31 |
+| T7 (Low) | 5 | **closed (de-flake)** — privacy-guard poll → `vi.waitFor` | §31 |
+| T8 (Low) | 5 | **closed (test)** — crash-fallback pins a REAL child reap (DIVERGED: the crashed child already exited) | §31 |
+| T9 (Low nit) | 1/5 | **partially closed** — invoice negative totals/Gutschrift (P1) + AES-GCM truncated-ciphertext (P5); the tautological-tripwire + mock score-band nits accepted | §31; §8 |
+| **F20** (Med, a11y) | 6 | **fixed** — first-run gate steers focus per `phase` (the `finishing` step had none — DIVERGED from the welcome→password framing) | §32 |
+| F21 (Low) | 6 | **fixed** — `DictationButton` cancels a mic capture acquired after unmount (`mountedRef`) | §32 |
+| F22 (Low) | 6 | **fixed** — ModelsScreen polls + DiagnosticsTab refreshers join the FE-4 `mountedRef` discipline | §32; "Renderer robustness" |
+| F23 (Low, a11y) | 6 | **fixed** — `StreamAnnouncer` drops `aria-atomic` (additive `role="log"` reads only the new sentence) | §32 |
+| F24 (Low) | 6 | **fixed** — Composer fallback caret timer tracked + cleared on unmount | §32 |
+| **D1–D8** (Med/Low, docs) | 7 | **fixed (docs)** — D1 TEST-6 record corrected (S13b IS a live CI gate) · D2 downloader fetches GGUF+mmproj · D3 reranker bundling reconciled · D4/D5/D6 four stray comment fragments · D7 whisper RTF two regimes · D8 README disk sizing | §33 |
+| **F11** (Low) | 7 / — | **doc-note recorded (P7)**; renderer half **NOT taken (P8)** — the `mode:'tree'` answer's `[Sn]` are whole-document leaf provenance, not inline-grounded excerpts (rag-design §14.4); differentiating the renderer presentation stays the **carried-forward** follow-up (the documented distinction stands) | §33; rag-design §14.4 |
+| **F12** (Low, perf) | **8** | **fixed** — the resident-cache reconcile's O(N) `SELECT chunk_id` scan is gone for the in-band paths: the three write sites pass named added/removed chunk_ids → delta fast path (decode only the new rows, no scan), with a `Map.size === COUNT(*)` gate falling back to the full scan (delta-less / out-of-band / wrong delta) — byte-identical to a cold rebuild (PERF-1 contract). Bench leg added | this ledger; Performance/Wave-P4 record |
+| **F13** (Low, latent) | 7 / — | **doc-note recorded (P7)**; code **carried forward** — re-enabling a positive `ragMinSimilarity` floor must first move it BEFORE the `topKInitial` cut; coupled to the deferred E5 `query:`/`passage:` prefix migration (inert at the pinned default 0) | §33; rag-design §12.1 R3 |
+| **F18** (Low, concurrency) | **8** | **fixed** — VisionService terminal `done` write routes through the cancelled-guarded `set()` (returns whether applied) so a concurrent cancel isn't overwritten / re-emitted. Latent (no await before it today); dual-neuter teeth-check recorded | this ledger; Image-understanding §5 |
+| **F19** (Low, concurrency) | **8** | **fixed** — `tearingDown` flag (the `suspend()` analogue of `stop()`'s `stopped`) bars a racing `ensureStarted` from spawning a sidecar that would survive the lock; both embedder + reranker; deterministic interleave teeth-test | this ledger; GPU §5.5c |
+
+**Carried-forward open items (deliberately NOT taken; on record for the next pass):**
+
+- **F11 renderer half** — present `mode:'tree'` answers as whole-document provenance (or cap the persisted
+  leaf list) rather than identically to inline-cited answers. The doc-note (rag-design §14.4) is the
+  current truth; the renderer change was scoped out of Phase 8 (non-trivial vs the Low severity).
+- **F13 code (floor-before-cut)** — a **precondition** of the deferred E5 `query:`/`passage:` prefix
+  migration (its own phase): re-enabling a positive `ragMinSimilarity` floor must over-fetch then floor,
+  or push the floor into the scan. Inert today (floor pinned at 0).
+- **§26-carried (re-verified, still valid):** **SEC-1 code half** (unlock rate-limit/attempt-counter +
+  create-time strength meter — the at-rest KDF is the binding mitigation against the offline attacker, so a
+  UI rate-limit doesn't bind the real threat); **SEC-2** (preview-temp staging under `userSkillsDir`);
+  **SEC-3** (dialog-opener capability tokens inert until the consuming `requireUnlocked()` gate); **REL-5**
+  (`BEGIN IMMEDIATE` + a single `withTransaction` guard — the no-`await`-in-txn invariant re-verified true
+  at every BEGIN site, so a defense-in-depth margin, its own characterized phase); **PERF-5 Part B** list
+  windowing (Documents + Diagnostics activity are the highest-value targets) + the **E5-prefix migration**.
+
+**Posture held across all eight phases (load-bearing):** offline / no telemetry / no new network egress; no
+schema change beyond the single additive nullable `invoices.extractor_version` (P3) + the internal
+`ModelDownloadTask.role` field (P4); content class (document/chat text, extracted figures, redacted text)
+never logged/audited/exported. Behavior-preserving: every behavioral fix (P1/P2/P3/P4/P6/P8) is
+**teeth-checked** (neuter the guard → red → restore byte-identical); P5 was test-only (`git diff src/`
+empty); P7 was docs/comments-only. The F12 byte-equivalence + signature backstop + lock-purge, the vision
+cancel semantics (F18), and the stop()/suspend() teardown semantics (F19) are all preserved. Final suite
+**2532 passed / 39 skipped (2571 collected)**; typecheck + `npm run build` green.
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
@@ -4051,19 +4490,87 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   `readChatSSE`, then asserts NO diagnostics-log call (any level) carries the prompt, the answer, or the
   base64 image bytes. Teeth: log `opts.question` or the image data-URL at the runtime layer → the spy
   captures it and the test reddens.
-- **TEST-6 (INFO) — no automated answer-quality floor in CI (documented, by design).** Retrieval / answer /
-  skill-trigger **accuracy** has **no automated floor that fails CI**. The `eval/skill-triggers` harness
-  prints precision/recall + a confusion matrix as a **measurement**, not a gate — the **S13b precision-bar
-  assertion** (`fired-wrong == 0` AND `precision ≥ 0.95`, §18) is **owner-gated on decision D1** and not yet
-  landed — and the real-model **quality benchmarks** are **env-gated out of CI by design** (they need GGUF
-  weights CI doesn't ship; see `model-benchmarks.md` D19). Net: retrieval/answer/trigger-accuracy regressions
-  are caught **only by the manual smoke matrix** (the deliberate separate human pre-release gate, like the
-  `HILBERTRAUM_*` artifact smokes). This is an accepted posture; the follow-up is to **land the S13b bar once
-  the owner sets D1**.
+- **TEST-6 (INFO) — answer-quality floor in CI is partial, by design.** *(Wording corrected Phase 7 / D1 —
+  the original claim that the S13b bar was "owner-gated on D1 / not yet landed" went stale the moment the bar
+  shipped.)* The **S13b skill-trigger precision bar IS a live CI gate**: `eval/skill-triggers.test.ts` asserts
+  the ratified `threshold-3` auto-fire policy clears D1 on the labelled corpus — `fired-wrong == 0` **AND**
+  `precision ≥ 0.95` (§18) — so any regression of `scoreSkillTriggers`/the threshold reddens CI. The
+  `eval/skill-triggers` *measurement* block (precision/recall + confusion matrix) still prints as a baseline
+  alongside it. What remains **without** an automated CI floor is **narrower**: real-model **RAG answer
+  quality** (faithfulness/grounding output) and the **real-model quality benchmarks**, which are **env-gated
+  out of CI by design** (they need GGUF weights CI doesn't ship; see `model-benchmarks.md` D19). Net: those
+  remaining accuracy dimensions are caught **only by the manual smoke matrix** (the deliberate separate human
+  pre-release gate, like the `HILBERTRAUM_*` artifact smokes) — an accepted posture.
 
 Suite after Phase 3: **2446 passed / 39 skipped (2485 collected)** (was 2437/39 → **+9 tests**; TEST-5 was a
 conversion, not an addition). No `src/` behavior change — the only source edits were the temporary
 teeth-check neuters, each restored byte-identical.
+
+### Post-merge audit (2026-06-29), Phase 5 — five more seams (T1/T2/T6/T7/T8), one nit (T9), one verify (T3)
+
+The post-merge audit's §4 testing review found the same *class* recurring — a control correct in isolation but
+not proven *wired* — at five more seams. Phase 5 closes them with the same discipline (real seam, inject only
+at the boundary, every closure teeth-checked). **Test-only; `git diff src/` empty.** The §31 ledger above
+carries the one-line disposition for each; the detail and teeth:
+
+- **T1 — SIGTERM-ignore → SIGKILL escalation, now teeth-tested at the UNIT tier
+  (`tests/unit/sidecar.test.ts`, +1).** The file's `FakeChild.kill()` exits on ANY signal, so
+  `LlamaServer.stop()` always settled on the "exited" branch and never reached the escalation — the integration
+  tier was the only place it was genuinely exercised. The new test uses a **stubborn child** (the LlamaServer
+  mirror of the transcriber's `makeStubbornChild(['SIGKILL'])`): it records each kill signal, sets `killed`
+  the moment a signal is *sent* (real `ChildProcess` semantics), but only emits `exit` on `SIGKILL`. With a
+  1 ms `killGraceMs` it asserts `signals == [undefined,'SIGKILL']` (polite SIGTERM first, then forceful
+  escalation). Teeth: revert the line-576 escalation gate `if (!this.exited)` → `if (!child.killed)` (the exact
+  bug the line-572 comment warns about — `child.killed` is true the instant a signal is sent) → SIGKILL is
+  never sent → `signals` stays `[undefined]` → reds.
+- **T2 — resident-cache lock-PURGE wiring, now asserted at the IPC layer
+  (`tests/integration/workspace-ipc.test.ts`, +1).** `purgeResidentVectors` (RAG-6, a stated SECURITY
+  requirement — chunk-text-derived vectors must not linger in main-process RAM after the vault re-encrypts) was
+  proven only at the unit tier (`resident-cache-incremental.test.ts`); the lock IPC's *call* to it was
+  unasserted. The new test seeds a REAL resident map (doc → chunk → embedding → `getResidentVectors`), locks
+  via the real IPC handler, and asserts the purge fired against the LIVE workspace db. The spy delegates to the
+  real `purgeResidentVectors` (sharing the real `caches` singleton, the resident-cache-incremental decode-spy
+  idiom), so the genuine purge still runs; the captured arg is asserted by **reference** (`toBe`, not
+  `toHaveBeenCalledWith`) because the post-lock db is closed and a deep-compare would touch its throwing
+  `isTransaction` getter. Teeth: drop `purgeResidentVectors(ctx.db)` from the lock handler → spy 0× → reds.
+- **T6 — GPU-probe timeout, de-flaked to fake timers (`tests/unit/gpu.test.ts`, converted in place).** The old
+  test awaited a real 20 ms `setTimeout` against a never-exiting child — a TEST-1-family wall-clock flake. It
+  now drives the probe's own kill-timeout through `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(20)` (the
+  `combine-signals.test.ts` idiom), with `verify` injected as a trivial resolver so only the timeout path is
+  under fake-timer control (no real fs/microtask racing the timer; the verify path has its own test). The
+  assertion is preserved (probe resolves `[]` on timeout AND the child is killed). Teeth: neuter the timeout's
+  `child.kill('SIGKILL')` → `child.killed` stays false → reds.
+- **T7 — privacy-guard snapshot poll, de-flaked to `vi.waitFor`
+  (`tests/integration/skills-privacy-guard.test.ts`, converted in place).** The old `for(i<50 &&
+  running){sleep(5)}` was a structural TEST-1 sibling (bounded iterations × a fixed sleep over mutable state).
+  It now re-polls via `vi.waitFor` (the `gpu-ipc.test.ts` idiom) until the run settles, no fixed cap; the
+  no-secret-in-snapshot assertions are preserved. (The optional redundant real-timer copies in
+  `vision-runtime.test.ts` were left as-is — converting them needs the fakeClock injection seam, beyond a quick
+  nit.)
+- **T8 — crash-fallback now pins a REAL child reap, not just a stop()-wrapper count
+  (`tests/integration/runtime-manager.test.ts`, +2 assertions).** The crash test counted a monkey-patched
+  `stop()` wrapper (`made[0].stops===1`), which still holds if a regression makes `stop()` stop reaching the
+  child kill (an orphan). The test now also asserts observable child state: a final `mgr.stop()` +
+  `children[1].child.killed===true` (the LIVE restarted CPU child is genuinely killed). This **DIVERGED from
+  the audit's literal "crashed child `killed===true`"** — empirically the crashed GPU child already `exited`
+  (via `crash()`), so the manager's `stop()` correctly early-returns on `this.exited` *before* any kill and the
+  crashed child's `killed` stays **false** (asserting true would red on correct code — verified). The genuine
+  "stop reaches the kill / no orphan" property lives on the live child instead. Teeth: early-return `stop()`
+  before the kill → the live child's `killed` stays false → reds (while `made[0].stops===1` still passes —
+  exactly the gap T8 closes).
+- **T9 (nit) — AES-GCM truncated-ciphertext at the `crypto.ts` unit tier (`tests/unit/crypto.test.ts`, +1).** A
+  length-reduced ciphertext (distinct from the existing bit-flip cases) must still fail GCM authentication
+  (the tag was computed over the full ciphertext); the streaming layer already covers a truncated on-disk
+  frame, this pins core `decrypt` itself. The other T9 nits were dispositioned in Phase 1 (invoice negative
+  line totals / Gutschrift/Rabatt) or left as accepted (the tautological `BANK_EXTRACTOR_VERSION` tripwire;
+  the mock-embedder score-band).
+- **T3 (verify only) — subsumed by F16.** `tests/integration/ipc-lock-coverage.test.ts` drives
+  `registerRagIpc` against a locked ctx with no exemptions, so `rag:ask` is enumerated and asserted to reject
+  with the localized lock copy. No separate Phase-5 test added (confirmed green).
+
+Suite after Phase 5: **2518 passed / 39 skipped (2557 collected)** (was 2515/39 after Phase 4 → **+3 tests**;
+T6/T7/T8 were conversions/strengthenings, not additions). **No `src/` behavior change** — the only source
+edits were the temporary teeth-check neuters, each restored byte-identical (`git diff src/` empty).
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 
@@ -4155,7 +4662,13 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   `runtime.ts` (`VisionRuntime` on `LlamaServer` directly with the §1 args; lazy single-flight
   `ensureStarted`; `analyze` builds the base64 `image_url` request + `readChatSSE`; the §6
   idle-teardown interlock), `index.ts` (`VisionService`: ephemeral job map, own one-job
-  serialization, busy-reject, cancel via AbortController, lock/quit `stop()`).
+  serialization, busy-reject, cancel via AbortController, lock/quit `stop()`). **F18
+  (full-audit-2026-06-29-postmerge):** the terminal success `done` write routes through the
+  cancelled-guarded `set()` helper (which now returns whether it applied) — not a raw `jobs.set` — so a
+  concurrent `cancel()` can't be silently overwritten by `done` (nor re-fire `emit.done`). Latent today
+  (no `await` between the `signal.aborted` check and the write), it hardens the path against a refactor
+  that inserts one; `tests/integration/vision-cancel.test.ts` pins the contract and the dual-neuter
+  (remove the abort check AND the `set()` guard → resurrection) is the recorded teeth-check.
 - **`ipc/registerImagesIpc.ts`** — `images:getStatus|chooseImage|readBytes|analyze|cancel|getJob` +
   `STREAM.imgToken/imgDone/imgError(jobId)`. `getStatus` needs no unlock; file/runtime handlers
   `requireUnlocked`. `chooseImage` returns `{path,name,sizeBytes}` (IPC-2); `readBytes`/`analyze`
@@ -4264,6 +4777,7 @@ anchor as:
 | plan §12 / §13 | Privacy posture (ephemeral, no content in log/audit) + security model | §2 + §7 |
 | plan §14 | Caps + RAM co-residency | §8 |
 | plan §15 / §17 | Eval/benchmark + the test plan | model-benchmarks §8 + the vision test suite |
+| plan §16 | V4/V5 runtime hardening — the idle-teardown interlock + lifecycle latches (RUNTIME-4) and the V5 smoke/acceptance | §6 (+ model-benchmarks §8 for the smoke) |
 | plan §19.10 | Streaming-by-default (the SSE channels) | §1 + §3 |
 | plan §19.11 | GPU vs CPU lever | §1 + §8 |
 | plan §19.13 | Idle-teardown timeout (2–5 min → tuned 120 s) | §1 + §6 |

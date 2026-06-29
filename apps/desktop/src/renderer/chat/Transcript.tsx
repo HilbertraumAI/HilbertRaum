@@ -368,7 +368,11 @@ export function StreamAnnouncer({ text }: { text: string }): JSX.Element {
   }, [text])
 
   return (
-    <div className="sr-only" role="log" aria-live="polite" aria-atomic="true">
+    // No aria-atomic (F23): this is an ADDITIVE log — we feed it only the newest completed
+    // sentence, so the AT should read what was ADDED. aria-atomic="true" forces a re-read of the
+    // ENTIRE region on every change (re-announcing prior sentences; double-speak on fast
+    // boundaries), defeating the sentence-slicing above. role="log" defaults to atomic=false.
+    <div className="sr-only" role="log" aria-live="polite">
       {announced}
     </div>
   )

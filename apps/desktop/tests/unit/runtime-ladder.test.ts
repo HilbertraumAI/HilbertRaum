@@ -10,7 +10,7 @@ import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
 import type { GpuDevice } from '../../src/shared/types'
 
-// Phase 15 start ladder (architecture.md GPU record §5.2/§11.1). Zero binaries, zero GPUs:
+// Phase 15 start ladder (architecture.md GPU record §5.2). Zero binaries, zero GPUs:
 // everything runs through the injected makeLlama/makeMock/probe seams.
 
 const opts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 2048 }

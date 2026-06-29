@@ -820,6 +820,16 @@ and RRF, not the cosine floor. *Latent improvement (not done — it would requir
 re-embedding the whole corpus): adding the E5 `query:`/`passage:` prefixes would likely
 spread the distribution and make a floor meaningful; revisit only with a prefix migration.*
 
+> **PRECONDITION for re-enabling a floor (F13, post-merge audit 2026-06-29):** today
+> `rag/index.ts` applies the `minSimilarity` filter **AFTER** the `topKInitial` cosine cut
+> (`searchText(question, topKInitial)` then `.filter(score >= minSimilarity)`) — inert at the
+> pinned default 0, but the moment the prefix migration re-enables a **positive** floor that
+> ordering becomes a **silent recall bug**: above-threshold hits ranked just outside `topKInitial`
+> are never considered while below-threshold hits inside it are dropped, so the scan yields fewer
+> real candidates than the index could supply. The prefix-migration phase MUST therefore also move
+> the floor **before** the cut (over-fetch a larger K → floor → trim, or push the floor into the
+> scan). Couple this to that phase; do not ship a positive floor without it.
+
 ### 12.2 Decisions (D8–D15, continuing the wave-1 table at D8)
 
 | # | Decision | Resolution |
@@ -837,7 +847,9 @@ spread the distribution and make a floor meaningful; revisit only with a prefix 
 
 Reranker ≈ **1.3 GB RSS** when active (F16 1.08 GiB + ctx 2048); worst case alongside
 4B chat (~2.6 GB) + E5 (~0.35 GB) + Electron (~1 GB) ≈ 5.3 GB — workable because the
-reranker is lazy, CPU-pinned, and opt-in by provisioning (never bundled; manifest
+reranker is lazy, CPU-pinned, and opt-in by provisioning — it IS in the DIY `prepare-drive
+--with-assets` default fetch set, but is flagged `bundled_on_preconfigured_drive: false`
+(advisory/unused in code) so a sold/commercial preconfigured drive does not ship it; manifest
 `recommended_min_ram_gb: 6`, profiles LITE/BALANCED/PRO). CPU latency bounded by the
 candidate cap (≤ 2×topKInitial) + the per-field approx-token truncation (§12.4).
 
@@ -1132,6 +1144,19 @@ nodes reduced in batches bounded by **node count**, not document size. All tiers
 The renderer surface (`CoverageMeter`/`TierMenu`, the PreviewModal meter+selector+provenance, the chat
 "most relevant passages" relevance label, the "Build deep index"/"Re-index first" row action) honours the
 forbidden-UI-words policy: "deeply indexed"/"sections"/"passages", never chunk/node/tree/vector jargon.
+
+**Tree-answer citations are whole-document LEAF PROVENANCE, not inline-grounded `[Sn]` excerpts (F11,
+post-merge audit 2026-06-29).** A `mode:'tree'` answer ([`whole-doc-tree.ts`](../apps/desktop/src/main/services/rag/whole-doc-tree.ts)
+`answerWholeDocFromTree`) map-reduces over **node summaries** — its prompt carries **no** `[Sn]` excerpt
+markers and the model emits no inline `[Sn]` — yet it persists a citation for **every reachable leaf
+chunk** (`documentLeafProvenance`, up to ~1000). So a tree answer's Sources are "the answer was derived
+from the whole document, here is all of it", a **deliberate coverage choice** (M2: node summaries are
+derived context, never citations) that is **distinct from the `generateGroundedAnswer` contract**, where
+each `[Sn]` is a labelled excerpt the model was actually shown and cited 1:1. The renderer currently
+presents the two identically; differentiating the presentation ("whole-document provenance, not
+inline-cited excerpts") or capping the persisted leaf list is a renderer follow-up (audit Phase 8). Until
+that lands, the distinction is recorded here so the leaf-provenance list is not mistaken for inline
+grounding.
 
 ### 14.5 Structured extract-then-aggregate + the task router (plan §4.2/§3.3/§4.4, H7/H1/M3/M7)
 

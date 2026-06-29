@@ -370,6 +370,53 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // F4 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch.
+  // LlamaServer.start retries a bind race only ONCE (REL-1); if the embedder loses the port
+  // twice during the near-simultaneous chat+embedder+reranker+vision startup, start() throws a
+  // bind-class error. The latch is for a PERMANENT fault (a bad GGUF) — arming it for a bind
+  // race silently disabled ALL imports for the session until lock/unlock. With the fix the
+  // latch stays null, so the next embed() re-attempts a fresh start on a new port.
+  it('does NOT latch a transient bind-race; a later embed retries on a fresh port (F4)', async () => {
+    const calls: Array<{ args: string[] }> = []
+    let portFree = false
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+      child.stderr = new EventEmitter()
+      if (!portFree) {
+        // A port-bind race: stderr reports EADDRINUSE and the child exits before health.
+        queueMicrotask(() => {
+          child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
+          child.emit('exit', 1, null)
+        })
+      }
+      return child
+    }
+    // /health stays unhealthy (503) while the port is contended, so waitForHealthy loops until it
+    // observes the bind-race exit (a 200 here would mask it). Once the port is free it serves ok.
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: portFree, status: portFree ? 200 : 503 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+
+    // The doubly-unlucky startup: BOTH the initial start and its single bind-retry lose the port.
+    await expect(embedder.embed(['a'])).rejects.toThrow(/address already in use/)
+    expect(calls.length).toBe(2) // one start + one bind-retry, both raced — NOT a permanent fault
+
+    // The latch must NOT be armed for a transient race: the next embed re-attempts a fresh start
+    // (it does not throw a cached error). The port is now free, so it starts and embeds.
+    portFree = true
+    const [v] = await embedder.embed(['b'])
+    expect(Array.from(v)).toEqual([1, 0])
+    expect(calls.length).toBe(3) // re-spawned a fresh start, rather than fast-failing on the latch
+    await embedder.stop()
+  })
+
   // L4: suspend() must clear the failed-start latch AFTER teardown, not before. If a
   // first-start is in flight when suspend() runs, teardown awaits it; should that start
   // then FAIL, it re-arms `startFailed`. Clearing the latch last guarantees a post-suspend
@@ -410,6 +457,92 @@ describe('E5Embedder', () => {
     // it and this embed would throw the stale 'connection refused'. Clearing last → fresh start.
     const [v] = await embedder.embed(['b'])
     expect(Array.from(v)).toEqual([1, 0])
+    await embedder.stop()
+  })
+
+  // F19 (full-audit-2026-06-29-postmerge): suspend() (workspace lock) sets no `stopped`-style latch,
+  // so a suspend() that interleaves with a concurrent embed() could tear down the OLD sidecar while a
+  // fresh ensureStarted SPAWNS and RETAINS a new one — surviving the lock with chunk-text-derived
+  // state in RAM. The `tearingDown` guard gives suspend() the orphan protection stop() gets from
+  // `stopped`. Deterministic interleave: a gated-exit child PARKS teardown's server.stop(), and a
+  // concurrent embed() fires in that window. TEETH: drop the `tearingDown` guard → the concurrent
+  // embed spawns child2, it is never killed, and `calls.length` is 2 → both assertions red.
+  it('suspend() does not retain a sidecar spawned by a concurrent embed during teardown (F19)', async () => {
+    // kill() marks `killed` but HOLDS the 'exit' event until releaseExit(), so server.stop() parks.
+    class GatedChild extends EventEmitter implements ChildProcessLike {
+      pid = 9
+      killed = false
+      private wantExit = false
+      private released = false
+      kill(): boolean {
+        this.killed = true
+        this.wantExit = true
+        if (this.released) this.emit('exit', 0, null)
+        return true
+      }
+      releaseExit(): void {
+        this.released = true
+        if (this.wantExit) this.emit('exit', 0, null)
+      }
+    }
+    const children: GatedChild[] = []
+    const calls: string[][] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push(args)
+      const c = new GatedChild()
+      children.push(c)
+      return c
+    }
+    // The FIRST start's /health is gated (the start stays in flight); later starts are healthy at once.
+    const firstHealth = { release: null as null | (() => void) }
+    let firstHealthDone = false
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        if (!firstHealthDone) {
+          await new Promise<void>((r) => (firstHealth.release = r))
+          firstHealthDone = true
+        }
+        return { ok: true, status: 200 } as Response
+      }
+      if (u.endsWith('/v1/embeddings')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+
+    // start1 in flight, parks on the gated first /health. Under the guard embed1 itself rejects
+    // (its post-start re-check sees tearingDown), so attach the catch up front to avoid an
+    // unhandled rejection while the test orchestrates the interleave.
+    const embed1 = embedder.embed(['a']).catch(() => undefined)
+    while (!firstHealth.release) await new Promise((r) => setTimeout(r, 1))
+    expect(children.length).toBe(1)
+
+    const suspendP = embedder.suspend() // teardown: tearingDown=true, awaits this.starting (start1)
+    await new Promise((r) => setTimeout(r, 1)) // let teardown register its await on start1
+
+    firstHealth.release!() // start1 resolves → this.server set → teardown advances to server.stop()
+    // teardown calls child1.kill() (exit gated) then PARKS — wait until that observable kill happens.
+    while (!children[0].killed) await new Promise((r) => setTimeout(r, 1))
+
+    // THE RACE: a concurrent embed in the teardown window. With the F19 guard ensureStarted refuses
+    // (tearingDown); without it, it spawns child2 and retains it past the lock.
+    const embed2 = embedder.embed(['b']).then(
+      () => 'ok',
+      () => 'rejected'
+    )
+    await new Promise((r) => setTimeout(r, 25)) // ample for child2 to spawn + go healthy if it were allowed
+
+    children[0].releaseExit() // unblock teardown's server.stop()
+    await suspendP
+    await embed1
+    await embed2
+
+    // No sidecar survives the lock: only child1 was ever spawned, and it was killed.
+    expect(calls.length).toBe(1)
+    for (const c of children) expect(c.killed).toBe(true)
     await embedder.stop()
   })
 

@@ -55,6 +55,14 @@ export function Composer({
   const { t } = useT()
   const ownRef = useRef<HTMLTextAreaElement>(null)
   const ref = inputRef ?? ownRef
+  // Tracks the fallback-path caret-restore timer so unmount can clear it (F24: timer-cleanup
+  // consistency; the fallback only runs where execCommand is unavailable, e.g. jsdom).
+  const caretTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (caretTimerRef.current) clearTimeout(caretTimerRef.current)
+    }
+  }, [])
   // Dictation recording state + the live mic tap. `recording` drives the dim + overlay
   // (true even when Web Audio is unavailable, so the affordance never silently vanishes);
   // `analyser` is null then and Waveform simply draws nothing.
@@ -102,8 +110,11 @@ export function Composer({
     if (!inserted) {
       onChange(before + insert + after)
       const caret = start + insert.length
-      // After the controlled re-render, put the caret after the inserted text.
-      setTimeout(() => {
+      // After the controlled re-render, put the caret after the inserted text. The timer is
+      // tracked so a mid-flight unmount clears it (F24) rather than firing on a dead ref.
+      if (caretTimerRef.current) clearTimeout(caretTimerRef.current)
+      caretTimerRef.current = setTimeout(() => {
+        caretTimerRef.current = null
         ref.current?.setSelectionRange(caret, caret)
       }, 0)
     }

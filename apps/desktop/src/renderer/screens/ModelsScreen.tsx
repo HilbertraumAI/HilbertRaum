@@ -107,6 +107,16 @@ export function ModelsScreen(): JSX.Element {
   const [engine, setEngine] = useState<EngineStatus | null>(null)
   const [engineJob, setEngineJob] = useState<EngineDownloadJob | null>(rememberedEngineJob)
   const engineJobRef = useRef<EngineDownloadJob | null>(rememberedEngineJob)
+  // Mounted flag (audit FE-4): refresh() and the download/engine polls below resolve async; a
+  // parked tick can land AFTER unmount (clearing the interval doesn't abort the in-flight
+  // promise). Guard every setState behind this so ModelsScreen joins the uniform FE-4 discipline.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   async function refresh(): Promise<void> {
     const [m, s, p, e, rt] = await Promise.all([
@@ -118,6 +128,7 @@ export function ModelsScreen(): JSX.Element {
       Promise.resolve(window.api.getEngineStatus?.()).then((r) => r ?? null, () => null),
       Promise.resolve(window.api.getRuntimeStatus?.()).then((r) => r ?? null, () => null)
     ])
+    if (!mountedRef.current) return // unmounted while the batch was loading (FE-4)
     setModels(m)
     setSettings(s)
     setPolicy(p)
@@ -126,8 +137,8 @@ export function ModelsScreen(): JSX.Element {
     // Machine RAM feeds the "needs more memory" flag copy; best-effort.
     window.api
       .getAppStatus()
-      .then((st) => setMachineRam(st.machineRamGb))
-      .catch(() => setMachineRam(UNKNOWN_RAM))
+      .then((st) => mountedRef.current && setMachineRam(st.machineRamGb))
+      .catch(() => mountedRef.current && setMachineRam(UNKNOWN_RAM))
   }
 
   useEffect(() => {
@@ -170,6 +181,7 @@ export function ModelsScreen(): JSX.Element {
       window.api
         .getDownloadJob(job.jobId)
         .then((next) => {
+          if (!mountedRef.current) return // late tick after unmount (FE-4)
           setJob(next)
           // A finished download changes install state — refresh the cards once.
           if (!JOB_LIVE.has(next.status) && JOB_LIVE.has(jobRef.current?.status ?? 'done')) {
@@ -191,6 +203,7 @@ export function ModelsScreen(): JSX.Element {
       window.api
         .getEngineJob(engineJob.jobId)
         .then((next) => {
+          if (!mountedRef.current) return // late tick after unmount (FE-4)
           setEngineJob(next)
           if (
             !ENGINE_JOB_LIVE.has(next.status) &&

@@ -111,12 +111,30 @@ export interface ExtractTransactionsOutput {
 
 // ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
 
+// A description that ENDS in a bare numeric token — a digit run (with optional grouping separators and
+// sign/paren) the 2-dp MONEY_RE rejected: a whole-euro `50`, a single-decimal `12,5`, a reference `1234`.
+// Used by the F1 ambiguity flag (parseLine): when a row collapses to ONE money token AND its description
+// ends in such a bare number, that number COULD be an uncaptured amount column (making the lone token the
+// balance) OR payee text (making the lone token the amount). End-anchored so a number in the MIDDLE of a
+// description (`Ref 50 Grocery`) — clearly payee text, not a column — never flags. The keep/drop decision
+// is taken per-STATEMENT in `extractTransactionRows` (a flagged row is dropped only when the statement has
+// a balance column), so a no-balance "Umsätze" listing with numeric payees (`REWE … 1234`) is preserved.
+const DESC_TRAILING_NUMBER = /(?:^|\s)[-+(]?\d[\d.,']*[-)]?$/
+
+/**
+ * Parse one transaction line. Returns the row plus `ambiguousAmount` — true when the row has exactly one
+ * money token AND its description ends in a bare number the 2-dp scan rejected (F1). On a statement with a
+ * balance column that shape is almost certainly an uncaptured amount + a captured BALANCE, so the lone
+ * token (recorded as `amount` here) would be the running balance read as the movement amount — the
+ * cardinal "confidently-wrong money" harm. `extractTransactionRows` drops such rows ONLY when the
+ * statement actually has a balance column; on a no-balance listing the lone token genuinely IS the amount.
+ */
 function parseLine(
   line: string,
   page: number | null,
   statementCurrency: string | null,
   order: DateOrder = 'dmy'
-): ExtractedTransaction | null {
+): { row: ExtractedTransaction; ambiguousAmount: boolean } | null {
   // Strip the leading DATE column(s) before the money scan (BL-1): the FIRST is the booking date, a
   // SECOND consecutive date token is the value date (Wertstellung/Valuta). Reading only the first token
   // left a value-date column in `rest`, where MONEY_RE reads its `dd.mm.20yy` tail as a 2-decimal amount —
@@ -131,12 +149,20 @@ function parseLine(
   // The description is the text before the FIRST money token (everything to the left of the figure run).
   const description = rest.slice(0, matches[0].index).trim()
   if (!description) return null
-  // BL-N3 — choose the amount column by POSITION, not the first money token. The de-AT layout is
-  // `<description> <amount> <running balance>`, so with ≥2 figures the LAST is the balance and the
-  // SECOND-TO-LAST is the movement amount; a money-shaped reference inside the description (e.g. an
-  // "…100,00 EUR…" note) therefore no longer steals the amount (and its sign). With exactly one figure
-  // there is no balance column, so that figure is the amount. (For the normal 2-figure row the
-  // second-to-last IS the first, so this is byte-identical to before on every existing fixture.)
+  // F1 (full-audit-2026-06-29-postmerge) — FLAG (don't yet drop) an ambiguous amount column. A whole-euro
+  // amount (`50`) or single-decimal (`12,5`) is REJECTED by MONEY_RE (no 2-dp tail, not grouped), so a
+  // `Sparen 50 1.234,56` row collapses to ONE money match — the BALANCE — and `matches[0]` would take the
+  // running balance AS the amount. We can't disambiguate from a single line (the same shape is a no-balance
+  // row whose payee ends in a number, `REWE … 1234 -19,15`), so the keep/drop is decided per-statement in
+  // `extractTransactionRows` using whether a balance column exists. (The flag is the LEFT-side uncaptured
+  // column because the bank amount is the second-to-last figure; the invoice path flags a RIGHT-side column
+  // because it reads the line total as the LAST figure — `invoice.ts parseLineItem`.)
+  const ambiguousAmount = matches.length === 1 && DESC_TRAILING_NUMBER.test(description)
+  // BL-N3 — choose the amount column by POSITION, not the first money token. With ≥2 figures the LAST is
+  // the balance and the SECOND-TO-LAST is the movement amount; a money-shaped reference inside the
+  // description (e.g. an "…100,00 EUR…" note) therefore no longer steals the amount (and its sign). With
+  // exactly one figure there is no balance column, so that figure is the amount. (For the normal 2-figure
+  // row the second-to-last IS the first, so this is byte-identical to before on every existing fixture.)
   const hasBalance = matches.length >= 2
   const amount = parseAmount(matches[hasBalance ? matches.length - 2 : 0][0])
   if (amount === null) return null
@@ -160,7 +186,7 @@ function parseLine(
     if (bal !== null) row.balanceAfter = bal
   }
   if (page != null) row.sourcePage = page
-  return row
+  return { row, ambiguousAmount }
 }
 
 // ---- Statement-level opening/closing balance (PDF geometry-extraction plan §3.5, D56) ----
@@ -378,7 +404,7 @@ export function extractTransactionRows(
   // Infer the document's date ordering ONCE over the whole text (BL-N1) so a US-ordered statement parses
   // mm/dd consistently across rows (no silent drop of day>12 rows, no confidently-wrong month).
   const dateOrder = order ?? inferDateOrder(chunks.map((c) => c.text).join('\n'))
-  const rows: ExtractedTransaction[] = []
+  const parsed: { row: ExtractedTransaction; ambiguousAmount: boolean }[] = []
   for (const chunk of chunks) {
     for (const rawLine of chunk.text.split(/\r?\n/)) {
       const line = rawLine.trim()
@@ -386,13 +412,21 @@ export function extractTransactionRows(
       // A printed opening/closing balance line is a summary, not a transaction — skip it even though
       // it may carry a booking-column date + figure (it is read by `extractStatementBalances` instead).
       if (isBalanceLabelLine(line.toLowerCase())) continue
-      const row = parseLine(line, chunk.page, statementCurrency, dateOrder)
-      if (row) {
-        rows.push(row)
-        if (rows.length >= MAX_TRANSACTIONS) return rows
+      const p = parseLine(line, chunk.page, statementCurrency, dateOrder)
+      if (p) {
+        parsed.push(p)
+        if (parsed.length >= MAX_TRANSACTIONS) break
       }
     }
+    if (parsed.length >= MAX_TRANSACTIONS) break
   }
+  // F1 — drop ambiguous single-amount rows ONLY when the statement has a balance column. A row flagged
+  // `ambiguousAmount` (one money token + a bare-number-trailing description) is an uncaptured-amount /
+  // balance-read-as-amount hazard ONLY when the statement prints running balances (so the lone token is a
+  // BALANCE); on a no-balance "Umsätze" listing the lone token genuinely IS the amount and a numeric payee
+  // (`REWE … 1234`) must be kept. `hasBalanceColumn` is established by the unambiguous (≥2-figure) rows.
+  const hasBalanceColumn = parsed.some((p) => p.row.balanceAfter !== undefined)
+  const rows = parsed.filter((p) => !(p.ambiguousAmount && hasBalanceColumn)).map((p) => p.row)
   return rows
 }
 

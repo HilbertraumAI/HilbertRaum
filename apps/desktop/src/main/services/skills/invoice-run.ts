@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type { Db } from '../db'
 import type { DocumentChunkRead, SkillToolAudit, SkillToolContext } from '../../../shared/types'
 import { getRegisteredTool, runSkillTool } from './tool-registry'
-import { finishRun, resolveDocumentReader } from './run'
+import { deleteInvoicesForDocument, finishRun, resolveDocumentReader } from './run'
 import { withDocumentLock } from './doc-lock'
+import { INVOICE_EXTRACTOR_VERSION } from './tools/invoice'
 import type {
   ExtractInvoiceOutput,
   InvoiceInput,
@@ -50,6 +51,15 @@ export interface InvoiceRunDeps {
    * legacy chunk-table reader (the integration tests that seed `chunks` directly).
    */
   readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
+  /**
+   * Re-extraction (F5 — mirrors the bank `replaceExisting`): when set, DELETE every prior `invoices`
+   * row (and its line items) for the document inside the persist transaction BEFORE inserting the fresh
+   * one. The reuse path passes it when the latest invoice is STALE (`isInvoiceStale`) so a since-fixed
+   * parser bug's rows are replaced — and so re-extraction never accumulates duplicate invoices. The
+   * persisted `totals_reconciled` flag on the old row is intentionally NOT carried over (the rows
+   * changed; the validate seam recomputes it). Unset (the default) = the additive behaviour.
+   */
+  replaceExisting?: boolean
 }
 
 export interface InvoiceExtractionResult {
@@ -91,9 +101,10 @@ export interface InvoiceToolResult {
  * Run `extract_invoice` on one selected document through the gate and persist the structured invoice.
  * Returns ids/counts only — never the extracted content (which lives only in the invoice_* tables).
  *
- * Serialized per document (audit PC-1): the whole extract+persist holds the per-document lock so a
- * concurrent run on the SAME document (any lane) cannot interleave (re-entrant when the analysis lane
- * already holds it; unrelated documents stay concurrent).
+ * Serialized per document (audit PC-1): the whole extract+persist — including the `replaceExisting`
+ * DELETE+INSERT (F5) — holds the per-document lock so a concurrent run on the SAME document (any lane)
+ * cannot race the delete (re-entrant when the analysis lane already holds it; unrelated documents stay
+ * concurrent).
  */
 export async function runInvoiceExtraction(
   db: Db,
@@ -155,13 +166,16 @@ async function runInvoiceExtractionInner(
     const completedAt = now()
     try {
       db.exec('BEGIN')
+      // Re-extraction (F5): replace the document's prior (stale) invoices in the SAME transaction, so a
+      // re-extract never accumulates duplicates and the swap is atomic (a failure rolls back to the old).
+      if (deps.replaceExisting) deleteInvoicesForDocument(db, args.documentId)
       const h = invoice.header
       const t = invoice.totals
       db.prepare(
         `INSERT INTO invoices
           (id, document_id, run_id, vendor, invoice_number, invoice_date, due_date, currency,
-           net_total, tax_total, tax_rate, gross_total, totals_reconciled, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`
+           net_total, tax_total, tax_rate, gross_total, totals_reconciled, extractor_version, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
       ).run(
         invoiceId,
         args.documentId,
@@ -175,6 +189,7 @@ async function runInvoiceExtractionInner(
         t.taxTotal ?? null,
         t.taxRatePercent ?? null,
         t.grossTotal ?? null,
+        INVOICE_EXTRACTOR_VERSION,
         completedAt
       )
       const insertLi = db.prepare(
@@ -228,12 +243,33 @@ async function runInvoiceExtractionInner(
 
 // ---- The downstream seams (validate / export) ----
 
-/** The newest invoice for a document (the deterministic run target), or null if none extracted. */
-function latestInvoice(db: Db, documentId: string): { id: string } | null {
+/**
+ * The newest invoice id for a document, or null if none has been extracted (mirrors
+ * `latestBankStatementId`). The single source of truth for "the latest invoice" across both call
+ * sites — the downstream run seam (`prepareInvoiceRun`) and the analysis read-back's reuse check
+ * (`analysis/invoice.ts`) — so they always resolve the SAME row. The `created_at DESC, id DESC`
+ * tie-break is LOAD-BEARING (it decides which invoice is reused / re-extracted).
+ */
+export function latestInvoiceId(db: Db, documentId: string): string | null {
   const row = db
     .prepare(`SELECT id FROM invoices WHERE document_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`)
     .get(documentId) as { id: string } | undefined
-  return row ?? null
+  return row?.id ?? null
+}
+
+/**
+ * Whether an invoice was produced by an OUTDATED extractor (F5 — mirrors `isBankStatementStale`). True
+ * when its `extractor_version` is NULL (extracted before versioning / by an older parser) or LESS than
+ * the current `INVOICE_EXTRACTOR_VERSION` — i.e. a since-fixed parser bug may have mis-read a figure in
+ * these rows. The reuse path (analysis read-back) re-extracts a stale invoice (with `replaceExisting`)
+ * instead of serving its rows. An invoice at the current version is fresh.
+ */
+export function isInvoiceStale(db: Db, invoiceId: string): boolean {
+  const row = db
+    .prepare('SELECT extractor_version AS v FROM invoices WHERE id = ?')
+    .get(invoiceId) as { v: number | null } | undefined
+  if (!row) return false // unknown id — nothing to re-extract (callers handle the missing case)
+  return row.v == null || row.v < INVOICE_EXTRACTOR_VERSION
 }
 
 /** Reconstruct the structured invoice from its rows (null columns omitted — schema is strict). */
@@ -315,7 +351,7 @@ async function prepareInvoiceRun(
   confirmed?: boolean,
   // When the caller has ALREADY reconstructed the invoice (the analysis handler loads it once for the
   // answer), pass it here so this prefix skips its own `loadInvoice` — the single-load that audit P-1
-  // collapses. The persist still targets the latest invoice's id (`latestInvoice`), unchanged.
+  // collapses. The persist still targets the latest invoice's id (`latestInvoiceId`), unchanged.
   preloadedInvoice?: InvoiceInput
 ): Promise<{ prepared: PreparedInvoiceRun } | { failed: InvoiceToolResult }> {
   const now = deps.now ?? (() => new Date().toISOString())
@@ -334,8 +370,8 @@ async function prepareInvoiceRun(
       return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
     }
 
-    const invoiceRow = latestInvoice(db, args.documentId)
-    if (!invoiceRow) {
+    const invoiceId = latestInvoiceId(db, args.documentId)
+    if (!invoiceId) {
       // Honest, friendly: the downstream tools need an extraction first (no figure invented).
       const msg = 'Read the invoice first, then run this tool.'
       finishRun(db, runId, 'failed', now(), null, msg)
@@ -344,7 +380,7 @@ async function prepareInvoiceRun(
 
     // Reuse the caller's already-reconstructed invoice when provided (audit P-1); otherwise load it
     // here (the run-bar/IPC path, which has no invoice in hand).
-    const invoice = preloadedInvoice ?? loadInvoice(db, invoiceRow.id)
+    const invoice = preloadedInvoice ?? loadInvoice(db, invoiceId)
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
@@ -368,7 +404,7 @@ async function prepareInvoiceRun(
       return { failed: { ok: false, runId, cancelled, error: result.error } }
     }
     return {
-      prepared: { runId, invoiceId: invoiceRow.id, invoice, output: result.output, completedAt: now() }
+      prepared: { runId, invoiceId, invoice, output: result.output, completedAt: now() }
     }
   } catch {
     console.error('[skills] invoice run failed unexpectedly')

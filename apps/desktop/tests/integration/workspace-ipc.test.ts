@@ -15,6 +15,22 @@ vi.mock('electron', () => ({
   }
 }))
 
+// T2 (post-merge audit Phase 5): the resident decoded-vector cache lock-PURGE is a stated SECURITY
+// requirement (RAG-6) — chunk-text-derived vectors must not linger in main-process RAM after the
+// vault re-encrypts — but it was only proven at the unit tier, never that the lock IPC actually
+// CALLS it. Spy on `purgeResidentVectors` (calling THROUGH to the real impl, sharing the real
+// `caches` singleton, mirroring the resident-cache-incremental decode-spy idiom) so the lock
+// handler's WIRING is asserted at the IPC layer. The other lock tests above run with `ctx.db`
+// undefined → harmless `purge(undefined)` no-ops, so the spy is mockClear'd per assertion below.
+const { purgeSpy } = vi.hoisted(() => ({ purgeSpy: vi.fn() }))
+vi.mock('../../src/main/services/embeddings', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/services/embeddings')>()
+  purgeSpy.mockImplementation(actual.purgeResidentVectors)
+  return { ...actual, purgeResidentVectors: purgeSpy }
+})
+
+import { randomUUID } from 'node:crypto'
+import { encodeVector, getResidentVectors } from '../../src/main/services/embeddings'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
@@ -201,5 +217,47 @@ describe('registerWorkspaceIpc', () => {
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(ctrl.isUnlocked()).toBe(false)
+  })
+
+  it('lockWorkspace purges the resident decoded-vector cache (RAG-6 security wiring, T2)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const db = ctrl.requireDb()
+
+    // Seed a REAL resident decoded-vector map for this db (doc → chunk → embedding), so the lock
+    // purge has a genuine chunk-text-derived buffer to drop — not an empty no-op.
+    const now = new Date().toISOString()
+    const docId = randomUUID()
+    db.prepare(
+      `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
+    ).run(docId, 'doc', now, now)
+    const chunkId = randomUUID()
+    db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, token_count, created_at)
+       VALUES (?, ?, 0, ?, ?, 1, ?)`
+    ).run(chunkId, docId, 'hello', 'doc', now)
+    const vec = new Float32Array([1, 0, 0, 0])
+    db.prepare(
+      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(chunkId, 'mock', encodeVector(vec), vec.length, now)
+    expect(getResidentVectors(db).size).toBe(1) // the decoded vector is resident in main-process RAM
+
+    // The lock handler reads ctx.db at call time — give it the LIVE workspace db so the purge
+    // target is the genuine cache key, not undefined.
+    registerWorkspaceIpc({ ...ctxWith(ctrl), db } as unknown as AppContext)
+    purgeSpy.mockClear() // ignore any earlier lock tests' purge(undefined) no-ops
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+
+    // RAG-6 SECURITY purge: the lock handler dropped the resident map, wired to the LIVE db,
+    // before the vault re-encrypted. A refactor that stops calling it reddens here (teeth-checked).
+    // Assert the captured arg by REFERENCE (`toBe`) — `toHaveBeenCalledWith` would deep-compare the
+    // now-closed db, whose `isTransaction` getter throws "database is not open".
+    expect(purgeSpy).toHaveBeenCalledTimes(1)
+    expect(purgeSpy.mock.calls[0][0]).toBe(db)
   })
 })

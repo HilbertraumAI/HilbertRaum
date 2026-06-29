@@ -127,6 +127,39 @@ function runSize(n: number): void {
       warmTimes.push(performance.now() - t)
     }
 
+    // F12: the FIRST-query-after-a-write RECONCILE cost — the term the post-merge close-out targeted.
+    // (a) FULL reconcile (a delta-LESS `invalidate`): the residual O(N) `SELECT chunk_id` scan +
+    //     Set build over the whole corpus before the new row is decoded.
+    // (b) DELTA reconcile (a NAMED `{ added }`, what the production write sites now pass): a point
+    //     decode of just the new row — NO id-scan. This is the F12 win.
+    const insChunk = db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, token_count, created_at)
+       VALUES (?, 'd', ?, 'x', 'd', 1, ?)`
+    )
+    const insEmb = db.prepare(
+      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+       VALUES (?, 'bench-model', ?, ?, ?)`
+    )
+    const addOneRow = (chunkIndex: number): string => {
+      const id = `cextra${chunkIndex}`
+      const now = new Date().toISOString()
+      insChunk.run(id, n + chunkIndex, now)
+      insEmb.run(id, encodeVector(randUnit()), DIMS, now)
+      return id
+    }
+
+    addOneRow(1) // (a)
+    invalidateResidentVectors(db) // delta-less → full chunk-id scan
+    const tFull = performance.now()
+    index.search(queries[0], 12)
+    const fullReconcileMs = performance.now() - tFull
+
+    const addedId = addOneRow(2) // (b)
+    invalidateResidentVectors(db, { added: [addedId] }) // named → delta fast path
+    const tDelta = performance.now()
+    index.search(queries[0], 12)
+    const deltaReconcileMs = performance.now() - tDelta
+
     /* eslint-disable no-console */
     console.log(`\n===== N=${n} (db: ${BENCH_DIR ? 'REAL DRIVE ' + baseDir : 'tmp'}) =====`)
     console.log(`seed ${n} vectors      : ${seedMs.toFixed(0)} ms`)
@@ -134,6 +167,8 @@ function runSize(n: number): void {
     console.log(`NEW  cold (build+scan)  : ${coldMs.toFixed(2)} ms (one-time per mutation)`)
     console.log(`NEW  warm (cached scan) : median ${median(warmTimes).toFixed(2)} ms/query`)
     console.log(`speedup (warm vs old)   : ${(median(oldTimes) / median(warmTimes)).toFixed(1)}×`)
+    console.log(`F12 reconcile FULL (id-scan, +1 row) : ${fullReconcileMs.toFixed(2)} ms (delta-less / self-heal path)`)
+    console.log(`F12 reconcile DELTA (named +1, no scan): ${deltaReconcileMs.toFixed(2)} ms (in-band production path)`)
     /* eslint-enable no-console */
   } finally {
     db.close()
