@@ -6,6 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 1 (FINANCIAL CORRECTNESS; FIN-1/2/3/4) — branch
+`audit-followup-phase1-financial` (unmerged; do NOT auto-merge/push).** The release-blocking
+"confidently-wrong figure / wrong currency / wrong date" class at the STATEMENT/DOCUMENT tier above the
+per-row money parser. Suite **2547 passed / 39 skipped** (was 2532/39 → **+15**), typecheck + `npm run build`
+green. Parsing-only — no schema / IPC / audit-payload change (figures stay content-class). All four fixed
+**characterization-first then test-first** through the real `extractTransactionsTool`/`extractInvoiceTool`/
+`extractTransactionRows`/`parseLineItem`/`reconstructLine` entry points; each is **teeth-checked** (revert →
+the new test reds, verified). **`BANK_EXTRACTOR_VERSION` 2→3** (FIN-1/3/4), **`INVOICE_EXTRACTOR_VERSION`
+1→2** (FIN-1/2/4) — the A9/F5 reuse gate (`isBankStatementStale`/`isInvoiceStale`) re-extracts older rows on
+next analysis (the rollback boundary; ledger version-tests updated).
+- **FIN-1 (High) — wrong-currency verified totals.** `money.ts detectDocumentCurrency` (new) replaces the
+  tool-level `detectCurrency(joined)` ("first allowlisted code ANYWHERE wins") with a **majority vote over
+  figure-adjacent detections**: a money line votes only on its figure region (dates scrubbed first, so a
+  left-of-amount memo code is excluded), a money-less header/label line votes on its whole text. Wired into
+  both tool `.run`s. A stray `USD` in a payee memo can no longer stamp a whole EUR statement (and its VERIFIED
+  total) with the wrong currency; genuinely-foreign + truly-mixed paths preserved.
+- **FIN-2 (Med) — invoice over-drop.** `invoice.ts UNCAPTURED_AMOUNT_AFTER` now requires the region after the
+  last money match to be ENTIRELY one money-shaped-but-rejected bare token, so a valid item with a trailing
+  annotation (`Service 12,50 (Pos. 3)`, `Beratung 1.234,56 19% MwSt`, `Line 50,00 EUR 2 Stk`) is KEPT while a
+  true uncaptured total (`Hosting 12,50 500`) still drops.
+- **FIN-3 (Med, High harm) — geometry `2.500`-as-date.** `pdf-layout.ts DATE_TOKEN_RE` tightened (a year must
+  follow its own dot) so a bare-thousands `2.500` is un-date-able → no longer dropped → the line parser reads
+  the amount, not the balance. **DIVERGENCE:** `MONEY_TOKEN_RE` NOT widened (the audit's literal suggestion) —
+  widening would regress the M3 split-amount safety boundary (`2.000`+`,00` → wrong figure 2000). Stale
+  `pdf-layout.ts:43` comment corrected.
+- **FIN-4 (Med) — memo date flips doc order.** `money.ts inferDateOrder` vote scoped by line KIND: a money
+  line (transaction row) votes only on its LEADING date column; a money-less header/label line votes on any
+  date. **DIVERGENCE:** the pure "leading column" rule broke labeled US-invoice dates (`Invoice date
+  06/15/2026`) — the split-by-line-kind fixes the statement-memo contamination while keeping both the
+  single-leading-US-date statement and the labeled US invoice working.
+- **Durable record:** architecture.md **§8 "Financial correctness (full-audit-2026-06-29 follow-up, Phase 1)"**
+  (per-finding ledger + both divergences); known-limitations.md updated (FIN-1 doc-currency vote, FIN-2
+  annotation keep, FIN-3 geometry residual boundary (4), FIN-4 line-kind scoping). `audits/full-audit-2026-06-29
+  -followup.md` marks FIN-1..4 / Phase 1 ✅ remediated (report KEPT — Phases 2–8 remain open).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase1-financial`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 2** FE-A/FE-C Electron-37 drag-drop, **Phase 3** PERF-1/PERF-4 main-
+  thread import I/O, **Phases 4–8** per the audit §6 plan._
+
+
 _2026-06-29 — **Post-merge full audit — Phase 8 (FINAL / CLOSE-OUT; F12 + F18 + F19, then the audit report
 RETIRED) — branch `audit-postmerge-phase8-closeout`.** The post-merge full audit is now **COMPLETE (all 8
 phases)**. Suite **2532 passed / 39 skipped (2571 collected)** (was 2523/39 after Phase 7 → **+9**: F12 ×5,

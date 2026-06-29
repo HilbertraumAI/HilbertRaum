@@ -2758,6 +2758,62 @@ change); all fixed **test-first** through the real `extractTransactionRows`/`par
   unaffected — DECISION 2.) Parens-negative through the real scanner (T4) and negative line totals / credit
   notes (Gutschrift/Rabatt, T9) are now pinned by whole-string tests.
 
+**Financial correctness (full-audit-2026-06-29 follow-up, Phase 1 — FIN-1/2/3/4).** A follow-up audit found
+the prior rounds had hardened the per-ROW money parser but left four "confidently-wrong figure / wrong
+currency / wrong date" paths in the STATEMENT/DOCUMENT-level orchestration ABOVE it. Parsing-only (no schema,
+IPC, or audit-payload change; figures stay content-class). All fixed **characterization-first then test-first**
+through the real `extractTransactionsTool`/`extractInvoiceTool`/`extractTransactionRows`/`parseLineItem`/
+`reconstructLine` entry points, each teeth-checked. **`BANK_EXTRACTOR_VERSION` 2 → 3** (FIN-1/3/4) and
+**`INVOICE_EXTRACTOR_VERSION` 1 → 2** (FIN-1/2/4) — the A9/F5 reuse gate (`isBankStatementStale`/
+`isInvoiceStale`) re-extracts older rows on next analysis (the rollback boundary).
+- **FIN-1 — document/statement currency by MAJORITY VOTE (`money.ts detectDocumentCurrency`, wired into both
+  tool `.run`s), HIGH.** The tool-level fallback was `detectCurrency(joined)` = "first allowlisted code
+  ANYWHERE in the joined text wins". On a bare-amount de-AT statement a stray `USD`/`CHF` in a payee MEMO won
+  → every bare-amount row fell back to USD → `summarizeCashflow` reported a **VERIFIED total in the wrong
+  currency**, and because the mislabel was UNIFORM the mixed-currency guard (fires on >1 distinct currency)
+  never tripped. The BL-2/F3 fix had narrowed only the per-ROW figure-region detection; the document-level
+  call still scanned everything. **Fix:** `detectDocumentCurrency` votes per line — a MONEY-bearing line votes
+  only on its **figure region** (text from the first amount onward, so a left-of-amount memo code is excluded;
+  dates are scrubbed first so a leading `dd.mm.yyyy` isn't read as the first "amount"), a MONEY-less line
+  (a `Währung EUR` header/label) votes on its whole text; the **most-voted** code wins, ties broken by first
+  appearance. A genuinely-foreign statement (code adjacent to amounts) is still detected; a truly-mixed
+  statement still reaches the mixed/unverified path because the per-row detection tags each row's own
+  figure-region currency (this only supplies the bare-row fallback).
+- **FIN-2 — invoice F1 right-side uncaptured-column drop OVER-fired (`invoice.ts UNCAPTURED_AMOUNT_AFTER`),
+  MEDIUM.** The F1 drop used `/(?:^|\s)[-+(]?\d/` — fired on ANY trailing digit after the last money match,
+  so it deleted valid items with a trailing annotation (`Service 12,50 (Pos. 3)`, `Beratung 1.234,56 19%
+  MwSt`, `Line 50,00 EUR 2 Stk`). **Fix:** the region after the last money match must be ENTIRELY a single
+  money-shaped-but-rejected bare token (`/^\s*[-+(]?\d[\d.,']*\)?\s*$/` — a whole/grouped integer or
+  single-decimal column, no `%`/`x`/unit word/other text), so a true uncaptured total (`Hosting 12,50 500`)
+  still drops while an annotated item is kept.
+- **FIN-3 — geometry classifier read a bare-thousands amount as a DATE (`pdf-layout.ts DATE_TOKEN_RE`),
+  MEDIUM (latent; HIGH harm when it fires).** The old `^(\d{1,2})\.(\d{1,2})\.?(\d{2,4})?$` let `2.500`
+  BACKTRACK into a date (day 2 / month 5 / "year" 00); out of the booking-date column that "date" was
+  DROPPED, so row `07.02. EINKAUF 2.500 1.000,00` reconstructed as `…EINKAUF 1.000,00` and the line parser
+  read the **BALANCE as the movement amount** (the cardinal wrong-money harm, via a path the F1 guard
+  doesn't cover). **Fix:** require a year to be preceded by its own dot (`^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4})?)?$`)
+  so `2.500` (one dot) is un-date-able → it survives as text and the line parser's `MONEY_RE` reads it.
+  **DIVERGENCE from the audit's "widen `MONEY_TOKEN_RE` to the shared grammar":** `MONEY_TOKEN_RE` was kept
+  a 2-dp-only SUBSET (NOT widened). Widening would make a pdf.js-SPLIT amount (`2.000` + `,00`, the M3
+  boundary) classify `2.000` as money and emit a row with amount 2000 — silently dropping the cents on a
+  `2.000,50`-style split, a **confidently-wrong figure where the row is today safely DROPPED**. The
+  `DATE_TOKEN_RE` tightening alone fixes the wrong-figure harm because the reconstructed line is re-parsed by
+  the shared `MONEY_RE` (which reads bare-thousands/apostrophe); the trade-off is that a SOLE bare-thousands/
+  apostrophe figure stays a gate-safe recall DROP (pre-existing — the old `MONEY_TOKEN_RE` already rejected
+  it). The stale `pdf-layout.ts:43` comment ("mirrors the accepted set of the shared `MONEY_RE`") was
+  corrected to state the intentional subset.
+- **FIN-4 — a memo date flipped the WHOLE document's date order (`money.ts inferDateOrder`), MEDIUM.** The
+  scan was over the ENTIRE joined text, so one `03/15/2026` (second field 15 → US) in a payee memo flipped a
+  de-AT statement to month-first → every dotted `dd.mm.yyyy` booking date with day ≤ 12 silently day/month-
+  swapped (all still valid → none dropped → fully silent; the completeness gate checks balances, not dates).
+  **Fix:** the vote is scoped by line KIND — a MONEY-bearing line (a transaction row) votes only on its
+  LEADING run of date-column tokens (capped at two, mirroring `splitLeadingDates`; a memo date deeper in the
+  row can't vote), while a MONEY-less line (an invoice `Invoice date 06/15/2026` header, a statement period)
+  votes on any date it carries. **DIVERGENCE from the audit's "restrict to the leading date column":** the
+  pure leading-column rule BROKE invoice US-date detection (an invoice's header dates follow a LABEL, they
+  don't lead the line) — hence the split-by-line-kind, which fixes the statement-memo contamination while
+  keeping both the single-leading-US-date statement and the labeled US invoice working.
+
 ### §11 IPC / audit surface
 
 `skills:list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning` +

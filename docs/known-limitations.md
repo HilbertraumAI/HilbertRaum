@@ -419,7 +419,17 @@ password recovery — are documented in
   under-counted by the dropped row (honest per its caveat, no longer a refusal). The scoped fix is an
   x-adjacency money re-merge (deferred). The same `architecture.md` §21 entry pins the
   two tuning-constant boundaries (a row whose baselines jitter past the 3-pt tolerance loses its amount; a
-  Datum/Valuta gap under 12 pt merges, allowing a spurious row).
+  Datum/Valuta gap under 12 pt merges, allowing a spurious row). (4) **[RESOLVED 2026-06-29 follow-up,
+  FIN-3 — the balance-as-amount harm.]** The geometry `DATE_TOKEN_RE` used to BACKTRACK a bare-thousands
+  amount (`2.500`) into a date and DROP it as an out-of-column value-date, so a `<date> X 2.500 1.000,00`
+  row reconstructed as `…X 1.000,00` and the line parser read the running **balance as the movement amount**
+  (a confidently-wrong figure). Requiring a year to be preceded by its own dot makes `2.500` un-date-able, so
+  it survives into the reconstructed line and the shared `MONEY_RE` (which reads bare-thousands/apostrophe)
+  parses it. **Residual (safe):** the geometry `MONEY_TOKEN_RE` was deliberately NOT widened to accept
+  bare-thousands (widening would make the split-amount boundary (3) emit a wrong figure — `2.000`+`,00` →
+  amount 2000, cents lost), so a row whose **ONLY** figure is a no-cents bare-thousands / apostrophe token
+  carries no money token at the classifier and is dropped — a recall loss, never a wrong figure (it
+  reconstructs correctly whenever a 2-dp figure also anchors the row, e.g. amount + cents balance).
 - **The bank/invoice LINE PARSER makes deliberate locale/column assumptions (full-audit-2026-06-28
   Phase 1, BL-N1/N2/N3 + DECISION 2).** The deterministic line parser shared by the bank and invoice tools
   (`tools/money.ts`, distinct from the geometry pass above) carries these accepted behaviors, all pinned by
@@ -431,8 +441,12 @@ password recovery — are documented in
     document whose dates are **all** fully ambiguous (every field ≤ 12, e.g. only `03/05/2026`) is read with
     the day-first default and a genuinely US value there reads as the wrong month. There is no per-row caveat
     channel (the tool output schema is frozen), so this residual is silent; widening it needs the schema/UI
-    work deferred past Phase 1. **Redaction does not infer locale** (it stays day-first — see the redaction
-    bullet's BL-N6 note).
+    work deferred past Phase 1. The vote is **scoped by line kind (full-audit-2026-06-29 follow-up FIN-4)**:
+    a MONEY-bearing line (a transaction row) votes only on its **leading** date column(s), so a foreign-format
+    date in a payee MEMO can no longer flip the whole document's order (which used to silently day/month-swap
+    every dotted booking date); a MONEY-less header/label line (an invoice `Invoice date 06/15/2026`, a
+    statement period) still votes on any date it carries, so labeled US-invoice dates are detected. **Redaction
+    does not infer locale** (it stays day-first — see the redaction bullet's BL-N6 note).
   - **The amount column is chosen by POSITION, not the first money-shaped token.** With a running balance
     present (≥2 figures on the row) the parser takes the **second-to-last** figure as the movement amount
     and the last as the balance; with one figure that figure is the amount. So a money-shaped reference in
@@ -455,6 +469,11 @@ password recovery — are documented in
     isolation). The invoice path mirrors this on the **opposite** side — it reads the line total as the LAST
     figure, so it drops a row with an uncaptured numeric column to the **RIGHT** of the line total
     (`Hosting 12,50 500` → the real total `500` lost) and a bare number to the LEFT is treated as a quantity.
+    The right-side drop is scoped to a trailing token that is **itself** a money-shaped-but-rejected bare
+    amount (full-audit-2026-06-29 follow-up FIN-2): the region after the last money match must be ENTIRELY
+    one such token, so a valid item with a trailing **annotation** (`Service 12,50 (Pos. 3)`, `Beratung
+    1.234,56 19% MwSt`, `Line 50,00 EUR 2 Stk`) is **kept**, not deleted by the earlier "any trailing digit
+    drops" rule.
   - **Every parsed figure is normalised to 2 decimal places (full-audit-2026-06-29-postmerge T5).**
     `parseAmount` rounds each figure to the nearest cent so `Math.round(x*100)` is its EXACT integer-cent
     value — the load-bearing premise of the completeness/reconcile tie-out math and the CSV `toFixed(2)`.
@@ -481,7 +500,15 @@ password recovery — are documented in
     summed into a meaningless cross-currency figure. **Residual:** a foreign symbol **glued immediately
     before** the only figure with no other adjacency (`$50,00` as a row's sole token) can be missed and
     falls back to the document currency — harmless on a single-currency document, a rare mis-tag on a truly
-    mixed one.
+    mixed one. The **document-level fallback currency** (used when a bare-amount row prints no figure-adjacent
+    code — the de-AT norm) is now a **MAJORITY VOTE over figure-adjacent detections** (full-audit-2026-06-29
+    follow-up FIN-1; `money.ts detectDocumentCurrency`), not the old "first allowlisted code anywhere in the
+    document wins". A money line votes only on its figure region (a code in a payee memo, LEFT of the amount,
+    is excluded); a money-less header/label line (`Währung EUR`) votes on its whole text. So a stray `USD` in
+    a memo can no longer stamp a whole EUR statement — and its VERIFIED total — with the wrong currency.
+    **Residual:** a statement that prints **bare amounts and declares its currency nowhere** except inside a
+    transaction memo (no header declaration, no figure-adjacent code) yields no document currency → its rows
+    are dropped (honest recall loss, never a wrong currency).
   - **Grouped figures without a 2-dp decimal are read as thousands.** A bare `1.000`/`2.500` (de-AT dot =
     thousands), space-grouped `1 234 567,89`, and Swiss-apostrophe `1'234.56` are now read whole. The
     trade-off (accepted, DECISION 2): a **dotted/grouped reference number** in a description — `Rechnung
