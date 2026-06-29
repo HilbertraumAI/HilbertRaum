@@ -271,6 +271,17 @@ force-quit. The contract now:
   (see "Stream recovery across navigation" below); the fix is guard-only. Teeth: `ChatUnmount.test.tsx`
   unmounts with a poll tick AND a flush timer in flight, then asserts `listDocuments` is not re-fetched
   and the flush timer was `clearTimeout`'d.
+  **Reconciled (full audit 2026-06-29 postmerge, F22 — the "applied uniformly" claim was overstated):**
+  two hold-outs remained when this record was written. `ModelsScreen`'s download/engine poll callbacks
+  (`setJob` + a transitional `void refresh()`) had **no** guard, and the `DiagnosticsTab`
+  `loadActivity`/`loadMoreActivity` refreshers — though this bullet listed "DiagnosticsTab refreshers" as
+  covered — guarded only `refreshStatus`/`refreshLogs`/the mount effect, not the activity-page setStates.
+  Phase 6 gives `ModelsScreen` its own `mountedRef` (guarding `refresh()` after its `await` + both poll
+  `.then`s) and routes the two `DiagnosticsTab` activity setStates through the existing component
+  `mountedRef`, so the discipline is **now actually uniform across every screen**. Teeth:
+  `ModelsScreenUnmount.test.tsx` (see §32). Sibling renderer lifecycle/a11y fixes landed the same phase:
+  **F21** (DictationButton mic-stream released when `getUserMedia` resolves after unmount — same
+  `mountedRef` idiom) and **F20** (WorkspaceGate per-`phase` focus management — `useEffect([phase])`).
 - **FE-5 (effect re-run on language change).** `I18nProvider.applyLanguageSetting` is now
   `useCallback([])` (identity-stable; it only needs `setLang`), so App's policy/settings effect, which
   lists it in deps, no longer re-fires `getPolicy()`+`getSettings()` purely because the UI language
@@ -4134,7 +4145,8 @@ started** — carried in the report.
 | F5 | 3 | **fixed (Phase 3)** — invoice extraction re-inserted a fresh invoice + line items on every analysis question (no reuse/replace/staleness, where the bank path has all three); now mirrors the bank reuse-or-re-extract gate (`extractor_version` + `isInvoiceStale` + `replaceExisting` atomic swap); see the **§29 ledger** | arch §29; arch §8 (invoice reuse/replace/staleness parity) |
 | F14, F15, F16, F17 | 4 | **fixed (Phase 4)** — security consistency: F15 mapped-IPv6 SSRF deny-list bypass, F14 diagnostics-log buffer readable after lock, F16 IPC lock-guard parity + generalized structural test (subsumes **T3**), F17 download size caps always bounded; see the **§30 ledger** | arch §30; security-model §D3 + "encrypted log" record; §25 inventory correction |
 | T1, T2, T6, T7, T8, T9, T3 | 5 | **closed (Phase 5, test-only)** — test-enforcement seams: T1 SIGKILL escalation unit test, T2 resident-cache lock-purge IPC wiring, T6/T7 two TEST-1-family flakes de-flaked (fake timers / `vi.waitFor`), T8 crash-fallback real-reap assertion, T9 truncated-ciphertext nit; T3 verified subsumed by F16; T4/T5 done in Phase 1. `git diff src/` empty; see the **§31 ledger** | arch §31; "Test-enforcement seams" record (Phase-5 subsection) |
-| F11–F13, F18, F19, F20–F24, D1–D8 | — | **not started** — RAG/perf/concurrency F11–F13/F18/F19 (Phase 8), renderer a11y/lifecycle F20–F24 (Phase 6), docs D1–D8 (Phase 7); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
+| F20, F21, F22, F23, F24 | 6 | **fixed (Phase 6, renderer-only)** — frontend a11y + lifecycle: F20 first-run gate phase-focus management (the `finishing` step had no focus target — the real gap; welcome→password & →starter already focused via `autoFocus`), F21 mic-stream leak when getUserMedia resolves after unmount, F22 ModelsScreen poll + DiagnosticsTab activity refreshers join the FE-4 `mountedRef` discipline (the claim now holds), F23 StreamAnnouncer `aria-atomic` drop, F24 Composer fallback caret-timer cleared on unmount; see the **§32 ledger** | arch §32; "Renderer robustness" FE-4 reconciliation |
+| F11–F13, F18, F19, D1–D8 | — | **not started** — RAG/perf/concurrency F11–F13/F18/F19 (Phase 8), docs D1–D8 (Phase 7); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
 
 **Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
 class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
@@ -4254,6 +4266,32 @@ change. Test-only. The de-flake conversions (T6/T7) removed two real-wall-clock 
 repeated runs); the wiring proofs (T1/T2/T8) each redden on a one-line neuter of the control they guard.
 **Open (later phases):** F11–F13/F18/F19 RAG/perf/concurrency (Phase 8), F20–F24 renderer a11y/lifecycle
 (Phase 6), D1–D8 docs (Phase 7); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 remain deferred.
+
+### §32 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 6 — renderer accessibility + lifecycle consistency)
+
+**Phase 6** closes the renderer cluster F20–F24 — frontend accessibility + effect-lifecycle consistency.
+**Renderer-only** (plus one test file / case per finding); **no IPC surface, no main-process behavior, no new
+user-facing copy** (so no i18n catalog change). Branch `audit-postmerge-phase6-frontend-a11y` (suite **2523
+passed / 39 skipped**, typecheck + build green). The FE-4 reconciliation is folded into the **"Renderer
+robustness" record** (FE-4 bullet, below); resolve a `full-audit-2026-06-29-postmerge F2<n>` code comment
+through this ledger. Test-first where observable in jsdom (F20/F21/F22 each red on current code → green).
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **F20** (Med, a11y) | 6 | **fixed** — the first-run gate swaps the entire card per `phase`; focus is now steered to each step's primary control via `useEffect(…, [phase])` (`WorkspaceGate.tsx` — password input on `password`, Skip on `finishing`, primary action on `starter`; the welcome CTA keeps its mount-time `autoFocus`). `PasswordField` gained an `inputRef` prop (mirroring `Composer`'s pattern). **DIVERGED from the audit's framing** — the audit called `welcome → password` the critical gap, but that field already carried `autoFocus` (the new test is green there pre-fix); the real deterministic gap was the **`finishing` step (no focus target at all → focus reset to `<body>`)**, which the new test reds on pre-fix. The effect also makes every transition re-entry-safe (`autoFocus` fires only on first mount). WCAG 2.4.3 / 3.2.2 | arch §32; `WorkspaceGateFocus.test.tsx` |
+| **F21** (Low, privacy/lifecycle) | 6 | **fixed** — `DictationButton.start()` assigned `captureRef` only AFTER `await getUserMedia`, so unmounting while the OS mic prompt was open ran the cleanup first (nothing to release), then stored a LIVE `MediaStream` on the dead component and never `.stop()`d it (OS recording indicator stayed lit). A `mountedRef` (mirroring ChatScreen/DocumentsScreen) now cancels the just-acquired capture and skips `onRecording` when unmounted. Teeth: `Dictation.test.tsx` resolves an injected capture AFTER unmount → asserts `cancel()` fired + recording was never entered | arch §32; "Renderer robustness" FE-4 |
+| **F22** (Low, lifecycle) | 6 | **fixed** — `ModelsScreen` was the lone FE-4 hold-out: its download/engine poll callbacks ran `setJob` + (on a live→terminal transition) `void refresh()` with no mounted guard, and the `DiagnosticsTab` `loadActivity`/`loadMoreActivity` refreshers (listed as guarded but weren't) ran `setEvents`/`setMoreAvailable` ungated. Both now carry the `mountedRef` guard, so the architecture's "FE-4 applied uniformly" claim now genuinely holds. Teeth: `ModelsScreenUnmount.test.tsx` parks a `getDownloadJob` tick, unmounts, resolves it → asserts no extra `listModels` (no refresh on a dead component) | arch §32; "Renderer robustness" FE-4 (narrowed) |
+| **F23** (Low, a11y) | 6 | **fixed** — the `StreamAnnouncer` live region carefully feeds only newly-completed sentences into a `role="log" aria-live="polite"` region, but `aria-atomic="true"` told the AT to re-read the ENTIRE region on every change (re-announcing prior sentences; double-speak on fast boundaries). Dropped `aria-atomic` (`role="log"` defaults to atomic=false); the sentence-slicing is untouched. `StreamAnnouncer.test.tsx` pins `not aria-atomic="true"` | arch §32; `StreamAnnouncer.test.tsx` |
+| **F24** (Low, lifecycle nit) | 6 | **fixed** — `Composer.insertDictation`'s non-`execCommand` fallback (jsdom / future removal) deferred caret restoration via an untracked `setTimeout(…, 0)`. Now tracked in a ref and cleared on unmount (consistency with FE-7/FE-1 timer cleanup). Benign in real Electron (`execCommand` succeeds there), so this is consistency-only; the Dictation insert-at-caret test still passes | arch §32 |
+
+**Posture held (Phase 6):** offline / no telemetry / no new network egress; renderer-only; no IPC channel,
+main-process, schema, or i18n-catalog change; the **content class** is untouched (no logging/audit/export
+surface added). No happy-path regression — the mic capture (F21), the streaming announcer slicing (F23), the
+poll-driven refresh (F22), and the dictation caret-restore (F24) all still work (their existing suites stay
+green). Every lifecycle guard **reuses the existing `mountedRef` idiom** (ChatScreen/DocumentsScreen/
+DiagnosticsTab), not a new discipline. **Open (later phases):** F11–F13/F18/F19 RAG/perf/concurrency (Phase
+8), D1–D8 docs (Phase 7); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix
+remain deferred.
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

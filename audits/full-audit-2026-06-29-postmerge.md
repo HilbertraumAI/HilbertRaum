@@ -580,6 +580,13 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   suspend.
 
 ### F20 — First-run gate does not move focus on phase transitions (accessibility)
+> **✅ REMEDIATED — Phase 6 (branch `audit-postmerge-phase6-frontend-a11y`).** `WorkspaceGate` now steers focus
+> per `phase` via `useEffect(() => { … }, [phase, creating])` — password input on `password`, Skip on
+> `finishing`, primary action on `starter`; the welcome CTA keeps its mount-time `autoFocus`. `PasswordField`
+> gained an `inputRef` prop (mirror of `Composer`). **DIVERGED from the framing above:** the
+> `welcome → password` field already carried `autoFocus` (verified green pre-fix), so the real deterministic
+> gap was the **`finishing` step — no focus target at all** (the new test reds on it pre-fix). The effect also
+> makes every transition re-entry-safe. Test: `WorkspaceGateFocus.test.tsx`. Disposition: architecture.md §32.
 - **Category:** Accessibility
 - **Severity:** Medium · **Confidence:** High
 - **Location:** `apps/desktop/src/renderer/screens/WorkspaceGate.tsx` (phase transitions
@@ -598,6 +605,11 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   deferred.
 
 ### F21 — Microphone stream leaks if the component unmounts while `getUserMedia` is pending
+> **✅ REMEDIATED — Phase 6 (branch `audit-postmerge-phase6-frontend-a11y`).** `DictationButton` now tracks a
+> `mountedRef` (mirror of ChatScreen/DocumentsScreen, dropped first in the unmount cleanup); after the
+> `await captureDictation()`, if unmounted it immediately `capture.cancel()`s the live stream and returns
+> without storing it or calling `onRecording`. Teeth-checked: `Dictation.test.tsx` resolves an injected capture
+> AFTER unmount → asserts `cancel()` fired and recording was never entered. Disposition: architecture.md §32.
 - **Category:** FE-lifecycle
 - **Severity:** Low · **Confidence:** High
 - **Location:** `apps/desktop/src/renderer/chat/DictationButton.tsx:69-81` (`start`), unmount cleanup
@@ -613,6 +625,13 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   called.
 
 ### F22 — ModelsScreen download/engine poll setState (+ `refresh()`) without the FE-4 unmount guard
+> **✅ REMEDIATED — Phase 6 (branch `audit-postmerge-phase6-frontend-a11y`).** `ModelsScreen` gained a
+> component `mountedRef` guarding `refresh()` (after its `await`) and both download/engine poll `.then`s
+> (before `setJob`/`refresh`); the `DiagnosticsTab` `loadActivity`/`loadMoreActivity` setStates (listed as
+> guarded but weren't) now route through the existing component `mountedRef`. The architecture's "FE-4 applied
+> uniformly" claim is **narrowed and now holds**. Test: `ModelsScreenUnmount.test.tsx` (parks a `getDownloadJob`
+> tick, unmounts, resolves → asserts no extra `listModels`). Disposition: architecture.md §32 + the FE-4
+> reconciliation in the "Renderer robustness" record.
 - **Category:** FE-lifecycle
 - **Severity:** Low · **Confidence:** High
 - **Location:** `apps/desktop/src/renderer/screens/ModelsScreen.tsx:165-205` (the two polling
@@ -629,6 +648,10 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** Narrow the FE-4 "applied uniformly" claim or fix the hold-outs.
 
 ### F23 — `StreamAnnouncer` live region uses `aria-atomic="true"`, re-announcing the whole buffer each flush
+> **✅ REMEDIATED — Phase 6 (branch `audit-postmerge-phase6-frontend-a11y`).** Dropped `aria-atomic="true"`
+> from the `role="log" aria-live="polite"` region (`Transcript.tsx`); `role="log"` defaults to atomic=false, so
+> the AT now reads only the newly-added sentence. The sentence-slicing logic is untouched. Pinned by a
+> `not aria-atomic="true"` assertion in `StreamAnnouncer.test.tsx`. Disposition: architecture.md §32.
 - **Category:** Accessibility
 - **Severity:** Low · **Confidence:** Medium
 - **Location:** `apps/desktop/src/renderer/chat/Transcript.tsx:370-374`
@@ -640,6 +663,10 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   with NVDA/VoiceOver.
 
 ### F24 — `Composer.insertDictation` schedules an uncleared `setTimeout(…, 0)` in the fallback path
+> **✅ REMEDIATED — Phase 6 (branch `audit-postmerge-phase6-frontend-a11y`).** The fallback caret-restore
+> `setTimeout` is now tracked in `caretTimerRef` and cleared in an unmount-cleanup effect (timer-cleanup
+> consistency with FE-7/FE-1). Benign in real Electron (`execCommand` succeeds there); the Dictation
+> insert-at-caret test still passes. Disposition: architecture.md §32.
 - **Category:** FE-lifecycle
 - **Severity:** Low · **Confidence:** Medium
 - **Location:** `apps/desktop/src/renderer/chat/Composer.tsx:106-108`

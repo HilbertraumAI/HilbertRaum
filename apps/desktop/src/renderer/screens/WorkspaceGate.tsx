@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Banner,
   BrandMark,
@@ -66,6 +66,23 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const [verifyProgress, setVerifyProgress] = useState<ModelVerifyProgress | null>(null)
   const finished = useRef(false)
   const { t } = useT()
+
+  // F20 (audit postmerge): the CREATE flow swaps the entire card per `phase`, so focus must
+  // be steered to each new step's primary control — otherwise a keyboard / screen-reader user
+  // who advances a step is dropped on <body> (worst on `password`, the most security-sensitive
+  // step; and `finishing` had no focus target at all). WCAG 2.4.3 / 3.2.2. The welcome CTA
+  // keeps its mount-time autoFocus (the initial step); these refs drive every later transition,
+  // and — unlike `autoFocus` — re-fire when a step is re-entered (e.g. Back → forward again).
+  const passwordInputRef = useRef<HTMLInputElement>(null)
+  const finishingSkipRef = useRef<HTMLButtonElement>(null)
+  const starterPrimaryRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!creating) return // the UNLOCK path focuses its own field via autoFocus — don't disturb it.
+    if (phase === 'password') passwordInputRef.current?.focus()
+    else if (phase === 'finishing') finishingSkipRef.current?.focus()
+    else if (phase === 'starter') starterPrimaryRef.current?.focus()
+    // 'welcome' keeps its CTA autoFocus (initial step).
+  }, [phase, creating])
 
   const usingPassword = !creating || mode === 'encrypted'
   // The strength meter is advisory; only the floor + match (and the main process's own
@@ -239,6 +256,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
             </p>
           )}
           <Button
+            ref={finishingSkipRef}
             variant="ghost"
             onClick={() => createdState && finish(createdState, 'chat')}
           >
@@ -266,8 +284,8 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
                 {t('gate.starter.addDocuments')}
               </Button>
               <Button
+                ref={starterPrimaryRef}
                 variant="primary"
-                autoFocus
                 onClick={() => createdState && finish(createdState, 'models')}
               >
                 {t('gate.starter.chooseModel')}
@@ -301,7 +319,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
             <PasswordField
               placeholder={t('gate.passwordPlaceholder')}
               value={password}
-              autoFocus
+              inputRef={passwordInputRef}
               autoComplete="new-password"
               show={showPassword}
               onToggleShow={() => setShowPassword((v) => !v)}

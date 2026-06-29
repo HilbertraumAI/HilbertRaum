@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Composer } from '../../src/renderer/chat/Composer'
+import { DictationButton } from '../../src/renderer/chat/DictationButton'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { t } from '../../src/shared/i18n'
 import type { DictationCapture, DictationCaptureStart } from '../../src/renderer/lib/dictation'
@@ -252,5 +253,42 @@ describe('friendly failures (§11.4)', () => {
     await screen.findByRole('button', { name: /stop dictation/i })
     unmount()
     expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  // F21 (audit postmerge): the harder leak — the component unmounts WHILE getUserMedia is
+  // still pending (the OS mic prompt is open). The unmount cleanup runs first and sees no
+  // capture to release; then the promise resolves, handing back a LIVE MediaStream. Without
+  // the mountedRef guard, start() would store it on the dead component and never stop() it —
+  // the OS recording indicator stays lit until GC. The guard must cancel it immediately and
+  // never touch the unmounted component (no onRecording).
+  it('cancels a capture that resolves AFTER unmount and never enters recording (F21)', async () => {
+    const user = userEvent.setup()
+    stubApi({})
+    const cancel = vi.fn()
+    const capture: DictationCapture = { stop: async () => new Uint8Array(), cancel, analyser: null }
+    let resolveCapture!: (c: DictationCapture) => void
+    const captureImpl: DictationCaptureStart = () =>
+      new Promise<DictationCapture>((res) => {
+        resolveCapture = res
+      })
+    const onRecording = vi.fn()
+    const { unmount } = render(
+      <DictationButton onText={() => {}} onRecording={onRecording} captureImpl={captureImpl} />
+    )
+
+    // Click to record → start() awaits the (parked) getUserMedia. Then navigate away.
+    await user.click(micButton())
+    expect(resolveCapture).toBeDefined()
+    unmount()
+
+    // The OS prompt now resolves — on the unmounted component.
+    await act(async () => {
+      resolveCapture(capture)
+    })
+
+    expect(cancel).toHaveBeenCalledTimes(1) // the just-acquired live stream is released
+    // Never ENTERED recording on the dead component — onRecording(_, true) must not fire.
+    // (The unmount cleanup's onRecording(null, false) wave-clear is expected and fine.)
+    expect(onRecording.mock.calls.some(([, recording]) => recording === true)).toBe(false)
   })
 })

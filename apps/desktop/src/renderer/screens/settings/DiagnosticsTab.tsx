@@ -208,9 +208,11 @@ export function DiagnosticsTab(): JSX.Element {
   const loadActivity = useCallback(async (): Promise<void> => {
     try {
       const page = (await window.api?.getAuditEvents(ACTIVITY_PAGE_SIZE)) ?? []
+      if (!mountedRef.current) return // late reply after unmount (FE-4)
       setEvents(page)
       setMoreAvailable(page.length === ACTIVITY_PAGE_SIZE)
     } catch {
+      if (!mountedRef.current) return
       setEvents([])
       setMoreAvailable(false)
     }
@@ -221,9 +223,11 @@ export function DiagnosticsTab(): JSX.Element {
     if (!last) return
     try {
       const page = (await window.api?.getAuditEvents(ACTIVITY_PAGE_SIZE, last.id)) ?? []
+      if (!mountedRef.current) return // late reply after unmount (FE-4)
       setEvents((prev) => [...(prev ?? []), ...page])
       setMoreAvailable(page.length === ACTIVITY_PAGE_SIZE)
     } catch {
+      if (!mountedRef.current) return
       setMoreAvailable(false)
     }
   }, [events])

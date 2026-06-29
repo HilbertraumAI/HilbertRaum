@@ -6,6 +6,49 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 6 (RENDERER ACCESSIBILITY + LIFECYCLE CONSISTENCY; F20/F21/F22/
+F23/F24) — branch `audit-postmerge-phase6-frontend-a11y`.** Suite **2523 passed / 39 skipped (2562 collected)**
+(was 2518/39 after Phase 5 → **+5 tests**: 3 F20 focus + 1 F21 mic-leak + 1 F22 unmount; F23 added an assertion
+to an existing test), typecheck clean, `npm run build` green. **Renderer-only** — no IPC surface, no
+main-process behavior, no new user-facing copy (no i18n change). Theme: **a keyboard/SR user is never dropped
+on `<body>`, and the FE-4 `mountedRef` discipline finally holds across EVERY screen.** Each observable fix is
+**test-first (red on current code → green)**.
+- **F20 (Med, a11y — the priority) — first-run gate didn't move focus on phase changes.** `WorkspaceGate`
+  swaps the whole card per `phase`; a `useEffect(…, [phase])` now focuses each step's primary control
+  (password input on `password`, Skip on `finishing`, primary action on `starter`; welcome keeps its
+  `autoFocus`). `PasswordField` gained an `inputRef` prop (mirror of `Composer`). **DIVERGED from the audit's
+  framing:** the audit called welcome→password the critical gap, but that field **already** had `autoFocus`
+  (the new test is green there pre-fix); the genuine deterministic gap was the **`finishing` step — NO focus
+  target at all** (the new test reds on it pre-fix). The effect also makes transitions re-entry-safe (autoFocus
+  only fires on first mount). WCAG 2.4.3/3.2.2.
+- **F21 (Low, privacy/lifecycle) — mic stream leaked if the component unmounted while getUserMedia was
+  pending.** `DictationButton.start()` stored `captureRef` only AFTER the await, so an unmount during the OS
+  mic prompt ran cleanup first (nothing to release), then a LIVE `MediaStream` landed on the dead component and
+  was never stopped (OS recording indicator stayed lit). A `mountedRef` now cancels the just-acquired capture +
+  skips `onRecording` when unmounted. Teeth-checked (neuter the guard → the late capture is stored + recording
+  entered → reds).
+- **F22 (Low, lifecycle consistency) — ModelsScreen poll + DiagnosticsTab activity refreshers lacked the FE-4
+  guard.** ModelsScreen's download/engine poll `.then`s (`setJob` + transitional `void refresh()`) and the
+  DiagnosticsTab `loadActivity`/`loadMoreActivity` setStates (listed as guarded but weren't) ran ungated.
+  Both now use a `mountedRef`; the architecture's "FE-4 applied uniformly" claim is **NARROWED + now actually
+  true**. Test parallels the DocumentsScreen FE-4 test (park a `getDownloadJob` tick → unmount → resolve →
+  assert no extra `listModels`).
+- **F23 (Low, a11y) — StreamAnnouncer re-announced the whole buffer each flush.** Dropped `aria-atomic="true"`
+  (an additive `role="log"` should read only what was ADDED; the sentence-slicing is untouched). Pinned by a
+  `not aria-atomic="true"` assertion.
+- **F24 (Low, consistency) — Composer fallback caret timer was untracked.** The non-`execCommand` fallback's
+  `setTimeout(…,0)` is now tracked in a ref and cleared on unmount (timer-cleanup consistency; benign in real
+  Electron where `execCommand` succeeds).
+- **Durable record:** architecture.md **§32 ledger** (F20–F24) + the **§27 master-ledger** Phase-6 row + the
+  **"Renderer robustness" FE-4 reconciliation** (ModelsScreen + DiagnosticsTab were the hold-outs; F20/F21
+  noted). The audit report marks F20–F24 remediated + Phase 6 DONE. No behavior-doc/known-limitations change
+  (nothing user-facing changed; F20 is a fix, not a deferral).
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase6-frontend-a11y`; do NOT auto-merge/push.** Then
+  the remaining open phases: Phase 7 (docs D1–D8), Phase 8 (RAG/perf + latent-concurrency F11–F13/F18/F19). The
+  §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix remain deferred to their
+  own phases._
+
+
 _2026-06-29 — **Post-merge full audit — Phase 5 (TEST-ENFORCEMENT SEAMS — prove the controls stay WIRED;
 T1/T2/T6/T7/T8 + T9 nit + T3 verify) — branch `audit-postmerge-phase5-test-seams`.** Suite **2518 passed / 39
 skipped (2557 collected)** (was 2515/39 after Phase 4 → **+3 tests**; T6/T7/T8 were conversions/strengthenings,

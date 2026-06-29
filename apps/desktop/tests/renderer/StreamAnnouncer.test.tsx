@@ -29,6 +29,9 @@ describe('StreamAnnouncer (L7)', () => {
     const region = screen.getByRole('log')
     expect(region).toHaveClass('sr-only')
     expect(region).toHaveAttribute('aria-live', 'polite')
+    // F23: additive log — must NOT be aria-atomic="true" (that re-reads the whole region on
+    // every change, re-announcing prior sentences and defeating the slicing below).
+    expect(region).not.toHaveAttribute('aria-atomic', 'true')
     expect(region).toBeEmptyDOMElement()
   })
 
