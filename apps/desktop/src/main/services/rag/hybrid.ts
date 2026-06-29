@@ -74,6 +74,10 @@ export function keywordSearchChunks(
     docFilter = `${scopeFilter.sql} AND `
     params.push(...scopeFilter.params)
   }
+  // The `chunk_id` secondary sort key makes equal-bm25 ties deterministic (full-audit-2026-06-29
+  // RAG-1): without it SQLite's tie order is unspecified, so the per-list rank a chunk feeds into
+  // RRF — and which chunk wins a page-dedup slot — could flip across versions/query plans. The
+  // vector path takes the matching chunkId tiebreak in embeddings/index.ts.
   const sql =
     `SELECT chunks_fts.chunk_id AS chunkId, bm25(chunks_fts) AS bm25
      FROM chunks_fts
@@ -82,7 +86,7 @@ export function keywordSearchChunks(
      WHERE ` +
     docFilter +
     `chunks_fts MATCH ?
-     ORDER BY bm25(chunks_fts)
+     ORDER BY bm25(chunks_fts), chunks_fts.chunk_id
      LIMIT ?`
   params.push(match, topK)
   return db.prepare(sql).all(...params) as unknown as KeywordHit[]

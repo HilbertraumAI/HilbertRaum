@@ -279,6 +279,107 @@ describe('LlamaServer', () => {
     await expect(server.start()).rejects.toThrow(/exited before becoming healthy/)
   })
 
+  // REL-1: findFreePort closes its listener BEFORE the child binds, so a concurrent
+  // process / sibling sidecar (chat + embedder + reranker + vision start near-
+  // simultaneously) can steal the port in that TOCTOU window. A first child that exits
+  // "address already in use" is a transient port race, not a model/device fault — so the
+  // server retries ONCE on a fresh port instead of failing the start.
+  it('retries once on a port-bind race, then starts healthy on a fresh port (REL-1)', async () => {
+    const ports: number[] = []
+    const spawnedArgs: string[][] = []
+    const failing = new FakeChild() as FakeChild & { stderr: EventEmitter }
+    failing.stderr = new EventEmitter()
+    const healthy = new FakeChild()
+    let n = 0
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      spawnedArgs.push(args)
+      n++
+      if (n === 1) {
+        queueMicrotask(() => {
+          failing.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
+          failing.emit('exit', 1, null)
+        })
+        return failing
+      }
+      return healthy // the retry's child stays up and reports healthy
+    }
+    // Only the retry's child (on the fresh port 50101) ever answers /health — the first
+    // child died before it could bind, so its port never serves a healthy response.
+    const fetchImpl = (async (url: string | URL) => {
+      const ok = String(url).includes(':50101/')
+      return { ok, status: ok ? 200 : 503 } as Response
+    }) as typeof fetch
+    let portCall = 0
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => {
+        const p = 50100 + portCall++
+        ports.push(p)
+        return p
+      },
+      healthIntervalMs: 1
+    })
+    await server.start() // resolves: the retry on a fresh port succeeds
+    expect(spawnedArgs).toHaveLength(2) // first lost the race, second won
+    expect(ports).toEqual([50100, 50101]) // a FRESH free port was acquired for the retry
+    const h = await server.health()
+    expect(h.healthy).toBe(true)
+    expect(h.port).toBe(50101)
+    await server.stop()
+  })
+
+  it('does NOT retry a non-bind immediate exit — only port races are transient (REL-1)', async () => {
+    let n = 0
+    const spawn = (): ChildProcessLike => {
+      n++
+      const child = new FakeChild()
+      queueMicrotask(() => child.emit('exit', 1, null)) // generic crash, no bind stderr
+      return child
+    }
+    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50200,
+      healthIntervalMs: 1
+    })
+    await expect(server.start()).rejects.toThrow(/exited before becoming healthy/)
+    expect(n).toBe(1) // no retry for a non-bind failure
+  })
+
+  it('retries a port-bind race only ONCE, then fails (bounded retry, REL-1)', async () => {
+    let n = 0
+    const spawn = (): ChildProcessLike => {
+      n++
+      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+      child.stderr = new EventEmitter()
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
+        child.emit('exit', 1, null)
+      })
+      return child
+    }
+    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50300,
+      healthIntervalMs: 1
+    })
+    await expect(server.start()).rejects.toThrow(/address already in use/)
+    expect(n).toBe(2) // one initial attempt + exactly one retry, then it gives up
+  })
+
   it('surfaces the stderr tail + exit code when the child fails to bind (port conflict)', async () => {
     const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
     child.stderr = new EventEmitter()

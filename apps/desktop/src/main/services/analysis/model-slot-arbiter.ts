@@ -104,11 +104,18 @@ export class ModelSlotArbiter {
    * Chat side: claim the slot. If no yielding build holds it, returns a no-op release
    * immediately. Otherwise it requests a pause and AWAITS the builder parking, then returns
    * a release fn the caller MUST call when its stream ends (idempotent).
+   *
+   * REL-3: an optional `signal` (the chat turn's `AbortController.signal`) lets a user "Stop"
+   * that lands while parked unwind THIS turn at once — instead of waiting up to one full
+   * multi-second tree-node summarization for the builder to reach its boundary. The wait
+   * rejects with `SlotAbortedError` on abort, cleaning up so the gone chat leaves no trace.
    */
-  async acquireForChat(): Promise<() => void> {
+  async acquireForChat(signal?: AbortSignal): Promise<() => void> {
     if (!this.activeBuild) {
       return () => {}
     }
+    // Already stopped before we even ask — don't request a pause or take a holder slot.
+    if (signal?.aborted) throw new SlotAbortedError('Chat slot acquire aborted')
     this.chatHolders += 1
     // If the builder is ALREADY parked (a prior chat handed the slot off and the build is
     // waiting to resume), the slot is free RIGHT NOW — a second concurrent chat must NOT
@@ -117,9 +124,7 @@ export class ModelSlotArbiter {
     // builder parks wait on the handoff (the builder wakes all of them at once when it parks).
     if (this.reacquireReject === null) {
       this.pauseRequested = true
-      await new Promise<void>((resolve) => {
-        this.handoffWaiters.push(resolve)
-      })
+      await this.waitForHandoff(signal)
     }
     let released = false
     return () => {
@@ -127,6 +132,37 @@ export class ModelSlotArbiter {
       released = true
       this.releaseOneChat()
     }
+  }
+
+  /**
+   * Park a chat caller until the builder reaches its node boundary and hands off the slot
+   * (resolve), or — if `signal` aborts first — reject with `SlotAbortedError` (REL-3). On
+   * abort it cleans up so the gone chat leaves NO trace: its waiter is removed from the queue
+   * (not leaked), the holder slot it took is given back via `releaseOneChat`, and — when it
+   * was the last waiter — the pause is dropped so the builder doesn't needlessly park for a
+   * chat that's gone (which, with no chat left to release it, would hang the build).
+   * Single-shot: whichever of wake/abort happens first wins; the loser is a no-op.
+   */
+  private waitForHandoff(signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
+      const onWake = (): void => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }
+      const onAbort = (): void => {
+        if (settled) return
+        settled = true
+        this.handoffWaiters = this.handoffWaiters.filter((w) => w !== onWake)
+        this.releaseOneChat()
+        if (this.handoffWaiters.length === 0) this.pauseRequested = false
+        reject(new SlotAbortedError('Chat slot acquire aborted'))
+      }
+      this.handoffWaiters.push(onWake)
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
   }
 
   /**

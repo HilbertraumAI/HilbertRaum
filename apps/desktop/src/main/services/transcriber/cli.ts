@@ -72,6 +72,24 @@ function resolveIdleTimeoutMs(explicit?: number): number {
   return Number.isFinite(env) && env > 0 ? env : DEFAULT_WHISPER_IDLE_TIMEOUT_MS
 }
 
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Grace after SIGTERM before escalating to SIGKILL on a kill (REL-2), mirroring
+ * `LlamaServer.stop()`'s `DEFAULT_KILL_GRACE_MS`. A whisper-cli wedged in native decode code
+ * can ignore SIGTERM and never emit `close`; the escalation guarantees the child actually dies.
+ */
+const DEFAULT_KILL_GRACE_MS = 2_000
+/**
+ * Absolute cap on how long `suspend()`/`stop()` wait for the killed children to finish their
+ * cleanup (exit + transient shred) before returning (REL-2). Even SIGKILL can leave a child
+ * uninterruptible on rare platforms; teardown (quit/lock) must never hang on it. Past this
+ * deadline the transient shred is best-effort — for the in-workspace `.parse` transient the
+ * startup crash-sweep is the backstop. Comfortably above the grace so the normal wedged case
+ * (SIGTERM ignored → SIGKILL → close → shred) completes well within it.
+ */
+const DEFAULT_SUSPEND_TIMEOUT_MS = 10_000
+
 /** Shape of the `-oj` output we rely on (whisper.cpp v1.8.6). */
 interface WhisperJson {
   transcription?: Array<{
@@ -103,6 +121,10 @@ export interface WhisperCliOptions {
    * `DEFAULT_WHISPER_IDLE_TIMEOUT_MS` (env-overridable). Injected small in tests.
    */
   idleTimeoutMs?: number
+  /** Grace after SIGTERM before escalating to SIGKILL (REL-2). Default `DEFAULT_KILL_GRACE_MS`. */
+  killGraceMs?: number
+  /** Cap on the `suspend()`/`stop()` cleanup await (REL-2). Default `DEFAULT_SUSPEND_TIMEOUT_MS`. */
+  suspendTimeoutMs?: number
 }
 
 export class WhisperCliTranscriber implements Transcriber {
@@ -111,6 +133,8 @@ export class WhisperCliTranscriber implements Transcriber {
   private readonly modelPath: string
   private readonly threads: number
   private readonly idleTimeoutMs: number
+  private readonly killGraceMs: number
+  private readonly suspendTimeoutMs: number
   private readonly spawnImpl: (command: string, args: string[], options: SpawnOptions) => ChildProcess
   private readonly verifyBinary: (binPath: string) => Promise<BinaryVerifyResult>
   /**
@@ -129,6 +153,8 @@ export class WhisperCliTranscriber implements Transcriber {
     this.modelPath = opts.modelPath
     this.threads = opts.threads ?? defaultThreadCount()
     this.idleTimeoutMs = resolveIdleTimeoutMs(opts.idleTimeoutMs)
+    this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
+    this.suspendTimeoutMs = opts.suspendTimeoutMs ?? DEFAULT_SUSPEND_TIMEOUT_MS
     this.spawnImpl = opts.spawnImpl ?? nodeSpawn
     this.verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
   }
@@ -237,11 +263,9 @@ export class WhisperCliTranscriber implements Transcriber {
         clearWatchdog()
         watchdog = setTimeout(() => {
           timedOut = true
-          try {
-            child.kill()
-          } catch {
-            /* already gone */
-          }
+          // REL-2: escalate to SIGKILL if the wedged child ignores SIGTERM — otherwise the
+          // watchdog "fires" but the child lives on and this ingestion slot stays held.
+          this.killWithEscalation(child)
         }, this.idleTimeoutMs)
       }
       armWatchdog()
@@ -260,13 +284,8 @@ export class WhisperCliTranscriber implements Transcriber {
         stderrTail = (stderrTail + text).slice(-4000)
       })
 
-      const onAbort = (): void => {
-        try {
-          child.kill()
-        } catch {
-          /* already gone */
-        }
-      }
+      // REL-2: escalate to SIGKILL so a "Stop" / cancel can't be ignored by a wedged child.
+      const onAbort = (): void => this.killWithEscalation(child)
       // Already aborted at spawn time (rare): kill at once; otherwise arm the listener.
       if (opts.signal?.aborted) onAbort()
       else opts.signal?.addEventListener('abort', onAbort, { once: true })
@@ -300,21 +319,57 @@ export class WhisperCliTranscriber implements Transcriber {
   }
 
   /**
+   * Kill a whisper child and escalate to SIGKILL if it ignores the polite signal (REL-2),
+   * mirroring `LlamaServer.stop()`. whisper-cli can wedge in native decode code that ignores
+   * SIGTERM and never emits `close`; without escalation the watchdog/abort/suspend "fires" but
+   * the child lives on, `transcribe()` never settles (the ingestion slot stays held), and
+   * `suspend()`/`stop()` — which await each child's cleanup — hang quit/lock forever.
+   * Best-effort throughout (a child already gone makes both kills harmless no-ops). The grace
+   * timer is `unref`'d so it never keeps Electron alive by itself, and is cleared the moment
+   * the child is confirmed gone so a clean exit leaves no lingering timer.
+   */
+  private killWithEscalation(child: ChildProcess): void {
+    let gone = false
+    const escalate = setTimeout(() => {
+      if (!gone) {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          /* best-effort */
+        }
+      }
+    }, this.killGraceMs)
+    escalate.unref?.()
+    const onGone = (): void => {
+      gone = true
+      clearTimeout(escalate)
+    }
+    child.once('exit', onGone)
+    child.once('close', onGone)
+    child.once('error', onGone)
+    try {
+      child.kill()
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /**
    * Kill in-flight children (workspace lock) — per-file CLI, so next use just respawns.
    * Awaits each child's full cleanup (exit + transient-transcript shred) before returning,
-   * so the parent cannot exit on quit with an un-shredded transcript still in `tmpdir()` (L5).
+   * so the parent cannot exit on quit with an un-shredded transcript still on disk (L5).
+   * The await is BOUNDED (REL-2): a child that ignores even SIGKILL must not hang teardown —
+   * past `suspendTimeoutMs` we return regardless (the crash-sweep is the shred backstop).
    */
   async suspend(): Promise<void> {
     const pending = [...this.active.entries()]
-    for (const [child] of pending) {
-      try {
-        child.kill()
-      } catch {
-        /* already gone */
-      }
-    }
-    // Wait for each killed child's `close` to drive transcribe()'s finally (shred + resolve).
-    await Promise.all(pending.map(([, done]) => done))
+    for (const [child] of pending) this.killWithEscalation(child)
+    // Wait for each killed child's `close` to drive transcribe()'s finally (shred + resolve),
+    // but never longer than the cap so a wedged child can't hang quit/lock.
+    await Promise.race([
+      Promise.all(pending.map(([, done]) => done)),
+      delay(this.suspendTimeoutMs)
+    ])
   }
 
   /** Permanent stop (`will-quit`): kill children and refuse new work. */

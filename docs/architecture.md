@@ -263,6 +263,14 @@ force-quit. The contract now:
   `DiagnosticsTab` refreshers, `SkillsTab` settings load, and the General tab. (React 18 makes a
   post-unmount setState a silent no-op, so this is defensive correctness; the DocumentsScreen test has
   teeth by asserting `listDocuments` is not re-fetched after unmount.)
+  **Extended (full audit 2026-06-29, FE-1):** `ChatScreen` was the remaining FE-4-class gap — its
+  attach-import poll (`watchAttachJob`) and streamed-token flush (`flushStream`) both resolve after the
+  user can navigate away mid-import / mid-generation. It now carries the same `mountedRef` (gating the
+  poll/flush setStates) and clears the pending flush timer on unmount. **Hard constraint:** the
+  main-side stream is *not* torn down — it is intentionally recovered on remount via `getActiveStream`
+  (see "Stream recovery across navigation" below); the fix is guard-only. Teeth: `ChatUnmount.test.tsx`
+  unmounts with a poll tick AND a flush timer in flight, then asserts `listDocuments` is not re-fetched
+  and the flush timer was `clearTimeout`'d.
 - **FE-5 (effect re-run on language change).** `I18nProvider.applyLanguageSetting` is now
   `useCallback([])` (identity-stable; it only needs `setLang`), so App's policy/settings effect, which
   lists it in deps, no longer re-fires `getPolicy()`+`getSettings()` purely because the UI language
@@ -399,22 +407,45 @@ simply absent from the map). The vector ↔ BLOB codec moved to `embeddings/code
 decode without an `index ↔ resident-cache` import cycle (re-exported from the barrel).
 
 **Invalidation contract (the highest-risk surface — a stale buffer silently corrupts ranking).**
-Belt-and-suspenders:
-- **Staleness (primary):** a cheap whole-table signature `(COUNT(*), MAX(rowid))` is recomputed at the
-  top of every `search`; any change rebuilds the map. `MAX(rowid)` is O(1) (rightmost btree leaf) and
-  `COUNT(*)` is a fast index count — negligible vs the scan they gate. Catches inserts (import),
-  deletes (doc delete), and reindex (delete+insert raises `maxRowid`) — i.e. **every `embeddings`
-  mutation, including direct SQL writes that bypass the hooks** (so test seeding stays correct).
-- **Explicit (belt):** `invalidateResidentVectors(db)` is also called at the three `embeddings` write
-  sites — `ingestion/index.ts` finalize-insert + reindex chunk-phase delete + `deleteDocument`. This
-  closes the one signature blind spot (delete the single max-rowid row, then insert exactly one row
-  reusing that rowid → `(count, maxRowid)` unchanged).
+Belt-and-suspenders, three mechanisms (the per-write *full rebuild* was removed in Phase 5 — see the
+PERF-1 note below; the original mechanism descriptions are folded into the three bullets):
+- **Incremental delta (primary in-band path, PERF-1 / full-audit-2026-06-29 Phase 5):**
+  `invalidateResidentVectors(db)` is called at the three `embeddings` write sites — `ingestion/index.ts`
+  finalize-insert + reindex chunk-phase delete + `deleteDocument`. It now MARKS the cache dirty (it no
+  longer drops it); the next `getResidentVectors` RECONCILES the delta — an `ids-only` scan
+  (`SELECT chunk_id`, no `vector_blob`, no decode) drops cached ids that are gone, and ONLY the
+  genuinely-new chunk ids are point-looked-up + `decodeVector`'d. So a pure-add of K vectors into an
+  N-vector corpus decodes exactly **K rows, not N**. The reconcile keys on the UNIQUE `chunk_id`, so it
+  is correct even when a deleted row's rowid is reused by a re-index (the new row carries a NEW
+  `chunk_id` → old id out, new id in) — this is also what closes the one signature blind spot: deleting
+  the single max-rowid row then inserting one row reusing that rowid leaves `(count, maxRowid)` unchanged,
+  so only the explicit flag (not the signature) can see it. The result is byte-identical to a
+  from-scratch rebuild for every insert/delete/reindex/same-rowid sequence (an in-band write never
+  mutates a vector under a *surviving* chunk_id; re-index mints fresh ids).
+- **Staleness signature (self-healing backstop):** a cheap whole-table signature `(COUNT(*), MAX(rowid))`
+  is recomputed at the top of every `search`. If the table changed but NO write went through the explicit
+  hook (a direct SQL / out-of-band writer — e.g. test seeding), the dirty flag is clear yet the signature
+  mismatches → **fall back to a FULL REBUILD**. `MAX(rowid)` is O(1) (rightmost btree leaf) and `COUNT(*)`
+  a fast index count — negligible vs the scan they gate. This is the path that makes a missed/buggy
+  incremental update self-heal on the next query; it is also the cold first build.
 - **Security (lock):** `purgeResidentVectors(db)` drops the map outright on workspace LOCK
-  (`registerWorkspaceIpc`, beside the embedder's `suspend()`). The vectors are derived from chunk text
-  and must not linger in main-process RAM after the vault re-encrypts — a requirement the staleness
-  signature does NOT cover (the table is unchanged on lock). No embedder-switch purge is needed: the
-  cache is per-`Db` and per-chunk (model-agnostic), the SQL model-id filter scopes results, and unlock
-  reopens the `Db` → a fresh (empty) cache.
+  (`registerWorkspaceIpc`, beside the embedder's `suspend()`). Distinct from `invalidate` (which only
+  marks dirty): the vectors are derived from chunk text and must not linger in main-process RAM after the
+  vault re-encrypts — a requirement the staleness signature does NOT cover (the table is unchanged on
+  lock). No embedder-switch purge is needed: the cache is per-`Db` and per-chunk (model-agnostic), the
+  SQL model-id filter scopes results, and unlock reopens the `Db` → a fresh (empty) cache.
+
+**PERF-1 (full-audit-2026-06-29, Phase 5) — per-write rebuild → incremental.** The original cache DROPPED
+the whole map on every `embeddings` write (each insert/delete/reindex `invalidate` = `caches.delete`), so
+the next query paid a full ~150 MB re-read + ~580 ms re-decode at the 100k bound — and it recurred after
+*every* import/re-index/delete (a heavy "import N docs, ask between each" session paid N full rebuilds).
+The incremental delta above removes that: a mutation now only pays the ids-only scan + a decode of the
+new rows. The off-main-thread worker (P4b) and ANN (P4c) remain the longer-term paths and the linear-scan
+ANN deferral (D15) is unchanged — Phase 5 only removes the per-write full rebuild. Proven in
+`tests/integration/resident-cache-incremental.test.ts`: equivalence (incremental map == a from-scratch
+rebuild byte-for-byte across insert/delete/reindex/same-rowid), the decode-count speedup (K not N, with a
+purge→full-decode teeth contrast), the same-rowid blind spot (signature unchanged → only the hook catches
+it), the signature backstop self-heal, and the lock-purge drop (decode-count contrast vs `invalidate`).
 
 **Measurement — confirmed on the PAID drive (D:, b9585; the "real E5-runtime numbers PENDING" item is
 now closed).** Two legs, because the scan is **data-independent** (N dot-products of 384-dim Float32 +
@@ -422,8 +453,9 @@ sort — identical timing for random unit vectors and real E5 outputs); only the
 query-embed round-trip are real-hardware variables.
 - **Scan scaling, DB on the real drive (synthetic vectors).** Warm cached scan vs the old
   decode-every-query path: 13.6 ms vs 22.4 ms @ 5k chunks (1.7×), 52.5 ms vs 63.3 ms @ 10k (1.2×),
-  164.6 ms vs 225 ms @ 30k (1.4×), 605 ms vs 753 ms @ 100k (1.2×). Cold rebuild (once per mutation,
-  not per query) 33 ms @ 5k … 1.48 s @ 100k. These track the earlier mock/SSD projection (~14/50/167/
+  164.6 ms vs 225 ms @ 30k (1.4×), 605 ms vs 753 ms @ 100k (1.2×). Cold rebuild (the from-scratch full
+  build — now only on the first build or the out-of-band signature-backstop path; an in-band mutation
+  pays the incremental reconcile instead, Phase 5) 33 ms @ 5k … 1.48 s @ 100k. These track the earlier mock/SSD projection (~14/50/167/
   580 ms) within noise — mmap (DB-2) keeps the cold build off USB cheap, so the drive does not move the
   numbers.
 - **Real E5 vectors, end-to-end on the drive** (genuine `multilingual-e5-small-q8` outputs from the
@@ -916,6 +948,16 @@ it fails with friendly convert-to-WAV/MP3 copy.
   is now **required** (no OS-tmpdir default) — the transient transcript is recognised speech
   (content) and must stay inside the `.parse` crash sweep; an empty `workDir` fails closed
   before any spawn. The watchdog/timeout errors carry only durations, never any transcript.
+  **SIGKILL escalation (full-audit 2026-06-29, REL-2):** the watchdog, the abort handler, and
+  `suspend()`/`stop()` previously sent a bare `child.kill()` (SIGTERM) and waited on `close` —
+  with no escalation. A `whisper-cli` wedged in native decode code that ignores SIGTERM never
+  emits `close`, so the watchdog "fired" but the slot stayed held, and `suspend()`/`stop()`
+  (on lock/quit) `await`ed an exit that never came — hanging teardown indefinitely with the
+  transient still on disk. All three kill sites now route through `killWithEscalation`, which
+  mirrors `LlamaServer.stop()`: SIGTERM, then **SIGKILL after `killGraceMs`** (default 2 s) if
+  the child hasn't gone (grace timer `unref`'d + cleared on a clean exit). And `suspend()`/`stop()`
+  **bound** their cleanup `await` with `suspendTimeoutMs` (default 10 s) so a child that ignores
+  even SIGKILL can't hang quit/lock — past the cap the `.parse` crash-sweep is the shred backstop.
 - **`AudioParser` implements `DocumentParser`.** `parse(filePath, ctx)` uses the
   transcriber injected per call via the ADDITIVE `ParseContext` (carried from
   `IngestionDeps.transcriber` — the embedder-injection precedent; text parsers ignore
@@ -1082,7 +1124,17 @@ sentinel-tested), zero native deps.
   long, resumable background builds that **cede the model slot to an incoming chat** via the
   `ModelSlotArbiter` (`services/analysis/model-slot-arbiter.ts`): the builder parks after the
   current node, chat acquires the slot (`acquireChatSlot`), streams, and the build resumes
-  in-session — so chat is not refused during a deep-index/extract build (rag-design §14.3). The **R-T1 probe**
+  in-session — so chat is not refused during a deep-index/extract build (rag-design §14.3).
+  **Abort-aware handoff (full-audit 2026-06-29, REL-3):** the builder parks only *between*
+  `generate` calls, and a single node's `generate` is a multi-second CPU summarization. Before
+  the fix `acquireForChat` had no `signal`, so a user "Stop" landing while a chat was parked
+  waiting for the handoff aborted a controller nobody was watching — "Stop" appeared dead for up
+  to one tree-node. The chat turn's `AbortController.signal` is now threaded
+  `withChatStream → acquireChatSlot → acquireForChat`: an abort during the park rejects the wait
+  at once (removing the waiter from the queue and giving back its holder slot, and dropping the
+  pause when it was the last waiter — so the builder doesn't park for a chat that's gone).
+  `withChatStream` treats that rejection like a no-token Stop: it resolves cleanly via `done`
+  with an empty message rather than surfacing `chat:error`. The **R-T1 probe**
   (`tests/manual/server-concurrency-probe.test.ts`, `HILBERTRAUM_CONCURRENCY_PROBE`) showed the
   pinned b9585 would serve two requests on PARALLEL slots at our default args — the
   app-side guard is the only serialization, which is exactly why it exists.
@@ -1553,6 +1605,18 @@ restart is in flight are also dropped by `createGpuCrashAutoFallback`'s `restart
 direct `start()` calls now share one spawn instead of the second orphaning the first — so the
 crash-restart's stop-then-start can never race a stray direct start into a leaked sidecar.)
 
+**§5.5 Port-race retry + bind-vs-device classification (full-audit 2026-06-29, REL-1).** `findFreePort`
+binds port 0, reads the assigned port, then **closes** the listener before handing the number to
+`llama-server --port N`. In that TOCTOU window another process — or a sibling in-app sidecar (chat +
+embedder + reranker + vision start near-simultaneously) — can grab the port, so the child exits
+"address already in use". Two corrections: (a) `LlamaServer.start()` now **retries `doStart()` once** on
+a bind-class immediate exit (`isBindRaceError`, matched against the start error message which carries
+the stderr tail), acquiring a *fresh* free port — bounded to one retry so a genuine failure still
+surfaces; this covers the chat runtime AND the embedder/reranker/vision (which compose `LlamaServer`
+directly and previously had no retry at all). (b) `LadderRuntime` no longer persists `gpuAutoDisabled`
+when a rung-1 failure message is a bind race rather than a device/driver/model fault — so one unlucky
+port collision can never disable GPU for the whole session. Only a real device failure auto-disables.
+
 **§5.4 Where GPU state lives:**
 
 | Datum | Home |
@@ -1619,7 +1683,7 @@ benchmark-card GPU row. Never "GPU failed" / "your hardware is bad".
 |---|---|
 | No Vulkan loader / 1.2 driver / RDP session | backend lib doesn't load or 0 devices → the default binary runs on its CPU backends; probe shows CPU |
 | Driver enumerates but crashes at model load | rung-1 exit → rung 2 (`--device none`), `gpuAutoDisabled` persisted |
-| Driver hangs (never healthy) | 60 s health timeout → rung 2; cost = one slow first start, then never again (flag persisted) |
+| Driver hangs (never healthy) | 180 s (3 min) health timeout (`DEFAULT_HEALTH_TIMEOUT_MS`; the chat runtime never overrides it) → rung 2; cost = one slow first start, then never again (flag persisted) |
 | Driver crash mid-generation / VRAM stolen mid-run | §5.3 auto-restart at CPU + friendly notice; next message works |
 | VRAM too small at load | upstream `--fit` partial offload — no special casing |
 | Vulkan present but slower than CPU (weak iGPU) | no crash; honest §8 copy; Settings toggle exists; no auto-benchmark in v1 |
@@ -2287,7 +2351,11 @@ primitives (`parseAmount`/`parseDate`/`detectCurrency`) and the CSV formula-inje
 rule, one audited export boundary. The Unicode **word-boundary** matcher `wordIncludes` lives here too
 (audit C-1, Phase 2): both the deterministic `categorizeRow` and the LLM `prefilterCategory` now call it,
 so a coincidental substring (`coffee`⊃`fee`, `atmosphere`⊃`atm`, `mühlohn`⊃`lohn`) can no longer mis-file
-a row to *Fees*/*Cash*/*Income* — and the two categorization paths agree on every description rule. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
+a row to *Fees*/*Cash*/*Income* — and the two categorization paths agree on every description rule. It now
+has a **two-sided STRICT** mode (the short, ambiguous English tokens) and a **one-sided COMPOUND** mode
+(full-audit-2026-06-29 BL-3) the rule table opts the unambiguous German keywords
+(`gebühr`/`gehalt`/`überweisung`/`bargeld`) into, so a de-AT closed compound (`kontoführungsgebühr`)
+categorizes while the C-1 guards hold (see the 2026-06-29 Phase 1 note below). The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
 `run.ts`'s `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, same no-partial-persist
 (BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
 (no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
@@ -2520,6 +2588,53 @@ missed the live `MONEY_RE`/`parseDate` bugs). Two owner decisions were taken bef
   `31/12/2026` masks while a US `12/31/2026` **leaks** — a locale-asymmetric OUTPUT. Kept best-effort and
   documented in known-limitations; a date-category toggle is a deferred higher-recall wave. There is **no**
   path where masked text is un-masked or a detected value reaches a log/audit (privacy posture unchanged).
+
+**Financial correctness (full-audit-2026-06-29, Phase 1 — BL-1/BL-2/BL-3).** A fresh 7-persona audit found
+three more correctness bugs in the SAME shared line-parser / categorizer layer, all verified by direct
+trace and fixed **test-first** through the real entry points (parsing/categorization only — no schema, IPC,
+or audit-payload change). One is HIGH (wrong figures); two are MEDIUM (silent suppression / mis-bucketing on
+the de-AT target locale).
+- **BL-1 — leading-minus sign theft (`money.ts MONEY_RE`), HIGH.** The trailing `\s*\)?-?` reached ACROSS
+  the column gap and consumed the LEADING minus of the next money token, so `2.500,00 -500,00` parsed as
+  amount −2500 / balance +500 (**BOTH** signs flipped). Because every figure flipped UNIFORMLY the running
+  chain still tied out, so `reconcileBalances` reported `ok` on confidently-wrong figures — the safety net
+  could not catch it. It triggers on ANY negative running balance / leading-minus amount (overdrafts,
+  US/international statements, and the §21 PDF-geometry path, which emits a negative balance verbatim). The
+  team's own fixtures never used a negative balance, which is why it slipped past the BL-N* round. **Fix:**
+  the trailing sign/paren region is now **SPACE-DISAMBIGUATED** — `(?:-|\s*\)|\s+-(?!\s*[-+(]?\d))?` — a
+  **glued** trailing minus (`45,90-`, the de-AT debit sign) is always consumed, a paren close is consumed,
+  and a **spaced** trailing minus is consumed only when NOT immediately followed by a figure. The
+  disambiguator is the SPACE: a glued `-` belongs to the figure on its LEFT, a `-<digit>` after a space is
+  the next figure's leading sign. This deliberately **differs** from the audit's first-pass
+  `(?:-(?!\s*[-+(]?\d))?` suggestion: once that form's `\s*` has run it also refuses the glued case and
+  would have **regressed** the common de-AT row `45,90- 1.908,20` (glued debit + running balance) to
+  +45,90. The trailing scans stay UNAMBIGUOUS (each whitespace run is followed by a disjoint atom) and the
+  lookahead is zero-width, so MONEY_RE remains ReDoS-linear (the 200k-char regression test stays green).
+  Residual: a SPACED trailing minus immediately before a balance figure (`45,90 - 1.908,20`) reads positive
+  — genuinely indistinguishable from subtraction (known-limitations).
+- **BL-2 — figure-region currency (`bank-statement.ts parseLine`), MEDIUM.** Per-row `detectCurrency(line)`
+  scanned the WHOLE line including the free-text description, so a EUR row whose memo read `Netflix USD
+  subscription` was tagged USD → the row-currency set grew → `summarizeCashflow` returned no single total,
+  `reconcileBalances` marked **every** row `unknown`, and `assessCompleteness` dropped to `unverified`. One
+  description string silently killed totalling for the whole statement. **Fix:** detect the per-row currency
+  only in the **figure region** (`rest.slice(matches[0].index)` — the text from the first money token on),
+  falling back to the statement currency. A currency WORD in the description is ignored; a GENUINE
+  foreign-currency row (code/symbol printed NEXT TO the amount, inside the figure region) is still detected,
+  so mixed-currency honesty is preserved — preferred over `statementCurrency ?? detectCurrency`, which would
+  silently sum a truly-mixed line in one currency.
+- **BL-3 — German closed-compound categorization (`money.ts wordIncludes`), MEDIUM (de-AT target locale).**
+  The C-1 two-sided word boundary (which stopped `fee`⊂`coffee`) ALSO stopped the de-AT keywords from ever
+  matching, because German fuses keywords into closed compounds where the keyword sits at a word edge on
+  only ONE side (`kontoführungs+gebühr`, `gehalts+zahlung`) — so account/bank **fees** fell through to the
+  generic Spending bucket and überweisung/gehalt compounds missed. **Fix:** `wordIncludes(haystack, needle,
+  compound)` gains a **COMPOUND** mode (a boundary on EITHER side suffices — one-sided, not raw substring,
+  so a keyword buried with letters on both sides is still rejected); the rule table opts the **unambiguous**
+  DE keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`) in via a per-rule `compound: true`. Short English
+  tokens (`fee`/`atm`/…) and the ambiguous `lohn` (⊂ `muehlohn`/`Belohnung`; income is covered by the
+  positive-sign fallback) stay **STRICT**, so no C-1 false positive returns. Both `categorizeRow` and
+  `prefilterCategory` thread the flag, so the two deterministic paths still **agree** (the C-1 invariant).
+  The flag is **matching-only** — `run.ts` seeds just `match_kind`/`pattern` into `bank_category_rules`
+  (transparency), so nothing is persisted and no schema change is needed.
 
 ### §11 IPC / audit surface
 
@@ -3808,6 +3923,147 @@ guard); the only Phase-8 code touches are the DOC-N2 comment fix (×2) + the DOC
 **2417 passed / 39 skipped** (typecheck + build green across the cumulative branch; no phase regressed
 another, verified by one full-suite run at close-out).
 
+
+### §26 Full audit (2026-06-29) — remediation close-out
+
+A **fresh 7-persona read-only full audit** (report `audits/full-audit-2026-06-29.md`), run after the
+2026-06-28 round (§25) was fully remediated and merged (PR #12), swept the real source tree across
+**security, RAG/ingestion, backend reliability, renderer, testing, documentation, and financial/business
+logic**, with the top findings re-verified firsthand (regex traces, a full-suite run, doc/code diffs).
+**No Critical, no remote-exploitable issue** (offline by construction). The report enumerated **2 High,
+~9 Medium, ~13 Low**; the two release-blockers were a confirmed financial-correctness bug (BL-1) and an
+intermittently-red suite (TEST-1). **All six phases (0–6) landed** on branch `full-audit-2026-06-29-fixes`.
+The working-paper report was **retired** under the CLAUDE.md doc-lifecycle rule once every finding was
+dispositioned; it was committed first so the full original stays **recoverable in git history** (the parent
+of the Phase-6 close-out commit), mirroring the §24 / §25 precedent. Each phase's decisions were folded into
+the topic-doc §§ as it landed; the report's lasting content (per-finding dispositions + accepted residuals)
+lives in **this section**. This ledger is the durable index — resolve a code comment's
+`full-audit-2026-06-29 <ID>` citation through it.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **TEST-1** (High) | 0 | **fixed (test-only)** — `dictation-ipc.test.ts` REL-3 poll swapped from an iteration cap (`i < 100` `setImmediate` ticks, flaked under full-suite CPU load) to a wall-clock deadline (`Date.now() - start < 5000`), matching the rest of the integration suite; 3× consecutive green | this ledger; BUILD_STATE Phase 0 |
+| **BL-1** (High, release-blocking) | 1 | **fixed** — `MONEY_RE`'s trailing `\s*\)?-?` stole the NEXT column's leading minus (`2.500,00 -500,00` → amount −2500 / balance +500, both flipped, so `reconcileBalances` blessed the wrong figures); replaced with a **space-disambiguated** trailing region `(?:-\|\s*\)\|\s+-(?!\s*[-+(]?\d))?` — a *glued* `-` is a de-AT debit (consumed), a *spaced* `-<digit>` is the next figure's sign (left alone). **DIVERGED from the audit's literal `(?:-(?!\s*[-+(]?\d))?`** — that form regressed the common de-AT row `45,90- 1.908,20` (glued debit + balance) to +45,90; verified by trace (rationale: BUILD_STATE Phase 1) | arch §8 "Financial correctness (full-audit-2026-06-29, Phase 1)"; known-limitations LINE PARSER (spaced-trailing-minus residual) |
+| BL-2 (Med) | 1 | **fixed** — per-row `detectCurrency` now scans only the **figure region** (`rest.slice(matches[0].index)`) with statement-currency fallback, so a `USD`/`$` in a payee memo no longer collapses a EUR statement to the mixed-currency refusal; a genuine figure-adjacent foreign code is still honoured | arch §8 (figure-region currency); known-limitations |
+| BL-3 (Med, de-AT target) | 1 | **fixed** — `wordIncludes` gained a one-sided **compound** mode; the unambiguous DE keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`) opt in via `compound: true` so `Kontoführungsgebühr`→Fees, while English tokens + ambiguous `lohn` stay strict (no C-1 regression); `categorizeRow` + `prefilterCategory` thread the flag (C-1 invariant held) | arch §8 (`wordIncludes` paragraph); known-limitations |
+| **REL-1** (Med) | 2 | **fixed** — `LlamaServer.start` retries `doStart` **once** on a bind-class immediate exit (`isBindRaceError`) on a fresh port (covers chat AND embedder/reranker/vision, which had no retry); the ladder no longer persists `gpuAutoDisabled` on a bind race vs a device fault, so a port collision can't disable GPU for the session | arch GPU record §5.5 |
+| REL-2 (Med) | 2 | **fixed** — `killWithEscalation` mirrors `LlamaServer.stop()` (SIGTERM → SIGKILL after `killGraceMs`, grace timer unref'd/cleared), wired into the whisper watchdog/abort/`stop()` kill sites; `suspend()`/`stop()` bound the cleanup await (`suspendTimeoutMs`, crash-sweep is the shred backstop) so a SIGTERM-ignoring child can't hang quit/lock | known-limitations "Audio transcription" (SIGKILL/teardown residual); this ledger |
+| REL-3 (Med) | 2 | **fixed** — `acquireForChat(signal?)` threads the turn's abort signal (new `waitForHandoff`); a Stop during a deep-index slot park rejects at once (removes the waiter, returns its `chatHolders` slot, drops the pause if last), resolved cleanly via `done` not `chat:error`; all 7 chat/rag call sites forward `controller.signal` | arch doc-task / model-slot-arbiter record; this ledger |
+| **DOC-2** (Low) | 2 | **fixed (docs)** — GPU table "60 s health timeout" → "180 s (3 min)" (`DEFAULT_HEALTH_TIMEOUT_MS`; chat runtime never overrides it) | arch GPU record §8 table |
+| TEST-2 (Med) | 3 | **fixed (test-only)** — `binary-verify-spawn.test.ts` drives the **real** `verifyBinaryBeforeSpawn` at all three spawn seams (`LlamaServer.start`, GPU `--list-devices` probe, `whisper-cli`) with packaged enforcement ON + a hash-mismatched marker → each refuses to spawn; matching-marker positive control; teeth-checked per seam | arch "Test-enforcement seams — design record (Phase 3)" TEST-2 |
+| TEST-3 (Med) | 3 | **fixed (test-only)** — `rag.test.ts` proves a fresh failing embedder over a non-empty corpus makes `generateGroundedAnswer` **reject** (doesn't masquerade as NO_DOCUMENT_CONTEXT) | arch test-enforcement record TEST-3 |
+| TEST-4 (Low) | 3 | **fixed (test-only)** — `skills-installer.test.ts` covers `encryptedZip` (GP-flag + ZIP64-sentinel), the SEC-N1 NUL `invalidPath` no-echo, and `pathTooLong` through the real `previewSkillPackage`/`importSkill`; the "no tar" test relabelled documentation-only | arch test-enforcement record TEST-4; this ledger |
+| TEST-5 (Low) | 3 | **fixed (test-only)** — the vision success-path no-leak test was **converted** to route through the real `VisionRuntime` (recording `fetch` + SSE body), so the no-prompt/no-image-bytes-in-logs guarantee exercises the real SSE/HTTP path | arch test-enforcement record TEST-5; this ledger |
+| **FE-1** (Low) | 4 | **fixed** — `ChatScreen` gained the FE-4-class `mountedRef` (gating the attach-poll + stream-flush setStates) + a flush-timer `clearTimeout` on unmount; the main-side stream is **not** torn down (recovered via `getActiveStream`) — guard-only | arch renderer record (FE-4 bullet, "Extended (full audit 2026-06-29, FE-1)") |
+| RAG-1 (Low) | 4 | **fixed** — both fusion input lists carry a `chunkId` tiebreak (vector sort `score desc, chunkId asc`; FTS `ORDER BY bm25(...), chunks_fts.chunk_id`) so equal-score ties are total/reproducible across SQLite versions; resident-cache equivalence oracle aligned | rag-design §11 per-list tie-break note |
+| RAG-2 (Low) | 4 | **fixed** — `truncateSnippet` counts AND slices by code point (`[...trimmed]`) so a boundary-straddling astral char no longer leaves a lone surrogate in a citation snippet (display-only) | source comments (`snippet-truncate.test.ts`); this ledger |
+| REL-4 (Low) | 4 | **fixed** — `combineSignals` owns an `AbortController` + explicit `setTimeout` and returns `{ signal, clear }`; the three embed/rerank/vision call sites `clear()` in `finally` so an early completion no longer leaves a 120 s/300 s timer + `any`-listener alive (behaviour preserved: caller-abort + timeout still abort, `TimeoutError`, unref'd) | source comments (`combine-signals.test.ts`); this ledger |
+| **PERF-1** (Med, the scalability item) | 5 | **fixed** — the resident decoded-vector cache is now **incremental**: `invalidate` marks dirty (no longer drops the map); the next read reconciles via an ids-only scan (drop gone ids) + a point decode of only genuinely-new chunk ids — a pure-add of K into N decodes K, not N. The `(count, maxRowid)` signature is **retained** as the self-healing backstop (out-of-band write → full rebuild); `purge` still drops the map on lock | arch "Performance — design record … Wave P4" (Incremental-delta + PERF-1 Phase-5 note) |
+| DOC-1 (Med) | 6 | **fixed (docs)** — `collections.ts` header no longer claims the *shipped* C2 delete-with-documents is "left out of v1"; repointed from the wrong `rag-design §13.7` to **architecture.md §1 C2** (the `projectOnlyDocumentIds` predicate is in the same file) | code comment → arch "Document organization — design record" §1 C2 |
+| DOC-3 (Low) | 6 | **fixed (docs)** — `bge-reranker-v2-m3.yaml` `size_on_disk_gb` 1.08 (GiB mislabel) → **1.16** (decimal GB, matching `size_bytes 1159776896 / 1e9` and the other twelve manifests); `model-policy.md` "~1.08 GB" → "~1.16 GB" | model-manifest + model-policy.md reranker row |
+| DOC-4 (Low) | 6 | **fixed (docs)** — dropped the dangling `/§11.1` from `benchmark.test.ts`'s "GPU record §8/§11.1" comment (the GPU record is §1–§8; §8 resolves) | code comment → arch GPU record §8 |
+| SEC-1 doc half (Low) | 6 | **docs-only** — added an **accepted-residual** note: vault unlock has no attempt counter / rate-limit and only an 8-char floor, so against the lost/stolen-drive threat a weak-but-≥8 password is offline-guessable at interactive-minimum Argon2id cost; at-rest Argon2id+AES-GCM is the primary mitigation; recorded as a defensible offline trade-off | security-model.md "Accepted residual — offline password guessing" |
+| TEST-6 (Info) | 3 | **docs-only / by-design** — no automated answer-quality floor in CI (the eval harness prints precision as a measurement; the S13b bar is owner-gated on D1; real-model benchmarks are env-gated out of CI by design); caught only by the manual smoke matrix | arch test-enforcement record TEST-6 |
+| **SEC-1 code half** (Low) | — | **accepted residual / open follow-up** — unlock-path rate-limit/attempt-counter + create-time strength meter/floor; deliberately **not** built in the docs-only close-out (a UI rate-limit doesn't bind the offline attacker that is the real threat; the at-rest KDF is the mitigation) | security-model.md residual note |
+| SEC-2 (Low) | — | **accepted residual / open follow-up** — `previewSkillPackage` stages path-/size-validated, finally-cleaned content to the shared OS `tmpdir()`; not an escape (skill packages aren't secret). Follow-up: stage under `userSkillsDir` for trust-zone consistency | this ledger |
+| SEC-3 (Info) | — | **accepted residual / open follow-up** — the dialog-opener IPCs (`pickSkillPackage`/`pickDocuments`/`imageChooseImage`) mint a capability token pre-unlock, but every **consuming** handler is `requireUnlocked()`-gated so the token is inert until unlock; a consistency gap, not an exploit | this ledger |
+| REL-5 (Low) | — | **deferred to its own phase / open follow-up** — `BEGIN IMMEDIATE` + a single `withTransaction(db, fn)` guard touches every `db.exec('BEGIN')` site; a broad, correctness-sensitive refactor (the load-bearing invariant — no `await` between BEGIN and COMMIT — already holds everywhere checked), so latent not confirmed | this ledger |
+| §5 INFO / by-design (CSV single-data-row, DOCX paragraph-split, `embedChunks` single-batch, `corpusNeedsReindex` double-scan, rerank-before-dedup cost) | — | **accepted (no change)** — low-severity edge/robustness notes; each acceptable as-is, recorded so the next audit skips them | this ledger (accepted residuals) |
+| PERF-5 Part B (list windowing), E5 `query:`/`passage:` prefix migration | — | **carried forward from §25 (still open)** — list virtualization re-deferred (no virt lib; variable-height rows + scroll/find/a11y behavior-sensitive); the prefix migration re-embeds the whole corpus (its own phase) and would re-enable a `ragMinSimilarity` floor | §25 accepted residuals (unchanged) |
+
+**Accepted residuals & non-code dispositions** (on record, deliberately not changed this round):
+
+- **SEC-1 code half / SEC-2 / SEC-3** — three security **consistency** improvements, none an exploit: the
+  offline-guessing residual's *only* binding mitigation is the at-rest KDF (a UI rate-limit doesn't stop the
+  drive-in-hand attacker), preview-temp staging is path-/size-validated and finally-cleaned, and the
+  dialog-opener tokens are inert until the consuming handler's `requireUnlocked()` gate. Open follow-ups, not
+  Phase-6 work (Phase 6 was docs-only by charter).
+- **REL-5** — `BEGIN IMMEDIATE` + `withTransaction` is **deferred to its own characterized phase** (per the
+  report's own recommendation): broad blast radius across every BEGIN site, and the load-bearing invariant
+  (no `await` inside a transaction) already holds, so it is a defense-in-depth margin rather than a live bug.
+- **§5 by-design edge notes** — CSV single-data-row, DOCX paragraph-split, `embedChunks` single-batch (bounded
+  by the 1000-chunk cap), `corpusNeedsReindex` double-scan (only on the already-failed empty-retrieval path),
+  and rerank-before-dedup cost (correct by design): all acknowledged, none scoped to a fix.
+- **PERF-5 Part B (list windowing)** and **E5 prefix migration** — **carried forward unchanged** from the §25
+  accepted residuals (still the owner-dispositioned long-pole items).
+- **§-anchor sweep note (not a finding to fix here):** the sweep confirmed DOC-1 (→ §1 C2) and DOC-4 (→ §8)
+  resolve and that every audit-introduced code/test comment cites by finding-ID. It also surfaced **two
+  pre-existing dangling `§11.1` citations** in `gpu.test.ts` and `runtime-ladder.test.ts` (the same `§11.1`
+  DOC-4 flagged, but at locations the report did not name). Per the Phase-6 scope guard (fix only citations
+  this audit introduced) they were **left as-is and reported** — a candidate for a future doc-comment pass.
+
+**Posture held across all six phases (load-bearing):** offline / no telemetry / no new network egress;
+behavior-preserving (every behavioral fix in Phases 1/2/4/5 teeth-checked neuter→fail→restore; Phases 0/3
+were test-only with no `src/` behavior change; Phase 6 was docs/comments-only + the report retirement); the
+**content class** (document text + titles/filenames, chat, extracted figures, redacted text) is never logged
+/ audited / exported; no schema/IPC/audit-payload change in any phase. Final suite **2463 passed / 39 skipped
+(2502 collected)** (typecheck + build green; the Phase-6 docs/comments change touched no test and the suite is
+unchanged from Phase 5).
+
+
+## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
+
+The 2026-06-29 audit's testing review flagged a class of gap distinct from a bug: a **security/reliability
+control that is correct in isolation but that no test proves stays *wired*.** A regression that silently
+stopped *calling* the control (not one that broke the control's logic) would redden no test — the control
+could be fully correct and fully unwired. Phase 3 closed four such gaps with test-only additions; every new
+test is **teeth-checked** (neuter the guarded control → the test reddens → restore byte-identical), and the
+teeth-check is the whole point — a test that passes whether or not the control is wired is worthless here.
+The closures deliberately use the **real seam** (the `FakeChild` / llama-runtime / transcriber harnesses, a
+recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates the bypass.
+
+- **TEST-2 — spawn seams re-hash the binary before spawn (`tests/integration/binary-verify-spawn.test.ts`,
+  new).** The binary-verifier verdict/cache matrix is well unit-tested, and each spawn seam *had* a refusal
+  test — but those **inject a fake** `verifyBinary: () => 'mismatch'`, proving only "IF the verdict is
+  mismatch, the seam refuses", not that the seam still **calls the real verifier**. The new tests drive the
+  real `verifyBinaryBeforeSpawn` end-to-end at all three seams — `LlamaServer.start`, the GPU
+  `--list-devices` probe, and the `whisper-cli` spawn — with **packaged enforcement ON**
+  (`initBinaryVerification(false)`) and a real on-disk install marker whose recorded hash mismatches the
+  binary's bytes: each seam refuses to spawn (no child created). A matching-marker **positive control**
+  proves the refusal is genuinely the hash mismatch, not an always-refuse artefact. Teeth: drop the
+  `verifyBinary`/`verify` call at a seam → the spawn proceeds and the refusal test reddens
+  (verified: LlamaServer resolves instead of rejecting, the probe's spawn count is 1, whisper proceeds).
+  See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
+- **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
+  (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
+  `generateGroundedAnswer` awaits `retrieve` and early-returns `NO_DOCUMENT_CONTEXT`/`REINDEX_NEEDED` on
+  empty chunks — so a regression wrapping `retrieve` in `try/catch → []` would make a transient embed fault
+  **masquerade as "no documents"** (a falsely-empty corpus) and redden nothing. The new test uses a **fresh**
+  failing embedder (defeating the per-instance query-vector LRU) over a **non-empty** corpus (so the genuine
+  empty⇒[] path can't masquerade) and asserts `generateGroundedAnswer` **rejects** rather than returning the
+  friendly no-context answer. Teeth: swallow the `retrieve` into `[]` → it resolves with the no-context
+  answer and the test reddens.
+- **TEST-4 — the installer's coded error constants (`tests/integration/skills-installer.test.ts`, +4).**
+  Three coded guards had no test: the ZIP64 / encrypted-GP-flag rejection (`encryptedZip` — both the GP-flag
+  bit-0 path and the `0xFFFFFFFF` ZIP64-sentinel size path), the **SEC-N1** NUL-byte content-leak defence
+  (`invalidPath`, asserting the fixed reason never echoes the crafted name), and the path-length cap
+  (`pathTooLong`). Each is driven through the real `previewSkillPackage`/`importSkill` and asserts the fixed
+  structural reason + its stable `errorCode` (never throws raw / leaks a path). The "never routes through
+  tar" test is relabelled **documentation-only** (a source grep — there is no runtime call site to intercept,
+  since the installer simply never imports the shell-tar extractor). Teeth: neuter each named guard → its
+  fixture's `errorCodes` assertion no longer holds.
+- **TEST-5 — the real `VisionRuntime` success path keeps the no-leak guarantee
+  (`tests/integration/vision-security.test.ts`, converted in place).** The success-path no-leak test
+  previously replaced `createRuntime` with a hand-written fake `analyze`, so the **real** runtime's request
+  construction (base64-inlining the image into the data-URL body) + SSE parsing were never exercised by the
+  no-leak assertion. It now runs through the real `VisionRuntime` (recording `fetch` + an SSE body), so the
+  prompt + image bytes genuinely pass through `runAnalyze` → `server.fetch('/v1/chat/completions', …)` →
+  `readChatSSE`, then asserts NO diagnostics-log call (any level) carries the prompt, the answer, or the
+  base64 image bytes. Teeth: log `opts.question` or the image data-URL at the runtime layer → the spy
+  captures it and the test reddens.
+- **TEST-6 (INFO) — no automated answer-quality floor in CI (documented, by design).** Retrieval / answer /
+  skill-trigger **accuracy** has **no automated floor that fails CI**. The `eval/skill-triggers` harness
+  prints precision/recall + a confusion matrix as a **measurement**, not a gate — the **S13b precision-bar
+  assertion** (`fired-wrong == 0` AND `precision ≥ 0.95`, §18) is **owner-gated on decision D1** and not yet
+  landed — and the real-model **quality benchmarks** are **env-gated out of CI by design** (they need GGUF
+  weights CI doesn't ship; see `model-benchmarks.md` D19). Net: retrieval/answer/trigger-accuracy regressions
+  are caught **only by the manual smoke matrix** (the deliberate separate human pre-release gate, like the
+  `HILBERTRAUM_*` artifact smokes). This is an accepted posture; the follow-up is to **land the S13b bar once
+  the owner sets D1**.
+
+Suite after Phase 3: **2446 passed / 39 skipped (2485 collected)** (was 2437/39 → **+9 tests**; TEST-5 was a
+conversion, not an addition). No `src/` behavior change — the only source edits were the temporary
+teeth-check neuters, each restored byte-identical.
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 

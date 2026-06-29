@@ -112,7 +112,15 @@ const RAW_SIG_EOCD = 0x06054b50
  * files by name and so cannot emit two entries that share a name), this honours the member list
  * verbatim — letting a fixture craft the duplicate central-directory entries S-2 must reject.
  */
-function writeRawZip(members: Array<{ name: string; data: Buffer }>): string {
+interface RawZipMember {
+  name: string
+  data: Buffer
+  /** Central-directory general-purpose flag (TEST-4: bit 0 = encrypted). Default 0. */
+  gpFlag?: number
+  /** Central-directory uncompressed size override (TEST-4: 0xffffffff = ZIP64 sentinel). */
+  uncompressedSizeOverride?: number
+}
+function writeRawZip(members: RawZipMember[]): string {
   const locals: Buffer[] = []
   const centrals: Buffer[] = []
   let offset = 0
@@ -131,9 +139,10 @@ function writeRawZip(members: Array<{ name: string; data: Buffer }>): string {
     cdh.writeUInt32LE(RAW_SIG_CDH, 0)
     cdh.writeUInt16LE(20, 4) // version made by
     cdh.writeUInt16LE(20, 6) // version needed
+    cdh.writeUInt16LE(m.gpFlag ?? 0, 8) // general-purpose flag (bit 0 = encrypted)
     cdh.writeUInt16LE(0, 10) // method 0 = store
     cdh.writeUInt32LE(m.data.length, 20) // compressed
-    cdh.writeUInt32LE(m.data.length, 24) // uncompressed
+    cdh.writeUInt32LE(m.uncompressedSizeOverride ?? m.data.length, 24) // uncompressed (0xffffffff = ZIP64)
     cdh.writeUInt16LE(nameBuf.length, 28)
     cdh.writeUInt32LE(0, 38) // external attrs (no symlink bits)
     cdh.writeUInt32LE(offset, 42) // local header offset
@@ -332,8 +341,88 @@ describe('safe extractor — DoS hardening (S-1 input bound, S-2 collision)', ()
   })
 })
 
+// ---- TEST-4 (full-audit-2026-06-29, Phase 3): the coded error constants with no test -------------
+// The installer is the best-tested security surface (the S-1 zip-bomb positive control is exemplary),
+// but three coded guards had NO test: the ZIP64 / encrypted-GP-flag rejection (`encryptedZip`), the
+// SEC-N1 NUL-byte content-leak defence (`invalidPath`), and the path-length cap (`pathTooLong`). Each
+// is exercised through the REAL previewSkillPackage / importSkill entry points (the structural reason
+// must surface; nothing throws raw / leaks a path). TEETH per test below (neuter the named guard →
+// the errorCodes assertion no longer holds).
+describe('safe extractor — coded error constants (TEST-4)', () => {
+  it('rejects an ENCRYPTED member (GP-flag bit 0) → encryptedZip', () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    // An otherwise-valid SKILL.md whose central-directory entry sets the "encrypted" GP flag.
+    // TEETH: drop `if (gpFlag & 0x0001) throw …encryptedZip` (installer.ts) → the store member reads
+    // as plaintext, preview.ok becomes true, and errorCodes is no longer ['encryptedZip'].
+    const zip = writeRawZip([{ name: 'SKILL.md', data: Buffer.from(skillMd({ id: 'enc' })), gpFlag: 0x0001 }])
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual(['encryptedZip'])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.encryptedZip)
+  })
+
+  it('rejects a ZIP64-sentinel size member (uncompressedSize = 0xFFFFFFFF) → encryptedZip', () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    // TEETH: drop the `uncompressedSize === 0xffffffff … throw …encryptedZip` ZIP64 guard → the
+    // 0xFFFFFFFF declared size instead trips the declared-total cap (`tooLarge`), so errorCodes flips.
+    const zip = writeRawZip([
+      { name: 'SKILL.md', data: Buffer.from(skillMd({ id: 'z64' })), uncompressedSizeOverride: 0xffffffff }
+    ])
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual(['encryptedZip'])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.encryptedZip)
+  })
+
+  it('rejects a NUL byte in a member path → invalidPath, and never echoes the raw path (SEC-N1)', () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const NUL = String.fromCharCode(0) // build the NUL via code so the source carries no literal NUL byte
+    // SEC-N1: a NUL passes the ../-/drive-/depth checks but makes the OS path invalid; the raw
+    // writeFileSync throw would EMBED the attacker-controlled name in the IPC error payload. The
+    // structural guard rejects it up front with a FIXED, content-free reason — before any write.
+    // TEETH: drop `if (name.includes(NUL)) throw …invalidPath` → the write throws raw
+    // ERR_INVALID_ARG_VALUE, which preview remaps to `unreadableZip` (and importSkill throws raw).
+    const zip = writeRawZip([
+      { name: 'SKILL.md', data: Buffer.from(skillMd({ id: 'nul' })) },
+      { name: `evil${NUL}.md`, data: Buffer.from('x') }
+    ])
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual(['invalidPath'])
+    // The reason is the fixed structural string — it never echoes the crafted (NUL-bearing) name.
+    expect(preview.errors).toEqual([SKILL_IMPORT_ERRORS.invalidPath])
+    expect(preview.errors.join('')).not.toContain(NUL)
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.invalidPath)
+  })
+
+  it('rejects an over-long member path → pathTooLong', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const limits: SkillLimits = { ...DEFAULT_SKILL_LIMITS, maxPathLen: 16 }
+    // 'SKILL.md' (8) ≤ 16 stays valid; the second member's path (29) exceeds the cap.
+    // TEETH: drop `if (name.length > maxPathLen) throw …pathTooLong` → the long .md path is accepted
+    // (depth 2 ≤ 4), preview.ok becomes true, and errorCodes is no longer ['pathTooLong'].
+    const zip = await writeZip([
+      { name: 'SKILL.md', content: skillMd({ id: 'pl' }) },
+      { name: 'examples/way-too-long-name.md', content: 'x' }
+    ])
+    const preview = previewSkillPackage(db, zip, { ...deps, limits })
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual(['pathTooLong'])
+    expect(() => importSkill(db, zip, { ...deps, limits })).toThrow(SKILL_IMPORT_ERRORS.pathTooLong)
+  })
+})
+
 describe('safe extractor — never routes a .skill.zip through tar (§22-A2)', () => {
-  it('the installer source contains no tar extractor reference', () => {
+  // DOCUMENTATION-ONLY static guard (TEST-4): there is nothing to observe at runtime — the installer
+  // simply never imports a shell-tar extractor — so this is a source grep, not a behavioral assertion.
+  // It pins the §22-A2 contract: a `.skill.zip` is attacker-supplied + unsigned and must NEVER be
+  // routed through the validation-blind shell-tar path that elsewhere extracts SHA-verified runtime
+  // archives. (A behavioral test would have no call site to intercept.)
+  it('the installer source contains no tar extractor reference (documentation-only)', () => {
     const src = readFileSync(join(__dirname, '../../src/main/services/skills/installer.ts'), 'utf8')
     expect(src).not.toContain('extractWithTar')
     expect(src).not.toContain('tar -xf')

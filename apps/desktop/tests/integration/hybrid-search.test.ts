@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder, VectorIndex, encodeVector } from '../../src/main/services/embeddings'
 import {
   buildFtsMatchQuery,
   keywordSearchChunks,
@@ -279,6 +279,70 @@ describe('rrfFuse', () => {
     // It ties 'vec-1' exactly (both RRF 1/(K+1), both best rank 1) → id decides:
     // 'invoice-code' < 'vec-1', so the keyword-only chunk leads the result.
     expect(fused[0].chunkId).toBe('invoice-code')
+  })
+})
+
+// ---- RAG-1 (full-audit-2026-06-29): per-list tie-break determinism -----------------
+
+/**
+ * Seed ONE document with two chunks that share identical text (so they tie on BOTH bm25 and
+ * cosine). `firstId` is inserted first (lower rowid). Choosing ids whose insertion order is
+ * the REVERSE of their sorted order makes the tiebreak observable: without it, both list
+ * paths fall back to rowid/insertion order; with it, they pin chunkId-ascending.
+ */
+async function seedTiedPair(
+  db: Db,
+  embedder: MockEmbedder,
+  firstId: string,
+  secondId: string,
+  text: string
+): Promise<void> {
+  const now = new Date().toISOString()
+  const docId = randomUUID()
+  db.prepare(
+    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, 'tied.txt', 'indexed', ?, ?)`
+  ).run(docId, now, now)
+  const [vec] = await embedder.embed([text])
+  let idx = 0
+  for (const chunkId of [firstId, secondId]) {
+    db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
+       VALUES (?, ?, ?, ?, 'tied.txt', NULL, NULL, ?, ?)`
+    ).run(chunkId, docId, idx, text, text.split(/\s+/).length, now)
+    db.prepare(
+      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(chunkId, embedder.id, encodeVector(vec), vec.length, now)
+    idx++
+  }
+}
+
+describe('RAG-1 tie-break determinism', () => {
+  it('the vector path returns equal-cosine hits in stable chunkId order', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    // 'chunk-zzz' is inserted FIRST (lower rowid / scan order) but sorts AFTER 'chunk-aaa'.
+    await seedTiedPair(db, embedder, 'chunk-zzz', 'chunk-aaa', 'identical tied text')
+    const [query] = await embedder.embed(['identical tied text'])
+    const hits = new VectorIndex(db, embedder, { embeddingModelId: embedder.id }).search(query, 10)
+    expect(hits).toHaveLength(2)
+    expect(hits[0].score).toBeCloseTo(hits[1].score, 12) // genuinely tied cosines
+    // The chunkId tiebreak pins ascending order regardless of scan order.
+    // Teeth: drop the `|| (a.chunkId < b.chunkId …)` and the stable sort keeps scan order
+    // (['chunk-zzz','chunk-aaa']) → this assertion fails.
+    expect(hits.map((h) => h.chunkId)).toEqual(['chunk-aaa', 'chunk-zzz'])
+  })
+
+  it('the keyword path returns equal-bm25 hits in stable chunkId order', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedTiedPair(db, embedder, 'chunk-zzz', 'chunk-aaa', 'zork zork zork')
+    const hits = keywordSearchChunks(db, 'zork', 10, { embeddingModelId: embedder.id })
+    expect(hits).toHaveLength(2)
+    expect(hits[0].bm25).toBeCloseTo(hits[1].bm25, 12) // identical text → identical bm25 rank
+    // Teeth: drop `, chunks_fts.chunk_id` from the ORDER BY → SQLite returns the ties in
+    // rowid order (['chunk-zzz','chunk-aaa']) → this assertion fails.
+    expect(hits.map((h) => h.chunkId)).toEqual(['chunk-aaa', 'chunk-zzz'])
   })
 })
 

@@ -131,6 +131,74 @@ describe('ModelSlotArbiter', () => {
     await expect(parked).rejects.toBeInstanceOf(SlotAbortedError)
   })
 
+  // REL-3: a "Stop" that lands while a chat is PARKED waiting for the builder's handoff
+  // (the builder is mid-node, a multi-second generate) must unwind that chat immediately —
+  // not after the node finishes. The aborted waiter is removed from the queue (not leaked)
+  // and the pause it requested is dropped, so the builder doesn't needlessly park for a chat
+  // that's gone (which, with no chat left to release it, would hang the build).
+  it('rejects a chat acquire when its signal aborts during the handoff wait, and unwinds cleanly (REL-3)', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const controller = new AbortController()
+    const acquire = a.acquireForChat(controller.signal)
+    await tick()
+    expect(a.shouldYield()).toBe(true) // pause requested while the chat waits
+    controller.abort()
+    await expect(acquire).rejects.toBeInstanceOf(SlotAbortedError)
+    // The gone chat left no trace: pause dropped (it was the only waiter) so the builder's
+    // next boundary does NOT park (which would hang — no chat remains to release it).
+    expect(a.shouldYield()).toBe(false)
+    // The build still pauses+resumes normally for a subsequent chat (no leaked chatHolders).
+    const acquire2 = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    const rel = await acquire2
+    rel()
+    await parked
+    expect(resumed).toBe(true)
+  })
+
+  it('one chat aborting during the wait keeps the pause + handoff for a co-waiting chat (REL-3)', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const c1 = new AbortController()
+    const acquire1 = a.acquireForChat(c1.signal)
+    const acquire2 = a.acquireForChat() // a second chat also waits for the handoff
+    await tick()
+    expect(a.shouldYield()).toBe(true)
+    c1.abort()
+    await expect(acquire1).rejects.toBeInstanceOf(SlotAbortedError)
+    expect(a.shouldYield()).toBe(true) // still paused for the surviving chat 2
+    // The builder hands off to chat 2; it resumes only after chat 2 releases — proving the
+    // aborted chat 1 gave back its holder count (else chatHolders would never reach 0).
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    const rel2 = await acquire2
+    await tick()
+    expect(resumed).toBe(false)
+    rel2()
+    await parked
+    expect(resumed).toBe(true)
+  })
+
+  it('an already-aborted signal makes a chat acquire reject without taking the slot (REL-3)', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const controller = new AbortController()
+    controller.abort() // already stopped before we even ask
+    await expect(a.acquireForChat(controller.signal)).rejects.toBeInstanceOf(SlotAbortedError)
+    // No pause was requested and the builder is untouched — a fresh chat still works.
+    expect(a.shouldYield()).toBe(false)
+    const acquire = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    ;(await acquire)()
+    await parked
+    expect(resumed).toBe(true)
+  })
+
   it('does not hang a chat acquire that races the build finishing', async () => {
     const a = new ModelSlotArbiter()
     a.registerBuild('job1')

@@ -26,6 +26,8 @@ interface LadderCall {
 /** Build a factory whose first `failFirst` llama attempts throw at start(). */
 function ladderHarness(config: {
   failFirst?: number
+  /** Message thrown by the failing rungs (default `rung N failed to start`). */
+  failMessage?: string
   probe?: GpuDevice[]
   gpuMode?: 'auto' | 'off'
   gpuAutoDisabled?: boolean
@@ -44,7 +46,9 @@ function ladderHarness(config: {
     return {
       modelId: o.modelId,
       start: async () => {
-        if (index < (config.failFirst ?? 0)) throw new Error(`rung ${index + 1} failed to start`)
+        if (index < (config.failFirst ?? 0)) {
+          throw new Error(config.failMessage ?? `rung ${index + 1} failed to start`)
+        }
       },
       stop: async () => {},
       health: async () => ({ healthy: true, message: 'ok', port: 5000 + index }),
@@ -117,6 +121,23 @@ describe('the GPU start ladder', () => {
     // The failure was recorded so the NEXT start skips the GPU health timeout.
     expect(h.failures).toHaveLength(1)
     expect(h.failures[0]).toContain('rung 1 failed')
+  })
+
+  it('does NOT persist gpuAutoDisabled when rung 1 fails on a port-bind race (REL-1)', async () => {
+    // A rung-1 start that died because its port was already taken is a transient TOCTOU
+    // race (LlamaServer already retried once), NOT a device/driver fault. Persisting
+    // gpuAutoDisabled here would disable GPU for the whole session over one port collision.
+    const h = ladderHarness({
+      failFirst: 1,
+      probe: [RTX],
+      failMessage:
+        'llama-server exited before becoming healthy (code 1) — last output: error: bind: address already in use'
+    })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(2) // fell through to rung 2 (forced CPU)
+    expect(runtime.backend).toBe('cpu')
+    expect(h.failures).toEqual([]) // a port race is not a GPU signal → nothing auto-disables
   })
 
   it('rungs 1–2 failing land on the rung-3 pure-CPU safety-net build', async () => {

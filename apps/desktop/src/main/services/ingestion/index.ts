@@ -763,10 +763,11 @@ export async function prepareDocument(
       }
       throw err
     }
-    // RAG-6 (Wave P4) belt: the chunk-phase transaction above DELETEd this doc's stale
-    // embeddings (re-index path), so drop the resident decoded-vector cache. The signature
-    // check would also catch it; this is the explicit hook that closes the delete-then-equal-
-    // reinsert blind spot and keeps the cache robust to any write through this path.
+    // RAG-6 (Wave P4) / PERF-1 (Phase 5) belt: the chunk-phase transaction above DELETEd this
+    // doc's stale embeddings (re-index path), so flag the resident decoded-vector cache dirty —
+    // the next search RECONCILES the delta (decoding only the re-inserted chunks), it no longer
+    // re-decodes the corpus. This explicit in-band hook is what closes the delete-then-equal-
+    // reinsert-same-rowid blind spot the signature can't see, and keeps the cache robust here.
     invalidateResidentVectors(db)
 
     // ING-3 pipeline boundary: chunks are now persisted and the document is in `embedding`.
@@ -912,9 +913,9 @@ async function embedChunks(
     }
     throw err
   }
-  // RAG-6 (Wave P4) belt: fresh vectors were just INSERTed — drop the resident decoded-vector
-  // cache so the next search rebuilds it including them (the signature check also catches the
-  // raised row count / maxRowid; this is the explicit hook).
+  // RAG-6 (Wave P4) / PERF-1 (Phase 5) belt: fresh vectors were just INSERTed — flag the resident
+  // decoded-vector cache dirty so the next search RECONCILES, decoding only these new chunks
+  // (a pure-add no longer re-decodes the corpus). This is the explicit in-band hook.
   invalidateResidentVectors(db)
 }
 
@@ -1482,8 +1483,9 @@ export function deleteDocument(db: Db, id: string): void {
   if (row.stored_path && existsSync(row.stored_path)) {
     shredFile(row.stored_path)
   }
-  // RAG-6 (Wave P4) belt: this doc's vectors were just DELETEd — drop the resident
-  // decoded-vector cache (closes the delete-then-equal-reinsert signature blind spot).
+  // RAG-6 (Wave P4) / PERF-1 (Phase 5) belt: this doc's vectors were just DELETEd — flag the
+  // resident decoded-vector cache dirty so the next search reconciles (drops these ids from the
+  // map via the chunk-id diff); closes the delete-then-equal-reinsert-same-rowid signature blind spot.
   invalidateResidentVectors(db)
 }
 

@@ -218,9 +218,12 @@ describe('registerDictationIpc', () => {
 
     const first = invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
     // PERF-2: the async `await writeFile` now precedes transcribe(), so a single tick no longer
-    // guarantees the first has reached it — poll until it does (inFlight is set synchronously, so the
-    // BUSY refusal below holds regardless of this timing).
-    for (let i = 0; calls === 0 && i < 100; i++) await new Promise((r) => setImmediate(r))
+    // guarantees the first has reached it — poll on a wall-clock deadline (matching the rest of the
+    // integration suite) until it does. An earlier iteration cap (100 setImmediate ticks) flaked under
+    // full-suite CPU load when the off-event-loop write didn't land in time (TEST-1, 2026-06-29).
+    // inFlight is set synchronously, so the BUSY refusal below holds regardless of this timing.
+    const start = Date.now()
+    while (calls === 0 && Date.now() - start < 5000) await new Promise((r) => setImmediate(r))
     expect(calls).toBe(1)
     // The second press is refused with friendly copy and never reaches the transcriber.
     await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6]))).rejects.toThrow(

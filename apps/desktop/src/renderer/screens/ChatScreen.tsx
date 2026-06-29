@@ -61,8 +61,9 @@ export const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
  *  persisted desktop preference is untouched — widening restores the user's choice). */
 export const LIST_AUTO_COLLAPSE_PX = 1150
 
-/** Streamed tokens are batched and flushed on this cadence instead of per-token. */
-const STREAM_FLUSH_MS = 40
+/** Streamed tokens are batched and flushed on this cadence instead of per-token.
+ *  Exported so the FE-1 unmount test can identify (and assert teardown of) the flush timer. */
+export const STREAM_FLUSH_MS = 40
 
 /**
  * Teaching empty state (guidelines §3): example prompts that fill the composer. Two sets —
@@ -236,8 +237,17 @@ export function ChatScreen({
   // confirm the interruption (a stopped partial reply otherwise looks like a normal turn).
   const stopped = useRef(false)
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // FE-1 (mirrors DocumentsScreen/DiagnosticsTab FE-4): the attach-import poll's late
+  // getImportJob tick and the streamed-token flush both resolve AFTER the user can navigate
+  // away (mid-import / mid-generation). The main-side stream is intentionally left running
+  // and recovered on remount (getActiveStream, below) — so we do NOT cancel it; we only flip
+  // this flag and gate every async setState that would otherwise land on a dead component.
+  const mountedRef = useRef(true)
 
   const flushStream = useCallback((): void => {
+    // FE-1: a late token can re-arm this timer after unmount (the onToken subscription stays
+    // live until the stream's finally); drop the flush rather than setState on a dead screen.
+    if (!mountedRef.current) return
     flushTimer.current = null
     if (pendingTokens.current !== '') {
       const chunk = pendingTokens.current
@@ -377,10 +387,17 @@ export function ChatScreen({
     void refreshAttachments(activeId)
   }, [activeId, refreshAttachments])
 
-  // Stop the attachment-import poll on unmount.
+  // Stop the attachment-import poll on unmount, flip the mounted flag the async poll/flush
+  // guards read (FE-1), and clear any pending stream-flush timer so no buffered flush fires
+  // after teardown. The main-side stream is intentionally NOT torn down here — an in-flight
+  // generation is recovered on remount via getActiveStream (the recovery effect below).
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (attachPollRef.current) clearInterval(attachPollRef.current)
+      if (flushTimer.current != null) clearTimeout(flushTimer.current)
+      flushTimer.current = null
     }
   }, [])
 
@@ -1041,6 +1058,9 @@ export function ChatScreen({
     attachPollRef.current = setInterval(async () => {
       try {
         const job = await window.api.getImportJob(jobId)
+        // The interval is cleared on unmount, but a tick already parked on this await resolves
+        // after teardown — drop it instead of refreshing/setState-ing on a dead screen (FE-1).
+        if (!mountedRef.current) return
         const settled = job.completed + job.failed
         const transitioned = settled !== lastSettled
         lastSettled = settled
@@ -1050,6 +1070,7 @@ export function ChatScreen({
         attachPollRef.current = null
         setPendingImport(null)
         const fresh = (await window.api.listDocuments().catch(() => [])) ?? []
+        if (!mountedRef.current) return // unmounted while the document list was loading (FE-1)
         setDocs(fresh)
         if (activeIdRef.current === convId) await refreshAttachments(convId)
         // Per-file failure: show the friendly error (canonical English → display map).
@@ -1069,7 +1090,7 @@ export function ChatScreen({
       } catch {
         if (attachPollRef.current) clearInterval(attachPollRef.current)
         attachPollRef.current = null
-        setPendingImport(null)
+        if (mountedRef.current) setPendingImport(null) // FE-1: not after unmount
       }
     }, 400)
   }

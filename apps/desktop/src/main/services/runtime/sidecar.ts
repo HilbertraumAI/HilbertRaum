@@ -115,14 +115,68 @@ export function findFreePort(host: string = LOOPBACK_HOST): Promise<number> {
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /**
- * A request abort signal that fires on EITHER the per-request timeout OR an optional
- * caller signal (a user "Stop"). When no caller signal is given it's just the timeout,
- * so existing callers are unchanged. Used by the embedder + reranker loopback fetches so
- * a "Stop" during query embedding / rerank cancels promptly, not only on timeout (M-C5).
+ * Does a start-failure message describe a PORT-BIND race rather than a device/driver/model
+ * fault (REL-1)? `findFreePort` binds port 0, reads the assigned port, then CLOSES the listener
+ * before handing the number to `llama-server --port N`; in that TOCTOU window another process —
+ * or a sibling in-app sidecar (chat + embedder + reranker + vision start near-simultaneously) —
+ * can grab the port, so the child exits "address already in use". That is transient: the start
+ * retries ONCE on a fresh port (`LlamaServer.start`), and the GPU ladder must NOT persist
+ * `gpuAutoDisabled` for it (factory.ts). Matched against the start error message, which carries
+ * the captured stderr tail. `EADDRINUSE` also matches the Windows `WSAEADDRINUSE`; the textual
+ * Windows winsock message is matched explicitly.
  */
-export function combineSignals(caller: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs)
-  return caller ? AbortSignal.any([caller, timeout]) : timeout
+export function isBindRaceError(message: string): boolean {
+  return /address already in use|EADDRINUSE|only one usage of each socket address/i.test(message)
+}
+
+/** A request abort signal plus a `clear()` that cancels its backing timeout timer. */
+export interface CombinedAbort {
+  /** Aborts on EITHER the per-request timeout OR the optional caller signal. */
+  readonly signal: AbortSignal
+  /**
+   * Cancel the timeout timer (and detach the caller listener). Call in a `finally` once the
+   * request settles, so an early completion — the norm — does not leave the timer pending for
+   * its full `timeoutMs` (REL-4: a large ingestion runs hundreds of embed/rerank batches; an
+   * unref'd-but-uncleared timer + `any`-listener per batch would otherwise pile up by the
+   * thousand before they age out). Idempotent.
+   */
+  clear(): void
+}
+
+/**
+ * A request abort that fires on EITHER the per-request timeout OR an optional caller signal
+ * (a user "Stop"). Used by the embedder + reranker + vision loopback fetches so a "Stop" during
+ * query embedding / rerank / vision cancels promptly, not only on timeout (M-C5).
+ *
+ * Unlike a bare `AbortSignal.timeout`, the timer is OWNED here so the caller can `clear()` it the
+ * instant the request settles (REL-4). The timeout still aborts with a `TimeoutError` DOMException
+ * and is unref'd, so behaviour and quit-blocking are unchanged — only the lifetime is bounded.
+ */
+export function combineSignals(caller: AbortSignal | undefined, timeoutMs: number): CombinedAbort {
+  const controller = new AbortController()
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')),
+    timeoutMs
+  )
+  // Don't let a pending request timeout keep the process alive (matches AbortSignal.timeout).
+  ;(timer as { unref?: () => void }).unref?.()
+
+  const onCallerAbort = (): void => controller.abort(caller!.reason)
+  if (caller) {
+    if (caller.aborted) controller.abort(caller.reason)
+    else caller.addEventListener('abort', onCallerAbort, { once: true })
+  }
+
+  let cleared = false
+  return {
+    signal: controller.signal,
+    clear(): void {
+      if (cleared) return
+      cleared = true
+      clearTimeout(timer)
+      caller?.removeEventListener('abort', onCallerAbort)
+    }
+  }
 }
 
 // ---- Injectable seams (so the server can be unit-tested with no real binary) -----
@@ -321,7 +375,7 @@ export class LlamaServer {
   async start(): Promise<void> {
     if (this.starting) return this.starting
     if (this.child) return
-    const run = this.doStart()
+    const run = this.startWithBindRetry()
     this.starting = run
     try {
       await run
@@ -329,6 +383,25 @@ export class LlamaServer {
       // Clear on both success and failure: a failed start cleans up `this.child` (via
       // waitForHealthy → stop()), so a later retry must be able to begin a fresh start.
       this.starting = null
+    }
+  }
+
+  /**
+   * Run `doStart()`, retrying ONCE if the child died of a port-bind race (REL-1). The port
+   * `findFreePort` hands us can be stolen between its listener close and the child's bind, so
+   * one "address already in use" exit is transient — a fresh `doStart()` acquires a NEW free
+   * port and almost always wins. The retry is bounded to one attempt: a second consecutive bind
+   * failure (vanishingly unlikely) propagates so the ladder/caller still sees a real failure
+   * rather than spinning. A non-bind start failure (timeout, bad model, spawn error) never
+   * retries. `doStart()`'s failure path already clears `this.child`, so the retry begins clean.
+   */
+  private async startWithBindRetry(): Promise<void> {
+    try {
+      await this.doStart()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!isBindRaceError(message)) throw err
+      await this.doStart()
     }
   }
 

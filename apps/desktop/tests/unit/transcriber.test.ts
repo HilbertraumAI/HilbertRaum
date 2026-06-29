@@ -120,6 +120,29 @@ function makeFakeChild(): FakeChild {
   return child
 }
 
+/** Records each kill signal; only the signals in `diesOn` actually make it close (REL-2). */
+interface StubbornChild extends FakeChild {
+  signals: Array<NodeJS.Signals | number | undefined>
+  kill: (signal?: NodeJS.Signals | number) => boolean
+}
+function makeStubbornChild(diesOn: ReadonlyArray<NodeJS.Signals>): StubbornChild {
+  const child = new EventEmitter() as StubbornChild
+  child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
+  child.killed = false
+  child.signals = []
+  child.kill = (signal?: NodeJS.Signals | number): boolean => {
+    child.signals.push(signal)
+    const sig = (signal ?? 'SIGTERM') as NodeJS.Signals
+    if (diesOn.includes(sig)) {
+      child.killed = true
+      setImmediate(() => child.emit('close', null, String(sig)))
+    }
+    return true
+  }
+  return child
+}
+
 /** Build a transcriber whose spawn writes `json` (if given) to the `-of` path. */
 function fakeCliTranscriber(opts: {
   json?: unknown
@@ -335,6 +358,85 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     controller.abort()
     await expect(call).rejects.toThrow(/cancelled/i)
     expect(heldChild!.killed).toBe(true)
+  })
+
+  // REL-2: a whisper-cli wedged in native code can ignore SIGTERM and never emit 'close'.
+  // stop()/suspend() must escalate to SIGKILL (mirroring LlamaServer.stop) so the slot is
+  // freed and the transient transcript is still shredded — not hang quit/lock forever.
+  it('stop() escalates to SIGKILL when the child ignores SIGTERM, then shreds (REL-2)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-sigkill-'))
+    let held: StubbornChild | null = null
+    let outJson = ''
+    const t = createWhisperCliTranscriber({
+      id: 't',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/m.bin',
+      killGraceMs: 20, // SIGTERM grace dialled down (prod default 2 s)
+      spawnImpl: (_cmd: string, args: string[]): ChildProcess => {
+        const child = makeStubbornChild(['SIGKILL']) // ignores SIGTERM, dies only on SIGKILL
+        held = child
+        outJson = `${args[args.indexOf('-of') + 1]}.json`
+        writeFileSync(outJson, JSON.stringify(WHISPER_JSON)) // transcript content on disk
+        return child as unknown as ChildProcess
+      }
+    })
+    const call = t.transcribe('a.mp3', { workDir })
+    await new Promise((r) => setImmediate(r))
+    expect(existsSync(outJson)).toBe(true)
+    await t.stop() // must resolve via the SIGKILL escalation, not hang on the wedged child
+    expect(held!.signals).toContain('SIGKILL') // escalated past the ignored SIGTERM
+    expect(existsSync(outJson)).toBe(false) // transient shredded before stop() returned
+    expect(readdirSync(workDir)).toEqual([])
+    await call.catch(() => undefined)
+  })
+
+  // REL-2: even SIGKILL can leave a child uninterruptible on rare platforms. The await in
+  // suspend()/stop() is bounded so teardown can never hang on a child that won't die.
+  it('suspend() resolves within the bounded window when the child ignores even SIGKILL (REL-2)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-nodie-'))
+    let held: StubbornChild | null = null
+    const t = createWhisperCliTranscriber({
+      id: 't',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/m.bin',
+      killGraceMs: 10,
+      suspendTimeoutMs: 40, // the absolute cap; the child never closes
+      spawnImpl: (): ChildProcess => {
+        const child = makeStubbornChild([]) // ignores every signal; never closes
+        held = child
+        return child as unknown as ChildProcess
+      }
+    })
+    const call = t.transcribe('a.mp3', { workDir })
+    await new Promise((r) => setImmediate(r))
+    expect(held).not.toBeNull()
+    const start = Date.now()
+    await t.suspend() // resolves via the bounded timeout, not by the child's (absent) exit
+    expect(Date.now() - start).toBeLessThan(1500) // did NOT hang
+    expect(held!.signals).toContain('SIGKILL') // it still tried the forceful escalation
+    void call.catch(() => undefined) // never settles (the child never closes) — that's the point
+  })
+
+  // REL-2: the inactivity watchdog is itself a kill site — a wedged child it fires on must
+  // also be escalated to SIGKILL, or the watchdog "fires" yet the child lives on.
+  it('the inactivity watchdog escalates to SIGKILL on a SIGTERM-ignoring child (REL-2)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-wd-kill-'))
+    let held: StubbornChild | null = null
+    const t = createWhisperCliTranscriber({
+      id: 't',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/m.bin',
+      idleTimeoutMs: 20,
+      killGraceMs: 20,
+      spawnImpl: (): ChildProcess => {
+        const child = makeStubbornChild(['SIGKILL']) // ignores SIGTERM
+        held = child
+        return child as unknown as ChildProcess
+      }
+    })
+    await expect(t.transcribe('a.mp3', { workDir })).rejects.toThrow(/watchdog|no output/i)
+    expect(held!.signals).toContain('SIGKILL')
+    expect(readdirSync(workDir)).toEqual([])
   })
 
   // REL-6: workDir is required — the transient transcript (recognised speech = content)

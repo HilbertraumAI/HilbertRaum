@@ -158,7 +158,7 @@ export function prefilterCategory(row: TransactionInput): string | null {
   for (const rule of BUILTIN_CATEGORY_RULES) {
     if (
       rule.matchKind === 'description-substring' &&
-      wordIncludes(desc, rule.pattern) &&
+      wordIncludes(desc, rule.pattern, rule.compound) && // honour the BL-3 German-compound flag (C-1 agreement)
       CATEGORY_SET.has(rule.category)
     ) {
       return rule.category

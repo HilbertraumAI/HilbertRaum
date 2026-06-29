@@ -23,6 +23,7 @@ import {
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
+import { prefilterCategory } from '../../src/main/services/skills/categorizer'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
 
 // architecture.md "Skills — design record" §8 (S11a) — the bank-statement extract_transactions tool, proven in
@@ -495,15 +496,13 @@ describe('categorize_transactions (S11c)', () => {
     expect(categorizeRow(tx({ description: 'Zero', amount: 0 }))).toBe(UNCATEGORIZED)
   })
 
-  it('categorizeRow matches description rules on WORD boundaries, not raw substrings (audit C-1)', () => {
-    // A coincidental substring no longer mis-files: 'fee'⊂'coffee', 'atm'⊂'atmosphere', 'lohn'⊂'mühlohn'.
+  it('categorizeRow keeps the strict two-sided boundary for short English tokens (audit C-1)', () => {
+    // The short, ambiguous English tokens still need BOTH sides bounded so a coincidental substring does
+    // not mis-file: 'fee'⊂'coffee', 'atm'⊂'atmosphere', and 'lohn' (kept strict) ⊄ 'muehlohn'.
     expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).not.toBe('Fees')
     expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).toBe('Spending') // sign fallback
     expect(categorizeRow(tx({ description: 'Atmosphere Bar', amount: -12 }))).not.toBe('Cash')
     expect(categorizeRow(tx({ description: 'Baeckerei Muehlohn', amount: -3.1 }))).not.toBe('Income')
-    // A COMPOUND that merely contains a keyword no longer matches — so it now agrees with the LLM
-    // prefilter (which sends such a row to the model): 'Kontoführungsgebühr' has no standalone 'gebühr'.
-    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Spending')
     // The keyword as its OWN word still matches.
     expect(categorizeRow(tx({ description: 'Coffee and a fee', amount: -3.5 }))).toBe('Fees')
   })
@@ -737,5 +736,156 @@ describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
     const res = reconcileBalances(rows)
     expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
     expect(res.reconciled).toBe(true)
+  })
+})
+
+// full-audit-2026-06-29 Phase 1 (financial correctness): BL-1/BL-2/BL-3 — adversarial WHOLE-STRING
+// fixtures through the REAL entry points (extractTransactionRows / reconcileBalances / summarizeCashflow
+// / categorizeRow), not pre-isolated tokens. Each pins a fixed reproduction from the audit §2.
+describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
+  // ---- BL-1: a leading-minus figure must not steal the previous figure's sign ----
+  it('BL-1: a leading-minus running balance keeps its sign; the credit before it stays positive', () => {
+    // "2.500,00 -500,00" = a +2500 credit into an overdrawn account, new balance −500. BEFORE the fix
+    // MONEY_RE's trailing `-?` ate the balance's leading minus ACROSS the separating space → amount −2500,
+    // balance +500 (BOTH signs flipped). The chain still tied out internally, so `reconcileBalances`
+    // reported `ok` on the WRONG figures — the safety net could not catch it.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Gehalt ACME 2.500,00 -500,00', // credit INTO an overdrawn account (balance still −500)
+      '2026-01-03 Supermarkt Billa -45,90 -545,90' // debit; balance stays negative (−500 − 45,90)
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2)
+    // BEFORE: rows[0] = { amount: −2500, balanceAfter: +500 } — a +€2500 credit became a −€2500 debit
+    // and a −€500 overdraft became +€500.
+    expect(rows[0]).toMatchObject({ amount: 2500, balanceAfter: -500 })
+    expect(rows[1]).toMatchObject({ amount: -45.9, balanceAfter: -545.9 })
+    // The running-balance chain ties out on the CORRECT signs (−500 + −45,90 == −545,90) — reconcile `ok`.
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+    expect(reconcile.reconciled).toBe(true)
+    // The headline figure is right: the credit is inflow, not outflow (BEFORE: net −2545,90).
+    expect(summarizeCashflow(rows)).toMatchObject({ totalIn: 2500, totalOut: 45.9, net: 2454.1 })
+  })
+
+  it('BL-1: a fully-negative-balance chain is no longer silently sign-flipped (reconcile false-green)', () => {
+    // The audit's core insight: with EVERY balance leading-minus and EVERY amount positive, the bug
+    // flipped the WHOLE chain consistently (prevBal+amount==bal still held with every sign negated), so
+    // reconcile reported `ok` on confidently-wrong figures. Now the signs are read correctly.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Einzahlung 1.000,00 -2.000,00', // +1000 into a −3000 overdraft → −2000
+      '2026-01-03 Einzahlung 1.500,00 -500,00' // +1500 → −500
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows.map((r) => r.amount)).toEqual([1000, 1500]) // BEFORE: [−1000, −1500]
+    expect(rows.map((r) => r.balanceAfter)).toEqual([-2000, -500]) // BEFORE: [+2000, +500]
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+    expect(summarizeCashflow(rows)).toMatchObject({ totalIn: 2500, totalOut: 0, net: 2500 })
+  })
+
+  it('BL-1: the de-AT GLUED trailing minus is preserved even when a balance figure follows', () => {
+    // The de-AT debit convention prints the sign as a GLUED trailing minus ("45,90-"), and a running-
+    // balance column normally follows it. The fix must keep reading the glued minus as a debit while NOT
+    // stealing a SEPARATED leading minus (the BL-1 case above). The disambiguator is the SPACE: a glued
+    // "-" belongs to the figure on its left; a "-<digit>" after a space is the next figure's leading sign.
+    // (A blanket trailing-minus lookahead would mis-read this de-AT debit as +45,90 — the reason the fix
+    // is space-aware rather than the audit's first-pass `(?:-(?!\s*[-+(]?\d))?` suggestion.)
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Miete 45,90- 1.908,20', // glued trailing-minus debit; positive running balance
+      '2026-01-03 Bargeld 200,00- 1.708,20' // glued trailing-minus debit again (1.908,20 − 200 = 1.708,20)
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ amount: -45.9, balanceAfter: 1908.2 })
+    expect(rows[1]).toMatchObject({ amount: -200, balanceAfter: 1708.2 })
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+  })
+
+  it('BL-1: a glued trailing-minus debit at END of line still reads negative (no following figure)', () => {
+    // The lone-figure de-AT debit "12,00-" (parseAmount-level fixture line 71) read through the real
+    // extractor: a trailing minus with nothing after it is unambiguously the figure's own sign.
+    const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Auszahlung 500,00-', 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ amount: -500 })
+  })
+
+  // ---- BL-2: a currency token in a payee description must not disable totals/reconciliation ----
+  it('BL-2: a currency WORD in a description no longer suppresses the single-currency total', () => {
+    // BEFORE: per-row `detectCurrency(line)` scanned the WHOLE line incl. the free-text description, so a
+    // memo containing "USD"/"$" tagged the row that currency → the row-currency set gained a member →
+    // summarizeCashflow returned no single total, reconcileBalances marked EVERY row `unknown`, and
+    // assessCompleteness dropped to `unverified`. One description string silently killed totalling for the
+    // whole EUR statement. Per-row detection now scans only the FIGURE REGION (from the first money token
+    // on), so a currency word LEFT of the amount is ignored.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Netflix USD subscription -12,99 1.187,01', // "USD" in the memo
+      '2026-01-03 Amazon $ gift card -20,00 1.167,01', // "$" in the memo
+      '2026-01-04 Gehalt ACME 2.000,00 3.167,01'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(3)
+    expect(rows.every((r) => r.currency === 'EUR')).toBe(true) // BEFORE: ['USD','USD','EUR']
+    // A single EUR total is computed (BEFORE: currency undefined — the "no single total" refusal).
+    const summary = summarizeCashflow(rows)
+    expect(summary.currency).toBe('EUR')
+    expect(summary).toMatchObject({ totalIn: 2000, totalOut: 32.99, net: 1967.01 })
+    // Reconciliation runs in EUR (BEFORE: every row `unknown`).
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.reconciled).toBe(true)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok', 'ok'])
+    expect(assessCompleteness({ rows, reconcile })).toBe('unverified') // no opening/closing pair, but not from a phantom mix
+  })
+
+  it('BL-2: a GENUINELY mixed-currency row (currency ADJACENT to the figure) still refuses a single total', () => {
+    // The figure region runs from the first money token onward, so a currency printed NEXT TO the amount is
+    // still detected per-row — a genuinely mixed statement keeps its honest "no single total" refusal
+    // (mixed-currency honesty intact, the reason this is figure-region rather than `statementCurrency ?? …`).
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Coffee -3,50 1.000,00',
+      '2026-01-03 Foreign purchase -20,00 USD' // a real foreign-currency row: USD sits next to the figure
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows.map((r) => r.currency)).toEqual(['EUR', 'USD'])
+    expect(summarizeCashflow(rows).currency).toBeUndefined() // honest mixed-currency refusal preserved
+  })
+
+  // ---- BL-3: German closed-compounds must reach the deterministic categorizer (de-AT target locale) ----
+  it('BL-3: German closed-compound keywords categorize inside a compound (de-AT)', () => {
+    // The C-1 two-sided word boundary stopped 'fee'⊂'coffee' but ALSO stopped the de-AT keywords from
+    // ever matching, because German forms closed compounds where the keyword sits at a morpheme seam that
+    // is a word edge on only ONE side. The compound-prone DE keywords (gebühr/gehalt/überweisung/bargeld)
+    // now match on a one-sided boundary, so account/bank fees and salary/transfer compounds bucket
+    // correctly instead of falling through to the generic negative→Spending bucket.
+    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Fees') // BEFORE: Spending
+    expect(categorizeRow(tx({ description: 'Bankgebühr Auslandseinsatz', amount: -2.5 }))).toBe('Fees')
+    expect(categorizeRow(tx({ description: 'SEPA-Überweisung Miete', amount: -800 }))).toBe('Transfer')
+    expect(categorizeRow(tx({ description: 'Dauerüberweisung Sparen', amount: -100 }))).toBe('Transfer')
+    expect(categorizeRow(tx({ description: 'Gehaltszahlung Juni', amount: 2500 }))).toBe('Income')
+    expect(categorizeRow(tx({ description: 'Bargeldbehebung Bankomat', amount: -150 }))).toBe('Cash')
+  })
+
+  it('BL-3: the LLM prefilter agrees with categorizeRow on the German compounds (audit C-1 invariant)', () => {
+    // Both deterministic paths share `wordIncludes` + the same compound flag, so they must still agree:
+    // a compound that NOW categorizes deterministically must ALSO be confidently pre-filtered (kept off
+    // the model), and a coincidental English substring must skip BOTH (go to the model).
+    for (const desc of ['Kontoführungsgebühr', 'Gehaltszahlung Juni', 'SEPA-Überweisung']) {
+      expect(prefilterCategory(tx({ description: desc, amount: -3 }))).toBe(categorizeRow(tx({ description: desc, amount: -3 })))
+      expect(prefilterCategory(tx({ description: desc, amount: -3 }))).not.toBeNull()
+    }
+  })
+
+  it('BL-3: the C-1 English/ambiguous guards still hold (no reintroduced false positives)', () => {
+    // The relaxation is German-only: short English tokens keep the strict two-sided boundary, and 'lohn'
+    // (the ambiguous DE token — muehlohn/Belohnung) stays strict too (salary is covered by the positive-
+    // amount sign fallback). So a coincidental substring is still NOT mis-filed.
+    expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).not.toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Atmosphere Bar', amount: -12 }))).not.toBe('Cash')
+    expect(categorizeRow(tx({ description: 'Baeckerei Muehlohn', amount: -3.1 }))).not.toBe('Income')
+    expect(prefilterCategory(tx({ description: 'Coffee Fellows', amount: -4.2 }))).toBeNull()
+    expect(prefilterCategory(tx({ description: 'ATMOS Sportswear', amount: -89 }))).toBeNull()
   })
 })

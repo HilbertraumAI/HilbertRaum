@@ -15,6 +15,7 @@ import { createMockRuntime } from './mock'
 import { createLlamaRuntime } from './llama'
 import { probeGpuDevices } from './gpu'
 import {
+  isBindRaceError,
   resolveCpuFallbackServerPath,
   resolveLlamaServerPath,
   type UnexpectedExitInfo
@@ -150,7 +151,11 @@ class LadderRuntime implements ModelRuntime {
         if (rung.gpuAttempt) {
           // Persist so later starts skip straight to rung 2 — no repeated GPU timeouts.
           const reason = err instanceof Error ? err.message : String(err)
-          this.deps.gpu.onGpuFailure?.(reason)
+          // REL-1: a port-bind race is a transient TOCTOU collision, NOT a GPU/device fault
+          // (LlamaServer already retried once on a fresh port). Don't auto-disable GPU for the
+          // whole session over one unlucky port steal — only a genuine device/driver/model
+          // failure persists `gpuAutoDisabled`.
+          if (!isBindRaceError(reason)) this.deps.gpu.onGpuFailure?.(reason)
         }
         continue
       }

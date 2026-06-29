@@ -346,11 +346,14 @@ MVP = **linear scan**: score every stored chunk vector by dot product against th
 Rows whose `dimensions` differ from the query (e.g. mid-migration) are skipped, not compared. The
 query is embedded with the **same** embedder, so a query equal to a chunk's text scores ≈ 1.0 and
 ranks first. The decoded vectors are held **process-resident** (`embeddings/resident-cache.ts`, perf
-audit Wave P4) so a query reads no `vector_blob` and re-decodes nothing — the cache invalidates on a
-cheap whole-table `(count, maxRowid)` signature + explicit hooks at the `embeddings` write sites, and
-is purged on workspace lock (vectors derive from chunk text). **Upgrade path** (still behind this same
-`search` signature, D15): an off-main-thread worker scan and/or an ANN index (sqlite-vec / HNSW) when a
-corpus outgrows the linear scan.
+audit Wave P4; maintained **incrementally** since PERF-1 / full-audit-2026-06-29 Phase 5) so a query
+reads no `vector_blob` and re-decodes nothing. The write-site hooks mark the cache dirty and the next
+query RECONCILES the delta on the unique `chunk_id` — decoding only the new chunks (a pure-add of K into
+N decodes K, not N), and correct even when a re-index reuses a freed rowid; a cheap whole-table
+`(count, maxRowid)` signature is the self-healing backstop that full-rebuilds on an out-of-band write,
+and the cache is purged on workspace lock (vectors derive from chunk text). **Upgrade path** (still
+behind this same `search` signature, D15): an off-main-thread worker scan and/or an ANN index
+(sqlite-vec / HNSW) when a corpus outgrows the linear scan.
 
 `searchText` embeds the query through `embedQueryCached` (RAG-5): a small per-embedder LRU
 (`QUERY_VECTOR_CACHE_MAX = 32`, keyed by exact query string, held in a `WeakMap` by embedder
@@ -638,6 +641,17 @@ relevance logit after a rerank. Citations never persist scores (locked).
 `min(vectorRank, keywordRank)`, then on `chunkId` (M-C4). The `min` (rather than vector rank
 alone) keeps a #1 keyword-only exact-match hit — invoice numbers / codes, the case hybrid search
 exists to catch — from always losing an RRF tie to a #1 vector hit.
+
+**Per-list tie-break (full-audit-2026-06-29 RAG-1).** `rrfFuse` breaks the *final* tie on
+`chunkId`, but the *per-list rank* each chunk feeds in (1/(k+rank)) is only deterministic if each
+input list is. Under prefix-less E5 the cosines compress into a narrow band (§12.1 R3), so
+equal-score ties are realistic — and without a secondary key the vector list inherited V8 sort
+stability while the keyword list inherited SQLite's unspecified `bm25()` tie order, so which chunk
+won a page-dedup slot could flip across SQLite versions/query plans (a reproducibility/test-flake
+risk, not a hallucination). Both input lists now carry a `chunkId` tiebreak — the vector sort in
+`embeddings/index.ts` (`score desc, chunkId asc`) and the FTS `ORDER BY bm25(chunks_fts),
+chunks_fts.chunk_id` — so the ranks into RRF and the page-dedup winner are pinned. (`chunkId` is
+unique, so the order is total.)
 
 ### Keyword index (`chunks_fts`)
 

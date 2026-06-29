@@ -101,7 +101,7 @@ describe('classifyProfile', () => {
   })
 })
 
-// ---- GPU profile-bump gate (Phase 16, architecture.md GPU record §8/§11.1) -----------------
+// ---- GPU profile-bump gate (Phase 16, architecture.md GPU record §8) -----------------
 
 describe('gpuUsefulForProfile', () => {
   const dev = (name: string, totalMb: number): GpuDevice => ({ id: 'Vulkan0', name, totalMb, freeMb: totalMb })

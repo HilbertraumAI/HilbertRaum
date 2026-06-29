@@ -157,6 +157,44 @@ describe('withChatStream (M-A2)', () => {
     expect(inFlightStreams.has('c1')).toBe(false)
   })
 
+  // REL-3: a user Stop can land while withChatStream is still WAITING to acquire the model
+  // slot from a yielding deep-index build (the acquire parks until the builder hands off).
+  // The controller's signal is now threaded into the acquire, so Stop rejects the wait — and
+  // withChatStream must treat that like an in-generation Stop that produced no token: resolve
+  // cleanly via `done` with an empty message, NOT emit chat:error (the renderer shows a toast
+  // on any invoke rejection). `runFn` must never run.
+  it('resolves cleanly (no chat:error) when a user Stop lands during the slot acquire (REL-3)', async () => {
+    const { event, sent } = fakeEvent()
+    let runFnReached = false
+    // acquireSlot parks until its threaded signal aborts, then rejects (what the arbiter does).
+    const acquireSlot = (signal: AbortSignal): Promise<() => void> =>
+      new Promise<() => void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('Chat slot acquire aborted')), {
+          once: true
+        })
+      })
+    const promise = withChatStream(
+      event,
+      'c1',
+      'label',
+      async () => {
+        runFnReached = true
+        return msg('should not happen')
+      },
+      acquireSlot
+    )
+    await new Promise((r) => setImmediate(r))
+    // Simulate Stop: abort the registered in-flight controller (what stopGeneration does).
+    inFlightStreams.get('c1')!.abort()
+    const result = await promise
+    expect(runFnReached).toBe(false) // generation never started
+    expect(result.content).toBe('') // clean empty-stop message
+    // A `done` was emitted; NO chat:error.
+    expect(sent.map((s) => s.channel)).toEqual(['chat:done:c1'])
+    expect(inFlightStreams.has('c1')).toBe(false)
+    expect(streamBuffers.has('c1')).toBe(false)
+  })
+
   it('clears the buffer when the run throws', async () => {
     const { event } = fakeEvent()
     await expect(

@@ -6,6 +6,280 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 6 (FINAL: DOCUMENTATION RECONCILIATION + AUDIT
+CLOSE-OUT; DOC-1/DOC-3/DOC-4 + SEC-1 doc half) — branch `full-audit-2026-06-29-fixes`.** Suite unchanged at
+**2463 passed / 39 skipped (2502 collected)**, typecheck clean, `npm run build` green. **Docs/comments-only +
+the report retirement — no behavior change** (the only `src/`/test edits were two comment fixes: the DOC-1
+`collections.ts` header and the DOC-4 `benchmark.test.ts` citation). This phase closes the six-phase audit.
+- **The six phases, one line each.** P0 TEST-1 (de-flaked the iteration-capped dictation poll → wall-clock
+  deadline); P1 BL-1/BL-2/BL-3 (financial correctness — leading-minus sign theft, figure-region currency,
+  German closed-compound categorization); P2 REL-1/REL-2/REL-3 + DOC-2 (port-race retry / whisper SIGKILL /
+  abort-aware slot handoff + the 180 s GPU-timeout doc fix); P3 TEST-2/3/4/5 + TEST-6 docs (test-enforcement
+  seams — prove the controls stay *wired*); P4 FE-1/RAG-1/RAG-2/REL-4 (renderer unmount guard + determinism /
+  robustness low-hangers); P5 PERF-1 (resident-cache incremental delta + signature backstop). The release-
+  blockers (BL-1 wrong-money, TEST-1 red-suite) and the strong should-fix (REL-2 hang-on-quit) all closed.
+- **Phase-6 doc fixes applied.** DOC-1 — `collections.ts` header no longer calls the *shipped* C2
+  delete-with-documents "left out of v1"; repointed to **architecture.md §1 C2**. DOC-3 — `bge-reranker-v2-m3.yaml`
+  `size_on_disk_gb` 1.08 (GiB mislabel) → **1.16** (decimal GB) + `model-policy.md` "~1.16 GB". DOC-4 — dropped
+  the dangling `/§11.1` from `benchmark.test.ts` (GPU record is §1–§8; §8 resolves). SEC-1 doc half —
+  `security-model.md` gained an **accepted-residual** note on offline password guessing (no unlock rate-limit /
+  8-char floor; the at-rest Argon2id+AES-GCM is the primary mitigation; the code half is an open follow-up).
+  DOC-2 verified already landed in P2 (GPU table "180 s (3 min)").
+- **Verified every earlier phase's doc rider landed** (P1 arch §8 + known-limitations; P2 GPU record §5.5 +
+  the doc-task/arbiter record; P3 "Test-enforcement seams" record; P4 renderer FE-4 bullet + rag-design §11
+  tie-break; P5 "Performance … Wave P4" incremental note) and ran a **§-anchor sweep** — DOC-1 (→ §1 C2) and
+  DOC-4 (→ §8) resolve; all audit-introduced code/test comments cite by finding-ID. The sweep surfaced **two
+  pre-existing dangling `§11.1` citations** (`gpu.test.ts`, `runtime-ladder.test.ts`) the report did not name;
+  per the scope guard they were **left as-is and reported** (a future doc-comment-pass candidate).
+- **Durable record:** new **architecture.md "§26 Full audit (2026-06-29) — remediation close-out"** ledger
+  (mirrors §25) dispositions EVERY finding → phase → as-built §. The working-paper report
+  `audits/full-audit-2026-06-29.md` was already committed (recoverable in git history) and is **`git rm`'d** in
+  this close-out commit per the CLAUDE.md doc-lifecycle rule.
+- **NEXT ACTION (owner): merge `full-audit-2026-06-29-fixes` to `master` when ready; do NOT auto-merge/push.**
+  Unscheduled follow-ups carried in §26 (none release-blocking): **SEC-1 code half** (unlock rate-limit /
+  strength floor), **SEC-2** (`previewSkillPackage` stages to OS temp), **SEC-3** (dialog-opener
+  `requireUnlocked()` parity), **REL-5** (`BEGIN IMMEDIATE` + `withTransaction` — its own phase), **PERF-5 Part
+  B** (list windowing), **E5 `query:`/`passage:` prefix migration**. The two pre-existing `§11.1` citations are
+  a minor doc-comment cleanup._
+
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 5 (RESIDENT-CACHE INCREMENTAL MAINTENANCE;
+PERF-1, the one real scalability item) — branch `full-audit-2026-06-29-fixes`.** Suite now **2463 passed /
+39 skipped (2502 collected)** (was 2456/39 at Phase 4 → **+7 tests**), typecheck clean, `npm run build`
+green, full suite green 3× consecutively. PERF-1 was Medium/High-confidence — the only finding with
+user-visible impact at scale.
+- **The problem (PERF-1).** `embeddings/resident-cache.ts` held the decoded
+  `Map<chunkId,Float32Array>` that `VectorIndex.search` ranks against, but every `embeddings` INSERT/
+  DELETE called `invalidateResidentVectors` = `caches.delete(db)` — DROPPING THE WHOLE MAP. The next
+  query rebuilt it by `SELECT`-ing + `decodeVector`-ing **all** rows synchronously on the Electron main
+  thread (~150 MB read + ~580 ms decode at the ~100k-vector bound), and it recurred after EVERY import/
+  re-index/delete (a heavy "import N docs, ask between each" session paid N full rebuilds).
+- **The fix — incremental delta + retained signature backstop.** `invalidate` now MARKS the cache dirty
+  (no longer drops it); the next `getResidentVectors` RECONCILES: an `ids-only` scan (`SELECT chunk_id`,
+  no `vector_blob`, no decode) drops gone ids, and ONLY the genuinely-new chunk ids are point-looked-up +
+  decoded. A pure-add of K into an N-corpus decodes **exactly K rows, not N**. Reconcile keys on the
+  UNIQUE `chunk_id` (PRIMARY KEY), so it is correct even when a re-index reuses a freed rowid (new id →
+  old out / new in). **Retained (NON-NEGOTIABLE):** the cheap `(count, maxRowid)` signature is the
+  self-healing backstop — a table change with NO hook (out-of-band write) full-rebuilds; and `purge`
+  still DROPS the map on workspace lock (security; distinct from `invalidate`). The three in-band write
+  sites (`ingestion/index.ts` finalize-insert + reindex chunk-phase delete + `deleteDocument`) are
+  unchanged calls; only the comments were updated.
+- **Equivalence guarantee (the correctness contract).** The incremental map is byte-identical to a
+  from-scratch rebuild for every insert/delete/reindex/same-rowid sequence (an in-band write never
+  mutates a vector under a *surviving* chunk_id; re-index mints fresh ids). Proven, not asserted.
+- **Tests (`tests/integration/resident-cache-incremental.test.ts`, NEW, +7).** (1) equivalence vs a cold
+  rebuild byte-for-byte across insert→insert→delete→reindex; (2) decode-count speedup — insert K decodes
+  K, with a `purge`→full-decode-of-N+K teeth contrast; (3) delete drops only the deleted ids; (4)
+  delete-then-reinsert-SAME-rowid — the test CONFIRMS node:sqlite reuses the freed rowid with an
+  identical `(count,maxRowid)`, so the fast path returns STALE without the hook and the hook then
+  reconciles to the NEW vector; (5) signature backstop self-heals an out-of-band write; (6) lock-purge
+  DROPS the map (decode-count contrast: `invalidate` decodes 0, `purge` re-decodes N) + post-lock empty.
+  Teeth manually verified by neutering: removing the signature-mismatch full-rebuild branch reds the
+  backstop test; reverting `invalidate` to `caches.delete` reds the speedup + lock-purge contrast.
+- **Docs:** `architecture.md` "Performance — design record … Wave P4" Invalidation-contract subsection
+  superseded (per-write full rebuild → incremental delta + backstop; the three mechanisms restated) + a
+  PERF-1 Phase-5 note; the "cold rebuild once per mutation" measurement phrasing corrected. `rag-design.md`
+  §11 retrieval note updated. P4b worker / P4c ANN / D15 linear-scan deferral all UNCHANGED — Phase 5 only
+  removes the per-write full rebuild.
+- **NEXT ACTION (owner):** P5 closes PERF-1 (the real scalability ceiling). Remaining on this branch:
+  **P6 — docs reconciliation (DOC-1…DOC-4, SEC-1 doc half) + audit close-out (the §26 ledger, `git rm`
+  the report) + optionally REL-5**. Do NOT auto-merge/push — left to the owner._
+
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 4 (RENDERER LIFECYCLE + DETERMINISM/ROBUSTNESS
+LOW-HANGERS; FE-1/RAG-1/RAG-2/REL-4) — branch `full-audit-2026-06-29-fixes`.** Suite now **2456 passed /
+39 skipped (2495 collected)** (was 2446/39 at Phase 3 → **+10 tests**), typecheck clean, `npm run build`
+green. All four are LOW (quality/reproducibility/robustness, not user-harm); each was test-first
+teeth-checked (write the failing/observable test → confirm it reddens on current code → fix → green →
+revert→fail→restore). Two commits: FE-1 (renderer), then RAG-1/RAG-2/REL-4 (main-process
+determinism/robustness).
+- **FE-1 (LOW) — `ChatScreen` setState-after-unmount in the attach poll + stream flush
+  (`ChatUnmount.test.tsx`, NEW, +1).** The FE-4-class gap the sibling screens already guard: the
+  attach-import poll (`watchAttachJob`) and the streamed-token flush (`flushStream`) both resolve after
+  the user can navigate away mid-import / mid-generation. Added a `mountedRef` (gating the poll/flush
+  setStates) and a flush-timer `clearTimeout` on unmount. **Hard constraint honoured:** the main-side
+  stream is NOT torn down — it is intentionally recovered on remount via `getActiveStream`; the change is
+  guard-only. Test unmounts with a poll tick AND a flush timer in flight; teeth on both (the late tick must
+  not re-fetch `listDocuments`; the flush timer must be `clearTimeout`'d).
+- **RAG-1 (LOW) — tied vector/keyword scores got nondeterministic per-list ranks before RRF
+  (`hybrid-search.test.ts`, +2; `resident-cache.test.ts` oracle aligned).** Neither input list had a
+  secondary key, so equal-score ties inherited V8 sort stability (vector) / SQLite's unspecified `bm25()`
+  order (keyword) — which chunk won a page-dedup slot could flip across SQLite versions/query plans (a
+  reproducibility/flake risk, NOT a hallucination). Added a `chunkId` tiebreak to BOTH: the vector sort in
+  `embeddings/index.ts` (`score desc, chunkId asc`) and the FTS `ORDER BY bm25(...), chunks_fts.chunk_id`.
+  The resident-cache equivalence oracle was updated to the same deterministic order (it is the reference
+  ranking). Teeth: dropping either tiebreak reddens the new equal-score tests; the other 19 hybrid tests
+  stay green (ranking algorithm unchanged — only ties are now total).
+- **RAG-2 (LOW) — `truncateSnippet` could split a surrogate pair (`snippet-truncate.test.ts`, NEW, +2).**
+  `String.slice(0, 600)` cuts on a UTF-16 code unit; an astral char (emoji/CJK ext-B/math) straddling the
+  boundary left the citation snippet ending in a lone surrogate (`�`, display-only). Now counts AND slices
+  by code point (`[...trimmed]`). Teeth: revert to `.slice` → the snippet carries a lone surrogate.
+- **REL-4 (LOW) — `combineSignals` accrued uncleared per-request timeout timers
+  (`combine-signals.test.ts`, NEW, +5).** Each embed/rerank/vision request built `AbortSignal.timeout` +
+  `AbortSignal.any`; an early completion (the norm) left the timer (120 s embed/rerank, 300 s vision) and
+  its `any`-listener alive for the full duration — a large ingestion accrued thousands. `combineSignals`
+  now owns an `AbortController` + explicit `setTimeout` and returns `{ signal, clear }`; all three call
+  sites `clear()` in a `finally`. Behaviour preserved (caller-abort AND timeout still abort; timeout reason
+  still `TimeoutError`; timer still unref'd). Teeth: skip the `clearTimeout` → a pending timer survives.
+- **Docs:** `architecture.md` renderer record (FE-4 bullet) extended with the FE-1 ChatScreen guard;
+  `rag-design.md` §11 gained a per-list tie-break determinism note (RAG-1). RAG-2/REL-4 are captured by
+  source comments + this entry.
+- **NEXT ACTION (owner):** P4 closes the renderer/determinism low-hangers. Remaining phases on this branch:
+  P5 resident-cache incremental (PERF-1), P6 docs + close-out (the §26 ledger) + REL-5. Do NOT
+  auto-merge/push — left to the owner. (PERF-5 Part B / FE-5 list-windowing stays deferred, untouched.)_
+
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 3 (TEST-ENFORCEMENT GAPS; TEST-2/3/4/5 +
+TEST-6 docs) — branch `full-audit-2026-06-29-fixes`.** Suite now **2446 passed / 39 skipped (2485 collected)**
+(was 2437/39 at Phase 2 → **+9 tests**; TEST-5 was a conversion, not an addition), typecheck clean,
+`npm run build` green. **Test-only phase — NO `src/` behavior change** (the only source edits were the
+temporary teeth-check neuters, each restored byte-identical; `git diff src/` is empty). The closures
+target a class of gap distinct from a bug: a security/reliability control that is correct in isolation
+but that no test proves stays *wired* — a silent unwiring (the control stops being *called*) would redden
+nothing. Each new test is **teeth-checked** (neuter the guarded control → the test reddens → restore),
+and the teeth-check IS the point. Closed with the REAL seam (FakeChild / llama-runtime / transcriber
+harness, recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates the bypass.
+- **TEST-2 (MEDIUM) — spawn seams re-hash before spawn (`tests/integration/binary-verify-spawn.test.ts`,
+  NEW, +4).** The verdict/cache matrix is well unit-tested and each seam HAD a refusal test — but those
+  inject a fake `verifyBinary: () => 'mismatch'`, proving only the verdict→refusal mapping, not that the
+  seam still CALLS the real verifier. The new tests drive the REAL `verifyBinaryBeforeSpawn` end-to-end at
+  all three seams (`LlamaServer.start`, the GPU `--list-devices` probe, `whisper-cli`) with PACKAGED
+  enforcement ON + a real on-disk marker whose recorded hash mismatches the bytes → each refuses to spawn
+  (no child). A matching-marker positive control proves the refusal is the hash mismatch, not an
+  always-refuse. Teeth confirmed: removing the verify guard at each seam reddens its refusal test
+  (LlamaServer resolves, GPU spawn count 1, whisper proceeds).
+- **TEST-3 (MEDIUM) — embed failure propagates at `generateGroundedAnswer`, not just `retrieve()`
+  (`tests/integration/rag.test.ts`, +1).** TEST-N8 proves `retrieve()` rejects on a failing embedder, but
+  `generateGroundedAnswer` early-returns NO_DOCUMENT_CONTEXT/REINDEX_NEEDED on empty chunks — a regression
+  wrapping `retrieve` in `try/catch → []` would make a transient embed fault MASQUERADE as "no documents".
+  The new test uses a FRESH failing embedder (defeats the per-instance query LRU) over a NON-EMPTY corpus
+  and asserts `generateGroundedAnswer` REJECTS. Teeth confirmed: swallowing `retrieve` into [] makes it
+  resolve with the no-context answer and the test reddens.
+- **TEST-4 (LOW) — installer coded error constants (`tests/integration/skills-installer.test.ts`, +4).**
+  `encryptedZip` (BOTH the GP-flag bit-0 path AND the `0xFFFFFFFF` ZIP64-sentinel path — `writeRawZip`
+  extended with optional `gpFlag`/`uncompressedSizeOverride`), `invalidPath` (the SEC-N1 NUL-byte
+  content-leak defence — asserts the FIXED reason never echoes the crafted name), and `pathTooLong` (small
+  `maxPathLen`) are each driven through the real `previewSkillPackage`/`importSkill` (fixed reason + stable
+  `errorCode`, never throws raw / leaks a path). The "never routes through tar" test is relabelled
+  **documentation-only** (a source grep — no runtime call site exists to intercept). Teeth confirmed: each
+  of the 4 reddens with its named guard neutered; the other 23 stay green.
+- **TEST-5 (LOW) — real `VisionRuntime` success-path no-leak (`tests/integration/vision-security.test.ts`,
+  CONVERTED in place).** The success-path no-leak test used a hand-written fake `analyze`, bypassing the
+  real runtime's data-URL request construction + SSE parsing. It now routes through the REAL `VisionRuntime`
+  (recording `fetch` + an SSE body) so the prompt + image bytes pass through `runAnalyze` → `server.fetch` →
+  `readChatSSE`, then asserts no log line carries the prompt/answer/base64-image. Teeth confirmed: logging
+  `opts.question`/the data-URL at the runtime layer reddens it.
+- **TEST-6 (INFO) — no automated answer-quality floor in CI (docs-only).** Recorded in `architecture.md`
+  "Test-enforcement seams — design record (Phase 3)": retrieval/answer/skill-trigger ACCURACY has no
+  automated floor that fails CI — the `eval/skill-triggers` harness prints precision as a MEASUREMENT (the
+  S13b precision-bar assertion is owner-gated on D1, §18) and the real-model quality benchmarks are
+  env-gated out of CI by design (model-benchmarks.md D19); accuracy regressions are caught only by the
+  manual smoke matrix. Follow-up: land the S13b bar once the owner sets D1.
+- **Docs:** new non-numbered `architecture.md` "Test-enforcement seams — design record (full audit
+  2026-06-29, Phase 3)" subsection (records TEST-2…6 + the teeth-check rationale); Phase 6's §26 ledger can
+  point to it. No new BUG surfaced by the added coverage (the controls are correct; only the wiring was
+  untested).
+- **NEXT ACTION (owner):** P3 closes the highest-value test-enforcement gaps. Remaining phases on this
+  branch: P4 renderer/determinism (FE-1/RAG-1/RAG-2/REL-4), P5 resident-cache incremental (PERF-1), P6 docs
+  + close-out (the §26 ledger) + REL-5. Do NOT auto-merge/push — left to the owner._
+
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 2 (RUNTIME RELIABILITY; REL-1/REL-2/REL-3 +
+DOC-2) — branch `full-audit-2026-06-29-fixes`.** Suite now **2437 passed / 39 skipped (2476 collected)**
+(was 2426/39 at Phase 1 → **+11 tests**), typecheck clean, `npm run build` green. Process-lifecycle /
+concurrency fixes only — no schema, IPC, or audit-payload change. Each finding fixed **test-first** through
+the real seams (FakeChild / llama-runtime / transcriber / arbiter harnesses), reproduction confirmed RED
+before the fix (the REL-2 tests hung→timed-out RED; the REL-3 chat-stream test threw on the un-threaded
+signal), with the existing GPU-ladder / forceRestart / LlamaServer.stop / dictation suites green after each.
+One commit per finding (fed7464 REL-1, e8f92d0 REL-2, 4061d7c REL-3, + the docs commit for DOC-2 / folding).
+- **REL-1 (MEDIUM) — port-race TOCTOU mis-attributed to "GPU broke" (`runtime/sidecar.ts`, `factory.ts`).**
+  `findFreePort` binds port 0, reads the port, then CLOSES the listener before the child binds — a sibling
+  sidecar (chat+embedder+reranker+vision start near-simultaneously) can steal it → child exits "address
+  already in use". (a) `LlamaServer.start` now retries `doStart` **once** on a bind-class immediate exit
+  (`isBindRaceError`) on a fresh port — covers chat AND the embedder/reranker/vision (which had NO retry).
+  (b) The GPU ladder no longer persists `gpuAutoDisabled` when a rung-1 failure is a bind race rather than a
+  device fault, so one port collision can't disable GPU for the session. **Diverged from the audit's literal
+  `…(?:-(?!…))` regex suggestion? No — that was BL-1; here the audit's directional `onGpuFailure`-narrowing
+  was implemented via the shared `isBindRaceError` classifier so the retry and the ladder agree.**
+- **REL-2 (MEDIUM) — whisper kill never escalated to SIGKILL → wedged child hangs quit/lock
+  (`transcriber/cli.ts`).** The watchdog, abort handler, and `suspend()`/`stop()` sent bare `child.kill()`
+  (SIGTERM) and awaited `close`; a child wedged in native code that ignores SIGTERM never emits `close`, so
+  the slot stayed held and teardown hung indefinitely with the transcript transient on disk. New
+  `killWithEscalation` mirrors `LlamaServer.stop()` (SIGTERM → SIGKILL after `killGraceMs`=2 s, grace timer
+  unref'd + cleared on clean exit), wired into all three kill sites; `suspend()`/`stop()` bound the cleanup
+  await with `suspendTimeoutMs`=10 s (crash-sweep is the shred backstop past the cap).
+- **REL-3 (MEDIUM) — "Stop" unresponsive while a deep-index build holds the slot (`ipc/chat-stream.ts`,
+  `analysis/model-slot-arbiter.ts`, `doctasks/manager.ts`).** `withChatStream` awaited `acquireSlot()` with
+  no signal; a Stop during the multi-second node-`generate` park aborted a controller nobody watched.
+  `acquireForChat(signal?)` now threads the turn's signal (new `waitForHandoff`): a Stop during the park
+  rejects at once, removing the waiter from the queue + giving back its `chatHolders` slot + dropping the
+  pause when it was the last waiter. `withChatStream` resolves that Stop cleanly via `done` (empty message),
+  never `chat:error`. All 7 call sites (registerChatIpc + 6 registerRagIpc) forward `controller.signal`.
+- **DOC-2 (LOW) — `architecture.md` GPU table said "60 s health timeout"; code is 180 s
+  (`DEFAULT_HEALTH_TIMEOUT_MS`).** Corrected to "180 s (3 min)". Folded the REL-1 (§5.5), REL-2 (transcriber
+  watchdog bullet), and REL-3 (doc-task arbiter bullet) as-built notes into `architecture.md`;
+  `known-limitations.md` extended with the REL-2 SIGKILL/teardown residual.
+- **REL-5 (LOW) — DEFERRED (per the audit's own recommendation).** `BEGIN IMMEDIATE` + a `withTransaction`
+  guard touches every `db.exec('BEGIN')` site (chat/doctasks/tree-build/node-vectors/skills) — a broad,
+  correctness-sensitive refactor that deserves its own characterized phase, not a ride-along here. **Still open.**
+- **NEXT ACTION (owner):** REL-2 (hang-on-quit) was the strongest should-fix here — closed. Remaining phases:
+  P3 test-enforcement gaps (TEST-2…5), P4 renderer/determinism (FE-1/RAG-1/RAG-2/REL-4), P5 resident-cache
+  incremental (PERF-1), P6 docs + close-out (the §26 ledger) + REL-5. Do NOT auto-merge/push — left to the owner._
+
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 1 (FINANCIAL CORRECTNESS; BL-1/BL-2/BL-3) —
+branch `full-audit-2026-06-29-fixes`.** Suite now **2426 passed / 39 skipped (2465 collected)** (was
+2417/39 at Phase 0 → **+9 fixtures**), typecheck clean, `npm run build` green. Parsing/categorization only
+— no schema, IPC, or audit-payload change (figures stay content-class). Each finding fixed **test-first**
+through the REAL entry points (`extractTransactionRows`/`reconcileBalances`/`summarizeCashflow`/
+`categorizeRow`/`prefilterCategory`), reproduction confirmed RED before the fix, with the pre-existing
+money/bank/invoice suite green after each. One commit per finding (6d5eea2 BL-1, 71c3fb8 BL-2, 3a3e93a BL-3).
+- **BL-1 (HIGH, release-blocking) — leading-minus sign theft (`money.ts MONEY_RE`).** The trailing
+  `\s*\)?-?` reached across the column gap and stole the NEXT figure's leading minus, so `2.500,00 -500,00`
+  parsed as amount −2500 / balance +500 (BOTH flipped); the uniform flip kept the running chain consistent,
+  so `reconcileBalances` blessed the wrong figures `ok`. Fixed with a **space-disambiguated** trailing region
+  `(?:-|\s*\)|\s+-(?!\s*[-+(]?\d))?`: a GLUED `-` is a de-AT debit (always consumed), a `-<digit>` after a
+  space is the next figure's leading sign (left alone). **Deliberately diverged from the audit's literal
+  `(?:-(?!\s*[-+(]?\d))?` suggestion**, which would have regressed the common de-AT row `45,90- 1.908,20`
+  (glued debit + running balance) to +45,90 — verified by trace. Stays ReDoS-linear (200k-char test green).
+  Residual (known-limitations): a SPACED trailing minus before a balance (`45,90 - 1.908,20`) reads positive
+  — indistinguishable from subtraction.
+- **BL-2 (MEDIUM) — figure-region currency (`bank-statement.ts parseLine`).** Per-row `detectCurrency(line)`
+  scanned the whole line incl. the description, so a `USD`/`$` in a payee memo tagged a EUR row foreign →
+  the whole statement's total/reconciliation collapsed to the mixed-currency refusal. Now detects only in the
+  **figure region** (`rest.slice(matches[0].index)`), falling back to the statement currency; a genuine
+  foreign-currency row (code/symbol next to the amount) is still detected, so mixed-currency honesty holds.
+- **BL-3 (MEDIUM, de-AT target) — German closed-compound categorization (`money.ts wordIncludes`).** The C-1
+  two-sided boundary stopped de-AT keywords from ever matching a closed compound (`kontoführungsgebühr`),
+  dropping fees into Spending. Added a **one-sided COMPOUND** mode to `wordIncludes`; the rule table opts the
+  unambiguous DE keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`) in via `compound: true`. English tokens
+  and the ambiguous `lohn` stay STRICT (no C-1 regression); `categorizeRow` + `prefilterCategory` thread the
+  flag so the two paths still agree (C-1 invariant). Matching-only — not persisted (`run.ts` seeds only
+  `match_kind`/`pattern`). The prior test pinning the now-buggy `Kontoführungsgebühr→Spending` was corrected.
+- **Docs:** `architecture.md` §8 — new "Financial correctness (full-audit-2026-06-29, Phase 1)" subsection +
+  the `wordIncludes` paragraph; `docs/known-limitations.md` — sign-by-space + figure-region-currency +
+  compound-categorization bullets and the residuals, "Last updated" bumped.
+- **NEXT ACTION (owner):** BL-1 was the release-blocking item — it is closed. Remaining phases on this branch:
+  P2 runtime reliability (REL-1/2/3), P3 test-enforcement gaps (TEST-2…5), P4 renderer/determinism, P5
+  resident-cache incremental, P6 docs + close-out (the §26 ledger). Do NOT auto-merge/push — left to the owner._
+
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 0 (DE-FLAKE THE SUITE; TEST-1) — branch
+`full-audit-2026-06-29-fixes`.** Suite now reliably **2417 passed / 39 skipped (2456 collected)**,
+confirmed stable across **3 consecutive full `npm test` runs**; `npm run build` green. Test-only change
+(nothing under `src/` touched), so the test count is unchanged from the previous headline — the fix
+removed the flake, not any tests; the "2417 passed" claim that the audit flagged as stale/optimistic is
+now genuinely held.
+- **TEST-1 (High).** `tests/integration/dictation-ipc.test.ts:223` (the REL-3 concurrency test) polled with
+  an **iteration cap** (`for (let i = 0; calls === 0 && i < 100; i++) …`) instead of a wall-clock deadline.
+  Commit `fa9a6b2` (2026-06-28 audit, PERF-2) moved `await writeFile` to run BEFORE `transcribe()`, so under
+  full-suite CPU contention (vitest forked pool) the off-event-loop write didn't complete within 100
+  `setImmediate` ticks → `calls` stayed 0 → `expect(calls).toBe(1)` flaked RED. Passed in isolation, flaked
+  only under whole-suite load. It was the lone iteration-capped poll in the integration suite.
+- **Fix.** Replaced the cap with a wall-clock deadline matching the rest of the suite:
+  `const start = Date.now(); while (calls === 0 && Date.now() - start < 5000) await new Promise((r) => setImmediate(r))`.
+  Comment updated to explain the deadline + cite TEST-1. The synchronous-`inFlight` BUSY-refusal assertions
+  below it (the actual single-flight contract) were untouched — they don't depend on this timing.
+- **NEXT ACTION (owner):** Phase 0 unblocks a trustworthy `npm test` baseline for the rest of the audit.
+  Remaining phases on this branch: P1 financial correctness (BL-1/2/3, the release-blocking sign-theft),
+  P2 runtime reliability (REL-1/2/3), P3 test-enforcement gaps (TEST-2…5), P4 renderer/determinism low-hangers,
+  P5 resident-cache incremental, P6 docs + close-out. Do NOT auto-merge/push — left to the owner._
+
+
 _2026-06-29 — **Doc cleanup: retired `docs/functionality-wave-3-plan.md`.** The wave was complete
 (Phases 31–38, 2026-06-11) and its per-feature mechanisms already lived in the topic docs; the unique
 "cited-as-a-unit" content (the §13 decisions D23–D37 + the §14 research-gate evidence R-S1/R-T1/R-T2/
