@@ -115,6 +115,21 @@ export function findFreePort(host: string = LOOPBACK_HOST): Promise<number> {
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /**
+ * Does a start-failure message describe a PORT-BIND race rather than a device/driver/model
+ * fault (REL-1)? `findFreePort` binds port 0, reads the assigned port, then CLOSES the listener
+ * before handing the number to `llama-server --port N`; in that TOCTOU window another process —
+ * or a sibling in-app sidecar (chat + embedder + reranker + vision start near-simultaneously) —
+ * can grab the port, so the child exits "address already in use". That is transient: the start
+ * retries ONCE on a fresh port (`LlamaServer.start`), and the GPU ladder must NOT persist
+ * `gpuAutoDisabled` for it (factory.ts). Matched against the start error message, which carries
+ * the captured stderr tail. `EADDRINUSE` also matches the Windows `WSAEADDRINUSE`; the textual
+ * Windows winsock message is matched explicitly.
+ */
+export function isBindRaceError(message: string): boolean {
+  return /address already in use|EADDRINUSE|only one usage of each socket address/i.test(message)
+}
+
+/**
  * A request abort signal that fires on EITHER the per-request timeout OR an optional
  * caller signal (a user "Stop"). When no caller signal is given it's just the timeout,
  * so existing callers are unchanged. Used by the embedder + reranker loopback fetches so
@@ -321,7 +336,7 @@ export class LlamaServer {
   async start(): Promise<void> {
     if (this.starting) return this.starting
     if (this.child) return
-    const run = this.doStart()
+    const run = this.startWithBindRetry()
     this.starting = run
     try {
       await run
@@ -329,6 +344,25 @@ export class LlamaServer {
       // Clear on both success and failure: a failed start cleans up `this.child` (via
       // waitForHealthy → stop()), so a later retry must be able to begin a fresh start.
       this.starting = null
+    }
+  }
+
+  /**
+   * Run `doStart()`, retrying ONCE if the child died of a port-bind race (REL-1). The port
+   * `findFreePort` hands us can be stolen between its listener close and the child's bind, so
+   * one "address already in use" exit is transient — a fresh `doStart()` acquires a NEW free
+   * port and almost always wins. The retry is bounded to one attempt: a second consecutive bind
+   * failure (vanishingly unlikely) propagates so the ladder/caller still sees a real failure
+   * rather than spinning. A non-bind start failure (timeout, bad model, spawn error) never
+   * retries. `doStart()`'s failure path already clears `this.child`, so the retry begins clean.
+   */
+  private async startWithBindRetry(): Promise<void> {
+    try {
+      await this.doStart()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!isBindRaceError(message)) throw err
+      await this.doStart()
     }
   }
 
