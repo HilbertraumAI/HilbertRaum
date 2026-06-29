@@ -1,6 +1,6 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-06-28. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. The transcriber/dictation/OCR sections carry the backend-audit-2026-06-27 cancellation & timeout records (REL-1/2/3/6). Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
+_Last updated: 2026-06-29. The §27–§34 design records carry the 2026-06-29 full and post-merge audit ledgers (final suite 2532). Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. The transcriber/dictation/OCR sections carry the backend-audit-2026-06-27 cancellation & timeout records (REL-1/2/3/6). Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
 
 ## Overview
 

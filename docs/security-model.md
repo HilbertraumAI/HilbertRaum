@@ -1,7 +1,9 @@
 # Security model — HilbertRaum
 
-_Last updated: 2026-06-20 (Image-understanding V8 — encrypted, deletable image-analysis history;
-its write/read temps now joined the startup crash sweep)_
+_Last updated: 2026-06-29 (the body now carries the 2026-06-27/28/29 security audit records —
+backend-audit SEC-1–SEC-6, full-audit SEC-N1/DOC-N1 + the "Phase-7 security polish" section, and
+post-merge F14/F15/F17). Prior: 2026-06-20 (Image-understanding V8 — encrypted, deletable
+image-analysis history; its write/read temps now joined the startup crash sweep)_
 
 This document describes the local threat model, the security baseline (spec §3.5), the offline
 posture (spec §3.6), how the privacy policy is loaded and enforced, and the **encrypted workspace**

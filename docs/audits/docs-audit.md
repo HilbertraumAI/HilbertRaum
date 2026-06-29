@@ -16,8 +16,9 @@
   and config were read **only** to verify factual documentation claims (npm scripts, script files,
   runtime pin, the image-history persistence behavior, the demo-mode button label).
 - **Report status:** IN PROGRESS — Phase 1 (DOC-001, DOC-002, DOC-003), Phase 2 (DOC-004,
-  DOC-005, DOC-012), and Phase 3 (DOC-008, DOC-009 Fixed; DOC-006 Superseded / accepted-by-policy)
-  done (2026-06-29); remaining phases (4–6) Open. See the Remediation log.
+  DOC-005, DOC-012), Phase 3 (DOC-008, DOC-009 Fixed; DOC-006 Superseded / accepted-by-policy),
+  and Phase 4 (DOC-007, DOC-010, DOC-011 Fixed) done (2026-06-29); remaining phases (5–6) Open.
+  See the Remediation log.
 
 ## How to use this report
 
@@ -62,8 +63,9 @@ Lite.app", DOC-004) and the example macOS volume label is inconsistent across do
 DOC-003)~~ ✅ **DONE (2026-06-29)**. ~~Phase 2 — brand & naming consistency (DOC-004, DOC-005,
 DOC-012)~~ ✅ **DONE (2026-06-29)**. ~~Phase 3 — cross-link & anchor hygiene (DOC-006, DOC-008,
 DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded / accepted-by-policy).
-**Next:** Phase 4 — header freshness & superseded markers (DOC-007, DOC-010, DOC-011):
-`/docs-fix phase 4`.
+~~Phase 4 — header freshness & superseded markers (DOC-007, DOC-010, DOC-011)~~ ✅ **DONE
+(2026-06-29)**. **Next:** Phase 5 — completeness / new standard docs (DOC-013, DOC-014):
+`/docs-fix phase 5`.
 
 **Estimated effort:** Phase 1 ≈ 30 min. Whole remediation ≈ 3–4 hours, most of it the two new files
 (CHANGELOG, CODE_OF_CONDUCT) and the header-freshness sweep.
@@ -75,21 +77,21 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 | `CLAUDE.md` | Agent operating manual / hard rules | Good | Accurate; commands match `package.json`. |
 | `README.md` | Project front door, setup, model catalog | Good | DOC-003 button label fixed (Phase 1). No open findings. |
 | `CONTRIBUTING.md` | Contributor workflow & ground rules | Good | Matches `package.json` engines + scripts. |
-| `SECURITY.md` | Security policy & threat-model summary | Needs update | DOC-002 (OCR) fixed (Phase 1); DOC-007 stale header remains (Phase 4). |
+| `SECURITY.md` | Security policy & threat-model summary | Good | DOC-002 (OCR) fixed (Phase 1); DOC-007 stale header fixed (Phase 4). No open findings. |
 | `PRIVACY.md` | Plain-language privacy notice | Good | Correct on image-history persistence. |
 | `LICENSE` | GPL-3.0-or-later full text | Good | Matches `package.json` `license`. |
 | `CLAUDE_HilbertRaum_MVP.md` | Original frozen product/architecture spec | Unclear | DOC-016: frozen historical spec; resolved "open questions" + superseded specifics may mislead. |
 | `BUILD_STATE.md` | Live build-state / handoff log (~815 KB) | Good | DOC-006 (32 broken links — retired plans + logged-as-deleted `filing-suggestions.ts`) **Superseded / accepted-by-policy** (Phase 3): correct as a chronological record; not rewritten. |
-| `docs/architecture.md` | System design + design records (~477 KB) | Needs update | DOC-007 stale header (06-28 vs 06-29 content). Otherwise consistent. |
-| `docs/rag-design.md` | Retrieval pipeline design records | Needs update | DOC-009 reranker size fixed (Phase 3); DOC-007 stale header remains (Phase 4). |
-| `docs/security-model.md` | Threat model, vault, offline guard, audit log | Needs update | DOC-007 stale header. Content otherwise correct. |
+| `docs/architecture.md` | System design + design records (~477 KB) | Good | DOC-007 stale header fixed (Phase 4; now 06-29). No open findings. |
+| `docs/rag-design.md` | Retrieval pipeline design records | Good | DOC-009 reranker size fixed (Phase 3); DOC-007 stale header fixed (Phase 4; now 06-29). No open findings. |
+| `docs/security-model.md` | Threat model, vault, offline guard, audit log | Good | DOC-007 stale header fixed (Phase 4; now 06-29). Content otherwise correct. No open findings. |
 | `docs/known-limitations.md` | Consciously-accepted gaps | Good | Correct on OCR + image history. References an unwritten `update-bundles-plan.md` (intended). |
-| `docs/design-guidelines.md` | UI/UX + brand + copy guidelines | Needs update | DOC-010: §11.2 superseded blue accent not flagged. |
+| `docs/design-guidelines.md` | UI/UX + brand + copy guidelines | Good | DOC-010 (§11.2 blue accent now flagged superseded by §13) fixed (Phase 4). No open findings. |
 | `docs/model-policy.md` | Manifest schema, roles, license gate | Good | Detailed and consistent. |
 | `docs/model-benchmarks.md` | Measured speed/RAM/quality + harness | Good | DOC-008 (broken intra-doc anchor "§4.6"→"§7.3") fixed (Phase 3). No open findings. |
 | `docs/packaging.md` | Portable build, sidecars, drive build | Good | DOC-004 (macOS `.app` example) fixed (Phase 2). No open findings. |
 | `docs/drive-layout.md` | On-drive directory layout | Good | DOC-005 (`PRIVATE_AI_DRIVE`→`HILBERTRAUM`) fixed (Phase 2). No open findings. |
-| `docs/user-guide.md` | End-user walkthrough of every screen | Needs update | DOC-001 (images) + DOC-003 fixed (Phase 1); DOC-011 remains (Phase 4). |
+| `docs/user-guide.md` | End-user walkthrough of every screen | Good | DOC-001 (images) + DOC-003 fixed (Phase 1); DOC-011 ("Not recommended" status) fixed (Phase 4). No open findings. |
 | `docs/troubleshooting.md` | Common problems & fixes | Good | DOC-001 (images) + DOC-003 fixed (Phase 1); DOC-005 fixed (Phase 2). No open findings. |
 | `docs/benchmark.md` | Hardware benchmark & recommendation | Good | Consistent with `model-benchmarks.md`. |
 | `docs/big-slot-embeddings-plan.md` | Open Phase-30 plan (working paper) | Unclear | DOC-015: "not started" since 2026-06-11; verify still open vs superseded. |
@@ -106,11 +108,11 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 | DOC-004 | Stale pre-rebrand product name "Private AI Drive Lite.app" | Medium | High | Consistency / Accuracy | Fixed | `packaging.md` | 2 |
 | DOC-005 | Inconsistent example volume label (`HILBERTRAUM` vs `PRIVATE_AI_DRIVE`) | Medium | High | Consistency | Fixed | `drive-layout.md`, `troubleshooting.md` | 2 |
 | DOC-006 | `BUILD_STATE.md` broken links to retired plans + source files | Low | High | Navigation | Superseded | `BUILD_STATE.md` | 3 |
-| DOC-007 | Stale "Last updated" headers (content newer than header) | Low | High | Maintainability | Open | `architecture.md`, `rag-design.md`, `security-model.md`, `SECURITY.md` | 4 |
+| DOC-007 | Stale "Last updated" headers (content newer than header) | Low | High | Maintainability | Fixed | `architecture.md`, `rag-design.md`, `security-model.md`, `SECURITY.md` | 4 |
 | DOC-008 | Broken intra-doc anchor "§4.6" (should be §7.3) | Low | High | Navigation | Fixed | `model-benchmarks.md` | 3 |
 | DOC-009 | Reranker size "1.08 GiB" contradicts §26 ledger "1.16 GB" | Low | Medium | Consistency | Fixed | `rag-design.md` | 3 |
-| DOC-010 | §11.2 present-tense blue accent superseded by teal, not flagged | Low | Medium | Accuracy / Clarity | Open | `design-guidelines.md` | 4 |
-| DOC-011 | User guide documents a "Not recommended" status never produced | Low | Medium | Accuracy | Open | `user-guide.md` | 4 |
+| DOC-010 | §11.2 present-tense blue accent superseded by teal, not flagged | Low | Medium | Accuracy / Clarity | Fixed | `design-guidelines.md` | 4 |
+| DOC-011 | User guide documents a "Not recommended" status never produced | Low | Medium | Accuracy | Fixed | `user-guide.md` | 4 |
 | DOC-012 | Manifests README calls embeddings "Q8" (shipped is F16) | Low | Medium | Clarity / Accuracy | Fixed | `model-manifests/README.md` | 2 |
 | DOC-013 | Missing `CHANGELOG.md` | Medium | High | Completeness | Open | (new file) | 5 |
 | DOC-014 | Missing `CODE_OF_CONDUCT.md` | Low | High | Completeness | Open | (new file) | 5 |
@@ -359,7 +361,22 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 
 ### DOC-007: Stale "Last updated" headers (header date older than the newest embedded content)
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Bumped all four stale `_Last updated:_` headers to **2026-06-29**
+  (today's date = newest embedded content) and added an accurate one-line note of what the body now
+  carries, in each file's existing header style:
+  - `architecture.md:3` "2026-06-28" → "2026-06-29", noting the §27–§34 records carry the 2026-06-29
+    full + post-merge audit ledgers (final suite 2532).
+  - `rag-design.md:3` "2026-06-15" → "2026-06-29", noting the body now reflects the 2026-06-27/28/29
+    audit waves (RAG-N markdown-fence/CSV/doc-cap fixes, RAG-1, REL-5/9, §12.3/§12.4); prior dates
+    demoted to "Prior:"/"Earlier:".
+  - `security-model.md:3` "2026-06-20" → "2026-06-29", noting the SEC-1–SEC-6 / SEC-N1 / DOC-N1 /
+    "Phase-7 security polish" / F14/F15/F17 records.
+  - `SECURITY.md:3` "2026-06-15" → "2026-06-29", extending the "changes since the Phase 9 baseline"
+    list with on-device OCR (Phase 38) and image understanding (encrypted, deletable history).
+  Each newest dated record was verified by grep (e.g. `rag-design.md` cites `full-audit-2026-06-29`
+  RAG-1 + post-merge F13; `security-model.md` cites `audit-postmerge-2026-06-29` F14/F15/F17). No
+  code touched. Validation: grep `_Last updated: 2026-06-29` → all four files now match (alongside the
+  already-current `known-limitations.md`); each header date ≥ the latest dated record in its file.
 - **Severity:** Low
 - **Confidence:** High
 - **Category:** Maintainability / Accuracy
@@ -435,7 +452,15 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 
 ### DOC-010: `design-guidelines.md` §11.2 states the retired blue accent in the present tense
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Edited the §11.2 "Facts the wave rests on" bullet
+  (`design-guidelines.md:385–387`): changed the present-tense "filled controls **use** `--accent-600
+  #2f6fed` … in both themes" to past tense ("pre-refresh filled controls **used** …") and appended a
+  superseded marker mirroring the existing §4.2 treatment: "**(Superseded by the §13 brand refresh —
+  the accent ramp is now teal; the primary button is teal fill + dark ink, §4.2.)**" The §11.2 bullet
+  remains an accurate historical record of the Phase-23–27 wave; it just no longer reads as the
+  current accent. Verified §4.2 (line 148) already carries the same "**Superseded by §13**" marker and
+  the teal values (`#57D0A4` on `#11171F`). No code touched. Validation: §11.2 no longer presents
+  `#2f6fed` as the current accent.
 - **Severity:** Low
 - **Confidence:** Medium
 - **Category:** Accuracy / Clarity
@@ -451,7 +476,17 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 
 ### DOC-011: User guide lists a "Not recommended" model status that the code never produces
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Removed the "**Not recommended** — runnable but not the best fit
+  for this computer's memory" bullet from the `user-guide.md` §5 model-status list (was ≈line 124).
+  An end-user guide should only list statuses a user can actually see; a footnote about a never-emitted
+  state would only confuse, so removal (the audit's first recommended option) was chosen over
+  footnoting. Verified against code: `not_recommended` is **declared only** — `shared/types.ts:313`
+  (the `ModelState` union), `i18n/en.ts:635`/`de.ts:651` (labels), and `ModelsScreen.tsx:34` (display
+  map) — with **no `state = 'not_recommended'`/`return 'not_recommended'` anywhere**; `services/models.ts`
+  emits `unsupported`/`installed`/`running` from `computeInstallState` plus the `recommended` and
+  `insufficientRam` booleans, never `not_recommended` (matches `known-limitations.md:171` "declared
+  but never produced"). The six remaining listed statuses all map to produced states/flags. No code
+  touched. Validation: grep `user-guide.md` for "Not recommended" → 0.
 - **Severity:** Low
 - **Confidence:** Medium
 - **Category:** Accuracy
@@ -579,8 +614,8 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 | C4 | `packaging.md` (macOS example) **vs** the rebrand + the `.exe` example | "Private AI Drive Lite.app" vs "HilbertRaum" | Rebrand → HilbertRaum | Rename the example artifact | DOC-004 (**Resolved**, Phase 2) |
 | C5 | `drive-layout.md` / `troubleshooting.md` **vs** `README.md` / `packaging.md` | `/Volumes/PRIVATE_AI_DRIVE` vs `/Volumes/HILBERTRAUM` | Rebrand → HILBERTRAUM | Standardize on HILBERTRAUM | DOC-005 (**Resolved**, Phase 2) |
 | C6 | `rag-design.md` §12.3 **vs** `architecture.md` §26 ledger | reranker "1.08 GiB" vs "changed to 1.16 GB" | Manifest `size_on_disk_gb: 1.16` | Reconcile to 1.16 GB | DOC-009 (**Resolved**, Phase 3) |
-| C7 | `design-guidelines.md` §11.2 **vs** §4.2/§13 | present-tense blue `#2f6fed` vs retired-for-teal | §13 brand refresh (teal) | Mark §11.2 superseded | DOC-010 |
-| C8 | `user-guide.md` **vs** `known-limitations.md` | documents a "Not recommended" status vs "declared but never produced" | known-limitations.md / code | Remove or footnote the status | DOC-011 |
+| C7 | `design-guidelines.md` §11.2 **vs** §4.2/§13 | present-tense blue `#2f6fed` vs retired-for-teal | §13 brand refresh (teal) | Mark §11.2 superseded | DOC-010 (**Resolved**, Phase 4) |
+| C8 | `user-guide.md` **vs** `known-limitations.md` | documents a "Not recommended" status vs "declared but never produced" | known-limitations.md / code | Remove or footnote the status | DOC-011 (**Resolved**, Phase 4) |
 
 ## Missing documentation
 
@@ -682,19 +717,25 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
   non-BUILD_STATE link scan stays 0.
 - **Risks:** Low (BUILD_STATE deliberately untouched). **Rollback:** revert the two doc edits.
 
-### Phase 4: Header freshness & superseded markers
+### Phase 4: Header freshness & superseded markers — ✅ DONE (2026-06-29)
 
 - **Goal:** Make "freshness" signals truthful.
-- **Findings included:** DOC-007, DOC-010, DOC-011.
+- **Findings included:** DOC-007, DOC-010, DOC-011 — all Fixed.
 - **Documents affected:** `architecture.md`, `rag-design.md`, `security-model.md`, `SECURITY.md`,
   `design-guidelines.md`, `user-guide.md`.
-- **Exact intended changes:** Bump each stale `_Last updated:_` to its newest content date; mark
-  design-guidelines §11.2 as superseded by §13; remove/footnote the "Not recommended" status in
-  user-guide §5.
-- **Code/config verification required:** Confirm the model statuses `services/models.ts` actually emits
-  (for DOC-011).
-- **Validation steps:** Each header date ≥ newest dated record; §11.2 marked; status list matches code.
-- **Risks:** Low. **Rollback:** revert.
+- **Changes made:** Bumped the four stale `_Last updated:_` headers to **2026-06-29** with an accurate
+  one-line content note each (DOC-007); past-tensed §11.2's `#2f6fed` accent fact and appended a
+  "(Superseded by the §13 brand refresh — now teal, §4.2)" marker mirroring §4.2 (DOC-010); removed
+  the never-emitted "Not recommended" status from the user-guide §5 list (DOC-011).
+- **Code/config verification done:** `not_recommended` confirmed declared-only — `shared/types.ts:313`,
+  `i18n/en.ts:635`/`de.ts:651`, `ModelsScreen.tsx:34` — with no producing code path in
+  `services/models.ts` (matches `known-limitations.md:171`). Newest dated records confirmed by grep in
+  each header-bumped file.
+- **Validation performed:** grep `_Last updated: 2026-06-29` → all four files match; grep `user-guide.md`
+  "Not recommended" → 0; §11.2 marker present (`design-guidelines.md:386–387`); each header date ≥ the
+  latest dated record in its file.
+- **Acceptance criteria:** Met — header dates truthful, §11.2 marked superseded, status list matches code.
+- **Risks:** Low (wording/date-only). **Rollback:** single-commit revert; no code touched.
 
 ### Phase 5: Completeness — new standard docs
 
@@ -730,8 +771,10 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
    anchor and the `rag-design.md` §12.3 reranker figure; the 815 KB `BUILD_STATE.md` edits were resolved
    as a **policy decision** (broken retired-plan / logged-as-deleted links accepted-by-policy) rather
    than churned.
-4. **Phase 4** (NEXT) — header/freshness truthfulness; do after content fixes so dates reflect the final state.
-5. **Phase 5** — additive new files; no risk to existing docs.
+4. ~~**Phase 4**~~ ✅ **DONE (2026-06-29)** — header/freshness truthfulness: bumped the four stale
+   `_Last updated:_` headers to 2026-06-29, flagged the §11.2 blue accent superseded by the §13 teal
+   refresh, and removed the never-emitted "Not recommended" status from the user guide.
+5. **Phase 5** (NEXT) — additive new files; no risk to existing docs.
 6. **Phase 6** — clarity polish on historical docs; least urgent.
 
 Phases are independent and each fits a single fresh `/docs-fix` session. Phase 1 should not be batched
@@ -744,3 +787,4 @@ with others (it carries the user-trust risk and deserves a focused review).
 | 2026-06-29 | Phase 1 — DOC-001, DOC-002, DOC-003 | `docs/user-guide.md`, `docs/troubleshooting.md`, `SECURITY.md`, `README.md`, `sample-data/README.md`, `docs/audits/docs-audit.md` | **DOC-001:** rewrote the user-guide §8 and troubleshooting image passages from "are not saved / never saved" to the persisted-encrypted-deletable image-history posture (`workspace/images/`, encrypted at rest, revisit + delete from Images screen); clarified that `Remove` returns to the landing view and does not delete the saved session. **DOC-002:** replaced `SECURITY.md:78` false "OCR not included in Lite" with an accurate on-device-only (deu+eng tesseract, no cloud OCR) statement. **DOC-003:** "Start mock runtime" → "Try in demo mode" + de-jargoned nearby prose in README/user-guide/troubleshooting **and** the audit-missed `sample-data/README.md`. | Re-read edited passages against `PRIVACY.md`, `vision/history.ts`, `ImagesScreen.tsx` (Remove vs Delete), `drive-layout.md`/`model-policy.md` (OCR scope), `en.ts:700`, `copy-tone.test.ts`. Greps: image `not saved/never saved` → only unrelated voice-dictation remains; `SECURITY.md` OCR → only corrected line; `Start mock runtime` → only intentional historical rename records remain. | Fixed | DOC-007 (SECURITY.md stale 2026-06-15 header) still open → Phase 4. No code changed; doc suite/links unaffected. |
 | 2026-06-29 | Phase 2 — DOC-004, DOC-005, DOC-012 | `docs/packaging.md`, `docs/drive-layout.md`, `docs/troubleshooting.md`, `model-manifests/README.md`, `docs/audits/docs-audit.md` | **DOC-004:** macOS `--app-artifact` example `packaging.md:309` `Private\ AI\ Drive\ Lite.app` → `HilbertRaum.app` (matches the `.exe` example + the rebrand). **DOC-005:** standardized the example macOS volume label on `HILBERTRAUM` — `drive-layout.md` sketch header `PRIVATE_AI_DRIVE/`→`HILBERTRAUM/` (line 57) + all four `/Volumes/PRIVATE_AI_DRIVE` examples (lines 149–152), and `troubleshooting.md:92`. **DOC-012:** `model-manifests/README.md:9` embeddings "Q8" → "F16" with a note that the `-q8` manifest id is a stable opaque identifier, not a quant claim, and that Q8 crashes the pinned runtime. | Greps after fix: `Private AI Drive` → only `BUILD_STATE.md` historical note + this report; `PRIVATE_AI_DRIVE` (docs) → only the frozen spec `CLAUDE_HilbertRaum_MVP.md` (DOC-016) + `BUILD_STATE.md` note + this report. DOC-012 verified against `multilingual-e5-small-q8.yaml` (`display_name: …(F16)`) and `model-policy.md` (lines 32, 37–46). | Fixed | **Follow-up (out of `/docs-fix` scope):** the same stale `/Volumes/PRIVATE_AI_DRIVE` example string appears in `#` usage-comments + one `echo` in `scripts/{fetch-models,fetch-runtime,prepare-drive,verify-models,setup-dev}.sh`; no script *logic* depends on it (it is the user-supplied `--target`). Update those comments in a separate code-touching pass if desired. The frozen spec `CLAUDE_HilbertRaum_MVP.md` retains the old label by design (DOC-016, Phase 6). No code changed. |
 | 2026-06-29 | Phase 3 — DOC-006, DOC-008, DOC-009 | `docs/model-benchmarks.md`, `docs/rag-design.md`, `docs/audits/docs-audit.md` | **DOC-008:** `model-benchmarks.md:157` broken intra-doc anchor "(the **§4.6** German wobble)" → "(the **§7.3** German wobble)" — §4 has no subsections; §7.3 is where the wobble is documented (line 209 already cited §7.3). **DOC-009:** `rag-design.md` §12.3 (line 848) reranker size "(F16 **1.08 GiB** + ctx 2048)" → "(F16 **1.16 GB** + ctx 2048)", aligning the lone laggard with the manifest unit and `model-policy.md`. **DOC-006:** **Superseded / accepted-by-policy** — the 32 broken `BUILD_STATE.md` links (retired plans + `filing-suggestions.ts`) are correct as a chronological record; decision recorded so future audits skip them. `BUILD_STATE.md` left unchanged (815 KB log not churned). | grep `model-benchmarks.md` `§4.6` → 0; grep `rag-design.md` `1.08` → 0; §7.3 confirmed present and documents the wobble; reranker figure cross-checked against `bge-reranker-v2-m3.yaml` (`size_on_disk_gb: 1.16`) + `model-policy.md:33` ("~1.16 GB"); `filing-suggestions.ts` deletion confirmed logged at `BUILD_STATE.md:5660`; non-BUILD_STATE broken-link count unchanged at 0. | Fixed (DOC-008, DOC-009); Superseded (DOC-006) | DOC-007 (`rag-design.md`/`SECURITY.md`/etc. stale `_Last updated:_` headers) still open → Phase 4. No code changed. |
+| 2026-06-29 | Phase 4 — DOC-007, DOC-010, DOC-011 | `docs/architecture.md`, `docs/rag-design.md`, `docs/security-model.md`, `SECURITY.md`, `docs/design-guidelines.md`, `docs/user-guide.md`, `docs/audits/docs-audit.md` | **DOC-007:** bumped the four stale `_Last updated:_` headers to **2026-06-29** with an accurate one-line content note each — `architecture.md` (§27–§34 carry the 2026-06-29 audit ledgers, suite 2532), `rag-design.md` (2026-06-27/28/29 RAG-N/RAG-1/REL/§12.3–4 records; prior dates demoted), `security-model.md` (SEC-1–6/SEC-N1/DOC-N1/Phase-7 polish/F14/F15/F17), `SECURITY.md` (added on-device OCR Phase 38 + image understanding to the "changes since Phase 9 baseline" list). **DOC-010:** `design-guidelines.md` §11.2 — past-tensed the `#2f6fed` accent fact and appended a "(Superseded by the §13 brand refresh — now teal, §4.2)" marker mirroring §4.2. **DOC-011:** removed the never-emitted "Not recommended" status bullet from `user-guide.md` §5. | grep `_Last updated: 2026-06-29` → all four header-bumped files match; each header date ≥ the file's newest dated record (verified by grep, e.g. `full-audit-2026-06-29`/`audit-postmerge-2026-06-29`); grep `user-guide.md` "Not recommended" → 0; §11.2 marker confirmed at `design-guidelines.md:386–387`; `not_recommended` confirmed declared-only (`types.ts:313`/`en.ts:635`/`de.ts:651`/`ModelsScreen.tsx:34`) with no producing path in `services/models.ts`. | Fixed | None for Phase 4. Remaining open: Phase 5 (DOC-013 CHANGELOG, DOC-014 CODE_OF_CONDUCT), Phase 6 (DOC-015, DOC-016). No code changed. |

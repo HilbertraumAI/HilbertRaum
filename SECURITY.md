@@ -1,9 +1,10 @@
 # Security Policy — HilbertRaum
 
-_Last updated: 2026-06-15. Security-relevant changes since the Phase 9 baseline: the audit log
+_Last updated: 2026-06-29. Security-relevant changes since the Phase 9 baseline: the audit log
 (Phase 19), the deny-by-default renderer permission handler (Phase 31), the v2 vault envelope with
 O(1) password change (Phase 32), encrypted-at-rest diagnostics log, malicious-document resource caps,
-and the fail-closed packaged-build policy._
+the fail-closed packaged-build policy, on-device scanned-PDF/photo OCR (Phase 38), and image
+understanding (local vision analysis with encrypted, deletable history)._
 
 ## Supported versions
 

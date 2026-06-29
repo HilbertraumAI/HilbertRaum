@@ -382,8 +382,9 @@ housekeeping; the full original phased plan is in git history —
   messages/notices only, no logic/IPC/schema changes). All hard rules held: fully offline
   (no web fonts/CDNs — system font stacks per §4.4), no telemetry, Windows first-class.
 - **Run vitest from `apps/desktop`** — repo-root runs break the renderer matchers.
-- The old accent `#4f8cff` as a filled-button background fails AA (3.22:1); filled controls
-  use `--accent-600 #2f6fed` (4.55:1) in both themes (§4.2).
+- The old accent `#4f8cff` as a filled-button background fails AA (3.22:1); pre-refresh filled
+  controls used `--accent-600 #2f6fed` (4.55:1) in both themes (§4.2). **(Superseded by the §13
+  brand refresh — the accent ramp is now teal; the primary button is teal fill + dark ink, §4.2.)**
 - `listModels` needs an unlocked workspace, so the first-run "is a model installed?" check
   runs **after** create succeeds, before handing off to the shell.
 

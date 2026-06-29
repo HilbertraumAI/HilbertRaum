@@ -121,7 +121,6 @@ blocks you.
      can't be selected or started here. Pick a smaller model — quality stays great.
    - **Can't verify** — the file is present but its checksum didn't match; re-download it.
    - **Unsupported** — this model can't run on this computer/build.
-   - **Not recommended** — runnable but not the best fit for this computer's memory.
 3. Click a model, then **Select** and **Start runtime**. The first start of a model can take a
    little while as it loads into memory.
 

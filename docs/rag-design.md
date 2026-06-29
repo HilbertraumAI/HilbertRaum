@@ -1,6 +1,6 @@
 # RAG design — HilbertRaum
 
-_Last updated: 2026-06-15 (whole-document-analysis closeout: the four-phase plan condensed into the §14 design record; Phases 1–4 shipped — summary tree, coverage meter, extract-then-aggregate, symmetric compare). Prior: 2026-06-12 docs housekeeping — Phase-17 record into §10, Phase-21 design record as §12._
+_Last updated: 2026-06-29 (the body now reflects the 2026-06-27/28/29 audit waves — backend, full, and post-merge: the RAG-N markdown-fence/CSV-delimiter/doc-cap fixes, RAG-1 listing-honesty, REL-5/9, and the §12.3/§12.4 sidecar records). Prior: 2026-06-15 (whole-document-analysis closeout: the four-phase plan condensed into the §14 design record; Phases 1–4 shipped — summary tree, coverage meter, extract-then-aggregate, symmetric compare). Earlier: 2026-06-12 docs housekeeping — Phase-17 record into §10, Phase-21 design record as §12._
 
 This document describes the local document → retrieval-augmented-generation pipeline.
 It is built up phase by phase:
