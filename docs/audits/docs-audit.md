@@ -17,8 +17,8 @@
   runtime pin, the image-history persistence behavior, the demo-mode button label).
 - **Report status:** IN PROGRESS — Phase 1 (DOC-001, DOC-002, DOC-003), Phase 2 (DOC-004,
   DOC-005, DOC-012), Phase 3 (DOC-008, DOC-009 Fixed; DOC-006 Superseded / accepted-by-policy),
-  and Phase 4 (DOC-007, DOC-010, DOC-011 Fixed) done (2026-06-29); remaining phases (5–6) Open.
-  See the Remediation log.
+  Phase 4 (DOC-007, DOC-010, DOC-011 Fixed), and Phase 5 (DOC-013, DOC-014 Fixed) done
+  (2026-06-29); remaining phase (6) Open. See the Remediation log.
 
 ## How to use this report
 
@@ -53,7 +53,8 @@ the RAM-tier model recommendations agree everywhere they appear. A repo-wide rel
 name a button **"Start mock runtime"** that was renamed **"Try in demo mode"** (the old literal is now
 banned by a copy-tone test).
 
-**Most important missing docs:** `CHANGELOG.md` (DOC-013) and `CODE_OF_CONDUCT.md` (DOC-014).
+**Most important missing docs:** ~~`CHANGELOG.md` (DOC-013) and `CODE_OF_CONDUCT.md` (DOC-014).~~
+✅ **Both added in Phase 5 (2026-06-29).**
 
 **Brand drift:** ~~a stale pre-rebrand product name survives in `packaging.md` ("Private AI Drive
 Lite.app", DOC-004) and the example macOS volume label is inconsistent across docs
@@ -64,8 +65,9 @@ DOC-003)~~ ✅ **DONE (2026-06-29)**. ~~Phase 2 — brand & naming consistency (
 DOC-012)~~ ✅ **DONE (2026-06-29)**. ~~Phase 3 — cross-link & anchor hygiene (DOC-006, DOC-008,
 DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded / accepted-by-policy).
 ~~Phase 4 — header freshness & superseded markers (DOC-007, DOC-010, DOC-011)~~ ✅ **DONE
-(2026-06-29)**. **Next:** Phase 5 — completeness / new standard docs (DOC-013, DOC-014):
-`/docs-fix phase 5`.
+(2026-06-29)**. ~~Phase 5 — completeness / new standard docs (DOC-013, DOC-014)~~ ✅ **DONE
+(2026-06-29)** (CHANGELOG.md + CODE_OF_CONDUCT.md added and cross-linked). **Next:** Phase 6 —
+historical-doc clarity (DOC-015, DOC-016): `/docs-fix phase 6`.
 
 **Estimated effort:** Phase 1 ≈ 30 min. Whole remediation ≈ 3–4 hours, most of it the two new files
 (CHANGELOG, CODE_OF_CONDUCT) and the header-freshness sweep.
@@ -114,8 +116,8 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 | DOC-010 | §11.2 present-tense blue accent superseded by teal, not flagged | Low | Medium | Accuracy / Clarity | Fixed | `design-guidelines.md` | 4 |
 | DOC-011 | User guide documents a "Not recommended" status never produced | Low | Medium | Accuracy | Fixed | `user-guide.md` | 4 |
 | DOC-012 | Manifests README calls embeddings "Q8" (shipped is F16) | Low | Medium | Clarity / Accuracy | Fixed | `model-manifests/README.md` | 2 |
-| DOC-013 | Missing `CHANGELOG.md` | Medium | High | Completeness | Open | (new file) | 5 |
-| DOC-014 | Missing `CODE_OF_CONDUCT.md` | Low | High | Completeness | Open | (new file) | 5 |
+| DOC-013 | Missing `CHANGELOG.md` | Medium | High | Completeness | Fixed | `CHANGELOG.md` (new), `README.md` | 5 |
+| DOC-014 | Missing `CODE_OF_CONDUCT.md` | Low | High | Completeness | Fixed | `CODE_OF_CONDUCT.md` (new), `README.md`, `CONTRIBUTING.md` | 5 |
 | DOC-015 | `big-slot-embeddings-plan.md` status reconcile ("not started" since 06-11) | Low | Medium | Accuracy / Maintainability | Open | `big-slot-embeddings-plan.md` | 6 |
 | DOC-016 | Frozen original spec may mislead (resolved "open questions", superseded specifics) | Low | Medium | Clarity | Open | `CLAUDE_HilbertRaum_MVP.md` | 6 |
 
@@ -528,7 +530,22 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 
 ### DOC-013: Missing `CHANGELOG.md`
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Added a [Keep a Changelog](https://keepachangelog.com)-format
+  `CHANGELOG.md` and linked it from `README.md`'s Documentation table. **Decision (honesty over
+  fabrication):** verified via `git tag -l` that the project has lightweight `v0.1.0`…`v0.1.34` tags
+  (2026-06-10 → 2026-06-22) with **no** per-tag release notes (annotations are just the version
+  string; `v0.1.0` carries the dead "Private AI Drive Lite MVP" brand), and that development
+  continued past the last tag (`package.json` is still `0.1.34`; current HEAD is 2026-06-29). These
+  are rapid per-phase **development checkpoints, not published releases**, so reconstructing accurate
+  per-version diffs for 23 tags would be invented history — barred by the no-speculation rule.
+  Instead the file records the feature-complete MVP under a single `[Unreleased]` section (grouped
+  under `Added` by capability area, sourced from the verified `README.md` feature list), with a
+  prominent note explaining the `v0.1.x` tag scheme and naming **`BUILD_STATE.md` as the detailed
+  development log of record**; the first public release will get its own dated entry. No GitHub
+  compare-links were added (the README still uses a `<this-repo>` placeholder — no canonical public
+  URL to point at). Validation: file present; all relative links resolve (`BUILD_STATE.md`,
+  `CODE_OF_CONDUCT.md`, `docs/known-limitations.md`); README Documentation table links it. No code
+  touched.
 - **Severity:** Medium
 - **Confidence:** High
 - **Category:** Completeness
@@ -548,7 +565,17 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 
 ### DOC-014: Missing `CODE_OF_CONDUCT.md`
 
-- **Status:** Open
+- **Status:** Fixed (2026-06-29) — Added a standard **Contributor Covenant v2.1** `CODE_OF_CONDUCT.md`
+  (full text incl. the Community Impact / Enforcement Guidelines ladder), linked from
+  `CONTRIBUTING.md` (intro line) and `README.md` (Contributing section). **Contact decision:** the
+  repo has **no published security/abuse contact yet** — `SECURITY.md` defers it ("a dedicated
+  security contact will be published before any public release") and the audit's own Missing-docs
+  table flags the absent contact as a known, accepted pre-1.0 gap. Inventing an address (or
+  unilaterally publishing a personal email) would violate the no-speculation rule, so the Covenant's
+  `[INSERT CONTACT METHOD]` slot was filled with language mirroring `SECURITY.md`: report privately to
+  the maintainers; a dedicated contact will be published before the first public release. Validation:
+  file present; cross-links resolve (`SECURITY.md`); CONTRIBUTING + README both link it. No code
+  touched.
 - **Severity:** Low
 - **Confidence:** High
 - **Category:** Completeness
@@ -621,8 +648,8 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 
 | Topic | Why it matters | Suggested file/section | Priority | Finding |
 |---|---|---|---|---|
-| Release/version history | Conventional Commits + versioned `package.json` (0.1.34) with no human-readable change history | `CHANGELOG.md` (Keep-a-Changelog) | Medium | DOC-013 |
-| Code of conduct | Standard for a public OSS contribution surface | `CODE_OF_CONDUCT.md` (Contributor Covenant) | Low | DOC-014 |
+| Release/version history | Conventional Commits + versioned `package.json` (0.1.34) with no human-readable change history | `CHANGELOG.md` (Keep-a-Changelog) | Medium | DOC-013 (**Resolved**, Phase 5) |
+| Code of conduct | Standard for a public OSS contribution surface | `CODE_OF_CONDUCT.md` (Contributor Covenant) | Low | DOC-014 (**Resolved**, Phase 5) |
 | Security contact | `SECURITY.md` says a contact "will be published before any public release" — no contact yet | `SECURITY.md` "Reporting a vulnerability" | Low (pre-1.0, acknowledged) | (note only) |
 | Issue/PR templates | No `.github/ISSUE_TEMPLATE` or PR template; CONTRIBUTING covers the workflow in prose | `.github/` templates | Low | (note only) |
 
@@ -737,16 +764,25 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 - **Acceptance criteria:** Met — header dates truthful, §11.2 marked superseded, status list matches code.
 - **Risks:** Low (wording/date-only). **Rollback:** single-commit revert; no code touched.
 
-### Phase 5: Completeness — new standard docs
+### Phase 5: Completeness — new standard docs — ✅ DONE (2026-06-29)
 
 - **Goal:** Add the missing OSS standard docs (or document why they're intentionally absent).
-- **Findings included:** DOC-013, DOC-014.
-- **Documents affected:** new `CHANGELOG.md`, new `CODE_OF_CONDUCT.md`; link from `README.md` /
-  `CONTRIBUTING.md`.
-- **Exact intended changes:** Seed a Keep-a-Changelog `CHANGELOG.md` from commit history/BUILD_STATE
-  milestones (or document BUILD_STATE-as-changelog); add a Contributor Covenant `CODE_OF_CONDUCT.md`.
-- **Validation steps:** Files parse; links resolve.
-- **Risks:** Low (additive). **Rollback:** delete the new files.
+- **Findings included:** DOC-013, DOC-014 — both Fixed.
+- **Documents affected:** new `CHANGELOG.md`, new `CODE_OF_CONDUCT.md`; `README.md`, `CONTRIBUTING.md`.
+- **Changes made:** Added a Keep-a-Changelog `CHANGELOG.md` recording the feature-complete MVP under
+  `[Unreleased]` (the `v0.1.x` tags are notes-free per-phase dev checkpoints, not releases — so no
+  invented per-tag diffs; the file names `BUILD_STATE.md` as the detailed log of record) and linked it
+  from the README Documentation table. Added a Contributor Covenant v2.1 `CODE_OF_CONDUCT.md`
+  (contact stance mirrors `SECURITY.md`'s deferred-contact policy) and linked it from `CONTRIBUTING.md`
+  + the README Contributing section.
+- **Code/config verification done:** `git tag -l` (23 lightweight tags `v0.1.0`–`v0.1.34`,
+  2026-06-10 → 06-22, no per-tag notes; dev continued to 06-29 with `package.json` still `0.1.34`);
+  README feature list used as the verified source for the changelog's `Added` entries.
+- **Validation performed:** both files present; all relative links resolve (`BUILD_STATE.md`,
+  `CODE_OF_CONDUCT.md`, `SECURITY.md`, `docs/known-limitations.md`); README + CONTRIBUTING link the
+  new files.
+- **Risks:** Low (additive). **Rollback:** delete the two new files + revert the README/CONTRIBUTING
+  link edits.
 
 ### Phase 6: Historical-doc clarity
 
@@ -774,8 +810,11 @@ DOC-009)~~ ✅ **DONE (2026-06-29)** (DOC-008/DOC-009 Fixed; DOC-006 Superseded 
 4. ~~**Phase 4**~~ ✅ **DONE (2026-06-29)** — header/freshness truthfulness: bumped the four stale
    `_Last updated:_` headers to 2026-06-29, flagged the §11.2 blue accent superseded by the §13 teal
    refresh, and removed the never-emitted "Not recommended" status from the user guide.
-5. **Phase 5** (NEXT) — additive new files; no risk to existing docs.
-6. **Phase 6** — clarity polish on historical docs; least urgent.
+5. ~~**Phase 5**~~ ✅ **DONE (2026-06-29)** — additive new files: a Keep-a-Changelog `CHANGELOG.md`
+   (feature-complete MVP under `[Unreleased]`; `v0.1.x` tags are dev checkpoints, `BUILD_STATE.md` is
+   the log of record) and a Contributor Covenant `CODE_OF_CONDUCT.md`, both cross-linked from
+   `README.md`/`CONTRIBUTING.md`.
+6. **Phase 6** (NEXT) — clarity polish on historical docs; least urgent.
 
 Phases are independent and each fits a single fresh `/docs-fix` session. Phase 1 should not be batched
 with others (it carries the user-trust risk and deserves a focused review).
@@ -788,3 +827,4 @@ with others (it carries the user-trust risk and deserves a focused review).
 | 2026-06-29 | Phase 2 — DOC-004, DOC-005, DOC-012 | `docs/packaging.md`, `docs/drive-layout.md`, `docs/troubleshooting.md`, `model-manifests/README.md`, `docs/audits/docs-audit.md` | **DOC-004:** macOS `--app-artifact` example `packaging.md:309` `Private\ AI\ Drive\ Lite.app` → `HilbertRaum.app` (matches the `.exe` example + the rebrand). **DOC-005:** standardized the example macOS volume label on `HILBERTRAUM` — `drive-layout.md` sketch header `PRIVATE_AI_DRIVE/`→`HILBERTRAUM/` (line 57) + all four `/Volumes/PRIVATE_AI_DRIVE` examples (lines 149–152), and `troubleshooting.md:92`. **DOC-012:** `model-manifests/README.md:9` embeddings "Q8" → "F16" with a note that the `-q8` manifest id is a stable opaque identifier, not a quant claim, and that Q8 crashes the pinned runtime. | Greps after fix: `Private AI Drive` → only `BUILD_STATE.md` historical note + this report; `PRIVATE_AI_DRIVE` (docs) → only the frozen spec `CLAUDE_HilbertRaum_MVP.md` (DOC-016) + `BUILD_STATE.md` note + this report. DOC-012 verified against `multilingual-e5-small-q8.yaml` (`display_name: …(F16)`) and `model-policy.md` (lines 32, 37–46). | Fixed | **Follow-up (out of `/docs-fix` scope):** the same stale `/Volumes/PRIVATE_AI_DRIVE` example string appears in `#` usage-comments + one `echo` in `scripts/{fetch-models,fetch-runtime,prepare-drive,verify-models,setup-dev}.sh`; no script *logic* depends on it (it is the user-supplied `--target`). Update those comments in a separate code-touching pass if desired. The frozen spec `CLAUDE_HilbertRaum_MVP.md` retains the old label by design (DOC-016, Phase 6). No code changed. |
 | 2026-06-29 | Phase 3 — DOC-006, DOC-008, DOC-009 | `docs/model-benchmarks.md`, `docs/rag-design.md`, `docs/audits/docs-audit.md` | **DOC-008:** `model-benchmarks.md:157` broken intra-doc anchor "(the **§4.6** German wobble)" → "(the **§7.3** German wobble)" — §4 has no subsections; §7.3 is where the wobble is documented (line 209 already cited §7.3). **DOC-009:** `rag-design.md` §12.3 (line 848) reranker size "(F16 **1.08 GiB** + ctx 2048)" → "(F16 **1.16 GB** + ctx 2048)", aligning the lone laggard with the manifest unit and `model-policy.md`. **DOC-006:** **Superseded / accepted-by-policy** — the 32 broken `BUILD_STATE.md` links (retired plans + `filing-suggestions.ts`) are correct as a chronological record; decision recorded so future audits skip them. `BUILD_STATE.md` left unchanged (815 KB log not churned). | grep `model-benchmarks.md` `§4.6` → 0; grep `rag-design.md` `1.08` → 0; §7.3 confirmed present and documents the wobble; reranker figure cross-checked against `bge-reranker-v2-m3.yaml` (`size_on_disk_gb: 1.16`) + `model-policy.md:33` ("~1.16 GB"); `filing-suggestions.ts` deletion confirmed logged at `BUILD_STATE.md:5660`; non-BUILD_STATE broken-link count unchanged at 0. | Fixed (DOC-008, DOC-009); Superseded (DOC-006) | DOC-007 (`rag-design.md`/`SECURITY.md`/etc. stale `_Last updated:_` headers) still open → Phase 4. No code changed. |
 | 2026-06-29 | Phase 4 — DOC-007, DOC-010, DOC-011 | `docs/architecture.md`, `docs/rag-design.md`, `docs/security-model.md`, `SECURITY.md`, `docs/design-guidelines.md`, `docs/user-guide.md`, `docs/audits/docs-audit.md` | **DOC-007:** bumped the four stale `_Last updated:_` headers to **2026-06-29** with an accurate one-line content note each — `architecture.md` (§27–§34 carry the 2026-06-29 audit ledgers, suite 2532), `rag-design.md` (2026-06-27/28/29 RAG-N/RAG-1/REL/§12.3–4 records; prior dates demoted), `security-model.md` (SEC-1–6/SEC-N1/DOC-N1/Phase-7 polish/F14/F15/F17), `SECURITY.md` (added on-device OCR Phase 38 + image understanding to the "changes since Phase 9 baseline" list). **DOC-010:** `design-guidelines.md` §11.2 — past-tensed the `#2f6fed` accent fact and appended a "(Superseded by the §13 brand refresh — now teal, §4.2)" marker mirroring §4.2. **DOC-011:** removed the never-emitted "Not recommended" status bullet from `user-guide.md` §5. | grep `_Last updated: 2026-06-29` → all four header-bumped files match; each header date ≥ the file's newest dated record (verified by grep, e.g. `full-audit-2026-06-29`/`audit-postmerge-2026-06-29`); grep `user-guide.md` "Not recommended" → 0; §11.2 marker confirmed at `design-guidelines.md:386–387`; `not_recommended` confirmed declared-only (`types.ts:313`/`en.ts:635`/`de.ts:651`/`ModelsScreen.tsx:34`) with no producing path in `services/models.ts`. | Fixed | None for Phase 4. Remaining open: Phase 5 (DOC-013 CHANGELOG, DOC-014 CODE_OF_CONDUCT), Phase 6 (DOC-015, DOC-016). No code changed. |
+| 2026-06-29 | Phase 5 — DOC-013, DOC-014 | `CHANGELOG.md` (new), `CODE_OF_CONDUCT.md` (new), `README.md`, `CONTRIBUTING.md`, `docs/audits/docs-audit.md` | **DOC-013:** added a Keep-a-Changelog `CHANGELOG.md`. `git tag -l` showed 23 lightweight `v0.1.0`–`v0.1.34` tags (2026-06-10 → 06-22) with no per-tag notes, and dev continued past the last tag (`package.json` still `0.1.34`; HEAD 2026-06-29) — i.e. internal per-phase checkpoints, **not** releases — so rather than fabricate 23 per-version diffs the file records the feature-complete MVP under one `[Unreleased]` section (`Added`, by capability area, sourced from the verified README feature list), explains the `v0.1.x` scheme, and names `BUILD_STATE.md` as the detailed log of record; linked from the README Documentation table. No GitHub compare-links (README still uses a `<this-repo>` placeholder). **DOC-014:** added a Contributor Covenant v2.1 `CODE_OF_CONDUCT.md`; the enforcement contact mirrors `SECURITY.md`'s deferred-contact policy (no contact invented — pre-1.0 accepted gap), linked from `CONTRIBUTING.md` intro + the README Contributing section. | `git tag -l`/tag-date/annotation checks (confirmed notes-free checkpoints); both new files present; all relative links resolve (`BUILD_STATE.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `docs/known-limitations.md`); README + CONTRIBUTING both link the new files (`grep -rln CODE_OF_CONDUCT.md\|CHANGELOG.md`). | Fixed | Remaining open: Phase 6 (DOC-015 `big-slot-embeddings-plan.md` status reconcile, DOC-016 frozen-spec banner). Optional later: seed real per-version sections + GitHub compare-links once a public repo URL / first tagged release exists. No code changed. |

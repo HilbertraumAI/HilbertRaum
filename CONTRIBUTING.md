@@ -1,6 +1,7 @@
 # Contributing — HilbertRaum
 
 Thanks for your interest! This project values **privacy, portability, and boring reliable tech**.
+By participating you agree to abide by our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Ground rules (non-negotiable)
 - No cloud dependencies, hosted AI APIs, telemetry, or analytics.

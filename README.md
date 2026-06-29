@@ -236,6 +236,7 @@ are in **[`docs/model-benchmarks.md`](docs/model-benchmarks.md)**.
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and fixes |
 | [`docs/known-limitations.md`](docs/known-limitations.md) | Consciously-accepted gaps |
 | [`BUILD_STATE.md`](BUILD_STATE.md) | Live build state — read first when contributing |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release/version history (pre-1.0; see also `BUILD_STATE.md`) |
 
 ## For developers
 
@@ -280,9 +281,9 @@ vulnerabilities per [`SECURITY.md`](SECURITY.md).
 ## Contributing
 
 Contributions are welcome — please read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the ground rules
-(no cloud/telemetry, offline-first, never commit weights/user data) and the workflow. Work one
-vertical slice at a time, add tests, keep `npm run typecheck` clean, and update the docs +
-`BUILD_STATE.md`.
+(no cloud/telemetry, offline-first, never commit weights/user data) and the workflow, and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community expectations. Work one vertical slice at a
+time, add tests, keep `npm run typecheck` clean, and update the docs + `BUILD_STATE.md`.
 
 ## License
 
