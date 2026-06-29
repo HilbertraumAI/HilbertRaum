@@ -739,3 +739,76 @@ describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
     expect(res.reconciled).toBe(true)
   })
 })
+
+// full-audit-2026-06-29 Phase 1 (financial correctness): BL-1/BL-2/BL-3 — adversarial WHOLE-STRING
+// fixtures through the REAL entry points (extractTransactionRows / reconcileBalances / summarizeCashflow
+// / categorizeRow), not pre-isolated tokens. Each pins a fixed reproduction from the audit §2.
+describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
+  // ---- BL-1: a leading-minus figure must not steal the previous figure's sign ----
+  it('BL-1: a leading-minus running balance keeps its sign; the credit before it stays positive', () => {
+    // "2.500,00 -500,00" = a +2500 credit into an overdrawn account, new balance −500. BEFORE the fix
+    // MONEY_RE's trailing `-?` ate the balance's leading minus ACROSS the separating space → amount −2500,
+    // balance +500 (BOTH signs flipped). The chain still tied out internally, so `reconcileBalances`
+    // reported `ok` on the WRONG figures — the safety net could not catch it.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Gehalt ACME 2.500,00 -500,00', // credit INTO an overdrawn account (balance still −500)
+      '2026-01-03 Supermarkt Billa -45,90 -545,90' // debit; balance stays negative (−500 − 45,90)
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2)
+    // BEFORE: rows[0] = { amount: −2500, balanceAfter: +500 } — a +€2500 credit became a −€2500 debit
+    // and a −€500 overdraft became +€500.
+    expect(rows[0]).toMatchObject({ amount: 2500, balanceAfter: -500 })
+    expect(rows[1]).toMatchObject({ amount: -45.9, balanceAfter: -545.9 })
+    // The running-balance chain ties out on the CORRECT signs (−500 + −45,90 == −545,90) — reconcile `ok`.
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+    expect(reconcile.reconciled).toBe(true)
+    // The headline figure is right: the credit is inflow, not outflow (BEFORE: net −2545,90).
+    expect(summarizeCashflow(rows)).toMatchObject({ totalIn: 2500, totalOut: 45.9, net: 2454.1 })
+  })
+
+  it('BL-1: a fully-negative-balance chain is no longer silently sign-flipped (reconcile false-green)', () => {
+    // The audit's core insight: with EVERY balance leading-minus and EVERY amount positive, the bug
+    // flipped the WHOLE chain consistently (prevBal+amount==bal still held with every sign negated), so
+    // reconcile reported `ok` on confidently-wrong figures. Now the signs are read correctly.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Einzahlung 1.000,00 -2.000,00', // +1000 into a −3000 overdraft → −2000
+      '2026-01-03 Einzahlung 1.500,00 -500,00' // +1500 → −500
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows.map((r) => r.amount)).toEqual([1000, 1500]) // BEFORE: [−1000, −1500]
+    expect(rows.map((r) => r.balanceAfter)).toEqual([-2000, -500]) // BEFORE: [+2000, +500]
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+    expect(summarizeCashflow(rows)).toMatchObject({ totalIn: 2500, totalOut: 0, net: 2500 })
+  })
+
+  it('BL-1: the de-AT GLUED trailing minus is preserved even when a balance figure follows', () => {
+    // The de-AT debit convention prints the sign as a GLUED trailing minus ("45,90-"), and a running-
+    // balance column normally follows it. The fix must keep reading the glued minus as a debit while NOT
+    // stealing a SEPARATED leading minus (the BL-1 case above). The disambiguator is the SPACE: a glued
+    // "-" belongs to the figure on its left; a "-<digit>" after a space is the next figure's leading sign.
+    // (A blanket trailing-minus lookahead would mis-read this de-AT debit as +45,90 — the reason the fix
+    // is space-aware rather than the audit's first-pass `(?:-(?!\s*[-+(]?\d))?` suggestion.)
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Miete 45,90- 1.908,20', // glued trailing-minus debit; positive running balance
+      '2026-01-03 Bargeld 200,00- 1.708,20' // glued trailing-minus debit again (1.908,20 − 200 = 1.708,20)
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ amount: -45.9, balanceAfter: 1908.2 })
+    expect(rows[1]).toMatchObject({ amount: -200, balanceAfter: 1708.2 })
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+  })
+
+  it('BL-1: a glued trailing-minus debit at END of line still reads negative (no following figure)', () => {
+    // The lone-figure de-AT debit "12,00-" (parseAmount-level fixture line 71) read through the real
+    // extractor: a trailing minus with nothing after it is unambiguously the figure's own sign.
+    const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Auszahlung 500,00-', 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ amount: -500 })
+  })
+})

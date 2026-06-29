@@ -49,17 +49,37 @@ export function detectCurrency(text: string): string | null {
 // then normalises any of these (it already strips spaces/apostrophes and applies the 3-trailing-digit
 // thousands rule), so the parse side is unchanged.
 //
+// Trailing sign/paren — the de-AT negative conventions, SPACE-DISAMBIGUATED (full-audit-2026-06-29 BL-1).
+// The trailing region matches ONE of three mutually-exclusive shapes after the magnitude:
+//   `-`                    a GLUED trailing minus ("45,90-") — the de-AT debit sign; ALWAYS consume it.
+//   `\s*\)`                a close paren ("(45,00)", "(45,00 )") — parens-negative.
+//   `\s+-(?!\s*[-+(]?\d)`  a SPACED trailing minus ("45,90 -") only when NOT followed by a figure.
+// WHY space-aware (and not the simpler blanket `\s*\)?-?` or `\s*\)?(?:-(?!\s*[-+(]?\d))?`): the old form
+// let the trailing `-?` reach ACROSS the column gap and steal the leading minus of the NEXT figure, so
+// "2.500,00 -500,00" parsed as amount −2500 / balance +500 (BOTH signs flipped) — and the running-balance
+// chain stayed self-consistent, so reconcileBalances reported `ok` on confidently-wrong figures (BL-1).
+// The disambiguator is the SPACE: a glued "-" belongs to the figure on its LEFT (a de-AT debit), whereas a
+// "-<digit>" after a space is the next figure's leading sign. A first-pass fix that only added the
+// `(?!\s*[-+(]?\d)` lookahead to the unconditional trailing `-?` would have REGRESSED the common de-AT row
+// "45,90- 1.908,20" (glued debit + running balance) to +45,90, because that lookahead also fires on the
+// glued case once `\s*` has run — hence the explicit glued-vs-spaced split here. (The residual genuinely-
+// ambiguous "45,90 - 1.908,20" — a spaced trailing minus immediately before a balance figure — reads as a
+// positive amount; recorded in docs/known-limitations.md, as no parser can tell it from subtraction.)
+//
 // ReDoS hardening (S12 audit / vuln-scan 2026-06-21; PRESERVED here): every repeating quantifier is
 // BOUNDED or unambiguous, so the scan stays provably linear. The earlier `\s*\d[\d.,]*` form backtracked
 // quadratically (O(N²)) on a long digit/separator run lacking a valid decimal tail — a hostile chunk on
 // one giant line could freeze the main process. (B)'s grouping run is bounded to 30 chars (a 30-digit
 // figure is ~10²³, far beyond any real amount); (A) and (C) repeat a group PINNED by its separator +
-// exactly three digits, so the `+` cannot backtrack ambiguously; the leading gap is bounded to 4 spaces
-// and the trailing `\s*` is followed only by OPTIONAL atoms. Each match attempt is therefore O(1) /
-// non-backtracking and the global `matchAll` is O(N) (the ReDoS regression tests pin this on 200k-char
-// adversarial lines). The accepted token set is unchanged for every realistic 2-dp figure.
+// exactly three digits, so the `+` cannot backtrack ambiguously; the leading gap is bounded to 4 spaces.
+// The trailing region runs ONLY after a magnitude match (which consumes input, so matches are
+// non-overlapping); its `\s*`/`\s+` runs are UNAMBIGUOUS (each is followed by a disjoint atom — `)`,`-`,
+// or `[-+(]\d` — so the whitespace class cannot overlap what follows) and the lookahead is zero-width, so
+// each trailing scan is bounded by the local whitespace run and the global `matchAll` stays O(N) (the
+// ReDoS regression tests pin this on 200k-char adversarial lines). The accepted token set is unchanged
+// for every realistic 2-dp figure; only the cross-column sign theft is removed.
 export const MONEY_RE =
-  /(?<!\d)[-+(]?\s{0,4}(?:(?<![A-Za-z0-9])\d{1,3}(?: \d{3})+(?:[.,]\d{2})?|\d[\d.,']{0,30}[.,]\d{2}|\d{1,3}(?:[.,']\d{3})+)(?!\d)\s*\)?-?/g
+  /(?<!\d)[-+(]?\s{0,4}(?:(?<![A-Za-z0-9])\d{1,3}(?: \d{3})+(?:[.,]\d{2})?|\d[\d.,']{0,30}[.,]\d{2}|\d{1,3}(?:[.,']\d{3})+)(?!\d)(?:-|\s*\)|\s+-(?!\s*[-+(]?\d))?/g
 
 /** Money equality within half a cent (printed figures carry 2 minor digits). */
 export const MONEY_EPS = 0.005
