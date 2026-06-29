@@ -631,8 +631,8 @@ password recovery — are documented in
   WAV/MP3/FLAC/OGG only (probed with real files, R-W2); decoding m4a would require
   bundling ffmpeg (license + surface we deliberately avoid). The friendly failure asks
   to convert the file to WAV or MP3 — most voice-recorder apps offer this.
-- **Transcription runs on the CPU at roughly real-time ÷ 1.5.** Measured (R-W4, small
-  model, 4 threads): a 52-minute meeting took ~35 minutes; peak memory ~1.2 GB. The
+- **Transcription runs on the CPU at roughly real-time ÷ 1.5 (RTF ≈ 0.67).** Measured (R-W4, small
+  model, 4 threads, the reference CPU): a 52-minute meeting took ~35 minutes; peak memory ~1.2 GB. The
   import shows honest "Transcribing… N%" progress and the app stays usable meanwhile.
   GPU-accelerated whisper is a possible later opt-in, never a default risk.
 - **A wedged or cancelled transcription self-recovers — it cannot hang the import slot**
@@ -670,8 +670,10 @@ password recovery — are documented in
 - **Dictation is click-to-start / click-to-stop, then transcribe — not live.** Streaming
   ASR (words appearing while you speak) is explicitly out of scope (D30); the per-file
   whisper CLI transcribes only a finished recording. The wait after stopping is the
-  whisper small model's real-time factor (~0.5× on the reference CPU), so a 15-second
-  dictation takes a few seconds to land. A warm whisper-server mode is the recorded
+  whisper small model's real-time factor — on a short clip nearer RTF ≈ 0.5 (R-W3 measured
+  ≈ 0.43–0.46 on short German benchmark clips; a long sustained file runs slower, ≈ 0.67 /
+  real-time÷1.5, see "Audio transcription" above), so a 15-second dictation takes a few
+  seconds to land. A warm whisper-server mode is the recorded
   follow-up if dictation latency ever warrants it (D34's revisit clause).
 - **The mic appears only when the speech model is installed** (the same
   availability-driven gate as audio import — no settings key). On a drive without the
@@ -763,9 +765,11 @@ password recovery — are documented in
 - **No vision model ships on a commercial drive yet, but the sell gate already verifies BOTH files
   (DIST-2).** `assertCommercialDrive` → `verifyDriveModels` iterates the same `manifestFiles` set
   (GGUF + mmproj) that `computeInstallState` requires, so a half-installed vision drive (good GGUF,
-  missing/corrupt projector) fails `weightsVerified`. The remaining DIY-only gap: the in-app
-  `DownloadManager` still drives only `tasks[0]` (the GGUF); the projector is fetched by the
-  `fetch-models.{sh,ps1}` scripts (the canonical two-file path) until a vision drive ships.
+  missing/corrupt projector) fails `weightsVerified`. The in-app `DownloadManager` now fetches **both
+  files (GGUF + mmproj) as one job** (DIST-1) — `planDownload` enqueues the language GGUF then its
+  `mmproj` projector, the job's `totalBytes`/`receivedBytes` cover both, and a finish of a
+  half-installed vision model (GGUF already present, projector missing) fetches just the projector
+  (`downloads.test.ts`). The `fetch-models.{sh,ps1}` scripts remain the offline/CLI two-file path.
 
 ## Internationalization (Phases 39–42, [`architecture.md`](architecture.md) i18n record)
 

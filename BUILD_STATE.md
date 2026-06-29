@@ -6,6 +6,55 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Post-merge full audit — Phase 7 (DOCUMENTATION RECONCILIATION; D1–D8 + the F11/F13 doc-notes +
+a fresh §-anchor sweep) — branch `audit-postmerge-phase7-docs`.** **Docs- and code-comment-ONLY — `git diff`
+shows only `.md`/`.yaml` files and code COMMENTS; no `src/` logic change.** Suite **2523 passed / 39 skipped**
+(unchanged from Phase 6 — comment edits only), typecheck clean, `npm run build` green. Theme: **make the docs
+match the code as built** — every contradiction re-verified against CURRENT code before fixing (Phases 1–6 had
+shifted line numbers, so each item was located by content).
+- **D1 (Med) — the TEST-6 record was stale.** It claimed the S13b skill-trigger precision bar was "owner-gated
+  on D1 / not yet landed"; `skill-triggers.test.ts` in fact asserts it as a **live CI gate** (`fired-wrong == 0`
+  AND `precision ≥ 0.95`, re-verified live, non-skipped). Corrected the §27 ledger row + the "Test-enforcement
+  seams" TEST-6 record + this file's TEST-6 bullet: the bar IS asserted; the remaining no-CI-floor gap is
+  **narrower** — real-model **RAG answer quality** + the env-gated quality benchmarks (still manual).
+- **D2 (Med) — known-limitations downloader note stale.** It said the in-app downloader "drives only `tasks[0]`
+  (the GGUF)"; the code fetches **both GGUF + mmproj as one job** (DIST-1; `downloads.test.ts` asserts
+  `totalBytes == gguf + mmproj` + the finish-just-the-projector case). Rewrote to the as-built reality.
+- **D3 (Med) — reranker "never bundled by default" contradiction.** Reconciled to ONE story: the reranker **IS**
+  in the DIY `prepare-drive --with-assets` default set (README/packaging/drive-layout — correct, unchanged) but
+  flagged `bundled_on_preconfigured_drive: false` (advisory / **unused by the validator**) as the sold/commercial
+  -drive intent. Fixed model-policy.md, rag-design §12.3, the reranker manifest comment. Left the **vision**
+  "never bundled" — it is genuinely opt-in / not in `--with-assets`.
+- **D4/D5/D6 (Low) — four stray test-comment fragments.** `gpu-smoke.test.ts` "60 s health timeout" → **180 s**
+  (`DEFAULT_HEALTH_TIMEOUT_MS`); dropped the dangling `/§11.1` from `gpu.test.ts`/`runtime-ladder.test.ts` and
+  `/§9` from `assets.test.ts` (GPU record is §1–§8; §5.1/§5.2/§6 resolve).
+- **D7 (Low) — whisper RTF figures.** Reconciled to **two annotated regimes** matching the R-W3/R-W4 source
+  measurements: a **long sustained file ≈ RTF 0.67** (÷1.5 / two-thirds; 52→35 min, 30→20 min) and a **short
+  clip ≈ RTF 0.46–0.5** (R-W3 benchmark clips + dictation). Annotated the short-vs-long distinction in
+  known-limitations.md (audio + dictation) and the whisper manifest comment.
+- **D8 (Low) — README disk sizing.** Clarified ~**3 GB** is the hand-built minimal footprint; the `--with-assets`
+  quick-start default set is ~**7 GB** (8B + embeddings + reranker + Whisper + runtimes), so a user does not
+  under-provision.
+- **F11 / F13 doc-notes (as-built reality carried into the topic docs).** rag-design **§14.4**: a `mode:'tree'`
+  answer's `[Sn]` citations are **whole-document LEAF PROVENANCE**, not the 1:1 inline-grounded excerpts of the
+  `generateGroundedAnswer` contract (renderer differentiation = Phase 8). rag-design **§12.1 R3**: a **PRECONDITION**
+  that re-enabling a positive `ragMinSimilarity` floor must move it **before** the `topKInitial` cut
+  (`rag/index.ts` filters after the cut today → silent recall loss), coupled to the deferred E5-prefix migration.
+- **§-anchor sweep (re-run): CLEAN.** §27–§32 ledgers exist + consecutively numbered; named-record citations
+  (GPU §5.5b, §22-D1, security-model `D3`, the Chat/encrypted-log/Renderer/Test-seam records) resolve. Residuals
+  fixed: the four D4/D5/D6 fragments **plus** one pre-existing dangler an independent sweep surfaced —
+  `image-understanding plan §16` (in `vision-runtime.test.ts`/`vision-smoke.test.ts`) was missing from the
+  image-understanding §-anchor legend → added a legend row (plan §16 → §6 + model-benchmarks §8). Every `§`
+  citation now resolves.
+- **Durable record:** architecture.md **§33 ledger** (D1–D8 + F11/F13 disposition + the sweep result) + the §27
+  master-ledger row flipped (D1–D8 + F11/F13 doc-notes → done; F12/F18/F19 + the F11 renderer half remain Phase
+  8). The audit report marks D1–D8 + the F11/F13 doc-notes resolved (report **KEPT** — Phase 8 retires it).
+- **NEXT ACTION (owner): review/merge `audit-postmerge-phase7-docs`; do NOT auto-merge/push.** Then **Phase 8**
+  (the close-out): F12 resident-cache reconcile fast-path + bench, F18 vision terminal-write guard, F19
+  `tearingDown` race guard, optionally the F11 renderer half — then **retire** the audit report (fold + `git rm`).
+  The §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix remain deferred._
+
+
 _2026-06-29 — **Post-merge full audit — Phase 6 (RENDERER ACCESSIBILITY + LIFECYCLE CONSISTENCY; F20/F21/F22/
 F23/F24) — branch `audit-postmerge-phase6-frontend-a11y`.** Suite **2523 passed / 39 skipped (2562 collected)**
 (was 2518/39 after Phase 5 → **+5 tests**: 3 F20 focus + 1 F21 mic-leak + 1 F22 unmount; F23 added an assertion
@@ -408,12 +457,13 @@ harness, recording `fetch`, the real `VisionRuntime`), never a new fake that re-
   (recording `fetch` + an SSE body) so the prompt + image bytes pass through `runAnalyze` → `server.fetch` →
   `readChatSSE`, then asserts no log line carries the prompt/answer/base64-image. Teeth confirmed: logging
   `opts.question`/the data-URL at the runtime layer reddens it.
-- **TEST-6 (INFO) — no automated answer-quality floor in CI (docs-only).** Recorded in `architecture.md`
-  "Test-enforcement seams — design record (Phase 3)": retrieval/answer/skill-trigger ACCURACY has no
-  automated floor that fails CI — the `eval/skill-triggers` harness prints precision as a MEASUREMENT (the
-  S13b precision-bar assertion is owner-gated on D1, §18) and the real-model quality benchmarks are
-  env-gated out of CI by design (model-benchmarks.md D19); accuracy regressions are caught only by the
-  manual smoke matrix. Follow-up: land the S13b bar once the owner sets D1.
+- **TEST-6 (INFO) — answer-quality floor in CI is partial, by design (docs-only).** Recorded in
+  `architecture.md` "Test-enforcement seams — design record (Phase 3)" *(wording corrected Phase 7 / D1)*:
+  the **S13b skill-trigger precision bar IS a live CI gate** — `eval/skill-triggers.test.ts` asserts
+  `fired-wrong == 0` AND `precision ≥ 0.95` (§18), so it reddens on any trigger-scoring regression. What
+  remains without a CI floor is narrower — real-model **RAG answer quality** + the real-model quality
+  benchmarks, env-gated out of CI by design (model-benchmarks.md D19) and caught only by the manual smoke
+  matrix.
 - **Docs:** new non-numbered `architecture.md` "Test-enforcement seams — design record (full audit
   2026-06-29, Phase 3)" subsection (records TEST-2…6 + the teeth-check rationale); Phase 6's §26 ledger can
   point to it. No new BUG surfaced by the added coverage (the controls are correct; only the wiring was

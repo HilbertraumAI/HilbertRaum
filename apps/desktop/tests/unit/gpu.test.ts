@@ -10,7 +10,7 @@ import {
 } from '../../src/main/services/runtime/gpu'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 
-// Phase 15 GPU probe (architecture.md GPU record §5.1/§11.1). Zero GPUs, zero binaries: the
+// Phase 15 GPU probe (architecture.md GPU record §5.1). Zero GPUs, zero binaries: the
 // probe is driven entirely through the fake-spawn seam.
 
 // L19 (audit-2026-06-13): a captured-real-output regression fixture. This is the verbatim

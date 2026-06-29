@@ -28,7 +28,7 @@ import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 const ROOT = process.env.HILBERTRAUM_GPU_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
-// Production keeps the locked 60 s health timeout; the smoke loads a multi-GB model
+// Production keeps the locked 180 s health timeout (DEFAULT_HEALTH_TIMEOUT_MS); the smoke loads a multi-GB model
 // from a possibly-cold disk several times in a row, so it gets more patience — the
 // point here is exercising the ladder/GPU mechanics, not the timeout budget.
 const PATIENT_MS = 240_000

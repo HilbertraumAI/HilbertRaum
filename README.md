@@ -79,9 +79,11 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
   best *fit*): ≤12 GB → Qwen3-4B · 16–24 GB → Ministral 8B · ≥32 GB → Gemma 4 12B (or the 30B-A3B MoE,
   opt-in). These are *recommended best-fit* tiers, **not** hard minimums — each model's actual floor is
   the lower **Min RAM** column in the model table below (e.g. Ministral 8B already runs from 12 GB).
-- **Disk space:** ~**3 GB** for the smallest usable setup (the 4B chat model + the embeddings model),
-  up to ~**10 GB** for the 14B or ~**19 GB** for the 30B-A3B MoE. A **USB-3 SSD** is recommended for
-  a portable drive.
+- **Disk space:** ~**3 GB** for the smallest *hand-built* setup (the 4B chat model + the embeddings
+  model only). The one-command `--with-assets` quick-start fetches a larger **default set** (8B chat +
+  embeddings + reranker + Whisper + both sidecar runtimes) at ~**7 GB** — size a drive for that if you
+  use it; a bigger chat model takes it to ~**10 GB** (14B) or ~**19 GB** (30B-A3B MoE). A **USB-3 SSD**
+  is recommended for a portable drive.
 - **To build from source:** **Node.js ≥ 22.5** (24 recommended; 22.15+ enables the
   `--use-system-ca` corporate-proxy workaround) + **Git**.
 - **The AI itself** = a **GGUF model file** *plus* the **`llama.cpp` `llama-server` binary**. Neither

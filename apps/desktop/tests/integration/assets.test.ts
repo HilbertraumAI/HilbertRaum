@@ -266,7 +266,7 @@ describe('selectRuntimeBuild', () => {
   })
 })
 
-// Phase 14: vulkan-first yaml ordering + the cpu safety net (architecture.md GPU record §6/§9).
+// Phase 14: vulkan-first yaml ordering + the cpu safety net (architecture.md GPU record §6).
 const vulkanFirstSources = (): RuntimeSources => {
   const res = validateRuntimeSources({
     llama_cpp: {

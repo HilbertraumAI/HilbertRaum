@@ -12,7 +12,9 @@ recommended_context_tokens: 0
 # `small` over `base` (R-W3, probed 2026-06-11 on real German audio): base makes
 # meaning-destroying word errors on real speech ("Leichenwagen" -> "gleichen Wagen",
 # "Toechter" -> "Teuchter", "Saerge" -> "sehrge"); small fixes nearly all of them at
-# ~2.4x the CPU cost (RTF ~0.46 vs ~0.21 at 4 threads on the dev box). German quality
+# ~2.4x the CPU cost (small RTF ~0.46 vs base ~0.21 on short German benchmark clips, 4
+# threads on the dev box, R-W3; a full long file runs slower at RTF ~0.67 / real-time÷1.5,
+# R-W4 — see known-limitations.md "Audio transcription"). German quality
 # is the product promise ("ask your meetings"), so small is the shipped default.
 local_path: models/transcriber/ggml-small.bin
 sha256: 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b

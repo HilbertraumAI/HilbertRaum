@@ -22,9 +22,11 @@ download:
   sha256: 5df93be121c09c43432102ad2b9569d369ccb85c209ca7583e8ccd28f0e41b88
   size_bytes: 1159776896
   license_url: https://huggingface.co/BAAI/bge-reranker-v2-m3
-# Optional quality add-on: NOT bundled by default — it costs ~1.3 GB RSS when active,
-# so TINY (8 GB) drives should not ship it (retrieval-quality plan §7). Retrieval works
+# Optional quality add-on. The DIY `prepare-drive --with-assets` set DOES fetch it, but the
+# flag below is the intent that a sold/preconfigured commercial drive (esp. a TINY 8 GB profile)
+# NOT ship it — it costs ~1.3 GB RSS when active (retrieval-quality plan §7). Retrieval works
 # fully without it (the reranker selector falls back to the fused/cosine ordering).
+# NB: this flag is advisory only — unused by the validator (see model-policy.md).
 bundled_on_preconfigured_drive: false
 recommended_profiles: [LITE, BALANCED, PRO]
 license_review:

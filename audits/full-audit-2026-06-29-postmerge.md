@@ -378,6 +378,11 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
   reading-order text + the conservative drop posture.
 
 ### F11 — Whole-doc-tree answers persist a full leaf-provenance citation list the model never grounded on
+> **◑ DOC-NOTE RECORDED — Phase 7.** The as-built distinction is now documented in **rag-design §14.4**: a
+> `mode:'tree'` answer's `[Sn]` citations are whole-document **leaf provenance** (`documentLeafProvenance`),
+> NOT the 1:1 inline-grounded excerpts of the `generateGroundedAnswer` contract — a deliberate coverage choice,
+> recorded as a known distinction. The **renderer half** (present tree provenance differently, or cap the
+> persisted leaf list — option (a)/(b)) is **deferred to Phase 8**.
 - **Category:** Retrieval-quality (citation honesty)
 - **Severity:** Low · **Confidence:** High
 - **Location:** `apps/desktop/src/main/services/rag/whole-doc-tree.ts:120` (+
@@ -412,6 +417,11 @@ Severity = Critical / High / Medium / Low. Confidence = High / Medium / Low. All
 - **Doc updates:** architecture.md "Wave P4 / PERF-1" — note the residual O(N) id-scan.
 
 ### F13 — `minSimilarity` is applied AFTER the `topKInitial` cut → a positive floor silently loses recall
+> **◑ DOC-NOTE RECORDED — Phase 7.** The **precondition** is now captured in **rag-design §12.1 R3**:
+> re-enabling a positive `ragMinSimilarity` floor (a goal of the deferred E5 `query:`/`passage:` prefix
+> migration) MUST first move the floor **before** the `topKInitial` cut, since `rag/index.ts` filters after the
+> cut today. Inert at the pinned default 0; the **code change is coupled to that migration phase** (not taken
+> here — Phase 8 / the E5-prefix phase owns it).
 - **Category:** Retrieval-quality
 - **Severity:** Low (latent; inert at the pinned default 0) · **Confidence:** High
 - **Location:** `apps/desktop/src/main/services/rag/index.ts:231-233`
@@ -684,16 +694,30 @@ mismatches**, the prior DOC-2/DOC-3 fixes landed, all §-anchor legends resolve,
 compliance is clean (the only plan file is the legitimately-open `big-slot-embeddings-plan.md`; the
 prior audit report was correctly retired). The issues below are contradictions/staleness, not gaps.
 
+> **✅ ALL RESOLVED — Phase 7 (branch `audit-postmerge-phase7-docs`, docs + code-comments only).** Each D-row
+> below was re-verified against current code, then reconciled to a single source of truth: **D1** TEST-6 record
+> corrected (the S13b precision bar IS a live CI gate; the residual no-floor gap is narrowed to RAG answer
+> quality + real-model output); **D2** known-limitations downloader note rewritten (fetches GGUF + mmproj as one
+> job, DIST-1); **D3** reranker "never bundled by default" reconciled (IS in the DIY `--with-assets` set;
+> `bundled_on_preconfigured_drive:false` is the advisory/unused sold-drive intent — fixed model-policy / rag-
+> design §12.3 / manifest; vision's "never bundled" left, genuinely true); **D4** 60 s → 180 s
+> (`DEFAULT_HEALTH_TIMEOUT_MS`); **D5/D6** the `/§9` + two `/§11.1` test-comment danglers dropped (GPU record is
+> §1–§8); **D7** whisper RTF reconciled to two annotated regimes (long file ≈ 0.67, short clip/dictation ≈
+> 0.46–0.5, per R-W3/R-W4); **D8** README clarified (~3 GB hand-built minimal vs ~7 GB `--with-assets` default).
+> The **F11/F13 doc-notes** below are also recorded (rag-design §14.4 leaf-provenance distinction; §12.1 R3
+> floor-before-cut precondition). The §-anchor sweep is **clean** (also added a missing `image-understanding
+> plan §16` legend row). Durable record: architecture.md **§33 ledger**. *(Report KEPT — Phase 8 retires it.)*
+
 | ID | Finding | Sev | Location |
 |----|---------|-----|----------|
-| **D1** | The **TEST-6 record (written during the prior audit) is already stale** — it says the S13b skill-trigger precision bar is "owner-gated on D1 / not asserted," but `skill-triggers.test.ts:150-163` now **asserts `firedWrong===0` AND `precision ≥ 0.95`** in CI (committed `7d7c7a1`). The remaining gap is narrower (RAG *answer* quality + real-model output, still env-gated). | Medium | architecture.md:3966/4054-4056; BUILD_STATE TEST-6 bullet |
-| **D2** | `known-limitations.md` lists as an open DIY gap that the in-app downloader "drives only `tasks[0]` (the GGUF)" — the **code fetches both** GGUF + mmproj as one job (`downloads.ts:263-298`, passing test `downloads.test.ts:268`). Contradicts user-guide §8. | Medium | known-limitations.md:714-716 |
-| **D3** | Reranker documented "**never bundled by default**" (model-policy.md:33, rag-design.md:840) but it **IS** in the `--with-assets` `DEFAULT_MODEL_IDS` (`prepare-drive.ps1:77`/`.sh:33`) and README/packaging/drive-layout all list it. The `bundled_on_preconfigured_drive:false` flag is unused in code. | Medium | model-policy.md:33; rag-design.md:840 |
-| **D4** | Stale "**60 s health timeout**" comment in `gpu-smoke.test.ts:31` (code is 180 s) — the DOC-2 fix didn't sweep test comments. | Low | gpu-smoke.test.ts:31 |
-| **D5** | New **dangling `§9` citation** in `assets.test.ts:265` ("GPU record §6/§9"; the GPU record ends at §8) — structurally identical to the §11.1 trio but not named by the prior sweep. | Low | assets.test.ts:265 |
-| **D6** | The two **pre-existing dangling `§11.1`** citations (`gpu.test.ts:13`, `runtime-ladder.test.ts:13`) remain (the §26 ledger admits them). Together with D4/D5, **four** stray test-comment fragments are cleanable in one pass. | Low | gpu.test.ts:13; runtime-ladder.test.ts:13 |
-| **D7** | Whisper **real-time-factor figures inconsistent** across docs/manifest (0.46 / 0.5 / 0.67; the "52 min → 35 min" example matches none). | Low | known-limitations.md:582/621; user-guide.md:417; whisper manifest:15 |
-| **D8** | README "**~3 GB smallest setup**" inconsistent with the documented `--with-assets` default (~7–11 GB) — a user sizing a drive from the 3 GB line may under-provision. | Low | README.md:82-84 vs :127-136 |
+| **D1** ✅ | The **TEST-6 record (written during the prior audit) is already stale** — it says the S13b skill-trigger precision bar is "owner-gated on D1 / not asserted," but `skill-triggers.test.ts:150-163` now **asserts `firedWrong===0` AND `precision ≥ 0.95`** in CI (committed `7d7c7a1`). The remaining gap is narrower (RAG *answer* quality + real-model output, still env-gated). | Medium | architecture.md:3966/4054-4056; BUILD_STATE TEST-6 bullet |
+| **D2** ✅ | `known-limitations.md` lists as an open DIY gap that the in-app downloader "drives only `tasks[0]` (the GGUF)" — the **code fetches both** GGUF + mmproj as one job (`downloads.ts:263-298`, passing test `downloads.test.ts:268`). Contradicts user-guide §8. | Medium | known-limitations.md:714-716 |
+| **D3** ✅ | Reranker documented "**never bundled by default**" (model-policy.md:33, rag-design.md:840) but it **IS** in the `--with-assets` `DEFAULT_MODEL_IDS` (`prepare-drive.ps1:77`/`.sh:33`) and README/packaging/drive-layout all list it. The `bundled_on_preconfigured_drive:false` flag is unused in code. | Medium | model-policy.md:33; rag-design.md:840 |
+| **D4** ✅ | Stale "**60 s health timeout**" comment in `gpu-smoke.test.ts:31` (code is 180 s) — the DOC-2 fix didn't sweep test comments. | Low | gpu-smoke.test.ts:31 |
+| **D5** ✅ | New **dangling `§9` citation** in `assets.test.ts:265` ("GPU record §6/§9"; the GPU record ends at §8) — structurally identical to the §11.1 trio but not named by the prior sweep. | Low | assets.test.ts:265 |
+| **D6** ✅ | The two **pre-existing dangling `§11.1`** citations (`gpu.test.ts:13`, `runtime-ladder.test.ts:13`) remain (the §26 ledger admits them). Together with D4/D5, **four** stray test-comment fragments are cleanable in one pass. | Low | gpu.test.ts:13; runtime-ladder.test.ts:13 |
+| **D7** ✅ | Whisper **real-time-factor figures inconsistent** across docs/manifest (0.46 / 0.5 / 0.67; the "52 min → 35 min" example matches none). | Low | known-limitations.md:582/621; user-guide.md:417; whisper manifest:15 |
+| **D8** ✅ | README "**~3 GB smallest setup**" inconsistent with the documented `--with-assets` default (~7–11 GB) — a user sizing a drive from the 3 GB line may under-provision. | Low | README.md:82-84 vs :127-136 |
 
 **Missing docs:** none material. The one structural absence worth recording is that there is **no
 automated full-stack e2e** (no Playwright/Electron-launch test in CI; the `walk-*.mjs` are manual
@@ -896,6 +920,12 @@ current behavior is load-bearing (financial parsing especially).
 - **Acceptance:** keyboard/SR walk of the first-run flow lands focus correctly; full suite green.
 
 ### Phase 7 — Documentation reconciliation
+> **✅ COMPLETE (branch `audit-postmerge-phase7-docs`).** D1–D8 reconciled to one source of truth + the
+> F11/F13 as-built distinctions carried into rag-design §14.4 / §12.1 R3 + a fresh §-anchor sweep (clean;
+> also added a missing `image-understanding plan §16` legend row). **Docs + code-comments only — no `src/`
+> logic change** (suite **2523/39** unchanged, typecheck + build green). Durable record: architecture.md
+> **§33 ledger** + the §27 master-ledger row flip + the BUILD_STATE Phase-7 entry. Report **KEPT** — Phase 8
+> (low-hangers F12/F18/F19 + the F11 renderer half) retires it.
 - **Goal:** close D1–D8 + the F11/F13 doc notes. **Docs/comments-only — no behavior change.**
 - **Scope/files:** architecture.md (TEST-6 record, §25 inventory), known-limitations.md, model-policy.md,
   rag-design.md, README.md, the four stray test-comment fragments (gpu.test.ts, runtime-ladder.test.ts,

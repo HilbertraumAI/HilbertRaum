@@ -4084,7 +4084,7 @@ lives in **this section**. This ledger is the durable index — resolve a code c
 | DOC-3 (Low) | 6 | **fixed (docs)** — `bge-reranker-v2-m3.yaml` `size_on_disk_gb` 1.08 (GiB mislabel) → **1.16** (decimal GB, matching `size_bytes 1159776896 / 1e9` and the other twelve manifests); `model-policy.md` "~1.08 GB" → "~1.16 GB" | model-manifest + model-policy.md reranker row |
 | DOC-4 (Low) | 6 | **fixed (docs)** — dropped the dangling `/§11.1` from `benchmark.test.ts`'s "GPU record §8/§11.1" comment (the GPU record is §1–§8; §8 resolves) | code comment → arch GPU record §8 |
 | SEC-1 doc half (Low) | 6 | **docs-only** — added an **accepted-residual** note: vault unlock has no attempt counter / rate-limit and only an 8-char floor, so against the lost/stolen-drive threat a weak-but-≥8 password is offline-guessable at interactive-minimum Argon2id cost; at-rest Argon2id+AES-GCM is the primary mitigation; recorded as a defensible offline trade-off | security-model.md "Accepted residual — offline password guessing" |
-| TEST-6 (Info) | 3 | **docs-only / by-design** — no automated answer-quality floor in CI (the eval harness prints precision as a measurement; the S13b bar is owner-gated on D1; real-model benchmarks are env-gated out of CI by design); caught only by the manual smoke matrix | arch test-enforcement record TEST-6 |
+| TEST-6 (Info) | 3 | **docs-only / by-design** — the **S13b skill-trigger precision bar IS a live CI gate** (`fired-wrong == 0` ∧ `precision ≥ 0.95`, `skill-triggers.test.ts`); the remaining no-automated-floor gap is narrower: **RAG answer-quality + real-model output** (env-gated out of CI by design), caught only by the manual smoke matrix. *(Wording corrected Phase 7 / D1 — the original "owner-gated on D1" claim went stale once the S13b bar landed.)* | arch test-enforcement record TEST-6 |
 | **SEC-1 code half** (Low) | — | **accepted residual / open follow-up** — unlock-path rate-limit/attempt-counter + create-time strength meter/floor; deliberately **not** built in the docs-only close-out (a UI rate-limit doesn't bind the offline attacker that is the real threat; the at-rest KDF is the mitigation) | security-model.md residual note |
 | SEC-2 (Low) | — | **accepted residual / open follow-up** — `previewSkillPackage` stages path-/size-validated, finally-cleaned content to the shared OS `tmpdir()`; not an escape (skill packages aren't secret). Follow-up: stage under `userSkillsDir` for trust-zone consistency | this ledger |
 | SEC-3 (Info) | — | **accepted residual / open follow-up** — the dialog-opener IPCs (`pickSkillPackage`/`pickDocuments`/`imageChooseImage`) mint a capability token pre-unlock, but every **consuming** handler is `requireUnlocked()`-gated so the token is inert until unlock; a consistency gap, not an exploit | this ledger |
@@ -4146,7 +4146,8 @@ started** — carried in the report.
 | F14, F15, F16, F17 | 4 | **fixed (Phase 4)** — security consistency: F15 mapped-IPv6 SSRF deny-list bypass, F14 diagnostics-log buffer readable after lock, F16 IPC lock-guard parity + generalized structural test (subsumes **T3**), F17 download size caps always bounded; see the **§30 ledger** | arch §30; security-model §D3 + "encrypted log" record; §25 inventory correction |
 | T1, T2, T6, T7, T8, T9, T3 | 5 | **closed (Phase 5, test-only)** — test-enforcement seams: T1 SIGKILL escalation unit test, T2 resident-cache lock-purge IPC wiring, T6/T7 two TEST-1-family flakes de-flaked (fake timers / `vi.waitFor`), T8 crash-fallback real-reap assertion, T9 truncated-ciphertext nit; T3 verified subsumed by F16; T4/T5 done in Phase 1. `git diff src/` empty; see the **§31 ledger** | arch §31; "Test-enforcement seams" record (Phase-5 subsection) |
 | F20, F21, F22, F23, F24 | 6 | **fixed (Phase 6, renderer-only)** — frontend a11y + lifecycle: F20 first-run gate phase-focus management (the `finishing` step had no focus target — the real gap; welcome→password & →starter already focused via `autoFocus`), F21 mic-stream leak when getUserMedia resolves after unmount, F22 ModelsScreen poll + DiagnosticsTab activity refreshers join the FE-4 `mountedRef` discipline (the claim now holds), F23 StreamAnnouncer `aria-atomic` drop, F24 Composer fallback caret-timer cleared on unmount; see the **§32 ledger** | arch §32; "Renderer robustness" FE-4 reconciliation |
-| F11–F13, F18, F19, D1–D8 | — | **not started** — RAG/perf/concurrency F11–F13/F18/F19 (Phase 8), docs D1–D8 (Phase 7); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
+| D1–D8 + F11/F13 doc-notes | 7 | **fixed / recorded (Phase 7, docs + comments-only)** — the D1–D8 documentation contradictions reconciled to one source of truth + the F11/F13 as-built distinctions carried into the topic docs + a clean §-anchor sweep; see the **§33 ledger** | arch §33; rag-design §14.4 (F11) + §12.1 R3 (F13) |
+| F12, F18, F19 + the F11 renderer half | — | **not started** — RAG/perf/concurrency low-hangers (Phase 8, the close-out); carried in the report's phased plan | `audits/full-audit-2026-06-29-postmerge.md` |
 
 **Posture held (Phase 1, load-bearing):** offline / no telemetry / no new network egress; the **content
 class** (extracted figures, document text) is never logged/audited/exported; no schema/IPC/audit-payload
@@ -4293,6 +4294,38 @@ DiagnosticsTab), not a new discipline. **Open (later phases):** F11–F13/F18/F1
 8), D1–D8 docs (Phase 7); the §26-carried SEC-1 (code half) / SEC-2 / SEC-3 / REL-5 / PERF-5 Part B / E5-prefix
 remain deferred.
 
+### §33 Full audit (2026-06-29, post-merge) — remediation ledger (Phase 7 — documentation reconciliation)
+
+**Phase 7** is **docs- and code-comment-only — no behavior change** (`git diff` shows only `.md`/`.yaml`
+files and code COMMENTS; no `src/` logic edit). It reconciles the §3 documentation findings D1–D8 to a single
+source of truth, carries the F11/F13 as-built realities into the topic docs, and re-runs the §-anchor sweep.
+Branch `audit-postmerge-phase7-docs`. The audit report stays (Phase 8 retires it).
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **D1** (Med) | 7 | **fixed (docs)** — the TEST-6 record claimed the S13b skill-trigger precision bar was "owner-gated on D1 / not yet landed"; it is in fact a **live CI gate** (`skill-triggers.test.ts` asserts `fired-wrong == 0` AND `precision ≥ 0.95`, re-verified live). Corrected the §27 ledger row + the "Test-enforcement seams" TEST-6 record + the BUILD_STATE TEST-6 bullet: the bar IS asserted; the remaining no-CI-floor gap is narrower — real-model **RAG answer quality** + the env-gated quality benchmarks | arch TEST-6 record + §27 row; BUILD_STATE |
+| **D2** (Med) | 7 | **fixed (docs)** — `known-limitations.md` claimed the in-app downloader "drives only `tasks[0]` (the GGUF)"; the code fetches **both GGUF + mmproj as one job** (DIST-1, `downloads.ts` `planDownload`; `downloads.test.ts` asserts `totalBytes == gguf + mmproj` + the finish-just-the-projector case). Rewrote the limitation to the as-built reality; user-guide §8 / troubleshooting carry no contradicting claim | known-limitations.md (image-understanding) |
+| **D3** (Med) | 7 | **fixed (docs)** — reconciled the reranker "**never bundled by default**" contradiction to ONE story: the reranker **IS** in the DIY `prepare-drive --with-assets` default fetch set (README/packaging/drive-layout — correct, unchanged), but is flagged `bundled_on_preconfigured_drive: false` (advisory/**unused by the validator**) as the intent for a sold/commercial preconfigured drive. Fixed the phrasing in model-policy.md, rag-design.md §12.3, and the reranker manifest comment. The **vision** "never bundled by default" was left — it is genuinely NOT in `--with-assets` (opt-in, true) | model-policy.md; rag-design §12.3; reranker manifest |
+| **D4/D5/D6** (Low) | 7 | **fixed (comments)** — four stray test-comment fragments cleaned: `gpu-smoke.test.ts` "60 s health timeout" → **180 s** (`DEFAULT_HEALTH_TIMEOUT_MS`); dropped the dangling `/§11.1` from `gpu.test.ts` (→ §5.1) and `runtime-ladder.test.ts` (→ §5.2) and the dangling `/§9` from `assets.test.ts` (→ §6). The GPU design record is §1–§8; §9/§11.1 never existed (`benchmark.test.ts` was already fixed by DOC-4) | code comments → GPU record §5.1/§5.2/§6 + sidecar `DEFAULT_HEALTH_TIMEOUT_MS` |
+| **D7** (Low) | 7 | **fixed (docs)** — reconciled the whisper RTF figures to **two annotated regimes** matching the R-W3/R-W4 source measurements: a **long sustained file ≈ RTF 0.67** (real-time÷1.5 / two-thirds; R-W4 52-min → 35 min, user-guide 30-min → 20-min) and a **short clip ≈ RTF 0.46–0.5** (R-W3 benchmark clips + dictation). Annotated the short-vs-long distinction in known-limitations.md (audio + dictation) and the whisper manifest comment so the figures no longer read as contradictory | known-limitations.md; whisper manifest |
+| **D8** (Low) | 7 | **fixed (docs)** — clarified README disk-space: the ~**3 GB** figure is the **hand-built** minimal footprint (4B + embeddings only); the one-command `--with-assets` quick-start default set (8B + embeddings + reranker + Whisper + both runtimes) is ~**7 GB**, so a user sizing a drive from the 3 GB line does not under-provision | README.md |
+| **F11** (doc-note) | 7 | **recorded (docs)** — rag-design §14.4: a `mode:'tree'` answer's `[Sn]` citations are **whole-document LEAF PROVENANCE** (`documentLeafProvenance`, up to ~1000 leaves), NOT the 1:1 inline-grounded excerpts of the `generateGroundedAnswer` contract (the tree prompt carries no `[Sn]` markers). A deliberate coverage choice; differentiating the renderer presentation is the Phase-8 follow-up — recorded as a known distinction | rag-design §14.4 |
+| **F13** (doc-note) | 7 | **recorded (docs)** — rag-design §12.1 R3: added a one-line **PRECONDITION** that re-enabling a positive `ragMinSimilarity` floor (a goal of the deferred E5 `query:`/`passage:` prefix migration) MUST first move the floor **before** the `topKInitial` cut — `rag/index.ts` applies it after the cut today, so a positive floor would silently lose recall. Coupled to that migration phase | rag-design §12.1 R3 |
+
+**§-anchor sweep (re-run, Phase 7).** Swept every `§` citation in `docs/**`, `README.md`, `BUILD_STATE.md`,
+and the `apps/desktop/{src,tests}` comment tree. The §27–§32 post-merge ledgers (Phases 1–6) exist,
+are consecutively numbered, and the named-record citations they added (GPU record §5.5b, §22-D1 honesty
+posture, security-model `D3`, the "Chat & streaming" / "encrypted log" / "Renderer robustness" / "Test-
+enforcement seams" records) all resolve. **Residuals fixed:** the four D4/D5/D6 fragments above, **plus** one
+pre-existing dangler the independent sweep surfaced — `image-understanding plan §16` (cited in
+`vision-runtime.test.ts` / `vision-smoke.test.ts`) was missing from the image-understanding §-anchor legend;
+added a legend row mapping plan §16 → §6 (V4/V5 runtime hardening) + model-benchmarks §8. **Result: clean** —
+every `§` citation now resolves.
+
+**Posture held (Phase 7):** offline / no telemetry; no `src/` LOGIC change (docs + code-comments only);
+typecheck + `npm test` + `npm run build` re-run green to confirm the comment edits broke no source-grepping
+test. **Open (Phase 8, the close-out):** F12/F18/F19 + the F11 renderer half, then retire this audit report.
+
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 
@@ -4344,15 +4377,17 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   `readChatSSE`, then asserts NO diagnostics-log call (any level) carries the prompt, the answer, or the
   base64 image bytes. Teeth: log `opts.question` or the image data-URL at the runtime layer → the spy
   captures it and the test reddens.
-- **TEST-6 (INFO) — no automated answer-quality floor in CI (documented, by design).** Retrieval / answer /
-  skill-trigger **accuracy** has **no automated floor that fails CI**. The `eval/skill-triggers` harness
-  prints precision/recall + a confusion matrix as a **measurement**, not a gate — the **S13b precision-bar
-  assertion** (`fired-wrong == 0` AND `precision ≥ 0.95`, §18) is **owner-gated on decision D1** and not yet
-  landed — and the real-model **quality benchmarks** are **env-gated out of CI by design** (they need GGUF
-  weights CI doesn't ship; see `model-benchmarks.md` D19). Net: retrieval/answer/trigger-accuracy regressions
-  are caught **only by the manual smoke matrix** (the deliberate separate human pre-release gate, like the
-  `HILBERTRAUM_*` artifact smokes). This is an accepted posture; the follow-up is to **land the S13b bar once
-  the owner sets D1**.
+- **TEST-6 (INFO) — answer-quality floor in CI is partial, by design.** *(Wording corrected Phase 7 / D1 —
+  the original claim that the S13b bar was "owner-gated on D1 / not yet landed" went stale the moment the bar
+  shipped.)* The **S13b skill-trigger precision bar IS a live CI gate**: `eval/skill-triggers.test.ts` asserts
+  the ratified `threshold-3` auto-fire policy clears D1 on the labelled corpus — `fired-wrong == 0` **AND**
+  `precision ≥ 0.95` (§18) — so any regression of `scoreSkillTriggers`/the threshold reddens CI. The
+  `eval/skill-triggers` *measurement* block (precision/recall + confusion matrix) still prints as a baseline
+  alongside it. What remains **without** an automated CI floor is **narrower**: real-model **RAG answer
+  quality** (faithfulness/grounding output) and the **real-model quality benchmarks**, which are **env-gated
+  out of CI by design** (they need GGUF weights CI doesn't ship; see `model-benchmarks.md` D19). Net: those
+  remaining accuracy dimensions are caught **only by the manual smoke matrix** (the deliberate separate human
+  pre-release gate, like the `HILBERTRAUM_*` artifact smokes) — an accepted posture.
 
 Suite after Phase 3: **2446 passed / 39 skipped (2485 collected)** (was 2437/39 → **+9 tests**; TEST-5 was a
 conversion, not an addition). No `src/` behavior change — the only source edits were the temporary
@@ -4623,6 +4658,7 @@ anchor as:
 | plan §12 / §13 | Privacy posture (ephemeral, no content in log/audit) + security model | §2 + §7 |
 | plan §14 | Caps + RAM co-residency | §8 |
 | plan §15 / §17 | Eval/benchmark + the test plan | model-benchmarks §8 + the vision test suite |
+| plan §16 | V4/V5 runtime hardening — the idle-teardown interlock + lifecycle latches (RUNTIME-4) and the V5 smoke/acceptance | §6 (+ model-benchmarks §8 for the smoke) |
 | plan §19.10 | Streaming-by-default (the SSE channels) | §1 + §3 |
 | plan §19.11 | GPU vs CPU lever | §1 + §8 |
 | plan §19.13 | Idle-teardown timeout (2–5 min → tuned 120 s) | §1 + §6 |
