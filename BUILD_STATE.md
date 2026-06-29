@@ -6,6 +6,60 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-29 — **Full audit 2026-06-29 remediation — Phase 3 (TEST-ENFORCEMENT GAPS; TEST-2/3/4/5 +
+TEST-6 docs) — branch `full-audit-2026-06-29-fixes`.** Suite now **2446 passed / 39 skipped (2485 collected)**
+(was 2437/39 at Phase 2 → **+9 tests**; TEST-5 was a conversion, not an addition), typecheck clean,
+`npm run build` green. **Test-only phase — NO `src/` behavior change** (the only source edits were the
+temporary teeth-check neuters, each restored byte-identical; `git diff src/` is empty). The closures
+target a class of gap distinct from a bug: a security/reliability control that is correct in isolation
+but that no test proves stays *wired* — a silent unwiring (the control stops being *called*) would redden
+nothing. Each new test is **teeth-checked** (neuter the guarded control → the test reddens → restore),
+and the teeth-check IS the point. Closed with the REAL seam (FakeChild / llama-runtime / transcriber
+harness, recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates the bypass.
+- **TEST-2 (MEDIUM) — spawn seams re-hash before spawn (`tests/integration/binary-verify-spawn.test.ts`,
+  NEW, +4).** The verdict/cache matrix is well unit-tested and each seam HAD a refusal test — but those
+  inject a fake `verifyBinary: () => 'mismatch'`, proving only the verdict→refusal mapping, not that the
+  seam still CALLS the real verifier. The new tests drive the REAL `verifyBinaryBeforeSpawn` end-to-end at
+  all three seams (`LlamaServer.start`, the GPU `--list-devices` probe, `whisper-cli`) with PACKAGED
+  enforcement ON + a real on-disk marker whose recorded hash mismatches the bytes → each refuses to spawn
+  (no child). A matching-marker positive control proves the refusal is the hash mismatch, not an
+  always-refuse. Teeth confirmed: removing the verify guard at each seam reddens its refusal test
+  (LlamaServer resolves, GPU spawn count 1, whisper proceeds).
+- **TEST-3 (MEDIUM) — embed failure propagates at `generateGroundedAnswer`, not just `retrieve()`
+  (`tests/integration/rag.test.ts`, +1).** TEST-N8 proves `retrieve()` rejects on a failing embedder, but
+  `generateGroundedAnswer` early-returns NO_DOCUMENT_CONTEXT/REINDEX_NEEDED on empty chunks — a regression
+  wrapping `retrieve` in `try/catch → []` would make a transient embed fault MASQUERADE as "no documents".
+  The new test uses a FRESH failing embedder (defeats the per-instance query LRU) over a NON-EMPTY corpus
+  and asserts `generateGroundedAnswer` REJECTS. Teeth confirmed: swallowing `retrieve` into [] makes it
+  resolve with the no-context answer and the test reddens.
+- **TEST-4 (LOW) — installer coded error constants (`tests/integration/skills-installer.test.ts`, +4).**
+  `encryptedZip` (BOTH the GP-flag bit-0 path AND the `0xFFFFFFFF` ZIP64-sentinel path — `writeRawZip`
+  extended with optional `gpFlag`/`uncompressedSizeOverride`), `invalidPath` (the SEC-N1 NUL-byte
+  content-leak defence — asserts the FIXED reason never echoes the crafted name), and `pathTooLong` (small
+  `maxPathLen`) are each driven through the real `previewSkillPackage`/`importSkill` (fixed reason + stable
+  `errorCode`, never throws raw / leaks a path). The "never routes through tar" test is relabelled
+  **documentation-only** (a source grep — no runtime call site exists to intercept). Teeth confirmed: each
+  of the 4 reddens with its named guard neutered; the other 23 stay green.
+- **TEST-5 (LOW) — real `VisionRuntime` success-path no-leak (`tests/integration/vision-security.test.ts`,
+  CONVERTED in place).** The success-path no-leak test used a hand-written fake `analyze`, bypassing the
+  real runtime's data-URL request construction + SSE parsing. It now routes through the REAL `VisionRuntime`
+  (recording `fetch` + an SSE body) so the prompt + image bytes pass through `runAnalyze` → `server.fetch` →
+  `readChatSSE`, then asserts no log line carries the prompt/answer/base64-image. Teeth confirmed: logging
+  `opts.question`/the data-URL at the runtime layer reddens it.
+- **TEST-6 (INFO) — no automated answer-quality floor in CI (docs-only).** Recorded in `architecture.md`
+  "Test-enforcement seams — design record (Phase 3)": retrieval/answer/skill-trigger ACCURACY has no
+  automated floor that fails CI — the `eval/skill-triggers` harness prints precision as a MEASUREMENT (the
+  S13b precision-bar assertion is owner-gated on D1, §18) and the real-model quality benchmarks are
+  env-gated out of CI by design (model-benchmarks.md D19); accuracy regressions are caught only by the
+  manual smoke matrix. Follow-up: land the S13b bar once the owner sets D1.
+- **Docs:** new non-numbered `architecture.md` "Test-enforcement seams — design record (full audit
+  2026-06-29, Phase 3)" subsection (records TEST-2…6 + the teeth-check rationale); Phase 6's §26 ledger can
+  point to it. No new BUG surfaced by the added coverage (the controls are correct; only the wiring was
+  untested).
+- **NEXT ACTION (owner):** P3 closes the highest-value test-enforcement gaps. Remaining phases on this
+  branch: P4 renderer/determinism (FE-1/RAG-1/RAG-2/REL-4), P5 resident-cache incremental (PERF-1), P6 docs
+  + close-out (the §26 ledger) + REL-5. Do NOT auto-merge/push — left to the owner._
+
 _2026-06-29 — **Full audit 2026-06-29 remediation — Phase 2 (RUNTIME RELIABILITY; REL-1/REL-2/REL-3 +
 DOC-2) — branch `full-audit-2026-06-29-fixes`.** Suite now **2437 passed / 39 skipped (2476 collected)**
 (was 2426/39 at Phase 1 → **+11 tests**), typecheck clean, `npm run build` green. Process-lifecycle /

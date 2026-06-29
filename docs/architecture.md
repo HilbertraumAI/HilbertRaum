@@ -3892,6 +3892,70 @@ guard); the only Phase-8 code touches are the DOC-N2 comment fix (×2) + the DOC
 another, verified by one full-suite run at close-out).
 
 
+## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
+
+The 2026-06-29 audit's testing review flagged a class of gap distinct from a bug: a **security/reliability
+control that is correct in isolation but that no test proves stays *wired*.** A regression that silently
+stopped *calling* the control (not one that broke the control's logic) would redden no test — the control
+could be fully correct and fully unwired. Phase 3 closed four such gaps with test-only additions; every new
+test is **teeth-checked** (neuter the guarded control → the test reddens → restore byte-identical), and the
+teeth-check is the whole point — a test that passes whether or not the control is wired is worthless here.
+The closures deliberately use the **real seam** (the `FakeChild` / llama-runtime / transcriber harnesses, a
+recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates the bypass.
+
+- **TEST-2 — spawn seams re-hash the binary before spawn (`tests/integration/binary-verify-spawn.test.ts`,
+  new).** The binary-verifier verdict/cache matrix is well unit-tested, and each spawn seam *had* a refusal
+  test — but those **inject a fake** `verifyBinary: () => 'mismatch'`, proving only "IF the verdict is
+  mismatch, the seam refuses", not that the seam still **calls the real verifier**. The new tests drive the
+  real `verifyBinaryBeforeSpawn` end-to-end at all three seams — `LlamaServer.start`, the GPU
+  `--list-devices` probe, and the `whisper-cli` spawn — with **packaged enforcement ON**
+  (`initBinaryVerification(false)`) and a real on-disk install marker whose recorded hash mismatches the
+  binary's bytes: each seam refuses to spawn (no child created). A matching-marker **positive control**
+  proves the refusal is genuinely the hash mismatch, not an always-refuse artefact. Teeth: drop the
+  `verifyBinary`/`verify` call at a seam → the spawn proceeds and the refusal test reddens
+  (verified: LlamaServer resolves instead of rejecting, the probe's spawn count is 1, whisper proceeds).
+  See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
+- **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
+  (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
+  `generateGroundedAnswer` awaits `retrieve` and early-returns `NO_DOCUMENT_CONTEXT`/`REINDEX_NEEDED` on
+  empty chunks — so a regression wrapping `retrieve` in `try/catch → []` would make a transient embed fault
+  **masquerade as "no documents"** (a falsely-empty corpus) and redden nothing. The new test uses a **fresh**
+  failing embedder (defeating the per-instance query-vector LRU) over a **non-empty** corpus (so the genuine
+  empty⇒[] path can't masquerade) and asserts `generateGroundedAnswer` **rejects** rather than returning the
+  friendly no-context answer. Teeth: swallow the `retrieve` into `[]` → it resolves with the no-context
+  answer and the test reddens.
+- **TEST-4 — the installer's coded error constants (`tests/integration/skills-installer.test.ts`, +4).**
+  Three coded guards had no test: the ZIP64 / encrypted-GP-flag rejection (`encryptedZip` — both the GP-flag
+  bit-0 path and the `0xFFFFFFFF` ZIP64-sentinel size path), the **SEC-N1** NUL-byte content-leak defence
+  (`invalidPath`, asserting the fixed reason never echoes the crafted name), and the path-length cap
+  (`pathTooLong`). Each is driven through the real `previewSkillPackage`/`importSkill` and asserts the fixed
+  structural reason + its stable `errorCode` (never throws raw / leaks a path). The "never routes through
+  tar" test is relabelled **documentation-only** (a source grep — there is no runtime call site to intercept,
+  since the installer simply never imports the shell-tar extractor). Teeth: neuter each named guard → its
+  fixture's `errorCodes` assertion no longer holds.
+- **TEST-5 — the real `VisionRuntime` success path keeps the no-leak guarantee
+  (`tests/integration/vision-security.test.ts`, converted in place).** The success-path no-leak test
+  previously replaced `createRuntime` with a hand-written fake `analyze`, so the **real** runtime's request
+  construction (base64-inlining the image into the data-URL body) + SSE parsing were never exercised by the
+  no-leak assertion. It now runs through the real `VisionRuntime` (recording `fetch` + an SSE body), so the
+  prompt + image bytes genuinely pass through `runAnalyze` → `server.fetch('/v1/chat/completions', …)` →
+  `readChatSSE`, then asserts NO diagnostics-log call (any level) carries the prompt, the answer, or the
+  base64 image bytes. Teeth: log `opts.question` or the image data-URL at the runtime layer → the spy
+  captures it and the test reddens.
+- **TEST-6 (INFO) — no automated answer-quality floor in CI (documented, by design).** Retrieval / answer /
+  skill-trigger **accuracy** has **no automated floor that fails CI**. The `eval/skill-triggers` harness
+  prints precision/recall + a confusion matrix as a **measurement**, not a gate — the **S13b precision-bar
+  assertion** (`fired-wrong == 0` AND `precision ≥ 0.95`, §18) is **owner-gated on decision D1** and not yet
+  landed — and the real-model **quality benchmarks** are **env-gated out of CI by design** (they need GGUF
+  weights CI doesn't ship; see `model-benchmarks.md` D19). Net: retrieval/answer/trigger-accuracy regressions
+  are caught **only by the manual smoke matrix** (the deliberate separate human pre-release gate, like the
+  `HILBERTRAUM_*` artifact smokes). This is an accepted posture; the follow-up is to **land the S13b bar once
+  the owner sets D1**.
+
+Suite after Phase 3: **2446 passed / 39 skipped (2485 collected)** (was 2437/39 → **+9 tests**; TEST-5 was a
+conversion, not an addition). No `src/` behavior change — the only source edits were the temporary
+teeth-check neuters, each restored byte-identical.
+
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 
 _Formerly `docs/image-understanding-plan.md` (folded in here at the Phase-V5 closeout,

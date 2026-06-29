@@ -265,16 +265,43 @@ describe('vision security sentinel', () => {
     expect(audit).not.toHaveBeenCalled()
   })
 
-  it('logs NOTHING containing content on the SUCCESS path (the answer exists but never reaches a log)', async () => {
+  // TEST-5 (full-audit-2026-06-29, Phase 3): the success-path no-leak guarantee, routed through the
+  // REAL VisionRuntime (recording fetch + an SSE body) instead of a hand-written fake `analyze`. The
+  // earlier version replaced `createRuntime` with a fake, so the real runtime's request construction
+  // (base64-inlining the image into the data-URL body) + SSE parsing were NOT exercised by this no-leak
+  // assertion — a leak inside those internals would have slipped through. This drives the real
+  // `runAnalyze` (`server.fetch('/v1/chat/completions', …)` → `readChatSSE`), so the prompt + image
+  // bytes genuinely pass through the runtime layer, then asserts NO diagnostics-log call (any level)
+  // carries the prompt, the answer, or the base64 image bytes.
+  // TEETH: log `opts.question` or the image data-URL at the runtime layer (vision/runtime.ts
+  // runAnalyze) → the spy captures it and this test reddens.
+  it('logs NOTHING containing content on the SUCCESS path — through the REAL VisionRuntime (TEST-5)', async () => {
+    const urls: string[] = []
+    const recordingFetch = (async (url: string | URL) => {
+      const u = String(url)
+      urls.push(u)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/chat/completions')) {
+        return { ok: true, status: 200, body: sseBody(SENTINEL_ANSWER) } as unknown as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
     const audit = vi.fn()
     const service = new VisionService({
       getStatus: async () => AVAILABLE,
-      createRuntime: () => ({
-        analyze: async (o: { onToken?: (d: string) => void }) => {
-          o.onToken?.(SENTINEL_ANSWER)
-          return SENTINEL_ANSWER
-        }
-      })
+      createRuntime: () =>
+        new VisionRuntime({
+          modelId: 'vlm',
+          binPath: '/bin/llama-server',
+          modelPath: '/m/vlm.gguf',
+          projectorPath: '/m/mmproj.gguf',
+          spawn: (() => new FakeChild()) as never,
+          fetchImpl: recordingFetch,
+          findPort: async () => 51234,
+          healthIntervalMs: 1,
+          idleTimeoutMs: 100_000
+        })
     })
     registerImagesIpc(ctxFor(audit), service)
 
@@ -282,13 +309,20 @@ describe('vision security sentinel', () => {
     const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, sentinelReq())) as ImageJob
     const done = await waitForTerminal(initial.jobId)
     expect(done.state).toBe('done')
-    expect(done.answer).toBe(SENTINEL_ANSWER) // the answer genuinely exists in the system…
+    // The answer genuinely streamed back through the REAL SSE parser (proving the runtime ran)…
+    expect(done.answer).toBe(SENTINEL_ANSWER)
+    // …and the request really went to loopback (the runtime built + sent the data-URL body).
+    expect(urls.some((u) => u.endsWith('/v1/chat/completions'))).toBe(true)
 
-    // …yet NO diagnostics-log call (any level) carries the prompt or the answer.
+    // …yet NO diagnostics-log call (any level) carries the prompt, the answer, or the image bytes.
+    const imageB64 = Buffer.from(SENTINEL_BYTES).toString('base64')
     for (const r of logRecords) {
-      expect(`${r.msg} ${JSON.stringify(r.meta ?? {})}`).not.toContain('ZZSENTINELZZ')
+      const line = `${r.msg} ${JSON.stringify(r.meta ?? {})}`
+      expect(line).not.toContain('ZZSENTINELZZ')
+      expect(line).not.toContain(imageB64)
     }
     expect(logCalls.join('\n')).not.toContain('ZZSENTINELZZ')
+    expect(logCalls.join('\n')).not.toContain(imageB64)
     expect(audit).not.toHaveBeenCalled()
   })
 
