@@ -33,7 +33,7 @@
                 export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath electronLibs}:$LD_LIBRARY_PATH"
               ''}
               alias hr-install='npm install'
-              alias hr-dev='npm run dev'
+              alias hr-dev='npm run dev | tee /tmp/hilbertraum.log'
               alias hr-build='npm run build'
               alias hr-test='npm test'
               alias hr-check='npm run typecheck'
