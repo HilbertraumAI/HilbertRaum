@@ -1152,11 +1152,30 @@ markers and the model emits no inline `[Sn]` — yet it persists a citation for 
 chunk** (`documentLeafProvenance`, up to ~1000). So a tree answer's Sources are "the answer was derived
 from the whole document, here is all of it", a **deliberate coverage choice** (M2: node summaries are
 derived context, never citations) that is **distinct from the `generateGroundedAnswer` contract**, where
-each `[Sn]` is a labelled excerpt the model was actually shown and cited 1:1. The renderer currently
-presents the two identically; differentiating the presentation ("whole-document provenance, not
-inline-cited excerpts") or capping the persisted leaf list is a renderer follow-up (audit Phase 8). Until
-that lands, the distinction is recorded here so the leaf-provenance list is not mistaken for inline
-grounding.
+each `[Sn]` is a labelled excerpt the model was actually shown and cited 1:1.
+
+**Renderer differentiation — AS BUILT (full-audit-2026-06-29 follow-up, Phase 5 — FE-B / F11 renderer
+half).** The two are no longer presented identically. [`SourcesDisclosure`](../apps/desktop/src/renderer/chat/SourcesDisclosure.tsx)
+now takes the answer's `coverage.mode` (threaded from `Transcript`/`MessageBlock` via `m.coverage?.mode`,
+and from the PreviewModal via `cov.coverage.mode`). Any **whole-document mode** (`tree`/`capped`/`extract`
+— i.e. `mode != null && mode !== 'relevance'`) renders as **provenance**, not inline citations:
+- the toggle relabels from `chat.sources.toggle` ("Sources (N)") to `chat.sources.wholeDoc` ("Drawn from
+  the document — N sections"). The wording is **breadth-neutral on purpose** — the `CoverageMeter` beside
+  it already owns the breadth claim ("whole document" / "beginning" / "partial"), so the disclosure must
+  not restate it (and "whole document" would be wrong for a truncated `capped` answer). **Divergence from
+  the audit's literal "Drawn from the whole document" example, deliberate:** dropping "whole" keeps the
+  label honest across every non-relevance mode and non-duplicative with the meter.
+- each card drops the `[Sn]` `cite-label` (which reads as a 1:1 inline citation) and the list carries a
+  quiet "Sections covered" caption (`chat.sources.wholeDocCaption`).
+- the rendered cards are **capped at 24** (`PROVENANCE_CARD_CAP`); the held-back tail is reached via an
+  "and N more sections" reveal (`chat.sources.more`) so a ~1000-leaf answer neither misleads ("the model
+  cited 1000 passages") nor janks.
+A `relevance` answer — and a pre-migration **NULL-coverage** turn (`mode` undefined) — is **byte-identical
+to before**: "Sources (N)", every card 1:1, with `[Sn]` labels. The **persisted leaf list is left uncapped**
+(`documentLeafProvenance` server-side unchanged) — the render cap alone meets the honesty + jank goals, and
+keeping the full provenance persisted avoids a persisted-data semantics change (the full set stays available
+to the PreviewModal and future features). FE-D in the same pass wired `aria-controls`/`role="region"` onto
+this disclosure (and the live Thinking + SummaryMarker disclosures); see design-guidelines §11.3.
 
 ### 14.5 Structured extract-then-aggregate + the task router (plan §4.2/§3.3/§4.4, H7/H1/M3/M7)
 

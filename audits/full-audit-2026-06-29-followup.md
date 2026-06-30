@@ -130,6 +130,7 @@ system.
 - **Tests needed.** Renderer test that drops a `File` **without** `.path` and asserts `importDocuments` is still called with a resolved path; contract test that the preload surface includes the resolver.
 
 ### FE-B — F11 renderer half still open: `mode:'tree'` answers present whole-doc leaf provenance as if inline-cited, and dump ~1000 uncapped "Sources"
+- ✅ **REMEDIATED (2026-06-30, Phase 5)** — **closes the carried-forward F11 renderer half.** `SourcesDisclosure` now takes the answer's `coverage.mode` (threaded from `Transcript` via `m.coverage?.mode`, and from the PreviewModal via `cov.coverage.mode`); any whole-document mode (`tree`/`capped`/`extract` — i.e. `≠ relevance`) renders as **provenance**: the toggle relabels to `chat.sources.wholeDoc` ("Drawn from the document — N sections", breadth-neutral so it doesn't restate the `CoverageMeter`'s breadth), each card drops the `[Sn]` label + carries a "Sections covered" caption, and the render is **capped at 24** (`PROVENANCE_CARD_CAP`) with an "and N more sections" reveal. A `relevance`/NULL-coverage turn is byte-identical to before. Persisted leaf list left uncapped (render cap alone meets the honesty + jank goals; keeps full provenance for the PreviewModal/future). **Divergence:** label drops "whole" from the audit's example wording (honest for truncated `capped`; non-duplicative with the meter). See rag-design.md §14.4 (AS BUILT).
 - **Category:** Citations / provenance honesty · **Severity:** Medium-High · **Confidence:** High (carried-forward item, confirmed still failing)
 - **Location:** `renderer/chat/SourcesDisclosure.tsx` (whole file), `chat/Transcript.tsx:238-249`; server side `services/rag/index.ts:761-773` (`answerWholeDocFromTree`) + `analysis/coverage.ts:95-118` (`documentLeafProvenance`, uncapped).
 - **Description.** A whole-document (`mode:'tree'`) answer returns a persisted `Message` whose `citations` are one entry per reachable **leaf chunk** (up to ~1000, uncapped) — pure provenance, no inline `[Sn]` grounding. `Transcript` renders it through the **same** `SourcesDisclosure` + `CoverageMeter` as a 3-source grounded relevance answer. `SourcesDisclosure` has no `mode`/coverage awareness → renders "Sources (1000)" and, on expand, ~1000 cards, byte-identical to inline-grounded citations. (The `CoverageMeter` *does* differentiate breadth — good — but the Sources list misleads by implication.)
@@ -147,7 +148,7 @@ system.
 - **Tests needed.** Drop with no resolvable path → error banner shown.
 
 ### FE-D / FE-E (Low)
-- **FE-D — `SourcesDisclosure` toggle lacks `aria-controls`; expanded region unlabeled** (`SourcesDisclosure.tsx:14-23`; same in `Transcript.tsx` SummaryMarker `:317-329` & Thinking `:155-160`). Give the cards an `id` + `aria-controls`/`role="region"`. Inconsistent with the careful a11y elsewhere (ContextMeter, StreamAnnouncer).
+- **FE-D — `SourcesDisclosure` toggle lacks `aria-controls`; expanded region unlabeled** (`SourcesDisclosure.tsx:14-23`; same in `Transcript.tsx` SummaryMarker `:317-329` & Thinking `:155-160`). Give the cards an `id` + `aria-controls`/`role="region"`. Inconsistent with the careful a11y elsewhere (ContextMeter, StreamAnnouncer). — ✅ **REMEDIATED (2026-06-30, Phase 5):** all three disclosures (Sources, Thinking, SummaryMarker) now wire `aria-controls={regionId}` on the toggle + `role="region"` + `aria-labelledby={toggleId}` on the panel (`useId()` id pairs); pinned by `SourcesProvenance.test.tsx` + `TranscriptA11y.test.tsx`. See design-guidelines.md §11.8.
 - **FE-E — `WorkspaceGate` "finishing" model-verify failure is silent** (`WorkspaceGate.tsx:106-135`). The `catch → finish(next,'chat')` (correctly "never trap the user") means a first-run model-listing failure produces no notice; the user lands on Chat and hits a generic "no model" empty state. Pass a one-shot notice or route to `'models'` when `listModels` *threw*. (Hypothesis — confirm intended UX.)
 
 ---
@@ -251,6 +252,7 @@ reconciled most contradictions. Remaining items, all tied to the findings above:
 
 - **rag-design §14.4 (F11)** documents the tree-mode provenance distinction but the renderer never implemented
   it (FE-B). When FE-B lands, update §14.4 from "renderer differentiation = Phase 8 follow-up" to as-built.
+  — ✅ **DONE (2026-06-30, Phase 5):** §14.4 now carries the "Renderer differentiation — AS BUILT" record.
 - **`money.ts` `detectCurrency` doc-comment** describes per-row figure-region scoping but doesn't note that the
   **document-level** call still scans whole text (FIN-1). Update when fixed; record in known-limitations until then.
 - **`pdf-layout.ts:43` comment** "Mirrors the accepted set of the shared `MONEY_RE`" is **stale/false**
@@ -400,7 +402,23 @@ and **teeth-checked** where a guard is added.
 - **Risks:** virtualization touches scroll/find/a11y — keep it to the simpler documents list; do NOT do the
   transcript here.
 
-### Phase 5 — RAG provenance honesty + Sources a11y (FE-B / F11 + FE-D)
+### Phase 5 — RAG provenance honesty + Sources a11y (FE-B / F11 + FE-D) — ✅ REMEDIATED 2026-06-30
+> **Done on branch `audit-followup-phase5-provenance`** (unmerged; do NOT auto-merge/push). **Closes the
+> carried-forward F11 renderer half.** Suite **2579 passed / 39 skipped** (was 2568/39 → **+11**:
+> `SourcesProvenance.test.tsx` ×9 + `TranscriptA11y.test.tsx` ×2), typecheck + `npm run build` green.
+> **Renderer + i18n + CSS only — no IPC/schema/audit-payload change; `documentLeafProvenance` left uncapped
+> server-side** (render cap alone meets the honesty + jank goals; keeps full provenance persisted).
+> **FE-B:** `SourcesDisclosure` takes `coverage.mode` (threaded from `Transcript` `m.coverage?.mode` + the
+> PreviewModal `cov.coverage.mode`); any whole-document mode (`tree`/`capped`/`extract` = `≠ relevance`)
+> relabels the toggle to `chat.sources.wholeDoc` ("Drawn from the document — N sections"), drops the `[Sn]`
+> card label + adds a "Sections covered" caption (`chat.sources.wholeDocCaption`), and caps the cards at 24
+> with an "and N more sections" reveal (`chat.sources.more`). `relevance`/NULL-coverage = byte-identical.
+> **3 new i18n keys EN+DE** (`chat.sources.wholeDoc`/`wholeDocCaption`/`more`). **Divergence** (recorded in
+> rag-design §14.4): the label is breadth-neutral — dropped "whole" from the audit's "Drawn from the whole
+> document" example (the `CoverageMeter` owns breadth; "whole" is wrong for a truncated `capped` answer).
+> **FE-D:** `aria-controls`/`role="region"`/`aria-labelledby` on the Sources, Thinking, and SummaryMarker
+> disclosures. Both teeth-checked (neuter `isProvenance` → 6 provenance tests red, relevance guards green).
+> Durable record: **rag-design.md §14.4 (AS BUILT)** + **design-guidelines.md §11.8**.
 - **Goal:** stop presenting whole-document leaf provenance as inline citations; cap the list; fix disclosure a11y.
 - **Scope/files:** `chat/SourcesDisclosure.tsx` (+ `mode` prop), `chat/Transcript.tsx` (thread `coverage.mode`),
   `shared/i18n/{en,de}.ts` (new `chat.sources.wholeDoc` keys), optionally `coverage.ts` (server-side cap).

@@ -2106,9 +2106,11 @@ function PreviewModal({
                 <AssistantMarkdown text={summary.text} />
               </div>
               {/* Source provenance behind a deep-index summary — the leaf SOURCE chunks (M2:
-                  never node summaries). Reuses the chat sources disclosure. */}
+                  never node summaries). Reuses the chat sources disclosure; passing the coverage
+                  mode (a deep-index summary is mode `tree`) renders it as whole-document
+                  provenance + caps the list, same as the chat path (FE-B / F11 Phase 5). */}
               {cov && cov.provenance.length > 0 && (
-                <SourcesDisclosure citations={cov.provenance} />
+                <SourcesDisclosure citations={cov.provenance} mode={cov.coverage.mode} />
               )}
               <div className="actions" style={{ marginTop: 4 }}>
                 <Button size="sm" onClick={onCopySummary}>

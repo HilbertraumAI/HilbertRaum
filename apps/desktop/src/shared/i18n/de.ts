@@ -291,6 +291,13 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Chat: sources ----
   'chat.sources.toggle': 'Quellen ({count})',
   'chat.sources.page': 'Seite {page}',
+  // Ganz-Dokument-Provenienz (Phase 5, FE-B / F11): die „Quellen“ einer Baum-/Kapp-/
+  // Extrakt-Antwort sind die genutzten Dokument-Abschnitte (Herkunft), keine 1:1 zitierten
+  // Auszüge. Bewusst breitenneutral — die Abdeckungsanzeige daneben sagt „ganzes Dokument“ /
+  // „Anfang“ / „teilweise“.
+  'chat.sources.wholeDoc': 'Aus dem Dokument entnommen — {count} Abschnitte',
+  'chat.sources.wholeDocCaption': 'Abgedeckte Abschnitte',
+  'chat.sources.more': 'und {count} weitere Abschnitte',
 
   // ---- Chat: dictation ----
   'chat.dictation.start': 'Nachricht diktieren',

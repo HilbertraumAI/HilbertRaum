@@ -6,6 +6,55 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 5 (RAG PROVENANCE HONESTY + SOURCES a11y; FE-B / F11 + FE-D) —
+branch `audit-followup-phase5-provenance` (unmerged; do NOT auto-merge/push).** Closes the long-carried
+**F11 renderer half**: a whole-document answer no longer presents its leaf-provenance list as if the model
+inline-cited each passage, and no longer dumps ~1000 uncapped "Sources" cards. Suite **2579 passed / 39
+skipped** (was 2568/39 after Phase 4 → **+11**: `SourcesProvenance.test.tsx` ×9 + `TranscriptA11y.test.tsx`
+×2), typecheck + `npm run build` green. **Renderer + i18n + CSS only — no IPC / schema / audit-payload
+change.** (One full-suite run showed a pre-existing unrelated flake in `password-change.test.ts` — "attempt
+to write a readonly database" in `seedCollections`, a Windows file-lock artifact under parallel load; it
+passes 18/18 in isolation and is untouched by this renderer-only work.)
+- **FE-B (Med-High) — whole-document "citations" are LEAF PROVENANCE, not 1:1 inline grounding.** A
+  `mode:'tree'`/`capped`/`extract` answer's `citations` = one entry per reachable document section (tree:
+  up to ~1000, uncapped), with **no** `[Sn]` markers in the prompt and none emitted by the model — yet the
+  renderer drew them through the **same** `SourcesDisclosure` as a 3-source grounded relevance answer →
+  "Sources (1000)" + 1000 byte-identical cards. FIX: `SourcesDisclosure` now takes the answer's
+  `coverage.mode` (threaded from `Transcript` via `m.coverage?.mode`, and from the documents PreviewModal
+  via `cov.coverage.mode`). Any whole-document mode (`≠ relevance`) renders as **provenance**: the toggle
+  relabels `chat.sources.toggle` ("Sources (N)") → **`chat.sources.wholeDoc`** ("Drawn from the document —
+  N sections"), each card **drops the `[Sn]` cite-label** + the list carries a **"Sections covered"**
+  caption (`chat.sources.wholeDocCaption`), and the rendered cards are **capped at 24**
+  (`PROVENANCE_CARD_CAP`) with an **"and N more sections"** reveal (`chat.sources.more`). A `relevance`
+  answer — and a pre-migration **NULL-coverage** turn (`mode` undefined) — is **byte-identical to before**
+  ("Sources (N)", 1:1, `[Sn]` labels). **The `CoverageMeter` (breadth differentiation) is untouched** — it
+  already shows "Covers the whole document" vs "the most relevant passages"; the new Sources label is
+  **breadth-neutral on purpose** so it does not restate the meter.
+- **DECISION — server-side cap NOT applied.** `documentLeafProvenance` (`coverage.ts`) is left **uncapped**;
+  the **render cap alone** meets the honesty + jank goals, and keeping the full provenance persisted avoids
+  a persisted-data semantics change (the full set stays available to the PreviewModal + future features).
+- **DIVERGENCE from the audit's literal label.** The audit's example was "Drawn from the **whole** document";
+  shipped wording drops "whole" — honest for a truncated `capped` answer (whose meter says "covers the
+  beginning") and non-duplicative with the meter's breadth claim. Recorded in rag-design §14.4.
+- **FE-D (Low) — disclosure a11y.** The Sources, live **Thinking…**, and compaction **SummaryMarker**
+  toggles named their state (`aria-expanded`) but not their region. FIX: `aria-controls={regionId}` on each
+  toggle + `role="region"` + `aria-labelledby={toggleId}` on each panel (`useId()` id pairs).
+- **i18n:** 3 new keys **EN+DE together** (parity typecheck-enforced) — `chat.sources.wholeDoc` /
+  `wholeDocCaption` / `more`. LLM prompts unchanged (English, D-L6) — only the user-facing label localized.
+- **Tests (+11), teeth-checked.** `SourcesProvenance.test.tsx`: tree/capped/extract relabel to provenance
+  (not "Sources (N)"); cap = 24 of 1000 + reveal renders all; small list uncapped; relevance + NULL-coverage
+  stay "Sources (N)" 1:1 with `[Sn]`; aria-controls resolves to the region id when expanded.
+  `TranscriptA11y.test.tsx`: Thinking + SummaryMarker aria-controls. Teeth: neuter `isProvenance=false` →
+  6 provenance tests red, the relevance guards stay green (proves the differentiation, not the scaffolding).
+- **Durable record:** **rag-design.md §14.4 "Renderer differentiation — AS BUILT"** + **design-guidelines.md
+  §11.8** (disclosure aria-controls). No known-limitations entry (this is a fix).
+  `audits/full-audit-2026-06-29-followup.md` marks FE-B / FE-D / Phase 5 ✅ remediated (report KEPT — Phases
+  6–8 remain open). The carried-forward **F11 renderer half is now CLOSED**.
+- **NEXT ACTION (owner): review/merge `audit-followup-phase5-provenance`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 6** reliability hardening (REL-1/2/3/4), **Phase 7** test seams,
+  **Phase 8** maintainability + close-out — per the audit §6 plan._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 4 (DOCUMENTS-LIST SCALE; PERF-3/PERF-2; PERF-6 deferred) —
 branch `audit-followup-phase4-docs-scale` (unmerged; do NOT auto-merge/push).** Stops the documents screen
 from getting slower with library size: a hot-path DB parse (PERF-3) and unbounded list DOM (PERF-2 = the

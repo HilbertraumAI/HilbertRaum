@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ConversationSummaryMarker, Message } from '@shared/types'
@@ -78,6 +78,8 @@ export const Transcript = memo(function Transcript({
   summaryMarker
 }: TranscriptProps): JSX.Element {
   const { t } = useT()
+  // Stable ids wiring the live "Thinking…" toggle to its region (FE-D aria-controls).
+  const thinkingId = useId()
   const scrollRef = useRef<HTMLDivElement>(null)
   // Whether the viewport is pinned to the bottom. We only auto-scroll on new content while the
   // user is already near the bottom, so a ~40 ms streaming flush no longer forces a layout +
@@ -155,7 +157,9 @@ export const Transcript = memo(function Transcript({
                   <button
                     type="button"
                     className="msg-thinking-toggle"
+                    id={`${thinkingId}-toggle`}
                     aria-expanded={thinkingOpen}
+                    aria-controls={`${thinkingId}-region`}
                     onClick={() => onThinkingOpenChange(!thinkingOpen)}
                   >
                     {t('chat.thinking')}
@@ -163,8 +167,14 @@ export const Transcript = memo(function Transcript({
                   {/* Kept mounted and hidden (not unmounted) when collapsed, matching the
                       old <details> semantics: the live reasoning buffer keeps accumulating
                       and is available to AT, while `hidden` removes it from view + the a11y
-                      tree when collapsed. */}
-                  <div className="msg-thinking-text" hidden={!thinkingOpen}>
+                      tree when collapsed. The toggle's aria-controls names this region (FE-D). */}
+                  <div
+                    className="msg-thinking-text"
+                    id={`${thinkingId}-region`}
+                    role="region"
+                    aria-labelledby={`${thinkingId}-toggle`}
+                    hidden={!thinkingOpen}
+                  >
                     {streamThinking}
                   </div>
                 </div>
@@ -237,7 +247,11 @@ const MessageBlock = memo(function MessageBlock({
         )}
         {m.citations && m.citations.length > 0 && (
           <>
-            <SourcesDisclosure citations={m.citations} />
+            {/* The coverage mode tells the disclosure whether these are 1:1 inline-grounded
+                excerpts (relevance) or whole-document LEAF PROVENANCE (tree/capped/extract) —
+                FE-B / F11 renderer half. A NULL-coverage relevance turn passes undefined and
+                renders byte-identically to before. */}
+            <SourcesDisclosure citations={m.citations} mode={m.coverage?.mode} />
             {/* Honesty (whole-document-analysis §4.5/§5.2; full-doc-skills §3.3/D48): render the
                 answer's PERSISTED coverage when we have it, else fall back to the relevance label —
                 "based on the most relevant passages, NOT the whole document". A pre-migration row
@@ -312,12 +326,15 @@ const MessageBlock = memo(function MessageBlock({
  */
 function SummaryMarker({ summary, t }: { summary: string; t: I18n['t'] }): JSX.Element {
   const [open, setOpen] = useState(false)
+  const id = useId()
   return (
     <div className="chat-summary-marker">
       <button
         type="button"
         className="chat-summary-marker-toggle"
+        id={`${id}-toggle`}
         aria-expanded={open}
+        aria-controls={`${id}-region`}
         title={t('chat.compaction.viewSummary')}
         onClick={() => setOpen((v) => !v)}
       >
@@ -326,7 +343,16 @@ function SummaryMarker({ summary, t }: { summary: string; t: I18n['t'] }): JSX.E
         </span>
         <span className="chat-summary-marker-label">{t('chat.compaction.markerLabel')}</span>
       </button>
-      {open && <div className="chat-summary-marker-text">{summary}</div>}
+      {open && (
+        <div
+          className="chat-summary-marker-text"
+          id={`${id}-region`}
+          role="region"
+          aria-labelledby={`${id}-toggle`}
+        >
+          {summary}
+        </div>
+      )}
     </div>
   )
 }

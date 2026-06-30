@@ -696,6 +696,20 @@ Home/Chat/Documents/AI Model/Settings with internet OFF ("Offline") vs ON ("Down
 Model cards (new "Try in demo mode" label, no disabled Select when not downloaded) — captures in
 `docs/design-review/home-privacy-aimodel/` (`scripts/walk-home-privacy-aimodel.mjs`).
 
+### 11.8 Disclosure a11y — `aria-controls` on toggle/region (IMPLEMENTED 2026-06-30, full-audit follow-up Phase 5, FE-D)
+
+The app's collapse/expand disclosures are hand-rolled `<button aria-expanded>` toggles (not native
+`<details>`, by L15 — see §12). FE-D found three of them named their state but not their region: an AT
+user heard "expanded" with no link to what expanded. **As built:** the toggle now carries
+`aria-controls={regionId}` and the expanded panel is `role="region"` + `aria-labelledby={toggleId}`,
+applied consistently to **Sources** (`SourcesDisclosure`), the live **Thinking…** line, and the
+compaction **SummaryMarker** (all in `renderer/chat/`). React `useId()` mints the stable id pair. This
+matches the careful a11y already shipped for `ContextMeter`/`StreamAnnouncer` and is pinned by
+`tests/renderer/SourcesProvenance.test.tsx` + `TranscriptA11y.test.tsx` (aria-controls resolves to the
+rendered region id when expanded). The **Sources** disclosure was also relabelled in the same pass for
+whole-document answers (provenance, not inline citations) — that honesty record lives in
+[`rag-design.md`](rag-design.md) §14.4 (FE-B / F11).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)
