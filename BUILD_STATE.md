@@ -6,6 +6,19 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Embedding 400 follow-up: clean error message + context-overflow retry.** Building on the body-surfacing
+below (which revealed the real reason: `input (623 tokens) is larger than the max context size (512 tokens)` — E5's hard
+512-token cap, the 2.2× truncation factor undershooting a 2.7×-dense chunk). (1) Errors now extract just `error.message`
+from llama.cpp's JSON envelope (`parseLlamaError` in `embeddings/e5.ts`) instead of dumping the raw JSON at the user.
+(2) On a context-overflow 400 (`exceed_context_size_error`), the embedder HALVES that batch's truncation budget and retries
+(down to a 64-token floor, ≤5×) so the chunk's HEAD still embeds rather than failing the document — only the overflowing
+batch pays. New `e5-embedder.test.ts` cases: message extraction (no JSON envelope leaked); overflow→re-truncate→retry
+succeeds with a shorter input. **KNOWN/OPEN (raised by user, not yet acted on):** `CHUNK_DEFAULTS.chunkSizeTokens` is 500
+approx tokens but the embedder can only embed ~232 approx (= `maxInputApproxTokens(512)`) — so a chunk's VECTOR covers only
+its first ~46% and the tail is under-retrievable (the stored/retrieved chunk text is full-size — the retry/truncation shrinks
+only the vector, never the chunk). The architecturally cleaner fix is to size chunks to the embedder's real-token budget
+upstream; deferred as a behavior change requiring re-index. Full suite green except the 3 pre-existing platform failures._
+
 _2026-06-30 — **Fixed "Embedding request failed: HTTP 400" + made it debuggable.** Two real bugs in the E5 embedder
 (`embeddings/e5.ts`): (1) empty/whitespace inputs were POSTed to llama.cpp's `/v1/embeddings`, which **rejects an empty
 input with HTTP 400** — inconsistent with the mock embedder's documented contract (`embeddings.test.ts:68`: empty text →

@@ -312,9 +312,9 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
-  // A 4xx must carry the sidecar's reason, not just the status — that body is what makes the
+  // A 4xx must carry the sidecar's REASON, not the JSON envelope — that message is what makes the
   // "Embedding request failed: HTTP 400" the user reported debuggable.
-  it('includes the server response body in a non-OK error', async () => {
+  it('extracts the error message (not the JSON envelope) from a non-OK body', async () => {
     const { spawn } = fakeSpawn()
     const fetchImpl = (async (url: string | URL) => {
       const u = String(url)
@@ -323,15 +323,67 @@ describe('E5Embedder', () => {
         return {
           ok: false,
           status: 400,
-          text: async () => 'input is too large to process. increase the physical batch size'
+          // llama.cpp's OpenAI-shaped error envelope.
+          text: async () =>
+            JSON.stringify({ error: { code: 400, message: 'input is empty', type: 'invalid_request_error' } })
         } as Response
       }
       throw new Error(`unexpected url ${u}`)
     }) as typeof fetch
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
-    await expect(embedder.embed(['x'])).rejects.toThrow(
-      /HTTP 400 — input is too large to process\. increase the physical batch size/
+    const err = await embedder.embed(['x']).then(
+      () => null,
+      (e: unknown) => e as Error
     )
+    expect(err?.message).toMatch(/HTTP 400 — input is empty/)
+    expect(err?.message).not.toContain('{') // no raw JSON dumped at the user
+    expect(err?.message).not.toContain('"error"')
+    await embedder.stop()
+  })
+
+  // A context overflow (the chunk still tokenizes over E5's hard 512 after truncation) is recovered
+  // by halving this batch's budget and retrying — the chunk's head embeds instead of failing the doc.
+  it('re-truncates and retries on a context-overflow 400, then succeeds', async () => {
+    const { spawn } = fakeSpawn()
+    const sent: string[] = []
+    let attempts = 0
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        const body = JSON.parse(String(init?.body)) as { input: string[] }
+        sent.push(body.input[0])
+        attempts += 1
+        if (attempts === 1) {
+          return {
+            ok: false,
+            status: 400,
+            text: async () =>
+              JSON.stringify({
+                error: {
+                  code: 400,
+                  message: 'input (623 tokens) is larger than the max context size (512 tokens). skipping',
+                  type: 'exceed_context_size_error',
+                  n_prompt_tokens: 623,
+                  n_ctx: 512
+                }
+              })
+          } as Response
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: body.input.map((_t, i) => ({ embedding: [1, 0], index: i })) })
+        } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const longText = 'lorem ipsum dolor sit amet '.repeat(200)
+    const [v] = await embedder.embed([longText])
+    expect(Array.from(v)).toEqual([1, 0]) // succeeded after the retry
+    expect(attempts).toBe(2)
+    expect(sent[1].length).toBeLessThan(sent[0].length) // retry sent a harder-truncated input
     await embedder.stop()
   })
 

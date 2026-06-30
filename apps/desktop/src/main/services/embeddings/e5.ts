@@ -45,6 +45,13 @@ const DEFAULT_EMBED_BATCH_SIZE = 32
 const EMBED_PHYSICAL_BATCH_TOKENS = 2048
 /** Per-request bound so a wedged sidecar fails the document instead of hanging it. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
+// E5's positional limit is a HARD 512 tokens, and the `REAL_TOKENS_PER_APPROX_TOKEN` factor is a
+// heuristic — a dense-enough chunk (heavy subword/code/agglutinative) can still tokenize over the
+// context after truncation and the sidecar 400s with `exceed_context_size_error`. On that specific
+// overflow we HALVE this batch's truncation budget and retry, down to this floor, so the chunk's
+// head still gets embedded instead of failing the whole document. Only an overflowing batch pays.
+const MIN_TRUNCATE_CONTEXT_TOKENS = 64
+const MAX_TRUNCATE_RETRIES = 5
 
 export type E5EmbedderDeps = Pick<
   LlamaServerOptions,
@@ -67,6 +74,39 @@ export interface E5EmbedderOptions extends E5EmbedderDeps {
 
 interface EmbeddingResponse {
   data?: Array<{ embedding?: number[]; index?: number }>
+}
+
+/**
+ * Pull the human-readable reason out of a llama-server error body. It returns the OpenAI-shaped
+ * `{ error: { message, type } }` (also `{ error: "…" }` / `{ message }` from older builds); we want
+ * the message + type, NOT the JSON envelope dumped at the user. Falls back to the raw (whitespace-
+ * collapsed) text for a non-JSON body.
+ */
+function parseLlamaError(body: string): { message: string; type: string } {
+  if (!body) return { message: '', type: '' }
+  try {
+    const p = JSON.parse(body) as {
+      error?: { message?: string; type?: string } | string
+      message?: string
+    }
+    if (p && typeof p.error === 'object' && p.error) {
+      return { message: (p.error.message ?? '').trim(), type: (p.error.type ?? '').trim() }
+    }
+    if (typeof p?.error === 'string') return { message: p.error.trim(), type: '' }
+    if (typeof p?.message === 'string') return { message: p.message.trim(), type: '' }
+  } catch {
+    // Not JSON — fall through to the raw text.
+  }
+  return { message: body.replace(/\s+/g, ' ').trim(), type: '' }
+}
+
+/** True for the sidecar's "input … is larger than the max context size" rejection (the one a
+ *  harder truncation + retry can fix), by error `type` or message text across llama.cpp versions. */
+function isContextOverflow(err: { message: string; type: string }): boolean {
+  return (
+    err.type === 'exceed_context_size_error' ||
+    /larger than the max context|exceeds? the context|max context size/i.test(err.message)
+  )
 }
 
 /** L2-normalize a vector in place so cosine similarity == dot product (interface contract). */
@@ -212,6 +252,7 @@ export class E5Embedder implements Embedder {
     const prepared = texts.map((t) => this.truncateForContext(t))
     const batchSize = Math.max(1, this.opts.batchSize ?? DEFAULT_EMBED_BATCH_SIZE)
     const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    const ctxBudget = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
 
     // Empty/whitespace inputs are NEVER sent to the sidecar: llama.cpp's `/v1/embeddings` rejects an
     // empty input with HTTP 400, and an empty chunk has nothing to embed. They take an all-zero
@@ -238,30 +279,44 @@ export class E5Embedder implements Embedder {
         throw new Error('Embedder is suspending (workspace is locking)')
       }
       const batchIdx = pending.slice(start, start + batchSize)
-      const batch = batchIdx.map((i) => prepared[i])
-      // REL-4: own the per-batch timeout so it is cleared the instant the request settles —
-      // hundreds of batches in a large ingestion otherwise leave hundreds of live timers.
-      const combined = combineSignals(opts?.signal, timeoutMs)
+      // First attempt uses the already-prepared (default-budget) truncation; a context overflow
+      // re-truncates THIS batch from the originals at a smaller budget and retries (see below).
+      let batch = batchIdx.map((i) => prepared[i])
+      let truncCtx = ctxBudget
       let json!: EmbeddingResponse
-      try {
-        const res = await server.fetch('/v1/embeddings', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ model: this.id, input: batch }),
-          signal: combined.signal
-        })
-        if (!res.ok) {
-          // Surface the sidecar's reason (e.g. "input is too large to process. increase the physical
-          // batch size", "input is empty") — a bare status code makes a 4xx undebuggable. Reading the
-          // body to text also drains and releases the connection.
-          const detail = (await res.text().catch(() => '')).trim().replace(/\s+/g, ' ')
-          throw new Error(
-            `Embedding request failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ''}`
-          )
+      for (let attempt = 0; ; attempt++) {
+        // REL-4: own the per-attempt timeout so it is cleared the instant the request settles —
+        // hundreds of batches in a large ingestion otherwise leave hundreds of live timers.
+        const combined = combineSignals(opts?.signal, timeoutMs)
+        let res: Response
+        try {
+          res = await server.fetch('/v1/embeddings', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ model: this.id, input: batch }),
+            signal: combined.signal
+          })
+        } finally {
+          combined.clear()
         }
-        json = (await res.json()) as EmbeddingResponse
-      } finally {
-        combined.clear()
+        if (res.ok) {
+          json = (await res.json()) as EmbeddingResponse
+          break
+        }
+        // llama.cpp wraps the reason in `{ error: { message, type } }`. Read it (also drains the
+        // body, releasing the connection) and surface just the message — never the JSON envelope.
+        const err = parseLlamaError((await res.text().catch(() => '')).trim())
+        // Context overflow despite truncation (the heuristic factor can't guarantee fit for an
+        // arbitrary-density chunk against E5's hard 512): halve this batch's budget and retry so the
+        // chunk's head still embeds instead of failing the document. Only this batch is re-truncated.
+        if (isContextOverflow(err) && truncCtx > MIN_TRUNCATE_CONTEXT_TOKENS && attempt < MAX_TRUNCATE_RETRIES) {
+          truncCtx = Math.max(MIN_TRUNCATE_CONTEXT_TOKENS, Math.floor(truncCtx / 2))
+          batch = batchIdx.map((i) => truncateToContext(texts[i], truncCtx))
+          continue
+        }
+        throw new Error(
+          `Embedding request failed: HTTP ${res.status}${err.message ? ` — ${err.message.slice(0, 500)}` : ''}`
+        )
       }
       const data = json.data ?? []
       if (data.length !== batch.length) {
