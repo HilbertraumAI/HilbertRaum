@@ -385,14 +385,47 @@ describe('changePassword — document-work race guard (Phase 32)', () => {
     ctl.lock()
   })
 
-  it('document work refuses to start while a password change is in progress', () => {
+  it('document work refuses to start while a REAL password change is in progress (the flag is set then cleared around the work)', () => {
     const vp = freshVault()
     const ctl = unlockedController(vp, 'pw-one', FAST_SCRYPT)
-    // changePassword is synchronous today, so the overlap cannot be produced from the
-    // outside — drive the defensive flag directly to pin the behavior.
-    ;(ctl as unknown as { changingPassword: boolean }).changingPassword = true
-    expect(() => ctl.beginDocumentWork()).toThrow(VaultBusyError)
-    ;(ctl as unknown as { changingPassword: boolean }).changingPassword = false
+
+    // changePassword is synchronous today, so the overlap cannot be interleaved from the outside.
+    // The OLD test poked the private `changingPassword` field directly, pinning only the guard's
+    // CONSEQUENCE (beginDocumentWork throws when the flag is set) — if changePassword forgot to set
+    // the flag it still passed (T6, full-audit-2026-06-30). Pin the PRECONDITION instead: trap the
+    // private flag to (1) record its real transitions and (2) at the instant the REAL changePassword
+    // flips it true (mid-work), prove beginDocumentWork() is genuinely refused — so a regression that
+    // stops setting/clearing the flag around the work reddens here.
+    const transitions: boolean[] = []
+    let refusedWhileChanging = false
+    let backing = false
+    Object.defineProperty(ctl, 'changingPassword', {
+      configurable: true,
+      get: () => backing,
+      set: (v: boolean) => {
+        backing = v
+        transitions.push(v)
+        if (v) {
+          // The flag just went true INSIDE changePassword's work → a real doc-work request must be
+          // refused right now (beginDocumentWork reads the same flag via its getter).
+          try {
+            ctl.beginDocumentWork()
+          } catch (err) {
+            if (err instanceof VaultBusyError) refusedWhileChanging = true
+          }
+        }
+      }
+    })
+
+    // Drive the REAL changePassword (full Argon2id rewrap) — not a poked field.
+    expect(ctl.changePassword('pw-one', 'pw-two', FAST_ARGON).state).toBe('unlocked')
+
+    // The REAL change SET the flag then CLEARED it (the `finally` ran), and document work was
+    // refused while it was set — pinning both edges of the guard's precondition.
+    expect(transitions).toEqual([true, false])
+    expect(refusedWhileChanging).toBe(true)
+
+    // Flag cleared → document work starts cleanly again (and the new password is in force).
     const release = ctl.beginDocumentWork()
     release()
     ctl.lock()

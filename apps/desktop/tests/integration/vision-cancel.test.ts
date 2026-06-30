@@ -29,6 +29,11 @@ const req = (): ImageAnalyzeRequest => ({
   question: 'what is in this image'
 })
 
+// Deterministic queue-drain (NOT a wall-clock wait): each `await tick()` flushes the macrotask
+// boundary, which first drains all pending microtasks. `while (cond) await tick()` re-checks an
+// observable until run() is provably at the interleave point — no `setTimeout(r, N)` race (T1).
+const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+
 describe('VisionService cancel vs terminal completion (F18)', () => {
   it('a cancel that races completion does not resurrect the job to done or fire emit.done', async () => {
     let resolveAnalyze!: (answer: string) => void
@@ -51,14 +56,19 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
 
     // Let run() reach the analyze await (status resolved, onToken fired once).
     const tokenSpy = emit.token as ReturnType<typeof vi.fn>
-    while (tokenSpy.mock.calls.length === 0) await new Promise((r) => setTimeout(r, 1))
+    while (tokenSpy.mock.calls.length === 0) await tick()
 
     // The user cancels mid-flight.
     expect(service.cancel(job.jobId).state).toBe('cancelled')
 
-    // A (misbehaving) runtime then resolves a full, non-empty answer AFTER the cancel.
+    // A (misbehaving) runtime then resolves a full, non-empty answer AFTER the cancel. run()'s
+    // continuation after `await runtime.analyze(...)` is synchronous (the abort re-check → return, or
+    // — under a neuter — the guarded terminal `done` write), so a single queue-drain deterministically
+    // flushes it: in the GOOD case nothing changes; under the F18 dual-neuter emit.done fires and the
+    // assertions below redden. No fixed `sleep(5)`.
     resolveAnalyze('a complete answer')
-    await new Promise((r) => setTimeout(r, 5))
+    await tick()
+    await tick()
 
     // The terminal write was guarded: the job stays cancelled and emit.done never fired.
     expect(service.getJob(job.jobId).state).toBe('cancelled')
@@ -79,7 +89,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     const job = service.analyze(req(), emit)
 
     const doneSpy = emit.done as ReturnType<typeof vi.fn>
-    while (doneSpy.mock.calls.length === 0) await new Promise((r) => setTimeout(r, 1))
+    while (doneSpy.mock.calls.length === 0) await tick()
 
     expect(service.getJob(job.jobId).state).toBe('done')
     expect(service.getJob(job.jobId).answer).toBe('a bar chart')

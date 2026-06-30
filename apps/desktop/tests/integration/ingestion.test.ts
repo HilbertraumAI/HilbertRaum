@@ -303,6 +303,75 @@ describe('ingestion pipeline', () => {
   })
 })
 
+describe('ingestion pipeline — chunk-insert rollback (T3: no partial chunks survive a failure)', () => {
+  it('rolls back the whole chunk-insert transaction on an injected mid-loop failure; connection not poisoned', async () => {
+    // Drive the REAL processDocument (ingestion/index.ts:750 BEGIN…COMMIT, the ~1000-insert loop —
+    // the highest-blast-radius transaction in the codebase). Mirror the data-layer-hardening gold
+    // standard: wrap the connection so the SECOND `INSERT INTO chunks` throws — after BEGIN, the
+    // re-index DELETEs, AND the first chunk has already been inserted INSIDE the transaction — and
+    // assert (a) NOTHING partial persisted (the first chunk was rolled back with the failing second)
+    // AND (b) the shared connection is not poisoned.
+    const db = freshDb()
+    const storeDir = store()
+    const src = write('rollback.txt', Array.from({ length: 1200 }, (_, i) => `word${i}`).join(' '))
+    const queued = createQueuedDocument(db, src)
+
+    // Everything except the targeted chunk insert hits the real connection (so BEGIN/COMMIT/ROLLBACK,
+    // the DELETEs, and setStatus are genuine); the throw is one-shot so a later clean run recovers.
+    let inserts = 0
+    let armed = true
+    const wrapped = new Proxy(db as object, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            const stmt = (target as Db).prepare(sql)
+            if (armed && sql.includes('INSERT INTO chunks')) {
+              return {
+                run: (...args: unknown[]): unknown => {
+                  inserts++
+                  if (inserts >= 2) {
+                    armed = false
+                    throw new Error('injected: chunk insert failed mid-transaction')
+                  }
+                  return (stmt as { run: (...a: unknown[]) => unknown }).run(...args)
+                }
+              }
+            }
+            return stmt
+          }
+        }
+        const val = (target as Record<string | symbol, unknown>)[prop]
+        return typeof val === 'function' ? (val as (...a: unknown[]) => unknown).bind(target) : val
+      }
+    }) as unknown as Db
+
+    // processDocument NEVER throws — it records the failure on the row.
+    const info = await processDocument(wrapped, storeDir, queued.id)
+
+    // (a) The doc failed and NO partial chunks survived — the first, already-inserted chunk was
+    // rolled back with the failing second (not committed half-way).
+    expect(info.status).toBe('failed')
+    expect(info.errorMessage).toMatch(/injected/)
+    expect(info.chunkCount).toBe(0)
+    expect(
+      (db.prepare('SELECT COUNT(*) AS n FROM chunks WHERE document_id = ?').get(queued.id) as { n: number }).n
+    ).toBe(0)
+    expect(inserts).toBe(2) // the loop genuinely reached the second insert (the rollback un-did the first)
+
+    // (b) The shared connection is not poisoned — a fresh transaction opens cleanly (it would throw
+    // "cannot start a transaction within a transaction" if a BEGIN were left dangling).
+    expect(() => {
+      db.exec('BEGIN')
+      db.exec('COMMIT')
+    }).not.toThrow()
+
+    // A clean re-process (the injection was one-shot) indexes the document normally — full recovery.
+    const info2 = await processDocument(db, storeDir, queued.id)
+    expect(info2.status).toBe('indexed')
+    expect(info2.chunkCount).toBeGreaterThan(1)
+  })
+})
+
 describe('reconcileStuckDocuments', () => {
   it('fails documents left non-terminal by a previous run, sparing live ones', () => {
     const db = freshDb()

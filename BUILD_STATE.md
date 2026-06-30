@@ -7,15 +7,54 @@
 
 
 _2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — Phases G + A MERGED to LOCAL master
-(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`); Phase B COMPLETE on the UNMERGED
-branch `audit-2026-06-30-phaseB-perf`; Phase C COMPLETE on the UNMERGED branch
-`audit-2026-06-30-phaseC-reliability` (STACKED on the Phase-B branch — master ← B ← C; awaiting owner
-review/merge of the stack — do NOT auto-merge/push).** The report is on master with D1–D10/M1 (Phase G) and
-C1/C5/T4 (Phase A) dispositioned ✅; the Phase-B branch adds the P1/P2 ✅ + P6 ⏸ dispositions; the Phase-C
-branch adds the R1–R7 ✅ dispositions. It is NOT retired (phases **F, D, E remain open** — suggested order
-**F → D → E**). Suite **2669 passed / 41 skipped** on the Phase-C branch (Phase-B baseline 2653/41 → +16
-Phase-C reliability tests); typecheck + `npm run build` green. **NEXT ACTION = owner review/merge of the
-stack (G + A already merged; then B, then C).** Per-phase detail below (Phase C, then B, then A, then G)._
+(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`); Phases B, C, F COMPLETE on UNMERGED
+STACKED branches — master ← B (`audit-2026-06-30-phaseB-perf`) ← C (`audit-2026-06-30-phaseC-reliability`) ←
+F (`audit-2026-06-30-phaseF-tests`); awaiting owner review/merge of the stack — do NOT auto-merge/push.** The
+report is on master with D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A) dispositioned ✅; the Phase-B branch adds
+P1/P2 ✅ + P6 ⏸; the Phase-C branch adds R1–R7 ✅; the Phase-F branch adds T1–T3 ✅ + T5–T7 ✅ (T4 was in Phase A).
+It is NOT retired (phases **D, E remain open** — suggested order **D → E**). Suite **2673 passed / 41 skipped**
+on the Phase-F branch (Phase-C baseline 2669/41 → **+4**: T3 ×2 rollback + T7 ×2 SSRF; T1/T2/T6 de-flakes at the
+same count); typecheck + `npm run build` green; two consecutive full runs identical. **NEXT ACTION = owner
+review/merge of the stack (G + A already merged; then B, then C, then F).** Per-phase detail below (Phase F,
+then C, then B, then A, then G)._
+
+
+_2026-06-30 — **Full audit — Phase F (TEST-SUITE ROBUSTNESS; T1–T3 + T5–T7 dispositions) — branch
+`audit-2026-06-30-phaseF-tests` (STACKED on `audit-2026-06-30-phaseC-reliability`; UNMERGED; do NOT
+auto-merge/push). TEST-ONLY — `git diff src/` is EMPTY** (the T7 numeric-host gap was already closed by the
+URL parser, so no guard change). Removes the timing-dependent and implementation-detail oracles the audit's
+§4 flagged, and closes two coverage gaps; every new oracle drives the REAL entry point with determinism from
+injected gates + `while (cond) await tick()` state-polling (NEVER a fixed `sleep(N)`), and every new
+rollback/flag oracle is teeth-checked (neuter → red → restore byte-identical). Suite **2673 passed / 41
+skipped** (Phase-C 2669/41 → **+4**: T3 ×2 + T7 ×2; T1/T2/T6 are de-flakes/strengthenings at the same count);
+`npm run typecheck` + `npm run build` green; **two consecutive full runs identical**. Durable record:
+architecture.md "Test-enforcement seams — design record" **Phase-F subsection**.
+- **T1 (Med) — vision teardown/cancel real-timer sleeps → deterministic park gates.** `void this.run` is
+  detached, so a fixed `sleep(2/5)` was the only thing "guaranteeing" the run() reached the REL-2 interleave
+  before teardown — it could pass vacuously under load. Both files now PARK the run() on an injected gate and
+  poll an observable counter (setImmediate drain). Test (2) redesigned to hold the teardown IN FLIGHT so the
+  post-`getStatus()` re-check is a LIVE co-guard. Teeth recorded honestly: both `tearingDown` checks are
+  CO-GUARDS → each scenario reds only on its DUAL neuter (the prior "single-neuter top-latch reds" comment was
+  inaccurate; corrected); the F18 cancel dual-neuter still reds with the drain.
+- **T2 (Med) — DocumentsScreen render-count deltas PAIRED with behavioral assertions.** Each PERF-5 case now
+  asserts the click EFFECT (toggle: `toBeChecked()` + siblings unchecked + toolbar `1 selected`; menu:
+  `getByRole('menu')` + item + sibling titles), keeping the `__docRowRenderCounts` deltas as a SECONDARY perf
+  oracle. Teeth: dropping `memo(DocRow)` reds the deltas (perf intact) while the behavioral layer passes.
+- **T3 (Med) — injected-failure ROLLBACK tests for the two untested high-blast-radius sites.** Added gold-
+  standard (data-layer-hardening) rollback tests for the **categorize persist** (real `DocTaskManager`+handler)
+  and the **ingestion chunk-insert loop** (real `processDocument`, throw on the 2nd insert) — no partial rows +
+  connection-not-poisoned + clean recovery; teeth-checked (neuter `ROLLBACK` → red). **Audit correction:**
+  `commitNode` (H11) + the extraction insert ALREADY have rollback tests — "1 of ~12" was ≥3.
+- **T5–T7 (Low, backlog):** T5 swept — converted the 3 genuine correctness-gates (`reranker`/`e5`/`ocr-task`
+  fixed waits → state-polls), recorded the residuals (timestamp-monotonicity, absence-settle, slow-op
+  simulations), kept the 3× timeout headroom. T6 — `changingPassword` lifecycle pinned via a property-trap on
+  the real `changePassword` (asserts `[true,false]` + in-flight refusal; teeth: neuter the flag SET → red). T7
+  — **already-mitigated** (WHATWG `new URL` canonicalizes numeric IPv4 → dotted-decimal before the deny-regex);
+  regression-pinned in both F15 styles, NO guard change.
+- **Scope:** `tests/integration/vision-teardown.test.ts`, `vision-cancel.test.ts`, `reranker.test.ts`,
+  `e5-embedder.test.ts`, `ocr-task.test.ts`, `doctasks-categorize.test.ts`, `ingestion.test.ts`,
+  `password-change.test.ts`, `assets.test.ts`, `tests/renderer/DocumentsScreen.test.tsx` (10 test files; no
+  `src/` change). T1–T3/T5–T7 marked ✅ in the report; phases D/E remain open; report NOT retired._
 
 
 _2026-06-30 — **Full audit — Phase C (LOCK/TEARDOWN RELIABILITY; R1 live + R2–R7 latent) — branch

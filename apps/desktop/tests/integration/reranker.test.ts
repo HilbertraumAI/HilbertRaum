@@ -122,7 +122,10 @@ describe('LlamaReranker', () => {
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: hangingFetch })
     const controller = new AbortController()
     const rerankPromise = reranker.rerank('q', ['a', 'b'], { signal: controller.signal })
-    await new Promise((r) => setTimeout(r, 1))
+    // Deterministically wait until the rerank request has REACHED fetch (the signal was handed over)
+    // before aborting — a fixed `sleep(1)` could fire before fetch under CPU starvation and exercise a
+    // different (pre-flight) path (T5). State-poll on the captured signal (the file's own idiom).
+    while (!seenSignal) await new Promise((r) => setTimeout(r, 1))
     controller.abort()
     await expect(rerankPromise).rejects.toThrow(/abort/i)
     expect(seenSignal?.aborted).toBe(true)

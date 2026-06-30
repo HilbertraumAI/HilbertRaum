@@ -243,6 +243,79 @@ describe('categorize doctask — extract does not auto-categorize (U-2)', () => 
   })
 })
 
+describe('categorize doctask — persist rollback (T3: no partial categorization survives a failure)', () => {
+  it('rolls back the category_id persist on an injected mid-transaction failure; connection not poisoned', async () => {
+    // Drive the REAL categorize handler (via the REAL DocTaskManager). Seed a fresh statement so the
+    // auto-extract path is skipped and the only `UPDATE bank_transactions SET category_id` is the
+    // step-(3) persist (handlers/categorize.ts:110 BEGIN…COMMIT). Mirror the data-layer-hardening
+    // gold standard (deleteConversation): wrap the connection so the FIRST persist UPDATE throws
+    // mid-transaction — after BEGIN + the in-txn `ensureBuiltinCategories` seed — and assert (a)
+    // nothing partial persisted AND (b) the shared connection is not poisoned.
+    const docId = await importText('Umsätze EUR\nplaceholder')
+    const stmtId = seedStatement(docId, [
+      { desc: 'REWE Markt', amount: -45.9 },
+      { desc: 'Amazon Bestellung', amount: -20 }
+    ])
+
+    // Everything except the targeted row UPDATE hits the real connection (so BEGIN/COMMIT/ROLLBACK and
+    // the category seed are genuine); the throw is ONE-shot so a later clean run recovers fully.
+    let failOnce = true
+    const wrapped = new Proxy(db as object, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            if (failOnce && sql.includes('UPDATE bank_transactions SET category_id')) {
+              return {
+                run: () => {
+                  failOnce = false
+                  throw new Error('injected: category_id persist failed mid-transaction')
+                }
+              }
+            }
+            return (target as Db).prepare(sql)
+          }
+        }
+        const val = (target as Record<string | symbol, unknown>)[prop]
+        return typeof val === 'function' ? (val as (...a: unknown[]) => unknown).bind(target) : val
+      }
+    }) as unknown as Db
+
+    const runtime = scriptedRuntime((d) => (d.includes('REWE') ? 'Groceries' : 'Shopping'))
+    const deps: DocTaskDeps = {
+      getDb: () => wrapped,
+      getRuntime: () => runtime,
+      isChatStreaming: () => false,
+      getContextTokens: () => 4096,
+      getStoreDir: () => storeDir,
+      getIngestionDeps: () => ({}),
+      beginDocumentWork: () => () => {}
+    }
+    const mgr = new DocTaskManager(deps)
+    const status = await waitTerminal(mgr, mgr.startDocTask({ kind: 'categorize', documentIds: [docId] }).jobId)
+
+    // (a) The task FAILED and NOTHING partial persisted: the rows are still uncategorized, the
+    // statement was never marked model-assisted, AND the in-transaction builtin-category seed was
+    // rolled back too (the rollback genuinely un-did every in-txn write, not just the row UPDATE).
+    expect(status.state).toBe('failed')
+    expect(persistedCategories(stmtId)).toEqual([null, null])
+    expect(categorizedByModel(stmtId)).toBeNull()
+    const catCount = (db.prepare('SELECT COUNT(*) AS n FROM bank_categories').get() as { n: number }).n
+    expect(catCount).toBe(0)
+
+    // (b) The shared connection is NOT poisoned — a fresh transaction opens cleanly (it would throw
+    // "cannot start a transaction within a transaction" if a BEGIN were left dangling by the failure).
+    expect(() => {
+      db.exec('BEGIN')
+      db.exec('COMMIT')
+    }).not.toThrow()
+
+    // A clean re-run (the injection was one-shot) categorizes + persists normally — full recovery.
+    const status2 = await waitTerminal(mgr, mgr.startDocTask({ kind: 'categorize', documentIds: [docId] }).jobId)
+    expect(status2.state).toBe('done')
+    expect(persistedCategories(stmtId)).toEqual(['Groceries', 'Shopping'])
+  })
+})
+
 describe('categorize doctask — auto-extract (the (D) ordering fix)', () => {
   it('extracts the statement first when none exists, then categorizes', async () => {
     // A bank-statement-shaped .txt with NO prior extraction — clicking categorize before extract.

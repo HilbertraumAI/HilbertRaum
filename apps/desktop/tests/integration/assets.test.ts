@@ -759,6 +759,31 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
       ).rejects.toThrow(/private\/loopback/)
       expect(existsSync(dest)).toBe(false)
     })
+
+    // T7 (full-audit-2026-06-30): decimal / hex / octal IPv4 ENCODINGS of a loopback / metadata host.
+    // The audit flagged the deny-list as "literal-dotted-decimal only" — but the WHATWG URL parser
+    // CANONICALIZES every numeric IPv4 spelling to dotted-decimal BEFORE the host classifier sees it
+    // (`new URL('https://2130706433/').hostname === '127.0.0.1'`), so `assertSafeDownloadUrl` already
+    // rejects them. These pin the REAL enforcement path (assertSafeDownloadUrl via downloadToFile)
+    // against a redirect to each encoding — no src change was needed (the guard is NOT bypassable by
+    // a numeric host).
+    it('blocks a redirect to a decimal/hex/octal-encoded loopback or metadata IP (T7 SSRF)', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      for (const target of [
+        'https://2130706433/x', // decimal 127.0.0.1
+        'https://0x7f000001/x', // hex     127.0.0.1
+        'https://017700000001/x', // octal 127.0.0.1
+        'https://2852039166/x' // decimal 169.254.169.254 (cloud metadata)
+      ]) {
+        const dest = join(root, 'x.gguf')
+        await expect(
+          downloadToFile('https://cdn.example.test/a', dest, {
+            fetchImpl: routeFetch(() => redirectTo(target))
+          })
+        ).rejects.toThrow(/private\/loopback/)
+        expect(existsSync(dest)).toBe(false)
+      }
+    })
   })
 
   // F15 — direct unit coverage on the host classifier. Feed it exactly what the enforcement seam
@@ -788,6 +813,18 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
       expect(isPrivateOrLoopbackHost(hostOf('https://huggingface.co/x'))).toBe(false)
       expect(isPrivateOrLoopbackHost(hostOf('https://cdn-lfs.huggingface.co/x'))).toBe(false)
       expect(isPrivateOrLoopbackHost(hostOf('https://8.8.8.8/x'))).toBe(false)
+    })
+
+    // T7 (full-audit-2026-06-30): decimal / hex / octal IPv4 encodings of loopback + metadata. `new
+    // URL` normalizes every numeric spelling to dotted-decimal, so the classifier — fed the
+    // canonicalized host exactly as the enforcement seam feeds it — denies them. The deny-list is NOT
+    // bypassable by a numeric encoding (the audit's "literal-dotted-decimal only" concern does not hold).
+    it('denies decimal/hex/octal IPv4 encodings of loopback + metadata (T7 — canonicalized by new URL)', () => {
+      expect(isPrivateOrLoopbackHost(hostOf('https://2130706433/x'))).toBe(true) // decimal 127.0.0.1
+      expect(isPrivateOrLoopbackHost(hostOf('https://0x7f000001/x'))).toBe(true) // hex 127.0.0.1
+      expect(isPrivateOrLoopbackHost(hostOf('https://0177.0.0.1/x'))).toBe(true) // octal first octet
+      expect(isPrivateOrLoopbackHost(hostOf('https://017700000001/x'))).toBe(true) // octal whole
+      expect(isPrivateOrLoopbackHost(hostOf('https://2852039166/x'))).toBe(true) // decimal metadata
     })
   })
 })

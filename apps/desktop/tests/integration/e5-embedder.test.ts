@@ -258,8 +258,10 @@ describe('E5Embedder', () => {
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: hangingFetch })
     const controller = new AbortController()
     const embedPromise = embedder.embed(['hello'], { signal: controller.signal })
-    // Let the request reach the fetch, then the user hits Stop.
-    await new Promise((r) => setTimeout(r, 1))
+    // Deterministically wait until the embed request REACHED fetch (the signal was handed over)
+    // before the user hits Stop — a fixed `sleep(1)` could fire before fetch under load (T5).
+    // State-poll on the captured signal (the file's own idiom).
+    while (!seenSignal) await new Promise((r) => setTimeout(r, 1))
     controller.abort()
     await expect(embedPromise).rejects.toThrow(/abort/i)
     // The signal handed to fetch fires when the caller aborts (combined with the timeout).
