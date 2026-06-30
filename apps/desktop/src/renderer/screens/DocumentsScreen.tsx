@@ -1,5 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
 import { SourcesDisclosure } from '../chat/SourcesDisclosure'
 import { AssistantMarkdown } from '../chat'
@@ -83,6 +84,17 @@ const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
  * behaviour is identical with or without it. Reset by the test between renders.
  */
 export const __docRowRenderCounts = new Map<string, number>()
+
+/**
+ * PERF-2 (= PERF-5 Part B; full-audit-2026-06-29 follow-up, Phase 4) — list windowing.
+ * Estimated row height for `@tanstack/react-virtual`: `.doc-row` is `min-height: 56px` + a 1px
+ * bottom border. It is only the FIRST-PAINT estimate — each rendered row reports its true height
+ * via `measureElement`, so a taller row (a failed-import error banner, a stale-embeddings notice,
+ * a wrapping chip cluster) self-corrects. Overscan keeps a cushion of off-screen rows so a small
+ * estimate error never flashes a gap.
+ */
+const DOC_ROW_ESTIMATED_HEIGHT = 57
+const DOC_ROW_OVERSCAN = 10
 
 /**
  * Per-document status badge. Audio in `extracting` is honestly "Transcribing…" —
@@ -675,6 +687,62 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       : sectioned
   }, [docs, section])
 
+  // PERF-2 (= PERF-5 Part B; full-audit-2026-06-29 follow-up, Phase 4) — window the documents list
+  // so the live DOM (and the per-row Radix `DropdownMenu.Root` state machines) stop growing linearly
+  // with library size. The screen scrolls as a whole inside the app's `.content` container (NOT an
+  // inner pane), so we virtualize AGAINST that existing scroll element with a `scrollMargin` for the
+  // header/hints above the list — additive, the full-screen scroll behavior is unchanged.
+  //
+  // GATING: windowing only engages once a real, laid-out scroll viewport is resolved
+  // (`clientHeight > 0`). With no `.content` ancestor or a zero-height viewport — a unit test
+  // rendering the screen standalone under jsdom, or first paint before layout — there is nothing to
+  // virtualize, so we fall back to rendering every row (byte-identical to the pre-PERF-2 list). This
+  // keeps the existing DocumentsScreen test corpus on the un-windowed path and is a truthful guard,
+  // not a test-env sniff (a 0px viewport genuinely can't be windowed). KNOWN TRADEOFF: find-in-page
+  // (Ctrl+F) can't match a row that isn't currently rendered — acceptable for a name-scannable
+  // library list (documented in docs/known-limitations.md).
+  const docListRef = useRef<HTMLDivElement | null>(null)
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null)
+  const [scrollMargin, setScrollMargin] = useState(0)
+
+  // Resolve the screen scroll container once mounted.
+  useLayoutEffect(() => {
+    setScrollEl((docListRef.current?.closest('.content') as HTMLElement | null) ?? null)
+  }, [])
+
+  // Keep the list's start offset within the scroll container current (content above it — hints,
+  // banners — can change height on section switch / doc-count change / window resize).
+  useLayoutEffect(() => {
+    const list = docListRef.current
+    if (!list || !scrollEl) return
+    const recompute = (): void => {
+      const m =
+        list.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop
+      setScrollMargin((prev) => (Math.abs(prev - m) > 0.5 ? Math.max(0, m) : prev))
+    }
+    recompute()
+    const ro = new ResizeObserver(recompute)
+    ro.observe(scrollEl)
+    ro.observe(list)
+    window.addEventListener('resize', recompute)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', recompute)
+    }
+  }, [scrollEl, visibleDocs.length, section])
+
+  const rowVirtualizer = useVirtualizer({
+    count: visibleDocs.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: () => DOC_ROW_ESTIMATED_HEIGHT,
+    overscan: DOC_ROW_OVERSCAN,
+    scrollMargin,
+    // Stable identity per document so a list reorder/filter doesn't desync measured heights.
+    getItemKey: (index) => visibleDocs[index]?.id ?? index
+  })
+  const windowed = scrollEl != null && scrollEl.clientHeight > 0
+  const virtualRows = rowVirtualizer.getVirtualItems()
+
   // Rail counts for the rare diagnostic views — one bucketing pass over docs instead of the four
   // independent `docs.filter` passes the render body used to run (FE-2).
   const rareCounts = useMemo(() => {
@@ -845,6 +913,63 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const handleKeepInLibrary = useEventCallback(onKeepInLibrary)
   const handleSetLifecycle = useEventCallback(onSetLifecycle)
   const handleRemoveFromCollection = useEventCallback(onRemoveFromCollection)
+
+  // One row's <DocRow> — shared by the windowed and the un-windowed (fallback) list paths (PERF-2),
+  // so the props wiring stays in exactly one place. The data SOURCE is unchanged from the former
+  // inline `visibleDocs.map`; only its call site moved.
+  const renderRow = (d: DocumentInfo): JSX.Element => {
+    // Derive the per-row task in the PARENT (perf audit PERF-5): the activeTask module store
+    // changes on EVERY 400 ms progress tick, so passing it whole would re-render every row each
+    // tick. `rowTask` is the active task narrowed to THIS row (so it shows the busy/cancel pair)
+    // or `null` — and `null` is Object.is-stable across ticks, so the ~all rows with no active
+    // task keep their memo while only the one targeted row re-renders.
+    const rowTask =
+      activeTask != null &&
+      activeTask.documentIds.includes(d.id) &&
+      !isDocTaskTerminal(activeTask.status)
+        ? activeTask
+        : null
+    return (
+      <DocRow
+        key={d.id}
+        d={d}
+        // Per-row BOOLEANS, never the whole Set/string (PERF-5): an unrelated row's selection
+        // or menu change can't bust this row's memo.
+        selected={selected.has(d.id)}
+        menuOpen={menuOpenId === d.id}
+        rowTask={rowTask}
+        // `activeTask !== null` is a stable boolean across progress ticks (the menu items only
+        // care whether ANY task runs, to disable themselves) — not the changing store object.
+        anyTaskActive={activeTask !== null}
+        t={t}
+        tCount={tCount}
+        lang={lang}
+        sourcesById={sourcesById}
+        ocrAvailable={ocrAvailable}
+        busy={busy}
+        previewLoading={previewLoading}
+        showCheckbox={Boolean(onAskSelected)}
+        isProjectSection={section.kind === 'project'}
+        projectSectionId={section.kind === 'project' ? section.id : null}
+        hasActiveProjects={activeProjects.length > 0}
+        onToggleSelected={handleToggleSelected}
+        setMenuOpenId={setMenuOpenId}
+        onPreview={handlePreview}
+        run={handleRun}
+        onSummarize={handleSummarize}
+        setTranslateDoc={setTranslateDoc}
+        onMakeSearchable={handleMakeSearchable}
+        onBuildDeepIndex={handleBuildDeepIndex}
+        onExport={handleExport}
+        setAddToProjectFor={setAddToProjectFor}
+        setProjectModal={setProjectModal}
+        onKeepInLibrary={handleKeepInLibrary}
+        onSetLifecycle={handleSetLifecycle}
+        onRemoveFromCollection={handleRemoveFromCollection}
+        setConfirmDelete={setConfirmDelete}
+      />
+    )
+  }
 
   return (
     <div className="screen docs-screen">
@@ -1020,61 +1145,35 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
       {/* Reading column (§11.6 refinement): the list is capped to a ~1000px max-width, left-
           aligned with the screen's content gutter (NOT centred), so long filenames get room and
-          the right-aligned Preview/⋯ column never drifts to a far edge on wide displays. */}
-      <div className="doc-list">
-      {visibleDocs.map((d) => {
-        // Derive the per-row task in the PARENT (perf audit PERF-5): the activeTask module store
-        // changes on EVERY 400 ms progress tick, so passing it whole would re-render every row each
-        // tick. `rowTask` is the active task narrowed to THIS row (so it shows the busy/cancel pair)
-        // or `null` — and `null` is Object.is-stable across ticks, so the ~all rows with no active
-        // task keep their memo while only the one targeted row re-renders.
-        const rowTask =
-          activeTask != null &&
-          activeTask.documentIds.includes(d.id) &&
-          !isDocTaskTerminal(activeTask.status)
-            ? activeTask
-            : null
-        return (
-          <DocRow
-            key={d.id}
-            d={d}
-            // Per-row BOOLEANS, never the whole Set/string (PERF-5): an unrelated row's selection
-            // or menu change can't bust this row's memo.
-            selected={selected.has(d.id)}
-            menuOpen={menuOpenId === d.id}
-            rowTask={rowTask}
-            // `activeTask !== null` is a stable boolean across progress ticks (the menu items only
-            // care whether ANY task runs, to disable themselves) — not the changing store object.
-            anyTaskActive={activeTask !== null}
-            t={t}
-            tCount={tCount}
-            lang={lang}
-            sourcesById={sourcesById}
-            ocrAvailable={ocrAvailable}
-            busy={busy}
-            previewLoading={previewLoading}
-            showCheckbox={Boolean(onAskSelected)}
-            isProjectSection={section.kind === 'project'}
-            projectSectionId={section.kind === 'project' ? section.id : null}
-            hasActiveProjects={activeProjects.length > 0}
-            onToggleSelected={handleToggleSelected}
-            setMenuOpenId={setMenuOpenId}
-            onPreview={handlePreview}
-            run={handleRun}
-            onSummarize={handleSummarize}
-            setTranslateDoc={setTranslateDoc}
-            onMakeSearchable={handleMakeSearchable}
-            onBuildDeepIndex={handleBuildDeepIndex}
-            onExport={handleExport}
-            setAddToProjectFor={setAddToProjectFor}
-            setProjectModal={setProjectModal}
-            onKeepInLibrary={handleKeepInLibrary}
-            onSetLifecycle={handleSetLifecycle}
-            onRemoveFromCollection={handleRemoveFromCollection}
-            setConfirmDelete={setConfirmDelete}
-          />
-        )
-      })}
+          the right-aligned Preview/⋯ column never drifts to a far edge on wide displays.
+          PERF-2: when a real scroll viewport is resolved the list is WINDOWED (only the rows in/
+          near the viewport mount); otherwise every row renders (the pre-PERF-2 path). */}
+      <div className="doc-list" ref={docListRef}>
+      {windowed ? (
+        // Canonical `@tanstack/react-virtual` "scroll container with content above" layout: an
+        // outer spacer of the full virtual height, and an inner stack translated to the first
+        // visible row (offset by `scrollMargin`). Each row is wrapped in a measured element so a
+        // variable-height row (banner / wrapping chips) corrects the estimate.
+        <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${(virtualRows[0]?.start ?? 0) - rowVirtualizer.options.scrollMargin}px)`
+            }}
+          >
+            {virtualRows.map((vi) => (
+              <div key={vi.key} data-index={vi.index} ref={rowVirtualizer.measureElement}>
+                {renderRow(visibleDocs[vi.index])}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        visibleDocs.map((d) => renderRow(d))
+      )}
       </div>{/* /doc-list */}
         </div>
       </div>{/* /docs-layout */}
