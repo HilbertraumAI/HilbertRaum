@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
+import { ocrMetaFromJson } from './ingestion/ocr-meta'
 
 // SQLite storage via Node's built-in driver (no native compilation).
 // Requires the bundled Node >= 22.5; Electron is pinned ^37 (Node 22.x) so the packaged
@@ -479,6 +480,39 @@ function ensureColumn(db: Db, table: string, column: string, ddl: string): void 
   }
 }
 
+/**
+ * PERF-3 (full-audit-2026-06-29 follow-up, Phase 4) — one-time backfill of the `ocr_meta_json`
+ * sidecar for rows imported before that column existed. Reads each row's `ocr_json` blob ONCE,
+ * extracts ONLY the surface metadata (`ocrMetaFromJson` — never page text), and writes the sidecar
+ * so the hot `listDocuments` path can read the OCR badge without parsing the blob again. After the
+ * first open every OCR'd row has meta, so subsequent opens select zero rows (a cheap indexed-status
+ * scan). Touches ONLY the new column — `updated_at` is left alone (a transparent migration, not a
+ * content edit), and no FK/lifecycle column is read or written, so an old on-disk workspace opens
+ * cleanly. Batched in one transaction to amortize fsyncs on the high-latency USB drive (DB-2).
+ */
+function backfillOcrMeta(db: Db): void {
+  const rows = db
+    .prepare(
+      "SELECT id, ocr_json FROM documents WHERE ocr_json IS NOT NULL AND ocr_meta_json IS NULL"
+    )
+    .all() as Array<{ id: string; ocr_json: string | null }>
+  if (rows.length === 0) return
+  const update = db.prepare('UPDATE documents SET ocr_meta_json = ? WHERE id = ?')
+  db.exec('BEGIN')
+  try {
+    for (const r of rows) {
+      const meta = ocrMetaFromJson(r.ocr_json)
+      // A blob that yields no valid page leaves meta NULL (the badge was already absent); it is
+      // re-examined on the next open (negligible — effectively never happens for real OCR output).
+      if (meta) update.run(JSON.stringify(meta), r.id)
+    }
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
 // The FTS5 keyword index over chunk text, used by hybrid retrieval (rag-design §11).
 // SELF-CONTAINED (text + chunk_id UNINDEXED), deliberately NOT an
 // external-content table keyed on chunks' implicit rowid — `chunks.id` is a TEXT PK, so
@@ -665,6 +699,13 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'documents', 'origin_json', 'origin_json TEXT')
   // Persisted per-page OCR recognition (content — lives only in this DB).
   ensureColumn(db, 'documents', 'ocr_json', 'ocr_json TEXT')
+  // PERF-3 (full-audit-2026-06-29 follow-up, Phase 4): cheap metadata-only OCR sidecar
+  // (`{ pageCount, languages, engineId, createdAt }` — a serialized DocumentOcrInfo, counts/ids
+  // only, NEVER page text). `listDocuments` reads the OCR badge from this column instead of
+  // JSON.parse-ing the multi-MB `ocr_json` blob per row. Additive + nullable (NULL = not yet
+  // backfilled OR no OCR); populated at OCR-write time and by the one-time backfill below.
+  ensureColumn(db, 'documents', 'ocr_meta_json', 'ocr_meta_json TEXT')
+  backfillOcrMeta(db)
   // Document-organization columns (plan §8.2/§8.3). All nullable — the ensureColumn DDL
   // grammar allows no DEFAULT/NOT NULL, so NULL is the sentinel, coalesced in code
   // (`lifecycle` NULL ⇒ 'permanent', the parseScope precedent).

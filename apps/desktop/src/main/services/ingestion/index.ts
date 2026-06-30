@@ -44,6 +44,7 @@ import {
   type ParsedDocument
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
+import { parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
 
@@ -161,6 +162,9 @@ interface DocumentRow {
   summary_json: string | null
   origin_json: string | null
   ocr_json: string | null
+  // PERF-3: cheap metadata-only sidecar for the OCR badge — `listDocuments` projects this and
+  // NOT `ocr_json`, so the hot list path never parses page text. Absent on the narrow projection.
+  ocr_meta_json?: string | null
   lifecycle: string | null
   source_folder_label: string | null
   tree_status: string | null
@@ -315,6 +319,20 @@ function ocrInfoOf(stored: StoredOcr | null): DocumentOcrInfo | null {
   }
 }
 
+/**
+ * The OCR badge for a document row. PERF-3 (full-audit-2026-06-29 follow-up): prefer the cheap
+ * `ocr_meta_json` sidecar so the hot `listDocuments` path NEVER materializes OCR page text. Falls
+ * back to a one-shot full `parseOcr(ocr_json)` only for a not-yet-backfilled row — and `listDocuments`
+ * never reaches that fallback (its projection omits `ocr_json` entirely AND the open-time backfill
+ * populates the sidecar first), so the megabytes-per-call parse is gone from the list path. The
+ * single-doc `getDocument` (SELECT *) carries both columns, so the sidecar still wins there too.
+ */
+function ocrInfoForRow(row: DocumentRow): DocumentOcrInfo | null {
+  const meta = parseOcrMeta(row.ocr_meta_json)
+  if (meta) return meta
+  return ocrInfoOf(parseOcr(row.ocr_json))
+}
+
 function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boolean): DocumentInfo {
   return {
     id: row.id,
@@ -331,7 +349,7 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     // DERIVED scan marker: failed with the exact scan notice. The OCR task targets
     // exactly these rows (plus already-OCR'd PDFs for a re-run).
     scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
-    ocr: ocrInfoOf(parseOcr(row.ocr_json)),
+    ocr: ocrInfoForRow(row),
     // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +
     // folder-import display label. Collection memberships are merged in by listDocuments
     // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
@@ -1212,16 +1230,30 @@ export function setDocumentOcr(
   documentId: string,
   ocr: { pages: OcrPage[]; engineId: string; languages: string[] } | null
 ): void {
+  const createdAt = nowIso()
   const json = ocr
     ? JSON.stringify({
         pages: ocr.pages,
         engineId: ocr.engineId,
         languages: ocr.languages,
-        createdAt: nowIso()
+        createdAt
       })
     : null
-  db.prepare('UPDATE documents SET ocr_json = ?, updated_at = ? WHERE id = ?').run(
+  // PERF-3: write the cheap metadata sidecar alongside the full blob so `listDocuments` reads the
+  // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json`:
+  // clearing OCR (ocr === null) nulls both. `pages.length` here == the valid-page count
+  // `ocrMetaFromJson` derives from the just-written blob (engine pages are always well-formed).
+  const metaJson = ocr
+    ? JSON.stringify({
+        pageCount: ocr.pages.length,
+        languages: ocr.languages,
+        engineId: ocr.engineId,
+        createdAt
+      })
+    : null
+  db.prepare('UPDATE documents SET ocr_json = ?, ocr_meta_json = ?, updated_at = ? WHERE id = ?').run(
     json,
+    metaJson,
     nowIso(),
     documentId
   )
@@ -1383,10 +1415,21 @@ export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
  * if it has chunks but none embedded under the active model (an embedder switch left it
  * unsearchable until re-indexed).
  */
+// PERF-3 (full-audit-2026-06-29 follow-up, Phase 4): the explicit narrow column set for the hot
+// list path. Deliberately EXCLUDES `ocr_json` — the badge comes from the cheap `ocr_meta_json`
+// sidecar (`ocrInfoForRow`), so a library of large scans no longer parses megabytes of OCR page
+// text on every documents-screen mount / import-completion / collection change. Every other
+// `DocumentRow` field `rowToInfo` reads is listed; `original_path` is in DocumentRow but unused by
+// the list (rowToInfo maps it but it is dropped client-side) — included to keep the row complete.
+const LIST_DOCUMENT_COLUMNS =
+  'id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message, ' +
+  'summary_json, origin_json, ocr_meta_json, lifecycle, source_folder_label, tree_status, ' +
+  'tree_meta_json, fully_chunked, extract_status, created_at, updated_at'
+
 export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): DocumentInfo[] {
   const rows = prepareCached(
     db,
-    "SELECT * FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC"
+    `SELECT ${LIST_DOCUMENT_COLUMNS} FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC`
   ).all() as unknown as DocumentRow[]
   // One join for every membership (document-organization plan §16/§18 — one extra indexed
   // join, not N+1), grouped by document for the per-row `collections` chips.
