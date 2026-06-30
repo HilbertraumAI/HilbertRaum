@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, join, posix, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
@@ -702,7 +702,15 @@ export function runtimeMarkerPath(extractTo: string): string {
  * `runtime/llama.cpp/win` → `llama-server.exe`; the cpu safety-net → `cpu/llama-server.exe`.
  */
 export function markerBinaryKey(extractTo: string, binaryPath: string): string {
-  return relative(extractTo, binaryPath).split(sep).join('/')
+  // Keys are ALWAYS posix-separated so a marker written on one OS resolves on another (a
+  // portable drive). Normalize any host (`\`) separators to `/` first, then diff with posix
+  // semantics — correct on ANY host. The host `relative`/`sep` would mishandle win32-style
+  // inputs on a posix host (and vice-versa): on Linux, `relative('C:\\r\\win',
+  // 'C:\\r\\win\\cpu\\x.exe')` yields `../C:\\r\\win\\cpu\\x.exe`, not `cpu/x.exe`. In production
+  // host === target so both spellings agree; this also keeps the cross-platform unit assertions
+  // honest on the Linux CI leg.
+  const toPosix = (p: string): string => p.replace(/\\/g, '/')
+  return posix.relative(toPosix(extractTo), toPosix(binaryPath))
 }
 
 /** Read + parse an install marker. Never throws: missing/malformed → null. */

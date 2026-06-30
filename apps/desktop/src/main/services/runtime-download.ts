@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync } from 'node:fs'
 import { mkdir, readdir, rename, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { basename, join } from 'node:path'
+import { basename, join, win32 } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { tMain } from './i18n'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
@@ -188,9 +188,14 @@ export function resolveTarBinary(
   env: NodeJS.ProcessEnv = process.env,
   fileExists: (p: string) => boolean = existsSync
 ): string {
+  // Build the Windows candidate with win32 path semantics regardless of the HOST os, so the
+  // absolute `…\System32\tar.exe` is always backslash-separated (the host `join` would emit
+  // `C:\Windows/System32/tar.exe` when this runs on a posix host — e.g. the Linux CI leg, or a
+  // drive-build script invoked cross-platform). The posix candidates are already absolute
+  // literals, valid as-is on any host.
   const candidates =
     platform === 'win32'
-      ? [join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'tar.exe')]
+      ? [win32.join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'tar.exe')]
       : ['/usr/bin/tar', '/bin/tar']
   for (const candidate of candidates) {
     if (fileExists(candidate)) return candidate
