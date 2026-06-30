@@ -1,4 +1,8 @@
-import { inFlightStreams as realInFlightStreams } from './ipc/inflight'
+import {
+  inFlightStreams as realInFlightStreams,
+  streamSettled as realStreamSettled,
+  awaitInFlightStreamsSettled
+} from './ipc/inflight'
 import { detachVaultKey as realDetachVaultKey, log as realLog } from './services/logging'
 import type { AppContext } from './services/context'
 
@@ -10,6 +14,8 @@ import type { AppContext } from './services/context'
 export interface ShutdownDeps {
   /** In-flight chat/RAG stream cancellers (REL-4). Defaults to the real shared registry. */
   inFlightStreams?: Map<string, AbortController>
+  /** Per-stream "settled" promises (R1). Defaults to the real shared registry. */
+  streamSettled?: Map<string, Promise<void>>
   /** Flush the encrypted diagnostics log before `lock()` zeroes the vault key. */
   detachVaultKey?: () => void
   /** Logger (only `error` is used). */
@@ -28,12 +34,17 @@ export interface ShutdownDeps {
  * an ABORT, so `generateAssistantMessage` persists the partial reply (synchronously, via
  * `appendMessage`) while `ctx.db` is still open — `lock()` runs last. Killing the sidecar first
  * (the previous quit ordering: `runtime.stop()` with no prior abort) instead throws a NON-abort
- * stream error, and the partial is dropped rather than persisted-as-partial. The aborts are
- * synchronous; the partial persists during the awaited `runtime.stop()` window below (the same
- * settle guarantee the lock path already relies on — neither path awaits the stream itself).
+ * stream error, and the partial is dropped rather than persisted-as-partial.
+ *
+ * R1 (full-audit-2026-06-30, Phase C) SUPERSEDES the original "the partial persists during the
+ * awaited `runtime.stop()` window" reliance: that was a RACE (for an already-exited/mock sidecar
+ * `runtime.stop()` can resolve before the abort-unwind reaches `appendMessage`). The teardown now
+ * explicitly awaits each stream's SETTLE (`awaitInFlightStreamsSettled`) after the sidecar stop and
+ * before `lock()`, so persist-before-close is the ORDERING, not a race — mirroring `lockWorkspace`.
  */
 export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps = {}): Promise<void> {
   const inFlightStreams = deps.inFlightStreams ?? realInFlightStreams
+  const streamSettled = deps.streamSettled ?? realStreamSettled
   const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
   const log = deps.log ?? realLog
 
@@ -68,6 +79,15 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   } catch (err) {
     log.error('Error stopping sidecars on quit', String(err))
   }
+  // R1 (full-audit-2026-06-30, Phase C): deterministically await each aborted stream's SETTLE
+  // (its partial-reply persistence) before lock() closes the DB — the same guarantee the lock
+  // path now makes. The aborts above unwind each generation as an ABORT so the partial persists
+  // via `appendMessage` while `ctx.db` is open, but that runs in the stream's OWN promise this
+  // teardown never awaited; the REL-4 ordering only ensured the abort fired FIRST, still racing
+  // `runtime.stop()` vs the abort-unwind. Awaiting the settle makes persist-before-close the
+  // ordering. After the sidecar stop so a generation ignoring its signal is unwound by the dead
+  // sidecar (no quit stall). Best-effort (`allSettled`).
+  await awaitInFlightStreamsSettled(streamSettled)
   // Flush the encrypted diagnostics log to disk while the vault key is still live (lock() zeroes it).
   // No-op for plaintext_dev (that log is appended in real time).
   detachVaultKey()

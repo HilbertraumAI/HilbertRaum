@@ -267,6 +267,14 @@ export class VisionRuntime {
     const server = this.server
     this.server = null
     if (server) await server.stop()
+    // R7 (full-audit-2026-06-30, Phase C) — re-cancel AFTER the awaits so stop()'s postcondition
+    // ("no idle timer is live when I return") holds LOCALLY, without relying on armIdleTimer's
+    // guards. The literal race is ALREADY closed there — armIdleTimer returns early on BOTH
+    // `this.stopped` AND `!this.server`, and stop() sets both synchronously before any await, so a
+    // concurrent `analyze()` finally cannot arm a surviving timer today. This is a third,
+    // defense-in-depth backstop (it only becomes load-bearing if a future refactor weakens both of
+    // those checks). Idempotent no-op when nothing is armed.
+    this.cancelIdleTimer()
   }
 
   // ---- Idle-teardown interlock (RUNTIME-4) --------------------------------------------

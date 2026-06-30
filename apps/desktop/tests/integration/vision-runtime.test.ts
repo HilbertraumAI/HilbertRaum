@@ -396,4 +396,39 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     await tick()
     expect(children.length).toBe(1) // nothing extra spawned or killed
   })
+
+  // R7 (full-audit-2026-06-30, Phase C): analyze()'s `finally` armIdleTimer() vs a concurrent stop()
+  // is unsynchronized across the await. The literal race is ALREADY closed — TWICE — inside
+  // armIdleTimer (it returns early on `this.stopped` AND on `!this.server`, both of which stop() sets
+  // synchronously before any await), so a timer can't even be armed in the window. This is a
+  // PROPERTY/regression guard for that interlock (no idle timer survives a stop() racing an analyze
+  // settle); the re-cancel after stop()'s awaits is a third, defense-in-depth backstop that makes
+  // stop()'s "no live idle timer on return" postcondition LOCAL (independent of armIdleTimer's
+  // guards) — it only becomes load-bearing if a future refactor weakens BOTH of those checks.
+  it('(g) no idle timer survives a stop() that races an analyze settling (R7)', async () => {
+    const { spawn } = gatedSpawn()
+    const { clock, state } = fakeClock()
+    let releaseFetch!: () => void
+    const fetchGate = new Promise<void>((r) => (releaseFetch = r))
+    let chatCount = 0
+    const gatedFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      chatCount++
+      await fetchGate // hold the analyze in flight so its settle can be raced against stop()
+      return { ok: true, status: 200, body: sseBody(FIXTURE_SSE) } as unknown as Response
+    }) as typeof fetch
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: gatedFetch, idleClock: clock })
+
+    const p = rt.analyze(analyzeOpts) // in flight; the idle timer is cancelled while inFlight > 0
+    while (chatCount === 0) await tick() // analyze has reached the gated fetch
+
+    // stop() begins (sets `stopped` synchronously) and the analyze settles in its window: its
+    // `finally` calls armIdleTimer(), which must NOT arm a timer that outlives the teardown.
+    const stopP = rt.stop()
+    releaseFetch()
+    await Promise.allSettled([p, stopP])
+
+    expect(state.fire).toBeNull() // no idle timer armed/left live after the racing stop()
+  })
 })

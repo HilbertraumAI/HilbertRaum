@@ -31,6 +31,7 @@ vi.mock('../../src/main/services/embeddings', async (importOriginal) => {
 
 import { randomUUID } from 'node:crypto'
 import { encodeVector, getResidentVectors } from '../../src/main/services/embeddings'
+import { inFlightStreams, streamSettled } from '../../src/main/ipc/inflight'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
@@ -259,5 +260,55 @@ describe('registerWorkspaceIpc', () => {
     // now-closed db, whose `isTransaction` getter throws "database is not open".
     expect(purgeSpy).toHaveBeenCalledTimes(1)
     expect(purgeSpy.mock.calls[0][0]).toBe(db)
+  })
+
+  // R1 (full-audit-2026-06-30, Phase C): lockWorkspace aborts in-flight streams, then must AWAIT
+  // each stream's SETTLE (its abort-unwind partial-reply persistence) BEFORE purge/lock close the
+  // DB — instead of relying on runtime.stop() outrunning the abort-unwind. The lock handler reads
+  // the module-singleton inFlightStreams + streamSettled, so this populates those directly.
+  it('lockWorkspace awaits each in-flight stream settle before re-encrypting (R1)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const db = ctrl.requireDb()
+    expect(ctrl.isUnlocked()).toBe(true)
+
+    const controller = new AbortController()
+    let persist!: () => void
+    const persisted = { done: false }
+    inFlightStreams.set('c1', controller)
+    streamSettled.set(
+      'c1',
+      new Promise<void>((r) => {
+        persist = () => {
+          persisted.done = true
+          r()
+        }
+      })
+    )
+
+    try {
+      registerWorkspaceIpc({ ...ctxWith(ctrl), db } as unknown as AppContext)
+      const lockP = invoke(handlers, IPC.lockWorkspace)
+
+      const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+      await tick()
+      await tick()
+      await tick()
+      // The stream was aborted, but the DB is STILL OPEN — lock is blocked on the pending settle.
+      expect(controller.signal.aborted).toBe(true)
+      expect(persisted.done).toBe(false)
+      expect(ctrl.isUnlocked()).toBe(true) // reds if the settle-await is removed (DB already closed)
+
+      persist() // the partial finished persisting → settle resolves
+      const { result } = await lockP
+      expect(result).toMatchObject({ state: 'locked' })
+      expect(ctrl.isUnlocked()).toBe(false) // re-encrypted only AFTER the settle
+    } finally {
+      inFlightStreams.delete('c1')
+      streamSettled.delete('c1')
+    }
   })
 })

@@ -14,7 +14,7 @@ import type { ModelRuntime } from '../services/runtime'
 import { isExceedContextError } from '../services/runtime/llama'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
-import { inFlightStreams, streamBuffers } from './inflight'
+import { inFlightStreams, streamBuffers, streamSettled } from './inflight'
 
 // M-A2 (audit-2026-06-13): the plain-chat (`sendChatMessage`) and RAG (`askDocuments`)
 // handlers duplicated the entire stream lifecycle verbatim — the guard preamble plus the
@@ -143,6 +143,16 @@ export async function withChatStream(
   const controller = new AbortController()
   inFlightStreams.set(conversationId, controller)
   streamBuffers.set(conversationId, { content: '', reasoning: '' })
+  // R1: publish a "settled" promise the lock/quit teardown can await so a partial reply
+  // persists BEFORE the DB closes. Resolved (never rejected) in the `finally` below, AFTER
+  // `runFn` (and thus its abort-driven `appendMessage`) has fully unwound.
+  let markSettled: () => void = () => {}
+  streamSettled.set(
+    conversationId,
+    new Promise<void>((resolve) => {
+      markSettled = resolve
+    })
+  )
   let releaseSlot: () => void = () => {}
   const sendToken: SendToken = (token) => {
     const buf = streamBuffers.get(conversationId)
@@ -212,6 +222,11 @@ export async function withChatStream(
     if (inFlightStreams.get(conversationId) === controller) {
       inFlightStreams.delete(conversationId)
       streamBuffers.delete(conversationId)
+      streamSettled.delete(conversationId)
     }
+    // R1: signal this stream has fully unwound (its partial — if any — is persisted). A
+    // lock/quit teardown awaiting the settled promise can now safely close the DB. Resolve
+    // unconditionally and last, after the entry is cleared.
+    markSettled()
   }
 }

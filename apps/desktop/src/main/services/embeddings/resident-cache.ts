@@ -182,22 +182,41 @@ function build(db: Db, signature: Signature): ResidentVectors {
   return { signature, byChunk, modelByChunk, pending: null }
 }
 
-/** Decode `chunkId`'s stored vector by a point lookup on the `chunk_id` PRIMARY-KEY index and set
- *  it (+ its model id) on the cache maps (omitting a truncated/missing row, exactly like `build`).
- *  Shared by both reconcile paths. The `fetch` statement MUST also project `embedding_model_id`. */
-function decodeInto(
-  cached: ResidentVectors,
-  fetch: ReturnType<Db['prepare']>,
+/** A staged decode result: the decoded vector + its model id for one chunk_id (R3). */
+interface DecodedEntry {
   chunkId: string
-): void {
+  vec: Float32Array
+  model: string
+}
+
+/** Decode `chunkId`'s stored vector by a point lookup on the `chunk_id` PRIMARY-KEY index and RETURN
+ *  it (+ its model id), or null for a truncated/missing row (omitted exactly like `build`). PURE — it
+ *  does NOT mutate the cache, so a reconcile can STAGE every decode and apply the results to the live
+ *  maps only AFTER all of them succeed (R3 atomicity). The `fetch` statement MUST also project
+ *  `embedding_model_id`. */
+function decodeRow(fetch: ReturnType<Db['prepare']>, chunkId: string): DecodedEntry | null {
   const row = fetch.get(chunkId) as unknown as
     | { embedding_model_id: string; vector_blob: Uint8Array; dimensions: number }
     | undefined
-  if (!row) return // raced delete — left absent; the size gate / next signature mismatch self-heals
+  if (!row) return null // raced delete — left absent; the size gate / next signature mismatch self-heals
   const vec = decodeVector(row.vector_blob, row.dimensions)
-  if (vec) {
-    cached.byChunk.set(chunkId, vec) // truncated blob → omitted, exactly like build()
-    cached.modelByChunk.set(chunkId, row.embedding_model_id)
+  if (!vec) return null // truncated blob → omitted, exactly like build()
+  return { chunkId, vec, model: row.embedding_model_id }
+}
+
+/** Apply a staged set of removals + decoded additions to the live cache maps (R3). Map `delete`/`set`
+ *  never throw, so once every fallible decode has succeeded this commit step is effectively atomic —
+ *  the reconcile leaves either the fully-updated maps or (on an earlier decode throw) the untouched
+ *  prior maps, never a half-mutated mix. `byChunk` + `modelByChunk` are committed TOGETHER, keeping
+ *  their key sets aligned (the P2 invariant). */
+function applyStaged(cached: ResidentVectors, removed: Iterable<string>, added: DecodedEntry[]): void {
+  for (const id of removed) {
+    cached.byChunk.delete(id)
+    cached.modelByChunk.delete(id)
+  }
+  for (const e of added) {
+    cached.byChunk.set(e.chunkId, e.vec)
+    cached.modelByChunk.set(e.chunkId, e.model)
   }
 }
 
@@ -207,7 +226,8 @@ function decodeInto(
  * marshalling but never re-decodes the corpus (the PERF-1 win). Keyed on the unique `chunk_id`, so
  * correct across insert / delete / re-index / delete-then-reinsert-same-rowid and byte-identical to
  * a from-scratch `build` for any in-band sequence. Used for a delta-less `invalidate(db)` and as
- * the self-heal when the delta path's size gate trips. Mutates `cached.byChunk` in place.
+ * the self-heal when the delta path's size gate trips. Stages all decodes, then commits the live
+ * maps atomically (R3) — a mid-decode throw leaves the prior maps untouched for a clean retry.
  */
 function reconcileFull(db: Db, cached: ResidentVectors): void {
   const byChunk = cached.byChunk
@@ -215,27 +235,30 @@ function reconcileFull(db: Db, cached: ResidentVectors): void {
   const currentIds = new Set<string>()
   for (const r of idRows) currentIds.add(r.chunk_id)
 
-  // Drop cached ids that are no longer present (deletes / re-index of the old chunk ids).
-  for (const id of byChunk.keys()) {
-    if (!currentIds.has(id)) {
-      byChunk.delete(id)
-      cached.modelByChunk.delete(id) // keep modelByChunk's keys aligned with byChunk
-    }
-  }
+  // STAGE first (R3): the cached ids no longer present (deletes / re-index of the old ids) →
+  // removals; and ids present now but absent from the map → decode the new vectors (+ model id).
+  // Compute BOTH before mutating, so a throw mid-decode leaves the live maps untouched.
+  const removed: string[] = []
+  for (const id of byChunk.keys()) if (!currentIds.has(id)) removed.push(id)
 
-  // Decode ONLY ids present now but absent from the map — the new vectors (+ their model id).
   const fetch = db.prepare(
     'SELECT embedding_model_id, vector_blob, dimensions FROM embeddings WHERE chunk_id = ?'
   )
+  const added: DecodedEntry[] = []
   for (const id of currentIds) {
     if (byChunk.has(id)) continue
-    decodeInto(cached, fetch, id)
+    const decoded = decodeRow(fetch, id) // the only fallible step — staged, not yet committed
+    if (decoded) added.push(decoded)
   }
+
+  // Commit atomically — only reached once every decode above succeeded.
+  applyStaged(cached, removed, added)
 }
 
 /**
- * DELTA reconcile (F12): apply the NAMED chunk-id delta IN PLACE, decoding ONLY the added ids — no
- * whole-table `chunk_id` scan. Returns whether the result is CONSISTENT with the table's COUNT(*)
+ * DELTA reconcile (F12): apply the NAMED chunk-id delta, decoding ONLY the added ids — no
+ * whole-table `chunk_id` scan. The decodes are STAGED then committed atomically (R3), so a throw
+ * leaves the prior maps untouched. Returns whether the result is CONSISTENT with the table's COUNT(*)
  * (`signature.count`): a correct in-band delta over a correct base always is (a missed add → too
  * few entries, a missed/extra delete → too many — both caught), so a `false` return tells the
  * caller to fall back to the self-healing `reconcileFull`. A truncated-blob row (build omits it
@@ -250,19 +273,25 @@ function reconcileDelta(
   signature: Signature
 ): boolean {
   const byChunk = cached.byChunk
-  for (const id of pending.removed) {
-    byChunk.delete(id)
-    cached.modelByChunk.delete(id) // keep modelByChunk's keys aligned with byChunk
-  }
+  // STAGE the added decodes BEFORE mutating the live maps (R3): a throw / transient read error
+  // during decode then leaves the committed maps untouched (the apply step below is throwless), so
+  // a concurrent / subsequent search never observes a half-applied delta. Still O(|added|+|removed|)
+  // — only the named delta is touched, never the whole table (the F12 contract is preserved; this
+  // stages just the delta-sized work, NOT a clone of the resident map). `added`/`removed` are kept
+  // DISJOINT by `invalidate`, so order between them is irrelevant.
+  const added: DecodedEntry[] = []
   if (pending.added.size > 0) {
     const fetch = db.prepare(
       'SELECT embedding_model_id, vector_blob, dimensions FROM embeddings WHERE chunk_id = ?'
     )
     for (const id of pending.added) {
       if (byChunk.has(id)) continue // a surviving chunk_id's vector never mutates in-band
-      decodeInto(cached, fetch, id)
+      const decoded = decodeRow(fetch, id)
+      if (decoded) added.push(decoded)
     }
   }
+  // Commit atomically — only reached once every decode succeeded.
+  applyStaged(cached, pending.removed, added)
   // Cheap consistency gate (one `Map.size` compare): a correct delta over a correct base leaves
   // size == COUNT(*); any drift (or a truncated-blob omission) trips it → the caller self-heals.
   return byChunk.size === signature.count

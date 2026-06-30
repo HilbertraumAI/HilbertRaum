@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { withChatStream } from '../../src/main/ipc/chat-stream'
 import { ChatRequestError } from '../../src/main/services/runtime/llama'
-import { inFlightStreams, streamBuffers } from '../../src/main/ipc/inflight'
+import { inFlightStreams, streamBuffers, streamSettled } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
 import { type Message } from '../../src/shared/types'
 
@@ -45,6 +45,7 @@ describe('withChatStream (M-A2)', () => {
   beforeEach(() => {
     inFlightStreams.clear()
     streamBuffers.clear()
+    streamSettled.clear()
   })
 
   it('registers an in-flight controller, streams tokens, emits done, and clears the entry', async () => {
@@ -203,5 +204,35 @@ describe('withChatStream (M-A2)', () => {
       })
     ).rejects.toThrow('boom')
     expect(streamBuffers.has('c1')).toBe(false)
+  })
+
+  // R1 (full-audit-2026-06-30, Phase C): the wrapper publishes a per-stream "settled" promise the
+  // lock/quit teardown can await so a partial reply persists BEFORE the DB closes. It is registered
+  // alongside the controller and resolved (in the finally) only AFTER the run — and thus its
+  // abort-driven appendMessage — has fully unwound.
+  it('registers a per-stream settled promise and resolves it after the run unwinds (R1)', async () => {
+    const { event } = fakeEvent()
+    let settledResolved = false
+    await withChatStream(event, 'c1', 'label', async () => {
+      const settled = streamSettled.get('c1')
+      expect(settled).toBeInstanceOf(Promise) // registered for the duration of the run
+      void settled!.then(() => (settledResolved = true))
+      expect(settledResolved).toBe(false) // not resolved while the run is still in flight
+      return msg('done')
+    })
+    await new Promise((r) => setImmediate(r))
+    expect(streamSettled.has('c1')).toBe(false) // cleared in lockstep with the controller
+    expect(settledResolved).toBe(true) // resolved after the run unwound (the teardown await-point)
+  })
+
+  it('resolves the settled promise even when the run throws (teardown never hangs) (R1)', async () => {
+    const { event } = fakeEvent()
+    let settledResolved = false
+    await withChatStream(event, 'c1', 'label', async () => {
+      void streamSettled.get('c1')!.then(() => (settledResolved = true))
+      throw new Error('boom')
+    }).catch(() => undefined)
+    await new Promise((r) => setImmediate(r))
+    expect(settledResolved).toBe(true) // resolved (never rejected) so allSettled can't hang teardown
   })
 })

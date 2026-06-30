@@ -4,7 +4,7 @@ import type { AppContext } from '../services/context'
 import { VaultBusyError, WrongPasswordError } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
-import { inFlightStreams } from './inflight'
+import { inFlightStreams, awaitInFlightStreamsSettled } from './inflight'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
@@ -244,6 +244,17 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // analyze, so this needs no `suspend()`/latch distinction (the runtime instance is discarded).
       ctx.vision?.stop() ?? Promise.resolve()
     ])
+    // R1 (full-audit-2026-06-30, Phase C) — deterministically await each aborted stream's
+    // SETTLE (its partial-reply persistence) before the DB closes. The aborts above unwind each
+    // generation as an ABORT, so `generateAssistantMessage` persists the partial via
+    // `appendMessage` while `ctx.db` is open — but that runs in the stream's OWN promise, which
+    // this handler never awaited; previously it relied on `runtime.stop()` outrunning the
+    // abort-unwind (for an already-exited/mock sidecar `stop()` can resolve first → the partial
+    // is dropped, or `appendMessage` throws against the now-closed DB → an unhandled rejection).
+    // Awaiting the settle here makes persist-before-close the ORDERING, not a race. Placed after
+    // the sidecar stop so a generation that ignores its abort signal is still unwound by the
+    // dead sidecar (no teardown stall). Best-effort (`allSettled`).
+    await awaitInFlightStreamsSettled()
     // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
     // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text
     // they must not linger after the vault re-encrypts. The staleness signature does NOT cover
