@@ -285,7 +285,10 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     expect(completed?.metadata).toEqual({ kind: 'translation', documentId: docId })
     const imported = events.find((e) => e.type === 'document_imported')
     expect(imported?.metadata).toMatchObject({ documentId: newId, status: 'indexed' })
-    expect(imported?.message).toContain('doc (Deutsch).md')
+    // S1 (full-audit-2026-06-30): the materialized output's title is CONTENT — the
+    // message is a fixed string and must NOT carry the translated filename.
+    expect(imported?.message).toBe('Document imported')
+    expect(imported?.message).not.toContain('Deutsch')
 
     // The materialize transient is gone (shredded) — nothing `.parse*` lingers.
     expect(readdirSync(storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)

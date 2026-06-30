@@ -260,6 +260,13 @@ password recovery — are documented in
   not audited (only the explicit "Lock now" / stop actions are). A download that completes
   against a placeholder manifest hash records no `model_download_verified` event (checksum
   honesty — the AI Model screen shows UNVERIFIED).
+  - **Document import / re-index events no longer name the file (full-audit-2026-06-30 S1).**
+    The Activity panel rows read a plain "Document imported" / "Document re-indexed" instead of
+    interpolating the title/basename, because a user-chosen filename is **content** (it can be as
+    sensitive as the text it labels) and the whole log is exported verbatim by the plaintext
+    `activity-log.json` action. The event still records the `documentId` + `status` + `chunkCount`,
+    so the row is fully resolvable from inside the app; only the human-readable name is withheld
+    from the log, matching the chat (conversation title) and collections (project name) channels.
 
 ## Retrieval quality (Phase 21, [`rag-design.md`](rag-design.md) §11)
 

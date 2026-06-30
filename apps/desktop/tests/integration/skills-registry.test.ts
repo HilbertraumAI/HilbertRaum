@@ -16,6 +16,8 @@ import {
   type ReconcileOptions
 } from '../../src/main/services/skills/registry'
 import { loadSkillPackage } from '../../src/main/services/skills/loader'
+import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
+import { DEFAULT_SKILL_LIMITS, type SkillLimits } from '../../src/main/services/skills/limits'
 
 // Skills plan Phase S3 — registry & persistence (revised §0, plaintext plain-folder model):
 // the additive `skills` table + the uniform disk reconcile of app-skills/ + user-skills/, with
@@ -119,6 +121,54 @@ describe('skills registry — discovery', () => {
     const res = discoverSkillsInDir(join(tempDir(), 'does-not-exist'), 'app')
     expect(res.skills).toHaveLength(0)
     expect(res.errors).toHaveLength(0)
+  })
+})
+
+describe('skills registry — drop-in file-size cap (S2, full-audit-2026-06-30)', () => {
+  // The installer's stageZip/stageFolder enforce maxFileBytes; the DROP-IN read path
+  // (parseSkillManifestFromDir, reached by discoverSkillsInDir / loadSkillPackage on every
+  // reconcile + per chat turn) must do the same statSync pre-check so an over-cap SKILL.md /
+  // manifest.json dropped into the unencrypted user-skills/ is rejected/skipped WITHOUT being
+  // read wholesale into the main process — a local memory-exhaustion DoS otherwise.
+  const tightLimits: SkillLimits = { ...DEFAULT_SKILL_LIMITS, maxFileBytes: 512 }
+
+  it('rejects an over-cap SKILL.md without reading it (and the same file is fine under the default cap)', () => {
+    const dirs = makeDirs()
+    // A perfectly VALID skill whose SKILL.md is padded past the (tight) per-file cap; only the
+    // size cap can reject it (the 4 KiB body is far under the default 64 KiB maxBodyChars).
+    writeSkill(dirs.userSkillsDir, 'huge', { body: 'x'.repeat(4096) })
+
+    const capped = discoverSkillsInDir(dirs.userSkillsDir, 'user', { limits: tightLimits })
+    expect(capped.skills).toHaveLength(0)
+    expect(
+      capped.errors.some((e) => e.includes('huge') && /larger than the allowed size/.test(e))
+    ).toBe(true)
+
+    // Discriminator (teeth): the file is otherwise valid — under the default 1 MiB cap the
+    // identical folder discovers OK, so the statSync guard is the ONLY thing rejecting it.
+    const generous = discoverSkillsInDir(dirs.userSkillsDir, 'user')
+    expect(generous.skills.map((s) => s.folderName)).toEqual(['huge'])
+  })
+
+  it('skips an over-cap manifest.json without reading it; the skill still loads', () => {
+    const dirs = makeDirs()
+    // In-cap SKILL.md, but an over-cap manifest.json whose title CONFLICTS — if it were read, the
+    // parser would emit a DS2 conflict note. Padding keeps the JSON valid but past the tight cap.
+    const skillDir = writeSkill(dirs.userSkillsDir, 'cached', { title: 'Canonical Title' })
+    const conflicting = { title: 'STALE CACHE TITLE', _pad: 'y'.repeat(4096) }
+    writeFileSync(join(skillDir, 'manifest.json'), JSON.stringify(conflicting), 'utf8')
+
+    // The skill still loads (the over-cap cache is non-fatal, exactly like a malformed one)…
+    const capped = parseSkillManifestFromDir(skillDir, { limits: tightLimits })
+    expect(capped.ok).toBe(true)
+    expect(capped.manifest?.title).toBe('Canonical Title')
+    // …and the over-cap manifest.json was NOT read: a DS2 conflict note would appear if it had been.
+    expect(capped.notes.some((n) => /manifest\.json .* disagrees/.test(n))).toBe(false)
+
+    // Discriminator (teeth): under the default cap the same manifest.json IS read → the note appears.
+    const generous = parseSkillManifestFromDir(skillDir)
+    expect(generous.ok).toBe(true)
+    expect(generous.notes.some((n) => /manifest\.json .* disagrees/.test(n))).toBe(true)
   })
 })
 

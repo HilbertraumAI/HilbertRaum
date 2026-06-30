@@ -6,17 +6,66 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — Phases G + A MERGED to LOCAL master
-(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`); Phases B, C, F, D COMPLETE on UNMERGED
-STACKED branches — master ← B (`audit-2026-06-30-phaseB-perf`) ← C (`audit-2026-06-30-phaseC-reliability`) ←
-F (`audit-2026-06-30-phaseF-tests`) ← D (`audit-2026-06-30-phaseD-renderer`); awaiting owner review/merge of the
-stack — do NOT auto-merge/push.** The report is on master with D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A)
-dispositioned ✅; the Phase-B branch adds P1/P2 ✅ + P6 ⏸; the Phase-C branch adds R1–R7 ✅; the Phase-F branch
-adds T1–T3 ✅ + T5–T7 ✅ (T4 was in Phase A); the Phase-D branch adds F1–F8 ✅ (renderer-only). It is NOT retired
-(phase **E remains open**). Suite **2677 passed / 41 skipped** on the Phase-D branch (Phase-F baseline 2673/41 →
-**+4**: F1 + F4 + F6 + F8; F2/F3 guards + F5/F7 deferrals at the same count); typecheck + `npm run build` green.
-**NEXT ACTION = owner review/merge of the stack (G + A already merged; then B, then C, then F, then D).** Per-phase
-detail below (Phase D, then F, then C, then B, then A, then G)._
+_2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — ROUND COMPLETE (all 7 phases A–G
+dispositioned); report RETIRED** (`git rm`; lasting content folded into the new **architecture.md §40**
+master close-out ledger; original recoverable in git history). **Branch topology:** Phases G + A MERGED to
+LOCAL master (two `--no-ff` merges; NOT pushed); Phases B, C, F, D, E COMPLETE on UNMERGED STACKED branches —
+master ← B (`audit-2026-06-30-phaseB-perf`) ← C (`audit-2026-06-30-phaseC-reliability`) ← F
+(`audit-2026-06-30-phaseF-tests`) ← D (`audit-2026-06-30-phaseD-renderer`) ← E (`audit-2026-06-30-phaseE-security`).
+Per phase: G = D1–D10/M1 ✅ (docs); A = C1/C5 ✅ + T4 ✅; B = P1/P2 ✅ + P6 ⏸; C = R1–R7 ✅; F = T1–T3 ✅ + T5–T7 ✅;
+D = F1–F8 ✅ (renderer); **E = S1 ✅ (policy change) + S2/S3 ✅ + S4 re-affirmed**. Carried forward (no phase took
+them): C2/C3/C4, P3/P4/P5, P6 (schema-trigger follow-up), F5/F7, T5 residuals, S4, + the §26/§34/§38 residuals
+(SEC-1c/2/3, REL-5, PERF-2 chat half, E5 prefix). Suite **2680 passed / 41 skipped** on the Phase-E branch
+(Phase-D baseline 2677/41 → **+3**: S2 ×2 + S3 ×1); `npm run typecheck` + `npm run build` green. **NEXT ACTION
+(owner): review + merge the stack IN ORDER — G + A already on local master; then B → C → F → D → E. Do NOT
+auto-merge/push.** Per-phase detail below (Phase E, then D, F, C, B, A, G)._
+
+
+_2026-06-30 — **Full audit — Phase E (SECURITY CONSISTENCY; S1 policy decision + S2/S3 + S4 re-affirm) & ROUND
+CLOSE-OUT — branch `audit-2026-06-30-phaseE-security` (STACKED on the Phase-D branch; UNMERGED; do NOT
+auto-merge/push).** Offline / no telemetry / no new network egress; each S1–S4 fix independently revertible;
+behavior-preserving EXCEPT the intended S1 audit-payload change + the S2/S3 refusals. Suite **2680 passed / 41
+skipped** (Phase-D 2677/41 → **+3**); typecheck + `npm run build` green. Durable record: **architecture.md §40**
+(the round master close-out ledger).
+- **⚠️ S1 (Low-Med — a POLICY DECISION with a behavior change; surfaced LOUDLY for owner veto). Implemented
+  option (a): document titles/filenames are now CONTENT.** `document_imported` / `document_reindexed` (incl. the
+  doc-task *materialize* path in `handlers/shared.ts`) record `documentId` + `status` + `chunkCount` only — a
+  **fixed** message string, NO title. This deliberately changes the audit payload (prior phases avoided that;
+  this one intends it) to (1) stop the plaintext `activity-log.json` export from leaking every imported filename
+  (`biopsy-results.pdf`…) and (2) make the document channel CONSISTENT with chat (withholds the conversation
+  title) + collections (refuses the project name). Updated: the `audit.ts` privacy-rule comment, the
+  `shared/types.ts` AuditEventType docs, `docs/security-model.md` "Audit log data class", `docs/known-limitations.md`
+  (Activity rows no longer name the file). Test: the privacy sentinel now greps the imported file's basename (a
+  `FILENAME_SENTINEL`) across import → re-index → summarize → translate → compare AND the real `exportAuditLog`
+  payload; teeth VERIFIED (re-add `${info.title}` to one message → the sentinel reds). 3 dependent tests realigned
+  (`doctasks-translation` message assert, `DiagnosticsActivity` fixture). **OWNER VETO PATH: option (b) was to
+  ACCEPT the leak + only document it — NOT taken. To revert to (b): restore the `${title}` interpolation in the 3
+  messages + revert the sentinel test; keep the doc note.** The grep sweep found NO other audit call interpolating
+  a title/name/basename (all others carry ids/model-ids/kinds/counts).
+- **S2 (Low) — skill drop-in / per-turn read path now enforces the file-size cap.** `parseSkillManifestFromDir`
+  adds a `statSync().size > limits.maxFileBytes` pre-check before each read (mirroring `stageFolder`): the
+  authoritative **SKILL.md is REJECTED** (`ok:false`, no skill loads), the optional **manifest.json is SKIPPED**
+  (same fate as a malformed cache) — so an over-cap file dropped into unencrypted `user-skills/` is no longer read
+  wholesale into the main process on every reconcile / chat turn (a local memory-exhaustion DoS). Tests (×2,
+  `skills-registry.test.ts`) drive `discoverSkillsInDir` + `parseSkillManifestFromDir`; the discriminators (the
+  same files read OK under the default cap) are the teeth.
+- **S3 (Low) — `transcribeDictation` is now lock-gated.** `requireUnlocked()`-style refusal (`main.dictation.locked`,
+  en+de) at the TOP of the handler, before any disk write — it used to dispatch on `ctx.transcriber` presence only,
+  landing a transient plaintext WAV in the workspace documents dir while the vault holds only `.enc` sidecars (an
+  F16 lock-guard parity gap). Test (`dictation-ipc.test.ts`): rejects when locked + NO file under `documents/`;
+  `ipc-lock-coverage.test.ts` `COVERED_ELSEWHERE` reason updated (it was wrongly "pre-unlock by design").
+- **S4 (Info) — re-affirmed ACCEPTED residual (§22-M2 "trust by location, not signature").** Unsigned, user-writable
+  manifests can redirect a download to any PUBLIC HTTPS host (hash verify doesn't help). Precondition = local FS
+  write; gated by policy ∧ `allowNetwork` ∧ per-download confirm; SSRF private/loopback/metadata + mapped-IPv6
+  already denied. A host **allowlist** was weighed and **DECLINED** (breaks legitimate offline curation, doesn't
+  bind the local-write attacker). No code; recorded in §40 + security-model.md D3.
+- **Reconciliation:** S2/S3 do **NOT** supersede the §26 SEC-2/SEC-3 residuals — S2 = drop-in read-SIZE cap (SEC-2 =
+  preview STAGING zone); S3 = dictation lock-gate (SEC-3 = dialog-opener token minting). Distinct seams; SEC-1c/2/3
+  remain carried-forward accepted residuals.
+- **Scope:** `registerDictationIpc.ts`, `registerDocsIpc.ts`, `services/audit.ts`, `doctasks/handlers/shared.ts`,
+  `skills/manifest.ts`, `shared/types.ts`, `i18n/en.ts`+`de.ts` (8 src) + 6 test files; docs: architecture.md §40,
+  security-model.md, known-limitations.md; `audits/full-audit-2026-06-30.md` DELETED (retired). S1–S4 ✅; the round
+  is COMPLETE; the report is RETIRED._
 
 
 _2026-06-30 — **Full audit — Phase D (RENDERER LIFECYCLE & A11Y; F1–F8) — branch

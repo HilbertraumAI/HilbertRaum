@@ -384,8 +384,13 @@ export function registerDocsIpc(ctx: AppContext): void {
               // (whole-document-analysis Q1/Q4). Gated + fire-and-forget — never throws here.
               ctx.docTasks?.maybeEnqueueTreeBuild(id)
             }
-            // Audit: filename + counts only — never the document's text.
-            ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
+            // Audit: ids + counts only — the filename/title is CONTENT (S1,
+            // full-audit-2026-06-30). A user-chosen document name (`biopsy-results.pdf`,
+            // `divorce-settlement.pdf`) can be as sensitive as a conversation title, which
+            // the chat channel already withholds; and the whole log is exfiltrated verbatim
+            // by the plaintext activity-log.json export. documentId resolves the title via
+            // the encrypted DB when the user actually needs it.
+            ctx.audit?.('document_imported', 'Document imported', {
               documentId: id,
               status: info.status,
               chunkCount: info.chunkCount
@@ -651,9 +656,12 @@ export function registerDocsIpc(ctx: AppContext): void {
     processing.add(documentId)
     try {
       const info = await reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
-      ctx.audit?.('document_reindexed', `Document re-indexed: ${info.title}`, {
+      // Audit: ids + counts only — the title is CONTENT (S1, full-audit-2026-06-30;
+      // same reasoning as document_imported above).
+      ctx.audit?.('document_reindexed', 'Document re-indexed', {
         documentId,
-        status: info.status
+        status: info.status,
+        chunkCount: info.chunkCount
       })
       // Re-index tore down any prior tree (→ stale); offer a fresh deep index where it
       // helps. The warm summary_cache makes the rebuild cheap despite chunk-id churn.

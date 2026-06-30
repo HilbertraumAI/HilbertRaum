@@ -1393,6 +1393,9 @@ export const en = {
   'main.models.locked': 'Workspace is locked. Unlock it to manage AI models.',
   'main.audit.locked': 'Workspace is locked. Unlock it to view activity.',
   'main.settings.locked': 'Workspace is locked. Unlock it to change settings.',
+  // S3 (full-audit-2026-06-30): dictation writes a transient plaintext WAV into the workspace
+  // documents dir, so it must lock-gate like the other workspace-touching handlers.
+  'main.dictation.locked': 'Workspace is locked. Unlock it to use voice dictation.',
   'main.preflight.readOnly':
     'This drive appears to be read-only, so the app cannot create its workspace. ' +
     'Try a different USB port, or see the troubleshooting guide.',

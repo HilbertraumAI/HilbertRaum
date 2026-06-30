@@ -6,6 +6,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { documentsDir } from '../services/ingestion'
 import { shredFile } from '../services/workspace-vault'
+import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 
 // Voice dictation IPC (wave-3 plan §10). The renderer records and resamples
@@ -16,6 +17,10 @@ import { log } from '../services/logging'
 //   • The temp WAV lives in the workspace documents dir under the `.parse` infix,
 //     so the startup `shredStalePlaintext` crash sweep covers a crash mid-dictation
 //     (the ingestion-temp pattern), and it is shredded in `finally`.
+//   • Lock-gated (S3, full-audit-2026-06-30): because it lands a transient PLAINTEXT WAV in
+//     the documents dir (which holds only `.enc` sidecars while locked), the handler refuses
+//     on a locked vault — closing the F16 lock-guard parity gap (it dispatched on the
+//     transcriber's presence only). No file is written when locked.
 //   • No audit event — dictation is content-adjacent, like search.
 //   • Errors back to the renderer are friendly copy; the technical reason goes to
 //     the local log only (transcriber error tails are stderr-only — never
@@ -69,6 +74,9 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
   let inFlight = false
 
   ipcMain.handle(IPC.transcribeDictation, async (_e, audio: unknown): Promise<string> => {
+    // S3: refuse on a locked vault BEFORE any disk write — a transient plaintext WAV must
+    // never land in the workspace documents dir while it holds only `.enc` sidecars.
+    if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.dictation.locked'))
     const transcriber = ctx.transcriber
     if (!transcriber) throw new Error(DICTATION_UNAVAILABLE_MESSAGE)
     // IPC delivers the renderer's Uint8Array as a Buffer (a Uint8Array subclass).
