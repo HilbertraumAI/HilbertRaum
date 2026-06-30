@@ -4219,7 +4219,7 @@ lives in **this section**. This ledger is the durable index — resolve a code c
 | **SEC-1 code half** (Low) | — | **accepted residual / open follow-up** — unlock-path rate-limit/attempt-counter + create-time strength meter/floor; deliberately **not** built in the docs-only close-out (a UI rate-limit doesn't bind the offline attacker that is the real threat; the at-rest KDF is the mitigation) | security-model.md residual note |
 | SEC-2 (Low) | — | **accepted residual / open follow-up** — `previewSkillPackage` stages path-/size-validated, finally-cleaned content to the shared OS `tmpdir()`; not an escape (skill packages aren't secret). Follow-up: stage under `userSkillsDir` for trust-zone consistency | this ledger |
 | SEC-3 (Info) | — | **accepted residual / open follow-up** — the dialog-opener IPCs (`pickSkillPackage`/`pickDocuments`/`imageChooseImage`) mint a capability token pre-unlock, but every **consuming** handler is `requireUnlocked()`-gated so the token is inert until unlock; a consistency gap, not an exploit | this ledger |
-| REL-5 (Low) | — | **deferred to its own phase / open follow-up** — `BEGIN IMMEDIATE` + a single `withTransaction(db, fn)` guard touches every `db.exec('BEGIN')` site; a broad, correctness-sensitive refactor (the load-bearing invariant — no `await` between BEGIN and COMMIT — already holds everywhere checked), so latent not confirmed | this ledger |
+| REL-5 (Low) | — | **non-reachable while the single-`DatabaseSync` architecture holds; promote to a real fix only if a second DB connection (e.g. a worker-thread reader) is introduced** — verified (follow-up Phase 6) architecturally non-reachable: exactly one live synchronous `DatabaseSync` connection per session (`db.ts`; others are transient open→seed→checkpoint→close), and all 15–20 `BEGIN…COMMIT` bodies are synchronous (the slow `await embed/generate` sits *outside* the txn). `BEGIN IMMEDIATE` would be a no-op without a second writer, so the `withTransaction(db, fn)` refactor stays deferred. **Precondition made explicit so a future worker-pool/second-connection change can't silently make it reachable** | this ledger; §37 (follow-up Phase 6 REL note) |
 | §5 INFO / by-design (CSV single-data-row, DOCX paragraph-split, `embedChunks` single-batch, `corpusNeedsReindex` double-scan, rerank-before-dedup cost) | — | **accepted (no change)** — low-severity edge/robustness notes; each acceptable as-is, recorded so the next audit skips them | this ledger (accepted residuals) |
 | PERF-5 Part B (list windowing), E5 `query:`/`passage:` prefix migration | — | **carried forward from §25 (still open)** — list virtualization re-deferred (no virt lib; variable-height rows + scroll/find/a11y behavior-sensitive); the prefix migration re-embeds the whole corpus (its own phase) and would re-enable a `ragMinSimilarity` floor | §25 accepted residuals (unchanged) |
 
@@ -4230,9 +4230,12 @@ lives in **this section**. This ledger is the durable index — resolve a code c
   drive-in-hand attacker), preview-temp staging is path-/size-validated and finally-cleaned, and the
   dialog-opener tokens are inert until the consuming handler's `requireUnlocked()` gate. Open follow-ups, not
   Phase-6 work (Phase 6 was docs-only by charter).
-- **REL-5** — `BEGIN IMMEDIATE` + `withTransaction` is **deferred to its own characterized phase** (per the
-  report's own recommendation): broad blast radius across every BEGIN site, and the load-bearing invariant
-  (no `await` inside a transaction) already holds, so it is a defense-in-depth margin rather than a live bug.
+- **REL-5** — `BEGIN IMMEDIATE` + `withTransaction` is **deferred**, now with the precondition stated
+  explicitly: it is **non-reachable while the single-`DatabaseSync` architecture holds** (one live synchronous
+  connection per session; every `BEGIN…COMMIT` body synchronous, the slow `await` outside the txn). It becomes
+  a real fix to build **only if a second DB connection is introduced** (e.g. a worker-thread reader / a
+  connection pool) — that change, not this audit, is what would make `BEGIN IMMEDIATE` load-bearing. Recorded
+  so a future worker-pool change can't silently re-open the gap (verified follow-up Phase 6; see §37).
 - **§5 by-design edge notes** — CSV single-data-row, DOCX paragraph-split, `embedChunks` single-batch (bounded
   by the 1000-chunk cap), `corpusNeedsReindex` double-scan (only on the already-failed empty-retrieval path),
   and rerank-before-dedup cost (correct by design): all acknowledged, none scoped to a fix.
@@ -4749,6 +4752,99 @@ build` green. Branch `audit-followup-phase6-reliability` (unmerged; do NOT auto-
 **REL-5 (carried, open):** unchanged — still keep-deferred (architecturally non-reachable while the single
 synchronous `DatabaseSync` connection holds; §26 note). Not in Phase 6's scope (the §26 wording strengthening
 is Phase 8).
+
+
+### §38 Full audit (2026-06-29, follow-up) — Phase 8 (maintainability + security hardening) & ROUND CLOSE-OUT
+
+The **2026-06-29 follow-up full audit** (report `audits/full-audit-2026-06-29-followup.md`) is **COMPLETE**
+— all eight phases landed. The round's pattern was *"the gaps moved outward"*: away from the
+heavily-fortified core primitives (crypto, money parser, sidecar lifecycle, RAG core — all independently
+re-confirmed clean) and into document/statement-level orchestration, the Electron-version platform boundary,
+and main-thread I/O / DOM scaling. **No Critical, no remote exploit** (offline by construction); 3 High
+(FIN-1 wrong-currency / FE-A dead drag-drop / PERF-1 import freeze) + PERF-2-at-scale, ~10 Medium, the rest
+Low/Info. Each phase folded its decisions into the topic docs as it landed (the per-phase records **§35**
+[Phase 3], **§36** [Phase 4], **§37** [Phase 6], the **Phase-7 subsection** of the Test-enforcement record,
+**§8** [Phase 1], **rag-design §14.4** [Phase 5], the **"Drag-drop intake" Renderer-robustness record**
+[Phase 2]); **this section is the durable master index** — resolve a `full-audit-2026-06-29-followup <ID>`
+code comment through it. Per the CLAUDE.md doc-lifecycle rule the working-paper report was **retired** once
+every finding was dispositioned (committed folded-in first, so the original stays **recoverable in git
+history** — the parent of the Phase-8 close-out commit), mirroring the §24/§25/§26/§34 precedent. Phases ran
+on stacked, unmerged branches (`audit-followup-phase1-financial` … `phase8-closeout`); owner merges when
+ready.
+
+**Per-phase one-liners:** **P1** financial correctness (FIN-1..4; release-blocking class; §8). **P2**
+Electron-37 drag-drop regression (FE-A `webUtils.getPathForFile` preload bridge + FE-C empty-drop feedback;
+Renderer-robustness record). **P3** main-thread import I/O + parser caps (PERF-1 async vault crypto / PERF-4
+text-CSV byte cap; §35). **P4** documents-list scale (PERF-3 `ocr_meta_json` sidecar / PERF-2 list windowing
+/ PERF-6 deferred; §36). **P5** RAG provenance honesty + Sources a11y (FE-B / F11 renderer half + FE-D;
+rag-design §14.4, design-guidelines §11.8). **P6** reliability hardening (REL-1..4 latent teardown races;
+§37). **P7** test-suite robustness (TEST-1/TEST-3/DX-2/DX-4/DX-5/DX-6; Phase-7 subsection, test-only). **P8**
+(this close-out) maintainability (DX-1/DX-3) + security hardening (SEC-4) + FE-E + REL-5 wording + report
+retirement.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **FIN-1** (High) | 1 | **fixed** — document/statement currency by figure-adjacent majority vote (`detectDocumentCurrency`), so a `USD`/`CHF` in a memo no longer stamps a EUR statement's verified total | §8; `money.ts`; known-limitations |
+| FIN-2 (Med) | 1 | **fixed** — invoice right-side "uncaptured column" drop requires the whole trailing region to be ONE money-shaped-but-rejected token (no over-fire on `(Pos. 3)` / `19% MwSt` / `2 Stk`) | §8; `invoice.ts` |
+| FIN-3 (Med) | 1 | **fixed** — `DATE_TOKEN_RE` tightened so `2.500` is un-date-able; `MONEY_TOKEN_RE` deliberately NOT widened (DIVERGED — widening would regress the M3 split-amount safety) | §8; `pdf-layout.ts` |
+| FIN-4 (Med) | 1 | **fixed** — `inferDateOrder` vote scoped by line KIND (money line → leading date column only; money-less header → any) so a memo's foreign-format date can't flip the doc | §8; `money.ts` |
+| **FE-A** (High) | 2 | **fixed** — preload `window.api.getDroppedFilePath` wraps `webUtils.getPathForFile` (Electron-37 removed `File.path`); `pathsFromDrop` calls it; real-Electron 37.10.3 leg verified | Renderer-robustness "Drag-drop intake"; `preload/index.ts`, `ChatScreen.tsx` |
+| FE-C (Med) | 2 | **fixed** — `onDrop` shows `chat.attach.dropUnsupported` when a Files-bearing drop yields zero importable paths | Renderer-robustness "Drag-drop intake" |
+| **FE-B** (Med-High) | 5 | **fixed (closes the carried F11 renderer half)** — `SourcesDisclosure` takes `coverage.mode`; any whole-document mode renders as **provenance** ("Drawn from the document — N sections", no `[Sn]`, capped at 24 + reveal); relevance/NULL-coverage byte-identical | rag-design §14.4 (AS BUILT) |
+| FE-D (Low, a11y) | 5 | **fixed** — `aria-controls`/`role="region"`/`aria-labelledby` on the Sources, Thinking, and SummaryMarker disclosures | design-guidelines §11.8 |
+| **FE-E** (Low) | **8** | **fixed** — a THROWN first-run model-listing/verify failure routes to the **Models** screen (not silently to Chat's generic "no model" empty state); an empty list still routes to the `starter` step; never traps the user | this §38; `WorkspaceGate.tsx`; `WorkspaceGate.test.tsx` |
+| **PERF-1** (High) | 3 | **fixed** — async `encryptFileAsync`/`decryptFileAsync` (per-chunk yield, byte-identical frame) on the import path; `copyFileSync`→async (DIVERGED — async siblings, the sync crash-lock/DB-lifecycle/vision-emitter stay sync) | §35; `workspace-vault.ts` |
+| **PERF-2** (High@scale) | 4 | **fixed (documents list)** — `@tanstack/react-virtual` windows the list (viewport-gated; else render all). **Chat-transcript half carried forward** (behavior-sensitive) | §36; known-limitations (find-in-page) |
+| PERF-3 (Med) | 4 | **fixed** — additive nullable `ocr_meta_json` sidecar (counts/ids only) written at OCR-write + backfilled once; `listDocuments` omits `ocr_json` (~147 ms/call removed) | §36 |
+| PERF-4 (Med) | 3 | **fixed** — `textMaxBytes` (64 MiB) + `readsWholeFileToString` flag → friendly `fileTooLarge` reject instead of a V8 string-limit OOM for txt/markdown/csv | §35; known-limitations |
+| PERF-5 (Low) | — | **accepted / carried** — `ImagesScreen` `AnswerThread` memo defeated by unstable `onCopy`/`onTryAgain`/`onStop` props; image sessions are short so the re-render cost is bounded (Low-Med) | this ledger (carried) |
+| PERF-6 (Low) | 4 | **deferred with cause** — per-page OCR child table is a larger schema migration; PERF-3's sidecar already removed the hot-path parse (the actual harm) | §36 |
+| **SEC-4** (Low/Info) | **8** | **fixed** — `runtime-sources.ts` rejects `..`/absolute/drive-letter `extract_to` at PARSE time (new `isUnsafeDrivePath`, applied to the sibling OCR `dest` too for consistency); defense-in-depth ahead of the load-bearing `resolveWithinRoot` | this §38; `shared/runtime-sources.ts`; `runtime-sources.test.ts` |
+| SEC-1c (Low) | — | **accepted residual / open** — unlock-path rate-limit/attempt-counter + create-time strength floor; the at-rest Argon2id KDF is the binding mitigation against the offline (drive-in-hand) attacker, so a UI rate-limit doesn't bind the real threat | §26 |
+| SEC-2 (Low) | — | **accepted residual / open** — stage `previewSkillPackage` content under `userSkillsDir` (trust-zone consistency); today path-/size-validated + finally-cleaned in the shared tmpdir, not an escape | §26 |
+| SEC-3 (Info) | — | **accepted residual / open** — dialog-opener IPCs mint a capability token pre-unlock but every consuming handler is `requireUnlocked()`-gated → inert; a consistency gap, not an exploit | §26 |
+| **REL-1** (Low) | 6 | **fixed** — OCR `terminateWorker` awaits the in-flight init so it can't outlive teardown | §37 |
+| **REL-2** (Low) | 6 | **fixed** — `VisionService` `tearingDown` latch (the F19 analogue) bars a NEW `analyze()` from rebuilding the ~4.6 GB sidecar mid-teardown | §37; GPU §5.5c |
+| **REL-3** (Low) | 6 | **fixed** — `e5.embed()` per-batch teardown re-check (captured-server staleness) throws the recognizable cancel, not "not started" | §37; GPU §5.5b/c |
+| **REL-4** (Low) | 6 | **fixed (option a)** — `performShutdown` (extracted to `main/shutdown.ts`) aborts in-flight streams BEFORE `runtime.stop()`, mirroring the lock path | §37 |
+| REL-5 (Low) | — | **non-reachable / deferred** — verified architecturally non-reachable while the single-`DatabaseSync` architecture holds; **promote to a real fix only if a second DB connection (e.g. a worker-thread reader) is introduced** (precondition made explicit) | §26 (strengthened, P8); §37 |
+| **TEST-1** (Med) | 7 | **closed (de-flake)** — the flaky real-timer vision idle block deleted; its two uncovered cases ported to the deterministic injected-clock twin | Phase-7 subsection |
+| **TEST-3** (Med) | 7 | **closed (test)** — `rag-pipeline-floor.test.ts`: model-free synthetic floor through the REAL chunk→embed→FTS→RRF→top-k→citation pipeline; teeth-checked ×2 | Phase-7 subsection |
+| **DX-1** (Med) | **8** | **fixed (refactor)** — `DocTaskManager` god-class split: each `run<Kind>` extracted to a `doctasks/handlers/*` module keyed by `MODEL_TASK_HANDLERS`; the manager keeps only queue/pump/arbiter + the `generate`/`generateWithRetry` retry loop, handed to handlers via a narrow `DocTaskCtx`. STRICTLY behavior-preserving (1758→~580 lines; full doctasks suite identical green) | this §38; `doctasks/manager.ts`, `doctasks/context.ts`, `doctasks/handlers/{index,shared,tree,summary,ocr,translation,compare,categorize}.ts` |
+| DX-2 (Low) | 7 | **fixed** — prod render-counter `import.meta.env.DEV`-guarded (no-ops in a production build; memo test green under DEV) | Phase-7 subsection; `DocumentsScreen.tsx` |
+| **DX-3** (Low) | **8** | **fixed (refactor)** — `DocumentsScreen` split: `DocRow`/`SectionRail`/`PreviewModal` to sibling `screens/documents/*` files + pure formatters to `documents/format.tsx` + shared types/keys to `documents/types.ts`. STRICTLY behavior-preserving (2190→1164 lines; Phase-4 virtualization + Phase-7 DEV render-counter intact; all Documents suites green) | this §38; `screens/documents/{format.tsx,types.ts,DocRow.tsx,SectionRail.tsx,PreviewModal.tsx}` |
+| DX-4 (Low-Med) | 7 | **closed (test)** — `ipc-lock-coverage` meta-assertion globs every `register*Ipc` export; a new uncovered module reds it | Phase-7 subsection |
+| DX-5 (Low) | 7 | **closed (test)** — `runtime-ladder-exit-wiring.test.ts`: a real `LlamaServer` child's `'exit'` drives the §5.3 crash auto-fallback end-to-end; teeth-checked | Phase-7 subsection |
+| DX-6 (Low) | 7 | **closed (de-flake)** — three settle-window sleeps → deterministic waits (await the F19-guarded refusal; poll the scripted in-flight count) | Phase-7 subsection |
+
+**Carried-forward open items (deliberately NOT taken; on record for the next pass):**
+
+- **SEC-1c / SEC-2 / SEC-3** — three security **consistency** improvements, none an exploit (re-affirmed
+  accepted residuals with their §26 rationale; the at-rest KDF binds the offline attacker, the skill-preview
+  staging is validated+cleaned, the dialog-opener tokens are inert until the consuming `requireUnlocked()`).
+- **REL-5** — **non-reachable while the single-`DatabaseSync` architecture holds**; becomes a real fix to
+  build **only if** a second DB connection (worker-thread reader / connection pool) is introduced. Precondition
+  now explicit in §26 so a future worker-pool change can't silently re-open the gap.
+- **PERF-5 (ImagesScreen `AnswerThread` memo)** — Low; image sessions are short, so the unstable-handler
+  re-render is bounded. Wrap `onCopy`/`onTryAgain`/`onStop` in `useEventCallback` when the Images screen is
+  next touched.
+- **PERF-2 chat-transcript half** — list windowing for the chat transcript stays deferred (variable height +
+  scroll-to-bottom + find-in-page + StreamAnnouncer are genuinely behavior-sensitive); the **documents-list
+  half is CLOSED** (P4). Still the tracked top renderer item.
+- **§26/§34-carried (still open, unchanged):** the **E5 `query:`/`passage:` prefix migration** (its own phase;
+  re-embeds the whole corpus) and the coupled **F13 floor-before-cut** precondition (re-enabling a positive
+  `ragMinSimilarity` floor must over-fetch then floor) — both inert at the pinned default 0.
+
+**Posture held across all eight phases (load-bearing):** offline / no telemetry / no new network egress; the
+only schema change was the single additive nullable `documents.ocr_meta_json` (P4, backfilled on open); no
+IPC / audit-payload change in any phase; the **content class** (document/chat text, titles/filenames,
+extracted figures, redacted text) is never logged / audited / exported. Behavior-preserving: every behavioral
+fix (P1/P2/P3/P4/P5/P6) is **teeth-checked** (neuter the guard → red → restore byte-identical); P7 was
+test-only (`git diff src/` a single DEV-guard line); **P8's two refactors (DX-1/DX-3) are STRICTLY
+relocation** — the full doctasks suite (154 tests) and the Documents renderer suites (95 tests) are identical
+green before and after, and the whole suite is unchanged at **2593 passed / 39 skipped** (+4 vs Phase 7's
+2589, all from SEC-4). The SEC-4 validator, the FE-E route, and the REL-5 wording are the only P8 behavior/
+doc deltas; `npm run typecheck` + `npm run build` green.
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

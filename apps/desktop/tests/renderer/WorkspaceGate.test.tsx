@@ -242,7 +242,11 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'chat')
   })
 
-  it('never traps the user when the post-create model check fails', async () => {
+  // FE-E (full-audit-2026-06-29-followup, Phase 8): a THROWN model-listing/verify failure
+  // (distinct from an empty list) must not drop the user silently on Chat's generic "no
+  // model" empty state — it routes to the Models screen so the failure is surfaced once,
+  // while still never trapping them in the gate (the workspace is open).
+  it('routes to Models (not silently to Chat) when the post-create model check throws', async () => {
     const user = userEvent.setup()
     const onUnlocked = vi.fn()
     stubApi({
@@ -258,7 +262,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
     await user.click(screen.getByRole('button', { name: /create workspace/i }))
 
-    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'chat'))
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'models'))
   })
 
   it('shows a determinate verification bar while first-run hashing runs, then unsubscribes', async () => {

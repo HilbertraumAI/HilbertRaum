@@ -6,6 +6,58 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 8 (MAINTAINABILITY + SECURITY HARDENING + DOCS CLOSE-OUT) —
+branch `audit-followup-phase8-closeout` (unmerged; do NOT auto-merge/push). THE FINAL PHASE — the round is
+COMPLETE.** Clears the structural debt, lands the one small security hardening + the first-run notice, re-affirms
+the accepted residuals, and **RETIRES the audit report** by folding every disposition into the arch §§ and
+`git rm`'ing it (recoverable in history), per the CLAUDE.md doc-lifecycle rule. Suite **2593 passed / 39 skipped**
+(was 2589/39 after Phase 7 → **+4**, all from SEC-4; the DX-1/DX-3 refactors add ZERO net tests — pure relocation).
+Typecheck + `npm run build` green. **No IPC / schema / audit-payload change; the two refactors are STRICTLY
+behavior-preserving** (the full doctasks suite 154 + the Documents renderer suites 95 are identical green before
+and after). Content class never logged.
+- **SEC-4 (Low/Info, NEW) — `runtime-sources.ts` `extract_to` `..`-rejected at PARSE time.** New pure
+  `isUnsafeDrivePath` rejects `..` traversal, leading-slash absolutes, and `C:`/UNC drive-letter forms; applied to
+  `extract_to` AND the sibling OCR `dest` (making the two path-fields consistent — the stated goal). Defense-in-depth
+  ahead of the still-load-bearing `resolveWithinRoot`. Tests ×4 (POSIX `../../escape`, Windows `..\\..\\escape`,
+  absolute/drive-letter reject, normal relative passes).
+- **FE-E (Low) — first-run model-verify FAILURE no longer silent.** `WorkspaceGate.completeCreate`'s catch still
+  never traps the user, but a THROWN `listModels` now routes to the **Models** screen (vs the old silent drop on
+  Chat's generic "no model" empty state); an EMPTY list still routes to the `starter` step. Existing "never traps"
+  test re-pointed to assert `(UNLOCKED, 'models')`.
+- **DX-1 (Med) — `DocTaskManager` god-class split (behavior-preserving relocation).** Each `run<Kind>` extracted to a
+  `doctasks/handlers/*` module keyed by `MODEL_TASK_HANDLERS`; the manager keeps ONLY queue/pump/arbiter + the
+  `generate`/`generateWithRetry` retry loop, handed to handlers through a narrow `DocTaskCtx` (deps + arbiter + the two
+  model-loop fns). Shared doc helpers (`materializeDocument`/`buildProvenance`/`extractSegmentTexts`) → `handlers/shared.ts`;
+  `InternalTask`/`DocTaskDeps`/`DocTaskCtx` → leaf `doctasks/context.ts` (no cycle; `DocTaskDeps` re-exported from
+  `manager.ts` for the barrel). `manager.ts` 1758→~580 lines. Full doctasks suite (154) identical green.
+- **DX-3 (Low) — oversized screens split (behavior-preserving relocation).** `DocumentsScreen.tsx` 2190→1164:
+  `DocRow`/`SectionRail`/`PreviewModal` → sibling `screens/documents/*` files, the pure formatters
+  (`badgeFor`/`provenanceLine`/`metaLine`/`friendlyMimeLabel`/…) → `documents/format.tsx`, the shared section/view
+  types + localStorage keys → `documents/types.ts`. Test import surface preserved via re-exports
+  (`friendlyMimeLabel`/`isRetryableFailure`/`__docRowRenderCounts`/`RAIL_COLLAPSED_KEY`/`VIEWS_MORE_KEY`). The Phase-4
+  virtualization + the Phase-7 DEV-guarded `__docRowRenderCounts` stay intact; all Documents suites green.
+- **REL-5 (no code) — §26 wording strengthened.** From "latent not confirmed" → "**non-reachable while the
+  single-`DatabaseSync` architecture holds; promote to a real fix only if a second DB connection (e.g. a worker-thread
+  reader) is introduced**" — precondition made explicit so a future worker-pool change can't silently make it reachable.
+- **Stale-comment sweep — VERIFIED CLEAN.** All four §3-flagged comments were already corrected in their owning phases
+  (`money.ts` `detectDocumentCurrency`, `pdf-layout.ts` "INTENTIONAL SUBSET not a mirror", `ChatScreen` `pathsFromDrop`
+  Electron-37 note, rag-design §14.4 AS BUILT); no residual.
+- **SEC-1c / SEC-2 / SEC-3 — re-affirmed accepted residuals** (unlock rate-limit; stage skill-preview under
+  `userSkillsDir`; dialog-opener token trust-zone consistency) with their §26 rationale.
+- **Durable record + RETIREMENT:** **architecture.md §38 "Phase 8 & ROUND CLOSE-OUT"** — the master ledger
+  dispositioning EVERY finding (FIN-1..4, FE-A..E, PERF-1..6, SEC-1c/2/3/4, REL-1..5, TEST-1/TEST-3, DX-1..6) →
+  its phase → as-built §/file → carried-forward items. `audits/full-audit-2026-06-29-followup.md` is `git rm`'d (its
+  lasting content lives in §38; the full original is recoverable at the Phase-7 parent commit), per the doc-lifecycle
+  rule (mirrors §24/§25/§26/§34). No known-limitations change (SEC-4 is hardening, FE-E is a fix).
+- **CARRIED FORWARD (open after this round):** SEC-1c/SEC-2/SEC-3 (accepted residuals, §26); REL-5 (non-reachable /
+  deferred until a second DB connection appears); PERF-5 (ImagesScreen `AnswerThread` handler memo — Low, sessions
+  short); PERF-2 chat-transcript windowing (behavior-sensitive); the E5 `query:`/`passage:` prefix migration + the
+  coupled F13 floor-before-cut (both inert at the pinned default 0).
+- **NEXT ACTION (owner): all 8 follow-up phases are COMPLETE on stacked, unmerged branches
+  (`audit-followup-phase1-financial` … `audit-followup-phase8-closeout`). Review and merge them when ready — do NOT
+  auto-merge or push.**_
+
+
 _2026-06-30 — **Follow-up full audit — Phase 7 (TEST-SUITE ROBUSTNESS; TEST-3/TEST-1/DX-4/DX-2/DX-5/DX-6) —
 branch `audit-followup-phase7-test-robustness` (unmerged; do NOT auto-merge/push). TEST-ONLY.** Closes the
 one material coverage gap (no automated RAG-retrieval floor), retires the actively-flaky vision real-timer
