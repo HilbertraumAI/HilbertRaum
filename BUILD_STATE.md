@@ -6,6 +6,18 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Deep-index offer is now truly fire-and-forget (import/reindex hardening).** A reported runtime crash —
+`ctx.docTasks?.maybeEnqueueTreeBuild is not a function` logged as "Document ingestion crashed" — exposed a latent bug:
+both call sites (import loop + `reindexDocument`) ran the OPTIONAL deep-index offer INSIDE the success path's try, so any
+throw from it (a stale running build whose `DocTaskManager` lacks the method, a DB hiccup) was miscounted as a FAILED
+import / rejected a SUCCESSFUL reindex — contradicting the method's own "never throws into the import/reindex path"
+contract. The `?.` only guarded a missing manager, not a throwing call. Wrapped both calls in one `offerDeepIndex(id)`
+helper (registerDocsIpc.ts) that logs and swallows, so a successfully-indexed doc is never marked failed for a
+side-effect. New `docs-ipc.test.ts` case injects a throwing `maybeEnqueueTreeBuild` (a Proxy) and asserts the import
+reports `failed:0`/doc `indexed` and reindex resolves to `indexed`. NOTE: the source + a fresh build already contain the
+method correctly (it has existed since 2026-06-15) — the original crash was a STALE RUNNING BUILD; rebuild/restart clears
+it, and this fix makes the failure mode graceful regardless. Full suite green except the 3 pre-existing platform failures._
+
 _2026-06-30 — **"Retry all" on the Failed imports tab.** The Documents screen's existing confirm-gated
 "Re-index all" (stale embeddings, M-U6) now has a sibling on the Failed tab: when `section.kind === 'failed'`
 and more than one document has `status === 'failed'`, a **Retry all ({count})** button re-indexes every failed

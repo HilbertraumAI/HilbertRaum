@@ -227,6 +227,20 @@ export function registerDocsIpc(ctx: AppContext): void {
     signal
   })
 
+  // Offer a deep-index (tree) build for a freshly-(re)indexed document. This is fire-and-forget
+  // and MUST NOT throw into the import/reindex path (the document is already indexed — only the
+  // optional deep-index offer is at stake). The `?.` guards a missing manager, but a throw from
+  // the call itself (e.g. a stale running build whose DocTaskManager lacks the method, or a DB
+  // hiccup) would otherwise be miscounted as a failed import / reject a successful reindex. Swallow
+  // and log so a successfully-indexed doc is never marked failed for a side-effect's sake.
+  const offerDeepIndex = (documentId: string): void => {
+    try {
+      ctx.docTasks?.maybeEnqueueTreeBuild(documentId)
+    } catch (err) {
+      log.warn('Deep-index offer skipped (non-fatal)', { documentId, error: String(err) })
+    }
+  }
+
   // Open the OS file/folder picker in the main process (renderer has no dialog access).
   // Windows cannot mix file + directory selection in one dialog, so the caller chooses a
   // mode: 'files' (default) or 'folder'.
@@ -382,7 +396,7 @@ export function registerDocsIpc(ctx: AppContext): void {
               fileFromPendingDestination(ctx.db, id)
               // Offer a deep index for documents the cheap capped summary can't fully cover
               // (whole-document-analysis Q1/Q4). Gated + fire-and-forget — never throws here.
-              ctx.docTasks?.maybeEnqueueTreeBuild(id)
+              offerDeepIndex(id)
             }
             // Audit: ids + counts only — the filename/title is CONTENT (S1,
             // full-audit-2026-06-30). A user-chosen document name (`biopsy-results.pdf`,
@@ -665,7 +679,7 @@ export function registerDocsIpc(ctx: AppContext): void {
       })
       // Re-index tore down any prior tree (→ stale); offer a fresh deep index where it
       // helps. The warm summary_cache makes the rebuild cheap despite chunk-id churn.
-      if (info.status === 'indexed') ctx.docTasks?.maybeEnqueueTreeBuild(documentId)
+      if (info.status === 'indexed') offerDeepIndex(documentId)
       return info
     } finally {
       processing.delete(documentId)

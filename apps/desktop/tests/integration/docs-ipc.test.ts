@@ -54,7 +54,13 @@ function freshWorkspace(): { db: Db; workspacePath: string } {
   return { db: openDatabase(join(root, 'hilbertraum.sqlite')), workspacePath: root }
 }
 
-function ctxWith(db: Db, workspacePath: string, embedder: Embedder, unlocked: boolean): AppContext {
+function ctxWith(
+  db: Db,
+  workspacePath: string,
+  embedder: Embedder,
+  unlocked: boolean,
+  docTasks?: unknown
+): AppContext {
   return {
     db,
     paths: { workspacePath },
@@ -64,7 +70,10 @@ function ctxWith(db: Db, workspacePath: string, embedder: Embedder, unlocked: bo
       isUnlocked: () => unlocked,
       beginDocumentWork: () => () => {},
       documentCipher: () => null
-    }
+    },
+    // Optional: a fake DocTaskManager (e.g. one whose maybeEnqueueTreeBuild throws) to prove the
+    // deep-index offer is fire-and-forget and never fails a (re)index.
+    docTasks
   } as unknown as AppContext
 }
 
@@ -162,6 +171,50 @@ describe('registerDocsIpc', () => {
     const lib = getBuiltinCollection(db, 'library')!
     expect(documentIdsInCollection(db, temp.id)).toContain(id)
     expect(documentIdsInCollection(db, lib.id)).not.toContain(id) // stays out of Library
+  })
+
+  it('a throwing maybeEnqueueTreeBuild never fails the import or reindex (fire-and-forget)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    // A stale/odd DocTaskManager whose deep-index offer throws — the exact runtime shape behind
+    // "ctx.docTasks?.maybeEnqueueTreeBuild is not a function". The document still indexes fine; the
+    // optional deep-index offer must be swallowed, not counted as a failed import / a rejected reindex.
+    const docTasks = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'maybeEnqueueTreeBuild') {
+            return () => {
+              throw new Error('maybeEnqueueTreeBuild is not a function')
+            }
+          }
+          // Every other guard the docs IPC consults (isDocumentBusy/hasActiveTask/…): a benign
+          // falsy no-op, so only the deep-index offer is the thing that throws.
+          return () => false
+        }
+      }
+    )
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, docTasks))
+    const file = join(workspacePath, 'report.txt')
+    writeFileSync(file, 'quarterly report alpha beta gamma delta epsilon')
+
+    // Import path: the job completes with the doc INDEXED and ZERO failures despite the throw.
+    const { result: imp } = await invoke(handlers, IPC.importDocuments, [file])
+    const jobId = (imp as ImportJob).jobId
+    let status: ImportJobStatus | undefined
+    for (let i = 0; i < 200; i++) {
+      status = (await invoke(handlers, IPC.getImportJob, jobId)).result as ImportJobStatus
+      if (status.done) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(status?.failed).toBe(0)
+    expect(status?.completed).toBe(1)
+    const id = (imp as ImportJob).documentIds[0]
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === id)!.status).toBe('indexed')
+
+    // Reindex path: resolves to `indexed` instead of rejecting on the same throw.
+    const info = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
+    expect(info.status).toBe('indexed')
   })
 
   it('imports a chat attachment: Temporary + a conversation_documents link (C3)', async () => {
