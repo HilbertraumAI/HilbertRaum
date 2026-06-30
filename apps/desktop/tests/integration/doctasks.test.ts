@@ -310,8 +310,11 @@ describe('state machine guards (D26)', () => {
     const manager = makeManager({ runtime, audit: true })
 
     const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [docId] })
-    // Let the stream start, then cancel mid-generation.
-    await new Promise((r) => setTimeout(r, 40))
+    // DX-6 (Phase 7): wait deterministically until the model stream is actively running (chatStream
+    // entered its loop → concurrent>0) instead of a fixed 40 ms "let it start" sleep, then cancel
+    // mid-generation. The scripted stream parks in its per-token delay honouring the abort signal,
+    // so the cancel lands while a generation is genuinely in flight (not before start / after done).
+    while (runtime.concurrent === 0) await new Promise((r) => setTimeout(r, 0))
     manager.cancelDocTask(jobId)
 
     const status = await waitTerminal(manager, jobId)

@@ -533,12 +533,15 @@ describe('E5Embedder', () => {
       () => 'ok',
       () => 'rejected'
     )
-    await new Promise((r) => setTimeout(r, 25)) // ample for child2 to spawn + go healthy if it were allowed
+    // DX-6 (Phase 7): deterministic in place of a fixed 25 ms "nothing spawned" settle. Under the
+    // F19 tearingDown guard embed2's ensureStarted REFUSES in the teardown window, so embed2 settles
+    // to 'rejected' on its own — no wall-clock wait. A regression that spawned child2 would instead
+    // resolve 'ok' (and bump calls.length below), so awaiting the outcome is the assertion.
+    expect(await embed2).toBe('rejected')
 
     children[0].releaseExit() // unblock teardown's server.stop()
     await suspendP
     await embed1
-    await embed2
 
     // No sidecar survives the lock: only child1 was ever spawned, and it was killed.
     expect(calls.length).toBe(1)

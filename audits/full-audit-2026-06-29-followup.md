@@ -233,13 +233,19 @@ system.
 
 ### Testing & maintainability findings
 - **TEST-1 (Med) — flaky real-timer vision idle-teardown block** (`tests/integration/vision-runtime.test.ts:195-265`) races real `setTimeout`s against tiny `idleTimeoutMs` in **both** directions (`sleep(15)` asserts not-yet-torn-down; `sleep(60)` asserts torn-down). A deterministic fake-clock twin already exists below it (`:268+`). Retire the real-timer block (the known T6/T7 "real-timer copies left" item).
+  - ✅ **REMEDIATED (2026-06-30, Phase 7)** — the real-timer block is DELETED; the two cases the injected-clock twin lacked were PORTED to it deterministically (clock-reset → new **(d)** via the fake clock's set/clear counts; stop()-cancels-timer → new **(f)** with the `stopped`-guarded stale fire). No idle `sleep` remains; stable across repeated full-suite runs. See architecture.md "Test-enforcement seams" → Phase-7 subsection.
 - **TEST-3 (Med) — no CI floor on end-to-end RAG retrieval quality.** The scorer logic is CI-gated (`tests/eval/score.test.ts`) and the skill-trigger precision bar is a live gate, but actual retrieval→answer quality (EM/hallucination/citation over the corpus) is asserted only in env-gated manual suites. A regression in chunking/embedding-prefix/reranking/`ragMinSimilarity` passes `npm test` green. Add a **model-free synthetic-corpus** CI floor (mock embedder ranks the known-correct chunk first; assert the pipeline returns its `chunk_id`/citation) — guards the plumbing without a real model.
-- **DX-1 (Med) — `DocTaskManager` god-class** (`doctasks/manager.ts`, 1758 lines, 8 unrelated task domains + queue/pump/arbiter). Extract each `run<Kind>` into a per-kind handler keyed by a registry; manager keeps only orchestration. Largest structural debt.
-- **DX-3 (Low) — oversized screens** (`DocumentsScreen.tsx` 2089, `ChatScreen.tsx` 1490). Split `DocRow`/`SectionRail`/`PreviewModal` into sibling files (tests already import them as units); lift formatters to `documents/format.ts`.
+  - ✅ **REMEDIATED (2026-06-30, Phase 7)** — new `tests/integration/rag-pipeline-floor.test.ts` (×3): the REAL pipeline (real chunker via `processDocument` → `MockEmbedder` → `VectorIndex` → FTS5 → RRF fusion → dedup → top-k → `[Sn]`/`Citation[]`) over a constructed corpus where the known-correct chunk wins both channels; asserts it ranks #1 with its citation, caps at `topKFinal`, and `generateGroundedAnswer` persists the right first citation. Mock line at the `MockEmbedder` seam (no real model/network); the real-model benchmark stays manual. Teeth-checked twice (reverse `rrfFuse` order → top-chunk red; drop the `topKFinal` break → cap red). See architecture.md Phase-7 subsection.
+- **DX-1 (Med) — `DocTaskManager` god-class** (`doctasks/manager.ts`, 1758 lines, 8 unrelated task domains + queue/pump/arbiter). Extract each `run<Kind>` into a per-kind handler keyed by a registry; manager keeps only orchestration. Largest structural debt. *(Phase 8 item — not addressed in the test-only Phase 7.)*
+- **DX-3 (Low) — oversized screens** (`DocumentsScreen.tsx` 2089, `ChatScreen.tsx` 1490). Split `DocRow`/`SectionRail`/`PreviewModal` into sibling files (tests already import them as units); lift formatters to `documents/format.ts`. *(Phase 8 item.)*
 - **DX-4 (Low-Med) — IPC lock-guard coverage relies on hand-maintained exemption/module sets** (`tests/integration/ipc-lock-coverage.test.ts:71-102`). A new `register*Ipc` module simply isn't enumerated → its handlers go unchecked. Add a meta-assertion: union(`MODULES`, "covered elsewhere") == all `register*Ipc` exports discovered by glob, failing if a new module appears uncovered.
+  - ✅ **REMEDIATED (2026-06-30, Phase 7)** — meta-assertion globs every `register*Ipc` export from the source tree and asserts union(`MODULES`, the new `COVERED_ELSEWHERE` reason-map) == discovered (`unaccounted == stale == []`); `COVERED_ELSEWHERE` annotates each of the 9 not-driven-here modules with WHY (dedicated lock test / pre-unlock-by-design). Teeth-checked (a stub `registerStubIpc.ts` → `unaccounted` → reds; stub deleted). See architecture.md Phase-7 subsection.
 - **DX-2 (Low) — `__docRowRenderCounts` test instrumentation shipped in production** (`DocumentsScreen.tsx:85`, exported Map bumped every `DocRow` render). Guard behind `import.meta.env.DEV` or inject an `onRender` callback.
+  - ✅ **REMEDIATED (2026-06-30, Phase 7)** — the per-render Map write is guarded behind `import.meta.env.DEV` (the SOLE `src/` line of the phase), so it no-ops in a production build (`npm run build` clean); the PERF-5 memo test stays green (vitest runs DEV true). See architecture.md Phase-7 subsection.
 - **DX-5 (Low) — `runtime-ladder` crash-recovery tested by hand-invoking `onUnexpectedExit`** (`tests/unit/runtime-ladder.test.ts:206,213`) — proves handler logic but not that the real sidecar wires `'exit'` → callback. Add one integration test that emits a real `'exit'` and asserts recovery fires.
+  - ✅ **REMEDIATED (2026-06-30, Phase 7)** — new `tests/integration/runtime-ladder-exit-wiring.test.ts`: the REAL `createLlamaRuntime`→`LlamaServer` (spawn/fetch/port injected) started to healthy on a GPU-reporting probe emits a REAL `'exit'` (code 134 + stderr tail); asserts the §5.3 auto-fallback fired (persist + compatibility notice + one CPU restart). Teeth-checked (drop the `'exit'`→`onUnexpectedExit` call → recovery never fires → reds). See architecture.md Phase-7 subsection.
 - **DX-6 (Low) — settle-window real sleeps** (`reranker.test.ts:447`, `e5-embedder.test.ts:536`, `doctasks.test.ts:314`): "assert nothing happened after a fixed delay" — robust today but un-teeth-checkable and waste wall-clock. Prefer deterministic queue-drain / fake clock.
+  - ✅ **REMEDIATED (2026-06-30, Phase 7)** — all three converted: reranker/e5 await the racing call's settled outcome (`expect(await {rerank,embed}2).toBe('rejected')` — the F19 guard makes it refuse on its own); doctasks waits `while (runtime.concurrent === 0) await tick()` on the scripted runtime's observable in-flight count before the mid-stream cancel. No fixed sleeps remain at these sites. See architecture.md Phase-7 subsection.
 - **Minor (Info) — `act(...)` warning** in `tests/renderer/ChatCompaction.test.tsx` (state update outside `act`, `ChatScreen.tsx:46`). Wrap the flushing update.
 
 > **Testing — checked and SOLID:** type hygiene (2 `as any` both in comments, 0 ts-ignore, no `.only`/`xit`),
@@ -458,7 +464,22 @@ and **teeth-checked** where a guard is added.
 - **Acceptance:** the four interleavings can't spawn/retain a sidecar past teardown; teeth-checks pass.
 - **Risks:** latent today — keep behavior-preserving; the teeth-checks are the guard.
 
-### Phase 7 — Test-suite robustness (TEST-1, TEST-3, DX-4, DX-2, DX-5, DX-6) — **test-only**
+### Phase 7 — Test-suite robustness (TEST-1, TEST-3, DX-4, DX-2, DX-5, DX-6) — **test-only** — ✅ REMEDIATED 2026-06-30
+> **Done on branch `audit-followup-phase7-test-robustness`** (unmerged; do NOT auto-merge/push). All six
+> closed; `git diff src/` is a SINGLE line (DX-2's `import.meta.env.DEV` guard). Suite **2589 passed / 39
+> skipped** (was 2586/39 after Phase 6 → **+3 net**: TEST-3 ×3 + DX-4 ×1 + DX-5 ×1 − TEST-1 net ×2; DX-2 a
+> guard, DX-6 conversions). Typecheck + `npm run build` green; two consecutive full runs stable.
+> **TEST-3:** new `rag-pipeline-floor.test.ts` — model-free synthetic floor through the REAL chunk→embed→
+> FTS→RRF-fusion→dedup→top-k→citation pipeline (mock only at the `MockEmbedder` seam), teeth-checked
+> (reverse fusion / drop top-k). **TEST-1:** deleted the flaky real-timer idle block; ported its two
+> uncovered cases (clock-reset, stop-cancels-timer) to the deterministic injected-clock twin. **DX-4:** glob
+> meta-assertion union(`MODULES`, `COVERED_ELSEWHERE`) == all `register*Ipc` exports, teeth-checked with a
+> stub module. **DX-2:** the prod render-counter is `import.meta.env.DEV`-guarded (no-ops in prod; memo test
+> green). **DX-5:** new `runtime-ladder-exit-wiring.test.ts` — a real `LlamaServer` child's `'exit'` drives
+> the GPU crash auto-fallback end-to-end, teeth-checked by cutting the wiring. **DX-6:** three settle-window
+> sleeps converted to deterministic waits (await the F19-guarded refusal; poll the scripted in-flight count).
+> Durable record: architecture.md "Test-enforcement seams" → Phase-7 subsection (per-finding rows + each
+> teeth-check). All neuters restored byte-identical; the DX-4 stub deleted.
 - **Goal:** retire the flaky vision block; add the model-free RAG-pipeline CI floor; make lock-guard enumeration
   self-checking; remove the prod test instrumentation; pin the ladder exit wiring; de-sleep settle windows.
 - **Scope/files:** `tests/integration/vision-runtime.test.ts`, a new `tests/integration/rag-pipeline-floor.test.ts`,

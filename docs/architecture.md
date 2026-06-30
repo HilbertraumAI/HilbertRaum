@@ -4883,6 +4883,79 @@ Suite after Phase 5: **2518 passed / 39 skipped (2557 collected)** (was 2515/39 
 T6/T7/T8 were conversions/strengthenings, not additions). **No `src/` behavior change** — the only source
 edits were the temporary teeth-check neuters, each restored byte-identical (`git diff src/` empty).
 
+### Full audit (2026-06-29, follow-up), Phase 7 — test-suite robustness (TEST-3 / TEST-1 / DX-4 / DX-2 / DX-5 / DX-6)
+
+The 2026-06-29 follow-up audit's §4 testing review found the same recurring class — plus the one
+**material coverage gap** (no automated end-to-end RAG-retrieval floor) and an actively-flaky block.
+Phase 7 is **test-only**: `git diff src/` is a SINGLE line (DX-2's DEV-guard). It closes the gap, retires
+the flaky vision real-timer block, and makes three "works today but no test proves it stays wired" seams
+self-enforcing — every added wiring test TEETH-CHECKED with the standing discipline (neuter the guarded
+control → red → restore byte-identical). Suite **2589 passed / 39 skipped** (was 2586/39 after Phase 6 →
+**+3 net**: TEST-3 ×3 + DX-4 ×1 + DX-5 ×1 − TEST-1 net ×2; DX-2/DX-6 are guards/conversions, no count change).
+
+- **TEST-3 — model-free RAG-pipeline retrieval FLOOR (`tests/integration/rag-pipeline-floor.test.ts`, new,
+  +3).** The scorer (`eval/score.test.ts`) and the S13b skill-trigger precision bar are CI-gated, but
+  actual retrieval→answer quality was asserted ONLY in env-gated MANUAL suites (`tests/manual/model-eval`,
+  `rag-quality`) — so a regression in chunking / embedding-prefix / reranking / `ragMinSimilarity` / top-k /
+  FUSION / citation assembly passed CI green. The floor draws the mock line at the SAME `MockEmbedder` seam
+  the RAG integration suite uses (deterministic, hash-based, offline) over a CONSTRUCTED corpus where the
+  known-correct chunk wins both the vector and the keyword channel, then runs the REAL pipeline end-to-end:
+  real chunker (`processDocument`) → `MockEmbedder` → `VectorIndex` cosine scan → FTS5 keyword scan → RRF
+  fusion → dedup → top-k trim → `[Sn]`/`Citation[]` assembly. Asserts (a) the known-correct chunk ranks #1
+  with its citation assembled, (b) the result caps at `topKFinal`, (c) `generateGroundedAnswer` persists a
+  cited answer whose first citation is the answer doc. The real-model EM/hallucination benchmark stays
+  MANUAL; this guards the PLUMBING that feeds it. Teeth: reverse `rrfFuse`'s sort (rag/hybrid.ts) → a
+  distractor ranks first → (a)/(c) red (verified); drop the `selected.length >= topKFinal` break
+  (rag/index.ts) → 5 returned → (b) red (verified).
+- **TEST-1 — the flaky real-timer vision idle-teardown block is DELETED
+  (`tests/integration/vision-runtime.test.ts`, net −2).** It raced real `setTimeout`s against tiny
+  `idleTimeoutMs` in BOTH directions (`sleep(15)` not-yet-torn-down, `sleep(60)` torn-down) — the known
+  T6/T7 "real-timer copies left" residual. Every case it covered is now asserted DETERMINISTICALLY by the
+  injected-clock twin: teardown-after-idle + cold restart → (b), in-flight guard → (a); the two UNCOVERED
+  cases were PORTED — clock-reset → new **(d)** (re-entry CLEARS T1 / re-arms T2, asserted via the fake
+  clock's `set`/`clear` counts, then T2 fires the teardown), stop()-cancels-timer → new **(f)** (stop()
+  clears the pending timer; a later stale fire is inert via the `stopped` guard in `idleTeardown`). No idle
+  `sleep` remains in the block; stable across repeated full-suite runs.
+- **DX-4 — IPC lock-guard enumeration is now self-checking
+  (`tests/integration/ipc-lock-coverage.test.ts`, +1).** The hand-kept `MODULES` array + a free-text
+  "covered elsewhere" comment meant a NEW `register*Ipc` module simply not listed went entirely unchecked
+  (the exact drift the file exists to prevent). New meta-assertion globs EVERY `register*Ipc` export from
+  the source tree (regex on the `export function` decl) and asserts union(`MODULES`, the new
+  `COVERED_ELSEWHERE` reason-map) == discovered (`unaccounted == stale == []`). `COVERED_ELSEWHERE`
+  annotates each of the 9 not-driven-here modules with WHY (a named dedicated locked-vault test, or
+  pre-unlock-by-design at the setup gate — download/engine guard their lone `ctx.db` read behind
+  `isUnlocked()`; dictation never touches `ctx.db`; workspace IS the lock gate). Teeth: add a stub
+  `src/main/ipc/registerStubIpc.ts` → it lands in `unaccounted` → reds (verified; stub deleted).
+- **DX-2 — the `__docRowRenderCounts` perf instrument no longer ships active in production
+  (`renderer/screens/DocumentsScreen.tsx`, the SOLE `src/` line).** The per-render Map write is guarded
+  behind `import.meta.env.DEV`, so it no-ops in a production build (verified: `npm run build` clean);
+  vitest runs with DEV true, so the PERF-5 memo test (`DocumentsScreen.test.tsx`, 48 green) still observes
+  the bumps. No production behaviour change (the exported Map stays an empty no-op in prod).
+- **DX-5 — the sidecar crash → auto-fallback WIRING is pinned end-to-end
+  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proves the
+  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama — never that
+  the real `LlamaServer` wires its child's `'exit'` event to that callback. The new test drives the REAL
+  `createLlamaRuntime`→`LlamaServer` (only spawn/fetch/port injected, the e5/reranker/vision gated-child
+  style), starts it to healthy on a GPU-reporting probe (backend `'gpu'`), then emits a REAL `'exit'`
+  (code 134 + a stderr tail) and asserts the §5.3 GPU crash auto-fallback fired: persisted failure
+  carrying `code 134` + the tail, the compatibility-mode notice, and ONE CPU restart of the same model.
+  Teeth: drop the `this.opts.onUnexpectedExit?.()` call in `LlamaServer`'s `'exit'` handler (or its
+  `ready && !stopping` gate) → no crash reaches the ladder → `restarts`/`persisted` stay empty → reds
+  (verified).
+- **DX-6 — three settle-window real sleeps converted to deterministic waits (no count change).**
+  `reranker.test.ts` / `e5-embedder.test.ts`: the fixed 25 ms "nothing spawned in the teardown window"
+  sleep is replaced by `expect(await {rerank,embed}2).toBe('rejected')` — under the F19 `tearingDown`
+  guard the racing call REFUSES on its own, so the absence is asserted by its settled outcome (a regression
+  that spawned a second child instead resolves `'ok'` AND bumps the spawn count the final assertion still
+  checks). `doctasks.test.ts`: the 40 ms "let the stream start" sleep is replaced by
+  `while (runtime.concurrent === 0) await tick()` (the scripted runtime's observable in-flight count), so
+  the mid-stream cancel lands deterministically once a generation is genuinely running. These assert/await
+  an absence-or-start so they are un-teeth-checkable by nature, but no longer race the wall clock.
+
+`git diff src/` after Phase 7 = the single DX-2 DEV-guard line; every teeth-check neuter (hybrid.ts fusion
+sort, rag/index.ts top-k break, sidecar.ts `'exit'`→hook) was restored byte-identical, and the DX-4 stub
+module was deleted.
+
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 
 _Formerly `docs/image-understanding-plan.md` (folded in here at the Phase-V5 closeout,

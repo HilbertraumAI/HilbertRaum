@@ -6,6 +6,63 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 7 (TEST-SUITE ROBUSTNESS; TEST-3/TEST-1/DX-4/DX-2/DX-5/DX-6) —
+branch `audit-followup-phase7-test-robustness` (unmerged; do NOT auto-merge/push). TEST-ONLY.** Closes the
+one material coverage gap (no automated RAG-retrieval floor), retires the actively-flaky vision real-timer
+block, and makes three "wired today but no test proves it stays wired" seams self-enforcing. **`git diff src/`
+is a SINGLE line** — DX-2's `import.meta.env.DEV` guard; every teeth-check neuter was restored byte-identical.
+Suite **2589 passed / 39 skipped** (was 2586/39 after Phase 6 → **+3 net**: TEST-3 ×3 + DX-4 ×1 + DX-5 ×1 −
+TEST-1 net ×2; DX-2 a guard, DX-6 conversions). Typecheck + `npm run build` green; **two consecutive full
+runs identical** (the de-flaking is the point). No IPC / schema / audit-payload change.
+- **TEST-3 (Med, the material gap) — model-free RAG-pipeline retrieval FLOOR** (new
+  `tests/integration/rag-pipeline-floor.test.ts`, ×3). CI gated only the scorer + the skill-trigger precision
+  bar; actual retrieval→answer quality lived in env-gated MANUAL suites, so a regression in chunking /
+  embedding-prefix / reranking / `ragMinSimilarity` / top-k / FUSION / citation assembly passed green. The
+  floor runs the REAL pipeline (real chunker via `processDocument` → `MockEmbedder` → `VectorIndex` cosine →
+  FTS5 → RRF fusion → dedup → top-k → `[Sn]`/`Citation[]`) over a corpus CONSTRUCTED so the known-correct
+  chunk wins both channels; mock line ONLY at the `MockEmbedder` seam the RAG suite already uses (no model /
+  network — offline). Asserts it ranks #1 with its citation, caps at `topKFinal`, and `generateGroundedAnswer`
+  persists the right first citation. The real-model EM/hallucination benchmark stays MANUAL. **Teeth ×2:**
+  reverse `rrfFuse`'s sort → a distractor ranks first → reds; drop the `topKFinal` break → 5 returned → reds.
+- **TEST-1 (Med, the active flake) — flaky real-timer vision idle-teardown block DELETED**
+  (`tests/integration/vision-runtime.test.ts`, net −2). It raced real `setTimeout`s vs a tiny `idleTimeoutMs`
+  in BOTH directions (the T6/T7 residual). Every case is now DETERMINISTIC on the injected-clock twin:
+  teardown+cold-restart → (b), in-flight guard → (a); the two uncovered cases PORTED — clock-reset → new
+  **(d)** (asserts re-entry CLEARED T1 / re-armed T2 via the fake clock's set/clear counts), stop-cancels-timer
+  → new **(f)** (stop clears the pending timer; a later stale fire is inert via the `stopped` guard). No idle
+  `sleep` remains.
+- **DX-4 (Low-Med) — IPC lock-guard enumeration self-checking** (`tests/integration/ipc-lock-coverage.test.ts`,
+  +1). New meta-assertion globs EVERY `register*Ipc` export and asserts union(`MODULES`, the new
+  `COVERED_ELSEWHERE` reason-map) == discovered (`unaccounted == stale == []`); a NEW unlisted module reds it.
+  `COVERED_ELSEWHERE` annotates each of the 9 not-driven-here modules with WHY (dedicated lock test, or
+  pre-unlock-by-design — download/engine guard their lone `ctx.db` read behind `isUnlocked()`, dictation never
+  touches `ctx.db`, workspace IS the gate). **Teeth:** a stub `registerStubIpc.ts` → `unaccounted` → reds
+  (stub deleted).
+- **DX-2 (Low, the SOLE src/ change) — prod render-counter `import.meta.env.DEV`-guarded**
+  (`renderer/screens/DocumentsScreen.tsx`). `__docRowRenderCounts.set(...)` now no-ops in a production build
+  (the exported Map stays empty); vitest runs DEV true, so the PERF-5 memo test (48 green) still observes the
+  bumps. Verified the guard compiles in both modes (`npm run build` clean).
+- **DX-5 (Low) — sidecar crash→auto-fallback WIRING pinned end-to-end** (new
+  `tests/integration/runtime-ladder-exit-wiring.test.ts`, +1). `runtime-ladder.test.ts` hand-invoked
+  `onUnexpectedExit` on a stub; this drives the REAL `createLlamaRuntime`→`LlamaServer` (spawn/fetch/port
+  injected), starts it healthy on a GPU-reporting probe, emits a REAL `'exit'` (code 134 + stderr tail), and
+  asserts the §5.3 GPU crash auto-fallback fired (persist with the code + tail, compatibility notice, ONE CPU
+  restart of the same model). **Teeth:** drop the `'exit'`→`onUnexpectedExit` call in `LlamaServer` → reds.
+- **DX-6 (Low) — three settle-window sleeps → deterministic waits** (`reranker`/`e5-embedder`/`doctasks`
+  integration tests, no count change). reranker/e5: `expect(await {rerank,embed}2).toBe('rejected')` — the F19
+  `tearingDown` guard makes the racing call refuse on its own (a regression that spawned a 2nd child resolves
+  `'ok'` AND bumps the spawn count the final assert checks). doctasks: `while (runtime.concurrent === 0) await
+  tick()` on the scripted runtime's in-flight count before the mid-stream cancel. No fixed sleeps at these sites.
+- **Durable record:** **architecture.md "Test-enforcement seams — design record" → new Phase-7 subsection**
+  (per-finding rows + each teeth-check). No behavior-doc / known-limitations change (nothing shipped changed).
+  `audits/full-audit-2026-06-29-followup.md` marks TEST-1/TEST-3/DX-4/DX-2/DX-5/DX-6 / Phase 7 ✅ remediated
+  (report KEPT — **Phase 8 remains, the LAST phase**).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase7-test-robustness`; do NOT auto-merge/push.**
+  **Phase 8** (the final phase) — maintainability (DX-1 `DocTaskManager` split, DX-3 oversized screens) +
+  security hardening (SEC-4 `extract_to` `..` reject) + FE-E + the REL-5 §26 wording + the four stale code
+  comments + fold this report into the arch §§ and `git rm` it — per the audit §6 plan._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 6 (RELIABILITY HARDENING; REL-1/REL-2/REL-3/REL-4) — branch
 `audit-followup-phase6-reliability` (unmerged; do NOT auto-merge/push).** Closes the four LATENT
 concurrency/teardown gaps in the sidecar lifecycle. **None is a live bug today** — each mirrors a race class

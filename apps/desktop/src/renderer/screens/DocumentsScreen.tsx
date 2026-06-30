@@ -1453,7 +1453,7 @@ const DocRow = memo(function DocRow({
   // Perf-test render probe (PERF-5): bumps the module-scoped per-id counter so the memoization test
   // can assert an untouched row did NOT re-render. A Map write — effectively free; production
   // behaviour is identical with or without it.
-  __docRowRenderCounts.set(d.id, (__docRowRenderCounts.get(d.id) ?? 0) + 1)
+  if (import.meta.env.DEV) __docRowRenderCounts.set(d.id, (__docRowRenderCounts.get(d.id) ?? 0) + 1) // DX-2: DEV-only, no-ops in prod
   __onRender?.(d.id)
 
   // Per-row derived values (moved inside DocRow, PERF-5) — pure functions of `d` + the stable

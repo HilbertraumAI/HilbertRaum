@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -101,6 +101,29 @@ const MODULES: Array<{
   { name: 'registerCollectionsIpc', register: registerCollectionsIpc, exempt: new Set<string>() }
 ]
 
+// DX-4 (full-audit-2026-06-29 follow-up, Phase 7): the locked-vault posture of every register*Ipc
+// module not driven HERE (in MODULES) is verified by a DEDICATED test, OR the module is
+// intentionally PRE-UNLOCK (it runs at the setup gate, before a workspace exists, so it has no
+// requireUnlocked preamble by design). Each entry names WHY, so this set can never silently absorb
+// a genuinely-unguarded module. The enumeration meta-assertion below proves
+// union(MODULES, COVERED_ELSEWHERE) == every register*Ipc discovered by glob — so a NEW module that
+// is added uncovered reds this file (the exact drift it exists to catch).
+const COVERED_ELSEWHERE: Record<string, string> = {
+  registerChatIpc: 'chat-ipc.test.ts (TEST-N8 locked-vault rejection)',
+  registerDocsIpc: 'docs-ipc.test.ts ("M6" locked-vault rejection)',
+  registerDocTasksIpc: 'doctasks-ipc.test.ts (locked-vault rejection)',
+  registerImagesIpc: 'images-ipc.test.ts (locked-vault rejection)',
+  registerSkillsIpc: 'skills-ipc.test.ts (locked-vault rejection; DB-touching, requireUnlocked-gated)',
+  registerWorkspaceIpc:
+    'workspace-ipc.test.ts — IS the lock/unlock/create/rekey gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design)',
+  registerDictationIpc:
+    'pre-unlock by design — whisper STT for the chat composer, never touches ctx.db (no requireUnlocked)',
+  registerDownloadIpc:
+    'pre-unlock by design — model downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()',
+  registerEngineIpc:
+    'pre-unlock by design — engine-binary downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()'
+}
+
 describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', () => {
   let tmp: string
 
@@ -141,5 +164,33 @@ describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', (
 
     const status = await invoke(handlers, IPC.getRuntimeStatus)
     expect(status.result).toMatchObject({ running: false })
+  })
+
+  // DX-4: close the enumeration loop. Glob EVERY `register*Ipc` export from the source tree and
+  // assert each is accounted for — either driven HERE (MODULES) or in COVERED_ELSEWHERE with a
+  // reason. A new register*Ipc module added uncovered lands in `unaccounted` and reds this; a
+  // module renamed/removed without updating the lists lands in `stale`. Discovery reads the source
+  // files (regex on the `export function register*Ipc` declaration) rather than importing them, so
+  // it needs no module side effects and matches what an author greps.
+  it('every register*Ipc module is enumerated here or in COVERED_ELSEWHERE (DX-4 drift guard)', () => {
+    const ipcDir = join(__dirname, '../../src/main/ipc')
+    const discovered = new Set<string>()
+    for (const file of readdirSync(ipcDir)) {
+      if (!file.startsWith('register') || !file.endsWith('Ipc.ts')) continue
+      const src = readFileSync(join(ipcDir, file), 'utf8')
+      for (const m of src.matchAll(/export function (register\w*Ipc)\b/g)) discovered.add(m[1])
+    }
+    // Sanity: the glob actually found the modules (a broken path would vacuously pass).
+    expect(discovered.size).toBeGreaterThanOrEqual(MODULES.length)
+
+    const accounted = new Set<string>([
+      ...MODULES.map((m) => m.name),
+      ...Object.keys(COVERED_ELSEWHERE)
+    ])
+    const unaccounted = [...discovered].filter((n) => !accounted.has(n)).sort()
+    const stale = [...accounted].filter((n) => !discovered.has(n)).sort()
+    // A new module appears in `unaccounted` (add it to MODULES or COVERED_ELSEWHERE with a reason);
+    // a removed/renamed module appears in `stale` (drop it from the lists).
+    expect({ unaccounted, stale }).toEqual({ unaccounted: [], stale: [] })
   })
 })
