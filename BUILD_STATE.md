@@ -6,6 +6,20 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Bulk re-index progress now survives navigation (main-owned job).** The "Re-index all" / "Retry all"
+progress bar used to vanish when leaving the Documents screen because the loop ran in the RENDERER and its progress was
+component `useState` (discarded on unmount) — while the work kept running invisibly in main. Moved the loop into MAIN as a
+tracked job, mirroring the import job: new `ReindexJobStatus`, `IPC.startReindexAll(documentIds)` + parameterless
+`IPC.getReindexAllJob()`, a single in-flight `reindexJob` aggregate (one run at a time; a start while running is
+idempotent), holding one `beginDocumentWork` lease and skipping docs that are `processing`/task-busy. Factored a shared
+`reindexOne()` core used by both the single `reindexDocument` handler and the batch. Renderer: `onReindexAll` now calls
+`startReindexAll` + polls via a new `watchReindex()` (separate interval ref), and a mount effect re-attaches the bar from
+`getReindexAllJob()` — so it persists across navigation AND a renderer reload. Transient only: nothing persisted to disk
+(a saved counter would lie post-restart; the live main job is the source of truth, recovered by polling — same as imports).
+Renderer tests now assert delegation to `startReindexAll(ids)`; a new `docs-ipc.test.ts` case drives the real main loop to
+completion + proves parameterless recovery + start idempotency. Full suite green except the 3 pre-existing platform
+failures; build + typecheck clean. Docs: rag-design.md §"Re-index all"._
+
 _2026-06-30 — **Deep-index offer is now truly fire-and-forget (import/reindex hardening).** A reported runtime crash —
 `ctx.docTasks?.maybeEnqueueTreeBuild is not a function` logged as "Document ingestion crashed" — exposed a latent bug:
 both call sites (import loop + `reindexDocument`) ran the OPTIONAL deep-index offer INSIDE the success path's try, so any

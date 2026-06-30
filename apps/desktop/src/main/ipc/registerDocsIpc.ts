@@ -13,6 +13,7 @@ import type {
   ImportOptions,
   ImportPreflight,
   PickDocumentsResult,
+  ReindexJobStatus,
   SmartListView
 } from '../../shared/types'
 import { matchesSmartView } from '../../shared/types'
@@ -122,6 +123,10 @@ export function registerDocsIpc(ctx: AppContext): void {
   const storeDir = documentsDir(ctx.paths.workspacePath)
   // Ephemeral per-import aggregates, keyed by job id.
   const jobs = new Map<string, ImportJobStatus>()
+  // The single in-flight (or most recent) bulk re-index aggregate. Main-owned so the renderer can
+  // recover the progress bar after navigating away and back via the parameterless getReindexAllJob.
+  // Only one runs at a time — beginDocumentWork serialises it against imports/password changes.
+  let reindexJob: ReindexJobStatus | null = null
   // Documents currently being processed (import loop or re-index). Guards delete/re-index
   // against racing an in-flight ingestion of the SAME document: interleaving used to
   // produce FK violations, duplicate chunk sets, and EBUSY on the stored copy.
@@ -659,14 +664,11 @@ export function registerDocsIpc(ctx: AppContext): void {
     return filePath
   })
 
-  ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
-    requireUnlocked()
-    requireNotProcessing(documentId)
-    requireNoActiveTask(documentId)
-    // Race guard: re-index rewrites the `.enc` sidecar — mutually exclusive
-    // with a password change (see importDocuments).
-    const releaseDocWork = ctx.workspace.beginDocumentWork()
-    log.info('Re-index document', { documentId })
+  // The core of a single re-index, shared by the one-shot IPC and the bulk loop: re-embed the
+  // document, audit it, and offer a fresh deep index. The `processing` add/delete guard wraps it
+  // (the sidecar rewrite must not race a concurrent ingestion of the same doc). Callers hold the
+  // `beginDocumentWork` lease and decide how to count the result.
+  const reindexOne = async (documentId: string): Promise<DocumentInfo> => {
     processing.add(documentId)
     try {
       const info = await reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
@@ -684,7 +686,78 @@ export function registerDocsIpc(ctx: AppContext): void {
     } finally {
       processing.delete(documentId)
       transcribing.delete(documentId)
+    }
+  }
+
+  ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
+    requireUnlocked()
+    requireNotProcessing(documentId)
+    requireNoActiveTask(documentId)
+    // Race guard: re-index rewrites the `.enc` sidecar — mutually exclusive
+    // with a password change (see importDocuments).
+    const releaseDocWork = ctx.workspace.beginDocumentWork()
+    log.info('Re-index document', { documentId })
+    try {
+      return await reindexOne(documentId)
+    } finally {
       releaseDocWork()
     }
   })
+
+  // ---- Bulk re-index ("Re-index all" stale / "Retry all" failed) --------------------
+  // Main owns the job (like an import) so its determinate progress bar survives navigating away
+  // from the Documents screen: the renderer recovers it with the parameterless getReindexAllJob on
+  // mount and polls until done. One run at a time — a start while one is in flight returns the
+  // running job rather than launching a second loop. The work is sequential (multi-document
+  // re-embedding contends on the single embedder), so it reuses the same one-at-a-time discipline
+  // as the import loop, holding ONE beginDocumentWork lease for the whole batch.
+  ipcMain.handle(IPC.startReindexAll, (_e, documentIds: string[]): ReindexJobStatus => {
+    requireUnlocked()
+    if (reindexJob && !reindexJob.done) return reindexJob // idempotent while running
+    const ids = safeIdArray(documentIds)
+    const jobId = randomUUID()
+    reindexJob = { jobId, total: ids.length, completed: 0, failed: 0, done: ids.length === 0 }
+    if (ids.length === 0) return reindexJob
+    const job = reindexJob
+    const releaseDocWork = ctx.workspace.beginDocumentWork()
+    log.info('Re-index all started', { jobId, total: ids.length })
+    void (async () => {
+      try {
+        for (const id of ids) {
+          // Workspace can lock mid-batch ("Lock now"): stop cleanly — the remaining docs keep
+          // their current status and the user can retry after unlock.
+          if (!ctx.workspace.isUnlocked()) {
+            log.warn('Re-index all stopped: workspace locked mid-batch', { jobId })
+            break
+          }
+          // Skip a doc already being processed or held by a live doc task (summary/deep-index):
+          // re-indexing under it would lose the race (see requireNoActiveTask). Count as failed so
+          // total still adds up and the user sees it didn't complete.
+          if (processing.has(id) || ctx.docTasks?.isDocumentBusy(id)) {
+            job.failed += 1
+            continue
+          }
+          try {
+            const info = await reindexOne(id)
+            if (info.status === 'indexed') job.completed += 1
+            else job.failed += 1
+          } catch (err) {
+            job.failed += 1
+            log.error('Re-index (batch) crashed', { id, error: String(err) })
+          }
+        }
+      } finally {
+        releaseDocWork()
+        job.done = true
+        log.info('Re-index all finished', {
+          jobId,
+          completed: job.completed,
+          failed: job.failed
+        })
+      }
+    })()
+    return reindexJob
+  })
+
+  ipcMain.handle(IPC.getReindexAllJob, (): ReindexJobStatus | null => reindexJob)
 }

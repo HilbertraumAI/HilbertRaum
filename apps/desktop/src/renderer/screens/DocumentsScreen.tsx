@@ -191,6 +191,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // chat ConversationList pattern). Holds the open row id, or null.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Separate interval for the bulk re-index poll so it never clobbers the import poll above.
+  const reindexPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Mounted flag (audit FE-4): the import poll's in-flight `getImportJob`/`refresh` can resolve
   // AFTER the interval is cleared on unmount; clearing the interval doesn't abort that tick's
   // promise, so guard every setState behind this flag.
@@ -279,6 +281,69 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     },
     [refresh]
   )
+
+  // Poll the MAIN-owned bulk re-index job until it settles. Mirrors `watchJob`: a 400 ms tick reads
+  // the small `getReindexAllJob` status, refreshes the full list on a count transition + at the end,
+  // and drives the determinate progress bar. Because the job lives in main, this re-attaches cleanly
+  // after navigating away and back (the mount effect below restarts it) — the bar no longer vanishes.
+  const watchReindex = useCallback((): void => {
+    if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+    let lastSettled = -1
+    reindexPollRef.current = setInterval(async () => {
+      try {
+        const job = await window.api.getReindexAllJob?.()
+        if (!mountedRef.current) return
+        if (!job) {
+          // No job (cleared/expired) — stop and reset the UI.
+          if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+          reindexPollRef.current = null
+          setBusy(null)
+          setReindexProgress(null)
+          return
+        }
+        setReindexProgress({ done: job.completed + job.failed, total: job.total })
+        const settled = job.completed + job.failed
+        const transitioned = settled !== lastSettled
+        lastSettled = settled
+        if (transitioned || job.done) await refresh()
+        if (job.done) {
+          if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+          reindexPollRef.current = null
+          if (mountedRef.current) {
+            setBusy(null)
+            setReindexProgress(null)
+          }
+        }
+      } catch (e) {
+        if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+        reindexPollRef.current = null
+        if (!mountedRef.current) return
+        setBusy(null)
+        setReindexProgress(null)
+        setError(friendlyIpcError(e))
+      }
+    }, 400)
+  }, [refresh])
+
+  // Recover a bulk re-index already running in main when the screen (re)mounts: this is what keeps
+  // the progress bar alive across navigation. Also clears the poll on unmount.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const job = await window.api.getReindexAllJob?.()
+        if (job && !job.done && mountedRef.current) {
+          setBusy('reindex-all')
+          setReindexProgress({ done: job.completed + job.failed, total: job.total })
+          watchReindex()
+        }
+      } catch {
+        // No bridge / locked — nothing to recover.
+      }
+    })()
+    return () => {
+      if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+    }
+  }, [watchReindex])
 
   // `token` (D1) is the picker capability from `pickDocuments`; main imports exactly what was
   // picked and ignores the `paths` we pass (kept only so an old test/caller still type-checks).
@@ -715,29 +780,25 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     })
   }
 
-  // Re-index a set of documents sequentially: same per-document call as the row button, one at
-  // a time — multi-document re-embedding contends on the embedder. Confirmed first (M-U6) because
-  // it is multi-minute CPU work; a determinate Progress bar reports "Re-indexing N of M…" rather
-  // than a bare button spinner. Used by both "Re-index all" (stale embeddings) and the failed-tab
-  // "Retry all" — the caller passes the snapshot so refresh() mutating staleDocs/failedDocs mid-run
-  // doesn't shrink the target list.
-  async function onReindexAll(targets: DocumentInfo[]): Promise<void> {
+  // Re-index a set of documents — the loop runs in MAIN (startReindexAll) so its determinate
+  // progress survives navigating away from this screen; here we just start it and poll via
+  // watchReindex. Confirmed first (M-U6) because it is multi-minute CPU work. Used by both
+  // "Re-index all" (stale embeddings) and the failed-tab "Retry all".
+  function onReindexAll(targets: DocumentInfo[]): void {
     setBusy('reindex-all')
     setError(null)
     setReindexProgress({ done: 0, total: targets.length })
-    try {
-      for (let i = 0; i < targets.length; i++) {
-        await window.api.reindexDocument(targets[i].id)
-        setReindexProgress({ done: i + 1, total: targets.length })
-        await refresh()
+    void (async () => {
+      try {
+        // Main owns the loop now (it survives navigation); we just kick it off and poll.
+        await window.api.startReindexAll(targets.map((d) => d.id))
+        watchReindex()
+      } catch (e) {
+        setBusy(null)
+        setReindexProgress(null)
+        setError(friendlyIpcError(e))
       }
-    } catch (e) {
-      setError(friendlyIpcError(e))
-    } finally {
-      setBusy(null)
-      setReindexProgress(null)
-      await refresh().catch(() => undefined)
-    }
+    })()
   }
 
   // Stable row-handler identities for the memoized DocRow (perf audit PERF-5). The latest-ref

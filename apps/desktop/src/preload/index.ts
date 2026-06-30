@@ -30,6 +30,7 @@ import type {
   ImageSessionSummary,
   ImportJob,
   ImportJobStatus,
+  ReindexJobStatus,
   ImportOptions,
   ImportPreflight,
   Message,
@@ -396,6 +397,14 @@ const api = {
     ipcRenderer.invoke(IPC.deleteDocument, documentId),
   reindexDocument: (documentId: string): Promise<DocumentInfo> =>
     ipcRenderer.invoke(IPC.reindexDocument, documentId),
+  /** Start a bulk re-index of the given documents (stale "Re-index all" / failed "Retry all").
+   *  Main owns the job so the progress bar survives navigation. Idempotent while one is running. */
+  startReindexAll: (documentIds: string[]): Promise<ReindexJobStatus> =>
+    ipcRenderer.invoke(IPC.startReindexAll, documentIds),
+  /** The current/last bulk re-index job, or null. Parameterless so the renderer re-attaches the
+   *  progress bar on mount. */
+  getReindexAllJob: (): Promise<ReindexJobStatus | null> =>
+    ipcRenderer.invoke(IPC.getReindexAllJob),
   /** Read-only in-app preview: the document's extracted text — FE-6 returns the BOUNDED first
    *  page (+ a `nextOffset` cursor when there is more). */
   previewDocument: (documentId: string): Promise<DocumentPreview> =>

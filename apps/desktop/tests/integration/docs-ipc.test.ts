@@ -41,7 +41,8 @@ import type {
   DocumentOrigin,
   ImportJob,
   ImportJobStatus,
-  ImportOptions
+  ImportOptions,
+  ReindexJobStatus
 } from '../../src/shared/types'
 import { LARGE_FILE_BYTES } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
@@ -215,6 +216,40 @@ describe('registerDocsIpc', () => {
     // Reindex path: resolves to `indexed` instead of rejecting on the same throw.
     const info = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
     expect(info.status).toBe('indexed')
+  })
+
+  it('startReindexAll runs the bulk loop in main, recoverable via parameterless getReindexAllJob', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const a = join(workspacePath, 'a.txt')
+    const b = join(workspacePath, 'b.txt')
+    writeFileSync(a, 'alpha beta gamma delta')
+    writeFileSync(b, 'epsilon zeta eta theta')
+    const { documentIds } = await runImport([a, b])
+    expect(documentIds).toHaveLength(2)
+
+    // Start the bulk re-index; the loop lives in MAIN, so the renderer can poll without the jobId.
+    const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    expect(started.total).toBe(2)
+    expect(started.done).toBe(false)
+    // Recovery: the parameterless getter returns the SAME in-flight job (this is what survives a
+    // navigation/remount), and a second start while running is idempotent (same jobId, no relaunch).
+    const recovered = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    expect(recovered.jobId).toBe(started.jobId)
+    const again = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    expect(again.jobId).toBe(started.jobId)
+
+    // Poll to completion, exactly as the renderer does.
+    let job = recovered
+    for (let i = 0; i < 200 && !job.done; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    }
+    expect(job.done).toBe(true)
+    expect(job.completed).toBe(2)
+    expect(job.failed).toBe(0)
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(documentIds.every((id) => listed.find((d) => d.id === id)?.status === 'indexed')).toBe(true)
   })
 
   it('imports a chat attachment: Temporary + a conversation_documents link (C3)', async () => {

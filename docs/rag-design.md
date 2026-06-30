@@ -607,8 +607,14 @@ files, with sources"). Renderer-only; dismissals are per-conversation, in-memory
 - **Re-index all** — the Documents screen offers a one-click sequential re-index of every
   stale document (the per-document stale badge shipped in the earlier polish round). The Failed
   imports tab carries the same affordance as **Retry all**, targeting `status === 'failed'`
-  documents instead of stale-embedding ones; both share one confirm-gated sequential runner
-  (`onReindexAll(targets)`), with copy keyed off which set opened it.
+  documents instead of stale-embedding ones; both are confirm-gated (M-U6), with copy keyed off
+  which set opened it. The sequential loop is **owned by MAIN** (`IPC.startReindexAll` /
+  `getReindexAllJob`, a `ReindexJobStatus` aggregate), mirroring the import job: only one runs at a
+  time (a start while running is idempotent), and the renderer drives the determinate progress bar
+  by polling. Because the job lives in main, the bar **survives navigating away from the Documents
+  screen and back** — the renderer recovers it with the parameterless `getReindexAllJob()` on mount.
+  Transient state only: nothing is persisted to disk (a saved counter would lie after a restart; the
+  live main job is the single source of truth, recovered by polling — same posture as imports).
 
 ### Tested behaviour (Phase 17)
 
