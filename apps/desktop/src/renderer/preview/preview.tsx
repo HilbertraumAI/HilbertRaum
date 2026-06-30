@@ -13,9 +13,11 @@ import { DocumentsScreen } from '../screens/DocumentsScreen'
 import '../tokens.css'
 import '../styles.css'
 
-// ---- Mock data (a nested project tree + a few chats) -------------------------------------------
+// ---- Mock data (the built-ins + a few flat projects and chats) ---------------------------------
+// Collections are FLAT on this branch (no nesting/parentId) — the By-Project view groups
+// conversations under their project, it is not a folder tree.
 const now = '2026-06-25T10:00:00Z'
-function coll(id: string, name: string, parentId: string | null = null, type = 'project'): Collection {
+function coll(id: string, name: string, type = 'project'): Collection {
   return {
     id,
     name,
@@ -25,18 +27,14 @@ function coll(id: string, name: string, parentId: string | null = null, type = '
     color: null,
     createdAt: now,
     updatedAt: now,
-    archivedAt: null,
-    parentId
+    archivedAt: null
   }
 }
 const COLLECTIONS: Collection[] = [
-  coll('lib', 'Library', null, 'library'),
-  coll('tmp', 'Temporary', null, 'temporary'),
+  coll('lib', 'Library', 'library'),
+  coll('tmp', 'Temporary', 'temporary'),
   coll('tax', 'Taxes'),
-  coll('tax25', '2025', 'tax'),
-  coll('tax24', '2024', 'tax'),
-  coll('legal', 'Legal'),
-  coll('legal-nda', 'NDAs', 'legal')
+  coll('legal', 'Legal')
 ]
 function conv(id: string, title: string, collectionId: string | null): Conversation {
   return {
@@ -95,7 +93,7 @@ const noop = (): void => {}
 
 const CASES: Record<string, { label: string; node: JSX.Element }> = {
   'chat-byproject': {
-    label: 'Chat sidebar — By Project folder browser',
+    label: 'Chat sidebar — By Project grouping',
     node: (
       <div style={{ width: 300, height: 620, display: 'flex' }}>
         <ConversationList
@@ -107,18 +105,13 @@ const CASES: Record<string, { label: string; node: JSX.Element }> = {
           onSelect={noop}
           onNew={noop}
           onDelete={noop}
-          onMove={noop}
-          onNewFolder={noop}
-          onCreateFolder={noop}
-          onNewInFolder={noop}
-          onOpenFolderFiles={noop}
           onCollapse={noop}
         />
       </div>
     )
   },
   documents: {
-    label: 'Documents — rail tree + nested folder browser',
+    label: 'Documents — list with project memberships',
     node: (
       <div style={{ width: 1100, height: 720 }}>
         <DocumentsScreen />
