@@ -124,14 +124,28 @@ export class ModelSlotArbiter {
     // builder parks wait on the handoff (the builder wakes all of them at once when it parks).
     if (this.reacquireReject === null) {
       this.pauseRequested = true
+      // waitForHandoff handles an abort that lands WHILE PARKED (removes the waiter, gives the
+      // holder slot back, drops the pause if last, rejects) and throws before the lines below —
+      // so on that path no holding-phase listener is installed and chatHolders is already balanced.
       await this.waitForHandoff(signal)
     }
+    // We hold the slot now — via the slow path above OR the fast path (builder already parked).
+    // R2 (full-audit-2026-06-30, Phase C): install the release-on-abort here so it covers BOTH
+    // paths uniformly. The fast path previously installed NO abort listener (it skipped
+    // waitForHandoff), so an aborted fast-path holder kept its `chatHolders` slot until
+    // withChatStream's `finally` unwound — a transient stall in which the build resumed only when
+    // the OTHER chat released. The listener and the returned release fn share ONE `released` latch,
+    // so the slot is given back EXACTLY once (whichever of abort / explicit-release fires first;
+    // the other is a no-op) and the build can't resume prematurely from a double-decrement.
     let released = false
-    return () => {
+    const release = (): void => {
       if (released) return
       released = true
+      signal?.removeEventListener('abort', release)
       this.releaseOneChat()
     }
+    signal?.addEventListener('abort', release, { once: true })
+    return release
   }
 
   /**

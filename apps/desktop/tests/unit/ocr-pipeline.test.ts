@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { pipelinePages } from '../../src/main/services/ocr/pipeline'
 
 // ING-5 — bounded 1-deep render/recognize look-ahead. Pure orchestration (no Electron):
@@ -129,5 +129,24 @@ describe('pipelinePages (ING-5 OCR look-ahead)', () => {
       calls++
     })
     expect(calls).toBe(0)
+  })
+
+  // R4 (full-audit-2026-06-30, Phase C): the in-try drain of the LAST recognition awaits it once;
+  // if it rejects, the catch must NOT re-await the SAME already-settled promise (there is no
+  // still-pending look-ahead for the final page). The fix nulls `prevOnPage` before the final await.
+  it('does not re-await an already-settled FINAL-page recognition in the catch (R4)', async () => {
+    const failure = new Error('final page recognize failed')
+    const finalP = Promise.reject(failure)
+    finalP.catch(() => undefined) // pre-handle with the REAL `then` (before the spy) → no unhandled-rejection warning
+    // `await p` on a native promise uses the internal then (invisible here); an EXPLICIT
+    // `p.catch(...)` calls `p.then`, so this spy counts ONLY a catch-block re-await of the final
+    // recognition — 0 when fixed, 1 with the double-drain bug.
+    const thenSpy = vi.spyOn(finalP, 'then')
+
+    await expect(
+      pipelinePages(3, async (n) => Buffer.from([n]), (n) => (n === 3 ? finalP : undefined))
+    ).rejects.toBe(failure)
+
+    expect(thenSpy).toHaveBeenCalledTimes(0)
   })
 })

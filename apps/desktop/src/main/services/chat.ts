@@ -27,6 +27,7 @@ import {
 } from './skills/prompt'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 import { ensureCompacted } from './chat/compaction'
+import { log } from './logging'
 
 /**
  * The ONE skill resolved for a turn (skills plan §10) — the minimal shape the chat/RAG
@@ -1183,17 +1184,32 @@ export async function generateAssistantMessage(
   // assistant bubble in the transcript otherwise) and return an unpersisted, empty
   // message to keep the resolve contract.
   if (content === '') return emptyAssistantMessage(conversationId)
-  // Stamp the skill only when its fence was actually placed (DS16/§22-A5) — an omitted-for-budget
-  // skill did not shape this answer, so it gets no glyph.
-  return appendMessage(db, {
-    conversationId,
-    role: 'assistant',
-    content,
-    skillId: fence ? (opts.skill?.installId ?? null) : null,
-    // Carry auto-fire provenance only when the fence was placed (the skill shaped the answer) — so the
-    // S13c undo lines up 1:1 with the glyph (§22-A5).
-    autoFired: fence ? opts.skill?.autoFired === true : false
-  })
+  try {
+    // Stamp the skill only when its fence was actually placed (DS16/§22-A5) — an omitted-for-budget
+    // skill did not shape this answer, so it gets no glyph.
+    return appendMessage(db, {
+      conversationId,
+      role: 'assistant',
+      content,
+      skillId: fence ? (opts.skill?.installId ?? null) : null,
+      // Carry auto-fire provenance only when the fence was placed (the skill shaped the answer) — so the
+      // S13c undo lines up 1:1 with the glyph (§22-A5).
+      autoFired: fence ? opts.skill?.autoFired === true : false
+    })
+  } catch (err) {
+    // R1 (full-audit-2026-06-30, Phase C) — defense-in-depth guard. The lock/quit teardown now
+    // deterministically awaits this stream's settle BEFORE closing the DB (so on the live path the
+    // partial persists first), but if the signal was aborted AND the DB is already closed, this is
+    // a teardown that closed `ctx.db` under an aborted partial-persist: swallow it cleanly (the
+    // partial is lost, not a crash) instead of rejecting into the global unhandled-rejection
+    // handler. A genuine open-DB persistence error (constraint/disk) still propagates. Content is
+    // never logged — only the conversation id + the reason.
+    if (opts.signal?.aborted && !db.isOpen) {
+      log.warn('chat: dropped partial reply — workspace locked during persist', { conversationId })
+      return emptyAssistantMessage(conversationId)
+    }
+    throw err
+  }
 }
 
 /**

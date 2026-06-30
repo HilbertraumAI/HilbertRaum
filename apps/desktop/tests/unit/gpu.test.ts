@@ -257,4 +257,51 @@ describe('createCachedGpuProbe', () => {
     await probe('/bin/x')
     expect(count()).toBe(2)
   })
+
+  // R5 (full-audit-2026-06-30, Phase C): a probe's timeout SIGKILLs but doesn't await the reap, and
+  // the child is unref'd, so rapid invalidate()+re-probe ("Try GPU again" mashing) WHILE one probe
+  // is still in flight used to drop the in-flight entry and spawn a SECOND child per click — N
+  // clicks → N stacked children for one binary. The fix coalesces: invalidate only drops SETTLED
+  // entries; a re-probe during the in-flight window returns the existing promise (one child).
+  it('coalesces re-probes while one is in flight — invalidate+re-probe mashing does not stack children (R5)', async () => {
+    let spawned = 0
+    const children: FakeProbeChild[] = []
+    const spawn: SpawnFn = () => {
+      spawned += 1
+      const child = new FakeProbeChild()
+      children.push(child) // NEVER closes on its own — the probe stays in flight until we drive it
+      return child
+    }
+    const probe = createCachedGpuProbe({ spawn })
+    const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+
+    const p1 = probe('/bin/x') // kicks off probe #1 (verify() is async, so spawn lands a tick later)
+    // Mash "Try GPU again" while the probe is still in flight: each invalidate()+probe() must
+    // coalesce onto the one running probe, never spawn another child.
+    for (let i = 0; i < 5; i++) {
+      probe.invalidate()
+      void probe('/bin/x')
+    }
+    while (spawned === 0) await tick() // let the in-flight probe's verify() resolve + spawn
+    // A couple more mashes now that the child is actually alive (still in flight — it never closed).
+    for (let i = 0; i < 3; i++) {
+      probe.invalidate()
+      void probe('/bin/x')
+    }
+    await tick()
+    expect(spawned).toBe(1) // ONE child despite all the mashing (reds at 1+5 with the old cache.clear)
+    expect(children.length).toBe(1)
+
+    // Let the in-flight probe settle; only THEN does invalidate()+probe re-spawn (feature intact).
+    children[0].stdout.emit('data', RTX_3080TI_OUTPUT)
+    children[0].emit('close', 0, null)
+    await p1
+    probe.invalidate()
+    const p2 = probe('/bin/x')
+    while (spawned === 1) await tick()
+    expect(spawned).toBe(2)
+    children[1].stdout.emit('data', RTX_3080TI_OUTPUT)
+    children[1].emit('close', 0, null)
+    await p2
+  })
 })

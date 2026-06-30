@@ -34,7 +34,14 @@ export async function pipelinePages(
       // Start recognize(N) but do NOT await it — the next render overlaps it.
       prevOnPage = Promise.resolve(onPage(pageNumber, png))
     }
-    if (prevOnPage) await prevOnPage
+    // Drain the LAST recognition. R4 (full-audit-2026-06-30, Phase C): null `prevOnPage` BEFORE
+    // awaiting it so that if this final recognition rejects, the catch below does NOT re-await the
+    // SAME already-settled promise — there is no still-pending look-ahead for the last page. The
+    // catch's drain is then reserved for a genuine in-flight recognition (a render/abort throw mid
+    // loop while recognize(N-1) is still running).
+    const last = prevOnPage
+    prevOnPage = null
+    if (last) await last
   } catch (err) {
     if (prevOnPage) await prevOnPage.catch(() => undefined)
     throw err

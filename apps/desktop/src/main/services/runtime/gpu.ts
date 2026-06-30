@@ -178,13 +178,28 @@ export interface CachedGpuProbe {
  */
 export function createCachedGpuProbe(deps: GpuProbeDeps = {}): CachedGpuProbe {
   const cache = new Map<string, Promise<GpuDevice[]>>()
+  // R5 (full-audit-2026-06-30, Phase C): binaries whose probe child is still alive. A probe's
+  // timeout `SIGKILL`s but does NOT await the reap, and the child is `unref`'d — so dropping an
+  // in-flight entry and re-probing (rapid "Try GPU again" mashing during a slow/cold driver init)
+  // would STACK a second short-lived child for the SAME binary, N clicks → N children. Fix:
+  // `invalidate()` drops only SETTLED entries; while a probe is in flight a re-probe COALESCES onto
+  // the existing promise (no second child), and the entry becomes invalidate-able once it settles.
+  const inFlight = new Set<string>()
   const probe = (binPath: string): Promise<GpuDevice[]> => {
     let pending = cache.get(binPath)
     if (!pending) {
       pending = probeGpuDevices(binPath, deps)
       cache.set(binPath, pending)
+      inFlight.add(binPath)
+      // probeGpuDevices never rejects (its contract), but `finally` is correct regardless.
+      void pending.finally(() => inFlight.delete(binPath))
     }
     return pending
   }
-  return Object.assign(probe, { invalidate: () => cache.clear() })
+  const invalidate = (): void => {
+    for (const bin of [...cache.keys()]) {
+      if (!inFlight.has(bin)) cache.delete(bin) // keep an in-flight probe; a re-probe coalesces onto it
+    }
+  }
+  return Object.assign(probe, { invalidate })
 }

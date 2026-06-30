@@ -251,6 +251,71 @@ describe('resident cache — ingestion lifecycle', () => {
   })
 })
 
+// ---- Reconcile atomicity on a mid-reconcile throw (R3) ----------------------------
+
+describe('resident cache — reconcile atomicity (R3)', () => {
+  it('a throw mid delta-reconcile leaves the live map UNMUTATED, and the next query equals from-scratch', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    // Base corpus (direct SQL → no invalidation hook): id_a, id_b.
+    const { chunkIds: base } = await seedDoc(db, embedder, 'a.txt', ['alpha one', 'alpha two'])
+    const [idA, idB] = base
+    // Build the cache and capture the LIVE map reference (=== cached.byChunk).
+    const liveMap = getResidentVectors(db)
+    expect(liveMap.size).toBe(2)
+
+    // Stage a NAMED delta: add id_c, id_d; remove id_a. Reflect it in the table too so the
+    // signature/COUNT(*) agrees (id_b, id_c, id_d remain → count 3).
+    const { chunkIds: more } = await seedDoc(db, embedder, 'b.txt', ['gamma three', 'delta four'])
+    const [idC, idD] = more
+    db.prepare('DELETE FROM embeddings WHERE chunk_id = ?').run(idA)
+    invalidateResidentVectors(db, { added: [idC, idD], removed: [idA] })
+
+    // Inject a per-id fetch whose 2nd .get() throws mid-reconcile; snapshot the LIVE map at the throw.
+    const realPrepare = db.prepare.bind(db)
+    let getCalls = 0
+    let mapAtThrow: { hasA: boolean; hasC: boolean; size: number } | null = null
+    ;(db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      const stmt = realPrepare(sql)
+      if (!sql.includes('WHERE chunk_id = ?')) return stmt
+      return {
+        get: (id: string) => {
+          getCalls++
+          if (getCalls === 2) {
+            mapAtThrow = { hasA: liveMap.has(idA), hasC: liveMap.has(idC), size: liveMap.size }
+            throw new Error('injected transient read error')
+          }
+          return (stmt as unknown as { get: (id: string) => unknown }).get(id)
+        }
+      }
+    }
+
+    expect(() => getResidentVectors(db)).toThrow('injected transient read error')
+
+    // R3: at the mid-reconcile throw the committed map is the PRISTINE base — the removal was not
+    // applied and no added id was committed. Without staging it would already show {id_b, id_c}
+    // (id_a dropped, id_c set) → these reds.
+    expect(mapAtThrow).not.toBeNull()
+    expect(mapAtThrow!.hasA).toBe(true) // removal not yet applied
+    expect(mapAtThrow!.hasC).toBe(false) // first decode not yet committed
+    expect(mapAtThrow!.size).toBe(2) // base size unchanged — no partial mutation observed
+
+    // Restore the real fetch and re-query: the reconcile retries cleanly from the intact base and
+    // lands EXACTLY the from-scratch result (id_a gone, id_b/id_c/id_d present).
+    ;(db as unknown as { prepare: typeof realPrepare }).prepare = realPrepare
+    const after = getResidentVectors(db)
+    expect(after.has(idA)).toBe(false)
+    expect(after.has(idB)).toBe(true)
+    expect(after.has(idC)).toBe(true)
+    expect(after.has(idD)).toBe(true)
+    expect(after.size).toBe(3)
+    // modelByChunk stays key-aligned with byChunk (the P2 invariant) — search still ranks the survivors.
+    const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
+    const hits = index.search((await embedder.embed(['gamma three']))[0], 10)
+    expect(hits.map((h) => h.chunkId).sort()).toEqual([idB, idC, idD].sort())
+  })
+})
+
 // ---- Offline guarantee through the cached path ------------------------------------
 
 describe('resident cache — offline guarantee', () => {

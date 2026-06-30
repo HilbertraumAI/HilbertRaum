@@ -92,4 +92,49 @@ describe('performShutdown ordering (REL-4)', () => {
     ).resolves.toBeUndefined()
     expect(order).toEqual(['detach']) // only the always-runs detach fired; no ctx calls threw
   })
+
+  // R1 (full-audit-2026-06-30, Phase C): aborting a stream is not enough — the partial reply
+  // persists in the stream's OWN promise (the abort-unwind → appendMessage), which the teardown
+  // never awaited. The quit path now AWAITS each in-flight stream's SETTLE (after the sidecar stop,
+  // before detach/lock), so the partial persists deterministically while the DB is still open.
+  it('AWAITS each in-flight stream settle before locking (R1)', async () => {
+    const order: string[] = []
+    const controller = recordingController(order, 'abort-stream')
+    let persist!: () => void
+    const settled = new Map<string, Promise<void>>([
+      [
+        'c1',
+        new Promise<void>((r) => {
+          persist = () => {
+            order.push('persist')
+            r()
+          }
+        })
+      ]
+    ])
+
+    const p = performShutdown(fakeCtx(order), {
+      inFlightStreams: new Map([['c1', controller]]),
+      streamSettled: settled,
+      detachVaultKey: () => order.push('detach'),
+      log: { error: () => undefined }
+    })
+
+    const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+    while (!order.includes('runtime.stop')) await tick()
+    await tick()
+    await tick()
+    // The sidecars were stopped, but lock() has NOT run — the teardown is blocked on the settle.
+    expect(order).toContain('runtime.stop')
+    expect(order).not.toContain('persist')
+    expect(order).not.toContain('lock')
+
+    persist() // the aborted partial finished persisting → settle resolves
+    await p
+
+    // The partial persisted BEFORE the vault re-encrypted; lock() is last of all.
+    expect(order.indexOf('persist')).toBeGreaterThan(order.indexOf('runtime.stop'))
+    expect(order.indexOf('persist')).toBeLessThan(order.indexOf('lock'))
+    expect(order[order.length - 1]).toBe('lock')
+  })
 })

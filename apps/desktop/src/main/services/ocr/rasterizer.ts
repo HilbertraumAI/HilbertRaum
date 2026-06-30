@@ -50,6 +50,50 @@ function abortError(): DOMException {
 }
 
 /**
+ * The hidden window's single-slot reply waiter. The rasterize protocol keeps exactly ONE request in
+ * flight at a time (open, then page-by-page), so there is normally never a second `expect()` before
+ * the prior settles. R6 (full-audit-2026-06-30, Phase C) hardens the slot regardless: a fresh
+ * `expect()` while a prior waiter is still unsettled REJECTS the prior ('superseded') instead of
+ * silently overwriting it — an overwritten waiter would otherwise orphan and hang to its 60 s
+ * `withTimeout` (the symptom a duplicate reply frame or a future refactor could trigger). Extracted
+ * from the per-run closure so the supersede guard is unit-testable without Electron.
+ */
+export class RasterReplySlot {
+  private waiter: { resolve: (m: Record<string, unknown>) => void; reject: (e: Error) => void } | null = null
+  private channel: string | null = null
+
+  /** Arm for `channel` and return the reply promise, superseding any still-pending prior waiter (R6). */
+  expect(channel: string): Promise<Record<string, unknown>> {
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      if (this.waiter) this.waiter.reject(new Error('superseded'))
+      this.waiter = { resolve, reject }
+      this.channel = channel
+    })
+  }
+
+  /** True iff a reply on `channel` is the one currently awaited (the `expectChannel` gate). */
+  awaits(channel: string): boolean {
+    return this.channel === channel
+  }
+
+  /** Resolve the current waiter with `payload` and clear the slot (no-op if none pending). */
+  deliver(payload: Record<string, unknown>): void {
+    const w = this.waiter
+    this.waiter = null
+    w?.resolve(payload)
+  }
+
+  /** Reject the current waiter (error frame / abort) and clear it; returns whether one was pending. */
+  fail(err: Error): boolean {
+    const w = this.waiter
+    this.waiter = null
+    if (!w) return false
+    w.reject(err)
+    return true
+  }
+}
+
+/**
  * Rasterize `pdf` page by page through a hidden window. One run at a time per
  * process (the DocTaskManager serializes tasks anyway; a second concurrent call
  * fails fast rather than crosstalking on the shared channels).
@@ -94,18 +138,8 @@ export async function rasterizePdfWithHiddenWindow(
   installNavigationGuard(win.webContents, () => false)
 
   // Collect replies addressed from OUR window only (defence in depth — the channels
-  // are not exposed on the main window's bridge at all).
-  type Waiter = { resolve: (msg: Record<string, unknown>) => void; reject: (e: Error) => void }
-  let waiter: Waiter | null = null
-  const expect = (channel: string): Promise<Record<string, unknown>> =>
-    new Promise<Record<string, unknown>>((resolve, reject) => {
-      waiter = {
-        resolve: (msg) => resolve(msg),
-        reject
-      }
-      expectChannel = channel
-    })
-  let expectChannel: string | null = null
+  // are not exposed on the main window's bridge at all). One request in flight at a time (R6).
+  const slot = new RasterReplySlot()
 
   const onMessage =
     (channel: string) =>
@@ -113,21 +147,16 @@ export async function rasterizePdfWithHiddenWindow(
       if (win.isDestroyed() || event.sender !== win.webContents) return
       if (channel === OCR_RASTER.error) {
         const message = typeof payload?.message === 'string' ? payload.message : 'render failed'
-        if (waiter) {
-          waiter.reject(new Error(message))
-          waiter = null
-        } else {
-          // No request in flight (e.g. the error raced a timeout/abort that already
-          // cleared the waiter) — don't drop it silently; the next expect() would
-          // otherwise hang to its timeout with no trace of the real cause.
+        // No request in flight (e.g. the error raced a timeout/abort that already cleared the
+        // waiter) — don't drop it silently; the next expect() would otherwise hang to its timeout
+        // with no trace of the real cause.
+        if (!slot.fail(new Error(message))) {
           log.warn('OCR rasterizer error frame arrived with no request in flight', { message })
         }
         return
       }
-      if (channel !== expectChannel) return
-      const w = waiter
-      waiter = null
-      w?.resolve(payload ?? {})
+      if (!slot.awaits(channel)) return
+      slot.deliver(payload ?? {})
     }
 
   const listeners: Array<[string, ReturnType<typeof onMessage>]> = [
@@ -138,8 +167,7 @@ export async function rasterizePdfWithHiddenWindow(
   for (const [ch, fn] of listeners) ipcMain.on(ch, fn)
 
   const onAbort = (): void => {
-    waiter?.reject(abortError())
-    waiter = null
+    slot.fail(abortError())
   }
   opts.signal?.addEventListener('abort', onAbort, { once: true })
 
@@ -171,7 +199,7 @@ export async function rasterizePdfWithHiddenWindow(
     }
     if (opts.signal?.aborted) throw abortError()
 
-    const openedP = expect(OCR_RASTER.opened)
+    const openedP = slot.expect(OCR_RASTER.opened)
     win.webContents.send(OCR_RASTER.open, { pdf: new Uint8Array(pdf) })
     const opened = await withTimeout(openedP)
     const pageCount = Number(opened.pageCount)
@@ -186,7 +214,7 @@ export async function rasterizePdfWithHiddenWindow(
     await pipelinePages(
       pageCount,
       async (pageNumber) => {
-        const pageP = expect(OCR_RASTER.page)
+        const pageP = slot.expect(OCR_RASTER.page)
         win.webContents.send(OCR_RASTER.render, { pageNumber })
         const msg = await withTimeout(pageP)
         const png = msg.png

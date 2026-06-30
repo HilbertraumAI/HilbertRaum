@@ -1795,6 +1795,12 @@ re-throws the same recognizable cancellation if `stopped`/`tearingDown` is set o
 stale (`this.server !== server`), so a `suspend()`/`stop()` mid-ingestion ends as a clean cancel instead of a
 confusing "llama-server is not started" on the next batch.
 
+**Phase-C extension (full-audit-2026-06-30 R7; see §39).** `VisionRuntime.stop()` re-calls
+`cancelIdleTimer()` AFTER its awaits so its "no idle timer is live on return" postcondition holds LOCALLY. The
+race is already closed by armIdleTimer's `this.stopped` + `!this.server` early-returns (both set synchronously
+by `stop()` before any await — triple-guarded), so this is a defense-in-depth backstop in the same co-guarded
+family, not a live fix.
+
 **§5.4 Where GPU state lives:**
 
 | Datum | Home |
@@ -1807,7 +1813,9 @@ confusing "llama-server is not started" on the next batch.
 "Try GPU again" is the dedicated `gpu:try-again` IPC: clears the flags **and** invalidates the
 session probe cache **and** re-probes + persists (a plain settings write would keep a
 once-timed-out probe cached as "no GPU"). Diagnostics hides the button while the Settings
-toggle is off. All GPU decisions happen post-unlock (settings live in the possibly-encrypted
+toggle is off. **R5 (full-audit-2026-06-30, §39):** the cache `invalidate()` drops only SETTLED probes
+— while a probe is still in flight a re-probe COALESCES onto it rather than spawning a second short-lived
+child, so mashing the button during a slow/cold driver init can't stack one-per-click children for a binary. All GPU decisions happen post-unlock (settings live in the possibly-encrypted
 DB) — fine, since sidecars only ever start post-unlock.
 
 ### §6 Per-OS build matrix (what ships on the drive)
@@ -5144,6 +5152,109 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
 `git diff src/` after Phase 7 = the single DX-2 DEV-guard line; every teeth-check neuter (hybrid.ts fusion
 sort, rag/index.ts top-k break, sidecar.ts `'exit'`→hook) was restored byte-identical, and the DX-4 stub
 module was deleted.
+
+
+### §39 Full audit (2026-06-30) — Phase C (lock/teardown reliability; R1 live + R2–R7 latent)
+
+**Phase C** (branch `audit-2026-06-30-phaseC-reliability`, stacked on the Phase-B perf branch) closes the
+one genuinely LIVE teardown race the audit found (R1) plus six LATENT / defense-in-depth concurrency &
+lifecycle hazards (R2–R7). Behavior-preserving — no schema / IPC / audit-payload change; each guard is
+independently revertible and teeth-checked by a DETERMINISTIC interleave test (injected clocks / gated
+promises / state-polling, no `sleep(N)`) that RED→GREENs, with the neuter restored byte-identical. Content
+class (document text, chat, figures) is never logged — a teardown diagnostic carries ids + the error
+message only. Suite **2669 passed / 41 skipped** (Phase-B baseline 2653/41 → **+16** Phase-C tests);
+`npm run typecheck` + `npm run build` green; two consecutive full runs identical (no new timing flake).
+
+- **R1 (Medium — the live race) — the lock/quit path could persist a chat partial against a closing DB.**
+  `lockWorkspace`/`performShutdown` aborted in-flight streams then awaited `runtime.stop()` + purge + `lock()`,
+  but the partial-reply persistence runs in the chat IPC's OWN promise (the `for await` unwinds →
+  `generateAssistantMessage` → `appendMessage`), which the teardown NEVER awaited — `inFlightStreams` held
+  only `AbortController`s. It relied on `runtime.stop()` outrunning the abort-unwind; for an already-exited /
+  mock sidecar `stop()` can resolve first → either the partial is silently dropped (the REL-4 data-loss class,
+  on the lock path) or `appendMessage` throws against the now-closed DB → an UNHANDLED REJECTION only
+  `log.warn`'d by the global handler. **Fix (deterministic, two layers):** (1) `withChatStream` now publishes a
+  per-stream **`streamSettled`** promise alongside the controller (`ipc/inflight.ts`), resolved (never
+  rejected) in its `finally` AFTER the run — and thus its abort-driven `appendMessage` — fully unwinds;
+  `lockWorkspace` and `performShutdown` call **`awaitInFlightStreamsSettled()`** after the sidecar stop and
+  before purge/`lock()`, so persist-before-close is the ORDERING, not a race (placed AFTER the stop so a
+  generation ignoring its signal is still unwound by the dead sidecar — no teardown stall; `allSettled` so one
+  stream can't block teardown). (2) Defense-in-depth: `generateAssistantMessage` wraps the partial-persist
+  `appendMessage` and swallows cleanly (→ empty message, a `log.warn` with the conversation id only) when
+  `opts.signal?.aborted && !db.isOpen` — a locked DB during an ABORT persist — while a genuine open-DB error
+  still propagates. This SUPERSEDES the §37 REL-4 "the partial persists during the awaited `runtime.stop()`
+  window" reliance (that was the race). Teeth: drop either settle-await → the lock/quit ordering test reds (DB
+  closed before the partial persists); drop the guard → the locked-DB persist test rejects instead of resolving
+  empty. (`ipc/inflight.ts`, `ipc/chat-stream.ts`, `ipc/registerWorkspaceIpc.ts`, `main/shutdown.ts`,
+  `services/chat.ts`; tests `chat-stream` ×2, `shutdown` ×1, `workspace-ipc` ×1, `lock-stream-persistence` ×3.)
+- **R2 (Medium, latent) — arbiter `acquireForChat` fast path installed no abort listener.** When a yielding
+  build is ALREADY parked (`reacquireReject !== null`), the fast path increments `chatHolders` and skips
+  `waitForHandoff` — so an aborted fast-path holder freed its slot only when `withChatStream`'s `finally` ran
+  the returned release fn (a transient stall: the build resumed only via the OTHER chat). **Fix:** install the
+  release-on-abort on BOTH paths — a single `release` closure (shared `released` latch with the returned fn, so
+  the slot is given back EXACTLY once) plus `signal.addEventListener('abort', release, { once })`. The slow
+  path's `waitForHandoff` still handles an abort WHILE PARKED and throws before the listener is installed.
+  Teeth: neuter the listener → the parked-build resume test reds (chatHolders stuck); the idempotency test pins
+  no double-decrement (a naive fix would resume the build prematurely). (`analysis/model-slot-arbiter.ts`;
+  `model-slot-arbiter.test.ts` ×2.)
+- **R3 (Medium, latent) — resident-cache reconcile mutated the live map in place before committing.** A throw
+  mid-`reconcileDelta`/`reconcileFull` (a transient DB read error / truncated row) left the map half-mutated
+  (some removed ids dropped, only some added ids decoded). Single-threaded synchrony means no search observes
+  it mid-reconcile, and `pending` staying set self-heals on the next query — but the in-place-before-commit
+  ordering was the one spot a throw left mixed state. **Fix:** STAGE every decode into a local array (the new
+  pure `decodeRow`), then APPLY removals + additions to the live maps in one throwless `applyStaged` step — a
+  throw during staging leaves the prior committed maps untouched for a clean retry. `byChunk` + `modelByChunk`
+  commit TOGETHER (the P2 key-alignment invariant). Crucially this stages only the |added|+|removed| delta, NOT
+  a clone of the resident map, so **Phase-B P2 resident-iteration and the F12 O(K) delta perf are preserved**;
+  the deferred-P6 `COUNT(*)` staleness path is untouched. Teeth: inject a `db.prepare` whose 2nd point-lookup
+  throws mid-reconcile → the live map is still the pristine base at the throw (with in-place mutation it already
+  shows the partial), and the next clean query equals a from-scratch build. (`embeddings/resident-cache.ts`;
+  `resident-cache.test.ts` ×1.)
+- **R4 (Low, latent) — OCR pipeline double-drained the final page's recognition.** The in-try final `await
+  prevOnPage` and the catch's `await prevOnPage.catch(...)` both awaited the SAME already-settled promise for
+  the last page (harmless, but the "drain the in-flight look-ahead" guarantee is wrong for the last page — there
+  is none). **Fix:** `const last = prevOnPage; prevOnPage = null; if (last) await last`, so the catch only
+  drains a genuinely still-pending look-ahead (a render/abort throw mid-loop while recognize(N-1) runs). Teeth:
+  the final-page recognition is awaited exactly once (no catch re-await). (`ocr/pipeline.ts`; `ocr-pipeline.test.ts` ×1.)
+- **R5 (Low, latent) — GPU probe re-spawn stacked children on "Try GPU again" mashing.** The probe timeout
+  `SIGKILL`s but doesn't await the (unref'd) reap, and `invalidate()` did `cache.clear()` unconditionally — so
+  rapid invalidate()+re-probe WHILE a probe was still in flight dropped the in-flight entry and spawned a SECOND
+  child per click. **Fix:** track `inFlight` per binary; `invalidate()` drops only SETTLED entries, and a
+  re-probe during the in-flight window COALESCES onto the existing promise (one child) — the entry becomes
+  invalidate-able once it settles, so the feature (a fresh probe after a settled timeout) is intact. Teeth: with
+  the old `cache.clear`, mashing during an in-flight probe spawns 1+N children; coalesced → 1.
+  (`runtime/gpu.ts`; `gpu.test.ts` ×1.)
+- **R6 (Low, latent) — OCR rasterizer `expect()` orphaned a superseded waiter.** A fresh `expect(channel)`
+  overwrote a pending `waiter` without settling it; safe under today's single-in-flight protocol, but a
+  duplicate frame / refactor would orphan the prior promise to its 60 s `withTimeout`. **Fix:** the per-run
+  waiter closure is extracted to a pure, exported `RasterReplySlot` (behavior-identical: `expect`/`awaits`/
+  `deliver`/`fail` map 1:1 to the old `waiter`/`expectChannel` logic) whose `expect()` REJECTS a still-pending
+  prior waiter (`'superseded'`) before re-arming. Teeth: two `expect()`s without an intervening settle → the
+  first rejects rather than hangs. (`ocr/rasterizer.ts`; new `ocr-rasterizer-slot.test.ts` ×3.)
+- **R7 (Low, latent) — vision `analyze()` finally `armIdleTimer()` vs a concurrent `stop()`.** The audit flagged
+  a timer armed in `stop()`'s await window surviving its `cancelIdleTimer()`. **Verified ALREADY closed** — and
+  TWICE: `armIdleTimer` returns early on BOTH `this.stopped` AND `!this.server`, and `stop()` sets `stopped` and
+  awaits before nulling `server`, both synchronously, so a racing `analyze()` finally can't arm a surviving
+  timer today. The fix re-calls `cancelIdleTimer()` AFTER `stop()`'s awaits as a third, **defense-in-depth**
+  backstop making stop()'s "no live idle timer on return" postcondition LOCAL (independent of armIdleTimer's
+  guards) — it only becomes load-bearing if a future refactor weakens both checks (the §37 REL-2 / F18
+  co-guarded-twin pattern; cross-ref **GPU §5.5c**). The test (g) is a PROPERTY/regression guard for the
+  interlock (no idle timer survives a stop racing an analyze settle) — single- AND dual-neuter stay green (the
+  `!this.server` guard also blocks the arm; it is genuinely triple-guarded), recorded transparently rather than
+  over-claimed. (`vision/runtime.ts`; `vision-runtime.test.ts` test (g).)
+
+| Finding | Sev | Disposition (one line) | Record / files |
+|---|---|---|---|
+| **R1** | Med (live) | **fixed** — `streamSettled` registry + `awaitInFlightStreamsSettled()` make lock/quit await each aborted partial's persist BEFORE closing the DB (supersedes the §37 REL-4 race); `appendMessage` locked-DB guard swallows cleanly. Teeth: drop a settle-await → ordering reds; drop the guard → locked persist rejects | this §39; `ipc/inflight.ts`, `ipc/chat-stream.ts`, `registerWorkspaceIpc.ts`, `main/shutdown.ts`, `services/chat.ts` |
+| **R2** | Med | **fixed** — fast-path holder installs the same release-on-abort listener as the slow path (shared `released` latch). Teeth: neuter → parked-build resume reds; idempotency pins single-release | this §39; `analysis/model-slot-arbiter.ts` |
+| **R3** | Med | **fixed** — reconcile STAGES decodes then commits `byChunk`+`modelByChunk` atomically (`decodeRow`/`applyStaged`); a throw leaves the prior maps intact. Preserves Phase-B P2 + F12 O(K). Teeth: 2nd-lookup throw → live map pristine at throw, next query = from-scratch | this §39; `embeddings/resident-cache.ts` |
+| **R4** | Low | **fixed** — null `prevOnPage` before the in-try final await so the catch drains only a still-pending look-ahead. Teeth: final-page recognition awaited exactly once | this §39; `ocr/pipeline.ts` |
+| **R5** | Low | **fixed** — `invalidate()` drops only SETTLED probes; an in-flight re-probe coalesces (one child per binary). Teeth: mashing spawns 1, not 1+N | this §39; `runtime/gpu.ts`; GPU §5.4 "Try GPU again" |
+| **R6** | Low | **fixed** — `RasterReplySlot.expect()` rejects a superseded prior waiter; extracted from the closure for testability. Teeth: two expect()s → first rejects | this §39; `ocr/rasterizer.ts` |
+| **R7** | Low | **already-mitigated; defense-in-depth added** — `stop()` re-cancels the idle timer after its awaits (the race is already closed by armIdleTimer's `stopped`+`!server` guards — triple-guarded; property test, not RED→GREEN-able) | this §39; `vision/runtime.ts`; GPU §5.5c |
+
+**No reliability issue OUT of R1–R7's scope surfaced during the work** (the audit's R1–R7 set was complete).
+The original new findings still open after Phase C: S1 (audit-log filename policy — Phase E) and the report's
+S1/C2/C3/C4 etc. Phases F/D/E remain; the report is NOT retired.
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 

@@ -221,4 +221,62 @@ describe('ModelSlotArbiter', () => {
     release() // second call is a no-op, does not double-resume
     await expect(parked).resolves.toBeUndefined()
   })
+
+  // R2 (full-audit-2026-06-30, Phase C): the FAST PATH — a chat that acquires while the builder is
+  // ALREADY parked (`reacquireReject !== null`) — used to install NO abort listener (it skips
+  // waitForHandoff). So aborting a fast-path holder freed its `chatHolders` slot only when
+  // withChatStream's `finally` later ran the returned release fn — a transient stall in which the
+  // build resumed only via the OTHER chat. The fix installs the release-on-abort on BOTH paths.
+  it('aborting a FAST-PATH (build-already-parked) chat holder releases its slot promptly (R2)', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    // Chat A pauses the build and is handed the slot (slow path).
+    const acquireA = a.acquireForChat()
+    await tick()
+    const parked = a.reacquire('job1') // builder parks → reacquireReject set → next acquire is fast
+    const relA = await acquireA
+    // Chat B arrives while the build is parked → FAST PATH. We deliberately DON'T keep its release
+    // fn: the abort listener (R2) must be what frees B's holder slot.
+    const ctrlB = new AbortController()
+    await a.acquireForChat(ctrlB.signal)
+
+    let resumed = false
+    void parked.then(() => (resumed = true))
+
+    ctrlB.abort() // R2: the fast-path abort listener releases B's holder slot
+    await tick()
+    expect(resumed).toBe(false) // A still holds the slot → build NOT resumed yet
+    relA() // the surviving chat releases
+    await tick()
+    // FIXED: B was released by its abort, A by relA → chatHolders hit 0 → build resumes. UNFIXED:
+    // B's abort installed no listener and its release fn was never called → chatHolders stuck at 1
+    // → the build never resumes → this reddens.
+    expect(resumed).toBe(true)
+  })
+
+  it('a FAST-PATH holder freed by abort is idempotent with its release fn (R2 — no double-release)', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const acquireA = a.acquireForChat()
+    await tick()
+    const parked = a.reacquire('job1')
+    const relA = await acquireA
+    const ctrlB = new AbortController()
+    const relB = await a.acquireForChat(ctrlB.signal) // FAST PATH
+
+    let resumed = false
+    void parked.then(() => (resumed = true))
+
+    // Both the abort listener AND the returned release fn (as withChatStream's finally calls it)
+    // fire for B — they share ONE `released` latch, so the slot is given back EXACTLY once.
+    ctrlB.abort()
+    relB()
+    await tick()
+    // A naive fix that decremented twice would have hit chatHolders 0 here and resumed the build
+    // while A still holds → this pins single-release.
+    expect(resumed).toBe(false)
+    relA()
+    await tick()
+    expect(resumed).toBe(true)
+  })
 })

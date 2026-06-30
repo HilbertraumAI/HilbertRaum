@@ -8,12 +8,45 @@
 
 _2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — Phases G + A MERGED to LOCAL master
 (two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`); Phase B COMPLETE on the UNMERGED
-branch `audit-2026-06-30-phaseB-perf` (awaiting owner review/merge — do NOT auto-merge/push).** The report
-is on master with D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A) dispositioned ✅; the Phase-B branch adds the
-P1/P2 ✅ + P6 ⏸ dispositions. It is NOT retired (phases **C, D, E, F remain open** — suggested order
-**C → F → D → E**). Suite **2653 passed / 39 skipped** on the Phase-B branch (2641/39 master baseline +12
-equivalence tests; +2 CI-gated benches → 41 skipped); typecheck + `npm run build` green. Per-phase detail
-below (Phase B, then A, then G)._
+branch `audit-2026-06-30-phaseB-perf`; Phase C COMPLETE on the UNMERGED branch
+`audit-2026-06-30-phaseC-reliability` (STACKED on the Phase-B branch — master ← B ← C; awaiting owner
+review/merge of the stack — do NOT auto-merge/push).** The report is on master with D1–D10/M1 (Phase G) and
+C1/C5/T4 (Phase A) dispositioned ✅; the Phase-B branch adds the P1/P2 ✅ + P6 ⏸ dispositions; the Phase-C
+branch adds the R1–R7 ✅ dispositions. It is NOT retired (phases **F, D, E remain open** — suggested order
+**F → D → E**). Suite **2669 passed / 41 skipped** on the Phase-C branch (Phase-B baseline 2653/41 → +16
+Phase-C reliability tests); typecheck + `npm run build` green. **NEXT ACTION = owner review/merge of the
+stack (G + A already merged; then B, then C).** Per-phase detail below (Phase C, then B, then A, then G)._
+
+
+_2026-06-30 — **Full audit — Phase C (LOCK/TEARDOWN RELIABILITY; R1 live + R2–R7 latent) — branch
+`audit-2026-06-30-phaseC-reliability` (STACKED on `audit-2026-06-30-phaseB-perf`; UNMERGED; do NOT
+auto-merge/push). BEHAVIOR-PRESERVING** — no schema, IPC, or audit-payload change; each guard independently
+revertible and teeth-checked by a DETERMINISTIC interleave (injected clocks / gated promises / state-polling,
+no `sleep(N)`) that RED→GREENs with the neuter restored byte-identical. Content class never logged (a teardown
+diagnostic carries ids + the error message only). Suite **2669 passed / 41 skipped** (was 2653/41 on the
+Phase-B branch → **+16**); `npm run typecheck` + `npm run build` green; two consecutive full runs identical
+(no new timing flake). Durable record: **architecture.md §39** (+ GPU §5.4/§5.5c cross-refs).
+- **R1 (Medium — the one LIVE race) — lock/quit could persist a chat partial against a closing DB.** The
+  abort-unwind → `appendMessage` runs in the chat IPC's OWN promise, which the teardown never awaited (it held
+  only `AbortController`s), relying on `runtime.stop()` outrunning the unwind → for an exited/mock sidecar the
+  partial was dropped or `appendMessage` threw against the closed DB (unhandled rejection). **Fix:**
+  `withChatStream` publishes a per-stream `streamSettled` promise (`ipc/inflight.ts`), resolved in its `finally`
+  after the run unwinds; `lockWorkspace` + `performShutdown` `awaitInFlightStreamsSettled()` after the sidecar
+  stop, before purge/`lock()`. Plus a defense-in-depth `appendMessage` guard (swallow a locked-DB ABORT persist
+  cleanly when `opts.signal?.aborted && !db.isOpen`). Supersedes the §37 REL-4 race-reliance.
+- **R2–R6 (latent, fixed + RED→GREEN teeth-checked):** R2 arbiter fast-path abort listener (shared `released`
+  latch); R3 resident-cache reconcile STAGES decodes then commits atomically (`decodeRow`/`applyStaged` — keeps
+  Phase-B P2 + F12 O(K), and the deferred-P6 `COUNT(*)` path); R4 OCR pipeline nulls `prevOnPage` before the
+  final await (no double-drain); R5 GPU probe `invalidate()` drops only SETTLED entries (in-flight re-probe
+  coalesces — one child per binary); R6 OCR rasterizer `RasterReplySlot.expect()` rejects a superseded waiter.
+- **R7 (latent) — already-mitigated; defense-in-depth added.** `VisionRuntime.stop()` re-cancels the idle timer
+  after its awaits, but the race is already closed TWICE (armIdleTimer's `stopped` + `!server` early-returns,
+  both set synchronously by `stop()` — triple-guarded). The re-cancel is a third, locality backstop; test (g) is
+  a property guard, recorded transparently (not RED→GREEN-able). 
+- **Scope:** `ipc/inflight.ts`, `ipc/chat-stream.ts`, `ipc/registerWorkspaceIpc.ts`, `main/shutdown.ts`,
+  `services/chat.ts`, `analysis/model-slot-arbiter.ts`, `embeddings/resident-cache.ts`, `ocr/pipeline.ts`,
+  `runtime/gpu.ts`, `ocr/rasterizer.ts`, `vision/runtime.ts`. **No reliability issue outside R1–R7 surfaced.**
+  R1–R7 marked ✅ in the report; phases F/D/E remain open; report NOT retired._
 
 
 _2026-06-30 — **Full audit — Phase B (PERFORMANCE HOT PATHS; P1 + P2, companion P6) — branch
