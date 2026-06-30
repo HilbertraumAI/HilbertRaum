@@ -8,7 +8,7 @@ import { tMain } from '../../i18n'
 import type { ModelRuntime } from '../../runtime'
 import { getDocument } from '../../ingestion'
 import { approxTokenCount, truncateToApproxTokens } from '../../ingestion/chunker'
-import { cosineSimilarity, decodeVector } from '../../embeddings'
+import { decodeVector } from '../../embeddings'
 import { ensureNodeEmbeddings, loadNodeVectors } from '../../analysis/node-vectors'
 import {
   planCompareWindows,
@@ -27,6 +27,7 @@ import {
   compareAsymmetricNotice,
   compareNodePairPrompt,
   comparePairOutputCap,
+  compareNearestNeighbors,
   alignNodes,
   SYMMETRIC_COMPARE_CALL_CEILING,
   compareDocumentTitle
@@ -213,17 +214,13 @@ async function runCompareSectionMatched(
     bChunks.push({ id: r.id, text: r.text, chunkIndex: r.chunk_index, vec })
   }
   const bById = new Map(bChunks.map((b) => [b.id, b]))
-  // Top-`topK` doc-B neighbors of one A-vector, scored against the resident decoded vectors —
-  // same ranking VectorIndex.search produced (descending cosine, slice topK), no DB round-trip.
-  const nearestB = (vec: Float32Array, topK: number): Array<{ chunkId: string; score: number }> => {
-    const hits: Array<{ chunkId: string; score: number }> = []
-    for (const b of bChunks) {
-      if (b.vec.length !== vec.length) continue
-      hits.push({ chunkId: b.id, score: cosineSimilarity(vec, b.vec) })
-    }
-    hits.sort((x, y) => y.score - x.score)
-    return hits.slice(0, topK)
-  }
+  // Top-`topK` doc-B neighbors of one A-vector, scored against the resident decoded vectors, no DB
+  // round-trip. The pure `compareNearestNeighbors` uses the `dotProduct` fast path (RAG-1: stored
+  // vectors are L2-normalized, so dot == cosine ranking) + a running top-K instead of sorting all
+  // N_B candidates per A-chunk — IDENTICAL ranking to the previous cosine-sort-slice (P1,
+  // full-audit-2026-06-30; same fast path VectorIndex.search uses), at a fraction of the FLOPs.
+  const nearestB = (vec: Float32Array, topK: number): Array<{ chunkId: string; score: number }> =>
+    compareNearestNeighbors(bChunks, vec, topK)
 
   const partials: string[] = []
   for (let i = 0; i < plan.windows.length; i++) {

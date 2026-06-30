@@ -64,7 +64,9 @@ import { decodeVector } from './codec'
 //     the signature mismatches → FALL BACK TO A FULL REBUILD. `MAX(rowid)` is O(1) (rightmost
 //     btree leaf) and `COUNT(*)` is a fast index count, both negligible vs the scan they gate.
 //     This is the path that makes a missed/buggy incremental update SELF-HEAL on the next query;
-//     it must not be removed.
+//     it must not be removed. (full-audit-2026-06-30 P6 weighed dropping the per-search `COUNT(*)`
+//     to a `MAX(rowid)`-only check but DEFERRED it: a non-max-row out-of-band DELETE leaves
+//     `MAX(rowid)` unchanged, so only `COUNT(*)` catches it — a tested guarantee.)
 //   • SECURITY (lock): `purge(db)` drops the resident map outright. Called on workspace LOCK
 //     (alongside the embedder's `suspend()`, which purges the sidecar's recent-text memory):
 //     the decoded vectors are derived from chunk text and must not linger in main-process RAM
@@ -113,6 +115,14 @@ interface ResidentVectors {
    */
   byChunk: Map<string, Float32Array>
   /**
+   * chunkId → its `embedding_model_id`. SAME key set as `byChunk` (maintained together on every
+   * add/remove; a chunk_id is UNIQUE in `embeddings` so it has exactly one model). Lets P2's
+   * resident-iteration fast path replicate `WHERE embedding_model_id = ?` in memory — the
+   * mismatch guard that keeps a mock→real migration's two 384-dim spaces from blending — WITHOUT
+   * the per-query `SELECT chunk_id` marshal. (full-audit-2026-06-30 P2.)
+   */
+  modelByChunk: Map<string, string>
+  /**
    * Non-null once an explicit `invalidate` at an `embeddings` write site has flagged the cache: the
    * next `getResidentVectors` RECONCILES this delta rather than trusting the staleness signature,
    * which cannot see a delete-then-reuse-same-rowid write. Cleared (→ null) once the reconcile runs.
@@ -143,6 +153,7 @@ function signaturesEqual(a: Signature, b: Signature): boolean {
 
 interface VectorRow {
   chunk_id: string
+  embedding_model_id: string
   vector_blob: Uint8Array
   dimensions: number
 }
@@ -154,31 +165,40 @@ interface ChunkIdRow {
 /** Decode every stored vector once into a fresh `Map<chunkId, Float32Array>` (full rebuild). */
 function build(db: Db, signature: Signature): ResidentVectors {
   const rows = db
-    .prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings')
+    .prepare('SELECT chunk_id, embedding_model_id, vector_blob, dimensions FROM embeddings')
     .all() as unknown as VectorRow[]
   const byChunk = new Map<string, Float32Array>()
+  const modelByChunk = new Map<string, string>()
   for (const row of rows) {
     // decodeVector returns null for a physically truncated blob (partial write) — skip it so
     // the chunk is simply absent from the map, exactly like the old per-row skip (DATA-2: the
     // length guard now lives inside decodeVector, shared by every caller).
     const vec = decodeVector(row.vector_blob, row.dimensions)
-    if (vec) byChunk.set(row.chunk_id, vec)
+    if (vec) {
+      byChunk.set(row.chunk_id, vec)
+      modelByChunk.set(row.chunk_id, row.embedding_model_id) // keys stay aligned with byChunk
+    }
   }
-  return { signature, byChunk, pending: null }
+  return { signature, byChunk, modelByChunk, pending: null }
 }
 
 /** Decode `chunkId`'s stored vector by a point lookup on the `chunk_id` PRIMARY-KEY index and set
- *  it on `byChunk` (omitting a truncated/missing row, exactly like `build`). Shared by both
- *  reconcile paths. */
+ *  it (+ its model id) on the cache maps (omitting a truncated/missing row, exactly like `build`).
+ *  Shared by both reconcile paths. The `fetch` statement MUST also project `embedding_model_id`. */
 function decodeInto(
-  byChunk: Map<string, Float32Array>,
+  cached: ResidentVectors,
   fetch: ReturnType<Db['prepare']>,
   chunkId: string
 ): void {
-  const row = fetch.get(chunkId) as unknown as { vector_blob: Uint8Array; dimensions: number } | undefined
+  const row = fetch.get(chunkId) as unknown as
+    | { embedding_model_id: string; vector_blob: Uint8Array; dimensions: number }
+    | undefined
   if (!row) return // raced delete — left absent; the size gate / next signature mismatch self-heals
   const vec = decodeVector(row.vector_blob, row.dimensions)
-  if (vec) byChunk.set(chunkId, vec) // truncated blob → omitted, exactly like build()
+  if (vec) {
+    cached.byChunk.set(chunkId, vec) // truncated blob → omitted, exactly like build()
+    cached.modelByChunk.set(chunkId, row.embedding_model_id)
+  }
 }
 
 /**
@@ -197,14 +217,19 @@ function reconcileFull(db: Db, cached: ResidentVectors): void {
 
   // Drop cached ids that are no longer present (deletes / re-index of the old chunk ids).
   for (const id of byChunk.keys()) {
-    if (!currentIds.has(id)) byChunk.delete(id)
+    if (!currentIds.has(id)) {
+      byChunk.delete(id)
+      cached.modelByChunk.delete(id) // keep modelByChunk's keys aligned with byChunk
+    }
   }
 
-  // Decode ONLY ids present now but absent from the map — the new vectors.
-  const fetch = db.prepare('SELECT vector_blob, dimensions FROM embeddings WHERE chunk_id = ?')
+  // Decode ONLY ids present now but absent from the map — the new vectors (+ their model id).
+  const fetch = db.prepare(
+    'SELECT embedding_model_id, vector_blob, dimensions FROM embeddings WHERE chunk_id = ?'
+  )
   for (const id of currentIds) {
     if (byChunk.has(id)) continue
-    decodeInto(byChunk, fetch, id)
+    decodeInto(cached, fetch, id)
   }
 }
 
@@ -225,12 +250,17 @@ function reconcileDelta(
   signature: Signature
 ): boolean {
   const byChunk = cached.byChunk
-  for (const id of pending.removed) byChunk.delete(id)
+  for (const id of pending.removed) {
+    byChunk.delete(id)
+    cached.modelByChunk.delete(id) // keep modelByChunk's keys aligned with byChunk
+  }
   if (pending.added.size > 0) {
-    const fetch = db.prepare('SELECT vector_blob, dimensions FROM embeddings WHERE chunk_id = ?')
+    const fetch = db.prepare(
+      'SELECT embedding_model_id, vector_blob, dimensions FROM embeddings WHERE chunk_id = ?'
+    )
     for (const id of pending.added) {
       if (byChunk.has(id)) continue // a surviving chunk_id's vector never mutates in-band
-      decodeInto(byChunk, fetch, id)
+      decodeInto(cached, fetch, id)
     }
   }
   // Cheap consistency gate (one `Map.size` compare): a correct delta over a correct base leaves
@@ -238,25 +268,43 @@ function reconcileDelta(
   return byChunk.size === signature.count
 }
 
+/** The resident decoded-vector cache views a query needs: the vectors + the per-chunk model id
+ *  (P2). Both are the LIVE cache maps — callers MUST treat them read-only (never mutate them). */
+export interface ResidentVectorIndex {
+  /** chunkId → decoded, L2-normalized vector. */
+  byChunk: ReadonlyMap<string, Float32Array>
+  /** chunkId → `embedding_model_id` (SAME key set as `byChunk`). */
+  modelByChunk: ReadonlyMap<string, string>
+}
+
 /**
- * Return the resident decoded-vector map for `db`. The cheap `(count, maxRowid)` signature is
- * recomputed every call; combined with the pending delta set by the write-site hooks it routes to:
- *   • the FAST PATH — nothing changed (no pending delta + matching signature) → return the map;
+ * Return the resident cache views for `db`, reconciled to the current `embeddings` table. The cheap
+ * `(count, maxRowid)` signature is recomputed every call; combined with the pending delta set by the
+ * write-site hooks it routes to:
+ *   • the FAST PATH — nothing changed (no pending delta + matching signature) → return the maps;
  *   • the DELTA RECONCILE (F12) — an in-band write named its added/removed ids → apply just that
- *     (decode only the new chunks, NO id-scan), with a size-gate fall-through to ↓ on any drift;
+ *     (decode only the new chunks + their model id, NO id-scan), with a size-gate fall-through to ↓
+ *     on any drift;
  *   • the FULL RECONCILE — a delta-less write (or a size-gate trip) → ids-only scan, decode only
  *     the new chunks (no re-decode of the corpus); or
  *   • a FULL REBUILD — the table changed with NO hook (out-of-band write) so the signature
  *     mismatches → rebuild from scratch (the self-healing backstop); also the cold first build.
- * The returned map is the live cache — callers MUST treat it read-only (never mutate it).
+ *
+ * P6 NOTE (full-audit-2026-06-30): the per-search `COUNT(*)` here is RETAINED deliberately — it is
+ * load-bearing for the out-of-band staleness guarantee. A pure out-of-band DELETE of a NON-max-rowid
+ * row leaves `MAX(rowid)` unchanged, so only `COUNT(*)` detects it (tested:
+ * `resident-cache.test.ts` "reflects a direct DELETE"). Dropping it to a `MAX(rowid)`-only backstop
+ * (the report's P6 suggestion) would silently serve the deleted row; a safe count maintained across
+ * out-of-band writes needs a DB-side counter (a trigger = a schema change). So P6 is deferred, not
+ * applied — see the audit report's P6 disposition.
  */
-export function getResidentVectors(db: Db): ReadonlyMap<string, Float32Array> {
+export function getResidentVectorIndex(db: Db): ResidentVectorIndex {
   const signature = computeSignature(db)
   const cached = caches.get(db)
   if (!cached) {
     const fresh = build(db, signature)
     caches.set(db, fresh)
-    return fresh.byChunk
+    return fresh
   }
   const pending = cached.pending
   if (pending) {
@@ -269,17 +317,26 @@ export function getResidentVectors(db: Db): ReadonlyMap<string, Float32Array> {
     }
     cached.signature = signature
     cached.pending = null
-    return cached.byChunk
+    return cached
   }
   if (signaturesEqual(cached.signature, signature)) {
-    return cached.byChunk // unchanged since the last build/reconcile — fast path
+    return cached // unchanged since the last build/reconcile — fast path
   }
   // Clean flag but the signature drifted ⇒ a write that bypassed the hooks (out-of-band). Don't
   // trust the incremental base; rebuild from scratch. This is the correctness backstop that makes
   // a missed/buggy incremental update self-heal — do not remove it.
   const fresh = build(db, signature)
   caches.set(db, fresh)
-  return fresh.byChunk
+  return fresh
+}
+
+/**
+ * Return ONLY the resident decoded-vector map (chunkId → vector). Thin wrapper over
+ * `getResidentVectorIndex` for the scope-filtered scan path + existing callers/tests. The returned
+ * map is the live cache — callers MUST treat it read-only (never mutate it).
+ */
+export function getResidentVectors(db: Db): ReadonlyMap<string, Float32Array> {
+  return getResidentVectorIndex(db).byChunk
 }
 
 /**

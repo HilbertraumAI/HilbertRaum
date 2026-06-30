@@ -1,6 +1,6 @@
 import type { Db } from '../db'
 import { buildScopeFilter } from '../retrieval-scope'
-import { getResidentVectors } from './resident-cache'
+import { getResidentVectors, getResidentVectorIndex } from './resident-cache'
 
 // Embeddings + vector search (spec §6, §7.8, §9.2). The `Embedder` interface keeps
 // the mock embedder and the real on-device embedder interchangeable behind one
@@ -172,6 +172,53 @@ export class VectorIndex {
   /** Rank stored chunks by cosine similarity to `queryVector`; return the top `topK`. */
   search(queryVector: Float32Array, topK: number): VectorSearchHit[] {
     if (topK <= 0) return []
+    // P2 (full-audit-2026-06-30): when there is NO document/collection scope and the archived
+    // exclusion removes nothing, the model-id-filtered resident map already IS the candidate set,
+    // so iterate it directly and skip the per-query `SELECT chunk_id` marshal entirely. Any real
+    // scope filter falls to the unchanged scoped scan. Both produce the same hits; the determinism
+    // sort below is shared.
+    const hits = this.canIterateResident()
+      ? this.collectResidentHits(queryVector)
+      : this.collectScopedHits(queryVector)
+    // Determinism (full-audit-2026-06-29 RAG-1): break equal cosines on chunkId. Under
+    // prefix-less E5 the scores compress into a narrow band, so ties are realistic; without a
+    // secondary key the per-list rank a chunk gets depends on V8 sort stability, which then
+    // perturbs its RRF contribution and the page-dedup winner. chunkId is unique, so this pins
+    // the order. (The keyword path takes the same tiebreak in rag/hybrid.ts.)
+    hits.sort((a, b) => b.score - a.score || (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0))
+    return hits.slice(0, topK)
+  }
+
+  /**
+   * P2 fast path: iterate the process-resident decoded-vector map directly (filtered by the active
+   * `embedding_model_id`) — NO per-query `SELECT chunk_id` and NO transient row object per in-scope
+   * chunk. Eligible ONLY when `canIterateResident()` holds, i.e. the resident map equals exactly the
+   * candidate set the scoped scan would return (see there). Byte-identical to `collectScopedHits`
+   * given that equivalence: same model filter, same `dotProduct` (RAG-1: stored + query vectors are
+   * L2-normalized so cosine == dot), same downstream determinism sort.
+   */
+  private collectResidentHits(queryVector: Float32Array): VectorSearchHit[] {
+    const { byChunk, modelByChunk } = getResidentVectorIndex(this.db)
+    const model = this.embeddingModelId
+    const hits: VectorSearchHit[] = []
+    for (const [chunkId, vec] of byChunk) {
+      // Replicate `WHERE embedding_model_id = ?` in memory (the mock↔E5 mismatch guard). A null
+      // model id disables the filter, exactly like the scoped scan's omitted predicate.
+      if (model !== null && modelByChunk.get(chunkId) !== model) continue
+      // Skip vectors of a different dimensionality (mid-migration) — the old dimension guard.
+      if (vec.length !== queryVector.length) continue
+      hits.push({ chunkId, score: dotProduct(queryVector, vec) })
+    }
+    return hits
+  }
+
+  /**
+   * The scoped candidate scan — UNCHANGED from RAG-6/Wave P4. Project ONLY `chunk_id` (the
+   * scope-filtered candidate set) and pull each vector from the resident cache (no `vector_blob`
+   * read, no re-decode). Used whenever a real document/collection scope OR a live archived
+   * exclusion is present (`canIterateResident()` false).
+   */
+  private collectScopedHits(queryVector: Float32Array): VectorSearchHit[] {
     // Compose the scan filters: model-id scoping and/or collection/document scoping
     // (+ archived exclusion). Placeholders only — ids are never interpolated into the SQL.
     const where: string[] = []
@@ -194,12 +241,6 @@ export class VectorIndex {
       where.push(`chunk_id IN (SELECT c.id FROM chunks c WHERE ${scopeFilter.sql})`)
       params.push(...scopeFilter.params)
     }
-    // RAG-6 (Wave P4): project ONLY `chunk_id` — the scope-filtered candidate set — and pull
-    // each vector from the process-resident decoded-vector cache (`resident-cache.ts`). This
-    // keeps the WHERE composition (model id + scope/archived) byte-identical to the old scan,
-    // so every scope filter behaves exactly as before, while reading NO `vector_blob` from
-    // SQLite (the ~150 MB-per-query read is gone) and re-decoding nothing (the cache holds the
-    // already-decoded `Float32Array`s — RAG-6's per-query allocation churn is gone too).
     const sql =
       'SELECT chunk_id FROM embeddings' +
       (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '')
@@ -219,13 +260,29 @@ export class VectorIndex {
       // the two norm accumulators per row for ~2× fewer FLOPs. Ranking is identical.
       hits.push({ chunkId: row.chunk_id, score: dotProduct(queryVector, vec) })
     }
-    // Determinism (full-audit-2026-06-29 RAG-1): break equal cosines on chunkId. Under
-    // prefix-less E5 the scores compress into a narrow band, so ties are realistic; without a
-    // secondary key the per-list rank a chunk gets depends on V8 sort stability, which then
-    // perturbs its RRF contribution and the page-dedup winner. chunkId is unique, so this pins
-    // the order. (The keyword path takes the same tiebreak in rag/hybrid.ts.)
-    hits.sort((a, b) => b.score - a.score || (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0))
-    return hits.slice(0, topK)
+    return hits
+  }
+
+  /**
+   * Whether the model-id-filtered resident map equals exactly what `collectScopedHits` would scan
+   * — the P2 fast-path gate. True iff (a) there is NO document/collection scope union (a real scope
+   * makes the scan a strict subset) AND (b) the global archived exclusion removes nothing: either
+   * archived documents are included, or none exist. When archived docs exist and are excluded, the
+   * resident map (which holds their chunks too — archiving keeps embeddings) is a SUPERSET of the
+   * candidate set, so we keep the scoped scan. The archived-existence probe scans the small
+   * `documents` table (≪ the chunk count it saves marshalling), only on the otherwise-eligible path.
+   */
+  private canIterateResident(): boolean {
+    if (this.documentIds !== null || this.collectionIds !== null) return false
+    if (this.includeArchived) return true
+    return !this.hasArchivedDocuments()
+  }
+
+  private hasArchivedDocuments(): boolean {
+    return (
+      this.db.prepare("SELECT 1 FROM documents WHERE lifecycle = 'archived' LIMIT 1").get() !==
+      undefined
+    )
   }
 
   /** Embed `query` with the same embedder, then run the cosine search. */
@@ -273,10 +330,11 @@ const queryVectorCache = new WeakMap<Embedder, Map<string, Float32Array>>()
 
 export {
   getResidentVectors,
+  getResidentVectorIndex,
   invalidateResidentVectors,
   purgeResidentVectors
 } from './resident-cache'
-export type { EmbeddingDelta } from './resident-cache'
+export type { EmbeddingDelta, ResidentVectorIndex } from './resident-cache'
 export { MockEmbedder, createMockEmbedder, MOCK_EMBEDDING_DIMENSIONS, MOCK_EMBEDDING_MODEL_ID } from './mock'
 export { E5Embedder, createE5Embedder } from './e5'
 export type { E5EmbedderOptions } from './e5'

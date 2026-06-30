@@ -6,11 +6,55 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — Phases G + A now MERGED to LOCAL master
-(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`).** The report is on master with
-D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A) dispositioned ✅; it is NOT retired (phases **B, C, D, E, F remain
-open** — suggested order **B → C → F → D → E**). Suite **2641 passed / 39 skipped**; typecheck + `npm run build`
-green. Per-phase detail below (Phase A then Phase G)._
+_2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — Phases G + A MERGED to LOCAL master
+(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`); Phase B COMPLETE on the UNMERGED
+branch `audit-2026-06-30-phaseB-perf` (awaiting owner review/merge — do NOT auto-merge/push).** The report
+is on master with D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A) dispositioned ✅; the Phase-B branch adds the
+P1/P2 ✅ + P6 ⏸ dispositions. It is NOT retired (phases **C, D, E, F remain open** — suggested order
+**C → F → D → E**). Suite **2653 passed / 39 skipped** on the Phase-B branch (2641/39 master baseline +12
+equivalence tests; +2 CI-gated benches → 41 skipped); typecheck + `npm run build` green. Per-phase detail
+below (Phase B, then A, then G)._
+
+
+_2026-06-30 — **Full audit — Phase B (PERFORMANCE HOT PATHS; P1 + P2, companion P6) — branch
+`audit-2026-06-30-phaseB-perf` (UNMERGED; do NOT auto-merge/push). EQUIVALENCE-first, BEHAVIOR-PRESERVING**
+— no schema, IPC, or audit-payload change. Each fix has an equivalence test driving the REAL path (proving
+identical results, not "looks faster") + a teeth-check (perturb → red → restore). Suite **2653 passed / 39
+skipped** (2641/39 master baseline → +12 equivalence tests; +2 CI-gated benches → 41 skipped total);
+`npm run typecheck` + `npm run build` green.
+- **P1 (High @ scale) — compare mode-(b) pairing no longer freezes the main thread.** The inline
+  `nearestB` (scored every doc-B vector with the slow 3-accumulator `cosineSimilarity` + a full
+  `sort().slice(topK)` per doc-A chunk → O(N_A·N_B·dim) + N_A sorts) is now the pure, exported
+  **`compareNearestNeighbors`** (`doctasks/compare.ts`) using **`dotProduct`** (RAG-1 fast path: stored
+  vectors are L2-normalized so cosine == dot — VERIFIED at `e5.ts l2normalize`/mock + exact codec
+  round-trip) + a **running top-K**. Equivalence proven in two EXACT links (`tests/unit/compare-nearest-
+  neighbors.test.ts`): running top-K == stable dot-sort+slice (byte-identical), and dot-sort == old
+  cosine-sort on unit vectors. The handler's false "same ranking VectorIndex.search produced" comment is
+  fixed. **Measured 2.2×** (1253→571 ms) on a 1000×1000 compare (CI-gated bench).
+- **P2 (Med @ scale) — unscoped `VectorIndex.search` skips the per-query `SELECT chunk_id` row marshal.**
+  `search` splits into `collectResidentHits` (fast) + `collectScopedHits` (the **byte-UNCHANGED** scoped
+  scan). The fast path iterates the resident map directly; two equivalence subtleties handled exactly:
+  (1) the map holds all model ids (mock↔E5 migration mix) → the cache now keeps **`modelByChunk`** (same
+  key set as `byChunk`, maintained in `build`/both reconciles) and the fast path filters by it in memory;
+  (2) **archiving keeps embeddings** → archived chunks are resident, so the gate `canIterateResident()`
+  takes the fast path only with no scope union AND (`includeArchived` OR no archived docs — a cheap
+  `documents` probe), else the scoped scan runs UNCHANGED. Equivalence: unscoped == all-docs-scoped
+  hit-for-hit (`tests/integration/vector-search-resident-iteration.test.ts`, driving BOTH real paths) +
+  model-mix/null-model/archived branches; existing `embedding-mismatch`/`embeddings` suites byte-identical.
+  **Measured ~5×/query** at 10k–50k (CI-gated bench).
+- **P6 (Low, companion) — ⏸ DEFERRED (investigated; per-search `COUNT(*)` is load-bearing).** Both the
+  report's suggestions (MAX(rowid)-only backstop / maintained in-band count) break a TESTED staleness
+  guarantee: an out-of-band DELETE of a NON-max-rowid row leaves `MAX(rowid)` unchanged, so only `COUNT(*)`
+  detects it (`resident-cache.test.ts` "reflects a direct DELETE"). Verified by reds. A safe O(1) fix needs
+  a DB-side counter (a trigger = a schema change, out of Phase-B scope). The `COUNT(*)` is RETAINED; the
+  conflict is documented at the `getResidentVectorIndex` docstring + the module header + the report's P6
+  disposition (with a schema-touching follow-up suggested). The `getResidentVectorIndex` refactor (returns
+  `byChunk` + `modelByChunk`) is kept — P2 needs it — with the ORIGINAL full-signature staleness semantics.
+- **Docs:** architecture.md Wave-P4 record gains a "Phase B" subsection (P2 resident-iteration + P1 compare
+  dotProduct + P6-deferred note) + the RAG-2/ING-1 compare note and the RAG-1/staleness bullets cross-ref it;
+  rag-design.md §12 D15 row + the retrieval-flow paragraph note P2. **NEXT ACTION = owner review/merge of
+  branch `audit-2026-06-30-phaseB-perf` (do NOT auto-merge/push).** Phases C–F remain open; report NOT retired.
+- **Companion M1** (the duplicate `VectorIndex.search` comment) was already deleted in Phase G — NOT redone here._
 
 
 _2026-06-30 — **Full audit — Phase A (FINANCIAL CORRECTNESS; C1 + C5, with T4 landed alongside) — branch
