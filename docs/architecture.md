@@ -5153,6 +5153,115 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
 sort, rag/index.ts top-k break, sidecar.ts `'exit'`→hook) was restored byte-identical, and the DX-4 stub
 module was deleted.
 
+### Full audit (2026-06-30), Phase F — test-suite robustness (T1 / T2 / T3; T5–T7 dispositions)
+
+The 2026-06-30 audit's §4 testing review found the same two recurring failure modes the earlier rounds chased:
+**(a) timing-dependent premises** (a fixed `sleep(N)` that, under CPU starvation, lets the assertion pass
+**vacuously** before the interleave it means to exercise even happens) and **(b) private-state / implementation-
+detail oracles** (a counter or flag that passes whether or not the real user-visible behavior holds) — plus two
+coverage gaps (transaction rollback, SSRF numeric-host). Phase F is **test-only** (branch
+`audit-2026-06-30-phaseF-tests`, stacked on C): `git diff src/` is **EMPTY** (the T7 numeric-host gap turned out
+already-closed by the URL parser — no guard change needed). Every new oracle drives the **real** entry point
+(`VisionService`, the real `DocTaskManager`+handlers, the real `processDocument`, the real `changePassword`, the
+real `assertSafeDownloadUrl`), determinism comes from injected gates + state-polling (NEVER a fixed `sleep(N)` to
+gate a correctness premise), and every added rollback/flag oracle is **teeth-checked** (neuter the guarded control
+→ red → restore byte-identical). Suite **2673 passed / 41 skipped** (Phase-C baseline 2669/41 → **+4**: T3 ×2
+rollback + T7 ×2 SSRF; T1/T2/T6 were de-flakes/strengthenings at the same test count). **T4** (the `money.ts`
+pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
+
+- **T1 — the vision teardown/cancel real-timer sleeps are replaced by deterministic park gates
+  (`tests/integration/vision-teardown.test.ts` + `vision-cancel.test.ts`, de-flaked in place).** `void this.run(…)`
+  is launched detached, so a fixed `sleep(2)`/`sleep(5)` was the ONLY thing "guaranteeing" the run() had reached
+  the interleave point (the `getStatus()` park / the gated runtime stop) before the teardown fired — under load it
+  hadn't, and `expect(createCalls).toBe(0)` could pass without the REL-2 interleave happening at all. Each test now
+  PARKS the run() on an injected gate and `while (cond) await tick()`-polls an observable counter (the gated
+  `getStatus`/`stop` flips `statusEntries`/`stopEntered`; the racing job is polled to a settled state) before the
+  teardown — `setImmediate` queue-drains, no wall clock. **Teeth (verified empirically against the real
+  `VisionService`, recorded honestly per the R7 co-guarded-twin precedent):** both REL-2 `tearingDown` checks (the
+  top-of-run latch AND the post-`getStatus()` re-check) are **co-guards**, so each scenario reddens only on its
+  DUAL neuter, never a single one — (1) a fresh-controller analyze during an in-flight teardown is co-guarded by
+  the **top latch + post-getStatus re-check** (neuter both → a 2nd runtime spawns → red; either alone is
+  backstopped); (2) a run() parked in `getStatus()` during a genuinely IN-FLIGHT teardown is co-guarded by
+  **`signal.aborted` + the post-getStatus re-check** (neuter both → red; either alone green). Test (2) was
+  redesigned to hold the teardown in flight (gated runtime stop) so the post-`getStatus()` re-check — the exact
+  guard the audit worried could ship green vacuously — is a LIVE co-guard there, not bypassed by a completed
+  `stop()`. The vision-cancel F18 dual-neuter (drop the abort re-check AND the `set()` cancelled-guard → the
+  cancelled job is resurrected to `done`) still reds with the deterministic drain. *(Discovered: the prior
+  vision-teardown comment claimed the top latch was a load-bearing SINGLE neuter — empirically it is co-guarded by
+  the post-getStatus re-check; the comment is corrected.)*
+- **T2 — the DocumentsScreen render-count deltas are now PAIRED with user-visible behavioral assertions
+  (`tests/renderer/DocumentsScreen.test.tsx`, both PERF-5 memo cases strengthened).** The private
+  `__docRowRenderCounts` Map was the SOLE oracle, so a regression where the click stops toggling selection / opening
+  the menu (but an unrelated re-render still bumps the count) passed green — and since DX-2 DEV-guards the counter,
+  the oracle degenerates if DEV ever flips. Each test now asserts the click's EFFECT first — selection toggle:
+  `toBeChecked()` on the toggled row, the siblings `not.toBeChecked()`, and the selection toolbar reads `1 selected`;
+  ⋯ menu: `getByRole('menu')` opened with its `Re-index` item, the sibling row titles intact — then keeps the
+  render-count deltas as a SECONDARY perf oracle. **Teeth:** dropping `memo(DocRow)` reds the delta assertions
+  (perf oracle intact) while the behavioral assertions still pass (proving the two layers are independent); a
+  toggle/open regression would red the behavioral layer the counter could not catch.
+- **T3 — injected-failure ROLLBACK coverage extended to the categorize persist and the ingestion chunk-insert loop
+  (the two genuinely-untested high-blast-radius BEGIN…COMMIT sites).** Mirroring the `data-layer-hardening`
+  gold standard (`deleteConversation`): wrap the **real** shared connection so one targeted `.run()` throws
+  mid-transaction, drive the **real** function, and assert (a) NOTHING partial persisted AND (b) a subsequent
+  `BEGIN/COMMIT` succeeds (the single shared `DatabaseSync` is not poisoned). **(i)** `doctasks-categorize.test.ts`
+  — the real `DocTaskManager`+`runCategorize` persist (handlers/categorize.ts:110); throw on the first
+  `UPDATE bank_transactions SET category_id` → rows stay uncategorized, the in-txn `ensureBuiltinCategories` seed is
+  rolled back (`bank_categories` count 0), the statement is never marked model-assisted, a fresh `BEGIN/COMMIT`
+  opens, and a one-shot-recovered clean re-run categorizes normally. **(ii)** `ingestion.test.ts` — the real
+  `processDocument` chunk transaction (ingestion/index.ts:750, the ~1000-insert loop); throw on the SECOND
+  `INSERT INTO chunks` so a chunk is inserted-then-rolled-back → `chunkCount 0`, connection clean, clean re-process
+  indexes. **Teeth:** neuter each handler's `ROLLBACK` → the dangling `BEGIN` poisons the connection / a partial
+  row survives → both tests red; restored. *(Discovered — the audit's "only 1 of ~12 sites tested" is inaccurate:
+  `commitNode` already has the H11 injected-edge-insert rollback test (`whole-doc-analysis.test.ts:421`) and the
+  extraction insert has its own (`whole-doc-extract.test.ts:221`) — both driving the real function with the gold-
+  standard assertions; T3 closes the categorize + ingestion gaps, the genuinely-missing pair.)*
+- **T5 (Low, backlog) — swept the integration suite for fixed `sleep(N)` that gate a CORRECTNESS premise; converted
+  the cheap ones, recorded the residuals.** Most fixed-duration `setTimeout` are STATE-POLL loop intervals
+  (`while (cond) … setTimeout`, e.g. the `waitTerminal`/`waitFor`/`pollUntil` helpers and the `while (!x.release)`
+  gates) — deterministic by construction, left as-is. The three genuine correctness-gates converted to state-polls:
+  `reranker.test.ts:125` and `e5-embedder.test.ts:262` (`sleep(1)` "let the request reach fetch" → `while
+  (!seenSignal) await …` so the abort lands only after the signal was genuinely handed to fetch), and
+  `ocr-task.test.ts:210` (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the gate, polled, so the
+  cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,
+  per "keep the timeout headroom"):** `chat.test.ts:171` + `image-history.test.ts:111` are timestamp-monotonicity
+  gaps (a small real-clock gap so `updated_at` strictly increases — converting needs a timestamp-injection seam
+  into `createConversation`/`appendMessage`/`addImageTurn`, out of test-only scope; low flake risk given ISO-ms
+  resolution + real elapsed insert work); `core-model-ipc.test.ts:448` is an ABSENCE-settle for a wrongly-fired
+  fire-and-forget `void startModelRuntime(…)` (in the correct case NO racing call exists to await, so the 50 ms is
+  a low-risk upper bound on a would-be async start); `ingestion-limits.test.ts:80/254` are deliberate slow-operation
+  SIMULATIONS (the duration MODELS a slow parse to exercise the wall-clock timeout — correct as-is, not a gate).
+  **The full-suite 3× (15 s) timeout headroom (vitest.config.ts) is RETAINED** — it absorbs the orthogonal,
+  pre-existing CPU-starvation renderer flake ("1-2 per run, a different test each time, all pass in isolation"),
+  which Phase F neither introduced nor is in scope to eliminate (it is a load-timeout, not a fixed-sleep premise
+  gate); observed once across four full runs (an untouched DocumentsScreen `organization` case), passing in
+  isolation, with two consecutive identical green runs confirmed.
+- **T6 (Low, backlog) — the password-change race guard now pins the REAL `changingPassword` lifecycle, not the
+  poked field (`password-change.test.ts`, the doc-work direction).** The old test SET the private flag from outside
+  and asserted only the guard's CONSEQUENCE (`beginDocumentWork` throws when the flag is set) — if `changePassword`
+  forgot to set/clear it, the test still passed. Since `changePassword` is synchronous (no outside interleave), the
+  test now traps the private flag via `Object.defineProperty` to (1) RECORD its real transitions and (2) at the
+  instant the real `changePassword` flips it true (mid-work), prove `beginDocumentWork()` is genuinely refused —
+  asserting `transitions === [true, false]` (SET then CLEARED around the real Argon2id rewrap) AND
+  `refusedWhileChanging`. **Teeth:** neuter `changePassword`'s `this.changingPassword = true` → `transitions` is
+  `[false]` and the refusal never fires → red (the old field-poking test could not catch this). The reciprocal
+  direction (a real doc-work lease refusing a real `changePassword`, `password-change.test.ts:375`) was already
+  strong and is left intact.
+- **T7 (Low, backlog) — already-mitigated; pinned, NO src change.** The audit flagged the SSRF deny-list
+  (`assets.ts isPrivateOrLoopbackHost`) as "literal-dotted-decimal only", missing decimal/octal/hex IP encodings of
+  loopback (`https://2130706433/`). Driving the REAL path shows it is NOT bypassable: `assertSafeDownloadUrl` reads
+  the host via `new URL(raw).hostname`, and the **WHATWG URL parser CANONICALIZES every numeric IPv4 spelling to
+  dotted-decimal** before the classifier sees it (`new URL('https://2130706433/').hostname === '127.0.0.1'`,
+  `0x7f000001`/`017700000001`/`0x7f.0.0.1` likewise; `2852039166` → `169.254.169.254`), so the existing
+  dotted-decimal deny-regex already rejects them. Pinned with regression tests in BOTH the F15 styles
+  (`assets.test.ts`): an integration test that the real `downloadToFile`→`assertSafeDownloadUrl` rejects a redirect
+  to each numeric encoding with `/private\/loopback/`, and a unit test that `isPrivateOrLoopbackHost(new
+  URL(…).hostname)` denies them. The decision (numeric-host SSRF is closed by URL canonicalization, no guard change)
+  is now documented and regression-guarded rather than left undocumented.
+
+`git diff src/` after Phase F = **EMPTY** (test-only; the T7 gap was already closed by the URL parser, so no guard
+change was made); every teeth-check neuter (vision `tearingDown`×2 / `signal.aborted` / the F18 pair, `memo(DocRow)`,
+the categorize + ingestion `ROLLBACK`s, `changePassword`'s flag SET) was restored byte-identical.
+
 
 ### §39 Full audit (2026-06-30) — Phase C (lock/teardown reliability; R1 live + R2–R7 latent)
 

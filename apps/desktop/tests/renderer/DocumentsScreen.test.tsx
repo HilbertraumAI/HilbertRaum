@@ -1030,11 +1030,17 @@ describe('DocumentsScreen — sub-nav (section rail) regroup', () => {
 })
 
 // ---- PERF-5 (Part A): DocRow memoization -----------------------------------------------
-// A render-count test WITH TEETH: an unrelated parent re-render (toggling another row's selection
-// / opening another row's ⋯ menu) must re-render ONLY the affected row, not every row. The probe
-// is the module-scoped `__docRowRenderCounts` Map that DocRow bumps by id in its body. Removing
-// `memo(...)`, or passing the whole `selected` Set / `menuOpenId` string instead of the per-row
-// boolean, makes the untouched row re-render too → these assertions fail.
+// An unrelated parent re-render (toggling another row's selection / opening another row's ⋯ menu)
+// must re-render ONLY the affected row, not every row. Each test asserts TWO things:
+//   (1) the user-VISIBLE EFFECT of the interaction (the checkbox is now checked + the selection
+//       toolbar counts it / the ⋯ menu actually opened and the sibling rows are intact) — so a
+//       regression where the click stops producing its effect but an unrelated re-render still bumps
+//       the count CANNOT pass green (T2, full-audit-2026-06-30), and the oracle survives a DX-2 DEV
+//       flip that empties `__docRowRenderCounts`; and
+//   (2) the SECONDARY perf oracle — the module-scoped `__docRowRenderCounts` Map that DocRow bumps by
+//       id in its body: only the affected row's delta moves. Removing `memo(...)`, or passing the
+//       whole `selected` Set / `menuOpenId` string instead of the per-row boolean, re-renders the
+//       untouched rows too → the delta assertions fail (the memoization teeth).
 describe('DocumentsScreen — row memoization (PERF-5)', () => {
   it('re-renders ONLY the toggled row when another row’s selection changes', async () => {
     const user = userEvent.setup()
@@ -1054,11 +1060,22 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
 
     // Snapshot render counts AFTER the list is stable, then toggle d2's selection only.
     const before = new Map(__docRowRenderCounts)
-    await user.click(screen.getByRole('checkbox', { name: /select beta.pdf/i }))
+    const beta = screen.getByRole('checkbox', { name: /select beta.pdf/i })
+    expect(beta).not.toBeChecked()
+    await user.click(beta)
 
+    // (1) BEHAVIOR: the click actually toggled d2's selection — the checkbox reads checked, the
+    // untouched rows read unchecked, and the selection toolbar counts exactly one. (This is what a
+    // "click no longer toggles selection" regression breaks; the render-count delta alone would not.)
+    expect(beta).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /select alpha.pdf/i })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /select gamma.pdf/i })).not.toBeChecked()
+    const bar = await screen.findByRole('group', { name: /actions for the selected documents/i })
+    expect(within(bar).getByText('1 selected')).toBeInTheDocument()
+
+    // (2) PERF (secondary): the toggled row re-rendered (its `selected` boolean flipped)…
     const delta = (id: string): number =>
       (__docRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
-    // The toggled row re-rendered (its `selected` boolean flipped)…
     expect(delta('d2')).toBeGreaterThan(0)
     // …while the untouched rows held their memo (their props are Object.is-unchanged). With
     // memo removed (or the whole Set passed), these would be > 0 and the test fails — the teeth.
@@ -1084,11 +1101,19 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
     // Opening d2's overflow flips the parent's `menuOpenId` to 'd2'.
     await user.click(screen.getByRole('button', { name: 'More actions for beta.pdf' }))
 
+    // (1) BEHAVIOR: the click actually OPENED d2's menu (its items are now reachable), and the
+    // sibling rows are untouched — their titles still render exactly as before. A regression where
+    // the ⋯ click no longer opens the menu (but some unrelated re-render bumps the count) reddens here.
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByRole('menuitem', { name: 'Re-index' })).toBeInTheDocument()
+    expect(screen.getByText('alpha.pdf')).toBeInTheDocument()
+    expect(screen.getByText('gamma.pdf')).toBeInTheDocument()
+
+    // (2) PERF (secondary): only d2 re-rendered; d1/d3 receive `menuOpen={false}` unchanged → their
+    // memo holds. (Teeth: passing the whole menuOpenId string, or dropping memo, re-renders them too.)
     const delta = (id: string): number =>
       (__docRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
     expect(delta('d2')).toBeGreaterThan(0)
-    // d1/d3 receive `menuOpen={false}` unchanged → their memo holds. (Teeth: passing the
-    // whole menuOpenId string, or dropping memo, re-renders them too.)
     expect(delta('d1')).toBe(0)
     expect(delta('d3')).toBe(0)
   })

@@ -201,13 +201,22 @@ describe('Make searchable (OCR) end to end', () => {
     const docId = await importScan()
     let release: () => void = () => {}
     const gate = new Promise<void>((r) => (release = r))
+    // Flag set the moment the OCR task PARKS in the rasterizer (genuinely mid-flight) — lets the
+    // cancel land deterministically once the task is running, instead of a fixed `sleep(30)` that
+    // could cancel before the task even started under CPU starvation (T5).
+    let rasterizeReached = false
     const engine = fakeEngine(() => 'never persisted')
     const manager = makeManager({
       engine,
-      rasterize: fakeRasterizer(2, { gate: () => gate })
+      rasterize: fakeRasterizer(2, {
+        gate: () => {
+          rasterizeReached = true
+          return gate
+        }
+      })
     })
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
-    await new Promise((r) => setTimeout(r, 30))
+    while (!rasterizeReached) await new Promise((r) => setTimeout(r, 1))
     manager.cancelDocTask(jobId)
     release()
     const status = await waitTerminal(manager, jobId)
