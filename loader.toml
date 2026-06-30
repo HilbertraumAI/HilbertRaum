@@ -1,0 +1,277 @@
+# loader.toml — the single declarative manifest the shared loader build tool (xtask,
+# in the third_party/loader submodule) derives EVERYTHING from. Nothing HilbertRaum-specific
+# lives in the engine; it all lives here. See third_party/loader for the engine.
+#
+# `@loader/<script>` in a cmd/src is rewritten to the loader scripts dir
+# (third_party/loader/scripts) at render time; `./scripts/<script>` stays project-local.
+#
+# HilbertRaum is a SELF-CONTAINED Electron app: its main process runs llama.cpp, RAG,
+# embeddings, SQLite, OCR and document ingestion internally, and manages its own model
+# weights + sidecar binaries from the drive. So the package is APP-ONLY — the loader ships
+# the Electron app component + the native launcher/splash + the FAT32 USB image, and nothing
+# else (no ollama, no python runtime, no daemon, no mac-mgmt).
+schema = 1
+
+# ── on-drive update manifest identity + classification ──────────────────────
+[manifest]
+product    = "hilbertraum"
+update_url = "https://hilbertraum-test.plan.ai"
+
+[manifest.classify]
+exact = [
+  ["hilbertraum.linux-x64.exe",   "linux-x64"],
+  ["hilbertraum.linux-arm64.exe", "linux-arm64"],
+  ["hilbertraum.exe",             "win-x64"],
+  ["hilbertraum.dmg",             "mac-arm64"],
+]
+substring = [
+  ["linux",   ["linux-x64", "linux-arm64"]],
+  ["nixos",   ["linux-x64", "linux-arm64"]],
+  ["darwin",  ["mac-arm64"]],
+  ["-mac-",   ["mac-arm64"]],
+  ["windows", ["win-x64"]],
+  ["-win-",   ["win-x64"]],
+]
+tools = ["linux-x64", "linux-arm64"]
+
+[manifest.upload]
+default_tarball = "dist/hilbertraum-update.tar.gz"
+
+# ── drive/bundle layout (consumed by the generalized bundle.sh + make-usb-image.sh) ──
+[layout]
+launcher_name  = "hilbertraum"
+image_name     = "hilbertraum-usb.img"
+volume_label   = "HILBERTRAUM"   # FAT32 label: exactly 11 chars (the max)
+launchers_dir  = "launchers"
+components_dir = "components/{os}"
+models_dir     = "models"
+manifest_file  = "update.json"
+selection_file = "platforms.json"
+[layout.launcher_artifact]
+"linux-x64"   = "hilbertraum.linux-x64.exe"
+"linux-arm64" = "hilbertraum.linux-arm64.exe"
+"win-x64"     = "hilbertraum.exe"
+"mac-arm64"   = "hilbertraum.dmg"
+
+# ── splash spinner colour scheme (rrggbb; baked into the spinner at build time) ──
+# HilbertRaum's accent blue (#2f6fed, from build/icon.svg) on a dark slate surface.
+[spinner]
+canvas = "0f172a"   # surface (window background)
+brand  = "2f6fed"   # accent (spinner arc + progress fill)
+text   = "e8edf5"   # label text
+track  = "1e293b"   # spinner trail / progress groove
+
+# ── platforms ───────────────────────────────────────────────────────────────
+[targets]
+known       = ["linux-x64", "linux-arm64", "win-x64", "mac-arm64"]
+select_env  = "HILBERTRAUM_PLATFORMS"
+select_lock = "targets"
+[targets.alias]
+"nixos-x64"   = "linux-x64"
+"nixos-arm64" = "linux-arm64"
+[targets.os_match]
+win = ["win", "windows"]
+mac = ["mac", "darwin"]
+
+# ── FHS package set (injected into buildFHSEnv by nix/loader) ─────────────────
+# Electron's GUI libs for the NixOS FHS re-exec (the static-musl launcher mounts this
+# closure and runs the generic-glibc Electron inside it).
+[fhs]
+name       = "hilbertraum-fhs"
+run_script = 'exec "$@"'
+systems    = ["x86_64-linux", "aarch64-linux"]
+target_pkgs = [
+  "glibc", "gcc-unwrapped.lib", "zlib",
+  "glib", "gtk3", "nss", "nspr", "atk", "at-spi2-atk", "at-spi2-core",
+  "cairo", "pango", "gdk-pixbuf", "cups", "dbus", "expat", "libdrm",
+  "libxkbcommon", "mesa", "libgbm", "alsa-lib", "freetype", "fontconfig",
+  "libGL", "systemd",
+  "libx11", "libxcomposite", "libxcursor", "libxdamage",
+  "libxext", "libxfixes", "libxi", "libxrender",
+  "libxtst", "libxcb", "libxrandr", "libxscrnsaver",
+]
+
+# ── leaf/source-producing steps (impure project scripts) ─────────────────────
+# Install the npm workspace deps, then build the Electron main/renderer with
+# electron-vite (→ app/apps/desktop/out). bundle.sh packages that per target.
+[[step]]
+name = "app"
+cmd  = "(cd app && npm ci)"
+src  = ["app/package.json", "app/package-lock.json"]
+desc = "hilbertraum npm deps"
+[[step]]
+name = "build"
+cmd  = "(cd app/apps/desktop && npm run build)"
+deps = ["app"]
+src_tree = ["app/apps/desktop/src"]
+src  = ["app/apps/desktop/package.json", "app/apps/desktop/electron.vite.config.ts"]
+desc = "electron-vite build"
+[[step]]
+name = "stage-app"
+per  = "target"
+cmd  = "./scripts/stage-app.sh {target}"
+deps = ["build"]
+src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "app/apps/desktop/electron-builder.yml"]
+desc = "stage app {target}"
+
+# ── shared source-input bundles ──────────────────────────────────────────────
+[srcgroups]
+import = ["@loader/import-build-component.sh", "@loader/store-import.sh", "@loader/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]
+
+# ── components ───────────────────────────────────────────────────────────────
+# The single component: the Electron app itself. stage-app produces the unpacked tree
+# (dist/app/{target}); import-build store-imports it and nix packs it OFFLINE — linux
+# squashfs, mac dmg (the VM mount preserves the .app's exec bit + signature), win dir
+# (zipped; the launcher/image unpack it). Attrs live in nix/builds.nix.
+[[component]]
+name = "app"
+per = "target"
+group = 1
+builder = "import-build"
+store_name = "app-{target}"
+src_dir = "dist/app/{target}"
+src_stamp = "stage-app-{target}"
+srcgroup = "import"
+[component.format]
+linux = { ext = "squashfs", attr = "app-{target}-squashfs", desc = "nix squashfs: app-{target}" }
+mac   = { ext = "dmg",      attr = "app-{target}-dmg",      desc = "nix dmg: app-{target}" }
+win   = { ext = "zip",      attr = "app-{target}-dir",      desc = "nix dir: app-{target}" }
+
+# ── bundle + final artifacts ──────────────────────────────────────────────────
+# One per-target bundle: bundle.sh ASSEMBLES the prebuilt app-<target> component + the
+# native launcher + the per-OS group manifest (+ the NixOS FHS helper on linux). The app
+# component is built by `make components` (the `app` component above).
+[bundle]
+per = "target"
+cmd = "./scripts/bundle.sh {target}"
+deps = ["components"]
+src  = ["launcher/Cargo.toml", "launcher/Cargo.lock", "./scripts/bundle.sh", "@loader/lib.sh",
+        "@loader/nix-component.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]
+src_tree = ["launcher/src"]
+desc = "bundle {target}"
+
+[[artifact]]
+name = "image"
+out  = "dist/hilbertraum-usb.img"
+cmd  = "@loader/make-usb-image.sh"
+deps_bundles = true
+src  = ["@loader/make-usb-image.sh", "@loader/lib.sh", "flake.nix"]
+src_tree = ["third_party/loader/crates"]
+desc = "usb image"
+default = true
+
+[[artifact]]
+name = "update-tarball"
+out  = "dist/hilbertraum-update.tar.gz"
+cmd  = "./scripts/make-update-tarball.sh"
+deps_bundles = true
+src  = ["./scripts/make-update-tarball.sh"]
+src_tree = ["third_party/loader/crates"]
+desc = "update tarball"
+
+[[launch]]
+name = "dev"
+cmd  = "./scripts/dev.sh"
+
+# ── Makefile (generated by `xtask gen-makefile`, committed so it can trigger xtask) ──
+[make]
+xtask_cmd    = "nix run .#xtask --"
+devshell_var = "HILBERTRAUM_DEVSHELL"
+guard_exclude = ["clean", "help"]
+default_goal = "all"
+
+[[make.target]]
+name = "all"
+help = "build EVERY target (mac/win/linux/nixos) + image (via ninja)"
+recipe = ["$(XTASK) build all"]
+[[make.target]]
+name = "ninja"
+help = "(re)generate build.ninja from the artifact graph"
+recipe = ["$(XTASK) gen-ninja"]
+[[make.target]]
+name = "makefile"
+help = "(re)generate this Makefile from loader.toml"
+recipe = ["$(XTASK) gen-makefile"]
+[[make.target]]
+name = "app"
+help = "install the HilbertRaum npm workspace deps"
+recipe = ["$(XTASK) build app"]
+[[make.target]]
+name = "build"
+help = "electron-vite build (main + renderer) into app/apps/desktop/out"
+recipe = ["$(XTASK) build build"]
+[[make.target]]
+name = "bundles"
+help = "package every target from the built app"
+recipe = ["$(XTASK) build bundles"]
+[[make.target]]
+name = "bundle"
+help = "package single-file artifact for TARGET"
+recipe = ["$(XTASK) build bundle-$(TARGET)"]
+[[make.target]]
+name = "image"
+help = "ready-to-burn FAT32 USB image (all artifacts < 4 GiB; reads everywhere)"
+recipe = ["$(XTASK) build image"]
+[[make.target]]
+name = "update-tarball"
+help = "update-server tarball (manifest.json + files/) for the update URL"
+recipe = ["$(XTASK) build update-tarball"]
+[[make.target]]
+name = "tarball-upload"
+help = "upload the update tarball to a webspace (set WEB_AGENCY_TOKEN + WEB_AGENCY_URL [+ WEB_AGENCY_WEBSPACE_ID])"
+deps = ["update-tarball"]
+recipe = ["$(XTASK) upload"]
+[[make.target]]
+name = "dev"
+help = "minimal NixOS build + run (development mode)"
+recipe = ["./scripts/dev.sh"]
+[[make.target]]
+name = "dev-electron"
+help = "launch the bundle with a locally staged unpacked app tree (make stage-app first)"
+recipe = ["dist/bundle/hilbertraum.linux-x64.exe --start-with-electron dist/app/linux-x64"]
+[[make.target]]
+name = "test-nixos"
+help = "launch the built nixos bundle under xvfb + screenshot"
+recipe = ["./scripts/test-nixos.sh"]
+[[make.target]]
+name = "test-usb"
+help = "FAT32 loop-image launch test"
+recipe = ["./scripts/test-usb-image.sh"]
+[[make.target]]
+name = "test-vm"
+help = "run the AppImage in an Ubuntu incus VM"
+recipe = ["./scripts/test-ubuntu-vm.sh"]
+[[make.target]]
+name = "test-clean"
+help = "wipe build outputs and rebuild from scratch (TARGET=linux-x64)"
+recipe = ["./scripts/test-clean-build.sh $(TARGET)"]
+[[make.target]]
+name = "test-mac"
+help = "run the mac launcher on a remote mac (set MAC_TARGET=<ssh host>)"
+recipe = ["./scripts/test-mac.sh"]
+[[make.target]]
+name = "test-win"
+help = "run the win launcher on a remote windows box (set WIN_TARGET=<ssh host>)"
+recipe = ["./scripts/test-win.sh"]
+[[make.target]]
+name = "docker-image"
+help = "build the devshell as a Docker image (result = a loadable archive)"
+recipe = [
+  "nix build .#devshell-image",
+  "@echo \"==> loadable image at ./result — 'docker load < result' or 'make docker-push IMAGE_REPO=...'\"",
+]
+[[make.target]]
+name = "docker-push"
+help = "push the devshell image to $(IMAGE_REPO) via skopeo (no docker daemon)"
+recipe = [
+  "@test -n \"$(IMAGE_REPO)\" || { echo 'set IMAGE_REPO=<registry/repo:tag>'; exit 1; }",
+  "img=$$(nix build .#devshell-image --no-link --print-out-paths); \\",
+  "  skopeo --insecure-policy copy docker-archive:$$img docker://$(IMAGE_REPO)",
+]
+[[make.target]]
+name = "clean"
+help = "remove all build outputs (ninja graph + dist + every crate's target/)"
+recipe = [
+  "@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then echo \"ninja -t clean\"; ninja -f build.ninja -t clean >/dev/null 2>&1 || true; fi",
+  "rm -rf dist build.ninja .ninja_log .ninja_lock app/node_modules app/apps/desktop/out app/apps/desktop/release launcher/target third_party/loader/crates/*/target",
+]
