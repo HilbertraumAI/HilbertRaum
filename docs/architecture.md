@@ -2860,6 +2860,30 @@ through the real `extractTransactionsTool`/`extractInvoiceTool`/`extractTransact
   don't lead the line) — hence the split-by-line-kind, which fixes the statement-memo contamination while
   keeping both the single-leading-US-date statement and the labeled US invoice working.
 
+**Financial correctness (full-audit-2026-06-30, Phase A — C1/C5).** A fresh audit found one false-NEGATIVE
+in the SAME reconcile/summary layer (parsing-only; no schema, IPC, or audit-payload change; `BANK_EXTRACTOR_VERSION`
+unchanged — reconcile re-runs on read). Fixed characterization-first through the real entry points, teeth-checked.
+- **C1 — `reconcileBalances` dropped a balance-less gap row from the chain → false `mismatch`, MEDIUM-HIGH.**
+  `prevBalance` advanced only on a printed balance, so a mid-statement row with a real `amount` but no printed
+  `balanceAfter` (same-day grouping — the bank prints the balance only on the day's last line — or an
+  OCR-dropped balance cell) was OMITTED: the next balance-bearing row computed `prevBalance + thisAmount`
+  without the gap amount → `mismatch` → `assessCompleteness` → `contradicted` → a correct, verifiable total was
+  **withheld** from the user (the inverse of the confidently-wrong harm). **Fix:** a `sinceLastPrinted` cents
+  accumulator — a balance-less row stays `unknown` (it prints no balance of its own to check) but its amount is
+  folded into the next printed balance's expected value (`toCents(prevBalance) + sinceLastPrinted + toCents(amount)`),
+  reset on each printed balance and discarded at the baseline. Since `amount` is a required `number` on every
+  `TransactionInput`/the schema, the chain is never "genuinely broken" by a missing amount, so there is **no**
+  revert-to-`unknown`-on-missing-amount branch (the audit's conditional is vacuous); a real read error still
+  surfaces as a `mismatch`. Supersedes the earlier "`reconcileBalances` over-reporting (honesty)" note's
+  drop-the-gap behavior. The normal 2-figure de-AT row and the HVB no-balance listing stay byte-identical.
+- **C5 — zero-amount classified inconsistently between `summarizeCashflow` and `categorizeRow`, LOW.**
+  `summarizeCashflow` counted `amount >= 0` as inflow while `categorizeRow` files a zero `Uncategorized`
+  (neither Income nor Spending). **Fix:** `summarizeCashflow` now uses `> 0` inflow / `< 0` outflow (a `0.00`
+  row is neither), matching the breakdown. Output is unchanged (the figure is zero) — a convention-consistency
+  fix. T4 (the §4 testing gap) landed alongside: a new `tests/unit/money.test.ts` table-tests the money/date/CSV
+  primitives in isolation (apostrophe+decimal `parseAmount`, `csvField` formula-lead × quote × CRLF,
+  `wordIncludes(compound)` repeated-needle, `inferDateOrder`/`detectDocumentCurrency` boundaries).
+
 ### §11 IPC / audit surface
 
 `skills:list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning` +
@@ -2992,15 +3016,19 @@ The four remaining LOW/residual items after the §14 audit, all fixed behind the
   (drop-in installs disabled DS19; the structural import-rejection reasons; the "Needs newer app"
   badge §14/M1; and "the skill tool found nothing in my document" — read-step-first / OCR / conservative
   parsing). Docs-only.
-- **`reconcileBalances` over-reporting (honesty).** The lone **baseline** row (the first row, or any
-  row whose predecessor printed no balance) is now `unknown`, not `ok` — it has nothing to compare
-  against, so it is not a genuine check. `reconciled` is true only when no row mismatched **and at
-  least one row was actually compared against a predecessor** (`okCount > 0`). A single-transaction
-  statement therefore reports `reconciled: false` / `resultKind: 'unchecked'` (it verified nothing)
-  instead of a false "reconciled". `validate_statement_balances`' downstream `resultKind` was already
-  keyed off `unknown`, so it flowed through unchanged; the baseline row now persists `reconciled =
-  NULL` (unchecked) rather than `1`. The invoice path (`validateInvoiceTotals`) has **no** baseline
-  concept — each of its three checks is a genuine figure-to-figure comparison — so it needed no change.
+- **`reconcileBalances` over-reporting (honesty).** The lone **baseline** row (the first row, or the
+  first row after a balance-less run with no PRIOR printed balance to anchor against) is `unknown`, not
+  `ok` — it has nothing to compare against, so it is not a genuine check. `reconciled` is true only when
+  no row mismatched **and at least one row was actually compared against a predecessor** (`okCount > 0`).
+  A single-transaction statement therefore reports `reconciled: false` / `resultKind: 'unchecked'` (it
+  verified nothing) instead of a false "reconciled". `validate_statement_balances`' downstream
+  `resultKind` was already keyed off `unknown`, so it flowed through unchanged; the baseline row now
+  persists `reconciled = NULL` (unchecked) rather than `1`. The invoice path (`validateInvoiceTotals`)
+  has **no** baseline concept — each of its three checks is a genuine figure-to-figure comparison — so it
+  needed no change. **Updated by full-audit-2026-06-30 C1 (above):** a row whose *immediate* predecessor
+  printed no balance is no longer auto-`unknown` — its gap amount is carried in `sinceLastPrinted` and it
+  reconciles `ok` against the last printed balance. ONLY the true baseline (no prior printed balance at
+  all) stays `unknown`.
 - **Cancel-during-run audit consistency.** When the abort signal has fired, the gate
   (`tool-registry.ts`) now **suppresses** the `skill_run_failed` audit event (a cancelled run audits
   as started-then-no-terminal-event), so the audit agrees with the `skill_runs` row the seam records

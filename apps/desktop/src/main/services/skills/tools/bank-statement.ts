@@ -538,15 +538,30 @@ export interface ReconcileResult {
 
 /**
  * Reconcile each row's printed running balance against the computed one (pure, deterministic).
- * For a row i with a printed `balanceAfter`, the expected balance is `balanceAfter[i-1] + amount[i]`,
- * so a row is `ok` only when its printed balance agrees with the computed one within half a cent, and
- * `mismatch` when they disagree. A row is `unknown` when it (or its predecessor) prints no balance —
- * including the **baseline** row (the first row, or any row whose predecessor printed no balance):
- * with nothing to compare against, the baseline has NOT been genuinely checked, so it is `unknown`,
- * never counted as `ok`. Counting the baseline as a pass would let a single-transaction statement
- * report `reconciled: true` having verified nothing — at odds with the §22-D1 "say so plainly /
- * don't paper over" honesty posture. `reconciled` is therefore true only when no row mismatched AND
- * at least one row was actually compared against a predecessor (`okCount > 0`).
+ * The expected balance for a row with a printed `balanceAfter` is the last printed balance PLUS every
+ * amount booked since (the gap-row amounts AND this row's amount), so a row is `ok` only when its printed
+ * balance agrees with the computed one to the cent, and `mismatch` when they disagree.
+ *
+ * A balance-bearing row is `unknown` when its predecessor printed no balance to anchor against —
+ * including the **baseline** row (the first row, or the first after a balance-less run with no prior
+ * printed balance): with nothing to compare against, the baseline has NOT been genuinely checked, so it
+ * is `unknown`, never counted as `ok`. Counting the baseline as a pass would let a single-transaction
+ * statement report `reconciled: true` having verified nothing — at odds with the §22-D1 "say so plainly
+ * / don't paper over" honesty posture. `reconciled` is therefore true only when no row mismatched AND at
+ * least one row was actually compared against a predecessor (`okCount > 0`).
+ *
+ * **Balance-less rows still ADVANCE the chain (full-audit-2026-06-30 C1).** A mid-statement row can carry
+ * a real `amount` but no printed `balanceAfter` — same-day grouping (the bank prints the running balance
+ * only on the day's last line) or an OCR-dropped balance cell. Such a row is reported `unknown` (it prints
+ * no balance of its own to check), but its amount is carried in a `sinceLastPrinted` cents accumulator and
+ * folded into the NEXT printed balance's expected value. The earlier code dropped the gap row from the
+ * chain entirely (it advanced `prevBalance` only on a printed balance), so the next balance-bearing row was
+ * judged against a stale predecessor with the gap amount OMITTED → a FALSE `mismatch` → `assessCompleteness`
+ * returned `'contradicted'` and a correct, verifiable total was withheld from the user (the inverse of the
+ * confidently-wrong harm, equally trust-damaging). Since `amount` is a required `number` on every row
+ * (`TransactionInput`/the schema), the chain is never "genuinely broken" by a missing amount, so there is
+ * no revert-to-`unknown`-on-missing-amount branch to write; a real read error still surfaces as a
+ * `mismatch` when the carried total disagrees with a printed balance.
  */
 export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
   // The running-balance chain (`prevBalance + amount`) is only meaningful WITHIN one currency; a
@@ -564,19 +579,27 @@ export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
   const toCents = (n: number): number => Math.round(n * 100)
   const out: ReconcileRow[] = []
   let prevBalance: number | null = null
+  // Cents booked since the last PRINTED balance — the amounts of any balance-less gap rows that must be
+  // folded into the next printed balance's expected value (C1). Reset whenever a printed balance lands.
+  let sinceLastPrinted = 0
   let okCount = 0
   let mismatchCount = 0
   rows.forEach((row, i) => {
     const printed = row.balanceAfter
     let status: ReconcileStatus
     if (printed === undefined) {
+      // Balance-less row: not a check on its own (it prints no balance to compare), but its amount still
+      // advances the chain so the next printed balance ties out. Honest verdict: `unknown` (not checked).
       status = 'unknown'
+      sinceLastPrinted += toCents(row.amount)
     } else if (prevBalance === null) {
-      // Baseline row: a printed balance with no predecessor balance to compare against. NOT a
-      // genuine check — flagged `unknown` so a lone baseline can never report `reconciled: true`.
+      // Baseline row: a printed balance with no predecessor balance to compare against. NOT a genuine
+      // check — flagged `unknown` so a lone baseline can never report `reconciled: true`. Any amounts
+      // booked before the first printed balance can't be tied to anything, so discard the accumulator.
       status = 'unknown'
+      sinceLastPrinted = 0
     } else {
-      const expected = toCents(prevBalance) + toCents(row.amount)
+      const expected = toCents(prevBalance) + sinceLastPrinted + toCents(row.amount)
       if (toCents(printed) === expected) {
         status = 'ok'
         okCount++
@@ -584,6 +607,7 @@ export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
         status = 'mismatch'
         mismatchCount++
       }
+      sinceLastPrinted = 0
     }
     if (printed !== undefined) prevBalance = printed
     out.push({ index: i, status })
@@ -695,6 +719,9 @@ export function categorizeRow(row: TransactionInput): string {
       return rule.category
     }
   }
+  // Sign fallback: a negative amount is Spending; a positive one was caught by the amount-sign rule
+  // above, so reaching here means amount is zero → Uncategorized. A `0.00` row is therefore neither
+  // inflow nor outflow — the convention summarizeCashflow now shares (full-audit-2026-06-30 C5).
   return row.amount < 0 ? 'Spending' : UNCATEGORIZED
 }
 
@@ -754,17 +781,21 @@ export interface CashflowSummary {
 }
 
 /**
- * Sum inflows / outflows / net over the rows (pure, deterministic). `totalOut` is the absolute sum
- * of negative amounts; `net` is the signed sum. The currency is reported only when EVERY row shares
- * one (mixed-currency statements report none rather than implying a meaningless total — honesty).
+ * Sum inflows / outflows / net over the rows (pure, deterministic). `totalIn` is the sum of POSITIVE
+ * amounts, `totalOut` the absolute sum of NEGATIVE amounts; `net` is the signed sum. A genuine `0.00`
+ * row is neither inflow nor outflow (full-audit-2026-06-30 C5): the prior `amount >= 0` test counted it
+ * as inflow while `categorizeRow` files it `Uncategorized` (neither Income nor Spending), so the two
+ * surfaces disagreed for the same row. Aligning on `> 0` / `< 0` makes the convention consistent (the
+ * figure is zero, so the reported totals are unchanged either way). The currency is reported only when
+ * EVERY row shares one (mixed-currency statements report none rather than implying a meaningless total).
  */
 export function summarizeCashflow(rows: TransactionInput[]): CashflowSummary {
   let totalIn = 0
   let totalOut = 0
   const currencies = new Set<string>()
   for (const row of rows) {
-    if (row.amount >= 0) totalIn += row.amount
-    else totalOut += -row.amount
+    if (row.amount > 0) totalIn += row.amount
+    else if (row.amount < 0) totalOut += -row.amount // a 0.00 row is neither inflow nor outflow (C5)
     currencies.add(row.currency)
   }
   const round = (n: number): number => Math.round(n * 100) / 100

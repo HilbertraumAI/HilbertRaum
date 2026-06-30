@@ -1074,3 +1074,126 @@ describe('financial correctness (full-audit-2026-06-29 follow-up Phase 1)', () =
     expect(extractTransactionRows([chunk(text, 1)], 'USD').map((r) => r.date)).toEqual(['2026-12-31', '2026-03-05'])
   })
 })
+
+// full-audit-2026-06-30 Phase A (financial correctness): C1 (reconcile breaks the running-balance chain
+// across a balance-less row → false `mismatch` → a CORRECT total withheld) + C5 (zero-amount classified
+// inconsistently between summary and breakdown). Adversarial WHOLE-STRING fixtures through the REAL entry
+// points (extractTransactionRows / extractStatementBalances / reconcileBalances / assessCompleteness /
+// summarizeCashflow / categorizeRow), not pre-isolated tokens (TEST-N2). Written CHARACTERIZATION-FIRST.
+describe('financial correctness (full-audit-2026-06-30 Phase A)', () => {
+  // ---- C1: a balance-less amount row mid-statement must still ADVANCE the chain (not be dropped) ----
+  it('C1: a balance-less amount row BETWEEN two balance-bearing rows whose chain ties out → all ok/unknown, complete', () => {
+    // The reported harm: a bank prints the running balance only on a day's last line (same-day grouping) or
+    // an OCR drops a balance cell, so a mid-statement row has a real amount but NO printed balanceAfter. The
+    // pre-fix code dropped that gap row from the chain entirely — `prevBalance` advanced only on a printed
+    // balance — so the NEXT balance-bearing row computed `prevBalance + thisAmount`, OMITTING the gap row's
+    // amount, and reported a FALSE `mismatch`. That single mismatch forced assessCompleteness → 'contradicted'
+    // → buildBankAnswer withheld a verifiable, CORRECT total. True chain here: 2000 → 1954,10 → (−10) →
+    // 1924,10 ties out exactly. BEFORE (the bug): rows[2] expected 1954,10 + (−20) = 1934,10 ≠ 1924,10 →
+    // ['unknown','unknown','mismatch'], reconciled:false, 'contradicted'.
+    const text = [
+      'Kontoauszug EUR',
+      'Anfangssaldo 2.000,00',
+      '2026-01-02 Grocery -45,90 1.954,10', // baseline (printed balance, no predecessor → unknown)
+      '2026-01-03 Coffee -10,00', // GAP: a real −10 amount, NO printed running balance
+      '2026-01-04 Bookshop -20,00 1.924,10', // 1.954,10 + (−10) + (−20) == 1.924,10 (the gap amount counts)
+      'Endsaldo 1.924,10'
+    ].join('\n')
+    const chunks = [chunk(text, 1)]
+    const rows = extractTransactionRows(chunks, 'EUR')
+    expect(rows).toHaveLength(3)
+    expect(rows[1]).toMatchObject({ description: 'Coffee', amount: -10 })
+    expect(rows[1].balanceAfter).toBeUndefined() // the gap row genuinely prints no balance
+    const reconcile = reconcileBalances(rows)
+    // The gap row is `unknown` (it prints no balance to check) but its amount STILL advances the chain, so
+    // the following balance-bearing row reconciles `ok` rather than falsely mismatching.
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'unknown', 'ok'])
+    expect(reconcile.reconciled).toBe(true)
+    const { openingBalance, closingBalance } = extractStatementBalances(chunks)
+    expect({ openingBalance, closingBalance }).toEqual({ openingBalance: 2000, closingBalance: 1924.1 })
+    // The verified total is no longer withheld: opening + Σamounts == closing → 'complete'.
+    expect(assessCompleteness({ rows, openingBalance, closingBalance, reconcile })).toBe('complete')
+  })
+
+  it('C1: TWO consecutive balance-less gap rows still tie out (the accumulator spans the whole gap)', () => {
+    // Same-day grouping can print the balance only on the day's LAST line, leaving several rows balance-less.
+    // 1.000,00 → (−10) → (−20) → 970,00: both gap amounts must be carried forward to the next printed balance.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Startbuchung 5,00 1.000,00', // baseline balance 1.000,00 (its own amount resets the gap accumulator)
+      '2026-01-03 Coffee -10,00', // gap 1
+      '2026-01-03 Tea -20,00', // gap 2 (same day)
+      '2026-01-03 Lunch -50,00 920,00' // 1.000,00 + (−10) + (−20) + (−50) == 920,00
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(4)
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'unknown', 'unknown', 'ok'])
+    expect(reconcile.reconciled).toBe(true)
+  })
+
+  it('C1: a GENUINELY broken chain is still a `mismatch` (the accumulator does not paper over read errors)', () => {
+    // The fix must not become a rubber stamp: a printed balance that does NOT equal the correct running
+    // total (even after carrying the gap amount) is still flagged. Correct would be 1.924,10; the statement
+    // prints 1.900,00 → mismatch under BOTH the old and the new arithmetic, so a real error still surfaces.
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Grocery -45,90 1.954,10',
+      '2026-01-03 Coffee -10,00', // gap
+      '2026-01-04 Bookshop -20,00 1.900,00' // wrong: 1.954,10 + (−10) + (−20) == 1.924,10, not 1.900,00
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'unknown', 'mismatch'])
+    expect(reconcile.reconciled).toBe(false)
+    expect(assessCompleteness({ rows, reconcile })).toBe('contradicted')
+  })
+
+  it('C1 regression: the normal 2-figure de-AT row is BYTE-IDENTICAL (no gap → no accumulator effect)', () => {
+    // Two balance-bearing rows, no gap: the baseline is `unknown`, the second is a genuine `ok`. This is the
+    // pre-fix behaviour unchanged — the accumulator stays at zero across a row that prints its own balance.
+    const rows = extractTransactionRows(
+      [chunk('Kontoauszug EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10', 1)],
+      'EUR'
+    )
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+    expect(reconcile.reconciled).toBe(true)
+  })
+
+  it('C1 regression: the HVB no-balance "Umsätze" listing stays all-unknown / not reconciled (BYTE-IDENTICAL)', () => {
+    // No row prints a running balance, so the accumulator runs but is never compared against a printed
+    // balance — okCount stays 0 → not reconciled, every row `unknown`, exactly as before the fix.
+    const text = [
+      'Kontoumsaetze EUR',
+      '2026-01-20 KARTENZAHLUNG REWE SAGT DANKE 1234 -19,15',
+      '2026-01-29 SEPA-GUTSCHRIFT Arbeitgeber 34,39'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2)
+    const reconcile = reconcileBalances(rows)
+    expect(reconcile.rows.every((r) => r.status === 'unknown')).toBe(true)
+    expect(reconcile.reconciled).toBe(false)
+  })
+
+  // ---- C5: a zero-amount row must be classified consistently across the summary and the breakdown ----
+  it('C5: a 0.00 row is neither inflow nor outflow — consistent across summarizeCashflow and categorizeRow', () => {
+    // BEFORE: summarizeCashflow used `amount >= 0` (a 0.00 row counted as INFLOW) while categorizeRow uses
+    // `> 0` Income / `< 0` Spending / else Uncategorized (a 0.00 row is UNCATEGORIZED = neither). The two
+    // surfaces disagreed on the same row. The figure is zero, so the TOTALS are unaffected either way; the
+    // fix makes the CONVENTION consistent: zero is neither inflow nor outflow in both. (This pins the
+    // convention against a future change that would make the zero attribution actually matter.)
+    expect(categorizeRow(tx({ amount: 0 }))).toBe(UNCATEGORIZED) // breakdown: neither Income nor Spending
+    const s = summarizeCashflow([tx({ amount: 12.5 }), tx({ amount: 0 }), tx({ amount: -4 })])
+    // The zero contributes to NEITHER total; the figures match the breakdown's "neither" verdict.
+    expect(s).toEqual({ totalIn: 12.5, totalOut: 4, net: 8.5, count: 3, currency: 'EUR' })
+    // A lone 0.00 row: no inflow, no outflow, net zero (and still counted in `count` — it is a real row).
+    expect(summarizeCashflow([tx({ amount: 0 })])).toEqual({
+      totalIn: 0,
+      totalOut: 0,
+      net: 0,
+      count: 1,
+      currency: 'EUR'
+    })
+  })
+})

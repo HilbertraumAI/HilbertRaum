@@ -6,6 +6,44 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **NEW full audit (`audits/full-audit-2026-06-30.md`) — Phase A (FINANCIAL CORRECTNESS; C1 + C5,
+with T4 landed alongside) — branch `audit-2026-06-30-phaseA-financial` (off master `7281a2e`; unmerged; do NOT
+auto-merge/push). BEHAVIOR-CHANGING but PARSING-ONLY** — no schema, IPC, or audit-payload change;
+`BANK_EXTRACTOR_VERSION` left at **3** (reconcile re-runs on read from the persisted rows, not from a blob, so
+statuses re-validate automatically). The SECOND phase of the fresh 2026-06-30 audit (Phase G, docs-only, sits on
+the sibling `audit-2026-06-30-phaseG-docs` branch). Characterization-first (RED → fix → GREEN), teeth-checked.
+Suite **2641 passed / 39 skipped** (was 2593/39 on master → **+48**: 6 new in `skills-bank-statement-tool.test.ts`
+[C1×5 + C5×1] + 42 in the new `tests/unit/money.test.ts` [T4]); `npm run typecheck` + `npm run build` green.
+- **C1 (Med-High, the headline) — `reconcileBalances` no longer breaks the running-balance chain across a
+  balance-less row.** A mid-statement row with a real `amount` but no printed `balanceAfter` (same-day grouping —
+  the bank prints the balance only on the day's last line — or an OCR-dropped balance cell) used to be dropped
+  from the chain, so the next balance-bearing row computed `prevBalance + thisAmount` OMITTING the gap amount → a
+  FALSE `mismatch` → `assessCompleteness` → `contradicted` → a correct, verifiable total **withheld from the
+  user**. **Fix:** a `sinceLastPrinted` cents accumulator — the gap row stays `unknown` (it prints no balance to
+  check) but its amount folds into the next printed balance's expected value, reset on each printed balance,
+  discarded at the baseline. `amount` is required on every row, so the chain is never "genuinely broken" by a
+  missing amount → no revert-to-`unknown` branch (the audit's conditional is vacuous; documented in the
+  docstring). A real read error still surfaces as a `mismatch`. The normal 2-figure de-AT row + the HVB
+  no-balance listing are byte-identical (re-asserted). (`bank-statement.ts reconcileBalances`; arch §8 +
+  known-limitations LINE PARSER.)
+- **C5 (Low) — zero-amount classified consistently.** `summarizeCashflow` now uses `> 0` inflow / `< 0` outflow
+  (a `0.00` row is neither), matching `categorizeRow`'s `Uncategorized` fallback. Output is unchanged (the figure
+  is zero) — a convention-consistency fix; the test pins the convention rather than going RED.
+- **T4 (Low-Med, §4 testing gap) — new `tests/unit/money.test.ts`** (42 offline table tests) covers the
+  money/date/CSV primitives in isolation (apostrophe+decimal `parseAmount` + 2-dp invariant, `MONEY_RE` token
+  boundaries, `detectCurrency`/`detectDocumentCurrency`, `inferDateOrder`/`parseDate`/`splitLeadingDates`/
+  `stripDateTokens`, `wordIncludes` strict-vs-compound repeated-needle, `csvField` formula-lead × quote × CRLF).
+- **Report carry (process note):** `audits/full-audit-2026-06-30.md` is NOT on master (it was authored on the
+  Phase G branch), so Phase A carried it in via `git checkout audit-2026-06-30-phaseG-docs -- audits/…` to add the
+  C1/C5/T4 ✅ dispositions. Expect a trivial **add/add** resolution when both branches merge — take the
+  most-dispositioned copy (this Phase A version is a superset on the C1/C5/T4 lines). The report is NOT retired
+  (phases B–F open).
+- **NEXT ACTION (owner): review/merge `audit-2026-06-30-phaseA-financial`; do NOT auto-merge/push.** Remaining
+  open phases of `audits/full-audit-2026-06-30.md`: B (perf P1/P2 + P6/M1), C (reliability R1 + latent R2–R7),
+  D (renderer F1 + F2–F8), E (security S1 decision/S2/S3), F (test robustness T1–T3 + T5–T7; T4 already done
+  here). Suggested order B → C → F → D → E._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 8 (MAINTAINABILITY + SECURITY HARDENING + DOCS CLOSE-OUT) —
 branch `audit-followup-phase8-closeout` (unmerged; do NOT auto-merge/push). THE FINAL PHASE — the round is
 COMPLETE.** Clears the structural debt, lands the one small security hardening + the first-run notice, re-affirms
