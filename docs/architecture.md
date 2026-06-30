@@ -150,9 +150,14 @@ batching — no behavior change.
 - **RAG-2/ING-1 — decode doc-B once.** Section-matched compare (mode b) ran `VectorIndex.search` per
   doc-A chunk, re-issuing the doc-B embeddings query and re-decoding every doc-B vector each time
   (O(N_A × N_B) redundant decodes + N_A re-scans), then re-fetched doc-B's text per window. Doc-B's
-  `(id, text, chunk_index, vector)` is now loaded **once** into a resident array; cosine runs in memory
-  via a local `nearestB()` reproducing the search ranking. Mirrors the `alignNodes` precedent
-  (`doctasks/compare.ts`).
+  `(id, text, chunk_index, vector)` is now loaded **once** into a resident array; the ranking runs in
+  memory. Mirrors the `alignNodes` precedent (`doctasks/compare.ts`).
+- **P1 (full-audit-2026-06-30) — `dotProduct` + running top-K.** The in-memory neighbor scan is now the
+  pure, exported **`compareNearestNeighbors`** (`doctasks/compare.ts`) using `dotProduct` (stored vectors
+  are L2-normalized → cosine == dot, the same RAG-1 fast path `VectorIndex.search` uses; ~2× fewer FLOPs)
+  + a running top-K instead of a full `sort().slice()` per A-chunk. Byte-identical selection to the old
+  cosine-sort-slice (equivalence-tested in `tests/unit/compare-nearest-neighbors.test.ts`); ~2.2× faster
+  on a 1000×1000 compare. See the Phase B note in the Wave-P4 performance record.
 
 **Chat runtime (`services/runtime/`).**
 - **RT-1 — chat prefill batch.** The chat sidecar left `--batch-size`/`--ubatch-size` at llama-server's
@@ -427,7 +432,8 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   `dotProduct` helper replaces `cosineSimilarity` in `VectorIndex.search`, dropping the two per-row
   norm accumulators (~2× fewer FLOPs/row); ranking is identical to floating-point tolerance (asserted
   by a test). **The off-main-thread / ANN scan stays Wave P4** (the documented D15 deferral) — this is
-  only the constant-factor slice.
+  only the constant-factor slice. *(full-audit-2026-06-30 P1 later extended this same dotProduct +
+  running-top-K fast path to the compare pairing — see the Phase B note in the Wave-P4 record below.)*
 
 Implemented in Wave P4 (below): the per-query BLOB re-read + re-decode (RAG-1/RAG-6 beyond the dot
 product). Still deferred from P2: Composer/`input` move, `DocRow` extraction, FE-5 windowing.
@@ -479,7 +485,11 @@ PERF-1 note below; the original mechanism descriptions are folded into the three
   hook (a direct SQL / out-of-band writer — e.g. test seeding), the dirty flag is clear yet the signature
   mismatches → **fall back to a FULL REBUILD**. `MAX(rowid)` is O(1) (rightmost btree leaf) and `COUNT(*)`
   a fast index count — negligible vs the scan they gate. This is the path that makes a missed/buggy
-  incremental update self-heal on the next query; it is also the cold first build.
+  incremental update self-heal on the next query; it is also the cold first build. **The `COUNT(*)` is
+  load-bearing and RETAINED** (full-audit-2026-06-30 P6 considered dropping it but DEFERRED): an
+  out-of-band DELETE of a non-max-rowid row leaves `MAX(rowid)` unchanged, so only `COUNT(*)` detects it
+  (a tested guarantee). A `COUNT`-free clean path would need a DB-side counter (a trigger = a schema
+  change).
 - **Security (lock):** `purgeResidentVectors(db)` drops the map outright on workspace LOCK
   (`registerWorkspaceIpc`, beside the embedder's `suspend()`). Distinct from `invalidate` (which only
   marks dirty): the vectors are derived from chunk text and must not linger in main-process RAM after the
@@ -545,6 +555,40 @@ drive) still blocks — the narrowed remaining D15 cliff.
   is against the no-native-build / portable cross-OS packaging posture that put the embedder in a
   llama.cpp sidecar rather than `onnxruntime-node` (D15's reasoning). Not adopted; a pure-JS HNSW would
   be reconsidered only if a linear scan over the resident buffer (even off-thread) still bites.
+
+**Phase B (full-audit-2026-06-30, P1 + P2) — the residual row-marshal + the compare quadratic, both
+behavior-preserving (equivalence-tested, teeth-checked). No schema/IPC/audit-payload change.**
+- **P2 — resident-map iteration on the unscoped path (`embeddings/index.ts`).** The PERF-1/F12 cache
+  killed the per-query BLOB read, but the scan still ran `SELECT chunk_id FROM embeddings WHERE …` and
+  materialized **one JS row object per in-scope chunk** before the dot-product loop. `VectorIndex.search`
+  now splits into `collectResidentHits` (fast) and `collectScopedHits` (the **unchanged** scoped SQL
+  scan), sharing the determinism sort. When there is no document/collection scope AND the archived
+  exclusion removes nothing, the fast path **iterates the resident map directly** (no `SELECT chunk_id`,
+  no transient rows). Two equivalence subtleties are handled exactly: (1) the resident map holds chunks
+  under *all* model ids (a transient mock→real migration mix), so the cache now also keeps a
+  **`modelByChunk`** map (chunkId → `embedding_model_id`, same key set as `byChunk`, maintained in
+  `build` + both reconcile paths) and the fast path replicates `WHERE embedding_model_id = ?` in memory;
+  (2) **archiving keeps embeddings**, so archived chunks are resident — the gate `canIterateResident()`
+  takes the fast path only when there is no scope union AND (`includeArchived` OR no archived docs exist,
+  a cheap `documents`-table probe), else the scoped scan runs byte-unchanged. Result is byte-identical to
+  the scoped scan over the same universe (`tests/integration/vector-search-resident-iteration.test.ts`:
+  unscoped == all-docs-scoped, hit-for-hit; a `db.prepare` spy confirms the marshal is gone). Measured
+  **~5× / query** at 10k–50k chunks (CI-gated `tests/manual/phaseB-perf-bench.test.ts`).
+- **P1 — `dotProduct` + running top-K in the compare pairing (`doctasks/compare.ts`).** Section-matched
+  compare (mode b) scored *every* doc-B vector with `cosineSimilarity` + a full per-A-chunk
+  `sort().slice(topK)` — O(N_A·N_B·dim) + N_A sorts, a multi-second main-thread freeze at ~1000 chunks/
+  side. The inline `nearestB` is now the pure, exported **`compareNearestNeighbors`** using `dotProduct`
+  (the same RAG-1 unit-vector fast path `VectorIndex` uses — stored vectors are L2-normalized, so
+  cosine == dot) + a **running top-K** (descending score, ties broken by doc-B `chunk_index` order). The
+  running top-K is byte-identical to a stable dot-sort + slice; on normalized vectors the dot ranking
+  equals the old cosine ranking (`tests/unit/compare-nearest-neighbors.test.ts` proves both links).
+  Measured **2.2×** on a synthetic 1000×1000 compare. Mode-(c) `alignNodes` (node-vector cosine) is out
+  of scope and unchanged.
+- **P6 — DEFERRED (the companion).** Dropping the per-search `(COUNT(*), MAX(rowid))` staleness signature
+  to a `MAX(rowid)`-only backstop would let an out-of-band DELETE of a non-max-rowid row go undetected
+  (a tested guarantee — `resident-cache.test.ts` "reflects a direct DELETE"); a safe O(1) row-count that
+  survives out-of-band writes needs a DB-side counter (a trigger = a schema change). So the `COUNT(*)` is
+  RETAINED. See the audit report's P6 disposition.
 
 ## Performance — design record (perf audit 2026-06-18, Wave P5)
 Three remaining Medium findings on hot/felt paths, all bounded and **behavior-preserving**.

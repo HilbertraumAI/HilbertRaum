@@ -1,6 +1,6 @@
 import { extname } from 'node:path'
 import { approxTokenCount, windowByTokens } from '../ingestion/chunker'
-import { cosineSimilarity } from '../embeddings'
+import { cosineSimilarity, dotProduct } from '../embeddings'
 import { SUMMARY_TOKENS_PER_WORD } from './summary'
 
 // Compare window math + templates (split out of the former monolithic doctasks.ts —
@@ -165,6 +165,51 @@ export function planCompareWindows(chunks: CompareChunkRef[], contextTokens: num
     pairBudgetWords,
     stepsTotal: kept.length + 2
   }
+}
+
+/** One doc-B candidate for mode-(b) neighbor selection (id + its stored, L2-normalized vector). */
+export interface CompareCandidate {
+  id: string
+  vec: Float32Array
+}
+
+/**
+ * Top-`topK` doc-B neighbors of one doc-A vector, scored against the pre-decoded doc-B vectors
+ * (mode (b); pure + unit-testable). Ranking is by DESCENDING similarity, ties broken by the
+ * candidates' iteration order (i.e. doc-B `chunk_index` order — the order `bChunks` is built in).
+ *
+ * PERF / EQUIVALENCE (P1, full-audit-2026-06-30):
+ *   • Score is the raw `dotProduct`, NOT `cosineSimilarity`. Every stored chunk vector is already
+ *     **L2-normalized** (`e5.ts` `l2normalize`, the mock embedder too), so for unit vectors
+ *     `cosine = dot/(‖a‖·‖b‖) = dot`; the ranking is identical to cosine at ~2× fewer FLOPs. This
+ *     is the SAME fast path `VectorIndex.search` already uses (RAG-1). Do NOT use on un-normalized
+ *     vectors.
+ *   • A bounded running top-K replaces the previous `hits.sort((x,y)=>y.score-x.score).slice(0,topK)`
+ *     — byte-IDENTICAL output (a stable descending sort + slice: an equal-or-lower LATER candidate
+ *     never displaces an earlier one in the kept set) without allocating + sorting all N_B
+ *     candidates once per doc-A chunk (the `N_A·N_B·log N_B` term).
+ * Length-mismatched candidates are skipped (a stray dimension never reaches `dotProduct`).
+ */
+export function compareNearestNeighbors(
+  bChunks: readonly CompareCandidate[],
+  vec: Float32Array,
+  topK: number
+): Array<{ chunkId: string; score: number }> {
+  const top: Array<{ chunkId: string; score: number }> = []
+  for (const b of bChunks) {
+    if (b.vec.length !== vec.length) continue
+    const score = dotProduct(vec, b.vec)
+    // Full set + this score can't beat the current worst ⇒ a stable sort would place it AFTER the
+    // kept top-K (equal scores keep insertion order), so it is sliced off: skip it.
+    if (top.length >= topK && score <= top[top.length - 1].score) continue
+    // Insert keeping `top` sorted descending; stop just AFTER all entries with score ≥ this one so
+    // equal scores preserve insertion order (stable). Then trim the worst if we overflow topK.
+    let i = top.length
+    while (i > 0 && top[i - 1].score < score) i--
+    top.splice(i, 0, { chunkId: b.id, score })
+    if (top.length > topK) top.pop()
+  }
+  return top
 }
 
 const COMPARE_SYSTEM_PROMPT_TEXT =
