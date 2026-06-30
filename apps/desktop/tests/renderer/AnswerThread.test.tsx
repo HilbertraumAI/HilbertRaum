@@ -13,7 +13,7 @@ const noop = (): void => {}
 
 function renderThread(answer: string, state: ImageTurn['state'] = 'done'): void {
   const turn: ImageTurn = { id: 't1', question: 'What is in this image?', answer, state, error: null }
-  render(<AnswerThread turns={[turn]} onCopy={noop} onTryAgain={noop} onStop={noop} />)
+  render(<AnswerThread turns={[turn]} onCopy={noop} onTryAgain={noop} onStop={noop} busy={false} />)
 }
 
 describe('AnswerThread — markdown rendering', () => {

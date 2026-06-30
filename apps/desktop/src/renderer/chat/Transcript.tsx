@@ -106,6 +106,11 @@ export const Transcript = memo(function Transcript({
     return undefined
   }, [messages])
 
+  // localizeServerCopy is an O(n) Map-lookup + two regex .exec over the WHOLE growing buffer; it
+  // was run TWICE per ~40 ms flush (visible bubble + StreamAnnouncer). Compute it once and feed
+  // both — behavior identical, half the work on the CPU-bound streaming path (perf audit F2).
+  const localizedStream = useMemo(() => localizeServerCopy(t, streamText), [t, streamText])
+
   return (
     <div className="chat-transcript" ref={scrollRef} onScroll={onScroll}>
       <div className="chat-transcript-inner">
@@ -188,12 +193,12 @@ export const Transcript = memo(function Transcript({
                   too. The visible text is NOT a live region (audit L7) — announcement is delegated to
                   the separate sentence-throttled StreamAnnouncer below. */}
               <div className="msg-content">
-                {localizeServerCopy(t, streamText)}
+                {localizedStream}
                 <span className="cursor" aria-hidden="true">
                   ▋
                 </span>
               </div>
-              <StreamAnnouncer text={localizeServerCopy(t, streamText)} />
+              <StreamAnnouncer text={localizedStream} />
             </div>
           </div>
         )}
@@ -373,7 +378,16 @@ function roleLabel(role: string, t: I18n['t']): string {
  * announce the stable prefix up to that boundary and remember how far we've gone, so the
  * trailing in-progress sentence is held back until it completes. Markdown markup is
  * stripped to a rough plain-text form so the reader doesn't voice "asterisk asterisk".
+ *
+ * F6 (a11y fallback): a table-only or very long run-on answer can go a long time with no sentence
+ * terminator, leaving the announcer silent until completion. When the UNANNOUNCED tail grows past a
+ * soft cap with no new terminator, we flush up to the last WORD boundary instead, so AT still hears
+ * progress. (A pure code block is stripped to ~nothing by stripMarkdown — voicing code punctuation
+ * is worse a11y than silence — so that case stays intentionally quiet; the surrounding prose still
+ * announces. Recorded as an accepted residual in known-limitations.)
  */
+const ANNOUNCE_SOFT_CAP = 160
+
 export function StreamAnnouncer({ text }: { text: string }): JSX.Element {
   const announcedLenRef = useRef(0)
   const [announced, setAnnounced] = useState('')
@@ -385,9 +399,14 @@ export function StreamAnnouncer({ text }: { text: string }): JSX.Element {
       setAnnounced('')
       return
     }
-    // Find the last completed-sentence boundary in the current buffer.
-    const boundary = lastSentenceBoundary(text)
-    if (boundary <= announcedLenRef.current) return
+    // Prefer the last completed-sentence boundary; if none is new, fall back to a word boundary once
+    // the unannounced tail is long enough (F6) so a terminator-less answer isn't held silent.
+    let boundary = lastSentenceBoundary(text)
+    if (boundary <= announcedLenRef.current) {
+      if (text.length - announcedLenRef.current < ANNOUNCE_SOFT_CAP) return
+      boundary = lastWordBoundary(text, announcedLenRef.current)
+      if (boundary <= announcedLenRef.current) return
+    }
     const next = stripMarkdown(text.slice(announcedLenRef.current, boundary)).trim()
     announcedLenRef.current = boundary
     if (next !== '') setAnnounced(next)
@@ -402,6 +421,18 @@ export function StreamAnnouncer({ text }: { text: string }): JSX.Element {
       {announced}
     </div>
   )
+}
+
+/**
+ * F6 fallback: index just past the last whitespace in the unannounced tail (so we announce only
+ * complete words and hold back the trailing partial). A single unbroken token past the cap returns
+ * `text.length` — flush it whole rather than stall the announcer forever.
+ */
+function lastWordBoundary(text: string, from: number): number {
+  for (let i = text.length - 1; i > from; i--) {
+    if (/\s/.test(text[i]!)) return i + 1
+  }
+  return text.length
 }
 
 /** Index just past the last sentence terminator (. ! ? … or newline); 0 if none yet. */

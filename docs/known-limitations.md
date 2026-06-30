@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-29 (full-audit-2026-06-29 Phase 2 — runtime reliability: whisper SIGKILL escalation + bounded teardown (REL-2) extended the audio-transcription watchdog bullet; the REL-1 port-race retry and REL-3 abort-aware slot handoff are recorded in the architecture.md GPU/runtime + doc-task records). Prior 2026-06-29: Phase 1 — financial correctness: space-disambiguated sign reading (BL-1), figure-region per-row currency (BL-2), German closed-compound categorization (BL-3); extended the bank/invoice line-parser + categorizer bullets under "Document tasks & summaries"). Prior: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6)._
+_Last updated: 2026-06-30 (full-audit-2026-06-30 Phase D — renderer lifecycle & a11y: added the pure-code-block StreamAnnouncer a11y residual (F6) to "Accessibility" and the self-healing optimistic "Try again" slice (F7) to "Engineering trade-offs"; the F1–F8 dispositions live in architecture.md "Renderer robustness" Phase D). Prior: 2026-06-29 (full-audit-2026-06-29 Phase 2 — runtime reliability: whisper SIGKILL escalation + bounded teardown (REL-2) extended the audio-transcription watchdog bullet; the REL-1 port-race retry and REL-3 abort-aware slot handoff are recorded in the architecture.md GPU/runtime + doc-task records). Prior 2026-06-29: Phase 1 — financial correctness: space-disambiguated sign reading (BL-1), figure-region per-row currency (BL-2), German closed-compound categorization (BL-3); extended the bank/invoice line-parser + categorizer bullets under "Document tasks & summaries"). Prior: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -222,6 +222,15 @@ password recovery — are documented in
   viewport is laid out — with none (e.g. a unit test rendering the screen standalone) the list renders every
   row. The trade-off is **deliberately not** applied to the chat transcript (its scroll-to-bottom /
   find-in-page / StreamAnnouncer behavior keeps it un-windowed for now).
+- **Chat "Try again" optimistically drops the last answer before regenerating; it self-heals, never
+  data loss (full-audit-2026-06-30 F7 — accepted).** `ChatScreen.onTryAgain` slices the last
+  assistant turn from the view before calling `stream(...)`, so the regenerate looks immediate. If the
+  regenerate IPC throws *before* the backend mutates, or the user switched conversations, that answer
+  is briefly missing from the view while the DB still holds it. It is restored without any manual
+  action: `stream`'s `catch` re-reads `listMessages(convId)` in place when the user stayed on the
+  conversation, and the `activeId`-change effect re-reads on return when they switched away. Deferring
+  a "defer the slice / force-refresh on failure" change keeps the immediate optimistic feedback.
+  (architecture.md "Renderer robustness" Phase D.)
 - **The session-boundary DB unlock/lock decrypt is still synchronous (PERF-1 scope; [`architecture.md`](architecture.md)
   §35).** The per-**import** document-cache crypto was made async (yields between 8 MiB chunks, so a large
   import no longer freezes the main process). The whole-DB decrypt on unlock / encrypt on lock — once per
@@ -915,3 +924,11 @@ as-is, with reasons:
   `instanceof`. The wrong-password mapping now also matches `err.name`; other duplications
   are benign (pure functions). Root cause in electron-vite/rollup module ids — not chased
   in this phase.
+- **A pure-code-block streamed answer announces nothing to screen readers until completion
+  (full-audit-2026-06-30 F6 — accepted).** The streaming `StreamAnnouncer` (a visually-hidden
+  `role="log"`) feeds AT only completed sentences, falling back to a word boundary once a
+  terminator-less tail grows past a soft cap (so tables / lists / run-on prose now announce
+  incrementally). But `stripMarkdown` collapses code/markup to spaces, so an answer that is **only**
+  a fenced code block strips to ~nothing and stays quiet until the final turn re-renders — voicing
+  code punctuation token-by-token is worse a11y than silence. Any surrounding prose still announces
+  normally; the visible bubble shows the code in full. (architecture.md "Renderer robustness" Phase D.)

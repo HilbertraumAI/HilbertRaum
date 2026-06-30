@@ -637,9 +637,19 @@ export function ChatScreen({
   // store the single best offer (or null). `Promise.resolve` + optional chaining keep it inert when
   // the IPC is absent or a test stub returns nothing — it never throws inside the debounce timer.
   function refreshSuggestion(convId: string, draft: string): void {
+    // FE-1/F3: this resolves after a ~400 ms debounce + the main-side scoring round-trip, by which
+    // time the user may have navigated away or switched conversations. Apply the result only if we
+    // are still mounted AND still on the conversation it was computed for — otherwise a late reply
+    // setStates a dead component or stamps a stale-conversation suggestion. (`activeIdRef` tracks
+    // the live id; `convId` is '' for a still-"new" draft, matching `activeId ?? ''` at call time.)
+    const applies = (): boolean => mountedRef.current && (activeIdRef.current ?? '') === convId
     void Promise.resolve(window.api.suggestSkills?.(convId, draft))
-      .then((s) => setSkillSuggestion(s?.[0] ?? null))
-      .catch(() => setSkillSuggestion(null))
+      .then((s) => {
+        if (applies()) setSkillSuggestion(s?.[0] ?? null)
+      })
+      .catch(() => {
+        if (applies()) setSkillSuggestion(null)
+      })
   }
 
   // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — a refresh

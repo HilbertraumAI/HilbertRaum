@@ -291,4 +291,44 @@ describe('friendly failures (§11.4)', () => {
     // (The unmount cleanup's onRecording(null, false) wave-clear is expected and fine.)
     expect(onRecording.mock.calls.some(([, recording]) => recording === true)).toBe(false)
   })
+
+  // F1 (full audit 2026-06-30): the stop side of the same leak. stopAndTranscribe() awaits the
+  // multi-second transcribeDictation IPC, then fires onText(text). If the user stops dictation
+  // and navigates away (or switches conversation) before the transcript returns, an unguarded
+  // onText sets the now-foreign composer's input — the user's words land in a DIFFERENT
+  // conversation. The mountedRef guard (mirroring start()'s F21) must let the IPC finish
+  // harmlessly and never call onText/onError/setState on the dead component.
+  it('does NOT fire onText when transcribeDictation resolves AFTER unmount (F1)', async () => {
+    const user = userEvent.setup()
+    // The transcribe IPC is parked until we release it explicitly — AFTER unmount.
+    let resolveTranscribe!: (text: string) => void
+    stubApi({
+      transcribeDictation: vi.fn(
+        () =>
+          new Promise<string>((res) => {
+            resolveTranscribe = res
+          })
+      )
+    })
+    const { start } = fakeCapture()
+    const onText = vi.fn()
+    const onError = vi.fn()
+    const { unmount } = render(
+      <DictationButton onText={onText} onError={onError} captureImpl={start} />
+    )
+
+    await user.click(micButton()) // start recording
+    await user.click(await screen.findByRole('button', { name: /stop dictation/i })) // stop → transcribe (parked)
+    expect(resolveTranscribe).toBeDefined()
+
+    unmount() // navigate away while the transcript is still in flight
+
+    // The IPC now resolves on the unmounted component — must be swallowed silently.
+    await act(async () => {
+      resolveTranscribe('leaked into another conversation')
+    })
+
+    expect(onText).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+  })
 })

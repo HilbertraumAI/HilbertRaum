@@ -41,13 +41,16 @@ const TurnRow = memo(function TurnRow({
   t,
   onCopy,
   onTryAgain,
-  onStop
+  onStop,
+  busy
 }: {
   turn: ImageTurn
   t: I18n['t']
   onCopy: (text: string) => void
   onTryAgain: (question: string) => void
   onStop: () => void
+  /** True while ANY turn is analyzing — vision is one-at-a-time, so a per-turn re-run is rejected. */
+  busy: boolean
 }): JSX.Element {
   const running = turn.state === 'starting' || turn.state === 'analyzing'
   return (
@@ -95,7 +98,10 @@ const TurnRow = memo(function TurnRow({
               <Button size="sm" onClick={() => onCopy(turn.answer)}>
                 {t('images.answer.copy')}
               </Button>
-              <Button size="sm" onClick={() => onTryAgain(turn.question)}>
+              {/* F4: vision is one-at-a-time. Disable "Try again" while any turn is analyzing,
+                  mirroring the disabled QuestionComposer, so the re-run is never silently dropped
+                  (the backend busy-rejects it). Copy stays live — it's a harmless read. */}
+              <Button size="sm" disabled={busy} onClick={() => onTryAgain(turn.question)}>
                 {t('images.answer.tryAgain')}
               </Button>
             </div>
@@ -110,18 +116,29 @@ export function AnswerThread({
   turns,
   onCopy,
   onTryAgain,
-  onStop
+  onStop,
+  busy
 }: {
   turns: ImageTurn[]
   onCopy: (text: string) => void
   onTryAgain: (question: string) => void
   onStop: () => void
+  /** True while a turn is analyzing — disables the per-turn "Try again" (vision is one-at-a-time). */
+  busy: boolean
 }): JSX.Element {
   const { t } = useT()
   return (
     <div className="image-thread">
       {turns.map((turn) => (
-        <TurnRow key={turn.id} turn={turn} t={t} onCopy={onCopy} onTryAgain={onTryAgain} onStop={onStop} />
+        <TurnRow
+          key={turn.id}
+          turn={turn}
+          t={t}
+          onCopy={onCopy}
+          onTryAgain={onTryAgain}
+          onStop={onStop}
+          busy={busy}
+        />
       ))}
     </div>
   )
