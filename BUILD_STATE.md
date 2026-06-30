@@ -7,16 +7,51 @@
 
 
 _2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — Phases G + A MERGED to LOCAL master
-(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`); Phases B, C, F COMPLETE on UNMERGED
+(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`); Phases B, C, F, D COMPLETE on UNMERGED
 STACKED branches — master ← B (`audit-2026-06-30-phaseB-perf`) ← C (`audit-2026-06-30-phaseC-reliability`) ←
-F (`audit-2026-06-30-phaseF-tests`); awaiting owner review/merge of the stack — do NOT auto-merge/push.** The
-report is on master with D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A) dispositioned ✅; the Phase-B branch adds
-P1/P2 ✅ + P6 ⏸; the Phase-C branch adds R1–R7 ✅; the Phase-F branch adds T1–T3 ✅ + T5–T7 ✅ (T4 was in Phase A).
-It is NOT retired (phases **D, E remain open** — suggested order **D → E**). Suite **2673 passed / 41 skipped**
-on the Phase-F branch (Phase-C baseline 2669/41 → **+4**: T3 ×2 rollback + T7 ×2 SSRF; T1/T2/T6 de-flakes at the
-same count); typecheck + `npm run build` green; two consecutive full runs identical. **NEXT ACTION = owner
-review/merge of the stack (G + A already merged; then B, then C, then F).** Per-phase detail below (Phase F,
-then C, then B, then A, then G)._
+F (`audit-2026-06-30-phaseF-tests`) ← D (`audit-2026-06-30-phaseD-renderer`); awaiting owner review/merge of the
+stack — do NOT auto-merge/push.** The report is on master with D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A)
+dispositioned ✅; the Phase-B branch adds P1/P2 ✅ + P6 ⏸; the Phase-C branch adds R1–R7 ✅; the Phase-F branch
+adds T1–T3 ✅ + T5–T7 ✅ (T4 was in Phase A); the Phase-D branch adds F1–F8 ✅ (renderer-only). It is NOT retired
+(phase **E remains open**). Suite **2677 passed / 41 skipped** on the Phase-D branch (Phase-F baseline 2673/41 →
+**+4**: F1 + F4 + F6 + F8; F2/F3 guards + F5/F7 deferrals at the same count); typecheck + `npm run build` green.
+**NEXT ACTION = owner review/merge of the stack (G + A already merged; then B, then C, then F, then D).** Per-phase
+detail below (Phase D, then F, then C, then B, then A, then G)._
+
+
+_2026-06-30 — **Full audit — Phase D (RENDERER LIFECYCLE & A11Y; F1–F8) — branch
+`audit-2026-06-30-phaseD-renderer` (STACKED on `audit-2026-06-30-phaseF-tests`; UNMERGED; do NOT
+auto-merge/push). RENDERER-ONLY** — `git diff` touches only `apps/desktop/src/renderer/**` + `tests/renderer/**`;
+no main-process, IPC, schema, or i18n change (the one busy banner reuses the existing `images.err.busy` key).
+Each fix is independently revertible; F1/F4/F6/F8 are teeth-checked (neuter → red → restore). Suite **2677 passed
+/ 41 skipped** (Phase-F 2673/41 → **+4**); `npm run typecheck` + `npm run build` green. Durable record:
+architecture.md "Renderer robustness — design record" **Phase-D subsection** (extends the FE-4 mountedRef family).
+- **F1 (Medium — the ONE real bug) — dictation text could leak into another conversation.**
+  `DictationButton.stopAndTranscribe()` awaited the multi-second `transcribeDictation` IPC then fired
+  `onText(text)`/`onError`/`setState` with no mountedRef check (only `start()` was F21-guarded). Stop-then-navigate
+  leaked the transcript into whatever composer is now mounted. Fix: `if (!mountedRef.current) return` before
+  `onText`/`onError` and the `finally` `setState` — IPC completes harmlessly, dead component untouched.
+- **F2/F3 (Low, guards) —** F2 memoizes `localizeServerCopy` (one compute feeds the visible bubble + the
+  `StreamAnnouncer`, was twice/flush); F3 gates the proactive skill-suggestion debounce on
+  `mountedRef.current && (activeIdRef.current ?? '') === convId` (no stale-conversation suggestion / dead setState).
+- **F4 (Low-Med) — ImagesScreen "Try again" no longer silently swallowed while a turn streams.** A `busy`
+  (= `analyzing`) prop disables the per-turn "Try again" (Copy stays live), AND `analyze()` now returns
+  `'started'|'busy'|'noop'` so `runAnalyze` surfaces `images.err.busy` if a click still reaches the busy guard.
+- **F6 (Low, a11y) — `StreamAnnouncer` length fallback added.** Past `ANNOUNCE_SOFT_CAP` (160) with no sentence
+  terminator it flushes to the last WORD boundary, so tables/lists/run-on prose announce incrementally; a pure
+  code block stays intentionally quiet (`stripMarkdown` removes code) — accepted residual in known-limitations.
+- **F8 (Low, hypothesis → CONFIRMED reachable, FIXED) — superseded vision analyze no longer wires a zombie
+  stream.** The busy guard covers only `activeJobId`, set AFTER the `imageAnalyze` create round-trip, so a slow
+  round-trip + image-switch + re-analyze left two analyzes both awaiting it; the slower wired a stream its late
+  done/error tore down over the newer job. Fix: per-call `analyzeGen` (bumped by `abortActive`/`clearVisionSession`)
+  → a superseded call cancels its orphan job and bails without wiring; per-handler `jobId === activeJobId` checks.
+- **F5 / F7 — DEFERRED (accepted).** F5 (Composer per-keystroke reflow) left as-is — single textarea, imperceptible;
+  rAF adds risk for no gain. F7 (regenerate optimistic slice) verified self-healing — `stream`'s `catch`
+  `refreshIfVisible()` restores in place, the `activeId` effect restores on return; no manual re-select needed.
+  Both recorded in known-limitations.
+- **Scope:** `chat/DictationButton.tsx`, `chat/Transcript.tsx`, `images/AnswerThread.tsx`, `lib/visionSession.ts`,
+  `screens/ChatScreen.tsx`, `screens/ImagesScreen.tsx` (6 src) + 4 renderer tests modified + 1 new
+  (`tests/renderer/visionSession.test.ts`). F1–F8 marked ✅ in the report; phase E remains open; report NOT retired._
 
 
 _2026-06-30 — **Full audit — Phase F (TEST-SUITE ROBUSTNESS; T1–T3 + T5–T7 dispositions) — branch

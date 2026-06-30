@@ -218,6 +218,30 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
     ).toBeInTheDocument()
   })
 
+  // F4 (full audit 2026-06-30): vision is one-at-a-time. A prior turn's "Try again" used to stay
+  // clickable while a different turn streamed, and analyze() then early-returned silently on the
+  // busy job — the click vanished with no answer and no feedback. The trigger must now disable.
+  it('disables a prior turn’s "Try again" while another analysis is in flight (F4)', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    stubApi({ ...s.api, ...pickStubs() } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await selectImageViaPicker(user)
+
+    // First analysis → done: its turn shows an ENABLED "Try again".
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.done.fn).toBeDefined())
+    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'A receipt.' }))
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled()
+
+    // Start a SECOND analysis (the composer is free again). The prior turn's "Try again" must go
+    // disabled — the click can no longer be silently swallowed by the busy backend.
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'And this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled())
+  })
+
   it('maps an empty model response to the friendly empty-response copy', async () => {
     const user = userEvent.setup()
     const s = streamStubs()

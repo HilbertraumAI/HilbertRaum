@@ -65,6 +65,32 @@ describe('StreamAnnouncer (L7)', () => {
     expect(screen.getByRole('log').textContent).toBe('Use bold and here.')
   })
 
+  // F6 (full audit 2026-06-30, a11y): a long answer with no sentence terminator yet (a table, a
+  // list, a run-on) would otherwise stay silent until completion. Past a soft cap the announcer
+  // flushes complete words at the last word boundary, holding back the in-progress final word.
+  it('falls back to a word boundary for a long answer with no sentence terminator (F6)', () => {
+    function LongHarness(): JSX.Element {
+      const [text, setText] = useState('')
+      // ~210 chars of words, NO . ! ? … or newline, plus a trailing partial word.
+      const longNoTerminator = 'word '.repeat(40) + 'tailpartial'
+      return (
+        <>
+          <button onClick={() => setText(longNoTerminator)}>long</button>
+          <StreamAnnouncer text={text} />
+        </>
+      )
+    }
+    render(<LongHarness />)
+    const region = screen.getByRole('log')
+    expect(region).toBeEmptyDOMElement()
+
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'long' })))
+    // It announced SOMETHING (the sentence-only path would have stayed silent — the teeth).
+    expect((region.textContent ?? '').length).toBeGreaterThan(0)
+    // The trailing partial word is held back (announced only up to a word boundary).
+    expect(region.textContent).not.toContain('tailpartial')
+  })
+
   it('resets when a new, shorter stream replaces the old one', () => {
     render(<Harness initial="A long first answer. Done." />)
     const region = screen.getByRole('log')

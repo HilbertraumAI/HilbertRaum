@@ -17,6 +17,13 @@ import type { DecodedImage, ImageTurn } from '../images'
 // calls `clearVisionSession()` so this resident content is dropped in lockstep with main purging
 // the vision job map and re-encrypting the vault.
 
+/**
+ * Result of an `analyze()` call: `started` once a turn is created (the answer streams into it, or
+ * the turn shows its own failure), `busy` when one is already in flight (the caller surfaces
+ * `images.err.busy`), `noop` when there is no image or an empty question (no feedback owed). F4.
+ */
+export type AnalyzeOutcome = 'started' | 'busy' | 'noop'
+
 /** The loaded image plus its display metadata (held across navigation by this store). */
 export interface SelectedImage {
   decoded: DecodedImage
@@ -52,6 +59,14 @@ let activeTurnId: string | null = null
 /** Live stream unsubscribers for the active job; emptied on teardown. */
 let unsubs: Array<(() => void) | undefined> = []
 let turnCounter = 0
+// F8: the busy guard rejects a second analyze only once `activeJobId` is set — but that isn't set
+// until AFTER the `imageAnalyze` create round-trip resolves. In the window before it, a session
+// change (a new image, Remove, a lock) followed by a fresh analyze can leave two analyzes both
+// awaiting `imageAnalyze`; the slower one would then wire a ZOMBIE stream that its own late
+// done/error tears down over the newer job. Each analyze captures this generation; a session change
+// bumps it, so a superseded call detects it after the await and bails (cancelling its orphan job)
+// instead of wiring. The per-handler `job.jobId === snapshot.activeJobId` checks are belt-and-braces.
+let analyzeGen = 0
 const listeners = new Set<() => void>()
 /** Fired when a turn completes + persists, so a mounted screen can refresh its history list. */
 const persistListeners = new Set<() => void>()
@@ -93,6 +108,9 @@ function abortActive(): void {
   if (snapshot.activeJobId) {
     void window.api?.imageCancel?.(snapshot.activeJobId)?.catch?.(() => {})
   }
+  // F8: a session-replacing action invalidates any analyze still inside its `imageAnalyze` await,
+  // so the orphan can't wire after the snapshot reset below.
+  analyzeGen += 1
   teardownStream()
 }
 
@@ -141,6 +159,7 @@ export function removeImage(): void {
  * aborted the job and re-encrypted the vault, so the image/answer content must not linger here.
  */
 export function clearVisionSession(): void {
+  analyzeGen += 1 // F8: invalidate any in-flight analyze so a post-lock resolve can't wire content.
   teardownStream()
   snapshot = { ...EMPTY }
   notify()
@@ -161,12 +180,21 @@ export function stopActive(): void {
  * listeners stay alive until the turn settles even if the screen unmounts (navigate-away), so
  * the answer keeps accumulating in the store and is intact on remount.
  */
-export async function analyze(question: string): Promise<void> {
+export async function analyze(question: string): Promise<AnalyzeOutcome> {
   const sel = snapshot.selected
   const q = question.trim()
-  if (!sel || !q || snapshot.activeJobId) return
+  // No image / empty question → nothing to do, no feedback owed. A second analyze while one is
+  // in flight is BUSY — report it so the caller can surface `images.err.busy` instead of letting
+  // the click vanish silently (F4). `analyzing` flips true the moment a turn is created (before
+  // `activeJobId` is set on the imageAnalyze round-trip), so the UI disables the trigger across the
+  // whole window; this guard is the belt-and-suspenders for a click that still reaches here.
+  if (!sel || !q) return 'noop'
+  if (snapshot.activeJobId) return 'busy'
 
   const turnId = nextTurnId()
+  // F8: claim this generation. A session change (abortActive / clearVisionSession) bumps it, so a
+  // slower create round-trip that resolves after the user moved on is detected as superseded below.
+  const myGen = ++analyzeGen
   set({
     turns: [...snapshot.turns, { id: turnId, question: q, answer: '', state: 'starting' }],
     analyzing: true
@@ -184,29 +212,44 @@ export async function analyze(question: string): Promise<void> {
       sessionId: snapshot.sessionId
     })
   } catch {
-    patchTurn(turnId, { state: 'failed', error: 'runtimeFailed' })
-    set({ analyzing: false })
-    return
+    // Only touch the turn/flag if we still own the session — a superseding call already reset it.
+    if (myGen === analyzeGen) {
+      patchTurn(turnId, { state: 'failed', error: 'runtimeFailed' })
+      set({ analyzing: false })
+    }
+    return 'started'
+  }
+
+  // F8: superseded while the create round-trip was in flight (new image / Remove / lock, then this
+  // resolved). The snapshot was reset, so its turn is gone and `analyzing` belongs to the newer
+  // call — do NOT wire a zombie stream a stale done/error could tear down over the new job. Cancel
+  // this now-orphan job main-side and bail.
+  if (myGen !== analyzeGen) {
+    if (job?.jobId) void window.api?.imageCancel?.(job.jobId)?.catch?.(() => {})
+    return 'started'
   }
 
   if (job.error === 'busy' || job.state === 'failed' || job.state === 'cancelled') {
     patchTurn(turnId, { state: 'failed', error: job.error ?? 'runtimeFailed' })
     set({ analyzing: false })
-    return
+    return 'started'
   }
 
   // Main creates the history session on first analyze and returns its id; reuse it for follow-ups.
   activeTurnId = turnId
   set({ activeJobId: job.jobId, sessionId: job.sessionId ?? snapshot.sessionId })
 
+  const jobId = job.jobId
   unsubs = []
   unsubs.push(
-    window.api?.onImageToken?.(job.jobId, (token: string) => {
+    window.api?.onImageToken?.(jobId, (token: string) => {
+      if (jobId !== snapshot.activeJobId) return // stale/late event for a superseded job (F8)
       patchTurn(turnId, (tn) => ({ answer: tn.answer + token, state: 'analyzing' }))
     })
   )
   unsubs.push(
-    window.api?.onImageDone?.(job.jobId, (doneJob) => {
+    window.api?.onImageDone?.(jobId, (doneJob) => {
+      if (jobId !== snapshot.activeJobId) return // F8 belt-and-braces (gen guard already prevents wiring)
       let saved = false
       patchTurn(turnId, (tn) => {
         const answer = doneJob.answer ?? tn.answer
@@ -223,13 +266,15 @@ export async function analyze(question: string): Promise<void> {
     })
   )
   unsubs.push(
-    window.api?.onImageError?.(job.jobId, (errJob) => {
+    window.api?.onImageError?.(jobId, (errJob) => {
+      if (jobId !== snapshot.activeJobId) return // F8 belt-and-braces (gen guard already prevents wiring)
       const code = errJob.error ?? 'runtimeFailed'
       patchTurn(turnId, code === 'cancelled' ? { state: 'cancelled' } : { state: 'failed', error: code })
       teardownStream()
       set({ activeJobId: null, analyzing: false })
     })
   )
+  return 'started'
 }
 
 /** Test-only: drop module-level state between renderer tests. */
@@ -237,6 +282,7 @@ export function resetVisionSessionForTests(): void {
   teardownStream()
   snapshot = EMPTY
   turnCounter = 0
+  analyzeGen = 0
   listeners.clear()
   persistListeners.clear()
 }

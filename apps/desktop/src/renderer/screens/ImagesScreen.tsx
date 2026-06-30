@@ -301,7 +301,12 @@ export function ImagesScreen({
   // this screen unmounts). A second analyze while one runs is busy-rejected by the backend
   // (IPC-3) and guarded in the store; the history-list refresh rides the persisted subscription.
   function runAnalyze(question: string): void {
-    void analyzeImage(question)
+    void analyzeImage(question).then((outcome) => {
+      // F4: a second analyze while one is in flight is busy-rejected. The trigger (composer +
+      // per-turn "Try again") is already disabled while `analyzing`, but surface the friendly
+      // banner if a click still reaches here, so the action is NEVER silently swallowed.
+      if (outcome === 'busy') setScreenError('busy')
+    })
   }
 
   function onStop(): void {
@@ -390,8 +395,9 @@ export function ImagesScreen({
           <AnswerThread
             turns={turns}
             onCopy={onCopy}
-            onTryAgain={(q) => void runAnalyze(q)}
+            onTryAgain={(q) => runAnalyze(q)}
             onStop={onStop}
+            busy={analyzing}
           />
         </div>
       </div>

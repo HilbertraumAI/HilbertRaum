@@ -338,6 +338,76 @@ never fabricate a platform property the renderer could read directly).
   true native OS drag (Explorer → chat) isn't faithfully automatable (a synthetic File has no on-disk
   path), so the disk→path success leg rests on that availability proof + the wiring tests.
 
+**Phase D (full audit 2026-06-30) — renderer lifecycle & a11y (F1–F8).** A renderer-only sweep
+extending the FE-4 mountedRef family; no main-process, IPC, schema, or i18n change (the one banner
+reuses the existing `images.err.busy` key). Each fix is independently revertible and the four
+behavioral ones are teeth-checked (neuter → red → restore). Suite 2673 → **2677 / 41 skipped** (+4:
+F1, F4, F6, F8). Per-finding disposition:
+- **F1 (Medium — the one real bug) — `DictationButton.stopAndTranscribe()` fired `onText` after
+  unmount, crossing conversations.** `start()` was F21-mountedRef-guarded but the stop path awaited
+  the multi-second `transcribeDictation` IPC and then unconditionally called `onText(text)` /
+  `onError(...)` / `setState('idle')`. Stop-dictation-then-navigate-away leaked the transcript into
+  whatever composer is now mounted (the parent's `mountedRef` doesn't gate its `setInput`). Fix: the
+  same `if (!mountedRef.current) return` guard before `onText`/`onError` and before the `finally`
+  `setState` — the IPC completes harmlessly, the dead component is never touched. Test:
+  `Dictation.test.tsx` resolves `transcribeDictation` AFTER `unmount()` → `onText`/`onError` not
+  called, no act-warning (mirrors the F21 test). Teeth: drop the guard → red.
+- **F2 (Low, perf) — `Transcript` localized the streaming buffer twice per ~40 ms flush.**
+  `localizeServerCopy(t, streamText)` (an O(n) Map-lookup + two regex `.exec` over the growing
+  buffer) ran once for the visible bubble and again for `<StreamAnnouncer>`. Now a single
+  `const localizedStream = useMemo(() => localizeServerCopy(t, streamText), [t, streamText])` feeds
+  both — byte-identical, half the work on the CPU-bound path.
+- **F3 (Low) — proactive skill-suggestion debounce setState was unguarded.** `ChatScreen`'s 400 ms
+  `refreshSuggestion` resolved `suggestSkills` then `setSkillSuggestion` with no mounted/convId
+  check, so a late reply setState'd a dead component or stamped a stale-conversation suggestion. Fix:
+  gate the `.then`/`.catch` behind `mountedRef.current && (activeIdRef.current ?? '') === convId`
+  (reusing the existing FE-1 `activeIdRef` the stream path already keeps); `convId` is `''` for a
+  still-"new" draft, matching `activeId ?? ''` at call time.
+- **F4 (Low-Med) — ImagesScreen "Try again" was silently dropped while another turn streamed.** The
+  per-turn action stayed clickable while `analyzing`, and `analyze()` early-returned on
+  `activeJobId` with no feedback. Fix: thread a `busy` (= `analyzing`) prop through
+  `AnswerThread`→`TurnRow` and **disable "Try again" while busy** (mirroring the already-disabled
+  composer; Copy stays live — a harmless read); plus defense-in-depth, `analyze()` now returns
+  `'started' | 'busy' | 'noop'` and `runAnalyze` surfaces `images.err.busy` if a click still reaches
+  the busy guard. Disabling on `analyzing` is *stronger* than the `activeJobId` guard — it also
+  covers the create round-trip window before `activeJobId` is set. Test: with a second analysis in
+  flight, the prior done turn's "Try again" is `toBeDisabled()`. Teeth: drop `disabled={busy}` → red.
+- **F5 (Low) — DEFERRED (accepted).** `Composer`'s auto-grow effect reads `scrollHeight`/`offsetHeight`
+  after writing `style.height` → one synchronous reflow per keystroke. It is a single textarea (the
+  audit itself rates it acceptable); an rAF batch would add a cancelable frame handle + an unmount
+  `cancelAnimationFrame` and risk a one-frame height-lag jump, for a sub-millisecond, imperceptible
+  cost. Left as-is by design.
+- **F6 (Low, a11y) — `StreamAnnouncer` length-based fallback ADDED.** The announcer only advanced on
+  sentence terminators, so a table-/list-/run-on answer with no `. ! ? …`/newline stayed silent until
+  completion. When the unannounced tail grows past `ANNOUNCE_SOFT_CAP` (160) with no new terminator,
+  it now flushes up to the last **word** boundary (`lastWordBoundary`), holding back the trailing
+  partial word — so AT hears progress incrementally. **Accepted residual:** a *pure code block* is
+  stripped to ~nothing by `stripMarkdown` (voicing code punctuation is worse a11y than silence), so
+  that case stays intentionally quiet; the surrounding prose still announces (recorded in
+  known-limitations Accessibility). Test: a 210-char terminator-less buffer announces complete words
+  and excludes the trailing partial. Teeth: neuter the fallback → region stays empty → red.
+- **F7 (Low) — DEFERRED (accepted; self-heals).** `ChatScreen.onTryAgain` optimistically slices the
+  last assistant turn before `stream(...)`. If the IPC throws before the backend mutates, `stream`'s
+  `catch` already calls `refreshIfVisible()` → `setMessages(await listMessages(convId))` **in place**
+  when the user stayed on the conversation, restoring the answer from the DB; if they switched away,
+  the `activeId`-change effect re-reads from the DB on return. So the slice is restored without manual
+  re-select in both cases — the audit's "until a manual re-select" framing predates the catch-path
+  refresh. Deferring avoids weakening the immediate optimistic feedback (recorded in known-limitations).
+- **F8 (Low, hypothesis → CONFIRMED reachable, FIXED) — a superseded vision analyze could wire a
+  zombie stream.** The busy guard rejects a second `analyze()` only once `activeJobId` is set, but
+  that isn't set until AFTER the `imageAnalyze` create round-trip resolves. A slow round-trip +
+  image-switch + re-analyze (the new image resets `analyzing`, re-enabling the composer) leaves two
+  analyzes both awaiting `imageAnalyze`; the slower one would reassign the module-global `unsubs`
+  over the newer job's (leaking the old listeners), and its own late done/error would then
+  `teardownStream()` the newer job and null its `activeJobId`. Fix: each `analyze()` claims a
+  monotonic `analyzeGen` (bumped by `abortActive`/`clearVisionSession`); after the await a superseded
+  call (`myGen !== analyzeGen`) cancels its now-orphan job main-side and **bails without wiring**, and
+  the catch path only touches the turn/flag when still current. Per-handler
+  `if (jobId !== snapshot.activeJobId) return` checks are belt-and-braces (the gen guard already
+  prevents two jobs' listeners from being live at once). Test (`visionSession.test.ts`, store-level):
+  a slow A-create resolving after a switch-to-B is cancelled (`imageCancel('jobA')`) and never wires;
+  B is the live job. Teeth: remove the gen bail → A wires, `imageCancel('jobA')` never fires → red.
+
 ## Performance — design record (perf audit 2026-06-18, Wave P3)
 Pipeline throughput & latency on the two hottest operations — **import a document** and **ask a
 question** — plus runtime-startup knobs. Unlike P2 (pure memoization), several P3 items are

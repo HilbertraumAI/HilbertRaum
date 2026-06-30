@@ -105,15 +105,22 @@ export function DictationButton({
     try {
       const bytes = await capture.stop()
       const text = (await window.api.transcribeDictation(bytes)).trim()
+      // Unmounted (or navigated to another conversation) while the multi-second transcribe IPC
+      // was in flight: let it complete harmlessly but touch nothing on the dead component —
+      // firing onText here would set the parent's input AFTER unmount, leaking this dictation
+      // into whatever composer is now mounted (a different conversation). Mirrors start()'s F21
+      // guard; the parent's mountedRef doesn't gate its setInput, so the gate must live here (F1).
+      if (!mountedRef.current) return
       if (text.length === 0) {
         onError?.(t('chat.dictation.noSpeech'))
       } else {
         onText(text)
       }
     } catch (e) {
+      if (!mountedRef.current) return
       onError?.(friendlyCaptureError(e))
     } finally {
-      setState('idle')
+      if (mountedRef.current) setState('idle')
     }
   }
 
