@@ -1678,6 +1678,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .docs-selbar-count { font-size: var(--text-sm); color: var(--text-muted); margin-right: 4px; }
 
+/* Bulk re-index progress: the determinate bar grows to fill the row, Cancel sits at the end. */
+.docs-reindex-progress { display: flex; align-items: center; gap: 8px; }
+.docs-reindex-progress > :first-child { flex: 1 1 auto; }
+
 /* Overflow menu separator (Radix DropdownMenu.Separator). */
 .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 

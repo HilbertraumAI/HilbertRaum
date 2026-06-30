@@ -6,6 +6,16 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Cancel for the in-flight bulk re-index.** Follow-up to the main-owned reindex job below: a **Cancel**
+button next to the progress bar (`IPC.cancelReindexAll`, an `AbortController` in `registerDocsIpc`) stops a running
+"Re-index all"/"Retry all". The current document finishes and the rest are skipped — abort is checked at each iteration
+boundary, the same granularity as the existing workspace-lock break. `ReindexJobStatus` gained `cancelled: boolean` (set
+from `signal.aborted` in the loop's finally); the renderer toasts "Re-indexing stopped — N of M done" (new i18n
+`docs.reindexAllCancel`/`docs.reindexAllCancelled`, en + de) instead of silently clearing the bar. New tests: main
+(`docs-ipc.test.ts`) starts 6 docs, cancels, polls to done, asserts `cancelled:true` + `completed < total`; renderer
+recovers a running job on mount and asserts the Cancel button calls `cancelReindexAll`. Full suite green except the 3
+pre-existing platform failures; build + typecheck clean. Docs: rag-design.md §"Re-index all"._
+
 _2026-06-30 — **Bulk re-index progress now survives navigation (main-owned job).** The "Re-index all" / "Retry all"
 progress bar used to vanish when leaving the Documents screen because the loop ran in the RENDERER and its progress was
 component `useState` (discarded on unmount) — while the work kept running invisibly in main. Moved the loop into MAIN as a

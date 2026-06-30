@@ -404,6 +404,8 @@ export const de: Record<keyof typeof en, string> = {
     'Dokumente, die erneut fehlschlagen, bleiben auf diesem Tab.',
   'docs.retryAllConfirm.confirm': 'Alle erneut versuchen',
   'docs.reindexAllProgress': 'Indexiere {done} von {total} neu…',
+  'docs.reindexAllCancel': 'Abbrechen',
+  'docs.reindexAllCancelled': 'Neu-Indexierung gestoppt – {done} von {total} erledigt.',
   'docs.supported.base':
     'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +
     'die auf diesem Laufwerk transkribiert werden',

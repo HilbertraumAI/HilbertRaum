@@ -405,6 +405,8 @@ const api = {
    *  progress bar on mount. */
   getReindexAllJob: (): Promise<ReindexJobStatus | null> =>
     ipcRenderer.invoke(IPC.getReindexAllJob),
+  /** Stop the in-flight bulk re-index (the current document finishes; the rest are skipped). */
+  cancelReindexAll: (): Promise<void> => ipcRenderer.invoke(IPC.cancelReindexAll),
   /** Read-only in-app preview: the document's extracted text — FE-6 returns the BOUNDED first
    *  page (+ a `nextOffset` cursor when there is more). */
   previewDocument: (documentId: string): Promise<DocumentPreview> =>

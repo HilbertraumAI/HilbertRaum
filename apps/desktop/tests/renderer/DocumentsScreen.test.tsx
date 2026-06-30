@@ -590,7 +590,7 @@ describe('DocumentsScreen', () => {
       .mockResolvedValue(stale.map((d) => ({ ...d, staleEmbeddings: false })))
     // The per-document loop now lives in MAIN (tested in docs-ipc.test.ts). The renderer just
     // delegates to startReindexAll and polls getReindexAllJob; a `done` job clears the bar.
-    const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true }
+    const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true, cancelled: false }
     const startReindexAll = vi.fn(async () => finished)
     const getReindexAllJob = vi.fn(async () => finished)
     stubApi({ listDocuments, startReindexAll, getReindexAllJob })
@@ -620,7 +620,7 @@ describe('DocumentsScreen', () => {
       doc({ id: 'd2', title: 'corrupt.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 })
     ]
     const listDocuments = vi.fn<() => Promise<DocumentInfo[]>>().mockResolvedValue(failed)
-    const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true }
+    const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true, cancelled: false }
     const startReindexAll = vi.fn(async () => finished)
     const getReindexAllJob = vi.fn(async () => finished)
     stubApi({ listDocuments, startReindexAll, getReindexAllJob })
@@ -758,7 +758,7 @@ describe('DocumentsScreen', () => {
       doc({ id: 'd1', staleEmbeddings: true }),
       doc({ id: 'd2', title: 'terms.docx', staleEmbeddings: true })
     ]
-    const startReindexAll = vi.fn(async () => ({ jobId: 'r1', total: 2, completed: 0, failed: 0, done: false }))
+    const startReindexAll = vi.fn(async () => ({ jobId: 'r1', total: 2, completed: 0, failed: 0, done: false, cancelled: false }))
     stubApi({ listDocuments: vi.fn(async () => stale), startReindexAll })
     render(<DocumentsScreen />)
 
@@ -766,6 +766,21 @@ describe('DocumentsScreen', () => {
     const dialog = within(await screen.findByRole('dialog'))
     await user.click(dialog.getByRole('button', { name: /cancel/i }))
     expect(startReindexAll).not.toHaveBeenCalled()
+  })
+
+  it('recovers an in-flight bulk re-index on mount and its Cancel button calls cancelReindexAll', async () => {
+    const user = userEvent.setup()
+    // A job already running in MAIN — the mount effect re-attaches the determinate bar + Cancel
+    // (this is the navigation-survival path). Clicking Cancel asks main to stop.
+    const running = { jobId: 'r1', total: 5, completed: 1, failed: 0, done: false, cancelled: false }
+    const getReindexAllJob = vi.fn(async () => running)
+    const cancelReindexAll = vi.fn(async () => undefined)
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob, cancelReindexAll })
+    render(<DocumentsScreen />)
+
+    const cancelBtn = await screen.findByRole('button', { name: 'Cancel' })
+    await user.click(cancelBtn)
+    expect(cancelReindexAll).toHaveBeenCalled()
   })
 })
 

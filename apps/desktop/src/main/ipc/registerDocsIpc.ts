@@ -127,6 +127,8 @@ export function registerDocsIpc(ctx: AppContext): void {
   // recover the progress bar after navigating away and back via the parameterless getReindexAllJob.
   // Only one runs at a time — beginDocumentWork serialises it against imports/password changes.
   let reindexJob: ReindexJobStatus | null = null
+  // Abort handle for the in-flight reindex loop (Cancel button); null when nothing is running.
+  let reindexAbort: AbortController | null = null
   // Documents currently being processed (import loop or re-index). Guards delete/re-index
   // against racing an in-flight ingestion of the SAME document: interleaving used to
   // produce FK violations, duplicate chunk sets, and EBUSY on the stored copy.
@@ -716,14 +718,19 @@ export function registerDocsIpc(ctx: AppContext): void {
     if (reindexJob && !reindexJob.done) return reindexJob // idempotent while running
     const ids = safeIdArray(documentIds)
     const jobId = randomUUID()
-    reindexJob = { jobId, total: ids.length, completed: 0, failed: 0, done: ids.length === 0 }
+    reindexJob = { jobId, total: ids.length, completed: 0, failed: 0, done: ids.length === 0, cancelled: false }
     if (ids.length === 0) return reindexJob
     const job = reindexJob
+    // User-cancel (Cancel button) — checked at each iteration boundary, so the in-flight document
+    // finishes and the rest are skipped, exactly like the workspace-lock break above.
+    reindexAbort = new AbortController()
+    const signal = reindexAbort.signal
     const releaseDocWork = ctx.workspace.beginDocumentWork()
     log.info('Re-index all started', { jobId, total: ids.length })
     void (async () => {
       try {
         for (const id of ids) {
+          if (signal.aborted) break // user pressed Cancel
           // Workspace can lock mid-batch ("Lock now"): stop cleanly — the remaining docs keep
           // their current status and the user can retry after unlock.
           if (!ctx.workspace.isUnlocked()) {
@@ -748,11 +755,14 @@ export function registerDocsIpc(ctx: AppContext): void {
         }
       } finally {
         releaseDocWork()
+        job.cancelled = signal.aborted
         job.done = true
+        reindexAbort = null
         log.info('Re-index all finished', {
           jobId,
           completed: job.completed,
-          failed: job.failed
+          failed: job.failed,
+          cancelled: job.cancelled
         })
       }
     })()
@@ -760,4 +770,13 @@ export function registerDocsIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.getReindexAllJob, (): ReindexJobStatus | null => reindexJob)
+
+  // Stop the in-flight bulk re-index. Aborts at the next iteration boundary (the current document
+  // finishes); no-op when nothing is running. The job then settles with `cancelled: true`.
+  ipcMain.handle(IPC.cancelReindexAll, (): void => {
+    if (reindexJob && !reindexJob.done) {
+      log.info('Re-index all cancel requested', { jobId: reindexJob.jobId })
+      reindexAbort?.abort()
+    }
+  })
 }

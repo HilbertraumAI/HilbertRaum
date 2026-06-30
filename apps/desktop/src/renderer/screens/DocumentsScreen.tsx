@@ -117,6 +117,7 @@ function inSection(d: DocumentInfo, section: DocSection): boolean {
 
 export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.Element {
   const { t, tCount, lang } = useT()
+  const showToast = useToast()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -312,6 +313,11 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
           if (mountedRef.current) {
             setBusy(null)
             setReindexProgress(null)
+            // Cancelled ends the same way as completed (bar clears, list refreshed) — a toast tells
+            // the user it STOPPED early rather than finished, with what got through.
+            if (job.cancelled) {
+              showToast(t('docs.reindexAllCancelled', { done: job.completed, total: job.total }))
+            }
           }
         }
       } catch (e) {
@@ -323,7 +329,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         setError(friendlyIpcError(e))
       }
     }, 400)
-  }, [refresh])
+  }, [refresh, showToast, t])
 
   // Recover a bulk re-index already running in main when the screen (re)mounts: this is what keeps
   // the progress bar alive across navigation. Also clears the poll on unmount.
@@ -1025,14 +1031,21 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       )}
 
       {reindexProgress && (
-        <Progress
-          label={t('docs.reindexAllProgress', {
-            done: reindexProgress.done,
-            total: reindexProgress.total
-          })}
-          value={reindexProgress.done}
-          max={reindexProgress.total}
-        />
+        <div className="docs-reindex-progress">
+          <Progress
+            label={t('docs.reindexAllProgress', {
+              done: reindexProgress.done,
+              total: reindexProgress.total
+            })}
+            value={reindexProgress.done}
+            max={reindexProgress.total}
+          />
+          {/* Stop the in-flight bulk re-index. The current document finishes; the rest are skipped
+              (main aborts at the next iteration boundary). The poll then clears this bar + toasts. */}
+          <Button size="sm" onClick={() => void window.api.cancelReindexAll?.()}>
+            {t('docs.reindexAllCancel')}
+          </Button>
+        </div>
       )}
 
       <p className="hint" style={{ marginTop: 10 }}>

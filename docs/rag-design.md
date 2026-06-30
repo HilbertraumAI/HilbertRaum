@@ -615,6 +615,10 @@ files, with sources"). Renderer-only; dismissals are per-conversation, in-memory
   screen and back** — the renderer recovers it with the parameterless `getReindexAllJob()` on mount.
   Transient state only: nothing is persisted to disk (a saved counter would lie after a restart; the
   live main job is the single source of truth, recovered by polling — same posture as imports).
+  A **Cancel** button (`IPC.cancelReindexAll`, an `AbortController` in main) stops an in-flight run:
+  the current document finishes and the rest are skipped (abort is checked at each iteration
+  boundary, the same granularity as the workspace-lock break), the job settles with
+  `cancelled: true`, and the renderer toasts "stopped — N of M done" instead of silently clearing.
 
 ### Tested behaviour (Phase 17)
 

@@ -390,6 +390,8 @@ export const en = {
     'until it finishes. Documents that fail again stay on this tab.',
   'docs.retryAllConfirm.confirm': 'Retry all',
   'docs.reindexAllProgress': 'Re-indexing {done} of {total}…',
+  'docs.reindexAllCancel': 'Cancel',
+  'docs.reindexAllCancelled': 'Re-indexing stopped — {done} of {total} done.',
   'docs.supported.base':
     'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +
     'which are transcribed on this drive',

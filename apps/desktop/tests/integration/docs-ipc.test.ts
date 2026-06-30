@@ -252,6 +252,32 @@ describe('registerDocsIpc', () => {
     expect(documentIds.every((id) => listed.find((d) => d.id === id)?.status === 'indexed')).toBe(true)
   })
 
+  it('cancelReindexAll stops the in-flight bulk loop (cancelled, not all completed)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const paths: string[] = []
+    for (let i = 0; i < 6; i++) {
+      const f = join(workspacePath, `f${i}.txt`)
+      writeFileSync(f, `doc ${i} alpha beta gamma delta`)
+      paths.push(f)
+    }
+    const { documentIds } = await runImport(paths)
+    expect(documentIds).toHaveLength(6)
+
+    const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    expect(started.done).toBe(false)
+    // Cancel right away: the in-flight document finishes, the rest are skipped at the next boundary.
+    await invoke(handlers, IPC.cancelReindexAll)
+    let job = started
+    for (let i = 0; i < 200 && !job.done; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    }
+    expect(job.done).toBe(true)
+    expect(job.cancelled).toBe(true)
+    expect(job.completed).toBeLessThan(job.total) // stopped before finishing all six
+  })
+
   it('imports a chat attachment: Temporary + a conversation_documents link (C3)', async () => {
     const { db, workspacePath } = freshWorkspace()
     registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))

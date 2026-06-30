@@ -1341,6 +1341,9 @@ export interface ReindexJobStatus {
   completed: number
   failed: number
   done: boolean
+  /** True when the run was stopped by the user mid-batch (Cancel). The in-flight document finishes;
+   *  the remaining documents are left untouched. Lets the renderer say "stopped" rather than "done". */
+  cancelled: boolean
 }
 
 // ---- Document organization (architecture.md "Document organization — design record";
