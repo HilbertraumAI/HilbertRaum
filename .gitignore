@@ -70,3 +70,6 @@ apps/desktop/screenshots/
 target
 # Nix
 result
+.ninja_log
+.ninja_lock
+.nix-gcroots/

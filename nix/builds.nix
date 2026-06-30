@@ -33,7 +33,7 @@ let
   # exec bit + signature). The .app's MacOS exe IS the launcher; at runtime it mounts
   # app-mac-arm64.dmg from the pool and runs the real HilbertRaum Electron app from it.
   launcherMac = flake.packages.${builtins.currentSystem}.launcher-mac-arm64;
-  appVersion = (builtins.fromJSON (builtins.readFile (flake.outPath + "/app/package.json"))).version;
+  appVersion = (builtins.fromJSON (builtins.readFile (flake.outPath + "/package.json"))).version;
   launcherInfoPlist = pkgs.writeText "Info.plist" ''
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

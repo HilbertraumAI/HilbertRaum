@@ -24,7 +24,7 @@ host_target() {
 }
 
 TARGET="${1:-$(host_target)}"
-APP="$REPO_ROOT/app"
+APP="$REPO_ROOT"                  # npm workspace root (the app IS this repo)
 VERSION="$(jq -r '.version' "$APP/package.json")"
 COMP_SRC="$DIST_DIR/components"   # where `make components` wrote app-<target>.<ext>
 OUT="$DIST_DIR/bundle"

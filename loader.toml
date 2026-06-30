@@ -36,12 +36,25 @@ tools = ["linux-x64", "linux-arm64"]
 
 [manifest.upload]
 default_tarball = "dist/hilbertraum-update.tar.gz"
+# The app IS this repo (the npm workspace root), not an app/ submodule — so the product
+# version comes from the root package.json (the loader otherwise defaults to app/package.json).
+[manifest.version]
+file = "package.json"
 
 # ── drive/bundle layout (consumed by the generalized bundle.sh + make-usb-image.sh) ──
 [layout]
 launcher_name  = "hilbertraum"
 image_name     = "hilbertraum-usb.img"
-volume_label   = "HILBERTRAUM"   # FAT32 label: exactly 11 chars (the max)
+volume_label   = "HILBERTRAUM"   # FAT32/exFAT label (≤ 11 chars: the FAT32 max)
+# exFAT, not FAT32: HilbertRaum seeds GGUF model weights onto the drive and several exceed
+# FAT32's 4 GiB/file limit (e.g. Gemma-12B-Q4 ~7 GB, Qwen3-30B-Q4 ~18 GB). exFAT reads on
+# Windows/macOS/Linux out of the box.
+image_fs       = "exfat"
+# Drive-population hook: after the update manifest is built, lay out the HilbertRaum drive
+# scaffolding (workspace/, models/, model-manifests/, runtime/ tree, config/, docs/, skills)
+# onto the image so the burned drive is ready to run. Append --with-assets here to also
+# download+verify the default model + runtime set into the image (build-time network).
+prepare_cmd    = "./scripts/prepare-drive.sh"
 launchers_dir  = "launchers"
 components_dir = "components/{os}"
 models_dir     = "models"
@@ -92,26 +105,26 @@ target_pkgs = [
 ]
 
 # ── leaf/source-producing steps (impure project scripts) ─────────────────────
-# Install the npm workspace deps, then build the Electron main/renderer with
-# electron-vite (→ app/apps/desktop/out). bundle.sh packages that per target.
+# The app IS this repo (npm workspace root; the Electron app is apps/desktop). Install the
+# workspace deps, then build the Electron main/renderer with electron-vite (→ apps/desktop/out).
 [[step]]
 name = "app"
-cmd  = "(cd app && npm ci)"
-src  = ["app/package.json", "app/package-lock.json"]
+cmd  = "npm ci"
+src  = ["package.json", "package-lock.json"]
 desc = "hilbertraum npm deps"
 [[step]]
 name = "build"
-cmd  = "(cd app/apps/desktop && npm run build)"
+cmd  = "(cd apps/desktop && npm run build)"
 deps = ["app"]
-src_tree = ["app/apps/desktop/src"]
-src  = ["app/apps/desktop/package.json", "app/apps/desktop/electron.vite.config.ts"]
+src_tree = ["apps/desktop/src"]
+src  = ["apps/desktop/package.json", "apps/desktop/electron.vite.config.ts"]
 desc = "electron-vite build"
 [[step]]
 name = "stage-app"
 per  = "target"
 cmd  = "./scripts/stage-app.sh {target}"
 deps = ["build"]
-src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "app/apps/desktop/electron-builder.yml"]
+src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "apps/desktop/electron-builder.yml"]
 desc = "stage app {target}"
 
 # ── shared source-input bundles ──────────────────────────────────────────────
@@ -198,7 +211,7 @@ help = "install the HilbertRaum npm workspace deps"
 recipe = ["$(XTASK) build app"]
 [[make.target]]
 name = "build"
-help = "electron-vite build (main + renderer) into app/apps/desktop/out"
+help = "electron-vite build (main + renderer) into apps/desktop/out"
 recipe = ["$(XTASK) build build"]
 [[make.target]]
 name = "bundles"
@@ -273,5 +286,5 @@ name = "clean"
 help = "remove all build outputs (ninja graph + dist + every crate's target/)"
 recipe = [
   "@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then echo \"ninja -t clean\"; ninja -f build.ninja -t clean >/dev/null 2>&1 || true; fi",
-  "rm -rf dist build.ninja .ninja_log .ninja_lock app/node_modules app/apps/desktop/out app/apps/desktop/release launcher/target third_party/loader/crates/*/target",
+  "rm -rf dist build.ninja .ninja_log .ninja_lock node_modules apps/desktop/out apps/desktop/release launcher/target third_party/loader/crates/*/target",
 ]

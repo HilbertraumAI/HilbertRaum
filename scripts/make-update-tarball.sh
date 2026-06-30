@@ -10,7 +10,7 @@ set -euo pipefail
 
 OUT="${1:-$DIST_DIR/hilbertraum-update.tar.gz}"
 BUNDLE="$DIST_DIR/bundle"
-VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
+VERSION="$(jq -r '.version' "$REPO_ROOT/package.json")"
 UPDATE_URL="${HILBERTRAUM_UPDATE_URL:-https://hilbertraum-test.plan.ai}"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -151,6 +151,8 @@
           inherit nixosFhs nixosFhs-arm64 macosx-sdk;
           xtask = loaderLib.xtask;
           libdmg-hfsplus = loaderLib.libdmg-hfsplus;
+          # pinned userspace image tooling (mtools/dosfstools/exfatprogs) for make-usb-image.sh.
+          usb-image-tools = loaderLib.usb-image-tools;
           # native launcher per target (cargo-zigbuild). linux is STATIC musl → runs on any
           # linux incl. NixOS (it FHS-reexecs there); win/mac are cross-built.
           launcher-linux-x64 = launcherFor { zigTarget = "x86_64-unknown-linux-musl"; outDir = "x86_64-unknown-linux-musl"; };
