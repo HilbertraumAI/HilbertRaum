@@ -909,7 +909,7 @@ The fused-order fallback stays as a backstop but now rarely fires.
 host would silently corrupt every vector, so it fails loudly at startup instead). `decodeVector`
 now returns **`Float32Array | null`**: a physically truncated `vector_blob` (`length < dimensions*4`,
 e.g. a partial write) or a non-positive `dimensions` yields `null` so **every** caller skips the row
-uniformly — including the two compare-path decodes (`doctasks/manager.ts`) that previously threw a
+uniformly — including the two compare-path decodes (`doctasks/handlers/compare.ts`; moved there by DX-1, architecture.md §38) that previously threw a
 `RangeError` and failed the whole compare task. The guard is one cheap length comparison, negligible
 on the hot resident-cache vector scan (§12 / D15). Tests: `reranker.test.ts` (CJK > ctx still
 reranks, no 500 fall-through), `embeddings.test.ts` (`decodeVector` truncated → null; resident-cache
@@ -1227,8 +1227,9 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   Only-B), attribute unmatched-A→Only-A and unmatched-B→Only-B **with no model call** (their node
   summaries are fed as notes — M2, never `[Sn]` citations), then one reduce into the four-section report.
   **Acceptance — the mirror property:** swapping A and B yields the mirror-image diff (Only-A ↔ Only-B
-  swap; Same/Different stable). The diff/reduce live in the manager (`runCompareSymmetricTrees`); the
-  **pure `alignNodes`** lives in `compare.ts` so the mirror is unit-testable without the model.
+  swap; Same/Different stable). The diff/reduce live in the compare handler
+  (`doctasks/handlers/compare.ts`, `runCompareSymmetricTrees`; moved there by DX-1, architecture.md §38);
+  the **pure `alignNodes`** lives in `compare.ts` so the mirror is unit-testable without the model.
   **Lopsided-pair honesty (post-merge review M-1):** the 24-ceiling bounds the number of `generate`
   calls (pairs ≤ the *smaller* section count), but a lopsided pair (e.g. A=3, B=40) still emits many
   free Only-B notes; when those overflow the reduce input budget the belt condenses the tail. That is

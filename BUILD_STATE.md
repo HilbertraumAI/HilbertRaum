@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **NEW full audit (`audits/full-audit-2026-06-30.md`) — Phase G (DOCUMENTATION RECONCILIATION;
+D1–D10 + M1) — branch `audit-2026-06-30-phaseG-docs` (unmerged; do NOT auto-merge/push). DOCS/COMMENTS-ONLY,
+zero behavior change.** Restores the topic docs + code-comment maps as the as-built source of truth after the
+Phase-8 DX-1/DX-3 refactors (commit `1a8b78a`) relocated code. **First phase landed of the fresh 2026-06-30
+audit** (distinct from the 2026-06-29 *follow-up* whose 8 phases sit on the `audit-followup-phase*` branches);
+phases A–F of THIS report remain open. Suite **2593 passed / 39 skipped — UNCHANGED** from the master baseline
+(`7281a2e`); typecheck + `npm run build` green. The sole `src/` touch is one comment deletion (M1); everything
+else is docs.
+- **D1/D2 (High/Med) — `architecture.md` "Document tasks" module map rewritten** to the post-DX-1 as-built:
+  the **manager keeps the queue/pump/arbiter + `generate`/`generateWithRetry` loop and dispatches via
+  `MODEL_TASK_HANDLERS[kind](task, runtime, ctx)`**; each kind's work lives in `handlers/*` (`index.ts`
+  registry, `shared.ts` doc helpers, then tree/summary/ocr/translation/compare/categorize); `context.ts` holds
+  `DocTaskDeps`/`InternalTask`/`DocTaskCtx`. "Six `DocTaskKind`s" → **"Seven"** (added `categorize`, D26).
+  Cross-refs §38 DX-1.
+- **D3 (Med) — ING-6/ING-8 repointed:** `materializeDocument` → `handlers/shared.ts`, `readStoredPdfBytes` →
+  `handlers/ocr.ts`. (ING-7's `manager.ts` per-doc-reads citation verified still accurate — left as-is.)
+- **D4 (Med) — compare run-path citations repointed** to `handlers/compare.ts` (pure math stays in
+  `doctasks/compare.ts`): `architecture.md:149`, `:440`, `rag-design.md:1230`, **and a 4th same-class citation
+  the audit's line-list missed (`rag-design.md:912`)** folded in so the docs aren't self-contradictory. Two
+  more same-class spots (the `doctasks/compare.ts` code comment; the `categorize`-kind `manager.ts` citations at
+  `architecture.md:3782`/`:4101`) were NOT changed — flagged in the report (out of D-list scope / the M1
+  "one src/ touch" cap).
+- **D5 (Med) — `doctasks.ts` barrel header comment** updated to the `handlers/` + `context.ts` layout. Verified
+  against the doctasks tests: NO handler run-fn is imported through the barrel, so the public import surface is
+  genuinely preserved; `export *` list UNCHANGED (adding `context`/`handlers` would collide on `DocTaskDeps`).
+- **D6/D7 (Med/Low) — `user-guide.md`:** "Add to project…" → **"Move to project…"** (4 occurrences; matches
+  `moveToProject`); selection toolbar list gains **"Mark temporary"** + **"Archive"**.
+- **D8 (Low) — `architecture.md` §36** gains a one-line "as of DX-3 the screen is split under
+  `screens/documents/*`" location note (behavior claims were already accurate).
+- **D9 (Low, lighter-touch + flagged) — `CHANGELOG.md`** note: version checkpointing **paused after `v0.1.34`**
+  (2026-06-22); later phases tracked in `BUILD_STATE.md`. **`package.json` left at `0.1.34`** (owner's call for
+  the first real release — did NOT bump).
+- **D10 (Low, cosmetic) —** `README.md` E5/reranker names gain **"(F16)"** (matches the manifests);
+  `security-model.md` `MONEY_RE` snippet gains the Swiss-apostrophe member → `[\d.,']` (matches `money.ts`).
+- **M1 (Low, the one `src/` touch — comment-only) —** the verbatim-duplicated RAG-1 determinism comment block in
+  `embeddings/index.ts` `VectorIndex.search` deleted (one copy kept; `hits.sort(...)` unchanged).
+- **NEXT ACTION (owner): review/merge `audit-2026-06-30-phaseG-docs`; do NOT auto-merge/push.** Phases A–F of
+  `audits/full-audit-2026-06-30.md` remain open (suggested order A financial C1/C5 → B perf P1/P2 → C reliability
+  R1 → F tests → D renderer F1 → E security S1/S2/S3). The report is intentionally KEPT (not retired) until those
+  land._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 8 (MAINTAINABILITY + SECURITY HARDENING + DOCS CLOSE-OUT) —
 branch `audit-followup-phase8-closeout` (unmerged; do NOT auto-merge/push). THE FINAL PHASE — the round is
 COMPLETE.** Clears the structural debt, lands the one small security hardening + the first-run notice, re-affirms
