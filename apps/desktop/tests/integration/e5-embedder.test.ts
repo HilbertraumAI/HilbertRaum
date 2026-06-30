@@ -533,12 +533,15 @@ describe('E5Embedder', () => {
       () => 'ok',
       () => 'rejected'
     )
-    await new Promise((r) => setTimeout(r, 25)) // ample for child2 to spawn + go healthy if it were allowed
+    // DX-6 (Phase 7): deterministic in place of a fixed 25 ms "nothing spawned" settle. Under the
+    // F19 tearingDown guard embed2's ensureStarted REFUSES in the teardown window, so embed2 settles
+    // to 'rejected' on its own — no wall-clock wait. A regression that spawned child2 would instead
+    // resolve 'ok' (and bump calls.length below), so awaiting the outcome is the assertion.
+    expect(await embed2).toBe('rejected')
 
     children[0].releaseExit() // unblock teardown's server.stop()
     await suspendP
     await embed1
-    await embed2
 
     // No sidecar survives the lock: only child1 was ever spawned, and it was killed.
     expect(calls.length).toBe(1)
@@ -557,6 +560,53 @@ describe('E5Embedder', () => {
       fetchImpl: embedFetch([[1, 0]])
     })
     await expect(embedder.embed(['a'])).rejects.toThrow(/dimension mismatch/)
+    await embedder.stop()
+  })
+
+  // REL-3 (full-audit-2026-06-29 follow-up): embed() captures `server` ONCE then loops batches. A
+  // suspend() (workspace lock) mid-loop — racing a large ingestion's many batches — nulls the
+  // sidecar, so the NEXT batch used to throw the runtime's "llama-server is not started" (a
+  // confusing per-document error). The per-batch re-check surfaces a clean cancellation instead.
+  // Deterministic interleave: batchSize=1 over two inputs; the FIRST batch's /v1/embeddings is
+  // gated, suspend() runs to completion in that window (nulling this.server), then the gate releases
+  // so the loop advances to the second batch's re-check. TEETH: drop the re-check → batch 2 fetches
+  // the dead captured server → "llama-server is not started" (not the cancellation class) → red.
+  it('embed() re-checks teardown between batches and cancels cleanly on a mid-loop suspend (REL-3)', async () => {
+    const { spawn, child } = fakeSpawn() // FakeChild.kill() emits exit on a microtask → suspend completes fast
+    const gate = { release: null as null | (() => void) }
+    let embedCalls = 0
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        embedCalls += 1
+        if (embedCalls === 1) await new Promise<void>((r) => (gate.release = r)) // park batch 1
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] })
+        } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl, batchSize: 1 })
+    const embedP = embedder.embed(['a', 'b']).then(
+      () => 'resolved',
+      (e: Error) => e.message
+    )
+    while (!gate.release) await new Promise((r) => setTimeout(r, 1)) // batch 1 in flight (parked)
+
+    await embedder.suspend() // teardown runs to completion: kills the child, nulls this.server
+    expect(child.killed).toBe(true)
+
+    gate.release!() // batch 1 resolves → loop advances → batch 2 re-check fires
+    const result = await embedP
+
+    // Clean, recognizable cancellation — NOT "llama-server is not started" / a count mismatch.
+    expect(result).toMatch(/suspending|locking/)
+    expect(result).not.toMatch(/not started/)
+    expect(embedCalls).toBe(1) // the second batch never issued a request to the dead sidecar
     await embedder.stop()
   })
 })

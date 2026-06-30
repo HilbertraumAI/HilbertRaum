@@ -291,6 +291,13 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Chat: sources ----
   'chat.sources.toggle': 'Quellen ({count})',
   'chat.sources.page': 'Seite {page}',
+  // Ganz-Dokument-Provenienz (Phase 5, FE-B / F11): die „Quellen“ einer Baum-/Kapp-/
+  // Extrakt-Antwort sind die genutzten Dokument-Abschnitte (Herkunft), keine 1:1 zitierten
+  // Auszüge. Bewusst breitenneutral — die Abdeckungsanzeige daneben sagt „ganzes Dokument“ /
+  // „Anfang“ / „teilweise“.
+  'chat.sources.wholeDoc': 'Aus dem Dokument entnommen — {count} Abschnitte',
+  'chat.sources.wholeDocCaption': 'Abgedeckte Abschnitte',
+  'chat.sources.more': 'und {count} weitere Abschnitte',
 
   // ---- Chat: dictation ----
   'chat.dictation.start': 'Nachricht diktieren',
@@ -1590,6 +1597,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.attach.added': '{name} zu diesem Chat hinzugefügt',
   'chat.attach.newDocChat': 'Neuer Dokument-Chat für {name} gestartet',
   'chat.attach.failed': '{name} konnte diesem Chat nicht hinzugefügt werden.',
+  // FE-C: ein Drop mit Dateien, der keine Datei auf der Festplatte ergab (z. B. aus dem Browser
+  // gezogen) – wird angezeigt statt still zu scheitern (Begleitung zur FE-A-Korrektur).
+  'chat.attach.dropUnsupported':
+    'Konnte das nicht hinzufügen – bitte eine auf dem Computer gespeicherte Datei hierher ziehen.',
 
   // ---- Bilder — „Frag ein Bild" (image-understanding §5/§11, Phase V3) ----
   // Visuelles Verstehen EINES lokalen PNG/JPEG über ein lokales KI-Modell — getrennt von

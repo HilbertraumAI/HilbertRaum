@@ -16,6 +16,8 @@ import {
 import {
   encryptFile,
   decryptFile,
+  encryptFileAsync,
+  decryptFileAsync,
   shredStalePlaintext,
   vaultPathsFrom,
   createEncryptedVaultOnDisk,
@@ -57,7 +59,9 @@ function testCipher(): DocumentCipher {
   const key = randomBytes(32)
   return {
     encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key)
+    decryptFile: (src, dest) => decryptFile(src, dest, key),
+    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
+    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
   }
 }
 

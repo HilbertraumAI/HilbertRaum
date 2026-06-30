@@ -127,8 +127,13 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
       if (hasChatModel) finish(next, 'chat')
       else setPhase('starter')
     } catch {
-      // Whatever went wrong, the workspace is open — never trap the user in the gate.
-      finish(next, 'chat')
+      // FE-E (full-audit-2026-06-29-followup, Phase 8): the workspace IS open, so we never
+      // trap the user in the gate — but a genuine listModels/verify FAILURE (a throw, not an
+      // empty list) used to drop them silently on Chat's generic "no model" empty state with
+      // no explanation. Land them on the Models screen instead so the failure is surfaced
+      // once where it's actionable. (An empty list — model genuinely absent — still routes to
+      // the 'starter' step above; only a thrown error reaches here.)
+      finish(next, 'models')
     } finally {
       unsubscribe?.()
     }

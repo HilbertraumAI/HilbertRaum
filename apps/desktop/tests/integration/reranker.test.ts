@@ -444,12 +444,15 @@ describe('LlamaReranker', () => {
       () => 'ok',
       () => 'rejected'
     )
-    await new Promise((r) => setTimeout(r, 25))
+    // DX-6 (Phase 7): deterministic in place of a fixed 25 ms "nothing spawned" settle. Under the
+    // F19 tearingDown guard rerank2's ensureStarted REFUSES in the teardown window, so rerank2
+    // settles to 'rejected' on its own — no wall-clock wait. A regression that spawned child2 would
+    // instead resolve 'ok' (and bump calls.length below), so awaiting the outcome is the assertion.
+    expect(await rerank2).toBe('rejected')
 
     children[0].releaseExit()
     await suspendP
     await rerank1
-    await rerank2
 
     expect(calls.length).toBe(1)
     for (const c of children) expect(c.killed).toBe(true)

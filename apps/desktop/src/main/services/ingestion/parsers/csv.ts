@@ -19,6 +19,8 @@ export const CsvParser: DocumentParser = {
   name: 'CsvParser',
   extensions: ['.csv', '.tsv'],
   mimeType: 'text/csv',
+  readsWholeFileToString: true, // PERF-4: raw string + papaparse rows + rebuilt lines ≈ 3 copies at once
+
   async parse(filePath: string): Promise<ParsedDocument> {
     const Papa = (await import('papaparse')).default
     const raw = await readFile(filePath, 'utf8')

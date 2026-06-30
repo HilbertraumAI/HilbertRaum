@@ -1027,6 +1027,19 @@ code, pre, kbd { font-family: var(--font-mono); }
   word-break: break-word;
   color: var(--text-muted);
 }
+/* Whole-document provenance list (Phase 5, FE-B): a quiet "Sections covered" caption marks
+   the cards as document sections, not cited excerpts; "and N more sections" reveals the tail
+   the ~24-card cap holds back (anti-jank for a ~1000-leaf provenance answer). */
+.sources-caption { margin-top: 2px; }
+.sources-more {
+  background: transparent;
+  border: none;
+  color: var(--link);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+}
 
 /* Composer (guidelines §3/§6): centered with the transcript; auto-grow input,
    one Send/Stop button, quiet footer row. */

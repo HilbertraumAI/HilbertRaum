@@ -71,6 +71,56 @@ describe('Transcript Thinking disclosure (L15)', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('reasoning about the question')).toBeVisible()
   })
+
+  // FE-D (Phase 5): the toggle names its region via aria-controls; the region is labelled
+  // by the toggle. The reasoning text region stays mounted, so aria-controls always resolves.
+  it('wires the toggle to its region via aria-controls (FE-D)', () => {
+    render(<ThinkingHarness />)
+    const toggle = screen.getByRole('button', { name: /thinking/i })
+    const controls = toggle.getAttribute('aria-controls')
+    expect(controls).toBeTruthy()
+    const region = document.getElementById(controls as string)
+    expect(region).not.toBeNull()
+    expect(region).toHaveTextContent('reasoning about the question')
+    expect(region?.getAttribute('aria-labelledby')).toBe(toggle.id)
+  })
+})
+
+// FE-D (Phase 5): the compaction summary marker disclosure carries aria-controls/region too.
+describe('Transcript SummaryMarker disclosure a11y (FE-D)', () => {
+  function renderWithMarker(): void {
+    render(
+      <I18nProvider>
+        <Transcript
+          messages={[
+            { id: 'a1', conversationId: 'c1', role: 'assistant', content: 'reply', createdAt: '2026-06-17T00:00:00.000Z' }
+          ]}
+          streamingHere={false}
+          streamText=""
+          streamThinking=""
+          thinkingOpen={false}
+          onThinkingOpenChange={noop}
+          emptyState={null}
+          onCopy={noop}
+          onSave={noop}
+          actionsDisabled={false}
+          summaryMarker={{ beforeMessageId: 'a1', summary: 'Earlier context condensed.' }}
+        />
+      </I18nProvider>
+    )
+  }
+
+  it('names its region via aria-controls when expanded', () => {
+    renderWithMarker()
+    const toggle = screen.getByRole('button', { name: /earlier messages summarized/i })
+    const controls = toggle.getAttribute('aria-controls')
+    expect(controls).toBeTruthy()
+    expect(document.getElementById(controls as string)).toBeNull() // collapsed: region absent
+    fireEvent.click(toggle)
+    const region = document.getElementById(controls as string)
+    expect(region).not.toBeNull()
+    expect(region).toHaveTextContent('Earlier context condensed.')
+  })
 })
 
 // S13c (D3): the per-turn "answer without it" undo shows ONLY on an auto-fired turn — and only on the

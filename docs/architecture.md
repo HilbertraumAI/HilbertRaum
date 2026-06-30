@@ -298,6 +298,41 @@ force-quit. The contract now:
 - **FE-9 (SegmentedControl Home/End).** Home/End now select the FIRST/LAST **enabled** segment directly
   (`moveToEdge`), instead of relying on the arrow-key modulo wrap to land there incidentally.
 
+**Drag-drop intake (full-audit-2026-06-29 follow-up, Phase 2 — FE-A / FE-C).** Chat drag-and-drop
+attach was **silently dead in the shipped app**: `ChatScreen.pathsFromDrop` read `(file).path`, the
+non-standard `File.path` Electron **removed in v32** (the app pins `^37.0.0`; installed 37.10.3). At
+runtime `.path` is `undefined`, so the loop produced `[]`, `attachFiles` was never called, and a drop
+did nothing — no import, no pending chip, no error. It went unnoticed because the only intake test
+(`ChatAttach.test.tsx`) **fabricated** `dataTransfer.files = [{ name, path }]`, injecting a property
+real Electron 37 doesn't provide → green test, broken product (the round's headline test lesson:
+never fabricate a platform property the renderer could read directly).
+- **FE-A — resolve the path in the PRELOAD.** The replacement, `webUtils.getPathForFile(file)`, is
+  only callable from the (sandboxed) preload, never the renderer. A new preload bridge method
+  `window.api.getDroppedFilePath(file)` (`preload/index.ts`, next to `pickDocuments`) wraps it;
+  `pathsFromDrop` now calls the bridge per dropped `File`. **NOT a new IPC channel** — `webUtils` is
+  synchronous and in-process in the preload, so the resolver is a plain bridge function (no
+  `ipcRenderer.invoke`, nothing added to `shared/ipc.ts`); the renderer call site is typed via
+  `PreloadApi = typeof api`. `File` objects cross `contextBridge` to the function; `contextIsolation`/
+  `sandbox` stay intact. Main still re-validates every path (existence + supported extension) on
+  import, so a spoofed value simply fails to import (unchanged trust model). The paperclip picker
+  (`pickDocuments` → main dialog → real paths) was always unaffected. The **Images** drop zone reads
+  `File` bytes (`FileReader`/`arrayBuffer`), never `File.path`, so it needed no change (confirmed).
+- **FE-C — no silent zero-path drop.** `onDrop` had no `else`: a Files-bearing drop resolving to zero
+  importable paths (now any browser-origin drag, and — pre-FE-A — *every* drop) was indistinguishable
+  from "nothing happened." It now surfaces a friendly banner (`chat.attach.dropUnsupported`, EN+DE)
+  when a drop carried Files but yielded no path, matching the Images screen's drop feedback.
+- **Tests / verification.** `ChatAttach.test.tsx` now drives the **real bridge shape** — the dropped
+  `File` carries no `.path` and a WeakMap stands in for webUtils' File→path resolution — plus an
+  explicit FE-A drop-without-`.path` test and the FE-C empty-drop banner test; `ChatUnmount.test.tsx`
+  updated to the same shape; `preload-attach.test.ts` is the preload-surface contract (resolver
+  exposed + forwards to `webUtils.getPathForFile`). All are teeth-checked (revert the bridge wiring →
+  red, verified). jsdom can't exercise `webUtils`, so the unit tests prove the **wiring**; the
+  real-Electron leg (bridge exposes the resolver in the actual renderer; `webUtils.getPathForFile` is
+  callable in the sandboxed preload on 37.10.3 — a renderer-built File resolves to `''` without
+  throwing) was confirmed by launching the built preload under the app's exact `webPreferences`. A
+  true native OS drag (Explorer → chat) isn't faithfully automatable (a synthetic File has no on-disk
+  path), so the disk→path success leg rests on that availability proof + the wiring tests.
+
 ## Performance — design record (perf audit 2026-06-18, Wave P3)
 Pipeline throughput & latency on the two hottest operations — **import a document** and **ask a
 question** — plus runtime-startup knobs. Unlike P2 (pure memoization), several P3 items are
@@ -673,11 +708,13 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   opening one row's ⋯ menu, or toggling another row's selection — re-renders ONLY the targeted row, not
   the whole list. The latest-ref `useEventCallback` was extracted to a shared `renderer/lib/` module and
   feeds stable handlers; render-count tests pin the win (teeth: dropping `memo`, or passing the whole
-  `selected` Set / `menuOpenId` string, re-renders every row). Still deferred as behavior-sensitive: the
-  Composer-`input` move (needs footer handler stabilization first) and **FE-5 list windowing**
-  (no virtualization lib in deps; windowing variable-height rows while preserving scroll-to-bottom,
-  find-in-page, and a11y is behavior-sensitive) — **PERF-5 Part B was re-deferred by owner decision**,
-  not confidently safe under the behavior-preserving mandate.
+  `selected` Set / `menuOpenId` string, re-renders every row). **PERF-5 Part B (list windowing) — DOCUMENTS
+  LIST now DONE** (full-audit-2026-06-29 follow-up **Phase 4 / PERF-2**; see **§36**): the documents list is
+  windowed with `@tanstack/react-virtual`, so its DOM + per-row Radix `DropdownMenu.Root` count no longer
+  grows linearly with library size. The **chat transcript** half stays deferred as genuinely
+  behavior-sensitive (variable-height messages + scroll-to-bottom + find-in-page + StreamAnnouncer); it
+  remains the tracked top renderer item. The Composer-`input` move (needs footer handler stabilization
+  first) also stays deferred.
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
@@ -1689,6 +1726,15 @@ still lazily restarts (only `stop()`'s separate, permanent `stopped` latch block
 teeth-tested (`e5-embedder.test.ts` / `reranker.test.ts`, F19): a gated-exit child parks teardown's
 `server.stop()`, a concurrent embed/rerank fires in that window, and the assertion is that NO sidecar survives
 the lock (one spawn, killed) — red without the flag (the concurrent start spawns + is retained).
+
+**Phase-6 extensions of this latch family (full-audit-2026-06-29 follow-up; see §37 for the ledger).**
+(a) **REL-2** ports the SAME `tearingDown` shape to `VisionService` (which had no orchestrator-level latch):
+set at the top of `stop()`, re-checked in `run()` at the top AND after the `getStatus()` await, so a NEW
+`analyze()` arriving during teardown can't rebuild the ~4.6 GB vision sidecar past the lock. (b) **REL-3**
+adds the missing BETWEEN-batches re-check to `e5.embed()` (it captures `server` once then loops): each batch
+re-throws the same recognizable cancellation if `stopped`/`tearingDown` is set or the captured `server` went
+stale (`this.server !== server`), so a `suspend()`/`stop()` mid-ingestion ends as a clean cancel instead of a
+confusing "llama-server is not started" on the next batch.
 
 **§5.4 Where GPU state lives:**
 
@@ -2757,6 +2803,62 @@ change); all fixed **test-first** through the real `extractTransactionRows`/`par
   confidently-wrong magnitude. (Single-separator 3-digit-group thousands forms `1.000`/`12.345` are integers,
   unaffected — DECISION 2.) Parens-negative through the real scanner (T4) and negative line totals / credit
   notes (Gutschrift/Rabatt, T9) are now pinned by whole-string tests.
+
+**Financial correctness (full-audit-2026-06-29 follow-up, Phase 1 — FIN-1/2/3/4).** A follow-up audit found
+the prior rounds had hardened the per-ROW money parser but left four "confidently-wrong figure / wrong
+currency / wrong date" paths in the STATEMENT/DOCUMENT-level orchestration ABOVE it. Parsing-only (no schema,
+IPC, or audit-payload change; figures stay content-class). All fixed **characterization-first then test-first**
+through the real `extractTransactionsTool`/`extractInvoiceTool`/`extractTransactionRows`/`parseLineItem`/
+`reconstructLine` entry points, each teeth-checked. **`BANK_EXTRACTOR_VERSION` 2 → 3** (FIN-1/3/4) and
+**`INVOICE_EXTRACTOR_VERSION` 1 → 2** (FIN-1/2/4) — the A9/F5 reuse gate (`isBankStatementStale`/
+`isInvoiceStale`) re-extracts older rows on next analysis (the rollback boundary).
+- **FIN-1 — document/statement currency by MAJORITY VOTE (`money.ts detectDocumentCurrency`, wired into both
+  tool `.run`s), HIGH.** The tool-level fallback was `detectCurrency(joined)` = "first allowlisted code
+  ANYWHERE in the joined text wins". On a bare-amount de-AT statement a stray `USD`/`CHF` in a payee MEMO won
+  → every bare-amount row fell back to USD → `summarizeCashflow` reported a **VERIFIED total in the wrong
+  currency**, and because the mislabel was UNIFORM the mixed-currency guard (fires on >1 distinct currency)
+  never tripped. The BL-2/F3 fix had narrowed only the per-ROW figure-region detection; the document-level
+  call still scanned everything. **Fix:** `detectDocumentCurrency` votes per line — a MONEY-bearing line votes
+  only on its **figure region** (text from the first amount onward, so a left-of-amount memo code is excluded;
+  dates are scrubbed first so a leading `dd.mm.yyyy` isn't read as the first "amount"), a MONEY-less line
+  (a `Währung EUR` header/label) votes on its whole text; the **most-voted** code wins, ties broken by first
+  appearance. A genuinely-foreign statement (code adjacent to amounts) is still detected; a truly-mixed
+  statement still reaches the mixed/unverified path because the per-row detection tags each row's own
+  figure-region currency (this only supplies the bare-row fallback).
+- **FIN-2 — invoice F1 right-side uncaptured-column drop OVER-fired (`invoice.ts UNCAPTURED_AMOUNT_AFTER`),
+  MEDIUM.** The F1 drop used `/(?:^|\s)[-+(]?\d/` — fired on ANY trailing digit after the last money match,
+  so it deleted valid items with a trailing annotation (`Service 12,50 (Pos. 3)`, `Beratung 1.234,56 19%
+  MwSt`, `Line 50,00 EUR 2 Stk`). **Fix:** the region after the last money match must be ENTIRELY a single
+  money-shaped-but-rejected bare token (`/^\s*[-+(]?\d[\d.,']*\)?\s*$/` — a whole/grouped integer or
+  single-decimal column, no `%`/`x`/unit word/other text), so a true uncaptured total (`Hosting 12,50 500`)
+  still drops while an annotated item is kept.
+- **FIN-3 — geometry classifier read a bare-thousands amount as a DATE (`pdf-layout.ts DATE_TOKEN_RE`),
+  MEDIUM (latent; HIGH harm when it fires).** The old `^(\d{1,2})\.(\d{1,2})\.?(\d{2,4})?$` let `2.500`
+  BACKTRACK into a date (day 2 / month 5 / "year" 00); out of the booking-date column that "date" was
+  DROPPED, so row `07.02. EINKAUF 2.500 1.000,00` reconstructed as `…EINKAUF 1.000,00` and the line parser
+  read the **BALANCE as the movement amount** (the cardinal wrong-money harm, via a path the F1 guard
+  doesn't cover). **Fix:** require a year to be preceded by its own dot (`^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4})?)?$`)
+  so `2.500` (one dot) is un-date-able → it survives as text and the line parser's `MONEY_RE` reads it.
+  **DIVERGENCE from the audit's "widen `MONEY_TOKEN_RE` to the shared grammar":** `MONEY_TOKEN_RE` was kept
+  a 2-dp-only SUBSET (NOT widened). Widening would make a pdf.js-SPLIT amount (`2.000` + `,00`, the M3
+  boundary) classify `2.000` as money and emit a row with amount 2000 — silently dropping the cents on a
+  `2.000,50`-style split, a **confidently-wrong figure where the row is today safely DROPPED**. The
+  `DATE_TOKEN_RE` tightening alone fixes the wrong-figure harm because the reconstructed line is re-parsed by
+  the shared `MONEY_RE` (which reads bare-thousands/apostrophe); the trade-off is that a SOLE bare-thousands/
+  apostrophe figure stays a gate-safe recall DROP (pre-existing — the old `MONEY_TOKEN_RE` already rejected
+  it). The stale `pdf-layout.ts:43` comment ("mirrors the accepted set of the shared `MONEY_RE`") was
+  corrected to state the intentional subset.
+- **FIN-4 — a memo date flipped the WHOLE document's date order (`money.ts inferDateOrder`), MEDIUM.** The
+  scan was over the ENTIRE joined text, so one `03/15/2026` (second field 15 → US) in a payee memo flipped a
+  de-AT statement to month-first → every dotted `dd.mm.yyyy` booking date with day ≤ 12 silently day/month-
+  swapped (all still valid → none dropped → fully silent; the completeness gate checks balances, not dates).
+  **Fix:** the vote is scoped by line KIND — a MONEY-bearing line (a transaction row) votes only on its
+  LEADING run of date-column tokens (capped at two, mirroring `splitLeadingDates`; a memo date deeper in the
+  row can't vote), while a MONEY-less line (an invoice `Invoice date 06/15/2026` header, a statement period)
+  votes on any date it carries. **DIVERGENCE from the audit's "restrict to the leading date column":** the
+  pure leading-column rule BROKE invoice US-date detection (an invoice's header dates follow a LABEL, they
+  don't lead the line) — hence the split-by-line-kind, which fixes the statement-memo contamination while
+  keeping both the single-leading-US-date statement and the labeled US invoice working.
 
 ### §11 IPC / audit surface
 
@@ -4014,9 +4116,10 @@ citation through it.
   **separate human pre-release gate** (it can't run in offline CI); the canned-real-output fixture-parser
   **policy** and the b9585 `--list-devices` fixture exist, but the promised **SSE** and **whisper-JSON**
   parser fixtures are still outstanding — an open follow-up so those parse layers gain CI coverage.
-- **PERF-5 Part B (list windowing)** — **re-deferred** (owner decision): no virtualization lib is in deps,
-  and variable-height rows + scroll / find-in-page / a11y are behavior-sensitive; Part A (row memoization)
-  shipped.
+- **PERF-5 Part B (list windowing)** — **documents-list DONE** (full-audit-2026-06-29 follow-up Phase 4 /
+  PERF-2 — `@tanstack/react-virtual`; see §36); the **chat transcript** half stays deferred (variable-height
+  messages + scroll-to-bottom + find-in-page + StreamAnnouncer — genuinely behavior-sensitive), still the
+  tracked top renderer item. Part A (row memoization) shipped earlier.
 - **E5 `query:`/`passage:` prefix migration** (RAG-N3 / DOC-N6) — **tracked TODO, not done**: it re-embeds
   the whole corpus (its own phase) and would re-enable a meaningful `ragMinSimilarity` floor; the reranker
   full-chunk fix was the smaller-blast-radius lever taken now.
@@ -4116,7 +4219,7 @@ lives in **this section**. This ledger is the durable index — resolve a code c
 | **SEC-1 code half** (Low) | — | **accepted residual / open follow-up** — unlock-path rate-limit/attempt-counter + create-time strength meter/floor; deliberately **not** built in the docs-only close-out (a UI rate-limit doesn't bind the offline attacker that is the real threat; the at-rest KDF is the mitigation) | security-model.md residual note |
 | SEC-2 (Low) | — | **accepted residual / open follow-up** — `previewSkillPackage` stages path-/size-validated, finally-cleaned content to the shared OS `tmpdir()`; not an escape (skill packages aren't secret). Follow-up: stage under `userSkillsDir` for trust-zone consistency | this ledger |
 | SEC-3 (Info) | — | **accepted residual / open follow-up** — the dialog-opener IPCs (`pickSkillPackage`/`pickDocuments`/`imageChooseImage`) mint a capability token pre-unlock, but every **consuming** handler is `requireUnlocked()`-gated so the token is inert until unlock; a consistency gap, not an exploit | this ledger |
-| REL-5 (Low) | — | **deferred to its own phase / open follow-up** — `BEGIN IMMEDIATE` + a single `withTransaction(db, fn)` guard touches every `db.exec('BEGIN')` site; a broad, correctness-sensitive refactor (the load-bearing invariant — no `await` between BEGIN and COMMIT — already holds everywhere checked), so latent not confirmed | this ledger |
+| REL-5 (Low) | — | **non-reachable while the single-`DatabaseSync` architecture holds; promote to a real fix only if a second DB connection (e.g. a worker-thread reader) is introduced** — verified (follow-up Phase 6) architecturally non-reachable: exactly one live synchronous `DatabaseSync` connection per session (`db.ts`; others are transient open→seed→checkpoint→close), and all 15–20 `BEGIN…COMMIT` bodies are synchronous (the slow `await embed/generate` sits *outside* the txn). `BEGIN IMMEDIATE` would be a no-op without a second writer, so the `withTransaction(db, fn)` refactor stays deferred. **Precondition made explicit so a future worker-pool/second-connection change can't silently make it reachable** | this ledger; §37 (follow-up Phase 6 REL note) |
 | §5 INFO / by-design (CSV single-data-row, DOCX paragraph-split, `embedChunks` single-batch, `corpusNeedsReindex` double-scan, rerank-before-dedup cost) | — | **accepted (no change)** — low-severity edge/robustness notes; each acceptable as-is, recorded so the next audit skips them | this ledger (accepted residuals) |
 | PERF-5 Part B (list windowing), E5 `query:`/`passage:` prefix migration | — | **carried forward from §25 (still open)** — list virtualization re-deferred (no virt lib; variable-height rows + scroll/find/a11y behavior-sensitive); the prefix migration re-embeds the whole corpus (its own phase) and would re-enable a `ragMinSimilarity` floor | §25 accepted residuals (unchanged) |
 
@@ -4127,9 +4230,12 @@ lives in **this section**. This ledger is the durable index — resolve a code c
   drive-in-hand attacker), preview-temp staging is path-/size-validated and finally-cleaned, and the
   dialog-opener tokens are inert until the consuming handler's `requireUnlocked()` gate. Open follow-ups, not
   Phase-6 work (Phase 6 was docs-only by charter).
-- **REL-5** — `BEGIN IMMEDIATE` + `withTransaction` is **deferred to its own characterized phase** (per the
-  report's own recommendation): broad blast radius across every BEGIN site, and the load-bearing invariant
-  (no `await` inside a transaction) already holds, so it is a defense-in-depth margin rather than a live bug.
+- **REL-5** — `BEGIN IMMEDIATE` + `withTransaction` is **deferred**, now with the precondition stated
+  explicitly: it is **non-reachable while the single-`DatabaseSync` architecture holds** (one live synchronous
+  connection per session; every `BEGIN…COMMIT` body synchronous, the slow `await` outside the txn). It becomes
+  a real fix to build **only if a second DB connection is introduced** (e.g. a worker-thread reader / a
+  connection pool) — that change, not this audit, is what would make `BEGIN IMMEDIATE` load-bearing. Recorded
+  so a future worker-pool change can't silently re-open the gap (verified follow-up Phase 6; see §37).
 - **§5 by-design edge notes** — CSV single-data-row, DOCX paragraph-split, `embedChunks` single-batch (bounded
   by the 1000-chunk cap), `corpusNeedsReindex` double-scan (only on the already-failed empty-retrieval path),
   and rerank-before-dedup cost (correct by design): all acknowledged, none scoped to a fix.
@@ -4429,7 +4535,9 @@ low-hangers F12/F18/F19 + report retirement.
   **SEC-3** (dialog-opener capability tokens inert until the consuming `requireUnlocked()` gate); **REL-5**
   (`BEGIN IMMEDIATE` + a single `withTransaction` guard — the no-`await`-in-txn invariant re-verified true
   at every BEGIN site, so a defense-in-depth margin, its own characterized phase); **PERF-5 Part B** list
-  windowing (Documents + Diagnostics activity are the highest-value targets) + the **E5-prefix migration**.
+  windowing — **documents-list half now CLOSED** (follow-up Phase 4 / PERF-2; see §36); the **chat
+  transcript** half remains (Diagnostics activity is a lower-volume secondary target) + the
+  **E5-prefix migration**.
 
 **Posture held across all eight phases (load-bearing):** offline / no telemetry / no new network egress; no
 schema change beyond the single additive nullable `invoices.extractor_version` (P3) + the internal
@@ -4439,6 +4547,304 @@ never logged/audited/exported. Behavior-preserving: every behavioral fix (P1/P2/
 empty); P7 was docs/comments-only. The F12 byte-equivalence + signature backstop + lock-purge, the vision
 cancel semantics (F18), and the stop()/suspend() teardown semantics (F19) are all preserved. Final suite
 **2532 passed / 39 skipped (2571 collected)**; typecheck + `npm run build` green.
+
+
+### §35 Full audit (2026-06-29, follow-up) — Phase 3 (main-thread import I/O + parser memory caps; PERF-1 / PERF-4)
+
+The follow-up audit (`audits/full-audit-2026-06-29-followup.md`) found the gaps had moved *outward* from the
+fortified core into main-thread I/O. **Phase 3** removes the synchronous import freeze (PERF-1) and turns an
+oversize-text OOM crash into the existing friendly reject (PERF-4). Both are behavior-class fixes with **no
+schema / IPC / audit-payload change**; the encrypted-at-rest guarantee and the exact on-disk vault frame are
+preserved byte-for-byte. Suite **2559 passed / 39 skipped** (was 2551/39 → **+8**: PERF-4 ×4 + PERF-1
+async-crypto ×4); typecheck + `npm run build` green.
+
+- **PERF-1 (High) — async document-cache crypto on the import path.** The document-import / re-index /
+  preview / OCR-read path encrypted/decrypted the stored copy through a fully **synchronous** `readSync` /
+  `writeSync` + `cipher.update` chunk loop on the Electron **main thread** — multi-second on a large scanned
+  PDF over USB, paid **twice** in an encrypted workspace (encrypt-on-store + decrypt-to-parse), freezing the
+  UI/IPC and starving the embedder sidecar. FIX: added **async siblings** `encryptFileAsync` /
+  `decryptFileAsync` in `workspace-vault.ts` — the SAME streaming AES-256-GCM loop on `fs.promises`
+  FileHandles, awaiting each 8 MiB chunk read/write so the event loop runs between chunks (GCM `update` on a
+  chunk is sub-ms — per-chunk yielding suffices, no worker thread). They write/read the **byte-identical**
+  frame (`MAGIC | iv | tag-placeholder | ciphertext`, the GCM tag positionally patched into its reserved
+  slot at `tagPos` after `final()`), cross-verified so a file written by either flavour decrypts with the
+  other (and the in-memory blob path). The `DocumentCipher` gained `encryptFileAsync`/`decryptFileAsync`; the
+  three already-async import callers (`ingestion processDocument` ×3, `extractDocumentPreview`,
+  `doctasks readStoredPdfBytes`) now `await` them, and the plaintext copy went `copyFileSync` →
+  `await fs.promises.copyFile`.
+  - **DIVERGENCE from the audit's "convert the vault loop" wording (deliberate, mechanically-correct).**
+    Rather than make the shared `encryptFile`/`decryptFile` async *in place* — which cascades into the
+    **DB-`.enc` lock/unlock/create/rekey lifecycle**, the **synchronous crash-only lock** (the
+    `uncaughtException` handler must re-encrypt the working DB **before** `process.exit`; an async lock can't
+    finish first → committed in-session data would be lost), and the **synchronous vision streaming emitter**
+    (`createImageSession` is reached through a non-awaitable `emit.done`) — i.e. the highest-stakes,
+    most-tested code, with the real vault-corruption blast radius the audit itself flagged in its CRITICAL
+    RISK note — we **added** async siblings used only by the actual per-import harm. The **session-boundary
+    DB lifecycle** (unlock decrypts the whole DB once per session; lock once on lock/quit — NOT "every
+    import") and the **bounded, sync-reached paths** (image-history via the vision emitter; text export) stay
+    on the synchronous functions. Net effect: the PERF-1 "freeze on **every import**" is gone; the
+    once-per-session unlock/lock decrypt freeze is an available follow-up (adopt the async siblings there once
+    the crash-lock keeps a synchronous path — `encryptFile` is retained for exactly that).
+- **PERF-4 (Medium) — string-safe byte cap for the read-whole-file-to-string formats.** The text / Markdown /
+  CSV parsers materialize the file as one UTF-16 JS string (CSV then derives the papaparse row array + the
+  rebuilt `lines.join` ≈ 3 full copies at once), so a file approaching the generous 1 GiB `maxBytes` exceeds
+  V8's ~512 MB string/heap ceiling and **OOM-crashes** the main process instead of producing the friendly
+  `fileTooLarge` reject. FIX: a new `textMaxBytes` ceiling (default **64 MiB**, env `HILBERTRAUM_TEXT_MAX_BYTES`)
+  + a `readsWholeFileToString` flag on the txt/markdown/csv parsers; `effectiveMaxBytes(title, limits)` narrows
+  the **existing** pre-parse byte checks in `processDocument` to that ceiling for those formats only — so an
+  oversize text/CSV file hits the unchanged friendly reject, while the streaming / page-bounded formats
+  (PDF/DOCX/audio/image) keep the full `maxBytes`. Streaming parse remains the better long-term fix; the cap
+  is the safe win (recorded in known-limitations).
+
+| Finding | Sev | Disposition (one line) | Record / files |
+|---|---|---|---|
+| **PERF-1** | High | **fixed** — async `encryptFileAsync`/`decryptFileAsync` (FileHandle, per-chunk yield, byte-identical frame) on the document-import path; `copyFileSync` → async `copyFile`. DIVERGED: added async siblings instead of converting the shared sync functions (DB lifecycle + crash-lock + vision emitter stay sync). Teeth: a non-yielding neuter reddens the event-loop-yield test while the frame-identity tests stay green | this §35; `workspace-vault.ts`, `ingestion/index.ts`, `doctasks/manager.ts`; known-limitations |
+| **PERF-4** | Med | **fixed** — `textMaxBytes` (64 MiB) + `readsWholeFileToString` flag + `effectiveMaxBytes` narrows the pre-parse byte cap for txt/markdown/csv → friendly `fileTooLarge` reject, not an OOM crash. Format-scoped (PDF keeps full `maxBytes`). Teeth: neuter the narrowing → the over-cap .txt/.csv tests redden | this §35; `ingestion/limits.ts`, `parsers/{index,txt,markdown,csv}.ts`, `ingestion/index.ts`; known-limitations |
+
+**Posture (load-bearing):** offline / no telemetry / no new network egress; encrypted-at-rest + the exact
+on-disk vault frame preserved (cross-read tests pin sync↔async equivalence + GCM auth on tamper); content
+class never logged. Behavior-preserving: both fixes are **teeth-checked** (neuter → red → restore
+byte-identical). Branch `audit-followup-phase3-import-io` (unmerged; do NOT auto-merge/push).
+
+
+### §36 Full audit (2026-06-29, follow-up) — Phase 4 (documents-list scale; PERF-3 / PERF-2; PERF-6 deferred)
+
+**Phase 4** removes the two ways the documents screen got slower with library size: a hot-path DB parse
+(PERF-3) and unbounded list DOM (PERF-2 = the long-deferred PERF-5 Part B). One additive nullable column;
+no IPC / audit-payload change; an old on-disk workspace opens cleanly. Suite **2568 passed / 39 skipped**
+(was 2559/39 → **+9**: PERF-3 ×7 + PERF-2 ×2); typecheck + `npm run build` green (the new renderer dep
+bundles offline — no runtime fetch).
+
+- **PERF-3 (Medium) — `listDocuments` no longer parses the full `ocr_json` blob per OCR'd row.** DB-8 (§
+  Performance Wave P5) projected columns on the single-doc getters, but the **list** path still did
+  `SELECT *` and fully `JSON.parse`d every row's `ocr_json` — reconstructing `pages[]` **with every page's
+  text** — only to read `pageCount`/`languages`/`engineId`/`createdAt` for the OCR badge. At a library of
+  large scans that is a megabytes-scale parse + a ~10⁵-object array allocation on the **main thread**, on
+  *every* documents-screen mount / import-completion / collection change. FIX: a cheap, additive, nullable
+  **`documents.ocr_meta_json`** sidecar holding ONLY the badge metadata (a serialized `DocumentOcrInfo` —
+  counts/ids/languages, **never page text**). Written alongside `ocr_json` at OCR-write time
+  (`setDocumentOcr`, lock-step; clearing nulls both), and **backfilled once** at `openDatabase` for rows
+  imported before the column existed (reads each blob ONCE, extracts meta, writes the sidecar; FK/lifecycle-
+  safe; `updated_at` untouched; subsequent opens select zero rows). `listDocuments` now SELECTs an explicit
+  **narrow column set that omits `ocr_json`** and reads the badge via `ocrInfoForRow` from the sidecar (with
+  a one-shot `parseOcr(ocr_json)` fallback the list path never reaches — its projection omits the blob AND
+  the backfill runs first). The meta extractor (`ingestion/ocr-meta.ts` — `ocrMetaFromJson` / `parseOcrMeta`)
+  is a **leaf module** (type-only import) so `db.ts` uses it for the backfill without a `db → ingestion`
+  cycle, and the page-count semantics (count only well-formed pages) match `parseOcr` exactly. **Measured**
+  (50 docs × 2000 pages × 500 chars, ~50 MB OCR text): the per-call `ocr_json` read+parse the projection
+  removes costs **~147 ms in isolation**; the projected `listDocuments` runs in **~55 ms** — and the
+  megabytes-scale string + ~10⁵-object allocation per call is eliminated.
+- **PERF-2 (High at scale; = PERF-5 Part B, documents-list half) — the documents list is windowed.** Every
+  document mapped to a live, memoized-but-never-unmounted `DocRow`, each mounting a Radix
+  `DropdownMenu.Root` — so the DOM and the count of menu-root state machines grew **linearly** with the
+  library (hundreds of mounted roots at scale, on CPU-only hardware). FIX: `@tanstack/react-virtual` (a
+  pure-JS, no-native, build-time dep — Vite bundles it; **no runtime network call**). The documents screen
+  scrolls **as a whole** inside the app's `.content` container, so the list virtualizes **against that
+  existing scroll element** with a `scrollMargin` for the header/hints above it — *additive*, the
+  full-screen scroll behavior is unchanged (no inner-pane restructure that would alter scroll position /
+  scroll-to). Variable row height (a failed-import error banner, a stale-embeddings notice, a wrapping chip
+  cluster — `.doc-row` is `min-height: 56px`, not fixed) is handled by per-row `measureElement` over a 57px
+  estimate + overscan, so a taller row self-corrects. The `DocRow` `React.memo` + the `__docRowRenderCounts`
+  seam are untouched; a shared `renderRow` keeps the windowed and fallback paths' props wiring in one place.
+  - **GATING (truthful, not a test sniff).** Windowing engages only once a real, laid-out viewport is
+    resolved (`scrollEl != null && clientHeight > 0`). With no `.content` ancestor or a 0px viewport — a
+    unit test rendering the screen standalone under jsdom, or first paint before layout — there is nothing
+    to virtualize, so it falls back to rendering **every** row, byte-identical to the pre-PERF-2 list. A 0px
+    viewport genuinely can't be windowed; the guard is honest, and it keeps the existing DocumentsScreen
+    test corpus on the un-windowed path while a dedicated test drives the **real** windowed path (mocking
+    `offsetHeight` — which react-virtual measures, not `getBoundingClientRect`).
+  - **KNOWN TRADEOFF (recorded in known-limitations.md):** the browser's find-in-page (Ctrl+F) can't match a
+    row that isn't currently mounted. Acceptable for a name-scannable library list (the in-app section/smart-
+    view filters search the full set); deliberately **not** applied to the chat transcript.
+- **PERF-6 (Low) — DEFERRED with cause.** Moving OCR pages from the one `ocr_json` blob to a per-page child
+  table is the clean root-cause fix for PERF-3, but it is a larger schema migration (backfill existing blobs
+  into child rows, FK/CASCADE lifecycle, the re-index-reuse + doctasks write paths). PERF-3's metadata
+  sidecar **already removed the hot-path parse** (the actual harm), so the child table is left as its own
+  future phase rather than forced into this one.
+
+| Finding | Sev | Disposition (one line) | Record / files |
+|---|---|---|---|
+| **PERF-3** | Med | **fixed** — additive nullable `ocr_meta_json` sidecar (counts/ids only, never text) written at OCR-write + backfilled once at open; `listDocuments` projects a narrow set that omits `ocr_json` and reads the badge from the sidecar. Measured ~147 ms blob-parse removed per call. Teeth: revert the projection to `SELECT *` → the SQL-omission test reddens | this §36; `db.ts`, `ingestion/index.ts`, `ingestion/ocr-meta.ts`; `tests/integration/ocr-meta-list.test.ts` |
+| **PERF-2** | High@scale | **fixed (documents list)** — `@tanstack/react-virtual` windows the list against the `.content` scroll element (scrollMargin + per-row measureElement); gated on a resolved non-zero viewport (else render all). Teeth: force `windowed = false` → the bounded-count test reddens. Chat transcript half stays deferred | this §36; `DocumentsScreen.tsx`, `package.json`; `tests/renderer/DocumentsScreen.test.tsx` |
+| **PERF-6** | Low | **deferred (cause)** — per-page OCR child table is a larger schema migration; PERF-3 already removed the hot-path parse it would have addressed | this §36 (own future phase) |
+
+**Posture (load-bearing):** offline / no telemetry / no new RUNTIME network egress (the virt lib is a
+build-time dep, bundled, verified no `.node` binary); the schema change is additive + nullable and opens old
+workspaces cleanly (backfill on first open); content class (OCR page text) is never materialized on the list
+path nor placed in the sidecar/logs/export. Branch `audit-followup-phase4-docs-scale` (unmerged; do NOT
+auto-merge/push).
+
+
+### §37 Full audit (2026-06-29, follow-up) — Phase 6 (reliability hardening; REL-1 / REL-2 / REL-3 / REL-4)
+
+**Phase 6** closes four **latent** concurrency/teardown gaps in the sidecar lifecycle. None is a live bug
+today — each mirrors a race class already fixed elsewhere (the F19 `tearingDown` family; the lock-path
+stream-abort ordering) — so this is **defense-in-depth, proven by teeth-checks** (neuter the guard → the
+deterministic interleave test resurrects the race and reddens → restore byte-identical). No IPC / schema /
+audit-payload change; behavior-preserving (the robust paths the audit confirmed CLEAN — single-flight start,
+bind-race retry, SIGTERM→SIGKILL escalation, the `VisionRuntime` idle interlock, the e5/reranker F19 latch,
+`combineSignals` cleanup, partial-on-abort persistence — all stay green). Content class is never logged (a
+cancellation diagnostic carries ids + the error message only). Suite **2586 passed / 39 skipped** (was
+2579/39 → **+7**: vision-teardown ×2, OCR REL-1 ×1, e5 REL-3 ×1, shutdown REL-4 ×3); typecheck + `npm run
+build` green. Branch `audit-followup-phase6-reliability` (unmerged; do NOT auto-merge/push).
+
+- **REL-2 (Low, strongest) — `VisionService.stop()` defeated by a `run()` that rebuilds the runtime during
+  teardown.** `run()` does `this.runtime ??= createRuntime(status)` after `await getStatus()`. `VisionService`
+  (unlike the embedder/reranker, F19) had **no orchestrator-level latch**, and the per-`VisionRuntime`
+  `stopped` flag doesn't help (a rebuilt runtime starts without it). FIX: a `tearingDown` latch on the
+  **service** (not the runtime), set at the TOP of `stop()` and cleared in its `finally`; `run()` re-checks it
+  **at the top AND immediately after the `getStatus()` await** — a losing `run()` ends `cancelled`, spawns
+  nothing. **DIVERGENCE / sharpened repro (recorded):** the audit's "parked in `getStatus()`" variant is
+  ALREADY neutralized today by the existing `if (signal.aborted)` check between the await and `createRuntime`
+  (`stop()` aborts every vision controller synchronously before yielding). The genuinely-uncovered window the
+  latch closes is a **NEW `analyze()` that lands DURING an in-progress teardown** — its controller is fresh
+  (stop()'s abort loop ran before the job existed), so `signal.aborted` misses it and, without the latch, it
+  would `createRuntime` a fresh ~4.6 GB vision sidecar co-resident with the vault re-encrypt. The
+  top-of-`run()` latch is **solely** load-bearing there (single-neuter teeth-check: `createCalls` goes 1→2).
+  The post-`getStatus()` re-check is the defense-in-depth twin (co-guarded by `signal.aborted`, like F18 — a
+  dual-neuter), kept to mirror e5/reranker's post-`await this.starting` re-check and harden against a refactor
+  weakening abort-propagation.
+- **REL-1 (Low) — OCR worker init latch nulled from under a concurrent `ensureWorker()`.** `stop()` (lock/quit)
+  calls `terminateWorker()` **out of band** — NOT through `this.chain` — so it can race an `ensureWorker()`
+  init started inside a chained `recognize()`. The old `terminateWorker` nulled `this.starting`
+  unconditionally and never awaited a **pending** init, so the worker that init later produced **outlived the
+  teardown** (a leaked WASM worker holding decoded page bytes). FIX (the e5/reranker teardown mirror): capture
+  `this.starting`, **await it** if in flight (so the worker it spawns is the one we then terminate), and clear
+  the latch only if it is **still** that same promise (a fresh init started during the await is left to run).
+  **DIVERGENCE (recorded):** the audit's literal "only null when it equals the promise being torn down
+  (capture + compare)" is, without the await, a **no-op** for the reachable harm — nothing can replace
+  `this.starting` between a synchronous capture and null, and the pending init is still orphaned. Awaiting the
+  init is the mechanically-correct fix; the equals-compare-before-null is kept on top of it (guards a second
+  out-of-band terminate that replaces the latch during the await). The audit's "spawns a SECOND worker"
+  variant requires an out-of-band terminate that ISN'T `stop()` (none exists today — `recognize()` is
+  `stopped`-gated and the timeout/abort terminate runs **inside** the chain), so the concrete reachable harm
+  is the init-outlives-`stop()` leak, which the await closes (teeth: drop the await → the late-born worker is
+  never terminated).
+- **REL-3 (Low) — `e5.embed()` didn't re-check teardown between batches.** `embed()` captures `server` once,
+  then loops batches; a `suspend()`/`stop()` mid-loop nulls the sidecar, so the NEXT `server.fetch` threw the
+  runtime's `"llama-server is not started"` — a confusing per-document error rather than a clean cancel
+  (functionally safe — no orphan). FIX: at the top of each batch iteration, throw the SAME recognizable
+  cancellation `ensureStarted` raises (`"Embedder is stopped …"` / `"… is suspending …"`). **DIVERGENCE
+  (recorded):** the audit said re-check `this.stopped`/`this.tearingDown`; the load-bearing condition is
+  `this.server !== server` (a captured-server **staleness** check). `tearingDown` clears in teardown's
+  `finally`, so a `suspend()` that COMPLETED between two batches has it back to `false` — only the staleness
+  signal (teardown nulled/replaced `this.server`) catches that interleaving, which is the common one. `stopped`
+  is checked first for the quit path (teeth: drop the re-check → the next batch fetches the dead captured
+  server and reddens with `"not started"`).
+- **REL-4 (Low) — quit `shutdown()` didn't abort in-flight streams before `runtime.stop()`.** The
+  workspace-LOCK path aborts in-flight chat/RAG streams first (so each partial reply unwinds as an ABORT and
+  `generateAssistantMessage` persists it while `ctx.db` is open), but the quit path killed the sidecar
+  directly — a non-abort stream error that **lost** the partial. **DECISION: option (a)** — abort
+  `inFlightStreams` before the sidecar stops, mirroring the lock ordering (more consistent than documenting
+  the divergence; the partial persists during the awaited `runtime.stop()` window, the same settle guarantee
+  the lock path already relies on — neither path awaits the stream itself). The quit teardown was **extracted**
+  from `main/index.ts` into `main/shutdown.ts` (`performShutdown(ctx, deps)`) so its ORDERING is unit-testable
+  with a fake ctx (the real `main/index.ts` registers app handlers at import time). Teeth: drop the abort loop
+  → the stream is never aborted and the ordering test reddens.
+
+| Finding | Sev | Disposition (one line) | Record / files |
+|---|---|---|---|
+| **REL-2** | Low | **fixed** — service-level `tearingDown` latch (the F19 analogue VisionService lacked); `run()` re-checks at top + after `getStatus()`; a new analyze during teardown can't rebuild the ~4.6 GB sidecar. Teeth: neuter both checks → `createCalls` 1→2 | this §37; GPU §5.5c (F19 family); `vision/index.ts`; `tests/integration/vision-teardown.test.ts` |
+| **REL-1** | Low | **fixed** — `terminateWorker` awaits the in-flight init (e5/reranker mirror) so its worker can't outlive teardown, and clears the latch only if unchanged. Teeth: drop the await → late-born worker never terminated | this §37; `ocr/tesseract.ts`; `tests/unit/ocr.test.ts` |
+| **REL-3** | Low | **fixed** — per-batch teardown re-check throws the recognizable cancellation (`this.server !== server` staleness + `stopped`/`tearingDown`) instead of a confusing "not started". Teeth: drop it → next batch fetches the dead server | this §37; GPU §5.5b/c; `embeddings/e5.ts`; `tests/integration/e5-embedder.test.ts` |
+| **REL-4** | Low | **fixed (option a)** — `performShutdown` (extracted to `main/shutdown.ts`) aborts in-flight streams BEFORE `runtime.stop()`, mirroring the lock path so a partial reply persists at quit. Teeth: drop the abort loop → ordering test reddens | this §37; the LOCK-path record (`registerWorkspaceIpc.lockWorkspace`); `main/shutdown.ts`, `main/index.ts`; `tests/unit/shutdown.test.ts` |
+
+**REL-5 (carried, open):** unchanged — still keep-deferred (architecturally non-reachable while the single
+synchronous `DatabaseSync` connection holds; §26 note). Not in Phase 6's scope (the §26 wording strengthening
+is Phase 8).
+
+
+### §38 Full audit (2026-06-29, follow-up) — Phase 8 (maintainability + security hardening) & ROUND CLOSE-OUT
+
+The **2026-06-29 follow-up full audit** (report `audits/full-audit-2026-06-29-followup.md`) is **COMPLETE**
+— all eight phases landed. The round's pattern was *"the gaps moved outward"*: away from the
+heavily-fortified core primitives (crypto, money parser, sidecar lifecycle, RAG core — all independently
+re-confirmed clean) and into document/statement-level orchestration, the Electron-version platform boundary,
+and main-thread I/O / DOM scaling. **No Critical, no remote exploit** (offline by construction); 3 High
+(FIN-1 wrong-currency / FE-A dead drag-drop / PERF-1 import freeze) + PERF-2-at-scale, ~10 Medium, the rest
+Low/Info. Each phase folded its decisions into the topic docs as it landed (the per-phase records **§35**
+[Phase 3], **§36** [Phase 4], **§37** [Phase 6], the **Phase-7 subsection** of the Test-enforcement record,
+**§8** [Phase 1], **rag-design §14.4** [Phase 5], the **"Drag-drop intake" Renderer-robustness record**
+[Phase 2]); **this section is the durable master index** — resolve a `full-audit-2026-06-29-followup <ID>`
+code comment through it. Per the CLAUDE.md doc-lifecycle rule the working-paper report was **retired** once
+every finding was dispositioned (committed folded-in first, so the original stays **recoverable in git
+history** — the parent of the Phase-8 close-out commit), mirroring the §24/§25/§26/§34 precedent. Phases ran
+on stacked, unmerged branches (`audit-followup-phase1-financial` … `phase8-closeout`); owner merges when
+ready.
+
+**Per-phase one-liners:** **P1** financial correctness (FIN-1..4; release-blocking class; §8). **P2**
+Electron-37 drag-drop regression (FE-A `webUtils.getPathForFile` preload bridge + FE-C empty-drop feedback;
+Renderer-robustness record). **P3** main-thread import I/O + parser caps (PERF-1 async vault crypto / PERF-4
+text-CSV byte cap; §35). **P4** documents-list scale (PERF-3 `ocr_meta_json` sidecar / PERF-2 list windowing
+/ PERF-6 deferred; §36). **P5** RAG provenance honesty + Sources a11y (FE-B / F11 renderer half + FE-D;
+rag-design §14.4, design-guidelines §11.8). **P6** reliability hardening (REL-1..4 latent teardown races;
+§37). **P7** test-suite robustness (TEST-1/TEST-3/DX-2/DX-4/DX-5/DX-6; Phase-7 subsection, test-only). **P8**
+(this close-out) maintainability (DX-1/DX-3) + security hardening (SEC-4) + FE-E + REL-5 wording + report
+retirement.
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| **FIN-1** (High) | 1 | **fixed** — document/statement currency by figure-adjacent majority vote (`detectDocumentCurrency`), so a `USD`/`CHF` in a memo no longer stamps a EUR statement's verified total | §8; `money.ts`; known-limitations |
+| FIN-2 (Med) | 1 | **fixed** — invoice right-side "uncaptured column" drop requires the whole trailing region to be ONE money-shaped-but-rejected token (no over-fire on `(Pos. 3)` / `19% MwSt` / `2 Stk`) | §8; `invoice.ts` |
+| FIN-3 (Med) | 1 | **fixed** — `DATE_TOKEN_RE` tightened so `2.500` is un-date-able; `MONEY_TOKEN_RE` deliberately NOT widened (DIVERGED — widening would regress the M3 split-amount safety) | §8; `pdf-layout.ts` |
+| FIN-4 (Med) | 1 | **fixed** — `inferDateOrder` vote scoped by line KIND (money line → leading date column only; money-less header → any) so a memo's foreign-format date can't flip the doc | §8; `money.ts` |
+| **FE-A** (High) | 2 | **fixed** — preload `window.api.getDroppedFilePath` wraps `webUtils.getPathForFile` (Electron-37 removed `File.path`); `pathsFromDrop` calls it; real-Electron 37.10.3 leg verified | Renderer-robustness "Drag-drop intake"; `preload/index.ts`, `ChatScreen.tsx` |
+| FE-C (Med) | 2 | **fixed** — `onDrop` shows `chat.attach.dropUnsupported` when a Files-bearing drop yields zero importable paths | Renderer-robustness "Drag-drop intake" |
+| **FE-B** (Med-High) | 5 | **fixed (closes the carried F11 renderer half)** — `SourcesDisclosure` takes `coverage.mode`; any whole-document mode renders as **provenance** ("Drawn from the document — N sections", no `[Sn]`, capped at 24 + reveal); relevance/NULL-coverage byte-identical | rag-design §14.4 (AS BUILT) |
+| FE-D (Low, a11y) | 5 | **fixed** — `aria-controls`/`role="region"`/`aria-labelledby` on the Sources, Thinking, and SummaryMarker disclosures | design-guidelines §11.8 |
+| **FE-E** (Low) | **8** | **fixed** — a THROWN first-run model-listing/verify failure routes to the **Models** screen (not silently to Chat's generic "no model" empty state); an empty list still routes to the `starter` step; never traps the user | this §38; `WorkspaceGate.tsx`; `WorkspaceGate.test.tsx` |
+| **PERF-1** (High) | 3 | **fixed** — async `encryptFileAsync`/`decryptFileAsync` (per-chunk yield, byte-identical frame) on the import path; `copyFileSync`→async (DIVERGED — async siblings, the sync crash-lock/DB-lifecycle/vision-emitter stay sync) | §35; `workspace-vault.ts` |
+| **PERF-2** (High@scale) | 4 | **fixed (documents list)** — `@tanstack/react-virtual` windows the list (viewport-gated; else render all). **Chat-transcript half carried forward** (behavior-sensitive) | §36; known-limitations (find-in-page) |
+| PERF-3 (Med) | 4 | **fixed** — additive nullable `ocr_meta_json` sidecar (counts/ids only) written at OCR-write + backfilled once; `listDocuments` omits `ocr_json` (~147 ms/call removed) | §36 |
+| PERF-4 (Med) | 3 | **fixed** — `textMaxBytes` (64 MiB) + `readsWholeFileToString` flag → friendly `fileTooLarge` reject instead of a V8 string-limit OOM for txt/markdown/csv | §35; known-limitations |
+| PERF-5 (Low) | — | **accepted / carried** — `ImagesScreen` `AnswerThread` memo defeated by unstable `onCopy`/`onTryAgain`/`onStop` props; image sessions are short so the re-render cost is bounded (Low-Med) | this ledger (carried) |
+| PERF-6 (Low) | 4 | **deferred with cause** — per-page OCR child table is a larger schema migration; PERF-3's sidecar already removed the hot-path parse (the actual harm) | §36 |
+| **SEC-4** (Low/Info) | **8** | **fixed** — `runtime-sources.ts` rejects `..`/absolute/drive-letter `extract_to` at PARSE time (new `isUnsafeDrivePath`, applied to the sibling OCR `dest` too for consistency); defense-in-depth ahead of the load-bearing `resolveWithinRoot` | this §38; `shared/runtime-sources.ts`; `runtime-sources.test.ts` |
+| SEC-1c (Low) | — | **accepted residual / open** — unlock-path rate-limit/attempt-counter + create-time strength floor; the at-rest Argon2id KDF is the binding mitigation against the offline (drive-in-hand) attacker, so a UI rate-limit doesn't bind the real threat | §26 |
+| SEC-2 (Low) | — | **accepted residual / open** — stage `previewSkillPackage` content under `userSkillsDir` (trust-zone consistency); today path-/size-validated + finally-cleaned in the shared tmpdir, not an escape | §26 |
+| SEC-3 (Info) | — | **accepted residual / open** — dialog-opener IPCs mint a capability token pre-unlock but every consuming handler is `requireUnlocked()`-gated → inert; a consistency gap, not an exploit | §26 |
+| **REL-1** (Low) | 6 | **fixed** — OCR `terminateWorker` awaits the in-flight init so it can't outlive teardown | §37 |
+| **REL-2** (Low) | 6 | **fixed** — `VisionService` `tearingDown` latch (the F19 analogue) bars a NEW `analyze()` from rebuilding the ~4.6 GB sidecar mid-teardown | §37; GPU §5.5c |
+| **REL-3** (Low) | 6 | **fixed** — `e5.embed()` per-batch teardown re-check (captured-server staleness) throws the recognizable cancel, not "not started" | §37; GPU §5.5b/c |
+| **REL-4** (Low) | 6 | **fixed (option a)** — `performShutdown` (extracted to `main/shutdown.ts`) aborts in-flight streams BEFORE `runtime.stop()`, mirroring the lock path | §37 |
+| REL-5 (Low) | — | **non-reachable / deferred** — verified architecturally non-reachable while the single-`DatabaseSync` architecture holds; **promote to a real fix only if a second DB connection (e.g. a worker-thread reader) is introduced** (precondition made explicit) | §26 (strengthened, P8); §37 |
+| **TEST-1** (Med) | 7 | **closed (de-flake)** — the flaky real-timer vision idle block deleted; its two uncovered cases ported to the deterministic injected-clock twin | Phase-7 subsection |
+| **TEST-3** (Med) | 7 | **closed (test)** — `rag-pipeline-floor.test.ts`: model-free synthetic floor through the REAL chunk→embed→FTS→RRF→top-k→citation pipeline; teeth-checked ×2 | Phase-7 subsection |
+| **DX-1** (Med) | **8** | **fixed (refactor)** — `DocTaskManager` god-class split: each `run<Kind>` extracted to a `doctasks/handlers/*` module keyed by `MODEL_TASK_HANDLERS`; the manager keeps only queue/pump/arbiter + the `generate`/`generateWithRetry` retry loop, handed to handlers via a narrow `DocTaskCtx`. STRICTLY behavior-preserving (1758→~580 lines; full doctasks suite identical green) | this §38; `doctasks/manager.ts`, `doctasks/context.ts`, `doctasks/handlers/{index,shared,tree,summary,ocr,translation,compare,categorize}.ts` |
+| DX-2 (Low) | 7 | **fixed** — prod render-counter `import.meta.env.DEV`-guarded (no-ops in a production build; memo test green under DEV) | Phase-7 subsection; `DocumentsScreen.tsx` |
+| **DX-3** (Low) | **8** | **fixed (refactor)** — `DocumentsScreen` split: `DocRow`/`SectionRail`/`PreviewModal` to sibling `screens/documents/*` files + pure formatters to `documents/format.tsx` + shared types/keys to `documents/types.ts`. STRICTLY behavior-preserving (2190→1164 lines; Phase-4 virtualization + Phase-7 DEV render-counter intact; all Documents suites green) | this §38; `screens/documents/{format.tsx,types.ts,DocRow.tsx,SectionRail.tsx,PreviewModal.tsx}` |
+| DX-4 (Low-Med) | 7 | **closed (test)** — `ipc-lock-coverage` meta-assertion globs every `register*Ipc` export; a new uncovered module reds it | Phase-7 subsection |
+| DX-5 (Low) | 7 | **closed (test)** — `runtime-ladder-exit-wiring.test.ts`: a real `LlamaServer` child's `'exit'` drives the §5.3 crash auto-fallback end-to-end; teeth-checked | Phase-7 subsection |
+| DX-6 (Low) | 7 | **closed (de-flake)** — three settle-window sleeps → deterministic waits (await the F19-guarded refusal; poll the scripted in-flight count) | Phase-7 subsection |
+
+**Carried-forward open items (deliberately NOT taken; on record for the next pass):**
+
+- **SEC-1c / SEC-2 / SEC-3** — three security **consistency** improvements, none an exploit (re-affirmed
+  accepted residuals with their §26 rationale; the at-rest KDF binds the offline attacker, the skill-preview
+  staging is validated+cleaned, the dialog-opener tokens are inert until the consuming `requireUnlocked()`).
+- **REL-5** — **non-reachable while the single-`DatabaseSync` architecture holds**; becomes a real fix to
+  build **only if** a second DB connection (worker-thread reader / connection pool) is introduced. Precondition
+  now explicit in §26 so a future worker-pool change can't silently re-open the gap.
+- **PERF-5 (ImagesScreen `AnswerThread` memo)** — Low; image sessions are short, so the unstable-handler
+  re-render is bounded. Wrap `onCopy`/`onTryAgain`/`onStop` in `useEventCallback` when the Images screen is
+  next touched.
+- **PERF-2 chat-transcript half** — list windowing for the chat transcript stays deferred (variable height +
+  scroll-to-bottom + find-in-page + StreamAnnouncer are genuinely behavior-sensitive); the **documents-list
+  half is CLOSED** (P4). Still the tracked top renderer item.
+- **§26/§34-carried (still open, unchanged):** the **E5 `query:`/`passage:` prefix migration** (its own phase;
+  re-embeds the whole corpus) and the coupled **F13 floor-before-cut** precondition (re-enabling a positive
+  `ragMinSimilarity` floor must over-fetch then floor) — both inert at the pinned default 0.
+
+**Posture held across all eight phases (load-bearing):** offline / no telemetry / no new network egress; the
+only schema change was the single additive nullable `documents.ocr_meta_json` (P4, backfilled on open); no
+IPC / audit-payload change in any phase; the **content class** (document/chat text, titles/filenames,
+extracted figures, redacted text) is never logged / audited / exported. Behavior-preserving: every behavioral
+fix (P1/P2/P3/P4/P5/P6) is **teeth-checked** (neuter the guard → red → restore byte-identical); P7 was
+test-only (`git diff src/` a single DEV-guard line); **P8's two refactors (DX-1/DX-3) are STRICTLY
+relocation** — the full doctasks suite (154 tests) and the Documents renderer suites (95 tests) are identical
+green before and after, and the whole suite is unchanged at **2593 passed / 39 skipped** (+4 vs Phase 7's
+2589, all from SEC-4). The SEC-4 validator, the FE-E route, and the REL-5 wording are the only P8 behavior/
+doc deltas; `npm run typecheck` + `npm run build` green.
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
@@ -4572,6 +4978,79 @@ carries the one-line disposition for each; the detail and teeth:
 Suite after Phase 5: **2518 passed / 39 skipped (2557 collected)** (was 2515/39 after Phase 4 → **+3 tests**;
 T6/T7/T8 were conversions/strengthenings, not additions). **No `src/` behavior change** — the only source
 edits were the temporary teeth-check neuters, each restored byte-identical (`git diff src/` empty).
+
+### Full audit (2026-06-29, follow-up), Phase 7 — test-suite robustness (TEST-3 / TEST-1 / DX-4 / DX-2 / DX-5 / DX-6)
+
+The 2026-06-29 follow-up audit's §4 testing review found the same recurring class — plus the one
+**material coverage gap** (no automated end-to-end RAG-retrieval floor) and an actively-flaky block.
+Phase 7 is **test-only**: `git diff src/` is a SINGLE line (DX-2's DEV-guard). It closes the gap, retires
+the flaky vision real-timer block, and makes three "works today but no test proves it stays wired" seams
+self-enforcing — every added wiring test TEETH-CHECKED with the standing discipline (neuter the guarded
+control → red → restore byte-identical). Suite **2589 passed / 39 skipped** (was 2586/39 after Phase 6 →
+**+3 net**: TEST-3 ×3 + DX-4 ×1 + DX-5 ×1 − TEST-1 net ×2; DX-2/DX-6 are guards/conversions, no count change).
+
+- **TEST-3 — model-free RAG-pipeline retrieval FLOOR (`tests/integration/rag-pipeline-floor.test.ts`, new,
+  +3).** The scorer (`eval/score.test.ts`) and the S13b skill-trigger precision bar are CI-gated, but
+  actual retrieval→answer quality was asserted ONLY in env-gated MANUAL suites (`tests/manual/model-eval`,
+  `rag-quality`) — so a regression in chunking / embedding-prefix / reranking / `ragMinSimilarity` / top-k /
+  FUSION / citation assembly passed CI green. The floor draws the mock line at the SAME `MockEmbedder` seam
+  the RAG integration suite uses (deterministic, hash-based, offline) over a CONSTRUCTED corpus where the
+  known-correct chunk wins both the vector and the keyword channel, then runs the REAL pipeline end-to-end:
+  real chunker (`processDocument`) → `MockEmbedder` → `VectorIndex` cosine scan → FTS5 keyword scan → RRF
+  fusion → dedup → top-k trim → `[Sn]`/`Citation[]` assembly. Asserts (a) the known-correct chunk ranks #1
+  with its citation assembled, (b) the result caps at `topKFinal`, (c) `generateGroundedAnswer` persists a
+  cited answer whose first citation is the answer doc. The real-model EM/hallucination benchmark stays
+  MANUAL; this guards the PLUMBING that feeds it. Teeth: reverse `rrfFuse`'s sort (rag/hybrid.ts) → a
+  distractor ranks first → (a)/(c) red (verified); drop the `selected.length >= topKFinal` break
+  (rag/index.ts) → 5 returned → (b) red (verified).
+- **TEST-1 — the flaky real-timer vision idle-teardown block is DELETED
+  (`tests/integration/vision-runtime.test.ts`, net −2).** It raced real `setTimeout`s against tiny
+  `idleTimeoutMs` in BOTH directions (`sleep(15)` not-yet-torn-down, `sleep(60)` torn-down) — the known
+  T6/T7 "real-timer copies left" residual. Every case it covered is now asserted DETERMINISTICALLY by the
+  injected-clock twin: teardown-after-idle + cold restart → (b), in-flight guard → (a); the two UNCOVERED
+  cases were PORTED — clock-reset → new **(d)** (re-entry CLEARS T1 / re-arms T2, asserted via the fake
+  clock's `set`/`clear` counts, then T2 fires the teardown), stop()-cancels-timer → new **(f)** (stop()
+  clears the pending timer; a later stale fire is inert via the `stopped` guard in `idleTeardown`). No idle
+  `sleep` remains in the block; stable across repeated full-suite runs.
+- **DX-4 — IPC lock-guard enumeration is now self-checking
+  (`tests/integration/ipc-lock-coverage.test.ts`, +1).** The hand-kept `MODULES` array + a free-text
+  "covered elsewhere" comment meant a NEW `register*Ipc` module simply not listed went entirely unchecked
+  (the exact drift the file exists to prevent). New meta-assertion globs EVERY `register*Ipc` export from
+  the source tree (regex on the `export function` decl) and asserts union(`MODULES`, the new
+  `COVERED_ELSEWHERE` reason-map) == discovered (`unaccounted == stale == []`). `COVERED_ELSEWHERE`
+  annotates each of the 9 not-driven-here modules with WHY (a named dedicated locked-vault test, or
+  pre-unlock-by-design at the setup gate — download/engine guard their lone `ctx.db` read behind
+  `isUnlocked()`; dictation never touches `ctx.db`; workspace IS the lock gate). Teeth: add a stub
+  `src/main/ipc/registerStubIpc.ts` → it lands in `unaccounted` → reds (verified; stub deleted).
+- **DX-2 — the `__docRowRenderCounts` perf instrument no longer ships active in production
+  (`renderer/screens/DocumentsScreen.tsx`, the SOLE `src/` line).** The per-render Map write is guarded
+  behind `import.meta.env.DEV`, so it no-ops in a production build (verified: `npm run build` clean);
+  vitest runs with DEV true, so the PERF-5 memo test (`DocumentsScreen.test.tsx`, 48 green) still observes
+  the bumps. No production behaviour change (the exported Map stays an empty no-op in prod).
+- **DX-5 — the sidecar crash → auto-fallback WIRING is pinned end-to-end
+  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proves the
+  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama — never that
+  the real `LlamaServer` wires its child's `'exit'` event to that callback. The new test drives the REAL
+  `createLlamaRuntime`→`LlamaServer` (only spawn/fetch/port injected, the e5/reranker/vision gated-child
+  style), starts it to healthy on a GPU-reporting probe (backend `'gpu'`), then emits a REAL `'exit'`
+  (code 134 + a stderr tail) and asserts the §5.3 GPU crash auto-fallback fired: persisted failure
+  carrying `code 134` + the tail, the compatibility-mode notice, and ONE CPU restart of the same model.
+  Teeth: drop the `this.opts.onUnexpectedExit?.()` call in `LlamaServer`'s `'exit'` handler (or its
+  `ready && !stopping` gate) → no crash reaches the ladder → `restarts`/`persisted` stay empty → reds
+  (verified).
+- **DX-6 — three settle-window real sleeps converted to deterministic waits (no count change).**
+  `reranker.test.ts` / `e5-embedder.test.ts`: the fixed 25 ms "nothing spawned in the teardown window"
+  sleep is replaced by `expect(await {rerank,embed}2).toBe('rejected')` — under the F19 `tearingDown`
+  guard the racing call REFUSES on its own, so the absence is asserted by its settled outcome (a regression
+  that spawned a second child instead resolves `'ok'` AND bumps the spawn count the final assertion still
+  checks). `doctasks.test.ts`: the 40 ms "let the stream start" sleep is replaced by
+  `while (runtime.concurrent === 0) await tick()` (the scripted runtime's observable in-flight count), so
+  the mid-stream cancel lands deterministically once a generation is genuinely running. These assert/await
+  an absence-or-start so they are un-teeth-checkable by nature, but no longer race the wall clock.
+
+`git diff src/` after Phase 7 = the single DX-2 DEV-guard line; every teeth-check neuter (hybrid.ts fusion
+sort, rag/index.ts top-k break, sidecar.ts `'exit'`→hook) was restored byte-identical, and the DX-4 stub
+module was deleted.
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 

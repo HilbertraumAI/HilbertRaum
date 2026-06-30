@@ -435,3 +435,52 @@ describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', (
     expect(parseLineItem('Gutschrift (30,00)', 'EUR')).toMatchObject({ lineTotal: -30 })
   })
 })
+
+// full-audit-2026-06-29 follow-up Phase 1 (financial correctness): FIN-1 (document currency by MAJORITY
+// VOTE over figure-adjacent detections — mirror of the bank fix) + FIN-2 (the F1 right-side uncaptured-
+// column drop only fires on a money-shaped-but-rejected trailing token, so a valid item with a trailing
+// annotation is no longer deleted) + FIN-4 (date order from the leading date column only). Whole-string
+// fixtures through the real `extractInvoiceTool` / `extractInvoice` / `parseLineItem`.
+describe('financial correctness (full-audit-2026-06-29 follow-up Phase 1)', () => {
+  // ---- FIN-1: a currency word in a line-item description must not stamp the invoice currency ----
+  it('FIN-1: a currency word in a line-item description no longer overrides the header-declared currency', async () => {
+    // "USD adapter cable 12,50" on a EUR invoice: detectCurrency scans ISO codes before symbols, so the
+    // description "USD" (earlier in the text than the "Currency EUR" header line) used to win the tool's
+    // detectCurrency(joined) → net/tax/gross printed in the WRONG code. The tool now majority-votes over
+    // figure-adjacent detections + header declarations, so the left-of-figure "USD" no longer counts.
+    const text = ['Invoice', 'USD adapter cable 12,50', 'Net Total 12,50', 'Gross Total 12,50', 'Currency EUR'].join('\n')
+    const { ctx } = makeCtx([chunk(text, 1)])
+    const result = await runSkillTool(extractInvoiceTool, { skillId: 'app:invoice', input: { documentId: 'd1' }, ctx })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const out = result.output as ExtractInvoiceOutput
+      expect(out.header.currency).toBe('EUR') // BEFORE: 'USD'
+      expect(out.lineItems[0].currency).toBe('EUR') // BEFORE: 'USD'
+    }
+  })
+
+  // ---- FIN-2: the right-side uncaptured-column drop must not delete valid items with trailing annotations ----
+  it('FIN-2: keeps a valid line item with a trailing position annotation', () => {
+    expect(parseLineItem('Service 12,50 (Pos. 3)', 'EUR')).toEqual({ description: 'Service', lineTotal: 12.5, currency: 'EUR' })
+  })
+
+  it('FIN-2: keeps a valid line item with a trailing per-line VAT %', () => {
+    expect(parseLineItem('Beratung 1.234,56 19% MwSt', 'EUR')).toEqual({ description: 'Beratung', lineTotal: 1234.56, currency: 'EUR' })
+  })
+
+  it('FIN-2: keeps a valid line item with a trailing currency + unit token', () => {
+    expect(parseLineItem('Line 50,00 EUR 2 Stk', 'EUR')).toEqual({ description: 'Line', lineTotal: 50, currency: 'EUR' })
+  })
+
+  it('FIN-2: still DROPS a genuine uncaptured whole-number total column (F1 preserved)', () => {
+    // The region after the last money match is ENTIRELY a bare integer (the real line total) → ambiguous → drop.
+    expect(parseLineItem('Hosting 12,50 500', 'EUR')).toBeNull()
+  })
+
+  // ---- FIN-4: a US-format date inside a line-item description must not flip the header date order ----
+  it('FIN-4: a US-format date in a line-item description does not flip the header date order', () => {
+    const inv = extractInvoice([chunk('Invoice\nInvoice date 05.03.2026\nWidget delivered 03/15/2026 100,00', 1)], 'EUR')
+    // BEFORE: the memo 03/15/2026 (US) flipped the whole document to month-first → 05.03.2026 → 3 May.
+    expect(inv.header.invoiceDate).toBe('2026-03-05')
+  })
+})

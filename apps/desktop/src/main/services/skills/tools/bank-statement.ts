@@ -8,6 +8,7 @@ import {
   MONEY_RE,
   csvField,
   detectCurrency,
+  detectDocumentCurrency,
   inferDateOrder,
   parseAmount,
   parseDate,
@@ -73,8 +74,14 @@ export const MAX_TRANSACTIONS = 10000
  *       (earliest = opening, latest = closing; a lone line = closing only) instead of reading it as BOTH
  *       opening and closing, changing the persisted `opening_balance`/`closing_balance` on Raiffeisen
  *       "Mein ELBA"-style statements. Stale v1 statements re-extract via the A9 path on the next reuse.
+ *   3 — full-audit-2026-06-29 follow-up Phase 1: FIN-1 (statement currency by majority vote over
+ *       figure-adjacent detections, not first-code-anywhere — fixes a wrong-currency total when a memo
+ *       carries a stray code), FIN-3 (geometry classifier reads bare-thousands / apostrophe amounts and
+ *       no longer mis-reads `2.500` as a date → the reconstructed line carries the real amount), and
+ *       FIN-4 (date-order inferred from the LEADING date column only, so a memo date can't day/month-swap
+ *       every row). Each can change the persisted currency / amounts / dates, so stale v2 rows re-extract.
  */
-export const BANK_EXTRACTOR_VERSION = 2
+export const BANK_EXTRACTOR_VERSION = 3
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -461,7 +468,12 @@ export const extractTransactionsTool: SkillTool = {
       return { ok: false, error: 'This statement could not be read.' }
     }
     const joined = chunks.map((c) => c.text).join('\n')
-    const statementCurrency = detectCurrency(joined)
+    // FIN-1 — the statement-level currency by MAJORITY VOTE over figure-adjacent detections (not the old
+    // `detectCurrency(joined)` "first code anywhere wins", which let a stray code in a payee memo stamp the
+    // whole statement — and its verified total — in the wrong currency). This is the per-row fallback for
+    // bare-amount rows AND the reported `output.currency`; per-row detection still tags figure-adjacent
+    // foreign rows, so a genuinely-mixed statement still reaches the mixed/unverified path.
+    const statementCurrency = detectDocumentCurrency(joined)
     // Infer the document's date ordering ONCE and hand it to both extractors so they agree (BL-N1).
     const dateOrder = inferDateOrder(joined)
     const transactions = extractTransactionRows(chunks, statementCurrency, dateOrder)

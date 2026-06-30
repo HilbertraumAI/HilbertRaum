@@ -22,6 +22,7 @@ import {
   type ExtractTransactionsOutput,
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
+import { detectDocumentCurrency, inferDateOrder } from '../../src/main/services/skills/tools/money'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
 import { prefilterCategory } from '../../src/main/services/skills/categorizer'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
@@ -333,11 +334,12 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
 })
 
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 2 — the audit C-4 bump (Kontostand-per disambiguation changes persisted balances)', () => {
+  it('is at 3 — the FIN-1/3/4 bump (majority-vote currency, geometry bare-thousands, leading-column date order)', () => {
     // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. The
-    // C-4 fix changes the persisted opening/closing on Raiffeisen statements, so v1 rows MUST re-extract;
-    // `skills-run.test.ts` proves `isBankStatementStale` flags a v1 statement once this reads 2.
-    expect(BANK_EXTRACTOR_VERSION).toBe(2)
+    // full-audit-2026-06-29 follow-up Phase 1 (FIN-1 currency / FIN-3 geometry / FIN-4 date order) can
+    // change the persisted currency / amounts / dates, so v2 (and older) rows MUST re-extract;
+    // `skills-run.test.ts` proves `isBankStatementStale` flags a v2 statement once this reads 3.
+    expect(BANK_EXTRACTOR_VERSION).toBe(3)
   })
 })
 
@@ -977,5 +979,98 @@ describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', (
     expect(rows).toHaveLength(1)
     expect(rows[0].amount).toBe(1234.57) // BEFORE: 1234.567 (a 3-dp value escaping the cent invariant)
     expect(rows[0].amount).toBe(Math.round(rows[0].amount * 100) / 100) // exactly 2-dp
+  })
+})
+
+// full-audit-2026-06-29 follow-up Phase 1 (financial correctness): FIN-1 (document/statement currency by
+// MAJORITY VOTE over figure-adjacent detections, not first-code-anywhere) + FIN-4 (date order inferred from
+// the LEADING date column only, so a memo date can't day/month-swap every row). Adversarial WHOLE-STRING
+// fixtures through the real `detectDocumentCurrency` / `extractTransactionsTool` / `extractTransactionRows`.
+describe('financial correctness (full-audit-2026-06-29 follow-up Phase 1)', () => {
+  // ---- FIN-1: detectDocumentCurrency (the figure-adjacent majority vote that replaces detectCurrency(joined)) ----
+  it('FIN-1: detectDocumentCurrency ignores a currency word LEFT of the amount but reads a header declaration', () => {
+    // The contamination source: a stray code in a payee memo (LEFT of the figure). A money line votes only
+    // on its figure region; a non-money line (a header/label) votes on its whole text. BEFORE the fix the
+    // tool used detectCurrency(joined) = "first code ANYWHERE wins" → the memo USD (earlier in the text) won.
+    expect(detectDocumentCurrency('Kontoauszug\n02.01.2026 USD Memo -12,00 100,00\nWährung EUR')).toBe('EUR')
+  })
+
+  it('FIN-1: detectDocumentCurrency reads a figure-adjacent foreign currency, majority-votes, breaks ties by order', () => {
+    expect(detectDocumentCurrency('Hotel -120,00 USD 880,00')).toBe('USD') // adjacent foreign code
+    expect(detectDocumentCurrency('A 100,00 USD\nB 50,00 USD\nNote EUR')).toBe('USD') // majority wins
+    expect(detectDocumentCurrency('Saldo 100,00 EUR\nPay in USD or CHF')).toBe('EUR') // tie → first appearance
+    expect(detectDocumentCurrency('No money here\nJust prose')).toBeNull() // no code in any voting region
+  })
+
+  it('FIN-1: a stray code in a payee memo no longer stamps the whole statement (wrong-currency total)', async () => {
+    // A bare-amount EUR statement: the only figure-adjacent code is the EUR on the closing line; a payee
+    // memo carries "USD" to the LEFT of its amount, EARLIER in document order. BEFORE: detectCurrency(joined)
+    // returned the FIRST code anywhere = USD → every bare row fell back to USD → a VERIFIED total in the
+    // WRONG currency, and the uniform mislabel never tripped the mixed-currency guard.
+    const text = [
+      'Kontoauszug',
+      '05.03.2026 USD Auslandsentgelt Wien -12,99 1.187,01',
+      '07.03.2026 Gehalt ACME 2.000,00 3.187,01',
+      'Endsaldo 3.187,01 EUR'
+    ].join('\n')
+    const { ctx } = makeCtx([chunk(text, 1)])
+    const result = await runSkillTool(extractTransactionsTool, {
+      skillId: 'app:bank-statement',
+      input: { documentId: 'd1' },
+      ctx
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const out = result.output as ExtractTransactionsOutput
+      expect(out.currency).toBe('EUR') // BEFORE: 'USD'
+      expect(out.transactions).toHaveLength(2)
+      expect(out.transactions.every((t) => t.currency === 'EUR')).toBe(true) // BEFORE: every row 'USD'
+      expect(summarizeCashflow(out.transactions).currency).toBe('EUR') // a single EUR total, not wrong-currency
+    }
+  })
+
+  it('FIN-1: a truly-mixed statement (a figure-adjacent foreign row) still refuses a single total', async () => {
+    // The fix supplies only the BARE-row fallback; per-row detection still tags a figure-adjacent foreign
+    // row, so a genuinely-mixed statement keeps its honest "no single total" refusal (mixed path preserved).
+    const text = ['Kontoauszug EUR', '2026-01-02 Coffee -3,50 1.000,00', '2026-01-03 Foreign -20,00 USD'].join('\n')
+    const { ctx } = makeCtx([chunk(text, 1)])
+    const result = await runSkillTool(extractTransactionsTool, {
+      skillId: 'app:bank-statement',
+      input: { documentId: 'd1' },
+      ctx
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const out = result.output as ExtractTransactionsOutput
+      expect(out.transactions.map((t) => t.currency)).toEqual(['EUR', 'USD'])
+      expect(summarizeCashflow(out.transactions).currency).toBeUndefined() // honest mixed-currency refusal
+    }
+  })
+
+  // ---- FIN-4: a foreign-format date in a MEMO must not flip the whole document's date order ----
+  it('FIN-4: a US-format date inside a payee memo does not day/month-swap every dotted booking date', () => {
+    // de-AT dotted booking dates with day ≤ 12 are ambiguous; a single `03/15/2026` (second field 15 → US)
+    // in a memo used to flip inferDateOrder to month-first over the WHOLE text → every row silently swapped
+    // (all still valid dates → none dropped → fully silent). The scan is now restricted to the LEADING date
+    // column, so a description/memo date can't vote.
+    const text = [
+      'Kontoauszug EUR',
+      '05.03.2026 Zahlung ORDER 03/15/2026 Ref -50,00 1.000,00',
+      '07.03.2026 Gehalt ACME 2.000,00 3.000,00',
+      '11.03.2026 Miete -800,00 2.200,00'
+    ].join('\n')
+    // The inferrer itself stays day-first (the memo date no longer votes) …
+    expect(inferDateOrder(text)).toBe('dmy') // BEFORE: 'mdy' (the memo's 03/15 flipped it)
+    // … so every booking date parses day-first (5/7/11 March), not month-first (3 May / 3 Jul / …).
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows.map((r) => r.date)).toEqual(['2026-03-05', '2026-03-07', '2026-03-11'])
+  })
+
+  it('FIN-4: a GENUINE US statement (rows LEAD with mm/dd) still flips to month-first', () => {
+    // The leading-column restriction must not break real US detection: a leading `12/31/2026` (second field
+    // 31 → US) still votes, so the otherwise-ambiguous rows resolve month-first.
+    const text = ['Statement USD', '12/31/2026 Year-end fee -5,00 95,00', '03/05/2026 Service -6,00 89,00'].join('\n')
+    expect(inferDateOrder(text)).toBe('mdy')
+    expect(extractTransactionRows([chunk(text, 1)], 'USD').map((r) => r.date)).toEqual(['2026-12-31', '2026-03-05'])
   })
 })

@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import {
-  copyFileSync,
   type Dirent,
   existsSync,
   mkdirSync,
@@ -9,6 +8,7 @@ import {
   realpathSync,
   statSync
 } from 'node:fs'
+import { copyFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
@@ -36,6 +36,7 @@ import type { OcrEngine, OcrPage } from '../ocr'
 import {
   isAudioPath,
   isPdfPath,
+  readsWholeFileToString,
   selectParser,
   supportedExtensions,
   type DocumentParser,
@@ -43,6 +44,7 @@ import {
   type ParsedDocument
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
+import { parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
 
@@ -160,6 +162,9 @@ interface DocumentRow {
   summary_json: string | null
   origin_json: string | null
   ocr_json: string | null
+  // PERF-3: cheap metadata-only sidecar for the OCR badge — `listDocuments` projects this and
+  // NOT `ocr_json`, so the hot list path never parses page text. Absent on the narrow projection.
+  ocr_meta_json?: string | null
   lifecycle: string | null
   source_folder_label: string | null
   tree_status: string | null
@@ -314,6 +319,20 @@ function ocrInfoOf(stored: StoredOcr | null): DocumentOcrInfo | null {
   }
 }
 
+/**
+ * The OCR badge for a document row. PERF-3 (full-audit-2026-06-29 follow-up): prefer the cheap
+ * `ocr_meta_json` sidecar so the hot `listDocuments` path NEVER materializes OCR page text. Falls
+ * back to a one-shot full `parseOcr(ocr_json)` only for a not-yet-backfilled row — and `listDocuments`
+ * never reaches that fallback (its projection omits `ocr_json` entirely AND the open-time backfill
+ * populates the sidecar first), so the megabytes-per-call parse is gone from the list path. The
+ * single-doc `getDocument` (SELECT *) carries both columns, so the sidecar still wins there too.
+ */
+function ocrInfoForRow(row: DocumentRow): DocumentOcrInfo | null {
+  const meta = parseOcrMeta(row.ocr_meta_json)
+  if (meta) return meta
+  return ocrInfoOf(parseOcr(row.ocr_json))
+}
+
 function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boolean): DocumentInfo {
   return {
     id: row.id,
@@ -330,7 +349,7 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     // DERIVED scan marker: failed with the exact scan notice. The OCR task targets
     // exactly these rows (plus already-OCR'd PDFs for a re-run).
     scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
-    ocr: ocrInfoOf(parseOcr(row.ocr_json)),
+    ocr: ocrInfoForRow(row),
     // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +
     // folder-import display label. Collection memberships are merged in by listDocuments
     // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
@@ -502,6 +521,19 @@ export interface PreparedDocument {
 }
 
 /**
+ * PERF-4: the pre-parse byte ceiling for THIS document, narrowed by format. The text/Markdown/CSV
+ * parsers read the whole file into ONE UTF-16 JS string (CSV then derives the papaparse row array +
+ * the rebuilt `lines.join` — ≈3 full copies at once), so the generous `maxBytes` (1 GiB) would blow
+ * past V8's ~512 MB string/heap ceiling and OOM-CRASH the main process instead of producing the
+ * friendly `fileTooLarge` reject. Those formats get the string-safe `textMaxBytes`; the streaming /
+ * page-bounded formats (PDF/DOCX/audio/image) keep the full `maxBytes`. Decided by `row.title` (the
+ * canonical name/extension), not the possibly-transient `parseSource`.
+ */
+function effectiveMaxBytes(title: string, limits: IngestionLimits): number {
+  return readsWholeFileToString(title) ? Math.min(limits.maxBytes, limits.textMaxBytes) : limits.maxBytes
+}
+
+/**
  * THE single parse-with-caps enforcement point (MAINT-4 / REL-5). Every parse entry point —
  * ingest (`prepareDocument`), the renderer preview (`extractDocumentPreview`), and the paged
  * preview (`extractDocumentPreviewPage`, via the former) — routes through here, so the resource
@@ -571,11 +603,12 @@ export async function prepareDocument(
   try {
     setStatus(db, documentId, 'extracting')
 
-    // Pre-parse byte ceiling (M-1): reject an oversized file BEFORE any copy/decrypt/parse
-    // work, using the size recorded at queue time. A friendly, persist-canonical message
-    // lands on the row (display-mapped at render). A null size_bytes falls through to the
-    // authoritative pre-parse stat below.
-    if (row.size_bytes != null && row.size_bytes > limits.maxBytes) {
+    // Pre-parse byte ceiling (M-1, narrowed by PERF-4): reject an oversized file BEFORE any
+    // copy/decrypt/parse work, using the size recorded at queue time. Text/Markdown/CSV use the
+    // string-safe `textMaxBytes` (a 1 GiB text file would OOM-crash V8's string limit, not reject).
+    // A friendly, persist-canonical message lands on the row (display-mapped at render). A null
+    // size_bytes falls through to the authoritative pre-parse stat below.
+    if (row.size_bytes != null && row.size_bytes > effectiveMaxBytes(row.title, limits)) {
       throw new Error(t('en', 'main.ingest.fileTooLarge'))
     }
 
@@ -600,12 +633,15 @@ export async function prepareDocument(
       const size = statSync(origin).size
       if (cipher) {
         storedPath = join(storeDir, documentId + ext + ENCRYPTED_DOC_SUFFIX)
-        cipher.encryptFile(origin, storedPath)
+        // PERF-1: async encrypt yields to the event loop between 8 MiB chunks, so a large import
+        // (paid twice in an encrypted workspace) no longer blocks the main process + IPC.
+        await cipher.encryptFileAsync(origin, storedPath)
         // Parse the original directly (it is still on disk) — no decrypt round-trip.
         parseSource = origin
       } else {
         storedPath = join(storeDir, documentId + ext)
-        copyFileSync(origin, storedPath)
+        // PERF-1: async whole-file copy off the main event loop (was synchronous copyFileSync).
+        await copyFile(origin, storedPath)
         parseSource = storedPath
       }
       db.prepare('UPDATE documents SET stored_path = ?, sha256 = ?, size_bytes = ? WHERE id = ?').run(
@@ -620,7 +656,7 @@ export async function prepareDocument(
       // the stored copy: encrypt it, point the row at the `.enc`, parse the old
       // plaintext one last time, then shred it.
       const encPath = `${storedPath}${ENCRYPTED_DOC_SUFFIX}`
-      cipher.encryptFile(storedPath, encPath)
+      await cipher.encryptFileAsync(storedPath, encPath) // PERF-1: yields between chunks
       db.prepare('UPDATE documents SET stored_path = ? WHERE id = ?').run(encPath, documentId)
       parseSource = storedPath
       transients.push(storedPath)
@@ -628,7 +664,7 @@ export async function prepareDocument(
     } else if (cipher) {
       // Encrypted stored copy: decrypt to a transient working file for the parser.
       parseSource = join(storeDir, `${documentId}.parse${ext}`)
-      cipher.decryptFile(storedPath, parseSource)
+      await cipher.decryptFileAsync(storedPath, parseSource) // PERF-1: yields between chunks
       transients.push(parseSource)
     } else {
       parseSource = storedPath
@@ -639,7 +675,7 @@ export async function prepareDocument(
     // was unknown at queue time). Cheap `statSync`; a stat failure here is non-fatal — the
     // parser will surface its own read error.
     try {
-      if (statSync(parseSource).size > limits.maxBytes) {
+      if (statSync(parseSource).size > effectiveMaxBytes(row.title, limits)) {
         throw new Error(t('en', 'main.ingest.fileTooLarge'))
       }
     } catch (err) {
@@ -992,7 +1028,7 @@ export async function extractDocumentPreview(
       if (cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
         const ext = extname(row.title).toLowerCase()
         parseSource = join(storeDir, `${documentId}.parse-preview${ext}`)
-        cipher.decryptFile(row.stored_path, parseSource)
+        await cipher.decryptFileAsync(row.stored_path, parseSource) // PERF-1: yields between chunks
         transients.push(parseSource)
       } else if (!cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
         // Emission (§3.3 rule 2): IPC throws below are transient — localized via tMain.
@@ -1194,16 +1230,30 @@ export function setDocumentOcr(
   documentId: string,
   ocr: { pages: OcrPage[]; engineId: string; languages: string[] } | null
 ): void {
+  const createdAt = nowIso()
   const json = ocr
     ? JSON.stringify({
         pages: ocr.pages,
         engineId: ocr.engineId,
         languages: ocr.languages,
-        createdAt: nowIso()
+        createdAt
       })
     : null
-  db.prepare('UPDATE documents SET ocr_json = ?, updated_at = ? WHERE id = ?').run(
+  // PERF-3: write the cheap metadata sidecar alongside the full blob so `listDocuments` reads the
+  // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json`:
+  // clearing OCR (ocr === null) nulls both. `pages.length` here == the valid-page count
+  // `ocrMetaFromJson` derives from the just-written blob (engine pages are always well-formed).
+  const metaJson = ocr
+    ? JSON.stringify({
+        pageCount: ocr.pages.length,
+        languages: ocr.languages,
+        engineId: ocr.engineId,
+        createdAt
+      })
+    : null
+  db.prepare('UPDATE documents SET ocr_json = ?, ocr_meta_json = ?, updated_at = ? WHERE id = ?').run(
     json,
+    metaJson,
     nowIso(),
     documentId
   )
@@ -1365,10 +1415,21 @@ export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
  * if it has chunks but none embedded under the active model (an embedder switch left it
  * unsearchable until re-indexed).
  */
+// PERF-3 (full-audit-2026-06-29 follow-up, Phase 4): the explicit narrow column set for the hot
+// list path. Deliberately EXCLUDES `ocr_json` — the badge comes from the cheap `ocr_meta_json`
+// sidecar (`ocrInfoForRow`), so a library of large scans no longer parses megabytes of OCR page
+// text on every documents-screen mount / import-completion / collection change. Every other
+// `DocumentRow` field `rowToInfo` reads is listed; `original_path` is in DocumentRow but unused by
+// the list (rowToInfo maps it but it is dropped client-side) — included to keep the row complete.
+const LIST_DOCUMENT_COLUMNS =
+  'id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message, ' +
+  'summary_json, origin_json, ocr_meta_json, lifecycle, source_folder_label, tree_status, ' +
+  'tree_meta_json, fully_chunked, extract_status, created_at, updated_at'
+
 export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): DocumentInfo[] {
   const rows = prepareCached(
     db,
-    "SELECT * FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC"
+    `SELECT ${LIST_DOCUMENT_COLUMNS} FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC`
   ).all() as unknown as DocumentRow[]
   // One join for every membership (document-organization plan §16/§18 — one extra indexed
   // join, not N+1), grouped by document for the per-row `collections` chips.

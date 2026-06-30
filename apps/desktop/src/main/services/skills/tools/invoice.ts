@@ -4,6 +4,7 @@ import {
   MONEY_RE,
   csvField,
   detectCurrency,
+  detectDocumentCurrency,
   inferDateOrder,
   parseAmount,
   parseDate,
@@ -80,8 +81,14 @@ export const MAX_LINE_ITEMS = 10000
  *   1 — baseline: the invoice parser as built through full-audit-2026-06-29-postmerge Phase 1 (F1 the
  *       statement-context-aware amount-column drop, F3 figure-region currency + single-currency guard,
  *       F6 space-column fusion drop, F8 qty-split corroboration). Pre-versioning rows are NULL → stale.
+ *   2 — full-audit-2026-06-29 follow-up Phase 1: FIN-1 (document currency by majority vote over
+ *       figure-adjacent detections — a currency word in a line-item description no longer stamps the
+ *       net/tax/gross in the wrong code), FIN-2 (the F1 right-side uncaptured-column drop only fires on a
+ *       trailing token that is ITSELF a money-shaped-but-rejected bare amount, so a valid item with a
+ *       trailing annotation — `(Pos. 3)`, `19% MwSt`, `EUR 2 Stk` — is no longer deleted), and FIN-4 (date
+ *       order from the leading date column only). Each can change the persisted output, so v1 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 1
+export const INVOICE_EXTRACTOR_VERSION = 2
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -163,10 +170,18 @@ const PERCENT_RE = /(\d+(?:[.,]\d+)?)\s*%/
 // token (group 3) — the F8 split fires only when group 3 is present OR a unit-price column corroborates.
 const QTY_TRAIL_RE = /^(.*?)\s+(\d+(?:[.,]\d+)?)\s*(x|×|stk\.?|stück|pcs?\.?|units?)?\s*$/i
 
-// F1 (full-audit-2026-06-29-postmerge) — a bare numeric token AFTER the last money match: an uncaptured
-// figure column to the RIGHT of the line total (the invoice reads the line total as the LAST figure). A
-// trailing currency code (`EUR`) carries no digit, so it does not trigger the drop.
-const UNCAPTURED_NUMBER_AFTER = /(?:^|\s)[-+(]?\d/
+// F1 (full-audit-2026-06-29-postmerge) / FIN-2 (full-audit-2026-06-29 follow-up) — an uncaptured AMOUNT
+// column to the RIGHT of the line total: the invoice reads the line total as the LAST money token, so a
+// bare integer / single-decimal figure MONEY_RE rejected, sitting after it, is the real total (`Hosting
+// 12,50 500` → the unit price 12,50 read as the total, the real 500 lost) → drop (the §22-D1 honesty
+// posture). FIN-2: the region after the last money match must be ENTIRELY that one bare numeric token
+// (`^\s*…\s*$`), so a trailing ANNOTATION is NOT mistaken for an uncaptured column and a VALID item
+// deleted — the old `/(?:^|\s)[-+(]?\d/` fired on ANY trailing digit and dropped `Service 12,50 (Pos. 3)`,
+// `Beratung 1.234,56 19% MwSt`, `Line 50,00 EUR 2 Stk`. A money-shaped-but-rejected token is a leading
+// optional sign/paren, a digit run with `.`/`,`/apostrophe grouping, and an optional trailing paren — no
+// `%`, no `x`, no unit word, no other text. A trailing currency code carries no leading digit, so it
+// never triggers the drop.
+const UNCAPTURED_AMOUNT_AFTER = /^\s*[-+(]?\d[\d.,']*\)?\s*$/
 
 /**
  * F6 (full-audit-2026-06-29-postmerge) — whether a matched money token is the FUSION-prone space-grouped
@@ -314,7 +329,7 @@ export function parseLineItem(
   // invoice line total is the LAST, so the dangerous uncaptured column is on the opposite side.
   const lastMatch = matches[matches.length - 1]
   const afterLast = rest.slice((lastMatch.index ?? 0) + lastMatch[0].length)
-  if (UNCAPTURED_NUMBER_AFTER.test(afterLast)) return null
+  if (UNCAPTURED_AMOUNT_AFTER.test(afterLast)) return null
 
   let description = rest.slice(0, matches[0].index).trim()
   if (!description) return null
@@ -416,7 +431,10 @@ export const extractInvoiceTool: SkillTool = {
       return { ok: false, error: 'This invoice could not be read.' }
     }
     const joined = chunks.map((c) => c.text).join('\n')
-    const currency = detectCurrency(joined)
+    // FIN-1 — document currency by MAJORITY VOTE over figure-adjacent detections (mirror of the bank
+    // path): a currency WORD in a line-item description (left of the amount) or a stray code in a note no
+    // longer beats the figure-adjacent / header-declared currency that the net/tax/gross are printed in.
+    const currency = detectDocumentCurrency(joined)
     const invoice = extractInvoice(chunks, currency, inferDateOrder(joined))
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     return { ok: true, output: invoice }

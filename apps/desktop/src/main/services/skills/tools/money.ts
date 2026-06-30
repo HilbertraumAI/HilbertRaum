@@ -131,6 +131,56 @@ export function parseAmount(raw: string): number | null {
   return (negative ? -cents : cents) / 100
 }
 
+/**
+ * Detect the DOCUMENT/statement-level currency by MAJORITY VOTE over the figure-adjacent currency of
+ * money-bearing lines (full-audit-2026-06-29 follow-up, FIN-1). It exists because the per-row extractors
+ * fall back to a document currency when a bare-amount row prints no figure-adjacent code (the de-AT norm),
+ * and the old fallback — `detectCurrency(joined)`, "first allowlisted code anywhere wins over the WHOLE
+ * text" — let a stray `USD`/`CHF` in a payee MEMO stamp a whole EUR statement (and its VERIFIED total)
+ * with the wrong ISO code: the mislabel was UNIFORM, so the mixed-currency guard never tripped.
+ *
+ * The rule, per line:
+ *  - a MONEY-bearing line votes only on its FIGURE REGION (the text from the first money token onward) —
+ *    a currency word in the description/memo sits LEFT of the amount and is excluded (mirrors the per-row
+ *    BL-2/F3 figure-region scoping);
+ *  - a NON-money line (a header/label like `Währung EUR`, `Currency: USD`) votes on its whole text, so a
+ *    statement that declares its currency only in the header (and prints bare amounts) is still detected.
+ * The winner is the most-voted code; a tie is broken by FIRST appearance (document order). A genuinely
+ * foreign statement (code adjacent to its amounts) is detected; a truly-mixed statement still reaches the
+ * mixed/unverified path because the PER-ROW detection tags each row's own figure-region currency — this
+ * function only supplies the fallback for bare rows. Returns null when no allowlisted code/symbol appears
+ * in any voting region (the extractor then drops currency-less rows rather than invent one — §22-D1).
+ */
+export function detectDocumentCurrency(text: string): string | null {
+  const counts = new Map<string, number>()
+  const order: string[] = []
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    // Scrub date tokens first (as the last-money readers do): a leading `dd.mm.yyyy` booking date would
+    // otherwise be read by MONEY_RE as a 2-dp amount (`05.03.2026` → `05.03.20`), making the "figure
+    // region" start at the date and re-include the very memo we mean to exclude.
+    const scrubbed = stripDateTokens(line)
+    const matches = [...scrubbed.matchAll(MONEY_RE)]
+    // Money line → figure region (right of the first amount, excluding a left memo); else the whole line.
+    const region = matches.length > 0 ? scrubbed.slice(matches[0].index) : scrubbed
+    const cur = detectCurrency(region)
+    if (!cur) continue
+    if (!counts.has(cur)) order.push(cur)
+    counts.set(cur, (counts.get(cur) ?? 0) + 1)
+  }
+  let best: string | null = null
+  let bestCount = 0
+  for (const cur of order) {
+    const c = counts.get(cur) as number
+    if (c > bestCount) {
+      best = cur
+      bestCount = c
+    }
+  }
+  return best
+}
+
 // ---- Dates ----
 
 function pad2(n: number): string {
@@ -150,8 +200,11 @@ function isValidYmd(y: number, m: number, d: number): boolean {
 export type DateOrder = 'dmy' | 'mdy'
 
 // A dotted/slashed `nn[./]nn[./]yyyy` token (ISO `yyyy-mm-dd` is unambiguous, so excluded). Used ONLY to
-// sniff the document's date ordering in `inferDateOrder` — never to validate a date.
-const AMBIGUOUS_DATE_RE = /\b(\d{1,2})[./](\d{1,2})[./]\d{4}\b/g
+// sniff the document's date ordering in `inferDateOrder` — never to validate a date. Two forms: ANCHORED
+// (a whole leading token, for a transaction row's booking-date column) and GLOBAL (any date on a money-
+// less header/label line).
+const AMBIGUOUS_DATE_TOKEN_RE = /^(\d{1,2})[./](\d{1,2})[./]\d{4}$/
+const AMBIGUOUS_DATE_GLOBAL_RE = /\b(\d{1,2})[./](\d{1,2})[./]\d{4}\b/g
 
 /**
  * Infer a document's date ordering (full-audit-2026-06-28 BL-N1, DECISION 1a — per-document locale
@@ -163,6 +216,20 @@ const AMBIGUOUS_DATE_RE = /\b(\d{1,2})[./](\d{1,2})[./]\d{4}\b/g
  * (a US `12/31/2026` no longer parses to null) and the confidently-wrong month (`03/05/2026` reads as the
  * doc's inferred locale), without guessing on a genuinely ambiguous document.
  *
+ * **A payee/description MEMO date must not vote (full-audit-2026-06-29 follow-up, FIN-4).** The earlier
+ * whole-text scan let a SINGLE foreign-format date inside a transaction MEMO (`… ORDER 03/15/2026 …`,
+ * second field 15 → US) flip an entire de-AT statement to month-first → every dotted `dd.mm.yyyy` booking
+ * date with day ≤ 12 silently day/month-swapped (all still valid dates → none dropped → fully silent; the
+ * completeness gate checks balances, not dates). The vote is therefore scoped by line KIND:
+ *  - a line that carries a MONEY token is a transaction-style row → only its LEADING run of date-shaped
+ *    tokens may vote (the booking + optional value-date columns — the region `splitLeadingDates` consumes,
+ *    capped at two); the scan stops at the first non-date token, so a memo date deeper in the row never
+ *    votes. A genuine US statement (whose ROWS lead with `mm/dd/yyyy`) still flips on its leading column.
+ *  - a MONEY-less line is a header/label/period line — an invoice `Invoice date 06/15/2026`, a statement
+ *    period — where a date is legitimate context, not a payee memo. ANY date on it votes (the invoice's
+ *    header dates are NOT leading the line, so the leading-column rule alone would miss them and break US
+ *    invoice detection — the reason the rule is split by line kind, not applied uniformly).
+ *
  * NB: the audit's BL-N1 prose stated the trigger with the fields SWAPPED ("first field > 12 → mm/dd"),
  * which is logically inverted — a first field > 12 can only be a DAY, forcing day-first. The
  * mechanically-correct rule (a SECOND field > 12 forces month-first) is implemented here; the
@@ -171,11 +238,25 @@ const AMBIGUOUS_DATE_RE = /\b(\d{1,2})[./](\d{1,2})[./]\d{4}\b/g
 export function inferDateOrder(text: string): DateOrder {
   let us = 0
   let eu = 0
-  for (const m of text.matchAll(AMBIGUOUS_DATE_RE)) {
-    const a = +m[1]
-    const b = +m[2]
+  const vote = (a: number, b: number): void => {
     if (b > 12 && b <= 31 && a <= 12) us++ // second field can only be a day ⇒ month-first
     else if (a > 12 && a <= 31 && b <= 12) eu++ // first field can only be a day ⇒ day-first
+  }
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (line.match(MONEY_RE)) {
+      // Transaction-style row: only the LEADING date column(s) vote — a memo date deeper in the row can't.
+      const tokens = line.split(/\s+/)
+      for (let i = 0; i < Math.min(2, tokens.length); i++) {
+        const m = AMBIGUOUS_DATE_TOKEN_RE.exec(tokens[i])
+        if (!m) break // not (or no longer) a leading date column → don't scan into the description
+        vote(+m[1], +m[2])
+      }
+    } else {
+      // Header/label/period line (no money) — a date here is legitimate context, so any date votes.
+      for (const m of line.matchAll(AMBIGUOUS_DATE_GLOBAL_RE)) vote(+m[1], +m[2])
+    }
   }
   return us > 0 && eu === 0 ? 'mdy' : 'dmy'
 }

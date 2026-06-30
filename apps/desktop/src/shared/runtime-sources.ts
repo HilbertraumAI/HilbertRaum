@@ -74,6 +74,19 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
+/**
+ * A drive-relative extract/dest target must not escape the drive root: no `..`
+ * traversal, no leading slash (absolute POSIX), no Windows drive-letter (`C:`) or
+ * UNC form. `model-manifests/` is user-writable on the removable drive, so an
+ * attacker-supplied `extract_to`/`dest` is rejected at PARSE time here (SEC-4),
+ * keeping these two sibling path-fields consistent — `resolveWithinRoot`
+ * (`services/assets.ts`) is still the load-bearing downstream containment, this is
+ * defense-in-depth so the footgun never reaches it. Pure (no I/O).
+ */
+function isUnsafeDrivePath(p: string): boolean {
+  return p.includes('..') || /^[\\/]/.test(p) || /^[A-Za-z]:/.test(p)
+}
+
 /** Validate one `{ version, builds[] }` family block, appending errors under `prefix.…`. */
 function validateFamily(block: Record<string, unknown>, prefix: string, errors: string[]): RuntimeSources | null {
   const version = block['version']
@@ -115,6 +128,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
       const extractTo = b['extract_to']
       if (typeof extractTo !== 'string' || extractTo.trim() === '') {
         errors.push(`${where}.extract_to is required and must be a non-empty string`)
+      } else if (isUnsafeDrivePath(extractTo.trim())) {
+        errors.push(`${where}.extract_to must be a drive-relative path with no "..", leading slash, or drive letter`)
       }
       if (
         typeof osRaw === 'string' &&
@@ -123,7 +138,8 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
         typeof backend === 'string' &&
         typeof url === 'string' &&
         typeof shaRaw === 'string' &&
-        typeof extractTo === 'string'
+        typeof extractTo === 'string' &&
+        !isUnsafeDrivePath(extractTo.trim())
       ) {
         builds.push({
           os: osRaw as RuntimeOs,
@@ -186,15 +202,15 @@ function validateOcrFamily(
         errors.push(`${where}.sha256 is required and must be a string (hash or placeholder)`)
       }
       const dest = f['dest']
-      if (typeof dest !== 'string' || dest.trim() === '' || dest.includes('..')) {
-        errors.push(`${where}.dest must be a drive-relative path with no ".."`)
+      if (typeof dest !== 'string' || dest.trim() === '' || isUnsafeDrivePath(dest.trim())) {
+        errors.push(`${where}.dest must be a drive-relative path with no "..", leading slash, or drive letter`)
       }
       if (
         typeof lang === 'string' &&
         typeof url === 'string' &&
         typeof sha === 'string' &&
         typeof dest === 'string' &&
-        !dest.includes('..')
+        !isUnsafeDrivePath(dest.trim())
       ) {
         files.push({
           lang: lang.trim().toLowerCase(),

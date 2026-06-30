@@ -28,6 +28,8 @@ import {
   VaultBusyError,
   decryptFile,
   encryptFile,
+  decryptFileAsync,
+  encryptFileAsync,
   type DocumentCipher
 } from '../../src/main/services/workspace-vault'
 import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
@@ -173,7 +175,9 @@ function testCipher(): DocumentCipher {
   const key = randomBytes(32)
   return {
     encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key)
+    decryptFile: (src, dest) => decryptFile(src, dest, key),
+    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
+    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
   }
 }
 

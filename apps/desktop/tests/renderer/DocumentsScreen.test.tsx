@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
@@ -1091,5 +1091,87 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
     // whole menuOpenId string, or dropping memo, re-renders them too.)
     expect(delta('d1')).toBe(0)
     expect(delta('d3')).toBe(0)
+  })
+})
+
+// ---- PERF-2 (= PERF-5 Part B): documents-list windowing ---------------------------------
+// At scale the un-windowed list mounted one live DocRow — each with a Radix DropdownMenu.Root —
+// per document, so the DOM (and menu-root state machines) grew linearly with the library. The list
+// now virtualizes against the screen's `.content` scroll container once a real, laid-out viewport
+// is resolved. jsdom has no layout, so we mock the viewport rect + clientHeight and the measured row
+// height; the virtualizer then mounts only the rows in/near the viewport. TEETH: with windowing
+// removed (render every row), the mounted-row count equals the doc count and the bounded assertion
+// (and the "far row absent" assertion) fail.
+describe('DocumentsScreen — list windowing (PERF-2)', () => {
+  const VIEWPORT = 600
+  const ROW = 57
+  let content: HTMLDivElement
+  // @tanstack/react-virtual measures via offsetWidth/offsetHeight (NOT getBoundingClientRect),
+  // both 0 under jsdom. Feed it a real viewport + row height so it can compute a bounded range:
+  // the `.content` scroll element → VIEWPORT, each measured row (a `[data-index]` wrapper) → ROW.
+  let offsetHeightDesc: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    content = document.createElement('div')
+    content.className = 'content'
+    document.body.appendChild(content)
+    Object.defineProperty(content, 'clientHeight', { configurable: true, value: VIEWPORT })
+    offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.classList?.contains('content')) return VIEWPORT
+        if (this.hasAttribute?.('data-index')) return ROW
+        return 0
+      }
+    })
+  })
+
+  afterEach(() => {
+    if (offsetHeightDesc) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc)
+    else delete (HTMLElement.prototype as unknown as { offsetHeight?: unknown }).offsetHeight
+    content.remove()
+  })
+
+  it('mounts only a bounded slice of rows for a 1000-document library', async () => {
+    const docs = Array.from({ length: 1000 }, (_, i) =>
+      doc({ id: `d${i}`, title: `doc-${String(i).padStart(4, '0')}.pdf` })
+    )
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => docs)
+    })
+    render(<DocumentsScreen />, { container: content })
+
+    // The first rows render (the windowed path shows real content, not a blank list)…
+    expect(await screen.findByText('doc-0000.pdf')).toBeInTheDocument()
+
+    // …while the mounted DocRow count is bounded by the viewport+overscan, NOT the 1000-doc library.
+    await waitFor(() => {
+      const mounted = content.querySelectorAll('.doc-row').length
+      expect(mounted).toBeGreaterThan(5)
+      expect(mounted).toBeLessThan(60)
+    })
+    // One Radix DropdownMenu trigger per mounted indexed row — bounded for the same reason (the
+    // "hundreds of mounted menu roots" the audit flagged are gone).
+    expect(content.querySelectorAll('.doc-row-menu-btn').length).toBeLessThan(60)
+
+    // A row far past the viewport is NOT in the DOM — the defining property of windowing (and the
+    // inherent find-in-page tradeoff: Ctrl+F can't match an un-rendered row).
+    expect(screen.queryByText('doc-0900.pdf')).not.toBeInTheDocument()
+  })
+
+  it('renders every row (un-windowed) when no laid-out scroll viewport exists', async () => {
+    // Render standalone (the default RTL container, NOT inside `.content`), so `closest('.content')`
+    // finds nothing → the fallback path renders all (the pre-PERF-2 / existing-corpus behavior).
+    const docs = Array.from({ length: 40 }, (_, i) => doc({ id: `e${i}`, title: `ed-${i}.pdf` }))
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => docs)
+    })
+    render(<DocumentsScreen />)
+    expect(await screen.findByText('ed-0.pdf')).toBeInTheDocument()
+    // All 40 mounted — windowing stayed off without a viewport.
+    expect(screen.getByText('ed-39.pdf')).toBeInTheDocument()
   })
 })

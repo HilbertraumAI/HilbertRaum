@@ -20,6 +20,8 @@ export const MarkdownParser: DocumentParser = {
   name: 'MarkdownParser',
   extensions: ['.md', '.markdown', '.mdown'],
   mimeType: 'text/markdown',
+  readsWholeFileToString: true, // PERF-4: reads the whole file into one JS string then `split`s it
+
   async parse(filePath: string): Promise<ParsedDocument> {
     const raw = await readFile(filePath, 'utf8')
     const lines = raw.split(/\r?\n/)

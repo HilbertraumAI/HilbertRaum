@@ -6,6 +6,394 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 8 (MAINTAINABILITY + SECURITY HARDENING + DOCS CLOSE-OUT) —
+branch `audit-followup-phase8-closeout` (unmerged; do NOT auto-merge/push). THE FINAL PHASE — the round is
+COMPLETE.** Clears the structural debt, lands the one small security hardening + the first-run notice, re-affirms
+the accepted residuals, and **RETIRES the audit report** by folding every disposition into the arch §§ and
+`git rm`'ing it (recoverable in history), per the CLAUDE.md doc-lifecycle rule. Suite **2593 passed / 39 skipped**
+(was 2589/39 after Phase 7 → **+4**, all from SEC-4; the DX-1/DX-3 refactors add ZERO net tests — pure relocation).
+Typecheck + `npm run build` green. **No IPC / schema / audit-payload change; the two refactors are STRICTLY
+behavior-preserving** (the full doctasks suite 154 + the Documents renderer suites 95 are identical green before
+and after). Content class never logged.
+- **SEC-4 (Low/Info, NEW) — `runtime-sources.ts` `extract_to` `..`-rejected at PARSE time.** New pure
+  `isUnsafeDrivePath` rejects `..` traversal, leading-slash absolutes, and `C:`/UNC drive-letter forms; applied to
+  `extract_to` AND the sibling OCR `dest` (making the two path-fields consistent — the stated goal). Defense-in-depth
+  ahead of the still-load-bearing `resolveWithinRoot`. Tests ×4 (POSIX `../../escape`, Windows `..\\..\\escape`,
+  absolute/drive-letter reject, normal relative passes).
+- **FE-E (Low) — first-run model-verify FAILURE no longer silent.** `WorkspaceGate.completeCreate`'s catch still
+  never traps the user, but a THROWN `listModels` now routes to the **Models** screen (vs the old silent drop on
+  Chat's generic "no model" empty state); an EMPTY list still routes to the `starter` step. Existing "never traps"
+  test re-pointed to assert `(UNLOCKED, 'models')`.
+- **DX-1 (Med) — `DocTaskManager` god-class split (behavior-preserving relocation).** Each `run<Kind>` extracted to a
+  `doctasks/handlers/*` module keyed by `MODEL_TASK_HANDLERS`; the manager keeps ONLY queue/pump/arbiter + the
+  `generate`/`generateWithRetry` retry loop, handed to handlers through a narrow `DocTaskCtx` (deps + arbiter + the two
+  model-loop fns). Shared doc helpers (`materializeDocument`/`buildProvenance`/`extractSegmentTexts`) → `handlers/shared.ts`;
+  `InternalTask`/`DocTaskDeps`/`DocTaskCtx` → leaf `doctasks/context.ts` (no cycle; `DocTaskDeps` re-exported from
+  `manager.ts` for the barrel). `manager.ts` 1758→~580 lines. Full doctasks suite (154) identical green.
+- **DX-3 (Low) — oversized screens split (behavior-preserving relocation).** `DocumentsScreen.tsx` 2190→1164:
+  `DocRow`/`SectionRail`/`PreviewModal` → sibling `screens/documents/*` files, the pure formatters
+  (`badgeFor`/`provenanceLine`/`metaLine`/`friendlyMimeLabel`/…) → `documents/format.tsx`, the shared section/view
+  types + localStorage keys → `documents/types.ts`. Test import surface preserved via re-exports
+  (`friendlyMimeLabel`/`isRetryableFailure`/`__docRowRenderCounts`/`RAIL_COLLAPSED_KEY`/`VIEWS_MORE_KEY`). The Phase-4
+  virtualization + the Phase-7 DEV-guarded `__docRowRenderCounts` stay intact; all Documents suites green.
+- **REL-5 (no code) — §26 wording strengthened.** From "latent not confirmed" → "**non-reachable while the
+  single-`DatabaseSync` architecture holds; promote to a real fix only if a second DB connection (e.g. a worker-thread
+  reader) is introduced**" — precondition made explicit so a future worker-pool change can't silently make it reachable.
+- **Stale-comment sweep — VERIFIED CLEAN.** All four §3-flagged comments were already corrected in their owning phases
+  (`money.ts` `detectDocumentCurrency`, `pdf-layout.ts` "INTENTIONAL SUBSET not a mirror", `ChatScreen` `pathsFromDrop`
+  Electron-37 note, rag-design §14.4 AS BUILT); no residual.
+- **SEC-1c / SEC-2 / SEC-3 — re-affirmed accepted residuals** (unlock rate-limit; stage skill-preview under
+  `userSkillsDir`; dialog-opener token trust-zone consistency) with their §26 rationale.
+- **Durable record + RETIREMENT:** **architecture.md §38 "Phase 8 & ROUND CLOSE-OUT"** — the master ledger
+  dispositioning EVERY finding (FIN-1..4, FE-A..E, PERF-1..6, SEC-1c/2/3/4, REL-1..5, TEST-1/TEST-3, DX-1..6) →
+  its phase → as-built §/file → carried-forward items. `audits/full-audit-2026-06-29-followup.md` is `git rm`'d (its
+  lasting content lives in §38; the full original is recoverable at the Phase-7 parent commit), per the doc-lifecycle
+  rule (mirrors §24/§25/§26/§34). No known-limitations change (SEC-4 is hardening, FE-E is a fix).
+- **CARRIED FORWARD (open after this round):** SEC-1c/SEC-2/SEC-3 (accepted residuals, §26); REL-5 (non-reachable /
+  deferred until a second DB connection appears); PERF-5 (ImagesScreen `AnswerThread` handler memo — Low, sessions
+  short); PERF-2 chat-transcript windowing (behavior-sensitive); the E5 `query:`/`passage:` prefix migration + the
+  coupled F13 floor-before-cut (both inert at the pinned default 0).
+- **NEXT ACTION (owner): all 8 follow-up phases are COMPLETE on stacked, unmerged branches
+  (`audit-followup-phase1-financial` … `audit-followup-phase8-closeout`). Review and merge them when ready — do NOT
+  auto-merge or push.**_
+
+
+_2026-06-30 — **Follow-up full audit — Phase 7 (TEST-SUITE ROBUSTNESS; TEST-3/TEST-1/DX-4/DX-2/DX-5/DX-6) —
+branch `audit-followup-phase7-test-robustness` (unmerged; do NOT auto-merge/push). TEST-ONLY.** Closes the
+one material coverage gap (no automated RAG-retrieval floor), retires the actively-flaky vision real-timer
+block, and makes three "wired today but no test proves it stays wired" seams self-enforcing. **`git diff src/`
+is a SINGLE line** — DX-2's `import.meta.env.DEV` guard; every teeth-check neuter was restored byte-identical.
+Suite **2589 passed / 39 skipped** (was 2586/39 after Phase 6 → **+3 net**: TEST-3 ×3 + DX-4 ×1 + DX-5 ×1 −
+TEST-1 net ×2; DX-2 a guard, DX-6 conversions). Typecheck + `npm run build` green; **two consecutive full
+runs identical** (the de-flaking is the point). No IPC / schema / audit-payload change.
+- **TEST-3 (Med, the material gap) — model-free RAG-pipeline retrieval FLOOR** (new
+  `tests/integration/rag-pipeline-floor.test.ts`, ×3). CI gated only the scorer + the skill-trigger precision
+  bar; actual retrieval→answer quality lived in env-gated MANUAL suites, so a regression in chunking /
+  embedding-prefix / reranking / `ragMinSimilarity` / top-k / FUSION / citation assembly passed green. The
+  floor runs the REAL pipeline (real chunker via `processDocument` → `MockEmbedder` → `VectorIndex` cosine →
+  FTS5 → RRF fusion → dedup → top-k → `[Sn]`/`Citation[]`) over a corpus CONSTRUCTED so the known-correct
+  chunk wins both channels; mock line ONLY at the `MockEmbedder` seam the RAG suite already uses (no model /
+  network — offline). Asserts it ranks #1 with its citation, caps at `topKFinal`, and `generateGroundedAnswer`
+  persists the right first citation. The real-model EM/hallucination benchmark stays MANUAL. **Teeth ×2:**
+  reverse `rrfFuse`'s sort → a distractor ranks first → reds; drop the `topKFinal` break → 5 returned → reds.
+- **TEST-1 (Med, the active flake) — flaky real-timer vision idle-teardown block DELETED**
+  (`tests/integration/vision-runtime.test.ts`, net −2). It raced real `setTimeout`s vs a tiny `idleTimeoutMs`
+  in BOTH directions (the T6/T7 residual). Every case is now DETERMINISTIC on the injected-clock twin:
+  teardown+cold-restart → (b), in-flight guard → (a); the two uncovered cases PORTED — clock-reset → new
+  **(d)** (asserts re-entry CLEARED T1 / re-armed T2 via the fake clock's set/clear counts), stop-cancels-timer
+  → new **(f)** (stop clears the pending timer; a later stale fire is inert via the `stopped` guard). No idle
+  `sleep` remains.
+- **DX-4 (Low-Med) — IPC lock-guard enumeration self-checking** (`tests/integration/ipc-lock-coverage.test.ts`,
+  +1). New meta-assertion globs EVERY `register*Ipc` export and asserts union(`MODULES`, the new
+  `COVERED_ELSEWHERE` reason-map) == discovered (`unaccounted == stale == []`); a NEW unlisted module reds it.
+  `COVERED_ELSEWHERE` annotates each of the 9 not-driven-here modules with WHY (dedicated lock test, or
+  pre-unlock-by-design — download/engine guard their lone `ctx.db` read behind `isUnlocked()`, dictation never
+  touches `ctx.db`, workspace IS the gate). **Teeth:** a stub `registerStubIpc.ts` → `unaccounted` → reds
+  (stub deleted).
+- **DX-2 (Low, the SOLE src/ change) — prod render-counter `import.meta.env.DEV`-guarded**
+  (`renderer/screens/DocumentsScreen.tsx`). `__docRowRenderCounts.set(...)` now no-ops in a production build
+  (the exported Map stays empty); vitest runs DEV true, so the PERF-5 memo test (48 green) still observes the
+  bumps. Verified the guard compiles in both modes (`npm run build` clean).
+- **DX-5 (Low) — sidecar crash→auto-fallback WIRING pinned end-to-end** (new
+  `tests/integration/runtime-ladder-exit-wiring.test.ts`, +1). `runtime-ladder.test.ts` hand-invoked
+  `onUnexpectedExit` on a stub; this drives the REAL `createLlamaRuntime`→`LlamaServer` (spawn/fetch/port
+  injected), starts it healthy on a GPU-reporting probe, emits a REAL `'exit'` (code 134 + stderr tail), and
+  asserts the §5.3 GPU crash auto-fallback fired (persist with the code + tail, compatibility notice, ONE CPU
+  restart of the same model). **Teeth:** drop the `'exit'`→`onUnexpectedExit` call in `LlamaServer` → reds.
+- **DX-6 (Low) — three settle-window sleeps → deterministic waits** (`reranker`/`e5-embedder`/`doctasks`
+  integration tests, no count change). reranker/e5: `expect(await {rerank,embed}2).toBe('rejected')` — the F19
+  `tearingDown` guard makes the racing call refuse on its own (a regression that spawned a 2nd child resolves
+  `'ok'` AND bumps the spawn count the final assert checks). doctasks: `while (runtime.concurrent === 0) await
+  tick()` on the scripted runtime's in-flight count before the mid-stream cancel. No fixed sleeps at these sites.
+- **Durable record:** **architecture.md "Test-enforcement seams — design record" → new Phase-7 subsection**
+  (per-finding rows + each teeth-check). No behavior-doc / known-limitations change (nothing shipped changed).
+  `audits/full-audit-2026-06-29-followup.md` marks TEST-1/TEST-3/DX-4/DX-2/DX-5/DX-6 / Phase 7 ✅ remediated
+  (report KEPT — **Phase 8 remains, the LAST phase**).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase7-test-robustness`; do NOT auto-merge/push.**
+  **Phase 8** (the final phase) — maintainability (DX-1 `DocTaskManager` split, DX-3 oversized screens) +
+  security hardening (SEC-4 `extract_to` `..` reject) + FE-E + the REL-5 §26 wording + the four stale code
+  comments + fold this report into the arch §§ and `git rm` it — per the audit §6 plan._
+
+
+_2026-06-30 — **Follow-up full audit — Phase 6 (RELIABILITY HARDENING; REL-1/REL-2/REL-3/REL-4) — branch
+`audit-followup-phase6-reliability` (unmerged; do NOT auto-merge/push).** Closes the four LATENT
+concurrency/teardown gaps in the sidecar lifecycle. **None is a live bug today** — each mirrors a race class
+already fixed elsewhere (the F19 `tearingDown` family; the lock-path stream-abort ordering) — so this is
+DEFENSE-IN-DEPTH, and the proof is the TEETH-CHECKS: each new guard has a deterministic gated-exit interleave
+test that RED→GREENs, and neutering the guard resurrects the race and reds. Suite **2586 passed / 39 skipped**
+(was 2579/39 after Phase 5 → **+7**: `vision-teardown.test.ts` ×2 + OCR REL-1 ×1 + e5 REL-3 ×1 +
+`shutdown.test.ts` ×3), typecheck + `npm run build` green. **No IPC / schema / audit-payload change; behavior-
+preserving** (single-flight start, bind-race retry, SIGTERM→SIGKILL, the `VisionRuntime` idle interlock, the
+e5/reranker F19 latch, `combineSignals` cleanup, partial-on-abort persistence all stay green). Content class
+never logged (a cancellation diagnostic carries ids + the error message only).
+- **REL-2 (Low, strongest) — `VisionService.stop()` couldn't be defeated by a `run()` rebuilding the runtime.**
+  Added a service-level `tearingDown` latch (the F19 analogue VisionService lacked): set at the TOP of `stop()`,
+  cleared in `finally`; `run()` re-checks it at the top AND after the `getStatus()` await — a losing run() ends
+  `cancelled`, spawns nothing. **SHARPENED REPRO / DIVERGENCE:** the audit's "parked in `getStatus()`" variant
+  is ALREADY neutralized by the existing `if (signal.aborted)` check (stop() aborts every vision controller
+  synchronously before yielding). The genuinely-uncovered window the latch closes is a **NEW `analyze()` that
+  lands DURING an in-progress teardown** — its controller is fresh, so `signal.aborted` misses it and, without
+  the latch, it would `createRuntime` a fresh ~4.6 GB vision sidecar co-resident with the vault re-encrypt. The
+  top-of-`run()` latch is SOLELY load-bearing there (single-neuter teeth: `createCalls` 1→2); the
+  post-`getStatus()` re-check is the defense-in-depth twin (co-guarded by `signal.aborted`, like F18).
+- **REL-1 (Low) — OCR `terminateWorker()` no longer orphans an in-flight init.** `stop()` calls it out of band
+  (not through `this.chain`), so it could race an `ensureWorker()` init and leave the init's worker to outlive
+  the teardown (a leaked WASM worker holding decoded page bytes). FIX (the e5/reranker teardown mirror): AWAIT
+  the in-flight init so its worker is the one terminated, and clear the latch only if still that promise.
+  **DIVERGENCE:** the audit's literal "capture + compare" is a no-op without the await (nothing replaces
+  `this.starting` between a synchronous capture and null); awaiting is the mechanically-correct fix. The audit's
+  "second worker spawn" needs an out-of-band terminate that ISN'T `stop()` (none exists — `recognize()` is
+  `stopped`-gated, timeout terminates run inside the chain), so the reachable harm is the init-outlives-`stop()`
+  leak (teeth: drop the await → late-born worker never terminated).
+- **REL-3 (Low) — `e5.embed()` re-checks teardown BETWEEN batches.** It captured `server` once then looped; a
+  `suspend()`/`stop()` mid-loop nulled the sidecar so the NEXT batch threw "llama-server is not started" (a
+  confusing per-document error). FIX: each batch re-throws the SAME recognizable cancellation `ensureStarted`
+  raises. **DIVERGENCE:** the load-bearing condition is `this.server !== server` (captured-server STALENESS) on
+  top of `stopped`/`tearingDown` — `tearingDown` clears in teardown's `finally`, so a `suspend()` that COMPLETED
+  between batches is caught only by the staleness signal (teeth: drop it → next batch fetches the dead server).
+- **REL-4 (Low) — quit `shutdown()` aborts in-flight streams BEFORE `runtime.stop()`.** **DECISION: option (a)**
+  (abort + mirror the lock path) over (b) (document the divergence) — more consistent; the partial reply unwinds
+  as an abort and persists while `ctx.db` is open (`lock()` runs last), instead of the sidecar being killed
+  mid-stream (a non-abort error that lost the partial). The quit teardown was EXTRACTED from `main/index.ts` to
+  **`main/shutdown.ts` (`performShutdown(ctx, deps)`)** so its ORDERING is unit-testable with a fake ctx (teeth:
+  drop the abort loop → ordering test reds).
+- **Durable record:** **architecture.md §37** (per-finding ledger + the three divergences + the REL-4 decision)
+  + the **§5.5c F19-family cross-ref** (REL-2 vision latch / REL-3 e5 batch). REL-5 stays carried/open (the §26
+  wording strengthening is Phase 8). `audits/full-audit-2026-06-29-followup.md` marks REL-1..4 / Phase 6 ✅
+  remediated (report KEPT — Phases 7–8 remain open). No known-limitations entry (these are fixes/hardening).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase6-reliability`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 7** test seams (TEST-1/TEST-3/DX-2/DX-4/DX-5/DX-6), **Phase 8**
+  maintainability + security hardening + docs close-out — per the audit §6 plan._
+
+
+_2026-06-30 — **Follow-up full audit — Phase 5 (RAG PROVENANCE HONESTY + SOURCES a11y; FE-B / F11 + FE-D) —
+branch `audit-followup-phase5-provenance` (unmerged; do NOT auto-merge/push).** Closes the long-carried
+**F11 renderer half**: a whole-document answer no longer presents its leaf-provenance list as if the model
+inline-cited each passage, and no longer dumps ~1000 uncapped "Sources" cards. Suite **2579 passed / 39
+skipped** (was 2568/39 after Phase 4 → **+11**: `SourcesProvenance.test.tsx` ×9 + `TranscriptA11y.test.tsx`
+×2), typecheck + `npm run build` green. **Renderer + i18n + CSS only — no IPC / schema / audit-payload
+change.** (One full-suite run showed a pre-existing unrelated flake in `password-change.test.ts` — "attempt
+to write a readonly database" in `seedCollections`, a Windows file-lock artifact under parallel load; it
+passes 18/18 in isolation and is untouched by this renderer-only work.)
+- **FE-B (Med-High) — whole-document "citations" are LEAF PROVENANCE, not 1:1 inline grounding.** A
+  `mode:'tree'`/`capped`/`extract` answer's `citations` = one entry per reachable document section (tree:
+  up to ~1000, uncapped), with **no** `[Sn]` markers in the prompt and none emitted by the model — yet the
+  renderer drew them through the **same** `SourcesDisclosure` as a 3-source grounded relevance answer →
+  "Sources (1000)" + 1000 byte-identical cards. FIX: `SourcesDisclosure` now takes the answer's
+  `coverage.mode` (threaded from `Transcript` via `m.coverage?.mode`, and from the documents PreviewModal
+  via `cov.coverage.mode`). Any whole-document mode (`≠ relevance`) renders as **provenance**: the toggle
+  relabels `chat.sources.toggle` ("Sources (N)") → **`chat.sources.wholeDoc`** ("Drawn from the document —
+  N sections"), each card **drops the `[Sn]` cite-label** + the list carries a **"Sections covered"**
+  caption (`chat.sources.wholeDocCaption`), and the rendered cards are **capped at 24**
+  (`PROVENANCE_CARD_CAP`) with an **"and N more sections"** reveal (`chat.sources.more`). A `relevance`
+  answer — and a pre-migration **NULL-coverage** turn (`mode` undefined) — is **byte-identical to before**
+  ("Sources (N)", 1:1, `[Sn]` labels). **The `CoverageMeter` (breadth differentiation) is untouched** — it
+  already shows "Covers the whole document" vs "the most relevant passages"; the new Sources label is
+  **breadth-neutral on purpose** so it does not restate the meter.
+- **DECISION — server-side cap NOT applied.** `documentLeafProvenance` (`coverage.ts`) is left **uncapped**;
+  the **render cap alone** meets the honesty + jank goals, and keeping the full provenance persisted avoids
+  a persisted-data semantics change (the full set stays available to the PreviewModal + future features).
+- **DIVERGENCE from the audit's literal label.** The audit's example was "Drawn from the **whole** document";
+  shipped wording drops "whole" — honest for a truncated `capped` answer (whose meter says "covers the
+  beginning") and non-duplicative with the meter's breadth claim. Recorded in rag-design §14.4.
+- **FE-D (Low) — disclosure a11y.** The Sources, live **Thinking…**, and compaction **SummaryMarker**
+  toggles named their state (`aria-expanded`) but not their region. FIX: `aria-controls={regionId}` on each
+  toggle + `role="region"` + `aria-labelledby={toggleId}` on each panel (`useId()` id pairs).
+- **i18n:** 3 new keys **EN+DE together** (parity typecheck-enforced) — `chat.sources.wholeDoc` /
+  `wholeDocCaption` / `more`. LLM prompts unchanged (English, D-L6) — only the user-facing label localized.
+- **Tests (+11), teeth-checked.** `SourcesProvenance.test.tsx`: tree/capped/extract relabel to provenance
+  (not "Sources (N)"); cap = 24 of 1000 + reveal renders all; small list uncapped; relevance + NULL-coverage
+  stay "Sources (N)" 1:1 with `[Sn]`; aria-controls resolves to the region id when expanded.
+  `TranscriptA11y.test.tsx`: Thinking + SummaryMarker aria-controls. Teeth: neuter `isProvenance=false` →
+  6 provenance tests red, the relevance guards stay green (proves the differentiation, not the scaffolding).
+- **Durable record:** **rag-design.md §14.4 "Renderer differentiation — AS BUILT"** + **design-guidelines.md
+  §11.8** (disclosure aria-controls). No known-limitations entry (this is a fix).
+  `audits/full-audit-2026-06-29-followup.md` marks FE-B / FE-D / Phase 5 ✅ remediated (report KEPT — Phases
+  6–8 remain open). The carried-forward **F11 renderer half is now CLOSED**.
+- **NEXT ACTION (owner): review/merge `audit-followup-phase5-provenance`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 6** reliability hardening (REL-1/2/3/4), **Phase 7** test seams,
+  **Phase 8** maintainability + close-out — per the audit §6 plan._
+
+
+_2026-06-30 — **Follow-up full audit — Phase 4 (DOCUMENTS-LIST SCALE; PERF-3/PERF-2; PERF-6 deferred) —
+branch `audit-followup-phase4-docs-scale` (unmerged; do NOT auto-merge/push).** Stops the documents screen
+from getting slower with library size: a hot-path DB parse (PERF-3) and unbounded list DOM (PERF-2 = the
+long-deferred PERF-5 Part B, documents-list half). Suite **2568 passed / 39 skipped** (was 2559/39 after
+Phase 3 → **+9**: PERF-3 ×7 + PERF-2 ×2), typecheck + `npm run build` green. **One additive nullable column,
+no IPC / audit-payload change; an old on-disk workspace opens cleanly and backfills on first open.** The new
+renderer dep bundles offline (no runtime network).
+- **PERF-3 (Med) — `listDocuments` no longer parses the full `ocr_json` blob per OCR'd row.** The list path
+  did `SELECT *` + a full `JSON.parse` of every row's `ocr_json` (reconstructing `pages[]` WITH every page's
+  text) only to read the OCR badge's `pageCount`/`languages`/`engineId`/`createdAt` — megabytes-scale parse +
+  ~10⁵-object allocation on the MAIN thread on every documents-screen mount / import-completion / collection
+  change. FIX: additive nullable **`documents.ocr_meta_json`** sidecar holding ONLY that metadata (a
+  serialized `DocumentOcrInfo` — counts/ids/languages, **never page text**), written alongside `ocr_json` at
+  OCR-write time (`setDocumentOcr`, lock-step; clearing nulls both) and **backfilled once** at `openDatabase`
+  for pre-existing rows (reads each blob ONCE; FK/lifecycle-safe; `updated_at` untouched). `listDocuments`
+  now projects a **narrow column set that omits `ocr_json`** and reads the badge from the sidecar
+  (`ocrInfoForRow`, with a one-shot `parseOcr` fallback the list path never reaches). New leaf module
+  `ingestion/ocr-meta.ts` is the single source of truth for meta extraction (imported by both the write path
+  and the `db.ts` backfill — no `db → ingestion` cycle). **Measured:** ~147 ms `ocr_json` read+parse removed
+  per call (50 docs × 2000 pages, ~50 MB OCR text); projected `listDocuments` ~55 ms.
+- **PERF-2 (High@scale; = PERF-5 Part B, documents-list half) — the documents list is windowed.** Every doc
+  mounted a live `DocRow` + a Radix `DropdownMenu.Root`, so the DOM + menu-root state machines grew linearly
+  with the library. FIX: **`@tanstack/react-virtual`** (pure-JS, no native, build-time dep — Vite bundles it;
+  no runtime fetch) windows the list **against the existing `.content` scroll element** (scrollMargin for the
+  header above it + per-row `measureElement` for variable-height rows) — additive, the full-screen scroll
+  behavior is unchanged. **GATING:** windows only once a real, laid-out viewport is resolved (`clientHeight >
+  0`); with none (a unit test rendering the screen standalone under jsdom, or first paint) it renders every
+  row, byte-identical to before — a truthful guard (a 0px viewport can't be windowed), keeping the existing
+  DocumentsScreen corpus on the un-windowed path. `DocRow` memo + `__docRowRenderCounts` seam untouched; a
+  shared `renderRow` keeps both paths' wiring in one place. **KNOWN TRADEOFF** (known-limitations): Ctrl+F
+  can't match an un-rendered row — fine for a name-scannable library (the section/smart-view filters search
+  the full set); deliberately NOT applied to the chat transcript.
+- **PERF-6 (Low) — DEFERRED with cause.** Per-page OCR child table is the clean root-cause for PERF-3 but a
+  larger schema migration (backfill blobs→child rows, FK/CASCADE, re-index-reuse + doctasks paths); PERF-3's
+  sidecar already removed the hot-path parse, so it is its own future phase.
+- **Tests (+9).** `ocr-meta-list.test.ts` (PERF-3 ×7): list SQL omits `ocr_json` / selects `ocr_meta_json`
+  (teeth: RED on `SELECT *`), badge correct from sidecar when `ocr_json` is poisoned (blob never parsed),
+  old-workspace migration backfills + correct page count + `updated_at` untouched + re-open no-op, + meta
+  extractor unit coverage. `DocumentsScreen.test.tsx` (PERF-2 ×2): at 1000 docs the mounted DocRow +
+  menu-trigger count is bounded (<60, not 1000) with a far row absent (teeth: `windowed=false` → reddens);
+  the no-viewport fallback renders all rows. Existing DocRow memo/keyboard/behavior tests stay green.
+- **Durable record:** architecture.md **§36 "Full audit (2026-06-29, follow-up) — Phase 4"** (per-finding
+  ledger); known-limitations.md (find-in-page windowing trade-off). The PERF-5 Part B carried-forward notes
+  are FLIPPED (documents-list DONE; chat transcript still tracked/deferred — §36, §34, §25 notes + the
+  renderer-tail perf note). `audits/full-audit-2026-06-29-followup.md` marks PERF-3 / PERF-2 (documents) /
+  PERF-6 (deferred) / Phase 4 ✅ remediated (report KEPT — Phases 5–8 remain open).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase4-docs-scale`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 5** RAG provenance honesty (FE-B/FE-D), **Phase 6** reliability
+  hardening, **Phase 7** test seams, **Phase 8** maintainability + close-out — per the audit §6 plan._
+
+
+_2026-06-30 — **Follow-up full audit — Phase 3 (MAIN-THREAD IMPORT I/O + PARSER MEMORY CAPS; PERF-1/PERF-4) —
+branch `audit-followup-phase3-import-io` (unmerged; do NOT auto-merge/push).** Removed the synchronous
+document-import freeze and turned an oversize-text OOM crash into the existing friendly reject. Suite **2559
+passed / 39 skipped** (was 2551/39 after Phase 2 → **+8**: PERF-4 ×4 + PERF-1 async-crypto ×4), typecheck +
+`npm run build` green. No schema / IPC / audit-payload change; the encrypted-at-rest guarantee and the exact
+on-disk vault frame are preserved byte-for-byte (cross-read tests pin it).
+- **PERF-1 (High) — async document-cache crypto on the import path.** The import / re-index / preview /
+  OCR-read path encrypted/decrypted the stored copy through a fully SYNCHRONOUS `readSync`/`writeSync` +
+  `cipher.update` chunk loop on the Electron MAIN thread — multi-second on a large scanned PDF over USB, paid
+  TWICE in an encrypted workspace, freezing UI/IPC + starving the embedder. FIX: added async siblings
+  `encryptFileAsync`/`decryptFileAsync` in `workspace-vault.ts` (same streaming AES-GCM loop on `fs.promises`
+  FileHandles, awaiting each 8 MiB chunk → yields between chunks; GCM `update` is sub-ms so no worker thread).
+  Byte-IDENTICAL frame (`MAGIC | iv | tag@tagPos | ciphertext`). The `DocumentCipher` gained the two async
+  methods; the already-async import callers (`ingestion processDocument` ×3, `extractDocumentPreview`,
+  `doctasks readStoredPdfBytes`) now `await` them; the plaintext copy went `copyFileSync` → `await copyFile`.
+- **CONTRACT DECISION (DIVERGENCE from the audit's "make encryptFile/decryptFile async" framing — deliberate,
+  recorded in architecture.md §35).** I did **NOT** change the sync→async contract of the shared
+  `encryptFile`/`decryptFile`; I **added async siblings** and converted only the per-import callers. Reason:
+  making the shared functions async cascades into the **DB-`.enc` lock/unlock/create/rekey lifecycle** (a
+  session boundary, NOT "every import"), the **synchronous crash-only lock** (the `uncaughtException` handler
+  must re-encrypt the working DB before `process.exit` — an async lock can't finish first → committed
+  in-session data would be lost), and the **synchronous vision streaming emitter** (`createImageSession` is
+  reached through a non-awaitable `emit.done`) — the highest-stakes, most-tested code, the exact
+  vault-corruption blast radius the audit's CRITICAL-RISK note flagged. So those + the bounded sync paths
+  (image-history, text export) stay on the sync `encryptFile`/`decryptFile` (which is also kept available for
+  exactly the crash-lock). The per-import freeze (the audit's stated harm) is gone; the once-per-session
+  unlock/lock decrypt freeze is a tracked follow-up (adopt the async siblings there once the crash-lock keeps
+  a sync path). Net: every caller of the SYNC functions is unchanged (no silently-dropped awaits); only the
+  import-path callers of the new ASYNC siblings await.
+- **PERF-4 (Med) — string-safe text/CSV/Markdown byte cap.** Those parsers read the whole file into one
+  UTF-16 JS string (CSV ≈3 copies at once), so a near-1 GiB file blows V8's ~512 MB string limit → OOM crash
+  instead of the friendly reject. FIX: `textMaxBytes` (64 MiB, env `HILBERTRAUM_TEXT_MAX_BYTES`) +
+  `readsWholeFileToString` parser flag; `effectiveMaxBytes(title, limits)` narrows the EXISTING pre-parse
+  byte checks for those formats so an oversize file hits the unchanged `fileTooLarge` reject. Format-scoped
+  (PDF/DOCX/audio/image keep full `maxBytes`).
+- **Tests.** PERF-4: oversize .txt/.csv → friendly reject, under-cap .txt parses, the cap does NOT apply to a
+  non-string format (PDF), + the new env override — all through the real `processDocument`. PERF-1: async↔sync
+  cross-read (a file written by either flavour decrypts with the other + the in-memory blob path), GCM auth on
+  a tampered async-written `.enc` (no plaintext left), and an event-loop-yield test (a macrotask cannot fire
+  during the sync encrypt but DOES fire during the async one). Both fixes **teeth-checked** (neuter → red →
+  restore): the cap neuter reds the over-cap tests; the non-yielding async neuter reds ONLY the yield test
+  while the frame-identity tests stay green (proving the separation).
+- **Durable record:** architecture.md **§35 "Full audit (2026-06-29, follow-up) — Phase 3"** (per-finding
+  ledger + the divergence); known-limitations.md (text/CSV 64 MiB cap + the session-boundary sync unlock/lock
+  residual). `audits/full-audit-2026-06-29-followup.md` marks PERF-1/PERF-4 / Phase 3 ✅ remediated (report
+  KEPT — Phases 4–8 remain open).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase3-import-io`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 4** documents-list scale (PERF-3/PERF-2/PERF-6), **Phase 5** RAG
+  provenance honesty (FE-B/FE-D), **Phase 6** reliability hardening, **Phase 7** test seams, **Phase 8**
+  maintainability + close-out — per the audit §6 plan._
+
+
+_2026-06-30 — **Follow-up full audit — Phase 2 (ELECTRON-37 DRAG-DROP REGRESSION; FE-A/FE-C) — branch
+`audit-followup-phase2-dragdrop` (unmerged; do NOT auto-merge/push).** Restored a shipped, advertised
+feature that was DEAD in the packaged app: dragging a file onto the chat surface silently did nothing, and
+no test caught it. Suite **2551 passed / 39 skipped** (was 2547/39 after Phase 1 → **+4**: FE-A explicit +
+FE-C banner in `ChatAttach.test.tsx`, ×2 `preload-attach.test.ts`), typecheck + `npm run build` green.
+Renderer + preload + i18n only — **no IPC surface change, no main-process behavior change**; contextIsolation/
+sandbox intact.
+- **FE-A (High) — drag-drop attach silently dead.** `ChatScreen.pathsFromDrop` read `(file).path` — the
+  non-standard `File.path` Electron **removed in v32** (pin `^37.0.0`, installed 37.10.3). At runtime `.path`
+  is `undefined` → `[]` → `attachFiles` never called → no import, no chip, no error. Hidden by a test that
+  **fabricated** `dataTransfer.files = [{ name, path }]` (a property real Electron 37 lacks). FIX: a preload
+  bridge `window.api.getDroppedFilePath(file)` wrapping `webUtils.getPathForFile` (only callable in the
+  sandboxed preload); `pathsFromDrop` calls it. **No new IPC channel** — webUtils is synchronous/in-process
+  in the preload, so the resolver is a plain bridge function (nothing added to `shared/ipc.ts`; renderer
+  typed via `PreloadApi = typeof api`). Main still re-validates every path on import. The paperclip picker
+  (`pickDocuments`) and the **Images** drop (reads File bytes, not `.path`) were both unaffected (confirmed).
+- **FE-C (Med) — silent zero-path drop.** `onDrop` had no `else`. Now a Files-bearing drop that resolves to
+  zero importable paths surfaces a friendly banner (`chat.attach.dropUnsupported`, EN+DE — parity
+  typecheck-enforced), matching the Images screen's drop feedback.
+- **Tests / eyeball.** `ChatAttach.test.tsx` + `ChatUnmount.test.tsx` rewired off the fabricated `File.path`
+  to the **real bridge shape** (dropped File has no `.path`; a WeakMap stands in for webUtils' File→path
+  resolution); added explicit FE-A drop-without-`.path`, FE-C empty-drop banner, and `preload-attach.test.ts`
+  surface-contract tests — all **teeth-checked** (revert the bridge wiring → 10 red, verified RED→GREEN).
+  jsdom can't exercise `webUtils`, so the unit tests prove the **wiring**; the real-Electron leg (bridge
+  exposes the resolver in the actual renderer; `webUtils.getPathForFile` callable in the sandboxed preload on
+  37.10.3 — a renderer-built File → `''`, no throw) was verified by launching the built preload under the
+  app's exact `webPreferences`. A true native OS drag (Explorer → chat) isn't faithfully automatable
+  (synthetic File has no on-disk path) — disk→path success rests on that availability proof + the wiring tests.
+- **Durable record:** architecture.md **"Renderer robustness" → "Drag-drop intake (full-audit-2026-06-29
+  follow-up, Phase 2 — FE-A / FE-C)"**. `audits/full-audit-2026-06-29-followup.md` marks FE-A/FE-C / Phase 2
+  ✅ remediated (report KEPT — Phases 3–8 remain open). No known-limitations entry (this is a fix, not a
+  deferral). Stale `pathsFromDrop` "Electron exposes `File.path`" comment corrected.
+- **NEXT ACTION (owner): review/merge `audit-followup-phase2-dragdrop`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 3** PERF-1/PERF-4 main-thread import I/O, **Phases 4–8** per the
+  audit §6 plan._
+
+
+_2026-06-30 — **Follow-up full audit — Phase 1 (FINANCIAL CORRECTNESS; FIN-1/2/3/4) — branch
+`audit-followup-phase1-financial` (unmerged; do NOT auto-merge/push).** The release-blocking
+"confidently-wrong figure / wrong currency / wrong date" class at the STATEMENT/DOCUMENT tier above the
+per-row money parser. Suite **2547 passed / 39 skipped** (was 2532/39 → **+15**), typecheck + `npm run build`
+green. Parsing-only — no schema / IPC / audit-payload change (figures stay content-class). All four fixed
+**characterization-first then test-first** through the real `extractTransactionsTool`/`extractInvoiceTool`/
+`extractTransactionRows`/`parseLineItem`/`reconstructLine` entry points; each is **teeth-checked** (revert →
+the new test reds, verified). **`BANK_EXTRACTOR_VERSION` 2→3** (FIN-1/3/4), **`INVOICE_EXTRACTOR_VERSION`
+1→2** (FIN-1/2/4) — the A9/F5 reuse gate (`isBankStatementStale`/`isInvoiceStale`) re-extracts older rows on
+next analysis (the rollback boundary; ledger version-tests updated).
+- **FIN-1 (High) — wrong-currency verified totals.** `money.ts detectDocumentCurrency` (new) replaces the
+  tool-level `detectCurrency(joined)` ("first allowlisted code ANYWHERE wins") with a **majority vote over
+  figure-adjacent detections**: a money line votes only on its figure region (dates scrubbed first, so a
+  left-of-amount memo code is excluded), a money-less header/label line votes on its whole text. Wired into
+  both tool `.run`s. A stray `USD` in a payee memo can no longer stamp a whole EUR statement (and its VERIFIED
+  total) with the wrong currency; genuinely-foreign + truly-mixed paths preserved.
+- **FIN-2 (Med) — invoice over-drop.** `invoice.ts UNCAPTURED_AMOUNT_AFTER` now requires the region after the
+  last money match to be ENTIRELY one money-shaped-but-rejected bare token, so a valid item with a trailing
+  annotation (`Service 12,50 (Pos. 3)`, `Beratung 1.234,56 19% MwSt`, `Line 50,00 EUR 2 Stk`) is KEPT while a
+  true uncaptured total (`Hosting 12,50 500`) still drops.
+- **FIN-3 (Med, High harm) — geometry `2.500`-as-date.** `pdf-layout.ts DATE_TOKEN_RE` tightened (a year must
+  follow its own dot) so a bare-thousands `2.500` is un-date-able → no longer dropped → the line parser reads
+  the amount, not the balance. **DIVERGENCE:** `MONEY_TOKEN_RE` NOT widened (the audit's literal suggestion) —
+  widening would regress the M3 split-amount safety boundary (`2.000`+`,00` → wrong figure 2000). Stale
+  `pdf-layout.ts:43` comment corrected.
+- **FIN-4 (Med) — memo date flips doc order.** `money.ts inferDateOrder` vote scoped by line KIND: a money
+  line (transaction row) votes only on its LEADING date column; a money-less header/label line votes on any
+  date. **DIVERGENCE:** the pure "leading column" rule broke labeled US-invoice dates (`Invoice date
+  06/15/2026`) — the split-by-line-kind fixes the statement-memo contamination while keeping both the
+  single-leading-US-date statement and the labeled US invoice working.
+- **Durable record:** architecture.md **§8 "Financial correctness (full-audit-2026-06-29 follow-up, Phase 1)"**
+  (per-finding ledger + both divergences); known-limitations.md updated (FIN-1 doc-currency vote, FIN-2
+  annotation keep, FIN-3 geometry residual boundary (4), FIN-4 line-kind scoping). `audits/full-audit-2026-06-29
+  -followup.md` marks FIN-1..4 / Phase 1 ✅ remediated (report KEPT — Phases 2–8 remain open).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase1-financial`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 2** FE-A/FE-C Electron-37 drag-drop, **Phase 3** PERF-1/PERF-4 main-
+  thread import I/O, **Phases 4–8** per the audit §6 plan._
+
+
 _2026-06-29 — **Post-merge full audit — Phase 8 (FINAL / CLOSE-OUT; F12 + F18 + F19, then the audit report
 RETIRED) — branch `audit-postmerge-phase8-closeout`.** The post-merge full audit is now **COMPLETE (all 8
 phases)**. Suite **2532 passed / 39 skipped (2571 collected)** (was 2523/39 after Phase 7 → **+9**: F12 ×5,

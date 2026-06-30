@@ -277,6 +277,14 @@ export const en = {
   // ---- Chat: sources (SourcesDisclosure.tsx) ----
   'chat.sources.toggle': 'Sources ({count})',
   'chat.sources.page': 'Page {page}',
+  // Whole-document PROVENANCE (full-audit-2026-06-29 follow-up Phase 5, FE-B / F11 renderer
+  // half): a tree/capped/extract answer's "citations" are the document SECTIONS it drew on
+  // (leaf provenance, up to ~1000), NOT 1:1 inline-cited excerpts. The wording stays
+  // breadth-neutral on purpose — the CoverageMeter beside it owns "whole document" /
+  // "beginning" / "partial", so this label must not restate the breadth claim.
+  'chat.sources.wholeDoc': 'Drawn from the document — {count} sections',
+  'chat.sources.wholeDocCaption': 'Sections covered',
+  'chat.sources.more': 'and {count} more sections',
 
   // ---- Chat: dictation (DictationButton.tsx) ----
   'chat.dictation.start': 'Dictate a message',
@@ -1530,6 +1538,9 @@ export const en = {
   'chat.attach.added': 'Added {name} to this chat',
   'chat.attach.newDocChat': 'Started a new document chat for {name}',
   'chat.attach.failed': "Couldn't add {name} to this chat.",
+  // FE-C: a Files-bearing drop that resolved to no on-disk file (a browser-origin drag) — surfaced
+  // instead of failing silently. Pairs with the FE-A drop-path fix (full-audit-2026-06-29 follow-up).
+  'chat.attach.dropUnsupported': "Couldn't add that — drag in a file saved on your computer.",
 
   // ---- Images — "Ask about an image" (image-understanding §5/§11, Phase V3) ----
   // Visual understanding of ONE local PNG/JPEG via a local vision model — distinct from OCR

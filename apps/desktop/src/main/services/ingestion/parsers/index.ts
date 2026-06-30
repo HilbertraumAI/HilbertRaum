@@ -90,6 +90,13 @@ export interface DocumentParser {
   readonly extensions: readonly string[]
   /** MIME type recorded for documents handled by this parser. */
   readonly mimeType: string
+  /**
+   * PERF-4: true when `parse()` reads the WHOLE file into a single JS string (text / Markdown /
+   * CSV). Such parsers get the string-safe `textMaxBytes` ceiling instead of the full `maxBytes`,
+   * because a near-`maxBytes` file would exceed V8's ~512 MB string limit and OOM-crash rather than
+   * hit the friendly `fileTooLarge` reject. The streaming/page-bounded parsers leave it unset.
+   */
+  readonly readsWholeFileToString?: boolean
   /** Extract ordered text segments from the file at `filePath`. */
   parse(filePath: string, ctx?: ParseContext): Promise<ParsedDocument>
 }
@@ -131,6 +138,15 @@ export function isPdfPath(filePath: string): boolean {
 /** Every file extension the ingestion pipeline can handle (lowercase, with dot). */
 export function supportedExtensions(): string[] {
   return PARSERS.flatMap((p) => [...p.extensions])
+}
+
+/**
+ * PERF-4: does the parser for this file read the whole file into one JS string? Drives the
+ * string-safe `textMaxBytes` ceiling in the ingestion byte-cap checks (txt/markdown/csv → true).
+ * Unknown/unsupported types → false (they fall through to the unsupported-type reject anyway).
+ */
+export function readsWholeFileToString(filePath: string): boolean {
+  return selectParser(filePath)?.readsWholeFileToString === true
 }
 
 /** Pick the parser for a file by extension, or null when the type is unsupported. */

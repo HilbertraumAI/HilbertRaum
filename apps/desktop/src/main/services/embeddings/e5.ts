@@ -215,6 +215,19 @@ export class E5Embedder implements Embedder {
 
     const out: Float32Array[] = []
     for (let start = 0; start < prepared.length; start += batchSize) {
+      // REL-3 (full-audit-2026-06-29 follow-up): re-check teardown BETWEEN batches. `server` was
+      // captured once above; a suspend()/stop() mid-loop (workspace lock / quit, racing a large
+      // ingestion's many batches) nulls `this.server` and kills the child, so the NEXT
+      // `server.fetch` would throw the runtime's "llama-server is not started" (or a count
+      // mismatch) — a confusing per-document error. Surface the SAME clean, recognizable
+      // cancellation `ensureStarted` raises instead. `this.server !== server` is the durable
+      // signal: teardown nulls (or replaces) `this.server` and that staleness persists even after
+      // `tearingDown` clears in teardown's `finally` (so a suspend that COMPLETED between batches is
+      // caught too, not only one still in progress). `stopped` is checked first for the quit path.
+      if (this.stopped) throw new Error('Embedder is stopped (app is shutting down)')
+      if (this.tearingDown || this.server !== server) {
+        throw new Error('Embedder is suspending (workspace is locking)')
+      }
       const batch = prepared.slice(start, start + batchSize)
       // REL-4: own the per-batch timeout so it is cleared the instant the request settles —
       // hundreds of batches in a large ingestion otherwise leave hundreds of live timers.

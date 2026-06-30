@@ -68,6 +68,33 @@ describe('validateRuntimeSources', () => {
     expect(res.errors.some((e) => e.includes('extract_to'))).toBe(true)
   })
 
+  // SEC-4 (full-audit-2026-06-29-followup, Phase 8): extract_to is a drive-relative
+  // target into the user-writable model-manifests/ tree, so a traversal/absolute/
+  // drive-letter form must be rejected at PARSE time — mirroring the sibling OCR `dest`
+  // check — not left to the downstream resolveWithinRoot containment alone.
+  it('rejects an extract_to with .. traversal (POSIX form)', () => {
+    const res = validateRuntimeSources(sources({ builds: [build({ extract_to: '../../escape' })] }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('extract_to') && e.includes('drive-relative'))).toBe(true)
+  })
+
+  it('rejects an extract_to with .. traversal (Windows backslash form)', () => {
+    const res = validateRuntimeSources(sources({ builds: [build({ extract_to: '..\\..\\escape' })] }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('extract_to') && e.includes('drive-relative'))).toBe(true)
+  })
+
+  it('rejects an absolute or drive-letter extract_to', () => {
+    expect(validateRuntimeSources(sources({ builds: [build({ extract_to: '/etc/evil' })] })).ok).toBe(false)
+    expect(validateRuntimeSources(sources({ builds: [build({ extract_to: 'C:\\Windows' })] })).ok).toBe(false)
+  })
+
+  it('still accepts a normal drive-relative extract_to', () => {
+    const res = validateRuntimeSources(sources({ builds: [build({ extract_to: 'runtime/llama.cpp/win' })] }))
+    expect(res.ok).toBe(true)
+    expect(res.sources?.builds[0].extractTo).toBe('runtime/llama.cpp/win')
+  })
+
   it('accepts multiple builds across OSes', () => {
     const res = validateRuntimeSources(
       sources({

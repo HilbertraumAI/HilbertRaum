@@ -199,11 +199,30 @@ export class TesseractOcrEngine implements OcrEngine {
     }
   }
 
-  /** Terminate the warm worker (best-effort) and clear it so it is recreated lazily. */
+  /**
+   * Terminate the warm worker (best-effort) and clear it so it is recreated lazily.
+   *
+   * REL-1 (full-audit-2026-06-29 follow-up): an init may be IN FLIGHT when this runs out of band
+   * — `stop()` (workspace lock / quit) calls this directly, NOT through `this.chain`, so it can
+   * interleave with an `ensureWorker()` started inside a chained `recognize()`. The old code nulled
+   * `this.starting` unconditionally; a still-PENDING init was then orphaned — it later resolved and
+   * installed a worker that OUTLIVED this teardown (a leaked WASM worker), and a concurrent
+   * `ensureWorker()` seeing a null latch could spawn a SECOND worker. Mirror the e5/reranker
+   * teardown: AWAIT the in-flight init so the worker it produces is the one we terminate, and only
+   * clear the latch if it is still that same promise (a fresh init started meanwhile is left to run).
+   */
   private async terminateWorker(): Promise<void> {
+    // Capture the init promise; if one is in flight, wait for it to settle so the worker it spawns
+    // cannot survive this teardown (it assigns `this.worker` on success — we terminate that below).
+    const starting = this.starting
+    if (starting) {
+      await starting.catch(() => undefined)
+    }
     const worker = this.worker
     this.worker = null
-    this.starting = null
+    // Only clear the latch if it is STILL the init we awaited — a concurrent ensureWorker() may have
+    // replaced it with a newer attempt during the await, which must be allowed to proceed (not orphaned).
+    if (this.starting === starting) this.starting = null
     if (worker) {
       try {
         await worker.terminate()

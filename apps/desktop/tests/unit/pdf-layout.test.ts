@@ -11,6 +11,7 @@ import {
   type LayoutWord
 } from '../../src/main/services/ingestion/parsers/pdf-layout'
 import { parseDate } from '../../src/main/services/skills/tools/money'
+import { extractTransactionRows } from '../../src/main/services/skills/tools/bank-statement'
 
 // PDF geometry-extraction plan §3.1 / §6, Stage 1 — the deterministic geometry reconstruction proven on
 // positioned word boxes (no real PDF needed here; the integration test drives a real PDF). The central
@@ -426,5 +427,49 @@ describe('HVB multi-baseline recovery (A1 association + A2 currency + A3 sign)',
     expect(lines).toContain('14.01.2025 LASTSCHRIFT Telekom Deutschland GmbH Mandatsref 9988 -3,99 EUR')
     // The phantom balance row (no payee continuation) is dropped — never a transaction line.
     expect(lines.some((l) => l.includes('1.234,56'))).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// FIN-3 (full-audit-2026-06-29 follow-up Phase 1). The geometry classifier's DATE_TOKEN_RE used to
+// BACKTRACK a bare-thousands amount like `2.500` into a date (day 2 / month 5 / "year" 00). Out of the
+// booking-date column, that "date" was DROPPED, so the row lost its movement amount and the line parser
+// read the running BALANCE as the amount — a confidently-wrong figure via a path the F1 guard doesn't
+// cover. The fix tightens DATE_TOKEN_RE (a year must be preceded by its own dot, so `2.500` is un-date-
+// able) so the token is NOT dropped: it rides the reconstructed line as text and the line parser's
+// authoritative MONEY_RE (which reads bare-thousands / apostrophe) parses it. Driven through the REAL
+// reconstructLine → extractTransactionRows path with whole rows.
+describe('FIN-3: bare-thousands / apostrophe amounts are no longer mis-read as dates (geometry)', () => {
+  const seg = (text: string): { text: string; page: number; index: number } => ({ text, page: 1, index: 0 })
+
+  it('a bare-thousands `2.500` survives reconstruction → amount 2500, balance 1000 (not balance-as-amount)', () => {
+    const line = reconstructLine(
+      [word('07.02.', 50, 700), word('EINKAUF', 160, 700), word('2.500', 420, 700), word('1.000,00', 500, 700)],
+      2024,
+      { min: 50, max: 50 }
+    )
+    // BEFORE: '07.02.2024 EINKAUF 1.000,00' (2.500 backtracked into a date and dropped).
+    expect(line).toBe('07.02.2024 EINKAUF 2.500 1.000,00')
+    const rows = extractTransactionRows([seg(line!)], 'EUR')
+    // BEFORE: amount 1000 (the running balance read as the movement amount — the cardinal wrong-money harm).
+    expect(rows[0]).toMatchObject({ amount: 2500, balanceAfter: 1000 })
+  })
+
+  it('an apostrophe-grouped `1\'234.56` likewise survives when a cents figure anchors the row', () => {
+    const line = reconstructLine(
+      [word('05.01.', 50, 700), word('Zahlung', 160, 700), word("1'234.56", 420, 700), word('9.999,99', 500, 700)],
+      2024,
+      { min: 50, max: 50 }
+    )
+    expect(line).toBe("05.01.2024 Zahlung 1'234.56 9.999,99")
+    expect(extractTransactionRows([seg(line!)], 'EUR')[0]).toMatchObject({ amount: 1234.56, balanceAfter: 9999.99 })
+  })
+
+  it('boundary: a SOLE no-cents `10.000` stays a gate-safe DROP (MONEY_TOKEN_RE deliberately not widened)', () => {
+    // The classifier keeps the 2-dp requirement, so a row whose ONLY figure is a no-cents bare-thousands
+    // carries no money TOKEN and is dropped — a recall loss, never a wrong figure. Widening to accept it
+    // would re-introduce the M3 split-amount wrong-figure risk (`2.000` + `,00` → amount 2000, cents lost).
+    // This is the documented FIN-3 divergence (architecture.md §8).
+    expect(reconstructLine([word('05.01.', 50, 700), word('Bonus', 160, 700), word('10.000', 420, 700)], 2024, { min: 50, max: 50 })).toBeNull()
   })
 })

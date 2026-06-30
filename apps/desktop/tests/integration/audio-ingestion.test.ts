@@ -16,7 +16,13 @@ import {
 import {
   AUDIO_NEEDS_TRANSCRIBER_MESSAGE
 } from '../../src/main/services/ingestion/parsers/audio'
-import { encryptFile, decryptFile, type DocumentCipher } from '../../src/main/services/workspace-vault'
+import {
+  encryptFile,
+  decryptFile,
+  encryptFileAsync,
+  decryptFileAsync,
+  type DocumentCipher
+} from '../../src/main/services/workspace-vault'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
 
 // Phase 36 — audio ingestion end-to-end with a FAKE transcriber behind the
@@ -73,7 +79,9 @@ function testCipher(): DocumentCipher {
   const key = randomBytes(32)
   return {
     encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key)
+    decryptFile: (src, dest) => decryptFile(src, dest, key),
+    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
+    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
   }
 }
 

@@ -28,17 +28,38 @@ export interface LayoutWord {
 /**
  * A day-first dotted date token as printed on a German statement: `31.12.`, `31.12`, `31.12.24`,
  * `31.12.2024`. The trailing year is OPTIONAL (bare day.month is the common per-row form; the year
- * lives in the page header). Plausibility (month 1–12, day 1–31) is checked by the caller so a
- * dot-decimal amount like `12.50` — which matches this shape but has an impossible "month" 50 — is NOT
- * misread as a date and is left to be classified as money instead.
+ * lives in the page header), but a year MUST be preceded by its own dot — so the three groups are
+ * `DD . MM ( . YYYY? )?` and a year can never be split off the month without a separator. This is the
+ * FIN-3 (full-audit-2026-06-29 follow-up) tightening: the old `\.?(\d{2,4})?` let a bare-thousands
+ * amount like `2.500` BACKTRACK into a date (month `5`, "year" `00`) and be DROPPED as an out-of-column
+ * value-date → the reconstructed line lost the amount and the line parser then read the BALANCE as the
+ * movement amount (a confidently-wrong figure via a path the F1 guard doesn't cover). Requiring the second
+ * dot before any year makes `2.500` un-date-able (it has only one dot), so it is NOT dropped: it stays in
+ * the reconstructed line as TEXT and the line parser's `MONEY_RE` (which reads bare-thousands) parses it as
+ * 2500 — see `MONEY_TOKEN_RE` below for why the geometry classifier needn't itself accept bare-thousands.
+ * Plausibility (month 1–12, day 1–31) is still checked by the caller so a dot-decimal like `12.50`
+ * (impossible "month" 50) is classified as money, not a date.
  */
-const DATE_TOKEN_RE = /^(\d{1,2})\.(\d{1,2})\.?(\d{2,4})?$/
+const DATE_TOKEN_RE = /^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4})?)?$/
 
 /**
  * A pure money token (anchored): an optional sign/paren, digits with `.`/`,` grouping, and a 2-digit
- * minor unit. Anchored so only a STANDALONE figure matches — a date like `31.12.2024` does not (it
- * ends in a 4-digit run with no separable 2-digit decimal tail), which keeps dates and amounts in
- * separate token classes. Mirrors the accepted set of the shared `MONEY_RE` for a single token.
+ * minor unit. Anchored so only a STANDALONE figure matches — a date like `31.12.2024` does not.
+ *
+ * This is an INTENTIONAL SUBSET of the shared `money.ts` `MONEY_RE`, NOT a mirror of it (FIN-3,
+ * full-audit-2026-06-29 follow-up — correcting the old comment that wrongly claimed it "mirrors the
+ * accepted set of the shared `MONEY_RE`", stale since DECISION-2 added bare-thousands / apostrophe forms).
+ * It deliberately does NOT accept a bare grouped-thousands token (`2.500`, `10.000`) or the Swiss
+ * apostrophe form. The reason it does not NEED to: this regex only CLASSIFIES a token for reconstruction;
+ * a token classified as TEXT is still emitted into the reconstructed line (in the description run), where
+ * the line parser's authoritative `MONEY_RE` — which DOES read bare-thousands / apostrophe — parses it.
+ * So a bare `2.500` reconstructs and reads as 2500 regardless. The FIN-3 bug was NOT this regex's narrow
+ * set; it was `DATE_TOKEN_RE` BACKTRACKING `2.500` into a date and DROPPING it (an out-of-column date is
+ * discarded, never emitted) — fixed above by requiring the second dot. **Diverges from the audit's "widen
+ * MONEY_TOKEN_RE to the shared grammar" suggestion** (recorded in architecture.md §8): widening would make
+ * a pdf.js-SPLIT amount (`2.000` + `,00`, the M3 boundary) classify `2.000` as money and emit a row with
+ * amount 2000 — silently dropping the cents on a `2.000,50`-style split, a confidently-wrong figure where
+ * today the row is safely DROPPED. Keeping the 2-dp requirement preserves that gate-safe boundary.
  */
 const MONEY_TOKEN_RE = /^[-+(]?\d[\d.,]*[.,]\d{2}\)?-?$/
 

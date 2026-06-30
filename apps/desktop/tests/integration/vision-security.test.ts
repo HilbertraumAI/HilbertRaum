@@ -25,7 +25,7 @@ vi.mock('electron', () => ({
 
 import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
 import { openDatabase } from '../../src/main/services/db'
-import { encryptFile, decryptFile } from '../../src/main/services/workspace-vault'
+import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
 import { VisionService } from '../../src/main/services/vision'
 import { VisionRuntime } from '../../src/main/services/vision/runtime'
 import { log } from '../../src/main/services/logging'
@@ -98,7 +98,9 @@ function ctxFor(
       isUnlocked: () => unlocked,
       documentCipher: () => ({
         encryptFile: (s: string, d: string) => encryptFile(s, d, key),
-        decryptFile: (s: string, d: string) => decryptFile(s, d, key)
+        decryptFile: (s: string, d: string) => decryptFile(s, d, key),
+        encryptFileAsync: (s: string, d: string) => encryptFileAsync(s, d, key),
+        decryptFileAsync: (s: string, d: string) => decryptFileAsync(s, d, key)
       })
     },
     audit
