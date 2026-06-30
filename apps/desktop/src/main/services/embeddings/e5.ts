@@ -1,6 +1,7 @@
 import type { Embedder, EmbedOptions } from './index'
 import { LlamaServer, combineSignals, isBindRaceError, type LlamaServerOptions } from '../runtime/sidecar'
 import { truncateToContext } from '../runtime/context-budget'
+import { log } from '../logging'
 
 // Real on-device embedder (spec §6, §9.2). Drops in behind the existing
 // `Embedder` interface with the SAME id/dimensions as the E5-small manifest, so the
@@ -107,6 +108,64 @@ function isContextOverflow(err: { message: string; type: string }): boolean {
     err.type === 'exceed_context_size_error' ||
     /larger than the max context|exceeds? the context|max context size/i.test(err.message)
   )
+}
+
+// ---- Opt-in chunk-coverage measurement (dev only; set HR_EMBED_COVERAGE=1) ---------------------
+// Answers "what fraction of each chunk does its vector actually cover, and how many chunks exceed
+// the embedder's hard context?" using the REAL tokenizer (the sidecar's /tokenize) — the only
+// source of truth (the chunker sizes by an APPROX heuristic). Zero cost when the flag is unset.
+// Accumulates across a whole re-index and logs a cumulative summary each call, so the LAST line is
+// the corpus-wide answer used to decide the upstream chunk size.
+function coverageEnabled(): boolean {
+  return process.env.HR_EMBED_COVERAGE === '1'
+}
+const coverageFull: number[] = [] // real tokens of each FULL (untruncated) chunk
+const coverageSent: number[] = [] // real tokens actually embedded (after truncation)
+
+async function tokenizeCount(server: LlamaServer, content: string): Promise<number> {
+  if (content.trim().length === 0) return 0
+  try {
+    const res = await server.fetch('/tokenize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content })
+    })
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => undefined)
+      return -1
+    }
+    const j = (await res.json()) as { tokens?: unknown[] }
+    return Array.isArray(j.tokens) ? j.tokens.length : -1
+  } catch {
+    return -1
+  }
+}
+
+function pctl(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0
+  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))]
+}
+
+function logCoverageSummary(ctxRealTokens: number): void {
+  const full = coverageFull.filter((n) => n >= 0).sort((a, b) => a - b)
+  if (full.length === 0) return
+  const coverages = coverageSent
+    .map((s, i) => (coverageFull[i] > 0 ? Math.min(1, s / coverageFull[i]) : 1))
+    .filter((c) => Number.isFinite(c))
+    .sort((a, b) => a - b)
+  const overflow = full.filter((n) => n > ctxRealTokens).length
+  const mean = full.reduce((a, b) => a + b, 0) / full.length
+  log.info('[embed-coverage] chunk real-token distribution (cumulative)', {
+    chunks: full.length,
+    ctxRealTokens,
+    fullTokens: { p50: pctl(full, 50), p90: pctl(full, 90), p99: pctl(full, 99), max: full[full.length - 1], mean: Math.round(mean) },
+    overflowPct: Math.round((overflow / full.length) * 1000) / 10, // chunks whose full text exceeds ctx
+    vectorCoverage: { p10: round2(pctl(coverages, 10)), p50: round2(pctl(coverages, 50)), mean: round2(coverages.reduce((a, b) => a + b, 0) / Math.max(1, coverages.length)) }
+  })
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
 }
 
 /** L2-normalize a vector in place so cosine similarity == dot product (interface contract). */
@@ -263,6 +322,15 @@ export class E5Embedder implements Embedder {
     for (let i = 0; i < prepared.length; i++) {
       if (prepared[i].trim().length === 0) out[i] = new Float32Array(this.dimensions)
       else pending.push(i)
+    }
+    // Dev measurement (HR_EMBED_COVERAGE=1): tokenize FULL chunk vs what we actually send, to size
+    // the upstream chunker against E5's hard context. Separate pass so the embed loop stays clean.
+    if (coverageEnabled()) {
+      for (const i of pending) {
+        coverageFull.push(await tokenizeCount(server, texts[i]))
+        coverageSent.push(await tokenizeCount(server, prepared[i]))
+      }
+      logCoverageSummary(ctxBudget)
     }
     for (let start = 0; start < pending.length; start += batchSize) {
       // REL-3 (full-audit-2026-06-29 follow-up): re-check teardown BETWEEN batches. `server` was

@@ -6,6 +6,16 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Chunk-coverage measurement tool (opt-in, dev).** To decide whether to size chunks upstream (the
+`chunkSizeTokens=500` approx vs the embedder's ~232-approx / 512-real budget mismatch), `embeddings/e5.ts` gained a
+gated measurement (set `HR_EMBED_COVERAGE=1`): during `embed()` it tokenizes each chunk's FULL text and the truncated
+text it actually sends via the sidecar's `/tokenize`, accumulates across a re-index, and logs a cumulative
+`[embed-coverage]` summary — chunk real-token percentiles (p50/p90/p99/max/mean), `overflowPct` (chunks whose full text
+exceeds n_ctx), and `vectorCoverage` (sent/full ratio percentiles). Zero cost when the flag is unset (read at call time).
+**To run:** `HR_EMBED_COVERAGE=1 npm run dev`, trigger a Re-index all, read the last `[embed-coverage]` line in
+`/tmp/hilbertraum.log`. The corpus-wide numbers there pick the upstream chunk size. Verified by a fake-`/tokenize` test
+(tokenizes full + sent per input). NOTE: this is a measurement aid — remove or keep as a dev tool once the size is set._
+
 _2026-06-30 — **Embedding 400 follow-up: clean error message + context-overflow retry.** Building on the body-surfacing
 below (which revealed the real reason: `input (623 tokens) is larger than the max context size (512 tokens)` — E5's hard
 512-token cap, the 2.2× truncation factor undershooting a 2.7×-dense chunk). (1) Errors now extract just `error.message`

@@ -387,6 +387,39 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // Dev coverage measurement (HR_EMBED_COVERAGE=1): the embedder tokenizes the FULL chunk AND the
+  // truncated text it actually sends, via the sidecar's /tokenize, to size the upstream chunker.
+  it('tokenizes full vs sent text via /tokenize when coverage measurement is enabled', async () => {
+    const { spawn } = fakeSpawn()
+    const tokenizeContents: string[] = []
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/tokenize')) {
+        const body = JSON.parse(String(init?.body)) as { content: string }
+        tokenizeContents.push(body.content)
+        // Fake tokenizer: 1 token per whitespace word — enough to exercise the measurement path.
+        return { ok: true, status: 200, json: async () => ({ tokens: body.content.split(/\s+/) }) } as Response
+      }
+      if (u.endsWith('/v1/embeddings')) {
+        const body = JSON.parse(String(init?.body)) as { input: string[] }
+        return { ok: true, status: 200, json: async () => ({ data: body.input.map((_t, i) => ({ embedding: [1, 0], index: i })) }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    process.env.HR_EMBED_COVERAGE = '1'
+    try {
+      const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+      await embedder.embed(['alpha beta', 'gamma'])
+      // Two inputs × (full + sent) = four /tokenize calls; the chunk text is among them.
+      expect(tokenizeContents).toContain('alpha beta')
+      expect(tokenizeContents.length).toBe(4)
+      await embedder.stop()
+    } finally {
+      delete process.env.HR_EMBED_COVERAGE
+    }
+  })
+
   // H3 (audit round 4): `this.server` is only assigned after the lazy start resolves,
   // so a stop() racing the first embed() used to see `server == null`, return, and let
   // the just-spawned sidecar outlive the app as an orphan. stop() must await the
