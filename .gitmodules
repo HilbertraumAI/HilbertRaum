@@ -1,0 +1,4 @@
+[submodule "third_party/loader"]
+	path = third_party/loader
+	url = https://git.plan.ai/plan-ai/loader-builder.git
+	branch = trunk
