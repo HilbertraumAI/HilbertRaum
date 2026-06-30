@@ -1727,6 +1727,15 @@ teeth-tested (`e5-embedder.test.ts` / `reranker.test.ts`, F19): a gated-exit chi
 `server.stop()`, a concurrent embed/rerank fires in that window, and the assertion is that NO sidecar survives
 the lock (one spawn, killed) — red without the flag (the concurrent start spawns + is retained).
 
+**Phase-6 extensions of this latch family (full-audit-2026-06-29 follow-up; see §37 for the ledger).**
+(a) **REL-2** ports the SAME `tearingDown` shape to `VisionService` (which had no orchestrator-level latch):
+set at the top of `stop()`, re-checked in `run()` at the top AND after the `getStatus()` await, so a NEW
+`analyze()` arriving during teardown can't rebuild the ~4.6 GB vision sidecar past the lock. (b) **REL-3**
+adds the missing BETWEEN-batches re-check to `e5.embed()` (it captures `server` once then loops): each batch
+re-throws the same recognizable cancellation if `stopped`/`tearingDown` is set or the captured `server` went
+stale (`this.server !== server`), so a `suspend()`/`stop()` mid-ingestion ends as a clean cancel instead of a
+confusing "llama-server is not started" on the next batch.
+
 **§5.4 Where GPU state lives:**
 
 | Datum | Home |
@@ -4661,6 +4670,85 @@ build-time dep, bundled, verified no `.node` binary); the schema change is addit
 workspaces cleanly (backfill on first open); content class (OCR page text) is never materialized on the list
 path nor placed in the sidecar/logs/export. Branch `audit-followup-phase4-docs-scale` (unmerged; do NOT
 auto-merge/push).
+
+
+### §37 Full audit (2026-06-29, follow-up) — Phase 6 (reliability hardening; REL-1 / REL-2 / REL-3 / REL-4)
+
+**Phase 6** closes four **latent** concurrency/teardown gaps in the sidecar lifecycle. None is a live bug
+today — each mirrors a race class already fixed elsewhere (the F19 `tearingDown` family; the lock-path
+stream-abort ordering) — so this is **defense-in-depth, proven by teeth-checks** (neuter the guard → the
+deterministic interleave test resurrects the race and reddens → restore byte-identical). No IPC / schema /
+audit-payload change; behavior-preserving (the robust paths the audit confirmed CLEAN — single-flight start,
+bind-race retry, SIGTERM→SIGKILL escalation, the `VisionRuntime` idle interlock, the e5/reranker F19 latch,
+`combineSignals` cleanup, partial-on-abort persistence — all stay green). Content class is never logged (a
+cancellation diagnostic carries ids + the error message only). Suite **2586 passed / 39 skipped** (was
+2579/39 → **+7**: vision-teardown ×2, OCR REL-1 ×1, e5 REL-3 ×1, shutdown REL-4 ×3); typecheck + `npm run
+build` green. Branch `audit-followup-phase6-reliability` (unmerged; do NOT auto-merge/push).
+
+- **REL-2 (Low, strongest) — `VisionService.stop()` defeated by a `run()` that rebuilds the runtime during
+  teardown.** `run()` does `this.runtime ??= createRuntime(status)` after `await getStatus()`. `VisionService`
+  (unlike the embedder/reranker, F19) had **no orchestrator-level latch**, and the per-`VisionRuntime`
+  `stopped` flag doesn't help (a rebuilt runtime starts without it). FIX: a `tearingDown` latch on the
+  **service** (not the runtime), set at the TOP of `stop()` and cleared in its `finally`; `run()` re-checks it
+  **at the top AND immediately after the `getStatus()` await** — a losing `run()` ends `cancelled`, spawns
+  nothing. **DIVERGENCE / sharpened repro (recorded):** the audit's "parked in `getStatus()`" variant is
+  ALREADY neutralized today by the existing `if (signal.aborted)` check between the await and `createRuntime`
+  (`stop()` aborts every vision controller synchronously before yielding). The genuinely-uncovered window the
+  latch closes is a **NEW `analyze()` that lands DURING an in-progress teardown** — its controller is fresh
+  (stop()'s abort loop ran before the job existed), so `signal.aborted` misses it and, without the latch, it
+  would `createRuntime` a fresh ~4.6 GB vision sidecar co-resident with the vault re-encrypt. The
+  top-of-`run()` latch is **solely** load-bearing there (single-neuter teeth-check: `createCalls` goes 1→2).
+  The post-`getStatus()` re-check is the defense-in-depth twin (co-guarded by `signal.aborted`, like F18 — a
+  dual-neuter), kept to mirror e5/reranker's post-`await this.starting` re-check and harden against a refactor
+  weakening abort-propagation.
+- **REL-1 (Low) — OCR worker init latch nulled from under a concurrent `ensureWorker()`.** `stop()` (lock/quit)
+  calls `terminateWorker()` **out of band** — NOT through `this.chain` — so it can race an `ensureWorker()`
+  init started inside a chained `recognize()`. The old `terminateWorker` nulled `this.starting`
+  unconditionally and never awaited a **pending** init, so the worker that init later produced **outlived the
+  teardown** (a leaked WASM worker holding decoded page bytes). FIX (the e5/reranker teardown mirror): capture
+  `this.starting`, **await it** if in flight (so the worker it spawns is the one we then terminate), and clear
+  the latch only if it is **still** that same promise (a fresh init started during the await is left to run).
+  **DIVERGENCE (recorded):** the audit's literal "only null when it equals the promise being torn down
+  (capture + compare)" is, without the await, a **no-op** for the reachable harm — nothing can replace
+  `this.starting` between a synchronous capture and null, and the pending init is still orphaned. Awaiting the
+  init is the mechanically-correct fix; the equals-compare-before-null is kept on top of it (guards a second
+  out-of-band terminate that replaces the latch during the await). The audit's "spawns a SECOND worker"
+  variant requires an out-of-band terminate that ISN'T `stop()` (none exists today — `recognize()` is
+  `stopped`-gated and the timeout/abort terminate runs **inside** the chain), so the concrete reachable harm
+  is the init-outlives-`stop()` leak, which the await closes (teeth: drop the await → the late-born worker is
+  never terminated).
+- **REL-3 (Low) — `e5.embed()` didn't re-check teardown between batches.** `embed()` captures `server` once,
+  then loops batches; a `suspend()`/`stop()` mid-loop nulls the sidecar, so the NEXT `server.fetch` threw the
+  runtime's `"llama-server is not started"` — a confusing per-document error rather than a clean cancel
+  (functionally safe — no orphan). FIX: at the top of each batch iteration, throw the SAME recognizable
+  cancellation `ensureStarted` raises (`"Embedder is stopped …"` / `"… is suspending …"`). **DIVERGENCE
+  (recorded):** the audit said re-check `this.stopped`/`this.tearingDown`; the load-bearing condition is
+  `this.server !== server` (a captured-server **staleness** check). `tearingDown` clears in teardown's
+  `finally`, so a `suspend()` that COMPLETED between two batches has it back to `false` — only the staleness
+  signal (teardown nulled/replaced `this.server`) catches that interleaving, which is the common one. `stopped`
+  is checked first for the quit path (teeth: drop the re-check → the next batch fetches the dead captured
+  server and reddens with `"not started"`).
+- **REL-4 (Low) — quit `shutdown()` didn't abort in-flight streams before `runtime.stop()`.** The
+  workspace-LOCK path aborts in-flight chat/RAG streams first (so each partial reply unwinds as an ABORT and
+  `generateAssistantMessage` persists it while `ctx.db` is open), but the quit path killed the sidecar
+  directly — a non-abort stream error that **lost** the partial. **DECISION: option (a)** — abort
+  `inFlightStreams` before the sidecar stops, mirroring the lock ordering (more consistent than documenting
+  the divergence; the partial persists during the awaited `runtime.stop()` window, the same settle guarantee
+  the lock path already relies on — neither path awaits the stream itself). The quit teardown was **extracted**
+  from `main/index.ts` into `main/shutdown.ts` (`performShutdown(ctx, deps)`) so its ORDERING is unit-testable
+  with a fake ctx (the real `main/index.ts` registers app handlers at import time). Teeth: drop the abort loop
+  → the stream is never aborted and the ordering test reddens.
+
+| Finding | Sev | Disposition (one line) | Record / files |
+|---|---|---|---|
+| **REL-2** | Low | **fixed** — service-level `tearingDown` latch (the F19 analogue VisionService lacked); `run()` re-checks at top + after `getStatus()`; a new analyze during teardown can't rebuild the ~4.6 GB sidecar. Teeth: neuter both checks → `createCalls` 1→2 | this §37; GPU §5.5c (F19 family); `vision/index.ts`; `tests/integration/vision-teardown.test.ts` |
+| **REL-1** | Low | **fixed** — `terminateWorker` awaits the in-flight init (e5/reranker mirror) so its worker can't outlive teardown, and clears the latch only if unchanged. Teeth: drop the await → late-born worker never terminated | this §37; `ocr/tesseract.ts`; `tests/unit/ocr.test.ts` |
+| **REL-3** | Low | **fixed** — per-batch teardown re-check throws the recognizable cancellation (`this.server !== server` staleness + `stopped`/`tearingDown`) instead of a confusing "not started". Teeth: drop it → next batch fetches the dead server | this §37; GPU §5.5b/c; `embeddings/e5.ts`; `tests/integration/e5-embedder.test.ts` |
+| **REL-4** | Low | **fixed (option a)** — `performShutdown` (extracted to `main/shutdown.ts`) aborts in-flight streams BEFORE `runtime.stop()`, mirroring the lock path so a partial reply persists at quit. Teeth: drop the abort loop → ordering test reddens | this §37; the LOCK-path record (`registerWorkspaceIpc.lockWorkspace`); `main/shutdown.ts`, `main/index.ts`; `tests/unit/shutdown.test.ts` |
+
+**REL-5 (carried, open):** unchanged — still keep-deferred (architecturally non-reachable while the single
+synchronous `DatabaseSync` connection holds; §26 note). Not in Phase 6's scope (the §26 wording strengthening
+is Phase 8).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

@@ -298,6 +298,60 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     expect(terminated).toBe(1)
   })
 
+  // REL-1 (full-audit-2026-06-29 follow-up): stop() (workspace lock / quit) calls terminateWorker()
+  // OUT OF BAND — not through this.chain — so it can race an ensureWorker() init started inside a
+  // chained recognize(). The old terminateWorker nulled this.starting unconditionally and never
+  // awaited a PENDING init, so the worker that init later produced OUTLIVED the teardown (a leaked
+  // WASM worker holding decoded page bytes). The fix awaits the in-flight init (the e5/reranker
+  // teardown mirror) so the worker it spawns is the one terminated. TEETH: drop the `await starting`
+  // → the late-born worker is never terminated (`terminated[0]` stays false → red).
+  it('stop() during an in-flight worker init terminates the worker it spawns — no leak (REL-1)', async () => {
+    let created = 0
+    const terminated: boolean[] = []
+    let releaseInit!: () => void
+    const initGate = new Promise<void>((r) => (releaseInit = r))
+    const mod = {
+      createWorker: async () => {
+        const myIndex = created++
+        // Gate the FIRST init so it is still in flight when stop() fires.
+        if (myIndex === 0) await initGate
+        terminated[myIndex] = false
+        return {
+          recognize: async (): Promise<{ data: { text: string; confidence: number } }> => ({
+            data: { text: 'x', confidence: 90 }
+          }),
+          terminate: async () => {
+            terminated[myIndex] = true
+          }
+        }
+      }
+    }
+    const engine = new TesseractOcrEngine({
+      langDir: '/ocr',
+      languages: ['eng'],
+      loadTesseract: async () => mod as never
+    })
+
+    // A recognize() drives ensureWorker() → createWorker enters and parks (init #0 in flight).
+    const rec = engine.recognize(Buffer.from('p')).then(
+      () => 'ok',
+      () => 'failed'
+    )
+    while (created === 0) await new Promise((r) => setTimeout(r, 1))
+    expect(created).toBe(1)
+
+    // stop() fires while init #0 is parked. terminateWorker must await it, then terminate worker #0.
+    const stopP = engine.stop()
+    await new Promise((r) => setTimeout(r, 2)) // let terminateWorker register its await on this.starting
+
+    releaseInit() // init #0 resolves → worker #0 is born
+    await stopP
+    await rec
+
+    expect(created).toBe(1) // no second worker was spawned
+    expect(terminated[0]).toBe(true) // the late-born worker was terminated, not leaked past the lock
+  })
+
   it('rewrites app.asar worker paths to app.asar.unpacked (packaged app)', () => {
     expect(
       resolveWorkerScriptPath('C:\\app\\resources\\app.asar\\node_modules\\tesseract.js\\w.js')

@@ -6,6 +6,57 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 6 (RELIABILITY HARDENING; REL-1/REL-2/REL-3/REL-4) — branch
+`audit-followup-phase6-reliability` (unmerged; do NOT auto-merge/push).** Closes the four LATENT
+concurrency/teardown gaps in the sidecar lifecycle. **None is a live bug today** — each mirrors a race class
+already fixed elsewhere (the F19 `tearingDown` family; the lock-path stream-abort ordering) — so this is
+DEFENSE-IN-DEPTH, and the proof is the TEETH-CHECKS: each new guard has a deterministic gated-exit interleave
+test that RED→GREENs, and neutering the guard resurrects the race and reds. Suite **2586 passed / 39 skipped**
+(was 2579/39 after Phase 5 → **+7**: `vision-teardown.test.ts` ×2 + OCR REL-1 ×1 + e5 REL-3 ×1 +
+`shutdown.test.ts` ×3), typecheck + `npm run build` green. **No IPC / schema / audit-payload change; behavior-
+preserving** (single-flight start, bind-race retry, SIGTERM→SIGKILL, the `VisionRuntime` idle interlock, the
+e5/reranker F19 latch, `combineSignals` cleanup, partial-on-abort persistence all stay green). Content class
+never logged (a cancellation diagnostic carries ids + the error message only).
+- **REL-2 (Low, strongest) — `VisionService.stop()` couldn't be defeated by a `run()` rebuilding the runtime.**
+  Added a service-level `tearingDown` latch (the F19 analogue VisionService lacked): set at the TOP of `stop()`,
+  cleared in `finally`; `run()` re-checks it at the top AND after the `getStatus()` await — a losing run() ends
+  `cancelled`, spawns nothing. **SHARPENED REPRO / DIVERGENCE:** the audit's "parked in `getStatus()`" variant
+  is ALREADY neutralized by the existing `if (signal.aborted)` check (stop() aborts every vision controller
+  synchronously before yielding). The genuinely-uncovered window the latch closes is a **NEW `analyze()` that
+  lands DURING an in-progress teardown** — its controller is fresh, so `signal.aborted` misses it and, without
+  the latch, it would `createRuntime` a fresh ~4.6 GB vision sidecar co-resident with the vault re-encrypt. The
+  top-of-`run()` latch is SOLELY load-bearing there (single-neuter teeth: `createCalls` 1→2); the
+  post-`getStatus()` re-check is the defense-in-depth twin (co-guarded by `signal.aborted`, like F18).
+- **REL-1 (Low) — OCR `terminateWorker()` no longer orphans an in-flight init.** `stop()` calls it out of band
+  (not through `this.chain`), so it could race an `ensureWorker()` init and leave the init's worker to outlive
+  the teardown (a leaked WASM worker holding decoded page bytes). FIX (the e5/reranker teardown mirror): AWAIT
+  the in-flight init so its worker is the one terminated, and clear the latch only if still that promise.
+  **DIVERGENCE:** the audit's literal "capture + compare" is a no-op without the await (nothing replaces
+  `this.starting` between a synchronous capture and null); awaiting is the mechanically-correct fix. The audit's
+  "second worker spawn" needs an out-of-band terminate that ISN'T `stop()` (none exists — `recognize()` is
+  `stopped`-gated, timeout terminates run inside the chain), so the reachable harm is the init-outlives-`stop()`
+  leak (teeth: drop the await → late-born worker never terminated).
+- **REL-3 (Low) — `e5.embed()` re-checks teardown BETWEEN batches.** It captured `server` once then looped; a
+  `suspend()`/`stop()` mid-loop nulled the sidecar so the NEXT batch threw "llama-server is not started" (a
+  confusing per-document error). FIX: each batch re-throws the SAME recognizable cancellation `ensureStarted`
+  raises. **DIVERGENCE:** the load-bearing condition is `this.server !== server` (captured-server STALENESS) on
+  top of `stopped`/`tearingDown` — `tearingDown` clears in teardown's `finally`, so a `suspend()` that COMPLETED
+  between batches is caught only by the staleness signal (teeth: drop it → next batch fetches the dead server).
+- **REL-4 (Low) — quit `shutdown()` aborts in-flight streams BEFORE `runtime.stop()`.** **DECISION: option (a)**
+  (abort + mirror the lock path) over (b) (document the divergence) — more consistent; the partial reply unwinds
+  as an abort and persists while `ctx.db` is open (`lock()` runs last), instead of the sidecar being killed
+  mid-stream (a non-abort error that lost the partial). The quit teardown was EXTRACTED from `main/index.ts` to
+  **`main/shutdown.ts` (`performShutdown(ctx, deps)`)** so its ORDERING is unit-testable with a fake ctx (teeth:
+  drop the abort loop → ordering test reds).
+- **Durable record:** **architecture.md §37** (per-finding ledger + the three divergences + the REL-4 decision)
+  + the **§5.5c F19-family cross-ref** (REL-2 vision latch / REL-3 e5 batch). REL-5 stays carried/open (the §26
+  wording strengthening is Phase 8). `audits/full-audit-2026-06-29-followup.md` marks REL-1..4 / Phase 6 ✅
+  remediated (report KEPT — Phases 7–8 remain open). No known-limitations entry (these are fixes/hardening).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase6-reliability`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 7** test seams (TEST-1/TEST-3/DX-2/DX-4/DX-5/DX-6), **Phase 8**
+  maintainability + security hardening + docs close-out — per the audit §6 plan._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 5 (RAG PROVENANCE HONESTY + SOURCES a11y; FE-B / F11 + FE-D) —
 branch `audit-followup-phase5-provenance` (unmerged; do NOT auto-merge/push).** Closes the long-carried
 **F11 renderer half**: a whole-document answer no longer presents its leaf-provenance list as if the model

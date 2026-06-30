@@ -45,6 +45,7 @@ import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import { composeServices } from './services/compose-services'
 import { initBinaryVerification } from './services/binary-verifier'
+import { performShutdown } from './shutdown'
 import type { AppContext } from './services/context'
 
 // HilbertRaum — Electron main process (the "backend").
@@ -466,52 +467,13 @@ app.whenReady().then(() => {
 
 let isShuttingDown = false
 
-/**
- * Graceful shutdown: stop the sidecars and AWAIT their exit so no orphaned
- * `llama-server` process survives, then re-encrypt + shred the plaintext working
- * DB (encrypted vault only). `runtime.stop()`
- * waits up to a couple of seconds for the child to die, so this MUST be awaited — a
- * fire-and-forget would let Electron tear down mid-kill and orphan the children.
- */
-async function shutdown(): Promise<void> {
-  // Abort an in-flight deep-index build before stopping the sidecars (plan §4.1 M9): it is
-  // not in inFlightStreams, so nothing else would stop it, and it would keep using the
-  // runtime as it is torn down. Leaves the tree resumable (reconcileStuckTrees on relaunch).
-  try {
-    ctx?.docTasks?.abortActiveBuild()
-  } catch {
-    /* best-effort */
-  }
-  try {
-    await Promise.allSettled([
-      ctx?.runtime.stop() ?? Promise.resolve(),
-      ctx?.embedder.stop?.() ?? Promise.resolve(),
-      ctx?.reranker?.stop?.() ?? Promise.resolve(),
-      ctx?.transcriber?.stop?.() ?? Promise.resolve(),
-      ctx?.ocrEngine?.stop?.() ?? Promise.resolve(),
-      // The vision sidecar is a 4th co-resident llama-server (PROD-1) — kill it too so no
-      // child orphans on quit.
-      ctx?.vision?.stop() ?? Promise.resolve()
-    ])
-  } catch (err) {
-    log.error('Error stopping sidecars on quit', String(err))
-  }
-  // Flush the encrypted diagnostics log to disk while the vault key is still live (lock()
-  // zeroes it). No-op for plaintext_dev (that log is appended in real time).
-  detachVaultKey()
-  // Lock (re-encrypt + shred) the plaintext working DB. No-op for plaintext_dev.
-  try {
-    ctx?.workspace.lock()
-  } catch (err) {
-    log.error('Failed to lock workspace on quit', String(err))
-  }
-}
-
 app.on('will-quit', (event) => {
   if (isShuttingDown) return // cleanup already ran → let the real quit proceed
   event.preventDefault()
   isShuttingDown = true
-  void shutdown().finally(() => app.exit(0))
+  // Graceful quit teardown lives in `./shutdown` so its ORDERING is unit-testable (REL-4: abort
+  // in-flight streams BEFORE runtime.stop so a partial reply persists, mirroring the lock path).
+  void performShutdown(ctx).finally(() => app.exit(0))
 })
 
 // Last-resort crash safety: a hard `uncaughtException` skips `will-quit`, so try to lock the

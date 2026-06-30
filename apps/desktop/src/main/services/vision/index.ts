@@ -57,6 +57,20 @@ export class VisionService {
   private activeJobId: string | null = null
   /** Lazily built once a model is available; reused across analyses. */
   private runtime: VisionAnalyzer | null = null
+  /**
+   * Set WHILE `stop()` (workspace LOCK / quit) tears the runtime down, cleared in its `finally` —
+   * the VisionService-level analogue of the e5/reranker `tearingDown` latch (F19, GPU §5.5c).
+   * VisionService has NO orchestrator-level `stopped` latch and the per-`VisionRuntime` `stopped`
+   * flag does not help (a rebuilt runtime starts without it), so without this a `run()` scheduled by
+   * an `analyze()` that lands DURING a teardown would `this.runtime ??= createRuntime(status)` a
+   * FRESH ~4.6 GB vision sidecar that outlives the teardown — co-resident with the vault re-encrypt
+   * (image-derived prefill in process RAM across the lock boundary). That job carries a fresh,
+   * UN-aborted controller (`stop()`'s synchronous abort loop already ran before the job existed), so
+   * the `signal.aborted` re-check in `run()` does NOT catch it; this latch does. `run()` refuses
+   * while it is set — at the top AND immediately after the `getStatus()` await — ending `cancelled`,
+   * spawning nothing. (REL-2, full-audit-2026-06-29 follow-up.)
+   */
+  private tearingDown = false
 
   constructor(private readonly deps: VisionServiceDeps) {}
 
@@ -98,12 +112,29 @@ export class VisionService {
     emit: VisionStreamEmitter
   ): Promise<void> {
     try {
+      // REL-2: a stop() (lock/quit) already in progress has decided everything is torn down. A
+      // run() scheduled by an analyze() that landed during that teardown window carries a FRESH
+      // controller — stop()'s synchronous abort loop ran before this job existed — so the
+      // `signal.aborted` check below would NOT catch it, and `this.runtime ??= createRuntime` would
+      // spawn a fresh vision sidecar that survives the teardown. The `tearingDown` latch bars that.
+      if (this.tearingDown) {
+        this.cancel(jobId)
+        return
+      }
       const status = await this.deps.getStatus()
       if (!status.available) {
         this.fail(jobId, 'runtimeFailed', emit)
         return
       }
       if (signal.aborted) {
+        this.cancel(jobId)
+        return
+      }
+      // REL-2: re-check AFTER the getStatus() await — a stop() may have begun while we were parked.
+      // For a job whose controller WAS aborted by that stop() the `signal.aborted` check above
+      // already returns; this is the defense-in-depth twin (mirrors e5/reranker `ensureStarted`'s
+      // post-`await this.starting` re-check) that does not depend on abort reaching this signal.
+      if (this.tearingDown) {
         this.cancel(jobId)
         return
       }
@@ -185,21 +216,29 @@ export class VisionService {
    * before the child is killed; the next analyze rebuilds a fresh runtime (cold start).
    */
   async stop(): Promise<void> {
-    for (const controller of this.controllers.values()) {
-      if (!controller.signal.aborted) controller.abort()
+    // REL-2: arm the teardown latch FIRST (before any await), so a run() scheduled by an analyze()
+    // that interleaves this teardown refuses to rebuild the runtime (see `tearingDown`). Cleared in
+    // `finally` so the next analyze after lock/quit-cancel rebuilds a fresh runtime (cold start).
+    this.tearingDown = true
+    try {
+      for (const controller of this.controllers.values()) {
+        if (!controller.signal.aborted) controller.abort()
+      }
+      const runtime = this.runtime
+      this.runtime = null
+      await runtime?.stop?.()
+      // Purge per-process residue at lock/quit (MEDIUM vuln-scan-2026-06-21). Completed-answer
+      // text — content derived from the user's private image — must not survive the vault
+      // re-encrypt, consistent with the lock path purging resident RAG vectors and zeroing the
+      // vault key. Done AFTER the teardown await so an aborting in-flight run() that resumes mid-
+      // await can't repopulate the map (and even then it re-records only a content-free terminal
+      // job). The orchestrator rebuilds a fresh runtime on the next analyze.
+      this.jobs.clear()
+      this.controllers.clear()
+      this.activeJobId = null
+    } finally {
+      this.tearingDown = false
     }
-    const runtime = this.runtime
-    this.runtime = null
-    await runtime?.stop?.()
-    // Purge per-process residue at lock/quit (MEDIUM vuln-scan-2026-06-21). Completed-answer
-    // text — content derived from the user's private image — must not survive the vault
-    // re-encrypt, consistent with the lock path purging resident RAG vectors and zeroing the
-    // vault key. Done AFTER the teardown await so an aborting in-flight run() that resumes mid-
-    // await can't repopulate the map (and even then it re-records only a content-free terminal
-    // job). The orchestrator rebuilds a fresh runtime on the next analyze.
-    this.jobs.clear()
-    this.controllers.clear()
-    this.activeJobId = null
   }
 
   /**
