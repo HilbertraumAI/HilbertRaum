@@ -564,6 +564,25 @@ password recovery — are documented in
     before the money scan, so the printed figure wins for both the date-leading `Kontostand per <date>
     <figure>` and the date-trailing shape. (This is why the backend-audit §24/§10 "last-token readers were
     never affected" claim was wrong — corrected there: only the *date-first* shape was ever safe.)
+  - **A balance-less row still ADVANCES the running-balance chain (full-audit-2026-06-30 C1).**
+    `reconcileBalances` carries a `sinceLastPrinted` cents accumulator: a mid-statement row with a real
+    amount but no printed running balance (same-day grouping — the bank prints the balance only on the
+    day's last line — or an OCR-dropped balance cell) is reported `unknown` (it prints no balance of its
+    own to check) but its amount is folded into the **next** printed balance's expected value. The earlier
+    code dropped the gap row from the chain, so the next balance-bearing row was judged against a stale
+    predecessor with the gap amount **omitted** → a FALSE `mismatch` → `assessCompleteness` returned
+    `contradicted` and a correct, verifiable total was **withheld** (the inverse of the confidently-wrong
+    harm, equally trust-damaging). A genuine read error still surfaces as a `mismatch` when the carried
+    total disagrees with a printed balance. **No persisted-figure change** (`BANK_EXTRACTOR_VERSION`
+    unchanged) — reconciliation runs on read, so row statuses / the `reconciled` flag re-validate
+    automatically. **Residual:** because `amount` is required on every row, the chain is never "genuinely
+    broken" by a missing amount, so a row whose balance was dropped AND whose amount the parser failed to
+    read drops earlier (the row vanishes, a recall loss) rather than reaching reconciliation.
+  - **A `0.00` row is neither inflow nor outflow (full-audit-2026-06-30 C5).** `summarizeCashflow` totals
+    positive amounts as inflow and negative as outflow; a genuine zero counts toward neither, matching
+    `categorizeRow`'s `Uncategorized` fallback for a zero amount (the two surfaces previously disagreed —
+    the summary's `>= 0` test counted a zero as inflow). The reported totals are unchanged (the figure is
+    zero); only the internal attribution is now consistent.
 - **Bank-statement categories are model-assisted, not verified (Phase 33).** The per-category breakdown
   is assigned by a local LLM constrained to a **fixed category set** (it can never invent a label; any
   uncertain/unparseable output drops to `Uncategorized`), so a category may be **wrong** — but a mislabel

@@ -6,14 +6,51 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_2026-06-30 — **NEW full audit (`audits/full-audit-2026-06-30.md`) — Phase G (DOCUMENTATION RECONCILIATION;
-D1–D10 + M1) — branch `audit-2026-06-30-phaseG-docs` (unmerged; do NOT auto-merge/push). DOCS/COMMENTS-ONLY,
+_2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — Phases G + A now MERGED to LOCAL master
+(two `--no-ff` merge commits; NOT pushed — 4 ahead of `origin/master`).** The report is on master with
+D1–D10/M1 (Phase G) and C1/C5/T4 (Phase A) dispositioned ✅; it is NOT retired (phases **B, C, D, E, F remain
+open** — suggested order **B → C → F → D → E**). Suite **2641 passed / 39 skipped**; typecheck + `npm run build`
+green. Per-phase detail below (Phase A then Phase G)._
+
+
+_2026-06-30 — **Full audit — Phase A (FINANCIAL CORRECTNESS; C1 + C5, with T4 landed alongside) — branch
+`audit-2026-06-30-phaseA-financial` — MERGED to local master (`--no-ff`), NOT pushed. BEHAVIOR-CHANGING but
+PARSING-ONLY** — no schema, IPC, or audit-payload change; `BANK_EXTRACTOR_VERSION` left at **3** (reconcile
+re-runs on read from the persisted rows, not from a blob, so statuses re-validate automatically). The SECOND
+phase of the fresh 2026-06-30 audit. Characterization-first (RED → fix → GREEN), teeth-checked. Suite **2641
+passed / 39 skipped** (was 2593/39 on master → **+48**: 6 new in `skills-bank-statement-tool.test.ts` [C1×5 +
+C5×1] + 42 in the new `tests/unit/money.test.ts` [T4]); `npm run typecheck` + `npm run build` green.
+- **C1 (Med-High, the headline) — `reconcileBalances` no longer breaks the running-balance chain across a
+  balance-less row.** A mid-statement row with a real `amount` but no printed `balanceAfter` (same-day grouping —
+  the bank prints the balance only on the day's last line — or an OCR-dropped balance cell) used to be dropped
+  from the chain, so the next balance-bearing row computed `prevBalance + thisAmount` OMITTING the gap amount → a
+  FALSE `mismatch` → `assessCompleteness` → `contradicted` → a correct, verifiable total **withheld from the
+  user**. **Fix:** a `sinceLastPrinted` cents accumulator — the gap row stays `unknown` (it prints no balance to
+  check) but its amount folds into the next printed balance's expected value, reset on each printed balance,
+  discarded at the baseline. `amount` is required on every row, so the chain is never "genuinely broken" by a
+  missing amount → no revert-to-`unknown` branch (the audit's conditional is vacuous; documented in the
+  docstring). A real read error still surfaces as a `mismatch`. The normal 2-figure de-AT row + the HVB
+  no-balance listing are byte-identical (re-asserted). (`bank-statement.ts reconcileBalances`; arch §8 +
+  known-limitations LINE PARSER.)
+- **C5 (Low) — zero-amount classified consistently.** `summarizeCashflow` now uses `> 0` inflow / `< 0` outflow
+  (a `0.00` row is neither), matching `categorizeRow`'s `Uncategorized` fallback. Output is unchanged (the figure
+  is zero) — a convention-consistency fix; the test pins the convention rather than going RED.
+- **T4 (Low-Med, §4 testing gap) — new `tests/unit/money.test.ts`** (42 offline table tests) covers the
+  money/date/CSV primitives in isolation (apostrophe+decimal `parseAmount` + 2-dp invariant, `MONEY_RE` token
+  boundaries, `detectCurrency`/`detectDocumentCurrency`, `inferDateOrder`/`parseDate`/`splitLeadingDates`/
+  `stripDateTokens`, `wordIncludes` strict-vs-compound repeated-needle, `csvField` formula-lead × quote × CRLF).
+- **Report carry (resolved):** the report was authored on the Phase G branch (not on master), so Phase A carried
+  it in to add the C1/C5/T4 dispositions; the expected **add/add** at merge was resolved by taking the Phase A
+  superset (it contains both the G and A dispositions)._
+
+
+_2026-06-30 — **Full audit — Phase G (DOCUMENTATION RECONCILIATION; D1–D10 + M1) — branch
+`audit-2026-06-30-phaseG-docs` — MERGED to local master (`--no-ff`), NOT pushed. DOCS/COMMENTS-ONLY,
 zero behavior change.** Restores the topic docs + code-comment maps as the as-built source of truth after the
 Phase-8 DX-1/DX-3 refactors (commit `1a8b78a`) relocated code. **First phase landed of the fresh 2026-06-30
-audit** (distinct from the 2026-06-29 *follow-up* whose 8 phases sit on the `audit-followup-phase*` branches);
-phases A–F of THIS report remain open. Suite **2593 passed / 39 skipped — UNCHANGED** from the master baseline
-(`7281a2e`); typecheck + `npm run build` green. The sole `src/` touch is one comment deletion (M1); everything
-else is docs.
+audit** (distinct from the 2026-06-29 *follow-up* whose 8 phases sit on the `audit-followup-phase*` branches).
+Suite **2593 passed / 39 skipped — UNCHANGED** from the master baseline (`7281a2e`); typecheck + `npm run build`
+green. The sole `src/` touch is one comment deletion (M1); everything else is docs.
 - **D1/D2 (High/Med) — `architecture.md` "Document tasks" module map rewritten** to the post-DX-1 as-built:
   the **manager keeps the queue/pump/arbiter + `generate`/`generateWithRetry` loop and dispatches via
   `MODEL_TASK_HANDLERS[kind](task, runtime, ctx)`**; each kind's work lives in `handlers/*` (`index.ts`
@@ -42,10 +79,8 @@ else is docs.
   `security-model.md` `MONEY_RE` snippet gains the Swiss-apostrophe member → `[\d.,']` (matches `money.ts`).
 - **M1 (Low, the one `src/` touch — comment-only) —** the verbatim-duplicated RAG-1 determinism comment block in
   `embeddings/index.ts` `VectorIndex.search` deleted (one copy kept; `hits.sort(...)` unchanged).
-- **NEXT ACTION (owner): review/merge `audit-2026-06-30-phaseG-docs`; do NOT auto-merge/push.** Phases A–F of
-  `audits/full-audit-2026-06-30.md` remain open (suggested order A financial C1/C5 → B perf P1/P2 → C reliability
-  R1 → F tests → D renderer F1 → E security S1/S2/S3). The report is intentionally KEPT (not retired) until those
-  land._
+- The report is intentionally KEPT (not retired) — phases B–F remain open (see the merge-status header at the
+  top of this section for the remaining-phase order); Phase A (financial) landed next, its entry is above._
 
 
 _2026-06-30 — **Follow-up full audit — Phase 8 (MAINTAINABILITY + SECURITY HARDENING + DOCS CLOSE-OUT) —
