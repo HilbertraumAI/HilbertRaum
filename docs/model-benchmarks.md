@@ -450,3 +450,62 @@ processes at peak. The idle teardown bounds the *window*, **not the active-use p
 is realistically co-resident **only with a small chat model, or after the chat sidecar idles out**;
 the manifest `recommended_min_ram_gb` / RAM-best-fit gate keeps a vision model off machines that
 can't hold it. Recorded in [`known-limitations.md`](known-limitations.md).
+
+## 9. Qwen3.5 Unsloth wave — PENDING candidates + the b9849 manual smoke (2026-07-01)
+
+Four `qwen3.5`-family chat manifests are in the catalog as **pending benchmark candidates** — added
+manifest-only, **rank 0**, **not bundled**, **not auto-recommended** (model-policy.md "Qwen3.5
+Unsloth wave"). **No wins are claimed here.** They have NOT been through the §2–§6 harness and the
+runtime pin they need (**b9849**, bumped from b9585) has not been smoked on this project's drive.
+
+| Candidate | Tier | Must beat (to earn a `recommendation_rank > 0`) |
+|---|---|---|
+| `qwen3.5-4b-ud-q4kxl` | 4B | `qwen3-4b-instruct-q4` (the bundled default) before promotion. |
+| `qwen3.5-9b-ud-q4kxl` | 8B | `ministral3-8b-instruct-2512-q4` on hallucination rate, German/English grounded QA, citation correctness, AND speed. |
+| `qwen3.5-27b-ud-q4kxl` | 12–14B+ | `gemma4-12b-it-qat-q4` and `qwen3-14b-instruct-q4` by enough to justify the size/RAM. |
+| `qwen3.5-35b-a3b-ud-q4kxl` | MoE (opt-in) | `qwen3-30b-a3b-q4` on speed OR quality by enough to justify replacement. |
+
+> **Public benchmark scores are NOT enough.** HilbertRaum promotion depends ONLY on the local,
+> offline German/English grounded-QA eval (§2) + the speed/RSS sweep (§3/§4) + the manual smoke
+> below. Qwen3.5 27B's public numbers may look stronger than 35B-A3B's on several categories — that
+> is *not* a promotion signal here. Until the local eval gives a model a real rank, every Qwen3.5
+> manifest stays `recommendation_rank: 0` (selectable manually, never auto-recommended, never
+> bundled). The §4 `recommended_min_ram_gb` values for these are **placeholders pending a real peak-RSS
+> measurement** (24 GB for the 27B/35B is a conservative guess, not a measured floor).
+
+### 9.1 Manual smoke checklist — b9849 runtime + Qwen3.5 load (REQUIRED; not CI)
+
+This is a human pre-promotion gate (offline / network / real GPUs can't run in CI). Record results
+in BUILD_STATE. **Capture tokens/sec + peak RSS** where the existing manual harness (§3/§4,
+`benchmark-speed.ps1`) supports it.
+
+**1. Fetch/install the b9849 runtime** (`fetch-runtime`), per build:
+- [ ] Windows Vulkan/full · [ ] Windows CPU safety-net · [ ] macOS arm64 (Metal) ·
+  [ ] Linux Vulkan/full · [ ] Linux CPU safety-net
+
+**2. Old models still load on b9849** (regression):
+- [ ] `qwen3-4b-instruct-q4` · [ ] `ministral3-8b-instruct-2512-q4` ·
+  [ ] `gemma4-12b-it-qat-q4` (if the machine has the RAM) ·
+  [ ] embedding (`multilingual-e5-small-q8`) + reranker (`bge-reranker-v2-m3`) sidecars still load
+  on b9849 — **or explicitly record if deferred to a later phase** (these were last verified on
+  b9585; the F16 choice is documented in model-policy.md).
+
+**3. New Qwen3.5 models load on b9849:**
+- [ ] `qwen3.5-4b-ud-q4kxl` · [ ] `qwen3.5-9b-ud-q4kxl` ·
+  [ ] `qwen3.5-27b-ud-q4kxl` (32 GB+ machine) · [ ] `qwen3.5-35b-a3b-ud-q4kxl` (32 GB+ machine)
+
+**4. For each Qwen3.5 smoke, through the APP (not raw llama.cpp):**
+- [ ] start the model via the AI Model screen
+- [ ] one normal chat prompt streams a coherent answer
+- [ ] one document-grounded prompt (if documents are available) answers from the corpus
+- [ ] streaming begins and can be **aborted** mid-stream
+- [ ] **lock / quit teardown leaves no `llama-server` sidecar running**
+- [ ] Deep/Thorough mode toggles `enable_thinking` correctly (reasoning frames appear)
+- [ ] Balanced/non-thinking mode disables thinking where supported (esp. the ≤9B models, which
+      default reasoning OFF unless `enable_thinking=true`)
+- [ ] no `mmproj`/projector is required for text-only chat (these are text-only manifests)
+
+**5. If `UD-Q4_K_XL` fails to load on b9849 but plain `Q4_K_M` loads:** add the experimental
+`qwen3.5-27b-q4km.yaml` / `qwen3.5-35b-a3b-q4km.yaml` fallback (hashes recorded in the manifest
+templates in the wave plan), keep `UD-Q4_K_XL` as the preferred quant. Do NOT add a fallback
+pre-emptively.

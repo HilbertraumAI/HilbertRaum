@@ -6,6 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Qwen3.5 Unsloth wave + llama.cpp runtime bump b9585 → b9849 — branch
+`model-catalog-qwen3.5-wave-b9849` (UNMERGED; do NOT auto-merge/push).** Manifest/docs/test-only —
+`git diff src/` touches one test fixture assertion (the committed-pin version) + one new test file; no
+product code path changed. Offline / no telemetry / no new network egress at runtime.
+- **Runtime pin: OLD `b9585` → NEW `b9849`** (2026-06-30 upstream release, commit `799fcc0`). **Reason:
+  Qwen3.5 compatibility gate** — Qwen3.5 is a newer architecture than b9585 may load. All five builds in
+  `runtime-sources.yaml` updated (win vulkan + win cpu, mac arm64 metal, linux vulkan + linux cpu),
+  preserving the vulkan-first product topology. **SHA-256 source: the official GitHub Releases API
+  `digest` metadata** for tag b9849, cross-checked twice (win-vulkan `ed6156de…`, win-cpu `fa7d9d93…`,
+  mac `fccd7497…`, linux-vulkan `0fb24916…`, linux-cpu `9ce3b4db…`). These were NOT confirmed by a local
+  re-download in this environment — but `fetch-runtime` re-SHA-256-verifies each archive before
+  extraction, so a wrong/changed digest fails the run (never installs a bad binary); the manual smoke is
+  also the hash confirmation.
+- **New manifests (3):** `model-manifests/chat/qwen3.5-9b-ud-q4kxl.yaml`,
+  `qwen3.5-27b-ud-q4kxl.yaml`, `qwen3.5-35b-a3b-ud-q4kxl.yaml` (MoE). All Apache-2.0, Unsloth Dynamic
+  2.0 `UD-Q4_K_XL` text-only GGUFs (no `mmproj`), `supports_thinking_mode: true`, `supports_tools: true`,
+  `recommended_context_tokens: 8192` (native 262K, but the field is the local runtime budget), with real
+  top-level + download SHA-256 (from the user-supplied HF LFS pointers). Existing `qwen3.5-4b-ud-q4kxl`
+  KEPT; its runtime-compat warning updated from "b9585 unverified" → "requires b9849 load smoke before
+  promotion". Fallback `q4km` manifests for 27B/35B are documented but NOT added (only if `UD-Q4_K_XL`
+  fails to load on b9849).
+- **Promotion status:** ALL FOUR Qwen3.5 models are `recommendation_rank: 0` + `recommended_profiles: []`
+  + `bundled_on_preconfigured_drive: false` → selectable manually, NEVER auto-recommended, NEVER bundled,
+  until the offline benchmark harness (`model-benchmarks.md` §9 promotion criteria) gives one a real rank.
+  Verified by a new test: `recommendModelIdByRam` returns no Qwen3.5 id at RAM ∈ {8,12,16,24,32,48,64,128}.
+- **Tests:** new `tests/integration/committed-catalog.test.ts` (6 tests: wave present + invariants +
+  the 8192 ctx + never-auto-recommended + no incumbent removed); `assets.test.ts` committed-pin assertion
+  bumped b9585 → b9849. `npm test` / `npm run typecheck` / `npm run build` — see the close-out line below.
+- **MANUAL SMOKE STILL REQUIRED (owner, offline — cannot run in CI):** fetch the b9849 runtime per OS;
+  confirm old models (`qwen3-4b-instruct-q4`, `ministral3-8b-instruct-2512-q4`, `gemma4-12b-it-qat-q4`)
+  + the embedder/reranker sidecars still load on b9849; confirm the four Qwen3.5 models load + stream +
+  abort + teardown-clean through the APP; verify Deep toggles `enable_thinking`; verify no projector is
+  needed. Full checklist: `model-benchmarks.md` §9.1. Capture tokens/sec + peak RSS.
+- **Scope:** `model-manifests/runtime-sources.yaml`, 3 new + 1 edited chat manifest, 1 new + 1 edited test;
+  docs: model-policy.md (Qwen3.5 wave section + b9849 license-review record + catalog rows), model-benchmarks.md
+  §9, packaging.md, README.md, architecture.md §3 (GPU record pin note), BUILD_STATE.md. **NEXT ACTION
+  (owner): run the §9.1 manual smoke + the offline benchmark, then promote winners via `recommendation_rank`.**_
+
+
 _2026-06-30 — **Full audit (`audits/full-audit-2026-06-30.md`) — ROUND COMPLETE (all 7 phases A–G
 dispositioned); report RETIRED** (`git rm`; lasting content folded into the new **architecture.md §40**
 master close-out ledger; original recoverable in git history). **Branch topology:** Phases G + A MERGED to

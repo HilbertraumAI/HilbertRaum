@@ -146,8 +146,9 @@ model) or drop the files into `models/` and `runtime/llama.cpp/<os>/` **by hand*
 > 🎙️ The whisper.cpp runtime ships **prebuilt for Windows only**; on a macOS/Linux build host
 > `-WithAssets` skips it with a note (build it from source — see **[`docs/packaging.md`](docs/packaging.md)**).
 
-> ✅ **`runtime-sources.yaml` is pinned to a real release** (`llama.cpp` **b9585**, real per-OS
-> URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads, verifies,
+> ✅ **`runtime-sources.yaml` is pinned to a real release** (`llama.cpp` **b9849** — bumped from
+> b9585 on 2026-07-01 as the Qwen3.5 compatibility gate; real per-OS URLs + SHA-256 checksums from
+> the official GitHub Releases API `digest` metadata) — `fetch-runtime` downloads, verifies,
 > extracts (zip and tar.gz), and flattens the binaries for all three OSes from any host. Model
 > weight URLs are real Hugging Face links, and the bundled manifests carry **real pinned
 > SHA-256 hashes** (captured from verified downloads with `verify-models --generate`), so
@@ -194,10 +195,13 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 | Qwen3.5 4B (UD-Q4_K_XL) | Newest 4B (not auto-recommended yet) | ~2.9 GB | 8 GB | Apache-2.0 |
 | Qwen3 8B Instruct Q4 | 12 GB+ laptops | ~5.0 GB | 12 GB | Apache-2.0 |
 | Ministral 3 8B Instruct (2512) Q4 | **Recommended 8B** — benchmark winner | ~5.2 GB | 12 GB | Apache-2.0 |
+| Qwen3.5 9B (UD-Q4_K_XL) | Qwen3.5 wave challenger (selectable; not auto-recommended) | ~6.0 GB | 12 GB | Apache-2.0 |
 | Granite 4.1 8B Q4 | Challenger (selectable, not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 |
 | Gemma 4 12B Instruct QAT Q4_0 | **Recommended 12–14B** — benchmark winner; has **Deep** | ~7.0 GB | 14 GB | Apache-2.0 |
 | Qwen3 14B Instruct Q4 | Dense, 32 GB+ | ~9.3 GB | 14 GB | Apache-2.0 |
 | Qwen3 30B-A3B (MoE) Q4 | ≈30B quality, ≈3B speed (opt-in) | ~18.6 GB | 24 GB | Apache-2.0 |
+| Qwen3.5 27B (UD-Q4_K_XL) | Qwen3.5 wave dense challenger (selectable; not auto-recommended) | ~16.7 GB | 24 GB | Apache-2.0 |
+| Qwen3.5 35B-A3B (UD-Q4_K_XL) | Qwen3.5 wave MoE (~3B active; opt-in, selectable) | ~20.6 GB | 24 GB | Apache-2.0 |
 
 ### Supporting models (non-chat)
 

@@ -1728,7 +1728,13 @@ Negligible next to multi-GB weights.
 
 ### §3 llama.cpp b9585 facts this design relies on
 
-(Verified 2026-06-10 against the pinned tag; re-verify on the next pin bump.)
+(Verified 2026-06-10 against the then-pinned tag b9585; re-verify on the next pin bump.
+**PIN BUMPED 2026-07-01: the live pin is now b9849** — bumped from b9585 as the Qwen3.5
+compatibility gate, `runtime-sources.yaml` + model-policy.md. The b9585-tagged facts below are the
+last *verified* runtime evidence; the b9849 re-verification is the REQUIRED manual smoke in
+`model-benchmarks.md` §9. These facts — `-ngl auto`/`--fit on` defaults, `--device none`,
+`--list-devices`, the Vulkan-archive-is-a-full-build property — are long-standing upstream behaviour
+expected to hold on b9849, but that is not yet re-confirmed on this project's drive.)
 
 - `-ngl` **defaults to `auto`** and `--fit` **defaults to `on`** (upstream PR #15434, Aug 2025):
   the server does VRAM-aware maximum offload with a ~1 GiB margin and a min-context guard —

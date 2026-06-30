@@ -1,0 +1,43 @@
+id: qwen3.5-35b-a3b-ud-q4kxl
+display_name: Qwen3.5 35B-A3B (UD-Q4_K_XL)
+family: qwen3.5
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 20.6
+recommended_min_ram_gb: 24
+recommended_ram_gb: 32
+# Default 0 — and keep it 0 FOREVER until the local benchmark proves this is better than the
+# current opt-in MoE (qwen3-30b-a3b-q4) on speed or quality. MoE candidate: the Qwen model card
+# reports 35B total params and ~3B activated (256 experts, 8 routed + 1 shared active). Intended
+# to challenge qwen3-30b-a3b-q4 as an opt-in big model.
+recommendation_rank: 0
+# Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). Manifest runtime context
+# is 8192 for now — the safe local runtime budget for normal laptops, not the model maximum.
+recommended_context_tokens: 8192
+# Larger Qwen3.5 models operate in thinking mode by default; the chat template honours
+# `enable_thinking`, so the Deep answer mode applies. Verify live behaviour by smoke test.
+supports_thinking_mode: true
+supports_tools: true
+local_path: models/chat/qwen3.5-35b-a3b-ud-q4kxl.gguf
+sha256: 46b21f2508c86dfe2206de7fb2b311afd95bb3b1663f9fe499c3d991c18ad67e
+# Quantization: unsloth "Dynamic 2.0" UD-Q4_K_XL, NOT plain Q4_K_M, unless a smoke shows the
+# dynamic quant cannot load (then add qwen3.5-35b-a3b-q4km.yaml as the experimental fallback).
+# The dynamic file (20.58 GB) is actually SMALLER than the plain Q4_K_M file (22.02 GB).
+download:
+  url: https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf?download=true
+  sha256: 46b21f2508c86dfe2206de7fb2b311afd95bb3b1663f9fe499c3d991c18ad67e
+  size_bytes: 20581194400
+  license_url: https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# MANUAL/SELECTABLE, NOT bundled — the download + RAM cost is high, so it must be a deliberate
+# choice (the same posture as qwen3-30b-a3b-q4). TEXT-ONLY USE: upstream Qwen3.5 is a
+# vision-language MoE model, but this chat manifest ships ONLY the language GGUF and no
+# mmproj/projector — which is all our chat pipeline uses.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-07-01"
+  notes: "APPROVED 2026-07-01: base model Qwen/Qwen3.5-35B-A3B and Unsloth GGUF card are apache-2.0. Quantization provenance: Unsloth Dynamic 2.0 GGUF, third-party quantization of Apache-2.0 Qwen weights. Apache-2.0 permits commercial redistribution; ship LICENSE/NOTICE attribution with the drive. TEXT-ONLY USE: upstream is a vision-language MoE model, but this chat manifest ships only the language GGUF and no mmproj/projector. Not bundled and not auto-recommended until the HilbertRaum offline benchmark + b9849 runtime smoke pass."

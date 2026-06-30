@@ -1,6 +1,10 @@
 # Model Policy — HilbertRaum
 
-_Last updated: 2026-06-20 (image understanding V5: the `vision` role + `mmproj` projector + the
+_Last updated: 2026-07-01 (Qwen3.5 Unsloth wave: three new text-only chat manifests —
+`qwen3.5-9b-ud-q4kxl`, `qwen3.5-27b-ud-q4kxl`, `qwen3.5-35b-a3b-ud-q4kxl` — added alongside the
+existing `qwen3.5-4b-ud-q4kxl`; runtime pin BUMPED b9585 → **b9849** as the Qwen3.5 compatibility
+gate. See "Qwen3.5 Unsloth wave" below. Prior:
+2026-06-20 (image understanding V5: the `vision` role + `mmproj` projector + the
 Qwen2.5-VL-3B-Instruct license review — see "The vision role + mmproj projector" below). Prior:
 2026-06-11 (Phase 29: first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
 Granite held, min-RAM recalibrated from measured peak RSS; see
@@ -28,7 +32,10 @@ pinned to llama.cpp b9585; all license reviews approved)_
 | Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 12 GB | — (not promoted) | Phase-29: lost its tier (most 8B hallucinations 3/15, lowest F1); kept selectable for its IBM provenance story |
 | Chat (winner, 12–14B) | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 14 GB | — (rank‡) | **Phase-29 winner at 12–14B**: beats Qwen3 14B on every axis (fewer hallucinations, faster). `supports_thinking_mode` **flipped on** — only thinking-capable challenger |
 | Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
-| Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 0) | Added 2026-06-18 (user request). unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). **Not auto-recommended/benchmarked; runtime-compat on pinned b9585 UNVERIFIED** (newer arch — may not load until the runtime pin is bumped). Vision model run text-only. |
+| Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 0) | Added 2026-06-18 (user request). unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). **Not auto-recommended/benchmarked; runtime pin bumped to b9849 (Qwen3.5 gate) but b9849 load smoke still PENDING before promotion.** Vision model run text-only. |
+| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** unsloth Dynamic-2.0 quant; balanced-tier challenger to Ministral 3 8B / Qwen3 8B. Text-only. Not bundled/benchmarked; needs b9849 load smoke + offline eval before promotion. |
+| Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~16.7 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger to Gemma 4 12B / Qwen3 14B / Qwen3 30B-A3B on 32 GB machines. Text-only, opt-in (not bundled). Pending b9849 smoke + offline eval. |
+| Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~20.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
 | Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation (Phase 36); whisper.cpp GGML; MIT |
@@ -39,7 +46,9 @@ pinned to llama.cpp b9585; all license reviews approved)_
 > The embeddings model uses an **F16** GGUF, not Q8 — the q8_0 conversions of this BERT/XLM-R model
 > crash llama.cpp b9585 (`binary_op: unsupported types … q8_0`). See BUILD_STATE §9. The
 > **reranker** (also XLM-R family) is pinned to **F16 for the same reason**; its live load on b9585
-> is verified by the `HILBERTRAUM_RERANK_SMOKE` manual harness. License review (recorded in its manifest):
+> is verified by the `HILBERTRAUM_RERANK_SMOKE` manual harness. _(These were verified on b9585; the
+> b9849 pin bump re-opens them — the manual smoke re-confirms the embedder + reranker sidecars load
+> on b9849, or records explicitly if deferred.)_ License review (recorded in its manifest):
 > base model `BAAI/bge-reranker-v2-m3` = Apache-2.0 (HF API, 2026-06-10); GGUF from
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
@@ -63,6 +72,39 @@ Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run 
 12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in
 `model-manifests/chat/` with a `download` block + a `recommended_profiles` list.
+
+## Qwen3.5 Unsloth wave (2026-07-01)
+
+Four **text-only** chat manifests in the `qwen3.5` family, all third-party **Unsloth Dynamic 2.0**
+GGUF requants of **Apache-2.0** Qwen weights (the Qwen org publishes no official GGUF for the 3.5
+refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
+
+| Manifest | Size | Min RAM | Quant | Challenges |
+|---|---|---|---|---|
+| `qwen3.5-4b-ud-q4kxl` (existing) | ~2.9 GB | 8 GB | UD-Q4_K_XL | the 4B tier (`qwen3-4b-instruct-q4`) |
+| `qwen3.5-9b-ud-q4kxl` (new) | ~6.0 GB | 12 GB | UD-Q4_K_XL | the 8B tier (Ministral 3 8B, Qwen3 8B) |
+| `qwen3.5-27b-ud-q4kxl` (new) | ~16.7 GB | 24 GB | UD-Q4_K_XL | dense 12–14B + Qwen3 30B-A3B |
+| `qwen3.5-35b-a3b-ud-q4kxl` (new, MoE) | ~20.6 GB | 24 GB | UD-Q4_K_XL | the opt-in MoE (`qwen3-30b-a3b-q4`) |
+
+- **Text-only in HilbertRaum.** Upstream Qwen3.5 are hybrid reasoning / vision-language models, but
+  every manifest here ships ONLY the language GGUF and **no `mmproj`/projector** (chat does not use
+  vision). Each carries `supports_thinking_mode: true` — the smaller models (≤9B) have reasoning
+  *disabled by default* in Unsloth's llama.cpp examples unless `enable_thinking=true`, while the
+  larger models think by default; the chat template honours the switch either way, so the Deep
+  answer mode applies. **Verify the live thinking-toggle behaviour by smoke test.**
+- **Native context is 262,144 tokens** (extensible to ~1,010,000 via YaRN), but every manifest sets
+  `recommended_context_tokens` to a small **local runtime budget** (8192 for the new three; the
+  incumbent 4B keeps 4096). That field is the *recommended runtime context for normal laptops*, not
+  the theoretical native window — revisit only after KV-cache/RAM budgeting + a long-context eval.
+- **Runtime pin bumped to b9849** (see "runtime-sources.yaml" below) specifically because Qwen3.5 is
+  a newer architecture than the old b9585 build. b9849 *should* load these models, but that is not
+  yet confirmed by a local smoke — see the manual-smoke checklist in `model-benchmarks.md` §9 / the
+  BUILD_STATE "Qwen3.5 Unsloth wave" entry.
+- **None are auto-recommended.** All four carry `recommendation_rank: 0` + `recommended_profiles: []`
+  and `bundled_on_preconfigured_drive: false`: selectable manually on the AI Model screen, never the
+  RAM-best-fit auto-pick, never bundled — **until the offline benchmark harness promotes them** with
+  a real rank (`model-benchmarks.md` §9 promotion criteria). Public benchmark scores do not count;
+  only the local German/English grounded-QA eval + manual smoke do.
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package
@@ -221,10 +263,30 @@ GPU driver) — no new licenses enter the product. The file is validated by
 (everything except the downloaded archive + the `cpu/` safety net) so an upgrade can never mix
 two builds or keep a stale binary under a fresh marker (GPU audit round).
 
-**License-review record — llama.cpp b9585 runtime assets (extends the original b9585 review,
-commit `8bdeb2e`; status: approved, reviewed 2026-06-10):** all five pinned assets build from
-the same MIT-licensed `ggml-org/llama.cpp` source at tag `b9585`. The two assets added by
-Phase 14 are explicitly part of this record:
+**License-review record — llama.cpp b9849 runtime assets (the CURRENT pin; status: approved,
+reviewed 2026-07-01):** the pin was bumped b9585 → **b9849** (2026-06-30, upstream commit
+`799fcc0`) as the **Qwen3.5 compatibility gate**. Licensing is unchanged from the b9585 review
+below: all five pinned assets build from the same **MIT**-licensed `ggml-org/llama.cpp` source at
+tag `b9849`, the Vulkan archives redistribute no Vulkan SDK/loader (it ships with the user's GPU
+driver), and the win/win-cpu zips ship the same MS OpenMP redistributable as before — **no new
+license class enters the product.** The SHA-256 values are the **official GitHub Releases API
+`digest`** metadata for tag `b9849` (cross-checked twice); `fetch-runtime` re-verifies every
+archive against them before extraction, so the REQUIRED manual smoke (download + install on a real
+drive) is also the hash confirmation — a wrong/changed digest fails the run, never installs a bad
+binary.
+
+| Asset | SHA-256 | Notes |
+|---|---|---|
+| `llama-b9849-bin-win-vulkan-x64.zip` | `ed6156dec5303748fdf13d0056c5fb29aa504210e01d949e72ce20e3d680e4d6` | MIT; Vulkan full build (default win build) |
+| `llama-b9849-bin-win-cpu-x64.zip` | `fa7d9d93fa86979c5b44ba176cadae1167b5b054d4c467d184d81def4d714352` | MIT; pure-CPU safety net |
+| `llama-b9849-bin-macos-arm64.tar.gz` | `fccd749707c0fb0bbcee1682a0097f0d7a6e4adb6ce7fc8c6151d9e1d4b3c830` | MIT; Metal (mac arm64) |
+| `llama-b9849-bin-ubuntu-vulkan-x64.tar.gz` | `0fb2491604cbc468321bcaaa56991cfbc27fb0ac58b9597fd290a81b86da06d4` | MIT; Vulkan full build (default linux build) |
+| `llama-b9849-bin-ubuntu-x64.tar.gz` | `9ce3b4db4535fd68efb272b7159ffbe0748884c2db3525e68ae4315ba2df2a4d` | MIT; pure-CPU safety net |
+
+**License-review record — llama.cpp b9585 runtime assets (HISTORICAL — the prior pin; extends the
+original b9585 review, commit `8bdeb2e`; status: approved, reviewed 2026-06-10):** all five pinned
+assets build from the same MIT-licensed `ggml-org/llama.cpp` source at tag `b9585`. The two assets
+added by Phase 14 are explicitly part of this record:
 
 | Asset | SHA-256 | Notes |
 |---|---|---|
@@ -234,8 +296,11 @@ Phase 14 are explicitly part of this record:
 The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the original b9585 review
 (unchanged in `runtime-sources.yaml`). **No new licenses enter the product.**
 
-> ✅ **Pinned to a real release: `b9585`** (2026-06-10), with real per-OS URLs and SHA-256
-> checksums computed from the downloaded assets — `fetch-runtime` verifies before extracting.
+> ✅ **Pinned to a real release: `b9849`** (2026-06-30, bumped from b9585 as the Qwen3.5
+> compatibility gate), with real per-OS URLs and SHA-256 checksums from the official GitHub
+> Releases API `digest` metadata — `fetch-runtime` re-verifies before extracting (a wrong/changed
+> hash fails the run). **The b9849 fetch + a one-old-model / one-Qwen3.5-model load are a REQUIRED
+> manual smoke** (BUILD_STATE "Qwen3.5 Unsloth wave"; `model-benchmarks.md` §9).
 > Notes on the current release format:
 > - The **Windows** asset is a `.zip` with the binaries at the archive root; **macOS/Linux** assets
 >   are `.tar.gz` nested under `llama-<tag>/`. `fetch-runtime` handles both, **flattens** nested

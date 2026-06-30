@@ -1,0 +1,45 @@
+id: qwen3.5-27b-ud-q4kxl
+display_name: Qwen3.5 27B (UD-Q4_K_XL)
+family: qwen3.5
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 16.7
+# RAM is intentionally conservative: the file is ~16.7 decimal GB and the KV cache + Electron +
+# database + embedding/reranker sidecars all need headroom alongside it.
+recommended_min_ram_gb: 24
+recommended_ram_gb: 32
+# Default 0: NOT auto-recommended. High-end DENSE candidate intended to challenge Gemma 4 12B,
+# Qwen3 14B, and Qwen3 30B-A3B on 32 GB machines. Qwen3.5 27B public benchmarks look stronger
+# than 35B-A3B on several language/instruction/coding categories, BUT HilbertRaum promotion
+# depends ONLY on the local German/English grounded-QA benchmark + manual smoke — not the public
+# scores. Promote with a real `recommendation_rank` only after it wins locally on b9849.
+recommendation_rank: 0
+# Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). Manifest runtime context
+# is 8192 for now — the safe local runtime budget for normal laptops, not the model maximum.
+# Revisit only after KV-cache/RAM budgeting + a long-context eval.
+recommended_context_tokens: 8192
+# Larger Qwen3.5 models operate in thinking mode by default; the chat template honours
+# `enable_thinking`, so the Deep answer mode applies. Verify live behaviour by smoke test.
+supports_thinking_mode: true
+supports_tools: true
+local_path: models/chat/qwen3.5-27b-ud-q4kxl.gguf
+sha256: 4e3d432f433deb39b3ea9696dab31fc6f4e780641db2b52902ee02a804e32f55
+# Quantization: unsloth "Dynamic 2.0" UD-Q4_K_XL, NOT plain Q4_K_M, unless a smoke shows the
+# dynamic quant cannot load (then add qwen3.5-27b-q4km.yaml as the experimental fallback). The
+# Qwen org publishes no official GGUF for the 3.5 refresh → established-quantizer fallback.
+download:
+  url: https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-UD-Q4_K_XL.gguf?download=true
+  sha256: 4e3d432f433deb39b3ea9696dab31fc6f4e780641db2b52902ee02a804e32f55
+  size_bytes: 16729015680
+  license_url: https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Qwen3.5 is a vision-language model, but this chat manifest ships ONLY
+# the language GGUF and no mmproj/projector — which is all our chat pipeline uses.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-07-01"
+  notes: "APPROVED 2026-07-01: base model Qwen/Qwen3.5-27B and Unsloth GGUF card are apache-2.0. Quantization provenance: Unsloth Dynamic 2.0 GGUF, third-party quantization of Apache-2.0 Qwen weights. Apache-2.0 permits commercial redistribution; ship LICENSE/NOTICE attribution with the drive. TEXT-ONLY USE: upstream is a vision-language model, but this chat manifest ships only the language GGUF and no mmproj/projector. Not bundled and not auto-recommended until the HilbertRaum offline benchmark + b9849 runtime smoke pass."

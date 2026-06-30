@@ -196,9 +196,12 @@ npm run package:win                                                            #
 copy ".\apps\desktop\release\HilbertRaum-*-portable.exe" E:\                    # place the launcher on the drive
 ```
 
-> ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9585**, real
-> per-OS URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads,
+> ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9849** — bumped
+> from b9585 on 2026-07-01 as the **Qwen3.5 compatibility gate**; real per-OS URLs + SHA-256
+> checksums from the official GitHub Releases API `digest` metadata) — `fetch-runtime` downloads,
 > verifies, extracts (zip and tar.gz) and flattens the binaries for all three OSes from any host.
+> **A real b9849 fetch + a one-old-model / one-Qwen3.5-model load are a REQUIRED manual smoke** (it
+> cannot run in offline CI; see BUILD_STATE "Qwen3.5 Unsloth wave" and `model-benchmarks.md` §9).
 > Since **Phase 14** the win/linux default is the **Vulkan full build** (GPU acceleration with
 > built-in CPU degradation) plus a pure-CPU safety net at `runtime/llama.cpp/<os>/cpu/` — see
 > [`drive-layout.md`](drive-layout.md) and the [`architecture.md`](architecture.md) GPU record.
@@ -390,8 +393,10 @@ a `HILBERTRAUM_*` env var that points at a provisioned drive / binary / model. T
 unless that env var is set, so a green CI run says nothing about them.
 
 **Before any drive ships, run the applicable subset against the real artifacts** (the dev
-box has `F:\paid-gpu-smoke-drive` with the b9585 binary + Qwen3-4B; see BUILD_STATE).
-Treat this as part of the gate, not optional polish:
+box has `F:\paid-gpu-smoke-drive` with a llama.cpp binary + Qwen3-4B; see BUILD_STATE).
+Treat this as part of the gate, not optional polish. **NOTE (2026-07-01):** the runtime pin
+moved to **b9849**, so re-run `fetch-runtime` on the smoke drive to refresh the binary before
+these harnesses prove the *current* pin (the drive's previous binary was b9585).
 
 | Harness | Env var(s) | Proves |
 | --- | --- | --- |
