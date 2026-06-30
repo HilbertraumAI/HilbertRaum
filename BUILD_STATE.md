@@ -6,6 +6,18 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Fixed "Embedding request failed: HTTP 400" + made it debuggable.** Two real bugs in the E5 embedder
+(`embeddings/e5.ts`): (1) empty/whitespace inputs were POSTed to llama.cpp's `/v1/embeddings`, which **rejects an empty
+input with HTTP 400** — inconsistent with the mock embedder's documented contract (`embeddings.test.ts:68`: empty text →
+all-zero vector). The bulk re-index of 30 docs hit it as soon as one chunk was empty/whitespace. Now empties are NEVER sent:
+they take a zero vector (cosine 0, never a false match) and only the non-empty inputs are batched, placed back by original
+index. (2) the thrown error discarded the server's response BODY — the bare `HTTP 400` hid the reason. Now the body is read
+and appended (e.g. `HTTP 400 — input is too large to process. increase the physical batch size` / `input is empty`), so any
+remaining 4xx is diagnosable from the log/UI. New `e5-embedder.test.ts` cases: empties are zero-vectored without reaching the
+server (only non-empty inputs sent, order preserved); a non-OK response surfaces its body. Full suite green except the 3
+pre-existing platform failures; build + typecheck clean. NOTE: if a 400 recurs after this, the message now names the cause —
+an "input is too large" reason would point at the truncation safety factor (`runtime/context-budget.ts`, 2.2×) vs n_ctx._
+
 _2026-06-30 — **Cancel for the in-flight bulk re-index.** Follow-up to the main-owned reindex job below: a **Cancel**
 button next to the progress bar (`IPC.cancelReindexAll`, an `AbortController` in `registerDocsIpc`) stops a running
 "Re-index all"/"Retry all". The current document finishes and the rest are skipped — abort is checked at each iteration

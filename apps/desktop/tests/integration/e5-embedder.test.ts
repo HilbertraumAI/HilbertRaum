@@ -283,6 +283,58 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // Empty/whitespace inputs are NOT sent to the sidecar (llama.cpp 400s on an empty input). They
+  // get an all-zero vector and the request carries only the non-empty inputs, placed back in order.
+  it('zero-vectors empty/whitespace inputs without sending them to the server', async () => {
+    const { spawn } = fakeSpawn()
+    const sentInputs: string[][] = []
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        const body = JSON.parse(String(init?.body)) as { input: string[] }
+        sentInputs.push(body.input)
+        const data = body.input.map((_t, i) => ({ embedding: [1, 0], index: i }))
+        return { ok: true, status: 200, json: async () => ({ data }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const out = await embedder.embed(['hello', '   ', '', 'world'])
+    expect(out).toHaveLength(4)
+    // Only the two non-empty inputs reached the sidecar, in order.
+    expect(sentInputs).toEqual([['hello', 'world']])
+    // The empty slots are all-zero vectors (cosine 0); the non-empty ones are normalized.
+    expect(Array.from(out[1])).toEqual([0, 0])
+    expect(Array.from(out[2])).toEqual([0, 0])
+    expect(Array.from(out[0])).toEqual([1, 0])
+    expect(Array.from(out[3])).toEqual([1, 0])
+    await embedder.stop()
+  })
+
+  // A 4xx must carry the sidecar's reason, not just the status — that body is what makes the
+  // "Embedding request failed: HTTP 400" the user reported debuggable.
+  it('includes the server response body in a non-OK error', async () => {
+    const { spawn } = fakeSpawn()
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        return {
+          ok: false,
+          status: 400,
+          text: async () => 'input is too large to process. increase the physical batch size'
+        } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    await expect(embedder.embed(['x'])).rejects.toThrow(
+      /HTTP 400 — input is too large to process\. increase the physical batch size/
+    )
+    await embedder.stop()
+  })
+
   // H3 (audit round 4): `this.server` is only assigned after the lazy start resolves,
   // so a stop() racing the first embed() used to see `server == null`, return, and let
   // the just-spawned sidecar outlive the app as an orphan. stop() must await the

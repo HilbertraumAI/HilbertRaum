@@ -213,8 +213,17 @@ export class E5Embedder implements Embedder {
     const batchSize = Math.max(1, this.opts.batchSize ?? DEFAULT_EMBED_BATCH_SIZE)
     const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
 
-    const out: Float32Array[] = []
-    for (let start = 0; start < prepared.length; start += batchSize) {
+    // Empty/whitespace inputs are NEVER sent to the sidecar: llama.cpp's `/v1/embeddings` rejects an
+    // empty input with HTTP 400, and an empty chunk has nothing to embed. They take an all-zero
+    // vector (cosine 0 — never a false match), matching the mock embedder's documented contract for
+    // empty text. Only the non-empty inputs are batched; results are placed back by original index.
+    const out: Float32Array[] = new Array<Float32Array>(prepared.length)
+    const pending: number[] = []
+    for (let i = 0; i < prepared.length; i++) {
+      if (prepared[i].trim().length === 0) out[i] = new Float32Array(this.dimensions)
+      else pending.push(i)
+    }
+    for (let start = 0; start < pending.length; start += batchSize) {
       // REL-3 (full-audit-2026-06-29 follow-up): re-check teardown BETWEEN batches. `server` was
       // captured once above; a suspend()/stop() mid-loop (workspace lock / quit, racing a large
       // ingestion's many batches) nulls `this.server` and kills the child, so the NEXT
@@ -228,7 +237,8 @@ export class E5Embedder implements Embedder {
       if (this.tearingDown || this.server !== server) {
         throw new Error('Embedder is suspending (workspace is locking)')
       }
-      const batch = prepared.slice(start, start + batchSize)
+      const batchIdx = pending.slice(start, start + batchSize)
+      const batch = batchIdx.map((i) => prepared[i])
       // REL-4: own the per-batch timeout so it is cleared the instant the request settles —
       // hundreds of batches in a large ingestion otherwise leave hundreds of live timers.
       const combined = combineSignals(opts?.signal, timeoutMs)
@@ -241,8 +251,13 @@ export class E5Embedder implements Embedder {
           signal: combined.signal
         })
         if (!res.ok) {
-          void res.body?.cancel().catch(() => undefined) // release the connection
-          throw new Error(`Embedding request failed: HTTP ${res.status}`)
+          // Surface the sidecar's reason (e.g. "input is too large to process. increase the physical
+          // batch size", "input is empty") — a bare status code makes a 4xx undebuggable. Reading the
+          // body to text also drains and releases the connection.
+          const detail = (await res.text().catch(() => '')).trim().replace(/\s+/g, ' ')
+          throw new Error(
+            `Embedding request failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ''}`
+          )
         }
         json = (await res.json()) as EmbeddingResponse
       } finally {
@@ -268,17 +283,19 @@ export class E5Embedder implements Embedder {
         withIndex === data.length
           ? [...data].sort((a, b) => (a.index as number) - (b.index as number))
           : data
-      for (const d of ordered) {
+      for (let k = 0; k < ordered.length; k++) {
         // Reject a missing/short vector rather than storing a 0/short-dim row: such a row
         // is silently un-searchable (the VectorIndex dimension guard skips it) and the
         // document would still report `indexed`. Failing here surfaces it as a doc error.
-        const raw = d.embedding ?? []
+        const raw = ordered[k].embedding ?? []
         if (raw.length !== this.dimensions) {
           throw new Error(
             `Embedding dimension mismatch: expected ${this.dimensions}, got ${raw.length}`
           )
         }
-        out.push(l2normalize(Float32Array.from(raw)))
+        // ordered[k] lines up with batch position k (sorted by `index` when present, else array
+        // order) → place it at the original input index this batch entry came from.
+        out[batchIdx[k]] = l2normalize(Float32Array.from(raw))
       }
     }
     return out
