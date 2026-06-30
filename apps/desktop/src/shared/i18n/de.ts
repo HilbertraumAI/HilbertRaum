@@ -394,6 +394,15 @@ export const de: Record<keyof typeof en, string> = {
     'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – du kannst ' +
     'weiterarbeiten, aber Antworten sind bis zum Abschluss möglicherweise langsamer.',
   'docs.reindexAllConfirm.confirm': 'Alle neu indexieren',
+  'docs.retryAllFailed': 'Alle erneut versuchen ({count})',
+  'docs.retryAllFailedTitle': 'Jedes Dokument neu indexieren, dessen Indexierung fehlgeschlagen ist',
+  'docs.retryAllConfirm.title': '{count} fehlgeschlagene Dokumente erneut versuchen?',
+  'docs.retryAllConfirm.body':
+    'Dabei wird jedes fehlgeschlagene Dokument nacheinander neu eingelesen und neu eingebettet. ' +
+    'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – du kannst ' +
+    'weiterarbeiten, aber Antworten sind bis zum Abschluss möglicherweise langsamer. ' +
+    'Dokumente, die erneut fehlschlagen, bleiben auf diesem Tab.',
+  'docs.retryAllConfirm.confirm': 'Alle erneut versuchen',
   'docs.reindexAllProgress': 'Indexiere {done} von {total} neu…',
   'docs.supported.base':
     'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +

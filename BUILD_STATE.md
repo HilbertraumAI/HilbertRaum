@@ -6,6 +6,16 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **"Retry all" on the Failed imports tab.** The Documents screen's existing confirm-gated
+"Re-index all" (stale embeddings, M-U6) now has a sibling on the Failed tab: when `section.kind === 'failed'`
+and more than one document has `status === 'failed'`, a **Retry all ({count})** button re-indexes every failed
+import sequentially. Both buttons share one runner — `onReindexAllStale()` was generalised to `onReindexAll(targets)`
+and the `confirmReindexAll` boolean became `{ kind: 'stale' | 'failed'; docs }` so the confirm dialog's title/body/
+button copy match whichever set opened it (new i18n keys `docs.retryAllFailed*` / `docs.retryAllConfirm.*`, en + de).
+New test in `DocumentsScreen.test.tsx` mirrors the stale-reindex test (navigates to Failed via the "More" disclosure,
+confirms, asserts both failed docs re-index); it clears localStorage first because `VIEWS_MORE_KEY` leaks across the
+file's tests. Full suite green except the 3 pre-existing platform failures; build clean. Docs: rag-design.md §"Re-index all"._
+
 _2026-06-30 — **Assistant Markdown renderer switched to Streamdown (streaming-aware) + KaTeX math** (ported from
 branch `mkg` commit `c5a1e86` onto `mkg-public`, which had diverged at 0.1.34 and never carried it). Replaced
 `react-markdown` + `remark-gfm` with **Streamdown** (`@streamdown/math` + `katex`) in `Transcript.tsx`'s shared

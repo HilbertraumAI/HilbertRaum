@@ -381,6 +381,14 @@ export const en = {
     'minutes and uses the processor heavily — you can keep working, but answers may be slower ' +
     'until it finishes.',
   'docs.reindexAllConfirm.confirm': 'Re-index all',
+  'docs.retryAllFailed': 'Retry all ({count})',
+  'docs.retryAllFailedTitle': 'Re-index every document that failed to index',
+  'docs.retryAllConfirm.title': 'Retry {count} failed documents?',
+  'docs.retryAllConfirm.body':
+    'This re-reads and re-embeds every failed document one at a time. It can take several ' +
+    'minutes and uses the processor heavily — you can keep working, but answers may be slower ' +
+    'until it finishes. Documents that fail again stay on this tab.',
+  'docs.retryAllConfirm.confirm': 'Retry all',
   'docs.reindexAllProgress': 'Re-indexing {done} of {total}…',
   'docs.supported.base':
     'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +

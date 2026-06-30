@@ -605,7 +605,10 @@ files, with sources"). Renderer-only; dismissals are per-conversation, in-memory
   indexed document has chunks but no document has any vector under the active embedder),
   the fixed answer tells the user to re-index instead of to rephrase. Still no model call.
 - **Re-index all** — the Documents screen offers a one-click sequential re-index of every
-  stale document (the per-document stale badge shipped in the earlier polish round).
+  stale document (the per-document stale badge shipped in the earlier polish round). The Failed
+  imports tab carries the same affordance as **Retry all**, targeting `status === 'failed'`
+  documents instead of stale-embedding ones; both share one confirm-gated sequential runner
+  (`onReindexAll(targets)`), with copy keyed off which set opened it.
 
 ### Tested behaviour (Phase 17)
 

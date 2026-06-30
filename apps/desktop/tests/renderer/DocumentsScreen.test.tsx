@@ -607,6 +607,41 @@ describe('DocumentsScreen', () => {
     )
   })
 
+  it('"Retry all" on the Failed tab confirms first, then re-indexes every failed document', async () => {
+    const user = userEvent.setup()
+    // The Views "More" disclosure is remembered in localStorage (VIEWS_MORE_KEY) and leaks across
+    // tests in this file — start from the default (closed) so the "More" toggle reliably OPENS it.
+    window.localStorage.clear()
+    const failed = [
+      doc({ id: 'd1', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 }),
+      doc({ id: 'd2', title: 'corrupt.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 })
+    ]
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValue(failed.map((d) => ({ ...d, status: 'indexed' as const, chunkCount: 5 })))
+    const reindexDocument = vi.fn(async (id: string) => doc({ id, status: 'indexed' }))
+    stubApi({ listDocuments, reindexDocument })
+    render(<DocumentsScreen />)
+
+    // The "Retry all" button lives ONLY on the Failed tab (a rare view behind "More").
+    await screen.findByRole('button', { name: 'Library' })
+    expect(screen.queryByRole('button', { name: /retry all/i })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More' }))
+    await user.click(await screen.findByRole('button', { name: 'Failed imports' }))
+
+    // Opens a ConfirmDialog — nothing runs until confirmed (M-U6).
+    await user.click(await screen.findByRole('button', { name: /retry all \(2\)/i }))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.getByText(/retry 2 failed documents\?/i)).toBeInTheDocument()
+    expect(reindexDocument).not.toHaveBeenCalled()
+
+    await user.click(dialog.getByRole('button', { name: /^retry all$/i }))
+    await waitFor(() => expect(reindexDocument).toHaveBeenCalledTimes(2))
+    expect(reindexDocument).toHaveBeenCalledWith('d1')
+    expect(reindexDocument).toHaveBeenCalledWith('d2')
+  })
+
   // ---- FE-7: poll job status only during import; refresh the list on a transition -------
   it('during import polls getImportJob each tick but refreshes the full list only on a file completion', async () => {
     vi.useFakeTimers()
