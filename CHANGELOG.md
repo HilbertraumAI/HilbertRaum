@@ -10,8 +10,11 @@ from its first public `1.0.0` release onward.
 > checkpoints were tagged `v0.1.0` … `v0.1.34` (2026-06-10 → 2026-06-22, mirrored
 > by the `version` field in `package.json`, currently `0.1.34`); these are rapid
 > per-phase development checkpoints, **not** published releases, and have no
-> per-tag notes. The detailed, chronological development log of record is
-> **[`BUILD_STATE.md`](BUILD_STATE.md)**. The first public release will get its
+> per-tag notes. **Per-tag/`version` checkpointing paused after `v0.1.34` (2026-06-22):**
+> the later phases (the audit-remediation rounds through 2026-06-30) are tracked in
+> `BUILD_STATE.md`, not new version bumps, so `package.json` deliberately stays at `0.1.34`
+> until the first public release sets a real version. The detailed, chronological development
+> log of record is **[`BUILD_STATE.md`](BUILD_STATE.md)**. The first public release will get its
 > own dated entry below; this file is curated by hand from then on.
 
 ## [Unreleased]

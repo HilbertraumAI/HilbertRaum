@@ -203,8 +203,8 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 
 | Model | Role | What it powers | Min RAM | License |
 |---|---|---|---|---|
-| Multilingual E5 Small | Embeddings | Document search / RAG (**required** for Q&A) | 4 GB | MIT |
-| BGE Reranker v2 M3 | Reranker | Higher-quality retrieval ordering | 6 GB | Apache-2.0 |
+| Multilingual E5 Small (F16) | Embeddings | Document search / RAG (**required** for Q&A) | 4 GB | MIT |
+| BGE Reranker v2 M3 (F16) | Reranker | Higher-quality retrieval ordering | 6 GB | Apache-2.0 |
 | Whisper Small (multilingual) | Transcriber | Audio-file transcription + dictation | 4 GB | MIT |
 | Qwen2.5-VL 3B Instruct Q4 | Vision | Image understanding (opt-in; in-app download) | 12 GB | Apache-2.0 |
 

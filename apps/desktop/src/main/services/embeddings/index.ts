@@ -224,11 +224,6 @@ export class VectorIndex {
     // secondary key the per-list rank a chunk gets depends on V8 sort stability, which then
     // perturbs its RRF contribution and the page-dedup winner. chunkId is unique, so this pins
     // the order. (The keyword path takes the same tiebreak in rag/hybrid.ts.)
-    // Determinism (full-audit-2026-06-29 RAG-1): break equal cosines on chunkId. Under
-    // prefix-less E5 the scores compress into a narrow band, so ties are realistic; without a
-    // secondary key the per-list rank a chunk gets depends on V8 sort stability, which then
-    // perturbs its RRF contribution and the page-dedup winner. chunkId is unique, so this pins
-    // the order. (The keyword path takes the same tiebreak in rag/hybrid.ts.)
     hits.sort((a, b) => b.score - a.score || (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0))
     return hits.slice(0, topK)
   }

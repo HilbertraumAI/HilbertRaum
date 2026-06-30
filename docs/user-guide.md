@@ -325,10 +325,10 @@ its name and a muted line of details (type, size, sections), any **location/proj
 a **status badge** (and small **Summary** / **Deeply indexed** badges once those exist), one
 inline **Preview** button, and a **⋯** menu. The **⋯** menu (also opened by right-clicking the
 row) holds the document's actions — **Summarize**, **Translate**, **Re-index**, **Build deep
-index**, **Make searchable (OCR)**, **Add to project…**, **Export**, and a **Delete** at the
+index**, **Make searchable (OCR)**, **Move to project…**, **Export**, and a **Delete** at the
 bottom (which always confirms first). Tick a document's checkbox and a **selection toolbar**
 appears at the top of the list with the actions that work across documents — **Ask these
-documents**, **Compare (2)**, **Add to project…**, and **Delete**.
+documents**, **Compare (2)**, **Move to project…**, **Mark temporary**, **Archive**, and **Delete**.
 
 **Summarize a document.** On the **Documents** screen, every Ready document offers
 **Summarize** in its **⋯** menu. The local model writes a summary on this drive — nothing leaves it —
@@ -455,9 +455,9 @@ Use the **«** handle at the top of the list to **collapse the whole sidebar** w
 document list full-width; the **»** handle brings it back. Your choice is remembered.
 
 **Move things around.** Each document row's **⋯** menu files it into a
-project (**Add to project…**), **Keep in Library**, marks it **Temporary** or **Archived**, or
+project (**Move to project…**), **Keep in Library**, marks it **Temporary** or **Archived**, or
 (inside a project) removes it from that project. Tick several documents and use the selection
-toolbar's **Add to project…** / **Delete** (or mark them Temporary/Archived) to do it in bulk. Deleting a *project* asks
+toolbar's **Move to project…** / **Delete** (or mark them Temporary/Archived) to do it in bulk. Deleting a *project* asks
 whether to keep its documents (they stay in your Library / other projects) or delete the ones
 that live *only* in that project — Library knowledge is never deleted by accident.
 

@@ -828,7 +828,7 @@ suites pin the parse behaviour, and each carries a 200k-char "returns in < 1 s" 
 
 - **`skills/tools/money.ts` `MONEY_RE`** (shared by the bank-statement + invoice extractors) — the
   unbounded `\s*\d[\d.,]*` backtracked O(N²) on a long digit/separator run with no decimal tail. Now
-  `\s{0,4}\d[\d.,]{0,30}[.,]\d{2}` — a 30-char integer/grouping bound is ~10²³, far beyond any printed
+  `\s{0,4}\d[\d.,']{0,30}[.,]\d{2}` — a 30-char integer/grouping bound is ~10²³, far beyond any printed
   amount, so each match attempt is O(1) and the global scan is O(N).
 - **`skills/tools/redaction.ts` `EMAIL_RE`** — the unbounded local-part/domain runs backtracked O(N²)
   on a long `a.a.a.…` string (no `@`). Now length-bounded to the RFC limits (local ≤ 64, domain ≤ 255).

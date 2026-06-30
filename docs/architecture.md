@@ -146,7 +146,7 @@ batching — no behavior change.
     deletes the chunk's prior rows before inserting, so a forced re-commit replaces rather than doubles the
     marker. Pinned by a no-double-count test.
 
-**Compare retrieval (`services/doctasks/manager.ts`).**
+**Compare retrieval (`services/doctasks/handlers/compare.ts`; the run path moved there by DX-1, §38 — the pure window math stays in `doctasks/compare.ts`).**
 - **RAG-2/ING-1 — decode doc-B once.** Section-matched compare (mode b) ran `VectorIndex.search` per
   doc-A chunk, re-issuing the doc-B embeddings query and re-decoding every doc-B vector each time
   (O(N_A × N_B) redundant decodes + N_A re-scans), then re-fetched doc-B's text per window. Doc-B's
@@ -437,7 +437,7 @@ The real fix for the synchronous main-thread vector scan (RAG-1/RAG-6) — the d
 D15. Condensed from `docs/performance-audit-2026-06-18.md` §4.2 after Wave P4 shipped. Stays behind the
 **unchanged `VectorIndex.search(queryVector, topK)` signature**, so `rag/index.ts retrieve()` and every
 scope filter are untouched. The sibling scans in `analysis/node-vectors.ts` (the summary-tree
-`node_vectors` table) and `doctasks/manager.ts` (compare's one-shot doc-B load) are NOT `VectorIndex`
+`node_vectors` table) and `doctasks/handlers/compare.ts` (compare's one-shot doc-B load) are NOT `VectorIndex`
 and are out of scope.
 
 **RAG-1 / RAG-6 — process-resident decoded-vector cache (`services/embeddings/resident-cache.ts`).**
@@ -646,7 +646,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   carried in a side `Map<chunkId>` so it never rides the returned `RetrievedChunk` shape. `messageTokens`
   is memoized by message-object identity (`WeakMap`) — a pure function of `m.content`, summed repeatedly
   per turn (`fitMessagesToContext` then `getConversationContextUsage`). Both byte-identical.
-- **ING-6 — flagged, not rewritten** (`doctasks/manager.ts`). The `materializeDocument` write-temp →
+- **ING-6 — flagged, not rewritten** (`doctasks/handlers/shared.ts`; moved there by DX-1, §38). The `materializeDocument` write-temp →
   re-parse → re-embed round-trip is DELIBERATE (it reuses the canonical import path for encryption, FTS,
   citations, and the crash-safe queue-time provenance stamp); documented in a comment so it is not mistaken
   for an oversight.
@@ -654,7 +654,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   transaction read `tree_status` then `extract_status` (two `SELECT`s) and reset each in its own `UPDATE`;
   now one `SELECT` of both + one combined `UPDATE` (four statements → two). The other audit-cited
   per-doc reads in `doctasks/manager.ts` were already single multi-column `SELECT`s — left as-is.
-- **ING-8 — async OCR PDF read** (`doctasks/manager.ts`). `readStoredPdfBytes` now uses `await readFile`
+- **ING-8 — async OCR PDF read** (`doctasks/handlers/ocr.ts`; moved there by DX-1, §38). `readStoredPdfBytes` now uses `await readFile`
   (node:fs/promises) instead of a blocking `readFileSync` on a PDF up to ~1 GiB, so the bytes stream off
   the main event loop; the method became `async` and its single `runOcr` caller awaits it.
 - **ING-9 — `coalesceSegments` joins once** (`ingestion/chunker.ts`). Each merged page/section group
@@ -1176,18 +1176,33 @@ sentinel-tested), zero native deps.
 
 ## Document tasks (Phases 33–35; OCR Phase 38; tree/extract = whole-document analysis, rag-design §14)
 - **`services/doctasks/` (barrel: `doctasks.ts`) — the shared task engine.** Split into a
-  `doctasks/` directory (audit M-A4): `manager.ts` (the `DocTaskManager` orchestration),
-  `summary.ts`, `translation.ts`, `compare.ts`. A job state machine on the Phase-4/18
-  async-with-polling precedent: `startDocTask({ kind, documentIds, params }) → { jobId }`,
+  `doctasks/` directory, with the **manager keeping the pump and the handlers owning each kind**
+  (DX-1, full-audit-2026-06-29 follow-up Phase 8 — see §38; the earlier audit-M-A4 split first
+  carved the window-math siblings out of the monolith). `manager.ts` (the `DocTaskManager`)
+  keeps ONLY the queue/pump + arbiter handshake + the `generate`/`generateWithRetry` retry loop,
+  and dispatches each dequeued job via `MODEL_TASK_HANDLERS[kind](task, runtime, ctx)`. Each
+  kind's actual work lives in its own `handlers/` module: `handlers/index.ts` (the
+  `MODEL_TASK_HANDLERS` registry + the `ocr`/`categorize` exports), `handlers/shared.ts` (the
+  shared doc helpers `materializeDocument`/`buildProvenance`/`extractSegmentTexts`), and one file
+  per kind — `tree.ts` (deep index + `extract`), `summary.ts`, `ocr.ts`, `translation.ts`,
+  `compare.ts`, `categorize.ts`. The window-math/prompt siblings `summary.ts`/`translation.ts`/
+  `compare.ts` at the `doctasks/` root stay (the PURE math + templates each handler calls).
+  `context.ts` is the leaf vocabulary module: `DocTaskDeps` (the injected seams, re-exported from
+  `manager.ts` for the barrel), `InternalTask` (the in-flight job), and `DocTaskCtx` — the narrow
+  orchestration handle (`deps` + the model-slot `arbiter` + the two model-loop fns) the manager
+  hands each handler so a `run<Kind>` body calls the shared model loop without a `this` reference.
+  A job state machine on the Phase-4/18 async-with-polling precedent:
+  `startDocTask({ kind, documentIds, params }) → { jobId }`,
   `getDocTask(jobId) → { state, progress { stepsDone, stepsTotal }, error?, resultRef? }`,
   `cancelDocTask(jobId?)`. States: `queued → running → done | failed | cancelled`; unknown
-  job ids report a terminal status so pollers always stop. **Six `DocTaskKind`s** run on the
-  one machine: `summary` (Phase 33), `translation` (Phase 34), `compare` (Phase 35 — exactly
-  TWO distinct source documents; the others take one), `ocr` (Phase 38), and the two
-  whole-document-analysis builds `tree` (deep index) and `extract` (structured extract). Deps
-  are injected (`getDb`, `getRuntime`, `isChatStreaming`, `getContextTokens`, `getStoreDir`,
-  `getIngestionDeps`, `beginDocumentWork`, `audit`), so the engine tests without Electron;
-  `main/index.ts` wires it and exposes it as `AppContext.docTasks`.
+  job ids report a terminal status so pollers always stop. **Seven `DocTaskKind`s** (`shared/
+  types.ts`) run on the one machine: `summary` (Phase 33), `translation` (Phase 34), `compare`
+  (Phase 35 — exactly TWO distinct source documents; the others take one), `ocr` (Phase 38), the
+  two whole-document-analysis builds `tree` (deep index) and `extract` (structured extract), and
+  `categorize` (the bank-statement LLM categorizer, D26). Deps are injected (`getDb`,
+  `getRuntime`, `isChatStreaming`, `getContextTokens`, `getStoreDir`, `getIngestionDeps`,
+  `beginDocumentWork`, `getOcrEngine`, `rasterizePdf`, `audit`), so the engine tests without
+  Electron; `main/index.ts` wires it and exposes it as `AppContext.docTasks`.
 - **Concurrency (D26, RESOLVED): strict one-at-a-time, with one exception.** Tasks serialize
   among themselves (one FIFO queue, one runner). A **non-yielding** task (`summary`,
   `translation`, `compare`, `ocr`) **refuses to start while a chat answer streams** (it reads
@@ -4614,6 +4629,12 @@ byte-identical). Branch `audit-followup-phase3-import-io` (unmerged; do NOT auto
 no IPC / audit-payload change; an old on-disk workspace opens cleanly. Suite **2568 passed / 39 skipped**
 (was 2559/39 → **+9**: PERF-3 ×7 + PERF-2 ×2); typecheck + `npm run build` green (the new renderer dep
 bundles offline — no runtime fetch).
+
+> **Note (location, as of DX-3 — follow-up Phase 8, §38):** the behavior claims below are current, but
+> `DocumentsScreen.tsx` was subsequently split into `screens/documents/*` (`DocRow`, `SectionRail`,
+> `PreviewModal`, `format.tsx`, `types.ts`) — a behavior-preserving relocation; the windowing + the
+> `__docRowRenderCounts` seam described here are intact (the `DocRow` `React.memo` lives in
+> `screens/documents/DocRow.tsx` now).
 
 - **PERF-3 (Medium) — `listDocuments` no longer parses the full `ocr_json` blob per OCR'd row.** DB-8 (§
   Performance Wave P5) projected columns on the single-doc getters, but the **list** path still did
