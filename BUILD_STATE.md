@@ -6,6 +6,16 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **`HR_FORCE_REINDEX` dev env var — force every document outdated.** Companion to the chunk-coverage work:
+when `HR_FORCE_REINDEX=1`, `listDocuments` (`ingestion/index.ts`, via `forceReindexEnabled()`, read at call time) reports
+EVERY indexed+chunked document as `staleEmbeddings: true` regardless of which embedder produced its vectors — so the
+"needs re-index" smart view + the "Re-index all" toolbar button cover the whole corpus. Since `reindexDocument` re-reads
+the stored file and re-chunks + re-embeds, this is the lever to re-index everything after a chunk-size or embedding-model
+change (e.g. once the coverage measurement picks a new `chunkSizeTokens`). `registerDocsIpc` logs a one-time
+`HR_FORCE_REINDEX active …` warning at startup so it's obvious why everything reads outdated. Zero effect when unset.
+Test in `ingestion.test.ts`: forced stale even when the active model matches / with no active-model context, and normal
+again once cleared. Full suite green except the 3 pre-existing platform failures._
+
 _2026-06-30 — **Chunk-coverage measurement tool (opt-in, dev).** To decide whether to size chunks upstream (the
 `chunkSizeTokens=500` approx vs the embedder's ~232-approx / 512-real budget mismatch), `embeddings/e5.ts` gained a
 gated measurement (set `HR_EMBED_COVERAGE=1`): during `embed()` it tokenizes each chunk's FULL text and the truncated

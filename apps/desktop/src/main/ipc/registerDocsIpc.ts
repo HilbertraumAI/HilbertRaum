@@ -24,6 +24,7 @@ import {
   expandPathsWithSource,
   extractDocumentPreviewPage,
   DEFAULT_PREVIEW_PAGE_SIZE,
+  forceReindexEnabled,
   getDocument,
   getDocumentSummary,
   listDocuments,
@@ -121,6 +122,11 @@ function filterDocuments(docs: DocumentInfo[], filter?: DocumentListFilter): Doc
 
 export function registerDocsIpc(ctx: AppContext): void {
   const storeDir = documentsDir(ctx.paths.workspacePath)
+  // Surface the dev force-reindex escape hatch once at startup so it's obvious WHY every document
+  // suddenly reports "needs re-index" (listDocuments forces `staleEmbeddings` while it's set).
+  if (forceReindexEnabled()) {
+    log.warn('HR_FORCE_REINDEX active — every indexed document is reported outdated (re-index to re-chunk + re-embed)')
+  }
   // Ephemeral per-import aggregates, keyed by job id.
   const jobs = new Map<string, ImportJobStatus>()
   // The single in-flight (or most recent) bulk re-index aggregate. Main-owned so the renderer can

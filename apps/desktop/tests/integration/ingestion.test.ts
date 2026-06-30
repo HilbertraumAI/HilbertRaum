@@ -411,6 +411,27 @@ describe('listDocuments stale-embedding flag', () => {
     // No active-model context → not evaluated.
     expect(listDocuments(db)[0].staleEmbeddings).toBeUndefined()
   })
+
+  it('HR_FORCE_REINDEX flags every indexed doc stale regardless of embedder', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const embedder = createMockEmbedder()
+    const src = write('f.txt', 'alpha beta gamma delta epsilon zeta')
+    const q = createQueuedDocument(db, src)
+    await processDocument(db, storeDir, q.id, { embedder, embeddingModelId: embedder.id })
+
+    process.env.HR_FORCE_REINDEX = '1'
+    try {
+      // Forced stale even though the active model MATCHES the vectors…
+      expect(listDocuments(db, embedder.id)[0].staleEmbeddings).toBe(true)
+      // …and even with NO active-model context (the lever doesn't need one).
+      expect(listDocuments(db)[0].staleEmbeddings).toBe(true)
+    } finally {
+      delete process.env.HR_FORCE_REINDEX
+    }
+    // Flag cleared → back to normal: matching model ⇒ not stale.
+    expect(listDocuments(db, embedder.id)[0].staleEmbeddings).toBe(false)
+  })
 })
 
 // Post-MVP: the read-only in-app preview re-parses the stored copy (chunks overlap, so
