@@ -163,6 +163,7 @@ system.
 - **Validate.** Import a ~500 MB file in an encrypted workspace; measure main-thread event-loop lag (`perf_hooks.monitorEventLoopDelay`) before/after — the contiguous multi-second block should disappear.
 
 ### PERF-2 — No list virtualization (chat transcript + documents list) = PERF-5 Part B, confirmed still open
+- ✅ **REMEDIATED (documents list) (2026-06-29, Phase 4)** — the documents list is windowed with `@tanstack/react-virtual` against the screen's `.content` scroll element (scrollMargin + per-row `measureElement`), gated on a resolved non-zero viewport (else render all). DOM + per-row Radix `DropdownMenu.Root` count no longer grows linearly with library size. The **chat transcript** half stays deferred (variable-height + scroll-to-bottom + find-in-page + StreamAnnouncer — genuinely behavior-sensitive), still tracked as the top renderer item. Find-in-page windowing trade-off recorded in known-limitations. See architecture.md §36.
 - **Category:** Renderer / DOM growth · **Severity:** High at scale · **Confidence:** High
 - **Location:** `chat/Transcript.tsx:114`, `screens/DocumentsScreen.tsx:1025`.
 - **Description.** Every persisted message / document maps to a live, memoized-but-never-unmounted DOM node; each `DocRow` mounts a Radix `DropdownMenu.Root`, each assistant `MessageBlock` retains a parsed markdown subtree. No virtualization library in deps.
@@ -171,6 +172,7 @@ system.
 - **Validate.** Seed 1000 docs / a 500-turn thread; measure mounted-node count + initial render + scroll-frame timing before/after.
 
 ### PERF-3 — `listDocuments` does `SELECT *` and `JSON.parse`s the full `ocr_json` blob per OCR'd doc — only to read a page count
+- ✅ **REMEDIATED (2026-06-29, Phase 4)** — additive nullable `documents.ocr_meta_json` sidecar (counts/ids only, never page text) written at OCR-write + backfilled once at `openDatabase`; `listDocuments` projects a narrow column set that OMITS `ocr_json` and reads the badge from the sidecar (`ocrInfoForRow`). Measured: the per-call `ocr_json` read+parse removed costs ~147 ms in isolation (50 docs × 2000 pages). Old workspaces open cleanly + backfill on first open. See architecture.md §36.
 - **Category:** SQLite / main-thread CPU · **Severity:** Medium · **Confidence:** High
 - **Location:** `ingestion/index.ts:1371` (`SELECT *`), `:333`→`parseOcr` (`:281-303`), `ocrInfoOf` (`:307-315`).
 - **Description.** DB-8 projected columns on the single-doc getters but the **list** path still pulls `ocr_json` for every row and fully `JSON.parse`s it (reconstructing `pages[]` *with* every page's text) only to keep `pages.length`/`languages`/`engineId`/`createdAt`.
@@ -188,7 +190,7 @@ system.
 
 ### PERF-5 / PERF-6 (Low)
 - **PERF-5 — `AnswerThread` memo defeated by unstable handler props** (`images/AnswerThread.tsx:39` memo; `screens/ImagesScreen.tsx:390-395` passes fresh closures each render while the screen re-renders per vision flush). Wrap `onCopy`/`onTryAgain`/`onStop` in `useEventCallback`/`useCallback` (as ChatScreen/DocumentsScreen already do). Image sessions are short → Low-Med.
-- **PERF-6 — OCR pages stored as one `ocr_json` blob** stringified/parsed whole (`ingestion/index.ts:1198/:1217`; bounded by `pdfMaxPages`=5000). Move to a per-page child table (also resolves PERF-3's root cause). Low.
+- **PERF-6 — OCR pages stored as one `ocr_json` blob** stringified/parsed whole (`ingestion/index.ts:1198/:1217`; bounded by `pdfMaxPages`=5000). Move to a per-page child table (also resolves PERF-3's root cause). Low. — ⏸ **DEFERRED with cause (2026-06-29, Phase 4):** PERF-3's `ocr_meta_json` sidecar already removed the hot-path parse (the actual harm); the per-page child table is a larger schema migration (backfill blobs→child rows, FK/CASCADE lifecycle, re-index-reuse + doctasks write paths) left as its own future phase. See architecture.md §36.
 
 > **Performance — checked and CLEAN:** resident vector cache (PERF-1/F12), RRF fusion + FTS sanitizer (no
 > N+1), chunker (linear, 1000-cap), every hot SQLite predicate indexed, no remaining ReDoS, PDF/image/audio
@@ -371,7 +373,20 @@ and **teeth-checked** where a guard is added.
 - **Risks:** the vault frame must stay byte-identical (the streaming crypto already targets the exact format) —
   pin with the existing round-trip tests + a cross-read test (old sync-written file decrypts with the new path).
 
-### Phase 4 — Documents-list scale (PERF-3 + PERF-2 documents-list + PERF-6)
+### Phase 4 — Documents-list scale (PERF-3 + PERF-2 documents-list + PERF-6) — ✅ REMEDIATED 2026-06-29
+> **Done on branch `audit-followup-phase4-docs-scale`** (unmerged; do NOT auto-merge/push). Suite **2568
+> passed / 39 skipped** (was 2559/39 → **+9**: PERF-3 ×7 + PERF-2 ×2), typecheck + `npm run build` green
+> (the new `@tanstack/react-virtual` dep bundles offline — no runtime fetch). Durable record:
+> **architecture.md §36** (per-finding ledger). **PERF-3:** additive nullable `ocr_meta_json` sidecar
+> (counts/ids only, never page text) written at OCR-write + backfilled once at open; `listDocuments`
+> projects a narrow set that omits `ocr_json` and reads the badge from the sidecar — old workspaces open
+> cleanly + backfill. Measured: ~147 ms blob-parse removed per call (50 docs × 2000 pages). **PERF-2 (=
+> PERF-5 Part B, documents-list half):** `@tanstack/react-virtual` windows the list against the `.content`
+> scroll element (scrollMargin + per-row measureElement), gated on a resolved non-zero viewport (else render
+> all); bounded mounted-row count proven at 1000 docs (teeth: `windowed=false` → reddens). The **chat
+> transcript** half stays deferred (genuinely behavior-sensitive), still the tracked top renderer item.
+> **PERF-6 DEFERRED with cause** (per-page child table is a larger schema migration; PERF-3 already removed
+> the hot-path parse). Find-in-page windowing trade-off recorded in known-limitations.
 - **Goal:** stop parsing `ocr_json` on the list path; window the documents list.
 - **Scope/files:** `ingestion/index.ts` (`listDocuments` projection + metadata-only OCR read; optional OCR
   child table), `DocumentsScreen.tsx` (virtualize `visibleDocs`), `package.json` (offline-bundle a virt lib).

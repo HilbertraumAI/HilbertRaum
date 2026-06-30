@@ -6,6 +6,57 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-30 — **Follow-up full audit — Phase 4 (DOCUMENTS-LIST SCALE; PERF-3/PERF-2; PERF-6 deferred) —
+branch `audit-followup-phase4-docs-scale` (unmerged; do NOT auto-merge/push).** Stops the documents screen
+from getting slower with library size: a hot-path DB parse (PERF-3) and unbounded list DOM (PERF-2 = the
+long-deferred PERF-5 Part B, documents-list half). Suite **2568 passed / 39 skipped** (was 2559/39 after
+Phase 3 → **+9**: PERF-3 ×7 + PERF-2 ×2), typecheck + `npm run build` green. **One additive nullable column,
+no IPC / audit-payload change; an old on-disk workspace opens cleanly and backfills on first open.** The new
+renderer dep bundles offline (no runtime network).
+- **PERF-3 (Med) — `listDocuments` no longer parses the full `ocr_json` blob per OCR'd row.** The list path
+  did `SELECT *` + a full `JSON.parse` of every row's `ocr_json` (reconstructing `pages[]` WITH every page's
+  text) only to read the OCR badge's `pageCount`/`languages`/`engineId`/`createdAt` — megabytes-scale parse +
+  ~10⁵-object allocation on the MAIN thread on every documents-screen mount / import-completion / collection
+  change. FIX: additive nullable **`documents.ocr_meta_json`** sidecar holding ONLY that metadata (a
+  serialized `DocumentOcrInfo` — counts/ids/languages, **never page text**), written alongside `ocr_json` at
+  OCR-write time (`setDocumentOcr`, lock-step; clearing nulls both) and **backfilled once** at `openDatabase`
+  for pre-existing rows (reads each blob ONCE; FK/lifecycle-safe; `updated_at` untouched). `listDocuments`
+  now projects a **narrow column set that omits `ocr_json`** and reads the badge from the sidecar
+  (`ocrInfoForRow`, with a one-shot `parseOcr` fallback the list path never reaches). New leaf module
+  `ingestion/ocr-meta.ts` is the single source of truth for meta extraction (imported by both the write path
+  and the `db.ts` backfill — no `db → ingestion` cycle). **Measured:** ~147 ms `ocr_json` read+parse removed
+  per call (50 docs × 2000 pages, ~50 MB OCR text); projected `listDocuments` ~55 ms.
+- **PERF-2 (High@scale; = PERF-5 Part B, documents-list half) — the documents list is windowed.** Every doc
+  mounted a live `DocRow` + a Radix `DropdownMenu.Root`, so the DOM + menu-root state machines grew linearly
+  with the library. FIX: **`@tanstack/react-virtual`** (pure-JS, no native, build-time dep — Vite bundles it;
+  no runtime fetch) windows the list **against the existing `.content` scroll element** (scrollMargin for the
+  header above it + per-row `measureElement` for variable-height rows) — additive, the full-screen scroll
+  behavior is unchanged. **GATING:** windows only once a real, laid-out viewport is resolved (`clientHeight >
+  0`); with none (a unit test rendering the screen standalone under jsdom, or first paint) it renders every
+  row, byte-identical to before — a truthful guard (a 0px viewport can't be windowed), keeping the existing
+  DocumentsScreen corpus on the un-windowed path. `DocRow` memo + `__docRowRenderCounts` seam untouched; a
+  shared `renderRow` keeps both paths' wiring in one place. **KNOWN TRADEOFF** (known-limitations): Ctrl+F
+  can't match an un-rendered row — fine for a name-scannable library (the section/smart-view filters search
+  the full set); deliberately NOT applied to the chat transcript.
+- **PERF-6 (Low) — DEFERRED with cause.** Per-page OCR child table is the clean root-cause for PERF-3 but a
+  larger schema migration (backfill blobs→child rows, FK/CASCADE, re-index-reuse + doctasks paths); PERF-3's
+  sidecar already removed the hot-path parse, so it is its own future phase.
+- **Tests (+9).** `ocr-meta-list.test.ts` (PERF-3 ×7): list SQL omits `ocr_json` / selects `ocr_meta_json`
+  (teeth: RED on `SELECT *`), badge correct from sidecar when `ocr_json` is poisoned (blob never parsed),
+  old-workspace migration backfills + correct page count + `updated_at` untouched + re-open no-op, + meta
+  extractor unit coverage. `DocumentsScreen.test.tsx` (PERF-2 ×2): at 1000 docs the mounted DocRow +
+  menu-trigger count is bounded (<60, not 1000) with a far row absent (teeth: `windowed=false` → reddens);
+  the no-viewport fallback renders all rows. Existing DocRow memo/keyboard/behavior tests stay green.
+- **Durable record:** architecture.md **§36 "Full audit (2026-06-29, follow-up) — Phase 4"** (per-finding
+  ledger); known-limitations.md (find-in-page windowing trade-off). The PERF-5 Part B carried-forward notes
+  are FLIPPED (documents-list DONE; chat transcript still tracked/deferred — §36, §34, §25 notes + the
+  renderer-tail perf note). `audits/full-audit-2026-06-29-followup.md` marks PERF-3 / PERF-2 (documents) /
+  PERF-6 (deferred) / Phase 4 ✅ remediated (report KEPT — Phases 5–8 remain open).
+- **NEXT ACTION (owner): review/merge `audit-followup-phase4-docs-scale`; do NOT auto-merge/push.** Remaining
+  follow-up phases (independent): **Phase 5** RAG provenance honesty (FE-B/FE-D), **Phase 6** reliability
+  hardening, **Phase 7** test seams, **Phase 8** maintainability + close-out — per the audit §6 plan._
+
+
 _2026-06-30 — **Follow-up full audit — Phase 3 (MAIN-THREAD IMPORT I/O + PARSER MEMORY CAPS; PERF-1/PERF-4) —
 branch `audit-followup-phase3-import-io` (unmerged; do NOT auto-merge/push).** Removed the synchronous
 document-import freeze and turned an oversize-text OOM crash into the existing friendly reject. Suite **2559

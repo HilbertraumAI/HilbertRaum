@@ -212,6 +212,16 @@ password recovery — are documented in
   makes an oversize text/CSV file hit the friendly "file too large" reject instead. PDF/DOCX/audio/image
   keep the full `maxBytes` (they stream / are page-bounded). A streaming line/row parser would lift the
   cap; the byte ceiling is the safe interim win.
+- **The documents list is windowed, so the browser's find-in-page (Ctrl+F) only matches rows that are
+  currently rendered (PERF-2, full-audit-2026-06-29-followup; [`architecture.md`](architecture.md) §36).**
+  To stop the list DOM (and the per-row Radix menu-root state machines) from growing linearly with library
+  size, the documents list virtualizes with `@tanstack/react-virtual` — only the rows in/near the viewport
+  are mounted. An inherent windowing trade-off is that Ctrl+F can't find a document whose row isn't mounted;
+  the in-app **section / smart-view filters** (which narrow over the full library, not just the visible rows)
+  are the intended way to locate a document by name/attribute. Windowing engages only when a real scroll
+  viewport is laid out — with none (e.g. a unit test rendering the screen standalone) the list renders every
+  row. The trade-off is **deliberately not** applied to the chat transcript (its scroll-to-bottom /
+  find-in-page / StreamAnnouncer behavior keeps it un-windowed for now).
 - **The session-boundary DB unlock/lock decrypt is still synchronous (PERF-1 scope; [`architecture.md`](architecture.md)
   §35).** The per-**import** document-cache crypto was made async (yields between 8 MiB chunks, so a large
   import no longer freezes the main process). The whole-DB decrypt on unlock / encrypt on lock — once per

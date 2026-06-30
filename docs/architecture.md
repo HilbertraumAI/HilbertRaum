@@ -708,11 +708,13 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   opening one row's ⋯ menu, or toggling another row's selection — re-renders ONLY the targeted row, not
   the whole list. The latest-ref `useEventCallback` was extracted to a shared `renderer/lib/` module and
   feeds stable handlers; render-count tests pin the win (teeth: dropping `memo`, or passing the whole
-  `selected` Set / `menuOpenId` string, re-renders every row). Still deferred as behavior-sensitive: the
-  Composer-`input` move (needs footer handler stabilization first) and **FE-5 list windowing**
-  (no virtualization lib in deps; windowing variable-height rows while preserving scroll-to-bottom,
-  find-in-page, and a11y is behavior-sensitive) — **PERF-5 Part B was re-deferred by owner decision**,
-  not confidently safe under the behavior-preserving mandate.
+  `selected` Set / `menuOpenId` string, re-renders every row). **PERF-5 Part B (list windowing) — DOCUMENTS
+  LIST now DONE** (full-audit-2026-06-29 follow-up **Phase 4 / PERF-2**; see **§36**): the documents list is
+  windowed with `@tanstack/react-virtual`, so its DOM + per-row Radix `DropdownMenu.Root` count no longer
+  grows linearly with library size. The **chat transcript** half stays deferred as genuinely
+  behavior-sensitive (variable-height messages + scroll-to-bottom + find-in-page + StreamAnnouncer); it
+  remains the tracked top renderer item. The Composer-`input` move (needs footer handler stabilization
+  first) also stays deferred.
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
@@ -4105,9 +4107,10 @@ citation through it.
   **separate human pre-release gate** (it can't run in offline CI); the canned-real-output fixture-parser
   **policy** and the b9585 `--list-devices` fixture exist, but the promised **SSE** and **whisper-JSON**
   parser fixtures are still outstanding — an open follow-up so those parse layers gain CI coverage.
-- **PERF-5 Part B (list windowing)** — **re-deferred** (owner decision): no virtualization lib is in deps,
-  and variable-height rows + scroll / find-in-page / a11y are behavior-sensitive; Part A (row memoization)
-  shipped.
+- **PERF-5 Part B (list windowing)** — **documents-list DONE** (full-audit-2026-06-29 follow-up Phase 4 /
+  PERF-2 — `@tanstack/react-virtual`; see §36); the **chat transcript** half stays deferred (variable-height
+  messages + scroll-to-bottom + find-in-page + StreamAnnouncer — genuinely behavior-sensitive), still the
+  tracked top renderer item. Part A (row memoization) shipped earlier.
 - **E5 `query:`/`passage:` prefix migration** (RAG-N3 / DOC-N6) — **tracked TODO, not done**: it re-embeds
   the whole corpus (its own phase) and would re-enable a meaningful `ragMinSimilarity` floor; the reranker
   full-chunk fix was the smaller-blast-radius lever taken now.
@@ -4520,7 +4523,9 @@ low-hangers F12/F18/F19 + report retirement.
   **SEC-3** (dialog-opener capability tokens inert until the consuming `requireUnlocked()` gate); **REL-5**
   (`BEGIN IMMEDIATE` + a single `withTransaction` guard — the no-`await`-in-txn invariant re-verified true
   at every BEGIN site, so a defense-in-depth margin, its own characterized phase); **PERF-5 Part B** list
-  windowing (Documents + Diagnostics activity are the highest-value targets) + the **E5-prefix migration**.
+  windowing — **documents-list half now CLOSED** (follow-up Phase 4 / PERF-2; see §36); the **chat
+  transcript** half remains (Diagnostics activity is a lower-volume secondary target) + the
+  **E5-prefix migration**.
 
 **Posture held across all eight phases (load-bearing):** offline / no telemetry / no new network egress; no
 schema change beyond the single additive nullable `invoices.extractor_version` (P3) + the internal
@@ -4588,6 +4593,74 @@ async-crypto ×4); typecheck + `npm run build` green.
 on-disk vault frame preserved (cross-read tests pin sync↔async equivalence + GCM auth on tamper); content
 class never logged. Behavior-preserving: both fixes are **teeth-checked** (neuter → red → restore
 byte-identical). Branch `audit-followup-phase3-import-io` (unmerged; do NOT auto-merge/push).
+
+
+### §36 Full audit (2026-06-29, follow-up) — Phase 4 (documents-list scale; PERF-3 / PERF-2; PERF-6 deferred)
+
+**Phase 4** removes the two ways the documents screen got slower with library size: a hot-path DB parse
+(PERF-3) and unbounded list DOM (PERF-2 = the long-deferred PERF-5 Part B). One additive nullable column;
+no IPC / audit-payload change; an old on-disk workspace opens cleanly. Suite **2568 passed / 39 skipped**
+(was 2559/39 → **+9**: PERF-3 ×7 + PERF-2 ×2); typecheck + `npm run build` green (the new renderer dep
+bundles offline — no runtime fetch).
+
+- **PERF-3 (Medium) — `listDocuments` no longer parses the full `ocr_json` blob per OCR'd row.** DB-8 (§
+  Performance Wave P5) projected columns on the single-doc getters, but the **list** path still did
+  `SELECT *` and fully `JSON.parse`d every row's `ocr_json` — reconstructing `pages[]` **with every page's
+  text** — only to read `pageCount`/`languages`/`engineId`/`createdAt` for the OCR badge. At a library of
+  large scans that is a megabytes-scale parse + a ~10⁵-object array allocation on the **main thread**, on
+  *every* documents-screen mount / import-completion / collection change. FIX: a cheap, additive, nullable
+  **`documents.ocr_meta_json`** sidecar holding ONLY the badge metadata (a serialized `DocumentOcrInfo` —
+  counts/ids/languages, **never page text**). Written alongside `ocr_json` at OCR-write time
+  (`setDocumentOcr`, lock-step; clearing nulls both), and **backfilled once** at `openDatabase` for rows
+  imported before the column existed (reads each blob ONCE, extracts meta, writes the sidecar; FK/lifecycle-
+  safe; `updated_at` untouched; subsequent opens select zero rows). `listDocuments` now SELECTs an explicit
+  **narrow column set that omits `ocr_json`** and reads the badge via `ocrInfoForRow` from the sidecar (with
+  a one-shot `parseOcr(ocr_json)` fallback the list path never reaches — its projection omits the blob AND
+  the backfill runs first). The meta extractor (`ingestion/ocr-meta.ts` — `ocrMetaFromJson` / `parseOcrMeta`)
+  is a **leaf module** (type-only import) so `db.ts` uses it for the backfill without a `db → ingestion`
+  cycle, and the page-count semantics (count only well-formed pages) match `parseOcr` exactly. **Measured**
+  (50 docs × 2000 pages × 500 chars, ~50 MB OCR text): the per-call `ocr_json` read+parse the projection
+  removes costs **~147 ms in isolation**; the projected `listDocuments` runs in **~55 ms** — and the
+  megabytes-scale string + ~10⁵-object allocation per call is eliminated.
+- **PERF-2 (High at scale; = PERF-5 Part B, documents-list half) — the documents list is windowed.** Every
+  document mapped to a live, memoized-but-never-unmounted `DocRow`, each mounting a Radix
+  `DropdownMenu.Root` — so the DOM and the count of menu-root state machines grew **linearly** with the
+  library (hundreds of mounted roots at scale, on CPU-only hardware). FIX: `@tanstack/react-virtual` (a
+  pure-JS, no-native, build-time dep — Vite bundles it; **no runtime network call**). The documents screen
+  scrolls **as a whole** inside the app's `.content` container, so the list virtualizes **against that
+  existing scroll element** with a `scrollMargin` for the header/hints above it — *additive*, the
+  full-screen scroll behavior is unchanged (no inner-pane restructure that would alter scroll position /
+  scroll-to). Variable row height (a failed-import error banner, a stale-embeddings notice, a wrapping chip
+  cluster — `.doc-row` is `min-height: 56px`, not fixed) is handled by per-row `measureElement` over a 57px
+  estimate + overscan, so a taller row self-corrects. The `DocRow` `React.memo` + the `__docRowRenderCounts`
+  seam are untouched; a shared `renderRow` keeps the windowed and fallback paths' props wiring in one place.
+  - **GATING (truthful, not a test sniff).** Windowing engages only once a real, laid-out viewport is
+    resolved (`scrollEl != null && clientHeight > 0`). With no `.content` ancestor or a 0px viewport — a
+    unit test rendering the screen standalone under jsdom, or first paint before layout — there is nothing
+    to virtualize, so it falls back to rendering **every** row, byte-identical to the pre-PERF-2 list. A 0px
+    viewport genuinely can't be windowed; the guard is honest, and it keeps the existing DocumentsScreen
+    test corpus on the un-windowed path while a dedicated test drives the **real** windowed path (mocking
+    `offsetHeight` — which react-virtual measures, not `getBoundingClientRect`).
+  - **KNOWN TRADEOFF (recorded in known-limitations.md):** the browser's find-in-page (Ctrl+F) can't match a
+    row that isn't currently mounted. Acceptable for a name-scannable library list (the in-app section/smart-
+    view filters search the full set); deliberately **not** applied to the chat transcript.
+- **PERF-6 (Low) — DEFERRED with cause.** Moving OCR pages from the one `ocr_json` blob to a per-page child
+  table is the clean root-cause fix for PERF-3, but it is a larger schema migration (backfill existing blobs
+  into child rows, FK/CASCADE lifecycle, the re-index-reuse + doctasks write paths). PERF-3's metadata
+  sidecar **already removed the hot-path parse** (the actual harm), so the child table is left as its own
+  future phase rather than forced into this one.
+
+| Finding | Sev | Disposition (one line) | Record / files |
+|---|---|---|---|
+| **PERF-3** | Med | **fixed** — additive nullable `ocr_meta_json` sidecar (counts/ids only, never text) written at OCR-write + backfilled once at open; `listDocuments` projects a narrow set that omits `ocr_json` and reads the badge from the sidecar. Measured ~147 ms blob-parse removed per call. Teeth: revert the projection to `SELECT *` → the SQL-omission test reddens | this §36; `db.ts`, `ingestion/index.ts`, `ingestion/ocr-meta.ts`; `tests/integration/ocr-meta-list.test.ts` |
+| **PERF-2** | High@scale | **fixed (documents list)** — `@tanstack/react-virtual` windows the list against the `.content` scroll element (scrollMargin + per-row measureElement); gated on a resolved non-zero viewport (else render all). Teeth: force `windowed = false` → the bounded-count test reddens. Chat transcript half stays deferred | this §36; `DocumentsScreen.tsx`, `package.json`; `tests/renderer/DocumentsScreen.test.tsx` |
+| **PERF-6** | Low | **deferred (cause)** — per-page OCR child table is a larger schema migration; PERF-3 already removed the hot-path parse it would have addressed | this §36 (own future phase) |
+
+**Posture (load-bearing):** offline / no telemetry / no new RUNTIME network egress (the virt lib is a
+build-time dep, bundled, verified no `.node` binary); the schema change is additive + nullable and opens old
+workspaces cleanly (backfill on first open); content class (OCR page text) is never materialized on the list
+path nor placed in the sidecar/logs/export. Branch `audit-followup-phase4-docs-scale` (unmerged; do NOT
+auto-merge/push).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
