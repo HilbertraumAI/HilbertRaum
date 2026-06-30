@@ -270,13 +270,23 @@ lifecycle (`conversation_*`); skill management and runs (`skill_imported`/`delet
 warnings; and offline-guard detections. (`shared/types.ts` is the authoritative enum.) Its data
 class is defined by a **hard privacy rule**:
 
-- Events carry **ids, model ids, filenames, and counts only** — NEVER chat content, document
-  text, or passwords. A chat transcript export records only the conversation id (even the
-  chosen filename is excluded — it derives from the conversation title, which is chat
-  content); `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
+- Events carry **ids, model ids, and counts only** — NEVER chat content, document text,
+  passwords, **or user-chosen names**. A chat transcript export records only the conversation
+  id (even the chosen filename is excluded — it derives from the conversation title, which is
+  chat content); `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
   `gpuMode`, `developerMode`) and their boolean/enum values, never any other setting's value.
-  Enforced by a sentinel-grep test (`tests/integration/audit-ipc.test.ts`) that pushes secret
-  strings through the wired flows and proves their absence from every recorded row.
+  **Document titles/filenames are content (S1, full-audit-2026-06-30).** `document_imported` /
+  `document_reindexed` (incl. the doc-task *materialize* path) record `documentId` + `status` +
+  `chunkCount` only — a **fixed** message string, never the title/basename. This aligns the
+  document channel with the chat channel (which already withholds the conversation title) and the
+  collections channel (which already refuses the project name): a user-chosen name like
+  `biopsy-results.pdf` can be as sensitive as the text it labels, and the **whole log is
+  exfiltrated verbatim** by the plaintext `activity-log.json` export, so its data class must hold
+  to the content bar end-to-end. Enforced by a sentinel-grep test
+  (`tests/integration/audit-ipc.test.ts`) that pushes secret strings — **now including the
+  imported file's basename** — through the wired flows (import → re-index → summarize → translate
+  → compare) AND the **`exportAuditLog` plaintext payload**, proving their absence from every
+  recorded row and the exported file. Re-interpolating a title into any message reds the sentinel.
 - The log lives **inside the workspace DB** ⇒ on an encrypted workspace it is encrypted at
   rest exactly like chats. It is FOR THE USER (spec §7.11): local only, surfaced on the
   Diagnostics **Activity** panel, exported only by an explicit user save-dialog action.
@@ -931,6 +941,23 @@ The backstop itself was lowered 64 → 48 GiB and is now unreachable from produc
 for a future caller). Residual: the cap is a disk-fill bound, not an integrity control — wrong bytes
 are still caught by the post-download SHA verify; and the DIY `fetch-*` scripts use the OS-native
 downloader (curl), not this seam.
+
+**S4 (full-audit-2026-06-30) — re-affirmed accepted residual: trust by location, not signature
+(§22-M2).** The SSRF hardening above is positive (https-only, redirect-revalidated, private/loopback/
+metadata + mapped-IPv6 denied), but there is **no positive host allowlist**, and model/runtime
+manifests are **neither signed nor pinned** and live in user-writable `model-manifests/`. A local
+adversary who can already write those files can therefore point a download at any **public** HTTPS
+host (hash verification doesn't help — they control both the `download.url` and the declared
+`sha256`). This is the **same** trust posture already accepted for the engine binary and skills
+(§22-M2: *trust by location, not signature*). The 2026-06-30 audit re-confirmed it remains the
+deliberate posture: the precondition is a **local filesystem write** (the threat the encrypted vault,
+not this gate, addresses), and every network fetch is already gated by **policy ∧ `allowNetwork` ∧ a
+per-download user confirmation**, so an exfiltration to an attacker host is neither silent nor
+unattended. A download-host **allowlist** was weighed as cheap hardening and **declined**: it would
+break the legitimate offline-curation workflow (a user adding a manifest that points at their own
+mirror / a non-listed but honest host) without binding the local-write attacker, who can edit the
+allowlist too. Manifest signing/pinning stays the only real fix and remains a **product decision**,
+not a code change for this round.
 
 ### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
 `validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines

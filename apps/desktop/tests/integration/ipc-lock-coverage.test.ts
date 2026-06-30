@@ -117,7 +117,7 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerWorkspaceIpc:
     'workspace-ipc.test.ts — IS the lock/unlock/create/rekey gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design)',
   registerDictationIpc:
-    'pre-unlock by design — whisper STT for the chat composer, never touches ctx.db (no requireUnlocked)',
+    'dictation-ipc.test.ts (locked-vault rejection; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
   registerDownloadIpc:
     'pre-unlock by design — model downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()',
   registerEngineIpc:

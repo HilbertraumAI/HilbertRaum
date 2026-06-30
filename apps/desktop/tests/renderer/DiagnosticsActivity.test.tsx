@@ -45,27 +45,34 @@ afterEach(cleanup)
 
 describe('Settings → Diagnostics (advanced) — Activity panel (Phase 19)', () => {
   it('loads activity on demand and filters by type', async () => {
+    // S1 (full-audit-2026-06-30): the document_imported message is a fixed string —
+    // the filename/title is CONTENT and is no longer interpolated into the message.
     const events = [
-      event(2, 'document_imported', 'Document imported: meeting-notes'),
+      event(2, 'document_imported', 'Document imported'),
       event(1, 'model_selected', 'Model selected: qwen3-4b')
     ]
     const getAuditEvents = vi.fn(async () => events)
     stubDiagnostics({ getAuditEvents })
-    render(<SettingsScreen tab="diagnostics" />)
+    const { container } = render(<SettingsScreen tab="diagnostics" />)
 
     // Friendly local-only copy is always visible on the card.
     expect(screen.getByText(/never contains chat text or document contents/i)).toBeInTheDocument()
     expect(getAuditEvents).not.toHaveBeenCalled() // on demand, not on mount
 
+    // Scope to the rendered ENTRY LIST: the fixed "Document imported" message (S1) now equals
+    // both its humanized type label AND the type-filter dropdown <option>, so a whole-screen
+    // text match is ambiguous — assert over the activity-list text instead.
+    const activityText = (): string =>
+      container.querySelector('.activity-list')?.textContent ?? ''
     await userEvent.click(screen.getByRole('button', { name: /show activity/i }))
-    expect(await screen.findByText(/Document imported: meeting-notes/)).toBeInTheDocument()
-    expect(screen.getByText(/Model selected: qwen3-4b/)).toBeInTheDocument()
+    await waitFor(() => expect(activityText()).toMatch(/Document imported/))
+    expect(activityText()).toMatch(/Model selected: qwen3-4b/)
     expect(getAuditEvents).toHaveBeenCalledWith(50)
 
     // The type filter narrows the list client-side.
     await userEvent.selectOptions(screen.getByRole('combobox'), 'model_selected')
-    expect(screen.queryByText(/Document imported: meeting-notes/)).not.toBeInTheDocument()
-    expect(screen.getByText(/Model selected: qwen3-4b/)).toBeInTheDocument()
+    expect(activityText()).not.toMatch(/Document imported/)
+    expect(activityText()).toMatch(/Model selected: qwen3-4b/)
   })
 
   it('shows a friendly empty state when nothing is recorded yet', async () => {

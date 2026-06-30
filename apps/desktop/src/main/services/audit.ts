@@ -12,9 +12,14 @@ import type { AuditEvent, AuditEventType } from '../../shared/types'
 // - `recordEvent` NEVER throws — an audit failure must never break the operation it
 //   records. Callers in the IPC layer go through an `AuditRecorder` (below), which also
 //   absorbs a locked workspace (`ctx.db` throws while locked) by buffering in memory.
-// - PRIVACY RULE (hard): `message`/`metadata` carry ids, model ids, filenames, and
-//   counts — NEVER chat content, document text, or passwords. Enforced by review at the
-//   call sites + the sentinel-grep test in tests/integration/audit-ipc.test.ts.
+// - PRIVACY RULE (hard): `message`/`metadata` carry ids, model ids, and counts —
+//   NEVER chat content, document text, passwords, OR user-chosen names. Document
+//   titles/filenames and conversation/project names are CONTENT (S1,
+//   full-audit-2026-06-30): they can be as sensitive as the text they label
+//   (`biopsy-results.pdf`), and the whole log is exfiltrated verbatim by the plaintext
+//   activity-log.json export — so a documentId, not its title, goes on record. Enforced
+//   by review at the call sites + the sentinel-grep test in
+//   tests/integration/audit-ipc.test.ts (the filename basename is now a grepped sentinel).
 // - Retention: the table is pruned to the newest `AUDIT_MAX_ROWS` rows on every insert
 //   — bounded table, no vacuum ceremony.
 

@@ -163,6 +163,32 @@ describe('registerDictationIpc', () => {
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
   })
 
+  // S3 (full-audit-2026-06-30): the handler used to dispatch on the transcriber's presence
+  // alone, landing a transient PLAINTEXT WAV in the documents dir even while the vault is
+  // locked (where it should hold only `.enc` sidecars) — an F16 lock-guard parity gap. With a
+  // transcriber PRESENT (so the refusal is the lock gate, not the unavailable backstop) and a
+  // LOCKED workspace, it must refuse with the friendly locked copy and write nothing.
+  it('refuses on a locked vault and writes NO file under documents/ (S3)', async () => {
+    const workspacePath = freshWorkspacePath()
+    const { transcriber, seen } = fakeTranscriber()
+    const lockedCtx = {
+      paths: { workspacePath },
+      transcriber,
+      audit: vi.fn(),
+      workspace: { isUnlocked: () => false }
+    } as unknown as AppContext
+    registerDictationIpc(lockedCtx)
+
+    await expect(
+      invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
+    ).rejects.toThrow(/Workspace is locked\./)
+    // The refusal precedes any disk write AND the transcriber dispatch.
+    expect(seen).toHaveLength(0)
+    expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+    // (The unlocked happy-path test above is the control: the same byte shape succeeds when
+    // isUnlocked() is true, so only the lock gate refused here.)
+  })
+
   it('refuses empty and non-byte payloads without touching the disk', async () => {
     const workspacePath = freshWorkspacePath()
     const { transcriber, seen } = fakeTranscriber()

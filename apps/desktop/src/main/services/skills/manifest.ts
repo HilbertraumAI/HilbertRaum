@@ -5,7 +5,7 @@
 // env-resolved body cap, and hand both to the pure parser. Deps (the directory, the limits) are
 // injected so it tests against a temp dir without Electron.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseSkillMarkdown, type SkillParseResult } from '../../../shared/skill-manifest'
 import { resolveSkillLimits, type SkillLimits } from './limits'
@@ -26,9 +26,20 @@ export function parseSkillManifestSource(
  * produces, with a friendly error when SKILL.md is missing.
  */
 export function parseSkillManifestFromDir(dir: string, opts: { limits?: SkillLimits } = {}): SkillParseResult {
+  // S2 (full-audit-2026-06-30): the installer's stageZip/stageFolder enforce maxFileBytes,
+  // but the DROP-IN read path (discoverSkillsInDir / loadSkillPackage) reached here with a
+  // bare readFileSync + no size guard — an over-cap SKILL.md / manifest.json dropped into the
+  // unencrypted user-skills/ would be read wholesale into the main process (and JSON-parsed)
+  // on every reconcile / per chat turn (a local memory-exhaustion DoS). Mirror stageFolder:
+  // statSync().size > maxFileBytes BEFORE each read — REJECT the authoritative SKILL.md (no
+  // skill loads), SKIP the optional manifest.json cache (the same fate as a malformed one).
+  const limits = opts.limits ?? resolveSkillLimits()
   const skillMdPath = join(dir, 'SKILL.md')
   if (!existsSync(skillMdPath)) {
     return { ok: false, errors: ['SKILL.md was not found in the skill package'], notes: [] }
+  }
+  if (statSync(skillMdPath).size > limits.maxFileBytes) {
+    return { ok: false, errors: ['SKILL.md is larger than the allowed size'], notes: [] }
   }
   const source = readFileSync(skillMdPath, 'utf8')
 
@@ -36,12 +47,15 @@ export function parseSkillManifestFromDir(dir: string, opts: { limits?: SkillLim
   const manifestJsonPath = join(dir, 'manifest.json')
   if (existsSync(manifestJsonPath)) {
     try {
-      manifestJson = JSON.parse(readFileSync(manifestJsonPath, 'utf8'))
+      // Skip the cache WITHOUT reading it when it is over-cap (statSync first). A malformed
+      // OR oversized manifest.json is ignored (DS2), never fatal — SKILL.md is authoritative.
+      if (statSync(manifestJsonPath).size <= limits.maxFileBytes) {
+        manifestJson = JSON.parse(readFileSync(manifestJsonPath, 'utf8'))
+      }
     } catch {
-      // Optional, non-authoritative cache — a malformed manifest.json is ignored (DS2), never fatal.
       manifestJson = undefined
     }
   }
 
-  return parseSkillManifestSource(source, { limits: opts.limits, manifestJson })
+  return parseSkillManifestSource(source, { limits, manifestJson })
 }

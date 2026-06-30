@@ -126,9 +126,11 @@ export async function materializeDocument(
     // origin_json was already stamped at queue time (DM-2); re-assert it post-success to
     // also clear original_path (the transient source is shredded in `finally`). Idempotent.
     setDocumentOrigin(db, info.id, origin)
-    // A new corpus document must never appear without an audit trail (filename +
-    // id only — the translated text is content, never audit-logged).
-    ctx.deps.audit?.('document_imported', `Document imported: ${result.title}`, {
+    // A new corpus document must never appear without an audit trail — ids + counts
+    // only. The title is CONTENT (S1, full-audit-2026-06-30): a materialized output's
+    // title derives from the source filename, so it carries the same sensitivity the
+    // import/re-index sites now withhold; the translated text was already never logged.
+    ctx.deps.audit?.('document_imported', 'Document imported', {
       documentId: info.id,
       status: result.status,
       chunkCount: result.chunkCount

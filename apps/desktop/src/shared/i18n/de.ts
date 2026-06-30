@@ -1454,6 +1454,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.audit.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Aktivität anzuzeigen.',
   'main.settings.locked':
     'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Einstellungen zu ändern.',
+  // S3 (full-audit-2026-06-30) — siehe en.ts.
+  'main.dictation.locked':
+    'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Spracheingabe zu verwenden.',
   'main.preflight.readOnly':
     'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
     'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in der ' +

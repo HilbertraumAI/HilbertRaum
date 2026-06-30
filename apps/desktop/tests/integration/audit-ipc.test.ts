@@ -83,6 +83,10 @@ const PASSWORD_SENTINEL = 'XPASS_SENTINEL_hunter2hunter2'
 // A project NAME is content-ish (plan §17): the collection audit events must record
 // id/type/count only, never the name — this sentinel proves it.
 const PROJECT_SENTINEL = 'XPROJECT_SENTINEL_lawsuit_mueller_divorce'
+// A document FILENAME is CONTENT (S1, full-audit-2026-06-30): the import / re-index /
+// materialize audit events must record documentId + status + counts only, never the
+// title/basename — this sentinel (used as the imported file's basename) proves it.
+const FILENAME_SENTINEL = 'XFILE_SENTINEL_biopsy-results'
 const SENTINELS = [
   CHAT_SENTINEL,
   DOC_SENTINEL,
@@ -90,7 +94,8 @@ const SENTINELS = [
   AUDIO_SENTINEL,
   SETTING_SENTINEL,
   PASSWORD_SENTINEL,
-  PROJECT_SENTINEL
+  PROJECT_SENTINEL,
+  FILENAME_SENTINEL
 ]
 
 const BODY = 'downloaded-model-bytes'
@@ -245,6 +250,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     registerDocsIpc(ctx)
     registerCollectionsIpc(ctx)
     registerDocTasksIpc(ctx)
+    registerAuditIpc(ctx) // S1: drive the real exportAuditLog plaintext payload too
     registerModelIpc(ctx)
     registerDownloadIpc(
       ctx,
@@ -270,8 +276,10 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     await invoke(handlers, IPC.exportConversation, conv.id)
     await invoke(handlers, IPC.deleteConversation, conv.id)
 
-    // -- documents: sentinel text inside the file body (the FILENAME is fair game).
-    const docPath = join(rootPath, 'meeting-notes.txt')
+    // -- documents: sentinel text inside the file body AND in the filename — both are
+    // CONTENT (S1); neither the body nor the title/basename may reach runtime_events,
+    // through import, re-index, summarize, translate, or compare-as-source.
+    const docPath = join(rootPath, `${FILENAME_SENTINEL}.txt`)
     writeFileSync(docPath, `notes\n${DOC_SENTINEL}\n`, 'utf8')
     const { result: jobRaw } = await invoke(handlers, IPC.importDocuments, [docPath])
     const job = jobRaw as ImportJob
@@ -469,7 +477,9 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       expect(types, `missing audit event: ${expected}`).toContain(expected)
     }
 
-    // …and NO sentinel content did (the privacy rule, spec §7.11 + plan §7).
+    // …and NO sentinel content did (the privacy rule, spec §7.11 + plan §7) — now incl.
+    // the document FILENAME/title (S1, full-audit-2026-06-30): the loop's FILENAME_SENTINEL
+    // entry reds if any import / re-index / materialize message re-interpolates the title.
     const recorded = allRowsText(db)
     for (const sentinel of SENTINELS) {
       expect(recorded).not.toContain(sentinel)
@@ -480,8 +490,31 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     )
     expect(settingsEvent?.metadata).toEqual({ allowNetwork: true })
 
-    // The filename (allowed) is on record; the document text is not.
-    expect(recorded).toContain('meeting-notes')
+    // S1: the document_imported event records the documentId + status + chunkCount ONLY —
+    // a fixed message string with NO title (the conversation_exported precedent).
+    const importEvent = listAuditEvents(db, { limit: 5000 }).find(
+      (e) =>
+        e.type === 'document_imported' &&
+        (e.metadata as { documentId?: string } | null)?.documentId === documentId
+    )
+    expect(importEvent?.message).toBe('Document imported')
+    expect(importEvent?.message).not.toContain(FILENAME_SENTINEL)
+    expect(importEvent?.metadata).toEqual({
+      documentId,
+      status: 'indexed',
+      chunkCount: expect.any(Number)
+    })
+
+    // S1: the plaintext activity-log.json export (the exfiltration amplifier) carries no
+    // sentinel either — drive the REAL exportAuditLog handler and grep the written file.
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = join(rootPath, 'activity-log.json')
+    const { result: auditExportPath } = await invoke(handlers, IPC.exportAuditLog)
+    expect(auditExportPath).toBeTruthy()
+    const exportedLog = readFileSync(join(rootPath, 'activity-log.json'), 'utf8')
+    for (const sentinel of SENTINELS) {
+      expect(exportedLog).not.toContain(sentinel)
+    }
   })
 
   it('document and conversation flows do not fire audit events on refused operations', async () => {

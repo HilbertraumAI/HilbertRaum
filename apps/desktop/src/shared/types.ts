@@ -1442,7 +1442,9 @@ export interface BenchmarkResult {
  * What the app records to the `runtime_events` audit log — FOR THE USER, local only
  * (spec §7.11): the log lives in the workspace DB (encrypted at rest on encrypted
  * workspaces) and is never uploaded anywhere. Privacy rule (hard): events carry ids,
- * model ids, filenames, and counts — NEVER chat content, document text, or passwords.
+ * model ids, and counts — NEVER chat content, document text, passwords, OR user-chosen
+ * names. Document titles/filenames and conversation/project names are CONTENT (S1,
+ * full-audit-2026-06-30): a documentId, not its title, goes on record.
  */
 /**
  * One installed skill over the IPC surface (skills plan §16) — a decoded `skills` row projected
@@ -1691,7 +1693,7 @@ export interface RunnableTool {
  * What `listRunnableTools` returns: the wired tools PLUS the in-scope target document IDS the run
  * would act on (skills audit U-1). The ids are content-free (the §6 ids/counts posture allows them
  * over IPC) and listed in main's resolution order — `documentIds[0]` is the default target a run
- * uses when the renderer passes none. Document TITLES/FILENAMES are content-adjacent and NEVER cross
+ * uses when the renderer passes none. Document TITLES/FILENAMES are CONTENT (S1) and NEVER cross
  * this boundary: the renderer maps these ids to NAMES from its own already-loaded document list, so
  * it can surface/choose the target without a title ever entering the IPC payload or the run state.
  */
@@ -1798,7 +1800,7 @@ export type AuditEventType =
   | 'conversation_exported'
   // Document-organization (plan §17): collection/membership/lifecycle changes. Metadata is
   // id + type + COUNT ONLY — never the collection/project NAME (a project name like
-  // "Divorce" is content-ish; the filename allowance does NOT extend to it).
+  // "Divorce" is content — exactly like a document title/filename, which S1 now withholds too).
   | 'collection_created'
   | 'collection_renamed'
   | 'collection_archived'
@@ -1832,7 +1834,7 @@ export type AuditEventType =
 export interface AuditEvent {
   id: string
   type: AuditEventType
-  /** Human-readable summary (ids/filenames/counts only — never content). */
+  /** Human-readable summary (ids/counts only — never content, incl. titles/filenames; S1). */
   message: string
   /** Structured details (parsed `metadata_json`), or null. */
   metadata: Record<string, unknown> | null
