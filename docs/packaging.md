@@ -172,26 +172,38 @@ off `config/drive.json`). The app then reads `models/`, `workspace/`, `config/`,
 > build from `apps/desktop` or temporarily disable hoisting. None of this affects `npm test` /
 > `typecheck` / `npm run build` (the green gate), which do not invoke electron-builder.
 
-### Sidecar runtimes as a loader component (loader-integration)
+### Sidecar engines as loader components (loader-integration)
 
 The image build (`loader/loader/`) no longer embeds the sidecar engine binaries on the drive.
-Instead they ship as a per-target **`runtime` loader component** — packed exactly like the `app`
-component (`loader.toml` `runtime` → `scripts/stage-runtime.sh` fetches the prebuilt
-`llama.cpp` + `whisper.cpp` binaries → import-build packs them offline as
-`runtime-<target>-{squashfs,dmg,dir}`). The native launcher **mounts** it beside the app and
-exports **`HILBERTRAUM_RUNTIME_ROOT`** pointing at the mounted tree (which contains the same
-`runtime/llama.cpp/<os>/…` layout as the drive).
+Instead they ship as **two per-target loader components** — `llamacpp` (the chat/embeddings
+server) and `whispercli` (the audio transcriber) — declared in `loader.toml` with
+`builder = "nix"` and packed **purely in nix** (`nix/builds.nix`) straight from **upstream
+prebuilt release archives** pinned by hash in `nix/runtime-pins.json`. No impure download step:
+`pkgs.fetchurl` fetches each archive under its pinned sha256 and the derivation extracts it,
+symlinking the executable at the component **root** (so the app resolves `<dir>/llama-server`).
+Refresh the pins with `scripts/update-runtime-pins.sh` (a `gh` + `jq` one-shot; network only).
 
-The app resolves its sidecars with **component-first, drive-fallback** precedence
-(`runtimeRoots()` in `services/runtime/sidecar.ts`): it looks under `HILBERTRAUM_RUNTIME_ROOT`
-first and only falls back to `HILBERTRAUM_DRIVE_ROOT/runtime/…` when the component is absent or
-lacks the binary. Same binaries, different location — a drive built with the on-disk runtime tree
-(a plain `prepare-drive --with-assets` without `--no-runtimes`) still works standalone.
+Per-OS specifics baked into the nix derivations:
+- **linux** — the portable Ubuntu builds need a couple of libs the FHS sandbox / a minimal host
+  may lack (`libssl`/`libcrypto`); those ship in a `lib/` subdir beside the binary.
+- **windows** — the MSVC-linked exes import `VCRUNTIME140.dll` / `MSVCP140.dll`; those redist DLLs
+  are dropped beside the `.exe` (from the vendored `nix/msvc-runtime.nix`) so a fresh Windows
+  doesn't die with `STATUS_DLL_NOT_FOUND`.
+- **mac** — llama.cpp only; upstream ships no whisper-cli mac archive (xcframework), so mac bundles
+  carry no `whispercli` component and the app falls back to no transcriber there.
 
-Because the loader now delivers the runtimes, the image's drive-population hook runs
+The native launcher **mounts** each present sidecar beside the app and exports
+**`HILBERTRAUM_LLAMACPP_DIR`** / **`HILBERTRAUM_WHISPERCLI_DIR`** (on both the host and the NixOS
+FHS-child path, since the FHS child spawns Electron). The app prefers the packaged component
+(`services/runtime/sidecar.ts` `resolveLlamaServerPath` / `transcriber/cli.ts`
+`resolveWhisperCliPath`), falling back to the drive's `runtime/<family>/<os>/` layout when a
+component is absent. When spawning a packaged linux binary, `sidecarSpawnEnv()` prepends the
+component's `lib/` to `LD_LIBRARY_PATH` (no-op on win/mac and for a drive binary).
+
+Because the loader now delivers the engines, the image's drive-population hook runs
 `prepare-drive.sh --no-runtimes` (`loader.toml [layout].prepare_cmd`), so the burned drive is not
-double-provisioned. Use `--no-runtimes` / `-NoRuntimes` directly whenever the runtimes come from
-the component rather than the drive.
+double-provisioned. Use `--no-runtimes` / `-NoRuntimes` directly whenever the engines come from
+the components rather than the drive.
 
 ## Preparing a drive — scripts (Phase 11)
 
