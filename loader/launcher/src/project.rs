@@ -2,12 +2,12 @@
 //!
 //! [`loader_core::lifecycle`] owns the phase sequencing, the NixOS FHS-child delegation,
 //! the updater + splash plumbing, the drive flush, and the apply/relaunch decisions.
-//! HilbertRaum is a self-contained Electron app (llama.cpp / RAG / embeddings / SQLite /
-//! OCR all live in its own main process, and it manages its own model weights from the
-//! drive), so the only product-specific work here is: mount the `app` component + the
-//! `runtime` component (the llama.cpp/whisper.cpp sidecar engines), point the app at the
-//! drive via `HILBERTRAUM_DRIVE_ROOT` and at the runtimes via `HILBERTRAUM_RUNTIME_ROOT`,
-//! and run Electron. No daemon, no supervisor, no localhost services — nothing from mac-mgmt.
+//! HilbertRaum is a self-contained Electron app (RAG / embeddings / SQLite / OCR all live in
+//! its own main process, and it manages its own model weights from the drive), so the only
+//! product-specific work here is: mount the `app` component + the `llamacpp` / `whispercli`
+//! sidecar components (the chat server + audio transcriber), point the app at the drive via
+//! `HILBERTRAUM_DRIVE_ROOT` and at the sidecars via `HILBERTRAUM_LLAMACPP_DIR` /
+//! `HILBERTRAUM_WHISPERCLI_DIR`, and run Electron. No daemon, no supervisor — nothing from mac-mgmt.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -27,6 +27,15 @@ use crate::{electron_in, electron_target};
 /// mount/tools dir + the instance lock. Single source for both the Project impl and the
 /// early `main()` set (so the CLI subcommand that touches the cache agrees).
 pub const CACHE_DIR_NAME: &str = "hilbertraum";
+
+/// Export `var=<base>/<name>` when that mounted sidecar dir exists, so the app finds the
+/// chat server / transcriber there. No-op when the sidecar wasn't shipped for this target.
+fn export_runtime_dir(base: &std::path::Path, name: &str, var: &str) {
+    let dir = base.join(name);
+    if dir.is_dir() {
+        std::env::set_var(var, &dir);
+    }
+}
 
 /// The HilbertRaum run. The only session-scoped state is the tokio runtime hosting the
 /// basic control-API server (kept alive for the session, dropped in teardown); the generic
@@ -61,11 +70,10 @@ impl Project for HilbertRaum {
                 if a.exists() {
                     *ctx.app_dir = Some(a);
                 }
-                // The sidecar runtimes ride in the same resource tree; point the app at them.
-                let rt = res.join("runtime");
-                if rt.exists() {
-                    std::env::set_var("HILBERTRAUM_RUNTIME_ROOT", &rt);
-                }
+                // The host already mounted the sidecars into `res`; just point the app at
+                // them (the FHS child spawns Electron, so the env must be set HERE too).
+                export_runtime_dir(res, "llamacpp", "HILBERTRAUM_LLAMACPP_DIR");
+                export_runtime_dir(res, "whispercli", "HILBERTRAUM_WHISPERCLI_DIR");
             }
             return true;
         }
@@ -99,23 +107,23 @@ impl Project for HilbertRaum {
             return false;
         }
 
-        // Mount the sidecar-runtime component (llama.cpp + whisper.cpp engines) beside the app
-        // and export HILBERTRAUM_RUNTIME_ROOT so the app resolves its sidecars from it. This is
-        // OPTIONAL: if the pool ships no runtime-<os> component the app falls back to an on-drive
-        // runtime/ tree (runtimeRoots in sidecar.ts), so a missing runtime is a log, not a
-        // failure. The mounted dir CONTAINS `runtime/<family>/<os>/…`, which is exactly the base
-        // the app appends `runtime/…` to.
-        if let Some(rt) = pick_base(comp, "runtime-") {
-            let dest = dist.join("runtime");
-            match mount(comp, &rt, &dest, "runtime", tools, force_extract) {
+        // Mount the sidecar runtime components (llama.cpp chat server, whisper.cpp
+        // transcriber) beside the app when present in the pool, and export their dirs so the
+        // app spawns the binaries from there. Best-effort: a missing/failed sidecar is logged
+        // and the app falls back (drive `runtime/`, else mock runtime / no transcriber).
+        for (prefix, name, var) in [
+            ("llamacpp-", "llamacpp", "HILBERTRAUM_LLAMACPP_DIR"),
+            ("whispercli-", "whispercli", "HILBERTRAUM_WHISPERCLI_DIR"),
+        ] {
+            let Some(base) = pick_base(comp, prefix) else { continue };
+            let dest = dist.join(name);
+            match mount(comp, &base, &dest, name, tools, force_extract) {
                 Ok(k) => {
                     ctx.mounts.push(Mount { dest: dest.clone(), kind: k });
-                    std::env::set_var("HILBERTRAUM_RUNTIME_ROOT", &dest);
+                    std::env::set_var(var, &dest);
                 }
-                Err(e) => log(&format!("runtime: {e} — falling back to the on-drive runtime/")),
+                Err(e) => log(&format!("{name}: {e} — app will fall back")),
             }
-        } else {
-            log("no runtime-<os> component in the pool — using the on-drive runtime/ (if any)");
         }
 
         // The loader framework's resource-tree env: consumed by the NixOS FHS sandbox
@@ -144,9 +152,10 @@ impl Project for HilbertRaum {
         };
 
         // Point HilbertRaum at the drive so its main process finds its model weights and
-        // workspace (the sidecar ENGINE binaries come from the mounted `runtime` component via
-        // HILBERTRAUM_RUNTIME_ROOT, set in prepare_mounts). The drive root is the portable root
-        // the loader pinned from the pool (the USB root holding launchers/ + components/).
+        // workspace (the sidecar ENGINE binaries come from the mounted llamacpp/whispercli
+        // components via HILBERTRAUM_LLAMACPP_DIR / HILBERTRAUM_WHISPERCLI_DIR, set in
+        // prepare_mounts). The drive root is the portable root the loader pinned from the pool
+        // (the USB root holding launchers/ + components/).
         let drive_root = loader_core::portable_root();
         std::env::set_var("HILBERTRAUM_DRIVE_ROOT", &drive_root);
         log(&format!("HILBERTRAUM_DRIVE_ROOT={}", drive_root.display()));

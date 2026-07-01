@@ -59,8 +59,9 @@ image_fs       = "exfat"
 # onto the image so the burned drive is ready to run. Append --with-assets here to also
 # download+verify the default model set into the image (build-time network).
 # --no-runtimes: the sidecar runtimes (llama.cpp + whisper.cpp) are NOT embedded on the drive
-# here — they ship as the `runtime` component below, which the launcher mounts + exposes via
-# HILBERTRAUM_RUNTIME_ROOT. So even a --with-assets build must not double-embed them.
+# here — they ship as the `llamacpp` + `whispercli` components below, which the launcher mounts
+# + exposes via HILBERTRAUM_LLAMACPP_DIR / HILBERTRAUM_WHISPERCLI_DIR. So even a --with-assets
+# build must not double-embed them.
 prepare_cmd    = "./scripts/prepare-drive.sh --no-runtimes"
 launchers_dir  = "launchers"
 components_dir = "components/{os}"
@@ -134,16 +135,6 @@ cmd  = "./scripts/stage-app.sh {target}"
 deps = ["build"]
 src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "../apps/desktop/electron-builder.yml"]
 desc = "stage app {target}"
-# The sidecar RUNTIMES (llama.cpp + whisper.cpp), staged per target into dist/runtime/{target}
-# by downloading + SHA-verifying the prebuilt release binaries (app's scripts/fetch-runtime.sh
-# → repo-root model-manifests/runtime-sources.yaml). Independent of the Electron build, so no
-# `deps`. Feeds the `runtime` component below.
-[[step]]
-name = "stage-runtime"
-per  = "target"
-cmd  = "./scripts/stage-runtime.sh {target}"
-src  = ["./scripts/stage-runtime.sh", "@loader/lib.sh", "../scripts/fetch-runtime.sh", "../model-manifests/runtime-sources.yaml"]
-desc = "stage runtime {target}"
 
 # ── shared source-input bundles ──────────────────────────────────────────────
 [srcgroups]
@@ -168,23 +159,36 @@ linux = { ext = "squashfs", attr = "app-{target}-squashfs", desc = "nix squashfs
 mac   = { ext = "dmg",      attr = "app-{target}-dmg",      desc = "nix dmg: app-{target}" }
 win   = { ext = "zip",      attr = "app-{target}-dir",      desc = "nix dir: app-{target}" }
 
-# The sidecar runtimes as a second per-target component, packed the same way as `app`
-# (stage-runtime → import-build → nix pack OFFLINE). The launcher mounts it beside the app and
-# exports HILBERTRAUM_RUNTIME_ROOT; the app finds llama-server/whisper-cli under it (component
-# wins, on-drive runtime/ is the fallback). Attrs live in nix/builds.nix.
+# The llama.cpp chat server + whisper.cpp transcriber the app spawns from the packaged
+# root. builder != import-build → packed by `nix-component.sh <attr>` straight from the
+# pure-nix attrs in nix/builds.nix (upstream prebuilt release archives; pins in
+# nix/runtime-pins.json). The launcher mounts these beside the app and exports their dirs;
+# the app resolves llama-server/whisper-cli from there, drive `runtime/` as fallback.
 [[component]]
-name = "runtime"
+name = "llamacpp"
 per = "target"
 group = 1
-builder = "import-build"
-store_name = "runtime-{target}"
-src_dir = "dist/runtime/{target}"
-src_stamp = "stage-runtime-{target}"
+builder = "nix"
 srcgroup = "import"
+src_extra = ["nix/runtime-pins.json"]
 [component.format]
-linux = { ext = "squashfs", attr = "runtime-{target}-squashfs", desc = "nix squashfs: runtime-{target}" }
-mac   = { ext = "dmg",      attr = "runtime-{target}-dmg",      desc = "nix dmg: runtime-{target}" }
-win   = { ext = "zip",      attr = "runtime-{target}-dir",      desc = "nix dir: runtime-{target}" }
+linux = { ext = "squashfs", attr = "llamacpp-{target}-squashfs", desc = "llama.cpp: {target}" }
+mac   = { ext = "dmg",      attr = "llamacpp-{target}-dmg",      desc = "llama.cpp: {target}" }
+win   = { ext = "zip",      attr = "llamacpp-{target}-dir",      desc = "llama.cpp: {target}" }
+
+# whisper.cpp transcriber CLI. No mac-arm64 format: upstream ships no mac CLI archive
+# (xcframework only), so the mac bundle has no whispercli component and the app falls back
+# to no transcriber on mac (the per-target render skips a target whose OS has no format).
+[[component]]
+name = "whispercli"
+per = "target"
+group = 1
+builder = "nix"
+srcgroup = "import"
+src_extra = ["nix/runtime-pins.json"]
+[component.format]
+linux = { ext = "squashfs", attr = "whispercli-{target}-squashfs", desc = "whisper.cpp: {target}" }
+win   = { ext = "zip",      attr = "whispercli-{target}-dir",      desc = "whisper.cpp: {target}" }
 
 # ── bundle + final artifacts ──────────────────────────────────────────────────
 # One per-target bundle: bundle.sh ASSEMBLES the prebuilt app-<target> component + the

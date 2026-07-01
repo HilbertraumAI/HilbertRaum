@@ -82,6 +82,96 @@ let
   nixosFhsArm64 = flake.packages.${builtins.currentSystem}.nixosFhs-arm64;
   nixosFhsClosureInfo = pkgs.closureInfo { rootPaths = [ nixosFhs ]; };
   nixosFhsArm64ClosureInfo = pkgs.closureInfo { rootPaths = [ nixosFhsArm64 ]; };
+
+  # --- llama.cpp / whisper.cpp sidecar binaries (upstream prebuilt releases) ---
+  # The chat server + audio transcriber the app spawns from the packaged root. ALL-PREBUILT:
+  # upstream ships PORTABLE Ubuntu x64+arm64 CLI archives (llama b9690, whisper v1.9.0), built
+  # against a baseline glibc — so they run on any matching-arch Linux, not just NixOS. mac-arm64
+  # whisper-cli has NO upstream CLI archive (xcframework is a library, not a binary) → omitted;
+  # the app falls back to no transcriber on mac. Pins (URL + sha256) live in ./runtime-pins.json,
+  # refreshed by scripts/update-runtime-pins.sh (a version bump is one scripted step).
+  #
+  # Layout: each derivation extracts the archive preserving its internal tree and symlinks the
+  # executable at the output ROOT, so the app resolves <root>/<exe> while the binary still execs
+  # from its real dir (rpath=$ORIGIN finds the sibling ggml/backend libs). Windows has no
+  # $ORIGIN — its DLLs sit beside the .exe, so we flatten that dir to root.
+  runtimePins = builtins.fromJSON (builtins.readFile ./runtime-pins.json);
+  unpackRuntime = { pname, url, sha256, exe, isWin ? false }:
+    pkgs.runCommand pname
+      {
+        src = pkgs.fetchurl { inherit url sha256; name = "${pname}-archive"; };
+        nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.unzip ];
+      }
+      (if isWin then ''
+        mkdir -p un && cd un && unzip -q "$src"
+        d=$(dirname "$(find . -type f -name '${exe}' | head -1)")
+        [ -n "$d" ] || { echo "no ${exe} in ${url}"; exit 1; }
+        mkdir -p "$out" && cp -a "$d"/. "$out"/
+      '' else ''
+        mkdir -p un && cd un && tar xf "$src"
+        rel=$(find . -type f -name '${exe}' | head -1)
+        [ -n "$rel" ] || { echo "no ${exe} in ${url}"; exit 1; }
+        mkdir -p "$out" && cp -a ./. "$out"/
+        ln -s "''${rel#./}" "$out/${exe}"
+      '');
+  # The upstream linux binary runs fine under the runtime host's glibc (the FHS sandbox on
+  # NixOS, the system on Ubuntu) — interpreter is the standard /lib64/ld-linux, rpath is $ORIGIN
+  # (so its own ggml libs resolve). It just needs a few libs the FHS sandbox / a minimal host may
+  # not provide (libssl/libcrypto). We DON'T patch or bundle a loader/glibc (that mixes a foreign
+  # binary with a nix loader and crashed). Instead ship those libs in a `lib/` subdir and let the
+  # app prepend it to LD_LIBRARY_PATH when it spawns the sidecar (sidecarSpawnEnv). GPU/driver
+  # libs (libvulkan) are deliberately NOT shipped: ggml dlopens its vulkan backend and falls back
+  # to CPU if absent, and a driver lib must match the actual host.
+  extraLibDirs = lib.makeLibraryPath [ pkgs.openssl ]; # libssl.so.3, libcrypto.so.3
+  extraLibs = [ "libssl.so.3" "libcrypto.so.3" ];
+  withExtraLibs = name: drv:
+    pkgs.runCommand name { inherit extraLibDirs; } ''
+      mkdir -p "$out"; cp -a ${drv}/. "$out"/; chmod -R u+w "$out"; mkdir -p "$out/lib"
+      for so in ${lib.concatStringsSep " " extraLibs}; do
+        for d in $(echo "$extraLibDirs" | tr ':' ' '); do
+          [ -e "$d/$so" ] && { cp -L "$d/$so" "$out/lib/"; break; }
+        done
+        [ -e "$out/lib/$so" ] || { echo "extra lib $so not found in $extraLibDirs"; exit 1; }
+      done
+    '';
+
+  # Windows: the upstream MSVC-linked binaries import VCRUNTIME140.dll / MSVCP140.dll (the VC++
+  # redistributable), which the release zip does NOT ship and a fresh Windows may lack → the exe
+  # dies with STATUS_DLL_NOT_FOUND before main(). Drop the redist DLLs beside the exe (Windows
+  # searches the exe's own dir). Sourced from a vendored copy of the upstream loader's shared pin
+  # (./msvc-runtime.nix — the redist DLLs extracted from the msvc-runtime wheel).
+  msvcDlls = (import ./msvc-runtime.nix { inherit pkgs; }).dlls;
+  withMsvcRuntime = name: drv:
+    pkgs.runCommand name { } ''
+      mkdir -p "$out"; cp -aL ${drv}/. "$out"/; chmod -R u+w "$out"
+      cp -n ${msvcDlls}/*.dll "$out"/   # beside the .exe; never clobber one the zip shipped
+    '';
+
+  # family → target → derivation, driven by runtime-pins.json (only present targets exist).
+  # Linux targets get the shipped `lib/` (openssl); win gets the MSVC redist DLLs; mac ships the
+  # upstream layout as-is (dylibs beside the binary).
+  runtimeBin = family: exeBase: target: pin:
+    let
+      exe = if target == "win-x64" then "${exeBase}.exe" else exeBase;
+      unpacked = unpackRuntime { pname = "${family}-${target}"; inherit (pin) url sha256; inherit exe; isWin = target == "win-x64"; };
+    in
+    if lib.hasPrefix "linux" target then withExtraLibs "${family}-${target}" unpacked
+    else if lib.hasPrefix "win" target then withMsvcRuntime "${family}-${target}" unpacked
+    else unpacked;
+  llamacppSrc = lib.mapAttrs (runtimeBin "llamacpp" "llama-server") runtimePins.llamacpp;
+  whispercliSrc = lib.mapAttrs (runtimeBin "whispercli" "whisper-cli") runtimePins.whispercli;
+  # Pack one runtime component for a target in the OS-appropriate format (matches `app`).
+  packRuntime = family: target: src:
+    if lib.hasPrefix "win" target then
+      pkgs.runCommand "${family}-${target}" { } "mkdir -p $out && cp -a ${src}/. $out/"
+    else if lib.hasPrefix "mac" target then
+      mkDmg { name = "${family}-${target}"; inherit src; }
+    else
+      mkSqfs "${family}-${target}" src;
+  ext = target: if lib.hasPrefix "win" target then "dir" else if lib.hasPrefix "mac" target then "dmg" else "squashfs";
+  runtimeComponents =
+    (lib.mapAttrs' (t: s: { name = "llamacpp-${t}-${ext t}"; value = packRuntime "llamacpp" t s; }) llamacppSrc)
+    // (lib.mapAttrs' (t: s: { name = "whispercli-${t}-${ext t}"; value = packRuntime "whispercli" t s; }) whispercliSrc);
 in
 {
   # the Electron app itself, packed as the app-<target> component. stage-app.sh produces the
@@ -93,15 +183,6 @@ in
   "app-mac-arm64-dmg" = mkDmg { name = "app-mac-arm64"; src = stores.app-mac-arm64 or (throw "app-mac-arm64 not imported"); };
   "app-win-x64-dir" = pkgs.runCommand "app-win-x64" { }
     "mkdir -p $out && cp -a ${stores.app-win-x64 or (throw "app-win-x64 not imported")}/. $out/";
-
-  # the sidecar RUNTIMES (llama.cpp + whisper.cpp) packed as the runtime-<target> component,
-  # exactly like app-<target>: stage-runtime.sh fetches the prebuilt binaries impurely,
-  # store-import records the tree (stores.runtime-<target>), these pack it OFFLINE.
-  "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));
-  "runtime-linux-arm64-squashfs" = mkSqfs "runtime-linux-arm64" (stores.runtime-linux-arm64 or (throw "runtime-linux-arm64 not imported"));
-  "runtime-mac-arm64-dmg" = mkDmg { name = "runtime-mac-arm64"; src = stores.runtime-mac-arm64 or (throw "runtime-mac-arm64 not imported"); };
-  "runtime-win-x64-dir" = pkgs.runCommand "runtime-win-x64" { }
-    "mkdir -p $out && cp -a ${stores.runtime-win-x64 or (throw "runtime-win-x64 not imported")}/. $out/";
 
   # the mac LAUNCHER dmg (hilbertraum.dmg): the ad-hoc-signed HilbertRaum.app packed by mkDmg
   # (volume "HilbertRaum" — the user mounts it, then double-clicks HilbertRaum.app). No sudo.
@@ -123,5 +204,7 @@ in
     cat $out/report.txt
   '';
 }
+# the prebuilt llama.cpp / whisper.cpp sidecar components (llamacpp-<target>-<ext>, …)
+// runtimeComponents
 # expose each import directly too (handy for `nix-build --impure nix/builds.nix -A <name>`)
 // stores
