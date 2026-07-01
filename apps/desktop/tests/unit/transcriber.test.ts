@@ -97,7 +97,7 @@ describe('resolveWhisperCliPath', () => {
     )
   })
 
-  it('prefers the component runtime (HILBERTRAUM_RUNTIME_ROOT) over the drive, drive is the fallback', () => {
+  it('prefers the packaged component (HILBERTRAUM_WHISPERCLI_DIR, binary at root); drive is the fallback', () => {
     const drive = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-drive-'))
     const component = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-comp-'))
     // Only the drive has the binary → component-absent → drive wins (fallback).
@@ -105,14 +105,12 @@ describe('resolveWhisperCliPath', () => {
     mkdirSync(driveDir, { recursive: true })
     const driveBin = join(driveDir, whisperCliBinaryName('linux'))
     writeFileSync(driveBin, 'fake')
-    expect(resolveWhisperCliPath(drive, 'linux', { HILBERTRAUM_RUNTIME_ROOT: component })).toBe(driveBin)
+    expect(resolveWhisperCliPath(drive, 'linux', { HILBERTRAUM_WHISPERCLI_DIR: component })).toBe(driveBin)
 
-    // Now the component also ships it → component wins.
-    const compDir = whisperCliDir(component, 'linux')
-    mkdirSync(compDir, { recursive: true })
-    const compBin = join(compDir, whisperCliBinaryName('linux'))
+    // Now the component ships the binary at its root → component wins.
+    const compBin = join(component, whisperCliBinaryName('linux'))
     writeFileSync(compBin, 'fake')
-    expect(resolveWhisperCliPath(drive, 'linux', { HILBERTRAUM_RUNTIME_ROOT: component })).toBe(compBin)
+    expect(resolveWhisperCliPath(drive, 'linux', { HILBERTRAUM_WHISPERCLI_DIR: component })).toBe(compBin)
   })
 })
 

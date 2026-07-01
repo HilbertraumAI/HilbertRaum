@@ -36,20 +36,6 @@ export function llamaServerDir(rootPath: string, platform: NodeJS.Platform = pro
   return join(rootPath, 'runtime', 'llama.cpp', llamaOsDir(platform))
 }
 
-/**
- * Roots that may hold the on-disk runtime tree (`runtime/<family>/<os>/`), in PRECEDENCE
- * order. The native launcher mounts the sidecar runtimes as a loader COMPONENT and exports
- * `HILBERTRAUM_RUNTIME_ROOT` pointing at the mounted tree; when present that component is the
- * canonical source, so it comes first. The drive root (`rootPath`, `HILBERTRAUM_DRIVE_ROOT`)
- * is the FALLBACK — a drive may still embed its own `runtime/` tree (a `prepare-drive.sh` run
- * without `--no-runtimes`). Same binaries, just a different location. A resolver walks these
- * and returns the first that actually holds the binary, so "component wins, drive fills gaps".
- */
-export function runtimeRoots(rootPath: string, env: NodeJS.ProcessEnv = process.env): string[] {
-  const component = env.HILBERTRAUM_RUNTIME_ROOT?.trim()
-  return component && component !== rootPath ? [component, rootPath] : [rootPath]
-}
-
 /** Options for the sidecar binary resolvers. */
 export interface ResolveBinOptions {
   /**
@@ -80,12 +66,34 @@ export function resolveLlamaServerPath(
     // Packaged build: never spawn an env-supplied, unverified binary.
     log.warn('Ignoring HILBERTRAUM_LLAMA_BIN in a packaged build (dev-only override)')
   }
-  // Component-mounted runtime first (HILBERTRAUM_RUNTIME_ROOT), drive root as fallback.
-  for (const root of runtimeRoots(rootPath, env)) {
-    const candidate = join(llamaServerDir(root, platform), llamaServerBinaryName(platform))
-    if (existsSync(candidate)) return candidate
+  // Prefer the loader-PACKAGED component (mounted beside the app; the launcher exports its
+  // dir with the binary at its root). Falls back to the drive's `runtime/llama.cpp/<os>/`
+  // layout for a prepared drive.
+  const packaged = env.HILBERTRAUM_LLAMACPP_DIR?.trim()
+  if (packaged) {
+    const p = join(packaged, llamaServerBinaryName(platform))
+    if (existsSync(p)) return p
   }
-  return null
+  const candidate = join(llamaServerDir(rootPath, platform), llamaServerBinaryName(platform))
+  return existsSync(candidate) ? candidate : null
+}
+
+/**
+ * Environment for spawning a sidecar binary resolved from a packaged component. The
+ * loader-packaged linux binaries ship the libs the host/FHS-sandbox may lack (libssl) in a
+ * `lib/` subdir beside the binary; prepend it to LD_LIBRARY_PATH so the binary finds them
+ * (its own ggml libs resolve via the binary's $ORIGIN rpath). No-op on win/mac (DLLs/dylibs
+ * sit beside the binary) and harmless for the drive-fallback binary (no `lib/` there).
+ */
+export function sidecarSpawnEnv(
+  binPath: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  if (platform === 'win32' || platform === 'darwin') return env
+  const libDir = join(binPath, '..', 'lib')
+  const prev = env.LD_LIBRARY_PATH
+  return { ...env, LD_LIBRARY_PATH: prev ? `${libDir}:${prev}` : libDir }
 }
 
 /**
@@ -96,15 +104,10 @@ export function resolveLlamaServerPath(
  */
 export function resolveCpuFallbackServerPath(
   rootPath: string,
-  platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env
+  platform: NodeJS.Platform = process.platform
 ): string | null {
-  // Same component-first / drive-fallback precedence as the default binary.
-  for (const root of runtimeRoots(rootPath, env)) {
-    const candidate = join(llamaServerDir(root, platform), 'cpu', llamaServerBinaryName(platform))
-    if (existsSync(candidate)) return candidate
-  }
-  return null
+  const candidate = join(llamaServerDir(rootPath, platform), 'cpu', llamaServerBinaryName(platform))
+  return existsSync(candidate) ? candidate : null
 }
 
 /** A sane default thread count: half the logical cores, at least 1. */
@@ -453,6 +456,9 @@ export class LlamaServer {
     // conflict's "bind: address already in use").
     const child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
       stdio: ['ignore', 'ignore', 'pipe'],
+      // A packaged-component binary needs its shipped `lib/` on LD_LIBRARY_PATH (linux libssl);
+      // no-op for a drive binary and on win/mac. See sidecarSpawnEnv.
+      env: sidecarSpawnEnv(this.opts.binPath),
       // REL-7: never flash a console window on Windows for this high-frequency spawn (every
       // model start), matching the tar / transcriber / runtime-download spawns. No-op off Windows.
       windowsHide: true
