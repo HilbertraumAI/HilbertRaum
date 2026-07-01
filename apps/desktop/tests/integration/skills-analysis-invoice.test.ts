@@ -169,12 +169,55 @@ describe('invoice analysis handler — run()', () => {
     expect(reads).toBeLessThanOrEqual(1)
   })
 
-  it('figures are quoted, never invented — only the invoice’s printed totals appear', async () => {
+  it('figures are quoted, never invented — only the invoice’s printed figures appear', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
     const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gross amount?'))
     const numbers = (res.answer.match(/\d+\.\d{2}/g) ?? []).sort()
-    expect(numbers).toEqual(['120.00', '144.00', '24.00'].sort())
+    // The two line-item totals (100,00 / 20,00) that the listing surfaces, plus the three printed totals
+    // (net 120,00, tax 24,00, gross 144,00). Every figure is printed on the invoice — nothing invented.
+    expect(numbers).toEqual(['100.00', '20.00', '120.00', '24.00', '144.00'].sort())
+  })
+
+  it('lists the line items so "give me the positions" is answerable (not just a count)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gib mir die positionen'))
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.positionsHeading'))
+    // Both line-item descriptions and their printed totals appear, each verbatim.
+    expect(res.answer).toContain('Widget')
+    expect(res.answer).toContain('Gadget')
+    expect(res.answer).toContain('100.00')
+    expect(res.answer).toContain('20.00')
+  })
+
+  it('answers a "als JSON" request by serializing the extracted invoice (no prose template)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'fasse die rechnung als json zusammen')
+    )
+    // The answer carries a fenced ```json block; its content parses and holds the extracted figures.
+    const block = /```json\n([\s\S]*?)\n```/.exec(res.answer)
+    expect(block, 'a json code block is present').not.toBeNull()
+    const parsed = JSON.parse(block![1]) as {
+      lineItems: Array<{ description: string; lineTotal: number }>
+      totals: Record<string, number | null>
+    }
+    expect(parsed.lineItems).toHaveLength(2)
+    expect(parsed.totals.netTotal).toBe(120)
+    expect(parsed.totals.grossTotal).toBe(144)
+    // It did NOT fall through to the prose count template.
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.totalsHeading'))
+  })
+
+  it('answers an "als CSV" request with the line-items CSV inline', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gib mir die rechnung als csv'))
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).toContain('description,quantity,unitPrice,lineTotal,currency')
+    expect(res.answer).toContain('Widget')
   })
 
   it('surfaces a failed reconciliation check BEFORE the headline gross (SKILL.md)', async () => {

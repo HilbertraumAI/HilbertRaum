@@ -6,6 +6,10 @@ import {
   validateInvoiceTotals,
   validateInvoiceTotalsTool,
   exportInvoiceCsvTool,
+  exportInvoiceJsonTool,
+  exportInvoiceXmlTool,
+  buildInvoiceJson,
+  buildInvoiceXml,
   lineItemsToCsv,
   type ExtractInvoiceOutput,
   type InvoiceInput
@@ -129,6 +133,47 @@ describe('extractInvoice (conservative drops)', () => {
     expect(inv.header.vendor).toBeUndefined()
     expect(inv.header.invoiceNumber).toBeUndefined()
     expect(inv.header.currency).toBe('EUR') // detected, not guessed
+  })
+})
+
+describe('extractInvoice (round totals printed without a decimal — invoice-totals-2026-07-01)', () => {
+  // The "Invoice 04.02.26.pdf" shape: a common layout that prints its totals as ROUND integers with a
+  // trailing currency symbol ("Total (excl. Tax) 914 $", "Tax 0 $", "Total (incl. Tax) 914 $"). MONEY_RE
+  // rejects bare integers, so before the fix the whole net/tax/gross block came back EMPTY and the skill
+  // answered "the invoice doesn't print a net, tax, or gross total I could read" on a perfectly clear bill.
+  const REAL = [
+    'INVOICE No.: 27',
+    'Date:04.02.2026',
+    '1 Description for Staking Page | STACKS 1 0% 142,80$ 142,80$',
+    '2 Article "How to Earn Bitcoin" 1 0% 167,70$ 167,70$',
+    '3 Article "Stablecoin Yield Farming" 1 0% 287,10$ 287,10$',
+    '4 Article "How Institutions Are Reshaping Bitcoin" 1 0% 316,40$ 316,40$',
+    'Total (excl. Tax) 914 $',
+    'Tax 0 $',
+    'Total (incl. Tax) 914 $'
+  ].join('\n')
+  const invoice = extractInvoice([chunk(REAL, 1)], 'USD')
+
+  it('reads the bare-integer totals: net (excl. tax) → 914, tax → 0, gross (incl. tax) → 914', () => {
+    expect(invoice.totals).toEqual({ netTotal: 914, taxTotal: 0, grossTotal: 914 })
+  })
+
+  it('reconciles: the four line items sum to the net, and net + tax equals the gross', () => {
+    const result = validateInvoiceTotals(invoice)
+    expect(result.reconciled).toBe(true)
+    expect(result.checks.every((c) => c.status !== 'mismatch')).toBe(true)
+  })
+
+  it('parses the abbreviated "No.:" invoice number without leaking its "." (was ".: 27")', () => {
+    expect(invoice.header.invoiceNumber).toBe('27')
+    expect(invoice.header.invoiceDate).toBe('2026-02-04')
+  })
+
+  it('a bare integer NOT touching a currency marker is never read as a total (VAT id stays out)', () => {
+    // "VAT: ATU81420204" starts with the tax label but the id is glued to letters (no adjacent currency)
+    // — it must not be mistaken for a tax amount of 81 420 204.
+    const inv = extractInvoice([chunk('VAT: ATU81420204\nTax 0 $', 1)], 'USD')
+    expect(inv.totals.taxTotal).toBe(0)
   })
 })
 
@@ -275,6 +320,69 @@ describe('export_invoice_csv', () => {
     })
     expect(ok.ok).toBe(true)
     if (ok.ok) expect(validateToolOutput(exportInvoiceCsvTool, ok.output)).toEqual([])
+  })
+})
+
+describe('JSON / XML serializers (invoice-format-2026-07-01)', () => {
+  const full = (): InvoiceInput => ({
+    header: { vendor: 'ACME', invoiceNumber: 'INV-1', invoiceDate: '2026-03-15', currency: 'EUR' },
+    lineItems: [
+      { description: 'Widget A', quantity: 2, unitPrice: 12.5, lineTotal: 25, currency: 'EUR' },
+      { description: 'Consulting', lineTotal: 300, currency: 'EUR' }
+    ],
+    totals: { netTotal: 325, taxTotal: 65, taxRatePercent: 20, grossTotal: 390 }
+  })
+
+  it('buildInvoiceJson emits parseable JSON with the extracted figures and a stable shape', () => {
+    const parsed = JSON.parse(buildInvoiceJson(full())) as {
+      invoiceNumber: string
+      dueDate: string | null
+      lineItems: Array<{ lineTotal: number }>
+      totals: Record<string, number | null>
+    }
+    expect(parsed.invoiceNumber).toBe('INV-1')
+    expect(parsed.dueDate).toBeNull() // absent field is an explicit null (stable shape)
+    expect(parsed.lineItems).toHaveLength(2)
+    expect(parsed.lineItems[0].lineTotal).toBe(25)
+    expect(parsed.totals.grossTotal).toBe(390)
+    expect(parsed.totals.taxRatePercent).toBe(20)
+  })
+
+  it('buildInvoiceXml emits well-formed XML, 2-dp numbers, absent fields omitted', () => {
+    const xml = buildInvoiceXml(full())
+    expect(xml).toMatch(/^<\?xml version="1\.0" encoding="UTF-8"\?>\n<invoice>/)
+    expect(xml).toContain('<invoiceNumber>INV-1</invoiceNumber>')
+    expect(xml).toContain('<lineTotal>25.00</lineTotal>')
+    expect(xml).toContain('<grossTotal>390.00</grossTotal>')
+    expect(xml).not.toContain('<dueDate>') // absent field omitted, never an empty element
+  })
+
+  it('buildInvoiceXml escapes the five XML entities in a description (markup can never break)', () => {
+    const xml = buildInvoiceXml({
+      header: { currency: 'EUR' },
+      lineItems: [{ description: 'A & B <"x"> \'y\'', lineTotal: 1, currency: 'EUR' }],
+      totals: {}
+    })
+    expect(xml).toContain('<description>A &amp; B &lt;&quot;x&quot;&gt; &apos;y&apos;</description>')
+    expect(xml).not.toMatch(/<description>A & B/)
+  })
+
+  it('the JSON / XML export tools are confirm-gated and return schema-valid {content, rowCount}', async () => {
+    for (const tool of [exportInvoiceJsonTool, exportInvoiceXmlTool]) {
+      const refused = await runSkillTool(tool, { skillId: 'app:invoice', input: full(), ctx: downstreamCtx() })
+      expect(refused.ok).toBe(false)
+      const ok = await runSkillTool(tool, {
+        skillId: 'app:invoice',
+        input: full(),
+        ctx: downstreamCtx(),
+        confirmed: true
+      })
+      expect(ok.ok).toBe(true)
+      if (ok.ok) {
+        expect(validateToolOutput(tool, ok.output)).toEqual([])
+        expect((ok.output as { rowCount: number }).rowCount).toBe(2)
+      }
+    }
   })
 })
 

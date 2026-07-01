@@ -6,7 +6,60 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_2026-07-01 — **Vision image descriptions were garbage on b9849 (RUNTIME-5) — branch
+_2026-07-01 — **Invoice format-transformation exports: JSON / CSV / XML (INVOICE-FORMAT-1) — working tree,
+UNCOMMITTED.** Offline / deterministic / 0 model calls. Owner asked "LLMs are good at extracting invoice
+data + transforming to JSON/CSV/XML — should we let the LLM do the job?" Ran a grounded workflow (8 agents,
+read-only over this repo) to decide it rather than answer from memory. **Decision — SPLIT the question:**
+(a) FORMAT TRANSFORMATION of the already-extracted `{header, lineItems, totals}` object is PURE
+SERIALIZATION — it needs no model and reaching for one only injects hallucination risk into a risk-free
+step; (b) EXTRACTION (text→figures) stays 100% deterministic because the shipped 4B-Q4 default hallucinated
+3/15 on the model benchmark (worst in the fleet) and grammar-constrained decoding guarantees valid
+STRUCTURE but NOT valid VALUES (`914→419` is valid JSON) — handing figures to it would break §22-D1/D56. This
+mirrors the codebase's OWN Phase-33 guard ("a category is not a figure; the LLM never moves a total"). A
+guarded LLM EXTRACTOR (the already-designed, unbuilt, **D52-gated** Stage-2: grammar-constrained propose →
+deterministic re-verify each figure vs a verbatim source quote + reconciliation → drop-on-failure) is
+DEFERRED until the invoice gold set is expanded and Stage-1 recall is MEASURED < ~90% (measure-then-build,
+D52). **Shipped (pure serializers, mirror `lineItemsToCsv`):** `buildInvoiceJson` / `buildInvoiceXml` (XML
+entity-escaped, 2-dp numbers, stable shape) in `tools/invoice.ts`; two confirm-gated `export-file` tools
+`export_invoice_json` / `export_invoice_xml` behind a generic `runInvoiceFileExport` seam
+(`invoice-run.ts`) with dispatch cases + `WIRED_TOOL_NAMES` (`tool-runs.ts`), registry + SKILL.md
+`allowedTools` + SkillRunBar labels; and an INLINE path — `detectFormat()` in `analysis/invoice.ts` routes
+"… als JSON/CSV/xml" to render the extracted invoice in a fenced code block (JSON/XML full; CSV reuses the
+line-items serializer), `applies()` stays TRUE so figures never leak to RAG. i18n en+de. **Tests:** +9
+(serializers/escaping/gate + JSON/XML export seam + inline JSON/CSV answers); the registry/allowedTools
+list assertions updated 3→5 invoice tools. 144 skills/invoice/bank tests pass; typecheck green. **Known
+rough edge (pre-existing, not this change):** line-item DESCRIPTIONS still carry the leading row index +
+the `1 0%` amount/rate columns (`"1 Description… STACKS 1 0%"`) — the label-less line parser leaves the
+columnar prefix/suffix in the description; cosmetic, fixable separately._
+- _(same-day earlier)_ **Invoice skill read no totals on a very common layout (INVOICE-TOTALS-1) — working tree,
+UNCOMMITTED.** Offline / deterministic / no model calls / no network. From D:\ testing with a real bill
+("Invoice 04.02.26.pdf": `Total (excl. Tax) 914 $` / `Tax 0 $` / `Total (incl. Tax) 914 $`, four decimal
+line items) the analysis handler answered *"the invoice doesn't print a net, tax, or gross total I could
+read"* and, whatever was asked ("analysiere", "gib mir die Positionen", "als JSON"), returned the SAME
+count+caveat template. **Root cause (reproduced via `extractInvoice`):** the totals print as **round
+integers with no decimal** (`914 $`, `0 $`) and `MONEY_RE` deliberately rejects bare ungrouped integers
+(anti-false-positive on reference numbers), so `lastMoney` returned null on every totals line → net/tax/gross
+all empty → the "noTotals" branch. The four line items survived only because they carry a `,80` decimal. A
+compounding classification bug: `Total (excl. Tax)` starts with the bare "total" gross label, so even a read
+figure would have landed as the gross (net left blank). **Fixes (`skills/tools/invoice.ts` +
+`skills/analysis/invoice.ts` + i18n):** (1) `totalsMoney` — a labeled totals line falls back to the last
+**currency-adjacent** bare integer (symbol/code touching the number is the safety anchor; the label scopes
+it); line items unchanged. (2) `EXCL_TAX_RE` — `(excl. tax)`/"net of tax" → net, `(incl. tax)` → gross. (3)
+`labeledValue` strips a leading `.:` run so `INVOICE No.: 27` → `27` (was `.: 27`). (4) The analysis answer
+now **lists the line items** (bounded, mirrors the bank handler) so "gib mir die Positionen" is answerable
+instead of returning only a count. `INVOICE_EXTRACTOR_VERSION` 2→3 (stale v2 rows auto re-extract). **Tests:**
++6 (unit `skills-invoice-tool` round-integer totals / excl-incl / `No.:` / VAT-id-not-a-total; integration
+`skills-analysis-invoice` lists positions; one existing "only totals appear" assertion updated to the new
+list-items behaviour). 107 invoice/bank/skills tests pass; typecheck green. Pre-existing unrelated env
+failures remain (`@shared/i18n` alias unresolved in the renderer vitest config; `C:\model-manifests` ENOENT)
+— confirmed identical on a clean stash. **STILL OPEN (needs a product call, NOT fixed):** the deterministic
+handler intercepts EVERY analysis-shaped invoice question and always emits its fixed template — so a
+FORMAT-specific ask ("fasse die Rechnung als JSON zusammen") is ignored (no JSON), and the ironically-correct
+"gesamtwert" answer in the transcript only happened because that word is NOT a keyword so it fell through to
+the LLM. Decide: narrow the routing (let format/JSON asks fall through to the model over the extracted rows)
+vs. teach the handler a JSON/structured mode. **(Format asks now render inline — see INVOICE-FORMAT-1
+above; the LLM-extraction question is separately decided + deferred there.)**
+- _(same-day earlier)_ **Vision image descriptions were garbage on b9849 (RUNTIME-5) — branch
 `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).** Offline / no
 telemetry / no new network egress. From D:\ testing: "describe this image" produced multilingual
 token-salad (repeated `NEW/TO/OF/SIZE` fragments + Chinese/Korean/Portuguese/Arabic pieces). **Root
@@ -54,7 +107,7 @@ large photo on the warm sidecar) to confirm end-to-end.**
   under `--device none`, and contention with the co-resident chat model corrupted the image embeddings
   → salad. The model↔runtime pairing is sound (the sidecar returns coherent output for every valid
   image when driven directly); this was b9849 default drift, not model incompatibility. Committed to
-  master. Docs: architecture.md §3 (RUNTIME-5/6), model-benchmarks §9 item 6._
+  master. Docs: architecture.md §3 (RUNTIME-5/6), model-benchmarks §9 item 6.
 
 
 _2026-07-01 — **Chat scope label (#6): unchecking the Library still said "Nutzt alle Dokumente" — branch

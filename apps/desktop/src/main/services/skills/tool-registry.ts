@@ -12,7 +12,13 @@ import {
   summarizeCashflowTool,
   validateStatementBalancesTool
 } from './tools/bank-statement'
-import { exportInvoiceCsvTool, extractInvoiceTool, validateInvoiceTotalsTool } from './tools/invoice'
+import {
+  exportInvoiceCsvTool,
+  exportInvoiceJsonTool,
+  exportInvoiceXmlTool,
+  extractInvoiceTool,
+  validateInvoiceTotalsTool
+} from './tools/invoice'
 import { redactDocumentTool } from './tools/redaction'
 
 // Tier-2 skill tool registry + the validate→run→validate gate (skills plan §12, Phase S10).
@@ -230,6 +236,8 @@ const REGISTRY: Record<string, SkillTool> = {
   [extractInvoiceTool.name]: extractInvoiceTool,
   [validateInvoiceTotalsTool.name]: validateInvoiceTotalsTool,
   [exportInvoiceCsvTool.name]: exportInvoiceCsvTool,
+  [exportInvoiceJsonTool.name]: exportInvoiceJsonTool,
+  [exportInvoiceXmlTool.name]: exportInvoiceXmlTool,
   [redactDocumentTool.name]: redactDocumentTool
 }
 

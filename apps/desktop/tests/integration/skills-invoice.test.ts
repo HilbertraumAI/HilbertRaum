@@ -16,7 +16,8 @@ import { recordToInfo } from '../../src/main/services/skills/installer'
 import {
   runInvoiceExtraction,
   runInvoiceTotalsValidation,
-  runInvoiceCsvExport
+  runInvoiceCsvExport,
+  runInvoiceFileExport
 } from '../../src/main/services/skills/invoice-run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import type { AuditEventType, RunnableTool } from '../../src/shared/types'
@@ -85,7 +86,13 @@ describe('invoice — committed SKILL.md is a Tier-2 tool skill', () => {
     const m = parsed.manifest!
     expect(m.id).toBe('invoice')
     expect(m.kind).toBe('tool')
-    expect(m.allowedTools).toEqual(['extract_invoice', 'validate_invoice_totals', 'export_invoice_csv'])
+    expect(m.allowedTools).toEqual([
+      'extract_invoice',
+      'validate_invoice_totals',
+      'export_invoice_csv',
+      'export_invoice_json',
+      'export_invoice_xml'
+    ])
     expect(m.reservesTools).toBe(true)
     // v1 permission ceiling holds.
     expect(m.permissions.network).toBe('denied')
@@ -124,7 +131,9 @@ describe('invoice — discovery + reconcile (S3)', () => {
     expect(record!.manifest.allowedTools).toEqual([
       'extract_invoice',
       'validate_invoice_totals',
-      'export_invoice_csv'
+      'export_invoice_csv',
+      'export_invoice_json',
+      'export_invoice_xml'
     ])
     expect(record!.manifest.reservesTools).toBe(true)
     expect(recordToInfo(record!, false).reservesTools).toBe(true)
@@ -135,8 +144,8 @@ describe('invoice — discovery + reconcile (S3)', () => {
   })
 })
 
-describe('invoice — the dispatch surfaces the three runnable tools', () => {
-  it('runnableToolsForSkill returns the three tools, export confirm-gated', () => {
+describe('invoice — the dispatch surfaces the runnable tools', () => {
+  it('runnableToolsForSkill returns the five tools, every export confirm-gated', () => {
     const db = freshDb()
     const d = deps()
     reconcileSkills(db, d)
@@ -144,19 +153,23 @@ describe('invoice — the dispatch surfaces the three runnable tools', () => {
     expect(runnableToolsForSkill(record)).toEqual<RunnableTool[]>([
       { name: 'extract_invoice', requiresConfirmation: false },
       { name: 'validate_invoice_totals', requiresConfirmation: false },
-      { name: 'export_invoice_csv', requiresConfirmation: true }
+      { name: 'export_invoice_csv', requiresConfirmation: true },
+      { name: 'export_invoice_json', requiresConfirmation: true },
+      { name: 'export_invoice_xml', requiresConfirmation: true }
     ])
   })
 
-  it('buildToolRunner wires each invoice tool (export needs the save capability)', () => {
+  it('buildToolRunner wires each invoice tool (every export needs the save capability)', () => {
     const db = freshDb()
     const { audit } = capturingAudit()
     const args = { skillInstallId: 'app:invoice', conversationId: '', documentId: 'd1' }
     expect(buildToolRunner(db, 'extract_invoice', args, audit)).not.toBeNull()
     expect(buildToolRunner(db, 'validate_invoice_totals', args, audit)).not.toBeNull()
-    // export returns null without a saveTextFile capability, non-null with it.
-    expect(buildToolRunner(db, 'export_invoice_csv', args, audit)).toBeNull()
-    expect(buildToolRunner(db, 'export_invoice_csv', args, audit, { saveTextFile: async () => true })).not.toBeNull()
+    for (const name of ['export_invoice_csv', 'export_invoice_json', 'export_invoice_xml']) {
+      // export returns null without a saveTextFile capability, non-null with it.
+      expect(buildToolRunner(db, name, args, audit)).toBeNull()
+      expect(buildToolRunner(db, name, args, audit, { saveTextFile: async () => true })).not.toBeNull()
+    }
   })
 })
 
@@ -252,6 +265,81 @@ describe('invoice — the run seams (extract → validate → export) on a real 
     const run = db.prepare('SELECT * FROM skill_runs WHERE id = ?').get(res.runId) as Record<string, unknown>
     expect(run.status).toBe('done')
     expect(run.result_ref).toBeNull() // export yields no DB artifact; the path is never recorded
+  })
+
+  it('JSON export produces parseable JSON through the seam (stub), reports the row count', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT)
+    const { audit } = capturingAudit()
+    await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit })
+    let written: { name: string; content: string } | null = null
+    const res = await runInvoiceFileExport(
+      db,
+      { skillInstallId, documentId: docId },
+      {
+        audit,
+        confirmed: true,
+        saveTextFile: async (name, content) => {
+          written = { name, content }
+          return true
+        }
+      },
+      { toolName: 'export_invoice_json', defaultFileName: 'invoice.json' }
+    )
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(2)
+    expect(written!.name).toBe('invoice.json')
+    const parsed = JSON.parse(written!.content) as { lineItems: unknown[]; totals: Record<string, unknown> }
+    expect(parsed.lineItems).toHaveLength(2)
+    expect(parsed.totals.grossTotal).toBe(390)
+  })
+
+  it('XML export produces well-formed XML through the seam (stub)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT)
+    const { audit } = capturingAudit()
+    await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit })
+    let written: { name: string; content: string } | null = null
+    const res = await runInvoiceFileExport(
+      db,
+      { skillInstallId, documentId: docId },
+      {
+        audit,
+        confirmed: true,
+        saveTextFile: async (name, content) => {
+          written = { name, content }
+          return true
+        }
+      },
+      { toolName: 'export_invoice_xml', defaultFileName: 'invoice.xml' }
+    )
+    expect(res.ok).toBe(true)
+    expect(written!.name).toBe('invoice.xml')
+    expect(written!.content).toMatch(/^<\?xml version="1\.0" encoding="UTF-8"\?>/)
+    expect(written!.content).toContain('<grossTotal>390.00</grossTotal>')
+    expect(written!.content).toContain('<lineItem>')
+  })
+
+  it('JSON export refuses without confirmation (the gate) — nothing is written', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT)
+    const { audit } = capturingAudit()
+    await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit })
+    let saveCalled = false
+    const res = await runInvoiceFileExport(
+      db,
+      { skillInstallId, documentId: docId },
+      {
+        audit,
+        saveTextFile: async () => {
+          saveCalled = true
+          return true
+        }
+      },
+      { toolName: 'export_invoice_json', defaultFileName: 'invoice.json' }
+    )
+    expect(res.ok).toBe(false)
+    expect(saveCalled).toBe(false)
   })
 
   it('export refuses without confirmation (the gate) — nothing is written', async () => {

@@ -20,6 +20,8 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - extract_invoice            #   read-only tools run when the user asks; export asks first.
   - validate_invoice_totals
   - export_invoice_csv
+  - export_invoice_json        # format-transformation exports (pure serializers; confirm-gated)
+  - export_invoice_xml
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
   # Bilingual + full words only: matching is case-insensitive question.includes(keyword), so short
   # ambiguous tokens are avoided (no bare "vat"→"private", "ust"→"August", "net"/"gross"→"internet").
