@@ -94,6 +94,15 @@ in
   "app-win-x64-dir" = pkgs.runCommand "app-win-x64" { }
     "mkdir -p $out && cp -a ${stores.app-win-x64 or (throw "app-win-x64 not imported")}/. $out/";
 
+  # the sidecar RUNTIMES (llama.cpp + whisper.cpp) packed as the runtime-<target> component,
+  # exactly like app-<target>: stage-runtime.sh fetches the prebuilt binaries impurely,
+  # store-import records the tree (stores.runtime-<target>), these pack it OFFLINE.
+  "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));
+  "runtime-linux-arm64-squashfs" = mkSqfs "runtime-linux-arm64" (stores.runtime-linux-arm64 or (throw "runtime-linux-arm64 not imported"));
+  "runtime-mac-arm64-dmg" = mkDmg { name = "runtime-mac-arm64"; src = stores.runtime-mac-arm64 or (throw "runtime-mac-arm64 not imported"); };
+  "runtime-win-x64-dir" = pkgs.runCommand "runtime-win-x64" { }
+    "mkdir -p $out && cp -a ${stores.runtime-win-x64 or (throw "runtime-win-x64 not imported")}/. $out/";
+
   # the mac LAUNCHER dmg (hilbertraum.dmg): the ad-hoc-signed HilbertRaum.app packed by mkDmg
   # (volume "HilbertRaum" — the user mounts it, then double-clicks HilbertRaum.app). No sudo.
   "launcher-mac-arm64-dmg" = mkDmg { name = "hilbertraum-launcher-mac"; src = launcherMacApp; vol = "HilbertRaum"; };

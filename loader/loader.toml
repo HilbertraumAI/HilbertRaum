@@ -57,8 +57,11 @@ image_fs       = "exfat"
 # Drive-population hook: after the update manifest is built, lay out the HilbertRaum drive
 # scaffolding (workspace/, models/, model-manifests/, runtime/ tree, config/, docs/, skills)
 # onto the image so the burned drive is ready to run. Append --with-assets here to also
-# download+verify the default model + runtime set into the image (build-time network).
-prepare_cmd    = "./scripts/prepare-drive.sh"
+# download+verify the default model set into the image (build-time network).
+# --no-runtimes: the sidecar runtimes (llama.cpp + whisper.cpp) are NOT embedded on the drive
+# here — they ship as the `runtime` component below, which the launcher mounts + exposes via
+# HILBERTRAUM_RUNTIME_ROOT. So even a --with-assets build must not double-embed them.
+prepare_cmd    = "./scripts/prepare-drive.sh --no-runtimes"
 launchers_dir  = "launchers"
 components_dir = "components/{os}"
 models_dir     = "models"
@@ -131,6 +134,16 @@ cmd  = "./scripts/stage-app.sh {target}"
 deps = ["build"]
 src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "../apps/desktop/electron-builder.yml"]
 desc = "stage app {target}"
+# The sidecar RUNTIMES (llama.cpp + whisper.cpp), staged per target into dist/runtime/{target}
+# by downloading + SHA-verifying the prebuilt release binaries (app's scripts/fetch-runtime.sh
+# → repo-root model-manifests/runtime-sources.yaml). Independent of the Electron build, so no
+# `deps`. Feeds the `runtime` component below.
+[[step]]
+name = "stage-runtime"
+per  = "target"
+cmd  = "./scripts/stage-runtime.sh {target}"
+src  = ["./scripts/stage-runtime.sh", "@loader/lib.sh", "../scripts/fetch-runtime.sh", "../model-manifests/runtime-sources.yaml"]
+desc = "stage runtime {target}"
 
 # ── shared source-input bundles ──────────────────────────────────────────────
 [srcgroups]
@@ -154,6 +167,24 @@ srcgroup = "import"
 linux = { ext = "squashfs", attr = "app-{target}-squashfs", desc = "nix squashfs: app-{target}" }
 mac   = { ext = "dmg",      attr = "app-{target}-dmg",      desc = "nix dmg: app-{target}" }
 win   = { ext = "zip",      attr = "app-{target}-dir",      desc = "nix dir: app-{target}" }
+
+# The sidecar runtimes as a second per-target component, packed the same way as `app`
+# (stage-runtime → import-build → nix pack OFFLINE). The launcher mounts it beside the app and
+# exports HILBERTRAUM_RUNTIME_ROOT; the app finds llama-server/whisper-cli under it (component
+# wins, on-drive runtime/ is the fallback). Attrs live in nix/builds.nix.
+[[component]]
+name = "runtime"
+per = "target"
+group = 1
+builder = "import-build"
+store_name = "runtime-{target}"
+src_dir = "dist/runtime/{target}"
+src_stamp = "stage-runtime-{target}"
+srcgroup = "import"
+[component.format]
+linux = { ext = "squashfs", attr = "runtime-{target}-squashfs", desc = "nix squashfs: runtime-{target}" }
+mac   = { ext = "dmg",      attr = "runtime-{target}-dmg",      desc = "nix dmg: runtime-{target}" }
+win   = { ext = "zip",      attr = "runtime-{target}-dir",      desc = "nix dir: runtime-{target}" }
 
 # ── bundle + final artifacts ──────────────────────────────────────────────────
 # One per-target bundle: bundle.sh ASSEMBLES the prebuilt app-<target> component + the

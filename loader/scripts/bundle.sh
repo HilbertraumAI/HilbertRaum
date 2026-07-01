@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Assemble the HilbertRaum bundle for one target: the native loader launcher + the prebuilt
-# app-<target> component + the per-OS group manifest (+ the NixOS FHS helper on linux). The
-# Electron app component itself is built by `make components` (loader.toml `app` component →
-# scripts/stage-app.sh → import-build pack); this script only ASSEMBLES dist/bundle/.
+# app-<target> + runtime-<target> components + the per-OS group manifest (+ the NixOS FHS
+# helper on linux). The components themselves are built by `make components` (loader.toml
+# `app`/`runtime` components → scripts/stage-app.sh / stage-runtime.sh → import-build pack);
+# this script only ASSEMBLES dist/bundle/.
 #
-# HilbertRaum is self-contained, so there is nothing else to assemble — no runtime, no ollama,
-# no daemon, nothing from mac-mgmt.
+# HilbertRaum is otherwise self-contained (llama.cpp/RAG/embeddings live in the Electron main
+# process) — no ollama, no daemon, nothing from mac-mgmt. The runtime component carries only
+# the sidecar ENGINE binaries (llama.cpp + whisper.cpp); model weights live on the drive.
 #
-#   linux  -> hilbertraum.<group>.exe + components/<group>/app-<t>.squashfs + nixos-fhs.*
-#   win    -> hilbertraum.exe         + components/<group>/app-<t>.zip
-#   mac    -> hilbertraum.dmg         + components/<group>/app-<t>.dmg
+#   linux  -> hilbertraum.<group>.exe + components/<group>/{app,runtime}-<t>.squashfs + nixos-fhs.*
+#   win    -> hilbertraum.exe         + components/<group>/{app,runtime}-<t>.zip
+#   mac    -> hilbertraum.dmg         + components/<group>/{app,runtime}-<t>.dmg
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -61,10 +63,17 @@ APP_COMP="$COMP_SRC/app-$TARGET.$FMT"
 cp -u "$APP_COMP" "$CDST/" || die "copy app component failed"
 log "app component -> $CDST/app-$TARGET.$FMT"
 
-# 2. Per-OS group manifest. App-only: the only component is app-<target>.
-jq -n --arg os "$GROUP" --arg app "app-$TARGET" --arg ver "$VERSION" \
-  '{os:$os, app:$app, version:$ver,
-    note:"per-OS component group; the launcher mounts app-<target> and runs HilbertRaum from it"}' \
+# 1b. The sidecar-runtime component (llama.cpp + whisper.cpp; runtime-<t>.<ext>). The launcher
+# mounts it beside the app and exports HILBERTRAUM_RUNTIME_ROOT so the app finds its engines.
+RUNTIME_COMP="$COMP_SRC/runtime-$TARGET.$FMT"
+[ -e "$RUNTIME_COMP" ] || die "missing runtime component $RUNTIME_COMP — run: make components (TARGET=$TARGET)"
+cp -u "$RUNTIME_COMP" "$CDST/" || die "copy runtime component failed"
+log "runtime component -> $CDST/runtime-$TARGET.$FMT"
+
+# 2. Per-OS group manifest: the launcher mounts app-<target> + runtime-<target>.
+jq -n --arg os "$GROUP" --arg app "app-$TARGET" --arg runtime "runtime-$TARGET" --arg ver "$VERSION" \
+  '{os:$os, app:$app, runtime:$runtime, version:$ver,
+    note:"per-OS component group; the launcher mounts app-<target> (Electron) + runtime-<target> (llama.cpp/whisper.cpp) and runs HilbertRaum"}' \
   > "$CDST/manifest.json"
 
 # 3. NixOS FHS helper closure (linux only): the static-musl launcher squashfuse-mounts it and

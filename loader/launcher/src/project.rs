@@ -3,10 +3,11 @@
 //! [`loader_core::lifecycle`] owns the phase sequencing, the NixOS FHS-child delegation,
 //! the updater + splash plumbing, the drive flush, and the apply/relaunch decisions.
 //! HilbertRaum is a self-contained Electron app (llama.cpp / RAG / embeddings / SQLite /
-//! OCR all live in its own main process, and it manages its own model weights + sidecar
-//! binaries from the drive), so the only product-specific work here is: mount the single
-//! `app` component, point the app at the drive via `HILBERTRAUM_DRIVE_ROOT`, and run
-//! Electron. No daemon, no supervisor, no localhost services — nothing from mac-mgmt.
+//! OCR all live in its own main process, and it manages its own model weights from the
+//! drive), so the only product-specific work here is: mount the `app` component + the
+//! `runtime` component (the llama.cpp/whisper.cpp sidecar engines), point the app at the
+//! drive via `HILBERTRAUM_DRIVE_ROOT` and at the runtimes via `HILBERTRAUM_RUNTIME_ROOT`,
+//! and run Electron. No daemon, no supervisor, no localhost services — nothing from mac-mgmt.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -60,6 +61,11 @@ impl Project for HilbertRaum {
                 if a.exists() {
                     *ctx.app_dir = Some(a);
                 }
+                // The sidecar runtimes ride in the same resource tree; point the app at them.
+                let rt = res.join("runtime");
+                if rt.exists() {
+                    std::env::set_var("HILBERTRAUM_RUNTIME_ROOT", &rt);
+                }
             }
             return true;
         }
@@ -92,6 +98,26 @@ impl Project for HilbertRaum {
             log("no app-<os> component found in the pool");
             return false;
         }
+
+        // Mount the sidecar-runtime component (llama.cpp + whisper.cpp engines) beside the app
+        // and export HILBERTRAUM_RUNTIME_ROOT so the app resolves its sidecars from it. This is
+        // OPTIONAL: if the pool ships no runtime-<os> component the app falls back to an on-drive
+        // runtime/ tree (runtimeRoots in sidecar.ts), so a missing runtime is a log, not a
+        // failure. The mounted dir CONTAINS `runtime/<family>/<os>/…`, which is exactly the base
+        // the app appends `runtime/…` to.
+        if let Some(rt) = pick_base(comp, "runtime-") {
+            let dest = dist.join("runtime");
+            match mount(comp, &rt, &dest, "runtime", tools, force_extract) {
+                Ok(k) => {
+                    ctx.mounts.push(Mount { dest: dest.clone(), kind: k });
+                    std::env::set_var("HILBERTRAUM_RUNTIME_ROOT", &dest);
+                }
+                Err(e) => log(&format!("runtime: {e} — falling back to the on-drive runtime/")),
+            }
+        } else {
+            log("no runtime-<os> component in the pool — using the on-drive runtime/ (if any)");
+        }
+
         // The loader framework's resource-tree env: consumed by the NixOS FHS sandbox
         // bind and by a relaunched launcher. These PLANAI_* names are loader-core's
         // internal contract (the shared engine predates the rebrand), not HilbertRaum's.
@@ -117,8 +143,9 @@ impl Project for HilbertRaum {
             }
         };
 
-        // Point HilbertRaum at the drive so its main process finds its model weights,
-        // llama.cpp sidecar binaries and workspace. The drive root is the portable root
+        // Point HilbertRaum at the drive so its main process finds its model weights and
+        // workspace (the sidecar ENGINE binaries come from the mounted `runtime` component via
+        // HILBERTRAUM_RUNTIME_ROOT, set in prepare_mounts). The drive root is the portable root
         // the loader pinned from the pool (the USB root holding launchers/ + components/).
         let drive_root = loader_core::portable_root();
         std::env::set_var("HILBERTRAUM_DRIVE_ROOT", &drive_root);
