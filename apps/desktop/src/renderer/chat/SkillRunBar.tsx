@@ -40,6 +40,8 @@ const TOOL_LABEL_KEY: Record<string, MessageKey> = {
   extract_invoice: 'chat.skill.tool.extractInvoice',
   validate_invoice_totals: 'chat.skill.tool.validateInvoiceTotals',
   export_invoice_csv: 'chat.skill.tool.exportInvoiceCsv',
+  export_invoice_json: 'chat.skill.tool.exportInvoiceJson',
+  export_invoice_xml: 'chat.skill.tool.exportInvoiceXml',
   redact_document: 'chat.skill.tool.redactDocument'
 }
 
@@ -51,7 +53,9 @@ const TOOL_DONE_KEY: Record<string, CountMessageKey> = {
   summarize_cashflow: 'chat.skill.run.done.summarize',
   export_transactions_csv: 'chat.skill.run.done.export',
   extract_invoice: 'chat.skill.run.done.extractInvoice',
-  export_invoice_csv: 'chat.skill.run.done.export'
+  export_invoice_csv: 'chat.skill.run.done.export',
+  export_invoice_json: 'chat.skill.run.done.export',
+  export_invoice_xml: 'chat.skill.run.done.export'
 }
 
 // Failure reason CODE (content-free, set by the run seam — I1) → localized copy key. An unmapped or

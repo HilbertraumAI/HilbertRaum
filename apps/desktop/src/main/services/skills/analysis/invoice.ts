@@ -14,6 +14,9 @@ import {
 } from '../invoice-run'
 import { withDocumentLock } from '../doc-lock'
 import {
+  buildInvoiceJson,
+  buildInvoiceXml,
+  lineItemsToCsv,
   validateInvoiceTotals,
   type InvoiceInput,
   type InvoiceTotalsResult
@@ -48,6 +51,21 @@ const ANALYSIS_KEYWORDS: readonly string[] = [
 function isAnalysisShaped(question: string): boolean {
   const q = question.toLowerCase()
   return ANALYSIS_KEYWORDS.some((k) => q.includes(k))
+}
+
+// Format-transformation intent (invoice-format-2026-07-01): "… als JSON", "as CSV", "im xml format".
+// When present, the handler serializes the ALREADY-extracted invoice DETERMINISTICALLY (no model call,
+// no invented figure — a serializer cannot read a number the parser did not) instead of the prose
+// template. `applies()` stays TRUE (an invoice keyword still owns the turn), so a format ask never leaks
+// the raw invoice into the generic RAG/LLM path. Word-bounded so `json`/`csv`/`xml` match only as
+// standalone tokens. JSON is checked first (the most common request).
+type OutputFormat = 'json' | 'csv' | 'xml'
+function detectFormat(question: string): OutputFormat | null {
+  const q = question.toLowerCase()
+  if (/\bjson\b/.test(q)) return 'json'
+  if (/\bxml\b/.test(q)) return 'xml'
+  if (/\bcsv\b/.test(q)) return 'csv'
+  return null
 }
 
 /** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
@@ -120,6 +138,10 @@ function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
 
 const MAX_CITATIONS = 12
 
+/** Cap the inline line-item listing (an invoice with hundreds of positions stays readable; the rest is
+ *  one CSV export away). Mirrors the bank handler's `MAX_LISTED_TRANSACTIONS`. */
+const MAX_LISTED_ITEMS = 20
+
 interface ChunkRow {
   chunk_index: number
   text: string
@@ -184,6 +206,24 @@ function checkMessage(tr: Tr, name: InvoiceTotalsResult['checks'][number]['name'
 }
 
 /**
+ * Render the extracted invoice as JSON/CSV/XML inside a fenced code block, with a short honest intro
+ * (invoice-format-2026-07-01). Pure serialization of the SAME structured object the extractor produced —
+ * the figures are the parser's, so nothing here can invent or transpose a number (the §22-D1 posture
+ * holds by construction; a serializer cannot read a figure the parser did not). CSV reuses the existing
+ * `lineItemsToCsv` (line items only, matching the CSV export); JSON/XML carry the full header + totals.
+ */
+export function buildFormatAnswer(tr: Tr, format: OutputFormat, invoice: InvoiceInput): string {
+  const content =
+    format === 'json'
+      ? buildInvoiceJson(invoice)
+      : format === 'xml'
+        ? buildInvoiceXml(invoice)
+        : lineItemsToCsv(invoice.lineItems)
+  const intro = tr('skills.invoiceAnalysis.formatIntro', { format: format.toUpperCase() })
+  return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\``
+}
+
+/**
  * Build the deterministic, localized answer (Markdown, 0 model calls) — the precedent is
  * `analysis/bank-statement.ts`. Failed reconciliation checks lead (SKILL.md "show any uncertain or
  * unreconciled figures before presenting a total"); the totals print only the figures the invoice
@@ -233,6 +273,28 @@ export function buildInvoiceAnswer(
     }
   } else {
     lines.push('', tr('skills.invoiceAnalysis.noTotals'))
+  }
+
+  // A bounded line-item listing so "give me the positions" is answerable in EVERY non-empty case (it is
+  // just the rows read, each figure quoted verbatim) — mirrors the bank handler's transaction listing.
+  // Without it the handler only ever printed a COUNT, so a direct "Gib mir die Positionen" went
+  // unanswered.
+  if (lineItems.length > 0) {
+    lines.push('', tr('skills.invoiceAnalysis.positionsHeading'))
+    for (const li of lineItems.slice(0, MAX_LISTED_ITEMS)) {
+      lines.push(
+        tr('skills.invoiceAnalysis.positionItem', {
+          description: li.description,
+          amount: fmt(li.lineTotal),
+          currency: li.currency
+        })
+      )
+    }
+    if (lineItems.length > MAX_LISTED_ITEMS) {
+      lines.push(
+        tr('skills.invoiceAnalysis.positionsMore', { count: lineItems.length - MAX_LISTED_ITEMS })
+      )
+    }
   }
 
   lines.push('', tr('skills.invoiceAnalysis.caveat'))
@@ -293,6 +355,25 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
       // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
       const invoice = loadInvoice(db, invoiceId)
+
+      // A machine-FORMAT request ("als JSON"/"as CSV"/"xml") is answered by SERIALIZING the already-
+      // extracted invoice — deterministic, 0 model calls, no reconciliation needed. Guarded to a
+      // non-empty invoice so an empty extraction still gets the honest prose fallback below (never an
+      // empty JSON husk dressed up as an answer).
+      const format = detectFormat(ctx.question)
+      const hasContent =
+        invoice.lineItems.length > 0 ||
+        invoice.totals.netTotal !== undefined ||
+        invoice.totals.taxTotal !== undefined ||
+        invoice.totals.grossTotal !== undefined
+      if (format && hasContent) {
+        return {
+          answer: buildFormatAnswer(ctx.tr, format, invoice),
+          citations: buildInvoiceCitations(db, target.id, target.title),
+          coverage: computeCoverage(db, target.id)
+        }
+      }
+
       const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
       const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 

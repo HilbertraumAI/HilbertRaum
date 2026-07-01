@@ -190,6 +190,8 @@ export const en = {
   'chat.skill.tool.extractInvoice': 'Extract invoice',
   'chat.skill.tool.validateInvoiceTotals': 'Check totals',
   'chat.skill.tool.exportInvoiceCsv': 'Export to CSV',
+  'chat.skill.tool.exportInvoiceJson': 'Export to JSON',
+  'chat.skill.tool.exportInvoiceXml': 'Export to XML',
   'chat.skill.tool.redactDocument': 'Redact personal data',
   // The breakdown question routed into the transcript after a categorize run (Phase 33, Q3) — it must
   // be both analysis- and category-shaped so the bank analysis handler answers it (0 model calls).
@@ -602,6 +604,12 @@ export const en = {
   'skills.invoiceAnalysis.tax': '- Tax: **{amount} {currency}**',
   'skills.invoiceAnalysis.taxWithRate': '- Tax ({rate}%): **{amount} {currency}**',
   'skills.invoiceAnalysis.gross': '- Gross total (amount due): **{amount} {currency}**',
+  'skills.invoiceAnalysis.positionsHeading': 'Line items:',
+  'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
+  'skills.invoiceAnalysis.positionsMore':
+    '… and **{count}** more — ask me to export the invoice as CSV to see every line.',
+  'skills.invoiceAnalysis.formatIntro':
+    'Here is the invoice as {format}, built only from the figures I read — nothing added up from prose or invented:',
   'skills.invoiceAnalysis.noTotals':
     'The invoice doesn’t print a net, tax, or gross total I could read.',
   'skills.invoiceAnalysis.caveat':

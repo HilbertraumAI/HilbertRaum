@@ -2682,6 +2682,17 @@ same `readDocumentChunks` reach over the frozen scope), `validate_invoice_totals
 checks within a half-cent epsilon — line items → net, net + tax → gross, tax vs. rate — each
 `ok`/`mismatch`/`unknown`, an honest `reconciled` verdict + a `resultKind` discriminator like
 `validate_statement_balances`), and `export_invoice_csv` (confirm-gated `export-file`, the line-items CSV).
+**Format-transformation exports (invoice-format-2026-07-01):** the domain adds `export_invoice_json` /
+`export_invoice_xml` — pure serializers (`buildInvoiceJson`/`buildInvoiceXml`, XML entity-escaped, 2-dp,
+stable shape) over the ALREADY-extracted invoice, behind the generic confirm-gated `runInvoiceFileExport`
+seam; and an INLINE path (`detectFormat()` in `analysis/invoice.ts`) that renders "… als JSON/CSV/xml" in a
+fenced code block. **Design decision (grounded workflow):** format transformation is pure serialization of a
+structured object — it takes **no model** (a serializer cannot invent a figure the parser did not, so §22-D1
+holds by construction). LLM-assisted **extraction** is deliberately NOT adopted: the shipped small Q4 model
+hallucinates figures and grammar-constrained decoding guarantees valid structure but not valid values — so a
+guarded LLM extractor (propose → deterministic re-verify vs a verbatim quote + reconciliation →
+drop-on-failure) stays **deferred behind a D52 gold-set recall measurement**, mirroring the Phase-33 "a
+category is not a figure" boundary. See `BUILD_STATE.md` INVOICE-FORMAT-1.
 Parsing is DETERMINISTIC + OFFLINE and CONSERVATIVE (invoice layouts vary — a known limitation that improves
 later): header fields and totals are read from **labeled lines only**, line items split a description from a
 trailing quantity + trailing unit-price/line-total money tokens, and anything that cannot be confidently

@@ -87,8 +87,14 @@ export const MAX_LINE_ITEMS = 10000
  *       trailing token that is ITSELF a money-shaped-but-rejected bare amount, so a valid item with a
  *       trailing annotation — `(Pos. 3)`, `19% MwSt`, `EUR 2 Stk` — is no longer deleted), and FIN-4 (date
  *       order from the leading date column only). Each can change the persisted output, so v1 rows re-extract.
+ *   3 — invoice-totals-2026-07-01: a LABELED totals line now reads a round total printed WITHOUT a
+ *       decimal/grouping ("Total (excl. Tax) 914 $", "Tax 0 $") via a currency-ADJACENT bare integer
+ *       (`totalsMoney`) — MONEY_RE rejects bare integers, so the whole net/tax/gross block was previously
+ *       empty on this extremely common layout; "Total (excl. Tax)" now resolves to the NET (not the
+ *       gross) via `EXCL_TAX_RE`; and the abbreviated header label "No.:" no longer leaks its `.:` into
+ *       the parsed invoice number. Each changes the persisted output, so v2 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 2
+export const INVOICE_EXTRACTOR_VERSION = 3
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -204,8 +210,11 @@ function labeledValue(line: string, labels: readonly string[]): string | null {
   const lower = line.toLowerCase()
   for (const label of labels) {
     if (!lower.startsWith(label)) continue
-    // Strip the label, then an optional separator (`:`/`#`/`-`) and surrounding whitespace.
-    const rest = line.slice(label.length).replace(/^\s*[:#-]?\s*/, '').trim()
+    // Strip the label, then a RUN of separator chars (`.`/`:`/`#`/`-`) and surrounding whitespace. The
+    // `.` matters for the abbreviated forms whose dot sits OUTSIDE the matched label — `INVOICE No.: 27`
+    // ('invoice no' + `.: 27`) yielded a value of `.: 27` under the old single-`[:#-]?` strip; the run
+    // now peels the leading `.:` so the value is a clean `27`.
+    const rest = line.slice(label.length).replace(/^[\s.:#-]+/, '').trim()
     if (rest) return rest
   }
   return null
@@ -229,6 +238,50 @@ function lastMoney(line: string): number | null {
   const matches = [...stripDateTokens(line).matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   return parseAmount(matches[matches.length - 1][0])
+}
+
+// The currency symbols MONEY_RE amounts print with (mirrors money.ts SYMBOL_TO_CODE keys). Used to
+// require a bare integer total to be currency-ADJACENT before it is read as an amount.
+const CURRENCY_SYMBOLS = '€$£¥'
+const BARE_INTEGER_RE = /(?<![\d.,'])\d{1,9}(?![\d.,'])/g
+
+/** "excl./exkl. tax", "net of tax", "vor Steuer" — qualifiers that mark a bare "Total" line as the NET
+ *  (not the gross), so an invoice printing "Total (excl. Tax)" and "Total (incl. Tax)" resolves both. */
+const EXCL_TAX_RE = /\bexcl|\bexkl|excluding|net of tax|before tax|ohne (?:steuer|ust|umsatzsteuer|mwst)|vor steuer/
+
+/**
+ * The printed figure on a LABELED totals line. First the normal last-money token (grouped/decimal via
+ * `lastMoney`); failing that — because a ROUND total is frequently printed with NO decimal and NO
+ * grouping ("914 $", "0 $"), a bare integer `MONEY_RE` deliberately REJECTS so a reference number in a
+ * description is never read as an amount — the LAST bare integer that TOUCHES a currency marker (a
+ * symbol glued or spaced, or a spaced ISO code). Currency-adjacency is the safety anchor: it keeps a
+ * stray reference/registration integer on the line (a VAT id `ATU81420204`, a `0%` rate) from being
+ * mistaken for the amount, while the totals LABEL already scopes this to a net/tax/gross line. Line
+ * items never use this — an unlabeled row's bare integer stays ambiguous (the §22-D1 honesty posture).
+ */
+function totalsMoney(line: string): number | null {
+  const v = lastMoney(line)
+  if (v !== null) return v
+  const text = stripDateTokens(line)
+  let last: number | null = null
+  for (const m of text.matchAll(BARE_INTEGER_RE)) {
+    const start = m.index ?? 0
+    const before = text.slice(0, start)
+    const after = text.slice(start + m[0].length)
+    const symbolAdjacent =
+      new RegExp(`[${CURRENCY_SYMBOLS}]\\s*$`).test(before) ||
+      new RegExp(`^\\s*[${CURRENCY_SYMBOLS}]`).test(after)
+    const codeAfter = /^\s+([A-Z]{3})\b/.exec(after)
+    const codeBefore = /\b([A-Z]{3})\s+$/.exec(before)
+    const codeAdjacent =
+      (codeAfter !== null && detectCurrency(codeAfter[1]) !== null) ||
+      (codeBefore !== null && detectCurrency(codeBefore[1]) !== null)
+    if (symbolAdjacent || codeAdjacent) {
+      const n = Number(m[0])
+      if (Number.isFinite(n)) last = n
+    }
+  }
+  return last
 }
 
 /** Read a percent figure (e.g. "20%", "19,5 %") from a line, or null. */
@@ -271,19 +324,26 @@ function applyTotals(line: string, totals: InvoiceTotals): boolean {
   const lower = line.toLowerCase()
   // net first, then tax, then gross (the bare "total" is a gross label — so "Net Total" wins as net).
   if (startsWithAny(lower, NET_LABELS)) {
-    const v = lastMoney(line)
+    const v = totalsMoney(line)
     if (v !== null && totals.netTotal === undefined) totals.netTotal = v
     return true
   }
   if (startsWithAny(lower, TAX_LABELS)) {
-    const v = lastMoney(line)
+    const v = totalsMoney(line)
     if (v !== null && totals.taxTotal === undefined) totals.taxTotal = v
     const rate = parsePercent(line)
     if (rate !== null && totals.taxRatePercent === undefined) totals.taxRatePercent = rate
     return true
   }
   if (startsWithAny(lower, GROSS_LABELS)) {
-    const v = lastMoney(line)
+    const v = totalsMoney(line)
+    // A bare "Total" qualified by "(excl. tax)"/"net of tax" is the NET, not the gross (a very common
+    // layout prints both "Total (excl. Tax)" and "Total (incl. Tax)"); the unqualified/"incl." total
+    // stays gross. Without this, "Total (excl. Tax)" landed as the gross and the real gross was dropped.
+    if (v !== null && EXCL_TAX_RE.test(lower)) {
+      if (totals.netTotal === undefined) totals.netTotal = v
+      return true
+    }
     if (v !== null && totals.grossTotal === undefined) totals.grossTotal = v
     return true
   }
@@ -591,5 +651,131 @@ export const exportInvoiceCsvTool: SkillTool = {
     if (ctx.signal.aborted) return { ok: false, error: 'This action was cancelled.' }
     const { lineItems } = input as InvoiceInput
     return { ok: true, output: { csv: lineItemsToCsv(lineItems), rowCount: lineItems.length } }
+  }
+}
+
+// ---- JSON / XML serializers (invoice-format-2026-07-01) ----
+//
+// Pure format transformations of the ALREADY-EXTRACTED invoice — the deterministic, honest-by-type-safety
+// answer to "give me this invoice as JSON/XML". They serialize the SAME structured object the extractor
+// produced and the run seam persisted (no model call, no new content reach): the figures are the parser's,
+// so nothing here can invent or transpose a number (the §22-D1 posture is preserved by construction — a
+// serializer cannot read a figure the parser did not). Both emit a STABLE shape (absent header/totals
+// fields are explicit `null` in JSON / omitted elements in XML) so a downstream consumer sees a
+// predictable schema. Numbers keep the extractor's 2-dp cent invariant. Mirrors `lineItemsToCsv`.
+
+/** The canonical plain object the JSON serializer emits — a stable shape (nulls for absent fields). */
+function invoiceToPlainObject(invoice: InvoiceInput): Record<string, unknown> {
+  const { header, lineItems, totals } = invoice
+  return {
+    vendor: header.vendor ?? null,
+    invoiceNumber: header.invoiceNumber ?? null,
+    invoiceDate: header.invoiceDate ?? null,
+    dueDate: header.dueDate ?? null,
+    currency: header.currency ?? null,
+    lineItems: lineItems.map((li) => ({
+      description: li.description,
+      quantity: li.quantity ?? null,
+      unitPrice: li.unitPrice ?? null,
+      lineTotal: li.lineTotal,
+      currency: li.currency
+    })),
+    totals: {
+      netTotal: totals.netTotal ?? null,
+      taxTotal: totals.taxTotal ?? null,
+      taxRatePercent: totals.taxRatePercent ?? null,
+      grossTotal: totals.grossTotal ?? null
+    }
+  }
+}
+
+/** Serialize the extracted invoice to pretty-printed JSON (2-space indent). Pure — no FS. */
+export function buildInvoiceJson(invoice: InvoiceInput): string {
+  return JSON.stringify(invoiceToPlainObject(invoice), null, 2)
+}
+
+/** XML-escape a text value (the five predefined entities) so a description can never break the markup. */
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
+/** Serialize the extracted invoice to XML. Absent header/totals fields are omitted; numbers are 2-dp. Pure. */
+export function buildInvoiceXml(invoice: InvoiceInput): string {
+  const { header, lineItems, totals } = invoice
+  const lines: string[] = ['<?xml version="1.0" encoding="UTF-8"?>', '<invoice>']
+  const el = (name: string, value: string | number | undefined, indent = '  '): void => {
+    if (value === undefined) return
+    const text = typeof value === 'number' ? value.toFixed(2) : xmlEscape(value)
+    lines.push(`${indent}<${name}>${text}</${name}>`)
+  }
+  el('vendor', header.vendor)
+  el('invoiceNumber', header.invoiceNumber)
+  el('invoiceDate', header.invoiceDate)
+  el('dueDate', header.dueDate)
+  el('currency', header.currency)
+  lines.push('  <lineItems>')
+  for (const li of lineItems) {
+    lines.push('    <lineItem>')
+    el('description', li.description, '      ')
+    el('quantity', li.quantity, '      ')
+    el('unitPrice', li.unitPrice, '      ')
+    el('lineTotal', li.lineTotal, '      ')
+    el('currency', li.currency, '      ')
+    lines.push('    </lineItem>')
+  }
+  lines.push('  </lineItems>')
+  lines.push('  <totals>')
+  el('netTotal', totals.netTotal, '    ')
+  el('taxTotal', totals.taxTotal, '    ')
+  el('taxRatePercent', totals.taxRatePercent, '    ')
+  el('grossTotal', totals.grossTotal, '    ')
+  lines.push('  </totals>')
+  lines.push('</invoice>')
+  return lines.join('\n') + '\n'
+}
+
+// ---- export_invoice_json / export_invoice_xml (export-file; confirm-gated; the seam does the FS write) ----
+
+/** The uniform file-export tool output: the serialized text + the line-item count (a content-free count). */
+const FILE_EXPORT_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['content', 'rowCount'],
+  properties: {
+    content: { type: 'string' },
+    rowCount: { type: 'integer', minimum: 0 }
+  }
+}
+
+export const exportInvoiceJsonTool: SkillTool = {
+  name: 'export_invoice_json',
+  description:
+    'Produce a JSON file of the selected invoice (header, line items, totals) for you to save. Requires your confirmation; you choose where the file is written.',
+  permissions: ['export-file'],
+  inputSchema: INVOICE_SCHEMA,
+  outputSchema: FILE_EXPORT_OUTPUT_SCHEMA,
+  async run(input, ctx): Promise<ToolResult> {
+    if (ctx.signal.aborted) return { ok: false, error: 'This action was cancelled.' }
+    const invoice = input as InvoiceInput
+    return { ok: true, output: { content: buildInvoiceJson(invoice), rowCount: invoice.lineItems.length } }
+  }
+}
+
+export const exportInvoiceXmlTool: SkillTool = {
+  name: 'export_invoice_xml',
+  description:
+    'Produce an XML file of the selected invoice (header, line items, totals) for you to save. Requires your confirmation; you choose where the file is written.',
+  permissions: ['export-file'],
+  inputSchema: INVOICE_SCHEMA,
+  outputSchema: FILE_EXPORT_OUTPUT_SCHEMA,
+  async run(input, ctx): Promise<ToolResult> {
+    if (ctx.signal.aborted) return { ok: false, error: 'This action was cancelled.' }
+    const invoice = input as InvoiceInput
+    return { ok: true, output: { content: buildInvoiceXml(invoice), rowCount: invoice.lineItems.length } }
   }
 }

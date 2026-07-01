@@ -14,7 +14,12 @@ import {
   runCsvExport,
   runDocumentRedaction
 } from './run'
-import { runInvoiceCsvExport, runInvoiceExtraction, runInvoiceTotalsValidation } from './invoice-run'
+import {
+  runInvoiceCsvExport,
+  runInvoiceExtraction,
+  runInvoiceFileExport,
+  runInvoiceTotalsValidation
+} from './invoice-run'
 import type { ToolRunner, ToolRunOutcome } from './run-controller'
 import type { DocTaskManager } from '../doctasks/manager'
 
@@ -41,6 +46,10 @@ const WIRED_TOOL_NAMES: readonly string[] = [
   'extract_invoice',
   'validate_invoice_totals',
   'export_invoice_csv',
+  // Format-transformation exports — pure serializers of the already-extracted invoice (same confirm-gated
+  // `export-file` shape as the CSV export; the invoice-run.ts `runInvoiceFileExport` seam).
+  'export_invoice_json',
+  'export_invoice_xml',
   // Redaction — the read-transform-export shape (confirm-gated `export-file`; no data table).
   'redact_document'
 ]
@@ -345,6 +354,21 @@ export function buildToolRunner(
           confirmed: args.confirmed,
           saveTextFile: deps.saveTextFile!
         })
+        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+      }
+    case 'export_invoice_json':
+    case 'export_invoice_xml':
+      if (!deps.saveTextFile) return null // cannot export without the MAIN-side save capability
+      return async ({ signal, onProgress }) => {
+        const res = await runInvoiceFileExport(
+          db,
+          seamArgs,
+          { audit, signal, onProgress, confirmed: args.confirmed, saveTextFile: deps.saveTextFile! },
+          {
+            toolName,
+            defaultFileName: toolName === 'export_invoice_json' ? 'invoice.json' : 'invoice.xml'
+          }
+        )
         return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'redact_document':

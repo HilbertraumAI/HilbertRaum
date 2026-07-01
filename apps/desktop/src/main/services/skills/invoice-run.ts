@@ -525,3 +525,52 @@ export async function runInvoiceCsvExport(
   finishRun(db, runId, 'done', completedAt, null, null)
   return { ok: true, runId, count: rowCount }
 }
+
+export interface InvoiceFileExportDeps extends InvoiceRunDeps {
+  /** Save serialized text to a user-chosen path (MAIN-side: a save dialog + write). Returns true once
+   *  written, false if the user cancelled. Path + content are NEVER logged/audited (§9.5/§22-M1). */
+  saveTextFile: (defaultFileName: string, content: string) => Promise<boolean>
+  /** True once the user accepted the write/export confirm modal (the gate also enforces it). */
+  confirmed?: boolean
+}
+
+/**
+ * `export_invoice_json` / `export_invoice_xml` — the format-transformation exports (invoice-format-2026-07-01).
+ * The generic sibling of `runInvoiceCsvExport`: produce the serialized text (pure tool, confirm-gated
+ * `export-file`) and write it MAIN-side to a user-chosen path. Every tool of the uniform `{content,
+ * rowCount}` output shape shares this seam — only the registry tool name + the default file name differ. The
+ * content + the chosen path never touch any log/audit; only "saved N rows" (a count) is surfaced. A cancel
+ * writes nothing and reports it calmly (B2), identical to the CSV path.
+ */
+export async function runInvoiceFileExport(
+  db: Db,
+  args: InvoiceRunArgs,
+  deps: InvoiceFileExportDeps,
+  opts: { toolName: string; defaultFileName: string }
+): Promise<InvoiceToolResult> {
+  const now = deps.now ?? (() => new Date().toISOString())
+  const prep = await prepareInvoiceRun(db, opts.toolName, args, deps, deps.confirmed)
+  if ('failed' in prep) return prep.failed
+  const { runId, output, completedAt } = prep.prepared
+  const { content, rowCount } = output as { content: string; rowCount: number }
+  // Cancelled after the tool produced the text but before the write — don't open the save dialog (B2).
+  if (deps.signal?.aborted) {
+    finishRun(db, runId, 'cancelled', now(), null, null)
+    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
+  }
+  let saved: boolean
+  try {
+    saved = await deps.saveTextFile(opts.defaultFileName, content)
+  } catch {
+    console.error('[skills] invoice file export failed to write')
+    const msg = 'The file could not be saved. Nothing was changed.'
+    finishRun(db, runId, 'failed', now(), null, msg)
+    return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
+  }
+  if (!saved) {
+    finishRun(db, runId, 'cancelled', now(), null, null)
+    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
+  }
+  finishRun(db, runId, 'done', completedAt, null, null)
+  return { ok: true, runId, count: rowCount }
+}

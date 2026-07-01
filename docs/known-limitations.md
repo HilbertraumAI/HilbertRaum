@@ -566,6 +566,18 @@ password recovery — are documented in
     F6) — a real line total almost always prints cents. A decimal-anchored space group (`1 234 567,89`) is a
     real figure and is kept; a space group **with** a decimal (`15 799,00`) stays the accepted trade-off
     (indistinguishable from a real 15 799,00).
+  - **A LABELED invoice totals line reads a ROUND total printed WITHOUT a decimal (invoice-totals-2026-07-01).**
+    `MONEY_RE` rejects bare ungrouped integers (so a reference number in a description is never read as money),
+    which also meant a very common invoice layout — `Total (excl. Tax) 914 $` / `Tax 0 $` / `Total (incl. Tax)
+    914 $` — produced an **empty** net/tax/gross block, and the skill answered *"the invoice doesn't print a
+    net, tax, or gross total I could read"* on a perfectly clear bill. A net/tax/gross-**labeled** line now
+    falls back to the last **currency-adjacent** bare integer (`totalsMoney`): the currency symbol/code touching
+    the number is the safety anchor that keeps a stray reference/registration integer (a VAT id `ATU81420204`, a
+    `0%` rate) off the totals, while the label already scopes the read to a totals line. **Line items are
+    unchanged** — an unlabeled row's bare integer stays ambiguous and is dropped (§22-D1). A **qualified** total
+    resolves by its tax phrasing: `Total (excl. Tax)` / "net of tax" → the **net**, `Total (incl. Tax)` → the
+    **gross** (`EXCL_TAX_RE`), so a layout that prints both no longer collapses onto the gross alone. The
+    abbreviated header label `No.:` no longer leaks its `.:` into the parsed invoice number. `INVOICE_EXTRACTOR_VERSION` → 3.
   - **A trailing number is split as `quantity` only with corroboration (full-audit-2026-06-29-postmerge
     F8, invoice path).** A product-coded description (`iPhone 15`, `Calendar 2026`) used to have its
     trailing number greedily read as a quantity. The split now requires a **unit token** (`x`/`Stk`/`pcs`/…)

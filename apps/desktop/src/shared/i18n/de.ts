@@ -203,6 +203,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.tool.extractInvoice': 'Rechnung einlesen',
   'chat.skill.tool.validateInvoiceTotals': 'Beträge prüfen',
   'chat.skill.tool.exportInvoiceCsv': 'Als CSV exportieren',
+  'chat.skill.tool.exportInvoiceJson': 'Als JSON exportieren',
+  'chat.skill.tool.exportInvoiceXml': 'Als XML exportieren',
   'chat.skill.tool.redactDocument': 'Personenbezogene Daten schwärzen',
   // Die nach einem Kategorisieren-Lauf in den Verlauf eingespielte Aufschlüsselungsfrage (Phase 33, Q3).
   'chat.skill.categorize.breakdownQuestion': 'Schlüssle meine Ausgaben nach Kategorie auf.',
@@ -614,6 +616,12 @@ export const de: Record<keyof typeof en, string> = {
   'skills.invoiceAnalysis.tax': '- Steuer: **{amount} {currency}**',
   'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{amount} {currency}**',
   'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{amount} {currency}**',
+  'skills.invoiceAnalysis.positionsHeading': 'Positionen:',
+  'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
+  'skills.invoiceAnalysis.positionsMore':
+    '… und **{count}** weitere — bitten Sie mich, die Rechnung als CSV zu exportieren, um alle Positionen zu sehen.',
+  'skills.invoiceAnalysis.formatIntro':
+    'Hier ist die Rechnung als {format}, ausschließlich aus den gelesenen Beträgen erstellt — nichts aus Fließtext zusammengerechnet oder erfunden:',
   'skills.invoiceAnalysis.noTotals':
     'Die Rechnung druckt keinen Netto-, Steuer- oder Bruttobetrag, den ich lesen konnte.',
   'skills.invoiceAnalysis.caveat':

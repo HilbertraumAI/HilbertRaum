@@ -117,6 +117,8 @@ describe('registry + resolveEffectiveTools', () => {
       'extract_invoice',
       'validate_invoice_totals',
       'export_invoice_csv',
+      'export_invoice_json',
+      'export_invoice_xml',
       // Redaction — the read-transform-export shape (confirm-gated; no content-class table).
       'redact_document'
     ])
