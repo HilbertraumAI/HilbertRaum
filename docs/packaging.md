@@ -172,6 +172,27 @@ off `config/drive.json`). The app then reads `models/`, `workspace/`, `config/`,
 > build from `apps/desktop` or temporarily disable hoisting. None of this affects `npm test` /
 > `typecheck` / `npm run build` (the green gate), which do not invoke electron-builder.
 
+### Sidecar runtimes as a loader component (loader-integration)
+
+The image build (`loader/loader/`) no longer embeds the sidecar engine binaries on the drive.
+Instead they ship as a per-target **`runtime` loader component** — packed exactly like the `app`
+component (`loader.toml` `runtime` → `scripts/stage-runtime.sh` fetches the prebuilt
+`llama.cpp` + `whisper.cpp` binaries → import-build packs them offline as
+`runtime-<target>-{squashfs,dmg,dir}`). The native launcher **mounts** it beside the app and
+exports **`HILBERTRAUM_RUNTIME_ROOT`** pointing at the mounted tree (which contains the same
+`runtime/llama.cpp/<os>/…` layout as the drive).
+
+The app resolves its sidecars with **component-first, drive-fallback** precedence
+(`runtimeRoots()` in `services/runtime/sidecar.ts`): it looks under `HILBERTRAUM_RUNTIME_ROOT`
+first and only falls back to `HILBERTRAUM_DRIVE_ROOT/runtime/…` when the component is absent or
+lacks the binary. Same binaries, different location — a drive built with the on-disk runtime tree
+(a plain `prepare-drive --with-assets` without `--no-runtimes`) still works standalone.
+
+Because the loader now delivers the runtimes, the image's drive-population hook runs
+`prepare-drive.sh --no-runtimes` (`loader.toml [layout].prepare_cmd`), so the burned drive is not
+double-provisioned. Use `--no-runtimes` / `-NoRuntimes` directly whenever the runtimes come from
+the component rather than the drive.
+
 ## Preparing a drive — scripts (Phase 11)
 
 `scripts/` provisions and verifies a drive. The scripts are **self-contained** (a drive can be laid
@@ -180,7 +201,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). **`-NoRuntimes`/`--no-runtimes`** skips the sidecar-runtime fetch (used by the image build, which delivers the runtimes as a mounted `runtime` component — see *Sidecar runtimes as a loader component*). |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |

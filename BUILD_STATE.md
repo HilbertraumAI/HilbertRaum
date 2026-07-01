@@ -1617,6 +1617,34 @@ Six independent fixes; one is a **product policy decision** (owner-approved duri
   `scripts\build-commercial-drive` to confirm a downloads-enabled + vision-bundled drive passes the (relaxed) sell
   gate. Provide the #7 repro (did scope/attachments change between the analysis answer and the button; >1 doc in scope?).**_
 
+_2026-07-01 — **Sidecar runtimes shipped as a loader `runtime` component — branch
+`loader-integration` (rebased onto `origin/master` @ `280cb39`; UNMERGED).** The image build no longer
+embeds the llama.cpp/whisper.cpp engines on the drive; they ship as a per-target loader component and the
+launcher mounts them. Offline / no telemetry / no new runtime egress.
+- **App (`services/runtime/sidecar.ts`):** new `runtimeRoots(rootPath, env)` gives **component-first,
+  drive-fallback** precedence — the llama + whisper resolvers (`resolveLlamaServerPath`,
+  `resolveCpuFallbackServerPath`, `resolveWhisperCliPath`) now try `HILBERTRAUM_RUNTIME_ROOT` first and
+  fall back to `HILBERTRAUM_DRIVE_ROOT/runtime/…`. Same binaries, different location. Data contract:
+  `HILBERTRAUM_RUNTIME_ROOT` = the dir that CONTAINS `runtime/<family>/<os>/…` (i.e. the launcher's mount
+  dest). Unit tests added to `sidecar.test.ts` + `transcriber.test.ts`.
+- **prepare-drive.{sh,ps1}:** new `--no-runtimes`/`-NoRuntimes` opt-out — `--with-assets` still fetches the
+  runtimes by default; the flag skips only the `fetch-runtime` calls (models still fetched). Parity kept.
+- **Loader (`loader/loader/`):** new per-target `runtime` import-build component in `loader.toml`
+  (mirrors `app`) + `scripts/stage-runtime.sh` (fetches prebuilt llama+whisper into `dist/runtime/<t>`) +
+  `nix/builds.nix` attrs `runtime-<t>-{squashfs,dmg,dir}` + `bundle.sh` pool inclusion. `[layout].prepare_cmd`
+  now `./scripts/prepare-drive.sh --no-runtimes` so the image doesn't double-embed. `xtask gen-ninja`
+  wires all edges (verified).
+- **Launcher (`loader/loader/launcher/src/project.rs`):** mounts the `runtime-<os>` component beside the
+  app and exports `HILBERTRAUM_RUNTIME_ROOT`; OPTIONAL — a missing runtime component logs + falls back to
+  the on-drive `runtime/`. `cargo test` green.
+- **Tests:** `npm test` = 2600 passed; the only non-green locals are the devshell leaking
+  `HILBERTRAUM_LLAMA_BIN` into the dev-mode vision resolver (`vision-status.test.ts` passes with it unset)
+  — an env artifact, not a code regression. `typecheck` + launcher tests green.
+- **NEXT ACTION (owner):** run `make components`/`make image` once with network to exercise the real
+  `stage-runtime` fetch + nix pack per target (structurally validated here, not built), then review + merge
+  `loader-integration`. Do NOT auto-merge/push. Design record: `docs/packaging.md` "Sidecar runtimes as a
+  loader component"._
+
 
 _2026-07-01 — **Qwen3.5 Unsloth wave + llama.cpp runtime bump b9585 → b9849 — branch
 `model-catalog-qwen3.5-wave-b9849` (UNMERGED; do NOT auto-merge/push).** Manifest/docs/test-only —

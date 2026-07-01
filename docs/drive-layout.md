@@ -197,6 +197,14 @@ Since Phase 14 (see the [`architecture.md`](architecture.md) GPU record §6) `ru
 Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
 exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).
 
+> **Loader-built drives: runtimes ship as a component, not on the drive.** The image build
+> (`loader/loader/`) delivers `runtime/llama.cpp/<os>/` + `runtime/whisper.cpp/<os>/` as a mounted
+> **`runtime` loader component**, and the launcher exports `HILBERTRAUM_RUNTIME_ROOT` at it. The
+> resolvers above prefer that component and use this on-drive `runtime/` tree only as a **fallback**
+> (`runtimeRoots()` in `services/runtime/sidecar.ts`). So a loader image is built with
+> `prepare-drive --no-runtimes` (the `runtime/` dirs are still scaffolded, just left empty). See
+> [`packaging.md`](packaging.md) "Sidecar runtimes as a loader component".
+
 ### Second sidecar family: the whisper.cpp transcriber (Phase 36)
 
 Audio transcription uses a separate, pinned **whisper.cpp** CLI under
