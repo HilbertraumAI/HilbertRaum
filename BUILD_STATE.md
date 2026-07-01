@@ -6,6 +6,43 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Chat truncation honesty + live context meter + German chat-budget safety — branch
+`fix/drive-app-issues-2026-07-01` (same branch as the 6-issue drive fixes below; UNMERGED; do NOT
+auto-merge/push).** Offline / no telemetry / no new network egress. From a D:\ chat test where later German
+"tell me everything" replies stopped **mid-word** while an earlier, longer reply completed. Root cause
+(cross-verified via an adversarial sub-agent pass): the balanced/deep path sends **no `max_tokens`** and the
+sidecar has **no `--n-predict`**, so a reply is bounded only by EOS or by filling `n_ctx`
+(`finish_reason: 'length'`); as history grows the answer's runway shrinks and long late-conversation replies
+overflow — and the app was blind to it (`readChatSSE` only read `delta.content`). Compaction was NOT
+involved (a 6-turn chat is below `MIN_COMPACTABLE_TURNS`). Three fixes, all additive + fail-safe:
+- **#A — Honest truncation signal.** `readChatSSE`/`parseSseLine` now surface the final chunk's
+  `finish_reason` via a new `RuntimeChatOptions.onFinish` (optional; vision + mock unaffected — the mock
+  reports `'stop'` on a clean finish). `generateAssistantMessage` flags `finishReason === 'length'` and
+  persists it as **`messages.truncated`** (new nullable column via `ensureColumn`; threaded through
+  `Message.truncated`, `MessageRow`/`rowToMessage`, `AppendMessageInput`/`appendMessage` INSERT, and the
+  regenerate delete/restore snapshot). A user **Stop** carries no finish reason ⇒ NOT flagged. Renderer:
+  a quiet amber `.msg-truncated` note (`chat.truncated.label`/`.hint`, en+de). **Scope:** plain chat only
+  (grounded doc answers out of scope). **Data contract:** `Message` gains optional `truncated?: boolean`;
+  `RuntimeChatOptions` gains optional `onFinish?(finishReason)`.
+- **#B — German subword safety on the chat budget.** `messageTokens` now scales the 1.3 base word rate by
+  `CHAT_TOKENS_PER_WORD_SAFETY (1.5)` → ≈1.95 real tokens/word (mirrors the RAG ÷1.5 German safety). One
+  estimate feeds the trim, the compaction trigger, AND the meter → German trims/compacts sooner + the meter
+  reads truthfully high (English reads slightly high — accepted). All token-math tests are
+  structural/comparative → regression-safe.
+- **#C — Live context meter %.** `ContextMeter` shows an always-visible % (aria-hidden; `aria-valuetext`
+  still reads tokens) and climbs live during streaming via `ChatScreen` `liveUsage` (resting read +
+  in-flight user turn + `estimateLiveTokens(streamText)`), reconciled to the resting read in the stream
+  `finally` (moved there from the try so a stopped/failed turn settles too; no double-count).
+- **Docs:** architecture.md "Chat & streaming" (L0 honest-signal bullet + German-safety + live-meter notes);
+  rag-design.md §15.2 (factor), §15.5 (live %), new **§15.7** design record. **Tests:** +5 (llama-runtime
+  onFinish length/stop/null-intermediate; chat truncated persist round-trip + clean-stop + user-Stop
+  unflagged). `npm test` **2692 passed / 41 skipped**; `npm run typecheck` + `npm run build` green.
+- **NOT done (offered, deferred to owner):** raise default `contextTokens` above 4096; a "continue this
+  reply" action on a truncated turn. **NEXT ACTION (owner): review; optionally capture `finish_reason` +
+  `usage` from the loopback `/v1/chat/completions` on one repro to confirm `length` on the original D:\
+  transcript (the app now self-reports it going forward).**_
+
+
 _2026-07-01 — **Drive/app fixes from D:\ testing (6 issues) — branch
 `fix/drive-app-issues-2026-07-01` (UNMERGED; do NOT auto-merge/push).** Offline / no telemetry / no new
 runtime network egress. `npm test` **2687 passed / 41 skipped**; `npm run typecheck` + `npm run build` green.

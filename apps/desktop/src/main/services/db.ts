@@ -751,6 +751,11 @@ export function openDatabase(path: string): Db {
   // plain rows). An older app ignores both columns and reads every row as a message — no behaviour change.
   ensureColumn(db, 'messages', 'kind', 'kind TEXT')
   ensureColumn(db, 'messages', 'covers_through_rowid', 'covers_through_rowid INTEGER')
+  // Honest-signal flag (D:\ testing report 2026-07-01): 1 when an assistant reply was CUT OFF at the
+  // token/context ceiling (llama-server `finish_reason: 'length'`), NULL otherwise (complete reply,
+  // user turn, or user Stop). Additive + nullable — an older app ignores it and reads every reply as
+  // complete, byte-identical to before. CONTENT-free (a single boolean).
+  ensureColumn(db, 'messages', 'truncated', 'truncated INTEGER')
   // Bank-transaction derived annotations (architecture.md "Skills — design record" §10, S11c). All nullable —
   // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
   // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.

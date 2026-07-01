@@ -272,6 +272,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.compaction.viewSummary': 'Zusammenfassung der früheren Nachrichten anzeigen',
   'chat.context.usageTooltip': 'Kontext: {used} / {window} Tokens (ungefähr)',
   'chat.context.willSummarize': 'Ältere Nachrichten werden zusammengefasst, um Platz zu schaffen.',
+  // Ehrliches Signal (§L0): erscheint bei einer Antwort, die das Modell am Kontextlimit abgeschnitten hat.
+  'chat.truncated.label': 'Antwort abgeschnitten – Kontextlimit des Modells erreicht',
+  'chat.truncated.hint':
+    'Dem Modell ging der Platz aus, um diese Antwort zu beenden. Bitte es fortzufahren, beginne einen neuen Chat oder erhöhe die Kontextgröße im Bereich „KI-Modell“.',
 
   // ---- Chat: document scope ----
   'chat.scope.usingAll': 'Nutzt alle Dokumente',

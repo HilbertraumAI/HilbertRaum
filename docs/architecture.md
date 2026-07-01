@@ -928,7 +928,13 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `contextTokens` (the production callers pass `getSettings(db).contextTokens`; omitted = the
   pure, untrimmed builder used by unit tests). This complements the doc-task window budgets
   (`doctasks/summary.ts`), which already sized their inputs to `contextTokens` — the gap was
-  only the conversational path.
+  only the conversational path. **German subword safety (2026-07-01):** `messageTokens` scales the
+  1.3 base word rate by `CHAT_TOKENS_PER_WORD_SAFETY` (1.5 → ≈1.95 real tokens/word) because a
+  German machine reply tokenizes at ~1.5–2 tokens/word; the 1.3 base under-counted it, so the trim
+  kept too much history and the answer overflowed. Mirrors the RAG ÷1.5 German safety (rag-design
+  §15.1); one estimate feeds both the trim budget AND the usage meter, so German trims/compacts
+  sooner and the meter reads truthfully high (English reads slightly high — accepted, the meter is
+  labelled approximate).
 - **Conversation compaction (L2, above the L1 floor).** When history approaches the **launched** context
   window (`RuntimeStatus.contextWindow?` / `effectiveContextWindow`, not `settings.contextTokens`),
   `ensureCompacted` (`services/chat/compaction.ts`) summarizes the OLDER turns **once** into a cached
@@ -936,9 +942,21 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   pair + only the post-checkpoint turns — instead of silently dropping the oldest. `fitMessagesToContext`
   still runs after and still guarantees fit; below threshold (or with the `chatCompactionEnabled` setting
   off) behaviour is byte-identical to drop-oldest. Every new path fails safe (any summarizer failure ⇒ no
-  checkpoint, turn proceeds). UX: a composer context-usage meter, a one-shot "summarizing…" notice
-  (`STREAM.compaction`), and an expandable transcript summary marker. Full design record (L0/L1/L2 +
-  trigger + summarizer + UX, with the deferred Phase-3 `/tokenize`): [`rag-design.md`](rag-design.md) §15.
+  checkpoint, turn proceeds). UX: a composer context-usage meter (now with an **always-visible %** that
+  updates **live** as the answer streams — `ChatScreen` `liveUsage` = resting read + in-flight user turn +
+  streaming-answer estimate, reconciled to the main-process resting read when the turn settles), a one-shot
+  "summarizing…" notice (`STREAM.compaction`), and an expandable transcript summary marker. Full design
+  record (L0/L1/L2 + trigger + summarizer + UX, with the deferred Phase-3 `/tokenize`):
+  [`rag-design.md`](rag-design.md) §15.
+- **Honest truncation signal (L0, 2026-07-01).** The balanced/deep chat path sends no `max_tokens`, so a
+  long reply on a small window can hit the context ceiling and stop **mid-word** (`finish_reason: 'length'`).
+  Previously the app was blind to it — the SSE parser only read `delta.content`, so the partial persisted as
+  if complete. Now `readChatSSE`/`parseSseLine` surface `finish_reason` via a new `RuntimeChatOptions.onFinish`
+  callback; `generateAssistantMessage` flags `finishReason === 'length'` and persists it as `messages.truncated`
+  (additive nullable column; threaded through `Message`, `appendMessage`, and the regenerate delete/restore
+  snapshot). The transcript renders a quiet amber "Reply cut off — reached the model's context limit" note
+  (`.msg-truncated`, `chat.truncated.*`) with an actionable tooltip. A user Stop carries no finish reason, so
+  the intentional partial is **not** flagged. Scope: plain chat (the grounded doc-answer path is out of scope).
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`

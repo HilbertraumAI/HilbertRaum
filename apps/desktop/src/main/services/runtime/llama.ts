@@ -95,22 +95,40 @@ export function requestParamsForMode(mode?: ChatDepthMode): ModeRequestParams {
 }
 
 interface ChatCompletionChunk {
-  choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>
+  choices?: Array<{
+    delta?: { content?: string; reasoning_content?: string }
+    /**
+     * Why the model stopped THIS choice: 'stop' (EOS / a stop token — a complete reply),
+     * 'length' (hit the token/context ceiling — the reply is CUT OFF mid-output), or null on
+     * intermediate chunks. llama-server sends it on the final content chunk before `[DONE]`.
+     */
+    finish_reason?: string | null
+  }>
 }
 
-/** Parse one SSE `data:` line → content/reasoning deltas, a `[DONE]` sentinel, or nothing. */
-function parseSseLine(line: string): { delta?: string; reasoning?: string; done?: boolean } {
+/** Parse one SSE `data:` line → content/reasoning deltas, a finish reason, a `[DONE]` sentinel, or nothing. */
+function parseSseLine(line: string): {
+  delta?: string
+  reasoning?: string
+  finishReason?: string
+  done?: boolean
+} {
   const t = line.trim()
   if (!t.startsWith('data:')) return {}
   const data = t.slice(5).trim()
   if (data === '[DONE]') return { done: true }
   try {
     const json = JSON.parse(data) as ChatCompletionChunk
-    const d = json.choices?.[0]?.delta
-    const out: { delta?: string; reasoning?: string } = {}
+    const choice = json.choices?.[0]
+    const d = choice?.delta
+    const out: { delta?: string; reasoning?: string; finishReason?: string } = {}
     if (typeof d?.content === 'string' && d.content.length > 0) out.delta = d.content
     if (typeof d?.reasoning_content === 'string' && d.reasoning_content.length > 0) {
       out.reasoning = d.reasoning_content
+    }
+    // Only a non-null finish_reason is meaningful — intermediate chunks carry null.
+    if (typeof choice?.finish_reason === 'string' && choice.finish_reason.length > 0) {
+      out.finishReason = choice.finish_reason
     }
     return out
   } catch {
@@ -123,15 +141,18 @@ function parseSseLine(line: string): { delta?: string; reasoning?: string; done?
  * Parse a Server-Sent-Events stream of OpenAI chat-completion chunks, yielding each
  * answer-text delta. Reasoning deltas (`delta.reasoning_content`, Deep mode) are
  * reported through `onReasoning` and are NEVER yielded — the yielded stream stays
- * answer-only, so the locked streaming token contract is untouched. Handles partial
- * lines across reads, ignores keep-alive/comment lines, and stops on the `[DONE]`
- * sentinel. Honours `signal` so an aborted request stops promptly and cancels the
- * underlying reader.
+ * answer-only, so the locked streaming token contract is untouched. The final chunk's
+ * `finish_reason` (e.g. 'length' when the reply was cut off at the token/context ceiling)
+ * is reported through `onFinish` so callers can flag a truncated answer — it is never part
+ * of the yielded content. Handles partial lines across reads, ignores keep-alive/comment
+ * lines, and stops on the `[DONE]` sentinel. Honours `signal` so an aborted request stops
+ * promptly and cancels the underlying reader.
  */
 export async function* readChatSSE(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
-  onReasoning?: (delta: string) => void
+  onReasoning?: (delta: string) => void,
+  onFinish?: (finishReason: string) => void
 ): AsyncGenerator<string, void, unknown> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
@@ -147,6 +168,9 @@ export async function* readChatSSE(
         const line = buffer.slice(0, nl)
         buffer = buffer.slice(nl + 1)
         const r = parseSseLine(line)
+        // The finish reason rides the final content chunk, which arrives BEFORE `[DONE]`;
+        // surface it before honouring the sentinel so a 'length' stop is never dropped.
+        if (r.finishReason) onFinish?.(r.finishReason)
         if (r.done) return
         if (r.reasoning) onReasoning?.(r.reasoning)
         if (r.delta) yield r.delta
@@ -155,6 +179,7 @@ export async function* readChatSSE(
     // Flush any final line the server sent without a trailing newline before closing.
     buffer += decoder.decode()
     const r = parseSseLine(buffer)
+    if (r.finishReason) onFinish?.(r.finishReason)
     if (r.reasoning) onReasoning?.(r.reasoning)
     if (r.delta) yield r.delta
   } finally {
@@ -274,7 +299,7 @@ export class LlamaRuntime implements ModelRuntime {
     if (!res.body) {
       throw new ChatRequestError(res.status, 'empty response body', '')
     }
-    yield* readChatSSE(res.body, options?.signal, options?.onReasoning)
+    yield* readChatSSE(res.body, options?.signal, options?.onReasoning, options?.onFinish)
   }
 }
 

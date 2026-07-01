@@ -1357,8 +1357,11 @@ excerpts than a large one.
 
 ### 15.2 Token accounting + the compaction trigger (§4.2/§4.3, R9)
 
-Budgeting uses the cheap word estimate `messageTokens` (`approxTokenCount × CHAT_TOKENS_PER_WORD(1.3) +
-8/msg`, exported from `chat.ts`) — **deliberately biased to over-count**, the safe direction for a budget.
+Budgeting uses the cheap word estimate `messageTokens` (`approxTokenCount × CHAT_TOKENS_PER_WORD(1.3) ×
+CHAT_TOKENS_PER_WORD_SAFETY(1.5) + 8/msg`, exported from `chat.ts`) — **deliberately biased to over-count**,
+the safe direction for a budget. The 1.5 subword-density safety (added 2026-07-01, §15.7) lifts the
+effective rate to ≈1.95 real tokens/word so subword-dense German (~1.5–2 tokens/word) can't slip under the
+1.3 base and overflow; one estimate feeds the trim, the compaction trigger, AND the usage meter.
 `ensureCompacted` ([`chat/compaction.ts`](../apps/desktop/src/main/services/chat/compaction.ts)) triggers
 when the **assembled-history** estimate ≥ `COMPACT_THRESHOLD (0.85) × window` **and** at least
 `MIN_COMPACTABLE_TURNS (6)` turns sit older than the protected `KEEP_RECENT_TURNS (6)` tail. Below
@@ -1440,7 +1443,11 @@ English (R12).
   the over-counting estimate — honesty over false precision). **Deviation (documented):** §5.1 offered the
   usage on `STREAM.done` OR a resting IPC; chose the resting IPC for BOTH surfaces (the renderer awaits the
   invoke + re-reads history and never consumes `onDone`; `done` is the locked `Message` contract — left
-  untouched).
+  untouched). **Enhanced 2026-07-01 (§15.7):** the bar now carries an **always-visible %** (aria-hidden;
+  the progressbar's `aria-valuetext` still reads the tokens) and updates **live** while an answer streams —
+  `ChatScreen` derives `liveUsage` = the resting read + the in-flight user turn estimate + a running
+  `estimateLiveTokens(streamText)`, then reconciles to the authoritative resting read in the stream
+  `finally` (the try-side refresh moved there so a partial/stopped reply also settles, with no double-count).
 - **"Summarizing…" notice (§5.2, R14).** `STREAM.compaction(requestId)` → `CompactionNotice {phase:'start'}`
   (`shared/ipc.ts`) mirrors `STREAM.scope`. `withChatStream` gained a 4th `runFn` arg `sendCompaction` (a
   `SendCompaction` notifier beside `sendToken`/`sendReasoning`): isDestroyed-guarded but **never written to
@@ -1482,3 +1489,44 @@ round-trip and a new optional interface method. Revisit only if the boundary pro
   unchanged from before — `fitMessagesToContext` keeps the final turn and the runtime's 400 path surfaces
   the friendly "too large for this model" message. Head+tail truncation of a giant single turn is out of
   scope.
+
+### 15.7 Honest truncation signal + German safety + live meter % (2026-07-01, from D:\ testing)
+
+Triggered by a D:\ test session (a German chat where later "tell me everything" replies stopped **mid-word**
+while an earlier, longer reply completed). Root cause, cross-verified: the balanced/deep path sends **no
+`max_tokens`** and the sidecar launches with **no `--n-predict`**, so a reply is bounded only by EOS or by
+physically filling `n_ctx` (`finish_reason: 'length'`). As history accumulates the answer's runway
+(`n_ctx − prompt`) shrinks, so late-conversation "answer everything" replies overflow — and the app was
+**blind to it** (`readChatSSE` only read `delta.content`), persisting the partial as if complete. Three
+independent fixes:
+
+- **Honest signal (L0).** `parseSseLine`/`readChatSSE` now surface the final chunk's `finish_reason` via a
+  new `RuntimeChatOptions.onFinish(reason)` callback (optional; the vision path and the mock are unaffected
+  — the mock reports `'stop'` on a clean finish for contract fidelity). `generateAssistantMessage` captures
+  it and flags `finishReason === 'length'` → persists `messages.truncated` (additive nullable column via
+  `ensureColumn`; threaded through `Message.truncated`, `MessageRow`, `rowToMessage`, `AppendMessageInput`,
+  the `appendMessage` INSERT, and the regenerate delete/restore snapshot for byte-faithful restore). A user
+  **Stop** aborts before any final chunk, so `finishReason` stays null → the intentional partial is **not**
+  flagged. Renderer: a quiet amber `.msg-truncated` note ("Reply cut off — reached the model's context
+  limit", `chat.truncated.label`/`.hint`, `role="note"`) with an actionable tooltip. **Scope:** plain chat
+  (`generateAssistantMessage`); the grounded doc-answer path is out of scope for this signal.
+- **German subword safety (§15.2).** `messageTokens` scales the 1.3 base word rate by
+  `CHAT_TOKENS_PER_WORD_SAFETY (1.5)` → ≈1.95 real tokens/word, mirroring the RAG grounded-answer ÷1.5
+  German safety (§15.1). The 1.3 base under-counted German (~1.5–2 tokens/word), so the trim kept too much
+  history and the real prompt ran larger than estimated — compounding the overflow. One estimate feeds the
+  trim budget, the compaction trigger, AND the meter, so German trims/compacts sooner and the meter reads
+  truthfully high (English reads slightly high — accepted; the meter is labelled approximate and warns
+  before the cliff). All token-math tests are structural/comparative, so the change is regression-safe.
+- **Live meter % (§15.5).** `ContextMeter` gains an always-visible percentage (aria-hidden — the
+  progressbar `aria-valuetext` still reads the tokens); `ChatScreen`'s `liveUsage` adds the in-flight user
+  turn + a running `estimateLiveTokens(streamText)` on top of the resting read so the bar + number climb as
+  the answer streams, then reconciles to the authoritative resting read in the stream `finally` (moved there
+  from the try so a stopped/failed turn also settles; `liveUserTokens` cleared first, and seeded 0 on a
+  regenerate to avoid double-counting an existing user turn).
+
+**Not done here (offered, deferred):** raising the default `contextTokens` above 4096, and a "continue this
+reply" affordance on a truncated turn. **The exact `finish_reason`/`usage` capture** (curl the loopback
+`/v1/chat/completions`) remains the one measurement that would confirm `length`-vs-`stop` on the original
+D:\ transcript; the fix makes the app self-report it going forward. Tests: `llama-runtime.test.ts`
+(onFinish length/stop + null-intermediate) and `chat.test.ts` (truncated persist round-trip; clean-`stop`
+and user-Stop both unflagged).

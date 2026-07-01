@@ -107,6 +107,37 @@ describe('readChatSSE', () => {
     }
     expect(out).toEqual(['a'])
   })
+
+  it('reports finish_reason "length" via onFinish when the reply is cut off at the ceiling', async () => {
+    // The final chunk carries an empty delta + finish_reason (the llama-server shape), then [DONE].
+    const stream = sseStream([
+      chatChunk('cut off here'),
+      'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+      'data: [DONE]\n\n'
+    ])
+    const finishes: string[] = []
+    const out: string[] = []
+    for await (const t of readChatSSE(stream, undefined, undefined, (r) => finishes.push(r))) {
+      out.push(t)
+    }
+    expect(out.join('')).toBe('cut off here')
+    expect(finishes).toEqual(['length'])
+  })
+
+  it('reports finish_reason "stop" via onFinish and ignores intermediate null reasons', async () => {
+    const stream = sseStream([
+      'data: {"choices":[{"delta":{"content":"done"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n'
+    ])
+    const finishes: string[] = []
+    const out: string[] = []
+    for await (const t of readChatSSE(stream, undefined, undefined, (r) => finishes.push(r))) {
+      out.push(t)
+    }
+    expect(out.join('')).toBe('done')
+    expect(finishes).toEqual(['stop'])
+  })
 })
 
 describe('LlamaRuntime', () => {

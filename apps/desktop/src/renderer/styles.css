@@ -811,6 +811,20 @@ code, pre, kbd { font-family: var(--font-mono); }
   color: var(--text-muted);
 }
 .msg-skill-icon { width: 14px; height: 14px; flex-shrink: 0; }
+/* Honest-signal truncation notice (§L0): a quiet warning-toned line on a reply the model cut off at
+   the context ceiling. Amber (not error-red) — the answer is incomplete, not broken; the tooltip
+   explains what to do. Matches the .msg-skill vocabulary (small, inline, muted) with a warm accent. */
+.msg-truncated {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--warning, #b8860b);
+  cursor: default;
+}
+.msg-truncated-glyph { flex-shrink: 0; font-size: 12px; }
 /* S13c (D3): the per-turn "answer without it" undo on an auto-fired turn — a quiet inline link, not a
    loud button, so an auto-applied skill is reversible without shouting. */
 .msg-skill-undo {
@@ -1089,18 +1103,31 @@ code, pre, kbd { font-family: var(--font-mono); }
 .context-meter {
   display: inline-flex;
   align-items: center;
-  width: 56px;
+  gap: 6px;
   cursor: default;
 }
 .context-meter-track {
   position: relative;
-  width: 100%;
+  width: 56px;
+  flex-shrink: 0;
   height: 4px;
   border-radius: 999px;
   background: var(--row-selected-bar, var(--border));
   opacity: 0.5;
   overflow: hidden;
 }
+/* Always-visible % readout beside the bar. Quiet + tabular so it doesn't jitter while it climbs
+   during streaming; tone tracks the meter (amber/near-full inherit the fill colour below). */
+.context-meter-pct {
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 3ch;
+  text-align: right;
+}
+.context-meter-amber .context-meter-pct { color: var(--warning, #b8860b); }
+.context-meter-near-full .context-meter-pct { color: var(--error, #c0392b); }
 .context-meter-fill {
   position: absolute;
   inset: 0 auto 0 0;

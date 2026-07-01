@@ -289,6 +289,58 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(history.at(-1)?.role).toBe('assistant')
   })
 
+  it('a clean reply (mock reports finish_reason "stop") is NOT flagged truncated', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, {})
+    expect(msg.truncated).toBeUndefined()
+    expect(listMessages(db, conv.id).at(-1)?.truncated).toBeUndefined()
+  })
+
+  it('flags + persists truncated when the runtime reports finish_reason "length"', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'tell me everything' })
+
+    // A runtime that streams a couple of tokens then stops at the context ceiling.
+    const cutOffRuntime: ModelRuntime = {
+      modelId: 'cutoff',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      contextWindow: () => 2048,
+      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
+        yield 'a partial answer that runs'
+        yield ' right into the wall'
+        options?.onFinish?.('length')
+      }
+    }
+
+    const msg = await generateAssistantMessage(db, cutOffRuntime, conv.id, {})
+    expect(msg.truncated).toBe(true)
+    // Round-trips through the DB read (messages.truncated → Message.truncated).
+    expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
+  })
+
+  it('a user Stop is NOT flagged truncated even though the reply is partial (no finish_reason)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+
+    const controller = new AbortController()
+    let n = 0
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, {
+      signal: controller.signal,
+      onToken: () => {
+        if (++n === 2) controller.abort()
+      }
+    })
+    // The abort carries no finish reason, so the intentional partial is not a length-truncation.
+    expect(msg.truncated).toBeUndefined()
+  })
+
   it('stop cancels the stream and persists only the partial reply', async () => {
     const db = freshDb()
     const conv = createConversation(db, {})
