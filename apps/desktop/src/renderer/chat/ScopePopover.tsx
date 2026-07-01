@@ -113,10 +113,20 @@ export function ScopePopover({
   }
 
   const addableDocs = indexed.filter((d) => !docIds.includes(d.id))
-  const label = scopeFooterLabel(scope, collections, t, tCount)
-  // Chat attachments (live + pending) are always included; surfaced as a quiet count
-  // alongside the composed sources (plan §13.1), never as removable selection chips.
-  const filesSuffix = fileCount > 0 ? ` · ${tCount('chat.scope.filesInChat', fileCount)}` : ''
+  // When the composed scope is empty (Library unchecked, no projects/docs picked) but the chat HAS
+  // attachments, retrieval is actually scoped to THOSE files — main-side `resolveScope` unions the chat
+  // attachments in, so the query never touches the whole corpus. The footer must therefore NOT say
+  // "Nutzt alle Dokumente" (which made unchecking the Library look like a no-op); show the files as the
+  // scope instead. Only a truly empty scope with NO attachments is the whole-corpus "all documents".
+  const composedEmpty = collIds.length === 0 && docIds.length === 0
+  const label =
+    composedEmpty && fileCount > 0
+      ? tCount('chat.scope.filesInChat', fileCount)
+      : scopeFooterLabel(scope, collections, t, tCount)
+  // Chat attachments (live + pending) are always included; surfaced as a quiet count alongside the
+  // composed sources (plan §13.1), never as removable selection chips. Not appended in the
+  // empty-composed-scope case above, where the file count is already the primary label (no double count).
+  const filesSuffix = fileCount > 0 && !composedEmpty ? ` · ${tCount('chat.scope.filesInChat', fileCount)}` : ''
 
   return (
     <Popover.Root>

@@ -6,6 +6,31 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Chat scope label (#6): unchecking the Library still said "Nutzt alle Dokumente" — branch
+`fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).** Offline / no
+telemetry / no new network egress. From D:\ testing: with a file attached to the chat, the user unchecked
+**Bibliothek** to narrow the scope, but the composer footer still read "Nutzt alle Dokumente · 1 Datei in
+diesem Chat" — so it looked like the narrowing did nothing (and the user reasonably concluded the chat
+uses all documents, which they linked to the context-overflow). Investigation (main-side): the RETRIEVAL
+was already correct — `setScope`→`serializeDocumentScope` persists an empty composed scope as
+`{collectionIds:[],documentIds:[]}` (NOT null), and `resolveScope` UNIONS the chat attachments into
+`documentIds`, so `buildScopeFilter` scopes the query to just the attachment. The BUG was the LABEL:
+`scopeFooterLabel` (ScopePopover) returned `chat.scope.usingAll` for an empty composed scope while
+IGNORING chat attachments, then the render appended "· N files" — reading as "all documents + the file".
+Fix (`renderer/chat/ScopePopover.tsx`, label-only, no retrieval change): when the composed scope is empty
+AND there are chat attachments, show the files as the scope (`tCount('chat.scope.filesInChat', n)`) instead
+of "usingAll", and don't double-append the file suffix. A truly empty scope with NO attachments still reads
+"usingAll" (whole corpus). **Tests:** +2 (empty scope + attachment → "N files in this chat", not
+"using all documents"; empty scope + no attachment → still "using all documents"); GermanSmoke's usingAll
+assertion unaffected (no attachments). typecheck green; full `npm test` re-run pending commit.
+- **NOTE on the context overflow (#5):** the retrieval was NOT using all documents (it was scoped to the
+  attachment). The overflow on "Kategorisiere die Transaktionen" is the #5 keyword-routing issue (needs the
+  app REBUILT to load) PLUS: the latest screenshot shows **Skill: Kein Skill** — with no skill there is no
+  0-model analysis handler, so it goes through generic RAG which can overflow a small-context model. For the
+  deterministic path the bank skill must be SELECTED (or use the "Kategorisieren" button). **NEXT ACTION
+  (owner): rebuild/restart the app; keep the Kontoauszug-Analyse skill selected; retry.**_
+
+
 _2026-07-01 — **Bank-statement skill follow-up (#5): "Das ist zu groß für das Kontextfenster" on a category
 question — branch `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).**
 Offline / no telemetry / no new network egress. From D:\ testing: typing **"Kategorisiere die
