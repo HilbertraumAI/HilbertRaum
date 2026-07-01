@@ -693,6 +693,17 @@ password recovery — are documented in
 
 ## Document comparison (Phase 35, wave-3 plan §8)
 
+- **A similar version pair is compared by a deterministic word-level diff (mode d).** When the two
+  documents share most of their text — the real "what changed" case — a Myers word diff finds the
+  EXACT changes (down to a single deleted word) and drives both the chat answer and the materialized
+  report; the model only interprets the changes into business language, so it can no longer miss a
+  subtle change or dismiss repetitive/placeholder text as "identical" (compare-diff record,
+  architecture.md §20). The limitations below apply to the FALLBACK modes, which run only when the two
+  documents are too different / too large for a precise redline (a rewrite, not a version bump).
+- **The diff's redline direction (old → new) follows document order, not a real old/new signal.** The
+  app cannot know which of two selected documents is the newer one, so "removed"/"added" follow the
+  order the documents are supplied (the doctask uses the user's explicit A/B selection; the chat path
+  uses scope order). The *set* of changes is always correct; only the arrow direction is order-dependent.
 - **Section-matched comparison is A-driven (asymmetric) UNLESS both documents are deeply
   indexed.** When two documents are too long to compare in full AND both have a ready deep
   index (and the smaller has ≤ 24 summary sections), the comparison is now **symmetric**:
@@ -704,11 +715,15 @@ password recovery — are documented in
   "one-directional — deeply index both for a complete two-way comparison" notice in the
   report. (The symmetric path lazily embeds each tree's summary sections on the CPU embedder
   sidecar the first time — once, then cached.)
-- **The report covers the BEGINNING of document A when it is very long.** In the asymmetric path the
-  map ceiling (12 calls, the summary's bounded-latency rationale) caps coverage; the report itself
-  carries a visible notice when that happens. (The symmetric path can also truncate — a lopsided pair
-  with many unmatched sections can overflow the reduce input — in which case it carries its own,
-  document-neutral truncation notice instead.) Both documents stay fully searchable.
+- **The report covers the BEGINNING of document A when it is very long (fallback modes only).** In the
+  asymmetric path the map ceiling (12 calls, the summary's bounded-latency rationale) caps coverage; the
+  report itself carries a visible notice when that happens. (The symmetric path can also truncate — a
+  lopsided pair with many unmatched sections can overflow the reduce input — in which case it carries its
+  own, document-neutral truncation notice instead.) The diff-driven mode (d) does NOT cap this way — it
+  reads both documents whole — so a similar version pair is compared in full regardless of length (up to
+  the `wordDiff` `maxWords` guard, beyond which it falls back to these modes). Both documents stay fully
+  searchable. In the chat diff path, stored chunks overlap by ~80 tokens, so a change landing exactly in
+  an overlap region may be listed twice — cosmetic, never a missed change.
 - **Report section headings are English even for German documents.** The four headings
   are dictated verbatim so the report structure is deterministic (R-T2-probed: the 4B
   keeps them); the findings under them follow the documents' language. Cosmetic, accepted

@@ -1222,7 +1222,18 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
 
 Node vectors are **NULL** after the Phase-1 build; **Phase 4 — symmetric compare — is their first and
 only consumer**, so they are embedded **lazily** here, the first time a compare needs a tree's nodes.
-[`compare.ts`](../apps/desktop/src/main/services/doctasks/compare.ts) now distinguishes three modes:
+[`compare.ts`](../apps/desktop/src/main/services/doctasks/compare.ts) now distinguishes four modes:
+- **(d) diff-driven** (compare-diff record, architecture.md §20; the PRIMARY path for a version pair) —
+  a deterministic Myers **word-level diff** (`services/diff`, `wordDiff`) over both full texts. Runs only
+  when the pair is SIMILAR (`isPreciseDiffUseful`: some shared content, changed fraction ≤ 0.5); a
+  rewrite / too-large / too-different pair returns null and falls through to (a)/(b)/(c). Identical docs
+  short-circuit to a model-free "textually identical" report; a real change set materializes a
+  deterministic **redline** (`renderRedline`) above a model interpretation of just the changes
+  (`compareDiffPrompt`) — the model never eyeballs two walls, so a one-word change can't be missed. The
+  chat compare (`grounded-whole-doc-compare`) has the mirror read `retrieveCompareDiff` in
+  [`rag/index.ts`](../apps/desktop/src/main/services/rag/index.ts): it reads both docs whole (no cap →
+  honest whole-document coverage, no page-2 truncation), feeds the changes+redline via
+  `buildCompareDiffPrompt`, and cites the chunks where the changes are.
 - **(a)** both full texts fit one pass — the existing single call over both, already symmetric.
 - **(c) symmetric both-trees** — when BOTH docs have a `ready` tree under the same active embedder AND
   the smaller doc has ≤ `SYMMETRIC_COMPARE_CALL_CEILING` (24) level-1 sections. Align each tree's

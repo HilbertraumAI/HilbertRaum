@@ -16,6 +16,15 @@ function normalizeScope(scope: string[] | RetrievalScope | null | undefined): Re
   return Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope
 }
 import { approxTokenCount } from '../ingestion/chunker'
+import {
+  wordDiff,
+  isPreciseDiffUseful,
+  renderRedline,
+  renderChangesForModel,
+  tokenizeForDiff,
+  type DiffChange,
+  type DiffResult
+} from '../diff'
 import { log } from '../logging'
 import {
   appendMessage,
@@ -515,6 +524,186 @@ export function retrieveCompareWholeDocuments(
   }
 }
 
+/** A document's chunks in order, with the metadata needed to attribute a change to a page/section. */
+interface OrderedChunkRow {
+  id: string
+  document_id: string
+  text: string
+  source_label: string | null
+  page_number: number | null
+  section_label: string | null
+}
+
+/** The diff-driven whole-doc compare read (mode d, compare-diff record). */
+export interface CompareDiffResult {
+  /** Change-attributed chunks (where the changes are) — the citation source of truth, `[Sn]`. */
+  chunks: RetrievedChunk[]
+  citations: Citation[]
+  /** Deterministic redline for the prompt (exact struck/added words with context). */
+  redlineText: string
+  /** Compact model-facing change list (Removed/Added/Changed). */
+  changesText: string
+  identical: boolean
+  /** Chunks examined (the WHOLE of both documents) / total — coverage is honest "whole document". */
+  chunksCovered: number
+  chunksTotal: number
+  /** True when the change list was capped (very many changes) — rare for a version pair. */
+  truncated: boolean
+}
+
+/**
+ * The DIFF-DRIVEN whole-document compare read (mode d, compare-diff record — architecture.md §20).
+ * Reads BOTH documents whole (in chunk order), runs a deterministic word-level diff, and returns the
+ * EXACT changes (never two walls of text) plus citations attributed to the chunks where the changes
+ * are. Coverage is honestly "whole document": the diff examined every chunk, so unlike the capped
+ * whole-doc path a page-2 change can never be truncated away. Returns null to fall back to the
+ * whole-doc-compare path when the diff is not the right tool (docs too large/different, or the change
+ * list overflows the budget). `budgetTokens` bounds the change list fed to the model.
+ */
+export function retrieveCompareDiff(
+  db: Db,
+  documentIds: string[],
+  budgetTokens: number
+): CompareDiffResult | null {
+  const [idA, idB] = documentIds
+  const readOrdered = (id: string): OrderedChunkRow[] =>
+    db
+      .prepare(
+        'SELECT id, document_id, text, source_label, page_number, section_label ' +
+          'FROM chunks WHERE document_id = ? ORDER BY chunk_index'
+      )
+      .all(id) as unknown as OrderedChunkRow[]
+  const aRows = readOrdered(idA)
+  const bRows = readOrdered(idB)
+  if (aRows.length === 0 || bRows.length === 0) return null
+
+  // Build each document's full word stream + the word-range each chunk owns (for attribution).
+  // NB: stored chunks overlap by ~80 tokens, so the joined text repeats a little at boundaries —
+  // harmless for the diff (both sides repeat identically ⇒ still equal) and no worse than the
+  // whole-doc-compare path, which already feeds the model the same overlapping chunk text.
+  const build = (rows: OrderedChunkRow[]): { text: string; ranges: Array<{ row: OrderedChunkRow; start: number; end: number }> } => {
+    const ranges: Array<{ row: OrderedChunkRow; start: number; end: number }> = []
+    let count = 0
+    const parts: string[] = []
+    for (const row of rows) {
+      const n = tokenizeForDiff(row.text).length
+      ranges.push({ row, start: count, end: count + n })
+      parts.push(row.text)
+      count += n
+    }
+    return { text: parts.join('\n'), ranges }
+  }
+  const a = build(aRows)
+  const b = build(bRows)
+
+  const budgetWords = Math.max(1, Math.floor(budgetTokens / TOKENS_PER_WORD))
+  const diff = wordDiff(a.text, b.text)
+  if (!diff || !isPreciseDiffUseful(diff)) return null
+
+  const chunksTotal = aRows.length + bRows.length
+
+  // Locate the chunk owning a word index (clamp to the last chunk for a trailing index).
+  const chunkAt = (
+    ranges: Array<{ row: OrderedChunkRow; start: number; end: number }>,
+    wordIdx: number
+  ): OrderedChunkRow =>
+    ranges.find((r) => wordIdx >= r.start && wordIdx < r.end)?.row ?? ranges[ranges.length - 1].row
+
+  // Attribute each change to its source chunk(s): removed/context → doc A, added → doc B. Preserve
+  // document order, dedupe, and label [S1…] continuously so the citation panel points AT the changes.
+  const cited: OrderedChunkRow[] = []
+  const seen = new Set<string>()
+  const cite = (row: OrderedChunkRow): void => {
+    if (seen.has(row.id)) return
+    seen.add(row.id)
+    cited.push(row)
+  }
+  if (diff.identical) {
+    // No changes: cite the head of each document so the panel/coverage still resolve.
+    cite(aRows[0])
+    cite(bRows[0])
+  } else {
+    for (const c of diff.changes) {
+      if (c.removed.length > 0) cite(chunkAt(a.ranges, c.aStart ?? 0))
+    }
+    for (const c of diff.changes) {
+      if (c.added.length > 0) cite(chunkAt(b.ranges, c.bStart ?? 0))
+    }
+    if (cited.length === 0) {
+      cite(aRows[0])
+      cite(bRows[0])
+    }
+  }
+
+  const changesText = diff.identical
+    ? '(No differences — a word-level comparison found the two documents to be textually identical.)'
+    : renderChangesForModel(diff.changes).text
+  // Cap the change list to the budget; if even capped it overflows, fall back (docs too different).
+  if (approxTokenCount(changesText) * TOKENS_PER_WORD > budgetTokens) {
+    const fitted = fitChangesToBudget(diff.changes, budgetWords)
+    if (!fitted) return null
+    return buildDiffResult(diff, fitted.changesText, fitted.redlineText, fitted.truncated, cited, chunksTotal)
+  }
+  const redlineText = diff.identical ? '' : renderRedline(diff.changes).text
+  return buildDiffResult(diff, changesText, redlineText, false, cited, chunksTotal)
+}
+
+/** Cap the change list to a word budget (best-first) so a very-many-changes pair still answers. */
+function fitChangesToBudget(
+  changes: DiffChange[],
+  budgetWords: number
+): { changesText: string; redlineText: string; truncated: boolean } | null {
+  for (let max = Math.min(changes.length, 200); max >= 1; max = Math.floor(max / 2)) {
+    const forModel = renderChangesForModel(changes, { max })
+    if (approxTokenCount(forModel.text) <= budgetWords) {
+      return {
+        changesText: forModel.text,
+        redlineText: renderRedline(changes, { max }).text,
+        truncated: true
+      }
+    }
+    if (max === 1) break
+  }
+  return null
+}
+
+function buildDiffResult(
+  diff: DiffResult,
+  changesText: string,
+  redlineText: string,
+  truncated: boolean,
+  cited: OrderedChunkRow[],
+  chunksTotal: number
+): CompareDiffResult {
+  const chunks: RetrievedChunk[] = cited.map((row, i) => ({
+    label: `S${i + 1}`,
+    chunkId: row.id,
+    documentId: row.document_id,
+    text: row.text,
+    sourceTitle: row.source_label ?? 'Untitled',
+    pageNumber: row.page_number,
+    sectionLabel: row.section_label,
+    score: 0
+  }))
+  const citations: Citation[] = chunks.map((c) => ({
+    label: c.label,
+    sourceTitle: c.sourceTitle,
+    pageNumber: c.pageNumber,
+    section: c.sectionLabel,
+    snippet: truncateSnippet(c.text)
+  }))
+  return {
+    chunks,
+    citations,
+    redlineText,
+    changesText,
+    identical: diff.identical,
+    chunksCovered: chunksTotal,
+    chunksTotal,
+    truncated
+  }
+}
+
 /**
  * RT-2 — the STABLE grounding rules + preface, hoisted out of the per-turn USER message into
  * the cacheable SYSTEM prompt (`GROUNDED_SYSTEM_PROMPT`). Keeping them in the user turn meant
@@ -595,6 +784,34 @@ ${question}
 ${skillBlock}
 Documents to compare:
 ${docs}
+
+Answer:`
+}
+
+/**
+ * Grounded prompt for the DIFF-DRIVEN compare (mode d, compare-diff record). The model is handed the
+ * EXACT changes a deterministic word-level diff already found — never two walls of text — so it
+ * cannot miss a one-word change or dismiss repetitive/placeholder content as "identical". It answers
+ * the user's question over those changes, in the user's language, per the skill fence. The redline is
+ * included verbatim so it can quote exact wording; `[Sn]` citations point at the changed locations.
+ */
+export function buildCompareDiffPrompt(
+  question: string,
+  redlineText: string,
+  changesText: string,
+  skillFence?: string | null
+): string {
+  const skillBlock = skillFence ? `\n${skillFence}\n` : ''
+  const redlineBlock = redlineText ? `Exact word-level changes (redline):\n${redlineText}\n\n` : ''
+  return `Question:
+${question}
+${skillBlock}
+A deterministic word-level comparison of the two documents produced the changes below. Base your
+answer ONLY on these changes — they are complete and exact. Do not dismiss a change as unimportant;
+keep names, numbers, and dates exact. Cite the changed locations with [S1], [S2], etc.
+
+${redlineBlock}Changes from the old version to the new version:
+${changesText}
 
 Answer:`
 }
@@ -779,6 +996,9 @@ export async function generateGroundedAnswer(
   // When set (Follow-up B), the grounded turn presents the two compared documents as labelled blocks
   // (buildCompareWholeDocPrompt) instead of a single excerpt list.
   let compareGroups: Array<{ title: string; chunks: RetrievedChunk[] }> | null = null
+  // When set (mode d, compare-diff record), the grounded turn presents the DETERMINISTIC changes
+  // (buildCompareDiffPrompt) instead of the two whole documents — the primary version-compare path.
+  let compareDiff: { redlineText: string; changesText: string } | null = null
   if (opts.wholeDocument) {
     const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
@@ -809,19 +1029,38 @@ export async function generateGroundedAnswer(
       truncated: whole.truncated
     }
   } else if (opts.wholeDocumentCompare) {
-    // 2-document whole-doc compare (Follow-up B): read BOTH documents in order with the budget split
-    // across them (size-aware), present them as two labelled blocks + the fence, and stamp honest
-    // `capped` coverage (truncated when EITHER document overflowed its share).
     const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
-    const comp = retrieveCompareWholeDocuments(db, opts.wholeDocumentCompare.documentIds, budget)
-    chunks = comp.chunks
-    citations = comp.citations
-    compareGroups = comp.groups
-    coverage = {
-      mode: 'capped',
-      chunksCovered: comp.chunksCovered,
-      chunksTotal: comp.chunksTotal,
-      truncated: comp.truncated
+    const ids = opts.wholeDocumentCompare.documentIds
+    // Mode (d) — DIFF-DRIVEN compare (compare-diff record, architecture.md §20). A deterministic
+    // word-level diff over BOTH whole documents is the primary path for a version pair: it examines
+    // every chunk (so a page-2 change can't be truncated away) and hands the model the EXACT changes,
+    // not two walls of text. Returns null when the diff is not the right tool (docs too large/too
+    // different) — then fall back to the labelled whole-doc-compare read (which may cap the tail).
+    const diff = retrieveCompareDiff(db, ids, budget)
+    if (diff) {
+      chunks = diff.chunks
+      citations = diff.citations
+      compareDiff = { redlineText: diff.redlineText, changesText: diff.changesText }
+      coverage = {
+        mode: 'capped',
+        chunksCovered: diff.chunksCovered,
+        chunksTotal: diff.chunksTotal,
+        truncated: diff.truncated
+      }
+    } else {
+      // 2-document whole-doc compare (Follow-up B): read BOTH documents in order with the budget
+      // split across them (size-aware), present them as two labelled blocks + the fence, and stamp
+      // honest `capped` coverage (truncated when EITHER document overflowed its share).
+      const comp = retrieveCompareWholeDocuments(db, ids, budget)
+      chunks = comp.chunks
+      citations = comp.citations
+      compareGroups = comp.groups
+      coverage = {
+        mode: 'capped',
+        chunksCovered: comp.chunksCovered,
+        chunksTotal: comp.chunksTotal,
+        truncated: comp.truncated
+      }
     }
   } else {
     // Clamp the excerpt budget to the REAL launched window (§L0), not just the fixed
@@ -863,9 +1102,11 @@ export async function generateGroundedAnswer(
   // Pre-size the skill fence (§11.3/A6) against the fence-less grounded turn so it never starves
   // the base preamble, the question, or the excerpts — only older history yields. The fence rides
   // in the grounded USER turn (buildGroundedPrompt). Stamp only when the fence actually fit.
-  const groundedNoFence = compareGroups
-    ? buildCompareWholeDocPrompt(question, compareGroups)
-    : buildGroundedPrompt(question, chunks)
+  const groundedNoFence = compareDiff
+    ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText)
+    : compareGroups
+      ? buildCompareWholeDocPrompt(question, compareGroups)
+      : buildGroundedPrompt(question, chunks)
   // `contextTokens` was resolved above (the whole-document budget needs it up-front); it is the
   // REAL launched context window the runtime reports (§L0), not settings.contextTokens.
   // L2 (context compaction): summarize older raw turns into a cached checkpoint when the history
@@ -895,9 +1136,11 @@ export async function generateGroundedAnswer(
     skillFence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget).text
   }
   const grounded = skillFence
-    ? compareGroups
-      ? buildCompareWholeDocPrompt(question, compareGroups, skillFence)
-      : buildGroundedPrompt(question, chunks, skillFence)
+    ? compareDiff
+      ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, skillFence)
+      : compareGroups
+        ? buildCompareWholeDocPrompt(question, compareGroups, skillFence)
+        : buildGroundedPrompt(question, chunks, skillFence)
     : groundedNoFence
   // Trim older history to the model context window so the grounded turn (which carries the
   // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow

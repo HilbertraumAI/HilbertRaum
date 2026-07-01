@@ -24,6 +24,7 @@ import {
   compareAttributionLine,
   compareBudgetWords,
   compareTruncationNotice,
+  compareRedlineHeading,
   type DocTaskDeps
 } from '../../src/main/services/doctasks'
 import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
@@ -62,6 +63,16 @@ async function importDoc(
   deps: IngestionDeps = {}
 ): Promise<string> {
   const text = Array.from({ length: words }, (_, i) => `${prefix}${i}`).join(' ')
+  const p = join(tmp, name)
+  writeFileSync(p, text, 'utf8')
+  const info = createQueuedDocument(db, p)
+  const done = await processDocument(db, storeDir, info.id, deps)
+  expect(done.status).toBe('indexed')
+  return info.id
+}
+
+/** Import a .txt with EXACT text (for the diff path — two similar version strings). */
+async function importText(name: string, text: string, deps: IngestionDeps = {}): Promise<string> {
   const p = join(tmp, name)
   writeFileSync(p, text, 'utf8')
   const info = createQueuedDocument(db, p)
@@ -263,6 +274,60 @@ describe('mode (a) — small-docs full compare (D37: re-extracted segments)', ()
     const manager = makeManager({ runtime: scriptedRuntime() })
     const status = await runCompare(manager, a, b)
     expect(status.state).toBe('done')
+  })
+})
+
+describe('mode (d) — diff-driven compare (similar version pairs, the what-changed case)', () => {
+  it('catches a single deleted word deep in the doc: exact redline + model sees the change list', async () => {
+    // A near-identical pair whose ONLY difference is one deleted word (the "tempor" regression):
+    // the model-eyeball modes miss it; the deterministic diff cannot.
+    const base = Array.from({ length: 300 }, (_, i) => `word${i}`)
+    const withWord = base.slice(0, 150).concat(['tempor'], base.slice(150)).join(' ')
+    const without = base.join(' ')
+    const a = await importText('v1.txt', withWord)
+    const b = await importText('v2.txt', without)
+    const rt = scriptedRuntime()
+    const status = await runCompare(makeManager({ runtime: rt }), a, b)
+
+    expect(status.state).toBe('done')
+    // Exactly ONE model call — to INTERPRET the deterministic change list (not eyeball two walls).
+    expect(rt.calls).toHaveLength(1)
+    const prompt = promptOf(rt.calls[0])
+    expect(prompt).toContain('deterministic word-level comparison')
+    expect(prompt).toContain('Removed: "tempor"') // the exact change is handed to the model
+    // The materialized document leads with the deterministic redline showing the exact deletion.
+    const { text } = readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    expect(text).toContain(compareRedlineHeading())
+    expect(text).toContain('~~tempor~~')
+    expect(text).not.toContain('covers the beginning')
+  })
+
+  it('identical documents: deterministic "textually identical" report, NO model call', async () => {
+    const same = Array.from({ length: 200 }, (_, i) => `same${i}`).join(' ')
+    const a = await importText('id1.txt', same)
+    const b = await importText('id2.txt', same)
+    const rt = scriptedRuntime()
+    const status = await runCompare(makeManager({ runtime: rt }), a, b)
+
+    expect(status.state).toBe('done')
+    expect(rt.calls).toHaveLength(0) // the word diff is ground truth — no model needed
+    expect(status.progress).toEqual({ stepsDone: 1, stepsTotal: 1 })
+    const { text } = readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    expect(text).toContain('textually identical')
+  })
+
+  it('a full rewrite (all words differ) falls back to the thematic modes — NOT a giant redline', async () => {
+    // 100% different → the diff is abandoned (equal share 0) and the existing single-pass mode runs.
+    const a = await importText('r1.txt', Array.from({ length: 120 }, (_, i) => `aa${i}`).join(' '))
+    const b = await importText('r2.txt', Array.from({ length: 120 }, (_, i) => `bb${i}`).join(' '))
+    const rt = scriptedRuntime()
+    const status = await runCompare(makeManager({ runtime: rt }), a, b)
+
+    expect(status.state).toBe('done')
+    const prompt = promptOf(rt.calls[0])
+    expect(prompt).toContain('Compare document A') // mode (a) fallback, not the diff prompt
+    const { text } = readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    expect(text).not.toContain(compareRedlineHeading())
   })
 })
 

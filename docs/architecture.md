@@ -3678,7 +3678,8 @@ triggers a second capped pass. A document that **fits** the budget never enters 
 DB tree/coverage reads + the chat runtime, no new DB/FS/net handle; the fence (with its guard line) keeps
 bracketing the untrusted body in every step's USER turn, the app-authored system prompt outside it.
 **Still open** for the tree path: a tree-backed compare (applying this map-reduce per oversized document
-inside the 2-doc compare below) — today the compare reads both docs capped, not tree-reduced.
+inside the 2-doc compare below) for the DISSIMILAR-document fallback — a similar version pair now goes
+through the **diff-driven** path (compare-diff record below), which reads both docs whole without capping.
 
 **2-document whole-doc compare (Follow-up B, Wave 3, 2026-06-22).** `what-changed` registers a
 **`grounded-whole-doc-compare`** handler (`analysis/whole-doc-skills.ts`) whose `applies()` matches a
@@ -3708,6 +3709,37 @@ relevance path). `skills-analysis-whole-doc.test.ts` also pins the `what-changed
 (IPC-level over the real `askDocuments`: the model IS called with `coverage.mode==='capped'` +
 the fence + the whole transcript in the user turn, the refuse path with no model call, and an off-topic
 question keeping the relevance path with no `capped` coverage).
+
+**Compare-diff record — deterministic word-level diff is the compare backbone (2026-07-02).**
+*Problem it fixes.* Every compare mode above hands the model two walls of text and asks it to *eyeball*
+the differences. That reliably MISSES a subtle change — a single deleted word deep in repetitive text —
+and lets the model dismiss low-salience/placeholder content ("Lorem ipsum") as "identical, nothing to
+compare". In the chat path it was compounded by truncation: at the default 4096-token window
+`splitCompareBudget` gives each doc ~half, so a ~2-page version pair had **page 2 (where the change was)
+dropped** as the capped tail — the model never saw it. *Fix.* A new pure module **`services/diff`**
+computes a **Myers word-level diff** (`wordDiff`, O((N+M)·D) with a `maxEdits` cutoff + a `maxWords`
+guard, so it is near-linear for a real version pair and cheaply BAILS to null when the two diverge).
+`isPreciseDiffUseful` (the single routing policy) drives compare by the diff ONLY when the pair is
+similar (some shared content, changed fraction ≤ 0.5); a rewrite / too-large / too-different pair returns
+null and falls through to the existing modes. Both compare paths gained a **diff-driven mode (d)**:
+- **Chat** (`grounded-whole-doc-compare`): `retrieveCompareDiff` reads BOTH docs whole (every chunk — no
+  cap), diffs them, and feeds the model the **exact changes + a redline** via `buildCompareDiffPrompt`
+  (never two whole-doc walls). Coverage is honest **whole-document** (the diff examined every chunk, so a
+  page-2 change can't be truncated away); `[Sn]` citations are attributed to the chunks where the changes
+  are. Identical docs are stated as such; the whole-doc-compare read is the fallback for a rewrite.
+- **Doctask** (`runCompare`, materialized "Comparison: A vs B.md"): `runCompareByDiff` short-circuits an
+  identical pair to a model-free report, else materializes a deterministic **redline** (`renderRedline`,
+  struck/added words with context) ABOVE a model interpretation of just the changes (`compareDiffPrompt`)
+  — so the exact wording is always shown even if the interpretation editorializes. Modes (a)/(b)/(c) run
+  only for a rewrite/too-large pair (which is why every prior compare test — all use maximally-dissimilar
+  fixtures — is byte-unchanged). The redline **direction** follows document order (there is no reliable
+  old/new signal); the doctask uses the user's explicit A/B selection order. `SKILL.md` was updated to
+  treat a supplied diff as complete/exact and never dismiss a change as placeholder.
+- *Tests.* `tests/unit/diff.test.ts` (the algorithm: the one-word-deletion regression, insert/replace/
+  identical, the edit-cutoff → null, near-identical large texts, redline/model rendering);
+  `doctasks-compare.test.ts` mode (d) block (one-word redline, identical short-circuit no model call,
+  rewrite → fallback); `rag-whole-doc-compare.test.ts` (chat diff path: exact changes reach the model,
+  identical, rewrite → whole-doc fallback).
 
 ### §21 Geometry-aware PDF bank-statement extraction (Phase 31, 2026-06-23, D50–D58)
 

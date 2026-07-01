@@ -38,8 +38,12 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const WHAT_CHANGED_INSTALL_ID = 'app:what-changed'
 
+// A real version pair: same wording except the amounts/terms — the diff-driven compare path.
 const VERSION_A = 'Service fee is 100 EUR per month. Term: 12 months. Cancellation notice: 30 days.'
 const VERSION_B = 'Service fee is 120 EUR per month. Term: 24 months. Cancellation notice: 60 days.'
+// A pair with NO shared wording — the diff is abandoned and the whole-doc-compare read runs.
+const REWRITE_A = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike'
+const REWRITE_B = 'one two three four five six seven eight nine ten eleven twelve thirteen'
 
 function writeWhatChangedSkill(appSkillsDir: string): void {
   const d = join(appSkillsDir, 'what-changed')
@@ -62,6 +66,7 @@ interface Harness {
   conversationId: (docIds: string[]) => string
   docA: string
   docB: string
+  mk: (name: string, text: string) => Promise<string>
   runtime: ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
 }
 
@@ -127,7 +132,7 @@ async function makeHarness(opts: { bothFullyChunked?: boolean } = {}): Promise<H
   registerRagIpc(ctx)
   const conversationId = (docIds: string[]): string =>
     createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: docIds } }).id
-  return { db, conversationId, docA, docB, runtime }
+  return { db, conversationId, docA, docB, mk, runtime }
 }
 
 beforeEach(() => {
@@ -136,7 +141,7 @@ beforeEach(() => {
 })
 
 describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Follow-up B)', () => {
-  it('compare path: BOTH whole docs reach the model, capped coverage, citations from both, skill stamped', async () => {
+  it('diff path: the EXACT changes reach the model (not two walls of text), capped coverage, cited, stamped', async () => {
     const h = await makeHarness({ bothFullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -148,21 +153,63 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     const msg = result as Message
 
     expect(h.runtime.calls).toBe(1)
-    // Both whole versions reached the model in one labelled compare turn (not top-k of one).
     const userTurn = h.runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
-    expect(userTurn).toContain('Document 1')
-    expect(userTurn).toContain('Document 2')
-    expect(userTurn).toContain('100 EUR')
-    expect(userTurn).toContain('120 EUR')
+    // The model is handed the deterministic change list — the exact changed values, not two whole
+    // documents. A one-word change here cannot be missed because it is spelled out. The redline
+    // direction follows document order (inherently ambiguous without an old/new signal), so accept
+    // either — what matters is that the exact 100↔120 change is surfaced deterministically.
+    expect(userTurn).toContain('deterministic word-level comparison')
+    expect(userTurn).toContain('100')
+    expect(userTurn).toContain('120')
+    expect(userTurn).toMatch(/~~(100|120)~~ \*\*(120|100)\*\*/) // redline shows the exact swap
+    expect(userTurn).not.toContain('Document 1') // NOT the whole-doc-walls prompt
     // The SKILL.md fence rode in the compare user turn.
     expect(userTurn).toContain('material changes')
-    // Honest combined breadth: both small versions fit → capped/not-truncated → "whole document".
+    // Honest breadth: the diff examined the WHOLE of both documents → capped/not-truncated.
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)
-    // Citations span BOTH documents; the skill is stamped (explicit pick ⇒ autoFired false).
+    // Citations point at the change locations in BOTH documents; the skill is stamped.
     expect(msg.citations && msg.citations.length).toBeGreaterThanOrEqual(2)
     expect(msg.skillId).toBe(WHAT_CHANGED_INSTALL_ID)
     expect(msg.autoFired).toBe(false)
+  })
+
+  it('identical documents: the model is told they are identical (not asked to eyeball two walls)', async () => {
+    const h = await makeHarness({ bothFullyChunked: true })
+    const same = await h.mk('same.txt', VERSION_A)
+    const sameCopy = await h.mk('same-copy.txt', VERSION_A)
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId([same, sameCopy]),
+      'what changed between these two versions?',
+      WHAT_CHANGED_INSTALL_ID
+    )
+    const msg = result as Message
+    const userTurn = h.runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
+    expect(userTurn).toContain('textually identical')
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(false)
+  })
+
+  it('a full rewrite (no shared wording) falls back to the labelled whole-doc-compare read', async () => {
+    const h = await makeHarness({ bothFullyChunked: true })
+    const a = await h.mk('rewrite-a.txt', REWRITE_A)
+    const b = await h.mk('rewrite-b.txt', REWRITE_B)
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId([a, b]),
+      'what changed between these two versions?',
+      WHAT_CHANGED_INSTALL_ID
+    )
+    const msg = result as Message
+    const userTurn = h.runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
+    // The diff was abandoned (no shared content) → the two documents are presented as labelled blocks.
+    expect(userTurn).toContain('Document 1')
+    expect(userTurn).toContain('Document 2')
+    expect(userTurn).not.toContain('deterministic word-level comparison')
+    expect(msg.coverage?.mode).toBe('capped')
   })
 
   it('refuse path: a not-fully-chunked doc in the pair is refused — fixed message, no model call', async () => {

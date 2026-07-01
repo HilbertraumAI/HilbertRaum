@@ -6,7 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_2026-07-01 — **Invoice format-transformation exports: JSON / CSV / XML (INVOICE-FORMAT-1) — working tree,
+_2026-07-02 — **Deterministic word-level diff is the compare backbone (COMPARE-DIFF-1) — working tree,
+UNCOMMITTED.** Offline / pure / no new deps. From D:\ testing the `what-changed` skill: two ~2-page docs
+differing by a SINGLE deleted word ("…eirmod ~~tempor~~ invidunt…" on page 2) — the chat compare answered
+"both are placeholder Lorem ipsum, no differences, identical". **Root cause (verified end-to-end + adversarial
+workflow, both claims `refuted:false high`):** (1) the chat `grounded-whole-doc-compare` split the whole-doc
+budget in half per doc, so at the default **4096-ctx** the ~780-token page 2 was dropped as the capped tail —
+the model never saw the change; (2) DEEPER + path-independent — **no compare mode did a textual diff at all**;
+every mode (chat whole-doc + doctask a/b/c) handed the model two walls of text to *eyeball*, and the prompts
+("material changes … not a raw diff", write "Nothing notable") make it dismiss a subtle change in repetitive
+text. **Fix — new pure module `services/diff`** (`wordDiff` = Myers O((N+M)·D) with `maxEdits` cutoff +
+`maxWords` guard; `isPreciseDiffUseful` = the single routing policy; `renderRedline`/`renderChangesForModel`).
+Both compare paths gained a **diff-driven mode (d)**, used ONLY for a SIMILAR pair (shared content, changed
+fraction ≤ 0.5) — a rewrite/too-large/too-different pair returns null and falls through to the existing modes
+(so every prior compare test, all maximally-dissimilar fixtures, is byte-unchanged): **doctask** `runCompare`
+→ `runCompareByDiff` (identical short-circuits model-free; else deterministic redline ABOVE a model
+interpretation of just the changes via `compareDiffPrompt`); **chat** `retrieveCompareDiff` reads both docs
+whole (no cap → honest whole-document coverage, page-2 change can't be truncated), feeds changes+redline via
+`buildCompareDiffPrompt`, cites the chunks where changes are. `SKILL.md` updated: treat a supplied diff as
+complete/exact, never dismiss a change as placeholder. **Data contract:** `DiffChange` carries optional
+`aStart`/`bStart` word indices for chunk/page attribution; redline direction follows document order (no
+reliable old/new signal — doctask uses the user's A/B order). **Tests:** +20 (`tests/unit/diff.test.ts` ×12
+incl. the one-word regression + cutoff→null; doctasks-compare mode (d) ×3; rag-whole-doc-compare rewritten to
+the diff behavior + identical + rewrite-fallback ×2 new). **Full `npm test` green: 2736 passed / 0 failed**;
+typecheck green. (The root-cwd `npx vitest` `@shared`/`C:\model-manifests` failures are the SAME pre-existing
+env artifacts noted below — absent under the canonical `npm test`.) Docs: architecture.md §20 compare-diff
+record, rag-design.md §14.6 mode (d), known-limitations.md. **Next:** consider de-overlapping the chat diff's
+chunk-joined text (a boundary change can list twice — cosmetic), and a tree-backed compare for the
+DISSIMILAR-large fallback (still deferred)._
+- _(same-day earlier)_ **Invoice format-transformation exports: JSON / CSV / XML (INVOICE-FORMAT-1) — working tree,
 UNCOMMITTED.** Offline / deterministic / 0 model calls. Owner asked "LLMs are good at extracting invoice
 data + transforming to JSON/CSV/XML — should we let the LLM do the job?" Ran a grounded workflow (8 agents,
 read-only over this repo) to decide it rather than answer from memory. **Decision — SPLIT the question:**

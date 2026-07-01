@@ -1,13 +1,21 @@
 import { extname } from 'node:path'
 import { approxTokenCount, windowByTokens } from '../ingestion/chunker'
 import { cosineSimilarity, dotProduct } from '../embeddings'
+import { DEFAULT_DIFF_CONTEXT_WORDS, DEFAULT_MAX_CHANGED_RATIO } from '../diff'
 import { SUMMARY_TOKENS_PER_WORD } from './summary'
 
 // Compare window math + templates (split out of the former monolithic doctasks.ts —
 // audit M-A4).
 //
 // The result is a MATERIALIZED corpus document ("Comparison: A vs B.md") and the
-// strategy auto-switches on token math:
+// strategy auto-switches:
+//   (d) diff-driven compare (compare-diff record, architecture.md §20) — the PRIMARY path for a
+//       version pair. A deterministic word-level diff (`../diff`) over both full texts finds the
+//       EXACT changes; identical docs short-circuit to a model-free report, and a real change set
+//       is materialized as a redline + a model interpretation of just the changes. It runs only
+//       when the two documents are SIMILAR (`isPreciseDiffUseful`); a rewrite / too-large / too-
+//       different pair returns null and falls through to the token-math modes below. This is what
+//       catches a one-word change the model-eyeball modes (a)/(b)/(c) miss.
 //   (a) small-docs full compare — both documents' full texts fit one call ⇒ one
 //       structured-comparison call over both, then materialize.
 //   (b) section-matched compare — for each window of doc A's chunks, the nearest doc-B
@@ -52,6 +60,10 @@ export const COMPARE_MAP_CALL_CEILING = 12
 const COMPARE_MAP_OUTPUT_FLOOR_TOKENS = 128
 /** Nearest doc-B chunks retrieved per doc-A chunk before the word-budget fill. */
 export const COMPARE_NEIGHBORS_PER_CHUNK = 3
+// Diff-driven compare routing (mode d) lives in `../diff` (the single policy shared with the chat
+// compare path); re-exported here under the compare-local names the handler + tests already use.
+export const COMPARE_DIFF_CONTEXT_WORDS = DEFAULT_DIFF_CONTEXT_WORDS
+export const COMPARE_DIFF_MAX_CHANGED_RATIO = DEFAULT_MAX_CHANGED_RATIO
 
 /** Usable model tokens for input text after the prompt + output reserves. */
 function compareUsableInputTokens(contextTokens: number): number {
@@ -301,6 +313,49 @@ export function compareReducePrompt(titleA: string, titleB: string, partials: st
     'to report, write "Nothing notable." under it. Do not mention the notes or sections. ' +
     'Reply with ONLY the report.\n\n' +
     partials.map((p, i) => `Notes ${i + 1}:\n${p}`).join('\n\n')
+  )
+}
+
+/** Heading for the deterministic redline block (the exact word-level changes, model-independent). */
+export function compareRedlineHeading(): string {
+  return '## Exact changes (word-level diff)'
+}
+
+/**
+ * Mode (d) — DIFF-DRIVEN compare (compare-diff record, architecture.md §20). A deterministic
+ * word-level diff already produced the EXACT changes; the model only INTERPRETS them into business
+ * language over the four-section skeleton. It is handed the changes (never the two whole documents),
+ * so it cannot miss a one-word change or dismiss repetitive/placeholder text as "identical". The
+ * deterministic redline is materialized ABOVE this report, so the exact wording is always shown even
+ * if the interpretation editorializes.
+ */
+export function compareDiffPrompt(titleA: string, titleB: string, changesText: string): string {
+  return (
+    `You are comparing two versions of a document: A ("${titleA}") and B ("${titleB}"). A ` +
+    'deterministic word-level comparison already found the EXACT changes between them, listed ' +
+    'below. Turn them into a short report in Markdown with exactly these four sections:\n' +
+    compareReportHeadings(titleA, titleB).join('\n') +
+    '\n\nUnder each heading write short bullet points. Base every bullet ONLY on the listed ' +
+    'changes — do not invent differences and do not claim anything the list does not show. Keep ' +
+    'names, numbers, and dates EXACT, and say which version has which value. A change that only ' +
+    'removed text belongs under "Only in A"; one that only added text under "Only in B"; a value ' +
+    'that changed under "What differs between them". Do not dismiss a change as unimportant — a ' +
+    'single changed word can matter; report it plainly and let the reader judge. If a section has ' +
+    'nothing, write "Nothing notable." under it. Reply with ONLY the report.\n\n' +
+    `The exact changes from version A to version B:\n${changesText}`
+  )
+}
+
+/**
+ * Deterministic report body for two TEXTUALLY IDENTICAL documents — no model call (the word diff is
+ * ground truth). Replaces the old failure mode where the model, shown two walls of identical text,
+ * would waffle about placeholder content; here the app states the fact plainly.
+ */
+export function compareIdenticalReport(): string {
+  return (
+    `${compareReportHeadings('', '')[0]}\n` +
+    '- The two documents are textually identical: a word-level comparison found no differences.\n\n' +
+    `${compareReportHeadings('', '')[1]}\n- Nothing notable.`
   )
 }
 

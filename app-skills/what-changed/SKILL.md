@@ -35,13 +35,21 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 # What Changed?
 
 Use this skill when the user wants to compare two versions of a document, contract, policy, offer,
-report, or set of terms. Highlight the **material** changes in business language — not a raw diff.
+report, or set of terms. Highlight the **material** changes in business language — grounded in the
+exact changes, not a vague impression.
 
 **Before you start:** if fewer than two documents or versions are in scope, say clearly: "Please
 select two documents or two versions to compare." If more than two are in scope, ask the user to
-narrow to exactly two. Do not pretend to produce an exact line-by-line diff unless the app actually
-gives you aligned compare output; prefer business-language impact. If only partial passages are
-available, use cautious wording.
+narrow to exactly two.
+
+**When the app gives you a deterministic word-level diff** (an "Exact changes"/redline block or a
+list of exact changes), treat it as **complete and exact** — it already found every changed word,
+including a single deleted or altered word. Base your answer only on it: turn each change into a
+plain-language point, and **never dismiss a change as unimportant or the content as "placeholder"**
+just because it looks repetitive or low-value — report it plainly (e.g. "one word removed on page 2")
+and let the reader judge. Keep every amount, date, and wording exactly as printed. If instead you are
+given only document passages (no diff), compare carefully and use cautious wording for anything the
+passages do not fully cover.
 
 Produce the answer in this order; omit a section only if there is genuinely nothing for it.
 

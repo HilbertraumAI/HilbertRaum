@@ -30,8 +30,14 @@ import {
   compareNearestNeighbors,
   alignNodes,
   SYMMETRIC_COMPARE_CALL_CEILING,
-  compareDocumentTitle
+  compareDocumentTitle,
+  compareDiffPrompt,
+  compareIdenticalReport,
+  compareRedlineHeading,
+  COMPARE_DIFF_CONTEXT_WORDS,
+  COMPARE_DIFF_MAX_CHANGED_RATIO
 } from '../compare'
+import { wordDiff, renderRedline, renderChangesForModel, isPreciseDiffUseful } from '../../diff'
 import type { DocTaskCtx, InternalTask } from '../context'
 import { buildProvenance, extractSegmentTexts, materializeDocument } from './shared'
 
@@ -64,7 +70,15 @@ export async function runCompare(
   let report: string
   let truncated = false
   let asymmetric = false
-  if (compareFitsSinglePass(approxTokenCount(textA), approxTokenCount(textB), contextTokens)) {
+  // Mode (d) — DIFF-DRIVEN compare (compare-diff record, architecture.md §20). A deterministic
+  // word-level diff is the backbone: it catches an exact one-word change that every model-eyeball
+  // mode below misses, and never dismisses repetitive/placeholder text as "identical". It drives the
+  // compare ONLY when the two documents are SIMILAR (a real version pair); a rewrite — or docs too
+  // different to diff cheaply — returns null and falls through to the thematic modes (a)/(b)/(c).
+  const diffReport = await runCompareByDiff(task, runtime, docA, docB, textA, textB, ctx)
+  if (diffReport) {
+    report = diffReport.report
+  } else if (compareFitsSinglePass(approxTokenCount(textA), approxTokenCount(textB), contextTokens)) {
     // Mode (a): one structured-comparison call over both full texts — already symmetric.
     task.status.progress.stepsTotal = 2
     report = await ctx.generate(
@@ -118,6 +132,59 @@ export async function runCompare(
   )
   task.status.progress.stepsDone += 1
   return newDocId
+}
+
+/**
+ * Mode (d) — DIFF-DRIVEN compare (compare-diff record, architecture.md §20). Runs a deterministic
+ * word-level diff over both full texts and, when the two are similar enough that a precise redline
+ * is the right deliverable, materializes that redline + a model interpretation of the EXACT changes
+ * (never the two whole documents). Returns null to signal "not applicable — fall through to the
+ * thematic modes": the docs are too different to diff cheaply (`wordDiff` cutoff), a rewrite (equal
+ * share too low / changed-ratio over the gate), or the change list overflows the model budget.
+ * Identical documents short-circuit to a deterministic report with NO model call.
+ */
+async function runCompareByDiff(
+  task: InternalTask,
+  runtime: ModelRuntime,
+  docA: { id: string; title: string },
+  docB: { id: string; title: string },
+  textA: string,
+  textB: string,
+  ctx: DocTaskCtx
+): Promise<{ report: string } | null> {
+  const diff = wordDiff(textA, textB, { context: COMPARE_DIFF_CONTEXT_WORDS })
+  if (!diff) return null // edit distance over the cutoff → too different for a precise redline
+
+  // Route only when a precise redline is the right answer (identical, or a real version pair);
+  // a rewrite falls through to the thematic modes.
+  if (!isPreciseDiffUseful(diff, COMPARE_DIFF_MAX_CHANGED_RATIO)) return null
+
+  // Identical (ground truth): state it plainly, no model call — the old failure was the model
+  // waffling over two identical walls of placeholder text.
+  if (diff.identical) {
+    task.status.progress.stepsTotal = 1 // materialize only
+    return { report: compareIdenticalReport() }
+  }
+
+  // The model sees the deterministic change list, never the whole documents — so it cannot miss a
+  // one-word change. Bail to the thematic modes if the list itself overflows the per-call budget.
+  const forModel = renderChangesForModel(diff.changes)
+  if (approxTokenCount(forModel.text) > compareBudgetWords(ctx.deps.getContextTokens())) return null
+
+  task.status.progress.stepsTotal = 2 // interpret + materialize
+  const interpretation = await ctx.generate(
+    runtime,
+    compareSystemPrompt(),
+    compareDiffPrompt(docA.title, docB.title, forModel.text),
+    COMPARE_OUTPUT_TOKENS,
+    COMPARE_TEMPERATURE,
+    task.controller.signal
+  )
+  if (interpretation.length === 0) throw new Error(tMain('main.task.genericFailure'))
+  task.status.progress.stepsDone += 1
+  // The deterministic redline sits ABOVE the interpretation, so the exact wording is always shown.
+  const redline = renderRedline(diff.changes)
+  return { report: `${compareRedlineHeading()}\n${redline.text}\n\n${interpretation}` }
 }
 
 /**
