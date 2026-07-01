@@ -6,9 +6,16 @@ import { readChatSSE } from '../runtime/llama'
 // does NOT inherit the chat slot's `CHAT_SERVER_ARGS` (RUNTIME-2). The V1 research gate
 // (BUILD_STATE 2026-06-20) resolved the exact arg set on the pinned b9585:
 //   • `--mmproj <projector>`  loads multimodal cleanly
-//   • `--device none`         CPU-pin (mirrors the embedder; avoids VRAM contention)
-//   • `--jinja` is DEFAULT-ENABLED on b9585 — do NOT pass it; and do NOT pass
-//     `--reasoning-format deepseek` (Qwen2.5-VL is non-reasoning, emits no reasoning frames)
+//   • `--device none` + `--no-mmproj-offload`  FULL CPU-pin (LM *and* projector). RUNTIME-6,
+//     2026-07-01: on b9849 the mmproj offloads to GPU BY DEFAULT even under `--device none`, so
+//     `--device none` alone leaves the projector on the (shared-memory iGPU) GPU where contention
+//     with the chat model can miscompute the image embeddings → token-salad. See VISION_DEVICE_ARGS.
+//   • `--parallel 1`          single server slot — RUNTIME-5, added 2026-07-01. Vision is strictly
+//     one-at-a-time, and the b9849 runtime defaults to n_slots=4 + a UNIFIED KV cache, which splits
+//     the 4096-cell context across slots so a large image starves it (see VISION_SLOT_ARGS below).
+//   • `--jinja` is DEFAULT-ENABLED on b9585 AND b9849 — do NOT pass it (A/B-verified 2026-07-01, it
+//     changes nothing); and do NOT pass `--reasoning-format deepseek` (Qwen2.5-VL is non-reasoning,
+//     emits no reasoning frames)
 // The request is an OpenAI `content:[{type:'text'},{type:'image_url',image_url:{url:'data:…'}}]`
 // with `cache_prompt:true` (the image prefill is cached across follow-ups), streamed back as SSE
 // byte-identical to chat — so `readChatSSE` parses the frames unchanged (V1-confirmed).
@@ -28,8 +35,39 @@ import { readChatSSE } from '../runtime/llama'
 // e5.ts is the precedent for the lazy-start/`startFailed`/no-orphan plumbing but has NO idle
 // timer, so the interlock above is genuinely new code, not a copy.
 
-/** The vision sidecar's extra CLI args BESIDES `--mmproj <path>` (V1-resolved, RUNTIME-2). */
-export const VISION_DEVICE_ARGS = ['--device', 'none'] as const
+/**
+ * FULL CPU-pin for the vision sidecar (RUNTIME-2 base + RUNTIME-6 hardening, 2026-07-01).
+ * `--device none` runs the LANGUAGE model on CPU; `--no-mmproj-offload` keeps the MULTIMODAL
+ * PROJECTOR (clip) on CPU too. On b9849 the projector defaults to GPU offload EVEN under
+ * `--device none` (`llama-server --help`: mmproj-offload default = on), so `--device none` alone
+ * does NOT fulfil the design's "avoid VRAM contention" intent: on this project's target hardware
+ * (a shared-memory Intel Iris Xe iGPU, Vulkan default backend, co-resident with a 6–8 GB chat
+ * model on a 16 GB machine) the projector's GPU compute can be starved and miscompute the image
+ * embeddings, which the LM then decodes as multilingual token-salad. Pinning the projector to CPU
+ * makes the whole vision path contention-immune. CONFIRMED as the fix in-app by the owner
+ * (2026-07-01): the salad reproduced ONLY in the full app, never in an isolated sidecar, because
+ * the projector only contends for the shared iGPU when the chat model is co-resident — pinning it
+ * to CPU resolved it. (Diagnosed the hard way: the b9849 sidecar returns coherent output for every
+ * valid image driven directly, so the model↔runtime pairing is sound; this was b9849 default drift.)
+ */
+export const VISION_DEVICE_ARGS = ['--device', 'none', '--no-mmproj-offload'] as const
+
+/**
+ * Pin the vision sidecar to a SINGLE server slot (RUNTIME-5, added 2026-07-01). Vision is strictly
+ * one-at-a-time — `VisionService` busy-rejects a concurrent analyze — so extra slots are never used.
+ * More than a no-op though: on the b9849 runtime `llama-server` defaults to `n_slots = 4` with a
+ * UNIFIED KV cache (`kv_unified = true`), which SPLITS the 4096-cell context across the four slots.
+ * A 1536-px image (the renderer's `DOWNSCALE_TARGET`) is ~1700–3000 vision tokens, and because the
+ * warm sidecar is reused with `cache_prompt` across images, two large images oversubscribe the
+ * shared pool → llama-server logs `failed to find a memory slot for batch` / `failed to restore kv
+ * cache`, and the request either 500s or runs on truncated/half-restored image embeddings, which
+ * the LM decodes as multilingual token-salad. This regressed silently in the b9585→b9849 pin bump
+ * (commit 26133b0): the vision path was never re-smoked on b9849, and b9585 did not share the KV
+ * pool this way. Empirically A/B-confirmed live on the drive 2026-07-01 — with `--parallel 1` the
+ * server starts `n_slots = 1, kv_unified = false`, the one in-flight request gets the full context
+ * with a cleanly-reset KV, and the large-image failures disappear. See docs/architecture.md §-record.
+ */
+export const VISION_SLOT_ARGS = ['--parallel', '1'] as const
 
 /** Default context window for the vision sidecar (V1 measured peak RSS ~4.6 GB at ctx 4096). */
 const DEFAULT_VISION_CONTEXT_TOKENS = 4096
@@ -159,7 +197,7 @@ export class VisionRuntime {
         // V1-resolved: `--mmproj` loads multimodal; `--device none` CPU-pins. The b9585
         // default-on `--jinja` gives the multimodal chat-template path without inheriting
         // CHAT_SERVER_ARGS; `--reasoning-format` is left at default (non-reasoning VLM).
-        extraArgs: ['--mmproj', this.opts.projectorPath, ...VISION_DEVICE_ARGS],
+        extraArgs: ['--mmproj', this.opts.projectorPath, ...VISION_SLOT_ARGS, ...VISION_DEVICE_ARGS],
         spawn: this.opts.spawn,
         fetchImpl: this.opts.fetchImpl,
         findPort: this.opts.findPort,

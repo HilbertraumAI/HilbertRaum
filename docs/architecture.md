@@ -1779,6 +1779,33 @@ last *verified* runtime evidence; the b9849 re-verification is the REQUIRED manu
 `--list-devices`, the Vulkan-archive-is-a-full-build property — are long-standing upstream behaviour
 expected to hold on b9849, but that is not yet re-confirmed on this project's drive.)
 
+**VISION RE-VERIFIED 2026-07-01 (RUNTIME-5 + RUNTIME-6).** The b9849 vision smoke that §9 owed was
+run live on the provisioned `D:\` drive. Garbage ("multilingual token-salad") image descriptions
+turned out to be **b9849 default drift**, not a model↔runtime incompatibility — the sidecar returns
+coherent output for every valid image when driven directly (CPU/GPU, small/large, PNG/JPEG), and
+corrupted input yields a clean load error, never salad. Two defaults the vision launch args never
+accounted for:
+
+- **RUNTIME-6 — the salad fix (`--no-mmproj-offload`).** On b9849 the **mmproj/clip projector
+  offloads to the GPU by default even under `--device none`** (`llama-server --help`: mmproj-offload
+  default = on). On the target hardware (shared-memory Intel Iris Xe iGPU, Vulkan default, co-resident
+  with a 6–8 GB chat model on a 16 GB machine) the projector's GPU compute was starved under
+  contention and miscomputed the image embeddings → the LM decoded noise as token-salad. The salad
+  therefore reproduced ONLY in the full app (contended iGPU), never in an isolated sidecar (free
+  iGPU). `VISION_DEVICE_ARGS` now also passes `--no-mmproj-offload`, pinning the projector to CPU and
+  completing the "avoid VRAM contention" intent. **Owner-confirmed fixed in-app 2026-07-01.**
+- **RUNTIME-5 — a separate large-image crash (`--parallel 1`).** b9849 defaults to `n_slots = 4` with
+  a **unified KV cache** (`kv_unified = true`), splitting the 4096-cell context across four slots. The
+  warm-reused sidecar (`cache_prompt`) + a 1536-px image's ~1700–3000 vision tokens oversubscribe the
+  shared pool → `failed to find a memory slot for batch` / `failed to restore kv cache` → HTTP 500.
+  `--parallel 1` (`VISION_SLOT_ARGS`) gives the strictly one-at-a-time vision request the full context
+  with a clean KV (`n_slots = 1, kv_unified = false`). A/B-confirmed live: without it a *repeat*
+  large-image request 500s; with it, both succeed.
+
+(Open follow-ups, not blocking: a 1536² image is ~3000 tokens ⇒ ~4 min CPU prefill, which can hit the
+300 s per-request timeout — consider lowering the renderer `DOWNSCALE_TARGET` 1536→~1280 and/or
+raising the vision `--ctx-size` for generation headroom.)
+
 - `-ngl` **defaults to `auto`** and `--fit` **defaults to `on`** (upstream PR #15434, Aug 2025):
   the server does VRAM-aware maximum offload with a ~1 GiB margin and a min-context guard —
   *no GPU args needed; VRAM exhaustion at load is upstream's problem.*

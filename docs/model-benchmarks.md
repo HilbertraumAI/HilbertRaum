@@ -505,6 +505,19 @@ in BUILD_STATE. **Capture tokens/sec + peak RSS** where the existing manual harn
       default reasoning OFF unless `enable_thinking=true`)
 - [ ] no `mmproj`/projector is required for text-only chat (these are text-only manifests)
 
+**6. Vision sidecar (Qwen2.5-VL-3B) on b9849 — DONE 2026-07-01 (the gap that shipped the salad bug):**
+The original §9 checklist omitted the vision sidecar (items 2–4 cover chat + embedder/reranker only).
+A large real image then produced multilingual token-salad on b9849 — root cause = b9849's
+`n_slots = 4` + unified KV starves a large image's ~1700–3000 vision tokens; fixed with `--parallel 1`
+(`VISION_SLOT_ARGS`). Full record: architecture.md §3 (RUNTIME-5) + BUILD_STATE. Re-smoke this after
+ANY future pin bump — a tiny fixture is NOT sufficient (the salad only appears above ~1000 vision
+tokens):
+- [ ] through the APP, analyze a LARGE photo (≥1536 px long side) → COHERENT description
+- [ ] analyze a SECOND large image on the same warm sidecar (no restart) → still coherent (guards the
+      KV-reuse/oversubscription path)
+- [ ] the sidecar stderr shows `n_slots = 1, kv_unified = false` and NO `failed to find a memory
+      slot` / `failed to process image` lines
+
 **5. If `UD-Q4_K_XL` fails to load on b9849 but plain `Q4_K_M` loads:** add the experimental
 `qwen3.5-27b-q4km.yaml` / `qwen3.5-35b-a3b-q4km.yaml` fallback (hashes recorded in the manifest
 templates in the wave plan), keep `UD-Q4_K_XL` as the preferred quant. Do NOT add a fallback

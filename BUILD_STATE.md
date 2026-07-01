@@ -6,6 +6,57 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Vision image descriptions were garbage on b9849 (RUNTIME-5) — branch
+`fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).** Offline / no
+telemetry / no new network egress. From D:\ testing: "describe this image" produced multilingual
+token-salad (repeated `NEW/TO/OF/SIZE` fragments + Chinese/Korean/Portuguese/Arabic pieces). **Root
+cause — the missing vision leg of the b9585→b9849 pin bump (commit 26133b0):** the vision sidecar
+shares the bumped `llama-server` and was never re-smoked on b9849 (§9 items 2–4 covered chat +
+embedder/reranker, NOT vision). On b9849 `llama-server` defaults to `n_slots = 4` + a **unified KV
+cache** (`kv_unified = true`), splitting the 4096-cell ctx across four slots. The sidecar is reused
+warm (`cache_prompt`) and a downscaled 1536-px image is ~1700–3000 vision tokens, so two large
+images oversubscribe the shared pool → `failed to find a memory slot for batch` / `failed to restore
+kv cache` → the request 500s or runs on truncated image embeddings that decode as salad. Tiny
+fixtures (<1000 tokens) fit, which is why unit tests + light testing looked fine. **Diagnosis was
+empirical** — reproduced live on the D:\ b9849 binary + real vision GGUF/mmproj: falsified the first
+two hypotheses (`--jinja` default flip — A/B identical; simple KV-reuse — 4 slots hid it), then a
+large-image A/B surfaced the memory-slot exhaustion in the sidecar stderr and the startup line
+`n_slots = 4, n_ctx_slot = 4096, kv_unified = 'true'`. **Fix (`services/vision/runtime.ts`):** new
+`VISION_SLOT_ARGS = ['--parallel','1']` prepended to the sidecar extraArgs — vision is strictly
+one-at-a-time (`VisionService` busy-reject), so a single slot is correct and restores `n_slots = 1,
+kv_unified = false` (full ctx + clean per-request KV). **A/B-confirmed live:** without the flag a
+repeat large-image request 500s; with it, first + repeat large images both return coherent
+descriptions. Header/`§3`/`§9` comments corrected (the old "resolved on b9585" note + `--jinja`
+claim). **Tests:** vision-runtime.test.ts +1 assertion (`--parallel 1`); full vision suite 46 pass /
+1 skipped (manual smoke); typecheck green; full `npm test` re-run pending commit. **Open follow-ups
+(NOT blocking, flagged in architecture.md §3):** a 1536² image is ~3000 tokens ⇒ ~4 min CPU prefill,
+which can hit the 300 s per-request timeout — consider lowering the renderer `DOWNSCALE_TARGET`
+1536→~1280 and/or raising the vision `--ctx-size` for generation headroom. **NEXT ACTION (owner):
+rebuild/restart the app on D:\ and re-run the §9 item-6 vision smoke (large photo, then a second
+large photo on the warm sidecar) to confirm end-to-end.**
+- **UPDATE (same day) — `--parallel 1` did NOT fix the field salad; sidecar EXONERATED; new leading
+  suspect RUNTIME-6.** Owner retested (restart + same image) → still salad on the FIRST request of a
+  fresh app. Extensive live A/B on the D:\ b9849 binary shows the sidecar returns coherent output for
+  EVERY valid image (small/large, PNG/JPEG, CPU `--device none`, Vulkan GPU, warm/cold, German prompt,
+  ±`--jinja`, ±`--parallel 1`), and CORRUPTED/truncated input yields a clean `Failed to load image`
+  ERROR — never salad. So the salad needs garbage embeddings from a VALID image, NOT reproducible in
+  an isolated sidecar ⇒ the cause is the FULL-APP environment, not the sidecar/model/args-as-read.
+  Hardware: 16 GB laptop, shared-memory Intel Iris Xe iGPU (Vulkan default). **Leading (UNPROVEN)
+  hypothesis RUNTIME-6:** on b9849 the mmproj/clip projector offloads to GPU BY DEFAULT even under
+  `--device none` (`llama-server --help`), so under real contention (chat model co-resident on the
+  8 GB shared iGPU) the projector miscomputes → salad. **Change made:** `VISION_DEVICE_ARGS` now also
+  passes `--no-mmproj-offload` (full CPU-pin of the projector) — verified live it is accepted + output
+  stays coherent; vision-runtime.test.ts asserts it. `--parallel 1` is KEPT (it fixes a real, separate
+  large-image 500 and is correct regardless).
+- **RESOLVED 2026-07-01 — `--no-mmproj-offload` (RUNTIME-6) fixed it; owner confirms coherent
+  descriptions in-app** (app runs via `npm run dev`, so the source fix loaded on restart). Root cause
+  confirmed: on b9849 the mmproj projector offloaded to the shared Intel Iris Xe iGPU by default even
+  under `--device none`, and contention with the co-resident chat model corrupted the image embeddings
+  → salad. The model↔runtime pairing is sound (the sidecar returns coherent output for every valid
+  image when driven directly); this was b9849 default drift, not model incompatibility. Committed to
+  master. Docs: architecture.md §3 (RUNTIME-5/6), model-benchmarks §9 item 6._
+
+
 _2026-07-01 — **Chat scope label (#6): unchecking the Library still said "Nutzt alle Dokumente" — branch
 `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).** Offline / no
 telemetry / no new network egress. From D:\ testing: with a file attached to the chat, the user unchecked

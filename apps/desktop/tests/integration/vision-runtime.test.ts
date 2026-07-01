@@ -99,7 +99,9 @@ describe('VisionRuntime — start + analyze', () => {
     expect(tokens.join('')).toBe(FIXTURE_ANSWER) // streamed token-by-token
     const args = calls[0].args.join(' ')
     expect(args).toContain('--mmproj /models/mmproj.gguf')
-    expect(args).toContain('--device none') // CPU-pinned (V1-resolved)
+    expect(args).toContain('--device none') // CPU-pinned LM (V1-resolved)
+    expect(args).toContain('--no-mmproj-offload') // projector on CPU too — b9849 offloads it to GPU by default (RUNTIME-6)
+    expect(args).toContain('--parallel 1') // single slot — b9849 defaults to n_slots=4+unified KV (RUNTIME-5)
     expect(args).toContain('--host 127.0.0.1') // loopback only
     expect(args).not.toContain('--reasoning-format') // non-reasoning VLM
     // The request inlines the image as a base64 data-URL and caches the prefill (V1).
