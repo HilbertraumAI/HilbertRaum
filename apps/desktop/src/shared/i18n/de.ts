@@ -206,6 +206,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.tool.redactDocument': 'Personenbezogene Daten schwärzen',
   // Die nach einem Kategorisieren-Lauf in den Verlauf eingespielte Aufschlüsselungsfrage (Phase 33, Q3).
   'chat.skill.categorize.breakdownQuestion': 'Schlüssle meine Ausgaben nach Kategorie auf.',
+  // Die nach einem „Geldfluss zusammenfassen“-Lauf eingespielte Frage — analyse-, aber nicht
+  // kategorieförmig, damit der Bankanalyse-Handler die Ein-/Ausgaben-Summen (nicht die Kategorie-
+  // Aufschlüsselung) liefert. Die Zahlen bleiben im Hauptprozess; der Lauf-Status trägt keine Beträge.
+  'chat.skill.summarize.question': 'Fasse meine Einnahmen und Ausgaben zusammen.',
   'chat.skill.run.running.one': 'Läuft: {tool} für {count} Dokument…',
   'chat.skill.run.running.other': 'Läuft: {tool} für {count} Dokumente…',
   // U-1: Statuszeile mit dem Zieldokument (`{document}` löst der Renderer aus seiner eigenen

@@ -194,6 +194,11 @@ export const en = {
   // The breakdown question routed into the transcript after a categorize run (Phase 33, Q3) — it must
   // be both analysis- and category-shaped so the bank analysis handler answers it (0 model calls).
   'chat.skill.categorize.breakdownQuestion': 'Break down my spending by category.',
+  // The question routed into the transcript after a "Summarize cashflow" run so the button produces a
+  // real answer (the in/out/net totals from the 0-model-call bank analysis handler) instead of a bare
+  // "Summarized N transactions" count — the figures stay main-side (the run state carries no figures).
+  // Analysis-shaped but NOT category-shaped, so it yields the cash-flow totals, not the category breakdown.
+  'chat.skill.summarize.question': 'Summarize my income and expenses.',
   'chat.skill.run.running.one': 'Running: {tool} on {count} document…',
   'chat.skill.run.running.other': 'Running: {tool} on {count} documents…',
   // U-1: the busy row naming the target document (the renderer resolves `{document}` from its own

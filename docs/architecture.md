@@ -3181,6 +3181,22 @@ unchanged §7 ceiling (no new capability, still offline, audit still ids/counts-
   chunk-table reader remains as the fallback for callers that don't inject the capability (the seam-level
   tests that seed `chunks` directly); the IPC always injects the verbatim one, and the tool-run IPC tests
   now seed a REAL stored `.txt` so they exercise the production path end-to-end.
+  - **(2026-07-01 follow-up — button/chat extraction parity.)** `readDocumentSegments` is now built by ONE
+    shared factory (`ipc/documentSegments.ts` `buildDocumentSegmentReader`) that BOTH the chat-analysis IPC
+    (`registerRagIpc`) and the run-bar IPC (`registerSkillsIpc`) call. Previously each IPC had its OWN copy
+    of the closure and they **drifted**: the run-bar copy dropped the `{layout}` argument (D58 geometry
+    reconstruction), so the "Extract transactions" BUTTON re-read a columnar statement in plain reading
+    order (fewer, scrambled rows) while the chat answer used layout mode — the SAME document reported a
+    DIFFERENT transaction count *by entry point*. The single factory makes that divergence structurally
+    impossible (a `buildDocumentSegmentReader` unit test pins the `{layout, maxPages}` threading). The
+    `extract_transactions` / `extract_invoice` run-bar buttons also now pass `replaceExisting: true`
+    (matching the analysis + categorize reuse paths — `analysis/bank-statement.ts`, `analysis/invoice.ts`,
+    `doctasks/handlers/categorize.ts`), so an explicit re-extract REPLACES rather than accumulating
+    duplicate `bank_statements`/`invoices` that `latestBankStatementId`/`latestInvoiceId` (newest wins)
+    could otherwise serve divergently to the chat. A `summarize_cashflow` run now also routes an
+    analysis-shaped question into the transcript (mirroring the categorize routing, via ChatScreen's
+    `ROUTED_RUN_QUESTION` map) so the button surfaces the real in/out/net totals — the figures still stay
+    main-side (the run state remains ids/counts-only).
 - **M1 — the §6.5 `minAppVersion` gate is now ENFORCED (was parsed-but-ignored).** A pure shared
   `skillNeedsNewerApp(minAppVersion, appVersion)` (`shared/skill-manifest.ts`) drives it. An app skill that
   needs a newer app reconciles in DISABLED (not auto-enabled); an import installs it disabled; the enable

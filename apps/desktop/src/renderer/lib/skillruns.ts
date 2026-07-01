@@ -12,6 +12,12 @@ import type { SkillRunState, StartSkillRunRequest } from '@shared/types'
 const POLL_MS = 400
 
 let active: SkillRunState | null = null
+// The conversation that started the active run. Kept module-level (like `active`) so it SURVIVES a
+// screen unmount: navigating away mid-run and back must re-attach to the running document chat, not
+// drop the user onto a fresh empty chat while the badge still spins. It is the id the renderer itself
+// passed to `startSkillRun` — NOT sourced from the content-free `SkillRunState`/IPC (which carries
+// ids/counts only), so the ids/counts privacy boundary is unchanged.
+let activeConversationId: string | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 const listeners = new Set<() => void>()
 
@@ -41,6 +47,15 @@ export function getActiveSkillRun(): SkillRunState | null {
   return active
 }
 
+/**
+ * The conversation that owns the active run, or null when no run is active. A screen re-selects it on
+ * remount so an in-flight run (e.g. a "categorize transactions" doctask) keeps the user on its document
+ * chat instead of a new empty one. Renderer-only (the id the renderer passed to `startSkillRun`).
+ */
+export function getActiveSkillRunConversationId(): string | null {
+  return active ? activeConversationId : null
+}
+
 export function isSkillRunTerminal(run: SkillRunState | null): boolean {
   return run != null && (run.state === 'done' || run.state === 'failed' || run.state === 'cancelled')
 }
@@ -68,6 +83,7 @@ export async function startSkillRun(req: StartSkillRunRequest): Promise<StartSki
   }
   const run = result.run
   stopPolling()
+  activeConversationId = req.conversationId
   setActive(run)
   timer = setInterval(() => {
     void (async () => {
@@ -107,6 +123,7 @@ export function acknowledgeSkillRun(): void {
     const handle = active.runHandle
     stopPolling()
     setActive(null)
+    activeConversationId = null
     void window.api.clearSkillRun(handle)
   }
 }
@@ -115,5 +132,6 @@ export function acknowledgeSkillRun(): void {
 export function resetSkillRunStoreForTests(): void {
   stopPolling()
   active = null
+  activeConversationId = null
   listeners.clear()
 }

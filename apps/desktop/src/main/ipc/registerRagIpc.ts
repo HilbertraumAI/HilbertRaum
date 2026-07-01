@@ -2,7 +2,6 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
-  type DocumentChunkRead,
   type ExtractRecordType,
   type Message,
   type RetrievalScope
@@ -19,8 +18,7 @@ import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '..
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { getSkillAnalysisHandler } from '../services/skills/analysis'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
-import { documentsDir, extractDocumentPreview } from '../services/ingestion'
-import { resolveIngestionLimits } from '../services/ingestion/limits'
+import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
 import { routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
@@ -114,26 +112,11 @@ function readyTreeCountInScope(db: Db, scope: RetrievalScope): number {
 export function registerRagIpc(ctx: AppContext): void {
   // The FAITHFUL content reach a tool-skill analysis handler needs (full-doc-skills §3.2): a
   // document's ordered, non-overlapping, newline-preserving parser segments, re-extracted from the
-  // stored copy — the SAME `extractDocumentPreview` reader the skills-run IPC injects. The `chunks`
-  // table is retrieval windows (newlines collapsed, ~80-token overlap), which would give the
-  // line-oriented extractors near-zero rows. Content stays main-side: only the tool ever sees it.
-  const storeDir = documentsDir(ctx.paths.workspacePath)
-  const readDocumentSegments = async (
-    documentId: string,
-    opts?: { layout?: boolean }
-  ): Promise<DocumentChunkRead[]> => {
-    // Geometry-aware layout reconstruction is requested only by the bank-statement handler (D58); the
-    // page cap rides along ONLY in that mode (plan §3.1 — per-page clustering across an uncapped page
-    // count is a DoS/perf amplifier). The default path is byte-unchanged reading-order text.
-    const preview = await extractDocumentPreview(
-      ctx.db,
-      storeDir,
-      documentId,
-      { cipher: ctx.workspace.documentCipher(), ocrEngine: ctx.ocrEngine },
-      opts?.layout ? { layout: true, maxPages: resolveIngestionLimits().pdfMaxPages } : {}
-    )
-    return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
-  }
+  // stored copy — the SAME reader the skills-run IPC injects (`documentSegments.ts`), so the chat
+  // answer and the run-bar button agree on layout use. The `chunks` table is retrieval windows
+  // (newlines collapsed, ~80-token overlap), which would give the line-oriented extractors near-zero
+  // rows. Content stays main-side: only the tool ever sees it.
+  const readDocumentSegments = buildDocumentSegmentReader(ctx)
 
   ipcMain.handle(
     IPC.askDocuments,

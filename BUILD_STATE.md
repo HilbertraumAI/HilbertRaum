@@ -6,6 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Bank-statement skill: extract-count parity (button vs chat), running-chat recovery on view
+switch, and the "Geldfluss zusammenfassen" button output — branch `fix/drive-app-issues-2026-07-01`
+(same branch; UNMERGED; do NOT auto-merge/push).** Offline / no telemetry / no new network egress. From
+D:\ bank-statement testing (attached transcript). Three issues, all confirmed high-confidence by an
+adversarial multi-agent verify+sibling-scan workflow:
+- **#2 (the confusing one) — the extracted transaction count DIVERGED by entry point** (chat said 45, the
+  "Transaktionen extrahieren" button said 22, on the SAME statement). Root cause: two DUPLICATED
+  `readDocumentSegments` closures had DRIFTED — the chat analysis reader (`registerRagIpc`) threaded the
+  geometry-`layout` flag (D58) into `extractDocumentPreview`, but the run-bar button reader
+  (`registerSkillsIpc`) IGNORED its `opts` arg, so the button re-read the columnar statement in PLAIN
+  reading order (fewer, scrambled rows). The button also omitted `replaceExisting`, so repeated clicks
+  ACCUMULATED duplicate `bank_statements` rows and `latestBankStatementId` (newest wins) could then serve
+  the chat a divergent extraction. Fix: extracted ONE shared reader `ipc/documentSegments.ts`
+  (`buildDocumentSegmentReader`) used by BOTH IPCs — they can no longer drift; the `extract_transactions`
+  button now passes `replaceExisting: true` (matching the chat analysis + categorize paths); the
+  `extract_invoice` button too (the same accumulation parity in the invoice domain — sibling found by the
+  workflow). Invoices stay reading-order (layout is bank-only, D58).
+- **#1 — a view switch lost the running document chat.** Categorizing runs in the DOCTASK lane (not a
+  llama stream), so the fresh-mount recovery (`listActiveStreamConversations`, streams only) never
+  re-selected it; the origin conversation lived only in a React ref lost on unmount, and `SkillRunState`
+  carries no conversationId. Fix (renderer-only, ids-only — the ids/counts privacy boundary is unchanged):
+  the module-level skill-run store now remembers the origin `conversationId`
+  (`getActiveSkillRunConversationId`, survives unmount); a new ChatScreen mount effect re-selects it
+  (mirrors the stream-recovery); the routed-answer effect falls back to it too.
+- **#3 — "Geldfluss zusammenfassen" (summarize_cashflow) produced no output.** The seam computes
+  totalIn/out/net but the run state is figures-free by design (ids/counts only), so the button only showed
+  "N Transaktionen zusammengefasst". Fix: mirror the categorize routing — a done summarize routes an
+  analysis-shaped question into the transcript so the 0-model-call bank analysis handler answers with the
+  real in/out/net totals (figures stay main-side). New i18n key `chat.skill.summarize.question` (en+de);
+  the categorize+summarize routing is generalized via a `ROUTED_RUN_QUESTION` map in ChatScreen.
+- **Tests:** +7 (document-segment-reader layout-threading ×3; skill-run store origin-conversation ×3;
+  extract idempotency/replace ×1); i18n de/en parity auto-guarded (i18n.test.ts). `npm test` **2698 passed
+  / 41 skipped** (the lone WorkspaceGate 'Weak' multi-match is the documented full-suite parallelism flake
+  — passes 17/17 in isolation). `npm run typecheck` green; `npm run build` green. Docs: architecture.md
+  "Skills — design record" §8 (shared segment reader + button/chat parity + routed run answers).
+- **NEXT ACTION (owner): review + merge `fix/drive-app-issues-2026-07-01`; re-test the same HVB statement
+  to confirm the button and chat now report the SAME count and the summarize button shows the totals.**_
+
+
 _2026-07-01 — **Plain-chat system-prompt UX fix (stop the per-turn offline disclaimers + general-question
 refusals) — branch `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).**
 Offline / no telemetry / no new network egress; product-behaviour change, owner-approved. From D:\ chat

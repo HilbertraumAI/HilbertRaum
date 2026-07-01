@@ -3,7 +3,6 @@ import { writeFile } from 'node:fs/promises'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
-  DocumentChunkRead,
   RunnableToolSet,
   SkillInfo,
   SkillPreview,
@@ -12,7 +11,7 @@ import type {
   StartSkillRunRequest,
   StartSkillRunResult
 } from '../../shared/types'
-import { documentsDir, extractDocumentPreview } from '../services/ingestion'
+import { buildDocumentSegmentReader } from './documentSegments'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -78,20 +77,12 @@ export function registerSkillsIpc(ctx: AppContext): void {
     return true
   }
 
-  // The FAITHFUL content reach for the extract/redaction tools: the document's ordered,
-  // non-overlapping, newline-preserving parser segments, re-extracted from the stored copy (the
-  // same `extractDocumentPreview` the doc-tasks use). The stored `chunks` table is retrieval
-  // windows — newlines collapsed, ~80-token overlap — which would give the line-oriented extractors
-  // near-zero rows and a de-formatted redaction copy. Page numbers carry through for `sourcePage`.
-  // Content stays main-side: only the tool (inside the gate) ever sees this text.
-  const storeDir = documentsDir(ctx.paths.workspacePath)
-  const readDocumentSegments = async (documentId: string): Promise<DocumentChunkRead[]> => {
-    const preview = await extractDocumentPreview(ctx.db, storeDir, documentId, {
-      cipher: ctx.workspace.documentCipher(),
-      ocrEngine: ctx.ocrEngine
-    })
-    return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
-  }
+  // The FAITHFUL content reach for the extract/redaction tools — ONE reader shared with the chat
+  // analysis IPC (`registerRagIpc`) so the run-bar button and the chat answer can never disagree on
+  // whether geometry-aware layout reconstruction was used (the drift that made the "Extract
+  // transactions" button report a different transaction count than the chat answer for the same
+  // document). See `documentSegments.ts`.
+  const readDocumentSegments = buildDocumentSegmentReader(ctx)
 
   // Developer mode (the model-leniency precedent): the user toggle OR a dev build. Gates the
   // downgrade override (DS15) only — never a security control (version is unsigned).

@@ -238,7 +238,14 @@ export function buildToolRunner(
           onProgress,
           readDocumentSegments: deps.readDocumentSegments,
           // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
-          layout: true
+          layout: true,
+          // An explicit "Extract transactions" click REPLACES the document's prior extraction, matching
+          // the chat analysis path (`analysis/bank-statement.ts`) and the categorize doctask
+          // (`doctasks/handlers/categorize.ts`), which both re-extract with `replaceExisting`. Without it
+          // repeated clicks accumulated duplicate `bank_statements` rows, and `latestBankStatementId`
+          // (newest wins) then served whichever extraction was last — so a chat answer and the button
+          // could disagree on the row count for the same document.
+          replaceExisting: true
         })
         // U-2 (audit 2026-06-26): a read-only "Extract transactions" click does NOT start the LLM
         // categorizer on its own. The earlier Phase-33 auto-offer silently enqueued a `categorize`
@@ -300,7 +307,13 @@ export function buildToolRunner(
           audit,
           signal,
           onProgress,
-          readDocumentSegments: deps.readDocumentSegments
+          readDocumentSegments: deps.readDocumentSegments,
+          // Parity with the bank extract button + the invoice analysis path (`analysis/invoice.ts`,
+          // which re-extracts with `replaceExisting`): an explicit re-extract REPLACES the document's
+          // prior invoice rather than accumulating duplicate `invoices` rows that `latestInvoiceId`
+          // would then pick between. (Invoices are never geometry-reconstructed — layout is bank-only,
+          // D58 — so no layout flag here.)
+          replaceExisting: true
         })
         return {
           ok: res.ok,

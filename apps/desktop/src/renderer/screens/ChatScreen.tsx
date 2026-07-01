@@ -19,6 +19,7 @@ import {
   acknowledgeSkillRun,
   cancelActiveSkillRun,
   getActiveSkillRun,
+  getActiveSkillRunConversationId,
   startSkillRun,
   subscribeSkillRun
 } from '../lib/skillruns'
@@ -94,6 +95,19 @@ const DOC_EXAMPLE_KEYS: MessageKey[] = [
   'chat.example.paymentTerms',
   'chat.example.indemnity'
 ]
+
+/**
+ * Tool runs whose finished result is surfaced as a REAL chat answer — a question routed into the
+ * transcript that the 0-model-call bank analysis handler answers from the persisted rows — rather than
+ * a bare run-bar count. `categorize` → the per-category breakdown; `summarize_cashflow` → the in/out/net
+ * cash-flow totals. The figures are computed main-side (the content-free run state carries no figures),
+ * so routing is the only way these buttons can produce their actual output. Keyed by tool name → the
+ * localized question key; a tool absent here keeps the plain run-bar result row.
+ */
+const ROUTED_RUN_QUESTION: Partial<Record<string, MessageKey>> = {
+  categorize_transactions: 'chat.skill.categorize.breakdownQuestion',
+  summarize_cashflow: 'chat.skill.summarize.question'
+}
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -517,6 +531,37 @@ export function ChatScreen({
     }
   }, [])
 
+  // On a FRESH mount, re-attach to the conversation that owns an in-flight SKILL RUN (e.g. a
+  // "categorize transactions" doctask). Its spinner survives the unmount (the module-level skillruns
+  // store), but `activeId` reset to null — so without this the user who navigated away mid-run and came
+  // back would land on a NEW empty chat while the badge still spins, unable to get back to the running
+  // document chat. Parallels the stream-recovery re-select above, but for skill runs (a categorizing
+  // doctask is NOT a llama stream, so `listActiveStreamConversations` never sees it). Runs once; the
+  // `activeIdRef` guards make it a no-op once the user hand-picks a conversation, and it never fires
+  // when nothing is running (the conversation id is renderer-owned — the one passed to `startSkillRun`).
+  useEffect(() => {
+    if (activeIdRef.current != null) return
+    const runConvId = getActiveSkillRunConversationId()
+    if (!runConvId) return
+    let cancelled = false
+    void (async () => {
+      let convs: Conversation[] = []
+      try {
+        convs = await window.api.listConversations()
+      } catch {
+        convs = []
+      }
+      if (cancelled || activeIdRef.current != null) return
+      if (convs.length > 0) setConversations(convs)
+      setActiveId(runConvId)
+      const conv = convs.find((c) => c.id === runConvId)
+      if (conv) setMode(conv.mode) // mirror the conversation's mode, like onSelectConversation
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   function setListCollapsedPersistent(collapsed: boolean): void {
     setListCollapsed(collapsed)
     try {
@@ -820,17 +865,19 @@ export function ChatScreen({
   // extract ran on — the id rides back through `onRunTool('categorize_transactions', …, id)`.
   const [runTargetId, setRunTargetId] = useState<string | null>(null)
 
-  // The conversation a categorize run was started in (C1): the routed breakdown below must land in THIS
-  // conversation, never whatever conversation happens to be active when the (module-level, app-wide) run
-  // finishes — switching conversations mid-run would otherwise inject the answer into the wrong transcript.
-  const categorizeRunConvRef = useRef<string | null>(null)
+  // The conversation a routed run (categorize / summarize) was started in (C1): the routed answer below
+  // must land in THIS conversation, never whatever conversation happens to be active when the
+  // (module-level, app-wide) run finishes — switching conversations mid-run would otherwise inject the
+  // answer into the wrong transcript. A React ref is lost on unmount, so the effect also falls back to
+  // the module-level skill-run store (`getActiveSkillRunConversationId`), which survives a remount.
+  const routedRunConvRef = useRef<string | null>(null)
 
   // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model). The
   // chosen `documentId` (U-1) is an in-scope id the renderer offered; main re-validates it against the
   // resolved scope. Defaults to the first in-scope document when none was chosen.
   function onRunTool(toolName: string, confirmed: boolean, documentId?: string): void {
     if (!currentSkillId || !activeId) return
-    if (toolName === 'categorize_transactions') categorizeRunConvRef.current = activeId
+    if (ROUTED_RUN_QUESTION[toolName]) routedRunConvRef.current = activeId
     const targetId = documentId ?? scopeDocIds[0]
     // Remember the target NAME + ID for the busy/result row (resolved renderer-side; never from the
     // IPC). The id powers the U-2 post-extract categorize offer (same-document targeting).
@@ -846,26 +893,29 @@ export function ChatScreen({
       .catch((e) => setError(friendlyIpcError(e)))
   }
 
-  // (D) Routed feedback (Phase 33, Q3): when a categorize run finishes, surface the result as a real
-  // chat answer — route the model-assisted per-category breakdown into the transcript by asking the
-  // standard breakdown question, which the 0-model-call bank analysis handler answers from the
-  // persisted categories the doctask just wrote (reusing the latest statement). Fires ONCE per run,
-  // documents-mode only, and never while another stream is in flight.
-  const handledCategorizeRunRef = useRef<string | null>(null)
+  // (D) Routed feedback (Phase 33, Q3; extended to summarize): when a ROUTED run finishes, surface the
+  // result as a real chat answer instead of a bare run-bar count. Categorize → route the per-category
+  // breakdown question; summarize_cashflow → route the cash-flow-totals question — both answered by the
+  // 0-model-call bank analysis handler from the persisted rows (reusing the latest statement). This is
+  // what gives "Summarize cashflow" an actual output (the figures never cross the content-free run
+  // state). Fires ONCE per run, documents-mode only, never while another stream is in flight.
+  const handledRoutedRunRef = useRef<string | null>(null)
   useEffect(() => {
     const run = activeSkillRun
-    if (!run || run.toolName !== 'categorize_transactions' || run.state !== 'done') return
-    if (handledCategorizeRunRef.current === run.runHandle) return
+    if (!run || run.state !== 'done') return
+    const questionKey = ROUTED_RUN_QUESTION[run.toolName]
+    if (!questionKey) return
+    if (handledRoutedRunRef.current === run.runHandle) return
     if (mode !== 'documents' || !activeId || busyStreaming) return
     // Only route into the conversation that STARTED the run (C1). If the user navigated to another
     // conversation, skip — without marking it handled — so the answer surfaces when they return, and is
-    // never injected into the wrong transcript. (Fallback to activeId only when the origin is unknown,
-    // e.g. after a screen remount lost the ref.)
-    const targetConv = categorizeRunConvRef.current ?? activeId
+    // never injected into the wrong transcript. The origin is the ref, else the module-level store
+    // (survives a remount), else the active conversation.
+    const targetConv = routedRunConvRef.current ?? getActiveSkillRunConversationId() ?? activeId
     if (targetConv !== activeId) return
-    handledCategorizeRunRef.current = run.runHandle
+    handledRoutedRunRef.current = run.runHandle
     acknowledgeSkillRun() // drop the content-free run row; the routed answer replaces it
-    const question = t('chat.skill.categorize.breakdownQuestion')
+    const question = t(questionKey)
     setMessages((prev) => [...prev, optimisticUser(targetConv, question)])
     // Route under the skill the RUN used (C2) — never `currentSkillId`, which is whatever the picker
     // shows now; a null/non-bank pick would bypass the 0-model-call bank analysis handler.

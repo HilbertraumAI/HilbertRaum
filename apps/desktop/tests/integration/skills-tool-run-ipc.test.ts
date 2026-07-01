@@ -385,6 +385,23 @@ describe('skills tool-run IPC (S11b)', () => {
     expect(final.transactionCount).toBe(2)
   })
 
+  it('a second extract REPLACES the prior statement (no duplicate bank_statements accumulate)', async () => {
+    // Regression: the run-bar "Extract transactions" button re-extracts with `replaceExisting`, matching
+    // the chat analysis + categorize paths. Without it, repeated clicks accumulated duplicate
+    // bank_statements rows and `latestBankStatementId` (newest wins) could serve the chat a DIFFERENT
+    // extraction than the one just shown — the divergence behind the "45 rows then 22 rows" report.
+    const { db, skillInstallId, conversationId } = makeHarness(
+      'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+    )
+    expect((await runTool(skillInstallId, conversationId, 'extract_transactions')).state).toBe('done')
+    expect((await runTool(skillInstallId, conversationId, 'extract_transactions')).state).toBe('done')
+    const statements = db.prepare('SELECT COUNT(*) AS n FROM bank_statements').get() as { n: number }
+    expect(statements.n).toBe(1) // replaced, not accumulated
+    // The prior statement's rows went with it (FK-ordered delete), so only the fresh 2 survive.
+    const txs = db.prepare('SELECT COUNT(*) AS n FROM bank_transactions').get() as { n: number }
+    expect(txs.n).toBe(2)
+  })
+
   it('refuses a tool the skill does not declare with a friendly, content-free error', async () => {
     const { skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
     // count_selected_documents is registered but NOT in the skill's allowedTools → unavailable.
