@@ -6,6 +6,33 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Bank-statement skill follow-up (#5): "Das ist zu groß für das Kontextfenster" on a category
+question — branch `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).**
+Offline / no telemetry / no new network egress. From D:\ testing: typing **"Kategorisiere die
+Transaktionen"** (bank skill selected) raised the context-window-too-large error even though the chat was
+at 6%. Root cause: `bankStatementAnalysisHandler.applies()` gates on `isAnalysisShaped()`, whose
+`ANALYSIS_KEYWORDS` are English/partial — the German VERB "kategorisiere" ⊄ "kategorie" and the noun
+"Transaktionen" ⊄ the English "transaction", so the question was NOT recognised as analysis-shaped. It
+fell through the 0-model handler to generic RAG, which stuffs the whole statement into the model →
+overflow. (The earlier "…nach Kategorie" phrasings worked only because they contain the literal word
+"Kategorie".) Fix (`analysis/bank-statement.ts`):
+- `isAnalysisShaped` now also returns true when the question is CATEGORY-shaped (a category request is
+  definitionally an analysis request — `isCategoryShaped`'s `kategor` stem catches "kategorisiere").
+- Broadened `ANALYSIS_KEYWORDS` to German STEMS: added `transaktion` (Transaktion/en), `geldfluss` (the
+  "Geldfluss zusammenfassen" phrasing), and `zusammenfass` (replaces `zusammenfassung`, so
+  "zusammenfassen" matches too).
+- Invoice handler checked for parity — its German keyword set (rechnung/betrag/netto/brutto/…) is already
+  comprehensive and has no category concept, so no change.
+- **Tests:** +3 (applies() on "Kategorisiere die Transaktionen", "Zeig mir alle Transaktionen", "Fasse den
+  Geldfluss zusammen"). Affected suites green (skills-analysis-bank 29; rag-skill-analysis; skill-triggers
+  eval); typecheck green; full `npm test` re-run pending commit.
+- **Known residual (not fixed — honest error, acceptable):** a GENUINELY off-topic question to a
+  whole-document skill still routes to whole-doc RAG and can overflow on a large statement (the app shows
+  the honest "pick a bigger-context model / smaller document" message). The common bank phrasings are now
+  covered. **NEXT ACTION (owner): re-test "Kategorisiere die Transaktionen" — it should now produce the
+  deterministic per-category breakdown, not the context error.**_
+
+
 _2026-07-01 — **Bank-statement skill follow-up (#4): "Dieses Dokument gehört nicht zu den Dokumenten dieses
 Chats" run error — branch `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT
 auto-merge/push).** Offline / no telemetry / no new network egress. Surfaced right after the #1–#3 fixes

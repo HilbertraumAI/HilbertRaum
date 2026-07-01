@@ -159,6 +159,20 @@ describe('bank-statement analysis handler — applies() pre-flight (R2)', () => 
       bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question: 'who wrote this letter?' })
     ).toBe(false)
   })
+
+  // Regression: German verb/noun phrasings that miss the English keywords. "Kategorisiere die
+  // Transaktionen" is category-shaped (kategor…) but the verb "kategorisiere" ⊄ "kategorie" and the noun
+  // "Transaktionen" ⊄ the English "transaction" — so it was NOT analysis-shaped, fell through to generic
+  // RAG, and overflowed the context window on a long Kontoauszug. Category-shaped ⟹ analysis-shaped now.
+  it.each([
+    'Kategorisiere die Transaktionen',
+    'Zeig mir alle Transaktionen',
+    'Fasse den Geldfluss zusammen'
+  ])('applies on the de-AT phrasing %j (context-overflow regression)', (question) => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+  })
 })
 
 describe('bank-statement analysis handler — run()', () => {
