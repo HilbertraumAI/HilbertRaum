@@ -461,6 +461,44 @@ export function ChatScreen({
     }
   }, [activeId, streaming, refreshContextInfo])
 
+  // On a FRESH mount (the user navigated away mid-reply and came back), the Chat screen has
+  // forgotten which conversation it was streaming — `activeId` resets to null, so the recovery
+  // effect above bails and an empty new chat shows while the answer streams invisibly (and, since
+  // the one-stream guard is per-conversation, a new empty conversation would even accept another
+  // turn). If a generation is still in flight, re-select that conversation so the recovery effect
+  // re-attaches to the live reply. Runs once on mount; the `activeIdRef` guards make it a no-op if
+  // the user has already hand-picked a conversation, and it never yanks the user onto an old chat
+  // when nothing is generating.
+  useEffect(() => {
+    if (!window.api.listActiveStreamConversations) return // older preload / test stub
+    let cancelled = false
+    void (async () => {
+      if (activeIdRef.current != null) return
+      let ids: string[] = []
+      try {
+        ids = (await window.api.listActiveStreamConversations!()) ?? []
+      } catch {
+        ids = []
+      }
+      if (cancelled || activeIdRef.current != null || ids.length === 0) return
+      const streamingId = ids[ids.length - 1] // insertion order → the most recently started stream
+      let convs: Conversation[] = []
+      try {
+        convs = await window.api.listConversations()
+      } catch {
+        convs = []
+      }
+      if (cancelled || activeIdRef.current != null) return
+      if (convs.length > 0) setConversations(convs)
+      setActiveId(streamingId)
+      const conv = convs.find((c) => c.id === streamingId)
+      if (conv) setMode(conv.mode) // mirror the conversation's mode (chat vs documents), like onSelectConversation
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   function setListCollapsedPersistent(collapsed: boolean): void {
     setListCollapsed(collapsed)
     try {

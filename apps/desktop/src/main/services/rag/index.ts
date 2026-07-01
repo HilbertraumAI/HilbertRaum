@@ -717,6 +717,34 @@ function wholeDocumentBudgetTokens(
 }
 
 /**
+ * Headroom the retrieval-excerpt budget leaves for the 1.3-tokens/word estimate under-counting
+ * real model tokens: `retrieve` measures excerpts at `approxTokenCount × TOKENS_PER_WORD` (1.3),
+ * but a subword-dense passage (e.g. a German account statement) can run closer to ~2 real BPE
+ * tokens/word. Dividing the window budget by this factor keeps the assembled grounded turn under
+ * the launched context window even worst-case — the fix for the HTTP 400 "exceeds context size".
+ */
+const RETRIEVAL_FIT_SAFETY = 1.5
+
+/**
+ * The excerpt-block budget for the RELEVANCE (top-k) path, clamped to the REAL launched context
+ * window (§L0) — not just the fixed `ragMaxContextTokens` setting. Mirrors `wholeDocumentBudgetTokens`
+ * (the whole-doc path already clamps; the relevance path never did), then subtracts a per-excerpt
+ * framing allowance (`[Sn] File: … | Page: …`) and applies RETRIEVAL_FIT_SAFETY. The caller takes
+ * `min(this, settings.maxContextTokens)`, so a large-window model keeps the full setting and only a
+ * small-window model is constrained. Returned in the SAME 1.3-scaled units `retrieve` caps against.
+ */
+function retrievalExcerptBudgetTokens(
+  contextTokens: number,
+  question: string,
+  skill: TurnSkill | null | undefined,
+  topKFinal: number
+): number {
+  const perExcerptFraming = 48 * Math.max(1, topKFinal) // "[Sn] File: <title> | Page: N" + quotes, per chunk
+  const usable = wholeDocumentBudgetTokens(contextTokens, question, skill) - perExcerptFraming
+  return Math.max(256, Math.floor(usable / RETRIEVAL_FIT_SAFETY))
+}
+
+/**
  * Retrieve grounded context for the last user turn of `conversationId`, stream a cited
  * answer from `runtime`, and persist the assistant message WITH its `Citation[]`
  * (→ `messages.citations_json`). The triggering user message must already be in history.
@@ -796,7 +824,20 @@ export async function generateGroundedAnswer(
       truncated: comp.truncated
     }
   } else {
-    const r = await retrieve(db, embedder, question, settings, scopeArg, opts.reranker, opts.signal)
+    // Clamp the excerpt budget to the REAL launched window (§L0), not just the fixed
+    // `ragMaxContextTokens` setting: otherwise the grounded turn (system + excerpts + framing +
+    // question) can exceed a small-window model's n_ctx → HTTP 400 "exceeds context size". The
+    // clamp is caller-scoped (retrieve()'s core loop is unchanged); min() keeps large windows at
+    // the full setting and only constrains small ones. Mirrors the whole-document path.
+    const excerptBudget = Math.min(
+      settings.maxContextTokens,
+      retrievalExcerptBudgetTokens(contextTokens, question, opts.skill, settings.topKFinal)
+    )
+    const fitted =
+      excerptBudget < settings.maxContextTokens
+        ? { ...settings, maxContextTokens: excerptBudget }
+        : settings
+    const r = await retrieve(db, embedder, question, fitted, scopeArg, opts.reranker, opts.signal)
     chunks = r.chunks
     citations = r.citations
   }

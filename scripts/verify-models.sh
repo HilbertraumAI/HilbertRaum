@@ -56,6 +56,16 @@ mmproj_block_of() { awk '/^mmproj:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} 
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
+# Supported (runtime -> format) pairs — mirror models.ts SUPPORTED_RUNTIME_FORMATS (the app's
+# §7.4 gate; drift test M-A1). A ggml/whisper_cpp weight (the bundled transcriber) has a real
+# sha256 and verifies by SHA-256 like any GGUF; only a genuinely unloadable pair is UNSUPPORTED.
+supported_format_for() {
+  case "$1" in
+    llama_cpp|llama.cpp) printf 'gguf' ;;
+    whisper_cpp)         printf 'ggml' ;;
+  esac
+}
+
 had_mismatch=0
 total_weights=0
 verified_weights=0
@@ -106,7 +116,7 @@ for mf in "${MANIFEST_FILES[@]}"; do
   mmproj_local="$(field_in "$mmproj_block" local_path)"
   mmproj_sha="$(field_in "$mmproj_block" sha256 | tr '[:upper:]' '[:lower:]')"
 
-  if [[ "$runtime" != "llama_cpp" && "$runtime" != "llama.cpp" ]] || [[ "$format" != "gguf" ]]; then
+  if [[ "$format" != "$(supported_format_for "$runtime")" ]]; then
     total_weights=$((total_weights + 1))
     [[ $STRICT -eq 1 ]] && echo "STRICT: $id is UNSUPPORTED (must be VERIFIED)" >&2
     printf '  %-12s %s\n' "UNSUPPORTED" "$id"

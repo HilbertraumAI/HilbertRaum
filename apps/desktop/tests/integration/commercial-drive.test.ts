@@ -201,17 +201,29 @@ describe('assertCommercialDrive', () => {
     expect(res.problems.some((p) => /license_review/.test(p))).toBe(true)
   })
 
-  it('fails when the policy allows network', async () => {
+  it('permits model downloads but fails when the policy allows phone-home (update checks)', async () => {
+    // Model downloads are a permitted, user-initiated action on a sold drive — the commercial
+    // default (allow_model_downloads: true) must NOT fail the gate on that ground.
+    const okRoot = tempDir('hilbertraum-commercial-net-ok-')
+    const okPolicy = buildPolicyJson()
+    expect(okPolicy.network.allow_model_downloads).toBe(true)
+    writePolicy(okRoot, okPolicy)
+    const okChat = writeVerifiedWeight(okRoot, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    const okRes = await assertCommercialDrive(okRoot, [okChat])
+    expect(okRes.checks.networkDenied).toBe(true) // downloads permitted, but no phone-home
+    expect(okRes.problems.some((p) => /update checks|telemetry/i.test(p))).toBe(false)
+
+    // An update-check (phone-home) channel, by contrast, must fail the sell gate.
     const root = tempDir('hilbertraum-commercial-net-')
     const policy = buildPolicyJson()
-    policy.network.allow_model_downloads = true
+    policy.network.allow_update_checks = true
     writePolicy(root, policy)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
 
     const res = await assertCommercialDrive(root, [chat])
     expect(res.ok).toBe(false)
     expect(res.checks.networkDenied).toBe(false)
-    expect(res.problems.some((p) => /network/i.test(p))).toBe(true)
+    expect(res.problems.some((p) => /update checks/i.test(p))).toBe(true)
   })
 
   it('fails when the policy allows a plaintext workspace', async () => {

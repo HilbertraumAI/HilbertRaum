@@ -247,6 +247,10 @@ const api = {
    *  remounted Chat screen recover a reply still streaming after navigating away + back. */
   getActiveStream: (conversationId: string): Promise<ActiveStreamSnapshot | null> =>
     ipcRenderer.invoke(IPC.getActiveStream, conversationId),
+  /** Conversation ids with a generation in flight (last = most recent). Lets a freshly-mounted
+   *  Chat screen re-select the still-streaming conversation instead of showing an empty new chat. */
+  listActiveStreamConversations: (): Promise<string[]> =>
+    ipcRenderer.invoke(IPC.listActiveStreamConversations),
   /** Delete a conversation (chat or document Q&A) and all of its messages. */
   deleteConversation: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteConversation, conversationId),

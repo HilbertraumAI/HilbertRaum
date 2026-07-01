@@ -324,6 +324,14 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   )
 
+  // Enumerate the conversations with a generation IN FLIGHT so a freshly-mounted Chat screen (the
+  // user navigated away and back) can re-select the still-streaming one and re-attach via
+  // getActiveStream — otherwise it forgets its conversation and shows an empty new chat while the
+  // reply streams invisibly. In-memory only + workspace-agnostic, so it intentionally skips
+  // requireUnlocked (like stopGeneration/getActiveStream). Insertion-ordered: the LAST id is the
+  // most recently started stream. Returns [] when nothing is generating.
+  ipcMain.handle(IPC.listActiveStreamConversations, (): string[] => [...inFlight.keys()])
+
   // Export a transcript to a user-chosen file (spec §7.6). The save dialog
   // runs in MAIN (the renderer has no fs/dialog access); returns the saved path, or
   // null when the user cancelled.

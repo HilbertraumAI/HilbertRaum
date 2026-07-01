@@ -6,6 +6,57 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Drive/app fixes from D:\ testing (6 issues) — branch
+`fix/drive-app-issues-2026-07-01` (UNMERGED; do NOT auto-merge/push).** Offline / no telemetry / no new
+runtime network egress. `npm test` **2687 passed / 41 skipped**; `npm run typecheck` + `npm run build` green.
+Six independent fixes; one is a **product policy decision** (owner-approved during this session):
+- **#1 — ggml/whisper_cpp weights now VERIFY (were `UNSUPPORTED`).** `verify-models.{ps1,sh}` + the sell-gate
+  verifier (`drive.ts` `verifyDriveModels`) gated on `gguf`+`llama_cpp` only, so the bundled Whisper transcriber
+  (`ggml`/`whisper_cpp`, real sha256, `bundled_on_preconfigured_drive: true`) was `UNSUPPORTED` → a drive that
+  bundles Whisper could **never** pass `-Strict` / `assertCommercialDrive`. Unified on the canonical pair-map
+  `SUPPORTED_RUNTIME_FORMATS` (now **exported** from `models.ts`, incl. `whisper_cpp→ggml`; `drive.ts` re-exports
+  it + uses `isSupportedRuntimeFormat`). Scripts use a pair check; `script-drift.test.ts` asserts the new shape;
+  `drive.test.ts` gains a whisper-verifies case.
+- **#2 — Qwen2.5-VL (vision) added to the `--with-assets` default set.** `prepare-drive.{ps1,sh}` `DEFAULT_MODEL_IDS`
+  now includes `qwen2.5-vl-3b-instruct-q4`; `fetch-models.{ps1,sh}` already fetch BOTH files (GGUF + mmproj).
+  Manifest comment + `model-policy.md` updated: provisioned by `--with-assets` but still **never auto-recommended**
+  in-app (`recommended_profiles: []`). (~3.27 GB / 12 GB RAM — owner-approved.)
+- **#3 — POLICY DECISION (owner-approved): `allow_model_downloads` default `false → true`** on prepared/sold
+  drives + the commercial **sell gate relaxed**. `buildPolicyJson` (`drive.ts`) + `prepare-drive.{ps1,sh}` write
+  `true`; `commercial-drive.ts` `networkDenied` redefined to **"never phones home"** (no update-checks, no
+  telemetry — model downloads are a permitted, per-download-confirmed user action); native `build-commercial-drive.{ps1,sh}`
+  gates match. Offline runtime guarantee intact (setting-gated + confirmation; nothing fetches without a user
+  action). Tests updated (`drive.test.ts`, `commercial-drive.test.ts`); `script-drift.test.ts` still enforces the
+  three producers in lockstep. Docs: security-model.md, packaging.md, drive-layout.md, model-policy.md, architecture.md.
+- **#4 — download→verify UX: no more invisible "Checking…" gap.** Root cause: the downloader `invalidateChecksum`'d
+  on success, forcing `listModels` to redundantly re-hash the multi-GB weight (seconds), which was only surfaced on
+  a Models remount → the button re-enabled looking failed. Now `downloads.ts` **primes** the checksum cache with the
+  hash it just verified (`models.ts` `primeChecksum`, size+mtime keyed), so install-state refresh is instant. The
+  download job's own `verifying` phase already shows "Checking…". `downloads.test.ts` asserts the prime.
+- **#5 — Chat: re-select the in-flight conversation on return.** A fresh Chat mount reset `activeId=null`, so the
+  existing stream-recovery poll bailed → an empty new chat showed while the reply streamed invisibly (and the
+  per-conversation guard let that empty chat accept a turn). New in-memory IPC `listActiveStreamConversations`
+  (`[...inFlightStreams.keys()]`, skips `requireUnlocked`); ChatScreen selects the streaming conversation + mirrors
+  its mode on mount, then the recovery poll re-attaches. **Data contract:** new IPC channel
+  `chat:activeStreamConversations` (added to `chat-ipc.test.ts` `IN_MEMORY_CHANNELS`). Preload + ipc.ts + architecture.md updated.
+- **#6 — RAG document Q&A no longer overflows a small context window (HTTP 400 "exceeds context size").** The
+  relevance path capped excerpts only by `ragMaxContextTokens` (2500, fixed), never by the model's real `n_ctx`;
+  `fitMessagesToContext` keeps the final turn mandatory → oversized grounded turn sent → 400. `generateGroundedAnswer`
+  now clamps to `min(ragMaxContextTokens, retrievalExcerptBudgetTokens(window,…))` (mirrors the whole-doc path; ÷1.5
+  safety for the 1.3-tokens/word under-count of subword-dense German). Caller-scoped (retrieve() unchanged);
+  regression test in `rag-pipeline-floor.test.ts`. Doc: rag-design.md §15.1. (NOTE: the 4096 was the small CHAT
+  model's window — the just-downloaded vision model can never be the chat runtime.)
+- **OPEN — #7 (skill quick-action "document not in this chat's scope") NOT fixed this pass.** Root cause is a stale
+  renderer `scopeDocIds` cache (keyed only on `[currentSkillId, activeId]`, FE-10) that doesn't refresh on
+  scope/attachment changes, PLUS an analysis-vs-run target divergence (`detectFilenameScope` narrows the analysis to
+  one filename-matched doc; the run default `docIds[0]` doesn't). Exact trigger not pinned without the repro event
+  order (a fresh single-doc chat would send `undefined` → default, not the error). Awaiting the user's reproduction
+  sequence before implementing.
+- **NEXT ACTION (owner): review + merge `fix/drive-app-issues-2026-07-01`. Then, for #2/#3, re-run
+  `scripts\build-commercial-drive` to confirm a downloads-enabled + vision-bundled drive passes the (relaxed) sell
+  gate. Provide the #7 repro (did scope/attachments change between the analysis answer and the button; >1 doc in scope?).**_
+
+
 _2026-07-01 — **Qwen3.5 Unsloth wave + llama.cpp runtime bump b9585 → b9849 — branch
 `model-catalog-qwen3.5-wave-b9849` (UNMERGED; do NOT auto-merge/push).** Manifest/docs/test-only —
 `git diff src/` touches one test fixture assertion (the committed-pin version) + one new test file; no

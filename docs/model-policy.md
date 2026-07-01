@@ -39,7 +39,7 @@ pinned to llama.cpp b9585; all license reviews approved)_
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
 | Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation (Phase 36); whisper.cpp GGML; MIT |
-| Vision (optional) | Qwen2.5-VL 3B Instruct Q4 + f16 mmproj | ~3.27 GB (2 files) | 12 GB | — (opt-in, never bundled by default) | Image understanding — the Images screen (Phases V1–V5). Two files: GGUF + the `mmproj` projector. CPU-pinned; ~4.6 GB peak RSS. **Co-resident with a 12B chat ⇒ >16 GB (PROD-1)** — see "The vision role" below. Apache-2.0 |
+| Vision (optional) | Qwen2.5-VL 3B Instruct Q4 + f16 mmproj | ~3.27 GB (2 files) | 12 GB | in the `--with-assets` default set (2026-07-01); **not** auto-recommended in-app (`recommended_profiles: []`, rank 0) — availability-driven, used on demand by the Images screen | Image understanding — the Images screen (Phases V1–V5). Two files: GGUF + the `mmproj` projector. CPU-pinned; ~4.6 GB peak RSS. **Co-resident with a 12B chat ⇒ >16 GB (PROD-1)** — see "The vision role" below. Apache-2.0 |
 
 > Qwen3 **1.7B** was in the original spec §7.3 (the TINY/UNKNOWN "small" model) but was **dropped**:
 > the official `Qwen/Qwen3-1.7B-GGUF` repo publishes no Q4_K_M. 4B now covers TINY/UNKNOWN too.

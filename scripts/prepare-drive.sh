@@ -11,8 +11,9 @@
 # --with-assets downloads + verifies a launch-ready default asset set (Phase 12), so one
 # command yields a usable drive (build-time network; the app stays offline). To keep setup
 # fast the default set is small but complete for the core features: the default chat model
-# (Ministral 3 8B), the embeddings model, the reranker, and the Whisper transcriber model,
-# PLUS both sidecar runtimes (llama.cpp + whisper.cpp). The user downloads any other models
+# (Ministral 3 8B), the embeddings model, the reranker, the Whisper transcriber model, and
+# the Qwen2.5-VL image-description model (GGUF + mmproj), PLUS both sidecar runtimes
+# (llama.cpp + whisper.cpp). The user downloads any other models
 # (larger chat models) from inside the app. Pass --all-models to fetch every model instead
 # (the sidecar runtimes are fetched either way).
 #
@@ -22,16 +23,18 @@
 set -euo pipefail
 
 # The models --with-assets provisions by default (fast setup): the default chat model plus
-# the embeddings model, reranker, and Whisper transcriber, so chat, document Q&A, retrieval
-# quality, and audio/dictation all work out of the box. Every OTHER model (larger chat
-# models) is downloaded by the user from inside the app. Pass --all-models to fetch
-# everything. The whisper.cpp runtime is fetched alongside these (see the --with-assets
-# block). Keep these ids in sync with the manifests under model-manifests/.
+# the embeddings model, reranker, Whisper transcriber, and the Qwen2.5-VL image-description
+# model, so chat, document Q&A, retrieval quality, audio/dictation, and image understanding
+# all work out of the box. Every OTHER model (larger chat models) is downloaded by the user
+# from inside the app. Pass --all-models to fetch everything. The whisper.cpp runtime is
+# fetched alongside these (see the --with-assets block). Keep these ids in sync with the
+# manifests under model-manifests/.
 DEFAULT_MODEL_IDS=(
   ministral3-8b-instruct-2512-q4   # chat (benchmark-winning 8B)
   multilingual-e5-small-q8         # embeddings (document Q&A)
   bge-reranker-v2-m3-f16           # reranker (retrieval quality)
   whisper-small-multilingual       # transcriber (audio / dictation)
+  qwen2.5-vl-3b-instruct-q4        # vision (image description; GGUF + mmproj, two files)
 )
 
 TARGET=""
@@ -180,7 +183,7 @@ EOF
 POLICY_JSON=$(cat <<EOF
 {
   "network": {
-    "allow_model_downloads": false,
+    "allow_model_downloads": true,
     "allow_update_checks": false
   },
   "workspace": {

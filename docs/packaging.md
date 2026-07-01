@@ -290,14 +290,14 @@ steps. Its plan + the final "is this sellable?" assertion are mirrored from the 
 `apps/desktop/src/main/services/commercial-drive.ts` (`planCommercialDrive` + `assertCommercialDrive`).
 
 ```
-prepare-drive  --force            # commercial policy (encrypted, plaintext off, network denied)
+prepare-drive  --force            # commercial policy (encrypted, plaintext off, no phone-home)
 fetch-models   --accept-license   # verified weights (a SOLD drive needs an approved, redistributable license — spec §13)
 fetch-runtime                     # verified llama.cpp sidecar builds: per OS the default (Vulkan/Metal)
                                   # + the pure-CPU safety net on win/linux (Phase 14)
 package + sign + notarize         # MANUAL — secrets never in the repo (pass --app-artifact / --skip-package)
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json
-final check: commercial posture (encrypted, network denied) + all weights VERIFIED
+final check: commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied) + all weights VERIFIED
              + runtime install markers match the pin (Phase 14) + no user data
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
 ```
@@ -313,10 +313,16 @@ scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license
 ```
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
-plaintext off, models must verify, network denied) **and** that **every weight is VERIFIED** **and**
+plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
+but update-checks + telemetry are denied) **and** that **every weight is VERIFIED** **and**
 that **no user data is present** (spec §12.2) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) — the canonical gate is
-`assertCommercialDrive(...)`; the scripts add a native cross-check of the same invariants. **Remaining manual acceptance (R5/R7):** a
+`assertCommercialDrive(...)`; the scripts add a native cross-check of the same invariants. **"Every
+weight VERIFIED" spans every shipped runtime family (2026-07-01):** the verifier + `verify-models.{ps1,sh}`
+gate on the canonical `(runtime → format)` support table (`models.ts` `SUPPORTED_RUNTIME_FORMATS`), so the
+bundled **ggml / whisper_cpp** transcriber verifies by SHA-256 like any GGUF — previously it was reported
+`UNSUPPORTED`, which meant a drive that bundles Whisper could never pass `-Strict` / the sell gate.
+**Remaining manual acceptance (R5/R7):** a
 real signed build + notarization + a USB-drive §17 demo on a fresh laptop with Wi-Fi off, and the
 second-laptop continuity check.
 

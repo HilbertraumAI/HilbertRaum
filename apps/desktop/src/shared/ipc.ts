@@ -37,6 +37,13 @@ export const IPC = {
    * still streaming after the user navigated away and back.
    */
   getActiveStream: 'chat:activeStream',
+  /**
+   * The conversation ids that currently have a generation IN FLIGHT (in-memory only). A Chat
+   * screen that mounts fresh (the user navigated away and back) has forgotten which conversation
+   * it was streaming — this lets it re-select the still-generating one and re-attach via
+   * getActiveStream, instead of showing an empty new chat while the reply streams invisibly.
+   */
+  listActiveStreamConversations: 'chat:activeStreamConversations',
   /** Delete a conversation (chat or document Q&A) and all of its messages. */
   deleteConversation: 'chat:deleteConversation',
   /** Replace a documents-conversation's "ask selected documents" scope. */

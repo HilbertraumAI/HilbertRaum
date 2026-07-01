@@ -1019,6 +1019,16 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   locked composer + Stop) through a derived `busyStreaming = streaming || recovering`. The token
   events missed while unmounted are not replayed — the snapshot carries the full accumulated text,
   so the bubble resumes complete. Completion (snapshot → null) refreshes the transcript from the DB.
+  **Re-selecting the streaming conversation on remount (2026-07-01).** The poll above only re-attaches
+  when the visible `activeId` already points at the streaming conversation — but a fresh mount resets
+  `activeId` to `null` (it was never persisted), so on return the screen showed an empty *new* chat
+  while the reply streamed invisibly (and, since the one-stream guard is per-conversation, that empty
+  conversation would even accept another turn). The Chat screen now, on mount with `activeId` still
+  null, calls the read-only `listActiveStreamConversations` IPC (`[...inFlightStreams.keys()]`,
+  in-memory + workspace-agnostic like `getActiveStream`) and, if a generation is in flight, selects
+  that conversation (most-recent = last key) and mirrors its mode — the existing recovery poll then
+  re-attaches. Guarded so it never clobbers a deliberate mid-load click and never yanks the user onto
+  an old conversation when nothing is generating.
 - **`MockRuntime.chatStream`** emits a deterministic reply token-by-token with a small delay so
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
@@ -1038,7 +1048,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   same gated start path.
 - **IPC** (`ipc/registerChatIpc.ts`): `createConversation`, `listConversations`, `listMessages`,
   `sendChatMessage` (streaming), `stopGeneration`, `deleteConversation`, plus `getActiveStream`
-  (stream recovery after navigation), `searchConversations` (Phase 31 full-text), `exportConversation`
+  and `listActiveStreamConversations` (stream recovery + re-selecting the in-flight conversation
+  after navigation), `searchConversations` (Phase 31 full-text), `exportConversation`
   (save to Markdown), and the scope/anchor setters used by the composite source picker. Regenerate reuses
   `sendChatMessage` with `options.regenerate` — it deletes the last assistant message, then
   re-streams from history. `deleteConversation` removes a conversation (chat or document Q&A) and
@@ -2117,9 +2128,10 @@ all enforced in MAIN and re-checked per call:**
 
 1. `policy.network.allowModelDownloads` — the authoritative ceiling (**wave-1 decision D3**:
    `DEFAULT_POLICY` allows it so the spec §3.6 user toggle is the sole gate when no policy
-   file restricts — "policy only restricts" preserved; `prepare-drive` writes deny in BOTH
-   postures, so prepared drives stay download-disabled unless the builder edits
-   `config/policy.json`).
+   file restricts — "policy only restricts" preserved; since 2026-07-01 `prepare-drive` also
+   writes `true` in BOTH postures, so a prepared/sold drive lets the buyer add models on demand —
+   still gated by the setting + a per-download confirmation, and update-checks + telemetry stay
+   denied so the drive never phones home).
 2. `settings.allowNetwork` — the spec §3.6 checkbox, **default on** for a fresh DIY/dev install
    (`DEFAULT_SETTINGS.allowNetwork: true`); gate 1's policy ceiling still wins, so prepared
    drives stay download-disabled. A locked workspace reads as off.
@@ -2137,7 +2149,11 @@ mismatch deletes the partial and fails the job; a placeholder expected hash comp
 `unverified` (checksum honesty). Cancel keeps the `.part`; the next start resumes via a
 `Range` header (append iff the server answered 206). One download at a time; jobs are
 in-memory, polled over `downloads:start/get/cancel` (the Phase-4 import precedent — no new
-event channels). On success the checksum-cache entry is invalidated. Audit events
+event channels). On a VERIFIED success the checksum cache is **primed** with the hash just
+computed (`models.ts` `primeChecksum`, keyed by the file's size+mtime) so the Models screen's
+install-state refresh reports `installed` WITHOUT re-hashing the multi-GB weight — this removed the
+invisible post-download "Checking…" gap where the card briefly looked un-downloaded (2026-07-01); a
+placeholder-hash completion still invalidates (it is never trusted). Audit events
 (`model_download_started/verified/failed`) flow through the injected
 `DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified".
 No update checks, no catalog (only manifests already on the drive), no background anything;
@@ -2147,9 +2163,11 @@ licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PR
 **`settings.allowNetwork` now defaults ON (2026-06-13).** The spec §3.6 checkbox was flipped
 `false → true` in `DEFAULT_SETTINGS` so a fresh install can download models out of the box
 (onboarding feedback). Gate 1 (the policy ceiling) is unchanged and still authoritative: a
-commercial `policy.json` with `allow_model_downloads: false` — or the packaged-build
-`STRICT_POLICY` fallback — keeps the app offline regardless of the toggle, and telemetry stays
-hardcoded off. A locked workspace still reads the setting as off.
+`policy.json` with `allow_model_downloads: false` — or the packaged-build `STRICT_POLICY` fallback —
+keeps the app offline regardless of the toggle. A prepared/commercial drive now writes
+`allow_model_downloads: true` (2026-07-01), so the setting + the per-download confirmation are the
+effective gate there; update-checks + telemetry stay hardcoded/denied so the drive never phones home.
+A locked workspace still reads the setting as off.
 
 ### In-app engine installer (2026-06-13)
 

@@ -1340,6 +1340,21 @@ CHAT_RESPONSE_RESERVE_TOKENS` (reserve = 1024, unchanged). For the shipped Qwen 
 `recommendedContextTokens` IS the launched window, so the budget is unchanged today — this just stops
 trimming against the wrong number and gives L2 the authoritative window.
 
+**Relevance-path excerpt budget clamped to the window (2026-07-01, fix G1-follow-up).** The history
+assembly above trimmed against the real window, but the RELEVANCE (top-k) path sized its retrieved-excerpt
+block only by the fixed `ragMaxContextTokens` setting (2500) — decoupled from `n_ctx`. On a small-window
+model (e.g. `recommendedContextTokens: 4096`) the grounded turn (system + excerpts + per-excerpt framing +
+question) could exceed the window, and since `fitMessagesToContext` keeps the FINAL turn mandatory it was
+sent unshrunk → llama-server HTTP 400 "exceeds the available context size". `generateGroundedAnswer` now
+clamps the excerpt budget to `min(ragMaxContextTokens, retrievalExcerptBudgetTokens(window, …))` before
+`retrieve` — mirroring the whole-document path's `wholeDocumentBudgetTokens` (which already clamped). The
+helper subtracts the reserve + system prompt + question scaffold + per-excerpt framing and divides by a
+`RETRIEVAL_FIT_SAFETY` (1.5) headroom, because the 1.3 tokens/word estimate under-counts subword-dense
+(e.g. German) text. The clamp is caller-scoped (retrieve()'s loop is unchanged, so a caller that passes an
+explicit budget is unaffected); `min()` keeps large-window models at the full 2500 and only constrains
+small ones. Teeth: `rag-pipeline-floor.test.ts` asserts a small launched window packs strictly fewer
+excerpts than a large one.
+
 ### 15.2 Token accounting + the compaction trigger (§4.2/§4.3, R9)
 
 Budgeting uses the cheap word estimate `messageTokens` (`approxTokenCount × CHAT_TOKENS_PER_WORD(1.3) +

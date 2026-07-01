@@ -407,7 +407,11 @@ describe('registerChatIpc', () => {
 describe('locked-vault guard coverage (TEST-N8)', () => {
   // The only chat handlers that legitimately work while locked: they touch in-memory stream state,
   // never ctx.db. Everything else must refuse.
-  const IN_MEMORY_CHANNELS = new Set<string>([IPC.stopGeneration, IPC.getActiveStream])
+  const IN_MEMORY_CHANNELS = new Set<string>([
+    IPC.stopGeneration,
+    IPC.getActiveStream,
+    IPC.listActiveStreamConversations
+  ])
 
   it('every DB-touching chat handler refuses with the friendly copy when locked (structural)', async () => {
     const db = freshDb()
@@ -431,9 +435,11 @@ describe('locked-vault guard coverage (TEST-N8)', () => {
     const db = freshDb()
     const { runtime } = gatedRuntime()
     registerChatIpc(makeCtx(db, runtime, false))
-    // Neither throws when locked (they read/clear the in-memory in-flight map, never ctx.db).
+    // None throw when locked (they read/clear the in-memory in-flight map, never ctx.db).
     await expect(invoke(handlers, IPC.stopGeneration, 'no-such-conv')).resolves.toBeDefined()
     await expect(invoke(handlers, IPC.getActiveStream, 'no-such-conv')).resolves.toBeDefined()
+    // listActiveStreamConversations enumerates the in-flight map (workspace-agnostic) → [] when idle.
+    expect((await invoke(handlers, IPC.listActiveStreamConversations)).result).toEqual([])
   })
 
   it('the benchmark handlers refuse when locked (SEC-N2 parity)', async () => {

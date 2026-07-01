@@ -28,12 +28,24 @@ import { getSettings, updateSettings } from './settings'
  * Runtime → formats this app can actually run (the spec §7.4 `unsupported` gate).
  * Support is a PAIR check — a manifest claiming `whisper_cpp` with `gguf` (or
  * `llama_cpp` with `ggml`) is still unsupported, never a silent pass.
+ *
+ * This is the CANONICAL support table. `drive.ts` verifyDriveModels (the sell gate) and
+ * the self-contained `verify-models.{ps1,sh}` scripts re-spell the SAME pairs (asserted by
+ * script-drift.test.ts M-A1) — so a bundled whisper weight (ggml/whisper_cpp) verifies by
+ * SHA-256 on every path instead of being falsely reported UNSUPPORTED (which would fail the
+ * ship gate for any drive that bundles Whisper).
  */
-const SUPPORTED_RUNTIME_FORMATS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+export const SUPPORTED_RUNTIME_FORMATS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['llama_cpp', new Set(['gguf'])],
   ['llama.cpp', new Set(['gguf'])],
   ['whisper_cpp', new Set(['ggml'])]
 ])
+
+/** The §7.4 support gate as a predicate: is this (runtime, format) pair one the app ships +
+ *  verifies? The single source of truth both `computeInstallState` and `verifyDriveModels` use. */
+export function isSupportedRuntimeFormat(runtime: string, format: string): boolean {
+  return SUPPORTED_RUNTIME_FORMATS.get(runtime)?.has(format) ?? false
+}
 const MANIFEST_EXTENSIONS = new Set(['.yaml', '.yml'])
 /**
  * Reserved filenames under `model-manifests/` that are NOT model manifests.
@@ -206,6 +218,26 @@ export function clearChecksumCache(): void {
 export function invalidateChecksum(filePath: string, store?: HashStore): void {
   hashCache.delete(filePath)
   store?.delete(filePath)
+}
+
+/**
+ * Seed the checksum cache with a hash ALREADY computed for `filePath` (e.g. the in-app
+ * downloader just SHA-256-verified the bytes it wrote). Keyed by the file's current
+ * (size, mtimeMs) like every cache entry, so the next `computeInstallState` reports
+ * `installed` WITHOUT re-hashing the multi-GB weight — this removes the invisible
+ * post-download "Checking…" gap where the Models card briefly looked un-downloaded
+ * (audit FE, download→verify UX). A no-op if the file has vanished.
+ */
+export function primeChecksum(filePath: string, actual: string, store?: HashStore): void {
+  let st: ReturnType<typeof statSync>
+  try {
+    st = statSync(filePath)
+  } catch {
+    return // file moved/removed before we could prime — the next verify hashes normally
+  }
+  const entry: CachedHash = { size: st.size, mtimeMs: st.mtimeMs, actual }
+  hashCache.set(filePath, entry)
+  store?.set(filePath, entry)
 }
 
 /** HashStore over `AppSettings.checksumCache` (settings rows live inside the DB). */
@@ -389,7 +421,7 @@ export async function computeInstallState(
   rootPath: string,
   opts: InstallStateOptions
 ): Promise<ModelState> {
-  if (!SUPPORTED_RUNTIME_FORMATS.get(manifest.runtime)?.has(manifest.format)) {
+  if (!isSupportedRuntimeFormat(manifest.runtime, manifest.format)) {
     return 'unsupported'
   }
   // A vision model is TWO files (GGUF + mmproj); install state requires BOTH present +
@@ -450,7 +482,7 @@ function pendingHashBytes(
   rootPath: string,
   opts: { developerMode: boolean; hashStore?: HashStore }
 ): number {
-  if (!SUPPORTED_RUNTIME_FORMATS.get(manifest.runtime)?.has(manifest.format)) return 0
+  if (!isSupportedRuntimeFormat(manifest.runtime, manifest.format)) return 0
   let files: Array<{ path: string; sha: string }>
   try {
     files = manifestFiles(rootPath, manifest)

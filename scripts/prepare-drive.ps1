@@ -27,17 +27,18 @@
 .PARAMETER Dev
   Generate a developer-friendly policy.json (plaintext workspace + unverified models
   allowed). Default is the commercial posture (encryption required, models must verify).
-  Network is OFF either way (deny-by-default offline guarantee).
+  Model downloads are PERMITTED either way (still gated by the in-app allowNetwork setting +
+  a per-download confirmation); update-checks + telemetry stay off (the app never phones home).
 
 .PARAMETER WithAssets
   After laying out the tree, download + verify a launch-ready default asset set (invokes
   fetch-models.ps1 + fetch-runtime.ps1) so one command yields a usable drive. Build-time
   network only — the app itself stays offline. To keep setup fast the default set is small
   but complete for the core features: the default chat model (Ministral 3 8B), the embeddings
-  model, the reranker, and the Whisper transcriber model, PLUS both sidecar runtimes
-  (llama.cpp + whisper.cpp). The user downloads any other models (larger chat models) from
-  inside the app. Without this flag the behaviour is unchanged (layout + config; you drop
-  artifacts in by hand).
+  model, the reranker, the Whisper transcriber model, and the Qwen2.5-VL image-description
+  model (GGUF + mmproj), PLUS both sidecar runtimes (llama.cpp + whisper.cpp). The user
+  downloads any other models (larger chat models) from inside the app. Without this flag the
+  behaviour is unchanged (layout + config; you drop artifacts in by hand).
 
 .PARAMETER AllModels
   With -WithAssets, fetch ALL models with a download block (every chat model + embeddings +
@@ -66,16 +67,18 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # The models -WithAssets provisions by default (fast setup): the default chat model plus the
-# embeddings model, reranker, and Whisper transcriber, so chat, document Q&A, retrieval
-# quality, and audio/dictation all work out of the box. Every OTHER model (larger chat
-# models) is downloaded by the user from inside the app. Pass -AllModels to fetch everything.
-# The whisper.cpp runtime is fetched alongside these (see the -WithAssets block). Keep these
-# ids in sync with the manifests under model-manifests/.
+# embeddings model, reranker, Whisper transcriber, and the Qwen2.5-VL image-description model,
+# so chat, document Q&A, retrieval quality, audio/dictation, and image understanding all work
+# out of the box. Every OTHER model (larger chat models) is downloaded by the user from inside
+# the app. Pass -AllModels to fetch everything. The whisper.cpp runtime is fetched alongside
+# these (see the -WithAssets block). Keep these ids in sync with the manifests under
+# model-manifests/.
 $DefaultModelIds = @(
   'ministral3-8b-instruct-2512-q4',   # chat (benchmark-winning 8B)
   'multilingual-e5-small-q8',         # embeddings (document Q&A)
   'bge-reranker-v2-m3-f16',           # reranker (retrieval quality)
-  'whisper-small-multilingual'        # transcriber (audio / dictation)
+  'whisper-small-multilingual',       # transcriber (audio / dictation)
+  'qwen2.5-vl-3b-instruct-q4'         # vision (image description; GGUF + mmproj, two files)
 )
 
 # Normalize -Target to a full path: the config files below are written via .NET
@@ -130,7 +133,7 @@ $DriveJson = [ordered]@{
 
 $PolicyJson = [ordered]@{
   network   = [ordered]@{
-    allow_model_downloads = $false
+    allow_model_downloads = $true
     allow_update_checks   = $false
   }
   workspace = [ordered]@{

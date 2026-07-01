@@ -162,4 +162,43 @@ describe('RAG pipeline floor (TEST-3, model-free)', () => {
     expect(msg.citations?.length).toBeGreaterThan(0)
     expect(msg.citations?.[0]).toMatchObject({ label: 'S1', sourceTitle: ANSWER_DOC })
   })
+
+  // §L0 context-overflow fix (backend audit 2026-07-01): the relevance excerpt budget must clamp to
+  // the REAL launched window, not just the fixed ragMaxContextTokens setting — otherwise a small-window
+  // model's grounded turn overflows n_ctx and llama-server returns HTTP 400 "exceeds the context size".
+  it('clamps the excerpt budget to a small launched window so fewer excerpts pack than a large window', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const embedder = new MockEmbedder()
+    // Six strongly-matching documents, each a sizable single chunk. With a large window they all pack
+    // into the 2500-token excerpt budget; a small launched window must clamp to fewer so the grounded
+    // turn fits. Removing the clamp (in generateGroundedAnswer) makes BOTH return the same count → reds.
+    const filler = 'photosynthesis sunlight water carbon dioxide glucose oxygen chloroplasts green plant cells '.repeat(20)
+    for (let i = 0; i < 6; i++) {
+      await importDoc(db, store, embedder, `photosynthesis-${i}.txt`, `Document ${i}. ${filler}`)
+    }
+    const settings: RagRetrievalSettings = { ...SETTINGS, topKFinal: 6 }
+    // A runtime that reports a given window but returns a trivial reply instantly — the mock's
+    // default echoes the (large) grounded prompt token-by-token, which is irrelevant here and slow.
+    const windowRuntime = (contextTokens: number): ReturnType<typeof createMockRuntime> => {
+      const rt = createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens })
+      ;(rt as { chatStream: unknown }).chatStream = async function* () {
+        yield 'ok'
+      }
+      return rt
+    }
+
+    const bigConv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: bigConv.id, role: 'user', content: QUESTION })
+    const big = await generateGroundedAnswer(db, windowRuntime(100_000), embedder, bigConv.id, QUESTION, settings)
+
+    const smallConv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: smallConv.id, role: 'user', content: QUESTION })
+    const small = await generateGroundedAnswer(db, windowRuntime(2048), embedder, smallConv.id, QUESTION, settings)
+
+    // Large window packs more excerpts; the small window is clamped to fewer — but always ≥1 (the
+    // grounding rule keeps the top chunk).
+    expect(big.citations!.length).toBeGreaterThan(small.citations!.length)
+    expect(small.citations!.length).toBeGreaterThanOrEqual(1)
+  })
 })
