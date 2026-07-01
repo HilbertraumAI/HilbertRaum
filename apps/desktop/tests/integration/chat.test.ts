@@ -248,11 +248,17 @@ describe('message coverage persistence (full-doc-skills D48)', () => {
 })
 
 describe('system prompt + message assembly', () => {
-  it('matches the spec §7.6 base prompt', () => {
+  it('the plain-chat base prompt answers from the model’s own knowledge and carries no grounding rules', () => {
     const p = buildSystemPrompt()
     expect(p).toContain('You are HilbertRaum')
-    expect(p).toContain('You do not have internet access.')
-    expect(p).toContain('include citations using the provided source labels')
+    // Plain chat answers general questions directly (no offline/no-internet boilerplate every turn).
+    expect(p).toContain('from your own knowledge')
+    // Document-grounding rules belong to GROUNDED_SYSTEM_PROMPT (rag), NEVER the plain-chat prompt —
+    // leaking them made plain chat refuse general questions and push "upload a document" (D:\ testing).
+    expect(p).not.toContain('include citations using the provided source labels')
+    expect(p).not.toContain('answer only from the context')
+    // And no standalone "no internet access" line for the model to parrot on every turn.
+    expect(p).not.toContain('You do not have internet access.')
   })
 
   it('prepends a system message then history in order', () => {

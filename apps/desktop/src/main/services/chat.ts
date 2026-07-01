@@ -58,15 +58,25 @@ export interface TurnSkill {
 // localize at persist time — the renderer display map translates it (D-L4).
 const DEFAULT_TITLE = t('en', 'main.chat.defaultTitle')
 
-// Base system prompt — verbatim from spec §7.6. RAG context injection (rag/index.ts)
-// appends source-labelled chunks after this preamble.
-export const BASE_SYSTEM_PROMPT = `You are HilbertRaum, a local offline assistant running on the user's laptop.
-You must be helpful, accurate, and honest about uncertainty.
-You do not have internet access.
-You must not claim to have accessed external services.
-When using provided document context, answer only from the context when the question is about those documents.
-If the context is insufficient, say what is missing.
-For document answers, include citations using the provided source labels.`
+// Base system prompt — the PLAIN-CHAT preamble. Revised 2026-07-01 (owner-approved, from D:\ chat
+// testing) from the original spec §7.6 wording, which was destroying the chat UX: small local models
+// latched onto its "You do not have internet access. / You must not claim to have accessed external
+// services." lines and prefaced almost every answer with offline/no-internet/training-cutoff
+// disclaimers, and its DOCUMENT-grounding lines ("answer only from the context… / include citations…")
+// leaked into plain chat, so the model REFUSED general-knowledge questions and pushed "upload a
+// document" (see the sample transcript). Those grounding rules belong ONLY to the grounded path and
+// already live, in full, in rag/index.ts `GROUNDING_RULES` (appended to this base as
+// `GROUNDED_SYSTEM_PROMPT`) — so removing them here loses nothing for RAG and fixes plain chat. This
+// base now tells the model to answer general questions directly from its own knowledge, stay honest
+// about uncertainty WITHOUT per-turn disclaimers, and keeps the one load-bearing guardrail (never
+// claim to have browsed / accessed data it wasn't given). RAG still appends `GROUNDING_RULES`; a
+// more-specific, later instruction, it governs document questions.
+export const BASE_SYSTEM_PROMPT = `You are HilbertRaum, a private assistant that runs locally and offline on the user's own computer.
+Be helpful, accurate, and honest about uncertainty.
+Answer general questions directly and fully from your own knowledge. If a specific fact is uncertain or may be out of date, note that briefly where it matters.
+Do not open answers with disclaimers about being offline, lacking internet access, or a training cutoff, and do not tell the user to upload documents — the user already knows this app runs locally and privately.
+Never claim to have searched the web, browsed, or opened files you were not given — you have not.
+Respond in the language the user writes in.`
 
 /**
  * Build the plain-chat system prompt (document answers compose their own in rag/). When a

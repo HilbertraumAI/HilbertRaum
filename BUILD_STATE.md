@@ -6,6 +6,33 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Plain-chat system-prompt UX fix (stop the per-turn offline disclaimers + general-question
+refusals) — branch `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).**
+Offline / no telemetry / no new network egress; product-behaviour change, owner-approved. From D:\ chat
+testing (attached transcript): plain chat prefaced almost every answer with "I'm offline / no internet / my
+training data has a cutoff / upload a document" boilerplate, and even **refused** a plain general-knowledge
+question ("I do not have information… in my available data or provided documents"). Root cause: the single
+`BASE_SYSTEM_PROMPT` (chat.ts) — used for BOTH plain chat AND, via `GROUNDED_SYSTEM_PROMPT =
+BASE + GROUNDING_RULES`, the RAG path — carried (a) standalone "You do not have internet access. / You must
+not claim to have accessed external services." lines that small local models parrot every turn, and (b)
+**document-grounding** lines ("answer only from the context… / include citations…") that leaked into plain
+chat → refuse-and-ask-for-documents. Fix (chat.ts `BASE_SYSTEM_PROMPT` reworded):
+- The grounding lines are **removed from the base** — they already live in full in rag/index.ts
+  `GROUNDING_RULES` (appended for the grounded path), so **RAG is byte-unchanged** (`GROUNDED_SYSTEM_PROMPT`
+  still = base + rules; rag.test.ts / skills-turn.test.ts assert `GROUNDING_RULES`, all green).
+- The offline framing collapses to ONE load-bearing guardrail ("never claim to have searched the web,
+  browsed, or opened files you were not given"), plus positive instructions to **answer general questions
+  directly from the model's own knowledge**, note uncertainty briefly WITHOUT per-turn disclaimers, not push
+  document uploads, and respond in the user's language.
+- **Only test touched:** chat.test.ts base-prompt assertions (now: contains "from your own knowledge"; does
+  NOT contain the grounding/citation lines or the standalone "no internet access" line). Docs:
+  architecture.md "Chat & streaming" (as-built record; frozen spec §7.6 retained as historical intent).
+  `npm test` green (full suite re-run pending final commit); typecheck + build green.
+- **NEXT ACTION (owner): re-test the same Bill Clinton / Hillary / Obama prompts on the real small model —
+  the prompt fix stops the refusals/disclaimers; it does NOT fix model factual accuracy (a model-quality
+  matter, out of scope here).**_
+
+
 _2026-07-01 — **Chat truncation honesty + live context meter + German chat-budget safety — branch
 `fix/drive-app-issues-2026-07-01` (same branch as the 6-issue drive fixes below; UNMERGED; do NOT
 auto-merge/push).** Offline / no telemetry / no new network egress. From a D:\ chat test where later German

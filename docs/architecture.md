@@ -908,6 +908,20 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   order. The **system prompt is built per request and not persisted** — the `messages` table
   holds only user/assistant turns, so the prompt can evolve (the grounded path swaps its own
   prompt into the last user turn). `messages.citations_json` is written only by grounded answers.
+- **Plain-chat system prompt revised (2026-07-01, owner-approved, supersedes the spec §7.6 wording).**
+  From D:\ chat testing: the original `BASE_SYSTEM_PROMPT` (a) had standalone "You do not have internet
+  access. / You must not claim to have accessed external services." lines that small local models
+  parroted as an offline/no-internet/training-cutoff **disclaimer on almost every answer**, and (b)
+  carried **document-grounding** lines ("answer only from the context… / include citations…") that
+  leaked into plain chat, so the model **refused general-knowledge questions** and pushed "upload a
+  document." Fix: the grounding lines are removed from the base (they already live in full in
+  `GROUNDING_RULES`, appended for the grounded path as `GROUNDED_SYSTEM_PROMPT` — so RAG is unchanged),
+  and the offline framing is reworked to a single load-bearing guardrail ("never claim to have
+  browsed / accessed data you weren't given") plus a positive instruction to **answer general
+  questions directly from the model's own knowledge, without per-turn disclaimers**, and to respond in
+  the user's language. `GROUNDED_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + GROUNDING_RULES` still governs
+  document questions (the later, more-specific rule wins). The frozen spec §7.6 prompt is retained in
+  `CLAUDE_HilbertRaum_MVP.md` as historical intent; this record is the as-built source of truth.
 - **Role alternation (fix 2026-06-14).** A failed answer persists the user turn but no
   assistant reply; left unguarded, the next turn sent **consecutive user messages**, which
   several chat templates (Mistral, Qwen tool-style) reject with `HTTP 500` ("roles must
