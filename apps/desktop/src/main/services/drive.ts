@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { ModelManifest } from '../../shared/manifest'
 import { isRealSha256 } from '../../shared/manifest'
-import { manifestFiles, sha256File, verifyChecksum } from './models'
+import { isSupportedRuntimeFormat, manifestFiles, sha256File, verifyChecksum } from './models'
 
 // Drive preparation logic (spec §6 / §12).
 //
@@ -182,17 +182,21 @@ export interface PolicyJsonOptions {
   /**
    * `true` → a developer-friendly drive (plaintext workspace + unverified models
    * allowed). Default `false` → the commercial posture (spec §6 example): encryption
-   * required, no plaintext, models must verify. Network stays OFF either way
-   * (deny-by-default is the non-negotiable offline guarantee).
+   * required, no plaintext, models must verify. Model downloads are PERMITTED either way
+   * (the user still needs the `allowNetwork` setting on + a per-download confirmation);
+   * update-checks + telemetry stay OFF — the app never phones home.
    */
   dev?: boolean
 }
 
 /**
- * Build `config/policy.json`. Network is ALWAYS denied by default (the offline
- * guarantee — `services/policy.ts` resolves effective network as policy ∧ user setting,
- * so this ceiling keeps the app offline). Workspace + model strictness depends on `dev`.
- * The snake_case shape is exactly what `parsePolicy`/`mergePolicyObject` accept.
+ * Build `config/policy.json`. `allow_model_downloads` is the POLICY CEILING for the in-app
+ * model downloader; it is `true` by default so a prepared drive can pull additional models
+ * on demand. This does not weaken the offline guarantee: `services/policy.ts` resolves
+ * effective network as policy ∧ the user's `allowNetwork` setting, every download needs an
+ * explicit confirmation, and update-checks + telemetry remain denied (the app never phones
+ * home). Workspace + model strictness depends on `dev`. The snake_case shape is exactly what
+ * `parsePolicy`/`mergePolicyObject` accept.
  */
 export function buildPolicyJson(opts: PolicyJsonOptions = {}): PolicyJson {
   const dev = opts.dev ?? false
@@ -201,7 +205,7 @@ export function buildPolicyJson(opts: PolicyJsonOptions = {}): PolicyJson {
     // carry an `allow_telemetry` field (it would only ever be false). `buildPolicyStatus`
     // hardcodes `telemetryAllowed: false`.
     network: {
-      allow_model_downloads: false,
+      allow_model_downloads: true,
       allow_update_checks: false
     },
     workspace: {
@@ -236,10 +240,12 @@ export interface ModelVerifyResult {
   sizeBytes: number | null
 }
 
-/** Runtimes/formats the app can load. Exported so the drift test (audit M-A1) can assert
- *  the `verify-models.{ps1,sh}` gate literals against this single source of truth. */
-export const SUPPORTED_RUNTIMES = new Set(['llama_cpp', 'llama.cpp'])
-export const SUPPORTED_FORMATS = new Set(['gguf'])
+/** The §7.4 (runtime → format) support table lives in `models.ts` (the canonical source
+ *  `computeInstallState` uses). Re-exported so the drift test (audit M-A1) asserts the
+ *  `verify-models.{ps1,sh}` gate literals against the SAME pairs the app verifies — a
+ *  bundled whisper weight (ggml/whisper_cpp) must verify by SHA-256 on every path, never
+ *  be falsely reported UNSUPPORTED (which would fail the ship gate). */
+export { SUPPORTED_RUNTIME_FORMATS } from './models'
 
 /**
  * Verify each manifest's weight against its `sha256`, mirroring `services/models.ts`
@@ -253,7 +259,7 @@ export async function verifyDriveModels(
 ): Promise<ModelVerifyResult[]> {
   const out: ModelVerifyResult[] = []
   for (const manifest of manifests) {
-    if (!SUPPORTED_RUNTIMES.has(manifest.runtime) || !SUPPORTED_FORMATS.has(manifest.format)) {
+    if (!isSupportedRuntimeFormat(manifest.runtime, manifest.format)) {
       out.push({
         id: manifest.id,
         localPath: manifest.localPath,

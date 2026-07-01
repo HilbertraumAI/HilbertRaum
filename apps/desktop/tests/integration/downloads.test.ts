@@ -316,16 +316,16 @@ describe('DownloadManager vision (two files)', () => {
 // ---- the job state machine ----------------------------------------------------------
 
 describe('DownloadManager jobs', () => {
-  it('downloads, verifies, renames .part into place, and invalidates the checksum cache', async () => {
+  it('downloads, verifies, renames .part into place, and PRIMES the checksum cache with the verified hash', async () => {
     const body = 'real-model-weights-bytes'
     const m = verifiedManifest(body)
     const root = tempRoot()
     const dest = weightPath(root, m)
-    const deleted: string[] = []
+    const primed: Array<{ path: string; actual: string }> = []
     const hashStore: HashStore = {
       get: () => null,
-      set: () => undefined,
-      delete: (p) => deleted.push(p)
+      set: (p, entry) => primed.push({ path: p, actual: entry.actual }),
+      delete: () => undefined
     }
     const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
     const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN, hashStore })
@@ -338,7 +338,9 @@ describe('DownloadManager jobs', () => {
     expect(finished.receivedBytes).toBe(body.length)
     expect(readFileSync(dest, 'utf8')).toBe(body)
     expect(existsSync(partPath(dest))).toBe(false)
-    expect(deleted).toContain(dest)
+    // Prime (not invalidate) the checksum cache with the hash just verified, so the Models screen
+    // reports `installed` without redundantly re-hashing the multi-GB weight (download→verify UX).
+    expect(primed.find((p) => p.path === dest)?.actual).toBe(sha256(body))
   })
 
   it('placeholder expected hash → job done but flagged unverified (checksum honesty, R5)', async () => {

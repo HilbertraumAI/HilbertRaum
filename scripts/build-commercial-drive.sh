@@ -58,7 +58,7 @@ echo "Build a COMMERCIAL (sellable) drive at: $TARGET"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run -- nothing will be changed)"
 
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
-step 1 "Lay out the drive (commercial policy: encryption required, network denied)"
+step 1 "Lay out the drive (commercial policy: encryption required, no phone-home)"
 PREP=(--target "$TARGET" --force)
 [[ $DRY_RUN -eq 1 ]] && PREP+=(--dry-run)
 bash "$SCRIPT_DIR/prepare-drive.sh" "${PREP[@]}"
@@ -145,7 +145,8 @@ POLICY="$TARGET/config/policy.json"
 if [[ -f "$POLICY" ]]; then
   grep -q '"encryption_required":[[:space:]]*true'  "$POLICY" || PROBLEMS+=("policy: encryption not required")
   grep -q '"allow_plaintext_dev_mode":[[:space:]]*true' "$POLICY" && PROBLEMS+=("policy: plaintext allowed")
-  grep -q '"allow_model_downloads":[[:space:]]*true' "$POLICY" && PROBLEMS+=("policy: model downloads allowed")
+  # Model downloads are a permitted, user-initiated action on a sold drive; only phone-home
+  # channels (update checks, telemetry) must be denied. Mirrors commercial-drive.ts networkDenied.
   grep -q '"allow_update_checks":[[:space:]]*true'  "$POLICY" && PROBLEMS+=("policy: update checks allowed")
   grep -q '"allow_telemetry":[[:space:]]*true'      "$POLICY" && PROBLEMS+=("policy: telemetry allowed")
   grep -q '"require_sha256_match":[[:space:]]*true' "$POLICY" || PROBLEMS+=("policy: sha256 match not required")
@@ -301,7 +302,7 @@ elif [[ ${#PROBLEMS[@]} -gt 0 ]]; then
   for p in "${PROBLEMS[@]}"; do echo "    - $p"; done
   exit 1
 else
-  echo "  SELLABLE: posture OK (encrypted, network denied, no user data) + all weights VERIFIED."
+  echo "  SELLABLE: posture OK (encrypted, no phone-home, no user data) + all weights VERIFIED."
 fi
 
 echo

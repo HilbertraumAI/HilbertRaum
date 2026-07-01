@@ -76,7 +76,7 @@ Write-Host "Build a COMMERCIAL (sellable) drive at: $Target" -ForegroundColor Gr
 if ($DryRun) { Write-Host '(dry run -- nothing will be changed)' -ForegroundColor Yellow }
 
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
-Step 1 'Lay out the drive (commercial policy: encryption required, network denied)'
+Step 1 'Lay out the drive (commercial policy: encryption required, no phone-home)'
 $prep = @{ Target = $Target; Force = $true }
 if ($DryRun) { $prep.DryRun = $true }
 Run 'prepare-drive.ps1' $prep
@@ -162,7 +162,9 @@ if (Test-Path $policyPath) {
   $policy = Get-Content $policyPath -Raw | ConvertFrom-Json
   if (-not $policy.workspace.encryption_required) { $problems += 'policy: encryption not required' }
   if ($policy.workspace.allow_plaintext_dev_mode) { $problems += 'policy: plaintext allowed' }
-  if ($policy.network.allow_model_downloads -or $policy.network.allow_update_checks) { $problems += 'policy: network allowed' }
+  # Model downloads are a permitted, user-initiated action on a sold drive; only phone-home
+  # channels (update checks, telemetry) must be denied. Mirrors commercial-drive.ts networkDenied.
+  if ($policy.network.allow_update_checks) { $problems += 'policy: update checks allowed' }
   if ($policy.network.allow_telemetry) { $problems += 'policy: telemetry allowed' }
   if (-not $policy.models.require_sha256_match) { $problems += 'policy: sha256 match not required' }
 } else {
@@ -314,7 +316,7 @@ if ($DryRun) {
   foreach ($p in $problems) { Write-Host "    - $p" -ForegroundColor Red }
   exit 1
 } else {
-  Write-Host '  SELLABLE: posture OK (encrypted, network denied, no user data) + all weights VERIFIED.' -ForegroundColor Green
+  Write-Host '  SELLABLE: posture OK (encrypted, no phone-home, no user data) + all weights VERIFIED.' -ForegroundColor Green
 }
 
 Write-Host "`nDone. Test the drive on a clean laptop with Wi-Fi OFF (spec section 17 demo)." -ForegroundColor Green

@@ -90,9 +90,11 @@ describe('config generators', () => {
     expect(paths.isPreparedDrive).toBe(true)
   })
 
-  it('policy.json (commercial default) denies network and is accepted by parsePolicy', () => {
+  it('policy.json (commercial default) permits model downloads but no phone-home, and is accepted by parsePolicy', () => {
     const json = buildPolicyJson()
-    expect(json.network.allow_model_downloads).toBe(false)
+    // Model downloads are a permitted, user-initiated, per-download-confirmed action (still
+    // gated by the allowNetwork setting); update-checks stay off — the app never phones home.
+    expect(json.network.allow_model_downloads).toBe(true)
     expect(json.network.allow_update_checks).toBe(false)
     // No `allow_telemetry` field — the app has no telemetry, so the knob is gone.
     expect('allow_telemetry' in json.network).toBe(false)
@@ -101,22 +103,22 @@ describe('config generators', () => {
     expect(json.models.require_sha256_match).toBe(true)
 
     const policy = parsePolicy(JSON.stringify(json))
-    expect(policy.network.allowModelDownloads).toBe(false)
+    expect(policy.network.allowModelDownloads).toBe(true)
     expect(policy.workspace.encryptionRequired).toBe(true)
     expect(policy.models.requireSha256Match).toBe(true)
   })
 
-  it('policy.json (dev) allows plaintext + unverified but STILL denies network', () => {
+  it('policy.json (dev) allows plaintext + unverified; model downloads permitted, no phone-home', () => {
     const json = buildPolicyJson({ dev: true })
     expect(json.workspace.allow_plaintext_dev_mode).toBe(true)
     expect(json.models.allow_unverified_models).toBe(true)
-    // The non-negotiable guarantee: network is off even in dev.
-    expect(json.network.allow_model_downloads).toBe(false)
+    // Downloads permitted in both postures; update-checks stay off (the app never phones home).
+    expect(json.network.allow_model_downloads).toBe(true)
     expect(json.network.allow_update_checks).toBe(false)
 
     const policy = mergePolicyObject(DEFAULT_POLICY, json)
     expect(policy.workspace.allowPlaintextDevMode).toBe(true)
-    expect(policy.network.allowModelDownloads).toBe(false)
+    expect(policy.network.allowModelDownloads).toBe(true)
   })
 })
 
@@ -174,21 +176,35 @@ describe('verifyDriveModels', () => {
     })
     const missing = asManifest({ id: 'gone', local_path: 'models/chat/gone.gguf' })
     const unsupported = asManifest({ id: 'onnx', runtime: 'onnx', local_path: 'models/chat/x.onnx' })
+    // Phase 36 fix: the bundled ggml/whisper_cpp transcriber has a real sha256 and MUST verify
+    // by hash (not be falsely UNSUPPORTED, which would fail the ship gate). Mirrors the
+    // computeInstallState pair-check + verify-models.{ps1,sh} gate (script-drift.test.ts).
+    const whisperContent = 'ggml-whisper-weights'
+    const whisperHash = createHash('sha256').update(whisperContent).digest('hex')
+    const whisper = asManifest({
+      id: 'whisper',
+      runtime: 'whisper_cpp',
+      format: 'ggml',
+      local_path: 'models/transcriber/ggml-small.bin',
+      sha256: whisperHash
+    })
 
     writeWeight(root, placeholder, 'data')
     writeWeight(root, mismatch, 'data')
+    writeWeight(root, whisper, whisperContent)
     const realContent = 'real-weights'
     writeWeight(root, real, realContent)
     const realHash = createHash('sha256').update(realContent).digest('hex')
     const realFixed = asManifest({ id: 'real', local_path: 'models/chat/real.gguf', sha256: realHash })
 
-    const results = await verifyDriveModels(root, [realFixed, placeholder, mismatch, missing, unsupported])
+    const results = await verifyDriveModels(root, [realFixed, placeholder, mismatch, missing, unsupported, whisper])
     const byId = Object.fromEntries(results.map((r) => [r.id, r.status]))
     expect(byId.real).toBe('verified')
     expect(byId.ph).toBe('unverified_placeholder')
     expect(byId.mm).toBe('mismatch')
     expect(byId.gone).toBe('missing')
     expect(byId.onnx).toBe('unsupported')
+    expect(byId.whisper).toBe('verified') // ggml/whisper_cpp now verifies by SHA-256
   })
 })
 

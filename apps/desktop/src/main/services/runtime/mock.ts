@@ -78,6 +78,10 @@ export class MockRuntime implements ModelRuntime {
       yield token
       await delay(TOKEN_DELAY_MS, signal)
     }
+    // Contract fidelity: a real runtime reports a finish reason on a clean stop. The mock always
+    // completes naturally (never hits a cap), so it reports 'stop' — an aborted stream returns
+    // above and reports nothing, exactly like an aborted fetch that carries no final chunk.
+    options?.onFinish?.('stop')
   }
 
   /** Build the deterministic mock reply, split into whitespace-preserving tokens. */

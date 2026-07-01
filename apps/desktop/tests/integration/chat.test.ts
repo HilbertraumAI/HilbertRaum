@@ -248,11 +248,17 @@ describe('message coverage persistence (full-doc-skills D48)', () => {
 })
 
 describe('system prompt + message assembly', () => {
-  it('matches the spec §7.6 base prompt', () => {
+  it('the plain-chat base prompt answers from the model’s own knowledge and carries no grounding rules', () => {
     const p = buildSystemPrompt()
     expect(p).toContain('You are HilbertRaum')
-    expect(p).toContain('You do not have internet access.')
-    expect(p).toContain('include citations using the provided source labels')
+    // Plain chat answers general questions directly (no offline/no-internet boilerplate every turn).
+    expect(p).toContain('from your own knowledge')
+    // Document-grounding rules belong to GROUNDED_SYSTEM_PROMPT (rag), NEVER the plain-chat prompt —
+    // leaking them made plain chat refuse general questions and push "upload a document" (D:\ testing).
+    expect(p).not.toContain('include citations using the provided source labels')
+    expect(p).not.toContain('answer only from the context')
+    // And no standalone "no internet access" line for the model to parrot on every turn.
+    expect(p).not.toContain('You do not have internet access.')
   })
 
   it('prepends a system message then history in order', () => {
@@ -287,6 +293,58 @@ describe('generateAssistantMessage (streaming)', () => {
     const history = listMessages(db, conv.id)
     expect(history.at(-1)?.content).toBe(msg.content)
     expect(history.at(-1)?.role).toBe('assistant')
+  })
+
+  it('a clean reply (mock reports finish_reason "stop") is NOT flagged truncated', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, {})
+    expect(msg.truncated).toBeUndefined()
+    expect(listMessages(db, conv.id).at(-1)?.truncated).toBeUndefined()
+  })
+
+  it('flags + persists truncated when the runtime reports finish_reason "length"', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'tell me everything' })
+
+    // A runtime that streams a couple of tokens then stops at the context ceiling.
+    const cutOffRuntime: ModelRuntime = {
+      modelId: 'cutoff',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      contextWindow: () => 2048,
+      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
+        yield 'a partial answer that runs'
+        yield ' right into the wall'
+        options?.onFinish?.('length')
+      }
+    }
+
+    const msg = await generateAssistantMessage(db, cutOffRuntime, conv.id, {})
+    expect(msg.truncated).toBe(true)
+    // Round-trips through the DB read (messages.truncated → Message.truncated).
+    expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
+  })
+
+  it('a user Stop is NOT flagged truncated even though the reply is partial (no finish_reason)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+
+    const controller = new AbortController()
+    let n = 0
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, {
+      signal: controller.signal,
+      onToken: () => {
+        if (++n === 2) controller.abort()
+      }
+    })
+    // The abort carries no finish reason, so the intentional partial is not a length-truncation.
+    expect(msg.truncated).toBeUndefined()
   })
 
   it('stop cancels the stream and persists only the partial reply', async () => {

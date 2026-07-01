@@ -8,8 +8,7 @@ import {
   DRIVE_FORMAT_VERSION,
   buildDriveJson,
   buildPolicyJson,
-  SUPPORTED_RUNTIMES,
-  SUPPORTED_FORMATS
+  SUPPORTED_RUNTIME_FORMATS
 } from '../../src/main/services/drive'
 import { isRealSha256 } from '../../src/shared/manifest'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
@@ -219,9 +218,20 @@ describe('TS ↔ shell-script drift (config payloads)', () => {
 })
 
 // --- verify-models.{ps1,sh} sha256 + supported-runtime/format gates (audit M-A1) ----
-// These mirror manifest.ts `isRealSha256` and drive.ts SUPPORTED_RUNTIMES/FORMATS. A
-// drift here mislabels weights (a placeholder passing as real, or a loadable format
-// rejected as "unsupported"). We extract the gate literals and assert them.
+// These mirror manifest.ts `isRealSha256` and the canonical (runtime → format) support
+// table SUPPORTED_RUNTIME_FORMATS (models.ts, re-exported via drive.ts). A drift here
+// mislabels weights (a placeholder passing as real, or a loadable format like the bundled
+// ggml/whisper_cpp transcriber rejected as "unsupported"). We extract the gate literals
+// and assert them against the canonical (runtime|format) pairs.
+
+/** Flatten SUPPORTED_RUNTIME_FORMATS to a set of `runtime|format` strings for comparison. */
+function canonicalRuntimeFormatPairs(): Set<string> {
+  const set = new Set<string>()
+  for (const [runtime, formats] of SUPPORTED_RUNTIME_FORMATS) {
+    for (const fmt of formats) set.add(`${runtime}|${fmt}`)
+  }
+  return set
+}
 
 describe('TS ↔ shell-script drift (verify-models gates)', () => {
   it('both verify scripts use the same real-sha256 regex, matching isRealSha256', () => {
@@ -243,28 +253,33 @@ describe('TS ↔ shell-script drift (verify-models gates)', () => {
     for (const p of probes) expect(re.test(p), `regex vs isRealSha256 on ${p}`).toBe(isRealSha256(p))
   })
 
-  it('verify-models.ps1 runtime/format gate matches SUPPORTED_RUNTIMES/FORMATS', () => {
+  it('verify-models.ps1 runtime/format gate matches SUPPORTED_RUNTIME_FORMATS', () => {
     const src = read('scripts/verify-models.ps1')
-    // if ($runtime -notin @('llama_cpp', 'llama.cpp') -or $format -ne 'gguf') {
-    const rt = src.match(/\$runtime\s+-notin\s+@\(([^)]*)\)/)
-    const fmt = src.match(/\$format\s+-ne\s+'([^']+)'/)
-    expect(rt, 'ps1 runtime gate not found').not.toBeNull()
-    expect(fmt, 'ps1 format gate not found').not.toBeNull()
-    const runtimes = new Set([...rt![1].matchAll(/'([^']+)'/g)].map((m) => m[1]))
-    expect(runtimes).toEqual(SUPPORTED_RUNTIMES)
-    expect(new Set([fmt![1]])).toEqual(SUPPORTED_FORMATS)
+    // $SupportedRuntimeFormats = [ordered]@{ 'llama_cpp' = 'gguf'; ...; 'whisper_cpp' = 'ggml' }
+    const start = src.indexOf('$SupportedRuntimeFormats = [ordered]@{')
+    expect(start, 'ps1 $SupportedRuntimeFormats table not found').toBeGreaterThanOrEqual(0)
+    const end = src.indexOf('}', start)
+    expect(end, 'ps1 $SupportedRuntimeFormats table not closed').toBeGreaterThan(start)
+    const body = src.slice(start, end)
+    const pairs = new Set(
+      [...body.matchAll(/'([^']+)'\s*=\s*'([^']+)'/g)].map((m) => `${m[1]}|${m[2]}`)
+    )
+    expect(pairs).toEqual(canonicalRuntimeFormatPairs())
   })
 
-  it('verify-models.sh runtime/format gate matches SUPPORTED_RUNTIMES/FORMATS', () => {
+  it('verify-models.sh runtime/format gate matches SUPPORTED_RUNTIME_FORMATS', () => {
     const src = read('scripts/verify-models.sh')
-    // if [[ "$runtime" != "llama_cpp" && "$runtime" != "llama.cpp" ]] || [[ "$format" != "gguf" ]];
-    const runtimes = new Set(
-      [...src.matchAll(/"\$runtime"\s*!=\s*"([^"]+)"/g)].map((m) => m[1])
-    )
-    const fmt = src.match(/"\$format"\s*!=\s*"([^"]+)"/)
-    expect(runtimes, 'sh runtime gate not found').not.toEqual(new Set())
-    expect(fmt, 'sh format gate not found').not.toBeNull()
-    expect(runtimes).toEqual(SUPPORTED_RUNTIMES)
-    expect(new Set([fmt![1]])).toEqual(SUPPORTED_FORMATS)
+    // supported_format_for() { case "$1" in llama_cpp|llama.cpp) printf 'gguf' ;; whisper_cpp) printf 'ggml' ;; esac }
+    const start = src.indexOf('supported_format_for() {')
+    expect(start, 'sh supported_format_for() not found').toBeGreaterThanOrEqual(0)
+    const end = src.indexOf('}', start)
+    expect(end, 'sh supported_format_for() not closed').toBeGreaterThan(start)
+    const body = src.slice(start, end)
+    const pairs = new Set<string>()
+    // Each case arm `pat1|pat2) printf 'format'` maps every runtime in the pattern to that format.
+    for (const m of body.matchAll(/^\s*([A-Za-z0-9_.|]+)\)\s*printf '([^']+)'/gm)) {
+      for (const runtime of m[1].split('|')) pairs.add(`${runtime}|${m[2]}`)
+    }
+    expect(pairs).toEqual(canonicalRuntimeFormatPairs())
   })
 })

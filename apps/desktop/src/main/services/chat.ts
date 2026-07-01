@@ -58,15 +58,25 @@ export interface TurnSkill {
 // localize at persist time — the renderer display map translates it (D-L4).
 const DEFAULT_TITLE = t('en', 'main.chat.defaultTitle')
 
-// Base system prompt — verbatim from spec §7.6. RAG context injection (rag/index.ts)
-// appends source-labelled chunks after this preamble.
-export const BASE_SYSTEM_PROMPT = `You are HilbertRaum, a local offline assistant running on the user's laptop.
-You must be helpful, accurate, and honest about uncertainty.
-You do not have internet access.
-You must not claim to have accessed external services.
-When using provided document context, answer only from the context when the question is about those documents.
-If the context is insufficient, say what is missing.
-For document answers, include citations using the provided source labels.`
+// Base system prompt — the PLAIN-CHAT preamble. Revised 2026-07-01 (owner-approved, from D:\ chat
+// testing) from the original spec §7.6 wording, which was destroying the chat UX: small local models
+// latched onto its "You do not have internet access. / You must not claim to have accessed external
+// services." lines and prefaced almost every answer with offline/no-internet/training-cutoff
+// disclaimers, and its DOCUMENT-grounding lines ("answer only from the context… / include citations…")
+// leaked into plain chat, so the model REFUSED general-knowledge questions and pushed "upload a
+// document" (see the sample transcript). Those grounding rules belong ONLY to the grounded path and
+// already live, in full, in rag/index.ts `GROUNDING_RULES` (appended to this base as
+// `GROUNDED_SYSTEM_PROMPT`) — so removing them here loses nothing for RAG and fixes plain chat. This
+// base now tells the model to answer general questions directly from its own knowledge, stay honest
+// about uncertainty WITHOUT per-turn disclaimers, and keeps the one load-bearing guardrail (never
+// claim to have browsed / accessed data it wasn't given). RAG still appends `GROUNDING_RULES`; a
+// more-specific, later instruction, it governs document questions.
+export const BASE_SYSTEM_PROMPT = `You are HilbertRaum, a private assistant that runs locally and offline on the user's own computer.
+Be helpful, accurate, and honest about uncertainty.
+Answer general questions directly and fully from your own knowledge. If a specific fact is uncertain or may be out of date, note that briefly where it matters.
+Do not open answers with disclaimers about being offline, lacking internet access, or a training cutoff, and do not tell the user to upload documents — the user already knows this app runs locally and privately.
+Never claim to have searched the web, browsed, or opened files you were not given — you have not.
+Respond in the language the user writes in.`
 
 /**
  * Build the plain-chat system prompt (document answers compose their own in rag/). When a
@@ -186,6 +196,8 @@ interface MessageRow {
   auto_fired: number | null
   /** Full-doc-skills Phase 1 — JSON-serialized `CoverageInfo` (D48), or NULL (legacy/no coverage). */
   coverage_json: string | null
+  /** 1 when this assistant reply was cut off at the context ceiling (finish_reason 'length'); else NULL/0. */
+  truncated: number | null
 }
 
 /**
@@ -278,7 +290,10 @@ function rowToMessage(r: MessageRow): Message {
     // Auto-fire provenance (S13c) only means anything when a skill actually shaped (and still resolves
     // for) this turn; a deleted skill drops the glyph AND the undo together.
     autoFired: skillResolved ? r.auto_fired === 1 : false,
-    coverage
+    coverage,
+    // Only surface truncation as a positive flag (undefined on complete replies / user turns), so a
+    // pre-migration NULL row and a normal reply both read exactly as before.
+    truncated: r.truncated === 1 ? true : undefined
   }
 }
 
@@ -587,6 +602,12 @@ export interface AppendMessageInput {
    * badge — so today's plain retrieval turns stay byte-identical. Counts/mode only, never content.
    */
   coverage?: CoverageInfo | null
+  /**
+   * True when this assistant reply was cut off at the token/context ceiling (finish_reason 'length',
+   * §L0 honest-signal). Stamped on assistant rows only; omitted/false ⇒ NULL (complete reply). Never
+   * set on a user-initiated Stop (that partial is intentional and user-known, not a length overflow).
+   */
+  truncated?: boolean
 }
 
 /** Append a message and bump the conversation's updated_at. */
@@ -600,6 +621,7 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   const skillId = input.skillId ?? null
   // Stamp auto-fire provenance only when a skill is actually stamped; 1 = auto-fired, NULL otherwise.
   const autoFired = skillId != null && input.autoFired === true
+  const truncated = input.truncated === true
   const msg: Message = {
     id: randomUUID(),
     conversationId: input.conversationId,
@@ -610,12 +632,13 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     citations: input.citations ?? undefined,
     skillId,
     autoFired,
-    coverage: input.coverage ?? undefined
+    coverage: input.coverage ?? undefined,
+    truncated: truncated ? true : undefined
   }
   prepareCached(
     db,
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msg.id,
     msg.conversationId,
@@ -626,7 +649,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     citationsJson,
     skillId,
     autoFired ? 1 : null,
-    coverageJson
+    coverageJson,
+    truncated ? 1 : null
   )
   prepareCached(db, 'UPDATE conversations SET updated_at = ? WHERE id = ?').run(
     now,
@@ -683,6 +707,7 @@ export interface DeletedMessage {
   readonly coverageJson: string | null
   readonly kind: string | null
   readonly coversThroughRowid: number | null
+  readonly truncated: number | null
 }
 
 interface DeletedMessageRow {
@@ -698,6 +723,7 @@ interface DeletedMessageRow {
   coverage_json: string | null
   kind: string | null
   covers_through_rowid: number | null
+  truncated: number | null
 }
 
 /**
@@ -730,7 +756,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
   const row = db
     .prepare(
       `SELECT id, conversation_id, role, content, created_at, token_count, citations_json,
-              skill_id, auto_fired, coverage_json, kind, covers_through_rowid
+              skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated
        FROM messages WHERE conversation_id = ?
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
@@ -749,7 +775,8 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     autoFired: row.auto_fired,
     coverageJson: row.coverage_json,
     kind: row.kind,
-    coversThroughRowid: row.covers_through_rowid
+    coversThroughRowid: row.covers_through_rowid,
+    truncated: row.truncated
   }
 }
 
@@ -765,8 +792,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     db,
     `INSERT INTO messages
        (id, conversation_id, role, content, created_at, token_count, citations_json,
-        skill_id, auto_fired, coverage_json, kind, covers_through_rowid)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     m.id,
     m.conversationId,
@@ -779,7 +806,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     m.autoFired,
     m.coverageJson,
     m.kind,
-    m.coversThroughRowid
+    m.coversThroughRowid,
+    m.truncated
   )
 }
 
@@ -939,8 +967,19 @@ export function exportTranscript(db: Db, conversationId: string): { title: strin
 /** Model tokens reserved for the streamed answer + chat-template chrome (so a fitted
  *  prompt still leaves room to generate; below this an answer would be truncated). */
 export const CHAT_RESPONSE_RESERVE_TOKENS = 1024
-/** Real-tokens-per-whitespace-word safety factor (matches the doctask + RAG budgets). */
+/** Base real-tokens-per-whitespace-word rate for typical English/Latin prose. */
 const CHAT_TOKENS_PER_WORD = 1.3
+/**
+ * Subword-density safety multiplier on top of the base word rate. A German machine-generated reply
+ * tokenizes at ~1.5–2 real BPE tokens/word, so the 1.3 base UNDER-counts it: `fitMessagesToContext`
+ * then keeps too much history, the real prompt runs larger than estimated, and the balanced path
+ * (which sends no `max_tokens`) truncates the answer mid-word at the context ceiling — the exact
+ * failure in the D:\ testing report (2026-07-01). Mirrors the RAG grounded-answer budget's ÷1.5
+ * German safety (rag-design §15.1): leaning the whole chat budget conservative makes German trim +
+ * compact a touch sooner (and the usage meter read truthfully high) rather than overflow. English
+ * reads slightly high — acceptable for a meter that is labelled approximate and designed to warn
+ * before the cliff. Effective rate: 1.3 × 1.5 ≈ 1.95 real tokens/word. */
+const CHAT_TOKENS_PER_WORD_SAFETY = 1.5
 /** Per-message overhead for role markers / delimiters the chat template adds. */
 const PER_MESSAGE_OVERHEAD_TOKENS = 8
 
@@ -957,7 +996,9 @@ const messageTokenCache = new WeakMap<ChatMessage, number>()
 export function messageTokens(m: ChatMessage): number {
   const cached = messageTokenCache.get(m)
   if (cached !== undefined) return cached
-  const tokens = Math.ceil(approxTokenCount(m.content) * CHAT_TOKENS_PER_WORD) + PER_MESSAGE_OVERHEAD_TOKENS
+  const tokens =
+    Math.ceil(approxTokenCount(m.content) * CHAT_TOKENS_PER_WORD * CHAT_TOKENS_PER_WORD_SAFETY) +
+    PER_MESSAGE_OVERHEAD_TOKENS
   messageTokenCache.set(m, tokens)
   return tokens
 }
@@ -1158,10 +1199,18 @@ export async function generateAssistantMessage(
   const fence = buildTurnFence(db, conversationId, opts.skill, contextTokens)
   const messages = buildChatMessages(db, conversationId, contextTokens, fence)
   let content = ''
+  // Capture the completion's finish reason so we can honestly flag a reply the model cut off at the
+  // token/context ceiling ('length') instead of persisting the mid-word partial as if complete
+  // (§L0 honest-signal). A user Stop aborts before any final chunk, so this stays null → not
+  // truncated (the abort partial is intentional and user-known).
+  let finishReason: string | null = null
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
     mode: opts.mode,
     onReasoning: opts.onReasoning,
+    onFinish: (reason) => {
+      finishReason = reason
+    },
     ...opts.runtimeOptions
   })
   try {
@@ -1174,6 +1223,8 @@ export async function generateAssistantMessage(
     // Any other error is a real failure and propagates to the IPC layer.
     if (!isAbortError(err, opts.signal)) throw err
   }
+  // 'length' = the reply hit the ceiling and is cut off; any other reason (or none) = a clean reply.
+  const truncated = finishReason === 'length'
   // Reasoning never reaches the DB: the runtime already streams it separately,
   // and any inline think block that slipped into the answer is stripped here.
   content = stripThinkBlocks(content)
@@ -1194,7 +1245,9 @@ export async function generateAssistantMessage(
       skillId: fence ? (opts.skill?.installId ?? null) : null,
       // Carry auto-fire provenance only when the fence was placed (the skill shaped the answer) — so the
       // S13c undo lines up 1:1 with the glyph (§22-A5).
-      autoFired: fence ? opts.skill?.autoFired === true : false
+      autoFired: fence ? opts.skill?.autoFired === true : false,
+      // Honest-signal flag: mark a reply the model cut off at the context ceiling ('length').
+      truncated
     })
   } catch (err) {
     // R1 (full-audit-2026-06-30, Phase C) — defense-in-depth guard. The lock/quit teardown now

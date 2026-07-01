@@ -908,6 +908,20 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   order. The **system prompt is built per request and not persisted** — the `messages` table
   holds only user/assistant turns, so the prompt can evolve (the grounded path swaps its own
   prompt into the last user turn). `messages.citations_json` is written only by grounded answers.
+- **Plain-chat system prompt revised (2026-07-01, owner-approved, supersedes the spec §7.6 wording).**
+  From D:\ chat testing: the original `BASE_SYSTEM_PROMPT` (a) had standalone "You do not have internet
+  access. / You must not claim to have accessed external services." lines that small local models
+  parroted as an offline/no-internet/training-cutoff **disclaimer on almost every answer**, and (b)
+  carried **document-grounding** lines ("answer only from the context… / include citations…") that
+  leaked into plain chat, so the model **refused general-knowledge questions** and pushed "upload a
+  document." Fix: the grounding lines are removed from the base (they already live in full in
+  `GROUNDING_RULES`, appended for the grounded path as `GROUNDED_SYSTEM_PROMPT` — so RAG is unchanged),
+  and the offline framing is reworked to a single load-bearing guardrail ("never claim to have
+  browsed / accessed data you weren't given") plus a positive instruction to **answer general
+  questions directly from the model's own knowledge, without per-turn disclaimers**, and to respond in
+  the user's language. `GROUNDED_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + GROUNDING_RULES` still governs
+  document questions (the later, more-specific rule wins). The frozen spec §7.6 prompt is retained in
+  `CLAUDE_HilbertRaum_MVP.md` as historical intent; this record is the as-built source of truth.
 - **Role alternation (fix 2026-06-14).** A failed answer persists the user turn but no
   assistant reply; left unguarded, the next turn sent **consecutive user messages**, which
   several chat templates (Mistral, Qwen tool-style) reject with `HTTP 500` ("roles must
@@ -928,7 +942,13 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `contextTokens` (the production callers pass `getSettings(db).contextTokens`; omitted = the
   pure, untrimmed builder used by unit tests). This complements the doc-task window budgets
   (`doctasks/summary.ts`), which already sized their inputs to `contextTokens` — the gap was
-  only the conversational path.
+  only the conversational path. **German subword safety (2026-07-01):** `messageTokens` scales the
+  1.3 base word rate by `CHAT_TOKENS_PER_WORD_SAFETY` (1.5 → ≈1.95 real tokens/word) because a
+  German machine reply tokenizes at ~1.5–2 tokens/word; the 1.3 base under-counted it, so the trim
+  kept too much history and the answer overflowed. Mirrors the RAG ÷1.5 German safety (rag-design
+  §15.1); one estimate feeds both the trim budget AND the usage meter, so German trims/compacts
+  sooner and the meter reads truthfully high (English reads slightly high — accepted, the meter is
+  labelled approximate).
 - **Conversation compaction (L2, above the L1 floor).** When history approaches the **launched** context
   window (`RuntimeStatus.contextWindow?` / `effectiveContextWindow`, not `settings.contextTokens`),
   `ensureCompacted` (`services/chat/compaction.ts`) summarizes the OLDER turns **once** into a cached
@@ -936,9 +956,21 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   pair + only the post-checkpoint turns — instead of silently dropping the oldest. `fitMessagesToContext`
   still runs after and still guarantees fit; below threshold (or with the `chatCompactionEnabled` setting
   off) behaviour is byte-identical to drop-oldest. Every new path fails safe (any summarizer failure ⇒ no
-  checkpoint, turn proceeds). UX: a composer context-usage meter, a one-shot "summarizing…" notice
-  (`STREAM.compaction`), and an expandable transcript summary marker. Full design record (L0/L1/L2 +
-  trigger + summarizer + UX, with the deferred Phase-3 `/tokenize`): [`rag-design.md`](rag-design.md) §15.
+  checkpoint, turn proceeds). UX: a composer context-usage meter (now with an **always-visible %** that
+  updates **live** as the answer streams — `ChatScreen` `liveUsage` = resting read + in-flight user turn +
+  streaming-answer estimate, reconciled to the main-process resting read when the turn settles), a one-shot
+  "summarizing…" notice (`STREAM.compaction`), and an expandable transcript summary marker. Full design
+  record (L0/L1/L2 + trigger + summarizer + UX, with the deferred Phase-3 `/tokenize`):
+  [`rag-design.md`](rag-design.md) §15.
+- **Honest truncation signal (L0, 2026-07-01).** The balanced/deep chat path sends no `max_tokens`, so a
+  long reply on a small window can hit the context ceiling and stop **mid-word** (`finish_reason: 'length'`).
+  Previously the app was blind to it — the SSE parser only read `delta.content`, so the partial persisted as
+  if complete. Now `readChatSSE`/`parseSseLine` surface `finish_reason` via a new `RuntimeChatOptions.onFinish`
+  callback; `generateAssistantMessage` flags `finishReason === 'length'` and persists it as `messages.truncated`
+  (additive nullable column; threaded through `Message`, `appendMessage`, and the regenerate delete/restore
+  snapshot). The transcript renders a quiet amber "Reply cut off — reached the model's context limit" note
+  (`.msg-truncated`, `chat.truncated.*`) with an actionable tooltip. A user Stop carries no finish reason, so
+  the intentional partial is **not** flagged. Scope: plain chat (the grounded doc-answer path is out of scope).
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`
@@ -1019,6 +1051,16 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   locked composer + Stop) through a derived `busyStreaming = streaming || recovering`. The token
   events missed while unmounted are not replayed — the snapshot carries the full accumulated text,
   so the bubble resumes complete. Completion (snapshot → null) refreshes the transcript from the DB.
+  **Re-selecting the streaming conversation on remount (2026-07-01).** The poll above only re-attaches
+  when the visible `activeId` already points at the streaming conversation — but a fresh mount resets
+  `activeId` to `null` (it was never persisted), so on return the screen showed an empty *new* chat
+  while the reply streamed invisibly (and, since the one-stream guard is per-conversation, that empty
+  conversation would even accept another turn). The Chat screen now, on mount with `activeId` still
+  null, calls the read-only `listActiveStreamConversations` IPC (`[...inFlightStreams.keys()]`,
+  in-memory + workspace-agnostic like `getActiveStream`) and, if a generation is in flight, selects
+  that conversation (most-recent = last key) and mirrors its mode — the existing recovery poll then
+  re-attaches. Guarded so it never clobbers a deliberate mid-load click and never yanks the user onto
+  an old conversation when nothing is generating.
 - **`MockRuntime.chatStream`** emits a deterministic reply token-by-token with a small delay so
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
@@ -1038,7 +1080,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   same gated start path.
 - **IPC** (`ipc/registerChatIpc.ts`): `createConversation`, `listConversations`, `listMessages`,
   `sendChatMessage` (streaming), `stopGeneration`, `deleteConversation`, plus `getActiveStream`
-  (stream recovery after navigation), `searchConversations` (Phase 31 full-text), `exportConversation`
+  and `listActiveStreamConversations` (stream recovery + re-selecting the in-flight conversation
+  after navigation), `searchConversations` (Phase 31 full-text), `exportConversation`
   (save to Markdown), and the scope/anchor setters used by the composite source picker. Regenerate reuses
   `sendChatMessage` with `options.regenerate` — it deletes the last assistant message, then
   re-streams from history. `deleteConversation` removes a conversation (chat or document Q&A) and
@@ -2117,9 +2160,10 @@ all enforced in MAIN and re-checked per call:**
 
 1. `policy.network.allowModelDownloads` — the authoritative ceiling (**wave-1 decision D3**:
    `DEFAULT_POLICY` allows it so the spec §3.6 user toggle is the sole gate when no policy
-   file restricts — "policy only restricts" preserved; `prepare-drive` writes deny in BOTH
-   postures, so prepared drives stay download-disabled unless the builder edits
-   `config/policy.json`).
+   file restricts — "policy only restricts" preserved; since 2026-07-01 `prepare-drive` also
+   writes `true` in BOTH postures, so a prepared/sold drive lets the buyer add models on demand —
+   still gated by the setting + a per-download confirmation, and update-checks + telemetry stay
+   denied so the drive never phones home).
 2. `settings.allowNetwork` — the spec §3.6 checkbox, **default on** for a fresh DIY/dev install
    (`DEFAULT_SETTINGS.allowNetwork: true`); gate 1's policy ceiling still wins, so prepared
    drives stay download-disabled. A locked workspace reads as off.
@@ -2137,7 +2181,11 @@ mismatch deletes the partial and fails the job; a placeholder expected hash comp
 `unverified` (checksum honesty). Cancel keeps the `.part`; the next start resumes via a
 `Range` header (append iff the server answered 206). One download at a time; jobs are
 in-memory, polled over `downloads:start/get/cancel` (the Phase-4 import precedent — no new
-event channels). On success the checksum-cache entry is invalidated. Audit events
+event channels). On a VERIFIED success the checksum cache is **primed** with the hash just
+computed (`models.ts` `primeChecksum`, keyed by the file's size+mtime) so the Models screen's
+install-state refresh reports `installed` WITHOUT re-hashing the multi-GB weight — this removed the
+invisible post-download "Checking…" gap where the card briefly looked un-downloaded (2026-07-01); a
+placeholder-hash completion still invalidates (it is never trusted). Audit events
 (`model_download_started/verified/failed`) flow through the injected
 `DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified".
 No update checks, no catalog (only manifests already on the drive), no background anything;
@@ -2147,9 +2195,11 @@ licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PR
 **`settings.allowNetwork` now defaults ON (2026-06-13).** The spec §3.6 checkbox was flipped
 `false → true` in `DEFAULT_SETTINGS` so a fresh install can download models out of the box
 (onboarding feedback). Gate 1 (the policy ceiling) is unchanged and still authoritative: a
-commercial `policy.json` with `allow_model_downloads: false` — or the packaged-build
-`STRICT_POLICY` fallback — keeps the app offline regardless of the toggle, and telemetry stays
-hardcoded off. A locked workspace still reads the setting as off.
+`policy.json` with `allow_model_downloads: false` — or the packaged-build `STRICT_POLICY` fallback —
+keeps the app offline regardless of the toggle. A prepared/commercial drive now writes
+`allow_model_downloads: true` (2026-07-01), so the setting + the per-download confirmation are the
+effective gate there; update-checks + telemetry stay hardcoded/denied so the drive never phones home.
+A locked workspace still reads the setting as off.
 
 ### In-app engine installer (2026-06-13)
 

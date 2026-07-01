@@ -308,6 +308,18 @@ const MessageBlock = memo(function MessageBlock({
             </div>
           )
         })()}
+        {/* Honest-signal truncation notice (§L0): a quiet, labelled line on an assistant reply the
+            model cut off at the token/context ceiling (finish_reason 'length'). Never colour-only —
+            a labelled marker with an explanatory tooltip (guidelines §9); role="note" so AT reads it
+            as supplementary to the answer, not an alert. */}
+        {m.role === 'assistant' && m.truncated && (
+          <div className="msg-truncated" role="note" title={t('chat.truncated.hint')}>
+            <span className="msg-truncated-glyph" aria-hidden="true">
+              ⚠
+            </span>
+            <span>{t('chat.truncated.label')}</span>
+          </div>
+        )}
       </div>
       {m.role === 'assistant' && (
         <MessageActions

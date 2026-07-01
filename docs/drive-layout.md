@@ -99,7 +99,8 @@ HILBERTRAUM/
 > drive letter — so the same drive continues the same encrypted workspace on any laptop (success
 > criterion #10). The canonical resolver is `services/launcher.ts` `resolveDriveRootFromLauncher`.
 > A **commercial (sellable) drive** ships `policy.json` in the commercial posture (encryption required,
-> plaintext off, models must verify, network denied) and contains **no user data** — built + asserted
+> plaintext off, models must verify, no phone-home — model downloads are a permitted user action, but
+> update-checks + telemetry are denied) and contains **no user data** — built + asserted
 > by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). See
 > [`packaging.md`](packaging.md).
 
@@ -154,7 +155,8 @@ scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 
 `prepare-drive` creates the directory tree, copies the committed manifests + user docs onto the
 drive, and generates `config/drive.json` (the prepared-drive marker) + `config/policy.json`
-(deny-by-default offline posture; `--dev`/`-Dev` for a plaintext developer drive).
+(no-phone-home posture — model downloads permitted, update-checks + telemetry denied; `--dev`/`-Dev`
+for a plaintext developer drive).
 
 By default it does **not** download artifacts. **Phase 12** adds `--with-assets`/`-WithAssets`, which
 then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar) — each download is

@@ -12,9 +12,11 @@ recommended_context_tokens: 4096
 supports_thinking_mode: false
 supports_tools: false
 input_modalities: [text, image]   # informational only — capability comes from role + mmproj
-# OPT-IN ONLY: never bundled or auto-recommended (recommended_profiles: [], rank 0). The Images
-# screen reads `available` once BOTH files below are present + SHA-256-verified on the drive;
-# `fetch-models --only qwen2.5-vl-3b-instruct-q4` (or the in-app downloader) pulls them.
+# Provisioned by `prepare-drive --with-assets` on a prepared drive (default asset set), but
+# NEVER auto-recommended in-app (recommended_profiles: [], rank 0) — it is a used-on-demand
+# capability, not a chat model the picker suggests. The Images screen reads `available` once
+# BOTH files below are present + SHA-256-verified on the drive; `fetch-models --only
+# qwen2.5-vl-3b-instruct-q4` (or the in-app downloader) pulls them on a hand-loaded drive.
 local_path: models/vision/qwen2.5-vl-3b-instruct-q4.gguf
 sha256: d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12
 download:

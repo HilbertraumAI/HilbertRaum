@@ -72,6 +72,15 @@ function Get-ManifestField([string]$text, [string]$key) {
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 
+# Supported (runtime -> format) pairs — mirror models.ts SUPPORTED_RUNTIME_FORMATS (the app's
+# §7.4 gate; drift test M-A1). A ggml/whisper_cpp weight (the bundled transcriber) has a real
+# sha256 and verifies by SHA-256 like any GGUF; only a genuinely unloadable pair is UNSUPPORTED.
+$SupportedRuntimeFormats = [ordered]@{
+  'llama_cpp'   = 'gguf'
+  'llama.cpp'   = 'gguf'
+  'whisper_cpp' = 'ggml'
+}
+
 # Extract the indented body of a top-level `mmproj:` mapping (the SECOND file of a vision model,
 # DIST-2: verify BOTH files). Get-ManifestField then reads its local_path/sha256.
 function Get-MmprojBlock([string]$text) {
@@ -134,7 +143,7 @@ foreach ($mf in $manifestFiles) {
   $mmprojLocal = Get-ManifestField $mmprojBlock 'local_path'
   $mmprojSha = (Get-ManifestField $mmprojBlock 'sha256'); if ($mmprojSha) { $mmprojSha = $mmprojSha.ToLower() }
 
-  if ($runtime -notin @('llama_cpp', 'llama.cpp') -or $format -ne 'gguf') {
+  if ($SupportedRuntimeFormats[$runtime] -ne $format) {
     Write-WeightResult $id '' 'UNSUPPORTED'
     continue
   }

@@ -257,6 +257,11 @@ export const en = {
   // The context-usage meter tooltip (§5.1). {used}/{window} are compact token counts ("6.4k").
   'chat.context.usageTooltip': 'Context: {used} / {window} tokens (approximate)',
   'chat.context.willSummarize': 'Older messages will be summarized to make room.',
+  // Honest-signal truncation notice (§L0): shown on an assistant reply the model cut off at the
+  // context ceiling (finish_reason 'length'). Label is the visible line; hint is the tooltip.
+  'chat.truncated.label': 'Reply cut off — reached the model’s context limit',
+  'chat.truncated.hint':
+    'The model ran out of room to finish this answer. Ask it to continue, start a new chat, or raise the context size on the AI Model screen.',
 
   // ---- Chat: document scope (ScopePopover.tsx) ----
   // Truthful, calm scope copy: never "Using all 0 documents". Zero documents routes to

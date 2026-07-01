@@ -702,6 +702,16 @@ export interface Message {
    * never content. Undefined on user turns and turns that recorded no coverage.
    */
   coverage?: CoverageInfo
+  /**
+   * True when this assistant reply was CUT OFF because generation hit the token/context ceiling
+   * (llama-server `finish_reason: 'length'`) — the answer is incomplete, not a clean EOS. Surfaced
+   * so the transcript can honestly say "reply cut off at the context limit" instead of a silent
+   * mid-word stop (D:\ testing report, 2026-07-01). Persisted as `messages.truncated` (1/NULL);
+   * undefined on a complete reply, on user turns, and on a user-initiated Stop (which carries no
+   * finish reason). Set by the plain-chat generation path (`generateAssistantMessage`); the grounded
+   * document-answer path is out of scope for this signal.
+   */
+  truncated?: boolean
 }
 
 /**

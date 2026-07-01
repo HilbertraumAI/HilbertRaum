@@ -12,7 +12,7 @@ import {
   type FetchFn,
   type ModelDownloadTask
 } from './assets'
-import { invalidateChecksum, type HashStore } from './models'
+import { invalidateChecksum, primeChecksum, type HashStore } from './models'
 
 // In-app model downloader (architecture.md "In-app model downloader"). A thin job
 // state machine over the `assets.ts` seams: `planModelDownloads` (license gate +
@@ -391,7 +391,16 @@ export class DownloadManager {
       // ok (verified) or placeholder (cannot verify — checksum honesty): the bytes are
       // complete either way, so move the file into place and refresh install state.
       renameSync(part, task.dest)
-      invalidateChecksum(task.dest, hashStore)
+      // Prime the checksum cache with the hash we JUST computed (identical bytes, same file) so the
+      // Models screen's install-state refresh reports `installed` immediately instead of redundantly
+      // re-hashing the multi-GB weight — that re-hash is the invisible gap where the card briefly
+      // looked un-downloaded (download→verify UX). A placeholder file has no real hash to trust, so
+      // it is invalidated (computeInstallState short-circuits placeholder weights without hashing).
+      if (verify.reason === 'placeholder' || !verify.actual) {
+        invalidateChecksum(task.dest, hashStore)
+      } else {
+        primeChecksum(task.dest, verify.actual, hashStore)
+      }
       // A single placeholder-hash file taints the whole model as UNVERIFIED (never silently pass).
       if (verify.reason === 'placeholder') job.unverified = true
       // Pin the combined received total to this file's true on-disk size before the next file.

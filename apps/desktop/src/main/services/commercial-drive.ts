@@ -210,7 +210,9 @@ export interface CommercialAssertion {
   checks: {
     /** Encryption required + plaintext off + models must verify. */
     policyCommercial: boolean
-    /** Network denied (no model downloads, no update checks). */
+    /** The drive never PHONES HOME on its own: no update checks, no telemetry. Model
+     *  downloads are an explicit, user-initiated, per-download-confirmed action and are
+     *  PERMITTED on a sold drive, so they do not count as a network violation here. */
     networkDenied: boolean
     /** Every shipped weight is present + SHA-256 VERIFIED (no placeholder/mismatch/missing). */
     weightsVerified: boolean
@@ -307,8 +309,11 @@ export async function assertCommercialDrive(
     policy.workspace.encryptionRequired &&
     !policy.workspace.allowPlaintextDevMode &&
     policy.models.requireSha256Match
+  // "Network denied" for a sold drive means the app never PHONES HOME on its own: no update
+  // checks, no telemetry. Model downloads are an explicit, user-initiated, per-download-confirmed
+  // action (the drive ships with them permitted so a buyer can add models), so they do NOT count
+  // as a network violation.
   const networkDenied =
-    !policy.network.allowModelDownloads &&
     !policy.network.allowUpdateChecks &&
     !policy.network.allowTelemetry
 
@@ -321,8 +326,8 @@ export async function assertCommercialDrive(
   if (!policy.models.requireSha256Match) {
     problems.push('policy.json does not require SHA-256 model verification')
   }
-  if (policy.network.allowModelDownloads || policy.network.allowUpdateChecks) {
-    problems.push('policy.json allows network access (a sold drive must deny network)')
+  if (policy.network.allowUpdateChecks) {
+    problems.push('policy.json allows update checks (a sold drive must not phone home)')
   }
   if (policy.network.allowTelemetry) {
     problems.push('policy.json allows telemetry (must always be off)')

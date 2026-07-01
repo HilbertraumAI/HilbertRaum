@@ -54,6 +54,20 @@ import type { MessageKey } from '@shared/i18n'
 
 type Mode = 'chat' | 'documents'
 
+/**
+ * Rough renderer-side token estimate for the LIVE context meter while a turn streams. Mirrors the
+ * main-process chat budget (word count × the ~1.95 English/German subword-safety rate + per-message
+ * chrome, chat.ts `messageTokens`) closely enough for a climbing bar; the exact resting value is
+ * reconciled from the main process (`getConversationContextUsage`) when the turn settles, so this
+ * only has to be approximately right, never authoritative.
+ */
+const LIVE_TOKENS_PER_WORD = 1.95
+function estimateLiveTokens(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length
+  if (words === 0) return 0
+  return Math.ceil(words * LIVE_TOKENS_PER_WORD) + 8
+}
+
 /** localStorage key for the conversation-list collapse (a UI preference, not user data). */
 export const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
@@ -115,8 +129,12 @@ export function ChatScreen({
    *  first answer token + in the stream's finally. Never persisted, lost on remount (R14). */
   const [compacting, setCompacting] = useState(false)
   /** Resting context-window usage for the composer meter (§5.1); null hides it. Refreshed on
-   *  conversation switch + after each completed turn. */
+   *  conversation switch + after each completed turn. During a turn the meter climbs LIVE via
+   *  `liveUsage` (base + the in-flight user turn + the streaming answer estimate), then reconciles to
+   *  this authoritative resting read when the turn settles. */
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
+  /** Estimated tokens of the in-flight user turn, added to the live meter until the turn settles. */
+  const [liveUserTokens, setLiveUserTokens] = useState(0)
   /** The latest compaction summary + its transcript marker position (§5.3, D-b); null hides it. */
   const [summaryMarker, setSummaryMarker] = useState<ConversationSummaryMarker | null>(null)
   // True while RECOVERING an in-flight generation that this component instance did not
@@ -461,6 +479,44 @@ export function ChatScreen({
     }
   }, [activeId, streaming, refreshContextInfo])
 
+  // On a FRESH mount (the user navigated away mid-reply and came back), the Chat screen has
+  // forgotten which conversation it was streaming — `activeId` resets to null, so the recovery
+  // effect above bails and an empty new chat shows while the answer streams invisibly (and, since
+  // the one-stream guard is per-conversation, a new empty conversation would even accept another
+  // turn). If a generation is still in flight, re-select that conversation so the recovery effect
+  // re-attaches to the live reply. Runs once on mount; the `activeIdRef` guards make it a no-op if
+  // the user has already hand-picked a conversation, and it never yanks the user onto an old chat
+  // when nothing is generating.
+  useEffect(() => {
+    if (!window.api.listActiveStreamConversations) return // older preload / test stub
+    let cancelled = false
+    void (async () => {
+      if (activeIdRef.current != null) return
+      let ids: string[] = []
+      try {
+        ids = (await window.api.listActiveStreamConversations!()) ?? []
+      } catch {
+        ids = []
+      }
+      if (cancelled || activeIdRef.current != null || ids.length === 0) return
+      const streamingId = ids[ids.length - 1] // insertion order → the most recently started stream
+      let convs: Conversation[] = []
+      try {
+        convs = await window.api.listConversations()
+      } catch {
+        convs = []
+      }
+      if (cancelled || activeIdRef.current != null) return
+      if (convs.length > 0) setConversations(convs)
+      setActiveId(streamingId)
+      const conv = convs.find((c) => c.id === streamingId)
+      if (conv) setMode(conv.mode) // mirror the conversation's mode (chat vs documents), like onSelectConversation
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   function setListCollapsedPersistent(collapsed: boolean): void {
     setListCollapsed(collapsed)
     try {
@@ -542,6 +598,18 @@ export function ChatScreen({
   // recovering one that survived a navigation. Gates every "no new turn / no edits while
   // answering" affordance so a recovered stream behaves exactly like a live one.
   const busyStreaming = streaming || recovering
+
+  // Live context-usage for the meter (§5.1): while THIS conversation streams, add the in-flight user
+  // turn + a running estimate of the streaming answer on top of the resting read, so the bar climbs
+  // as the answer grows (and warns before it overflows). Off-stream it is just the resting value; on
+  // completion the resting read is reconciled from the main process (the `finally` above).
+  const liveUsage = useMemo<ContextUsage | null>(() => {
+    if (!contextUsage) return null
+    const streamingHere = busyStreaming && streamConvId === activeId
+    if (!streamingHere) return contextUsage
+    const extra = liveUserTokens + estimateLiveTokens(streamText)
+    return { ...contextUsage, usedTokens: contextUsage.usedTokens + extra }
+  }, [contextUsage, busyStreaming, streamConvId, activeId, liveUserTokens, streamText])
 
   function selectDepth(d: ChatDepthMode): void {
     if (busyStreaming) return
@@ -820,6 +888,10 @@ export function ChatScreen({
     setStreamThinking('')
     setThinkingOpen(false)
     setCompacting(false)
+    // Seed the live meter with the user turn about to be sent; the streaming answer estimate is
+    // added on top in `liveUsage`. A regenerate re-streams an EXISTING user turn (already counted in
+    // the resting usage), so it seeds 0 to avoid double-counting the question.
+    setLiveUserTokens(regenerate ? 0 : estimateLiveTokens(content))
     answerStarted.current = false
     stopped.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
@@ -875,8 +947,6 @@ export function ChatScreen({
       // Re-read the persisted history (includes the user turn + final assistant reply).
       await refreshIfVisible()
       await refreshConversations()
-      // The turn may have cut a fresh checkpoint and changed fullness — refresh the meter + marker.
-      if (activeIdRef.current === convId) await refreshContextInfo(convId)
     } catch (e) {
       if (activeIdRef.current === convId) setError(friendlyIpcError(e))
       // Refresh so a partial (stopped) reply that was persisted still shows.
@@ -893,6 +963,12 @@ export function ChatScreen({
       setStreamText('')
       setStreamThinking('')
       setCompacting(false)
+      // Drop the live delta BEFORE reconciling so the meter never double-counts the turn: the
+      // authoritative resting read below already includes the persisted user turn + reply.
+      setLiveUserTokens(0)
+      // The turn may have cut a fresh checkpoint and changed fullness — reconcile the meter + marker
+      // to the persisted truth (runs on success AND error, so a partial/stopped reply settles too).
+      if (activeIdRef.current === convId) void refreshContextInfo(convId)
       // M-U2: confirm a user-requested stop so a truncated reply is not mistaken for a
       // complete one. Only when looking at THIS conversation (a background stream's toast
       // would be confusing) and only if no error already explained the early end.
@@ -1430,10 +1506,11 @@ export function ChatScreen({
               )}
               {/* Context-window usage meter (§5.1): pushed to the right of the footer's quiet
                   affordances. Shown for an existing conversation once usage is known; applies to
-                  both Chat and document answers. */}
-              {contextUsage && (
+                  both Chat and document answers. Uses the LIVE usage so the bar + % climb while the
+                  answer streams. */}
+              {liveUsage && (
                 <span className="composer-footer-spacer">
-                  <ContextMeter usage={contextUsage} />
+                  <ContextMeter usage={liveUsage} />
                 </span>
               )}
             </>

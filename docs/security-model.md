@@ -131,9 +131,12 @@ The commercial **sell gate** (`assertCommercialDrive`) deliberately keeps the DE
 shipping *no* `policy.json` must FAIL the gate, not pass on the strict fallback.
 
 A (future signed) `policy.json` is **authoritative**: it can only **restrict**, never expand, what
-the user setting permits — `prepare-drive` keeps writing `allow_model_downloads: false` in both its
-postures, so prepared drives deny downloads unless the drive builder deliberately changes that. The
-effective network permission is:
+the user setting permits — `prepare-drive` writes `allow_model_downloads: true` in both its postures
+(2026-07-01), so a prepared/sold drive lets the buyer fetch additional models on demand (still gated
+by the `allowNetwork` setting + a per-download confirmation). Update-checks and telemetry stay off in
+every posture, so the drive never phones home — that is what the sell gate now enforces as "network
+denied" (see `commercial-drive.ts` `networkDenied` = no update-checks, no telemetry). The effective
+network permission is:
 
 ```
 networkAllowedByPolicy = policy.network.allowModelDownloads || policy.network.allowUpdateChecks
@@ -143,9 +146,10 @@ offlineMode            = !networkAllowed
 
 Consequences:
 - **The shipped default permits downloads, but only when a policy also allows them.** `allowNetwork`
-  defaults **ON** (`DEFAULT_SETTINGS`) so a fresh dev install can fetch models out of the box;
-  however a packaged commercial drive ships a `policy.json` with downloads disabled, which overrides
-  the user setting and keeps it offline (`networkAllowed = networkAllowedByPolicy && userSetting`).
+  defaults **ON** (`DEFAULT_SETTINGS`) so a fresh dev install can fetch models out of the box; a
+  prepared/commercial drive also ships `allow_model_downloads: true` (2026-07-01) so a buyer can add
+  models — always via an explicit per-download confirmation, and the app still runs fully offline
+  (nothing fetches without that user action). Update-checks + telemetry remain denied in every posture.
   While the workspace is locked the setting is unreadable and treated as off.
 - **Policy forbids → offline**, regardless of the user toggle ("Network access disabled by policy").
 - **Policy permits + user opts in → network allowed** — used exclusively by the Phase-18 in-app

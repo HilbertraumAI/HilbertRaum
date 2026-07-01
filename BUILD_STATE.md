@@ -6,6 +6,121 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Plain-chat system-prompt UX fix (stop the per-turn offline disclaimers + general-question
+refusals) — branch `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT auto-merge/push).**
+Offline / no telemetry / no new network egress; product-behaviour change, owner-approved. From D:\ chat
+testing (attached transcript): plain chat prefaced almost every answer with "I'm offline / no internet / my
+training data has a cutoff / upload a document" boilerplate, and even **refused** a plain general-knowledge
+question ("I do not have information… in my available data or provided documents"). Root cause: the single
+`BASE_SYSTEM_PROMPT` (chat.ts) — used for BOTH plain chat AND, via `GROUNDED_SYSTEM_PROMPT =
+BASE + GROUNDING_RULES`, the RAG path — carried (a) standalone "You do not have internet access. / You must
+not claim to have accessed external services." lines that small local models parrot every turn, and (b)
+**document-grounding** lines ("answer only from the context… / include citations…") that leaked into plain
+chat → refuse-and-ask-for-documents. Fix (chat.ts `BASE_SYSTEM_PROMPT` reworded):
+- The grounding lines are **removed from the base** — they already live in full in rag/index.ts
+  `GROUNDING_RULES` (appended for the grounded path), so **RAG is byte-unchanged** (`GROUNDED_SYSTEM_PROMPT`
+  still = base + rules; rag.test.ts / skills-turn.test.ts assert `GROUNDING_RULES`, all green).
+- The offline framing collapses to ONE load-bearing guardrail ("never claim to have searched the web,
+  browsed, or opened files you were not given"), plus positive instructions to **answer general questions
+  directly from the model's own knowledge**, note uncertainty briefly WITHOUT per-turn disclaimers, not push
+  document uploads, and respond in the user's language.
+- **Only test touched:** chat.test.ts base-prompt assertions (now: contains "from your own knowledge"; does
+  NOT contain the grounding/citation lines or the standalone "no internet access" line). Docs:
+  architecture.md "Chat & streaming" (as-built record; frozen spec §7.6 retained as historical intent).
+  `npm test` green (full suite re-run pending final commit); typecheck + build green.
+- **NEXT ACTION (owner): re-test the same Bill Clinton / Hillary / Obama prompts on the real small model —
+  the prompt fix stops the refusals/disclaimers; it does NOT fix model factual accuracy (a model-quality
+  matter, out of scope here).**_
+
+
+_2026-07-01 — **Chat truncation honesty + live context meter + German chat-budget safety — branch
+`fix/drive-app-issues-2026-07-01` (same branch as the 6-issue drive fixes below; UNMERGED; do NOT
+auto-merge/push).** Offline / no telemetry / no new network egress. From a D:\ chat test where later German
+"tell me everything" replies stopped **mid-word** while an earlier, longer reply completed. Root cause
+(cross-verified via an adversarial sub-agent pass): the balanced/deep path sends **no `max_tokens`** and the
+sidecar has **no `--n-predict`**, so a reply is bounded only by EOS or by filling `n_ctx`
+(`finish_reason: 'length'`); as history grows the answer's runway shrinks and long late-conversation replies
+overflow — and the app was blind to it (`readChatSSE` only read `delta.content`). Compaction was NOT
+involved (a 6-turn chat is below `MIN_COMPACTABLE_TURNS`). Three fixes, all additive + fail-safe:
+- **#A — Honest truncation signal.** `readChatSSE`/`parseSseLine` now surface the final chunk's
+  `finish_reason` via a new `RuntimeChatOptions.onFinish` (optional; vision + mock unaffected — the mock
+  reports `'stop'` on a clean finish). `generateAssistantMessage` flags `finishReason === 'length'` and
+  persists it as **`messages.truncated`** (new nullable column via `ensureColumn`; threaded through
+  `Message.truncated`, `MessageRow`/`rowToMessage`, `AppendMessageInput`/`appendMessage` INSERT, and the
+  regenerate delete/restore snapshot). A user **Stop** carries no finish reason ⇒ NOT flagged. Renderer:
+  a quiet amber `.msg-truncated` note (`chat.truncated.label`/`.hint`, en+de). **Scope:** plain chat only
+  (grounded doc answers out of scope). **Data contract:** `Message` gains optional `truncated?: boolean`;
+  `RuntimeChatOptions` gains optional `onFinish?(finishReason)`.
+- **#B — German subword safety on the chat budget.** `messageTokens` now scales the 1.3 base word rate by
+  `CHAT_TOKENS_PER_WORD_SAFETY (1.5)` → ≈1.95 real tokens/word (mirrors the RAG ÷1.5 German safety). One
+  estimate feeds the trim, the compaction trigger, AND the meter → German trims/compacts sooner + the meter
+  reads truthfully high (English reads slightly high — accepted). All token-math tests are
+  structural/comparative → regression-safe.
+- **#C — Live context meter %.** `ContextMeter` shows an always-visible % (aria-hidden; `aria-valuetext`
+  still reads tokens) and climbs live during streaming via `ChatScreen` `liveUsage` (resting read +
+  in-flight user turn + `estimateLiveTokens(streamText)`), reconciled to the resting read in the stream
+  `finally` (moved there from the try so a stopped/failed turn settles too; no double-count).
+- **Docs:** architecture.md "Chat & streaming" (L0 honest-signal bullet + German-safety + live-meter notes);
+  rag-design.md §15.2 (factor), §15.5 (live %), new **§15.7** design record. **Tests:** +5 (llama-runtime
+  onFinish length/stop/null-intermediate; chat truncated persist round-trip + clean-stop + user-Stop
+  unflagged). `npm test` **2692 passed / 41 skipped**; `npm run typecheck` + `npm run build` green.
+- **NOT done (offered, deferred to owner):** raise default `contextTokens` above 4096; a "continue this
+  reply" action on a truncated turn. **NEXT ACTION (owner): review; optionally capture `finish_reason` +
+  `usage` from the loopback `/v1/chat/completions` on one repro to confirm `length` on the original D:\
+  transcript (the app now self-reports it going forward).**_
+
+
+_2026-07-01 — **Drive/app fixes from D:\ testing (6 issues) — branch
+`fix/drive-app-issues-2026-07-01` (UNMERGED; do NOT auto-merge/push).** Offline / no telemetry / no new
+runtime network egress. `npm test` **2687 passed / 41 skipped**; `npm run typecheck` + `npm run build` green.
+Six independent fixes; one is a **product policy decision** (owner-approved during this session):
+- **#1 — ggml/whisper_cpp weights now VERIFY (were `UNSUPPORTED`).** `verify-models.{ps1,sh}` + the sell-gate
+  verifier (`drive.ts` `verifyDriveModels`) gated on `gguf`+`llama_cpp` only, so the bundled Whisper transcriber
+  (`ggml`/`whisper_cpp`, real sha256, `bundled_on_preconfigured_drive: true`) was `UNSUPPORTED` → a drive that
+  bundles Whisper could **never** pass `-Strict` / `assertCommercialDrive`. Unified on the canonical pair-map
+  `SUPPORTED_RUNTIME_FORMATS` (now **exported** from `models.ts`, incl. `whisper_cpp→ggml`; `drive.ts` re-exports
+  it + uses `isSupportedRuntimeFormat`). Scripts use a pair check; `script-drift.test.ts` asserts the new shape;
+  `drive.test.ts` gains a whisper-verifies case.
+- **#2 — Qwen2.5-VL (vision) added to the `--with-assets` default set.** `prepare-drive.{ps1,sh}` `DEFAULT_MODEL_IDS`
+  now includes `qwen2.5-vl-3b-instruct-q4`; `fetch-models.{ps1,sh}` already fetch BOTH files (GGUF + mmproj).
+  Manifest comment + `model-policy.md` updated: provisioned by `--with-assets` but still **never auto-recommended**
+  in-app (`recommended_profiles: []`). (~3.27 GB / 12 GB RAM — owner-approved.)
+- **#3 — POLICY DECISION (owner-approved): `allow_model_downloads` default `false → true`** on prepared/sold
+  drives + the commercial **sell gate relaxed**. `buildPolicyJson` (`drive.ts`) + `prepare-drive.{ps1,sh}` write
+  `true`; `commercial-drive.ts` `networkDenied` redefined to **"never phones home"** (no update-checks, no
+  telemetry — model downloads are a permitted, per-download-confirmed user action); native `build-commercial-drive.{ps1,sh}`
+  gates match. Offline runtime guarantee intact (setting-gated + confirmation; nothing fetches without a user
+  action). Tests updated (`drive.test.ts`, `commercial-drive.test.ts`); `script-drift.test.ts` still enforces the
+  three producers in lockstep. Docs: security-model.md, packaging.md, drive-layout.md, model-policy.md, architecture.md.
+- **#4 — download→verify UX: no more invisible "Checking…" gap.** Root cause: the downloader `invalidateChecksum`'d
+  on success, forcing `listModels` to redundantly re-hash the multi-GB weight (seconds), which was only surfaced on
+  a Models remount → the button re-enabled looking failed. Now `downloads.ts` **primes** the checksum cache with the
+  hash it just verified (`models.ts` `primeChecksum`, size+mtime keyed), so install-state refresh is instant. The
+  download job's own `verifying` phase already shows "Checking…". `downloads.test.ts` asserts the prime.
+- **#5 — Chat: re-select the in-flight conversation on return.** A fresh Chat mount reset `activeId=null`, so the
+  existing stream-recovery poll bailed → an empty new chat showed while the reply streamed invisibly (and the
+  per-conversation guard let that empty chat accept a turn). New in-memory IPC `listActiveStreamConversations`
+  (`[...inFlightStreams.keys()]`, skips `requireUnlocked`); ChatScreen selects the streaming conversation + mirrors
+  its mode on mount, then the recovery poll re-attaches. **Data contract:** new IPC channel
+  `chat:activeStreamConversations` (added to `chat-ipc.test.ts` `IN_MEMORY_CHANNELS`). Preload + ipc.ts + architecture.md updated.
+- **#6 — RAG document Q&A no longer overflows a small context window (HTTP 400 "exceeds context size").** The
+  relevance path capped excerpts only by `ragMaxContextTokens` (2500, fixed), never by the model's real `n_ctx`;
+  `fitMessagesToContext` keeps the final turn mandatory → oversized grounded turn sent → 400. `generateGroundedAnswer`
+  now clamps to `min(ragMaxContextTokens, retrievalExcerptBudgetTokens(window,…))` (mirrors the whole-doc path; ÷1.5
+  safety for the 1.3-tokens/word under-count of subword-dense German). Caller-scoped (retrieve() unchanged);
+  regression test in `rag-pipeline-floor.test.ts`. Doc: rag-design.md §15.1. (NOTE: the 4096 was the small CHAT
+  model's window — the just-downloaded vision model can never be the chat runtime.)
+- **OPEN — #7 (skill quick-action "document not in this chat's scope") NOT fixed this pass.** Root cause is a stale
+  renderer `scopeDocIds` cache (keyed only on `[currentSkillId, activeId]`, FE-10) that doesn't refresh on
+  scope/attachment changes, PLUS an analysis-vs-run target divergence (`detectFilenameScope` narrows the analysis to
+  one filename-matched doc; the run default `docIds[0]` doesn't). Exact trigger not pinned without the repro event
+  order (a fresh single-doc chat would send `undefined` → default, not the error). Awaiting the user's reproduction
+  sequence before implementing.
+- **NEXT ACTION (owner): review + merge `fix/drive-app-issues-2026-07-01`. Then, for #2/#3, re-run
+  `scripts\build-commercial-drive` to confirm a downloads-enabled + vision-bundled drive passes the (relaxed) sell
+  gate. Provide the #7 repro (did scope/attachments change between the analysis answer and the button; >1 doc in scope?).**_
+
+
 _2026-07-01 — **Qwen3.5 Unsloth wave + llama.cpp runtime bump b9585 → b9849 — branch
 `model-catalog-qwen3.5-wave-b9849` (UNMERGED; do NOT auto-merge/push).** Manifest/docs/test-only —
 `git diff src/` touches one test fixture assertion (the committed-pin version) + one new test file; no

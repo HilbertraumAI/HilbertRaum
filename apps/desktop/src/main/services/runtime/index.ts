@@ -29,6 +29,15 @@ export interface RuntimeChatOptions {
    */
   onReasoning?: (delta: string) => void
   /**
+   * Receives the completion's `finish_reason` once, when the model stops: 'stop' (EOS / a stop
+   * token — a complete reply), 'length' (the reply hit the token/context ceiling and is CUT OFF),
+   * or another server-defined reason. Lets the chat service flag a length-truncated answer so the
+   * UI can say the reply was cut off instead of stopping mid-word silently. Never fired on a user
+   * abort (an aborted request carries no final chunk). The mock runtime reports 'stop' on a clean
+   * finish; a runtime that can't report one simply never calls it (callers treat that as 'stop').
+   */
+  onFinish?: (finishReason: string) => void
+  /**
    * Grammar-constrained decoding (D55): when set, the runtime constrains the model's output to
    * this JSON Schema via llama-server's OpenAI-compatible `response_format: { type: 'json_schema' }`,
    * so the completion is GUARANTEED to be JSON matching the schema (the model cannot emit an
