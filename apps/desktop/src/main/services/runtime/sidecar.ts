@@ -36,6 +36,20 @@ export function llamaServerDir(rootPath: string, platform: NodeJS.Platform = pro
   return join(rootPath, 'runtime', 'llama.cpp', llamaOsDir(platform))
 }
 
+/**
+ * Roots that may hold the on-disk runtime tree (`runtime/<family>/<os>/`), in PRECEDENCE
+ * order. The native launcher mounts the sidecar runtimes as a loader COMPONENT and exports
+ * `HILBERTRAUM_RUNTIME_ROOT` pointing at the mounted tree; when present that component is the
+ * canonical source, so it comes first. The drive root (`rootPath`, `HILBERTRAUM_DRIVE_ROOT`)
+ * is the FALLBACK — a drive may still embed its own `runtime/` tree (a `prepare-drive.sh` run
+ * without `--no-runtimes`). Same binaries, just a different location. A resolver walks these
+ * and returns the first that actually holds the binary, so "component wins, drive fills gaps".
+ */
+export function runtimeRoots(rootPath: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const component = env.HILBERTRAUM_RUNTIME_ROOT?.trim()
+  return component && component !== rootPath ? [component, rootPath] : [rootPath]
+}
+
 /** Options for the sidecar binary resolvers. */
 export interface ResolveBinOptions {
   /**
@@ -66,8 +80,12 @@ export function resolveLlamaServerPath(
     // Packaged build: never spawn an env-supplied, unverified binary.
     log.warn('Ignoring HILBERTRAUM_LLAMA_BIN in a packaged build (dev-only override)')
   }
-  const candidate = join(llamaServerDir(rootPath, platform), llamaServerBinaryName(platform))
-  return existsSync(candidate) ? candidate : null
+  // Component-mounted runtime first (HILBERTRAUM_RUNTIME_ROOT), drive root as fallback.
+  for (const root of runtimeRoots(rootPath, env)) {
+    const candidate = join(llamaServerDir(root, platform), llamaServerBinaryName(platform))
+    if (existsSync(candidate)) return candidate
+  }
+  return null
 }
 
 /**
@@ -78,10 +96,15 @@ export function resolveLlamaServerPath(
  */
 export function resolveCpuFallbackServerPath(
   rootPath: string,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
 ): string | null {
-  const candidate = join(llamaServerDir(rootPath, platform), 'cpu', llamaServerBinaryName(platform))
-  return existsSync(candidate) ? candidate : null
+  // Same component-first / drive-fallback precedence as the default binary.
+  for (const root of runtimeRoots(rootPath, env)) {
+    const candidate = join(llamaServerDir(root, platform), 'cpu', llamaServerBinaryName(platform))
+    if (existsSync(candidate)) return candidate
+  }
+  return null
 }
 
 /** A sane default thread count: half the logical cores, at least 1. */

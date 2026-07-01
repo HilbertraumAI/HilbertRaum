@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { llamaOsDir, defaultThreadCount, type ResolveBinOptions } from '../runtime/sidecar'
+import { llamaOsDir, defaultThreadCount, runtimeRoots, type ResolveBinOptions } from '../runtime/sidecar'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
@@ -46,8 +46,12 @@ export function resolveWhisperCliPath(
     if (opts.isDev) return existsSync(override) ? override : null
     log.warn('Ignoring HILBERTRAUM_WHISPER_BIN in a packaged build (dev-only override)')
   }
-  const candidate = join(whisperCliDir(rootPath, platform), whisperCliBinaryName(platform))
-  return existsSync(candidate) ? candidate : null
+  // Component-mounted runtime first (HILBERTRAUM_RUNTIME_ROOT), drive root as fallback.
+  for (const root of runtimeRoots(rootPath, env)) {
+    const candidate = join(whisperCliDir(root, platform), whisperCliBinaryName(platform))
+    if (existsSync(candidate)) return candidate
+  }
+  return null
 }
 
 /** Marker prefix so the AudioParser can map a decode failure to friendly copy. */

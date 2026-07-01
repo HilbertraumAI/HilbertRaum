@@ -9,6 +9,7 @@ import net from 'node:net'
 import {
   resolveLlamaServerPath,
   resolveCpuFallbackServerPath,
+  runtimeRoots,
   llamaServerBinaryName,
   llamaServerDir,
   llamaOsDir,
@@ -131,6 +132,59 @@ describe('resolveCpuFallbackServerPath (Phase 15, ladder rung 3)', () => {
   it('returns null when the drive ships no safety net (e.g. mac)', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-cpubin-'))
     expect(resolveCpuFallbackServerPath(root, 'darwin')).toBeNull()
+  })
+
+  it('prefers a component safety-net binary over the drive one', () => {
+    const drive = mkdtempSync(join(tmpdir(), 'hilbertraum-cpu-drive-'))
+    const component = mkdtempSync(join(tmpdir(), 'hilbertraum-cpu-comp-'))
+    for (const root of [drive, component]) {
+      const dir = join(llamaServerDir(root, 'linux'), 'cpu')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, llamaServerBinaryName('linux')), 'x')
+    }
+    expect(resolveCpuFallbackServerPath(drive, 'linux', { HILBERTRAUM_RUNTIME_ROOT: component })).toBe(
+      join(llamaServerDir(component, 'linux'), 'cpu', llamaServerBinaryName('linux'))
+    )
+  })
+})
+
+// The native launcher mounts the sidecar runtimes as a loader COMPONENT and exports
+// HILBERTRAUM_RUNTIME_ROOT; the app must prefer that mounted tree over an embedded drive
+// runtime, falling back to the drive when the component lacks the binary (or is absent).
+describe('runtimeRoots (component-first, drive fallback)', () => {
+  it('is just the drive root when no component is mounted', () => {
+    expect(runtimeRoots('/drive', {})).toEqual(['/drive'])
+  })
+
+  it('puts the component root first when HILBERTRAUM_RUNTIME_ROOT is set', () => {
+    expect(runtimeRoots('/drive', { HILBERTRAUM_RUNTIME_ROOT: '/mnt/runtime' })).toEqual(['/mnt/runtime', '/drive'])
+  })
+
+  it('collapses to a single root when the component equals the drive root', () => {
+    expect(runtimeRoots('/drive', { HILBERTRAUM_RUNTIME_ROOT: '/drive' })).toEqual(['/drive'])
+  })
+
+  it('resolveLlamaServerPath: component binary wins over the drive binary', () => {
+    const drive = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-drive-'))
+    const component = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-comp-'))
+    for (const root of [drive, component]) {
+      const dir = llamaServerDir(root, 'linux')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, llamaServerBinaryName('linux')), 'x')
+    }
+    expect(resolveLlamaServerPath(drive, 'linux', { HILBERTRAUM_RUNTIME_ROOT: component })).toBe(
+      join(llamaServerDir(component, 'linux'), llamaServerBinaryName('linux'))
+    )
+  })
+
+  it('resolveLlamaServerPath: falls back to the drive when the component lacks the binary', () => {
+    const drive = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-drive-'))
+    const component = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-comp-')) // empty component
+    const driveDir = llamaServerDir(drive, 'linux')
+    mkdirSync(driveDir, { recursive: true })
+    const driveBin = join(driveDir, llamaServerBinaryName('linux'))
+    writeFileSync(driveBin, 'x')
+    expect(resolveLlamaServerPath(drive, 'linux', { HILBERTRAUM_RUNTIME_ROOT: component })).toBe(driveBin)
   })
 })
 
