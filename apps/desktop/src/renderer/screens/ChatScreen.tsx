@@ -812,11 +812,14 @@ export function ChatScreen({
   // enters the run state/IPC. `[0]` is the default target.
   const [scopeDocIds, setScopeDocIds] = useState<string[]>([])
   useEffect(() => {
-    if (!currentSkillId || !activeId || !window.api.listRunnableTools) {
-      setRunnableTools([])
-      setScopeDocIds([])
-      return
-    }
+    // Clear the PRIOR conversation's offer SYNCHRONOUSLY before the async re-resolve below lands, so a
+    // run can never fire against a STALE target: `scopeDocIds` otherwise briefly held the PREVIOUS
+    // conversation's document (e.g. a "…(1).pdf" left over from another chat) while `onRunTool` sends the
+    // NEW conversation's id, which main then rejects as out-of-scope ("that document isn't in this chat's
+    // documents"). Clearing up front means the run bar offers nothing until the new scope resolves.
+    setRunnableTools([])
+    setScopeDocIds([])
+    if (!currentSkillId || !activeId || !window.api.listRunnableTools) return
     let live = true
     void window.api
       .listRunnableTools(currentSkillId, activeId)

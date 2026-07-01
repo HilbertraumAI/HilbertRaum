@@ -321,14 +321,20 @@ export function registerSkillsIpc(ctx: AppContext): void {
     if (docIds.length === 0) {
       return { started: false, error: tMain('main.skills.run.noDocument') }
     }
-    // U-1: a renderer-supplied target id is UNTRUSTED — accept it ONLY when it is in the freshly
-    // resolved in-scope set, never trusting a renderer id past the scope filter. An out-of-scope id
-    // is refused (a defensive backstop — the renderer only ever offers ids from `documentIds`).
+    // U-1: a renderer-supplied target id is UNTRUSTED — accepted ONLY when it is in the freshly resolved
+    // in-scope set, never trusting a renderer id past the scope filter. When it is NOT in scope — a target
+    // left over from a conversation switch (the run bar briefly held the prior chat's document), or a
+    // document removed / re-indexing since the bar resolved it — do NOT hard-fail the run when the choice
+    // is UNAMBIGUOUS: with exactly one in-scope document, run against it. The out-of-scope id itself is
+    // NEVER run (the untrusted-id posture is unchanged — a forged/stale id can only ever fall back to a
+    // known in-scope document, so a run can't read outside the chat's scope). With MORE than one in-scope
+    // document the pick is genuinely ambiguous, so the user is asked to re-choose.
     const requestedId = typeof req?.documentId === 'string' ? req.documentId : ''
-    if (requestedId && !docIds.includes(requestedId)) {
+    const requestedInScope = requestedId !== '' && docIds.includes(requestedId)
+    if (requestedId !== '' && !requestedInScope && docIds.length > 1) {
       return { started: false, error: tMain('main.skills.run.documentOutOfScope') }
     }
-    const targetId = requestedId || docIds[0]
+    const targetId = requestedInScope ? requestedId : docIds[0]
     const runner = buildToolRunner(
       ctx.db,
       toolName,

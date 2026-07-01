@@ -6,6 +6,30 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-01 — **Bank-statement skill follow-up (#4): "Dieses Dokument gehört nicht zu den Dokumenten dieses
+Chats" run error — branch `fix/drive-app-issues-2026-07-01` (same branch; UNMERGED; do NOT
+auto-merge/push).** Offline / no telemetry / no new network egress. Surfaced right after the #1–#3 fixes
+below (the screenshot showed the run-bar chooser on a `…(1).pdf` while the chat answered over
+`…sanitized.pdf`). Root cause: a STALE run-bar target. The `listRunnableTools` effect
+(`ChatScreen`) resolved `scopeDocIds` for the previous conversation and did NOT clear them
+synchronously when the conversation changed, so during the async re-resolve `onRunTool` could send the
+OLD conversation's `documentId` with the NEW `conversationId`; main's `startSkillRun` then rejected it
+(`documentOutOfScope` — both sides call the identical `resolveInScopeDocumentIds`, so the id was simply
+from a different scope). The #1 view-switch remount re-select made this more reachable. Two-sided fix:
+- **Renderer (prevent the stale send):** the `[currentSkillId, activeId]` effect now clears
+  `runnableTools`/`scopeDocIds` SYNCHRONOUSLY before the async `listRunnableTools` lands — the run bar
+  offers nothing (so nothing stale can be clicked) until the new conversation's scope resolves.
+- **Main (graceful, defense-in-depth):** an out-of-scope `documentId` no longer HARD-FAILS when the
+  choice is unambiguous — with exactly ONE in-scope document `startSkillRun` falls back to it; with >1 it
+  still refuses (ambiguous → re-pick). The out-of-scope id is NEVER run (only ever falls back to a known
+  in-scope doc), so the untrusted-id / privacy posture is unchanged.
+- **Tests:** +1 (single in-scope doc + stale id → runs on the one doc, no error); the existing
+  "refuses an out-of-scope id" test is now the >1-doc (ambiguous) case. Affected suites green
+  (skills-tool-run-ipc 26; renderer Chat/Skill 36); typecheck green; full `npm test` re-run pending commit.
+- **NEXT ACTION (owner): re-test — switch conversations / views then click a run button; the error should
+  be gone and the run should target the current chat's document.**_
+
+
 _2026-07-01 — **Bank-statement skill: extract-count parity (button vs chat), running-chat recovery on view
 switch, and the "Geldfluss zusammenfassen" button output — branch `fix/drive-app-issues-2026-07-01`
 (same branch; UNMERGED; do NOT auto-merge/push).** Offline / no telemetry / no new network egress. From

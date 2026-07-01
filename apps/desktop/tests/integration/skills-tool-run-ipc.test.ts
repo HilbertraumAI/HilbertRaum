@@ -554,7 +554,9 @@ describe('skills tool-run IPC — multi-document targeting (U-1)', () => {
     expect(final.documentCount).toBe(1)
   })
 
-  it('REFUSES a documentId that is not in the resolved in-scope set (never trusts a renderer id)', async () => {
+  it('REFUSES an out-of-scope documentId when the scope is AMBIGUOUS (>1 in-scope doc)', async () => {
+    // With several in-scope documents the run cannot silently pick one for the user — a stale/forged id
+    // is refused (never trusted past the scope filter) so they re-choose.
     const { skillInstallId, conversationId } = makeMultiDocHarness([ONE_TXN, TWO_TXN])
     const { result } = await invoke(handlers, IPC.startSkillRun, {
       skillInstallId,
@@ -566,6 +568,26 @@ describe('skills tool-run IPC — multi-document targeting (U-1)', () => {
     expect(start.started).toBe(false)
     if (start.started) throw new Error('expected refusal')
     expect('error' in start && start.error).toBeTruthy()
+  })
+
+  it('gracefully falls back to the single in-scope document when a STALE id is supplied (no error)', async () => {
+    // Regression: a target left over from a conversation switch (the run bar briefly held another chat's
+    // "…(1).pdf") must NOT hard-fail with "that document isn't in this chat's documents" when the choice
+    // is unambiguous — with exactly one in-scope document the run proceeds against it. The out-of-scope id
+    // is never run (only ever falls back to the known in-scope doc), so the untrusted-id posture holds.
+    const { skillInstallId, conversationId } = makeHarness(ONE_TXN)
+    const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'extract_transactions',
+      conversationId,
+      documentId: randomUUID() // a stale / out-of-scope id
+    })
+    const start = startRaw as StartSkillRunResult
+    expect(start.started).toBe(true)
+    if (!start.started) throw new Error('expected the run to start on the single in-scope doc')
+    const final = await pollUntilTerminal(start.run.runHandle)
+    expect(final.state).toBe('done')
+    expect(final.transactionCount).toBe(1) // ran against the single in-scope document
   })
 
   it('never leaks a document TITLE through listRunnableTools or the run state (content-free)', async () => {
