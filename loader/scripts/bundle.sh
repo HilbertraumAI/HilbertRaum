@@ -24,8 +24,11 @@ host_target() {
 }
 
 TARGET="${1:-$(host_target)}"
-APP="$REPO_ROOT"                  # npm workspace root (the app IS this repo)
+APP="$(app_root)"                # npm workspace root (the app; ../ from loader/)
 VERSION="$(jq -r '.version' "$APP/package.json")"
+# The mac dmg's Info.plist reads the version in nix (nix/builds.nix); the app package.json is
+# outside the flake when the loader is a subdir, so hand it the version via the env instead.
+export PLANAI_APP_VERSION="$VERSION"
 COMP_SRC="$DIST_DIR/components"   # where `make components` wrote app-<target>.<ext>
 OUT="$DIST_DIR/bundle"
 

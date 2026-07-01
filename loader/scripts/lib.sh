@@ -23,6 +23,32 @@ die()  { printf '\033[1;31m[err]\033[0m %s\n' "$*" >&2; exit 1; }
 # --- prerequisites ----------------------------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1 (enter 'nix develop')"; }
 
+# --- app root ---------------------------------------------------------------
+# app_root -> the packaged PROJECT root, from loader.toml [layout].app_root (default ".",
+# resolved against REPO_ROOT the loader root). Mirrors the loader engine's helper: default "."
+# keeps the app AT the loader root; HilbertRaum vendors the loader in <project>/loader/ and
+# sets app_root=".." so these scripts (stage-app, bundle, make-update-tarball) reach the app
+# one level up. Memoised (config-json runs xtask).
+app_root() {
+  [ -n "${_APP_ROOT:-}" ] && { printf '%s' "$_APP_ROOT"; return; }
+  need jq; need nix
+  local rel; rel="$( ( cd "$REPO_ROOT" && nix run ".#xtask" -- config-json ) | jq -r '.layout.app_root // "."')"
+  _APP_ROOT="$(cd "$REPO_ROOT" && cd "$rel" && pwd)" || die "app_root '$rel' not found under $REPO_ROOT"
+  printf '%s' "$_APP_ROOT"
+}
+
+# flakeref -> a `git+file://` flakeref for the loader flake, correct even when the loader
+# lives in a subdirectory of the git repo (git+file://<root>?dir=<sub>). nix/builds.nix reads
+# it (PLANAI_FLAKEREF) so getFlake fetches the right git tree. Mirrors the engine helper.
+flakeref() {
+  need git
+  local top rel
+  top="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null)" || { printf 'git+file://%s' "$REPO_ROOT"; return; }
+  rel="$(realpath --relative-to="$top" "$REPO_ROOT")"
+  if [ "$rel" = "." ]; then printf 'git+file://%s' "$top"
+  else printf 'git+file://%s?dir=%s' "$top" "$rel"; fi
+}
+
 # --- test drive provisioning ------------------------------------------------
 # Seed a staged drive-root with update.json + platforms.json so the launcher treats it as an
 # already-provisioned drive and runs from the LOCAL pushed components, instead of bootstrapping

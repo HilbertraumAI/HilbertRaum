@@ -13,7 +13,12 @@
 let
   # git+file so the flake source is the GIT tree (tracked files only) — a bare path: flakeref
   # would copy the whole repo (incl. multi-GB gitignored dist/) into the store every build.
-  flake = builtins.getFlake "git+file://${toString ../.}";
+  # PLANAI_FLAKEREF (exported by the loader scripts) carries the correct ref even when this
+  # loader lives in a subdirectory of its project's git repo (git+file://<root>?dir=<sub>);
+  # fall back to this directory for a loader that IS the repo root.
+  flakeref = let e = builtins.getEnv "PLANAI_FLAKEREF"; in
+    if e != "" then e else "git+file://${toString ../.}";
+  flake = builtins.getFlake flakeref;
   pkgs = flake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
   lib = pkgs.lib;
   stores = import ./stores.nix;
@@ -33,7 +38,17 @@ let
   # exec bit + signature). The .app's MacOS exe IS the launcher; at runtime it mounts
   # app-mac-arm64.dmg from the pool and runs the real HilbertRaum Electron app from it.
   launcherMac = flake.packages.${builtins.currentSystem}.launcher-mac-arm64;
-  appVersion = (builtins.fromJSON (builtins.readFile (flake.outPath + "/package.json"))).version;
+  # The app's package.json is at the PROJECT root (app_root), which — when the loader is
+  # vendored in <project>/loader/ — is the flake's PARENT and thus outside the flake source.
+  # Prefer PLANAI_APP_VERSION (exported by the bundle scripts via app_version, impure eval);
+  # fall back to a package.json inside the flake (app_root=".") ; else 0.0.0. Only the mac dmg
+  # Info.plist consumes this, so a plain default is harmless for non-mac builds.
+  appVersion =
+    let env = builtins.getEnv "PLANAI_APP_VERSION";
+        pj = flake.outPath + "/package.json";
+    in if env != "" then env
+       else if builtins.pathExists pj then (builtins.fromJSON (builtins.readFile pj)).version
+       else "0.0.0";
   launcherInfoPlist = pkgs.writeText "Info.plist" ''
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

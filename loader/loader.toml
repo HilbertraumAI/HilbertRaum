@@ -43,6 +43,10 @@ file = "package.json"
 
 # ── drive/bundle layout (consumed by the generalized bundle.sh + make-usb-image.sh) ──
 [layout]
+# This loader lives in <project>/loader/; the HilbertRaum app is the parent directory. The
+# engine resolves app-relative work (models seeding, the prepare hook, the app version) against
+# app_root. The per-step src/cmd paths below are literal, so they carry the matching "../".
+app_root       = ".."
 launcher_name  = "hilbertraum"
 image_name     = "hilbertraum-usb.img"
 volume_label   = "HILBERTRAUM"   # FAT32/exFAT label (≤ 11 chars: the FAT32 max)
@@ -105,26 +109,27 @@ target_pkgs = [
 ]
 
 # ── leaf/source-producing steps (impure project scripts) ─────────────────────
-# The app IS this repo (npm workspace root; the Electron app is apps/desktop). Install the
-# workspace deps, then build the Electron main/renderer with electron-vite (→ apps/desktop/out).
+# The app is the PARENT of this loader dir (npm workspace root; the Electron app is
+# apps/desktop). ninja runs from the loader root, so app paths carry "../". Install the
+# workspace deps, then build the Electron main/renderer with electron-vite (→ ../apps/desktop/out).
 [[step]]
 name = "app"
-cmd  = "npm ci"
-src  = ["package.json", "package-lock.json"]
+cmd  = "(cd .. && npm ci)"
+src  = ["../package.json", "../package-lock.json"]
 desc = "hilbertraum npm deps"
 [[step]]
 name = "build"
-cmd  = "(cd apps/desktop && npm run build)"
+cmd  = "(cd ../apps/desktop && npm run build)"
 deps = ["app"]
-src_tree = ["apps/desktop/src"]
-src  = ["apps/desktop/package.json", "apps/desktop/electron.vite.config.ts"]
+src_tree = ["../apps/desktop/src"]
+src  = ["../apps/desktop/package.json", "../apps/desktop/electron.vite.config.ts"]
 desc = "electron-vite build"
 [[step]]
 name = "stage-app"
 per  = "target"
 cmd  = "./scripts/stage-app.sh {target}"
 deps = ["build"]
-src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "apps/desktop/electron-builder.yml"]
+src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "../apps/desktop/electron-builder.yml"]
 desc = "stage app {target}"
 
 # ── shared source-input bundles ──────────────────────────────────────────────
@@ -211,7 +216,7 @@ help = "install the HilbertRaum npm workspace deps"
 recipe = ["$(XTASK) build app"]
 [[make.target]]
 name = "build"
-help = "electron-vite build (main + renderer) into apps/desktop/out"
+help = "electron-vite build (main + renderer) into ../apps/desktop/out"
 recipe = ["$(XTASK) build build"]
 [[make.target]]
 name = "bundles"
@@ -286,5 +291,5 @@ name = "clean"
 help = "remove all build outputs (ninja graph + dist + every crate's target/)"
 recipe = [
   "@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then echo \"ninja -t clean\"; ninja -f build.ninja -t clean >/dev/null 2>&1 || true; fi",
-  "rm -rf dist build.ninja .ninja_log .ninja_lock node_modules apps/desktop/out apps/desktop/release launcher/target third_party/loader/crates/*/target",
+  "rm -rf dist build.ninja .ninja_log .ninja_lock ../node_modules ../apps/desktop/out ../apps/desktop/release launcher/target third_party/loader/crates/*/target",
 ]

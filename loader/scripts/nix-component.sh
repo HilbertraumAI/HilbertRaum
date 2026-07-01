@@ -15,6 +15,7 @@ OUT="${2:?usage: nix-component.sh <nix-attr> <out-file>}"
 # build streams its real compiler/packer errors instead of nix's terse "builder for …
 # failed" line. (Legacy `nix-build` has no -L.) --print-out-paths gives us the store
 # path on stdout (build logs go to stderr, so they don't pollute $P).
+export PLANAI_FLAKEREF="$(flakeref)"   # correct getFlake tree for a subdir loader
 P="$(cd "$REPO_ROOT" && nix build -L --impure -f nix/builds.nix "$ATTR" --no-link --print-out-paths)"
 mkdir -p "$(dirname "$OUT")"
 # copy the real file/dir out of the read-only store so bundle/image can read it.

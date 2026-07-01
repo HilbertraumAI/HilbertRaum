@@ -14,7 +14,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TARGET="${1:?usage: stage-app.sh <target>}"
-APP="$REPO_ROOT"                             # npm workspace root (the app IS this repo)
+APP="$(app_root)"                            # npm workspace root (the app; ../ from loader/)
 DESKTOP="$APP/apps/desktop"                  # the Electron app (electron-builder.yml + vite)
 RELEASE="$DESKTOP/release"                   # electron-builder `directories.output`
 DEST="$DIST_DIR/app/$TARGET"                 # the staged unpacked tree the component imports

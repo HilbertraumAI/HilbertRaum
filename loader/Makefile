@@ -35,7 +35,7 @@ makefile: ## (re)generate this Makefile from loader.toml
 app: ## install the HilbertRaum npm workspace deps
 	$(XTASK) build app
 
-build: ## electron-vite build (main + renderer) into app/apps/desktop/out
+build: ## electron-vite build (main + renderer) into ../apps/desktop/out
 	$(XTASK) build build
 
 bundles: ## package every target from the built app
@@ -88,7 +88,7 @@ docker-push: ## push the devshell image to $(IMAGE_REPO) via skopeo (no docker d
 
 clean: ## remove all build outputs (ninja graph + dist + every crate's target/)
 	@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then echo "ninja -t clean"; ninja -f build.ninja -t clean >/dev/null 2>&1 || true; fi
-	rm -rf dist build.ninja .ninja_log .ninja_lock app/node_modules app/apps/desktop/out app/apps/desktop/release launcher/target third_party/loader/crates/*/target
+	rm -rf dist build.ninja .ninja_log .ninja_lock ../node_modules ../apps/desktop/out ../apps/desktop/release launcher/target third_party/loader/crates/*/target
 
 help: ## list targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
