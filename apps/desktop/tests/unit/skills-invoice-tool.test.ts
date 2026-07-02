@@ -592,3 +592,41 @@ describe('financial correctness (full-audit-2026-06-29 follow-up Phase 1)', () =
     expect(inv.header.invoiceDate).toBe('2026-03-05')
   })
 })
+
+// ---------------------------------------------------------------------------------------------------
+// R1 (skills-remediation, audit §5.3 + §5.7-low). Two fixes, both executing the REAL extractor:
+//   §5.3   — the shared `normalizeExtractionText` pre-pass at `extractInvoice`'s entry (a Unicode minus /
+//            no-break-space thousands separator / Swiss U+2019 apostrophe group read correctly).
+//   §5.7-low — `totalsMoney`'s currency-adjacent bare-integer fallback is now SIGN-AWARE, so a credit-note
+//            total printed WITHOUT a decimal/grouping keeps its sign (a credit is not read as a charge).
+// ---------------------------------------------------------------------------------------------------
+describe('R1 — invoice Unicode normalization + sign-aware bare-integer total (audit §5.3 / §5.7-low)', () => {
+  const MINUS = '\u2212' // MINUS SIGN
+  const NBSP = '\u00A0' // NO-BREAK SPACE
+  const RSQUO = '\u2019' // RIGHT SINGLE QUOTATION MARK (Swiss apostrophe grouping)
+
+  it('§5.3: an NBSP-grouped total reads its FULL magnitude (1 234,56 → 1234.56, not 234.56)', () => {
+    const invoice = extractInvoice([chunk(`Gesamtbetrag 1${NBSP}234,56 EUR`, 1)], 'EUR')
+    expect(invoice.totals.grossTotal).toBe(1234.56)
+  })
+
+  it('§5.3: a U+2212 minus on a net total signs it negative (−325,00 → −325)', () => {
+    const invoice = extractInvoice([chunk(`Nettobetrag ${MINUS}325,00 EUR`, 1)], 'EUR')
+    expect(invoice.totals.netTotal).toBe(-325)
+  })
+
+  it('§5.3: a Swiss U+2019 apostrophe-grouped gross total reads 1’234.56 → 1234.56', () => {
+    const invoice = extractInvoice([chunk(`Gesamtbetrag 1${RSQUO}234.56 CHF`, 1)], 'CHF')
+    expect(invoice.totals.grossTotal).toBe(1234.56)
+  })
+
+  it('§5.7-low: a credit-note bare-integer total keeps its sign (Gesamtbetrag -914 EUR → −914)', () => {
+    const invoice = extractInvoice([chunk('Gesamtbetrag -914 EUR', 1)], 'EUR')
+    expect(invoice.totals.grossTotal).toBe(-914)
+  })
+
+  it('§5.7-low: a POSITIVE bare-integer total is unchanged — no regression (Gesamtbetrag 914 EUR → 914)', () => {
+    const invoice = extractInvoice([chunk('Gesamtbetrag 914 EUR', 1)], 'EUR')
+    expect(invoice.totals.grossTotal).toBe(914)
+  })
+})

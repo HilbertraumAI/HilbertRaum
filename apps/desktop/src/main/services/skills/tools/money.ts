@@ -26,6 +26,35 @@ export function detectCurrency(text: string): string | null {
   return null
 }
 
+// ---- Unicode normalization pre-pass (audit §5.3) ----
+
+/**
+ * Normalize the Unicode "side doors" that make the money/date regexes silently MISREAD a figure — run at
+ * every extractor entry point BEFORE any `MONEY_RE` / `parseAmount` / date scan sees the text, so all
+ * downstream regexes operate on clean ASCII. A de-AT PDF routinely prints all three classes:
+ *  - MINUS-like dashes → ASCII '-': U+2212 MINUS SIGN, U+2013 EN DASH, U+2011 NON-BREAKING HYPHEN.
+ *    `MONEY_RE`'s sign class is ASCII-only, so an un-normalized debit '−45,90' (U+2212) loses its sign and
+ *    reads +45.90 — debits parse as credits (audit §5.3, first bullet).
+ *  - NO-BREAK SPACE family → ASCII space: U+00A0 NBSP, U+202F NARROW NBSP, U+2007 FIGURE SPACE. These are
+ *    the thousands separators a German layout prints ('1 234,56'); left un-normalized `MONEY_RE`'s
+ *    space-grouped alternative (which matches an ASCII space) never fires and the figure truncates to its
+ *    last group — a 1000× magnitude error (audit §5.3, second bullet).
+ *  - U+2019 RIGHT SINGLE QUOTATION MARK → ASCII apostrophe "'": the Swiss thousands separator ('1’234.56'),
+ *    which `MONEY_RE`'s apostrophe-grouping alternative reads (it accepts the ASCII apostrophe only).
+ *
+ * PURE and IDEMPOTENT: ASCII-only input is returned byte-identical (so ASCII fixtures are unaffected), and
+ * applying it twice equals applying it once (entry points may normalize text a downstream reader also
+ * normalizes). The geometry path (`pdf-layout.ts`) carries a PRIVATE copy of these rules — it must not
+ * import this skills-layer module (same wrong-direction-dependency rationale as its duplicated
+ * `CURRENCY_TOKEN_RE`); keep the two in sync.
+ */
+export function normalizeExtractionText(s: string): string {
+  return s
+    .replace(/[\u2212\u2013\u2011]/g, '-') // MINUS SIGN / EN DASH / NON-BREAKING HYPHEN
+    .replace(/[\u00A0\u202F\u2007]/g, ' ') // NBSP / NARROW NBSP / FIGURE SPACE
+    .replace(/\u2019/g, "'") // RIGHT SINGLE QUOTATION MARK
+}
+
 // ---- Amounts ----
 
 // A money token is either a figure ending in a 2-digit minor unit (",56" / ".56") OR a bare GROUPED

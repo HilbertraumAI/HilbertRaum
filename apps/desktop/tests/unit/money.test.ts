@@ -5,6 +5,7 @@ import {
   detectCurrency,
   detectDocumentCurrency,
   inferDateOrder,
+  normalizeExtractionText,
   parseDate,
   splitLeadingDates,
   stripDateTokens,
@@ -17,6 +18,43 @@ import {
 // decimal, csvField formula-lead × quote × CRLF, wordIncludes(compound) with a repeated needle) could
 // break while every integration fixture still passed. These are cheap, OFFLINE, pure-function table
 // tests of those primitives in ISOLATION — they sit BESIDE the integration suite, not replace it.
+
+// R1 (skills-remediation, audit §5.3) — the shared Unicode normalization pre-pass, tested in isolation.
+// It maps three classes to ASCII (minus-like dashes → '-', no-break-space family → ' ', U+2019 → "'"),
+// is a NO-OP for ASCII, and is IDEMPOTENT — every extractor entry point depends on those three properties.
+describe('money.ts — normalizeExtractionText (audit §5.3)', () => {
+  it.each([
+    ['U+2212 MINUS SIGN \u2192 hyphen', '\u2212', '-'],
+    ['U+2013 EN DASH \u2192 hyphen', '\u2013', '-'],
+    ['U+2011 NON-BREAKING HYPHEN \u2192 hyphen', '\u2011', '-'],
+    ['U+00A0 NBSP \u2192 space', '\u00A0', ' '],
+    ['U+202F NARROW NBSP \u2192 space', '\u202F', ' '],
+    ['U+2007 FIGURE SPACE \u2192 space', '\u2007', ' '],
+    ['U+2019 RIGHT SINGLE QUOTE \u2192 apostrophe', '\u2019', "'"]
+  ])('maps %s', (_label, input, expected) => {
+    expect(normalizeExtractionText(input)).toBe(expected)
+  })
+
+  it('is a no-op for ASCII text (byte-identical — no behavior change for ASCII fixtures)', () => {
+    const ascii = '2026-01-02 Grocery Store -45,90 1.954,10\nGross Total 390,00 EUR'
+    expect(normalizeExtractionText(ascii)).toBe(ascii)
+  })
+
+  it('is idempotent (applying twice equals applying once)', () => {
+    const dirty = 'Betrag \u22121\u00A0234,56 EUR und 1\u2019000.00 CHF' // minus + NBSP group + Swiss apostrophe
+    const once = normalizeExtractionText(dirty)
+    expect(normalizeExtractionText(once)).toBe(once)
+    expect(once).toBe("Betrag -1 234,56 EUR und 1'000.00 CHF")
+  })
+
+  it('makes MONEY_RE / parseAmount read the normalized figure correctly (the load-bearing effect)', () => {
+    // A U+2212 debit keeps its sign; an NBSP group reads its full magnitude; a Swiss U+2019 group parses.
+    expect(parseAmount(normalizeExtractionText('\u221245,90'))).toBe(-45.9)
+    const nbsp = normalizeExtractionText('1\u00A0234,56')
+    expect(parseAmount([...nbsp.matchAll(MONEY_RE)][0][0])).toBe(1234.56)
+    expect(parseAmount(normalizeExtractionText('1\u2019234.56'))).toBe(1234.56)
+  })
+})
 
 describe('money.ts — parseAmount (boundary cells)', () => {
   it.each([

@@ -153,20 +153,20 @@ describe('runBankExtraction (S11a)', () => {
     expect(cols).toEqual(expect.arrayContaining(['category_id', 'reconciled', 'confidence']))
   })
 
-  it('isBankStatementStale: an older statement is STALE now the extractor is at v3 (FIN-1/3/4 bump); current is fresh', async () => {
-    // C-4 moved the version 1 → 2; the full-audit-2026-06-29 follow-up Phase 1 (FIN-1 majority-vote
-    // currency, FIN-3 geometry bare-thousands/date, FIN-4 leading-column date order) moves it 2 → 3, so
-    // every statement an OLDER (v2/v1 / pre-versioning NULL) parser produced must re-extract via the A9
-    // path. A fresh extraction is stamped at the current version → never stale.
-    expect(BANK_EXTRACTOR_VERSION).toBe(3)
+  it('isBankStatementStale: an older statement is STALE now the extractor is at v4 (R1 normalization bump); current is fresh', async () => {
+    // C-4 moved the version 1 → 2; the full-audit-2026-06-29 follow-up Phase 1 (FIN-1/3/4) moved it 2 → 3;
+    // skills-remediation R1 (audit §5.3, Unicode normalization pre-pass) moves it 3 → 4, so every statement
+    // an OLDER (v3/v2/v1 / pre-versioning NULL) parser produced must re-extract via the A9 path. A fresh
+    // extraction is stamped at the current version → never stale.
+    expect(BANK_EXTRACTOR_VERSION).toBe(4)
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
     const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })
     const id = res.statementId!
     expect(isBankStatementStale(db, id)).toBe(false) // freshly stamped at the current version
 
-    db.prepare('UPDATE bank_statements SET extractor_version = 2 WHERE id = ?').run(id)
-    expect(isBankStatementStale(db, id)).toBe(true) // produced by the pre-FIN parser → re-extract
+    db.prepare('UPDATE bank_statements SET extractor_version = 3 WHERE id = ?').run(id)
+    expect(isBankStatementStale(db, id)).toBe(true) // produced by the pre-R1 parser → re-extract
     db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(id)
     expect(isBankStatementStale(db, id)).toBe(true) // legacy / pre-versioning → re-extract
   })

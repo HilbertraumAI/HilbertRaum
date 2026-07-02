@@ -96,6 +96,24 @@ const SIGN_TOKEN_RE = /^(?:[-+]|[SH])$/
  *  sign — wide enough for a trailing sign cell, narrow enough to never grab a dash mid-description. */
 const SIGN_ZONE_SLACK = 40
 
+/**
+ * Normalize the Unicode "side doors" a de-AT PDF prints, so `classifyToken` sees ASCII (audit §5.3): a
+ * Unicode minus — U+2212 MINUS SIGN / U+2013 EN DASH / U+2011 NON-BREAKING HYPHEN — → ASCII '-' (else a
+ * `−45,90` token fails `MONEY_TOKEN_RE`, classifies as TEXT, and its debit SIGN is lost), and a Swiss
+ * U+2019 RIGHT SINGLE QUOTATION MARK → ASCII apostrophe (so `1’234.56` reconstructs as `1'234.56`, which
+ * the line parser's `MONEY_RE` reads). The no-break-space family (U+00A0 / U+202F / U+2007) is already
+ * split by the `\s+` tokenizer in `rowTokens`, but is folded in here too so this stays a single mirror of
+ * the shared skills-layer `normalizeExtractionText` (`money.ts`). DUPLICATED, not imported: this
+ * ingestion-layer module stays zero-dependency (the same wrong-direction-dependency rationale as the
+ * duplicated `CURRENCY_TOKEN_RE`) — keep the two in sync.
+ */
+function normalizeLayoutText(s: string): string {
+  return s
+    .replace(/[\u2212\u2013\u2011]/g, '-')
+    .replace(/[\u00A0\u202F\u2007]/g, ' ')
+    .replace(/\u2019/g, "'")
+}
+
 type TokenClass = 'date' | 'money' | 'currency' | 'sign' | 'text'
 
 /** Classify one whitespace-delimited token. Date is tried first (with a plausibility check) so a
@@ -221,7 +239,10 @@ interface PositionedToken {
 function rowTokens(row: readonly LayoutWord[]): PositionedToken[] {
   const out: PositionedToken[] = []
   for (const w of row) {
-    for (const tok of w.str.split(/\s+/)) {
+    // R1 (audit §5.3): normalize the Unicode side-doors BEFORE classification so a `−45,90` (U+2212) keeps
+    // its debit sign and a `1’234.56` keeps its apostrophe grouping — otherwise `classifyToken` reads them
+    // as TEXT and the amount/sign is lost. (The `\s+` split already handles the no-break-space family.)
+    for (const tok of normalizeLayoutText(w.str).split(/\s+/)) {
       if (tok) out.push({ str: tok, x: w.x })
     }
   }

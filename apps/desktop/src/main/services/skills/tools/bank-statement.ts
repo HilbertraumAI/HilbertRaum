@@ -10,6 +10,7 @@ import {
   detectCurrency,
   detectDocumentCurrency,
   inferDateOrder,
+  normalizeExtractionText,
   parseAmount,
   parseDate,
   splitLeadingDates,
@@ -80,8 +81,14 @@ export const MAX_TRANSACTIONS = 10000
  *       no longer mis-reads `2.500` as a date → the reconstructed line carries the real amount), and
  *       FIN-4 (date-order inferred from the LEADING date column only, so a memo date can't day/month-swap
  *       every row). Each can change the persisted currency / amounts / dates, so stale v2 rows re-extract.
+ *   4 — skills-remediation R1 (audit §5.3): a shared `normalizeExtractionText` pre-pass runs at the plain-
+ *       text extractor entry points (rows + balances), and the geometry path normalizes each token in
+ *       `rowTokens` (its private mirror), so a Unicode minus (U+2212 / en dash / non-breaking hyphen), a
+ *       no-break-space thousands separator (NBSP / narrow NBSP / figure space), or a Swiss U+2019 apostrophe
+ *       group is read correctly — a `−45,90` debit now signs negative and a `1 234,56` (NBSP) no longer
+ *       truncates to 234,56. Changes persisted amounts/signs on affected statements, so stale v3 rows re-extract.
  */
-export const BANK_EXTRACTOR_VERSION = 3
+export const BANK_EXTRACTOR_VERSION = 4
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -279,14 +286,16 @@ export function extractStatementBalances(
   openingBalance?: number
   closingBalance?: number
 } {
+  // R1 (audit §5.3): normalize Unicode side-doors before any money/date scan (mirrors extractTransactionRows).
+  const texts = chunks.map((c) => normalizeExtractionText(c.text))
   // Per-document date ordering (BL-N1) — so a US-ordered `Kontostand per <date>` line sorts correctly.
-  const dateOrder = order ?? inferDateOrder(chunks.map((c) => c.text).join('\n'))
+  const dateOrder = order ?? inferDateOrder(texts.join('\n'))
   let explicitOpening: number | undefined
   let explicitClosing: number | undefined
   // Every `Kontostand per <date>` line with its (parsed) period date — resolved to opening/closing below.
   const kontostand: { date: string | null; value: number }[] = []
-  for (const chunk of chunks) {
-    for (const rawLine of chunk.text.split(/\r?\n/)) {
+  for (const text of texts) {
+    for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
       const lower = line.toLowerCase()
@@ -408,12 +417,16 @@ export function extractTransactionRows(
   statementCurrency: string | null,
   order?: DateOrder
 ): ExtractedTransaction[] {
-  // Infer the document's date ordering ONCE over the whole text (BL-N1) so a US-ordered statement parses
-  // mm/dd consistently across rows (no silent drop of day>12 rows, no confidently-wrong month).
-  const dateOrder = order ?? inferDateOrder(chunks.map((c) => c.text).join('\n'))
+  // R1 (audit §5.3): normalize Unicode side-doors (U+2212 minus family, NBSP thousands-space family,
+  // U+2019 apostrophe) ONCE at the entry so every downstream regex (MONEY_RE, date scans) sees ASCII.
+  const texts = chunks.map((c) => normalizeExtractionText(c.text))
+  // Infer the document's date ordering ONCE over the whole (normalized) text (BL-N1) so a US-ordered
+  // statement parses mm/dd consistently across rows (no silent drop of day>12 rows, no wrong month).
+  const dateOrder = order ?? inferDateOrder(texts.join('\n'))
   const parsed: { row: ExtractedTransaction; ambiguousAmount: boolean }[] = []
-  for (const chunk of chunks) {
-    for (const rawLine of chunk.text.split(/\r?\n/)) {
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci]
+    for (const rawLine of texts[ci].split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
       // A printed opening/closing balance line is a summary, not a transaction — skip it even though
@@ -467,7 +480,9 @@ export const extractTransactionsTool: SkillTool = {
       // Out-of-scope / unreadable — friendly + content-free; the technical reason is the seam's log.
       return { ok: false, error: 'This statement could not be read.' }
     }
-    const joined = chunks.map((c) => c.text).join('\n')
+    // R1 (audit §5.3): normalize Unicode side-doors before the currency vote / date-order inference read
+    // MONEY_RE over this text (the extractors normalize their own chunk copies independently; idempotent).
+    const joined = normalizeExtractionText(chunks.map((c) => c.text).join('\n'))
     // FIN-1 — the statement-level currency by MAJORITY VOTE over figure-adjacent detections (not the old
     // `detectCurrency(joined)` "first code anywhere wins", which let a stray code in a payee memo stamp the
     // whole statement — and its verified total — in the wrong currency). This is the per-row fallback for

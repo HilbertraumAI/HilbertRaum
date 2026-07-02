@@ -473,3 +473,47 @@ describe('FIN-3: bare-thousands / apostrophe amounts are no longer mis-read as d
     expect(reconstructLine([word('05.01.', 50, 700), word('Bonus', 160, 700), word('10.000', 420, 700)], 2024, { min: 50, max: 50 })).toBeNull()
   })
 })
+
+// R1 (skills-remediation, audit §5.3) — the geometry token normalization. A de-AT / Swiss PDF prints a
+// Unicode MINUS (U+2212) glued to the amount, or a Swiss U+2019 apostrophe group, as its OWN word.
+// Without normalization `classifyToken` reads `−1.234,56` as TEXT (MONEY_TOKEN_RE's sign class is
+// ASCII-only) → the row carries NO money token → it is DROPPED (or its debit sign is lost). `rowTokens`
+// now normalizes every token (a private mirror of the skills-layer `normalizeExtractionText`) BEFORE
+// classification. Driven through the REAL reconstructLine → extractTransactionRows path.
+describe('R1: geometry token normalization (audit §5.3)', () => {
+  const MINUS = '\u2212' // MINUS SIGN
+  const RSQUO = '\u2019' // RIGHT SINGLE QUOTATION MARK
+  const seg = (text: string): { text: string; page: number; index: number } => ({ text, page: 1, index: 0 })
+
+  it('a U+2212 amount classifies as money, keeps its sign, and reads negative through the parser', () => {
+    const row: LayoutWord[] = [
+      word('05.04.', 50, 700),
+      word('Gehalt', 170, 700),
+      word(`${MINUS}1.234,56`, 440, 700),
+      word('9.999,99', 520, 700)
+    ]
+    const line = reconstructLine(row, 2025, { min: 50, max: 50 })
+    // BEFORE: null — the `−1.234,56` token was TEXT, the row had no amount and was dropped.
+    expect(line).toBe('05.04.2025 Gehalt -1.234,56 9.999,99')
+    expect(extractTransactionRows([seg(line!)], 'EUR')[0]).toMatchObject({ amount: -1234.56, balanceAfter: 9999.99 })
+  })
+
+  it('a lone U+2212 amount (no balance column) still signs the movement negative', () => {
+    const row: LayoutWord[] = [word('05.04.', 50, 700), word('Miete', 170, 700), word(`${MINUS}45,90`, 440, 700)]
+    const line = reconstructLine(row, 2025, { min: 50, max: 50 })
+    expect(line).toBe('05.04.2025 Miete -45,90')
+    expect(extractTransactionRows([seg(line!)], 'EUR')[0]).toMatchObject({ amount: -45.9 })
+  })
+
+  it('a Swiss U+2019 apostrophe amount survives as apostrophe-grouped money', () => {
+    const row: LayoutWord[] = [
+      word('05.01.', 50, 700),
+      word('Zahlung', 160, 700),
+      word(`1${RSQUO}234.56`, 420, 700),
+      word('9.999,99', 500, 700)
+    ]
+    const line = reconstructLine(row, 2024, { min: 50, max: 50 })
+    expect(line).toBe("05.01.2024 Zahlung 1'234.56 9.999,99")
+    expect(extractTransactionRows([seg(line!)], 'EUR')[0]).toMatchObject({ amount: 1234.56, balanceAfter: 9999.99 })
+  })
+})

@@ -6,6 +6,63 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation R1: Unicode normalization pre-pass + sign-aware bare-integer total —
+branch `fix/skills-r1`, UNMERGED.** First phase of the remediation plan (plan §R1; audit §5.3 + §5.7-low).
+Offline / pure / no new deps. **Root cause (confirmed by executing the real modules):** the money/row
+extractors saw raw Unicode — a U+2212 minus (or en dash U+2013 / non-breaking hyphen U+2011) fell outside
+`MONEY_RE`'s ASCII sign class, so a `−45,90` debit read **+45,90** (debits as credits); an NBSP / narrow-NBSP /
+figure-space thousands separator (`1 234,56`) broke `MONEY_RE`'s ASCII-space grouping, so the figure truncated
+to its last group (**234,56**, a 1000× error); and (§5.7-low) `totalsMoney`'s currency-adjacent bare-integer
+fallback used `Number(digits)` and dropped the sign, so a credit-note `Gesamtbetrag -914 EUR` read **+914**.
+**Fix:** one exported pure `normalizeExtractionText(s)` in `tools/money.ts` (U+2212/2013/2011→`-`;
+NBSP/U+202F/U+2007→space; U+2019→`'`; **no-op for ASCII, idempotent**) called at BOTH extractor entry points
+(`extractTransactionRows`, `extractInvoice`) + `extractStatementBalances` + the two tool `run()` currency/
+date-order reads; the geometry path carries a **private mirror** in `pdf-layout.ts rowTokens` (zero-dependency
+stance, like its duplicated `CURRENCY_TOKEN_RE`) so a `−1.234,56` token classifies as money instead of falling
+to TEXT and being dropped; `totalsMoney` rebuilds the sign around the bare integer and reuses `parseAmount`'s
+leading/paren/trailing rules. **Both extractor versions bumped 3→4** so stale rows re-extract (the two
+version-pin tests + the isBankStatementStale integration test updated). **Tests added (execute the real
+modules):** `money.test` normalizeExtractionText table + idempotence/ASCII-no-op; bank + invoice tool tests
+(U+2212, en-dash/NB-hyphen trailing minus, NBSP/narrow-NBSP/figure-space grouping, Swiss U+2019, full-statement
+Σ, NBSP balances, ASCII byte-identical guard, credit-note & positive bare-integer totals); `pdf-layout` geometry
+tests (U+2212 + U+2019 through reconstructLine→extractTransactionRows). **Verified:** `npm test` green
+(2763 passed / 41 skipped), `npm run typecheck` clean. Docs: `known-limitations.md` money-parsing entries
+adjusted; plan §0.2 R1 → `[x]`. Non-goals held (no other parser / routing / refactor change). Branch left
+unmerged per plan §0._
+
+_2026-07-02 — **Skills & Tools audit #2 (full-system: triggers / coverage / determinism-vs-LLM /
+architecture) — REPORT ONLY, no code changes.** Owner-requested deep audit after user complaints
+(partial-document analysis, inconsistent results, "we try too much with our skills and don't let
+the LLM enough room"). Multi-agent audit (111 agents; 108 raw → 73 deduped findings, each
+adversarially verified against the working tree): **56 confirmed (2 critical / 17 high / 26 medium
+/ 11 low), 5 refuted, 12 testing-dimension findings only partially verified** (spend limit hit; the
+4 load-bearing ones re-verified by hand, incl. running the trigger eval harness). Full report +
+prioritized remediation plan: [`docs/skills-audit-2026-07-02.md`](docs/skills-audit-2026-07-02.md).
+Headlines: (1) **[CRITICAL]** a multi-document scope silently disables every whole-document engine
+→ ~2-chunk top-k (the root cause of the partial-document complaint, compounded by: whole-doc =
+prefix read with NO in-prompt truncation notice at the default 4096 ctx; keyword under-fire; auto-
+fire doubly dormant so the machinery is unreachable without a manual pick); (2) **[CRITICAL]**
+invoice label-prefix matching turns line items starting with label words ('Steuerberatung…',
+'Netto-Miete…', 'Total hours…') into wrong net/tax/gross presented "exactly as printed" (probe-
+confirmed by executing the extractor); (3) fixed templates intercept every keyword-matched question
+and the extracted rows NEVER reach the LLM — the documented STILL-OPEN residual, judged no longer
+acceptable; recommended fix = a third mode, "LLM answers over extracted+validated rows" (report
+§8.1); (4) U+2212/NBSP money parsing side doors (debits parse as credits; '1 234,56'→234,56) —
+one shared normalization pre-pass fixes both; (5) the shipping suggestion threshold measures
+**60.7% precision on the project's own eval corpus** (33 turns, only 4 of 8 skills labeled).
+Checked-and-cleared items in report §9 (5 refuted findings; no regression of the 2026-06-26 §23
+audit's closed items). **Next:** owner reviews the report; recommended P0 batch = extractor
+correctness (report §5.2–§5.6: label matching, normalization pre-pass, German totals labels,
+compare direction, stale-row exports, sepa rule — each with extractor version bump + real-layout
+fixtures), then P1 = the coverage/routing redesign (report §8).
+**UPDATE (same day):** remediation plan written —
+[`docs/skills-remediation-plan.md`](docs/skills-remediation-plan.md): 20 one-session phases
+(R1–R6 correctness, W1–W5 complaint drivers, U1–U5 reach/trust, A1–A3 architecture, T1 eval
+infra) with pre-made design decisions, per-phase copy-paste session prompts (Opus 4.8-tuned,
+context-budget rules), dependency order and a status tracker (plan §0.2). Sessions execute ONE
+phase each, branch `fix/skills-<id>`, and follow the plan's §0 protocol (targeted vitest during
+dev, canonical `npm test` at the end, docs + BUILD_STATE + tracker updates, per-phase ritual)._
+
 _2026-07-02 — **Deterministic word-level diff is the compare backbone (COMPARE-DIFF-1) — working tree,
 UNCOMMITTED.** Offline / pure / no new deps. From D:\ testing the `what-changed` skill: two ~2-page docs
 differing by a SINGLE deleted word ("…eirmod ~~tempor~~ invidunt…" on page 2) — the chat compare answered

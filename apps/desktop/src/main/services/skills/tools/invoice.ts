@@ -6,6 +6,7 @@ import {
   detectCurrency,
   detectDocumentCurrency,
   inferDateOrder,
+  normalizeExtractionText,
   parseAmount,
   parseDate,
   splitLeadingDates,
@@ -93,8 +94,14 @@ export const MAX_LINE_ITEMS = 10000
  *       empty on this extremely common layout; "Total (excl. Tax)" now resolves to the NET (not the
  *       gross) via `EXCL_TAX_RE`; and the abbreviated header label "No.:" no longer leaks its `.:` into
  *       the parsed invoice number. Each changes the persisted output, so v2 rows re-extract.
+ *   4 — skills-remediation R1 (audit §5.3 + §5.7-low): a shared `normalizeExtractionText` pre-pass runs
+ *       at the extractor entry (`extractInvoice`) so a Unicode minus / no-break-space thousands separator /
+ *       Swiss U+2019 apostrophe group is read correctly; and `totalsMoney`'s currency-adjacent bare-integer
+ *       fallback is now SIGN-AWARE (a credit-note "Gesamtbetrag -914 EUR" reads −914 instead of +914,
+ *       honouring `parseAmount`'s leading/paren/trailing sign rules). Each changes the persisted totals/
+ *       amounts on affected invoices, so stale v3 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 3
+export const INVOICE_EXTRACTOR_VERSION = 4
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -277,8 +284,17 @@ function totalsMoney(line: string): number | null {
       (codeAfter !== null && detectCurrency(codeAfter[1]) !== null) ||
       (codeBefore !== null && detectCurrency(codeBefore[1]) !== null)
     if (symbolAdjacent || codeAdjacent) {
-      const n = Number(m[0])
-      if (Number.isFinite(n)) last = n
+      // R1 (audit §5.7-low): keep the SIGN. A credit note prints `Gesamtbetrag -914 EUR` / `(914)` /
+      // `914-`; the bare integer alone drops it (a credit read as a charge). Rebuild the token with the
+      // sign glued around the digits and reuse `parseAmount`'s leading/paren/trailing sign rules (`Number`
+      // saw only the unsigned digits). The sign chars sit immediately beside the integer — a leading `-`/`(`
+      // at the end of `before` (a currency symbol may sit further left, `€-914`), a trailing `)`/`-` at the
+      // start of `after`. For an unsigned integer this yields the same positive value as before.
+      const lead = /[-(]\s*$/.exec(before)
+      const trail = /^\s*[-)]/.exec(after)
+      const signed = `${lead ? lead[0].trim() : ''}${m[0]}${trail ? trail[0].trim() : ''}`
+      const n = parseAmount(signed)
+      if (n !== null) last = n
     }
   }
   return last
@@ -435,13 +451,16 @@ export function extractInvoice(
   documentCurrency: string | null,
   order?: DateOrder
 ): ExtractedInvoice {
+  // R1 (audit §5.3): normalize Unicode side-doors (U+2212 minus family, NBSP thousands-space family,
+  // U+2019 apostrophe) ONCE at the entry so every downstream regex (MONEY_RE, date scans) sees ASCII.
+  const texts = chunks.map((c) => normalizeExtractionText(c.text))
   // Infer the document's date ordering ONCE (BL-N1) so US-ordered header dates parse mm/dd consistently.
-  const dateOrder = order ?? inferDateOrder(chunks.map((c) => c.text).join('\n'))
+  const dateOrder = order ?? inferDateOrder(texts.join('\n'))
   const header: InvoiceHeader = {}
   const lineItems: InvoiceLineItem[] = []
   const totals: InvoiceTotals = {}
-  for (const chunk of chunks) {
-    for (const rawLine of chunk.text.split(/\r?\n/)) {
+  for (const text of texts) {
+    for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
       if (applyHeader(line, header, dateOrder)) continue
@@ -490,7 +509,9 @@ export const extractInvoiceTool: SkillTool = {
       // Out-of-scope / unreadable — friendly + content-free; the technical reason is the seam's log.
       return { ok: false, error: 'This invoice could not be read.' }
     }
-    const joined = chunks.map((c) => c.text).join('\n')
+    // R1 (audit §5.3): normalize Unicode side-doors before the currency vote / date-order inference read
+    // MONEY_RE over this text (extractInvoice normalizes its own chunk copies independently; idempotent).
+    const joined = normalizeExtractionText(chunks.map((c) => c.text).join('\n'))
     // FIN-1 — document currency by MAJORITY VOTE over figure-adjacent detections (mirror of the bank
     // path): a currency WORD in a line-item description (left of the amount) or a stray code in a note no
     // longer beats the figure-adjacent / header-declared currency that the net/tax/gross are printed in.

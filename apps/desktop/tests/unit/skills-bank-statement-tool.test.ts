@@ -334,12 +334,14 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
 })
 
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 3 — the FIN-1/3/4 bump (majority-vote currency, geometry bare-thousands, leading-column date order)', () => {
-    // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. The
-    // full-audit-2026-06-29 follow-up Phase 1 (FIN-1 currency / FIN-3 geometry / FIN-4 date order) can
-    // change the persisted currency / amounts / dates, so v2 (and older) rows MUST re-extract;
-    // `skills-run.test.ts` proves `isBankStatementStale` flags a v2 statement once this reads 3.
-    expect(BANK_EXTRACTOR_VERSION).toBe(3)
+  it('is at 4 — the R1 Unicode-normalization bump (audit §5.3)', () => {
+    // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
+    // (skills-remediation) adds a shared `normalizeExtractionText` pre-pass at the plain-text entry points
+    // and normalizes geometry tokens in `rowTokens`, so a Unicode minus / no-break-space thousands
+    // separator / Swiss apostrophe now reads correctly — changing the persisted amounts/signs on affected
+    // statements. v3 (and older) rows MUST re-extract; `skills-run.test.ts` proves `isBankStatementStale`
+    // flags an out-of-date statement once this reads 4.
+    expect(BANK_EXTRACTOR_VERSION).toBe(4)
   })
 })
 
@@ -1195,5 +1197,99 @@ describe('financial correctness (full-audit-2026-06-30 Phase A)', () => {
       count: 1,
       currency: 'EUR'
     })
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// R1 (skills-remediation, audit §5.3) — the shared Unicode normalization pre-pass. A de-AT / Swiss PDF
+// routinely prints a Unicode MINUS (U+2212 / EN DASH / NON-BREAKING HYPHEN), a NO-BREAK-SPACE thousands
+// separator (NBSP / narrow NBSP / figure space), or a Swiss U+2019 apostrophe group. Without the pre-pass
+// MONEY_RE (whose sign class is ASCII-only, and whose space grouping matches an ASCII space) either loses
+// the sign — a DEBIT read as a CREDIT — or truncates the magnitude to the last group (a 1000× error).
+// These construct realistic layouts with the real codepoints and execute the REAL extractor.
+// ---------------------------------------------------------------------------------------------------
+describe('R1 — Unicode normalization at the extractor entry (audit §5.3)', () => {
+  const MINUS = '\u2212' // MINUS SIGN
+  const ENDASH = '\u2013' // EN DASH
+  const NBHYPHEN = '\u2011' // NON-BREAKING HYPHEN
+  const NBSP = '\u00A0' // NO-BREAK SPACE
+  const NNBSP = '\u202F' // NARROW NO-BREAK SPACE
+  const FIGSP = '\u2007' // FIGURE SPACE
+  const RSQUO = '\u2019' // RIGHT SINGLE QUOTATION MARK (Swiss apostrophe grouping)
+
+  it('a U+2212 minus signs the amount negative (a debit is no longer read as a credit)', () => {
+    const rows = extractTransactionRows([chunk(`2026-01-02 Grocery Store ${MINUS}45,90 1.954,10`, 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 })
+  })
+
+  it('an EN-DASH trailing minus (de-AT glued debit sign) signs the amount negative', () => {
+    const rows = extractTransactionRows([chunk(`2026-01-02 Lastschrift 45,90${ENDASH} 1.954,10`, 1)], 'EUR')
+    expect(rows[0].amount).toBe(-45.9)
+  })
+
+  it('a NON-BREAKING-HYPHEN trailing minus is normalized the same way', () => {
+    const rows = extractTransactionRows([chunk(`2026-01-02 Lastschrift 45,90${NBHYPHEN} 1.954,10`, 1)], 'EUR')
+    expect(rows[0].amount).toBe(-45.9)
+  })
+
+  it('an NBSP-grouped amount reads its FULL magnitude (1 234,56 → 1234.56, not 234.56)', () => {
+    const rows = extractTransactionRows(
+      [chunk(`2026-01-02 Big Payment ${MINUS}1${NBSP}234,56 5${NBSP}678,90`, 1)],
+      'EUR'
+    )
+    expect(rows[0]).toMatchObject({ amount: -1234.56, balanceAfter: 5678.9 })
+  })
+
+  it('a NARROW NBSP (U+202F) grouping is normalized identically', () => {
+    const rows = extractTransactionRows([chunk(`2026-01-02 Rent ${MINUS}1${NNBSP}000,00 4${NNBSP}454,10`, 1)], 'EUR')
+    expect(rows[0]).toMatchObject({ amount: -1000, balanceAfter: 4454.1 })
+  })
+
+  it('a Swiss U+2019 apostrophe group reads 1’234.56 → 1234.56 (not truncated)', () => {
+    const rows = extractTransactionRows(
+      [chunk(`2026-01-02 Zahlung ${MINUS}1${RSQUO}234.56 5${RSQUO}678.90`, 1)],
+      'CHF'
+    )
+    expect(rows[0]).toMatchObject({ amount: -1234.56, balanceAfter: 5678.9, currency: 'CHF' })
+  })
+
+  it('a full statement of NBSP / figure-space rows parses correctly end-to-end (Σ from clean magnitudes)', () => {
+    const text = [
+      'Kontoauszug EUR',
+      `2026-01-02 Supermarkt Billa ${MINUS}1${NBSP}234,56 8${FIGSP}765,44`,
+      `2026-01-03 Gehalt ACME 2${NBSP}500,00 11${NBSP}265,44`
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ amount: -1234.56, balanceAfter: 8765.44 })
+    expect(rows[1]).toMatchObject({ amount: 2500, balanceAfter: 11265.44 })
+    // The net follows from the clean magnitudes — NOT the 1000×-truncated 2500 − 234.56 ≈ 2265.44.
+    expect(rows.reduce((s, r) => s + r.amount, 0)).toBeCloseTo(1265.44, 2)
+  })
+
+  it('extractStatementBalances normalizes too: NBSP-grouped Kontostand balances read in full', () => {
+    // The balance readers (`lastMoneyOnLine`) run over the SAME normalized text, so a Raiffeisen
+    // `Kontostand per <date>` pair with NBSP-grouped balances brackets the period with full magnitudes.
+    const text = [
+      `Kontostand per 01.01.2026 1${NBSP}000,00`,
+      `Kontostand per 31.01.2026 2${NBSP}500,50`
+    ].join('\n')
+    expect(extractStatementBalances([chunk(text, 1)])).toEqual({
+      openingBalance: 1000,
+      closingBalance: 2500.5
+    })
+  })
+
+  it('ASCII inputs are unaffected (the normalization is a no-op for clean text)', () => {
+    // The acceptance guard: an all-ASCII statement produces the exact same rows as before R1.
+    const text = [
+      'Account statement EUR',
+      '2026-01-02 Grocery Store -45,90 1.954,10',
+      '2026-01-03 Salary ACME 2.500,00 4.454,10'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 2)], 'EUR')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ amount: -45.9, balanceAfter: 1954.1 })
+    expect(rows[1]).toMatchObject({ amount: 2500, balanceAfter: 4454.1 })
   })
 })

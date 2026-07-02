@@ -521,6 +521,15 @@ password recovery — are documented in
     A printed figure with a 3rd decimal (only reachable via the both-separator `1.234,567` form) is read to
     the nearest cent (`1234.57`), **not dropped** — a sub-cent normalisation, never a confidently-wrong
     magnitude. (Single-separator 3-digit-group thousands forms `1.000`/`12.345` are integers, unaffected.)
+  - **Unicode "side doors" are normalized to ASCII before any figure is read (skills-remediation R1,
+    audit §5.3; `money.ts normalizeExtractionText` at every extractor entry, mirrored in the geometry
+    path's `pdf-layout.ts rowTokens`).** A Unicode minus — U+2212 / en dash U+2013 / non-breaking hyphen
+    U+2011 — becomes `-`, so a `−45,90` debit signs **negative** instead of reading +45,90 (debits were
+    parsing as credits). The no-break-space thousands family — NBSP U+00A0 / narrow NBSP U+202F / figure
+    space U+2007 — becomes an ASCII space, so `1 234,56` reads **1234,56** whole instead of truncating to
+    234,56 (a 1000× error). The Swiss U+2019 apostrophe becomes `'`, so `1’234.56` reads 1234.56. The
+    pre-pass is a **no-op for ASCII** (existing fixtures byte-identical) and **idempotent**. Extractor
+    versions bumped (`BANK_EXTRACTOR_VERSION` → 4, `INVOICE_EXTRACTOR_VERSION` → 4) so stale rows re-extract.
   - **A figure's sign is read by the SPACE around a minus (full-audit-2026-06-29 BL-1).** A **glued**
     trailing minus is a de-AT debit (`45,90-` → −45,90, even with a running balance after it); a `-<digit>`
     after a space is the next figure's **leading** sign (`2.500,00 -500,00` → +2500 then −500). This
@@ -577,7 +586,10 @@ password recovery — are documented in
     unchanged** — an unlabeled row's bare integer stays ambiguous and is dropped (§22-D1). A **qualified** total
     resolves by its tax phrasing: `Total (excl. Tax)` / "net of tax" → the **net**, `Total (incl. Tax)` → the
     **gross** (`EXCL_TAX_RE`), so a layout that prints both no longer collapses onto the gross alone. The
-    abbreviated header label `No.:` no longer leaks its `.:` into the parsed invoice number. `INVOICE_EXTRACTOR_VERSION` → 3.
+    abbreviated header label `No.:` no longer leaks its `.:` into the parsed invoice number. **The
+    bare-integer fallback keeps the SIGN (skills-remediation R1, audit §5.7-low):** a credit-note total
+    printed without a decimal — `Gesamtbetrag -914 EUR` — now reads **−914** (a leading `-`/paren or a
+    trailing minus around the integer is honoured via `parseAmount`), not the old +914. `INVOICE_EXTRACTOR_VERSION` → 4.
   - **A trailing number is split as `quantity` only with corroboration (full-audit-2026-06-29-postmerge
     F8, invoice path).** A product-coded description (`iPhone 15`, `Calendar 2026`) used to have its
     trailing number greedily read as a quantity. The split now requires a **unit token** (`x`/`Stk`/`pcs`/…)
