@@ -18,6 +18,8 @@ import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '..
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { getSkillAnalysisHandler } from '../services/skills/analysis'
 import { documentsInScope } from '../services/skills/scope-documents'
+import { getSkill } from '../services/skills/registry'
+import { matchesSkillDocSignals } from '../services/skills/selector'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
@@ -183,6 +185,74 @@ export function registerRagIpc(ctx: AppContext): void {
       // registered for the turn skill, or `applies()` is false (off-topic / multi-doc), this whole
       // block is skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
       const analysisHandler = skill ? getSkillAnalysisHandler(skill.installId) : undefined
+
+      // W2 doc-count-fallthrough routing (audit §2.1/§3.4): a tool/whole-doc skill reads ONE document
+      // (two, for compare) at a time, so a multi-document scope can't be analysed exhaustively. When the
+      // turn skill HAS a handler and the question is INTENT-shaped (`intends()`) but `applies()` fails —
+      // which, given `intends()` is true, can ONLY be the document count — do NOT fall through silently to
+      // top-k retrieval. Instead narrow to the one document the skill's manifest signals best match (with
+      // an honest scope notice) or emit a deterministic routing answer. Deterministic, ZERO model calls.
+      // `intends()` absent (redaction, whose `applies()` already accepts any count ≥ 1) opts out entirely.
+      let scopeNotice: string | null = null
+      if (
+        skill &&
+        analysisHandler &&
+        analysisHandler.intends?.({ question: text, scope, db: ctx.db }) &&
+        !analysisHandler.applies({ question: text, scope, db: ctx.db })
+      ) {
+        const turnSkill = skill
+        const inScope = documentsInScope(ctx.db, scope, { requireChunks: true })
+        // A deterministic routing answer over the LOCKED stream (skill-stamped, no coverage/citations —
+        // it makes no document claim). Same shape as the refuse/listing paths; no model call.
+        const routeAnswer = (label: string, answer: string): Promise<Message> =>
+          withChatStream(
+            event,
+            conversationId,
+            label,
+            withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (_signal, sendToken): Promise<Message> => {
+              sendToken(answer)
+              return appendMessage(ctx.db, {
+                conversationId,
+                role: 'assistant',
+                content: answer,
+                skillId: turnSkill.installId,
+                autoFired: turnSkill.autoFired === true
+              })
+            }),
+            (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
+          )
+
+        if (analysisHandler.mode === 'grounded-whole-doc-compare') {
+          // what-changed at ≠ 2 docs (audit §3.4): ask for exactly two — the app owns the scope, so this
+          // replaces the SKILL.md's ask-the-model policing (the model can't see the count). 0 docs stays
+          // on the ordinary relevance path (its own "no documents" honesty).
+          if (inScope.length >= 1) {
+            return routeAnswer('Document compare routing', tMain('skills.analysis.selectTwo', { count: inScope.length }))
+          }
+        } else if (inScope.length >= 2) {
+          // A single-doc handler over TOO MANY docs: narrow to the ONE the skill's manifest doc signals
+          // (filenamePatterns/MIME) match. We only narrow to a doc we can ACTUALLY answer exhaustively —
+          // i.e. one that is FULLY chunked — so the "I answered from «title»" notice is never a lie: a
+          // sole match that is legacy/partly-chunked would otherwise fall into the refusePartial branch
+          // below, discarding the notice and implying a single-doc scope the user never chose. In that
+          // case (or 0 / several matches) we ask the user to pick one instead — the user's pick then
+          // hits the honest single-doc refusal on its own. Deterministic; no model call.
+          const triggers = getSkill(ctx.db, turnSkill.installId)?.manifest.triggers
+          const candidates = triggers ? inScope.filter((d) => matchesSkillDocSignals(triggers, d)) : []
+          const chosen = candidates.length === 1 ? candidates[0] : null
+          const narrowedScope = chosen ? { ...scope, collectionIds: null, documentIds: [chosen.id] } : null
+          if (chosen && narrowedScope && allInScopeDocsFullyChunked(ctx.db, narrowedScope)) {
+            // Narrow WITHIN the resolved scope (mirrors the filename auto-scope above). `applies()` below
+            // is now true and the fully-chunked gate passes, so the ordinary dispatch runs and prepends
+            // `scopeNotice` to its answer (the grounded path carries it via `answerPrefix`).
+            scope = narrowedScope
+            scopeNotice = tMain('skills.analysis.scopeNarrowed', { title: chosen.title, count: inScope.length - 1 })
+          } else {
+            return routeAnswer('Document analysis routing', tMain('skills.analysis.selectOne', { count: inScope.length }))
+          }
+        }
+      }
+
       if (skill && analysisHandler && analysisHandler.applies({ question: text, scope, db: ctx.db })) {
         const turnSkill = skill
         // Exhaustiveness precondition (D45/R4): every in-scope doc must be FULLY chunked at turn time.
@@ -237,7 +307,10 @@ export function registerRagIpc(ctx: AppContext): void {
                   // context, so the assistant row carries the skill stamp + `capped` coverage.
                   skill: turnSkill,
                   wholeDocument: { documentId },
-                  onToken: sendToken
+                  onToken: sendToken,
+                  // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
+                  // answer with the honest scope notice (undefined ⇒ byte-unchanged).
+                  answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined
                 })),
               (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
             )
@@ -285,11 +358,12 @@ export function registerRagIpc(ctx: AppContext): void {
         // `grounded-whole-doc` handler omits `run()` and returned above; the guard keeps types honest.
         if (analysisHandler.run) {
           const runHandler = analysisHandler.run.bind(analysisHandler)
+          const notice = scopeNotice
           return withChatStream(
             event,
             conversationId,
             'Document analysis failed',
-            withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken): Promise<Message> => {
+            withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction): Promise<Message> => {
               const result = await runHandler({
                 db: ctx.db,
                 question: text,
@@ -304,11 +378,27 @@ export function registerRagIpc(ctx: AppContext): void {
                 // Faithful newline-preserving segments (not the overlap-collapsing chunks table).
                 readDocumentSegments
               })
-              sendToken(result.answer)
+              // W2 plausibility gate (audit §4.5): the extractor found nothing on a document that doesn't
+              // look like this skill's type — answer the user's ACTUAL question via the ordinary grounded
+              // (relevance) path in the SAME locked slot, instead of the misleading empty template. The
+              // turn's skill fence still rides along (parity with the ordinary document path below).
+              if (result.fallThrough) {
+                return generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+                  signal,
+                  onCompactionStart: sendCompaction,
+                  scope,
+                  reranker: ctx.reranker,
+                  skill: turnSkill,
+                  onToken: sendToken
+                })
+              }
+              // W2 (§2.1): when the scope was auto-narrowed to this doc, prepend the honest notice.
+              const answer = notice ? `${notice}\n\n${result.answer}` : result.answer
+              sendToken(answer)
               return appendMessage(ctx.db, {
                 conversationId,
                 role: 'assistant',
-                content: result.answer,
+                content: answer,
                 citations: result.citations,
                 coverage: result.coverage,
                 skillId: turnSkill.installId,

@@ -1099,6 +1099,14 @@ export interface GroundedAnswerOptions {
    * Phase 1 only plumbs the callback; the `STREAM.compaction` UX channel is Phase 2.
    */
   onCompactionStart?: () => void
+  /**
+   * W2 scope notice (audit §2.1): when the chat path AUTO-NARROWED a multi-document scope to the one
+   * document this skill best matches, this fixed, localized notice ("I answered from «title» only — the
+   * other N documents in scope were not read…") is prepended to the streamed answer AND to the persisted
+   * content, so the honesty note rides with the answer (never a silent narrowing). Absent ⇒ no prefix
+   * (the byte-unchanged path). App-authored text; it carries no content and needs no model call.
+   */
+  answerPrefix?: string
 }
 
 /**
@@ -1232,7 +1240,9 @@ export async function generateGroundedAnswer(
         skill: opts.skill,
         contextTokens,
         signal: opts.signal,
-        onToken: opts.onToken
+        onToken: opts.onToken,
+        // W2 (§2.1): carry the auto-narrow scope notice into the tree rescue path too.
+        answerPrefix: opts.answerPrefix
       })
       if (viaTree) return viaTree
     }
@@ -1365,7 +1375,11 @@ export async function generateGroundedAnswer(
   // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow
   // and trigger an HTTP 400 from the runtime.
   const messages = buildGroundedChatMessages(db, conversationId, grounded, contextTokens)
-  let content = ''
+  // W2 scope notice (§2.1): when the scope was auto-narrowed to this one document, lead with the fixed
+  // localized notice so it streams first AND lands in the persisted content (never a silent narrowing).
+  const seededPrefix = opts.answerPrefix ?? ''
+  let content = seededPrefix
+  if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
   // No `mode` is passed: document answers always run 'balanced' — grounded
   // answers should be fast + literal.
   const stream = runtime.chatStream(messages, { signal: opts.signal, ...opts.runtimeOptions })
@@ -1383,8 +1397,11 @@ export async function generateGroundedAnswer(
   content = stripThinkBlocks(content)
   // Drop any skill-fence framing the model echoed back (e.g. a trailing "--- END LOCAL SKILL ---").
   content = stripSkillFenceEcho(content)
-  // A stop before the first token produced nothing — persist nothing.
-  if (content === '') return emptyAssistantMessage(conversationId)
+  // A stop before the first token produced nothing — persist nothing. When a W2 scope-notice prefix was
+  // seeded (`seededPrefix`), an empty model turn leaves ONLY that notice: it is not an answer and must
+  // not be persisted alone stamped with `capped` coverage (W2 review), so treat prefix-only as empty too.
+  // With no prefix `seededPrefix` is '' → byte-identical to the prior `content === ''` guard.
+  if (content === '' || content === seededPrefix) return emptyAssistantMessage(conversationId)
   // Persist the assistant turn with the computed citations (source of truth = retrieval) and stamp
   // the skill only when its fence was actually placed (DS16/§22-A5).
   return appendMessage(db, {

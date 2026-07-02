@@ -100,6 +100,9 @@ export interface WholeDocTreeDeps {
   signal?: AbortSignal
   /** Streams the FINAL reduce tokens to the renderer (the map steps are internal, not streamed). */
   onToken?: (token: string) => void
+  /** W2 scope notice (§2.1): prepended to the streamed + persisted answer when the scope was auto-
+   *  narrowed to this document. App-authored, content-free. Absent ⇒ no prefix. */
+  answerPrefix?: string
 }
 
 /**
@@ -109,7 +112,7 @@ export interface WholeDocTreeDeps {
  * coverage; the skill is stamped (the fence shaped the answer at every step).
  */
 export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Message | null> {
-  const { db, runtime, conversationId, documentId, question, skill, contextTokens, signal, onToken } =
+  const { db, runtime, conversationId, documentId, question, skill, contextTokens, signal, onToken, answerPrefix } =
     deps
 
   // Pre-model gate (pure reads): a ready tree + at least one usable node summary, else fall back.
@@ -175,7 +178,11 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     return stripThinkBlocks(out).trim()
   }
 
-  let content = ''
+  // W2 scope notice (§2.1): lead the streamed + persisted answer with the fixed narrowing notice when
+  // the scope was auto-narrowed to this document (mirrors the main grounded path).
+  const seeded = answerPrefix ?? ''
+  let content = seeded
+  if (answerPrefix) onToken?.(answerPrefix)
   try {
     // MAP: when the node summaries fit one window there is no map step — the reduce runs over them
     // directly (it still carries the fence). More than one window → fence-applied notes per section.
@@ -223,7 +230,11 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
 
   content = stripThinkBlocks(content)
   content = stripSkillFenceEcho(content)
-  if (content === '') return emptyAssistantMessage(conversationId)
+  // Persist NOTHING when the model added nothing beyond the (app-authored) scope-notice prefix (a Stop
+  // before the first reduce token, or a think-only reply): the notice is not an answer, and must never be
+  // persisted alone stamped with `tree` coverage (W2 review). `content === seeded` catches the prefix-only
+  // case; `content === ''` the no-prefix case — byte-identical to the pre-W2 guard when there is no prefix.
+  if (content === '' || content === seeded) return emptyAssistantMessage(conversationId)
   // `truncated` is now final (ceiling cut and/or notes truncation): a truncated tree answer is stamped
   // as covering only the beginning, never as whole-document coverage (audit §2.2). The renderer badge
   // reads this flag first, before the leaf-fraction 100% claim.

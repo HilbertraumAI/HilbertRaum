@@ -101,6 +101,42 @@ describe('whole-doc analysis handlers — applies() pre-flight', () => {
   }
 })
 
+describe('whole-doc analysis handlers — intends() (W2 doc-count-agnostic intent)', () => {
+  for (const { name, h, shaped, deShaped } of HANDLERS) {
+    it(`${name}: intends() is TRUE on a shaped question (EN+DE) regardless of the doc count`, () => {
+      const db = freshDb()
+      const a = seedDoc(db, ['a'])
+      const b = seedDoc(db, ['b'])
+      // Two docs → applies() is false (Wave 2 is single-doc), but the intent is still shaped, so W2
+      // narrows/routes instead of falling through silently.
+      expect(h.applies!({ db, scope: { documentIds: [a, b] }, question: shaped })).toBe(false)
+      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: shaped })).toBe(true)
+      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: deShaped })).toBe(true)
+    })
+
+    it(`${name}: intends() is FALSE on an off-topic question (keeps the relevance path)`, () => {
+      const db = freshDb()
+      const a = seedDoc(db, ['a'])
+      const b = seedDoc(db, ['b'])
+      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'what colour is the sky?' })).toBe(false)
+    })
+  }
+
+  it('what-changed: intends() is TRUE for a compare-shaped question at 1 or 3 docs (applies is false)', () => {
+    const db = freshDb()
+    const a = seedDoc(db, ['a'])
+    const b = seedDoc(db, ['b'])
+    const c = seedDoc(db, ['c'])
+    const h = whatChangedAnalysisHandler
+    for (const ids of [[a], [a, b, c]]) {
+      expect(h.applies!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(false)
+      expect(h.intends!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(true)
+    }
+    // Off-topic stays false at any count.
+    expect(h.intends!({ db, scope: { documentIds: [a] }, question: 'what colour is the sky?' })).toBe(false)
+  })
+})
+
 describe('analysis-handler registry — whole-doc skills', () => {
   it('registerBuiltinSkillAnalysisHandlers wires all four whole-doc handlers + what-changed compare', () => {
     clearSkillAnalysisHandlers()

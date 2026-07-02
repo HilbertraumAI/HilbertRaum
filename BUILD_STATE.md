@@ -6,6 +6,54 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation W2: doc-count fallthrough routing + plausibility gate — branch `fix/skills-w2`, UNMERGED.**
+Track-W (plan §W2; audit §2.1 CRITICAL + §3.4 + §4.5), branched off `fix/skills-w1` (deps: W1; the plan/audit
+docs live on the W-branch chain, not `master`). Offline / pure / no new deps / **no schema change** / **zero new
+model calls**. **Root cause:** all eight analysis handlers gate `applies()` on an EXACT in-scope document count
+(1, or 2 for compare). At the wrong count — the default whole-library scope, or a statement plus any second doc —
+`applies()` was false and the turn fell through **byte-unchanged and SILENTLY** to top-k retrieval (~2 excerpts),
+while the suggestion machinery still offered the skill in exactly that configuration (offer/execution mismatch,
+§2.1). `what-changed` delegated scope-policing to the *model* (which can't see the count, §3.4). And `applies()`
+never checked whether the single doc IS a statement/invoice, so a contract with the bank skill sticky answered
+"I read the whole statement but couldn't find any transactions" instead of the actual question (§4.5). **Fix
+(seam):** additive `SkillAnalysisHandler.intends()` — the doc-count-AGNOSTIC half of `applies()` (so `applies()`
+⟺ `intends()` && the count precondition; `applies()` false + `intends()` true ⟹ failed ONLY on count) — added to
+bank/invoice/4×whole-doc/what-changed; redaction omits it (its `applies()` already takes any count ≥ 1, opting
+out). Additive `SkillAnalysisResult.fallThrough`. Shared `matchesSkillDocSignals(triggers, {title,mimeType})` in
+`selector.ts` (filename-glob OR mime-membership — the boolean sibling of `scoreSkillTriggers`' doc-signal half).
+**Fix (routing, `registerRagIpc` W2 pre-pass, BEFORE the existing applies() dispatch):** intent-shaped + `!applies()`
+⇒ (compare) `what-changed` at ≠2 docs → deterministic `skills.analysis.selectTwo` ("select exactly two"); (single-
+doc) with ≥2 in scope → NARROW to the one doc matching the skill's manifest signals **that is also fully-chunked**,
+pinning `scope={...,documentIds:[id]}` + setting `scopeNotice`, else → `skills.analysis.selectOne` ("pick one").
+0-doc scope is left on the ordinary relevance path (its own "no documents" honesty). The narrow notice rides the
+answer: the run() (exhaustive) path PREPENDS it; the streamed grounded-whole-doc path carries it via a new
+`generateGroundedAnswer` **`answerPrefix`** option (also threaded through `answerWholeDocFromTree`). `what-changed`
+SKILL.md's "if fewer/more than two … tell the user" paragraph rewritten to "the app handles scope — do not police
+it". **Fix (plausibility gate §4.5, bank+invoice `run()`):** a ZERO-row/-content extraction on a doc that the skill
+DECLARES signals for but matches NONE → return `{fallThrough:true}`; `registerRagIpc`'s run() branch then streams
+the ordinary grounded (relevance) answer in the SAME locked slot (skill fence still applied). Conservative D56
+posture via `shouldFallThroughOnEmpty`: an unsignalled skill (empty triggers) OR an unreadable skill row (getSkill
+null — the pdf-bank-layout unit harness) does NOT fall through — it keeps the honest empty answer, so a REAL
+statement whose rows merely failed to parse is never re-routed to a top-k model. **Data contract:** none broken
+(`intends?`/`fallThrough?` optional-additive; `answerPrefix?` optional). **i18n:** `skills.analysis.scopeNarrowed`
+/`selectOne`/`selectTwo` added to en + de (du-form). **Files beyond the plan's W2 list (per §0 "say so"):**
+`rag/index.ts` + `rag/whole-doc-tree.ts` gained the additive `answerPrefix` (required to carry the narrow notice
+into the streamed grounded answer honestly). **Non-goals held:** whole-doc budget internals (W1), trigger vocab
+(W5), gate inversion (A3). **Adversarial 3-lens diff review (correctness / honesty-plan-fidelity / edge-cases —
+each finding independently verified, default-refute):** caught a real **MEDIUM** — narrowing to a signal-matching
+but legacy/partly-chunked doc hit the refusePartial branch and DROPPED the scope notice (a new silent narrowing +
+the "I answered from X" notice would be false on a refusal); fixed by only narrowing to a doc that is also
+fully-chunked (else route `selectOne`, whose pick then hits the honest single-doc refusal). And a real **LOW** —
+the `answerPrefix` seed defeated the `content===''` empty guard, so a Stop-before-first-token / think-only turn
+persisted a message carrying ONLY the notice, stamped with `capped`/`tree` coverage; fixed by a prefix-only empty
+guard in BOTH the grounded and tree paths. **Residual (documented in known-limitations, A3 territory):** the
+financial skills declare a broad `application/pdf` MIME, so the discriminating narrow/gate signal in practice is
+the FILENAME pattern — a contract *PDF* (matching the MIME) with the bank skill sticky still keeps the empty
+template; the fix stands for non-PDF/CSV docs + the multi-doc narrow/route paths. **Tests:** 22 net-new — selector
+`matchesSkillDocSignals` (4), whole-doc `intends()` (10), IPC narrow/route/gate/happy-path across bank + invoice +
+contract-brief + what-changed, plus the two review-driven regressions (legacy-match→route, empty-model→persist-
+nothing). Full canonical suite green (2867) + typecheck. `fix/skills-w2`._
+
 _2026-07-02 — **Skills remediation W1: whole-doc budget honesty — branch `fix/skills-w1`, UNMERGED.**
 First Track-W phase (plan §W1; audit §2.2 — all bullets + §7 rec 4), branched off `fix/skills-r6` (the
 plan/audit docs live on the R-branch chain, not `master`). Offline / pure / no new deps / no routing change /

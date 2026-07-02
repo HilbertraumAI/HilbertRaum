@@ -636,6 +636,24 @@ export const en = {
     'I can only answer this accurately from the whole document, and this one isn’t fully indexed ' +
     'yet. Open the Documents screen and choose Re-index, then ask again.',
 
+  // W2 doc-count-fallthrough routing (audit §2.1). A tool/whole-doc skill reads ONE document at a time,
+  // so a multi-document scope can’t be analysed exhaustively. Instead of silently degrading to a couple
+  // of retrieved passages, the app either narrows to the one document this skill best matches (with the
+  // honest `scopeNarrowed` notice) or asks the user to pick. Deterministic, content-free (a title +
+  // count, no document text), no model call.
+  // Prepended to the answer when the scope was auto-narrowed to a single best-matching document.
+  'skills.analysis.scopeNarrowed':
+    'I answered from **{title}** only — the other {count} document(s) in scope weren’t read. To analyse ' +
+    'a different one, select just that document (or name its file in your question) and ask again.',
+  // No single best match (0 or several candidates): ask the user to pick ONE document to analyse fully.
+  'skills.analysis.selectOne':
+    'To analyse this fully I need a single document — right now {count} are in scope, so I can only see ' +
+    'a few passages across them. Select one document (or name its file in your question) and ask again.',
+  // what-changed compare needs EXACTLY two documents; ask the user to select them (audit §3.4).
+  'skills.analysis.selectTwo':
+    'To compare, select exactly **two** documents (or two versions) — {count} are in scope right now. ' +
+    'Choose the two you want to compare and ask again.',
+
   // Redaction-routing answer: an ACTION skill points the user at its own run button instead of
   // producing a top-k Q&A. Deterministic + content-free (no model call, no document read); `{button}`
   // is the SkillRunBar's own label so the wording matches the affordance the user sees.

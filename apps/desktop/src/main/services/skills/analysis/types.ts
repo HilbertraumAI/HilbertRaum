@@ -67,6 +67,16 @@ export interface SkillAnalysisResult {
   /** The honest breadth (D48) — `mode:'extract'`, `fullyChunked` gating the "whole document" wording.
    *  Omitted by a `routing` handler (it reads no content, so it makes NO breadth claim). */
   coverage?: CoverageInfo
+  /**
+   * W2 document-plausibility gate (audit §4.5): set to `true` when the extractor found NOTHING on a
+   * document that does NOT match this skill's manifest doc signals (filename/MIME) — the single doc in
+   * scope is not, in fact, a statement/invoice. The chat path then ABANDONS the honest-but-useless
+   * empty template ("I read the whole statement but couldn't find any transactions") and answers the
+   * user's actual question via the ordinary grounded (relevance) path instead. `answer`/`citations` are
+   * ignored when this is set. A zero-row extraction on a doc that DOES look like this skill's type
+   * leaves this false and keeps the honest empty answer.
+   */
+  fallThrough?: boolean
 }
 
 export interface SkillAnalysisHandler {
@@ -94,6 +104,18 @@ export interface SkillAnalysisHandler {
   mode?: 'exhaustive' | 'grounded-whole-doc' | 'grounded-whole-doc-compare' | 'routing'
   /** Can this skill answer THIS question over THIS scope? (cheap, pre-flight). */
   applies(input: SkillAnalysisInput): boolean
+  /**
+   * The DOC-COUNT-AGNOSTIC half of `applies()` (W2, audit §2.1): does the question match this skill's
+   * answer shape, IGNORING how many documents are in scope? By construction `applies()` ⟺ `intends()`
+   * AND the scope-count precondition (single doc, or exactly two for compare). So when `applies()` is
+   * false but `intends()` is true, the turn IS intent-shaped and failed ONLY on document count — the
+   * chat path then narrows to the skill's best-matching document (with an honest scope notice) or emits
+   * a deterministic routing answer, instead of the old silent fall-through to top-k retrieval.
+   *
+   * Optional/additive: a handler that omits it opts OUT of the W2 doc-count routing (e.g. the redaction
+   * routing handler, whose `applies()` already accepts any count ≥ 1). Never a NEW model call.
+   */
+  intends?(input: SkillAnalysisInput): boolean
   /**
    * Run the whole-document read-only tools and synthesise the grounded answer + real coverage, OR
    * (for a `routing` handler) return the action-routing answer with no citations/coverage. OMITTED

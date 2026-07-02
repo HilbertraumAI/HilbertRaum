@@ -55,6 +55,12 @@ function makeCompareHandler(keywords: readonly string[]): SkillAnalysisHandler {
   }
   return {
     mode: 'grounded-whole-doc-compare',
+    // Doc-count-agnostic intent (W2, §2.1): a compare-shaped question, regardless of how many docs are
+    // in scope. When `applies()` fails only on the count (≠2), the chat path emits the deterministic
+    // "select exactly two documents" routing answer instead of falling through silently.
+    intends(input: SkillAnalysisInput): boolean {
+      return isShaped(input.question)
+    },
     applies(input: SkillAnalysisInput): boolean {
       if (!isShaped(input.question)) return false
       return exactlyTwoInScopeDocuments(input.db, input.scope)
@@ -72,6 +78,12 @@ function makeWholeDocHandler(keywords: readonly string[]): SkillAnalysisHandler 
   }
   return {
     mode: 'grounded-whole-doc',
+    // Doc-count-agnostic intent (W2, §2.1): an analysis-shaped question, regardless of how many docs are
+    // in scope. When `applies()` fails only on the count, the chat path narrows to the skill's best-
+    // matching document (with an honest scope notice) or routes, instead of falling through silently.
+    intends(input: SkillAnalysisInput): boolean {
+      return isShaped(input.question)
+    },
     applies(input: SkillAnalysisInput): boolean {
       if (!isShaped(input.question)) return false
       return singleInScopeDocument(input.db, input.scope) !== null

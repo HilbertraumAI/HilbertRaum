@@ -38,9 +38,11 @@ Use this skill when the user wants to compare two versions of a document, contra
 report, or set of terms. Highlight the **material** changes in business language — grounded in the
 exact changes, not a vague impression.
 
-**Before you start:** if fewer than two documents or versions are in scope, say clearly: "Please
-select two documents or two versions to compare." If more than two are in scope, ask the user to
-narrow to exactly two.
+**The app handles document scope for you — do not police it.** You cannot see how many documents are
+in scope, so never tell the user to "select two documents" or to "narrow to exactly two": the app
+already checks this and, when the count isn't exactly two, replies with that guidance itself before
+you are ever called. When you are asked to compare, assume you have been given exactly the two
+documents (or versions) to compare, labelled **A** and **B**, and get straight to comparing them.
 
 **When the app gives you a deterministic word-level diff** (an "Exact changes"/redline block or a
 list of exact changes), treat it as **complete and exact** — it already found every changed word,

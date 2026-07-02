@@ -647,6 +647,25 @@ export const de: Record<keyof typeof en, string> = {
     'Das kann ich nur genau über das ganze Dokument beantworten, und dieses ist noch nicht ' +
     'vollständig indexiert. Öffne den Dokumente-Bildschirm, wähle „Neu indexieren" und frage dann erneut.',
 
+  // W2 Weiterleitung bei falscher Dokumentanzahl (Audit §2.1). Eine Werkzeug-/Ganzdokument-Skill liest
+  // jeweils EIN Dokument, daher lässt sich ein Bereich mit mehreren Dokumenten nicht vollständig
+  // auswerten. Statt still auf wenige Textpassagen zurückzufallen, grenzt die App auf das am besten
+  // passende Dokument ein (mit dem ehrlichen `scopeNarrowed`-Hinweis) oder bittet dich zu wählen.
+  // Deterministisch, inhaltsfrei (Titel + Anzahl, kein Dokumenttext), kein Modellaufruf. Du-Form.
+  'skills.analysis.scopeNarrowed':
+    'Ich habe nur **{title}** ausgewertet — die übrigen {count} Dokument(e) im Bereich habe ich nicht ' +
+    'gelesen. Um ein anderes auszuwerten, wähle genau dieses Dokument aus (oder nenne die Datei in ' +
+    'deiner Frage) und frage erneut.',
+  // Kein eindeutig bestes Dokument (0 oder mehrere Treffer): bitte um die Auswahl EINES Dokuments.
+  'skills.analysis.selectOne':
+    'Für eine vollständige Auswertung brauche ich ein einzelnes Dokument — im Moment sind {count} im ' +
+    'Bereich, daher sehe ich nur einige Passagen daraus. Wähle ein Dokument aus (oder nenne die Datei in ' +
+    'deiner Frage) und frage erneut.',
+  // what-changed-Vergleich braucht GENAU zwei Dokumente; bitte um deren Auswahl (Audit §3.4).
+  'skills.analysis.selectTwo':
+    'Für einen Vergleich wähle bitte genau **zwei** Dokumente (oder zwei Versionen) aus — im Moment ' +
+    'sind {count} im Bereich. Wähle die beiden zu vergleichenden aus und frage erneut.',
+
   // Antwort der Schwärzungs-Weiterleitung: eine Aktions-Skill verweist auf ihre eigene Schaltfläche
   // statt eine Top-k-Antwort zu erzeugen. Deterministisch + inhaltsfrei (kein Modellaufruf, kein
   // Dokumentzugriff); `{button}` ist die Beschriftung aus der SkillRunBar.

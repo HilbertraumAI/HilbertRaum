@@ -100,6 +100,32 @@ export function scoreSkillTriggers(triggers: SkillTriggers, ctx: SkillTriggerCon
   return keywordHits * KEYWORD_WEIGHT + (mimeHit ? MIME_WEIGHT : 0) + (filenameHit ? FILENAME_WEIGHT : 0)
 }
 
+/**
+ * Does ONE document match a skill's DOCUMENT signals — its `filenamePatterns` (glob over the title) or
+ * `mimeTypes`? The boolean sibling of the mime/filename half of `scoreSkillTriggers`, extracted so the
+ * W2 doc-count narrowing (registerRagIpc) and the bank/invoice plausibility gate test a document's
+ * plausibility the SAME way the suggestion scorer weighs it (audit §2.1/§4.5) — one definition, no
+ * drift. Empty/whitespace entries are ignored; a skill with no doc signals matches nothing.
+ *
+ * Note the app's standing signal philosophy (see the weights above): the built-in financial skills
+ * carry a BROAD `application/pdf` MIME, so a MIME hit alone is weak evidence that a document "is" a
+ * statement/invoice — the discriminating signal in practice is the filename pattern (`*statement*`,
+ * `*invoice*`). This helper reports either, matching the plan's "filenamePatterns/mimeTypes"; callers
+ * that need the stronger signal should lean on the filename match.
+ */
+export function matchesSkillDocSignals(
+  triggers: Pick<SkillTriggers, 'mimeTypes' | 'filenamePatterns'>,
+  doc: { title: string; mimeType: string | null }
+): boolean {
+  const mimeHit =
+    doc.mimeType != null && triggers.mimeTypes.some((m) => m.trim() && m.trim() === doc.mimeType)
+  const filenameHit = triggers.filenamePatterns.some((p) => {
+    const pat = p.trim()
+    return pat ? globMatches(pat, doc.title) : false
+  })
+  return mimeHit || filenameHit
+}
+
 export interface SkillCandidate {
   installId: string
   title: string

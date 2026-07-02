@@ -379,8 +379,9 @@ password recovery — are documented in
   message, not hardcoded `relevance`). If any in-scope doc is **not** fully chunked the turn is
   **refused** with a fixed message pointing at Documents → Re-index — no partial answer, no model call
   (D45) — rather than silently answering from a few passages (for accounting, a partial read is a wrong
-  total). A tool skill answering an **off-topic** question, or over a multi-doc scope, keeps the
-  ordinary relevance path unchanged. `document-redaction` is an action skill: it registers a
+  total). A tool skill answering an **off-topic** question keeps the ordinary relevance path unchanged;
+  an **intent-shaped** question over a **multi-document** scope is no longer silently degraded — it is
+  narrowed or routed (**W2**, audit §2.1, recorded below). `document-redaction` is an action skill: it registers a
   **`routing`** handler (not an exhaustive one — D49a, 2026-06-22), so a redaction-shaped request
   returns a short answer pointing at its run button (no content read, no tool run, **no coverage
   badge**) instead of a top-k Q&A that lectured and falsely claimed a relevance-limited reading; the
@@ -413,6 +414,32 @@ password recovery — are documented in
   its joined notes to the reduce budget. **Open follow-up (deferred by W1):** auto-building (or one-click
   offering) the deep index when a whole-doc turn truncates, and routing lookup-shaped questions to top-k
   when a whole-doc read would truncate — both are W2/A3 territory.
+  **W2 (audit §2.1/§3.4/§4.5) killed the silent doc-count fallthrough and added a document-plausibility
+  gate — all deterministic, zero new model calls.** Before W2, when a tool/whole-doc skill was the turn
+  skill but the in-scope document **count** was wrong (a multi-doc scope, or the default whole-library
+  scope), `applies()` was false and the turn fell through **silently** to ~2 top-k passages dressed up as
+  a whole-document read. Now, when the question is **intent-shaped** (a new doc-count-agnostic
+  `SkillAnalysisHandler.intends()`) but `applies()` fails only on count, the chat path (`registerRagIpc`,
+  before the existing dispatch) either **(a) narrows** to the ONE in-scope document that matches the
+  skill's own **manifest doc signals** (`filenamePatterns`/`mimeTypes`, via the shared
+  `matchesSkillDocSignals` in `selector.ts`) — proceeding against it with an honest scope notice
+  **prepended to the answer** (`skills.analysis.scopeNarrowed`; the streamed grounded path carries it via
+  a new `generateGroundedAnswer` **`answerPrefix`** option, also threaded through the tree-rescue path) —
+  or **(b) routes** with a deterministic answer: `skills.analysis.selectOne` ("pick one document") when
+  0/≥2 docs match, and `skills.analysis.selectTwo` ("select exactly two") for **`what-changed`** at ≠2
+  docs (its SKILL.md no longer asks the *model* to police a scope it cannot see — §3.4). A **0-doc** scope
+  is left on the ordinary relevance path (its own "no documents" honesty). The **plausibility gate**
+  (§4.5): in bank/invoice `run()`, a **zero-row** extraction on a document that matches **none** of the
+  skill's declared signals returns a `fallThrough` result, so the turn takes the ordinary grounded path
+  (the LLM answers the actual question) instead of the misleading "I read the whole statement but couldn't
+  find any transactions" template — the exact contract-with-bank-skill-sticky failure. Zero rows on a doc
+  that **does** look like a statement/invoice keeps the honest empty answer; and — the conservative D56
+  posture — a skill that declares **no** signals (or whose row can't be read) does **not** fall through
+  (it keeps the empty answer, so a real statement whose rows merely failed to parse is never re-routed to
+  a top-k model). **Residual (documented, A3 territory):** the financial skills declare a broad
+  `application/pdf` MIME, so the discriminating signal in practice is the **filename** pattern — a
+  contract *PDF* (matching the MIME) with the bank skill sticky still keeps the empty template rather than
+  falling through; the fix stands for non-PDF/CSV docs and for the multi-doc narrow/route paths.
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

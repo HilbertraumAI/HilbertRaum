@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   globMatches,
+  matchesSkillDocSignals,
   scoreSkillTriggers,
   selectSuggestion,
   SUGGEST_SCORE_THRESHOLD,
@@ -95,6 +96,33 @@ describe('scoreSkillTriggers', () => {
       docMimeTypes: ['text/csv']
     })
     expect(score).toBeGreaterThanOrEqual(SUGGEST_SCORE_THRESHOLD)
+  })
+})
+
+describe('matchesSkillDocSignals (W2 doc-count narrowing + plausibility gate)', () => {
+  const bankTriggers = triggers({
+    mimeTypes: ['application/pdf', 'text/csv'],
+    filenamePatterns: ['*statement*', '*kontoauszug*']
+  })
+
+  it('matches on a filename-pattern hit (the discriminating signal)', () => {
+    expect(matchesSkillDocSignals(bankTriggers, { title: '2024-statement-march.pdf', mimeType: 'application/pdf' })).toBe(true)
+    expect(matchesSkillDocSignals(bankTriggers, { title: 'Kontoauszug-2024.txt', mimeType: 'text/plain' })).toBe(true)
+  })
+
+  it('matches on a MIME hit even without a filename match (broad but declared)', () => {
+    expect(matchesSkillDocSignals(bankTriggers, { title: 'my-file.pdf', mimeType: 'application/pdf' })).toBe(true)
+  })
+
+  it('does NOT match a document that hits neither signal (a text contract falls through)', () => {
+    expect(matchesSkillDocSignals(bankTriggers, { title: 'lease-agreement.txt', mimeType: 'text/plain' })).toBe(false)
+    expect(matchesSkillDocSignals(bankTriggers, { title: 'notes.md', mimeType: 'text/markdown' })).toBe(false)
+  })
+
+  it('matches nothing when the skill declares no doc signals, and tolerates a null MIME', () => {
+    expect(matchesSkillDocSignals(triggers(), { title: 'anything-statement.pdf', mimeType: 'application/pdf' })).toBe(false)
+    expect(matchesSkillDocSignals(bankTriggers, { title: 'march-statement', mimeType: null })).toBe(true) // filename still hits
+    expect(matchesSkillDocSignals(bankTriggers, { title: 'contract', mimeType: null })).toBe(false)
   })
 })
 

@@ -61,6 +61,11 @@ function writeInvoiceSkill(appSkillsDir: string): void {
     'version: 1.0.0',
     'kind: tool',
     'allowedTools: [extract_invoice, validate_invoice_totals, export_invoice_csv]',
+    // Real manifest doc signals so the W2 plausibility gate can tell an invoice from a contract.
+    'triggers:',
+    '  keywords: [invoice, rechnung, total, vendor]',
+    '  mimeTypes: [application/pdf, text/csv]',
+    '  filenamePatterns: ["*invoice*", "*rechnung*", "*faktura*", "*bill*"]',
     '---',
     'Quote the printed figures.'
   ]
@@ -78,7 +83,7 @@ interface Harness {
 /** Real DB + an ingested single invoice + an ENABLED app:invoice tool skill + the analysis registry,
  *  wired through the real `askDocuments` handler (the production path: stored copy + chunks + embeddings
  *  + fully_chunked). */
-async function makeHarness(opts: { fullyChunked?: boolean } = {}): Promise<Harness> {
+async function makeHarness(opts: { fullyChunked?: boolean; text?: string; file?: string } = {}): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-raginvoice-'))
   const workspacePath = join(root, 'workspace')
   const appSkillsDir = join(root, 'app-skills')
@@ -93,8 +98,8 @@ async function makeHarness(opts: { fullyChunked?: boolean } = {}): Promise<Harne
   skills.reconcile() // installs app:invoice ENABLED
 
   const storeDir = documentsDir(workspacePath)
-  const docPath = join(root, 'invoice.txt')
-  writeFileSync(docPath, CLEAN, 'utf8')
+  const docPath = join(root, opts.file ?? 'invoice.txt')
+  writeFileSync(docPath, opts.text ?? CLEAN, 'utf8')
   const doc = createQueuedDocument(db, docPath)
   await processDocument(db, storeDir, doc.id, { embedder: createMockEmbedder() })
   if (opts.fullyChunked === false) {
@@ -217,5 +222,25 @@ describe('askDocuments — invoice analysis routing (full-doc-skills Phase 4)', 
     expect(msg.content).not.toContain(t('en', 'skills.invoiceAnalysis.count', { count: 2 }))
     const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
     expect(runs.n).toBe(0)
+  })
+
+  it('W2 plausibility gate: a zero-content read on a NON-invoice falls through to the grounded path', async () => {
+    // The invoice skill is sticky but a plain contract is in scope: the extractor finds no line items or
+    // totals, and the doc matches none of the invoice's manifest signals — so instead of the misleading
+    // "I read the whole invoice but couldn't find any line items or totals", the LLM answers the actual
+    // question via the ordinary grounded path (audit §4.5).
+    const h = await makeHarness({
+      file: 'service-contract.txt',
+      text:
+        'This service agreement covers the total scope of work agreed between the provider and the ' +
+        'client. Either party may end the agreement with notice; no amounts are stated in this clause.'
+    })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'what is the total?', INVOICE_INSTALL_ID)
+    const msg = result as Message
+
+    expect(msg.content).not.toBe(t('en', 'skills.invoiceAnalysis.empty'))
+    expect(msg.content).toContain('Model answer.')
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.coverage?.mode).not.toBe('extract')
   })
 })

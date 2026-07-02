@@ -3,7 +3,8 @@ import type { Citation, CoverageInfo, RetrievalScope } from '../../../../shared/
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
 import { documentsInScope } from '../scope-documents'
 import { documentChunkCount } from '../../analysis/coverage'
-import { skillInstallId } from '../registry'
+import { getSkill, skillInstallId } from '../registry'
+import { matchesSkillDocSignals } from '../selector'
 import {
   isInvoiceStale,
   latestInvoiceId,
@@ -70,10 +71,36 @@ function detectFormat(question: string): OutputFormat | null {
 
 /** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
  *  analysis path reads the stored `chunks`, so it requires them (`requireChunks: true`) — an indexed
- *  but unchunked document is runnable via the button but not answerable here (X-1, the shared helper). */
-function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string; title: string } | null {
+ *  but unchunked document is runnable via the button but not answerable here (X-1, the shared helper).
+ *  Carries `mimeType` too so the W2 plausibility gate can test the doc against the skill's signals. */
+function singleInScopeDocument(
+  db: Db,
+  scope: RetrievalScope
+): { id: string; title: string; mimeType: string | null } | null {
   const docs = documentsInScope(db, scope, { requireChunks: true })
-  return docs.length === 1 ? { id: docs[0].id, title: docs[0].title } : null
+  return docs.length === 1 ? { id: docs[0].id, title: docs[0].title, mimeType: docs[0].mimeType } : null
+}
+
+/**
+ * W2 document-plausibility gate (audit §4.5): after a ZERO-CONTENT extraction, should the turn abandon
+ * the empty template and fall through to the ordinary grounded path? Only when the skill DECLARES doc
+ * signals (filenamePatterns/MIME) and the document matches NONE of them — positive evidence it isn't an
+ * invoice at all (a contract or statement in scope with the invoice skill sticky). Absent signals — an
+ * unsignalled skill, or the anomaly where the skill row can't be read — give NO basis to judge, so we
+ * KEEP the honest empty answer (mirrors the bank handler's D56 posture). Deterministic; no model call.
+ */
+function shouldFallThroughOnEmpty(
+  db: Db,
+  skillInstallId: string,
+  doc: { title: string; mimeType: string | null }
+): boolean {
+  const triggers = getSkill(db, skillInstallId)?.manifest.triggers
+  if (!triggers) return false
+  const hasAnySignal =
+    triggers.mimeTypes.some((m) => m.trim().length > 0) ||
+    triggers.filenamePatterns.some((p) => p.trim().length > 0)
+  if (!hasAnySignal) return false
+  return !matchesSkillDocSignals(triggers, doc)
 }
 
 /**
@@ -318,6 +345,13 @@ export function buildInvoiceAnswer(
 }
 
 export const invoiceAnalysisHandler: SkillAnalysisHandler = {
+  // The doc-count-agnostic intent (W2, audit §2.1): an analysis-shaped invoice question, regardless of
+  // how many documents are in scope. `applies()` = this AND a single in-scope doc; when it fails ONLY on
+  // the count, the chat path narrows to the best-matching invoice or routes (never a silent fall-through).
+  intends(input: SkillAnalysisInput): boolean {
+    return isAnalysisShaped(input.question)
+  },
+
   applies(input: SkillAnalysisInput): boolean {
     // Cheap pre-flight (R2): a well-defined single in-scope doc + an analysis-shaped invoice question.
     // The refuse / not-fully-chunked routing gate lives in registerRagIpc (Phase 3), not here.
@@ -382,6 +416,17 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         invoice.totals.netTotal !== undefined ||
         invoice.totals.taxTotal !== undefined ||
         invoice.totals.grossTotal !== undefined
+
+      // W2 plausibility gate (audit §4.5): the extractor found NO line items or totals. If this document
+      // doesn't even look like an invoice by the skill's own manifest signals (filename/MIME), it almost
+      // certainly isn't one (a contract in scope with the invoice skill sticky) — fall through to the
+      // ordinary grounded path so the LLM answers the user's ACTUAL question, instead of the honest-but-
+      // useless "I read the whole invoice but couldn't find any line items or totals" template. A zero-
+      // content read on a doc that DOES look like an invoice keeps that honest empty answer. No model.
+      if (!hasContent && shouldFallThroughOnEmpty(db, ctx.skillInstallId, target)) {
+        return { answer: '', citations: [], fallThrough: true }
+      }
+
       if (format && hasContent) {
         return {
           answer: buildFormatAnswer(ctx.tr, format, invoice),
