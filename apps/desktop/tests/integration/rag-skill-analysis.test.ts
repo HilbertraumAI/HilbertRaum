@@ -67,7 +67,7 @@ interface Harness {
   db: Db
   conversationId: string
   docId: string
-  runtime: ModelRuntime & { calls: number }
+  runtime: ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
   audit: { type: string; meta?: Record<string, unknown> }[]
 }
 
@@ -98,19 +98,22 @@ async function makeHarness(opts: { fullyChunked?: boolean; text?: string } = {})
     db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(doc.id)
   }
 
-  // A runtime that records whether it was ever asked to generate — both Phase-3 outcomes must make
-  // ZERO model calls (grounding rule: deterministic copy / fixed refusal, never the model).
+  // A runtime that records whether it was ever asked to generate (the Phase-3 template/refuse outcomes must
+  // make ZERO model calls) AND captures the messages it was handed, so a W4 grounded-data turn can assert
+  // the model saw the JSON data block + the verbatim rules.
   const runtime = {
     modelId: 'mock',
     calls: 0,
+    lastMessages: [] as ChatMessage[],
     start: async () => {},
     stop: async () => {},
     health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(_messages: ChatMessage[]) {
+    async *chatStream(messages: ChatMessage[]) {
       runtime.calls++
+      runtime.lastMessages = messages
       yield 'Model answer.'
     }
-  } as unknown as ModelRuntime & { calls: number }
+  } as unknown as ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
 
   const audit: { type: string; meta?: Record<string, unknown> }[] = []
   const ctx = {
@@ -247,6 +250,86 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     const msgs = listMessages(h.db, h.conversationId)
     expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant'])
     expect(msgs[1].id).toBe(msg.id)
+  })
+})
+
+// ---- W4: bank grounded-data (third mode) + inline format parity (audit §3.1/§3.3/§8.1) ----
+// The bank port of W3: a non-summary bank question streams a MODEL answer over the deterministically
+// extracted + validated statement (with the parsed in/out/net echoed beneath it), and a format ask
+// serializes the statement inline (JSON/CSV) with 0 model calls — parity with the invoice handler.
+
+describe('askDocuments — bank grounded-data + inline format (W4)', () => {
+  it('grounded-data: a non-summary question streams a model answer over the JSON + deterministic postscript', async () => {
+    const h = await makeHarness({ fullyChunked: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'what was my largest transaction?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+
+    // The model WAS called (the point of the third mode), and its answer is persisted.
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.content).toContain('Model answer.')
+
+    // The prompt the model saw carried the serialized JSON data block + the strict verbatim rule.
+    const lastTurn = h.runtime.lastMessages[h.runtime.lastMessages.length - 1]
+    expect(lastTurn.role).toBe('user')
+    expect(lastTurn.content).toContain('Bank statement (JSON):')
+    expect(lastTurn.content).toContain('quote them EXACTLY')
+    expect(lastTurn.content).toContain('Do NOT do arithmetic')
+    // The grounded-data SYSTEM prompt drops the "[S1]" excerpt-citation rule (no numbered excerpts here).
+    expect(h.runtime.lastMessages[0].role).toBe('system')
+    expect(h.runtime.lastMessages[0].content).toContain('Do NOT add inline [S1]')
+
+    // The deterministic in/out/net echo (postscript) is appended verbatim UNDER the model answer, and it
+    // matches the PARSED net (2454.10) exactly — a model misquote is immediately contradicted.
+    expect(msg.content).toContain('2454.10')
+    expect(msg.content.indexOf('Model answer.')).toBeLessThan(msg.content.indexOf('2454.10'))
+
+    // Honest extract coverage + citations pass straight through; the fence rode the turn so the row is stamped.
+    expect(msg.coverage?.mode).toBe('extract')
+    expect(msg.citations && msg.citations.length).toBeGreaterThan(0)
+    expect(msg.skillId).toBe(BANK_INSTALL_ID)
+
+    // The read-only tools still auto-ran (they feed the data block); export never did.
+    const toolNames = h.audit.map((e) => e.meta?.toolName)
+    expect(toolNames).toContain('extract_transactions')
+    expect(toolNames).toContain('validate_statement_balances')
+    expect(toolNames).not.toContain('export_transactions_csv')
+  })
+
+  it('follow-up regression: an explanatory "warum stimmen die Summen nicht?" is a DIFFERENT (model) answer, not the byte-identical template', async () => {
+    const h = await makeHarness({ fullyChunked: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'warum stimmen die Summen nicht?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.content).toContain('Model answer.')
+    // NOT the deterministic template's headline count line.
+    expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
+  })
+
+  it('format path: "as JSON" serializes the statement inline (no model)', async () => {
+    const h = await makeHarness({ fullyChunked: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'give me the statement as JSON',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(h.runtime.calls).toBe(0)
+    expect(msg.content).toContain('```json')
+    expect(msg.content).toContain('"totalIn": 2500')
   })
 })
 

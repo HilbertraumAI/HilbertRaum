@@ -464,8 +464,29 @@ password recovery — are documented in
   template. `buildInvoiceAnswer` also gained a **Details block** (vendor / invoice number / invoice + due
   date), so those header fields surface even on the template path (the "who is the vendor" gap dies on both
   paths). Citations + honest `extract` coverage pass straight through (source of truth = the deterministic
-  extractor); the data block caps line items at ~150 rows (totals + header always kept). **Bank parity is
-  W4** (the bank handler and its serializers are deliberately untouched — SPLIT-POINT).
+  extractor); the data block caps line items at ~150 rows (totals + header always kept). **W4 (audit
+  §3.1 bank half / §3.3 / §3.6-low) ported the same third mode to the BANK handler** and closed the
+  self-referential escape-hatch copy. The bank `run()` now routes by the same ANSWER SHAPE: a **format**
+  ask (`detectFormat`) serializes the statement **inline** — new `buildStatementJson` (transactions +
+  cashflow summary + opening/closing balances) or the existing `transactionsToCsv` (rows only) — closing
+  the §3.3 gap that the bank template pointed at a CSV export the handler could never produce; a
+  **summary / reconcile / total / balance / category / list** shape (a broader stem list than invoice —
+  for a statement the **totals ARE the D56-gated headline**, so `total`/`summe`/`saldo`/`kontostand`/`net
+  change`/`cashflow` stay on the completeness-gated **template**, plus `\bstimm(en|t)\b` and the
+  `warum`/`wieso`/`why` explanatory guard) keeps the deterministic template; **everything else** streams a
+  model answer over `buildStatementDataBlock` (the JSON + the balance-reconciliation + the **D56
+  completeness verdict** + a deterministic per-category grouping + provenance, capped ~150 rows) with a
+  **deterministic in/out/net postscript** (`buildCashflowPostscript` — empty on a mixed-currency statement,
+  since there is no single meaningful total; the R5 date caveat rides it too). The self-referential
+  `transactionsMore` copy now names the **real** affordances (the run-bar **Export to CSV** button for a
+  saved file + "ask for it as CSV or JSON here in chat"), and the inline **CSV intros** (bank + invoice,
+  §3.6-low) state honestly that CSV carries the rows/line-items only while the summary/balances (bank) or
+  header/totals (invoice) ride in JSON/XML. Because a non-summary follow-up ("warum stimmen die Summen
+  nicht?") now routes to grounded-data (the template can only PRINT figures, never EXPLAIN), a repeat
+  intercept no longer re-serves the byte-identical template — pinned by a regression test on both handlers.
+  The bank port added **no** extractor-version bump (the serializers are read-side; extraction output is
+  byte-identical). **Residual:** bank has no statement **XML** serializer (JSON/CSV only, per the plan), so
+  an "as xml" ask falls through to grounded-data rather than an inline XML block.
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

@@ -1023,3 +1023,55 @@ export const exportTransactionsCsvTool: SkillTool = {
     return { ok: true, output: { csv: transactionsToCsv(transactions), rowCount: transactions.length } }
   }
 }
+
+// ---- JSON serializer (W4, audit §3.3 — bank format parity with the invoice handler) ----
+//
+// Pure format transformation of the ALREADY-EXTRACTED statement — the deterministic, honest-by-type-
+// safety answer to "give me this statement as JSON" (the bank half of what invoice got at
+// invoice-format-2026-07-01). Mirrors `buildInvoiceJson`: it serializes the SAME rows the extractor
+// produced + the deterministic cashflow summary + the persisted opening/closing balances (no model call,
+// no invented figure — a serializer cannot read a number the parser did not; the §22-D1 posture holds by
+// construction). CSV parity is the existing `transactionsToCsv` (transaction rows only, matching the
+// export). Emits a STABLE shape (absent fields explicit `null`) so a downstream consumer sees a
+// predictable schema; numbers keep the extractor's 2-dp cent invariant.
+
+/** The read-side view the bank JSON serializer + the grounded-data block are built from: the extracted
+ *  rows, the deterministic cashflow summary, and the statement's printed opening/closing balances. */
+export interface StatementSnapshot {
+  rows: TransactionInput[]
+  summary: CashflowSummary
+  openingBalance?: number
+  closingBalance?: number
+}
+
+/** The canonical plain object the JSON serializer emits — a stable shape (nulls for absent fields). */
+function statementToPlainObject(snap: StatementSnapshot): Record<string, unknown> {
+  const { rows, summary, openingBalance, closingBalance } = snap
+  return {
+    openingBalance: openingBalance ?? null,
+    closingBalance: closingBalance ?? null,
+    // Reported only when EVERY row shares one currency (mixed → null); mirrors summarizeCashflow (BL-2).
+    currency: summary.currency ?? null,
+    summary: {
+      totalIn: summary.totalIn,
+      totalOut: summary.totalOut,
+      net: summary.net,
+      count: summary.count,
+      currency: summary.currency ?? null
+    },
+    transactions: rows.map((r) => ({
+      date: r.date,
+      valueDate: r.valueDate ?? null,
+      description: r.description,
+      amount: r.amount,
+      currency: r.currency,
+      balanceAfter: r.balanceAfter ?? null,
+      sourcePage: r.sourcePage ?? null
+    }))
+  }
+}
+
+/** Serialize the extracted statement to pretty-printed JSON (2-space indent). Pure — no FS, no model. */
+export function buildStatementJson(snap: StatementSnapshot): string {
+  return JSON.stringify(statementToPlainObject(snap), null, 2)
+}

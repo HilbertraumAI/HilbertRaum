@@ -601,8 +601,27 @@ export const de: Record<keyof typeof en, string> = {
   // Eine begrenzte Buchungsliste, damit „zeig mir die Buchungen“ beantwortbar ist (Beträge unverändert).
   'skills.bankAnalysis.transactionsHeading': 'Buchungen:',
   'skills.bankAnalysis.transactionItem': '- {date} · {description} · {amount} {currency}',
+  // W4 (Audit §3.3): benenne die ECHTEN Wege statt einer selbstbezüglichen Sackgasse. Der alte Text bat
+  // darum, „den Auszug als CSV zu exportieren“ — der Bank-Handler hatte aber keinen Format-Modus und löste
+  // dieselbe Vorlage erneut aus (Endlosschleife). Jetzt zeigt er auf den Export-Knopf der Aktionsleiste (mit
+  // seinem echten Namen, für eine gespeicherte Datei) UND auf die neue Inline-Ausgabe direkt im Chat. Du-Form.
   'skills.bankAnalysis.transactionsMore':
-    '… und **{count}** weitere — bitten Sie mich, den Auszug als CSV zu exportieren, um alle Zeilen zu sehen.',
+    '… und **{count}** weitere. Um jede Zeile zu sehen, nutze den Knopf **Als CSV exportieren** in der ' +
+    'Aktionsleiste, um den ganzen Auszug zu speichern, oder frag hier im Chat einfach nach dem Auszug als CSV oder JSON.',
+  // W4 (Audit §8.1): der deterministische Zahlen-Nachtrag UNTER einer grounded-data-Modellantwort, damit ein
+  // Falschzitat des Modells sofort durch die Ein-/Ausgänge/Saldoänderung des Parsers widerlegt wird. Beträge unverändert.
+  'skills.bankAnalysis.figureEcho': 'Beträge wie eingelesen, wörtlich aus dem Dokument: {figures}.',
+  'skills.bankAnalysis.figureEchoIn': 'Eingang {amount} {currency}',
+  'skills.bankAnalysis.figureEchoOut': 'Ausgang {amount} {currency}',
+  'skills.bankAnalysis.figureEchoNet': 'Saldoänderung {amount} {currency}',
+  // W4 (Audit §3.3): der ehrliche Einleitungstext für die Inline-JSON/CSV-Ausgabe des Auszugs. Die CSV-
+  // Variante nennt, was im CSV fehlt (Zusammenfassung + Salden), gemäß der §3.6-Ehrlichkeit.
+  'skills.bankAnalysis.formatIntro':
+    'Hier ist der Auszug als {format}, ausschließlich aus den gelesenen Beträgen erstellt — nichts aus Fließtext zusammengerechnet oder erfunden:',
+  'skills.bankAnalysis.formatIntroCsv':
+    'Hier ist der Auszug als CSV — nur die Buchungszeilen, aus den gelesenen Beträgen erstellt (nichts aus ' +
+    'Fließtext zusammengerechnet oder erfunden). Die Geldfluss-Zusammenfassung und die Anfangs-/Endsalden ' +
+    'sind nicht im CSV enthalten; frag nach dem Auszug als JSON, um auch die zu bekommen.',
 
   // ---- Rechnungsauswertung (full-doc-skills Plan §3.1, Phase 4 / D49) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
@@ -630,6 +649,12 @@ export const de: Record<keyof typeof en, string> = {
     '… und **{count}** weitere — bitten Sie mich, die Rechnung als CSV zu exportieren, um alle Positionen zu sehen.',
   'skills.invoiceAnalysis.formatIntro':
     'Hier ist die Rechnung als {format}, ausschließlich aus den gelesenen Beträgen erstellt — nichts aus Fließtext zusammengerechnet oder erfunden:',
+  // §3.6-low (W4): CSV enthält NUR die Positionen — Kopf + Beträge fehlen (die sind in JSON/XML). Der alte
+  // Text sagte „die Rechnung als CSV“, ohne zu nennen, was im CSV fehlt; jetzt ehrlich benannt.
+  'skills.invoiceAnalysis.formatIntroCsv':
+    'Hier ist die Rechnung als CSV — nur die Positionen, aus den gelesenen Beträgen erstellt (nichts aus ' +
+    'Fließtext zusammengerechnet oder erfunden). Der Kopf (Lieferant, Rechnungsnummer, Daten) und die ' +
+    'Beträge sind nicht im CSV enthalten; frag nach der Rechnung als JSON oder XML, um auch die zu bekommen.',
   'skills.invoiceAnalysis.noTotals':
     'Die Rechnung druckt keinen Netto-, Steuer- oder Bruttobetrag, den ich lesen konnte.',
   'skills.invoiceAnalysis.caveat':

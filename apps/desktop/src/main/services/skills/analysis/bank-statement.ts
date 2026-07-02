@@ -20,12 +20,15 @@ import { withDocumentLock } from '../doc-lock'
 import {
   BUILTIN_CATEGORIES,
   assessCompleteness,
+  buildStatementJson,
   categorizeRow,
   reconcileBalances,
   summarizeCashflow,
+  transactionsToCsv,
   type CashflowSummary,
   type CompletenessStatus,
   type ReconcileResult,
+  type StatementSnapshot,
   type TransactionInput
 } from '../tools/bank-statement'
 import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, SkillAnalysisResult } from './types'
@@ -81,6 +84,72 @@ function isAnalysisShaped(question: string): boolean {
 function isCategoryShaped(question: string): boolean {
   const q = question.toLowerCase()
   return CATEGORY_KEYWORDS.some((k) => q.includes(k))
+}
+
+// Format-transformation intent (W4, audit §3.3 — the bank half of invoice-format-2026-07-01). When
+// present the handler SERIALIZES the already-extracted statement DETERMINISTICALLY (no model call, no
+// invented figure — a serializer cannot read a number the parser did not) instead of a prose/model
+// answer. `applies()` stays TRUE (a bank keyword still owns the turn), so a format ask never leaks the
+// raw statement into the generic RAG path. Word-bounded so `json`/`csv` match only as standalone tokens.
+// Bank supports JSON (rows + summary + balances) and CSV (rows only — the export serializer); there is
+// no statement XML serializer, so "as xml" is left to fall through to the summary/grounded-data routing.
+type OutputFormat = 'json' | 'csv'
+function detectFormat(question: string): OutputFormat | null {
+  const q = question.toLowerCase()
+  if (/\bjson\b/.test(q)) return 'json'
+  if (/\bcsv\b/.test(q)) return 'csv'
+  return null
+}
+
+// W4 answer-shape routing (audit §3.1/§8.1), ported from the invoice handler (W3). The question selects
+// the ANSWER SHAPE, not document access (every shape reads the same extracted statement): an aggregate
+// SUMMARY / reconcile / totals / balance / category / list ask keeps the high-stakes deterministic
+// TEMPLATE — the one path that runs the D56 completeness gate + surfaces unreconciled rows BEFORE any
+// total, a posture the LLM must never own — while everything else that passed `applies()` (a specific
+// filter, a superlative, an entity, or a "why" follow-up: "how much did I spend on groceries?", "wer hat
+// die höchste Zahlung bekommen?", "warum stimmen die Summen nicht?") streams a model answer that NARRATES
+// the verified data (grounded-data). Substring-matched, already inside a bank-shaped `applies()`. The set
+// is DELIBERATELY broader than the invoice one: for a statement the totals ARE the D56-gated headline
+// (a mis-read partial sum masquerading as the verified total is the cardinal harm), so `total`/`summe`/
+// `saldo`/`kontostand`/`net change`/`cashflow` stay on the gated template, not the model.
+const SUMMARY_KEYWORDS: readonly string[] = [
+  'summar', // summary / summarize / summarise
+  'overview',
+  'überblick',
+  'zusammenfass', // Zusammenfassung / zusammenfassen
+  'reconcil', // reconcile / reconciliation
+  'abgleich', // DE: reconcile
+  'total', // total / totals — the D56-gated headline figure
+  'net change', // the totals-line label (bank answer)
+  'cashflow',
+  'cash flow',
+  'geldfluss',
+  'summe', // Was ist die Summe? — a total ask → the completeness gate, not the model
+  'kontostand',
+  'saldo', // balance asks → the deterministic balance/completeness answer
+  'alle transaktionen',
+  'transaktionen auflisten',
+  'list the transaction',
+  'list all transaction'
+]
+
+// The German reconcile ask "Stimmen die Salden?" / "Stimmt die Summe?" (do the balances/totals add up?).
+// WORD-anchored, NOT a bare `stimmen` substring: `stimmen` ⊂ bestimmen / abstimmen / übereinstimmen — a
+// bare match would over-fire those to the template. Mirrors the invoice `RECONCILE_STIMMT_RE`.
+const RECONCILE_STIMMT_RE = /\bstimm(en|t)\b/
+
+// A WHY / explanatory marker escapes the summary shape even when a summary stem is present: the template
+// can only PRINT figures, never EXPLAIN, so "Warum stimmen die Summen nicht?" is a grounded-data question
+// (the audit §3.1 / W4 follow-up case — a repeat "summe"/"total" intercept must NOT re-serve the
+// byte-identical template). Word-bounded so it never fires inside an unrelated word. Mirrors the invoice.
+const EXPLANATORY_RE = /\b(?:warum|wieso|weshalb|why)\b|\bhow come\b/
+
+function isSummaryShaped(question: string): boolean {
+  const q = question.toLowerCase()
+  if (EXPLANATORY_RE.test(q)) return false // "warum …" always explains → grounded-data
+  // A CATEGORY breakdown is a high-stakes deterministic shape too (the template renders the per-category
+  // totals + the honest model-assisted note); keep it on the template unless it ASKS WHY (guarded above).
+  return SUMMARY_KEYWORDS.some((k) => q.includes(k)) || RECONCILE_STIMMT_RE.test(q) || isCategoryShaped(q)
 }
 
 /** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
@@ -347,6 +416,105 @@ function categoryTotals(paired: readonly RowWithCategory[]): CategoryTotal[] {
 const MAX_LISTED_TRANSACTIONS = 10
 
 /**
+ * Render the extracted statement as JSON/CSV inside a fenced code block, with a short honest intro (W4,
+ * audit §3.3 — the bank half of invoice-format-2026-07-01). Pure serialization of the SAME structured
+ * rows the extractor produced — the figures are the parser's, so nothing here can invent or transpose a
+ * number (a serializer cannot read a figure the parser did not). JSON carries the transactions + the
+ * cashflow summary + the printed balances; CSV reuses the export serializer (transaction ROWS ONLY — the
+ * summary/balances aren't in CSV), and the CSV intro says so (§3.6 honesty precedent).
+ */
+export function buildFormatAnswer(tr: Tr, format: OutputFormat, snap: StatementSnapshot): string {
+  const content = format === 'json' ? buildStatementJson(snap) : transactionsToCsv(snap.rows)
+  const intro =
+    format === 'csv'
+      ? tr('skills.bankAnalysis.formatIntroCsv')
+      : tr('skills.bankAnalysis.formatIntro', { format: format.toUpperCase() })
+  return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\``
+}
+
+/** The transaction cap for the grounded-data block (W4 §8.1 4096-ctx guard, mirror of the invoice
+ *  `MAX_DATA_BLOCK_ITEMS`): the summary + balances ALWAYS stay (the figures questions ask about); rows
+ *  past this are dropped from the block with an honest "…and N more" note. A coarse structural bound. */
+const MAX_DATA_BLOCK_ROWS = 150
+
+/** A one-line, content-free English description of the D56 completeness status for the data block, so the
+ *  model NARRATING the statement knows whether the totals are proven-whole and can caveat honestly (it is
+ *  never asked to recompute the gate — the verdict is the extractor's). */
+function completenessNote(status: CompletenessStatus): string {
+  switch (status) {
+    case 'complete':
+      return 'the printed opening + Σ(amounts) == closing balance ties out, so these are the whole statement'
+    case 'contradicted':
+      return 'a printed balance disagrees with the rows, so the totals are NOT verified as the whole statement'
+    case 'unverified':
+      return 'the statement prints no opening/closing balance to confirm every row was captured — treat the totals as a sum of the rows read, not a verified statement total'
+  }
+}
+
+/**
+ * Serialize the VERIFIED statement as the grounded-data block (W4, audit §8.1 — mirror of the invoice
+ * `buildInvoiceDataBlock`): the JSON (rows + cashflow summary + balances) + the deterministic balance
+ * reconciliation + the D56 completeness verdict + a deterministic per-category grouping + a provenance
+ * note. This is authoritative context the model NARRATES (never computes over) — `buildStatementJson`
+ * emits the parser's figures, so nothing here can invent a number. Rows past `MAX_DATA_BLOCK_ROWS` are
+ * omitted from the JSON with an honest count (summary + balances always kept). Fixed English, model-facing.
+ */
+export function buildStatementDataBlock(args: {
+  snap: StatementSnapshot
+  reconcile: ReconcileResult
+  status: CompletenessStatus
+  categories: CategoryTotal[]
+}): string {
+  const { snap, reconcile, status, categories } = args
+  const omitted = Math.max(0, snap.rows.length - MAX_DATA_BLOCK_ROWS)
+  const capped: StatementSnapshot =
+    omitted > 0 ? { ...snap, rows: snap.rows.slice(0, MAX_DATA_BLOCK_ROWS) } : snap
+  const lines: string[] = ['Bank statement (JSON):', buildStatementJson(capped)]
+  if (omitted > 0) {
+    lines.push(`(${omitted} further transaction(s) were parsed but omitted from this block for length.)`)
+  }
+  const mismatched = reconcile.rows.filter((r) => r.status === 'mismatch').map((r) => r.index)
+  lines.push(
+    '',
+    'Balance reconciliation (computed deterministically by the extractor — do NOT recompute):',
+    `- running balances: ${reconcile.reconciled ? 'reconciled' : 'not reconciled'}`
+  )
+  if (mismatched.length > 0) {
+    lines.push(`- rows whose printed running balance disagrees (0-based index): ${mismatched.join(', ')}`)
+  }
+  lines.push(`- completeness: ${completenessNote(status)}`)
+  if (categories.length > 0) {
+    lines.push('', 'Category totals (a deterministic rule-based grouping of the signed amounts — NOT model-assigned):')
+    for (const c of categories) {
+      lines.push(`- ${c.category}: ${fmt(c.amount)} ${c.currency} (${c.count} row(s))`)
+    }
+  }
+  lines.push(
+    '',
+    'Provenance: every value above was parsed and reconciled from the whole document by a deterministic ' +
+      'offline extractor. Quote these figures verbatim; do not add, total, convert, or derive any number.'
+  )
+  return lines.join('\n')
+}
+
+/**
+ * The deterministic figure echo appended UNDER a grounded-data model answer (W4 §8.1 caveat, mirror of
+ * the invoice `buildTotalsPostscript`): the parsed money-in / money-out / net, verbatim, so a model
+ * misquote is immediately contradicted. Returns '' on a MIXED-currency statement (`summary.currency`
+ * absent) — there is no single meaningful total to echo (BL-2/D56), so the streaming path appends nothing
+ * and the model narrates the per-currency rows itself. The amounts are the parser's own 2-dp figures.
+ */
+export function buildCashflowPostscript(tr: Tr, summary: CashflowSummary): string {
+  if (!summary.currency) return ''
+  const figures = [
+    tr('skills.bankAnalysis.figureEchoIn', { amount: fmt(summary.totalIn), currency: summary.currency }),
+    tr('skills.bankAnalysis.figureEchoOut', { amount: fmt(summary.totalOut), currency: summary.currency }),
+    tr('skills.bankAnalysis.figureEchoNet', { amount: fmt(summary.net), currency: summary.currency })
+  ].join(' · ')
+  return tr('skills.bankAnalysis.figureEcho', { figures })
+}
+
+/**
  * Build the deterministic, localized answer (Markdown, 0 model calls) — the precedent is
  * `analysis/listing-answer.ts`. Unreconciled rows lead (SKILL.md "before presenting a total"); the
  * totals only print when every row shares one currency (mixed ⇒ an honest "no single total"). A bounded
@@ -562,6 +730,25 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         return { answer: '', citations: [], fallThrough: true }
       }
 
+      // Citations + coverage + balances are the SAME for the format, template, and grounded-data shapes
+      // (all three read the whole extracted statement); the deterministic extractor is the source of truth
+      // for the figures on every path. Hoisted here so the format short-circuit below can return them.
+      const citations = buildBankCitations(db, target.id, target.title, rows)
+      const coverage = computeCoverage(db, target.id)
+      const balances = loadStatementBalances(db, statementId)
+
+      // A machine-FORMAT request ("als JSON"/"as CSV") is answered by SERIALIZING the already-extracted
+      // statement (W4, audit §3.3 — the bank half of the invoice format mode) — deterministic, 0 model
+      // calls, no reconciliation needed (mirror of the invoice format path, which likewise returns before
+      // the validate seam). Guarded to a non-empty statement so a zero-row extraction still gets the honest
+      // prose fallback below (never an empty JSON husk dressed up as an answer). JSON carries rows +
+      // cashflow summary + balances; CSV reuses the export serializer (rows only) — computed purely here.
+      const format = detectFormat(ctx.question)
+      if (format && rows.length > 0) {
+        const snap: StatementSnapshot = { rows, summary: summarizeCashflow(rows), ...balances }
+        return { answer: buildFormatAnswer(ctx.tr, format, snap), citations, coverage }
+      }
+
       const loaded = toLoadedTransactions(paired)
       const summaryResult = await runCashflowSummary(db, args, deps, loaded)
       const validateResult = await runBalanceValidation(db, args, deps, loaded)
@@ -593,30 +780,65 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       }
 
       // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's
-      // printed opening + Σamounts == closing. Load the persisted balances and classify into one of three
-      // outcomes — `complete` (proven), `contradicted` (a printed balance the rows refute → refuse), or
-      // `unverified` (no balance to tie against, nothing contradicting → present a clearly-labelled sum of
-      // the rows read, the no-balance "Umsätze" case). `buildBankAnswer` renders each honestly.
-      const balances = loadStatementBalances(db, statementId)
+      // printed opening + Σamounts == closing. Classify into one of three outcomes — `complete` (proven),
+      // `contradicted` (a printed balance the rows refute → refuse), or `unverified` (no balance to tie
+      // against, nothing contradicting → present a clearly-labelled sum of the rows read, the no-balance
+      // "Umsätze" case). `buildBankAnswer` renders each honestly; the data block carries the same verdict.
       const status = assessCompleteness({
         rows,
         openingBalance: balances.openingBalance,
         closingBalance: balances.closingBalance,
         reconcile
       })
+      const dateOrderInferred = loadDateOrderInferred(db, statementId)
 
-      const answer = buildBankAnswer(ctx.tr, {
-        rows,
-        summary,
-        reconcile,
-        categories,
-        status,
-        modelAssisted,
-        dateOrderInferred: loadDateOrderInferred(db, statementId)
-      })
-      const citations = buildBankCitations(db, target.id, target.title, rows)
-      const coverage = computeCoverage(db, target.id)
-      return { answer, citations, coverage }
+      // W4 answer-shape routing (audit §3.1/§8.1), ported from the invoice handler (W3): an aggregate
+      // summary / reconcile / total / balance / category / list ask keeps the high-stakes deterministic
+      // TEMPLATE — the ONLY path that runs the D56 completeness gate + surfaces unreconciled rows BEFORE any
+      // total, a posture the LLM must never own; everything else that passed applies() — a specific filter,
+      // a superlative, an entity, a "why" follow-up ("how much did I spend on groceries?", "warum stimmen
+      // die Summen nicht?") — streams a model answer that NARRATES the verified data (grounded-data), with
+      // the parsed in/out/net echoed deterministically beneath it. The LLM never computes a figure; it reads
+      // the data. A zero-row extraction that reached here (a real statement with no readable rows — not a
+      // fall-through non-statement) also stays on the template: it owns the honest empty answer, and there
+      // is no verified data to hand a model.
+      if (isSummaryShaped(ctx.question) || rows.length === 0) {
+        const answer = buildBankAnswer(ctx.tr, {
+          rows,
+          summary,
+          reconcile,
+          categories,
+          status,
+          modelAssisted,
+          dateOrderInferred
+        })
+        return { answer, citations, coverage }
+      }
+
+      // The grounded-data postscript is the deterministic in/out/net echo (§8.1) PLUS the R5 honest date
+      // caveat when the dates were read day-first with no evidence — a template appendix (R5, audit §5.7)
+      // that must ride the grounded-data answer too, else W4 would silently drop R5's honesty for exactly
+      // the date/filter questions that now route HERE. Both are deterministic, content-free beyond the
+      // parser's own figures. The per-category grouping is computed deterministically for the data block
+      // (so a "how much on groceries?" question is answerable) — no model, no persistence (categoryTotals
+      // falls back to the rule-based categorizeRow when nothing is persisted).
+      const postscriptParts: string[] = []
+      const cashflowEcho = buildCashflowPostscript(ctx.tr, summary)
+      if (cashflowEcho) postscriptParts.push(cashflowEcho)
+      if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.bankAnalysis.dateOrderCaveat'))
+      return {
+        answer: '',
+        mode: 'grounded-data',
+        dataBlock: buildStatementDataBlock({
+          snap: { rows, summary, ...balances },
+          reconcile,
+          status,
+          categories: categories ?? categoryTotals(paired)
+        }),
+        postscript: postscriptParts.join('\n\n'),
+        citations,
+        coverage
+      }
     })
   }
 }

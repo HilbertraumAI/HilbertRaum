@@ -10,7 +10,18 @@ import {
   buildInvoiceDataBlock,
   buildTotalsPostscript
 } from '../../src/main/services/skills/analysis/invoice'
+import {
+  buildStatementDataBlock,
+  buildCashflowPostscript
+} from '../../src/main/services/skills/analysis/bank-statement'
 import { validateInvoiceTotals, type InvoiceInput } from '../../src/main/services/skills/tools/invoice'
+import {
+  buildStatementJson,
+  reconcileBalances,
+  summarizeCashflow,
+  type StatementSnapshot,
+  type TransactionInput
+} from '../../src/main/services/skills/tools/bank-statement'
 import { t } from '../../src/shared/i18n'
 
 const tr = (key: Parameters<typeof t>[1], params?: Parameters<typeof t>[2]): string => t('en', key, params)
@@ -112,5 +123,119 @@ describe('buildTotalsPostscript (W3 §8.1)', () => {
     expect(post).toContain('100.00')
     expect(post).not.toContain('tax')
     expect(post).not.toContain('gross')
+  })
+})
+
+// ---- W4 (audit §3.1/§3.3/§8.1): the BANK port of the third mode's pure builders ----
+// A clean 2-row statement: Grocery −45.90 (out), Salary +2500.00 (in); opening 2000 + Σ 2454.10 == 4454.10.
+const ROWS: TransactionInput[] = [
+  { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 },
+  { date: '2026-01-03', description: 'Salary', amount: 2500, currency: 'EUR', balanceAfter: 4454.1 }
+]
+const SUMMARY = summarizeCashflow(ROWS)
+const SNAP: StatementSnapshot = { rows: ROWS, summary: SUMMARY, openingBalance: 2000, closingBalance: 4454.1 }
+
+describe('buildStatementJson (W4 §3.3)', () => {
+  it('serializes the transactions + the cashflow summary + the printed balances (stable shape)', () => {
+    const json = buildStatementJson(SNAP)
+    const parsed = JSON.parse(json) as {
+      openingBalance: number | null
+      closingBalance: number | null
+      currency: string | null
+      summary: { totalIn: number; totalOut: number; net: number; count: number }
+      transactions: Array<{ description: string; amount: number }>
+    }
+    expect(parsed.openingBalance).toBe(2000)
+    expect(parsed.closingBalance).toBe(4454.1)
+    expect(parsed.currency).toBe('EUR')
+    expect(parsed.summary.totalIn).toBe(2500)
+    expect(parsed.summary.totalOut).toBe(45.9)
+    expect(parsed.summary.net).toBe(2454.1)
+    expect(parsed.transactions).toHaveLength(2)
+    expect(parsed.transactions.map((t) => t.description)).toEqual(['Grocery', 'Salary'])
+  })
+
+  it('emits null for an absent balance (never an invented figure)', () => {
+    const noBalances: StatementSnapshot = { rows: ROWS, summary: SUMMARY }
+    const parsed = JSON.parse(buildStatementJson(noBalances)) as { openingBalance: number | null }
+    expect(parsed.openingBalance).toBeNull()
+  })
+})
+
+describe('buildStatementDataBlock (W4 §8.1)', () => {
+  it('serializes the JSON, the reconciliation + completeness verdict, categories, and provenance', () => {
+    const block = buildStatementDataBlock({
+      snap: SNAP,
+      reconcile: reconcileBalances(ROWS),
+      status: 'complete',
+      categories: [{ category: 'Income', currency: 'EUR', amount: 2500, count: 1 }]
+    })
+    expect(block).toContain('Bank statement (JSON):')
+    expect(block).toContain('"totalIn": 2500')
+    expect(block).toContain('Balance reconciliation')
+    expect(block).toContain('completeness:')
+    expect(block).toContain('ties out') // the 'complete' completeness note
+    // The category grouping the model can answer "how much on X?" over.
+    expect(block).toContain('Category totals')
+    expect(block).toContain('- Income: 2500.00 EUR (1 row(s))')
+    // The provenance line forbids the model from computing.
+    expect(block).toContain('Quote these figures verbatim')
+    expect(block).toContain('do not add, total, convert, or derive any number')
+  })
+
+  it('flags a NOT-reconciled statement + mismatched row indices honestly', () => {
+    // Row 1's printed balance can't follow row 0 → a mismatch (index 1).
+    const bad: TransactionInput[] = [
+      { date: '2026-01-02', description: 'Alpha', amount: -10, currency: 'EUR', balanceAfter: 100 },
+      { date: '2026-01-03', description: 'Beta', amount: -10, currency: 'EUR', balanceAfter: 200 }
+    ]
+    const block = buildStatementDataBlock({
+      snap: { rows: bad, summary: summarizeCashflow(bad) },
+      reconcile: reconcileBalances(bad),
+      status: 'contradicted',
+      categories: []
+    })
+    expect(block).toContain('running balances: not reconciled')
+    expect(block).toContain('rows whose printed running balance disagrees')
+    expect(block).toContain('NOT verified as the whole statement') // the 'contradicted' note
+    // No category section when none are passed.
+    expect(block).not.toContain('Category totals')
+  })
+
+  it('caps the transactions at 150 with an honest omitted-count note (summary always kept)', () => {
+    const many: TransactionInput[] = Array.from({ length: 151 }, (_, i) => ({
+      date: '2026-01-01',
+      description: `Row ${i}`,
+      amount: -1,
+      currency: 'EUR'
+    }))
+    const block = buildStatementDataBlock({
+      snap: { rows: many, summary: summarizeCashflow(many) },
+      reconcile: reconcileBalances(many),
+      status: 'unverified',
+      categories: []
+    })
+    expect(block).toContain('1 further transaction(s) were parsed but omitted')
+    expect(block).toContain('"description": "Row 149"')
+    expect(block).not.toContain('"description": "Row 150"')
+  })
+})
+
+describe('buildCashflowPostscript (W4 §8.1)', () => {
+  it('echoes money-in / money-out / net verbatim from the parsed summary', () => {
+    const post = buildCashflowPostscript(tr, SUMMARY)
+    expect(post).toContain('2500.00')
+    expect(post).toContain('45.90')
+    expect(post).toContain('2454.10')
+    expect(post).toContain('EUR')
+    expect(post).toContain(tr('skills.bankAnalysis.figureEchoNet', { amount: '2454.10', currency: 'EUR' }))
+  })
+
+  it('returns empty on a MIXED-currency statement (no single meaningful total to echo — BL-2)', () => {
+    const mixed: TransactionInput[] = [
+      { date: '2026-01-02', description: 'Coffee', amount: -3.5, currency: 'EUR' },
+      { date: '2026-01-03', description: 'Book', amount: -10, currency: 'USD' }
+    ]
+    expect(buildCashflowPostscript(tr, summarizeCashflow(mixed))).toBe('')
   })
 })

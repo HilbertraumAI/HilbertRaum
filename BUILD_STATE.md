@@ -6,6 +6,53 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation W4: third mode — bank port + format parity + follow-ups — branch `fix/skills-w4`, UNMERGED.**
+Track-W (plan §W4; audit §3.1 bank half + §3.3 MEDIUM + §3.6-low), branched off `fix/skills-w3` (deps: W3; the
+plan/audit docs live on the W-branch chain, not `master`). Offline / pure / no new deps / **no schema change** /
+**no extractor-version bump** (the new serializers are read-side; extraction output is byte-identical). **Root
+cause:** W3 left the bank handler on the pre-W3 shape — `run()` inspected the question once (no format mode at all,
+§3.3) and otherwise built `buildBankAnswer`, a question-AGNOSTIC template, so "what was my largest transaction?",
+"warum stimmen die Summen nicht?" and repeat follow-ups all got the byte-identical in/out/net template; the
+extracted rows never reached the model (§3.1 bank half). The template even pointed at an "ask me to export as CSV"
+escape hatch the bank handler could never fulfil — an infinite loop (§3.3). **Fix (serializer,
+`tools/bank-statement.ts`):** new pure `buildStatementJson(StatementSnapshot)` = transactions + cashflow summary +
+opening/closing balances (mirror of `buildInvoiceJson`; stable shape, nulls for absent fields). **Fix (routing,
+`analysis/bank-statement.ts`):** ported W3's answer-shape routing — `detectFormat` ("as JSON"/"as CSV")→inline
+`buildFormatAnswer` (JSON via `buildStatementJson`; CSV reuses `transactionsToCsv`, rows only) BEFORE the seams,
+0 model calls; `isSummaryShaped`→existing template; else→`{mode:'grounded-data',dataBlock,postscript}`. The bank
+summary stem list is DELIBERATELY BROADER than invoice's — for a statement the totals ARE the D56-gated headline
+(a mis-read/partial sum masquerading as the verified total is the cardinal harm), so `total`/`summe`/`saldo`/
+`kontostand`/`net change`/`cashflow`/`geldfluss`/category(`isCategoryShaped`) stay on the completeness-gated
+template; +`\bstimm(en|t)\b` (word-anchored) + a `warum`/`wieso`/`weshalb`/`why` explanatory guard (so "warum
+stimmen die Summen nicht?"→grounded-data — the template can only PRINT figures, never EXPLAIN). `dataBlock` =
+`buildStatementDataBlock` (JSON + balance reconciliation + the **D56 completeness verdict** + a deterministic
+per-category grouping so a "how much on groceries?" question is answerable + provenance; rows capped ~150 with an
+honest omitted count). `postscript` = `buildCashflowPostscript` (money-in/out/net verbatim; **'' on mixed currency**
+— no single meaningful total, BL-2/D56) **plus the R5 date caveat** when the dates defaulted day-first. A zero-row
+extraction (not a fall-through non-statement) stays on the template. The streaming is the handler-agnostic W3
+`registerRagIpc` `result.mode==='grounded-data'` block — **UNCHANGED** (it already dispatched invoice's outcome).
+**Fix (copy, §3.3/§3.6-low):** `skills.bankAnalysis.transactionsMore` now names the REAL affordances (the run-bar
+**Export to CSV** button for a saved file + "ask for it as CSV or JSON here in chat"), replacing the dead escape
+hatch; BOTH CSV intros made honest (`skills.bankAnalysis.formatIntroCsv` + `skills.invoiceAnalysis.formatIntroCsv`
+— CSV carries the rows/line-items only, summary/balances resp. header/totals ride in JSON/XML). **i18n:**
+`figureEcho`/`figureEchoIn`/`…Out`/`…Net` + `formatIntro`/`formatIntroCsv` + rewritten `transactionsMore` for bank,
+and `invoiceAnalysis.formatIntroCsv`, added to en + de (new German assistant copy is **du**; the legacy Sie in the
+old `transactionsMore` was removed in passing). **Data contract:** none broken (reused W3's optional-additive
+`mode`/`dataBlock`/`postscript`; `StatementSnapshot` is a new exported read-side view). **Files beyond the plan's
+W4 list (per §0 "say so"):** `analysis/invoice.ts` (+1 CSV-intro branch) and `skills-analysis-invoice.test.ts`
+(+1 assertion) for the §3.6-low invoice CSV honesty — both named in the plan's §W4 decisions. **Non-goals held:**
+trigger vocab (W5), whole-doc internals (W1), the run-seam refactor (A1). **Adversarial 4-lens diff review
+(correctness/D56 · plan-conformance · parity-i18n · test-adequacy — each finding independently verified,
+default-refute):** the three substantive lenses ALL returned clean; only test-adequacy fired → 3 confirmed
+COVERAGE gaps (no live bug) closed — the integration grounded-data test now pins the run()-produced `Category
+totals` section (`categories ?? categoryTotals(paired)` wiring, not just the pure builder), the CSV format test
+asserts `mode` unset (the 0-model short-circuit), and the invoice CSV test pins `formatIntroCsv` (the §3.6-low
+honesty branch). **Tests:** +16 net-new — bank serializer/data-block/postscript units (JSON shape, cap, mixed-
+currency '', reconciliation/completeness/category), handler-level grounded-data outcome + template-preserved +
+inline JSON/CSV + follow-up-regression + R5-caveat-on-postscript, IPC grounded-data (prompt carries JSON + verbatim
+rule + no-`[S1]` system prompt + postscript order) + follow-up + inline JSON. Full canonical suite green (2898) +
+typecheck. `fix/skills-w4`._
+
 _2026-07-02 — **Skills remediation W3: the third answer mode (LLM over extracted, verified data) — seam + invoice — branch `fix/skills-w3`, UNMERGED.**
 Track-W (plan §W3; audit §3.1 HIGH + §8.1 — "the single highest-leverage fix"), branched off `fix/skills-w2`
 (deps: R2; the plan/audit docs live on the W-branch chain, not `master`). Offline / pure / no new deps / **no

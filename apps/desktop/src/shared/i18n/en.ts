@@ -588,8 +588,27 @@ export const en = {
   // A bounded transaction listing so "show me the transactions" is answerable (figures pass through verbatim).
   'skills.bankAnalysis.transactionsHeading': 'Transactions:',
   'skills.bankAnalysis.transactionItem': '- {date} · {description} · {amount} {currency}',
+  // W4 (audit §3.3): name the REAL affordances, not a self-referential escape hatch. The old copy told the
+  // user to "ask me to export … as CSV" — but the bank handler had no format mode and re-triggered the same
+  // template, an infinite loop. Now it points at the run-bar Export button (its actual label, for a saved
+  // file) AND the inline chat serialization W4 added (CSV or JSON right here in chat).
   'skills.bankAnalysis.transactionsMore':
-    '… and **{count}** more — ask me to export the statement as CSV to see every row.',
+    '… and **{count}** more. To see every row, use the **Export to CSV** button in the run bar to save the ' +
+    'whole statement, or just ask for it as CSV or JSON right here in chat.',
+  // W4 (audit §8.1): the deterministic figure echo printed UNDER a grounded-data model answer, so any model
+  // misquote is immediately contradicted by the parser's own money-in / money-out / net. Amounts verbatim.
+  'skills.bankAnalysis.figureEcho': 'Figures as parsed, verbatim from the document: {figures}.',
+  'skills.bankAnalysis.figureEchoIn': 'money in {amount} {currency}',
+  'skills.bankAnalysis.figureEchoOut': 'money out {amount} {currency}',
+  'skills.bankAnalysis.figureEchoNet': 'net change {amount} {currency}',
+  // W4 (audit §3.3): the honest intro for the inline JSON/CSV serialization of the statement. The CSV
+  // variant states what CSV omits (summary + balances), the §3.6 honesty precedent.
+  'skills.bankAnalysis.formatIntro':
+    'Here is the statement as {format}, built only from the figures I read — nothing added up from prose or invented:',
+  'skills.bankAnalysis.formatIntroCsv':
+    'Here is the statement as CSV — the transaction rows only, built from the figures I read (nothing added ' +
+    'up from prose or invented). The cashflow summary and the opening/closing balances aren’t in CSV; ask ' +
+    'for it as JSON to get those too.',
 
   // ---- Invoice analysis answer (full-doc-skills plan §3.1, Phase 4 / D49) ----
   // The deterministic, whole-document answer the invoice analysis handler synthesises from the
@@ -617,6 +636,12 @@ export const en = {
     '… and **{count}** more — ask me to export the invoice as CSV to see every line.',
   'skills.invoiceAnalysis.formatIntro':
     'Here is the invoice as {format}, built only from the figures I read — nothing added up from prose or invented:',
+  // §3.6-low (W4): CSV carries the line items ONLY — the header + totals are omitted (they ride in JSON/XML).
+  // The old single intro claimed "the invoice as CSV" without saying what CSV leaves out; state it honestly.
+  'skills.invoiceAnalysis.formatIntroCsv':
+    'Here is the invoice as CSV — the line items only, built from the figures I read (nothing added up from ' +
+    'prose or invented). The header (vendor, invoice number, dates) and the totals aren’t in CSV; ask for it ' +
+    'as JSON or XML to get those too.',
   'skills.invoiceAnalysis.noTotals':
     'The invoice doesn’t print a net, tax, or gross total I could read.',
   'skills.invoiceAnalysis.caveat':

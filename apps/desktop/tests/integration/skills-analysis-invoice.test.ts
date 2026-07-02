@@ -329,6 +329,9 @@ describe('invoice analysis handler — run()', () => {
     expect(res.answer).toContain('```csv')
     expect(res.answer).toContain('description,quantity,unitPrice,lineTotal,currency')
     expect(res.answer).toContain('Widget')
+    // §3.6-low (W4): the CSV intro states honestly that CSV omits the header + totals (they ride in
+    // JSON/XML), instead of the old generic "the invoice as CSV" claim — pin that honesty branch.
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.formatIntroCsv'))
   })
 
   it('surfaces a failed reconciliation check BEFORE the headline gross (SKILL.md)', async () => {

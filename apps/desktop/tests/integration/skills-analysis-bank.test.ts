@@ -578,6 +578,120 @@ describe('bank-statement analysis handler — run()', () => {
   })
 })
 
+describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3.3/§8.1)', () => {
+  it('grounded-data path: a non-summary question returns mode grounded-data (data block + postscript), not the template', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // "what was my largest transaction?" is bank-analysis-shaped ('transaction') but NOT a summary/total/
+    // category/list ask, so instead of the wrong in/out/net template it hands the model the verified data.
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'what was my largest transaction?')
+    )
+
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).toBe('') // the template answer is empty; the model answer is streamed by the IPC path
+    // The data block is the serialized VERIFIED statement (JSON + reconciliation + provenance).
+    expect(res.dataBlock).toContain('Bank statement (JSON):')
+    expect(res.dataBlock).toContain('Grocery')
+    expect(res.dataBlock).toContain('Salary')
+    expect(res.dataBlock).toContain('Quote these figures verbatim')
+    // The deterministic per-category grouping rides the block too, so a "how much did I spend on X?"
+    // question is answerable — pins the run() `categories ?? categoryTotals(paired)` wiring end-to-end,
+    // not just the pure builder (a regression dropping it to [] would otherwise stay green).
+    expect(res.dataBlock).toContain('Category totals')
+    expect(res.dataBlock).toContain('- Income:') // Salary → Income (built-in rule)
+    // The deterministic in/out/net postscript rides beneath (echoed under the model answer downstream).
+    expect(res.postscript).toContain('2454.10') // net change, verbatim
+    expect(res.postscript).toContain(tr('skills.bankAnalysis.figureEchoNet', { amount: '2454.10', currency: 'EUR' }))
+    // Honest extract coverage + real citations pass straight through (source of truth = the extractor).
+    expect(res.coverage?.mode).toBe('extract')
+    expect(res.citations.length).toBeGreaterThan(0)
+  })
+
+  it('summary/total/reconcile/category asks STILL get the deterministic template (mode unset)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    for (const q of [
+      'summarize the cashflow',
+      'what is the total?',
+      'do the balances reconcile?',
+      'break down spending by category'
+    ]) {
+      const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
+      expect(res.mode, `"${q}" must keep the template`).toBeUndefined()
+      expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    }
+  })
+
+  it('format path (JSON): "as JSON" serializes the statement inline — rows + summary + balances, no model, no template', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'give me this statement as JSON')
+    )
+    expect(res.mode).toBeUndefined()
+    const block = /```json\n([\s\S]*?)\n```/.exec(res.answer)
+    expect(block, 'a json code block is present').not.toBeNull()
+    const parsed = JSON.parse(block![1]) as {
+      transactions: unknown[]
+      summary: { net: number }
+      openingBalance: number | null
+    }
+    expect(parsed.transactions).toHaveLength(2)
+    expect(parsed.summary.net).toBe(2454.1)
+    expect(parsed.openingBalance).toBe(2000)
+    // It did NOT fall through to the prose count template.
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+  })
+
+  it('format path (CSV): "as CSV" serializes the transaction rows inline with the honest CSV intro', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'show me the statement as CSV')
+    )
+    expect(res.mode).toBeUndefined() // the 0-model deterministic short-circuit, not grounded-data
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).toContain('date,valueDate,description,amount,currency,balanceAfter,sourcePage')
+    expect(res.answer).toContain('Grocery')
+    // The CSV intro states honestly that CSV omits the summary + balances (§3.6-low precedent).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.formatIntroCsv'))
+  })
+
+  it('follow-up regression: a repeat "warum stimmen die Summen nicht?" is NOT the byte-identical template', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // A summary ask first — the deterministic template (the "byte-identical" answer users complained about).
+    const first = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    expect(first.mode).toBeUndefined()
+    // The explanatory follow-up (contains 'summe' but ASKS WHY) must route to grounded-data — the template
+    // can only PRINT figures, never explain — so the repeat intercept produces a DIFFERENT (model) answer.
+    const second = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'warum stimmen die Summen nicht?')
+    )
+    expect(second.mode).toBe('grounded-data')
+    expect(second.answer).not.toBe(first.answer)
+    expect(second.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+  })
+
+  it('grounded-data postscript carries the R5 date caveat when dates were read day-first with no evidence', async () => {
+    const db = freshDb()
+    // All-ambiguous dotted dates + a tying opening/closing → day-first applied with no evidence (R5).
+    const id = seedDoc(
+      db,
+      'Statement EUR\nOpening balance 2.000,00\n03.05.2026 Grocery -45,90 1.954,10\n' +
+        '04.06.2026 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
+    )
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'what was my biggest payment?')
+    )
+    expect(res.mode).toBe('grounded-data')
+    // Both the deterministic in/out/net echo AND the R5 caveat ride the postscript (R5 honesty preserved).
+    expect(res.postscript).toContain('2454.10')
+    expect(res.postscript).toContain(tr('skills.bankAnalysis.dateOrderCaveat'))
+  })
+})
+
 describe('analysis-handler registry', () => {
   it('register/get round-trips by install id; an unknown id returns undefined', () => {
     clearSkillAnalysisHandlers()

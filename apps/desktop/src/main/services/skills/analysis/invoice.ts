@@ -292,7 +292,12 @@ export function buildFormatAnswer(tr: Tr, format: OutputFormat, invoice: Invoice
       : format === 'xml'
         ? buildInvoiceXml(invoice)
         : lineItemsToCsv(invoice.lineItems)
-  const intro = tr('skills.invoiceAnalysis.formatIntro', { format: format.toUpperCase() })
+  // §3.6-low (W4): CSV carries the line items ONLY — the header + totals are omitted (they ride in
+  // JSON/XML), so the CSV intro says so honestly instead of the generic "the invoice as CSV" claim.
+  const intro =
+    format === 'csv'
+      ? tr('skills.invoiceAnalysis.formatIntroCsv')
+      : tr('skills.invoiceAnalysis.formatIntro', { format: format.toUpperCase() })
   return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\``
 }
 
