@@ -100,8 +100,17 @@ export const MAX_LINE_ITEMS = 10000
  *       fallback is now SIGN-AWARE (a credit-note "Gesamtbetrag -914 EUR" reads −914 instead of +914,
  *       honouring `parseAmount`'s leading/paren/trailing sign rules). Each changes the persisted totals/
  *       amounts on affected invoices, so stale v3 rows re-extract.
+ *   5 — skills-remediation R2 (audit §5.2 CRITICAL + §5.4): label matching is now STRUCTURAL — a totals/
+ *       header label matches only with a word boundary (`labelBoundaryOk`), so "Steuerberatung Jänner
+ *       500,00" is a line item, not a `taxTotal`; a totals label is honoured only when its remainder is
+ *       essentially just the figure (`isFillerOnly`), so "Netto-Miete Objekt 3 1.000,00" / "Total hours
+ *       consulting 40,00" stay line items; totals are LAST-WINS (a real totals block prints after the
+ *       items); the German summary vocabulary is extended (Summe/Gesamtsumme/Rechnungssumme/Endsumme/
+ *       Endbetrag) and a summary-line guard (`isSummaryLabelLine`) drops phantom "Summe" items; and header
+ *       matching no longer swallows a line that parses as a line item. Each can change the persisted
+ *       totals/line items on affected invoices, so stale v4 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 4
+export const INVOICE_EXTRACTOR_VERSION = 5
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -168,13 +177,82 @@ const DUE_LABELS = ['due date', 'fälligkeitsdatum', 'fällig', 'payment due', '
 const INVOICE_DATE_LABELS = ['invoice date', 'rechnungsdatum', 'datum', 'date']
 
 // Totals line labels — checked net → tax → gross so a bare "Total" lands as the gross total while
-// "Net Total" / "Gross Total" resolve to their own field (each matched at the line start).
-const NET_LABELS = ['net total', 'nettobetrag', 'netto', 'subtotal', 'zwischensumme', 'net amount']
+// "Net Total" / "Gross Total" resolve to their own field. Matched at the line start WITH a structural
+// boundary (`labelBoundaryOk`) so a label word can never match a longer word it merely prefixes —
+// `steuer` must NOT swallow a "Steuerberatung Jänner 500,00" line item (audit §5.2 CRITICAL). The German
+// summary vocabulary is extended (audit §5.4): a `Summe`/`Gesamtsumme`/`Rechnungssumme`/`Endsumme`/
+// `Endbetrag` line now resolves to a total instead of falling through to `parseLineItem` as a phantom item.
+const NET_LABELS = ['net total', 'net amount', 'nettobetrag', 'netto', 'subtotal', 'zwischensumme', 'summe netto']
 const TAX_LABELS = ['vat', 'mehrwertsteuer', 'umsatzsteuer', 'mwst', 'tax total', 'tax', 'steuer']
 const GROSS_LABELS = [
-  'gross total', 'gross amount', 'gesamtbetrag', 'rechnungsbetrag', 'gesamt', 'brutto', 'amount due',
-  'zu zahlen', 'zahlbetrag', 'total'
+  'gross total', 'gross amount', 'gesamtbetrag', 'rechnungsbetrag', 'rechnungssumme', 'gesamtsumme',
+  'endsumme', 'endbetrag', 'gesamt', 'brutto', 'amount due', 'zu zahlen', 'zahlbetrag', 'summe', 'total'
 ]
+
+/**
+ * Whether a label matched at a line's START ends on a STRUCTURAL word boundary — the character after the
+ * label is not a letter/digit that would make the label a mere PREFIX of a longer word. The audit §5.2
+ * CRITICAL fix: without it `steuer` (a TAX label) matched "Steuerberatung Jänner 500,00" and stole its
+ * 500 into `taxTotal`, deleting the line item and discarding the real totals block. A label that itself
+ * ends in a separator (`invoice #`) always matches — its word already ended, so a following digit
+ * ("Invoice #27") is expected, not a continuation. `line`/`label` are compared lowercased by the caller;
+ * only character CLASSES matter here, so case is irrelevant.
+ */
+function labelBoundaryOk(line: string, label: string): boolean {
+  if (line.length <= label.length) return true
+  const isWordChar = (c: string): boolean => /[\p{L}\p{N}]/u.test(c)
+  return !(isWordChar(label[label.length - 1]) && isWordChar(line[label.length]))
+}
+
+// Words that legitimately sit beside a total on a genuine totals/summary line — tax qualifiers, the tax/
+// total nouns, currency codes, "as of <date>" connectors, and articles. Removing every date / figure /
+// percent / currency symbol from a real totals line leaves ONLY these; any OTHER word means the line
+// carries a real description and is a LINE ITEM, not a total ("Netto-Miete Objekt 3 …", "Total hours …").
+const TOTALS_FILLER: ReadonlySet<string> = new Set([
+  // tax qualifiers
+  'inkl', 'incl', 'including', 'zzgl', 'plus', 'excl', 'exkl', 'excluding', 'ohne', 'vor', 'davon',
+  // tax / total nouns (a compound totals phrase — "Gesamt Netto Betrag")
+  'ust', 'mwst', 'vat', 'steuer', 'umsatzsteuer', 'mehrwertsteuer', 'tax', 'net', 'netto', 'brutto',
+  'gross', 'gesamt', 'summe', 'betrag', 'total', 'amount', 'sum', 'saldo', 'zwischensumme',
+  // "as of <date>" connectors on a balance/total line ("Gross total 390,00 EUR per 30.06.2026")
+  'per', 'am', 'zum', 'vom', 'as', 'of', 'dated', 'stand',
+  // articles / conjunctions
+  'der', 'die', 'das', 'den', 'des', 'und', 'and', 'the',
+  // currency codes (MONEY_RE strips symbols; a spaced ISO code survives as a bare word)
+  'eur', 'usd', 'gbp', 'chf', 'jpy', 'cad', 'aud', 'nzd', 'sek', 'nok', 'dkk', 'pln', 'czk', 'huf'
+])
+
+/**
+ * True when `text` — after its date / money / percent / currency-symbol tokens are removed — contains no
+ * SUBSTANTIVE word (only `TOTALS_FILLER`). This is the test that a labeled line is a genuine totals line
+ * and not a line item whose description merely begins with a totals word. Empty text is filler-only.
+ */
+function isFillerOnly(text: string): boolean {
+  const stripped = stripDateTokens(text)
+    .replace(MONEY_RE, ' ')
+    .replace(/\d[\d.,'%]*/g, ' ') // bare integers / percents / residual digit debris
+    .replace(/[€$£¥%()]/g, ' ')
+  const words = stripped
+    .split(/[\s.:;#/\\-]+/)
+    .map((w) => w.trim().toLowerCase())
+    .filter(Boolean)
+  return words.every((w) => TOTALS_FILLER.has(w))
+}
+
+// The union of all totals labels — a line whose DESCRIPTION (the text before its first figure) is ONLY
+// one of these (plus filler) is a statement SUMMARY line, never a line item. Mirrors the bank
+// `isBalanceLabelLine` drop (audit §5.4): it kills the phantom "Summe"/"Zwischensumme" items a summary
+// line becomes when `applyTotals` did not consume it (e.g. trailing debris sits after the figure).
+const SUMMARY_LABELS: readonly string[] = [...NET_LABELS, ...TAX_LABELS, ...GROSS_LABELS]
+
+/** Whether the line's description (text before its first figure) is only a boundary-matched summary label. */
+function isSummaryLabelLine(line: string): boolean {
+  const lower = line.toLowerCase()
+  const label = SUMMARY_LABELS.find((l) => lower.startsWith(l) && labelBoundaryOk(lower, l))
+  if (label === undefined) return false
+  const beforeFigure = line.slice(label.length).split(MONEY_RE)[0]
+  return isFillerOnly(beforeFigure)
+}
 
 const DATE_TOKEN_RE = /\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4}/
 const PERCENT_RE = /(\d+(?:[.,]\d+)?)\s*%/
@@ -212,11 +290,13 @@ function isFusedSpaceGroup(token: string): boolean {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 
-/** If `line` starts with one of `labels`, return the trimmed remainder (the value), else null. */
+/** If `line` starts with one of `labels` (WITH a structural boundary), return the trimmed remainder (the
+ *  value), else null. The boundary check (audit §5.2) keeps a header label from matching a longer word it
+ *  merely prefixes (`from` must not match "Fromage …"). */
 function labeledValue(line: string, labels: readonly string[]): string | null {
   const lower = line.toLowerCase()
   for (const label of labels) {
-    if (!lower.startsWith(label)) continue
+    if (!lower.startsWith(label) || !labelBoundaryOk(lower, label)) continue
     // Strip the label, then a RUN of separator chars (`.`/`:`/`#`/`-`) and surrounding whitespace. The
     // `.` matters for the abbreviated forms whose dot sits OUTSIDE the matched label — `INVOICE No.: 27`
     // ('invoice no' + `.: 27`) yielded a value of `.: 27` under the old single-`[:#-]?` strip; the run
@@ -225,10 +305,6 @@ function labeledValue(line: string, labels: readonly string[]): string | null {
     if (rest) return rest
   }
   return null
-}
-
-function startsWithAny(lower: string, labels: readonly string[]): boolean {
-  return labels.some((l) => lower.startsWith(l))
 }
 
 /** Parse the first ISO / dotted-slashed date token out of a value, or null. `order` is the per-document
@@ -320,47 +396,67 @@ function applyHeader(line: string, header: InvoiceHeader, order: DateOrder = 'dm
     if (!header.invoiceNumber) header.invoiceNumber = number
     return true
   }
+  // A date label consumes the line ONLY when a date actually parses from its value (audit §5.2): a line
+  // that merely BEGINS with a date word but carries a money-bearing description — `Due diligence review
+  // 2.000,00`, `Date storage fee 50,00` — parses no date, so it is NOT consumed here and falls through
+  // to `parseLineItem` as the line item it is (rather than being silently swallowed and dropped).
   const dueRaw = labeledValue(line, DUE_LABELS)
   if (dueRaw !== null) {
     const d = parseDateInText(dueRaw, order)
-    if (d && !header.dueDate) header.dueDate = d
-    return true
+    if (d) {
+      if (!header.dueDate) header.dueDate = d
+      return true
+    }
   }
   const dateRaw = labeledValue(line, INVOICE_DATE_LABELS)
   if (dateRaw !== null) {
     const d = parseDateInText(dateRaw, order)
-    if (d && !header.invoiceDate) header.invoiceDate = d
-    return true
+    if (d) {
+      if (!header.invoiceDate) header.invoiceDate = d
+      return true
+    }
   }
   return false
 }
 
-/** Apply a totals label to the line; returns true when the line WAS a totals line (consumed). */
+/**
+ * Apply a totals label to the line; returns true when the line WAS a totals line (consumed). A totals
+ * label matches only at the line start WITH a structural boundary (`labelBoundaryOk`), and ONLY when the
+ * remainder after it is essentially just the figure (`isFillerOnly`) — a boundary-matched label whose
+ * remainder still carries a real description ("Netto-Miete Objekt 3 1.000,00", "Total hours consulting
+ * 40,00") is a LINE ITEM and falls through to `parseLineItem` (returns false). Assignment is LAST-WINS —
+ * a later totals block overwrites an earlier one, since real invoices print the totals after the line
+ * items (audit §5.2). The figure itself is re-read over the whole line by `totalsMoney`.
+ */
 function applyTotals(line: string, totals: InvoiceTotals): boolean {
   const lower = line.toLowerCase()
+  const isTotalsLine = (labels: readonly string[]): boolean => {
+    const label = labels.find((l) => lower.startsWith(l) && labelBoundaryOk(lower, l))
+    return label !== undefined && isFillerOnly(line.slice(label.length))
+  }
   // net first, then tax, then gross (the bare "total" is a gross label — so "Net Total" wins as net).
-  if (startsWithAny(lower, NET_LABELS)) {
+  if (isTotalsLine(NET_LABELS)) {
     const v = totalsMoney(line)
-    if (v !== null && totals.netTotal === undefined) totals.netTotal = v
+    if (v !== null) totals.netTotal = v
     return true
   }
-  if (startsWithAny(lower, TAX_LABELS)) {
+  if (isTotalsLine(TAX_LABELS)) {
     const v = totalsMoney(line)
-    if (v !== null && totals.taxTotal === undefined) totals.taxTotal = v
+    if (v !== null) totals.taxTotal = v
     const rate = parsePercent(line)
-    if (rate !== null && totals.taxRatePercent === undefined) totals.taxRatePercent = rate
+    if (rate !== null) totals.taxRatePercent = rate
     return true
   }
-  if (startsWithAny(lower, GROSS_LABELS)) {
+  if (isTotalsLine(GROSS_LABELS)) {
     const v = totalsMoney(line)
     // A bare "Total" qualified by "(excl. tax)"/"net of tax" is the NET, not the gross (a very common
     // layout prints both "Total (excl. Tax)" and "Total (incl. Tax)"); the unqualified/"incl." total
     // stays gross. Without this, "Total (excl. Tax)" landed as the gross and the real gross was dropped.
     if (v !== null && EXCL_TAX_RE.test(lower)) {
-      if (totals.netTotal === undefined) totals.netTotal = v
+      totals.netTotal = v
       return true
     }
-    if (v !== null && totals.grossTotal === undefined) totals.grossTotal = v
+    if (v !== null) totals.grossTotal = v
     return true
   }
   return false
@@ -463,8 +559,17 @@ export function extractInvoice(
     for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
+      // Header first (it consumes a labeled date line — `Rechnungsdatum: 15.01.2026` — before the money
+      // scan below could misread the date's `15.01` as an amount). `applyHeader` no longer consumes a
+      // date-label line unless a date actually parses, so a line item that merely begins with a date word
+      // (`Due diligence review 2.000,00`) falls through instead of being swallowed (audit §5.2).
       if (applyHeader(line, header, dateOrder)) continue
+      // A boundary-matched totals label whose remainder is just the figure is a total; one that still
+      // carries a real description ("Netto-Miete Objekt 3 1.000,00", "Total hours consulting 40,00")
+      // falls through to `parseLineItem` and stays a line item (audit §5.2).
       if (applyTotals(line, totals)) continue
+      // A summary line whose description is only a totals label never becomes a phantom line item (§5.4).
+      if (isSummaryLabelLine(line)) continue
       const item = parseLineItem(line, documentCurrency, dateOrder)
       if (item) {
         lineItems.push(item)

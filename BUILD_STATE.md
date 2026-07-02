@@ -6,6 +6,33 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation R2: invoice/bank label & totals matching — branch `fix/skills-r2`,
+UNMERGED.** Second remediation phase (plan §R2; audit §5.2 CRITICAL + §5.4), on top of R1. Offline / pure /
+no new deps / no routing or answer change (R1 owns money regexes, R6 owns description cleanup). **Root cause
+(confirmed by executing the real module):** invoice totals/header labels matched as bare case-insensitive
+line-start **prefixes**, first-wins — so `steuer` swallowed **`Steuerberatung Jänner 500,00 EUR`** (its 500
+became `taxTotal`, the line item vanished, the real totals block was discarded), `netto`/`total` did the same
+to `Netto-Miete…`/`Total hours…`, missing German summary labels (`Summe`/`Gesamtsumme`/`Rechnungssumme`/
+`Endsumme`/`Endbetrag`) fell through to `parseLineItem` as phantom items with empty totals, and the bank
+balance gate recognised only `Kontostand per` (not `am`/`zum`). **Fix (tools/invoice.ts):** a **structural
+boundary** (`labelBoundaryOk` — the char after the label may not continue the word, so `steuer`⊄`Steuerberatung`
+but `Steuer:`/`Tax ` still match); a label is a **totals** line only when its remainder is essentially just the
+figure (`isFillerOnly` over a tax/currency/date-connector allowlist), else it **falls through to a line item**;
+totals are **last-block-wins** (real invoices print totals after the items); a **summary-line guard**
+(`isSummaryLabelLine`, mirror of the bank `isBalanceLabelLine`) drops label-only phantom items; NET += `summe
+netto`, GROSS += `summe`/`gesamtsumme`/`endsumme`/`rechnungssumme`/`endbetrag` (TAX unchanged); header
+date-labels now consume a line **only when a date parses** (so `Due diligence review 2.000,00` is a line item,
+while `Rechnungsdatum: 15.01.2026` — whose date `15.01` `MONEY_RE` would misread — is still consumed as a
+header because `applyHeader` stays first). **Bank (tools/bank-statement.ts):** `KONTOSTAND_LABELS` = `per`/`am`/
+`zum` (dual-role date-disambiguation + transaction-stream drop both honour all three). **Versions bumped 4→5**
+(both extractors) so stale rows re-extract; the two version-pin tests + the `isBankStatementStale` integration
+test updated. **Tests added (real modules, the audit's probe inputs):** invoice R2 block (`Steuerberatung`→item
+not taxTotal; `Netto-Miete`/`Total hours`/`Due diligence` stay items; `Steuer:`/`Tax` still totals; extended
+labels → totals + ZERO phantom items; last-block-wins; the full canonical Austrian invoice reconciles end to
+end); bank R2 block (`Kontostand am`/`zum` open/close balances + phantom-row drop). **Verified:** `npm test`
+green (2771 passed / 41 skipped), `npm run typecheck` clean. Docs: `known-limitations.md` (structural-label
+bullet + `Kontostand per/am/zum`); plan §0.2 R2 → `[x]`. Non-goals held. Branch left unmerged per plan §0._
+
 _2026-07-02 — **Skills remediation R1: Unicode normalization pre-pass + sign-aware bare-integer total —
 branch `fix/skills-r1`, UNMERGED.** First phase of the remediation plan (plan §R1; audit §5.3 + §5.7-low).
 Offline / pure / no new deps. **Root cause (confirmed by executing the real modules):** the money/row

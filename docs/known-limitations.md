@@ -410,9 +410,9 @@ password recovery — are documented in
   date sits in the statement's leftmost, densest date column — so a value-date (Valuta) column printed
   on a second baseline, with a foreign-currency reference amount hidden in its description, is no longer
   emitted as a spurious row (the Raiffeisen "Mein ELBA" over-extraction the gold set surfaced). A line
-  matching an opening/closing **balance label** (incl. `Kontostand per <date>`) is treated as a summary
-  and never counted as a transaction even when it carries a booking-column date + figure (it is read
-  only by the completeness gate). **Column clustering is still heuristic** (statements vary; an unusual
+  matching an opening/closing **balance label** (incl. `Kontostand per/am/zum <date>` — all three
+  prepositions, skills-remediation R2 §5.4) is treated as a summary and never counted as a transaction
+  even when it carries a booking-column date + figure (it is read only by the completeness gate). **Column clustering is still heuristic** (statements vary; an unusual
   column geometry can mis-read a row), so a **completeness gate** (D56, refined by **D56-R** 2026-06-25)
   classifies every answer into one of three outcomes. A **VERIFIED statement total** is presented **only
   when the printed opening + Σamounts == closing balance ties out** (a clean per-row running-balance chain
@@ -590,6 +590,20 @@ password recovery — are documented in
     bare-integer fallback keeps the SIGN (skills-remediation R1, audit §5.7-low):** a credit-note total
     printed without a decimal — `Gesamtbetrag -914 EUR` — now reads **−914** (a leading `-`/paren or a
     trailing minus around the integer is honoured via `parseAmount`), not the old +914. `INVOICE_EXTRACTOR_VERSION` → 4.
+  - **Invoice totals/header labels match STRUCTURALLY, not as bare prefixes (skills-remediation R2, audit
+    §5.2 CRITICAL + §5.4).** A label matched at a line start only when a word boundary follows it
+    (`labelBoundaryOk`), so the canonical Austrian tax-advisor line **`Steuerberatung Jänner 500,00 EUR`**
+    is no longer swallowed by the `steuer` prefix (which stole its 500 into `taxTotal`, deleted the line
+    item, and discarded the real totals block) — it is the line item it is. A label is treated as a
+    **totals** line only when its remainder is essentially just the figure (`isFillerOnly`): tax
+    qualifiers / currency / `%` may follow, but a real description ("Netto-Miete Objekt 3 1.000,00",
+    "Total hours consulting 40,00") means the line **falls through to `parseLineItem`** and stays a line
+    item; header matching likewise no longer swallows a money-bearing line (`Due diligence review 2.000,00`
+    — a date label only consumes when a date actually parses). Totals are **last-block-wins** (a real
+    invoice prints its totals after the items). The German summary vocabulary is extended — `Summe`,
+    `Gesamtsumme`, `Rechnungssumme`, `Endsumme`, `Endbetrag`, `summe netto` — and a summary-line guard
+    (`isSummaryLabelLine`, mirroring the bank `isBalanceLabelLine`) drops phantom "Summe" items so a
+    summary line never becomes a line item while the totals stay empty. `INVOICE_EXTRACTOR_VERSION` → 5.
   - **A trailing number is split as `quantity` only with corroboration (full-audit-2026-06-29-postmerge
     F8, invoice path).** A product-coded description (`iPhone 15`, `Calendar 2026`) used to have its
     trailing number greedily read as a quantity. The split now requires a **unit token** (`x`/`Stk`/`pcs`/…)

@@ -67,7 +67,7 @@
 | ID | Title | Prio | Deps | Size | Status |
 |----|-------|------|------|------|--------|
 | R1 | Character normalization + money sign fixes | P0 | — | S | [x] — `normalizeExtractionText` pre-pass at all money/row entry points (plain + geometry) + sign-aware bare-integer total; versions→4; 20 new tests. `fix/skills-r1` |
-| R2 | Invoice/bank label & totals matching | P0 | R1 | M | [ ] |
+| R2 | Invoice/bank label & totals matching | P0 | R1 | M | [x] — structural (`labelBoundaryOk`) + `isFillerOnly` totals gate kills the `Steuerberatung`→taxTotal theft; last-block-wins; `isSummaryLabelLine` guard; NET/GROSS German labels extended; header date-labels consume only when a date parses; bank `Kontostand am/zum`; versions→5; probe fixtures added. `fix/skills-r2` |
 | R3 | Stale-row runs + sepa prefilter demotion | P0 | — | S | [ ] |
 | R4 | Deterministic compare pair + scope-query consolidation | P0 | — | S | [ ] |
 | R5 | Date correctness (yy-dates, cross-year, ambiguous flag) | P0 | — | M | [ ] |

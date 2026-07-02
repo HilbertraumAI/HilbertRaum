@@ -630,3 +630,95 @@ describe('R1 — invoice Unicode normalization + sign-aware bare-integer total (
     expect(invoice.totals.grossTotal).toBe(914)
   })
 })
+
+// ---------------------------------------------------------------------------------------------------
+// R2 (skills-remediation, audit §5.2 CRITICAL + §5.4). Structural label matching (word boundary +
+// "remainder is just the figure"), last-totals-block-wins, the summary-line guard, and the extended
+// German totals vocabulary — all executing the REAL extractor over the audit's probe inputs.
+// ---------------------------------------------------------------------------------------------------
+describe('R2 — structural invoice label matching + last-block-wins + summary guard (audit §5.2 / §5.4)', () => {
+  it('§5.2 CRITICAL: "Steuerberatung Jänner 500,00 EUR" is a LINE ITEM, never a taxTotal', () => {
+    const inv = extractInvoice([chunk('Steuerberatung Jänner 500,00 EUR', 1)], 'EUR')
+    // BEFORE: `steuer` prefix-matched → 500 stolen into taxTotal, the item deleted. NOW the word boundary
+    // stops the mid-word match, so the line is the ordinary consulting line item it is.
+    expect(inv.totals.taxTotal).toBeUndefined()
+    expect(inv.lineItems).toEqual([{ description: 'Steuerberatung Jänner', lineTotal: 500, currency: 'EUR' }])
+  })
+
+  it('§5.2: a totals label whose remainder still carries a description stays a LINE ITEM', () => {
+    // Each begins with a totals word but has a real description after it → NOT a total (isFillerOnly fails).
+    expect(extractInvoice([chunk('Netto-Miete Objekt 3 1.000,00 EUR', 1)], 'EUR')).toMatchObject({
+      lineItems: [{ description: 'Netto-Miete Objekt 3', lineTotal: 1000, currency: 'EUR' }],
+      totals: {}
+    })
+    expect(extractInvoice([chunk('Total hours consulting 40,00 EUR', 1)], 'EUR')).toMatchObject({
+      lineItems: [{ description: 'Total hours consulting', lineTotal: 40, currency: 'EUR' }],
+      totals: {}
+    })
+    // "Due" is a header (due-date) label; header matching must not swallow a money-bearing line either.
+    expect(extractInvoice([chunk('Due diligence review 2.000,00 EUR', 1)], 'EUR')).toMatchObject({
+      lineItems: [{ description: 'Due diligence review', lineTotal: 2000, currency: 'EUR' }],
+      header: {}
+    })
+  })
+
+  it('§5.2: a genuine boundary-matched totals label still parses (no over-correction)', () => {
+    expect(extractInvoice([chunk('Steuer: 60,00 EUR', 1)], 'EUR')).toMatchObject({
+      totals: { taxTotal: 60 },
+      lineItems: []
+    })
+    expect(extractInvoice([chunk('Tax 60,00 EUR', 1)], 'EUR')).toMatchObject({
+      totals: { taxTotal: 60 },
+      lineItems: []
+    })
+  })
+
+  it('§5.4: extended German summary labels resolve to totals with ZERO phantom line items', () => {
+    const summe = extractInvoice([chunk('Summe 300,00 EUR', 1)], 'EUR')
+    expect(summe.totals.grossTotal).toBe(300)
+    expect(summe.lineItems).toEqual([])
+
+    const rsumme = extractInvoice([chunk('Rechnungssumme inkl. USt 360,00 EUR', 1)], 'EUR')
+    expect(rsumme.totals.grossTotal).toBe(360)
+    expect(rsumme.lineItems).toEqual([])
+
+    const endbetrag = extractInvoice([chunk('Endbetrag 360,00 EUR', 1)], 'EUR')
+    expect(endbetrag.totals.grossTotal).toBe(360)
+    expect(endbetrag.lineItems).toEqual([])
+  })
+
+  it('§5.2: the LAST totals block wins (a later gross overwrites an earlier one)', () => {
+    const inv = extractInvoice([chunk('Gesamtbetrag 100,00 EUR\nGesamtbetrag 250,00 EUR', 1)], 'EUR')
+    expect(inv.totals.grossTotal).toBe(250) // BEFORE: 100 (first-wins)
+  })
+
+  it('§5.2: the canonical Austrian tax-advisor invoice — probe rows stay items, totals from the real block', () => {
+    const TEXT = [
+      'Rechnung',
+      'Lieferant: Steuerberatung Muster GmbH',
+      'Rechnungsnummer: R-2026-001',
+      'Rechnungsdatum: 15.01.2026',
+      'Steuerberatung Jänner 500,00 EUR',
+      'Netto-Miete Objekt 3 1.000,00 EUR',
+      'Total hours consulting 40,00 EUR',
+      'Due diligence review 2.000,00 EUR',
+      'Summe netto 3.540,00 EUR',
+      'Umsatzsteuer 20% 708,00 EUR',
+      'Rechnungssumme inkl. USt 4.248,00 EUR'
+    ].join('\n')
+    const inv = extractInvoice([chunk(TEXT, 1)], 'EUR')
+    // All four probe rows are LINE ITEMS — none stolen into a total, none a phantom summary item.
+    expect(inv.lineItems.map((li) => li.description)).toEqual([
+      'Steuerberatung Jänner',
+      'Netto-Miete Objekt 3',
+      'Total hours consulting',
+      'Due diligence review'
+    ])
+    expect(inv.lineItems.map((li) => li.lineTotal)).toEqual([500, 1000, 40, 2000])
+    // Totals read from the real block below the items — and they reconcile end to end.
+    expect(inv.totals).toEqual({ netTotal: 3540, taxTotal: 708, taxRatePercent: 20, grossTotal: 4248 })
+    expect(validateInvoiceTotals(inv).reconciled).toBe(true)
+    // The vendor name that BEGINS with "Steuerberatung" is captured as the vendor, not read as a tax label.
+    expect(inv.header.vendor).toBe('Steuerberatung Muster GmbH')
+  })
+})

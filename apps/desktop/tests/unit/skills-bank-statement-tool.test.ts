@@ -197,6 +197,26 @@ describe('extractStatementBalances + isStatementComplete (completeness gate — 
     expect(extractStatementBalances([c])).toEqual({ openingBalance: 35037.04, closingBalance: 30647.07 })
   })
 
+  it('R2: recognizes `Kontostand am` / `Kontostand zum` as dual-role balance labels too (audit §5.4)', () => {
+    // `per` / `am` / `zum` are all in use across AT/DE banks; recognizing only `per` silently lost the
+    // completeness gate (and left phantom transactions) on an `am`/`zum` statement.
+    const am = chunk('Kontostand am 31.03.2025 35.037,04\n... rows ...\nKontostand am 23.06.2025 30.647,07')
+    expect(extractStatementBalances([am])).toEqual({ openingBalance: 35037.04, closingBalance: 30647.07 })
+    const zum = chunk('Kontostand zum 01.01.2026 1.000,00\n... rows ...\nKontostand zum 31.01.2026 2.500,50')
+    expect(extractStatementBalances([zum])).toEqual({ openingBalance: 1000, closingBalance: 2500.5 })
+  })
+
+  it('R2: an `am`/`zum` Kontostand line is dropped from the transaction stream, not read as a phantom row (§5.4)', () => {
+    const text = [
+      'Kontoauszug EUR',
+      '2026-01-02 Kaffeehaus -3,50 996,50',
+      'Kontostand am 31.01.2026 996,50'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(1) // the balance line is a summary, not a transaction
+    expect(rows[0]).toMatchObject({ description: 'Kaffeehaus', amount: -3.5 })
+  })
+
   it('a SINGLE `Kontostand per` line is CLOSING only — opening stays undefined (audit C-4)', () => {
     // One such line cannot bracket the period, so reading it as BOTH opening and closing (the old dual
     // listing) produced opening == closing → a false `contradicted`. Now it is the closing only, so the
@@ -334,14 +354,14 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
 })
 
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 4 — the R1 Unicode-normalization bump (audit §5.3)', () => {
+  it('is at 5 — the R2 Kontostand-label bump (audit §5.4)', () => {
     // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
-    // (skills-remediation) adds a shared `normalizeExtractionText` pre-pass at the plain-text entry points
-    // and normalizes geometry tokens in `rowTokens`, so a Unicode minus / no-break-space thousands
-    // separator / Swiss apostrophe now reads correctly — changing the persisted amounts/signs on affected
-    // statements. v3 (and older) rows MUST re-extract; `skills-run.test.ts` proves `isBankStatementStale`
-    // flags an out-of-date statement once this reads 4.
-    expect(BANK_EXTRACTOR_VERSION).toBe(4)
+    // (skills-remediation) added the `normalizeExtractionText` pre-pass (v4); R2 extends the dual-role
+    // balance label to `Kontostand am`/`Kontostand zum` (audit §5.4), so an `am`/`zum` statement's
+    // balances now feed the completeness gate and those lines drop from the transaction stream — changing
+    // the persisted balances/rows on affected statements. v4 (and older) rows MUST re-extract;
+    // `skills-run.test.ts` proves `isBankStatementStale` flags an out-of-date statement once this reads 5.
+    expect(BANK_EXTRACTOR_VERSION).toBe(5)
   })
 })
 

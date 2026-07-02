@@ -87,8 +87,13 @@ export const MAX_TRANSACTIONS = 10000
  *       no-break-space thousands separator (NBSP / narrow NBSP / figure space), or a Swiss U+2019 apostrophe
  *       group is read correctly — a `−45,90` debit now signs negative and a `1 234,56` (NBSP) no longer
  *       truncates to 234,56. Changes persisted amounts/signs on affected statements, so stale v3 rows re-extract.
+ *   5 — skills-remediation R2 (audit §5.4): the dual-role balance label now recognizes `Kontostand am` and
+ *       `Kontostand zum` alongside `Kontostand per` (all three prepositions are in use across AT/DE banks),
+ *       so an `am`/`zum` statement's opening/closing balances feed the §3.5 completeness gate and those
+ *       lines are dropped from the transaction stream instead of double-counting. Changes the persisted
+ *       balances (and row set) on affected statements, so stale v4 rows re-extract.
  */
-export const BANK_EXTRACTOR_VERSION = 4
+export const BANK_EXTRACTOR_VERSION = 5
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -211,15 +216,22 @@ function parseLine(
 // scan for the label, then read the LAST money token on that line (the figure trails the label, and a
 // date earlier on the line is skipped by taking the last token).
 
-// `kontostand per <date>` is the Raiffeisen "Mein ELBA" balance-line label: the statement prints the
-// OPENING balance as `Kontostand per <period-start>` and the CLOSING balance as `Kontostand per
-// <period-end>` — the SAME label for both. It therefore CANNOT be split by label alone, so it is kept
-// OUT of the opening/closing lists below and disambiguated by DATE in `extractStatementBalances` (audit
-// C-4): the earliest-dated line is the opening, the latest-dated is the closing; a lone such line is the
-// closing only. It still belongs to `BALANCE_LABELS` so the line is dropped from the transaction stream.
-// NOT "Aktueller Kontostand" (the top-of-document restatement of the closing value — it would corrupt
-// the opening).
-const KONTOSTAND_PER = 'kontostand per'
+// `kontostand per/am/zum <date>` is the Raiffeisen "Mein ELBA" (and several other AT/DE banks') balance-
+// line label: the statement prints the OPENING balance as `Kontostand per <period-start>` and the CLOSING
+// balance as `Kontostand per <period-end>` — the SAME label for both. It therefore CANNOT be split by
+// label alone, so it is kept OUT of the opening/closing lists below and disambiguated by DATE in
+// `extractStatementBalances` (audit C-4): the earliest-dated line is the opening, the latest-dated is the
+// closing; a lone such line is the closing only. It still belongs to `BALANCE_LABELS` so the line is
+// dropped from the transaction stream. The `per` / `am` / `zum` prepositions are all in use across banks
+// (audit §5.4): recognizing only `per` silently lost the completeness gate on an `am`/`zum` statement.
+// NOT "Aktueller Kontostand" (the top-of-document restatement of the closing value — it would corrupt the
+// opening).
+const KONTOSTAND_LABELS: readonly string[] = ['kontostand per', 'kontostand am', 'kontostand zum']
+
+/** Whether a lowercased line carries a dual-role `Kontostand per/am/zum` balance label. */
+function isKontostandLine(lower: string): boolean {
+  return KONTOSTAND_LABELS.some((l) => lower.includes(l))
+}
 
 /** Opening-balance label fragments (lowercased substrings), EN + DE for the de-AT target. */
 const OPENING_LABELS: readonly string[] = [
@@ -241,7 +253,7 @@ const CLOSING_LABELS: readonly string[] = [
  * opening/closing into Σamounts, breaking the completeness tie — so the extractor drops any line
  * matching a balance label; `extractStatementBalances` still reads those same lines for the gate.
  */
-const BALANCE_LABELS: readonly string[] = [...OPENING_LABELS, ...CLOSING_LABELS, KONTOSTAND_PER]
+const BALANCE_LABELS: readonly string[] = [...OPENING_LABELS, ...CLOSING_LABELS, ...KONTOSTAND_LABELS]
 
 function isBalanceLabelLine(lowerLine: string): boolean {
   return BALANCE_LABELS.some((l) => lowerLine.includes(l))
@@ -299,7 +311,7 @@ export function extractStatementBalances(
       const line = rawLine.trim()
       if (!line) continue
       const lower = line.toLowerCase()
-      if (lower.includes(KONTOSTAND_PER)) {
+      if (isKontostandLine(lower)) {
         // A dual-role label — never matched against the opening/closing lists; resolved by date below.
         const value = lastMoneyOnLine(line)
         if (value !== null) kontostand.push({ date: firstDateOnLine(line, dateOrder), value })
