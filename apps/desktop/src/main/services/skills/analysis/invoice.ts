@@ -136,6 +136,14 @@ function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
   return { header, lineItems, totals }
 }
 
+/** The persisted date-order provenance flag (R5, audit §5.7) — drives the one honest date caveat, or null. */
+function loadDateOrderInferred(db: Db, invoiceId: string): 'evidence' | 'default' | null {
+  const row = db
+    .prepare('SELECT date_order_inferred AS flag FROM invoices WHERE id = ?')
+    .get(invoiceId) as { flag: string | null } | undefined
+  return row?.flag === 'default' ? 'default' : row?.flag === 'evidence' ? 'evidence' : null
+}
+
 const MAX_CITATIONS = 12
 
 /** Cap the inline line-item listing (an invoice with hundreds of positions stays readable; the rest is
@@ -231,9 +239,14 @@ export function buildFormatAnswer(tr: Tr, format: OutputFormat, invoice: Invoice
  */
 export function buildInvoiceAnswer(
   tr: Tr,
-  data: { invoice: InvoiceInput; validation: InvoiceTotalsResult }
+  data: {
+    invoice: InvoiceInput
+    validation: InvoiceTotalsResult
+    /** The persisted date-order provenance (R5, audit §5.7). 'default' appends ONE honest date caveat. */
+    dateOrderInferred?: 'evidence' | 'default' | null
+  }
 ): string {
-  const { invoice, validation } = data
+  const { invoice, validation, dateOrderInferred } = data
   const { header, lineItems, totals } = invoice
   const hasTotals =
     totals.netTotal !== undefined || totals.taxTotal !== undefined || totals.grossTotal !== undefined
@@ -298,6 +311,9 @@ export function buildInvoiceAnswer(
   }
 
   lines.push('', tr('skills.invoiceAnalysis.caveat'))
+  // One honest date caveat (R5, audit §5.7): with no evidence of day- vs month-first, the invoice's dotted/
+  // slashed dates were read day-first (the de-AT default). A trailing note — never a figure.
+  if (dateOrderInferred === 'default') lines.push('', tr('skills.invoiceAnalysis.dateOrderCaveat'))
   return lines.join('\n')
 }
 
@@ -377,7 +393,11 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
       const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 
-      const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation })
+      const answer = buildInvoiceAnswer(ctx.tr, {
+        invoice,
+        validation,
+        dateOrderInferred: loadDateOrderInferred(db, invoiceId)
+      })
       const citations = buildInvoiceCitations(db, target.id, target.title)
       const coverage = computeCoverage(db, target.id)
       return { answer, citations, coverage }

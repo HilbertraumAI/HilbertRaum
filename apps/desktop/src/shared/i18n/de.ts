@@ -590,6 +590,13 @@ export const de: Record<keyof typeof en, string> = {
     'Der Auszug enthält keinen Anfangs- und Endsaldo, daher kann ich nicht bestätigen, dass das alle ' +
     'Buchungen sind — verstehen Sie sie als Summe der angezeigten Zeilen, nicht als geprüften Auszugssaldo. ' +
     'Nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+  // R5 (Audit §5.7): der eine ehrliche Datumshinweis — nur angehängt, wenn das Dokument keinen Hinweis auf
+  // tag- vs. monatszuerst gab und die Daten daher tagzuerst gelesen wurden (die de-AT-Voreinstellung).
+  // Assistenzstimme in DU-Form (Plan §0). Inhaltsfrei.
+  'skills.bankAnalysis.dateOrderCaveat':
+    'Ein Hinweis zu den Daten: Dieser Auszug zeigt nicht, ob sie tag- oder monatszuerst gemeint sind, daher ' +
+    'habe ich sie tagzuerst gelesen (Tag.Monat.Jahr) — ein Datum wie 03.05. kann also der 3. Mai oder der ' +
+    '5. März sein. Prüf jedes Datum, auf das es ankommt, am Dokument nach.',
   // Eine begrenzte Buchungsliste, damit „zeig mir die Buchungen“ beantwortbar ist (Beträge unverändert).
   'skills.bankAnalysis.transactionsHeading': 'Buchungen:',
   'skills.bankAnalysis.transactionItem': '- {date} · {description} · {amount} {currency}',
@@ -627,6 +634,12 @@ export const de: Record<keyof typeof en, string> = {
   'skills.invoiceAnalysis.caveat':
     'Diese Zahlen sind die auf der Rechnung gedruckten Beträge, gelesen über das ganze Dokument — ' +
     'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+  // R5 (Audit §5.7): der eine ehrliche Datumshinweis — nur angehängt, wenn die Rechnung keinen Hinweis auf
+  // tag- vs. monatszuerst gab. Assistenzstimme in DU-Form (Plan §0). Inhaltsfrei.
+  'skills.invoiceAnalysis.dateOrderCaveat':
+    'Ein Hinweis zu den Daten: Diese Rechnung zeigt nicht, ob sie tag- oder monatszuerst gemeint sind, daher ' +
+    'habe ich sie tagzuerst gelesen (Tag.Monat.Jahr) — ein Datum wie 03.05. kann also der 3. Mai oder der ' +
+    '5. März sein. Prüf jedes Datum, auf das es ankommt, am Dokument nach.',
 
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':

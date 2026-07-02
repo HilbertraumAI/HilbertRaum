@@ -175,6 +175,57 @@ describe('bank-statement analysis handler — applies() pre-flight (R2)', () => 
   })
 })
 
+describe('bank-statement analysis handler — date-order caveat (R5, §5.7)', () => {
+  // An all-ambiguous statement (every dotted date has BOTH fields ≤ 12): day-first is applied with NO
+  // evidence, so the answer must carry ONE honest date caveat. Opening + Σ == closing ⇒ a verified total.
+  const AMBIGUOUS =
+    'Statement EUR\nOpening balance 2.000,00\n03.05.2026 Grocery -45,90 1.954,10\n' +
+    '04.06.2026 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
+
+  it('appends the day-first caveat (en) when the document gives no date-order evidence', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, AMBIGUOUS)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    expect(res.answer).toContain(t('en', 'skills.bankAnalysis.dateOrderCaveat'))
+  })
+
+  it('appends the day-first caveat rendered in German (du-form) when tr is de', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, AMBIGUOUS)
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'),
+      tr: (k: MessageKey, p?: MessageParams) => t('de', k, p)
+    }
+    const res = await bankStatementAnalysisHandler.run!(ctx)
+    expect(res.answer).toContain(t('de', 'skills.bankAnalysis.dateOrderCaveat'))
+    expect(res.answer).not.toContain(' Sie ') // du-form: the new caveat never says Sie
+  })
+
+  it('adds NO caveat when the dates carry evidence (COMPLETE uses ISO dates ⇒ the guess is moot)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    expect(res.answer).not.toContain(t('en', 'skills.bankAnalysis.dateOrderCaveat'))
+  })
+
+  // Regression guard for the 4-digit-only ambiguity-sniff gap: a statement whose booking dates are all
+  // 2-digit-year (dd.mm.yy) — the exact cohort R5 newly parses — must still fire the day-first caveat. The
+  // ISO `Statement date` line supplies the year anchor (so the yy rows parse) but does NOT vote, so the yy
+  // booking dates are the ONLY order-ambiguous dates. Before the fix this answered with NO caveat.
+  const YY_AMBIGUOUS =
+    'Statement date 2026-01-31 EUR\nOpening balance 2.000,00\n03.05.26 Grocery -45,90 1.954,10\n' +
+    '04.06.26 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
+
+  it('appends the caveat on a dd.mm.yy statement whose only order-ambiguous dates are 2-digit-year', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, YY_AMBIGUOUS)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    // The yy rows parsed against the anchor (proving R5 extraction), AND the caveat fired (proving the fix).
+    expect(res.answer).toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
+    expect(res.answer).toContain(t('en', 'skills.bankAnalysis.dateOrderCaveat'))
+  })
+})
+
 describe('bank-statement analysis handler — run()', () => {
   it('exhaustive math: count + in/out/net totals computed from the extracted rows', async () => {
     const db = freshDb()

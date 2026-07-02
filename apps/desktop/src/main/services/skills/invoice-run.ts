@@ -174,8 +174,9 @@ async function runInvoiceExtractionInner(
       db.prepare(
         `INSERT INTO invoices
           (id, document_id, run_id, vendor, invoice_number, invoice_date, due_date, currency,
-           net_total, tax_total, tax_rate, gross_total, totals_reconciled, extractor_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+           net_total, tax_total, tax_rate, gross_total, totals_reconciled, extractor_version,
+           date_order_inferred, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`
       ).run(
         invoiceId,
         args.documentId,
@@ -190,6 +191,7 @@ async function runInvoiceExtractionInner(
         t.taxRatePercent ?? null,
         t.grossTotal ?? null,
         INVOICE_EXTRACTOR_VERSION,
+        invoice.dateOrderInferred ?? null,
         completedAt
       )
       const insertLi = db.prepare(

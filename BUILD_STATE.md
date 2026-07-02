@@ -6,6 +6,67 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation R5: date correctness (yy-dates, cross-year, ambiguous flag) — branch
+`fix/skills-r5`, UNMERGED.** Fifth remediation phase (plan §R5; audit §5.7 — the three date bullets), branched
+off `master` (R1–R4 are already merged there). Offline / pure / no new deps / no routing change; the ONLY
+answer change is one appended caveat line. **Root cause (§5.7, dd.mm.yy → zero rows):** the plain/CSV
+`parseDate` required a 4-digit year, so a `dd.mm.yy` (or bare `dd.mm.`) statement parsed EVERY row to null →
+zero transactions, while the geometry path already had safe century expansion. **Root cause (§5.7,
+cross-year):** the geometry path stamped ONE page/period year on every bare `dd.mm.` date, so December rows on
+a January-dated (year-forward) statement got the wrong year. **Root cause (§5.7-low, ambiguous dates):** an
+all-ambiguous document (every dotted field ≤ 12) was read day-first with NO caveat — a silent residual.
+**Fix (year completion):** `parseDate(token, order, anchor?)` now completes a 2-digit-year date (→ the
+anchor's century) and a BARE `dd.mm.` date (→ the anchor year) — but ONLY when a `DateAnchor` is supplied;
+without one, 2-digit/bare dates still DROP (drop-don't-guess pinned by an explicit zero-rows test). The
+regex requires the SECOND separator so a decimal price `28.12` is never read as a date. `inferDateAnchor`
+resolves the anchor = the FIRST fully-printed 4-digit-year date in the document (order-aware, mirrors the
+geometry `resolvePageAnchor`); a grouped amount (`1.234,56`) is never mistaken for one. **Fix (cross-year):**
+`rollAnchorYear` — a bare date whose month is ≥ 11 with an anchor month ≤ 2 rolls to the PREVIOUS year (mirror
+→ next year); a mid-year anchor never rolls. Applied symmetrically in the plain path and the geometry
+`toFullDate`. `resolvePageAnchor` now returns `{year, month}` (`resolvePageYear` kept as a `.year` wrapper for
+existing callers/tests); `reconstructPage` threads the anchor month, and `pdf.ts` carries `fallbackMonth`
+across pages so a page-1 period month rolls a page-3 December row. **Fix (ambiguous honesty, additive
+schema):** `date_order_inferred TEXT` on `bank_statements`+`invoices` (nullable, via `ensureColumn`).
+`inferDateOrderResult` reports `{order, inferred}`; the persisted flag is `'default'` **exactly when** the
+order was NOT fixed by a clean single-sided unambiguous vote AND an order-ambiguous dotted/slashed date was
+actually read — otherwise `'evidence'` (so a doc with only ISO / only unambiguous dates never caveats). This
+**folds** the plan's "'default' AND at least one dotted/slashed date parsed" condition into the single
+additive column (schema frozen — no per-row channel), so the answer fires the caveat iff the column reads
+`'default'`. `buildBankAnswer`/`buildInvoiceAnswer` append ONE localized caveat line (en + de, **du-form** per
+§0), loaded via a small `loadDateOrderInferred`. **Threading:** the anchor + order + flag flow from the two
+extract tools (`inferDateOrderResult` + `inferDateAnchor` computed once) through `extractTransactionRows`/
+`extractStatementBalances`/`parseLine`/`firstDateOnLine` and `extractInvoice`/`applyHeader`/`parseLineItem`/
+`parseDateInText`; the invoice `DATE_TOKEN_RE` (4-digit-year only) is deliberately NOT widened (non-goal), so
+the invoice anchor acts only on a bare/yy leading line-item date via the shared `splitLeadingDates`. **Data
+contract:** `ExtractTransactionsOutput.dateOrderInferred?` + `ExtractedInvoice.dateOrderInferred?` (optional,
+in `EXTRACT_OUTPUT_SCHEMA`/`INVOICE_SCHEMA`); persisted in `run.ts`/`invoice-run.ts`. **Versions:**
+`BANK_EXTRACTOR_VERSION` 5→6, `INVOICE_EXTRACTOR_VERSION` 5→6 (both output-affecting: completed dates + the new
+provenance field) — stale v5 rows re-extract via the A9/F5 path. **Non-goals held:** no other parser change;
+redaction date masking untouched (U2 owns it — `parseDate` with no anchor is byte-identical, so
+`redaction.ts` is unaffected). **Adversarial review fix (HIGH):** the multi-agent diff review caught a real
+honesty gap — `inferDateOrderResult`'s ambiguity sniff used regexes requiring a 4-digit year, so the
+`date_order_inferred='default'` flag (and thus the caveat) never fired on the very `dd.mm.yy` / bare cohort R5
+newly parses (a genuinely day-first-guessed `05.01.26` statement showed guessed dates with NO disclaimer, and
+a US `12/31/26` mis-defaulted to day-first → invalid → dropped every row). Fixed by loosening the ANCHORED
+`AMBIGUOUS_DATE_TOKEN_RE` to the optional-year shape `(?:\d{2}|\d{4})?` (the GLOBAL header-line form stays
+4-digit — bare/yy dates are money-classified, so they only reach the anchored leading-token path), which also
+corrects order inference for yy/bare US statements. Two MEDIUM test-coverage gaps the review flagged (invoice
+`parseLineItem` anchor completion; the geometry multi-page `fallbackMonth` carry) were closed with focused
+unit tests. **Tests (19 net-new):** `parseDate` anchor cases (yy→century, bare→year,
+Dec→prev-year + Jan→next-year rollover, mid-year no-roll, yy-not-rolled, bare-decimal rejected, mdy path);
+`inferDateAnchor` (first year+month, order-aware, null without one, amount-not-anchor); `inferDateOrderResult`
+(all-ambiguous→default, day>12→evidence, mdy→evidence, ISO-only→evidence); `extractTransactionRows` dd.mm.yy
+WITH anchor → all rows correct years, WITHOUT anchor → ZERO (explicit), cross-year 28.12.→prev-year; geometry
+`toFullDate` rollover + `resolvePageAnchor` + `reconstructPage` cross-year; caveat present (en + de, no "Sie")
+on bank AND invoice answers + evidence-doc carries none; version-expectation tests updated 5→6; PLUS the four
+review-driven regression tests (yy-only ambiguous → 'default' + order inference, caveat on a dd.mm.yy-only
+statement, invoice `parseLineItem` anchor completion, geometry `fallbackMonth` carry + mid-year no-roll
+control). **Verified:** `npm test` green (2816 passed / 41 skipped), `npm run typecheck` clean; adversarial
+multi-agent diff review (correctness / plan-fidelity / honesty-posture / test-rigor lenses, each finding
+independently verified — 4 confirmed, all addressed).
+Docs: `known-limitations.md` date-locale bullet rewritten (ambiguous-date residual is now caveated, not
+silent) + new yy/bare-anchor + cross-year bullet; plan §0.2 R5 → `[x]`. Branch left unmerged per plan §0._
+
 _2026-07-02 — **Skills remediation R4: deterministic compare pair + scope-query consolidation — branch
 `fix/skills-r4`, UNMERGED.** Fourth remediation phase (plan §R4; audit §5.1 HIGH + §4.6), branched off
 `fix/skills-r3`. Offline / pure / no new deps / no diff-algorithm or compare-budget change (W1 owns budgets).

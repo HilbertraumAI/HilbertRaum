@@ -103,6 +103,48 @@ const CLEAN = [
   'Gross total 144,00 EUR'
 ].join('\n')
 
+describe('invoice analysis handler — date-order caveat (R5, §5.7)', () => {
+  // An invoice whose LEADING delivery-date column is ORDER-AMBIGUOUS (both fields ≤ 12): day-first is
+  // applied with no evidence ⇒ the answer carries ONE honest date caveat. (The date must LEAD its line to
+  // vote — a labelled `Invoice date 03.05.2026` reads as a money-shaped `03.05` token, not a booking date.)
+  // The ISO-dated CLEAN carries no ambiguous date ⇒ no caveat. Totals are unchanged (the date is stripped).
+  const AMBIGUOUS = [
+    'Invoice number INV-001',
+    'Vendor Acme GmbH',
+    '03.05.2026 Widget 2 50,00 100,00',
+    'Gadget 1 20,00 20,00',
+    'Net total 120,00 EUR',
+    'VAT 20% 24,00 EUR',
+    'Gross total 144,00 EUR'
+  ].join('\n')
+
+  it('appends the day-first caveat (en) when the invoice gives no date-order evidence', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, AMBIGUOUS)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    expect(res.answer).toContain(t('en', 'skills.invoiceAnalysis.dateOrderCaveat'))
+  })
+
+  it('appends the caveat rendered in German (du-form) when tr is de', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, AMBIGUOUS)
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'what are the totals?'),
+      tr: (k: MessageKey, p?: MessageParams) => t('de', k, p)
+    }
+    const res = await invoiceAnalysisHandler.run!(ctx)
+    expect(res.answer).toContain(t('de', 'skills.invoiceAnalysis.dateOrderCaveat'))
+    expect(res.answer).not.toContain(' Sie ')
+  })
+
+  it('adds NO caveat when the invoice date is ISO (evidence — the day-first guess is moot)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    expect(res.answer).not.toContain(t('en', 'skills.invoiceAnalysis.dateOrderCaveat'))
+  })
+})
+
 describe('invoice analysis handler — applies() pre-flight (R2)', () => {
   it('applies on an analysis-shaped question over a single in-scope invoice', () => {
     const db = freshDb()

@@ -578,6 +578,12 @@ export const en = {
     'statement prints no opening or closing balance, so I can’t confirm those are every transaction — ' +
     'treat them as a sum of the rows shown, not a verified statement total. Nothing here is added up ' +
     'from prose or invented.',
+  // R5 (audit §5.7): the one honest date caveat, appended only when the document gave no evidence of day-
+  // vs month-first ordering and its dates were therefore read day-first (the de-AT default). Content-free.
+  'skills.bankAnalysis.dateOrderCaveat':
+    'A note on the dates: this statement gives no sign whether they’re day-first or month-first, so I read ' +
+    'them day-first (day.month.year) — a date like 03.05. could be 3 May or 5 March. Check any date that ' +
+    'matters against the document.',
   // A bounded transaction listing so "show me the transactions" is answerable (figures pass through verbatim).
   'skills.bankAnalysis.transactionsHeading': 'Transactions:',
   'skills.bankAnalysis.transactionItem': '- {date} · {description} · {amount} {currency}',
@@ -615,6 +621,12 @@ export const en = {
   'skills.invoiceAnalysis.caveat':
     'These figures are the invoice’s own printed amounts, read across the whole document — ' +
     'nothing here is added up from prose or invented.',
+  // R5 (audit §5.7): the one honest date caveat — appended only when the invoice gave no evidence of day-
+  // vs month-first ordering and its dates were therefore read day-first (the de-AT default). Content-free.
+  'skills.invoiceAnalysis.dateOrderCaveat':
+    'A note on the dates: this invoice gives no sign whether they’re day-first or month-first, so I read ' +
+    'them day-first (day.month.year) — a date like 03.05. could be 3 May or 5 March. Check any date that ' +
+    'matters against the document.',
 
   // Full-doc-skills Phase 3 (§3.2/D45): the refuse-partial notice. A tool skill can only answer
   // exhaustively over a FULLY-INDEXED document; a legacy/partly-chunked doc is refused (no partial

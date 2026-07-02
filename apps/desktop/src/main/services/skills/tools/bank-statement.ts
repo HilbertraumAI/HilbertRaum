@@ -9,13 +9,16 @@ import {
   csvField,
   detectCurrency,
   detectDocumentCurrency,
+  inferDateAnchor,
   inferDateOrder,
+  inferDateOrderResult,
   normalizeExtractionText,
   parseAmount,
   parseDate,
   splitLeadingDates,
   stripDateTokens,
   wordIncludes,
+  type DateAnchor,
   type DateOrder
 } from './money'
 
@@ -92,8 +95,14 @@ export const MAX_TRANSACTIONS = 10000
  *       so an `am`/`zum` statement's opening/closing balances feed the §3.5 completeness gate and those
  *       lines are dropped from the transaction stream instead of double-counting. Changes the persisted
  *       balances (and row set) on affected statements, so stale v4 rows re-extract.
+ *   6 — skills-remediation R5 (audit §5.7): date correctness. `parseDate` now completes a 2-digit-year
+ *       `dd.mm.yy` or a BARE `dd.mm.` date against the document year anchor (`inferDateAnchor`) — a
+ *       plain/CSV statement that prints `dd.mm.yy` dates extracted ZERO rows before; and cross-year
+ *       month-rollover assigns a December row on a January-anchored statement to the PREVIOUS year (both the
+ *       geometry `toFullDate` and the plain path). Changes the persisted transaction dates (and the row set,
+ *       since previously-dropped `dd.mm.yy` rows now parse) on affected statements, so stale v5 rows re-extract.
  */
-export const BANK_EXTRACTOR_VERSION = 5
+export const BANK_EXTRACTOR_VERSION = 6
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -105,7 +114,10 @@ const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
     currency: { type: 'string', pattern: '^[A-Z]{3}$' },
     // Statement-level opening/closing balances for the completeness gate (§3.5, D56) — optional.
     openingBalance: { type: 'number' },
-    closingBalance: { type: 'number' }
+    closingBalance: { type: 'number' },
+    // Whether the date ORDER was inferred from evidence or defaulted to day-first on ambiguous dates (R5,
+    // audit §5.7) — persisted and surfaced as one honest answer caveat. Optional.
+    dateOrderInferred: { type: 'string', enum: ['evidence', 'default'] }
   }
 }
 
@@ -126,6 +138,8 @@ export interface ExtractTransactionsOutput {
   openingBalance?: number
   /** The statement's printed CLOSING balance (Endsaldo / "balance carried forward"), if found. */
   closingBalance?: number
+  /** Whether the date order rests on evidence or defaulted to day-first on ambiguous dates (R5, §5.7). */
+  dateOrderInferred?: 'evidence' | 'default'
 }
 
 // ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
@@ -152,7 +166,8 @@ function parseLine(
   line: string,
   page: number | null,
   statementCurrency: string | null,
-  order: DateOrder = 'dmy'
+  order: DateOrder = 'dmy',
+  anchor?: DateAnchor | null
 ): { row: ExtractedTransaction; ambiguousAmount: boolean } | null {
   // Strip the leading DATE column(s) before the money scan (BL-1): the FIRST is the booking date, a
   // SECOND consecutive date token is the value date (Wertstellung/Valuta). Reading only the first token
@@ -160,7 +175,9 @@ function parseLine(
   // dropping the row (empty description) or mis-valuing it. `splitLeadingDates` consumes the whole leading
   // date run; the description then starts at the first non-date token. `order` is the per-document date
   // ordering (BL-N1), so a US `mm/dd/yyyy` booking date is recognised (not dropped) on a US statement.
-  const { dates, rest } = splitLeadingDates(line, order)
+  // `anchor` (R5) completes a 2-digit-year / bare leading date against the document's own year; without it
+  // such a date parses to null and the row is dropped (drop-don't-guess) exactly as before.
+  const { dates, rest } = splitLeadingDates(line, order, anchor)
   if (dates.length === 0) return null
   const date = dates[0]
   const matches = [...rest.matchAll(MONEY_RE)]
@@ -271,10 +288,11 @@ function lastMoneyOnLine(line: string): number | null {
   return parseAmount(matches[matches.length - 1][0])
 }
 
-/** The first whitespace-token on a line that parses as a date (ISO `YYYY-MM-DD`), or null. */
-function firstDateOnLine(line: string, order: DateOrder = 'dmy'): string | null {
+/** The first whitespace-token on a line that parses as a date (ISO `YYYY-MM-DD`), or null. `anchor` (R5)
+ *  completes a 2-digit-year / bare date against the document year; without it those parse to null as before. */
+function firstDateOnLine(line: string, order: DateOrder = 'dmy', anchor?: DateAnchor | null): string | null {
   for (const token of line.split(/\s+/)) {
-    const d = parseDate(token, order)
+    const d = parseDate(token, order, anchor)
     if (d) return d
   }
   return null
@@ -293,15 +311,20 @@ function firstDateOnLine(line: string, order: DateOrder = 'dmy'): string | null 
  */
 export function extractStatementBalances(
   chunks: DocumentChunkRead[],
-  order?: DateOrder
+  order?: DateOrder,
+  anchor?: DateAnchor | null
 ): {
   openingBalance?: number
   closingBalance?: number
 } {
   // R1 (audit §5.3): normalize Unicode side-doors before any money/date scan (mirrors extractTransactionRows).
   const texts = chunks.map((c) => normalizeExtractionText(c.text))
-  // Per-document date ordering (BL-N1) — so a US-ordered `Kontostand per <date>` line sorts correctly.
-  const dateOrder = order ?? inferDateOrder(texts.join('\n'))
+  // Per-document date ordering (BL-N1) — so a US-ordered `Kontostand per <date>` line sorts correctly. The
+  // year anchor (R5) is resolved here too (default) so a bare/2-digit balance-line date completes; when the
+  // caller passes both (the extract tool), the recompute is skipped.
+  const joined = texts.join('\n')
+  const dateOrder = order ?? inferDateOrder(joined)
+  const dateAnchor = anchor ?? inferDateAnchor(joined, dateOrder)
   let explicitOpening: number | undefined
   let explicitClosing: number | undefined
   // Every `Kontostand per <date>` line with its (parsed) period date — resolved to opening/closing below.
@@ -314,7 +337,7 @@ export function extractStatementBalances(
       if (isKontostandLine(lower)) {
         // A dual-role label — never matched against the opening/closing lists; resolved by date below.
         const value = lastMoneyOnLine(line)
-        if (value !== null) kontostand.push({ date: firstDateOnLine(line, dateOrder), value })
+        if (value !== null) kontostand.push({ date: firstDateOnLine(line, dateOrder, dateAnchor), value })
         continue
       }
       if (explicitOpening === undefined && OPENING_LABELS.some((l) => lower.includes(l))) {
@@ -427,14 +450,19 @@ export function isStatementComplete(args: {
 export function extractTransactionRows(
   chunks: DocumentChunkRead[],
   statementCurrency: string | null,
-  order?: DateOrder
+  order?: DateOrder,
+  anchor?: DateAnchor | null
 ): ExtractedTransaction[] {
   // R1 (audit §5.3): normalize Unicode side-doors (U+2212 minus family, NBSP thousands-space family,
   // U+2019 apostrophe) ONCE at the entry so every downstream regex (MONEY_RE, date scans) sees ASCII.
   const texts = chunks.map((c) => normalizeExtractionText(c.text))
   // Infer the document's date ordering ONCE over the whole (normalized) text (BL-N1) so a US-ordered
-  // statement parses mm/dd consistently across rows (no silent drop of day>12 rows, no wrong month).
-  const dateOrder = order ?? inferDateOrder(texts.join('\n'))
+  // statement parses mm/dd consistently across rows (no silent drop of day>12 rows, no wrong month). The
+  // year anchor (R5) — resolved here by default, or supplied by the extract tool — completes 2-digit / bare
+  // dates against the document's own year; without an anchor those rows drop exactly as before.
+  const joined = texts.join('\n')
+  const dateOrder = order ?? inferDateOrder(joined)
+  const dateAnchor = anchor ?? inferDateAnchor(joined, dateOrder)
   const parsed: { row: ExtractedTransaction; ambiguousAmount: boolean }[] = []
   for (let ci = 0; ci < chunks.length; ci++) {
     const chunk = chunks[ci]
@@ -444,7 +472,7 @@ export function extractTransactionRows(
       // A printed opening/closing balance line is a summary, not a transaction — skip it even though
       // it may carry a booking-column date + figure (it is read by `extractStatementBalances` instead).
       if (isBalanceLabelLine(line.toLowerCase())) continue
-      const p = parseLine(line, chunk.page, statementCurrency, dateOrder)
+      const p = parseLine(line, chunk.page, statementCurrency, dateOrder, dateAnchor)
       if (p) {
         parsed.push(p)
         if (parsed.length >= MAX_TRANSACTIONS) break
@@ -501,12 +529,15 @@ export const extractTransactionsTool: SkillTool = {
     // bare-amount rows AND the reported `output.currency`; per-row detection still tags figure-adjacent
     // foreign rows, so a genuinely-mixed statement still reaches the mixed/unverified path.
     const statementCurrency = detectDocumentCurrency(joined)
-    // Infer the document's date ordering ONCE and hand it to both extractors so they agree (BL-N1).
-    const dateOrder = inferDateOrder(joined)
-    const transactions = extractTransactionRows(chunks, statementCurrency, dateOrder)
-    const balances = extractStatementBalances(chunks, dateOrder)
+    // Infer the document's date ordering ONCE and hand it to both extractors so they agree (BL-N1). R5: also
+    // resolve the year ANCHOR once (2-digit / bare date completion + cross-year rollover) and record whether
+    // the order rests on evidence or defaulted to day-first on ambiguous dates (`dateOrderInferred`).
+    const { order: dateOrder, inferred: dateOrderInferred } = inferDateOrderResult(joined)
+    const dateAnchor = inferDateAnchor(joined, dateOrder)
+    const transactions = extractTransactionRows(chunks, statementCurrency, dateOrder, dateAnchor)
+    const balances = extractStatementBalances(chunks, dateOrder, dateAnchor)
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
-    const output: ExtractTransactionsOutput = { transactions }
+    const output: ExtractTransactionsOutput = { transactions, dateOrderInferred }
     if (statementCurrency) output.currency = statementCurrency
     if (balances.openingBalance !== undefined) output.openingBalance = balances.openingBalance
     if (balances.closingBalance !== undefined) output.closingBalance = balances.closingBalance

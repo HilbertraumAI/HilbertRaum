@@ -784,6 +784,12 @@ export function openDatabase(path: string): Db {
   // on every extraction; bumped whenever the line parser OR the geometry reconstruction changes output.
   // CONTENT-CLASS adjacent (a provenance int): never logged/audited/exported.
   ensureColumn(db, 'bank_statements', 'extractor_version', 'extractor_version INTEGER')
+  // Whether the statement's date ORDER rests on evidence or defaulted to day-first on ambiguous dates (R5,
+  // audit §5.7). Additive + nullable: NULL/'evidence' = the order is trustworthy or moot (no caveat);
+  // 'default' = day-first was applied to genuinely order-ambiguous dates with nothing in the document to
+  // justify it, so the deterministic answer appends ONE honest date caveat. A provenance flag (never a
+  // figure); CONTENT-CLASS adjacent — never logged/audited/exported.
+  ensureColumn(db, 'bank_statements', 'date_order_inferred', 'date_order_inferred TEXT')
   // The deterministic INVOICE extractor version (F5 — the same reuse/replace/staleness machinery as the
   // bank `extractor_version` above, mirrored for the second Tier-2 content class). Additive + nullable:
   // NULL = extracted before versioning → STALE, so the invoice analysis read-back RE-EXTRACTS (replacing
@@ -791,6 +797,9 @@ export function openDatabase(path: string): Db {
   // `INVOICE_EXTRACTOR_VERSION` on every extraction; bumped whenever the invoice parser changes output.
   // CONTENT-CLASS adjacent (a provenance int): never logged/audited/exported.
   ensureColumn(db, 'invoices', 'extractor_version', 'extractor_version INTEGER')
+  // The invoice date-order provenance flag (R5, audit §5.7 — mirror of `bank_statements.date_order_inferred`
+  // above). Additive + nullable; drives the same one-line honest date caveat on the invoice answer.
+  ensureColumn(db, 'invoices', 'date_order_inferred', 'date_order_inferred TEXT')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

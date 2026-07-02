@@ -480,14 +480,34 @@ password recovery — are documented in
     *second* field is 13–31) and no unambiguously EU-ordered one; otherwise the de-AT **day-first** default
     holds. So a US statement no longer **silently drops** day>12 rows or attaches a wrong month — BUT a
     document whose dates are **all** fully ambiguous (every field ≤ 12, e.g. only `03/05/2026`) is read with
-    the day-first default and a genuinely US value there reads as the wrong month. There is no per-row caveat
-    channel (the tool output schema is frozen), so this residual is silent; widening it needs the schema/UI
-    work deferred past Phase 1. The vote is **scoped by line kind (full-audit-2026-06-29 follow-up FIN-4)**:
-    a MONEY-bearing line (a transaction row) votes only on its **leading** date column(s), so a foreign-format
-    date in a payee MEMO can no longer flip the whole document's order (which used to silently day/month-swap
-    every dotted booking date); a MONEY-less header/label line (an invoice `Invoice date 06/15/2026`, a
-    statement period) still votes on any date it carries, so labeled US-invoice dates are detected. **Redaction
-    does not infer locale** (it stays day-first — see the redaction bullet's BL-N6 note).
+    the day-first default and a genuinely US value there reads as the wrong month. **This is no longer silent
+    (skills-remediation R5, audit §5.7):** the extractor records a statement-level `date_order_inferred`
+    flag (`'evidence'` | `'default'`, additive nullable column on `bank_statements`/`invoices`) — set to
+    `'default'` exactly when the order was NOT fixed by a clean unambiguous vote AND an order-ambiguous
+    dotted/slashed date was actually read — and the deterministic answer then appends **one honest caveat
+    line** ("this statement gives no sign whether the dates are day-first or month-first, so I read them
+    day-first…", en + de, du-form). The **residual** is that the caveat is document-level: there is still no
+    PER-ROW channel (the tool output schema is frozen), so a single ambiguous date among evidence-bearing
+    ones is read day-first without an individual flag. The vote is **scoped by line kind (full-audit-2026-06-29
+    follow-up FIN-4)**: a MONEY-bearing line (a transaction row) votes only on its **leading** date column(s),
+    so a foreign-format date in a payee MEMO can no longer flip the whole document's order (which used to
+    silently day/month-swap every dotted booking date); a MONEY-less header/label line (an invoice `Invoice
+    date 06/15/2026`, a statement period) still votes on any date it carries, so labeled US-invoice dates are
+    detected. **Redaction does not infer locale** (it stays day-first — see the redaction bullet's BL-N6 note).
+  - **Two-digit-year and bare dates complete against a document year anchor; cross-year statements roll over
+    (skills-remediation R5, audit §5.7).** A `dd.mm.yy` (2-digit year) or a BARE `dd.mm.` date now parses on
+    the plain/CSV path (previously `parseDate` dropped BOTH — a `dd.mm.yy` CSV statement extracted **zero
+    rows**) — but **only when the document supplies a fully-printed 4-digit-year date** as an anchor
+    (`inferDateAnchor`): the century is taken from the anchor for `yy`, and a bare date takes the anchor year.
+    Without such an anchor a 2-digit/bare date is still **DROPPED** (drop-don't-guess stands). A bare date
+    additionally gets **cross-year month-rollover**: a December/November row on a January/February-anchored
+    statement is assigned the **previous** year (the mirror case, the next year), so a statement whose period
+    spans year-end no longer stamps one page year on every bare date. This mirrors the geometry path's
+    `toFullDate`/`resolvePageAnchor` (which gained the same rollover). **Residual:** the anchor is the FIRST
+    fully-printed date in document order — a document whose first 4-digit-year date is in a foreign century
+    (an old memo date) would expand `yy` into that wrong century (the same first-date-wins risk the geometry
+    path already carries); and rollover keys only off the anchor month, so a genuinely multi-year listing with
+    no clear period anchor is not disambiguated per-row.
   - **The amount column is chosen by POSITION, not the first money-shaped token.** With a running balance
     present (≥2 figures on the row) the parser takes the **second-to-last** figure as the movement amount
     and the last as the balance; with one figure that figure is the amount. So a money-shaped reference in

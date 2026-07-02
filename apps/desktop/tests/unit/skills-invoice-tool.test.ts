@@ -120,6 +120,19 @@ describe('extractInvoice (conservative drops)', () => {
     expect(li?.unitPrice).toBeUndefined() // the date fragment is NOT mistaken for a unit price
   })
 
+  it('parseLineItem completes a 2-digit-year lead date column against a document anchor (R5, §5.7)', () => {
+    const anchor = { year: 2026, month: 1 }
+    // WITH the document anchor the yy lead date is recognized as a date column and stripped, so the clean
+    // description + line total parse (mirrors the bank BL-1 fix for the dd.mm.yy cohort R5 newly enables).
+    const withAnchor = parseLineItem('05.01.26 Consulting 120,00', 'EUR', 'dmy', anchor)
+    expect(withAnchor?.description).toBe('Consulting')
+    expect(withAnchor?.lineTotal).toBe(120)
+    // WITHOUT an anchor a yy lead date is not a date (drop-don't-guess), so it does NOT strip to the same
+    // clean item — the anchor is exactly what R5 threads through to make this parse. (Reverting the anchor
+    // arg in parseLineItem's splitLeadingDates call regresses `withAnchor` and fails the assertion above.)
+    expect(parseLineItem('05.01.26 Consulting 120,00', 'EUR')?.description).not.toBe('Consulting')
+  })
+
   it('does not mistake a header/totals line for a line item (no figure invented)', () => {
     // "Gross Total" is a totals label, so it never becomes a line item; an unlabeled prose line with
     // no money is dropped.

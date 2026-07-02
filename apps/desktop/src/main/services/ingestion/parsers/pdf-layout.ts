@@ -172,12 +172,29 @@ function inDatumColumn(x: number, datum: DatumColumn | null | undefined): boolea
 }
 
 /**
+ * Cross-year statement month-rollover (R5, audit §5.7): a BARE date (no printed year) belongs to the
+ * adjacent year when its month sits on the far side of a year boundary from the page/period anchor month —
+ * a Nov/Dec row on a Jan/Feb-anchored statement is the PREVIOUS year (the December-rows-on-a-January-
+ * statement bug), and the mirror case is the NEXT year. `anchorMonth` null/undefined (a page whose year came
+ * from a bare 4-digit header token, or a caller that passes none) ⇒ no rollover, the page year stands.
+ * PRIVATE copy of the skills-layer `money.ts` `rollAnchorYear` (kept in sync by hand — pdf-layout must not
+ * import the skills module, same wrong-direction-dependency rule as the duplicated `normalizeExtractionText`).
+ */
+function rollAnchorYear(month: number, year: number, anchorMonth: number | null | undefined): number {
+  if (anchorMonth == null) return year
+  if (month >= 11 && anchorMonth <= 2) return year - 1
+  if (month <= 2 && anchorMonth >= 11) return year + 1
+  return year
+}
+
+/**
  * Resolve a printed date token to a full `DD.MM.YYYY` string using the page-resolved `year` for the
  * bare/2-digit forms, or null when it cannot be resolved (no year for a bare date → the row is dropped,
- * not guessed). A 2-digit year is expanded into the century of the page year (or 2000s when unknown).
- * The output is exactly the `DD.MM.YYYY` shape `parseDate` already accepts — `parseDate` is untouched.
+ * not guessed). A 2-digit year is expanded into the century of the page year (or 2000s when unknown). A
+ * BARE date additionally applies cross-year month-rollover against `anchorMonth` (the page/period anchor
+ * month, R5). The output is exactly the `DD.MM.YYYY` shape `parseDate` already accepts — `parseDate` untouched.
  */
-export function toFullDate(token: string, year: number | null): string | null {
+export function toFullDate(token: string, year: number | null, anchorMonth?: number | null): string | null {
   const m = DATE_TOKEN_RE.exec(token)
   if (!m) return null
   const day = +m[1]
@@ -190,7 +207,7 @@ export function toFullDate(token: string, year: number | null): string | null {
     const century = year != null ? Math.floor(year / 100) * 100 : 2000
     resolvedYear = century + +m[3]
   } else if (year != null) {
-    resolvedYear = year
+    resolvedYear = rollAnchorYear(month, year, anchorMonth) // bare day.month → page year + cross-year rollover
   } else {
     return null // bare day.month with no page year — drop, don't guess
   }
@@ -331,9 +348,10 @@ export function detectDatumColumn(
 export function reconstructLine(
   row: readonly LayoutWord[],
   year: number | null,
-  datum?: DatumColumn | null
+  datum?: DatumColumn | null,
+  anchorMonth?: number | null
 ): string | null {
-  const parsed = parseTransactionRow(row, year, datum)
+  const parsed = parseTransactionRow(row, year, datum, anchorMonth)
   if (!parsed) return null
   return formatTransaction(parsed.date, parsed.description, parsed.money, parsed.currency)
 }
@@ -371,7 +389,8 @@ function formatTransaction(date: string, description: string[], money: string[],
 function parseTransactionRow(
   row: readonly LayoutWord[],
   year: number | null,
-  datum?: DatumColumn | null
+  datum?: DatumColumn | null,
+  anchorMonth?: number | null
 ): TransactionParse | null {
   const tokens = rowTokens(row)
   if (tokens.length === 0) return null
@@ -388,7 +407,7 @@ function parseTransactionRow(
       // mid-line label date, or a secondary date) is dropped — kept out of description so it is never
       // read as money, and never allowed to qualify the row as a transaction.
       if (leadDate === null && inDatumColumn(tok.x, datum)) {
-        const full = toFullDate(tok.str, year)
+        const full = toFullDate(tok.str, year, anchorMonth)
         if (full) leadDate = full
         // a date we cannot resolve (bare, no page year) is dropped — never guessed
       }
@@ -464,20 +483,30 @@ function continuationText(row: readonly LayoutWord[], datum?: DatumColumn | null
 }
 
 /**
- * Resolve the calendar year for a page from its words: prefer the year of the FIRST fully-printed
- * `DD.MM.YYYY` date anywhere on the page (the statement period or a fully-dated row), else a standalone
- * 4-digit year token in the page's TOP band (the header), else null. A null result means bare per-row
- * dates on this page cannot be completed and their rows are dropped (honesty) unless a document-level
- * fallback year is supplied by the caller.
+ * A page's resolved year ANCHOR — the year, plus the MONTH when it came from a fully-printed date (the
+ * cross-year rollover reference for bare dates, R5). `month` is null when the year came from a bare 4-digit
+ * header token (no month → no rollover).
  */
-export function resolvePageYear(words: readonly LayoutWord[]): number | null {
+export interface PageAnchor {
+  year: number
+  month: number | null
+}
+
+/**
+ * Resolve a page's year ANCHOR from its words (R5 generalisation of `resolvePageYear`): prefer the FIRST
+ * fully-printed `DD.MM.YYYY` date anywhere on the page (the statement period or a fully-dated row) — its year
+ * AND month — else a standalone 4-digit year token in the page's TOP band (the header, year only, month
+ * null), else null. A null result means bare per-row dates on this page cannot be completed and their rows
+ * are dropped (honesty) unless a document-level fallback is supplied by the caller.
+ */
+export function resolvePageAnchor(words: readonly LayoutWord[]): PageAnchor | null {
   for (const w of words) {
     for (const tok of w.str.split(/\s+/)) {
       const m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(tok)
       if (m) {
         const month = +m[2]
         const day = +m[1]
-        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return +m[3]
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return { year: +m[3], month }
       }
     }
   }
@@ -500,10 +529,19 @@ export function resolvePageYear(words: readonly LayoutWord[]): number | null {
   for (const w of words) {
     if (w.y < bandFloor) continue
     for (const tok of w.str.split(/\s+/)) {
-      if (YEAR_TOKEN_RE.test(tok)) return +tok
+      if (YEAR_TOKEN_RE.test(tok)) return { year: +tok, month: null }
     }
   }
   return null
+}
+
+/**
+ * Resolve the calendar year for a page — the year of {@link resolvePageAnchor}, or null. Kept as the narrow
+ * exported entry point that predates R5's month-aware anchor (unit tests + the "carry the year forward"
+ * caller depend on it).
+ */
+export function resolvePageYear(words: readonly LayoutWord[]): number | null {
+  return resolvePageAnchor(words)?.year ?? null
 }
 
 /** Default baseline tolerance (PDF points) for grouping words into one visual row. */
@@ -522,6 +560,12 @@ export interface ReconstructOptions {
    * usually prints the year only on page 1). When the page resolves its own year that wins.
    */
   fallbackYear?: number | null
+  /**
+   * The document-level fallback anchor MONTH (cross-year rollover reference, R5) for pages whose own header
+   * carries no fully-printed date — usually the statement PERIOD month from page 1. When the page resolves
+   * its own dated anchor, that month wins. Undefined/null ⇒ no rollover on that page (the year stands).
+   */
+  fallbackMonth?: number | null
   /** x gap (points) separating columns when resolving the booking-date column. Defaults to {@link DEFAULT_COLUMN_GAP}. */
   columnGap?: number
 }
@@ -531,21 +575,27 @@ export interface ReconstructResult {
   text: string
   /** The year resolved for this page (for the caller to carry forward as the next page's fallback). */
   year: number | null
+  /** The anchor MONTH resolved for this page (R5), or null — carried forward as the next page's fallback. */
+  month: number | null
 }
 
 /**
- * Reconstruct a page's layout-preserved text from its positioned words. Resolves the page year (own
- * header first, then the caller's document-level fallback), clusters rows, and emits one clean
- * transaction line per row. Returns the joined text plus the resolved year so the caller can thread it
- * onto subsequent pages.
+ * Reconstruct a page's layout-preserved text from its positioned words. Resolves the page year+month anchor
+ * (own header first, then the caller's document-level fallback), clusters rows, and emits one clean
+ * transaction line per row. Returns the joined text plus the resolved year+month so the caller can thread
+ * them onto subsequent pages.
  */
 export function reconstructPage(
   words: readonly LayoutWord[],
   opts: ReconstructOptions = {}
 ): ReconstructResult {
   const tol = opts.yTolerance ?? DEFAULT_ROW_TOLERANCE
-  const ownYear = resolvePageYear(words)
-  const year = ownYear ?? opts.fallbackYear ?? null
+  const ownAnchor = resolvePageAnchor(words)
+  const year = ownAnchor?.year ?? opts.fallbackYear ?? null
+  // The rollover month follows the page's OWN dated anchor when it has one; a page that resolved only a bare
+  // header YEAR (month null) falls back to the carried period month (page 1's period month applies to a
+  // page-3 December row), else null → no rollover.
+  const anchorMonth = ownAnchor?.month ?? opts.fallbackMonth ?? null
   const rows = clusterRows(words, tol)
   // Resolve the booking-date column from the page's date geometry first, so `reconstructLine` can
   // reject a row whose only date is a Valuta column or a mid-line label date (§3.1.3).
@@ -575,7 +625,7 @@ export function reconstructPage(
   }
 
   for (const row of rows) {
-    const parse = parseTransactionRow(row, year, datum)
+    const parse = parseTransactionRow(row, year, datum, anchorMonth)
     if (parse) {
       flush()
       pending = { parse, continuation: [], absorbed: 0 }
@@ -599,5 +649,5 @@ export function reconstructPage(
     if (raw) lines.push(raw)
   }
   flush()
-  return { text: lines.join('\n'), year }
+  return { text: lines.join('\n'), year, month: anchorMonth }
 }

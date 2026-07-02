@@ -228,11 +228,50 @@ function isValidYmd(y: number, m: number, d: number): boolean {
  */
 export type DateOrder = 'dmy' | 'mdy'
 
-// A dotted/slashed `nn[./]nn[./]yyyy` token (ISO `yyyy-mm-dd` is unambiguous, so excluded). Used ONLY to
-// sniff the document's date ordering in `inferDateOrder` — never to validate a date. Two forms: ANCHORED
-// (a whole leading token, for a transaction row's booking-date column) and GLOBAL (any date on a money-
-// less header/label line).
-const AMBIGUOUS_DATE_TOKEN_RE = /^(\d{1,2})[./](\d{1,2})[./]\d{4}$/
+/**
+ * A document-level YEAR anchor for completing dates that print no 4-digit year (R5, audit §5.7). It is the
+ * first fully-printed `dd.mm.yyyy` / ISO date in the document (`inferDateAnchor`), and it supplies:
+ *  - the CENTURY for a 2-digit year `dd.mm.yy` (→ `century + yy`), and
+ *  - the YEAR + MONTH for a BARE `dd.mm.` date, whose year is chosen by cross-year month-rollover
+ *    (`rollAnchorYear`): a December row on a January-anchored statement is the PREVIOUS year.
+ * Without an anchor `parseDate` keeps DROPPING 2-digit/bare dates (drop-don't-guess stands, §22-D1). This
+ * ports the geometry path's `toFullDate`/`resolvePageAnchor` behaviour to the plain/CSV path (which had none
+ * — a `dd.mm.yy` CSV statement extracted ZERO rows).
+ */
+export interface DateAnchor {
+  year: number
+  /** The anchor date's month (1–12) — the cross-year rollover reference. */
+  month: number
+}
+
+/**
+ * The result of `inferDateOrderResult`: the chosen order plus WHETHER that choice rests on evidence. The
+ * `inferred` flag is persisted (`bank_statements`/`invoices`.`date_order_inferred`) and drives the answer's
+ * one honest date caveat. It is `'default'` — the caveat-worthy state — ONLY when the order was NOT cleanly
+ * established by an unambiguous date AND the document actually carries an order-AMBIGUOUS dotted/slashed
+ * date (both fields ≤ 12), whose reading therefore depended on the day-first guess. A document with only
+ * ISO or only unambiguous dates is `'evidence'` (the day-first guess changed nothing), so the caveat never
+ * fires spuriously. (The single additive column thus encodes exactly "should the day-first caveat show?".)
+ */
+export interface DateOrderResult {
+  order: DateOrder
+  inferred: 'evidence' | 'default'
+}
+
+// A dotted/slashed `nn[./]nn[./](yy|yyyy)?` token (ISO `yyyy-mm-dd` is unambiguous, so excluded). Used ONLY
+// to sniff the document's date ordering AND its order-ambiguity in `inferDateOrderResult` — never to
+// validate a date. Two forms: ANCHORED (a whole leading token, for a transaction row's booking-date column)
+// and GLOBAL (any date on a money-less header/label line).
+//
+// The ANCHORED form accepts an OPTIONAL 2-digit / absent year (R5, audit §5.7): the year field mirrors
+// `parseDate`'s `(\d{2}|\d{4})?`, keeping the SECOND separator required (so a decimal `28.12` is never a
+// date). Without this, the `dd.mm.yy` / bare `dd.mm.` dates R5 newly PARSES (day-first) would never register
+// in the vote — so a genuinely day-first-GUESSED statement would neither infer the right order (a US
+// `12/31/26` row) nor flag `date_order_inferred='default'` (the honesty caveat would silently miss the exact
+// cohort it protects). The GLOBAL form stays 4-digit-year: a bare/2-digit date's `dd.mm` is money-shaped, so
+// it is classified as a transaction row and only ever reaches the ANCHORED leading-token path — a money-LESS
+// header/label line that carries a date carries a fully-printed 4-digit year (an invoice `Invoice date …`).
+const AMBIGUOUS_DATE_TOKEN_RE = /^(\d{1,2})[./](\d{1,2})[./](?:\d{2}|\d{4})?$/
 const AMBIGUOUS_DATE_GLOBAL_RE = /\b(\d{1,2})[./](\d{1,2})[./]\d{4}\b/g
 
 /**
@@ -265,9 +304,23 @@ const AMBIGUOUS_DATE_GLOBAL_RE = /\b(\d{1,2})[./](\d{1,2})[./]\d{4}\b/g
  * discrepancy is recorded in architecture.md §24 so it is not re-litigated.
  */
 export function inferDateOrder(text: string): DateOrder {
+  return inferDateOrderResult(text).order
+}
+
+/**
+ * Like `inferDateOrder`, but also reports whether the day-first/month-first choice rests on EVIDENCE or on
+ * the conservative DEFAULT (R5, audit §5.7-low — ambiguous-date honesty). The `inferred` flag is persisted
+ * and drives the answer's single date caveat (see {@link DateOrderResult}). It is `'default'` only when the
+ * order was NOT determined by a clean single-sided unambiguous vote AND at least one order-ambiguous
+ * dotted/slashed date (both fields ≤ 12) was present — the exact case where the reader silently applied
+ * day-first with nothing in the document to justify it.
+ */
+export function inferDateOrderResult(text: string): DateOrderResult {
   let us = 0
   let eu = 0
+  let ambiguous = 0
   const vote = (a: number, b: number): void => {
+    if (a <= 12 && b <= 12) ambiguous++ // both fields could be the month ⇒ order-ambiguous (needs the guess)
     if (b > 12 && b <= 31 && a <= 12) us++ // second field can only be a day ⇒ month-first
     else if (a > 12 && a <= 31 && b <= 12) eu++ // first field can only be a day ⇒ day-first
   }
@@ -287,25 +340,88 @@ export function inferDateOrder(text: string): DateOrder {
       for (const m of line.matchAll(AMBIGUOUS_DATE_GLOBAL_RE)) vote(+m[1], +m[2])
     }
   }
-  return us > 0 && eu === 0 ? 'mdy' : 'dmy'
+  const order: DateOrder = us > 0 && eu === 0 ? 'mdy' : 'dmy'
+  // Clean single-sided evidence (exactly one side voted) ⇒ 'evidence'. Otherwise the order is the de-AT
+  // DEFAULT (no unambiguous dates, or a self-contradictory mix); flag it 'default' — caveat-worthy — only
+  // if an order-ambiguous date was actually read, so a doc with only ISO/unambiguous dates never caveats.
+  const cleanEvidence = (us > 0) !== (eu > 0)
+  const inferred: 'evidence' | 'default' = !cleanEvidence && ambiguous > 0 ? 'default' : 'evidence'
+  return { order, inferred }
+}
+
+// The first fully-printed 4-digit-year date anywhere in the document (dotted/slashed or ISO), used as the
+// year ANCHOR for completing 2-digit / bare dates in `parseDate` (R5). `(?<!\d)`/`(?!\d)` pin the match to
+// a clean numeric boundary so it can't start mid-digit-run; the alternation is BOUNDED (fixed digit
+// counts), so the scan stays linear. A grouped amount like `1.234,56` is NOT matched (its tail is a
+// 2-digit minor unit, not a 4-digit year).
+const FULL_YEAR_DATE_SCAN_RE = /(?<!\d)\d{1,2}[./]\d{1,2}[./]\d{4}(?!\d)|(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)/g
+
+/**
+ * Infer the document's YEAR anchor (R5, audit §5.7) — the year+month of the FIRST fully-printed 4-digit-year
+ * date in the document, order-aware so the month is read per the document's own `dmy`/`mdy` ordering. Mirrors
+ * the geometry path's `resolvePageAnchor` (first full date wins). Returns null when the document prints no
+ * 4-digit-year date at all — then `parseDate` keeps dropping 2-digit/bare dates (drop-don't-guess).
+ */
+export function inferDateAnchor(text: string, order: DateOrder = 'dmy'): DateAnchor | null {
+  for (const m of text.matchAll(FULL_YEAR_DATE_SCAN_RE)) {
+    const iso = parseDate(m[0], order)
+    if (iso) {
+      const [y, mo] = iso.split('-')
+      return { year: +y, month: +mo }
+    }
+  }
+  return null
+}
+
+/**
+ * Cross-year statement month-rollover (R5, audit §5.7): a BARE date (no printed year) belongs to the
+ * adjacent year when its month sits on the far side of a year boundary from the document's anchor month — a
+ * Nov/Dec row on a Jan/Feb-anchored statement is the PREVIOUS year, and the mirror case (a Jan/Feb row on a
+ * Nov/Dec-anchored statement) is the NEXT year. A mid-year anchor (month 3–10), or a row month near the
+ * anchor, keeps the anchor year. Symmetric with the geometry path's private copy in `pdf-layout.ts` (which
+ * must not import this skills-layer module — same wrong-direction-dependency rule as `normalizeExtractionText`).
+ */
+function rollAnchorYear(month: number, anchor: DateAnchor): number {
+  if (month >= 11 && anchor.month <= 2) return anchor.year - 1
+  if (month <= 2 && anchor.month >= 11) return anchor.year + 1
+  return anchor.year
 }
 
 /**
  * Normalize a printed date to ISO `YYYY-MM-DD`, or null if unsupported/invalid. ISO passes through.
  * Dotted/slashed forms are read DAY-FIRST by default (the de-AT target locale); pass `order: 'mdy'` to
- * read them month-first (the US ordering inferred per-document by `inferDateOrder`, BL-N1). Two-digit
- * years are unsupported (dropped) rather than guessed.
+ * read them month-first (the US ordering inferred per-document by `inferDateOrder`, BL-N1).
+ *
+ * **Year completion (R5, audit §5.7 — port of the geometry path's `toFullDate`).** A full 4-digit-year date
+ * always parses. A 2-digit-year `dd.mm.yy` or a BARE `dd.mm.` date parses ONLY when an `anchor` is supplied
+ * (the document's own year, from `inferDateAnchor`): the century is taken from the anchor for `yy`, and a
+ * bare date takes the anchor year with cross-year month-rollover (`rollAnchorYear`). Without an anchor a
+ * 2-digit/bare date is DROPPED (drop-don't-guess, §22-D1) — exactly the prior behaviour, so every existing
+ * anchor-less call site is byte-identical. The second separator is REQUIRED (`28.12.`, not `28.12`) so a
+ * decimal price is never read as a date on the plain/CSV path.
  */
-export function parseDate(token: string, order: DateOrder = 'dmy'): string | null {
+export function parseDate(token: string, order: DateOrder = 'dmy', anchor?: DateAnchor | null): string | null {
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(token)
   if (iso) return isValidYmd(+iso[1], +iso[2], +iso[3]) ? token : null
-  const m = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(token)
+  const m = /^(\d{1,2})[./](\d{1,2})[./](\d{2}|\d{4})?$/.exec(token)
   if (m) {
     const f1 = +m[1]
     const f2 = +m[2]
-    const y = +m[3]
     const d = order === 'mdy' ? f2 : f1
     const mo = order === 'mdy' ? f1 : f2
+    const yRaw = m[3]
+    let y: number
+    if (yRaw !== undefined && yRaw.length === 4) {
+      y = +yRaw
+    } else if (anchor) {
+      if (yRaw !== undefined) {
+        y = Math.floor(anchor.year / 100) * 100 + +yRaw // 2-digit year → the anchor's century window
+      } else {
+        y = rollAnchorYear(mo, anchor) // bare date → the anchor year, with cross-year month-rollover
+      }
+    } else {
+      return null // 2-digit / bare year with no document anchor → drop, don't guess
+    }
     return isValidYmd(y, mo, d) ? `${y}-${pad2(mo)}-${pad2(d)}` : null
   }
   return null
@@ -328,7 +444,8 @@ export function parseDate(token: string, order: DateOrder = 'dmy'): string | nul
  * Conservative by construction: it stops at the first NON-date token, so a description is never consumed,
  * and it is capped at two dates (booking + value) so a date-shaped FIRST word of a description cannot eat
  * the whole row. `dates` is empty when the line does not begin with a date (the caller then drops it).
- * `order` (default day-first) is the per-document ordering from `inferDateOrder` (BL-N1).
+ * `order` (default day-first) is the per-document ordering from `inferDateOrder` (BL-N1). `anchor` (R5) is
+ * the document year anchor; without it a leading 2-digit/bare date parses to null and the run stops there.
  *
  * The money scanner's OTHER users (`lastMoneyOnLine` / balance / invoice-total readers) take the LAST
  * token, which a TRAILING date can corrupt — a balance line shaped `Endsaldo 1.234,56 EUR per 30.06.2026`
@@ -336,14 +453,18 @@ export function parseDate(token: string, order: DateOrder = 'dmy'): string | nul
  * Those readers therefore scrub ALL date tokens via `stripDateTokens` BEFORE the money scan (handling a
  * date at EITHER end), rather than splitting only leading dates here.
  */
-export function splitLeadingDates(line: string, order: DateOrder = 'dmy'): { dates: string[]; rest: string } {
+export function splitLeadingDates(
+  line: string,
+  order: DateOrder = 'dmy',
+  anchor?: DateAnchor | null
+): { dates: string[]; rest: string } {
   const dates: string[] = []
   let rest = line
   // Cap at two leading dates (booking + value) — a third date-shaped leading token is not a real column.
   while (dates.length < 2) {
     const m = /^(\S+)\s+(.*)$/.exec(rest)
     if (!m) break
-    const d = parseDate(m[1], order)
+    const d = parseDate(m[1], order, anchor)
     if (!d) break
     dates.push(d)
     rest = m[2]

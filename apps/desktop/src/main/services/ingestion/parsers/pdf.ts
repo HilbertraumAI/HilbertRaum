@@ -98,8 +98,10 @@ export const PdfParser: DocumentParser = {
       }
       // Layout mode (plan §3.1, D51): carry the document-level year forward across pages — a
       // multi-page statement usually prints the year only in the page-1 header, so later pages whose
-      // own header has none still resolve their bare DD.MM. dates.
+      // own header has none still resolve their bare DD.MM. dates. Carry the anchor MONTH the same way
+      // (R5) so cross-year rollover works on later pages (page-1 period month applies to a page-3 Dec row).
       let fallbackYear: number | null = null
+      let fallbackMonth: number | null = null
       for (let pageNumber = 1; pageNumber <= lastPage; pageNumber++) {
         const page = await doc.getPage(pageNumber)
         const content = await page.getTextContent()
@@ -125,8 +127,9 @@ export const PdfParser: DocumentParser = {
             const w = itemWord(item as TextItemLike)
             if (w) words.push(w)
           }
-          const { text, year } = reconstructPage(words, { fallbackYear })
+          const { text, year, month } = reconstructPage(words, { fallbackYear, fallbackMonth })
           if (year != null) fallbackYear = year
+          if (month != null) fallbackMonth = month
           const trimmed = text.trim()
           if (trimmed.length > 0) segments.push({ text: trimmed, pageNumber })
           continue

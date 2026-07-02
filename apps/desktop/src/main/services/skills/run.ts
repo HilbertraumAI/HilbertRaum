@@ -235,8 +235,8 @@ async function runBankExtractionInner(
       db.prepare(
         `INSERT INTO bank_statements
            (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance,
-            extractor_version, created_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`
+            extractor_version, date_order_inferred, created_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`
       ).run(
         statementId,
         args.documentId,
@@ -245,6 +245,7 @@ async function runBankExtractionInner(
         output.openingBalance ?? null,
         output.closingBalance ?? null,
         BANK_EXTRACTOR_VERSION,
+        output.dateOrderInferred ?? null,
         completedAt
       )
       const insertTx = db.prepare(

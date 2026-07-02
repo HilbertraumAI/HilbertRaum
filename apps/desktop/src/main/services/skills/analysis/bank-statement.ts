@@ -191,6 +191,14 @@ function loadStatementBalances(db: Db, statementId: string): { openingBalance?: 
   return out
 }
 
+/** The persisted date-order provenance flag (R5, audit §5.7) — drives the one honest date caveat, or null. */
+function loadDateOrderInferred(db: Db, statementId: string): 'evidence' | 'default' | null {
+  const row = db
+    .prepare('SELECT date_order_inferred AS flag FROM bank_statements WHERE id = ?')
+    .get(statementId) as { flag: string | null } | undefined
+  return row?.flag === 'default' ? 'default' : row?.flag === 'evidence' ? 'evidence' : null
+}
+
 const MAX_CITATIONS = 12
 
 interface ChunkRow {
@@ -341,9 +349,15 @@ export function buildBankAnswer(
      * rule pass / on-the-fly `categorizeRow`. Only meaningful when `categories` is non-null.
      */
     modelAssisted?: boolean
+    /**
+     * The persisted date-order provenance (R5, audit §5.7). When 'default' — day-first was applied to
+     * genuinely order-ambiguous dates with no evidence — ONE honest caveat line is appended. 'evidence'/
+     * null/absent adds nothing (the order is trustworthy or moot). Never a figure; a trailing note only.
+     */
+    dateOrderInferred?: 'evidence' | 'default' | null
   }
 ): string {
-  const { rows, summary, reconcile, categories, status, modelAssisted } = data
+  const { rows, summary, reconcile, categories, status, modelAssisted, dateOrderInferred } = data
   if (rows.length === 0) return tr('skills.bankAnalysis.empty')
 
   const lines: string[] = [tr('skills.bankAnalysis.count', { count: rows.length })]
@@ -434,6 +448,10 @@ export function buildBankAnswer(
   if (rows.length > MAX_LISTED_TRANSACTIONS) {
     lines.push(tr('skills.bankAnalysis.transactionsMore', { count: rows.length - MAX_LISTED_TRANSACTIONS }))
   }
+
+  // One honest date caveat (R5, audit §5.7): the document gave no evidence of day- vs month-first, so the
+  // dotted/slashed dates above were read day-first (the de-AT default). A trailing note — never a figure.
+  if (dateOrderInferred === 'default') lines.push('', tr('skills.bankAnalysis.dateOrderCaveat'))
 
   return lines.join('\n')
 }
@@ -541,7 +559,15 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         reconcile
       })
 
-      const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, status, modelAssisted })
+      const answer = buildBankAnswer(ctx.tr, {
+        rows,
+        summary,
+        reconcile,
+        categories,
+        status,
+        modelAssisted,
+        dateOrderInferred: loadDateOrderInferred(db, statementId)
+      })
       const citations = buildBankCitations(db, target.id, target.title, rows)
       const coverage = computeCoverage(db, target.id)
       return { answer, citations, coverage }

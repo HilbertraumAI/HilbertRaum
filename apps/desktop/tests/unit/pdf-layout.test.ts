@@ -4,6 +4,7 @@ import {
   detectDatumColumn,
   reconstructLine,
   reconstructPage,
+  resolvePageAnchor,
   resolvePageYear,
   toFullDate,
   DEFAULT_ROW_TOLERANCE,
@@ -73,6 +74,34 @@ describe('toFullDate (year resolution → full DD.MM.YYYY that parseDate accepts
 
   it('rejects an implausible month/day (so a dot-decimal amount is not read as a date)', () => {
     expect(toFullDate('12.50.', 2024)).toBeNull()
+  })
+
+  it('cross-year month-rollover for a BARE date (R5, §5.7)', () => {
+    // A December bare row on a January-anchored page belongs to the PREVIOUS year; the mirror case (a
+    // January row on a December-anchored page) is the NEXT year. A mid-year anchor never rolls.
+    expect(toFullDate('28.12.', 2026, 1)).toBe('28.12.2025')
+    expect(toFullDate('03.01.', 2025, 12)).toBe('03.01.2026')
+    expect(toFullDate('28.12.', 2026, 6)).toBe('28.12.2026') // mid-year anchor → no roll
+    expect(toFullDate('28.12.', 2026, null)).toBe('28.12.2026') // no anchor month (year-only header) → no roll
+    expect(toFullDate('28.12.', 2026)).toBe('28.12.2026') // arity-2 call unchanged
+    // A 2-digit-year date is explicit and is NOT rolled (rollover is bare-only).
+    expect(toFullDate('28.12.25', 2026, 1)).toBe('28.12.2025')
+  })
+})
+
+describe('resolvePageAnchor (R5 — year + rollover month)', () => {
+  it('returns the year AND month of the first fully-printed date', () => {
+    const words = [word('Statement period 05.01.2026 - 31.01.2026', 50, 800), word('28.12.', 50, 700)]
+    expect(resolvePageAnchor(words)).toEqual({ year: 2026, month: 1 })
+  })
+
+  it('returns month null for a header-band year token (no rollover reference)', () => {
+    const words = [word('Kontoauszug 2026', 50, 800), word('28.12.', 50, 700)]
+    expect(resolvePageAnchor(words)).toEqual({ year: 2026, month: null })
+  })
+
+  it('returns null when no year is anywhere on the page', () => {
+    expect(resolvePageAnchor([word('28.12.', 50, 700)])).toBeNull()
   })
 })
 
@@ -194,6 +223,39 @@ describe('reconstructPage (end-to-end on word boxes)', () => {
     for (const line of ['05.01.2024 Gehalt ACME 2.500,00 3.500,00', '06.01.2024 Miete -900,00 2.600,00']) {
       expect(parseDate(line.split(' ')[0])).not.toBeNull()
     }
+  })
+
+  it('cross-year (R5): a bare December row on a January-anchored statement resolves to the PREVIOUS year', () => {
+    const words: LayoutWord[] = [
+      // Period header supplies the year+month anchor ({2026, January}) — a phrase word, not a booking date.
+      word('Kontoauszug Zeitraum 05.01.2026 - 31.01.2026', 50, 800),
+      // A fully-dated January booking row establishes the booking-date column geometry.
+      word('05.01.', 50, 700),
+      word('Gehalt', 170, 700),
+      word('2.500,00', 440, 700),
+      // The bare December booking row in the SAME column — belongs to 2025, not the 2026 page year.
+      word('28.12.', 50, 680),
+      word('Miete', 170, 680),
+      word('-900,00', 440, 680)
+    ]
+    const { text, year, month } = reconstructPage(words)
+    expect(year).toBe(2026)
+    expect(month).toBe(1)
+    const lines = text.split('\n')
+    expect(lines).toContain('05.01.2026 Gehalt 2.500,00')
+    expect(lines).toContain('28.12.2025 Miete -900,00')
+    expect(text).not.toContain('28.12.2026')
+  })
+
+  it('cross-year (R5): the carried document-level fallbackMonth rolls a bare December row on a later page', () => {
+    // A later page with NO own dated anchor (only bare booking rows) uses the document-level fallbackMonth
+    // (page-1 period month) to roll a December row to the previous year — the multi-page carry pdf.ts threads.
+    const words: LayoutWord[] = [word('28.12.', 50, 700), word('Miete', 170, 700), word('-900,00', 440, 700)]
+    expect(reconstructPage(words, { fallbackYear: 2026, fallbackMonth: 1 }).text).toBe('28.12.2025 Miete -900,00')
+    // A mid-year carried month never rolls (control) — proves the roll is month-driven, not unconditional.
+    expect(reconstructPage(words, { fallbackYear: 2026, fallbackMonth: 6 }).text).toBe('28.12.2026 Miete -900,00')
+    // No carried month at all ⇒ no roll (the page year stands).
+    expect(reconstructPage(words, { fallbackYear: 2026 }).text).toBe('28.12.2026 Miete -900,00')
   })
 
   it('preserves opening/closing balance label lines (no date) for the completeness gate', () => {

@@ -154,13 +154,13 @@ describe('runBankExtraction (S11a)', () => {
     expect(cols).toEqual(expect.arrayContaining(['category_id', 'reconciled', 'confidence']))
   })
 
-  it('isBankStatementStale: an older statement is STALE now the extractor is at v5 (R2 Kontostand-label bump); current is fresh', async () => {
+  it('isBankStatementStale: an older statement is STALE now the extractor is at v6 (R5 date-correctness bump); current is fresh', async () => {
     // C-4 moved the version 1 → 2; the full-audit-2026-06-29 follow-up Phase 1 (FIN-1/3/4) moved it 2 → 3;
     // skills-remediation R1 (audit §5.3, Unicode normalization pre-pass) moved it 3 → 4; R2 (audit §5.4,
-    // `Kontostand am`/`zum` balance labels) moves it 4 → 5, so every statement an OLDER (v4…v1 / pre-
-    // versioning NULL) parser produced must re-extract via the A9 path. A fresh extraction is stamped at
-    // the current version → never stale.
-    expect(BANK_EXTRACTOR_VERSION).toBe(5)
+    // `Kontostand am`/`zum` balance labels) moved it 4 → 5; R5 (audit §5.7, anchor-gated year completion +
+    // cross-year rollover) moves it 5 → 6, so every statement an OLDER (v5…v1 / pre-versioning NULL) parser
+    // produced must re-extract via the A9 path. A fresh extraction is stamped at the current version → never stale.
+    expect(BANK_EXTRACTOR_VERSION).toBe(6)
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
     const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })

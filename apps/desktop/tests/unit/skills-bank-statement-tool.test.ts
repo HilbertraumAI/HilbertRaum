@@ -22,7 +22,12 @@ import {
   type ExtractTransactionsOutput,
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
-import { detectDocumentCurrency, inferDateOrder } from '../../src/main/services/skills/tools/money'
+import {
+  detectDocumentCurrency,
+  inferDateAnchor,
+  inferDateOrder,
+  inferDateOrderResult
+} from '../../src/main/services/skills/tools/money'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
 import { prefilterCategory } from '../../src/main/services/skills/categorizer'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
@@ -62,8 +67,67 @@ describe('bank-statement parser helpers', () => {
     expect(parseDate('31/01/2026')).toBe('2026-01-31')
     expect(parseDate('2026-13-01')).toBeNull() // bad month
     expect(parseDate('31.02.2026')).toBeNull() // Feb 31 doesn't exist
-    expect(parseDate('31.01.26')).toBeNull() // 2-digit year unsupported
+    expect(parseDate('31.01.26')).toBeNull() // 2-digit year unsupported WITHOUT a document anchor (R5)
     expect(parseDate('not-a-date')).toBeNull()
+  })
+
+  it('parseDate — anchor-gated 2-digit-year / bare completion + cross-year rollover (R5, §5.7)', () => {
+    const janAnchor = { year: 2026, month: 1 } // a January-anchored (period) statement
+    // No anchor ⇒ a 2-digit-year or bare date is DROPPED, exactly as before (drop-don't-guess).
+    expect(parseDate('05.01.26')).toBeNull()
+    expect(parseDate('28.12.')).toBeNull()
+    // 2-digit year ⇒ the anchor's century window.
+    expect(parseDate('05.01.26', 'dmy', janAnchor)).toBe('2026-01-05')
+    expect(parseDate('05.01.99', 'dmy', { year: 1998, month: 1 })).toBe('1999-01-05')
+    // Bare date ⇒ the anchor year; a December row on a January statement is the PREVIOUS year (rollover),
+    // and a January row on a December statement is the NEXT year.
+    expect(parseDate('15.06.', 'dmy', { year: 2026, month: 6 })).toBe('2026-06-15')
+    expect(parseDate('28.12.', 'dmy', janAnchor)).toBe('2025-12-28')
+    expect(parseDate('03.01.', 'dmy', { year: 2025, month: 12 })).toBe('2026-01-03')
+    // A 2-digit-year date is NOT rolled (its year is explicit); only bare dates roll.
+    expect(parseDate('28.12.25', 'dmy', janAnchor)).toBe('2025-12-28')
+    // A bare decimal (no SECOND separator) is never a date — a price stays a price.
+    expect(parseDate('28.12', 'dmy', janAnchor)).toBeNull()
+    // mdy anchor path: US 2-digit year completes month-first.
+    expect(parseDate('01.05.26', 'mdy', { year: 2026, month: 1 })).toBe('2026-01-05')
+  })
+
+  it('inferDateAnchor — first fully-printed year+month, order-aware, null without one (R5)', () => {
+    expect(inferDateAnchor('Kontoauszug Zeitraum 05.01.2026 - 31.01.2026\n28.12. Miete -900,00')).toEqual({
+      year: 2026,
+      month: 1
+    })
+    // Order-aware: a US mm/dd/yyyy anchor reads month-first.
+    expect(inferDateAnchor('Invoice date 03/15/2026', 'mdy')).toEqual({ year: 2026, month: 3 })
+    // No fully-printed 4-digit-year date ⇒ no anchor (a grouped amount is never mistaken for one).
+    expect(inferDateAnchor('28.12. Miete -900,00 2.500,00\n05.01. Gehalt 1.234,56')).toBeNull()
+  })
+
+  it('inferDateOrderResult — evidence vs the day-first default (R5, §5.7)', () => {
+    // All-ambiguous doc (every leading date field ≤ 12): day-first is applied with NO evidence ⇒ 'default'
+    // (caveat-worthy). The dates LEAD their money rows — the booking-column vote scope (FIN-4).
+    const ambiguous = inferDateOrderResult('03.05.2026 Grocery -45,90\n04.06.2026 Salary 2.500,00')
+    expect(ambiguous.order).toBe('dmy')
+    expect(ambiguous.inferred).toBe('default')
+    // An unambiguous leading date (a field > 12) fixes the order ⇒ 'evidence' (no caveat).
+    expect(inferDateOrderResult('31.01.2026 Grocery -45,90\n15.02.2026 Salary 2.500,00').inferred).toBe('evidence')
+    expect(inferDateOrderResult('12/31/2026 Grocery -45,90').order).toBe('mdy')
+    expect(inferDateOrderResult('12/31/2026 Grocery -45,90').inferred).toBe('evidence')
+    // Only ISO dates ⇒ the day-first guess is moot ⇒ 'evidence' (never a spurious caveat).
+    expect(inferDateOrderResult('2026-03-05 Coffee -3,50 100,00').inferred).toBe('evidence')
+  })
+
+  it('inferDateOrderResult — 2-digit-year / bare ambiguous dates also drive the flag (R5 fix, §5.7)', () => {
+    // The dd.mm.yy / bare cohort R5 newly PARSES (day-first) must register in the order sniff too — else a
+    // genuinely day-first-guessed statement neither infers the right order nor flags 'default' (the caveat
+    // would silently miss the exact rows it protects). yy rows leading money lines are order-ambiguous:
+    expect(inferDateOrderResult('03.05.26 Grocery -45,90\n04.06.26 Salary 2.500,00').inferred).toBe('default')
+    // A bare de-AT day>12 date is day-first EVIDENCE (28 can only be a day) — previously ignored entirely.
+    expect(inferDateOrderResult('28.12. Miete -900,00').order).toBe('dmy')
+    expect(inferDateOrderResult('28.12. Miete -900,00').inferred).toBe('evidence')
+    // A US mm/dd/yy row (second field > 12) is month-first evidence — previously mis-defaulted to dmy and
+    // then dropped every row (day 12, month 31 = invalid).
+    expect(inferDateOrderResult('12/31/26 Grocery -45,90').order).toBe('mdy')
   })
 
   it('parseAmount handles US + German separators, signs, parens, trailing minus', () => {
@@ -353,15 +417,47 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
   })
 })
 
+describe('extractTransactionRows — date correctness (R5, §5.7)', () => {
+  it('completes dd.mm.yy rows against a 4-digit anchor date in the document', () => {
+    const text = [
+      'Kontoauszug Zeitraum 01.01.2026 - 31.01.2026', // the 4-digit-year anchor
+      '05.01.26 Gehalt ACME 2.500,00 3.500,00',
+      '06.01.26 Miete -900,00 2.600,00'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].date).toBe('2026-01-05')
+    expect(rows[1].date).toBe('2026-01-06')
+  })
+
+  it('drops dd.mm.yy rows when the document has NO 4-digit anchor (posture preserved — asserted explicitly)', () => {
+    const text = ['05.01.26 Gehalt ACME 2.500,00 3.500,00', '06.01.26 Miete -900,00 2.600,00'].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(0) // no anchor ⇒ no guess ⇒ zero rows (the drop-don't-guess posture stands)
+  })
+
+  it('cross-year: a bare 28.12. row on a January-anchored statement gets the PREVIOUS year', () => {
+    const text = [
+      'Kontoauszug Zeitraum 01.01.2026 - 31.01.2026',
+      '05.01.2026 Gehalt ACME 2.500,00 3.500,00',
+      '28.12. Miete -900,00 2.600,00'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    const december = rows.find((r) => r.description.includes('Miete'))
+    expect(december?.date).toBe('2025-12-28') // NOT 2026-12-28 (the naive page-year stamp)
+  })
+})
+
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 5 — the R2 Kontostand-label bump (audit §5.4)', () => {
+  it('is at 6 — the R5 date-correctness bump (audit §5.7)', () => {
     // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
-    // (skills-remediation) added the `normalizeExtractionText` pre-pass (v4); R2 extends the dual-role
-    // balance label to `Kontostand am`/`Kontostand zum` (audit §5.4), so an `am`/`zum` statement's
-    // balances now feed the completeness gate and those lines drop from the transaction stream — changing
-    // the persisted balances/rows on affected statements. v4 (and older) rows MUST re-extract;
-    // `skills-run.test.ts` proves `isBankStatementStale` flags an out-of-date statement once this reads 5.
-    expect(BANK_EXTRACTOR_VERSION).toBe(5)
+    // (skills-remediation) added the `normalizeExtractionText` pre-pass (v4); R2 extended the dual-role
+    // balance label to `Kontostand am`/`Kontostand zum` (v5, audit §5.4); R5 completes 2-digit-year / bare
+    // dates against the document year anchor and applies cross-year month-rollover (audit §5.7), changing
+    // persisted transaction dates and the row set (previously-dropped `dd.mm.yy` rows now parse) on affected
+    // statements. v5 (and older) rows MUST re-extract; `skills-run.test.ts` proves `isBankStatementStale`
+    // flags an out-of-date statement once this reads 6.
+    expect(BANK_EXTRACTOR_VERSION).toBe(6)
   })
 })
 

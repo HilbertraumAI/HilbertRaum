@@ -5,12 +5,15 @@ import {
   csvField,
   detectCurrency,
   detectDocumentCurrency,
+  inferDateAnchor,
   inferDateOrder,
+  inferDateOrderResult,
   normalizeExtractionText,
   parseAmount,
   parseDate,
   splitLeadingDates,
   stripDateTokens,
+  type DateAnchor,
   type DateOrder
 } from './money'
 
@@ -58,6 +61,13 @@ export interface ExtractedInvoice {
   header: InvoiceHeader
   lineItems: InvoiceLineItem[]
   totals: InvoiceTotals
+  /**
+   * Whether the invoice's date ORDER rests on evidence or defaulted to day-first on ambiguous dates (R5,
+   * audit §5.7). A document-level provenance flag (not part of the invoice structure) — persisted to
+   * `invoices.date_order_inferred` and surfaced as one honest answer caveat. Optional so every downstream
+   * tool that takes an `InvoiceInput` (validate/export) simply ignores it.
+   */
+  dateOrderInferred?: 'evidence' | 'default'
 }
 
 /** What the extractor returns (and what every downstream tool takes as structured input). */
@@ -109,8 +119,14 @@ export const MAX_LINE_ITEMS = 10000
  *       Endbetrag) and a summary-line guard (`isSummaryLabelLine`) drops phantom "Summe" items; and header
  *       matching no longer swallows a line that parses as a line item. Each can change the persisted
  *       totals/line items on affected invoices, so stale v4 rows re-extract.
+ *   6 — skills-remediation R5 (audit §5.7): date correctness. `parseDate` now completes a 2-digit-year /
+ *       bare lead date on a line item against the document year anchor (`inferDateAnchor`) via the shared
+ *       `splitLeadingDates` (previously such a date stayed in the description); and the extractor now records
+ *       the document-level `dateOrderInferred` provenance (evidence vs day-first default) on the invoice for
+ *       the answer caveat. The added output field (and any completed lead date) changes the persisted output,
+ *       so stale v5 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 5
+export const INVOICE_EXTRACTOR_VERSION = 6
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -160,7 +176,10 @@ const INVOICE_SCHEMA: JsonSchema = {
   properties: {
     header: HEADER_SCHEMA,
     lineItems: { type: 'array', items: LINE_ITEM_SCHEMA, maxItems: MAX_LINE_ITEMS },
-    totals: TOTALS_SCHEMA
+    totals: TOTALS_SCHEMA,
+    // Document-level date-order provenance (R5, audit §5.7) — optional, so a downstream tool handing an
+    // invoice loaded from persisted rows (no flag) still validates against this shared input schema.
+    dateOrderInferred: { type: 'string', enum: ['evidence', 'default'] }
   }
 }
 
@@ -308,10 +327,11 @@ function labeledValue(line: string, labels: readonly string[]): string | null {
 }
 
 /** Parse the first ISO / dotted-slashed date token out of a value, or null. `order` is the per-document
- *  date ordering (BL-N1), so a US `mm/dd/yyyy` header date parses on a US-ordered invoice. */
-function parseDateInText(text: string, order: DateOrder = 'dmy'): string | null {
+ *  date ordering (BL-N1), so a US `mm/dd/yyyy` header date parses on a US-ordered invoice. `anchor` (R5)
+ *  completes a 2-digit-year / bare date against the document year; without it those parse to null as before. */
+function parseDateInText(text: string, order: DateOrder = 'dmy', anchor?: DateAnchor | null): string | null {
   const m = DATE_TOKEN_RE.exec(text)
-  return m ? parseDate(m[0], order) : null
+  return m ? parseDate(m[0], order, anchor) : null
 }
 
 /** The last money token on a line (the printed figure), or null if none parses. Date tokens are scrubbed
@@ -384,8 +404,16 @@ function parsePercent(line: string): number | null {
   return Number.isFinite(v) ? v : null
 }
 
-/** Apply a header label to the line; returns true when the line WAS a header line (consumed). */
-function applyHeader(line: string, header: InvoiceHeader, order: DateOrder = 'dmy'): boolean {
+/** Apply a header label to the line; returns true when the line WAS a header line (consumed). `anchor` (R5)
+ *  is passed through to the shared date parser; the local `DATE_TOKEN_RE` only surfaces 4-digit-year header
+ *  dates, so it is forward-compatible plumbing here (a header `dd.mm.yy` is not surfaced without widening it,
+ *  a deliberate non-goal). */
+function applyHeader(
+  line: string,
+  header: InvoiceHeader,
+  order: DateOrder = 'dmy',
+  anchor?: DateAnchor | null
+): boolean {
   const vendor = labeledValue(line, VENDOR_LABELS)
   if (vendor !== null) {
     if (!header.vendor) header.vendor = vendor
@@ -402,7 +430,7 @@ function applyHeader(line: string, header: InvoiceHeader, order: DateOrder = 'dm
   // to `parseLineItem` as the line item it is (rather than being silently swallowed and dropped).
   const dueRaw = labeledValue(line, DUE_LABELS)
   if (dueRaw !== null) {
-    const d = parseDateInText(dueRaw, order)
+    const d = parseDateInText(dueRaw, order, anchor)
     if (d) {
       if (!header.dueDate) header.dueDate = d
       return true
@@ -410,7 +438,7 @@ function applyHeader(line: string, header: InvoiceHeader, order: DateOrder = 'dm
   }
   const dateRaw = labeledValue(line, INVOICE_DATE_LABELS)
   if (dateRaw !== null) {
-    const d = parseDateInText(dateRaw, order)
+    const d = parseDateInText(dateRaw, order, anchor)
     if (d) {
       if (!header.invoiceDate) header.invoiceDate = d
       return true
@@ -471,14 +499,16 @@ function applyTotals(line: string, totals: InvoiceTotals): boolean {
 export function parseLineItem(
   line: string,
   documentCurrency: string | null,
-  order: DateOrder = 'dmy'
+  order: DateOrder = 'dmy',
+  anchor?: DateAnchor | null
 ): InvoiceLineItem | null {
   // Strip any leading DATE column(s) (e.g. a service-/delivery-date column) before the money scan so a
   // `dd.mm.yyyy` token's `.20yy` tail can't be read as a price (shared BL-1 fix; see bank `parseLine`).
   // An invoice line item rarely leads with a date, so this is usually a no-op; when it does, the date is
   // dropped (line items carry no date field) and the description starts at the first non-date token.
-  // `order` is the per-document date ordering (BL-N1), so a US `mm/dd/yyyy` lead column is recognised.
-  const { rest } = splitLeadingDates(line, order)
+  // `order` is the per-document date ordering (BL-N1), so a US `mm/dd/yyyy` lead column is recognised;
+  // `anchor` (R5) completes a 2-digit-year / bare lead date, else it parses to null and stays in the text.
+  const { rest } = splitLeadingDates(line, order, anchor)
   const matches = [...rest.matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   // F6 — DROP a space-column FUSION (`Widget 10 100` → `10 100` → 10100, ~100× too large). The bank path
@@ -545,13 +575,17 @@ export function parseLineItem(
 export function extractInvoice(
   chunks: DocumentChunkRead[],
   documentCurrency: string | null,
-  order?: DateOrder
+  order?: DateOrder,
+  anchor?: DateAnchor | null
 ): ExtractedInvoice {
   // R1 (audit §5.3): normalize Unicode side-doors (U+2212 minus family, NBSP thousands-space family,
   // U+2019 apostrophe) ONCE at the entry so every downstream regex (MONEY_RE, date scans) sees ASCII.
   const texts = chunks.map((c) => normalizeExtractionText(c.text))
-  // Infer the document's date ordering ONCE (BL-N1) so US-ordered header dates parse mm/dd consistently.
-  const dateOrder = order ?? inferDateOrder(texts.join('\n'))
+  // Infer the document's date ordering ONCE (BL-N1) so US-ordered header dates parse mm/dd consistently, and
+  // the year ANCHOR (R5) so a bare/2-digit lead date on a line item completes (shared with the bank path).
+  const joined = texts.join('\n')
+  const dateOrder = order ?? inferDateOrder(joined)
+  const dateAnchor = anchor ?? inferDateAnchor(joined, dateOrder)
   const header: InvoiceHeader = {}
   const lineItems: InvoiceLineItem[] = []
   const totals: InvoiceTotals = {}
@@ -563,14 +597,14 @@ export function extractInvoice(
       // scan below could misread the date's `15.01` as an amount). `applyHeader` no longer consumes a
       // date-label line unless a date actually parses, so a line item that merely begins with a date word
       // (`Due diligence review 2.000,00`) falls through instead of being swallowed (audit §5.2).
-      if (applyHeader(line, header, dateOrder)) continue
+      if (applyHeader(line, header, dateOrder, dateAnchor)) continue
       // A boundary-matched totals label whose remainder is just the figure is a total; one that still
       // carries a real description ("Netto-Miete Objekt 3 1.000,00", "Total hours consulting 40,00")
       // falls through to `parseLineItem` and stays a line item (audit §5.2).
       if (applyTotals(line, totals)) continue
       // A summary line whose description is only a totals label never becomes a phantom line item (§5.4).
       if (isSummaryLabelLine(line)) continue
-      const item = parseLineItem(line, documentCurrency, dateOrder)
+      const item = parseLineItem(line, documentCurrency, dateOrder, dateAnchor)
       if (item) {
         lineItems.push(item)
         if (lineItems.length >= MAX_LINE_ITEMS) {
@@ -621,7 +655,12 @@ export const extractInvoiceTool: SkillTool = {
     // path): a currency WORD in a line-item description (left of the amount) or a stray code in a note no
     // longer beats the figure-adjacent / header-declared currency that the net/tax/gross are printed in.
     const currency = detectDocumentCurrency(joined)
-    const invoice = extractInvoice(chunks, currency, inferDateOrder(joined))
+    // R5 (audit §5.7): resolve date order + evidence flag + year anchor ONCE and hand them to the extractor,
+    // then stamp the document-level `dateOrderInferred` provenance onto the returned invoice.
+    const { order: dateOrder, inferred: dateOrderInferred } = inferDateOrderResult(joined)
+    const dateAnchor = inferDateAnchor(joined, dateOrder)
+    const invoice = extractInvoice(chunks, currency, dateOrder, dateAnchor)
+    invoice.dateOrderInferred = dateOrderInferred
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     return { ok: true, output: invoice }
   }
