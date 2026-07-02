@@ -15,7 +15,7 @@ export type { RetrievalScope } from '../../../shared/types'
 function normalizeScope(scope: string[] | RetrievalScope | null | undefined): RetrievalScope {
   return Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope
 }
-import { approxTokenCount } from '../ingestion/chunker'
+import { approxTokenCount, CHUNK_DEFAULTS } from '../ingestion/chunker'
 import {
   wordDiff,
   isPreciseDiffUseful,
@@ -372,6 +372,66 @@ export interface WholeDocumentResult {
   truncated: boolean
 }
 
+/** Generous upper bound on the chunk-overlap size in CHARACTERS: the chunker re-includes at most
+ *  `chunkOverlapTokens` tokens, and a single approx-token is at most `ONE_TOKEN_WORD_CHARS` (16)
+ *  characters of a whitespace word (chunker.ts) — 20 leaves slack for the joining spaces. Bounds the
+ *  de-overlap scan so it stays linear AND a coincidental long match can't reach far past the real
+ *  overlap. (A space-less run is ~1 char/token, comfortably inside this bound.) */
+const MAX_OVERLAP_CHARS_PER_TOKEN = 20
+
+/** Length of the longest suffix of `tail` that is also a PREFIX of `head` (byte-exact) — the chunk
+ *  overlap size. KMP: build the prefix function of `head`, then run `tail` through that automaton and
+ *  read off the match length at `tail`'s end. O(head+tail), no separator sentinel needed (so no
+ *  assumptions about which characters extracted text may contain). */
+function overlapLength(head: string, tail: string): number {
+  const pi = new Array<number>(head.length).fill(0)
+  for (let i = 1; i < head.length; i += 1) {
+    let j = pi[i - 1]
+    while (j > 0 && head[i] !== head[j]) j = pi[j - 1]
+    if (head[i] === head[j]) j += 1
+    pi[i] = j
+  }
+  let k = 0 // length of the `head`-prefix matched at the current position of `tail`
+  for (let i = 0; i < tail.length; i += 1) {
+    while (k > 0 && tail[i] !== head[k]) k = pi[k - 1]
+    if (tail[i] === head[k]) k += 1
+    if (k === head.length) k = pi[k - 1] // full head matched mid-tail — keep scanning for a longer tail-suffix
+  }
+  return k
+}
+
+/**
+ * Consecutive chunks from the SAME segment overlap by ~`chunkOverlapTokens` (80) tokens of DUPLICATED
+ * text — the chunker re-includes the previous window's tail so retrieval never splits a fact across a
+ * boundary (chunker.ts `windowByTokens`). A whole-document read concatenates chunks in order, so that
+ * overlap wastes ~16 % of the already-scarce budget (audit §2.2). This strips the leading run of `next`
+ * that byte-exactly duplicates the tail of `prev`. It matches on CHARACTERS (not whitespace words) so
+ * it is correct for space-less scripts and glued PDF runs — where a whole chunk is one space-less
+ * "word" a word-level scan would either miss entirely or, for an identical repeated window, wrongly
+ * empty. The scan is bounded to the known overlap size (`chunkOverlapTokens × MAX_OVERLAP_CHARS_PER_TOKEN`);
+ * any run it strips is by definition also present at the END of `prev`, so nothing is lost, and the
+ * `< next.length` guard means a chunk is never emptied. Callers gate this on same page/section labels
+ * (only same-segment neighbours overlap). */
+function deOverlapAgainstPrev(prev: string, next: string): string {
+  const cap = CHUNK_DEFAULTS.chunkOverlapTokens * MAX_OVERLAP_CHARS_PER_TOKEN
+  const tail = prev.length > cap ? prev.slice(prev.length - cap) : prev
+  const head = next.length > cap ? next.slice(0, cap) : next
+  const overlap = overlapLength(head, tail)
+  if (overlap <= 0 || overlap >= next.length) return next
+  return next.slice(overlap).replace(/^\s+/, '')
+}
+
+/** True when two consecutive chunks belong to the same coalesced segment (same page + section), the
+ *  only case where the chunker introduces overlap. `coalesceSegments` merges adjacent same-label
+ *  segments before chunking, so equal labels on order-adjacent chunks ⇒ one segment ⇒ real overlap. */
+function sameSegment(
+  prev: { page_number: number | null; section_label: string | null },
+  cur: { page_number: number | null; section_label: string | null }
+): boolean {
+  return (prev.page_number ?? null) === (cur.page_number ?? null) &&
+    (prev.section_label ?? null) === (cur.section_label ?? null)
+}
+
 /**
  * Load a SINGLE document's chunks IN ORDER (not top-k retrieval) for a skill-aware whole-document
  * answer (skill-whole-doc engine, Wave 2 — `architecture.md` §19/§20). Unlike `retrieve`, this does
@@ -402,21 +462,27 @@ export function retrieveWholeDocument(
   const chunksTotal = rows.length
   const selected: Array<Omit<RetrievedChunk, 'label'>> = []
   let usedTokens = 0
+  let prevRow: ChunkRow | null = null
   for (const row of rows) {
-    const tokens = Math.ceil((row.token_count ?? approxTokenCount(row.text)) * TOKENS_PER_WORD)
+    // De-overlap: a same-segment neighbour repeats ~80 tokens of `prevRow`'s tail as its own prefix
+    // (audit §2.2). Strip that duplication so the excerpt block carries real coverage, and charge the
+    // DE-OVERLAPPED text against the budget so the ~16% overlap tax buys ~a whole extra chunk of reach.
+    const text = prevRow && sameSegment(prevRow, row) ? deOverlapAgainstPrev(prevRow.text, row.text) : row.text
+    const tokens = Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
     // Always include the first chunk (a single over-budget chunk must not yield "no context");
     // after that, stop as soon as the next chunk would overflow the whole-document budget.
     if (selected.length > 0 && usedTokens + tokens > budgetTokens) break
     selected.push({
       chunkId: row.id,
       documentId: row.document_id,
-      text: row.text,
+      text,
       sourceTitle: row.source_label ?? 'Untitled',
       pageNumber: row.page_number,
       sectionLabel: row.section_label,
       score: 0
     })
     usedTokens += tokens
+    prevRow = row
   }
   const chunks: RetrievedChunk[] = selected.map((c, i) => ({ ...c, label: `S${i + 1}` }))
   const citations: Citation[] = chunks.map((c) => ({
@@ -438,15 +504,22 @@ function sourceMeta(chunk: RetrievedChunk): string {
 
 /** A document's whole size in the SAME token unit as `retrieveWholeDocument` (persisted token_count
  *  scaled by TOKENS_PER_WORD), so the compare budget can be split by real size. */
-function documentApproxTokenTotal(db: Db, documentId: string): number {
-  // ORDER BY chunk_index for read-shape parity with `retrieveWholeDocument` (audit DATA-4):
-  // the sum is order-independent, so this changes no value — it just keeps the budget
-  // computation and the actual whole-document read on the same ordered query.
+export function documentApproxTokenTotal(db: Db, documentId: string): number {
+  // ORDER BY chunk_index for read-shape parity with `retrieveWholeDocument`: the whole-document read
+  // de-overlaps consecutive same-segment chunks and charges the de-overlapped text against the budget
+  // (audit §2.2), so the compare-split sizing must measure the SAME de-overlapped totals — otherwise a
+  // document's ~80-token-per-boundary overlap tax would inflate its half of the split beyond what it
+  // actually occupies. The scan is therefore order-dependent (each chunk compared to its predecessor).
   const rows = db
-    .prepare('SELECT text, token_count FROM chunks WHERE document_id = ? ORDER BY chunk_index')
-    .all(documentId) as unknown as Array<{ text: string; token_count: number | null }>
+    .prepare('SELECT text, page_number, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+    .all(documentId) as unknown as Array<{ text: string; page_number: number | null; section_label: string | null }>
   let total = 0
-  for (const r of rows) total += Math.ceil((r.token_count ?? approxTokenCount(r.text)) * TOKENS_PER_WORD)
+  let prev: { text: string; page_number: number | null; section_label: string | null } | null = null
+  for (const r of rows) {
+    const text = prev && sameSegment(prev, r) ? deOverlapAgainstPrev(prev.text, r.text) : r.text
+    total += Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
+    prev = r
+  }
   return total
 }
 
@@ -491,11 +564,25 @@ export function describeCompareDoc(letter: 'A' | 'B', title: string, importedAt:
   return `Document ${letter}: "${title}" (imported ${when})`
 }
 
+/** One document's side of a labelled 2-document compare read — its title/import label, its selected
+ *  chunks, and its OWN honest coverage so a partial half can print a per-document "beginning" notice
+ *  in the prompt (audit §2.2). `documentId` is internal (citations carry it); the rest are prompt-facing. */
+export interface CompareDocGroup {
+  documentId?: string
+  title: string
+  importedAt: string | null
+  chunks: RetrievedChunk[]
+  /** True when THIS document overflowed its budget share (only its tail was dropped). */
+  truncated: boolean
+  chunksCovered: number
+  chunksTotal: number
+}
+
 /** The whole-document read for a 2-document compare (Follow-up B): both documents read IN ORDER,
  *  the budget split by size, with continuous `[Sn]` labels across the two so citations stay unique. */
 export interface CompareWholeDocumentsResult {
   /** Per-document groups (in scope order), for the labelled compare prompt. */
-  groups: Array<{ documentId: string; title: string; importedAt: string | null; chunks: RetrievedChunk[] }>
+  groups: CompareDocGroup[]
   /** All chunks (doc A then doc B), continuously labelled — the citation source of truth. */
   chunks: RetrievedChunk[]
   citations: Citation[]
@@ -527,8 +614,24 @@ export function retrieveCompareWholeDocuments(
   const bCitations: Citation[] = b.citations.map((c, i) => ({ ...c, label: `S${offset + i + 1}` }))
   return {
     groups: [
-      { documentId: idA, title: metaA.title, importedAt: metaA.importedAt, chunks: a.chunks },
-      { documentId: idB, title: metaB.title, importedAt: metaB.importedAt, chunks: bChunks }
+      {
+        documentId: idA,
+        title: metaA.title,
+        importedAt: metaA.importedAt,
+        chunks: a.chunks,
+        truncated: a.truncated,
+        chunksCovered: a.chunksCovered,
+        chunksTotal: a.chunksTotal
+      },
+      {
+        documentId: idB,
+        title: metaB.title,
+        importedAt: metaB.importedAt,
+        chunks: bChunks,
+        truncated: b.truncated,
+        chunksCovered: b.chunksCovered,
+        chunksTotal: b.chunksTotal
+      }
     ],
     chunks: [...a.chunks, ...bChunks],
     citations: [...a.citations, ...bCitations],
@@ -756,16 +859,44 @@ Rules:
 /** The grounded-answer SYSTEM prompt: the base preamble + the stable grounding rules (RT-2). */
 export const GROUNDED_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${GROUNDING_RULES}`
 
+/** How many `[Sn]` sections of how many a whole-document read actually provided — the shape of an
+ *  in-prompt truncation notice. Absent/null ⇒ the whole document fit ⇒ no notice. */
+export interface WholeDocTruncation {
+  covered: number
+  total: number
+}
+
 /**
- * Build the grounded answer USER turn: the question, the optional skill fence, then the
- * numbered source excerpts in the spec §7.8 source-context format (`[S1] File: X | Page: 4`
- * then the quoted chunk text). The stable grounding rules now live in `GROUNDED_SYSTEM_PROMPT`
- * (RT-2), so this carries only the per-turn content. Pure + unit-testable.
+ * Model-facing PARTIAL-DOCUMENT notice (fixed English, app-authored — D-L6 precedent; rides in the
+ * USER turn WITH the excerpts, never `system`). Injected when a whole-document read overflowed the
+ * budget and no rescue tree covered it: the model is told exactly which sections it was and was NOT
+ * given, told to say its answer covers only the beginning, and FORBIDDEN from asserting an absence
+ * ("no decisions", "not mentioned", "none found") beyond the provided sections — the audit §2.2
+ * failure where the answer text itself claimed completeness. `covered`/`total` are `[Sn]` section
+ * counts. `subject` is the noun the notice reads over ("DOCUMENT", "Document A", …). */
+function truncationNotice(covered: number, total: number, subject: string): string {
+  // "the first N of M sections" — NOT "sections 1 to N", which would collide with the global [Sn]
+  // excerpt labels (a compare half B is labelled [S{offset+1}]…, so "sections 1 to N" would mislead).
+  return (
+    `IMPORTANT — PARTIAL ${subject}: you were given the first ${covered} of ${total} sections; the ` +
+    `remaining ${total - covered} did not fit and were NOT provided. Answer only from the sections you ` +
+    `were given, state plainly that your answer covers only the beginning, and do NOT say that ` +
+    `anything is absent or missing (for example "no X", "not mentioned", "none found") — the sections ` +
+    `you cannot see may contain it.`
+  )
+}
+
+/**
+ * Build the grounded answer USER turn: the question, the optional skill fence, an optional
+ * partial-document notice, then the numbered source excerpts in the spec §7.8 source-context format
+ * (`[S1] File: X | Page: 4` then the quoted chunk text). The stable grounding rules now live in
+ * `GROUNDED_SYSTEM_PROMPT` (RT-2), so this carries only the per-turn content. Pure + unit-testable.
  */
 export function buildGroundedPrompt(
   question: string,
   chunks: RetrievedChunk[],
-  skillFence?: string | null
+  skillFence?: string | null,
+  truncation?: WholeDocTruncation | null
 ): string {
   const excerpts = chunks
     .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
@@ -775,9 +906,12 @@ export function buildGroundedPrompt(
   // excerpts; the fence carries its own guard line. The grounding rules in GROUNDED_SYSTEM_PROMPT
   // ("use only the excerpts", "cite [S1]…", "do not invent citations") always win.
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
+  // The partial-document notice sits between the fence and the excerpts (audit §2.2). Absent ⇒ the
+  // string is byte-identical to the pre-W1 prompt for a document that fit (no regression).
+  const truncationBlock = truncation ? `\n${truncationNotice(truncation.covered, truncation.total, 'DOCUMENT')}\n` : ''
   return `Question:
 ${question}
-${skillBlock}
+${skillBlock}${truncationBlock}
 Document excerpts:
 ${excerpts}
 
@@ -793,15 +927,28 @@ Answer:`
  */
 export function buildCompareWholeDocPrompt(
   question: string,
-  groups: Array<{ title: string; importedAt: string | null; chunks: RetrievedChunk[] }>,
+  groups: Array<{
+    title: string
+    importedAt: string | null
+    chunks: RetrievedChunk[]
+    truncated?: boolean
+    chunksCovered?: number
+    chunksTotal?: number
+  }>,
   skillFence?: string | null
 ): string {
   const docs = groups
     .map((g, i) => {
+      const letter = i === 0 ? 'A' : 'B'
       const excerpts = g.chunks
         .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
         .join('\n\n')
-      return `${describeCompareDoc(i === 0 ? 'A' : 'B', g.title, g.importedAt)}:\n${excerpts}`
+      // A PARTIAL half prints its own notice under its label so the model never reports a value as
+      // "removed"/"absent" merely because it fell past this document's provided beginning (audit §2.2).
+      const notice = g.truncated
+        ? `\n${truncationNotice(g.chunksCovered ?? g.chunks.length, g.chunksTotal ?? g.chunks.length, `Document ${letter}`)}`
+        : ''
+      return `${describeCompareDoc(letter, g.title, g.importedAt)}:${notice}\n${excerpts}`
     })
     .join('\n\n')
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
@@ -830,17 +977,26 @@ export function buildCompareDiffPrompt(
   changesText: string,
   labelA: string,
   labelB: string,
-  skillFence?: string | null
+  skillFence?: string | null,
+  truncated?: boolean
 ): string {
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
   const redlineBlock = redlineText ? `Exact word-level changes (redline):\n${redlineText}\n\n` : ''
+  // The change list can be capped to the (W1-tightened) budget. When it was, the model must NOT be
+  // told it is "complete and exact" (audit §2.2 honesty): it is the most significant changes only, and
+  // "no change listed for X" no longer implies X is unchanged.
+  const completeness = truncated
+    ? 'Base your answer ONLY on these changes. This list is PARTIAL — the most significant changes are\n' +
+      'shown but some further changes did not fit and are NOT listed, so do NOT say a section is\n' +
+      'unchanged just because no change for it appears here.'
+    : 'Base your answer ONLY on these changes — they are complete and exact.'
   return `Question:
 ${question}
 ${skillBlock}
 A deterministic word-level comparison of two documents produced the changes below.
 ${labelA}
 ${labelB}
-Base your answer ONLY on these changes — they are complete and exact. Do not dismiss a change as
+${completeness} Do not dismiss a change as
 unimportant; keep names, numbers, and dates exact. "Removed"/"Changed-from" text is present in
 Document A but not Document B; "Added"/"Changed-to" text is present in Document B but not Document A.
 The labels A and B follow import order only — do NOT describe either as the "old" or the "new"
@@ -951,7 +1107,7 @@ export interface GroundedAnswerOptions {
  * and an allowance for the skill fence (the fence's precise placement/trim is still done downstream
  * in `generateGroundedAnswer`). Never below a small floor so a tiny window still includes something.
  */
-function wholeDocumentBudgetTokens(
+export function wholeDocumentBudgetTokens(
   contextTokens: number,
   question: string,
   skill: TurnSkill | null | undefined
@@ -998,6 +1154,23 @@ function retrievalExcerptBudgetTokens(
 }
 
 /**
+ * The WHOLE-DOCUMENT read budget with the same RETRIEVAL_FIT_SAFETY (1.5) headroom the relevance path
+ * applies (audit §2.2 [HIGH] German subword overflow). `wholeDocumentBudgetTokens` measures chunk text
+ * at `approxTokenCount × TOKENS_PER_WORD` (1.3), but a subword-dense passage — a German account
+ * statement — can run ~2 real BPE tokens/word, so a budget-filling whole-doc turn (the flagship de-AT
+ * flow) could exceed n_ctx and fail with a raw runtime HTTP 400. Dividing by the safety factor keeps
+ * the assembled grounded turn under the launched window even worst-case. Used by BOTH the single
+ * whole-doc read and the 2-document compare split (which further divides this across the two documents).
+ */
+export function wholeDocumentFitBudgetTokens(
+  contextTokens: number,
+  question: string,
+  skill: TurnSkill | null | undefined
+): number {
+  return Math.max(512, Math.floor(wholeDocumentBudgetTokens(contextTokens, question, skill) / RETRIEVAL_FIT_SAFETY))
+}
+
+/**
  * Retrieve grounded context for the last user turn of `conversationId`, stream a cited
  * answer from `runtime`, and persist the assistant message WITH its `Citation[]`
  * (→ `messages.citations_json`). The triggering user message must already be in history.
@@ -1029,16 +1202,21 @@ export async function generateGroundedAnswer(
   let chunks: RetrievedChunk[]
   let citations: Citation[]
   let coverage: CoverageInfo | undefined
+  // When a single whole-document read overflowed the budget (no rescue tree), the grounded prompt
+  // carries an explicit model-facing notice: it names how many sections were provided vs total and
+  // forbids asserting an absence beyond the provided beginning (audit §2.2). Null ⇒ no notice.
+  let singleDocTruncation: { covered: number; total: number } | null = null
   // When set (Follow-up B), the grounded turn presents the two compared documents as labelled blocks
-  // (buildCompareWholeDocPrompt) instead of a single excerpt list.
-  let compareGroups: Array<{ title: string; importedAt: string | null; chunks: RetrievedChunk[] }> | null = null
+  // (buildCompareWholeDocPrompt) instead of a single excerpt list. Each group carries its own honest
+  // per-document coverage so a PARTIAL half prints its own "beginning only" notice in the prompt.
+  let compareGroups: Array<CompareDocGroup> | null = null
   // When set (mode d, compare-diff record), the grounded turn presents the DETERMINISTIC changes
   // (buildCompareDiffPrompt) instead of the two whole documents — the primary version-compare path.
   // `labelA`/`labelB` name the pair (title + import date) so the prompt states the A→B direction
   // WITHOUT asserting which is the old/new version (audit §5.1).
-  let compareDiff: { redlineText: string; changesText: string; labelA: string; labelB: string } | null = null
+  let compareDiff: { redlineText: string; changesText: string; labelA: string; labelB: string; truncated: boolean } | null = null
   if (opts.wholeDocument) {
-    const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
+    const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
     // Over-budget document (Follow-up A): rather than truncate to the beginning, run a skill-fenced
     // map-reduce over its READY deep-index tree (true whole-document coverage, `mode:'tree'`). Returns
@@ -1066,8 +1244,11 @@ export async function generateGroundedAnswer(
       chunksTotal: whole.chunksTotal,
       truncated: whole.truncated
     }
+    // No rescue tree fired (else we returned above): the read is the honest beginning. Tell the model
+    // exactly what it cannot see so its answer never claims completeness or asserts an absence (§2.2).
+    if (whole.truncated) singleDocTruncation = { covered: whole.chunksCovered, total: whole.chunksTotal }
   } else if (opts.wholeDocumentCompare) {
-    const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
+    const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
     const ids = opts.wholeDocumentCompare.documentIds
     // Mode (d) — DIFF-DRIVEN compare (compare-diff record, architecture.md §20). A deterministic
     // word-level diff over BOTH whole documents is the primary path for a version pair: it examines
@@ -1078,7 +1259,7 @@ export async function generateGroundedAnswer(
     if (diff) {
       chunks = diff.chunks
       citations = diff.citations
-      compareDiff = { redlineText: diff.redlineText, changesText: diff.changesText, labelA: diff.labelA, labelB: diff.labelB }
+      compareDiff = { redlineText: diff.redlineText, changesText: diff.changesText, labelA: diff.labelA, labelB: diff.labelB, truncated: diff.truncated }
       coverage = {
         mode: 'capped',
         chunksCovered: diff.chunksCovered,
@@ -1141,10 +1322,10 @@ export async function generateGroundedAnswer(
   // the base preamble, the question, or the excerpts — only older history yields. The fence rides
   // in the grounded USER turn (buildGroundedPrompt). Stamp only when the fence actually fit.
   const groundedNoFence = compareDiff
-    ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB)
+    ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB, null, compareDiff.truncated)
     : compareGroups
       ? buildCompareWholeDocPrompt(question, compareGroups)
-      : buildGroundedPrompt(question, chunks)
+      : buildGroundedPrompt(question, chunks, null, singleDocTruncation)
   // `contextTokens` was resolved above (the whole-document budget needs it up-front); it is the
   // REAL launched context window the runtime reports (§L0), not settings.contextTokens.
   // L2 (context compaction): summarize older raw turns into a cached checkpoint when the history
@@ -1175,10 +1356,10 @@ export async function generateGroundedAnswer(
   }
   const grounded = skillFence
     ? compareDiff
-      ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB, skillFence)
+      ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB, skillFence, compareDiff.truncated)
       : compareGroups
         ? buildCompareWholeDocPrompt(question, compareGroups, skillFence)
-        : buildGroundedPrompt(question, chunks, skillFence)
+        : buildGroundedPrompt(question, chunks, skillFence, singleDocTruncation)
     : groundedNoFence
   // Trim older history to the model context window so the grounded turn (which carries the
   // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow

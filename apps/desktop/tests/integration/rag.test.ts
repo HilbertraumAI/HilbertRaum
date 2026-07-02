@@ -12,6 +12,7 @@ import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import {
+  buildCompareDiffPrompt,
   buildGroundedChatMessages,
   buildGroundedPrompt,
   GROUNDED_SYSTEM_PROMPT,
@@ -199,6 +200,24 @@ describe('buildGroundedPrompt', () => {
     ])
     expect(p).toContain('[S1] File: notes.txt\n')
     expect(p).not.toContain('notes.txt |')
+  })
+})
+
+describe('buildCompareDiffPrompt — completeness claim is honest when the change list was capped (W1, §2.2)', () => {
+  const args = ['what changed?', '~~100~~ **120**', '- fee 100 → 120', 'Document A: "v1" (imported 2026-01-01)', 'Document B: "v2" (imported 2026-02-01)'] as const
+
+  it('a COMPLETE change list is asserted "complete and exact"', () => {
+    const p = buildCompareDiffPrompt(...args, null, false)
+    expect(p).toContain('they are complete and exact')
+    expect(p).not.toContain('PARTIAL')
+  })
+
+  it('a TRUNCATED change list (W1 shrank this budget) is NOT called complete — it says PARTIAL', () => {
+    const p = buildCompareDiffPrompt(...args, null, true)
+    expect(p).not.toContain('complete and exact')
+    expect(p).toContain('PARTIAL')
+    // And the model is told not to infer "unchanged" from an absent change (audit §2.2 honesty).
+    expect(p).toMatch(/do NOT say a section is\s+unchanged/i)
   })
 })
 

@@ -66,8 +66,16 @@ function breadthOf(coverage: CoverageInfo): Breadth {
       params: { scanned }
     }
   }
-  // mode === 'tree'. The whole-document/100% claim is made ONLY for a READY deep index — any
-  // other state shows the partial fraction or "not built yet", NEVER 100% (C1/L2).
+  // mode === 'tree'. A READY-tree answer that was truncated (map-call ceiling cut or notes truncated
+  // at the reduce budget — audit §2.2) covers only the BEGINNING even though every leaf is reachable,
+  // so this is checked BEFORE the leaf-fraction 100% claim: it must never read as whole-document
+  // coverage. A building/stale tree already shows the honest partial fraction below, so the gate is
+  // scoped to `ready` (the only state `answerWholeDocFromTree` stamps).
+  if (treeStatus === 'ready' && coverage.truncated) {
+    return { tone: 'warning', icon: '◔', textKey: 'coverage.tree.beginning' }
+  }
+  // The whole-document/100% claim is made ONLY for a READY deep index — any other state shows the
+  // partial fraction or "not built yet", NEVER 100% (C1/L2).
   if (treeStatus === 'ready' && chunksTotal > 0 && chunksCovered >= chunksTotal) {
     return { tone: 'success', icon: '●', textKey: 'coverage.tree.whole' }
   }

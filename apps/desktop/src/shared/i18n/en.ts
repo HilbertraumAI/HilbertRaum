@@ -474,6 +474,7 @@ export const en = {
   'coverage.capped.whole': 'Covers the whole document',
   'coverage.capped.beginning': 'Covers the beginning of the document',
   'coverage.tree.whole': 'Covers the whole document (deeply indexed)',
+  'coverage.tree.beginning': 'Covers the beginning of the document — it was too large to read in full',
   'coverage.tree.partial': 'Deep index in progress — {covered} of {total} sections',
   'coverage.tree.pending': 'No deep index yet',
   'coverage.depth': 'Detail: {label}',

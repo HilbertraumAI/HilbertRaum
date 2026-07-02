@@ -390,7 +390,7 @@ password recovery — are documented in
   over a single in-scope, fully-chunked document streams a model answer over the **whole** document
   (read in order, not top-k) with the SKILL.md format applied, stamping honest `capped` coverage. A
   document larger than the context budget that has a **ready deep index** is answered by a skill-fenced
-  **map-reduce over its tree** instead of truncating (full coverage, `tree` badge — Follow-up A, §20);
+  **map-reduce over its tree** instead of truncating (`tree` badge — Follow-up A, §20);
   **without** a ready tree it is still read **from the beginning** with a "covers the beginning" badge,
   never silently complete. **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
@@ -398,6 +398,21 @@ password recovery — are documented in
   presents them as labelled blocks, instead of top-k. A tree-backed compare (the §20 map-reduce applied
   per oversized doc *inside* the compare) remains a documented follow-up — today an oversized compared
   doc is read capped, not tree-reduced.
+  **W1 (audit §2.2) made the beginning-read honest AND safe at the default 4096 context.** The grounded
+  prompt now carries an explicit **partial-document notice** — the model is told "sections 1–N of M
+  provided" and FORBIDDEN to assert an absence ("no decisions found") beyond them — so the answer text
+  can no longer claim completeness (the compare fallback prints the notice **per truncated half**). The
+  whole-doc AND compare budgets apply the same **1.5 German-subword safety divisor** the relevance path
+  uses, so a budget-filling German (subword-dense) whole-doc turn no longer risks the raw
+  `HTTP 400 exceed_context_size_error`. Consecutive **same-segment chunks are de-overlapped** (the known
+  ~80-token chunk overlap stripped, metadata-gated on page/section) so the read stops wasting ~16 % of
+  the scarce budget on duplicated text — and the compare-split sizing measures the same de-overlapped
+  totals. The tree map-reduce, which formerly "lied at the margin" (hard-truncated its notes while
+  stamping `truncated:false`), now flips to the honest `truncated`/"covers the beginning" badge and a
+  softened reduce prompt when it hits the **12-call map ceiling** (`SUMMARY_MAP_CALL_CEILING`) or clamps
+  its joined notes to the reduce budget. **Open follow-up (deferred by W1):** auto-building (or one-click
+  offering) the deep index when a whole-doc turn truncates, and routing lookup-shaped questions to top-k
+  when a whole-doc read would truncate — both are W2/A3 territory.
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

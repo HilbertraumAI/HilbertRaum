@@ -15,6 +15,7 @@ import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
 import { createConversation } from '../../src/main/services/chat'
 import { answerWholeDocFromTree } from '../../src/main/services/rag/whole-doc-tree'
+import { SUMMARY_MAP_CALL_CEILING } from '../../src/main/services/doctasks/summary'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import type { TurnSkill } from '../../src/main/services/chat'
 
@@ -47,6 +48,25 @@ function fakeRuntime(): FakeRuntime {
       rt.calls++
       rt.turns.push(messages.map((m) => `${m.role}:${m.content}`))
       yield 'Minutes body with decisions and actions.'
+    }
+  } as unknown as FakeRuntime
+  return rt
+}
+
+/** Like `fakeRuntime`, but each MAP step emits a long partial so the joined notes overflow the reduce
+ *  budget — the "notes truncated at the reduce budget" path (audit §2.2), distinct from the ceiling. */
+function fakeRuntimeLongMaps(): FakeRuntime {
+  const rt = {
+    modelId: 'mock',
+    calls: 0,
+    turns: [] as string[][],
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: 'ok', port: null }),
+    async *chatStream(messages: ChatMessage[]) {
+      rt.calls++
+      rt.turns.push(messages.map((m) => `${m.role}:${m.content}`))
+      yield `Beschluss ${'wichtiger Detailpunkt '.repeat(200)}`.trim()
     }
   } as unknown as FakeRuntime
   return rt
@@ -217,5 +237,85 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     })
     expect(msg).toBeNull()
     expect(rt.calls).toBe(0)
+  })
+
+  it('map-call ceiling: more than N sections → capped map calls, truncated stamp, softened reduce (§2.2)', async () => {
+    const h = await makeDoc()
+    // Many level-1 node summaries under a level-2 root: at a small context each fills its own window,
+    // so the window count exceeds SUMMARY_MAP_CALL_CEILING and the rescue must stop at the ceiling.
+    const section = (label: string): string => `${label}. ${'detail point '.repeat(60)}`.trim()
+    const nodes: string[] = []
+    for (let i = 0; i < SUMMARY_MAP_CALL_CEILING + 4; i++) {
+      nodes.push(insertNode(h.db, h.docId, 1, i, false, section(`Section ${i}`)))
+    }
+    const root = insertNode(h.db, h.docId, 2, 0, true, 'Whole-document root summary.')
+    nodes.forEach((nid, i) => {
+      insertEdge(h.db, root, nid, false, i)
+      h.db.prepare('UPDATE tree_nodes SET parent_id = ? WHERE id = ?').run(root, nid)
+    })
+    h.chunkIds.forEach((cid, i) => insertEdge(h.db, nodes[i % nodes.length], cid, true, i))
+    markTreeReady(h.db, h.docId)
+
+    const rt = fakeRuntime()
+    const msg = await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question: 'write the meeting minutes',
+      skill: SKILL,
+      contextTokens: 900 // tiny window → each section is its own window → >ceiling windows
+    })
+
+    expect(msg).not.toBeNull()
+    // The map calls are capped at the ceiling (+1 reduce) — the rescue never fans out unbounded.
+    expect(rt.calls).toBeLessThanOrEqual(SUMMARY_MAP_CALL_CEILING + 1)
+    // Honest coverage: a ceiling cut covers only the BEGINNING even though every leaf is reachable.
+    expect(msg!.coverage?.mode).toBe('tree')
+    expect(msg!.coverage?.truncated).toBe(true)
+    // The reduce prompt is softened: it no longer claims the notes cover the WHOLE document.
+    const reduceUser = rt.turns[rt.turns.length - 1].find((t) => t.startsWith('user:')) ?? ''
+    expect(reduceUser).toContain('BEGINNING of the document')
+    expect(reduceUser).not.toContain('cover the WHOLE document')
+    // The fence still shaped every step (the ceiling does not drop the skill).
+    expect(reduceUser).toContain('structured minutes')
+  })
+
+  it('notes truncated at the reduce budget → truncated stamp (the former "lies at the margin" bug)', async () => {
+    const h = await makeDoc()
+    // Three sections, UNDER the ceiling, but each map emits a long partial so the joined notes overflow
+    // the reduce budget and are hard-truncated — which must now flip the coverage stamp to truncated.
+    const section = (label: string): string => `${label}. ${'detail point '.repeat(60)}`.trim()
+    const n1 = insertNode(h.db, h.docId, 1, 0, false, section('Section A'))
+    const n2 = insertNode(h.db, h.docId, 1, 1, false, section('Section B'))
+    const n3 = insertNode(h.db, h.docId, 1, 2, false, section('Section C'))
+    const root = insertNode(h.db, h.docId, 2, 0, true, 'Root summary.')
+    ;[n1, n2, n3].forEach((nid, i) => {
+      insertEdge(h.db, root, nid, false, i)
+      h.db.prepare('UPDATE tree_nodes SET parent_id = ? WHERE id = ?').run(root, nid)
+    })
+    h.chunkIds.forEach((cid, i) => insertEdge(h.db, [n1, n2, n3][i % 3], cid, true, i))
+    markTreeReady(h.db, h.docId)
+
+    const rt = fakeRuntimeLongMaps()
+    const msg = await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question: 'write the meeting minutes',
+      skill: SKILL,
+      contextTokens: 900
+    })
+
+    expect(msg).not.toBeNull()
+    // Real map steps ran, and stayed UNDER the ceiling — so this is the notes-truncation path, not the
+    // ceiling path (both now set truncated, but only this route exercises the reduce-budget clamp).
+    expect(rt.calls).toBeGreaterThanOrEqual(2)
+    expect(rt.calls).toBeLessThanOrEqual(SUMMARY_MAP_CALL_CEILING + 1)
+    expect(msg!.coverage?.mode).toBe('tree')
+    expect(msg!.coverage?.truncated).toBe(true)
+    const reduceUser = rt.turns[rt.turns.length - 1].find((t) => t.startsWith('user:')) ?? ''
+    expect(reduceUser).toContain('BEGINNING of the document')
   })
 })

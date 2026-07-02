@@ -6,6 +6,71 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation W1: whole-doc budget honesty — branch `fix/skills-w1`, UNMERGED.**
+First Track-W phase (plan §W1; audit §2.2 — all bullets + §7 rec 4), branched off `fix/skills-r6` (the
+plan/audit docs live on the R-branch chain, not `master`). Offline / pure / no new deps / no routing change /
+no schema change. **Root cause (§2.2):** at the DEFAULT 4096 context a skill "whole document" read is really
+a ~2–3-chunk prefix read, and it (a) carried NO in-prompt notice — so the answer text itself claimed
+completeness ("no decisions found") while skill bodies demand exhaustive deliverables; (b) used the 1.3
+tokens/word estimate with NO safety factor while the relevance path applies `RETRIEVAL_FIT_SAFETY = 1.5`, so a
+subword-dense German whole-doc turn — the flagship de-AT flow — could exceed n_ctx and fail with the raw
+`HTTP 400 exceed_context_size_error`; (c) read the OVERLAPPING retrieval chunks (~80-token overlap per
+500-token chunk), duplicating ~16 % of the scarce budget; (d) on the tree-rescue path hard-truncated the joined
+map notes **while stamping `truncated:false`** and asserting whole-document coverage, with no map-call ceiling
+(the summary path caps at 12). **Fix (in-prompt notice):** `buildGroundedPrompt` gains an optional
+`WholeDocTruncation {covered,total}` param and `buildCompareWholeDocPrompt` reads per-group coverage; when a
+whole-doc read (or a compare half) overflows, the grounded USER turn carries a fixed-English app-authored
+notice (D-L6 precedent, rides WITH the excerpts, never `system`) — "you were given the first N of M sections;
+the remaining did not fit and were NOT provided … do NOT say that anything is absent" — so the model is
+TOLD what it cannot see and forbidden to assert an absence; the compare prompt prints it **per truncated
+half** (`PARTIAL Document A/B`). ("the first N of M sections", not "sections 1 to N", so it can't collide
+with the global `[Sn]` excerpt labels a compare half B carries.) **Fix (1.5 divisor):** new
+`wholeDocumentFitBudgetTokens` = `max(512, floor(wholeDocumentBudgetTokens/1.5))`, used at BOTH whole-doc call
+sites (single read + compare split, so the diff and labelled-compare reads inherit it). **Fix (de-overlap):**
+`deOverlapAgainstPrev` strips the byte-exact ~80-token (`CHUNK_DEFAULTS.chunkOverlapTokens`) overlap prefix off
+a consecutive chunk — CHARACTER-based (a KMP `overlapLength`, longest suffix-of-prev == prefix-of-next), so it
+is correct for space-less scripts / glued PDF runs where a whole chunk is one whitespace-free "word" (a
+word-split scan would miss the overlap or, for an identical repeated window, wrongly EMPTY the chunk); a
+`< next.length` guard means a chunk is never emptied, and any run it strips is by definition also at the END of
+`prev`, so nothing is lost. **Metadata-gated** on same page+section (only same-coalesced-segment neighbours
+overlap — a genuine cross-segment repeat is never eaten); applied in `retrieveWholeDocument` (counts the
+de-overlapped text against the budget → ~a whole extra chunk of reach) and `documentApproxTokenTotal` (so the
+compare split sizes on the same de-overlapped totals). **Fix (diff-compare honesty):** `buildCompareDiffPrompt`
+takes a `truncated` flag threaded from `retrieveCompareDiff`; the change list W1's smaller budget now caps more
+often is no longer asserted "complete and exact" — a truncated list says it is PARTIAL and that an absent
+change does NOT imply a section is unchanged (consistent with the existing in-band "+N further change(s) not
+listed" marker + the capped badge). **Fix (tree path, `whole-doc-tree.ts`):** the window list is capped at
+`SUMMARY_MAP_CALL_CEILING` (12) and a joined-notes clamp to the reduce budget now BOTH set a `truncated` flag
+threaded into the `mode:'tree'` coverage stamp AND soften the reduce prompt ("cover only the BEGINNING … do
+NOT say anything is absent"); `CoverageMeter` checks `treeStatus==='ready' && truncated` BEFORE the
+leaf-fraction 100 % claim → renders the new `coverage.tree.beginning` badge instead of "covers the whole
+document". **Data contract:** none changed (`CompareDocGroup` gained per-doc `truncated/chunksCovered/
+chunksTotal`; `wholeDocumentBudgetTokens`/`wholeDocumentFitBudgetTokens`/`documentApproxTokenTotal` exported for
+tests; `buildCompareDiffPrompt` gained a trailing optional `truncated` param). **i18n:**
+`coverage.tree.beginning` added to en + de (du-neutral). **Non-goals held:** no routing changes (W2), no
+gate inversion (A3); deep-index auto-build on truncation + lookup-shaped→top-k rerouting noted as
+follow-ups. **Adversarial review fix (CRITICAL + HIGH):** a 4-lens multi-agent diff review (plan-fidelity /
+correctness-regression / honesty-persistence / test-adequacy — each finding independently verified) caught a
+real **CRITICAL**: the FIRST de-overlap implementation matched WHOLE whitespace words, so a space-less/glued
+chunk (one word to a splitter) either missed the overlap or, for an identical repeated window, stripped the
+only "word" → an EMPTY `[Sn]` excerpt + dropped content — the exact de-AT/IBAN domain of §2.2. Fixed by the
+character-based KMP de-overlap above (+ empty guard). Also a real **HIGH**: `buildCompareDiffPrompt` asserted
+the (now-more-often-capped) change list "complete and exact" — fixed by the diff-compare honesty change above.
+Four MEDIUM/LOW test-and-clarity gaps closed: the `[Sn]`-collision notice reword; a `documentApproxTokenTotal`
+de-overlap regression; a cross-segment-gate fixture; and a strengthened per-half compare test (non-truncated
+half stays notice-free + exact per-half counts). **Tests (13 net-new):** `rag-whole-doc-truncation.test.ts`
+(divisor exact + ≤(4096−reserve)/1.5; de-overlap → no duplicated `M####` markers + assembled words < naive DB
+sum + `documentApproxTokenTotal` < naive 1.3-scaled sum; **cross-segment gate — a coincidental boundary run is
+NOT stripped**; **space-less/CJK de-overlap — never empties, content preserved**; fit-budget truncation
+flagged; end-to-end in-prompt notice + `capped`/truncated stamp + notice only in the USER turn; small doc → no
+notice); `rag-whole-doc-tree.test.ts` +2 (map ceiling → capped calls + truncated + softened reduce;
+notes-truncation → truncated); `rag-whole-doc-compare.test.ts` +1 (partial half prints its own notice, other
+half none, per-half counts); `rag.test.ts` +2 (`buildCompareDiffPrompt` complete vs PARTIAL wording);
+`Coverage.test.tsx` +1 (ready+truncated → "beginning", never whole). **Verified:** `npm test` green (2845
+passed / 41 skipped), `npm run typecheck` clean. Docs: `known-limitations.md` whole-doc-handler record extended
+with the W1 honesty/safety paragraph + the deferred follow-ups; plan §0.2 W1 → `[x]`. Branch left unmerged per
+plan §0._
+
 _2026-07-02 — **Skills remediation R6: row fidelity — wrapped descriptions + line-item column debris —
 branch `fix/skills-r6`, UNMERGED.** Sixth remediation phase (plan §R6; audit §5.7 — the "wrapped
 descriptions silently dropped" and "line-item column debris" bullets), branched off `master` (R1–R5 merged

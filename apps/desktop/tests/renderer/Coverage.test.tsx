@@ -59,6 +59,17 @@ describe('CoverageMeter — breadth ≠ fidelity honesty (C1/L2)', () => {
     ).toBeInTheDocument()
   })
 
+  it('a READY deep index that was TRUNCATED covers "the beginning", never the whole document (§2.2)', () => {
+    // The tree rescue hit its map-call ceiling / clamped its notes: every leaf is reachable
+    // (chunksCovered == chunksTotal) but the answer only covers the beginning, so the badge must NOT
+    // claim whole-document coverage on the leaf-fraction alone.
+    render(
+      meter({ mode: 'tree', treeStatus: 'ready', chunksCovered: 10, chunksTotal: 10, truncated: true })
+    )
+    expect(screen.getByText(t('en', 'coverage.tree.beginning'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'coverage.tree.whole'))).not.toBeInTheDocument()
+  })
+
   it('a BUILDING deep index shows the partial fraction, NEVER the whole-document claim', () => {
     render(meter({ mode: 'tree', treeStatus: 'building', chunksCovered: 3, chunksTotal: 10, truncated: true }))
     expect(

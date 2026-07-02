@@ -261,6 +261,44 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     expect(msg.coverage).toBeUndefined()
   })
 
+  it('a PARTIAL compare half prints its own beginning-only notice in the prompt (audit §2.2)', async () => {
+    const h = await makeHarness({ bothFullyChunked: true })
+    // A large document A with NO shared wording with B: the diff is abandoned → the labelled
+    // whole-doc-compare read runs, and A's split-budget half overflows → only A is partial.
+    const bigA = Array.from(
+      { length: 300 },
+      (_, i) => `Zeile ${i}: einzigartiger Vermerk alpha${i} beta${i} gamma${i} delta${i} epsilon${i}.`
+    ).join('\n')
+    const a = await h.mk('big-a.txt', bigA)
+    const b = await h.mk('tiny-b.txt', 'kurzer text ohne gemeinsame woerter')
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId([a, b]),
+      'what changed between these two versions?',
+      WHAT_CHANGED_INSTALL_ID
+    )
+    const msg = result as Message
+    const userTurn = h.runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
+    // Fell back to the labelled whole-doc-compare read (not the diff), and A overflowed its half.
+    expect(userTurn).not.toContain('deterministic word-level comparison')
+    expect(userTurn).toContain('PARTIAL Document A')
+    expect(userTurn).toContain('did not fit and were NOT provided')
+    // The small document B FIT its half → it must carry NO partial notice (per-half gating, not global).
+    expect(userTurn).not.toContain('PARTIAL Document B')
+    // A's notice uses A's OWN per-half counts (covered < total), and that total is strictly below the
+    // SUMMED whole-doc total — proving the notice reports per-half numbers, not the compare-wide sum.
+    const partialA = userTurn.match(/the first (\d+) of (\d+) sections/)
+    expect(partialA).not.toBeNull()
+    const coveredA = Number(partialA![1])
+    const totalA = Number(partialA![2])
+    expect(coveredA).toBeLessThan(totalA)
+    expect(totalA).toBeLessThan(msg.coverage?.chunksTotal ?? Infinity)
+    // Honest coverage: truncated because a half overflowed.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(true)
+  })
+
   it('does NOT fire on a single-doc scope (needs exactly two) — keeps the relevance path', async () => {
     const h = await makeHarness({ bothFullyChunked: true })
     const { result } = await invoke(

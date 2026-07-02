@@ -20,6 +20,7 @@ import {
 import {
   packIntoWindows,
   summaryBudgetWords,
+  SUMMARY_MAP_CALL_CEILING,
   SUMMARY_OUTPUT_TOKENS,
   SUMMARY_TEMPERATURE,
   SUMMARY_TOKENS_PER_WORD
@@ -63,14 +64,27 @@ function mapUserPrompt(skillFence: string | null, part: number, total: number, t
   )
 }
 
-/** REDUCE step (streamed): produce the final skill-formatted deliverable from the whole-document notes. */
-function reduceUserPrompt(skillFence: string | null, question: string, notes: string): string {
+/** REDUCE step (streamed): produce the final skill-formatted deliverable from the notes. When the
+ *  document was too large to process in full (map-call ceiling hit or the joined notes were
+ *  truncated to fit the reduce budget), the prompt is SOFTENED to the honest beginning-only framing
+ *  and forbids asserting an absence beyond the covered part — the tree-rescue equivalent of the
+ *  whole-doc read's partial-document notice (audit §2.2). */
+function reduceUserPrompt(
+  skillFence: string | null,
+  question: string,
+  notes: string,
+  truncated: boolean
+): string {
   const fence = skillFence ? `\n${skillFence}\n` : ''
-  return (
-    'Using the notes below — which together cover the WHOLE document — complete the user request by ' +
-    'following the task instructions exactly. Do not mention that the document was processed in parts.\n\n' +
-    `User request:\n${question}\n${fence}\nNotes (whole document):\n${notes}\n\nAnswer:`
-  )
+  const coverageLine = truncated
+    ? 'Using the notes below — which cover only the BEGINNING of the document (it was too large to ' +
+      'process in full) — complete the user request by following the task instructions exactly. State ' +
+      'plainly that your answer covers only the beginning, and do NOT say that anything is absent or ' +
+      'missing — the part not covered may contain it. Do not mention that the document was processed in parts.'
+    : 'Using the notes below — which together cover the WHOLE document — complete the user request by ' +
+      'following the task instructions exactly. Do not mention that the document was processed in parts.'
+  const notesLabel = truncated ? 'Notes (beginning of the document)' : 'Notes (whole document)'
+  return `${coverageLine}\n\nUser request:\n${question}\n${fence}\n${notesLabel}:\n${notes}\n\nAnswer:`
 }
 
 export interface WholeDocTreeDeps {
@@ -116,16 +130,14 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     nodeTexts = [root.summary_text]
   }
 
-  // Provenance + coverage are pure reads, computed up front (the answer rests on the whole tree).
+  // Provenance + the whole-tree coverage reads are pure and computed up front; the `truncated` flag is
+  // finalized AFTER the map-reduce, because a map-call-ceiling cut OR a reduce-budget notes truncation
+  // makes the answer honestly cover only the beginning (audit §2.2 — the former code truncated the
+  // notes here while the coverage stamp still asserted `truncated:false`/whole-document coverage).
   const citations: Citation[] = documentLeafProvenance(db, documentId, title)
-  const coverage: CoverageInfo = {
-    mode: 'tree',
-    treeStatus: 'ready',
-    chunksCovered: reachableLeafChunkIds(db, documentId).length,
-    chunksTotal: documentChunkCount(db, documentId),
-    treeLevels: maxTreeLevel(db, documentId),
-    truncated: false
-  }
+  const chunksCovered = reachableLeafChunkIds(db, documentId).length
+  const chunksTotal = documentChunkCount(db, documentId)
+  const treeLevels = maxTreeLevel(db, documentId)
 
   // The fence is built ONCE (full body — already capped at import validation) and applied at every
   // step. Its token cost is reserved out of the per-window input budget so a window + fence + output
@@ -136,7 +148,15 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     (fenceTokens + approxPromptTokens(question) + 200) / SUMMARY_TOKENS_PER_WORD
   )
   const budgetWords = Math.max(200, summaryBudgetWords(contextTokens) - reserveWords)
-  const windows = packIntoWindows(nodeTexts, budgetWords)
+  // Map-call ceiling (parity with `planSummaryWindows` / SUMMARY_MAP_CALL_CEILING): beyond ~12 windows
+  // the tree rescue would fan out without bound. Keep the first N windows and mark the answer truncated
+  // so the coverage stamp AND the reduce prompt stay honest ("covers the beginning") — audit §2.2.
+  let truncated = false
+  let windows = packIntoWindows(nodeTexts, budgetWords)
+  if (windows.length > SUMMARY_MAP_CALL_CEILING) {
+    windows = windows.slice(0, SUMMARY_MAP_CALL_CEILING)
+    truncated = true
+  }
 
   /** One non-streamed model call (a MAP step). Reasoning stripped, like the doctask `generate`. */
   const collect = async (user: string): Promise<string> => {
@@ -169,18 +189,23 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
         if (partial.length > 0) partials.push(partial)
       }
       // All-empty maps (e.g. a reasoning model that emitted only think blocks): fall back to the raw
-      // node summaries (truncated to the budget) so the reduce still has whole-document material.
-      notes =
-        partials.length > 0
-          ? partials.join('\n\n')
-          : truncateToApproxTokens(nodeTexts.join('\n\n'), budgetWords)
-      if (approxTokenCount(notes) > budgetWords) notes = truncateToApproxTokens(notes, budgetWords)
+      // node summaries so the reduce still has document material. Either way, when the joined notes
+      // exceed the reduce budget they are hard-truncated → mark the answer truncated so the coverage
+      // stamp + reduce prompt stop claiming whole-document coverage (audit §2.2, the "lies at the
+      // margin" defect).
+      let joined = partials.length > 0 ? partials.join('\n\n') : nodeTexts.join('\n\n')
+      if (approxTokenCount(joined) > budgetWords) {
+        joined = truncateToApproxTokens(joined, budgetWords)
+        truncated = true
+      }
+      notes = joined
     }
 
-    // REDUCE (streamed to the user): the final skill-formatted deliverable over the whole document.
+    // REDUCE (streamed to the user): the final skill-formatted deliverable. The prompt is softened to
+    // the honest "beginning only" framing when the document did not fit in full (audit §2.2).
     const messages: ChatMessage[] = [
       { role: 'system', content: WHOLE_DOC_TREE_SYSTEM_PROMPT },
-      { role: 'user', content: reduceUserPrompt(skillFence, question, notes) }
+      { role: 'user', content: reduceUserPrompt(skillFence, question, notes, truncated) }
     ]
     for await (const token of runtime.chatStream(messages, {
       signal,
@@ -199,6 +224,17 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
   content = stripThinkBlocks(content)
   content = stripSkillFenceEcho(content)
   if (content === '') return emptyAssistantMessage(conversationId)
+  // `truncated` is now final (ceiling cut and/or notes truncation): a truncated tree answer is stamped
+  // as covering only the beginning, never as whole-document coverage (audit §2.2). The renderer badge
+  // reads this flag first, before the leaf-fraction 100% claim.
+  const coverage: CoverageInfo = {
+    mode: 'tree',
+    treeStatus: 'ready',
+    chunksCovered,
+    chunksTotal,
+    treeLevels,
+    truncated
+  }
   return appendMessage(db, {
     conversationId,
     role: 'assistant',

@@ -490,6 +490,7 @@ export const de: Record<keyof typeof en, string> = {
   'coverage.capped.whole': 'Deckt das ganze Dokument ab',
   'coverage.capped.beginning': 'Deckt den Anfang des Dokuments ab',
   'coverage.tree.whole': 'Deckt das ganze Dokument ab (tief indexiert)',
+  'coverage.tree.beginning': 'Deckt den Anfang des Dokuments ab — es war zu groß, um es vollständig zu lesen',
   'coverage.tree.partial': 'Tiefenindex läuft — {covered} von {total} Abschnitten',
   'coverage.tree.pending': 'Noch kein Tiefenindex',
   'coverage.depth': 'Detailgrad: {label}',
