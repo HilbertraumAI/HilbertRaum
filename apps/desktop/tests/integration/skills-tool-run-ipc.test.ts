@@ -402,6 +402,36 @@ describe('skills tool-run IPC (S11b)', () => {
     expect(txs.n).toBe(2)
   })
 
+  it('a DOWNSTREAM run-bar run re-extracts a STALE statement from faithful segments, not the chunks (R3 / §5.6)', async () => {
+    // The production gap behind audit §5.6: after a version bump (figures were mis-read) the Validate/
+    // Summarize/Export buttons must re-extract before serving rows — and that re-extraction MUST read the
+    // faithful stored-file SEGMENTS, not the newline-collapsed `chunks`. This exercises the FULL IPC path
+    // (startSkillRun → buildToolRunner → seam), so it also proves `tool-runs.ts` forwards the segment
+    // reader to the downstream dispatch: revert that forwarding and the re-extraction reads the corrupted
+    // chunk below → ZERO rows → this test fails.
+    const { db, skillInstallId, conversationId } = makeHarness(
+      'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+    )
+    expect((await runTool(skillInstallId, conversationId, 'extract_transactions')).state).toBe('done')
+    const docId = (db.prepare('SELECT id FROM documents LIMIT 1').get() as { id: string }).id
+    const staleId = (db.prepare('SELECT id FROM bank_statements WHERE document_id = ?').get(docId) as { id: string }).id
+
+    // Force the statement stale AND corrupt the chunk: if the downstream re-extraction fell back to the
+    // chunk-table reader (segments NOT forwarded), it would read this garbage and persist zero rows.
+    db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(staleId)
+    db.prepare("UPDATE chunks SET text = 'no transactions in this chunk' WHERE document_id = ?").run(docId)
+
+    expect((await runTool(skillInstallId, conversationId, 'validate_statement_balances')).state).toBe('done')
+
+    // Re-extracted in place: a NEW id, stamped fresh, with BOTH faithful rows from the stored-file segments.
+    const stmts = db.prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?').all(docId) as Array<{ id: string; v: number | null }>
+    expect(stmts).toHaveLength(1) // replaceExisting — no accumulation
+    expect(stmts[0].id).not.toBe(staleId)
+    expect(stmts[0].v).not.toBeNull() // stamped at the current extractor version (no longer stale)
+    const txs = db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE statement_id = ?').get(stmts[0].id) as { n: number }
+    expect(txs.n).toBe(2) // read from the faithful segments — the corrupted chunk fallback would give 0
+  })
+
   it('refuses a tool the skill does not declare with a friendly, content-free error', async () => {
     const { skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
     // count_selected_documents is registered but NOT in the skill's allowedTools → unavailable.

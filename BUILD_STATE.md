@@ -6,6 +6,46 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation R3: stale-row runs + sepa prefilter demotion — branch `fix/skills-r3`,
+UNMERGED.** Third remediation phase (plan §R3; audit §5.6 + §5.5), branched off `fix/skills-r2` (the plan/audit
+working papers live on the R-branches, not master; R3's code is independent of R1/R2 so the rebase onto r2 was
+conflict-free). Offline / pure / no new deps / no routing, answer-template, or run-lifecycle-shape change.
+**Root cause (§5.6):** staleness re-extraction (`isBankStatementStale`/`isInvoiceStale`) was enforced only on
+the chat/analysis path. After a version bump (figures were mis-read) the run-bar **Validate/Summarize/Categorize**
+buttons and the **CSV/JSON/XML exports** still served — and wrote to durable files — rows from the OLD extractor.
+**Root cause (§5.5):** the bare `sepa` description rule (and `überweisung`) deterministically bucketed most de-AT
+rows 'Transfer', and `prefilterCategory` treated any description-rule hit as CONFIDENT, so those rows never
+reached the 15-category LLM (Netflix, rent, a doctor refund all collapsed into one bucket). **Fix (§5.6):**
+`prepareStatementRun`/`prepareInvoiceRun` now re-extract a stale latest extraction in place (`replaceExisting`)
+before the downstream tool runs — parity with the analysis handler — and fail the run with the existing
+`needsExtraction` code if the re-extraction fails (a user CANCEL mid-re-extraction is reported `cancelled`, NOT a
+failure — parity with the seam's downstream cancel handling + the doctask categorize path); skipped when the
+caller supplied `preloaded` rows (the analysis lane already re-extracted, and re-extracting would delete the
+very rows it handed us). **Supporting edit
+(outside the plan's file list, required for parity — see below): `tool-runs.ts`** forwards the segment reader
+(+ bank `layout:true`) to the downstream dispatches (validate/categorize/summarize/export, bank + invoice);
+without it the re-extraction would fall back to the newline-collapsed `chunks` reader and persist near-zero rows
+(`resolveDocumentReader` — the chunk table is the wrong source for the line-oriented extractors). **Fix (§5.5):**
+a `CategoryRule.confident` flag (default true); `sepa`/`überweisung` are marked `confident:false` — they stay in
+`categorizeRow` as the deterministic NO-model fallback (still 'Transfer' offline) but `prefilterCategory` skips
+them so a loaded runtime sees those rows. `transfer` (English) stays confident (§5.5 named only sepa/überweisung).
+No extractor version bump (run/categorizer behaviour, not extraction output). **Tests added (20 net-new, real
+modules):** bank run-seam block (stale Validate/Summarize/CSV re-extract → new statement id, current version,
+faithful rows via segments not the collapsed chunk fallback; fresh = no re-extract/no duplicate; failed
+re-extraction → `needsExtraction`, stale row preserved; CANCEL mid-re-extraction → `cancelled`; stale+`preloaded`
+→ re-extraction SKIPPED); invoice run-seam block (same set for Validate + JSON export, incl. cancel, preloaded-skip
+and a `buildToolRunner` dispatch test proving invoice segment-forwarding); a full-IPC discriminating bank test (a
+downstream run-bar run re-extracts from faithful segments); categorizer unit block (sepa/überweisung → prefilter
+null but `categorizeRow` Transfer; `transfer` still prefiltered; a SEPA row routes to the model); the BL-3
+C-1-agreement test split to assert the deliberate boilerplate divergence. Every fix has a mutation-verified
+discriminating test (reverting the fix fails the test). **Adversarial multi-agent review** of the diff (4 dims →
+verify → synthesis) surfaced 4 confirmed issues, all addressed: (1) cancel-vs-fail in the re-extraction block
+[fixed]; (2) invoice segment-forwarding had no discriminating test [added, `buildToolRunner`]; (3) the
+stale+`preloaded` guard branch was untested [added, both domains]; (4) doc test-count off-by [corrected here].
+**Verified:** `npm test` green (2791 passed / 41 skipped), `npm run typecheck` clean. Docs: `known-limitations.md`
+categorization bullet (transfer boilerplate now reaches the model); plan §0.2 R3 → `[x]`. Non-goals held (A1
+run-seam refactor untouched; no answer/template change). Branch left unmerged per plan §0._
+
 _2026-07-02 — **Skills remediation R2: invoice/bank label & totals matching — branch `fix/skills-r2`,
 UNMERGED.** Second remediation phase (plan §R2; audit §5.2 CRITICAL + §5.4), on top of R1. Offline / pure /
 no new deps / no routing or answer change (R1 owns money regexes, R6 owns description cleanup). **Root cause

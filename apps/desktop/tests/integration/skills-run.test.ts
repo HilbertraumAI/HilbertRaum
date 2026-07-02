@@ -13,6 +13,7 @@ import {
   runCashflowSummary,
   runCsvExport,
   isBankStatementStale,
+  latestBankStatementId,
   type LoadedTransaction
 } from '../../src/main/services/skills/run'
 import {
@@ -518,5 +519,166 @@ describe('downstream statement seams (S11c)', () => {
     expect(saveCalled).toBe(false) // nothing was written under a cancel
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('cancelled')
+  })
+})
+
+// R3 (audit §5.6): the run-bar buttons (Validate/Summarize) and the CSV export must NEVER serve rows a
+// SINCE-FIXED extractor produced — the version bump means those figures were mis-read. `prepareStatementRun`
+// re-extracts a stale statement in place before the downstream tool runs, mirroring the analysis-handler
+// parity path. These tests seed a COLLAPSED chunk row (the chunk-table fallback would yield ≤1 row) and
+// provide FAITHFUL segments, so a re-extraction reading 2 rows proves it read the segments (not the chunks).
+describe('R3 — downstream runs re-extract a STALE statement before serving rows (audit §5.6)', () => {
+  const COLLAPSED = 'Statement EUR 2026-01-02 Grocery -45,90 1.954,10 2026-01-03 Salary 2.500,00 4.454,10'
+  const SEGMENTS: DocumentChunkRead[] = [
+    { text: 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10', page: 1, index: 0 }
+  ]
+  const faithfulReader = async (): Promise<DocumentChunkRead[]> => SEGMENTS
+  const ARGS = (docId: string): { skillInstallId: string; documentId: string } => ({
+    skillInstallId: 'app:bank-statement',
+    documentId: docId
+  })
+
+  /** Extract once at the CURRENT version from the faithful segments, then force the row stale. */
+  async function seedStaleStatement(db: Db, docId: string): Promise<string> {
+    const res = await runBankExtraction(db, ARGS(docId), { audit: () => {}, readDocumentSegments: faithfulReader })
+    const id = res.statementId!
+    expect(res.transactionCount).toBe(2)
+    db.prepare('UPDATE bank_statements SET extractor_version = 2 WHERE id = ?').run(id)
+    expect(isBankStatementStale(db, id)).toBe(true)
+    return id
+  }
+
+  it('Validate re-extracts the stale statement (new id, current version, faithful rows) before reconciling', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+    const staleId = await seedStaleStatement(db, docId)
+
+    const { audit } = capturingAudit()
+    const res = await runBalanceValidation(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader })
+    expect(res.ok).toBe(true)
+
+    const freshId = latestBankStatementId(db, docId)!
+    expect(freshId).not.toBe(staleId) // a NEW extraction replaced the stale one
+    expect(isBankStatementStale(db, freshId)).toBe(false) // stamped at the current version
+    // replaceExisting deleted the stale statement — no accumulation, and the old id is gone.
+    const count = (db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(docId) as { n: number }).n
+    expect(count).toBe(1)
+    expect(db.prepare('SELECT id FROM bank_statements WHERE id = ?').get(staleId)).toBeUndefined()
+    // The re-extraction read the FAITHFUL segments: 2 rows (the collapsed chunk fallback would give ≤1).
+    const txCount = (db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE statement_id = ?').get(freshId) as { n: number }).n
+    expect(txCount).toBe(2)
+  })
+
+  it('Summarize re-extracts the stale statement before computing the cashflow (count = re-extracted rows)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+    const staleId = await seedStaleStatement(db, docId)
+
+    const { audit } = capturingAudit()
+    const res = await runCashflowSummary(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader })
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(2) // both re-extracted rows summarized (the stale row set is not served)
+    const freshId = latestBankStatementId(db, docId)!
+    expect(freshId).not.toBe(staleId)
+    expect(isBankStatementStale(db, freshId)).toBe(false)
+  })
+
+  it('CSV export re-extracts the stale statement and writes the FRESH rows', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+    const staleId = await seedStaleStatement(db, docId)
+
+    let written = ''
+    const { audit } = capturingAudit()
+    const res = await runCsvExport(db, ARGS(docId), {
+      audit,
+      confirmed: true,
+      readDocumentSegments: faithfulReader,
+      saveTextFile: async (_name, content) => {
+        written = content
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(2) // two re-extracted rows exported (not the stale set)
+    // The written CSV carries BOTH faithful rows — the collapsed chunk fallback could not have produced them.
+    expect(written).toContain('Grocery')
+    expect(written).toContain('Salary')
+    const freshId = latestBankStatementId(db, docId)!
+    expect(isBankStatementStale(db, freshId)).toBe(false)
+  })
+
+  it('a FRESH statement is NOT re-extracted (same id, no duplicate) — re-extraction only fires when stale', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+    const res0 = await runBankExtraction(db, ARGS(docId), { audit: () => {}, readDocumentSegments: faithfulReader })
+    const freshId = res0.statementId!
+    expect(isBankStatementStale(db, freshId)).toBe(false)
+
+    const { audit } = capturingAudit()
+    const res = await runBalanceValidation(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader })
+    expect(res.ok).toBe(true)
+    // The statement id is unchanged and there is still exactly ONE statement — nothing re-extracted.
+    expect(latestBankStatementId(db, docId)).toBe(freshId)
+    const count = (db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(docId) as { n: number }).n
+    expect(count).toBe(1)
+  })
+
+  it('a stale statement whose re-extraction FAILS fails the run with needsExtraction (no bad rows served)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+    const staleId = await seedStaleStatement(db, docId)
+
+    const { audit } = capturingAudit()
+    const res = await runBalanceValidation(db, ARGS(docId), {
+      audit,
+      readDocumentSegments: async () => {
+        throw new Error('stored copy is gone')
+      }
+    })
+    expect(res.ok).toBe(false)
+    expect(res.errorCode).toBe('needsExtraction') // the plan's decision: fail with the existing code
+    // The stale statement is NOT deleted on a failed re-extraction (the DELETE only runs inside a
+    // successful persist), and no wrong figures were served.
+    expect(db.prepare('SELECT id FROM bank_statements WHERE id = ?').get(staleId)).toBeDefined()
+  })
+
+  it('a user CANCEL mid-re-extraction is reported cancelled (not a needsExtraction failure)', async () => {
+    // Regression for a run-bar defect the re-extraction introduced: a deliberate cancel during the stale
+    // re-extraction must surface as `cancelled` (run history 'cancelled'), NOT a 'failed' run with the
+    // misleading "read the statement first" needsExtraction message.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+    await seedStaleStatement(db, docId)
+
+    const ac = new AbortController()
+    ac.abort() // Cancel landed before the re-extraction's gate ran → runSkillTool returns cancelled
+    const { audit } = capturingAudit()
+    const res = await runBalanceValidation(db, ARGS(docId), { audit, signal: ac.signal, readDocumentSegments: faithfulReader })
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(true)
+    expect(res.errorCode).toBeUndefined() // NOT needsExtraction — a cancel is not a failure
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('cancelled')
+  })
+
+  it('a stale statement is NOT re-extracted when the caller supplies preloaded rows (guard for the analysis lane)', async () => {
+    // The `preloaded === undefined` half of the guard: the analysis lane re-extracts a stale statement
+    // ITSELF and then hands the fresh rows down as `preloaded`. Re-extracting again here would DELETE the
+    // very rows it handed us (stranding the persist that targets their ids). So even a STALE statement must
+    // be left untouched when preloaded rows are supplied. Dropping the sub-condition would fail this test.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+    const staleId = await seedStaleStatement(db, docId)
+    const preloaded = loadLoadedRows(db, staleId)
+
+    const { audit } = capturingAudit()
+    const res = await runBalanceValidation(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader }, preloaded)
+    expect(res.ok).toBe(true)
+    // No re-extraction: the SAME (still-stale) statement is served — the caller owns the freshness decision.
+    expect(latestBankStatementId(db, docId)).toBe(staleId)
+    expect(isBankStatementStale(db, staleId)).toBe(true)
+    const count = (db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(docId) as { n: number }).n
+    expect(count).toBe(1) // no duplicate spawned
   })
 })

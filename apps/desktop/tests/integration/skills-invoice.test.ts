@@ -17,10 +17,13 @@ import {
   runInvoiceExtraction,
   runInvoiceTotalsValidation,
   runInvoiceCsvExport,
-  runInvoiceFileExport
+  runInvoiceFileExport,
+  latestInvoiceId,
+  isInvoiceStale
 } from '../../src/main/services/skills/invoice-run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
-import type { AuditEventType, RunnableTool } from '../../src/shared/types'
+import type { InvoiceInput } from '../../src/main/services/skills/tools/invoice'
+import type { AuditEventType, DocumentChunkRead, RunnableTool } from '../../src/shared/types'
 
 // architecture.md "Skills — design record" §8 — the SECOND bundled Tier-2 skill: invoice. It mirrors
 // the bank-statement skill layer-for-layer to prove the gate generalizes to a second content-class
@@ -374,5 +377,181 @@ describe('invoice — the run seams (extract → validate → export) on a real 
     expect(res.error).toMatch(/cancel/i)
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('cancelled')
+  })
+})
+
+// R3 (audit §5.6): the invoice run-bar Validate button and the JSON/CSV/XML exports must NEVER serve
+// figures a since-fixed extractor mis-read. `prepareInvoiceRun` re-extracts a stale invoice in place
+// before the downstream tool runs (mirror of the bank `prepareStatementRun`). A COLLAPSED chunk row
+// (line-oriented parsing yields near-nothing) + FAITHFUL segments prove the re-extraction reads the
+// segments: 2 line items + gross 390 cannot come from the collapsed chunk.
+describe('R3 — downstream invoice runs re-extract a STALE invoice before serving rows (audit §5.6)', () => {
+  const skillInstallId = 'app:invoice'
+  const COLLAPSED = INVOICE_TEXT.replace(/\n/g, ' ')
+  const SEGMENTS: DocumentChunkRead[] = [{ text: INVOICE_TEXT, page: 1, index: 0 }]
+  const faithfulReader = async (): Promise<DocumentChunkRead[]> => SEGMENTS
+
+  /** Extract once at the CURRENT version from the faithful segments, then force the invoice stale. */
+  async function seedStaleInvoice(db: Db, docId: string): Promise<string> {
+    const res = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: faithfulReader })
+    const id = res.invoiceId!
+    expect(res.lineItemCount).toBe(2)
+    db.prepare('UPDATE invoices SET extractor_version = 2 WHERE id = ?').run(id)
+    expect(isInvoiceStale(db, id)).toBe(true)
+    return id
+  }
+
+  it('Validate re-extracts the stale invoice (new id, current version) before reconciling', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const staleId = await seedStaleInvoice(db, docId)
+
+    const { audit } = capturingAudit()
+    const res = await runInvoiceTotalsValidation(db, { skillInstallId, documentId: docId }, { audit, readDocumentSegments: faithfulReader })
+    expect(res.ok).toBe(true)
+
+    const freshId = latestInvoiceId(db, docId)!
+    expect(freshId).not.toBe(staleId)
+    expect(isInvoiceStale(db, freshId)).toBe(false)
+    // replaceExisting deleted the stale invoice — exactly one remains and the old id is gone.
+    const count = (db.prepare('SELECT COUNT(*) AS n FROM invoices WHERE document_id = ?').get(docId) as { n: number }).n
+    expect(count).toBe(1)
+    expect(db.prepare('SELECT id FROM invoices WHERE id = ?').get(staleId)).toBeUndefined()
+    // The re-extraction read the FAITHFUL segments: both line items are present.
+    const items = (db.prepare('SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id = ?').get(freshId) as { n: number }).n
+    expect(items).toBe(2)
+  })
+
+  it('JSON export re-extracts the stale invoice and serializes the FRESH figures', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const staleId = await seedStaleInvoice(db, docId)
+
+    let written = ''
+    const { audit } = capturingAudit()
+    const res = await runInvoiceFileExport(
+      db,
+      { skillInstallId, documentId: docId },
+      {
+        audit,
+        confirmed: true,
+        readDocumentSegments: faithfulReader,
+        saveTextFile: async (_name, content) => {
+          written = content
+          return true
+        }
+      },
+      { toolName: 'export_invoice_json', defaultFileName: 'invoice.json' }
+    )
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(2)
+    const parsed = JSON.parse(written) as { lineItems: unknown[]; totals: Record<string, unknown> }
+    expect(parsed.lineItems).toHaveLength(2) // re-extracted rows, not the stale set
+    expect(parsed.totals.grossTotal).toBe(390)
+    const freshId = latestInvoiceId(db, docId)!
+    expect(freshId).not.toBe(staleId)
+    expect(isInvoiceStale(db, freshId)).toBe(false)
+  })
+
+  it('a FRESH invoice is NOT re-extracted (same id, no duplicate)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const res0 = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: faithfulReader })
+    const freshId = res0.invoiceId!
+    expect(isInvoiceStale(db, freshId)).toBe(false)
+
+    const { audit } = capturingAudit()
+    const res = await runInvoiceTotalsValidation(db, { skillInstallId, documentId: docId }, { audit, readDocumentSegments: faithfulReader })
+    expect(res.ok).toBe(true)
+    expect(latestInvoiceId(db, docId)).toBe(freshId) // unchanged — nothing re-extracted
+    const count = (db.prepare('SELECT COUNT(*) AS n FROM invoices WHERE document_id = ?').get(docId) as { n: number }).n
+    expect(count).toBe(1)
+  })
+
+  it('a stale invoice whose re-extraction FAILS fails the run with needsExtraction', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const staleId = await seedStaleInvoice(db, docId)
+
+    const { audit } = capturingAudit()
+    const res = await runInvoiceTotalsValidation(db, { skillInstallId, documentId: docId }, {
+      audit,
+      readDocumentSegments: async () => {
+        throw new Error('stored copy is gone')
+      }
+    })
+    expect(res.ok).toBe(false)
+    expect(res.errorCode).toBe('needsExtraction')
+    // The stale invoice survives a failed re-extraction (the DELETE only runs in a successful persist).
+    expect(db.prepare('SELECT id FROM invoices WHERE id = ?').get(staleId)).toBeDefined()
+  })
+
+  it('a user CANCEL mid-re-extraction is reported cancelled (not a needsExtraction failure)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    await seedStaleInvoice(db, docId)
+
+    const ac = new AbortController()
+    ac.abort() // cancel before the re-extraction's gate ran → runSkillTool returns cancelled
+    const { audit } = capturingAudit()
+    const res = await runInvoiceTotalsValidation(db, { skillInstallId, documentId: docId }, {
+      audit,
+      signal: ac.signal,
+      readDocumentSegments: faithfulReader
+    })
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(true)
+    expect(res.errorCode).toBeUndefined() // NOT needsExtraction — a cancel is not a failure
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('cancelled')
+  })
+
+  it('a stale invoice is NOT re-extracted when the caller supplies a preloaded invoice (analysis-lane guard)', async () => {
+    // The `preloadedInvoice === undefined` half of the guard: the analysis lane already re-extracted the
+    // stale invoice and hands it down as `preloadedInvoice`; re-extracting again would delete its rows.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const staleId = await seedStaleInvoice(db, docId)
+    const preloaded: InvoiceInput = {
+      header: { vendor: 'ACME', currency: 'EUR' },
+      lineItems: [{ description: 'Item', quantity: 1, unitPrice: 100, lineTotal: 100, currency: 'EUR' }],
+      totals: { netTotal: 100, grossTotal: 100 }
+    }
+
+    const { audit } = capturingAudit()
+    const res = await runInvoiceTotalsValidation(db, { skillInstallId, documentId: docId }, { audit, readDocumentSegments: faithfulReader }, preloaded)
+    expect(res.ok).toBe(true)
+    // No re-extraction: the SAME (still-stale) invoice is served — the caller owns the freshness decision.
+    expect(latestInvoiceId(db, docId)).toBe(staleId)
+    expect(isInvoiceStale(db, staleId)).toBe(true)
+    const count = (db.prepare('SELECT COUNT(*) AS n FROM invoices WHERE document_id = ?').get(docId) as { n: number }).n
+    expect(count).toBe(1)
+  })
+
+  it('the run-bar DISPATCH forwards the segment reader to a stale invoice re-extraction (buildToolRunner, R3 / §5.6)', async () => {
+    // Discriminating twin of the bank IPC test: proves `tool-runs.ts` forwards `readDocumentSegments` to
+    // the downstream INVOICE dispatch. The COLLAPSED chunk yields ~0 line items via the chunk fallback;
+    // only the faithful segments give 2. Revert the invoice forwarding and this test fails.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const { audit } = capturingAudit()
+    const args = { skillInstallId, conversationId: '', documentId: docId }
+    const runnerDeps = { readDocumentSegments: faithfulReader }
+    const runCtx = { signal: new AbortController().signal, onProgress: () => {} }
+
+    // Extract through the dispatch (reads the forwarded segments) — two line items.
+    const extract = buildToolRunner(db, 'extract_invoice', args, audit, runnerDeps)!
+    expect((await extract(runCtx)).ok).toBe(true)
+    const staleId = latestInvoiceId(db, docId)!
+    db.prepare('UPDATE invoices SET extractor_version = 2 WHERE id = ?').run(staleId)
+
+    // A downstream dispatch (Validate) must re-extract from the forwarded segments, not the chunk fallback.
+    const validate = buildToolRunner(db, 'validate_invoice_totals', args, audit, runnerDeps)!
+    expect((await validate(runCtx)).ok).toBe(true)
+
+    const freshId = latestInvoiceId(db, docId)!
+    expect(freshId).not.toBe(staleId) // re-extracted through the dispatch
+    const items = (db.prepare('SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id = ?').get(freshId) as { n: number }).n
+    expect(items).toBe(2) // faithful segments — the collapsed chunk fallback would give 0
   })
 })

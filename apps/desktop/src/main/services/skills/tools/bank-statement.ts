@@ -694,6 +694,17 @@ export interface CategoryRule {
    * so it is not persisted.
    */
   compound?: boolean
+  /**
+   * Whether a match on this rule is CONFIDENT enough to skip the LLM categorizer (R3 / audit §5.5).
+   * Defaults to true (omitted ⇒ confident): a keyword like `gebühr`/`gehalt` unambiguously names one
+   * bucket, so `prefilterCategory` returns it and the model is never consulted for that row. Set FALSE
+   * for transfer-BOILERPLATE patterns (`sepa`, `überweisung`) that merely describe the RAILS a payment
+   * rode, not what it was — Netflix, rent and a doctor refund all carry "SEPA" and must reach the
+   * 15-category model when a runtime is loaded. A non-confident rule stays in `categorizeRow` (the
+   * deterministic NO-model fallback still labels them 'Transfer' offline), but `prefilterCategory`
+   * ignores it so those rows go to the model instead of being vetoed by boilerplate.
+   */
+  confident?: boolean
 }
 
 export const UNCATEGORIZED = 'Uncategorized'
@@ -707,6 +718,10 @@ export const UNCATEGORIZED = 'Uncategorized'
 // gebühr/gehalt/überweisung/bargeld. The short English tokens (fee/charge/atm/…) and the ambiguous
 // `lohn` (⊂ muehlohn/Belohnung) stay STRICT — income from salary is still covered by the positive-amount
 // sign fallback, so `lohn` need not (and must not) be relaxed.
+// `confident: false` marks TRANSFER-BOILERPLATE (`sepa`, `überweisung`): these describe the payment RAILS,
+// not the merchant, so most de-AT rows carry them (R3 / audit §5.5). They stay here as the deterministic
+// NO-model fallback (`categorizeRow` still labels them 'Transfer' offline) but `prefilterCategory` skips
+// them, so with a runtime loaded those rows reach the 15-category LLM instead of collapsing into 'Transfer'.
 export const BUILTIN_CATEGORY_RULES: readonly CategoryRule[] = [
   { category: 'Fees', matchKind: 'description-substring', pattern: 'fee' },
   { category: 'Fees', matchKind: 'description-substring', pattern: 'gebühr', compound: true },
@@ -716,8 +731,8 @@ export const BUILTIN_CATEGORY_RULES: readonly CategoryRule[] = [
   { category: 'Income', matchKind: 'description-substring', pattern: 'lohn' },
   { category: 'Income', matchKind: 'description-substring', pattern: 'payroll' },
   { category: 'Transfer', matchKind: 'description-substring', pattern: 'transfer' },
-  { category: 'Transfer', matchKind: 'description-substring', pattern: 'überweisung', compound: true },
-  { category: 'Transfer', matchKind: 'description-substring', pattern: 'sepa' },
+  { category: 'Transfer', matchKind: 'description-substring', pattern: 'überweisung', compound: true, confident: false },
+  { category: 'Transfer', matchKind: 'description-substring', pattern: 'sepa', confident: false },
   { category: 'Cash', matchKind: 'description-substring', pattern: 'atm' },
   { category: 'Cash', matchKind: 'description-substring', pattern: 'bargeld', compound: true },
   { category: 'Cash', matchKind: 'description-substring', pattern: 'withdrawal' },

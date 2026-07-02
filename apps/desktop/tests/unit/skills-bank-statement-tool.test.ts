@@ -892,13 +892,24 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
     expect(categorizeRow(tx({ description: 'Bargeldbehebung Bankomat', amount: -150 }))).toBe('Cash')
   })
 
-  it('BL-3: the LLM prefilter agrees with categorizeRow on the German compounds (audit C-1 invariant)', () => {
-    // Both deterministic paths share `wordIncludes` + the same compound flag, so they must still agree:
-    // a compound that NOW categorizes deterministically must ALSO be confidently pre-filtered (kept off
-    // the model), and a coincidental English substring must skip BOTH (go to the model).
-    for (const desc of ['Kontoführungsgebühr', 'Gehaltszahlung Juni', 'SEPA-Überweisung']) {
+  it('BL-3: the LLM prefilter agrees with categorizeRow on the CONFIDENT German compounds (audit C-1 invariant)', () => {
+    // Both deterministic paths share `wordIncludes` + the same compound flag, so a CONFIDENT compound that
+    // categorizes deterministically must ALSO be confidently pre-filtered (kept off the model). Only the
+    // unambiguous buckets qualify — transfer-boilerplate (sepa/überweisung) is deliberately excluded now
+    // (see the divergence test below, R3 / audit §5.5).
+    for (const desc of ['Kontoführungsgebühr', 'Gehaltszahlung Juni']) {
       expect(prefilterCategory(tx({ description: desc, amount: -3 }))).toBe(categorizeRow(tx({ description: desc, amount: -3 })))
       expect(prefilterCategory(tx({ description: desc, amount: -3 }))).not.toBeNull()
+    }
+  })
+
+  it('R3 / §5.5: transfer boilerplate DIVERGES — categorizeRow labels Transfer, but the prefilter sends it to the model', () => {
+    // `sepa`/`überweisung` are `confident: false`: they describe the payment rails, not the merchant, so
+    // most de-AT rows carry them. The deterministic NO-model fallback still buckets them 'Transfer', but
+    // the LLM prefilter must return null so a runtime can assign the richer 15-category taxonomy instead.
+    for (const desc of ['SEPA-Überweisung Miete', 'Dauerüberweisung Sparen', 'SEPA-Lastschrift NETFLIX']) {
+      expect(categorizeRow(tx({ description: desc, amount: -12 }))).toBe('Transfer')
+      expect(prefilterCategory(tx({ description: desc, amount: -12 }))).toBeNull()
     }
   })
 

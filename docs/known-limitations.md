@@ -646,7 +646,12 @@ password recovery — are documented in
   The deterministic rules match German keywords **inside closed compounds** (full-audit-2026-06-29 BL-3:
   `kontoführungsgebühr`→Fees, `gehaltszahlung`→Income) via a one-sided word boundary on the unambiguous DE
   keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`), while short English tokens (`fee`/`atm`) and the
-  ambiguous `lohn` keep a strict two-sided boundary. **Residuals:** `lohn` is NOT compound-matched (so a
+  ambiguous `lohn` keep a strict two-sided boundary. **Transfer boilerplate does NOT veto the model
+  (R3 / audit §5.5):** `sepa`/`überweisung` describe the payment rails, not the merchant, so most de-AT
+  rows carry them; they are marked `confident: false`, so with a runtime loaded those rows go to the
+  15-category LLM (Netflix, rent, a doctor refund no longer all collapse into one `Transfer` bucket). With
+  **no model loaded** the deterministic fallback still labels them `Transfer` (coarser, but honest offline).
+  **Residuals:** `lohn` is NOT compound-matched (so a
   `monatslohn` *debit* is not deterministically Income — a positive salary is still caught by the sign
   fallback), and the compound `gehalt` could in principle over-match a non-salary compound
   (`alkoholgehalt`) — neither moves a verified figure, only the model-assisted breakdown.

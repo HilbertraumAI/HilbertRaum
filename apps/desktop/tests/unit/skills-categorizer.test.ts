@@ -108,6 +108,58 @@ describe('categorizer — deterministic categorizeRow agrees with the prefilter 
   })
 })
 
+describe('categorizer — transfer boilerplate is demoted from the confident prefilter (R3 / audit §5.5)', () => {
+  // `sepa`/`überweisung` describe the payment RAILS, not the merchant; most de-AT rows carry them, so
+  // they must NOT veto the model. The prefilter returns null (→ ask the model) while `categorizeRow`
+  // (the deterministic NO-model fallback) still labels them 'Transfer' when no runtime is loaded.
+  const boilerplate = [
+    'SEPA-Lastschrift NETFLIX INTERNATIONAL',
+    'SEPA-Dauerauftrag Miete Objekt 3',
+    'SEPA Gutschrift Arztpraxis Dr. Huber',
+    'Überweisung an Max Mustermann'
+  ]
+
+  it('prefilterCategory sends transfer-boilerplate rows to the model (returns null)', () => {
+    for (const desc of boilerplate) {
+      expect(prefilterCategory(row(desc, -12.99))).toBeNull()
+    }
+  })
+
+  it('categorizeRow (no-model fallback) still labels the same rows Transfer', () => {
+    for (const desc of boilerplate) {
+      expect(categorizeRow(row(desc, -12.99))).toBe('Transfer')
+    }
+  })
+
+  it('the English `transfer` keyword stays confident (still prefiltered)', () => {
+    // Only sepa/überweisung were demoted (§5.5); the explicit `transfer` word remains confident.
+    expect(prefilterCategory(row('Bank transfer to savings', -100))).toBe('Transfer')
+  })
+
+  it('with a runtime, a SEPA row reaches the model and gets its richer category (not Transfer)', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(
+      validReplyFor((desc) => (desc.includes('NETFLIX') ? 'Shopping' : 'Uncategorized')),
+      calls
+    )
+    // A confident Gebühr row is prefiltered; the SEPA-Netflix row is NOT (it must go to the model).
+    const rows = [row('Kontoführung Gebühr', -3.5), row('SEPA-Lastschrift NETFLIX INTERNATIONAL', -12.99)]
+    const { assignments, modelAssisted } = await categorizeTransactions(rows, {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(modelAssisted).toBe(true)
+    expect(assignments).toEqual([
+      { index: 0, category: 'Fees' }, // prefiltered — never sent to the model
+      { index: 1, category: 'Shopping' } // routed to the model, which chose a richer bucket than 'Transfer'
+    ])
+    expect(calls).toHaveLength(1)
+    const sent = calls[0].messages[1].content
+    expect(sent).toContain('NETFLIX') // the SEPA row WAS sent to the model
+    expect(sent).not.toContain('Gebühr') // the confident row was NOT
+  })
+})
+
 describe('categorizeTransactions — model path', () => {
   it('keeps prefilter matches and assigns the rest from the model', async () => {
     const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []

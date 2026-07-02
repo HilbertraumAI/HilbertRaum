@@ -522,12 +522,40 @@ async function prepareStatementRun(
       return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
     }
 
-    const statementId = latestBankStatementId(db, args.documentId)
+    let statementId = latestBankStatementId(db, args.documentId)
     if (!statementId) {
       // Honest, friendly: the downstream tools need an extraction first (no figure invented).
       const msg = 'Read the statement first, then run this tool.'
       finishRun(db, runId, 'failed', now(), null, msg)
       return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
+    }
+
+    // Staleness re-extraction (R3 / audit §5.6): a run-bar button OR an export must NEVER serve rows a
+    // since-fixed parser produced — the extractor version is bumped precisely because those figures were
+    // mis-read (sign theft, wrong currency, 1000× understatement). Mirror the analysis handler's parity
+    // path (`analysis/bank-statement.ts`): re-extract in place (`replaceExisting`) before loading rows.
+    // `runBankExtraction` self-locks the same document re-entrantly (`doc-lock`), so this nests safely
+    // under a downstream seam that already holds the lock. Skip when the caller supplied `preloaded`
+    // rows — the analysis lane already re-extracted any stale statement and re-extracting here would
+    // DELETE the very rows it handed us (stranding the persist that targets their ids).
+    if (preloaded === undefined && isBankStatementStale(db, statementId)) {
+      const extraction = await runBankExtraction(db, args, { ...deps, replaceExisting: true })
+      if (!extraction.ok || !extraction.statementId) {
+        // A user CANCEL mid-re-extraction is a calm outcome, not a failure — mirror the downstream
+        // tool-failure branch below (`const cancelled = signal.aborted`) and the doctask categorize path,
+        // both of which record a cancel as 'cancelled', not a 'failed' run with the misleading
+        // needsExtraction "read the statement first" message. The seam is the authority on cancel (B2).
+        if (extraction.cancelled) {
+          finishRun(db, runId, 'cancelled', now(), null, null)
+          return { failed: { ok: false, runId, cancelled: true, error: extraction.error } }
+        }
+        // Re-extraction genuinely failed (source gone / unreadable): fail with the SAME code the missing-
+        // extraction branch uses, so the renderer tells the user to read the statement again (never a bad figure).
+        const msg = 'Read the statement first, then run this tool.'
+        finishRun(db, runId, 'failed', now(), null, msg)
+        return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
+      }
+      statementId = extraction.statementId
     }
 
     // Reuse the caller's already-loaded rows when provided (audit P-1); otherwise load them here (the

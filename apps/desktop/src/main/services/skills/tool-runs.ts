@@ -271,7 +271,16 @@ export function buildToolRunner(
       }
     case 'validate_statement_balances':
       return async ({ signal, onProgress }) => {
-        const res = await runBalanceValidation(db, seamArgs, { audit, signal, onProgress })
+        // Forward the faithful segment reader (+ bank geometry, D58): if the latest statement is STALE
+        // the downstream seam re-extracts it (R3 / audit §5.6), and that re-extraction MUST read the
+        // newline-preserving parser segments — the `chunks` table collapses newlines into near-zero rows.
+        const res = await runBalanceValidation(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          readDocumentSegments: deps.readDocumentSegments,
+          layout: true
+        })
         return {
           ok: res.ok,
           transactionCount: res.count,
@@ -290,12 +299,26 @@ export function buildToolRunner(
         return ({ signal, onProgress }) => runCategorizeViaDocTask(docTasks, args.documentId, signal, onProgress)
       }
       return async ({ signal, onProgress }) => {
-        const res = await runCategorization(db, seamArgs, { audit, signal, onProgress })
+        // Segment reader forwarded for the stale re-extraction (R3 / §5.6). This direct-seam categorize
+        // is the tests/headless path; with a doctask lane the categorize goes through the branch above.
+        const res = await runCategorization(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          readDocumentSegments: deps.readDocumentSegments,
+          layout: true
+        })
         return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'summarize_cashflow':
       return async ({ signal, onProgress }) => {
-        const res = await runCashflowSummary(db, seamArgs, { audit, signal, onProgress })
+        const res = await runCashflowSummary(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          readDocumentSegments: deps.readDocumentSegments, // stale re-extraction reads faithful segments (R3 / §5.6)
+          layout: true
+        })
         return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'export_transactions_csv':
@@ -306,7 +329,9 @@ export function buildToolRunner(
           signal,
           onProgress,
           confirmed: args.confirmed,
-          saveTextFile: deps.saveTextFile!
+          saveTextFile: deps.saveTextFile!,
+          readDocumentSegments: deps.readDocumentSegments, // an export of a STALE statement re-extracts first (R3 / §5.6)
+          layout: true
         })
         return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
@@ -334,7 +359,14 @@ export function buildToolRunner(
       }
     case 'validate_invoice_totals':
       return async ({ signal, onProgress }) => {
-        const res = await runInvoiceTotalsValidation(db, seamArgs, { audit, signal, onProgress })
+        // Segment reader forwarded so a STALE invoice re-extracts from faithful segments (R3 / §5.6).
+        // No `layout` flag — invoices are never geometry-reconstructed (layout is bank-only, D58).
+        const res = await runInvoiceTotalsValidation(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          readDocumentSegments: deps.readDocumentSegments
+        })
         return {
           ok: res.ok,
           transactionCount: res.count,
@@ -352,7 +384,8 @@ export function buildToolRunner(
           signal,
           onProgress,
           confirmed: args.confirmed,
-          saveTextFile: deps.saveTextFile!
+          saveTextFile: deps.saveTextFile!,
+          readDocumentSegments: deps.readDocumentSegments // export of a STALE invoice re-extracts first (R3 / §5.6)
         })
         return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
@@ -363,7 +396,14 @@ export function buildToolRunner(
         const res = await runInvoiceFileExport(
           db,
           seamArgs,
-          { audit, signal, onProgress, confirmed: args.confirmed, saveTextFile: deps.saveTextFile! },
+          {
+            audit,
+            signal,
+            onProgress,
+            confirmed: args.confirmed,
+            saveTextFile: deps.saveTextFile!,
+            readDocumentSegments: deps.readDocumentSegments // JSON/XML export of a STALE invoice re-extracts first (R3 / §5.6)
+          },
           {
             toolName,
             defaultFileName: toolName === 'export_invoice_json' ? 'invoice.json' : 'invoice.xml'

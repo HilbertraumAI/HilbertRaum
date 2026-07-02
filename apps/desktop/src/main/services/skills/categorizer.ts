@@ -151,13 +151,17 @@ export function buildBatchPrompt(rows: TransactionInput[]): string {
  * `wordIncludes`, not a raw substring) so a coincidental match (`fee` inside `coffee`) never wrongly
  * skips the model — and so this PRE-FILTER and the deterministic `categorizeRow` agree on the same
  * description rules (audit C-1). The amount-sign fallback is NOT confident, so those rows still go to
- * the model. Returns the category or null (→ ask the model).
+ * the model. Nor are `confident: false` rules (transfer-BOILERPLATE `sepa`/`überweisung` — R3 / audit
+ * §5.5): they describe the payment rails, not the merchant, so they must reach the model here even
+ * though `categorizeRow` still applies them as the deterministic no-model fallback. Returns the
+ * category or null (→ ask the model).
  */
 export function prefilterCategory(row: TransactionInput): string | null {
   const desc = row.description.toLowerCase()
   for (const rule of BUILTIN_CATEGORY_RULES) {
     if (
       rule.matchKind === 'description-substring' &&
+      rule.confident !== false && // transfer-boilerplate (sepa/überweisung) goes to the model, not the prefilter (§5.5)
       wordIncludes(desc, rule.pattern, rule.compound) && // honour the BL-3 German-compound flag (C-1 agreement)
       CATEGORY_SET.has(rule.category)
     ) {

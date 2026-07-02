@@ -370,12 +370,35 @@ async function prepareInvoiceRun(
       return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
     }
 
-    const invoiceId = latestInvoiceId(db, args.documentId)
+    let invoiceId = latestInvoiceId(db, args.documentId)
     if (!invoiceId) {
       // Honest, friendly: the downstream tools need an extraction first (no figure invented).
       const msg = 'Read the invoice first, then run this tool.'
       finishRun(db, runId, 'failed', now(), null, msg)
       return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
+    }
+
+    // Staleness re-extraction (R3 / audit §5.6 — mirrors the bank `prepareStatementRun`): a run-bar
+    // button OR a JSON/CSV/XML export must NEVER serve figures a since-fixed parser mis-read. Mirror the
+    // analysis handler (`analysis/invoice.ts`): re-extract in place (`replaceExisting`) before loading.
+    // `runInvoiceExtraction` self-locks the same document re-entrantly, so this nests safely. Skip when
+    // the caller passed a `preloadedInvoice` — the analysis lane already re-extracted any stale invoice
+    // and re-extracting here would delete the very rows it handed us.
+    if (preloadedInvoice === undefined && isInvoiceStale(db, invoiceId)) {
+      const extraction = await runInvoiceExtraction(db, args, { ...deps, replaceExisting: true })
+      if (!extraction.ok || !extraction.invoiceId) {
+        // A user CANCEL mid-re-extraction is a calm outcome, not a failure (mirror the bank
+        // `prepareStatementRun` + the downstream tool-failure branch below): record 'cancelled', not a
+        // 'failed' run with the misleading needsExtraction message.
+        if (extraction.cancelled) {
+          finishRun(db, runId, 'cancelled', now(), null, null)
+          return { failed: { ok: false, runId, cancelled: true, error: extraction.error } }
+        }
+        const msg = 'Read the invoice first, then run this tool.'
+        finishRun(db, runId, 'failed', now(), null, msg)
+        return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
+      }
+      invoiceId = extraction.invoiceId
     }
 
     // Reuse the caller's already-reconstructed invoice when provided (audit P-1); otherwise load it
