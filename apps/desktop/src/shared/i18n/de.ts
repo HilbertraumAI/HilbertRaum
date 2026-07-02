@@ -504,12 +504,15 @@ export const de: Record<keyof typeof en, string> = {
   // Abdeckung einer „Liste alle X"-Antwort (Phase 3). Vollständig über die durchsuchten
   // Abschnitte — NIE „komplett" (H7). „Ganzes Dokument" nur, wenn alles indexiert ist.
   // D-L7-Review ausstehend.
-  'coverage.extract.whole': 'Jeder Treffer im ganzen Dokument — {scanned} Abschnitte durchsucht',
+  // U1 (audit §2.3 / ux-10): entschärft von „Jeder Treffer …", das die Vollständigkeit der EXTRAKTION
+  // überzeichnete. „Gelesen" ist die ehrliche Aussage — jeder Abschnitt wurde GELESEN, ohne zu behaupten,
+  // jeder Treffer sei erfasst.
+  'coverage.extract.whole': 'Im ganzen Dokument gelesen — {scanned} Abschnitte durchsucht',
   'coverage.extract.wholeUnparsed':
-    'Jeder Treffer im ganzen Dokument — {scanned} Abschnitte durchsucht, {unparsed} nicht lesbar',
-  'coverage.extract.sections': 'Jeder Treffer in {scanned} durchsuchten Abschnitten',
+    'Im ganzen Dokument gelesen — {scanned} Abschnitte durchsucht, {unparsed} nicht lesbar',
+  'coverage.extract.sections': 'In {scanned} durchsuchten Abschnitten gelesen',
   'coverage.extract.sectionsUnparsed':
-    'Jeder Treffer in {scanned} durchsuchten Abschnitten, {unparsed} nicht lesbar',
+    'In {scanned} durchsuchten Abschnitten gelesen, {unparsed} nicht lesbar',
 
   // ---- „Liste alle X"-Antwort (Phase 3) — D-L7-Review ausstehend ----
   'analysis.kind.generic': 'Einträge',
@@ -536,8 +539,23 @@ export const de: Record<keyof typeof en, string> = {
   // extrahierten Buchungstabelle erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt
   // und werden unverändert als Parameter durchgereicht.
   'skills.bankAnalysis.count': 'Ich habe **{count}** Buchungen über den ganzen Auszug gelesen.',
+  // U1 (audit §2.3): die ehrlich abgesicherte Kopfzeile (du-Form). Jeder Abschnitt wurde gelesen, aber
+  // **{dropped}** Zeile(n) mit einer Zahl ließen sich nicht als Buchung erfassen — also nicht zwingend alle.
+  'skills.bankAnalysis.countPartial':
+    'Ich habe **{count}** Buchungen gelesen. Bei **{dropped}** Zeile(n) stand eine Zahl, die ich nicht als ' +
+    'Buchung erfassen konnte — es sind also vielleicht nicht alle Buchungen. Prüf diese Zeilen im Dokument.',
+  // U1 (audit §2.3): die CONTRADICTED-D56-Kopfzeile — keine „ganzer Auszug"-Behauptung über einem Text, der
+  // sagt, dass die aufgedruckten Salden nicht aufgehen (behebt den Selbstwiderspruch der alten Kopfzeile).
+  'skills.bankAnalysis.countContradicted':
+    'Ich habe **{count}** Buchungen gelesen, aber die aufgedruckten Salden dieses Auszugs gehen damit nicht ' +
+    'auf — ich kann daher nicht bestätigen, dass das alle sind.',
+  // U1 (audit §2.3 / ux-11): der leere Fall ist keine Sackgasse mehr — es liegt am Leser, nicht am Dokument,
+  // und der nächste Schritt wird genannt (OCR bei einem Scan; sonst ist das Layout evtl. nicht maschinenlesbar).
   'skills.bankAnalysis.empty':
-    'Ich habe den ganzen Auszug gelesen, aber keine Buchungen zum Summieren gefunden.',
+    'Ich habe das ganze Dokument durchsucht, konnte aber keine Buchungen daraus lesen. Die Zeilen liegen ' +
+    'vielleicht als gescanntes Bild oder in einem ungewöhnlichen Layout vor, dem mein Leser nicht folgen kann. ' +
+    'Wenn es ein Scan ist, lass zuerst OCR (Texterkennung) darüberlaufen; sonst ist das Layout womöglich nicht ' +
+    'maschinenlesbar — öffne den Auszug und lies die Zahlen direkt.',
   'skills.bankAnalysis.couldNotRead':
     'Ich konnte diesen Auszug nicht lesen und kann ihn daher nicht auswerten.',
   'skills.bankAnalysis.unreconciledHeading':
@@ -628,8 +646,17 @@ export const de: Record<keyof typeof en, string> = {
   // extrahierten Rechnung erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt und werden
   // unverändert als Parameter durchgereicht.
   'skills.invoiceAnalysis.count': 'Ich habe die ganze Rechnung gelesen — **{count}** Positionen.',
+  // U1 (audit §2.3): die ehrlich abgesicherte Kopfzeile (du-Form) — jeder Abschnitt gelesen, aber
+  // **{dropped}** Zeile(n) mit einer Zahl ließen sich nicht erfassen, also nicht zwingend die ganze Rechnung.
+  'skills.invoiceAnalysis.countPartial':
+    'Ich habe **{count}** Positionen gelesen. Bei **{dropped}** Zeile(n) stand eine Zahl, die ich nicht als ' +
+    'Position erfassen konnte — es sind also vielleicht nicht alle Positionen. Prüf diese Zeilen im Dokument.',
+  // U1 (audit §2.3 / ux-11): der leere Fall nennt einen nächsten Schritt statt in einer Sackgasse zu enden.
   'skills.invoiceAnalysis.empty':
-    'Ich habe die ganze Rechnung gelesen, aber keine Positionen oder Beträge zum Auswerten gefunden.',
+    'Ich habe das ganze Dokument durchsucht, konnte aber keine Positionen oder Beträge daraus lesen. Die ' +
+    'Zahlen liegen vielleicht als gescanntes Bild oder in einem ungewöhnlichen Layout vor, dem mein Leser ' +
+    'nicht folgen kann. Wenn es ein Scan ist, lass zuerst OCR (Texterkennung) darüberlaufen; sonst ist das ' +
+    'Layout womöglich nicht maschinenlesbar — öffne die Rechnung und lies die Zahlen direkt.',
   'skills.invoiceAnalysis.couldNotRead':
     'Ich konnte diese Rechnung nicht lesen und kann sie daher nicht auswerten.',
   'skills.invoiceAnalysis.unreconciledHeading':

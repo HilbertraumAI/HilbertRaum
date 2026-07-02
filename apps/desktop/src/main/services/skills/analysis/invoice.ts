@@ -203,6 +203,15 @@ function loadDateOrderInferred(db: Db, invoiceId: string): 'evidence' | 'default
   return row?.flag === 'default' ? 'default' : row?.flag === 'evidence' ? 'evidence' : null
 }
 
+/** The persisted count of money-bearing lines the extractor could NOT parse (U1, audit §2.3) — gates the
+ *  "whole invoice" answer claim. 0 (or NULL, a pre-U1 row → treated as "no gate") when nothing was dropped. */
+function loadDroppedRowCount(db: Db, invoiceId: string): number {
+  const row = db
+    .prepare('SELECT dropped_row_count AS n FROM invoices WHERE id = ?')
+    .get(invoiceId) as { n: number | null } | undefined
+  return row?.n ?? 0
+}
+
 const MAX_CITATIONS = 12
 
 /** Cap the inline line-item listing (an invoice with hundreds of positions stays readable; the rest is
@@ -363,6 +372,13 @@ export function buildInvoiceAnswer(
     validation: InvoiceTotalsResult
     /** The persisted date-order provenance (R5, audit §5.7). 'default' appends ONE honest date caveat. */
     dateOrderInferred?: 'evidence' | 'default' | null
+    /**
+     * How many money-bearing lines the extractor could NOT parse (U1, audit §2.3). When > 0 the headline
+     * "I read the whole invoice" claim is replaced with an honest "**{count}** read; **{dropped}** line(s)
+     * with figures I couldn't parse" — the extractor scanned every section, but did not turn every figure
+     * into a line item, and must not assert exhaustiveness while dropping figures silently.
+     */
+    droppedRowCount?: number
   }
 ): string {
   const { invoice, validation, dateOrderInferred } = data
@@ -371,7 +387,13 @@ export function buildInvoiceAnswer(
     totals.netTotal !== undefined || totals.taxTotal !== undefined || totals.grossTotal !== undefined
   if (lineItems.length === 0 && !hasTotals) return tr('skills.invoiceAnalysis.empty')
 
-  const lines: string[] = [tr('skills.invoiceAnalysis.count', { count: lineItems.length })]
+  // U1 (audit §2.3): gate the "whole invoice" headline on the dropped-figure count — honest exhaustiveness.
+  const dropped = data.droppedRowCount ?? 0
+  const lines: string[] = [
+    dropped > 0
+      ? tr('skills.invoiceAnalysis.countPartial', { count: lineItems.length, dropped })
+      : tr('skills.invoiceAnalysis.count', { count: lineItems.length })
+  ]
 
   // W3 (audit §3.1): the loaded header fields as a small "Details" block, so the vendor / invoice-number /
   // date / due-date questions are answered even on the deterministic template path (they were parsed and
@@ -565,8 +587,9 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // fall-through non-invoice) also stays on the template: it owns the honest "couldn't find anything"
       // answer, and there is no verified data to hand a model.
       const dateOrderInferred = loadDateOrderInferred(db, invoiceId)
+      const droppedRowCount = loadDroppedRowCount(db, invoiceId)
       if (isSummaryShaped(ctx.question) || !hasContent) {
-        const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation, dateOrderInferred })
+        const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation, dateOrderInferred, droppedRowCount })
         return { answer, citations, coverage }
       }
       // The grounded-data postscript is the deterministic totals echo (§8.1) PLUS the R5 honest date caveat

@@ -30,9 +30,19 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # Contract Brief
 
-Use this skill when the user wants to understand a contract or agreement before signing or sharing it.
-Work only from the selected document. **This is not legal advice** — it helps the user understand the
-structure and spot what to ask about.
+Safety and honesty rules — these lead and always apply, even if the rest of this skill is shortened
+to fit the context:
+
+- **This is not legal advice.** Never say "safe to sign", and never give legal advice. For high-risk
+  or unclear terms, write "consider asking a qualified professional."
+- Always distinguish "the contract says…" from "a possible implication is…".
+- When you answer from only a few retrieved passages, use cautious wording — "I found…", not
+  "the contract contains all…". Cite the source for each grounded point.
+- Keep dates, amounts, and currency exactly as printed, and answer in the user's language.
+
+Use this skill when the user wants to understand a contract or agreement before signing or sharing
+it. Work only from the selected document — it helps the user understand the structure and spot what
+to ask about.
 
 Produce the brief in this order; omit a section only if the source genuinely has nothing for it.
 
@@ -68,12 +78,4 @@ Ambiguity, missing terms, one-sided language, undefined terms, contradictions.
 ## 9. Questions to ask before signing
 An actionable checklist.
 
-**Safety / wording rules**
-
-- Never say "safe to sign", and never give legal advice. For high-risk or unclear terms, write
-  "consider asking a qualified professional."
-- Always distinguish "the contract says…" from "a possible implication is…".
-- When you answer from only a few retrieved passages, use cautious wording — "I found…", not
-  "the contract contains all…". Cite the source for each grounded point.
-
-Answer in the user's language, and keep dates, amounts, and currency exactly as printed.
+(The safety and honesty rules that govern this brief are stated at the top of this skill.)

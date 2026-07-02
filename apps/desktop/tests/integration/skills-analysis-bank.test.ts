@@ -226,6 +226,45 @@ describe('bank-statement analysis handler — date-order caveat (R5, §5.7)', ()
   })
 })
 
+describe('bank-statement analysis handler — honest completeness gate (U1, §2.3)', () => {
+  // One good row + one row the parser DROPS as an ambiguous balance-as-amount ("Sparen 50 …" — a lone
+  // money token with a bare-number-trailing description on a balance-column statement). droppedRowCount = 1.
+  const ONE_DROPPED =
+    'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Sparen 50 1.234,56'
+
+  it('gates the count line: droppedRowCount > 0 ⇒ the honest partial headline, not "the whole statement"', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, ONE_DROPPED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    // One row survived; one money-bearing line was dropped → the partial headline (count 1, dropped 1).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 1 }))
+  })
+
+  // A per-row printed balance that the amounts refute ⇒ status 'contradicted'; both rows parse (dropped 0).
+  const CONTRADICTED =
+    'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+    '2026-01-03 Salary 2.500,00 9.999,99\nClosing balance 9.999,99'
+
+  it('gates the count line: a CONTRADICTED statement drops the "whole statement" claim (self-contradiction fix)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CONTRADICTED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countContradicted', { count: 2 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    // The body still refuses a total (the balances don't tie) — the count line no longer contradicts it.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+  })
+
+  it('a clean, complete statement keeps the plain "across the whole statement" count (no false gate)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 2, dropped: 0 }))
+  })
+})
+
 describe('bank-statement analysis handler — run()', () => {
   it('exhaustive math: count + in/out/net totals computed from the extracted rows', async () => {
     const db = freshDb()

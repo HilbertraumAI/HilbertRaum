@@ -181,7 +181,10 @@ describe('PDF layout mode — geometry reconstruction recovers the columnar stat
     const docId = seedDoc(db, segments)
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
 
-    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
+    // U1 (audit §2.3): a CONTRADICTED statement no longer claims "across the whole statement" over a body
+    // that refuses a total — the count line is gated to the honest contradicted headline.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countContradicted', { count: 3 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
     expect(res.answer).not.toContain('Net change')
   })
@@ -319,7 +322,10 @@ describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per
     const docId = seedDoc(db, segments)
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
 
-    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
+    // U1 (audit §2.3): a CONTRADICTED statement no longer claims "across the whole statement" over a body
+    // that refuses a total — the count line is gated to the honest contradicted headline.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countContradicted', { count: 3 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
     expect(res.answer).not.toContain('Net change')
   })

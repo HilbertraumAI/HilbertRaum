@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   buildSkillFence,
   composeSystemPromptWithSkill,
+  logSkillFenceReduction,
   skillFenceBudgetTokens,
   approxPromptTokens,
   stripSkillFenceEcho,
   SKILL_GUARD_LINE
 } from '../../src/main/services/skills/prompt'
+import { readLogTail } from '../../src/main/services/logging'
 
 // Skills plan §11 (S7) — the skill fence builder + budget. Pure, no DB, no Electron. Covers the
 // §17 prompt-assembly + injection-boundary + budget cases: framing/guard present, the body is data
@@ -46,6 +48,20 @@ describe('buildSkillFence — assembly + injection boundary (§11.2/§22-H2)', (
     const { text, trimmed } = buildSkillFence({ title: 'T', body: BODY_3 })
     expect(trimmed).toBe(false)
     expect(text).toContain('Third optional block.')
+  })
+})
+
+describe('logSkillFenceReduction — U1 diagnosability (audit §3.6)', () => {
+  it('logs a budget-driven trim/omit (ids/counts only) and is a no-op on a fully-placed fence', () => {
+    // The flags were discarded at every call site before U1 (a decapitated-rule turn was undiagnosable).
+    logSkillFenceReduction('app:noop-fence', { text: 'kept body', omitted: false, trimmed: false })
+    expect(readLogTail(500).some((l) => l.includes('app:noop-fence'))).toBe(false) // clean fence → no log
+
+    logSkillFenceReduction('app:trimmed-fence', { text: 'kept body', omitted: false, trimmed: true })
+    const tail = readLogTail(500)
+    expect(tail.some((l) => l.includes('app:trimmed-fence') && /fence/i.test(l))).toBe(true)
+    // ids/counts only — the skill BODY never reaches the log (the no-content-in-logs rule).
+    expect(tail.some((l) => l.includes('kept body'))).toBe(false)
   })
 })
 

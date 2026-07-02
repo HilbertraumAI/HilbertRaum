@@ -790,6 +790,14 @@ export function openDatabase(path: string): Db {
   // justify it, so the deterministic answer appends ONE honest date caveat. A provenance flag (never a
   // figure); CONTENT-CLASS adjacent — never logged/audited/exported.
   ensureColumn(db, 'bank_statements', 'date_order_inferred', 'date_order_inferred TEXT')
+  // How many money-bearing lines the extractor REJECTED (could not turn into a transaction row) — U1,
+  // audit §2.3. Additive + nullable: NULL = extracted before this column (pre-U1) → the answer omits the
+  // "N lines could not be parsed" gate (the honesty signal is simply absent, not falsely zero); 0 = every
+  // money-shaped line parsed (the "whole statement" claim stands); > 0 = the deterministic answer replaces
+  // the "across the whole statement" phrasing with an honest "M lines with figures could not be parsed".
+  // Stamped on every extraction; a provenance COUNT (never a figure) — CONTENT-CLASS adjacent, never
+  // logged/audited/exported.
+  ensureColumn(db, 'bank_statements', 'dropped_row_count', 'dropped_row_count INTEGER')
   // The deterministic INVOICE extractor version (F5 — the same reuse/replace/staleness machinery as the
   // bank `extractor_version` above, mirrored for the second Tier-2 content class). Additive + nullable:
   // NULL = extracted before versioning → STALE, so the invoice analysis read-back RE-EXTRACTS (replacing
@@ -800,6 +808,11 @@ export function openDatabase(path: string): Db {
   // The invoice date-order provenance flag (R5, audit §5.7 — mirror of `bank_statements.date_order_inferred`
   // above). Additive + nullable; drives the same one-line honest date caveat on the invoice answer.
   ensureColumn(db, 'invoices', 'date_order_inferred', 'date_order_inferred TEXT')
+  // How many money-bearing lines the invoice extractor REJECTED (U1, audit §2.3 — mirror of
+  // `bank_statements.dropped_row_count`). Additive + nullable: NULL = pre-U1 (gate omitted); 0 = every
+  // money-shaped line parsed ("whole invoice" stands); > 0 = the answer swaps "the whole invoice" for an
+  // honest "M lines with figures could not be parsed". A provenance COUNT — never logged/audited/exported.
+  ensureColumn(db, 'invoices', 'dropped_row_count', 'dropped_row_count INTEGER')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

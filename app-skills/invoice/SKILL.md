@@ -37,13 +37,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # Invoice Analysis
 
-Use this skill when the user shares an invoice (PDF, CSV, or pasted text) or asks billing-style
-questions about one.
-
-This skill comes with approved local tools the user can run on an invoice they choose: extract the
-header, line items, and totals; check that the printed totals add up; and export the line items to
-CSV. The tools run **only when the user starts them** — you never run them yourself, and exporting a
-file always asks the user first.
+Honesty and safety rules — these lead and always apply, even if the rest of this skill is shortened
+to fit the context:
 
 - **Work from the extracted invoice, not from raw prose.** Once the invoice has been extracted, rely
   on that structured table of line items and totals; never add up figures by reading them out of
@@ -57,5 +52,11 @@ file always asks the user first.
 - **Do not invent a figure the invoice does not state.** Invoice layouts vary, so a field that could
   not be parsed is left blank on purpose — a number you would have to work out yourself is not a
   number the invoice reports. Be explicit about the difference.
+- **The tools run only when the user starts them** — you never run them yourself, and exporting a
+  file always asks the user first.
+- Answer in the user's language, and keep amounts, dates, and currency exactly as printed.
 
-Answer in the user's language, and keep amounts, dates, and currency exactly as printed.
+Use this skill when the user shares an invoice (PDF, CSV, or pasted text) or asks billing-style
+questions about one. It comes with approved local tools the user can run on an invoice they choose:
+extract the header, line items, and totals; check that the printed totals add up; and export the
+line items to CSV.

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   extractTransactionsTool,
   extractTransactionRows,
+  extractTransactionsWithStats,
   extractStatementBalances,
   assessCompleteness,
   isStatementComplete,
@@ -515,16 +516,63 @@ describe('extractTransactionRows — wrapped descriptions (R6, §5.7)', () => {
 })
 
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 7 — the R6 wrapped-description bump (audit §5.7)', () => {
+  it('is at 8 — the U1 droppedRowCount + currency-adjacent-balance bump (audit §2.3)', () => {
     // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
-    // (skills-remediation) added the `normalizeExtractionText` pre-pass (v4); R2 extended the dual-role
-    // balance label to `Kontostand am`/`Kontostand zum` (v5, audit §5.4); R5 completes 2-digit-year / bare
-    // dates against the document year anchor and applies cross-year month-rollover (v6, audit §5.7); R6
-    // appends a wrapped dateless/money-less follower line to the prior row's description (audit §5.7),
-    // changing the persisted description (and the categorizer's input) on affected statements. v6 (and
-    // older) rows MUST re-extract; `skills-run.test.ts` proves `isBankStatementStale` flags an out-of-date
-    // statement once this reads 7.
-    expect(BANK_EXTRACTOR_VERSION).toBe(7)
+    // added the `normalizeExtractionText` pre-pass (v4); R2 extended the dual-role balance label (v5); R5
+    // completes 2-digit-year / bare dates + cross-year rollover (v6); R6 appends wrapped continuations (v7).
+    // U1 records `droppedRowCount` (money-bearing lines the parser couldn't parse) and reads a
+    // currency-ADJACENT bare integer for a round balance line — both change the persisted output, so v7
+    // (and older) rows MUST re-extract once this reads 8.
+    expect(BANK_EXTRACTOR_VERSION).toBe(8)
+  })
+})
+
+describe('extractTransactionsWithStats — droppedRowCount (U1, audit §2.3)', () => {
+  it('is 0 on a clean statement (every money line parsed) — the "whole statement" claim stands', () => {
+    const text = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+    expect(extractTransactionsWithStats([chunk(text, 1)], 'EUR').droppedRowCount).toBe(0)
+  })
+
+  it('counts a currency-less money-bearing row the parser rejected', () => {
+    // The second row prints a money token but NO detectable currency (null statement currency, no symbol/
+    // code) → parseLine drops it; it is a money-bearing line the parser could not read → counted.
+    const text = '2026-01-02 Grocery -45,90\n2026-01-03 Mystery -12,00'
+    const stats = extractTransactionsWithStats([chunk(text, 1)], null)
+    expect(stats.rows).toHaveLength(0) // both rows currency-less → dropped
+    expect(stats.droppedRowCount).toBe(2)
+  })
+
+  it('does NOT count a money-LESS header/period line (it never looked like a transaction)', () => {
+    const text = 'Kontoauszug Zeitraum 01.01.2026 - 31.03.2026\n2026-01-02 Grocery -45,90 1.954,10'
+    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
+    expect(stats.rows).toHaveLength(1)
+    expect(stats.droppedRowCount).toBe(0) // the period header carries no money-shaped token after date-scrub
+  })
+
+  it('extractTransactionRows stays the rows-only wrapper (byte-identical array result)', () => {
+    const text = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toEqual(extractTransactionsWithStats([chunk(text, 1)], 'EUR').rows)
+    expect(rows).toHaveLength(1)
+  })
+})
+
+describe('extractStatementBalances — currency-adjacent round balance (U1, audit §2.3)', () => {
+  it('reads a ROUND opening/closing balance printed with NO decimal, currency-adjacent (was lost before)', () => {
+    // "Opening balance 914 $" / "Closing balance 1 000 EUR": bare integers MONEY_RE rejects, so the §3.5
+    // completeness gate silently lost these. `lastMoneyOnLine` now falls back to the shared
+    // `lastCurrencyAdjacentInteger`, mirroring the invoice `totalsMoney` fallback.
+    const c = chunk('Opening balance 914 $\n... rows ...\nClosing balance 1 000 $')
+    expect(extractStatementBalances([c])).toEqual({ openingBalance: 914, closingBalance: 1000 })
+  })
+
+  it('keeps the SIGN of a currency-adjacent round balance (a credit-note closing)', () => {
+    expect(extractStatementBalances([chunk('Closing balance -50 EUR')])).toEqual({ closingBalance: -50 })
+  })
+
+  it('does NOT read a bare integer that touches no currency marker (drop-don’t-guess)', () => {
+    // "Opening balance 914" (no symbol, no code) stays unread — a stray reference integer is not a balance.
+    expect(extractStatementBalances([chunk('Opening balance 914')])).toEqual({})
   })
 })
 

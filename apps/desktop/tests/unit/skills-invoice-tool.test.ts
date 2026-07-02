@@ -388,12 +388,31 @@ describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
 })
 
 describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
-  it('is at 7 — the R6 row-fidelity bump (audit §5.7)', () => {
-    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: R6 (wrapped-description continuation + identity-gated
-    // column-debris cleanup) changes the persisted line-item descriptions/quantities, so an invoice an
-    // OLDER (v6…v1 / pre-versioning NULL) parser produced must re-extract via the F5 path. A reverted or
-    // forgotten bump would silently serve stale rows with the old debris-laden descriptions.
-    expect(INVOICE_EXTRACTOR_VERSION).toBe(7)
+  it('is at 8 — the U1 droppedRowCount bump (audit §2.3)', () => {
+    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: U1 records `droppedRowCount` (money-bearing lines the
+    // parser couldn't turn into a line item / total) on every extraction, changing the persisted output, so
+    // an invoice an OLDER (v7…v1 / pre-versioning NULL) parser produced must re-extract via the F5 path.
+    expect(INVOICE_EXTRACTOR_VERSION).toBe(8)
+  })
+})
+
+describe('extractInvoice — droppedRowCount (U1, audit §2.3)', () => {
+  it('is 0 on a clean invoice (every line parsed) — the "whole invoice" claim stands', () => {
+    expect(extractInvoice([chunk(INVOICE_TEXT, 1)], 'EUR').droppedRowCount).toBe(0)
+  })
+
+  it('counts a currency-less money-bearing line the parser rejected', () => {
+    // "Widget X 2 9,99" carries a money token but NO detectable currency (null doc currency) → parseLineItem
+    // drops it; it is a money-bearing line the parser could not read → counted.
+    const inv = extractInvoice([chunk('Widget X   2   9,99', 1)], null)
+    expect(inv.lineItems).toEqual([])
+    expect(inv.droppedRowCount).toBe(1)
+  })
+
+  it('does NOT count consumed header/totals/summary lines or money-less prose', () => {
+    // Every line is consumed (header/line item/totals) or money-less → nothing dropped.
+    const text = ['Vendor: ACME', 'Thank you for your business', 'Item A   10,00 EUR', 'Gross total 10,00 EUR'].join('\n')
+    expect(extractInvoice([chunk(text, 1)], 'EUR').droppedRowCount).toBe(0)
   })
 })
 

@@ -192,6 +192,32 @@ describe('invoice analysis handler — applies() pre-flight (R2)', () => {
   })
 })
 
+describe('invoice analysis handler — honest completeness gate (U1, §2.3)', () => {
+  // One good line item + one the parser DROPS as a fused space-group amount ("Gizmo 10 100" → 10 100).
+  const ONE_DROPPED = [
+    'Invoice number INV-001',
+    'Vendor Acme GmbH',
+    'Widget 2 50,00 100,00',
+    'Gizmo 10 100',
+    'Net total 100,00 EUR'
+  ].join('\n')
+
+  it('gates the count line: droppedRowCount > 0 ⇒ the honest partial headline, not "the whole invoice"', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, ONE_DROPPED)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.countPartial', { count: 1, dropped: 1 }))
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.count', { count: 1 }))
+  })
+
+  it('a clean invoice keeps the plain "the whole invoice" count (no false gate)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.count', { count: 2 }))
+  })
+})
+
 describe('invoice analysis handler — run()', () => {
   it('exhaustive figures: count + net/tax/gross read from the extracted invoice', async () => {
     const db = freshDb()

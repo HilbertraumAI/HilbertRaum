@@ -1,4 +1,5 @@
 import { approxTokenCount } from '../ingestion/chunker'
+import { log } from '../logging'
 
 // Skill prompt integration (skills plan §11). Builds the ONE selected skill's fenced data
 // block + computes the token budget so the fence never starves the base preamble, the final
@@ -145,6 +146,23 @@ export function buildSkillFence(input: SkillFenceInput, budgetTokens?: number): 
   }
   const text = assemble(title, paragraphs.slice(0, kept).join('\n\n'))
   return { text, omitted: false, trimmed: kept < paragraphs.length }
+}
+
+/**
+ * Diagnose a budget-driven fence reduction (U1, audit §3.6). A fence that was TRIMMED (whole paragraphs
+ * dropped to fit) or OMITTED (not even the minimum fit) is now logged — the flags were previously
+ * discarded at every call site, so a decapitated-rule turn was undiagnosable. IDS/COUNTS ONLY (the skill
+ * install id + the two booleans + the paragraph count) — NEVER the skill body (the no-content-in-logs
+ * rule). A no-op on a fully-placed fence, so a normal turn logs nothing. The SKILL.md bodies now lead with
+ * the honesty/safety rules (U1), so a trimmed fence keeps them; this log is the diagnostic backstop.
+ */
+export function logSkillFenceReduction(skillId: string, result: SkillFenceResult): void {
+  if (!result.trimmed && !result.omitted) return
+  log.warn('skill fence reduced to fit context budget', {
+    skillId,
+    omitted: result.omitted,
+    trimmed: result.trimmed
+  })
 }
 
 /**

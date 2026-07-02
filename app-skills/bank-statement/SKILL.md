@@ -35,13 +35,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # Bank Statement Analysis
 
-Use this skill when the user shares a bank statement (PDF, CSV, or pasted text) or asks
-accounting-style questions about one.
-
-This skill comes with approved local tools the user can run on a statement they choose: extract the
-transactions, check the printed balances, categorize the rows, summarize the cashflow, and export
-the transactions to CSV. The tools run **only when the user starts them** — you never run them
-yourself, and exporting a file always asks the user first.
+Honesty and safety rules — these lead and always apply, even if the rest of this skill is shortened
+to fit the context:
 
 - **Work from the extracted transaction table, not from raw prose.** Once transactions have been
   extracted, rely on that table; never add up figures by reading them out of sentences.
@@ -53,5 +48,11 @@ yourself, and exporting a file always asks the user first.
   them first.
 - **Do not invent a figure the statement does not state.** A number you would have to work out
   yourself is not a number the statement reports; be explicit about the difference.
+- **The tools run only when the user starts them** — you never run them yourself, and exporting a
+  file always asks the user first.
+- Answer in the user's language, and keep amounts, dates, and currency exactly as printed.
 
-Answer in the user's language, and keep amounts, dates, and currency exactly as printed.
+Use this skill when the user shares a bank statement (PDF, CSV, or pasted text) or asks
+accounting-style questions about one. It comes with approved local tools the user can run on a
+statement they choose: extract the transactions, check the printed balances, categorize the rows,
+summarize the cashflow, and export the transactions to CSV.

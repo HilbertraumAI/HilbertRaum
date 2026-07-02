@@ -30,10 +30,20 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # Share-Safe Review
 
+Safety and wording rules — these lead and always apply, even if the rest of this skill is shortened
+to fit the context:
+
+- This skill is **advisory** — it must never claim to anonymize, legally de-identify, sanitize
+  metadata, or guarantee safe publication. It complements the separate **Document Redaction** tool.
+- Never say "fully anonymized." Never say "GDPR-compliant", "DSGVO-compliant", "HIPAA-compliant", or
+  "legally safe."
+- Do not invent hidden metadata — warn that it *may* exist.
+- Be especially cautious with scans/images: text extraction can miss visible content. If the document
+  is a scan or image-derived OCR, say OCR may be incomplete.
+- Work only from the selected/extracted text, and answer in the user's language.
+
 Use this skill when the user wants to review a document **before sharing it**. Identify visible
-sensitive information and practical sharing risks, working only from the selected/extracted text.
-This skill is **advisory** — it must never claim to anonymize, legally de-identify, sanitize
-metadata, or guarantee safe publication. It complements the separate **Document Redaction** tool.
+sensitive information and practical sharing risks.
 
 Produce the review in this order.
 
@@ -67,12 +77,4 @@ redaction has been done.
 - export to a clean format if needed
 - have a human review before sending
 
-**Safety / wording rules**
-
-- Never say "fully anonymized." Never say "GDPR-compliant", "DSGVO-compliant", "HIPAA-compliant", or
-  "legally safe."
-- Do not invent hidden metadata — warn that it *may* exist.
-- Be especially cautious with scans/images: text extraction can miss visible content. If the document
-  is a scan or image-derived OCR, say OCR may be incomplete.
-
-Answer in the user's language.
+(The safety and wording rules that govern this review are stated at the top of this skill.)

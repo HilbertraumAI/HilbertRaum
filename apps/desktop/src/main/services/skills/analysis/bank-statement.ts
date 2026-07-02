@@ -287,6 +287,15 @@ function loadDateOrderInferred(db: Db, statementId: string): 'evidence' | 'defau
   return row?.flag === 'default' ? 'default' : row?.flag === 'evidence' ? 'evidence' : null
 }
 
+/** The persisted count of money-bearing lines the extractor could NOT parse (U1, audit §2.3) — gates the
+ *  "whole statement" answer claim. 0 (or NULL, a pre-U1 row → treated as "no gate") when nothing dropped. */
+function loadDroppedRowCount(db: Db, statementId: string): number {
+  const row = db
+    .prepare('SELECT dropped_row_count AS n FROM bank_statements WHERE id = ?')
+    .get(statementId) as { n: number | null } | undefined
+  return row?.n ?? 0
+}
+
 const MAX_CITATIONS = 12
 
 interface ChunkRow {
@@ -542,12 +551,31 @@ export function buildBankAnswer(
      * null/absent adds nothing (the order is trustworthy or moot). Never a figure; a trailing note only.
      */
     dateOrderInferred?: 'evidence' | 'default' | null
+    /**
+     * How many money-bearing lines the extractor could NOT parse (U1, audit §2.3). Gates the "whole
+     * statement" headline: > 0 ⇒ an honest "**{count}** read; **{dropped}** line(s) with figures I
+     * couldn't parse". Combined with the D56 `status`, this also kills the self-contradicting count line —
+     * a `contradicted` statement no longer claims "across the whole statement" over a body that says the
+     * balances don't add up. The extractor scanned every section; it just could not parse every figure.
+     */
+    droppedRowCount?: number
   }
 ): string {
   const { rows, summary, reconcile, categories, status, modelAssisted, dateOrderInferred } = data
   if (rows.length === 0) return tr('skills.bankAnalysis.empty')
 
-  const lines: string[] = [tr('skills.bankAnalysis.count', { count: rows.length })]
+  // U1 (audit §2.3): the headline count is honesty-gated. A dropped figure (parse gap) is the strongest
+  // caveat; else a `contradicted` D56 status still avoids the "whole statement" claim (the printed balances
+  // refute the rows); else the plain "across the whole statement" line stands. The extractor read every
+  // section — this gates the exhaustiveness of the TRANSACTIONS, not the reading pass (see the caveat).
+  const dropped = data.droppedRowCount ?? 0
+  const countLine =
+    dropped > 0
+      ? tr('skills.bankAnalysis.countPartial', { count: rows.length, dropped })
+      : status === 'contradicted'
+        ? tr('skills.bankAnalysis.countContradicted', { count: rows.length })
+        : tr('skills.bankAnalysis.count', { count: rows.length })
+  const lines: string[] = [countLine]
 
   // Surface unreconciled rows BEFORE the total (printed balance disagrees with the amounts).
   const mismatches = reconcile.rows.filter((r) => r.status === 'mismatch')
@@ -782,6 +810,7 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         reconcile
       })
       const dateOrderInferred = loadDateOrderInferred(db, statementId)
+      const droppedRowCount = loadDroppedRowCount(db, statementId)
 
       // W4 answer-shape routing (audit §3.1/§8.1), ported from the invoice handler (W3): an aggregate
       // summary / reconcile / total / balance / category / list ask keeps the high-stakes deterministic
@@ -801,7 +830,8 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
           categories,
           status,
           modelAssisted,
-          dateOrderInferred
+          dateOrderInferred,
+          droppedRowCount
         })
         return { answer, citations, coverage }
       }

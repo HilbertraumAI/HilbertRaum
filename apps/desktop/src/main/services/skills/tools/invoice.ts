@@ -5,9 +5,11 @@ import {
   csvField,
   detectCurrency,
   detectDocumentCurrency,
+  hasMoneyToken,
   inferDateAnchor,
   inferDateOrder,
   inferDateOrderResult,
+  lastCurrencyAdjacentInteger,
   normalizeExtractionText,
   parseAmount,
   parseDate,
@@ -70,6 +72,14 @@ export interface ExtractedInvoice {
    * tool that takes an `InvoiceInput` (validate/export) simply ignores it.
    */
   dateOrderInferred?: 'evidence' | 'default'
+  /**
+   * How many money-bearing lines the extractor REJECTED — a line that carries a money-shaped token
+   * (`hasMoneyToken`) yet did not become a line item / total / header (U1, audit §2.3). Persisted to
+   * `invoices.dropped_row_count`; when > 0 the deterministic answer drops the "the whole invoice" claim for
+   * an honest "M lines with figures could not be parsed". A document-level stat, not part of the invoice
+   * structure — a downstream tool taking an `InvoiceInput` (validate/export) ignores it.
+   */
+  droppedRowCount?: number
 }
 
 /** What the extractor returns (and what every downstream tool takes as structured input). */
@@ -144,8 +154,12 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       when `quantity × unitPrice ≈ lineTotal` independently confirms the split — otherwise the description
  *       is left exactly as parsed (drop-don't-guess, §22-D1). Changes the persisted descriptions /
  *       quantities on affected invoices, so stale v6 rows re-extract.
+ *   8 — skills-remediation U1 (audit §2.3): the extractor now records `droppedRowCount` — how many
+ *       money-bearing lines it REJECTED (couldn't turn into a line item / total / header) — so the answer
+ *       gates its "the whole invoice" claim honestly instead of asserting exhaustiveness while dropping
+ *       figures silently. The new field changes the persisted output, so stale v7 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 7
+export const INVOICE_EXTRACTOR_VERSION = 8
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -199,7 +213,10 @@ const INVOICE_SCHEMA: JsonSchema = {
     totals: TOTALS_SCHEMA,
     // Document-level date-order provenance (R5, audit §5.7) — optional, so a downstream tool handing an
     // invoice loaded from persisted rows (no flag) still validates against this shared input schema.
-    dateOrderInferred: { type: 'string', enum: ['evidence', 'default'] }
+    dateOrderInferred: { type: 'string', enum: ['evidence', 'default'] },
+    // How many money-bearing lines the extractor rejected (U1, audit §2.3) — optional; gates the "whole
+    // invoice" answer claim. Ignored by the downstream tools that take an `InvoiceInput`.
+    droppedRowCount: { type: 'integer', minimum: 0 }
   }
 }
 
@@ -404,11 +421,6 @@ function lastMoney(line: string): number | null {
   return parseAmount(matches[matches.length - 1][0])
 }
 
-// The currency symbols MONEY_RE amounts print with (mirrors money.ts SYMBOL_TO_CODE keys). Used to
-// require a bare integer total to be currency-ADJACENT before it is read as an amount.
-const CURRENCY_SYMBOLS = '€$£¥'
-const BARE_INTEGER_RE = /(?<![\d.,'])\d{1,9}(?![\d.,'])/g
-
 /** "excl./exkl. tax", "net of tax", "vor Steuer" — qualifiers that mark a bare "Total" line as the NET
  *  (not the gross), so an invoice printing "Total (excl. Tax)" and "Total (incl. Tax)" resolves both. */
 const EXCL_TAX_RE = /\bexcl|\bexkl|excluding|net of tax|before tax|ohne (?:steuer|ust|umsatzsteuer|mwst)|vor steuer/
@@ -426,35 +438,10 @@ const EXCL_TAX_RE = /\bexcl|\bexkl|excluding|net of tax|before tax|ohne (?:steue
 function totalsMoney(line: string): number | null {
   const v = lastMoney(line)
   if (v !== null) return v
-  const text = stripDateTokens(line)
-  let last: number | null = null
-  for (const m of text.matchAll(BARE_INTEGER_RE)) {
-    const start = m.index ?? 0
-    const before = text.slice(0, start)
-    const after = text.slice(start + m[0].length)
-    const symbolAdjacent =
-      new RegExp(`[${CURRENCY_SYMBOLS}]\\s*$`).test(before) ||
-      new RegExp(`^\\s*[${CURRENCY_SYMBOLS}]`).test(after)
-    const codeAfter = /^\s+([A-Z]{3})\b/.exec(after)
-    const codeBefore = /\b([A-Z]{3})\s+$/.exec(before)
-    const codeAdjacent =
-      (codeAfter !== null && detectCurrency(codeAfter[1]) !== null) ||
-      (codeBefore !== null && detectCurrency(codeBefore[1]) !== null)
-    if (symbolAdjacent || codeAdjacent) {
-      // R1 (audit §5.7-low): keep the SIGN. A credit note prints `Gesamtbetrag -914 EUR` / `(914)` /
-      // `914-`; the bare integer alone drops it (a credit read as a charge). Rebuild the token with the
-      // sign glued around the digits and reuse `parseAmount`'s leading/paren/trailing sign rules (`Number`
-      // saw only the unsigned digits). The sign chars sit immediately beside the integer — a leading `-`/`(`
-      // at the end of `before` (a currency symbol may sit further left, `€-914`), a trailing `)`/`-` at the
-      // start of `after`. For an unsigned integer this yields the same positive value as before.
-      const lead = /[-(]\s*$/.exec(before)
-      const trail = /^\s*[-)]/.exec(after)
-      const signed = `${lead ? lead[0].trim() : ''}${m[0]}${trail ? trail[0].trim() : ''}`
-      const n = parseAmount(signed)
-      if (n !== null) last = n
-    }
-  }
-  return last
+  // R1 (audit §5.7-low): the currency-adjacent bare-integer fallback, sign-aware (a credit note
+  // `Gesamtbetrag -914 EUR` reads −914) — now the shared `lastCurrencyAdjacentInteger` (U1: the bank
+  // balance reader uses the SAME helper so a round `Opening balance 914 $` is read identically).
+  return lastCurrencyAdjacentInteger(line)
 }
 
 /** Read a percent figure (e.g. "20%", "19,5 %") from a line, or null. */
@@ -663,6 +650,8 @@ export function extractInvoice(
   const header: InvoiceHeader = {}
   const lineItems: InvoiceLineItem[] = []
   const totals: InvoiceTotals = {}
+  // U1 (audit §2.3): money-bearing lines the parser could not turn into a line item / total / header.
+  let droppedWithFigure = 0
   for (const text of texts) {
     // R6 (audit §5.7): a money-less, non-label line that DIRECTLY follows a line item is a wrapped
     // continuation of that item's description (the plain-text mirror of the geometry multi-baseline
@@ -706,7 +695,7 @@ export function extractInvoice(
         pending = { item, absorbed: 0 }
         if (lineItems.length >= MAX_LINE_ITEMS) {
           if (documentCurrency && !header.currency) header.currency = documentCurrency
-          return { header, lineItems, totals }
+          return { header, lineItems, totals, droppedRowCount: droppedWithFigure }
         }
         continue
       }
@@ -722,11 +711,16 @@ export function extractInvoice(
         pending.absorbed++
         continue
       }
+      // U1 (audit §2.3): a rejected, non-continuation line that STILL carries a money-shaped token is a
+      // line-item / total candidate the parser could not read (a currency-less row, a fused space-group,
+      // an uncaptured-amount drop). Count it so the answer gates its "the whole invoice" claim. A money-LESS
+      // note never counts. Header/totals/summary lines were consumed above, so they are excluded.
+      if (hasMoneyToken(line)) droppedWithFigure++
       pending = null
     }
   }
   if (documentCurrency && !header.currency) header.currency = documentCurrency
-  return { header, lineItems, totals }
+  return { header, lineItems, totals, droppedRowCount: droppedWithFigure }
 }
 
 // ---- extract_invoice (read-only over the selected document scope) ----

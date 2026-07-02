@@ -488,12 +488,15 @@ export const en = {
   // Structured-extract listing coverage (whole-document-analysis plan §4.2/§5.2, Phase 3).
   // Exhaustive over the sections scanned — NEVER "complete" (H7). "Whole document" only when
   // every in-scope document is fully indexed.
-  'coverage.extract.whole': 'Every match found across the whole document — {scanned} sections scanned',
+  // U1 (audit §2.3 / ux-10): softened from "Every match found …", which overclaimed exhaustiveness of the
+  // EXTRACTION (a small model / an unusual layout can miss a match). "Read across …" is the honest claim —
+  // every section was READ; it does not assert every match was captured.
+  'coverage.extract.whole': 'Read across the whole document — {scanned} sections scanned',
   'coverage.extract.wholeUnparsed':
-    'Every match found across the whole document — {scanned} sections scanned, {unparsed} could not be read',
-  'coverage.extract.sections': 'Every match found across {scanned} sections scanned',
+    'Read across the whole document — {scanned} sections scanned, {unparsed} could not be read',
+  'coverage.extract.sections': 'Read across {scanned} sections scanned',
   'coverage.extract.sectionsUnparsed':
-    'Every match found across {scanned} sections scanned, {unparsed} could not be read',
+    'Read across {scanned} sections scanned, {unparsed} could not be read',
 
   // ---- "List every X" answer (whole-document-analysis plan §4.2, Phase 3) ----
   // The deterministic listing answer (0 model calls). User words only — "sections", no
@@ -522,8 +525,22 @@ export const en = {
   // figures, lead with the count, surface unreconciled rows BEFORE the total, never invent a
   // number. Amounts/dates/currency are CONTENT and pass through verbatim as params.
   'skills.bankAnalysis.count': 'I read **{count}** transactions across the whole statement.',
+  // U1 (audit §2.3): the honesty-gated headline. The extractor scanned every section but could not turn
+  // **{dropped}** money-bearing line(s) into a transaction — so it must NOT claim these are every one.
+  'skills.bankAnalysis.countPartial':
+    'I read **{count}** transactions. **{dropped}** line(s) carried a figure I couldn’t parse into a ' +
+    'transaction, so this may not be every transaction — check those lines against the document.',
+  // U1 (audit §2.3): the CONTRADICTED-D56 headline — no "whole statement" claim over a body that says the
+  // printed balances don’t reconcile (fixes the self-contradiction the old count line created).
+  'skills.bankAnalysis.countContradicted':
+    'I read **{count}** transactions, but this statement’s printed balances don’t add up against them — ' +
+    'so I can’t confirm these are all of them.',
+  // U1 (audit §2.3 / ux-11): the empty read is no longer a dead end — blame the READER, not the document,
+  // and name the next step (OCR a scan; otherwise the layout may not be machine-readable).
   'skills.bankAnalysis.empty':
-    'I read the whole statement but couldn’t find any transactions to total.',
+    'I scanned the whole document but couldn’t parse any transactions from it. The rows may be in a scanned ' +
+    'image or an unusual layout my reader can’t follow. If this is a scan, run OCR (text recognition) on it ' +
+    'first; otherwise the layout may not be machine-readable — open the statement to read the figures directly.',
   'skills.bankAnalysis.couldNotRead': 'I couldn’t read this statement, so I can’t analyse it.',
   'skills.bankAnalysis.unreconciledHeading':
     'Check these rows first — their printed running balance doesn’t reconcile with the amounts:',
@@ -616,8 +633,17 @@ export const en = {
   // failed totals check BEFORE the headline gross, never invent a field the invoice doesn't state.
   // Amounts/dates/currency are CONTENT and pass through verbatim as params.
   'skills.invoiceAnalysis.count': 'I read the whole invoice — **{count}** line items.',
+  // U1 (audit §2.3): the honesty-gated headline — the extractor scanned every section but could not parse
+  // **{dropped}** money-bearing line(s), so it must NOT claim to have read the whole invoice exhaustively.
+  'skills.invoiceAnalysis.countPartial':
+    'I read **{count}** line items. **{dropped}** line(s) carried a figure I couldn’t parse into a line ' +
+    'item, so this may not be every line — check those lines against the document.',
+  // U1 (audit §2.3 / ux-11): the empty read names a next step instead of dead-ending. Blames the reader.
   'skills.invoiceAnalysis.empty':
-    'I read the whole invoice but couldn’t find any line items or totals to report.',
+    'I scanned the whole document but couldn’t parse any line items or totals from it. The figures may be in ' +
+    'a scanned image or an unusual layout my reader can’t follow. If this is a scan, run OCR (text ' +
+    'recognition) on it first; otherwise the layout may not be machine-readable — open the invoice to read ' +
+    'the figures directly.',
   'skills.invoiceAnalysis.couldNotRead': 'I couldn’t read this invoice, so I can’t analyse it.',
   'skills.invoiceAnalysis.unreconciledHeading':
     'Check these totals first — they don’t reconcile:',

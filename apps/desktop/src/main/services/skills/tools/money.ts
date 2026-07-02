@@ -488,6 +488,65 @@ export function stripDateTokens(line: string): string {
   return line.replace(DATE_TOKEN_RE, ' ')
 }
 
+// ---- Currency-adjacent bare-integer read + money-presence test (U1, audit §2.3) ----
+
+// The currency symbols a money figure prints with (mirrors SYMBOL_TO_CODE keys), and a BARE integer
+// (a whole number MONEY_RE deliberately rejects so a reference/account number is never read as an
+// amount). Shared so the currency-adjacent fallback is identical for a labelled invoice total
+// (`totalsMoney`) and a bank balance line (`lastMoneyOnLine`), audit §2.3 (the gate gap where
+// "Opening balance 914 $" lost its completeness figure because `lastMoneyOnLine` used MONEY_RE only).
+const CURRENCY_SYMBOLS = '€$£¥'
+const BARE_INTEGER_RE = /(?<![\d.,'])\d{1,9}(?![\d.,'])/g
+
+/**
+ * The LAST bare integer on a (date-scrubbed) line that TOUCHES a currency marker — a symbol glued or
+ * spaced (`€914`, `914 $`) or a spaced ISO code (`914 EUR`) — as a signed number, else null. A ROUND
+ * total/balance is frequently printed with NO decimal and NO grouping, which MONEY_RE rejects; this is
+ * the currency-anchored fallback the totals/balance readers use AFTER the normal `MONEY_RE` last-token
+ * scan fails. Currency-adjacency is the safety anchor: a stray reference/registration integer that does
+ * NOT touch a currency marker is never read as the amount (the §22-D1 honesty posture). SIGN-aware (R1):
+ * a credit-note `-914`/`(914)`/`914-` keeps its sign via `parseAmount`. Dates are scrubbed first so a
+ * `dd.mm.yyyy` token's digits are never mistaken for a currency-adjacent integer.
+ */
+export function lastCurrencyAdjacentInteger(line: string): number | null {
+  const text = stripDateTokens(line)
+  let last: number | null = null
+  for (const m of text.matchAll(BARE_INTEGER_RE)) {
+    const start = m.index ?? 0
+    const before = text.slice(0, start)
+    const after = text.slice(start + m[0].length)
+    const symbolAdjacent =
+      new RegExp(`[${CURRENCY_SYMBOLS}]\\s*$`).test(before) ||
+      new RegExp(`^\\s*[${CURRENCY_SYMBOLS}]`).test(after)
+    const codeAfter = /^\s+([A-Z]{3})\b/.exec(after)
+    const codeBefore = /\b([A-Z]{3})\s+$/.exec(before)
+    const codeAdjacent =
+      (codeAfter !== null && detectCurrency(codeAfter[1]) !== null) ||
+      (codeBefore !== null && detectCurrency(codeBefore[1]) !== null)
+    if (symbolAdjacent || codeAdjacent) {
+      // Keep the SIGN (R1): rebuild the token with a leading `-`/`(` at the end of `before` (a symbol may
+      // sit further left, `€-914`) or a trailing `)`/`-` at the start of `after` and reuse parseAmount.
+      const lead = /[-(]\s*$/.exec(before)
+      const trail = /^\s*[-)]/.exec(after)
+      const signed = `${lead ? lead[0].trim() : ''}${m[0]}${trail ? trail[0].trim() : ''}`
+      const n = parseAmount(signed)
+      if (n !== null) last = n
+    }
+  }
+  return last
+}
+
+/**
+ * Whether a line carries a money-SHAPED token (a `MONEY_RE` match, after date-scrubbing so a `dd.mm.yyyy`
+ * fragment is never counted). Used by the extractors' `droppedRowCount` (U1, audit §2.3): a line the
+ * parser rejected that STILL contains such a token is a "line with figures I could not parse" — the
+ * honesty signal that gates the "whole invoice/statement" claim. A bare integer is intentionally NOT
+ * money-shaped here (MONEY_RE rejects it), matching the parser's own "there is a figure here" definition.
+ */
+export function hasMoneyToken(line: string): boolean {
+  return stripDateTokens(line).match(MONEY_RE) !== null
+}
+
 // ---- Word-bounded substring test (shared by both categorization paths) ----
 
 /**

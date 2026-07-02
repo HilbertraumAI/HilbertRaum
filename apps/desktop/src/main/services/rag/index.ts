@@ -46,6 +46,7 @@ import { ensureCompacted } from '../chat/compaction'
 import {
   approxPromptTokens,
   buildSkillFence,
+  logSkillFenceReduction,
   skillFenceBudgetTokens,
   stripSkillFenceEcho
 } from '../skills/prompt'
@@ -1385,7 +1386,10 @@ export async function generateGroundedAnswer(
       reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
       fixedTokens
     })
-    skillFence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget).text
+    const fence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget)
+    // U1 (audit §3.6): log a budget-driven trim/omit (ids/counts only) — was silently discarded before.
+    logSkillFenceReduction(opts.skill.installId, fence)
+    skillFence = fence.text
   }
   const grounded = skillFence
     ? compareDiff
@@ -1500,7 +1504,10 @@ export async function generateGroundedDataAnswer(
       reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
       fixedTokens
     })
-    skillFence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget).text
+    const fence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget)
+    // U1 (audit §3.6): log a budget-driven trim/omit (ids/counts only) — was silently discarded before.
+    logSkillFenceReduction(opts.skill.installId, fence)
+    skillFence = fence.text
   }
   const grounded = skillFence ? buildGroundedDataPrompt(question, data.dataBlock, skillFence) : groundedNoFence
   // The grounded-data mode uses its OWN system prompt (no `[Sn]` citation rule — the turn carries a data

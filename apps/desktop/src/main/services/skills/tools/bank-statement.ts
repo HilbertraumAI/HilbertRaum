@@ -9,9 +9,11 @@ import {
   csvField,
   detectCurrency,
   detectDocumentCurrency,
+  hasMoneyToken,
   inferDateAnchor,
   inferDateOrder,
   inferDateOrderResult,
+  lastCurrencyAdjacentInteger,
   normalizeExtractionText,
   parseAmount,
   parseDate,
@@ -117,8 +119,14 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       row whose `NETFLIX INTERNATIONAL…` payee printed on the line below) survives instead of being
  *       silently dropped (which degraded the categorizer and the listing). Changes the persisted
  *       description on affected statements (and thus the categorizer's input), so stale v6 rows re-extract.
+ *   8 — skills-remediation U1 (audit §2.3): the extractor now records `droppedRowCount` — how many
+ *       money-bearing lines it REJECTED (couldn't turn into a row) — so the answer can gate its "whole
+ *       statement" claim honestly; and `lastMoneyOnLine` reads a currency-ADJACENT bare integer when
+ *       MONEY_RE finds none, so a round `Opening balance 914 $` feeds the §3.5/D56 completeness gate
+ *       instead of silently losing it. The new field + the recovered balances change the persisted output
+ *       on affected statements, so stale v7 rows re-extract.
  */
-export const BANK_EXTRACTOR_VERSION = 7
+export const BANK_EXTRACTOR_VERSION = 8
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -133,7 +141,10 @@ const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
     closingBalance: { type: 'number' },
     // Whether the date ORDER was inferred from evidence or defaulted to day-first on ambiguous dates (R5,
     // audit §5.7) — persisted and surfaced as one honest answer caveat. Optional.
-    dateOrderInferred: { type: 'string', enum: ['evidence', 'default'] }
+    dateOrderInferred: { type: 'string', enum: ['evidence', 'default'] },
+    // How many money-bearing lines the extractor REJECTED (U1, audit §2.3) — gates the "whole statement"
+    // claim in the answer. Optional; persisted to `bank_statements.dropped_row_count`.
+    droppedRowCount: { type: 'integer', minimum: 0 }
   }
 }
 
@@ -156,6 +167,13 @@ export interface ExtractTransactionsOutput {
   closingBalance?: number
   /** Whether the date order rests on evidence or defaulted to day-first on ambiguous dates (R5, §5.7). */
   dateOrderInferred?: 'evidence' | 'default'
+  /**
+   * How many money-bearing lines the extractor REJECTED — a line that carries a money-shaped token
+   * (`hasMoneyToken`) yet did NOT become a transaction row (an unparseable/currency-less/no-anchor-date
+   * row, or a row dropped as an ambiguous balance-as-amount), U1 / audit §2.3. Persisted; when > 0 the
+   * deterministic answer drops the "whole statement" claim for an honest "M lines could not be parsed".
+   */
+  droppedRowCount?: number
 }
 
 // ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
@@ -300,8 +318,12 @@ function isBalanceLabelLine(lowerLine: string): boolean {
  */
 function lastMoneyOnLine(line: string): number | null {
   const matches = [...stripDateTokens(line).matchAll(MONEY_RE)]
-  if (matches.length === 0) return null
-  return parseAmount(matches[matches.length - 1][0])
+  if (matches.length > 0) return parseAmount(matches[matches.length - 1][0])
+  // U1 (audit §2.3): a balance printed as a ROUND currency-adjacent integer (`Opening balance 914 $`,
+  // `Kontostand 1 000 EUR`) has no MONEY_RE match — read the last currency-adjacent bare integer so the
+  // §3.5/D56 completeness gate isn't silently lost on this extremely common layout (mirror of the
+  // invoice `totalsMoney` fallback, now the shared `lastCurrencyAdjacentInteger`).
+  return lastCurrencyAdjacentInteger(line)
 }
 
 /** The first whitespace-token on a line that parses as a date (ISO `YYYY-MM-DD`), or null. `anchor` (R5)
@@ -474,13 +496,20 @@ function isDescriptionContinuation(line: string, order: DateOrder, anchor?: Date
   return [...line.matchAll(MONEY_RE)].length === 0
 }
 
-/** Pure extractor over already-read chunks — emits only fully-valid rows (ambiguous lines dropped). */
-export function extractTransactionRows(
+/**
+ * Pure extractor + completeness stats: the fully-valid rows AND `droppedRowCount` — how many money-bearing
+ * lines the parser REJECTED (U1, audit §2.3). A rejected line is one that carries a money-shaped token
+ * (`hasMoneyToken`) yet did not become a row: an unparseable / currency-less / no-anchor-date row, or a row
+ * later dropped as an ambiguous balance-as-amount. Counting them lets the answer gate its "whole statement"
+ * claim instead of asserting exhaustiveness while silently dropping figures. `extractTransactionRows` is the
+ * rows-only wrapper the tools/tests keep calling (unchanged signature).
+ */
+export function extractTransactionsWithStats(
   chunks: DocumentChunkRead[],
   statementCurrency: string | null,
   order?: DateOrder,
   anchor?: DateAnchor | null
-): ExtractedTransaction[] {
+): { rows: ExtractedTransaction[]; droppedRowCount: number } {
   // R1 (audit §5.3): normalize Unicode side-doors (U+2212 minus family, NBSP thousands-space family,
   // U+2019 apostrophe) ONCE at the entry so every downstream regex (MONEY_RE, date scans) sees ASCII.
   const texts = chunks.map((c) => normalizeExtractionText(c.text))
@@ -492,6 +521,8 @@ export function extractTransactionRows(
   const dateOrder = order ?? inferDateOrder(joined)
   const dateAnchor = anchor ?? inferDateAnchor(joined, dateOrder)
   const parsed: { row: ExtractedTransaction; ambiguousAmount: boolean }[] = []
+  // U1 (audit §2.3): money-bearing lines the parser could not turn into a row (the honesty signal).
+  let droppedWithFigure = 0
   for (let ci = 0; ci < chunks.length; ci++) {
     const chunk = chunks[ci]
     // R6 (audit §5.7): a dateless, money-less line that DIRECTLY follows a parsed row is a wrapped
@@ -536,6 +567,16 @@ export function extractTransactionRows(
         pending.absorbed++
         continue
       }
+      // U1 (audit §2.3): a rejected, non-continuation line that looks like a TRANSACTION the parser could
+      // not read — a LEADING booking date AND a money-shaped token — is counted, so the answer gates its
+      // "whole statement" claim (a currency-less row, an empty-description figure row, a fused-amount row).
+      // The leading-date requirement is load-bearing: it excludes a money-LESS header/period line AND a
+      // memo / FX-reference continuation line (a Valuta+foreign-currency second baseline whose description
+      // leads, so it carries no leading BOOKING date) — those carry figures but were never transactions, so
+      // counting them would falsely gate a correctly-read statement (the geometry multi-baseline case).
+      if (splitLeadingDates(line, dateOrder, dateAnchor).dates.length > 0 && hasMoneyToken(line)) {
+        droppedWithFigure++
+      }
       pending = null
     }
     if (parsed.length >= MAX_TRANSACTIONS) break
@@ -546,8 +587,23 @@ export function extractTransactionRows(
   // BALANCE); on a no-balance "Umsätze" listing the lone token genuinely IS the amount and a numeric payee
   // (`REWE … 1234`) must be kept. `hasBalanceColumn` is established by the unambiguous (≥2-figure) rows.
   const hasBalanceColumn = parsed.some((p) => p.row.balanceAfter !== undefined)
-  const rows = parsed.filter((p) => !(p.ambiguousAmount && hasBalanceColumn)).map((p) => p.row)
-  return rows
+  const kept = parsed.filter((p) => !(p.ambiguousAmount && hasBalanceColumn))
+  // An ambiguous row DROPPED here is also a money-bearing line the parser could not confidently keep — fold
+  // it into the completeness signal (U1), so a statement whose rows were dropped for ambiguity is honest.
+  const ambiguousDropped = parsed.length - kept.length
+  return { rows: kept.map((p) => p.row), droppedRowCount: droppedWithFigure + ambiguousDropped }
+}
+
+/** Pure extractor over already-read chunks — emits only fully-valid rows (ambiguous lines dropped). The
+ *  rows-only wrapper over `extractTransactionsWithStats` (the tools/tests call this; the extract tool reads
+ *  the stats variant for `droppedRowCount`). */
+export function extractTransactionRows(
+  chunks: DocumentChunkRead[],
+  statementCurrency: string | null,
+  order?: DateOrder,
+  anchor?: DateAnchor | null
+): ExtractedTransaction[] {
+  return extractTransactionsWithStats(chunks, statementCurrency, order, anchor).rows
 }
 
 // ---- The tool ----
@@ -594,10 +650,15 @@ export const extractTransactionsTool: SkillTool = {
     // the order rests on evidence or defaulted to day-first on ambiguous dates (`dateOrderInferred`).
     const { order: dateOrder, inferred: dateOrderInferred } = inferDateOrderResult(joined)
     const dateAnchor = inferDateAnchor(joined, dateOrder)
-    const transactions = extractTransactionRows(chunks, statementCurrency, dateOrder, dateAnchor)
+    const { rows: transactions, droppedRowCount } = extractTransactionsWithStats(
+      chunks,
+      statementCurrency,
+      dateOrder,
+      dateAnchor
+    )
     const balances = extractStatementBalances(chunks, dateOrder, dateAnchor)
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
-    const output: ExtractTransactionsOutput = { transactions, dateOrderInferred }
+    const output: ExtractTransactionsOutput = { transactions, dateOrderInferred, droppedRowCount }
     if (statementCurrency) output.currency = statementCurrency
     if (balances.openingBalance !== undefined) output.openingBalance = balances.openingBalance
     if (balances.closingBalance !== undefined) output.closingBalance = balances.closingBalance

@@ -41,6 +41,17 @@ describe('t — lookup and interpolation', () => {
     // The unresolved placeholder stays literal — visible in dev, never a crash.
     expect(t('de', 'home.docsReady.other')).toBe('{count} documents ready to ask about')
   })
+
+  it('U1/ux-10: the extract coverage badge is softened from "Every match found" (overclaim) to "Read"', () => {
+    // "Every match found" asserted the EXTRACTION was exhaustive — a small model / unusual layout can miss
+    // a match. The honest claim is that every section was READ, not that every match was captured.
+    for (const key of ['coverage.extract.whole', 'coverage.extract.sections'] as MessageKey[]) {
+      expect(t('en', key)).not.toMatch(/every match/i)
+      expect(t('en', key, { scanned: 3 })).toMatch(/read/i)
+      expect(t('de', key)).not.toMatch(/jeder treffer/i)
+      expect(t('de', key, { scanned: 3 })).toMatch(/gelesen/i)
+    }
+  })
 })
 
 describe('tCount — .one/.other plural pairs (n === 1 rule)', () => {

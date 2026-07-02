@@ -505,6 +505,34 @@ password recovery — are documented in
   The bank port added **no** extractor-version bump (the serializers are read-side; extraction output is
   byte-identical). **Residual:** bank has no statement **XML** serializer (JSON/CSV only, per the plan), so
   an "as xml" ask falls through to grounded-data rather than an inline XML block.
+  **U1 (audit §2.3 / ux-10 / ux-11 / §3.6) made the completeness claim honest and stopped silent row drops
+  from masquerading as exhaustive reads.** The bank + invoice extractors now record an additive
+  `dropped_row_count` per extraction (`bank_statements`/`invoices`, nullable — pre-U1 rows read NULL and the
+  answer simply omits the gate) — how many money-bearing lines the parser **rejected** (a currency-less /
+  empty-description / fused-amount / ambiguous-balance-as-amount row; a *money-shaped* token via the shared
+  `hasMoneyToken`, so a bare reference integer never counts). A **leading booking date is required** for a
+  bank line to count, so a memo / FX-reference continuation line (the geometry Valuta second baseline, whose
+  description leads) and a money-less header are excluded — they carry figures but were never transactions,
+  and counting them would falsely gate a correctly-read statement. When `> 0` the deterministic answer
+  **replaces the "across the whole statement" / "the whole invoice" headline** with an honest *"**N** read;
+  **M** line(s) with figures I couldn't parse"* (`countPartial`, EN+DE du-form); and a D56-**contradicted**
+  statement now uses a **`countContradicted`** headline instead of claiming "the whole statement" over a body
+  that refuses a total — killing the self-contradicting count line. The currency-adjacent bare-integer read
+  (R1's `totalsMoney` fallback, now the shared `lastCurrencyAdjacentInteger`) is **extended to bank balance
+  lines** (`lastMoneyOnLine`), so a round `Opening balance 914 $` feeds the §3.5/D56 completeness gate instead
+  of silently losing it. **Both extractor versions → 8.** The **"Every match found …"** structured-extract
+  coverage badge is softened to **"Read across …"** (ux-10 — it overclaimed *exhaustive extraction*; a small
+  model / odd layout can miss a match), and the **empty-extraction copy** no longer dead-ends — it blames the
+  reader not the document and names the next step (OCR a scan; else the layout may not be machine-readable).
+  Finally, every shipped SKILL.md body is **reordered so its honesty/safety rules LEAD the first content
+  paragraph** (they used to trail, so the budget-driven fence trim — which keeps leading paragraphs —
+  silently decapitated them, §3.6), and the `buildSkillFence` **`trimmed`/`omitted` flags are now LOGGED**
+  (ids/counts only, `logSkillFenceReduction`) at every call site instead of discarded, so a decapitated-rule
+  turn is diagnosable. **Residuals (documented):** `droppedRowCount` uses the parser's own `MONEY_RE`
+  definition of a figure, so a **round-integer-only** line with no decimal and no currency marker (a bare
+  "Office supplies 500") is still not counted — it is genuinely indistinguishable from a quantity/reference;
+  and the fence trim/omit surfaces only in the **log**, not yet as a coverage-meter badge (the renderer /
+  `CoverageInfo` surface is outside U1's file scope — a follow-up).
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

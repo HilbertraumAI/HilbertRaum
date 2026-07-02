@@ -22,6 +22,7 @@ import {
   approxPromptTokens,
   buildSkillFence,
   composeSystemPromptWithSkill,
+  logSkillFenceReduction,
   skillFenceBudgetTokens,
   stripSkillFenceEcho
 } from './skills/prompt'
@@ -1289,7 +1290,11 @@ function buildTurnFence(
     reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
     fixedTokens
   })
-  return buildSkillFence({ title: skill.title, body: skill.body }, budget).text
+  const fence = buildSkillFence({ title: skill.title, body: skill.body }, budget)
+  // U1 (audit §3.6): log a budget-driven trim/omit (ids/counts only) — the flags were discarded before,
+  // making a decapitated-rule turn undiagnosable. The SKILL.md bodies now lead with the honesty rules.
+  logSkillFenceReduction(skill.installId, fence)
+  return fence.text
 }
 
 /** An UNPERSISTED empty assistant message (the zero-token-stop case — see above). */

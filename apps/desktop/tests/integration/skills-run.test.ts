@@ -158,10 +158,11 @@ describe('runBankExtraction (S11a)', () => {
     // C-4 moved the version 1 → 2; the full-audit-2026-06-29 follow-up Phase 1 (FIN-1/3/4) moved it 2 → 3;
     // skills-remediation R1 (audit §5.3, Unicode normalization pre-pass) moved it 3 → 4; R2 (audit §5.4,
     // `Kontostand am`/`zum` balance labels) moved it 4 → 5; R5 (audit §5.7, anchor-gated year completion +
-    // cross-year rollover) moved it 5 → 6; R6 (audit §5.7, wrapped-description continuation) moves it 6 → 7,
-    // so every statement an OLDER (v6…v1 / pre-versioning NULL) parser produced must re-extract via the A9
-    // path. A fresh extraction is stamped at the current version → never stale.
-    expect(BANK_EXTRACTOR_VERSION).toBe(7)
+    // cross-year rollover) moved it 5 → 6; R6 (audit §5.7, wrapped-description continuation) moved it 6 → 7;
+    // U1 (audit §2.3, droppedRowCount + currency-adjacent balance read) moves it 7 → 8, so every statement an
+    // OLDER (v7…v1 / pre-versioning NULL) parser produced must re-extract via the A9 path. A fresh extraction
+    // is stamped at the current version → never stale.
+    expect(BANK_EXTRACTOR_VERSION).toBe(8)
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
     const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })

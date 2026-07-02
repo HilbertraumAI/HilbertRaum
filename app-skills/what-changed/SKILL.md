@@ -34,24 +34,31 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # What Changed?
 
+Honesty rules — these lead and always apply, even if the rest of this skill is shortened to fit the
+context:
+
+- **The app handles document scope for you — do not police it.** You cannot see how many documents
+  are in scope, so never tell the user to "select two documents" or to "narrow to exactly two": the
+  app already checks this and, when the count isn't exactly two, replies with that guidance itself
+  before you are ever called. Assume you have been given exactly the two documents (or versions) to
+  compare, labelled **A** and **B**, and get straight to comparing them.
+- **A and B are import-order labels only** — the app does not know which is the older or newer
+  version. Never call one the "old" and the other the "new" version unless the documents' own
+  contents say so.
+- **When the app gives you a deterministic word-level diff** (an "Exact changes"/redline block or a
+  list of exact changes), treat it as **complete and exact** — it already found every changed word,
+  including a single deleted or altered word. Base your answer only on it. If instead you are given
+  only document passages (no diff), compare carefully and use cautious wording for anything the
+  passages do not fully cover.
+- **Never dismiss a change as unimportant or the content as "placeholder"** just because it looks
+  repetitive or low-value — report it plainly (e.g. "one word removed on page 2") and let the reader
+  judge.
+- Cite the source for each change. Keep every amount, date, and wording exactly as printed, and
+  answer in the user's language.
+
 Use this skill when the user wants to compare two versions of a document, contract, policy, offer,
 report, or set of terms. Highlight the **material** changes in business language — grounded in the
 exact changes, not a vague impression.
-
-**The app handles document scope for you — do not police it.** You cannot see how many documents are
-in scope, so never tell the user to "select two documents" or to "narrow to exactly two": the app
-already checks this and, when the count isn't exactly two, replies with that guidance itself before
-you are ever called. When you are asked to compare, assume you have been given exactly the two
-documents (or versions) to compare, labelled **A** and **B**, and get straight to comparing them.
-
-**When the app gives you a deterministic word-level diff** (an "Exact changes"/redline block or a
-list of exact changes), treat it as **complete and exact** — it already found every changed word,
-including a single deleted or altered word. Base your answer only on it: turn each change into a
-plain-language point, and **never dismiss a change as unimportant or the content as "placeholder"**
-just because it looks repetitive or low-value — report it plainly (e.g. "one word removed on page 2")
-and let the reader judge. Keep every amount, date, and wording exactly as printed. If instead you are
-given only document passages (no diff), compare carefully and use cautious wording for anything the
-passages do not fully cover.
 
 Produce the answer in this order; omit a section only if there is genuinely nothing for it.
 
@@ -59,9 +66,7 @@ Produce the answer in this order; omit a section only if there is genuinely noth
 3–6 bullets on the most important changes.
 
 ## 2. Material changes
-The app labels the two documents **A** and **B** by import order only — it does **not** know which
-is the older or newer version. Use those labels; never call one the "old" and the other the "new"
-version unless the documents' own contents say so.
+Use the app's **A** / **B** labels (import order only — never "old"/"new"; see the honesty rules above).
 | Area | Document A | Document B | Why it matters | Source |
 Prioritize: price / fees / payment; scope / deliverables; dates / term / renewal / deadlines;
 obligations / responsibilities; rights / permissions; cancellation / termination; liability /
@@ -81,5 +86,5 @@ changed amounts, changed notice periods.
 ## 6. Questions to review
 A checklist for the user.
 
-Cite the source for each change. Answer in the user's language, and keep amounts, dates, and wording
-exactly as printed.
+(The honesty rules that govern this comparison — sourcing, A/B labels, exact wording — are stated at
+the top of this skill.)

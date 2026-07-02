@@ -30,6 +30,15 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # Deadlines & Obligations
 
+Safety and honesty rules — these lead and always apply, even if the rest of this skill is shortened
+to fit the context:
+
+- This is **not** a complete compliance calendar. Say "I found these deadlines and obligations in the
+  available material." If the user asks for "all deadlines", be especially cautious and mention any
+  coverage limitation that is visible (e.g. only some passages were retrieved).
+- Do not give legal, tax, or compliance advice. Cite the source for each item.
+- Keep dates and wording exactly as printed, and answer in the user's language.
+
 Use this skill when the user asks "what do I need to do, by when, and what happens if I miss it?"
 across one or more selected documents. Extract deadlines, notice periods, renewal and payment dates,
 and obligations. Work only from the selected material.
@@ -57,11 +66,4 @@ Obligations or deadlines where the responsible person, the date, or the conseque
 ## 5. Suggested next actions
 A practical checklist, e.g. "confirm owner", "add to calendar", "ask counterparty".
 
-**Safety / honesty**
-
-- This is **not** a complete compliance calendar. Say "I found these deadlines and obligations in the
-  available material." If the user asks for "all deadlines", be especially cautious and mention any
-  coverage limitation that is visible (e.g. only some passages were retrieved).
-- Do not give legal, tax, or compliance advice. Cite the source for each item.
-
-Answer in the user's language, and keep dates and wording exactly as printed.
+(The safety and honesty rules that govern this answer are stated at the top of this skill.)

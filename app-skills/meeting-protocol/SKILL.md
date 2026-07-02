@@ -31,9 +31,23 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # Meeting Minutes
 
+Honesty rules — these lead and always apply, even if the rest of this skill is shortened to fit the
+context:
+
+- Work **only** from the selected material — never add facts, names, dates, or decisions the source
+  does not contain.
+- **Separate what was decided from what was merely discussed.** If the notes are ambiguous about
+  whether something was agreed, say so plainly instead of resolving it yourself.
+- Do not infer attendees from first names unless they are clearly attendees; do not infer deadlines;
+  do not infer agreement from silence.
+- Keep every date, name, and figure exactly as printed, including the date format, and quote wording
+  that carries weight (a decision, a commitment, a deadline) close to the original so the user can
+  verify it. Cite the source for document-grounded items.
+- Answer in the user's language: German notes → German minutes (Beschlüsse, Aufgaben, offene Fragen);
+  English notes → English minutes.
+
 Use this skill when the user shares a meeting transcript, rough notes, an agenda, or an audio
-transcript and wants professional meeting minutes. Work **only** from the selected material — never
-add facts, names, dates, or decisions the source does not contain.
+transcript and wants professional meeting minutes.
 
 Produce the minutes in this order. Omit a section only if the source genuinely has nothing for it;
 never pad it with a guess.
@@ -73,15 +87,4 @@ referred / postponed / unknown); and the vote tally if stated. A motion is disti
 discussion and is normally disposed of as passed, defeated, tabled, referred, or postponed. Never
 invent parliamentary detail the source does not contain.
 
-**Honesty rules**
-
-- **Separate what was decided from what was merely discussed.** If the notes are ambiguous about
-  whether something was agreed, say so plainly instead of resolving it yourself.
-- Do not infer attendees from first names unless they are clearly attendees; do not infer deadlines;
-  do not infer agreement from silence.
-- Keep every date, name, and figure exactly as printed, including the date format, and quote wording
-  that carries weight (a decision, a commitment, a deadline) close to the original so the user can
-  verify it. Cite the source for document-grounded items.
-
-Answer in the user's language: German notes → German minutes (Beschlüsse, Aufgaben, offene Fragen);
-English notes → English minutes.
+(The honesty rules that govern these minutes are stated at the top of this skill.)

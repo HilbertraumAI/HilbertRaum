@@ -52,6 +52,34 @@ describe('SKILL.md triggers.keywords ⇔ vocabulary parity (W5)', () => {
   }
 })
 
+// U1 (audit §3.6) — every SKILL.md body now LEADS with its honesty/safety rules. `buildSkillFence` keeps
+// leading paragraphs when it trims to a budget, so rules-last bodies were silently decapitated. The parser's
+// `body` starts with the `# Heading` paragraph; the rules block must be the very next paragraph, so it
+// survives to the guaranteed-kept minimum. This pins the reorder for all 8 shipped app skills.
+const ALL_APP_SKILL_IDS = [
+  'bank-statement',
+  'invoice',
+  'document-redaction',
+  'contract-brief',
+  'deadline-obligation-finder',
+  'meeting-protocol',
+  'share-safe-review',
+  'what-changed'
+] as const
+
+describe('SKILL.md bodies lead with honesty/safety rules (U1, audit §3.6)', () => {
+  for (const id of ALL_APP_SKILL_IDS) {
+    it(`${id}: the rules block is the FIRST content paragraph (survives fence trimming)`, () => {
+      const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
+      expect(res.ok, `parse ${id}: ${res.errors.join('; ')}`).toBe(true)
+      const paras = (res.body ?? '').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
+      // paragraph[0] is the "# Heading"; the consolidated rules block is paragraph[1].
+      expect(paras[0].startsWith('#')).toBe(true)
+      expect(paras[1]).toMatch(/lead and always apply/i)
+    })
+  }
+})
+
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 /** Mirrors the answer builders' private `fmt` (two-decimal, like the printed figures). */
 const fmt = (n: number): string => n.toFixed(2)

@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation U1: honest completeness — droppedRowCount + gated "whole doc" claims + softened badge + honest empty copy + fence reorder/log — branch `fix/skills-u1`, UNMERGED.**
+Track-U (plan §U1; audit §2.3 + ux-10/ux-11 + §3.6), branched off `fix/skills-w5` (deps: R2; the plan/audit
+docs live on the phase-branch chain, not `master`). Offline / pure / no new deps. **Additive schema** only
+(`dropped_row_count` on `bank_statements`+`invoices`, nullable). **Root cause:** the drop-don't-guess parser
+posture is right, but dropping SILENTLY while claiming exhaustiveness is not — a currency-less / round /
+wrapped / fused row vanished with no trace, yet the answer said "I read the whole statement/invoice"; a
+D56-`contradicted` statement's count line *still* claimed "across the whole statement" over a body refusing
+a total (a self-contradiction); the `Every match found …` extract badge overclaimed; the empty read
+dead-ended ("couldn't find any transactions", no next step); and every SKILL.md put its honesty/safety rules
+LAST, so the budget-driven fence trim (keeps LEADING paragraphs) decapitated them while the `trimmed`/`omitted`
+flags were discarded at both call sites (undiagnosable). **Fix (extractors):** new pure `hasMoneyToken` +
+shared `lastCurrencyAdjacentInteger` (money.ts). `extractTransactionsWithStats` (bank; `extractTransactionRows`
+kept as the rows-only wrapper) and `extractInvoice` now return `droppedRowCount` — money-bearing lines the
+parser rejected. Bank counts a rejected line ONLY with a **leading booking date** + a money token (so an
+FX-reference/Valuta second-baseline continuation, whose description leads, and a money-less header are
+excluded — the geometry multi-baseline would otherwise gate a correctly-read statement) PLUS the F1
+ambiguous-balance-as-amount drops; invoice counts a rejected non-header/totals/summary/line-item line with a
+money token. Bank `lastMoneyOnLine` now falls back to `lastCurrencyAdjacentInteger` (a round `Opening balance
+914 $` feeds the §3.5/D56 gate — the audit §2.3 gap where `lastMoneyOnLine` used `MONEY_RE` only). Invoice
+`totalsMoney` refactored onto the same shared helper (byte-identical). **Both versions → 8** (persisted output
+changed); `run.ts`/`invoice-run.ts` INSERTs persist `dropped_row_count`. **Fix (answers):** `buildBankAnswer`
+gates the headline — `droppedRowCount>0` ⇒ `countPartial` ("N read; M with figures I couldn't parse"), else
+`status==='contradicted'` ⇒ `countContradicted` (no "whole statement" claim), else the plain count;
+`buildInvoiceAnswer` gates `countPartial` vs count. New i18n keys EN+DE (du-form). The `Every match found …`
+badge → `Read across …` (`coverage.extract.*`, EN+DE, ux-10); the empty copy blames the reader + names the
+next step (OCR / not-machine-readable, ux-11). **Fix (fence, §3.6):** all 8 SKILL.md bodies reordered so the
+honesty/safety rules are the FIRST content paragraph (survive trimming); `buildSkillFence` `trimmed`/`omitted`
+now LOGGED via `logSkillFenceReduction` (ids/counts only — skill id + booleans, never the body) at all 3
+budget call sites (chat.ts + rag/index.ts ×2). **Supporting edit outside the plan file list:** money.ts (the
+shared `hasMoneyToken`/`lastCurrencyAdjacentInteger` primitives — the shared-primitives home; DRY over
+duplicating invoice's inline logic into bank). **Data contract:** `dropped_row_count INTEGER` nullable —
+NULL = pre-U1 (gate omitted, never falsely 0); 0 = every money-shaped line parsed; >0 = the partial headline
+fires. Never logged/audited/exported (a provenance count, CONTENT-CLASS adjacent). **+23 net-new tests**
+(droppedRowCount bank+invoice incl. clean-is-0 + geometry-FX-excluded, currency-adjacent balance ±sign +
+no-currency-drop, `countPartial`/`countContradicted` analysis, `logSkillFenceReduction` ids-only, SKILL.md
+rules-lead ×8, badge soften EN+DE); version-pin + geometry-contradicted tests updated to the gated headlines;
+full suite green (**2957** passed / 41 skipped) + typecheck. **Residuals (documented in known-limitations):**
+a round-integer-ONLY line with no decimal and no currency marker is uncounted (MONEY_RE's own figure
+definition; indistinguishable from a quantity/reference); the fence trim/omit surfaces only in the LOG, not
+yet a coverage-meter badge (renderer / `CoverageInfo` surface outside U1's file scope — a follow-up). Next: U2
+(PII detectors) or per the recommended order._
+
 _2026-07-02 — **Skills remediation W5: one trigger vocabulary + word-boundary matcher + scoring + 8-skill eval corpus — branch `fix/skills-w5`, UNMERGED.**
 Track-W (plan §W5; audit §3.2/§4.1/§4.2/§8.3), branched off `fix/skills-w4` (deps: none; the plan/audit docs
 live on the W-branch chain, not `master`). Offline / pure / no new deps / **no schema change** / **no
