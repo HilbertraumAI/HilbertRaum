@@ -448,16 +448,83 @@ describe('extractTransactionRows — date correctness (R5, §5.7)', () => {
   })
 })
 
+describe('extractTransactionRows — wrapped descriptions (R6, §5.7)', () => {
+  it('appends a dateless/money-less follower line to the prior row (merchant name survives)', () => {
+    // A SEPA row whose payee prints on the line below: before R6 the `NETFLIX…` line was dropped (the row
+    // kept only `SEPA-Lastschrift`), degrading the categorizer and the listing. R6 appends the wrapped
+    // payee line to the row's description (the plain-text mirror of the geometry multi-baseline association).
+    const text = [
+      '2026-03-01 SEPA-Lastschrift -12,99 1.000,00',
+      'NETFLIX INTERNATIONAL B.V.'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].description).toContain('NETFLIX')
+    expect(rows[0]).toMatchObject({ amount: -12.99, balanceAfter: 1000, description: 'SEPA-Lastschrift NETFLIX INTERNATIONAL B.V.' })
+  })
+
+  it('is BOUNDED to one continuation line — a third dateless line does not glue', () => {
+    const text = [
+      '2026-03-01 SEPA-Lastschrift -12,99 1.000,00',
+      'NETFLIX INTERNATIONAL B.V.', // absorbed (1st continuation)
+      'Amsterdam NL' // NOT absorbed — past the single-line bound
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].description).toBe('SEPA-Lastschrift NETFLIX INTERNATIONAL B.V.')
+    expect(rows[0].description).not.toContain('Amsterdam')
+  })
+
+  it('does NOT glue a balance-label line or a following transaction to the prior row', () => {
+    // A balance-label line (a summary) and a genuine next transaction each CLOSE the pending row rather
+    // than being absorbed as description text — the continuation is strictly a dateless/money-less wrap.
+    const text = [
+      '2026-03-01 Kaffeehaus -3,50 996,50',
+      'Kontostand am 31.03.2026 996,50', // balance label — read by extractStatementBalances, never glued
+      '2026-03-02 Bäckerei -2,00 994,50'
+    ].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].description).toBe('Kaffeehaus')
+    expect(rows[1].description).toBe('Bäckerei')
+  })
+
+  it('does NOT glue a figure-bearing follower line (a stray annotation is not payee text)', () => {
+    // The continuation is strictly dateless AND money-less. A bare figure line (an FX/annotation remnant)
+    // carries a money token, so it CLOSES the pending row instead of being absorbed into the description.
+    const text = ['2026-03-01 Kaffeehaus -3,50 996,50', '1,50'].join('\n')
+    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].description).toBe('Kaffeehaus') // NOT "Kaffeehaus 1,50"
+  })
+
+  it('does NOT carry a continuation across a chunk/page boundary (each chunk is one page)', () => {
+    // A wrapped payee prints on the SAME page as its booking row; `pending` is scoped per-segment, so a
+    // page-2 repeated column header must NOT glue onto page-1's last row (the multi-page common case).
+    const rows = extractTransactionRows(
+      [
+        chunk('2026-03-01 Kaffeehaus -3,50 996,50', 1, 0),
+        chunk('Buchungstag Valuta Buchungstext Betrag Saldo\n2026-03-02 Bäckerei -2,00 994,50', 2, 1)
+      ],
+      'EUR'
+    )
+    expect(rows).toHaveLength(2)
+    expect(rows[0].description).toBe('Kaffeehaus') // page-2 header NOT absorbed across the boundary
+    expect(rows[1].description).toBe('Bäckerei')
+  })
+})
+
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 6 — the R5 date-correctness bump (audit §5.7)', () => {
+  it('is at 7 — the R6 wrapped-description bump (audit §5.7)', () => {
     // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
     // (skills-remediation) added the `normalizeExtractionText` pre-pass (v4); R2 extended the dual-role
     // balance label to `Kontostand am`/`Kontostand zum` (v5, audit §5.4); R5 completes 2-digit-year / bare
-    // dates against the document year anchor and applies cross-year month-rollover (audit §5.7), changing
-    // persisted transaction dates and the row set (previously-dropped `dd.mm.yy` rows now parse) on affected
-    // statements. v5 (and older) rows MUST re-extract; `skills-run.test.ts` proves `isBankStatementStale`
-    // flags an out-of-date statement once this reads 6.
-    expect(BANK_EXTRACTOR_VERSION).toBe(6)
+    // dates against the document year anchor and applies cross-year month-rollover (v6, audit §5.7); R6
+    // appends a wrapped dateless/money-less follower line to the prior row's description (audit §5.7),
+    // changing the persisted description (and the categorizer's input) on affected statements. v6 (and
+    // older) rows MUST re-extract; `skills-run.test.ts` proves `isBankStatementStale` flags an out-of-date
+    // statement once this reads 7.
+    expect(BANK_EXTRACTOR_VERSION).toBe(7)
   })
 })
 

@@ -233,6 +233,24 @@ describe('invoice analysis handler — run()', () => {
     expect(res.answer).toContain('20.00')
   })
 
+  it('R6: the listing shows a CLEANED (debris-stripped) line-item description (audit §5.7)', async () => {
+    // A `<rowIndex> <description> <qty> <rate>% <unitPrice> <lineTotal>` row: 12 × 76,17 = 914,04 confirms
+    // the split, so the leading index + trailing `12 0%` debris are stripped and the listing shows the clean
+    // description (not the raw "1 Web hosting 12 Monate 12 0%"). Exercises extract → persist → listing.
+    const DEBRIS = [
+      'Invoice number INV-777',
+      'Vendor Debris GmbH',
+      '1 Web hosting 12 Monate 12 0% 76,17 914,04',
+      'Net total 914,04 EUR'
+    ].join('\n')
+    const db = freshDb()
+    const id = seedDoc(db, DEBRIS)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gib mir die positionen'))
+    expect(res.answer).toContain('Web hosting 12 Monate') // the identity-confirmed cleaned description
+    expect(res.answer).not.toContain('1 Web hosting') // leading row-index gone
+    expect(res.answer).not.toContain('0%') // trailing tax-rate debris gone
+  })
+
   it('answers a "als JSON" request by serializing the extracted invoice (no prose template)', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)

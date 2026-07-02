@@ -61,6 +61,15 @@ const TRANSACTION_ROW_SCHEMA: JsonSchema = {
 export const MAX_TRANSACTIONS = 10000
 
 /**
+ * How many wrapped DESCRIPTION continuation lines a single transaction row may absorb on the plain-text
+ * path (R6, audit §5.7). ONE — the plain path has no column geometry to confirm the association (unlike
+ * the geometry `MAX_CONTINUATION_ROWS` = 4), so a single immediately-following dateless/money-less line is
+ * the conservative bound: enough to recover a merchant name that wrapped once, not enough to swallow a
+ * footer note that happens to sit under the last row.
+ */
+const MAX_PLAIN_CONTINUATION_ROWS = 1
+
+/**
  * The deterministic bank-statement extractor version (A9, Phase 31–33 follow-up). Stamped onto every
  * `bank_statements` row (`run.ts` `runBankExtraction`) and compared on reuse: a statement whose stored
  * `extractor_version` is NULL (legacy) or LESS than this is STALE — the analysis read-back + the
@@ -101,8 +110,15 @@ export const MAX_TRANSACTIONS = 10000
  *       month-rollover assigns a December row on a January-anchored statement to the PREVIOUS year (both the
  *       geometry `toFullDate` and the plain path). Changes the persisted transaction dates (and the row set,
  *       since previously-dropped `dd.mm.yy` rows now parse) on affected statements, so stale v5 rows re-extract.
+ *   7 — skills-remediation R6 (audit §5.7): wrapped descriptions. A dateless, money-less line that
+ *       DIRECTLY follows a parsed transaction row is appended to that row's description as a bounded
+ *       (single-line) continuation — the plain-text mirror of the geometry multi-baseline association
+ *       (`pdf-layout.ts`) — so a merchant/payee name that wrapped to the next line (a `SEPA-Lastschrift`
+ *       row whose `NETFLIX INTERNATIONAL…` payee printed on the line below) survives instead of being
+ *       silently dropped (which degraded the categorizer and the listing). Changes the persisted
+ *       description on affected statements (and thus the categorizer's input), so stale v6 rows re-extract.
  */
-export const BANK_EXTRACTOR_VERSION = 6
+export const BANK_EXTRACTOR_VERSION = 7
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -446,6 +462,18 @@ export function isStatementComplete(args: {
   return assessCompleteness(args) === 'complete'
 }
 
+/**
+ * Whether a line is a pure DESCRIPTION continuation — the wrapped payee/purpose of the row above. It
+ * carries NO leading booking date (a leading date would make it its own transaction) and NO money token
+ * (a figure would be a running-balance / FX / footer annotation, not payee text). Mirror of the geometry
+ * `continuationText` guard on the plain-text path (R6, audit §5.7). `anchor` completes a 2-digit / bare
+ * date so a wrapped-looking `dd.mm.` line that is actually a booking row is NOT absorbed as text.
+ */
+function isDescriptionContinuation(line: string, order: DateOrder, anchor?: DateAnchor | null): boolean {
+  if (splitLeadingDates(line, order, anchor).dates.length > 0) return false
+  return [...line.matchAll(MONEY_RE)].length === 0
+}
+
 /** Pure extractor over already-read chunks — emits only fully-valid rows (ambiguous lines dropped). */
 export function extractTransactionRows(
   chunks: DocumentChunkRead[],
@@ -466,17 +494,49 @@ export function extractTransactionRows(
   const parsed: { row: ExtractedTransaction; ambiguousAmount: boolean }[] = []
   for (let ci = 0; ci < chunks.length; ci++) {
     const chunk = chunks[ci]
+    // R6 (audit §5.7): a dateless, money-less line that DIRECTLY follows a parsed row is a wrapped
+    // continuation of that row's payee/purpose (the plain-text mirror of the geometry multi-baseline
+    // association). It is appended to the pending row's description so a merchant name that wrapped once
+    // survives (it was silently dropped before). The pending row is closed by the next parsed row, a
+    // balance-label line, a blank line, any other non-continuation line, or the end of this SEGMENT.
+    // `pending` is scoped PER CHUNK: each chunk is one page on the real path (segments map 1:1 to pages),
+    // and a wrapped payee always prints on the SAME page as its booking row — so it must NOT survive the
+    // segment boundary (else a page-2 running header / footer would glue onto page-1's last row). This
+    // mirrors the geometry `reconstructPage`, which keeps its pending LOCAL and flushes it at page end.
+    let pending: { row: ExtractedTransaction; absorbed: number } | null = null
     for (const rawLine of texts[ci].split(/\r?\n/)) {
       const line = rawLine.trim()
-      if (!line) continue
+      if (!line) {
+        pending = null // a blank line breaks a wrapped-description run
+        continue
+      }
       // A printed opening/closing balance line is a summary, not a transaction — skip it even though
       // it may carry a booking-column date + figure (it is read by `extractStatementBalances` instead).
-      if (isBalanceLabelLine(line.toLowerCase())) continue
+      // It also CLOSES any pending row (a summary line is never a payee continuation).
+      if (isBalanceLabelLine(line.toLowerCase())) {
+        pending = null
+        continue
+      }
       const p = parseLine(line, chunk.page, statementCurrency, dateOrder, dateAnchor)
       if (p) {
         parsed.push(p)
+        pending = { row: p.row, absorbed: 0 }
         if (parsed.length >= MAX_TRANSACTIONS) break
+        continue
       }
+      // Not a parsed row: when it carries no leading date and no money token it is a wrapped payee
+      // continuation of the row above — append it to that row's description (bounded). Anything else
+      // (a header line, a figure-bearing annotation) closes the pending row instead.
+      if (
+        pending &&
+        pending.absorbed < MAX_PLAIN_CONTINUATION_ROWS &&
+        isDescriptionContinuation(line, dateOrder, dateAnchor)
+      ) {
+        pending.row.description = `${pending.row.description} ${line}`.trim()
+        pending.absorbed++
+        continue
+      }
+      pending = null
     }
     if (parsed.length >= MAX_TRANSACTIONS) break
   }

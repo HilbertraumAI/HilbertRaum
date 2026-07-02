@@ -46,6 +46,8 @@ export interface InvoiceLineItem {
   description: string
   quantity?: number
   unitPrice?: number
+  /** Per-line tax rate (%), recovered ONLY from an identity-confirmed `<qty> <rate>%` column split (R6). */
+  taxRatePercent?: number
   lineTotal: number
   currency: string
 }
@@ -76,6 +78,14 @@ export type InvoiceInput = ExtractedInvoice
 
 /** A hard cap so a pathological document can never produce an unbounded array (the gate also validates). */
 export const MAX_LINE_ITEMS = 10000
+
+/**
+ * How many wrapped DESCRIPTION continuation lines a single line item may absorb on the plain-text path
+ * (R6, audit §5.7). ONE — the plain path has no column geometry to confirm the association (unlike the
+ * geometry `MAX_CONTINUATION_ROWS` = 4), so a single immediately-following money-less line is the
+ * conservative bound: enough to recover a description that wrapped once, not enough to swallow a note.
+ */
+const MAX_PLAIN_CONTINUATION_ROWS = 1
 
 /**
  * The deterministic invoice extractor version (F5 — mirrors `BANK_EXTRACTOR_VERSION`). Stamped onto
@@ -125,8 +135,17 @@ export const MAX_LINE_ITEMS = 10000
  *       the document-level `dateOrderInferred` provenance (evidence vs day-first default) on the invoice for
  *       the answer caveat. The added output field (and any completed lead date) changes the persisted output,
  *       so stale v5 rows re-extract.
+ *   7 — skills-remediation R6 (audit §5.7): row fidelity. (a) A money-less, non-label line that DIRECTLY
+ *       follows a line item is appended to that item's description as a bounded (single-line) continuation
+ *       — the plain-text mirror of the geometry multi-baseline association — so a wrapped description
+ *       survives instead of being dropped. (b) Line-item column debris is cleaned IDENTITY-GATED: a
+ *       `<rowIndex> <description> <qty> <rate>%` shape has the leading row index stripped and the trailing
+ *       quantity / tax-rate columns split into `quantity` + the new optional `taxRatePercent`, but ONLY
+ *       when `quantity × unitPrice ≈ lineTotal` independently confirms the split — otherwise the description
+ *       is left exactly as parsed (drop-don't-guess, §22-D1). Changes the persisted descriptions /
+ *       quantities on affected invoices, so stale v6 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 6
+export const INVOICE_EXTRACTOR_VERSION = 7
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -151,6 +170,7 @@ const LINE_ITEM_SCHEMA: JsonSchema = {
     description: { type: 'string', minLength: 1 },
     quantity: { type: 'number' },
     unitPrice: { type: 'number' },
+    taxRatePercent: { type: 'number' },
     lineTotal: { type: 'number' },
     currency: { type: 'string', pattern: '^[A-Z]{3}$' }
   }
@@ -308,6 +328,47 @@ function isFusedSpaceGroup(token: string): boolean {
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
+
+// R6 (audit §5.7) — the identity-gated line-item column-debris cleanup. A very common invoice table
+// prints  <rowIndex> <description> <qty> <taxRate>% <unitPrice> <lineTotal>  where the rowIndex, the
+// quantity and the tax-rate percent are BARE (non-2-dp) tokens MONEY_RE ignores, so they stay glued to
+// the parsed description ("1 Web hosting 12 Monate 1 0%"). This regex isolates a trailing `<int> <num>%`
+// run (quantity + tax rate) at the END of the description region; the split is applied ONLY when the
+// arithmetic identity qty × unitPrice ≈ lineTotal confirms it (see cleanColumnDebris).
+const COLUMN_DEBRIS_TRAIL_RE = /^(.*?)\s+(\d+)\s+(\d+(?:[.,]\d+)?)\s*%\s*$/
+
+/**
+ * Recover `quantity` + `taxRatePercent` from a line item's trailing `<qty> <rate>%` column debris and
+ * strip a leading row index — but ONLY when the recovered quantity reproduces the printed line total from
+ * the unit price (`quantity × unitPrice ≈ lineTotal`, within half a cent). This is the drop-don't-guess
+ * gate (§22-D1): an unverifiable split returns null and the caller leaves the description exactly as
+ * parsed. Needs the two money columns (unitPrice = second-to-last, lineTotal = last), so a single-figure
+ * row — with no unit price to check against — is never cleaned. The leading-index strip is coupled to the
+ * same gate, so the audit probe `1 Web hosting 12 Monate 1 0% 76,17 914,00` (1 × 76,17 ≠ 914) is left
+ * entirely intact rather than half-cleaned.
+ */
+function cleanColumnDebris(
+  description: string,
+  amounts: number[]
+): { description: string; quantity: number; taxRatePercent: number } | null {
+  if (amounts.length < 2) return null
+  const m = COLUMN_DEBRIS_TRAIL_RE.exec(description)
+  if (!m) return null
+  const quantity = Number(m[2])
+  const taxRatePercent = Number(m[3].replace(',', '.'))
+  if (!Number.isFinite(quantity) || !Number.isFinite(taxRatePercent)) return null
+  const unitPrice = amounts[amounts.length - 2]
+  const lineTotal = amounts[amounts.length - 1]
+  // The identity gate — the recovered quantity must tie the unit price to the printed line total.
+  if (Math.abs(round2(quantity * unitPrice) - lineTotal) >= MONEY_EPS) return null
+  // Also strip ONE leading standalone integer that is a plausible ROW INDEX (1–3 digits) — never persisted
+  // as a quantity. A LONGER leading run is left in place: a 4-digit number is far more likely a product year
+  // (`2026 Calendar …`) or code than a row index, and the identity gate confirms only the qty/price split,
+  // not that the leading token is an index — so clobbering it could silently delete real description text.
+  const cleaned = m[1].replace(/^\d{1,3}\s+/, '').trim()
+  if (!cleaned) return null
+  return { description: cleaned, quantity, taxRatePercent }
+}
 
 /** If `line` starts with one of `labels` (WITH a structural boundary), return the trimmed remainder (the
  *  value), else null. The boundary check (audit §5.2) keeps a header label from matching a longer word it
@@ -547,17 +608,29 @@ export function parseLineItem(
   const currency = detectCurrency(figureRegion) ?? documentCurrency
   if (!currency) return null
 
-  // F8 — split a trailing number off the description as `quantity` ONLY when a unit token is present
-  // (QTY_TRAIL_RE group 3) OR a second money column (a unit price, `amounts.length >= 2`) corroborates
-  // it. Without either, a product-coded description (`iPhone 15`, `Calendar 2026`) had its trailing
-  // number greedily read as a quantity. (lineTotal is unaffected — this is a metadata fix.)
   let quantity: number | undefined
-  const qtyMatch = QTY_TRAIL_RE.exec(description)
-  if (qtyMatch && qtyMatch[1].trim() && (qtyMatch[3] !== undefined || amounts.length >= 2)) {
-    const q = Number(qtyMatch[2].replace(',', '.'))
-    if (Number.isFinite(q)) {
-      quantity = q
-      description = qtyMatch[1].trim()
+  let taxRatePercent: number | undefined
+  // R6 (audit §5.7) — try the identity-gated column-debris cleanup FIRST: it owns the trailing
+  // `<qty> <rate>%` shape and, when the identity confirms, fully determines the cleaned description +
+  // quantity + tax rate (and strips a leading row index). It fires only on that specific shape, so any
+  // other line falls through to the existing F8 trailing-quantity split unchanged.
+  const debris = cleanColumnDebris(description, amounts)
+  if (debris) {
+    description = debris.description
+    quantity = debris.quantity
+    taxRatePercent = debris.taxRatePercent
+  } else {
+    // F8 — split a trailing number off the description as `quantity` ONLY when a unit token is present
+    // (QTY_TRAIL_RE group 3) OR a second money column (a unit price, `amounts.length >= 2`) corroborates
+    // it. Without either, a product-coded description (`iPhone 15`, `Calendar 2026`) had its trailing
+    // number greedily read as a quantity. (lineTotal is unaffected — this is a metadata fix.)
+    const qtyMatch = QTY_TRAIL_RE.exec(description)
+    if (qtyMatch && qtyMatch[1].trim() && (qtyMatch[3] !== undefined || amounts.length >= 2)) {
+      const q = Number(qtyMatch[2].replace(',', '.'))
+      if (Number.isFinite(q)) {
+        quantity = q
+        description = qtyMatch[1].trim()
+      }
     }
   }
 
@@ -567,6 +640,7 @@ export function parseLineItem(
     currency
   }
   if (quantity !== undefined) item.quantity = quantity
+  if (taxRatePercent !== undefined) item.taxRatePercent = taxRatePercent
   if (amounts.length >= 2) item.unitPrice = amounts[amounts.length - 2]
   return item
 }
@@ -590,28 +664,65 @@ export function extractInvoice(
   const lineItems: InvoiceLineItem[] = []
   const totals: InvoiceTotals = {}
   for (const text of texts) {
+    // R6 (audit §5.7): a money-less, non-label line that DIRECTLY follows a line item is a wrapped
+    // continuation of that item's description (the plain-text mirror of the geometry multi-baseline
+    // association). It is appended to the pending item's description so a description that wrapped once
+    // survives. Bounded to ONE line; the pending item is closed by the next line item, a header/totals/
+    // summary line, a blank line, any figure-bearing line, or the end of this SEGMENT. `pending` is scoped
+    // PER CHUNK (each chunk is one page on the real path) — a wrapped description always prints on the SAME
+    // page as its line item, so it must NOT survive the segment boundary (else a page-2 footer / header
+    // would glue onto page-1's last line item). Mirrors the geometry per-page flush in `reconstructPage`.
+    let pending: { item: InvoiceLineItem; absorbed: number } | null = null
     for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim()
-      if (!line) continue
+      if (!line) {
+        pending = null // a blank line breaks a wrapped-description run
+        continue
+      }
       // Header first (it consumes a labeled date line — `Rechnungsdatum: 15.01.2026` — before the money
       // scan below could misread the date's `15.01` as an amount). `applyHeader` no longer consumes a
       // date-label line unless a date actually parses, so a line item that merely begins with a date word
-      // (`Due diligence review 2.000,00`) falls through instead of being swallowed (audit §5.2).
-      if (applyHeader(line, header, dateOrder, dateAnchor)) continue
+      // (`Due diligence review 2.000,00`) falls through instead of being swallowed (audit §5.2). A header
+      // line also CLOSES any pending item (it is a structural boundary, never a description continuation).
+      if (applyHeader(line, header, dateOrder, dateAnchor)) {
+        pending = null
+        continue
+      }
       // A boundary-matched totals label whose remainder is just the figure is a total; one that still
       // carries a real description ("Netto-Miete Objekt 3 1.000,00", "Total hours consulting 40,00")
       // falls through to `parseLineItem` and stays a line item (audit §5.2).
-      if (applyTotals(line, totals)) continue
+      if (applyTotals(line, totals)) {
+        pending = null
+        continue
+      }
       // A summary line whose description is only a totals label never becomes a phantom line item (§5.4).
-      if (isSummaryLabelLine(line)) continue
+      if (isSummaryLabelLine(line)) {
+        pending = null
+        continue
+      }
       const item = parseLineItem(line, documentCurrency, dateOrder, dateAnchor)
       if (item) {
         lineItems.push(item)
+        pending = { item, absorbed: 0 }
         if (lineItems.length >= MAX_LINE_ITEMS) {
           if (documentCurrency && !header.currency) header.currency = documentCurrency
           return { header, lineItems, totals }
         }
+        continue
       }
+      // Not a line item: a money-less follower line is a wrapped description continuation of the item
+      // above (bounded). Anything carrying a money token closes the pending item instead (a figure is a
+      // total/annotation, not description text).
+      if (
+        pending &&
+        pending.absorbed < MAX_PLAIN_CONTINUATION_ROWS &&
+        [...line.matchAll(MONEY_RE)].length === 0
+      ) {
+        pending.item.description = `${pending.item.description} ${line}`.trim()
+        pending.absorbed++
+        continue
+      }
+      pending = null
     }
   }
   if (documentCurrency && !header.currency) header.currency = documentCurrency
@@ -842,6 +953,7 @@ function invoiceToPlainObject(invoice: InvoiceInput): Record<string, unknown> {
       description: li.description,
       quantity: li.quantity ?? null,
       unitPrice: li.unitPrice ?? null,
+      taxRatePercent: li.taxRatePercent ?? null,
       lineTotal: li.lineTotal,
       currency: li.currency
     })),
@@ -889,6 +1001,7 @@ export function buildInvoiceXml(invoice: InvoiceInput): string {
     el('description', li.description, '      ')
     el('quantity', li.quantity, '      ')
     el('unitPrice', li.unitPrice, '      ')
+    el('taxRatePercent', li.taxRatePercent, '      ')
     el('lineTotal', li.lineTotal, '      ')
     el('currency', li.currency, '      ')
     lines.push('    </lineItem>')

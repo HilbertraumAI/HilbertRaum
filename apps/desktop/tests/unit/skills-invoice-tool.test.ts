@@ -11,6 +11,7 @@ import {
   buildInvoiceJson,
   buildInvoiceXml,
   lineItemsToCsv,
+  INVOICE_EXTRACTOR_VERSION,
   type ExtractInvoiceOutput,
   type InvoiceInput
 } from '../../src/main/services/skills/tools/invoice'
@@ -292,6 +293,110 @@ describe('validate_invoice_totals', () => {
   })
 })
 
+describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
+  it('cleans a `<idx> <desc> <qty> <rate>%` row when qty × unitPrice ties the line total (identity PASSES)', () => {
+    // 12 × 76,17 = 914,04 → the split is confirmed: leading index stripped, qty + tax rate recovered,
+    // the "12 Monate" in the middle of the description is preserved (only the LEADING index is dropped).
+    expect(parseLineItem('1 Web hosting 12 Monate 12 0% 76,17 914,04', 'EUR')).toEqual({
+      description: 'Web hosting 12 Monate',
+      quantity: 12,
+      taxRatePercent: 0,
+      unitPrice: 76.17,
+      lineTotal: 914.04,
+      currency: 'EUR'
+    })
+  })
+
+  it('leaves the description INTACT when the identity FAILS (the audit probe — drop-don\'t-guess)', () => {
+    // The audit probe: 1 × 76,17 = 76,17 ≠ 914 → the column split is unverifiable, so nothing is cleaned
+    // (no qty, no tax rate, the leading index and trailing debris stay). The item is still produced with
+    // the money columns the parser DID read — R6 only declines to "fix" what it cannot confirm.
+    expect(parseLineItem('1 Web hosting 12 Monate 1 0% 76,17 914,00', 'EUR')).toEqual({
+      description: '1 Web hosting 12 Monate 1 0%',
+      unitPrice: 76.17,
+      lineTotal: 914,
+      currency: 'EUR'
+    })
+  })
+
+  it('does not fire without a unit-price column to check against (single figure → left as-is)', () => {
+    // One money token = no unitPrice, so the identity cannot run; a trailing `<int> <rate>%` stays in the
+    // description rather than being guessed into structured fields.
+    expect(parseLineItem('Beratung 1 19% 1.234,56', 'EUR')).toEqual({
+      description: 'Beratung 1 19%',
+      lineTotal: 1234.56,
+      currency: 'EUR'
+    })
+  })
+
+  it('preserves a 4-digit leading token — a product year is not a row index (even when the identity passes)', () => {
+    // 5 × 3,00 = 15,00 confirms the split, but a leading `2026` is a product year, not a row index; only a
+    // plausible 1–3 digit index is stripped, so real leading description text is never silently deleted.
+    expect(parseLineItem('2026 Calendar 5 0% 3,00 15,00', 'EUR')).toEqual({
+      description: '2026 Calendar',
+      quantity: 5,
+      taxRatePercent: 0,
+      unitPrice: 3,
+      lineTotal: 15,
+      currency: 'EUR'
+    })
+  })
+
+  it('appends a money-less follower line as a wrapped line-item description (bounded)', () => {
+    const text = [
+      'Consulting services for the    100,00',
+      'Q1 2026 platform migration', // absorbed (wrapped description)
+      'irrelevant trailing note line' // NOT absorbed — past the single-line bound
+    ].join('\n')
+    const inv = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(inv.lineItems).toHaveLength(1)
+    expect(inv.lineItems[0].description).toBe('Consulting services for the Q1 2026 platform migration')
+  })
+
+  it('does NOT glue a figure-bearing follower line onto the prior line item', () => {
+    // The continuation is money-less only: a bare figure line (a stray total/annotation) CLOSES the pending
+    // item rather than being absorbed as description text.
+    const text = ['Consulting services    100,00', '12,50'].join('\n')
+    const inv = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(inv.lineItems).toHaveLength(1)
+    expect(inv.lineItems[0].description).toBe('Consulting services') // NOT "Consulting services 12,50"
+  })
+
+  it('does NOT carry a continuation across a chunk/page boundary (each chunk is one page)', () => {
+    const inv = extractInvoice(
+      [
+        chunk('Consulting services 100,00', 1, 0),
+        chunk('Vielen Dank für Ihren Auftrag\nWeb hosting 50,00', 2, 1)
+      ],
+      'EUR'
+    )
+    expect(inv.lineItems).toHaveLength(2)
+    expect(inv.lineItems[0].description).toBe('Consulting services') // page-2 footer NOT absorbed
+    expect(inv.lineItems[1].description).toBe('Web hosting')
+  })
+
+  it('the cleaned debris row flows through extract → JSON/CSV export (acceptance: exports carry cleaned shapes)', () => {
+    const inv = extractInvoice([chunk('1 Web hosting 12 Monate 12 0% 76,17 914,04', 1)], 'EUR')
+    expect(inv.lineItems[0]).toMatchObject({ description: 'Web hosting 12 Monate', quantity: 12, taxRatePercent: 0 })
+    const json = JSON.parse(buildInvoiceJson(inv)) as { lineItems: Array<{ description: string; taxRatePercent: number | null }> }
+    expect(json.lineItems[0].description).toBe('Web hosting 12 Monate')
+    expect(json.lineItems[0].taxRatePercent).toBe(0)
+    const csv = lineItemsToCsv(inv.lineItems)
+    expect(csv).toContain('Web hosting 12 Monate') // the cleaned description reaches CSV too
+    expect(csv.split('\r\n')[0]).toBe('description,quantity,unitPrice,lineTotal,currency') // CSV stays 5-col by design
+  })
+})
+
+describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
+  it('is at 7 — the R6 row-fidelity bump (audit §5.7)', () => {
+    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: R6 (wrapped-description continuation + identity-gated
+    // column-debris cleanup) changes the persisted line-item descriptions/quantities, so an invoice an
+    // OLDER (v6…v1 / pre-versioning NULL) parser produced must re-extract via the F5 path. A reverted or
+    // forgotten bump would silently serve stale rows with the old debris-laden descriptions.
+    expect(INVOICE_EXTRACTOR_VERSION).toBe(7)
+  })
+})
+
 describe('export_invoice_csv', () => {
   it('lineItemsToCsv writes a header + escaped rows, fixed-dp numbers, blanks for nulls', () => {
     const csv = lineItemsToCsv([
@@ -378,6 +483,24 @@ describe('JSON / XML serializers (invoice-format-2026-07-01)', () => {
     })
     expect(xml).toContain('<description>A &amp; B &lt;&quot;x&quot;&gt; &apos;y&apos;</description>')
     expect(xml).not.toMatch(/<description>A & B/)
+  })
+
+  it('R6: a per-line taxRatePercent surfaces in JSON (explicit null when absent) and XML (omitted when absent)', () => {
+    const inv: InvoiceInput = {
+      header: { currency: 'EUR' },
+      lineItems: [
+        { description: 'Web hosting', quantity: 12, unitPrice: 76.17, taxRatePercent: 0, lineTotal: 914.04, currency: 'EUR' },
+        { description: 'Support', lineTotal: 50, currency: 'EUR' }
+      ],
+      totals: {}
+    }
+    const json = JSON.parse(buildInvoiceJson(inv)) as { lineItems: Array<{ taxRatePercent: number | null }> }
+    expect(json.lineItems[0].taxRatePercent).toBe(0)
+    expect(json.lineItems[1].taxRatePercent).toBeNull() // stable shape: explicit null when the line has no rate
+    const xml = buildInvoiceXml(inv)
+    expect(xml).toContain('<taxRatePercent>0.00</taxRatePercent>')
+    // The second line item carries no rate → no empty element (mirrors the other absent-field handling).
+    expect(xml.match(/<taxRatePercent>/g) ?? []).toHaveLength(1)
   })
 
   it('the JSON / XML export tools are confirm-gated and return schema-valid {content, rowCount}', async () => {

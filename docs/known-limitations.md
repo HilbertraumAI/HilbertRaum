@@ -508,6 +508,37 @@ password recovery — are documented in
     (an old memo date) would expand `yy` into that wrong century (the same first-date-wins risk the geometry
     path already carries); and rollover keys only off the anchor month, so a genuinely multi-year listing with
     no clear period anchor is not disambiguated per-row.
+  - **A wrapped description is stitched onto the row it belongs to (skills-remediation R6, audit §5.7).** On
+    the plain-text / CSV path a merchant/payee (bank) or line-item (invoice) description that wrapped onto the
+    NEXT line — a dateless, money-less follower — used to be **silently dropped** (the row kept only its
+    booking-line fragment, degrading the categorizer and the listing). It is now **appended** to the row above
+    as a bounded continuation — the plain-text mirror of the geometry **multi-baseline association** — so a
+    `SEPA-Lastschrift` row whose `NETFLIX INTERNATIONAL B.V.` payee printed below reads its real payee.
+    Bounded to **one** continuation line (the plain path has no column geometry to confirm the association, so
+    it is deliberately more conservative than the geometry `MAX_CONTINUATION_ROWS` of 4): a second follower
+    line does not glue, and a balance/header/totals/summary line, a blank line, a figure-bearing line, or the
+    next row **closes** the association. The association is **per page/segment** — `pending` is scoped to one
+    chunk (each chunk is one page on the real path) and never survives the segment boundary, exactly like the
+    geometry `reconstructPage` per-page flush, so a repeated column header or footer at the top of the next
+    page can never glue onto the previous page's last row. `BANK_EXTRACTOR_VERSION` → 7,
+    `INVOICE_EXTRACTOR_VERSION` → 7. **Residual:** a genuine footer/prose line sitting immediately under the
+    last row on the SAME page with no boundary between them can still be absorbed (bounded to one line, and
+    never a wrong figure — it is description text only).
+  - **Line-item column debris is cleaned only when arithmetic confirms the split (skills-remediation R6,
+    audit §5.7).** A common invoice table prints `<rowIndex> <description> <qty> <rate>% <unitPrice>
+    <lineTotal>`, where the row index, the quantity and the tax-rate percent are **bare** tokens `MONEY_RE`
+    ignores, so they stayed glued to the parsed description (`1 Web hosting 12 Monate 1 0%`) — a first-class
+    defect once JSON/CSV/XML made the line-item structure a deliverable. The leading row index is stripped and
+    the trailing `<qty> <rate>%` run is split into `quantity` + a new optional `taxRatePercent` — but **ONLY**
+    when the recovered quantity reproduces the printed line total from the unit price
+    (`quantity × unitPrice ≈ lineTotal`, within half a cent). When the identity fails — the audit probe
+    `1 Web hosting 12 Monate 1 0% 76,17 914,00` (1 × 76,17 ≠ 914) — **nothing is cleaned**: the description is
+    left exactly as parsed (drop-don't-guess, §22-D1), and single-figure rows (no unit price to check against)
+    are never cleaned. The recovered `taxRatePercent` is surfaced in the JSON/XML serializers and the
+    extract-output schema; it is **not** persisted (the line-item table's columns are unchanged — out of the
+    phase's tools-only scope), so it survives only within a fresh extraction. The persisted **and** exported
+    win is the **clean description** and the correctly-assigned `quantity`/`unitPrice`. `INVOICE_EXTRACTOR_VERSION`
+    → 7 (shared bump with the wrapped-description change above).
   - **The amount column is chosen by POSITION, not the first money-shaped token.** With a running balance
     present (≥2 figures on the row) the parser takes the **second-to-last** figure as the movement amount
     and the last as the balance; with one figure that figure is the amount. So a money-shaped reference in

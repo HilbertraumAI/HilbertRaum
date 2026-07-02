@@ -6,6 +6,53 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation R6: row fidelity — wrapped descriptions + line-item column debris —
+branch `fix/skills-r6`, UNMERGED.** Sixth remediation phase (plan §R6; audit §5.7 — the "wrapped
+descriptions silently dropped" and "line-item column debris" bullets), branched off `master` (R1–R5 merged
+there). Offline / pure / no new deps / no routing/answer change / no schema change. **Root cause (§5.7,
+wrapped descriptions):** on the plain-text/CSV path a merchant/payee (bank) or line-item (invoice)
+description that wrapped onto the next line — a dateless, money-less follower — was silently dropped (the row
+kept only its booking-line fragment), degrading the categorizer and the listing; only the geometry path had
+multi-baseline association. **Root cause (§5.7, column debris):** a common invoice table prints
+`<rowIndex> <description> <qty> <rate>% <unitPrice> <lineTotal>` where the index/qty/rate are BARE tokens
+`MONEY_RE` ignores, so they stayed glued to the description (`1 Web hosting 12 Monate 1 0%`) — a first-class
+defect once JSON/CSV/XML made the line-item structure a deliverable. **Fix (continuation):** both extractors
+now append a follower line that is dateless+money-less (bank, `isDescriptionContinuation`) / money-less and
+not a header/totals/summary line (invoice) to the pending row/item's description — the plain mirror of the
+geometry association — bounded to ONE line (`MAX_PLAIN_CONTINUATION_ROWS = 1`, more conservative than the
+geometry `MAX_CONTINUATION_ROWS = 4` since the plain path has no column geometry). Closed by the next row, a
+balance/header/totals/summary line, a blank line, a figure-bearing line, or the SEGMENT boundary. **Fix
+(cleanup):** `cleanColumnDebris` strips a leading 1–3-digit row index and splits a trailing `<int> <num>%`
+into `quantity` + a new optional `InvoiceLineItem.taxRatePercent`, but ONLY when
+`quantity × unitPrice ≈ lineTotal` (within `MONEY_EPS`); on failure the description is left EXACTLY as parsed
+(drop-don't-guess, §22-D1). It runs before the existing F8 trailing-quantity split and owns the `<qty> <rate>%`
+shape. `taxRatePercent` is added to `LINE_ITEM_SCHEMA` + the JSON/XML serializers (a stable optional field);
+it is deliberately NOT added to the 5-column CSV nor persisted (the line-item DB columns are out of the
+tools-only file scope) — the persisted+exported win is the clean description + correct quantity/unitPrice,
+which DO round-trip. **Data contract:** `InvoiceLineItem.taxRatePercent?` (optional, additive to
+`LINE_ITEM_SCHEMA`/`INVOICE_SCHEMA`); no persisted-schema change. **Versions:** `BANK_EXTRACTOR_VERSION` 6→7,
+`INVOICE_EXTRACTOR_VERSION` 6→7 (both output-affecting) — stale v6 rows re-extract via the A9/F5 path.
+**Non-goals held:** no geometry-path change; no new column model (F10 stays open); no routing/answer/DB-schema
+change. **Adversarial review fix (HIGH):** the multi-agent diff review (4 lenses, each finding independently
+verified) caught a real cross-segment bug — `pending` was declared OUTSIDE the per-chunk loop, so on the
+common multi-page case a page-2 repeated column header / footer (`Buchungstag …`, `Vielen Dank …`) glued onto
+page-1's last row/item description (each `DocumentChunkRead` is one page; extraction reads segments 1:1 with
+pages). Fixed by scoping `pending` PER CHUNK (reset at each segment boundary), matching the geometry per-page
+flush. Also fixed a LOW: the leading-index strip was unbounded, so a passing-identity `2026 Calendar 5 0% …`
+lost its year — capped the strip to 1–3 digits. Three MEDIUM/LOW test-coverage gaps the review flagged were
+closed (no `INVOICE_EXTRACTOR_VERSION` value pin; the continuation "no money token" closer untested on both
+paths; no extract→export end-to-end assertion for a cleaned debris row). **Tests (16 net-new):** bank
+wrapped-payee survives / bounded (3rd line doesn't glue) / balance-label+next-row close / figure-follower
+doesn't glue / **cross-page header not glued**; invoice identity PASS (clean desc + qty + taxRatePercent) vs
+FAIL (audit probe left intact) / single-figure no-fire / continuation bounded / figure-follower doesn't glue /
+**cross-page footer not glued** / 4-digit leading-year preserved / extract→JSON+CSV cleaned-shape flow;
+`INVOICE_EXTRACTOR_VERSION`===7 pin; bank version pins moved 6→7 (unit + run integration); integration listing
+shows the cleaned description. **Verified:** `npm test` green (2832 passed / 41 skipped), `npm run typecheck`
+clean; adversarial multi-agent diff review (plan-fidelity / correctness-regression / honesty-persistence /
+test-adequacy lenses — 10 raised, 6 confirmed + all addressed, 4 dismissed as intentional-scope).
+Docs: `known-limitations.md` gains a wrapped-description bullet (with the per-page scoping) + a column-debris
+bullet; plan §0.2 R6 → `[x]`. Branch left unmerged per plan §0._
+
 _2026-07-02 — **Skills remediation R5: date correctness (yy-dates, cross-year, ambiguous flag) — branch
 `fix/skills-r5`, UNMERGED.** Fifth remediation phase (plan §R5; audit §5.7 — the three date bullets), branched
 off `master` (R1–R4 are already merged there). Offline / pure / no new deps / no routing change; the ONLY
