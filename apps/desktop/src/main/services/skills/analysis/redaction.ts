@@ -1,7 +1,5 @@
-import type { Db } from '../../db'
-import type { RetrievalScope } from '../../../../shared/types'
-import { buildScopeFilter } from '../../retrieval-scope'
 import { skillInstallId } from '../registry'
+import { documentsInScope } from '../scope-documents'
 import type {
   SkillAnalysisContext,
   SkillAnalysisHandler,
@@ -45,19 +43,9 @@ function isRedactionShaped(question: string): boolean {
   return REDACTION_KEYWORDS.some((k) => q.includes(k))
 }
 
-/** The indexed, answerable documents within a scope (mirrors invoice/bank `inScopeDocuments`). */
-function inScopeDocuments(db: Db, scope: RetrievalScope): Array<{ id: string }> {
-  const filter = buildScopeFilter(scope, 'd.id')
-  const where = filter ? ` AND ${filter.sql}` : ''
-  const params = filter ? filter.params : []
-  return db
-    .prepare(
-      `SELECT d.id AS id FROM documents d
-       WHERE d.status = 'indexed'
-         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)${where}`
-    )
-    .all(...params) as Array<{ id: string }>
-}
+// The indexed, answerable documents in scope come from the ONE shared helper (X-1 / audit §4.6): the
+// redaction handler reads the stored `chunks`, so it takes `requireChunks: true` — the same predicate
+// the invoice/bank/whole-doc handlers use — instead of a private copy of the query.
 
 export const documentRedactionAnalysisHandler: SkillAnalysisHandler = {
   mode: 'routing',
@@ -68,7 +56,7 @@ export const documentRedactionAnalysisHandler: SkillAnalysisHandler = {
     // more in-scope docs is enough (the run UI is per-document). With NO doc in scope there is
     // nothing to redact, so keep the normal path (the model asks the user to select a document).
     if (!isRedactionShaped(input.question)) return false
-    return inScopeDocuments(input.db, input.scope).length >= 1
+    return documentsInScope(input.db, input.scope, { requireChunks: true }).length >= 1
   },
 
   async run(ctx: SkillAnalysisContext): Promise<SkillAnalysisResult> {
@@ -78,7 +66,7 @@ export const documentRedactionAnalysisHandler: SkillAnalysisHandler = {
     // scope (U-1) the single-doc tool targets one document, so the copy stays honest about that —
     // it tells the user to choose which document on the run button (the COUNT only, never a title).
     const button = ctx.tr('chat.skill.tool.redactDocument')
-    const multiDoc = inScopeDocuments(ctx.db, ctx.scope).length > 1
+    const multiDoc = documentsInScope(ctx.db, ctx.scope, { requireChunks: true }).length > 1
     const answer = ctx.tr(multiDoc ? 'skills.redactionRouting.answerMulti' : 'skills.redactionRouting.answer', {
       button
     })

@@ -473,11 +473,29 @@ export function splitCompareBudget(tokensA: number, tokensB: number, totalBudget
   return [Math.max(1, a), Math.max(1, b)]
 }
 
+/** Title + import date for a compared document, read once from `documents`. Labels the pair in the
+ *  compare prompts so a same-titled version pair is distinguishable WITHOUT claiming which is older
+ *  (audit §5.1). `importedAt` is the `created_at` the shared scope helper also orders the pair by. */
+function compareDocMeta(db: Db, id: string): { title: string; importedAt: string | null } {
+  const row = db.prepare('SELECT title, created_at FROM documents WHERE id = ?').get(id) as unknown as
+    | { title: string | null; created_at: string | null }
+    | undefined
+  return { title: row?.title ?? 'Untitled', importedAt: row?.created_at ?? null }
+}
+
+/** A model-facing label for a compared document: `Document A: "title" (imported YYYY-MM-DD)`. The
+ *  letter carries the diff DIRECTION (A→B) — which document each change belongs to — but makes NO
+ *  claim that A is the original/old version (the app cannot know; import order ≠ authoring order). */
+export function describeCompareDoc(letter: 'A' | 'B', title: string, importedAt: string | null): string {
+  const when = importedAt && importedAt.length >= 10 ? importedAt.slice(0, 10) : 'unknown date'
+  return `Document ${letter}: "${title}" (imported ${when})`
+}
+
 /** The whole-document read for a 2-document compare (Follow-up B): both documents read IN ORDER,
  *  the budget split by size, with continuous `[Sn]` labels across the two so citations stay unique. */
 export interface CompareWholeDocumentsResult {
   /** Per-document groups (in scope order), for the labelled compare prompt. */
-  groups: Array<{ documentId: string; title: string; chunks: RetrievedChunk[] }>
+  groups: Array<{ documentId: string; title: string; importedAt: string | null; chunks: RetrievedChunk[] }>
   /** All chunks (doc A then doc B), continuously labelled — the citation source of truth. */
   chunks: RetrievedChunk[]
   citations: Citation[]
@@ -498,12 +516,8 @@ export function retrieveCompareWholeDocuments(
     documentApproxTokenTotal(db, idB),
     totalBudget
   )
-  const titleOf = (id: string): string => {
-    const row = db.prepare('SELECT title FROM documents WHERE id = ?').get(id) as unknown as
-      | { title: string | null }
-      | undefined
-    return row?.title ?? 'Untitled'
-  }
+  const metaA = compareDocMeta(db, idA)
+  const metaB = compareDocMeta(db, idB)
   const a = retrieveWholeDocument(db, idA, budgetA)
   const b = retrieveWholeDocument(db, idB, budgetB)
   // Continue [Sn] numbering across the SECOND document so labels are unique + ordered (M2: the
@@ -513,8 +527,8 @@ export function retrieveCompareWholeDocuments(
   const bCitations: Citation[] = b.citations.map((c, i) => ({ ...c, label: `S${offset + i + 1}` }))
   return {
     groups: [
-      { documentId: idA, title: titleOf(idA), chunks: a.chunks },
-      { documentId: idB, title: titleOf(idB), chunks: bChunks }
+      { documentId: idA, title: metaA.title, importedAt: metaA.importedAt, chunks: a.chunks },
+      { documentId: idB, title: metaB.title, importedAt: metaB.importedAt, chunks: bChunks }
     ],
     chunks: [...a.chunks, ...bChunks],
     citations: [...a.citations, ...bCitations],
@@ -549,6 +563,10 @@ export interface CompareDiffResult {
   chunksTotal: number
   /** True when the change list was capped (very many changes) — rare for a version pair. */
   truncated: boolean
+  /** Model-facing labels for the two compared documents (title + import date). The diff is A→B
+   *  ("Removed" = in A, "Added" = in B); the labels name A/B without asserting old/new (audit §5.1). */
+  labelA: string
+  labelB: string
 }
 
 /**
@@ -566,6 +584,10 @@ export function retrieveCompareDiff(
   budgetTokens: number
 ): CompareDiffResult | null {
   const [idA, idB] = documentIds
+  const metaA = compareDocMeta(db, idA)
+  const metaB = compareDocMeta(db, idB)
+  const labelA = describeCompareDoc('A', metaA.title, metaA.importedAt)
+  const labelB = describeCompareDoc('B', metaB.title, metaB.importedAt)
   const readOrdered = (id: string): OrderedChunkRow[] =>
     db
       .prepare(
@@ -642,10 +664,10 @@ export function retrieveCompareDiff(
   if (approxTokenCount(changesText) * TOKENS_PER_WORD > budgetTokens) {
     const fitted = fitChangesToBudget(diff.changes, budgetWords)
     if (!fitted) return null
-    return buildDiffResult(diff, fitted.changesText, fitted.redlineText, fitted.truncated, cited, chunksTotal)
+    return buildDiffResult(diff, fitted.changesText, fitted.redlineText, fitted.truncated, cited, chunksTotal, labelA, labelB)
   }
   const redlineText = diff.identical ? '' : renderRedline(diff.changes).text
-  return buildDiffResult(diff, changesText, redlineText, false, cited, chunksTotal)
+  return buildDiffResult(diff, changesText, redlineText, false, cited, chunksTotal, labelA, labelB)
 }
 
 /** Cap the change list to a word budget (best-first) so a very-many-changes pair still answers. */
@@ -673,7 +695,9 @@ function buildDiffResult(
   redlineText: string,
   truncated: boolean,
   cited: OrderedChunkRow[],
-  chunksTotal: number
+  chunksTotal: number,
+  labelA: string,
+  labelB: string
 ): CompareDiffResult {
   const chunks: RetrievedChunk[] = cited.map((row, i) => ({
     label: `S${i + 1}`,
@@ -700,7 +724,9 @@ function buildDiffResult(
     identical: diff.identical,
     chunksCovered: chunksTotal,
     chunksTotal,
-    truncated
+    truncated,
+    labelA,
+    labelB
   }
 }
 
@@ -767,7 +793,7 @@ Answer:`
  */
 export function buildCompareWholeDocPrompt(
   question: string,
-  groups: Array<{ title: string; chunks: RetrievedChunk[] }>,
+  groups: Array<{ title: string; importedAt: string | null; chunks: RetrievedChunk[] }>,
   skillFence?: string | null
 ): string {
   const docs = groups
@@ -775,14 +801,17 @@ export function buildCompareWholeDocPrompt(
       const excerpts = g.chunks
         .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
         .join('\n\n')
-      return `Document ${i + 1} — "${g.title}":\n${excerpts}`
+      return `${describeCompareDoc(i === 0 ? 'A' : 'B', g.title, g.importedAt)}:\n${excerpts}`
     })
     .join('\n\n')
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
   return `Question:
 ${question}
 ${skillBlock}
-Documents to compare:
+Compare the two documents below. They are labelled A and B by import order ONLY — this does NOT tell
+you which is the older or newer version. Describe the differences between Document A and Document B;
+never call either the "old" or the "new" version.
+
 ${docs}
 
 Answer:`
@@ -799,6 +828,8 @@ export function buildCompareDiffPrompt(
   question: string,
   redlineText: string,
   changesText: string,
+  labelA: string,
+  labelB: string,
   skillFence?: string | null
 ): string {
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
@@ -806,11 +837,16 @@ export function buildCompareDiffPrompt(
   return `Question:
 ${question}
 ${skillBlock}
-A deterministic word-level comparison of the two documents produced the changes below. Base your
-answer ONLY on these changes — they are complete and exact. Do not dismiss a change as unimportant;
-keep names, numbers, and dates exact. Cite the changed locations with [S1], [S2], etc.
+A deterministic word-level comparison of two documents produced the changes below.
+${labelA}
+${labelB}
+Base your answer ONLY on these changes — they are complete and exact. Do not dismiss a change as
+unimportant; keep names, numbers, and dates exact. "Removed"/"Changed-from" text is present in
+Document A but not Document B; "Added"/"Changed-to" text is present in Document B but not Document A.
+The labels A and B follow import order only — do NOT describe either as the "old" or the "new"
+version. Cite the changed locations with [S1], [S2], etc.
 
-${redlineBlock}Changes from the old version to the new version:
+${redlineBlock}Differences from Document A to Document B:
 ${changesText}
 
 Answer:`
@@ -995,10 +1031,12 @@ export async function generateGroundedAnswer(
   let coverage: CoverageInfo | undefined
   // When set (Follow-up B), the grounded turn presents the two compared documents as labelled blocks
   // (buildCompareWholeDocPrompt) instead of a single excerpt list.
-  let compareGroups: Array<{ title: string; chunks: RetrievedChunk[] }> | null = null
+  let compareGroups: Array<{ title: string; importedAt: string | null; chunks: RetrievedChunk[] }> | null = null
   // When set (mode d, compare-diff record), the grounded turn presents the DETERMINISTIC changes
   // (buildCompareDiffPrompt) instead of the two whole documents — the primary version-compare path.
-  let compareDiff: { redlineText: string; changesText: string } | null = null
+  // `labelA`/`labelB` name the pair (title + import date) so the prompt states the A→B direction
+  // WITHOUT asserting which is the old/new version (audit §5.1).
+  let compareDiff: { redlineText: string; changesText: string; labelA: string; labelB: string } | null = null
   if (opts.wholeDocument) {
     const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
@@ -1040,7 +1078,7 @@ export async function generateGroundedAnswer(
     if (diff) {
       chunks = diff.chunks
       citations = diff.citations
-      compareDiff = { redlineText: diff.redlineText, changesText: diff.changesText }
+      compareDiff = { redlineText: diff.redlineText, changesText: diff.changesText, labelA: diff.labelA, labelB: diff.labelB }
       coverage = {
         mode: 'capped',
         chunksCovered: diff.chunksCovered,
@@ -1103,7 +1141,7 @@ export async function generateGroundedAnswer(
   // the base preamble, the question, or the excerpts — only older history yields. The fence rides
   // in the grounded USER turn (buildGroundedPrompt). Stamp only when the fence actually fit.
   const groundedNoFence = compareDiff
-    ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText)
+    ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB)
     : compareGroups
       ? buildCompareWholeDocPrompt(question, compareGroups)
       : buildGroundedPrompt(question, chunks)
@@ -1137,7 +1175,7 @@ export async function generateGroundedAnswer(
   }
   const grounded = skillFence
     ? compareDiff
-      ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, skillFence)
+      ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB, skillFence)
       : compareGroups
         ? buildCompareWholeDocPrompt(question, compareGroups, skillFence)
         : buildGroundedPrompt(question, chunks, skillFence)

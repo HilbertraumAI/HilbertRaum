@@ -6,6 +6,40 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation R4: deterministic compare pair + scope-query consolidation — branch
+`fix/skills-r4`, UNMERGED.** Fourth remediation phase (plan §R4; audit §5.1 HIGH + §4.6), branched off
+`fix/skills-r3`. Offline / pure / no new deps / no diff-algorithm or compare-budget change (W1 owns budgets).
+**Root cause (§5.1):** the chat `what-changed` compare pair `[idA, idB]` came from a **private** in-scope-documents
+query in `registerRagIpc.ts` with **no `ORDER BY`** — so `[0]`→"Document A", `[1]`→"Document B" was an
+UNSPECIFIED SQL row order, and `buildCompareDiffPrompt` then told the model the changes were "from the old version
+to the new version". A user who imported the newer contract first got every addition reported as a removal, with
+full confidence — the report could be exactly inverted. **Root cause (§4.6):** two private copies of the
+in-scope-documents query (`registerRagIpc.ts` `documentsInScope`, `analysis/redaction.ts` `inScopeDocuments`)
+lived beside the shared `scope-documents.ts` helper whose own comment declares drift "impossible"; the IPC copy
+was the direct source of the §5.1 ordering bug. **Fix (§4.6):** deleted BOTH private copies; every site now routes
+through `documentsInScope(db, scope, {requireChunks:true})` — the same predicate the invoice/bank/whole-doc
+handlers use — which carries the deterministic `ORDER BY d.created_at, d.id`, so the compare pair is import-order
+stable. **Fix (§5.1):** the compare prompts stop asserting old/new. `buildCompareWholeDocPrompt` +
+`buildCompareDiffPrompt` now label the pair `Document A/B: "title" (imported <date>)` (a new `describeCompareDoc`
++ `compareDocMeta` reading `created_at`) and describe the diff as **A→B** ("Removed"=in A, "Added"=in B) with an
+explicit rule to never call either the "old"/"new" version; `retrieveCompareDiff`/`retrieveCompareWholeDocuments`
+carry the labels/import date out to the prompt. The `what-changed` SKILL.md body was realigned: the Material-changes
+table header `Old version | New version` → `Document A | Document B`, and §3/§4 became "Added (present in B, not A)"
+/ "Removed (present in A, not B)". **Necessary interpretation of the plan's grep decision:** the plan names the
+pattern `FROM documents d` + `status = 'indexed'`, but that 2-substring pair ALSO appears in three
+legitimately-separate queries this phase does not touch — the Library-seed backfill (`db.ts`), the reindex-needed
+COUNT (`rag/index.ts`), and the fully-chunked COUNT (`registerRagIpc.ts` `allInScopeDocsFullyChunked`). Those are
+`COUNT(*)`/`SELECT d.id,` queries, never the `d.id AS id` PROJECTION, so the new grep test (`tests/unit/
+scope-documents-single-source.test.ts`) fingerprints the projection by ALL THREE of `d.id AS id` + `FROM
+documents d` + `status='indexed'`, which is unique to `scope-documents.ts`. No extractor version bump (no
+extraction-output change). **Tests added (3 net-new + updates):** deterministic import-order pair (created_at
+forced to reverse insertion order → earlier-imported doc is always Document A); honest labels on BOTH the diff and
+whole-doc-fallback paths (both titles present, `Document A/B: "…" (imported YYYY-MM-DD)`, no "old/new version");
+the source-hygiene grep (projection lives only in `scope-documents.ts` + a not-a-no-op guard); existing compare
+tests updated from `Document 1`/`Document 2` to the A/B labels. **Verified:** `npm test` green (2795 passed / 41
+skipped), `npm run typecheck` clean. Docs: `known-limitations.md` compare-direction bullet rewritten (deterministic
++ honestly labelled, not an asserted old→new); plan §0.2 R4 → `[x]`. Non-goals held. Branch left unmerged per plan §0._
+
 _2026-07-02 — **Skills remediation R3: stale-row runs + sepa prefilter demotion — branch `fix/skills-r3`,
 UNMERGED.** Third remediation phase (plan §R3; audit §5.6 + §5.5), branched off `fix/skills-r2` (the plan/audit
 working papers live on the R-branches, not master; R3's code is independent of R1/R2 so the rebase onto r2 was

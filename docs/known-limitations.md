@@ -731,10 +731,15 @@ password recovery — are documented in
   subtle change or dismiss repetitive/placeholder text as "identical" (compare-diff record,
   architecture.md §20). The limitations below apply to the FALLBACK modes, which run only when the two
   documents are too different / too large for a precise redline (a rewrite, not a version bump).
-- **The diff's redline direction (old → new) follows document order, not a real old/new signal.** The
-  app cannot know which of two selected documents is the newer one, so "removed"/"added" follow the
-  order the documents are supplied (the doctask uses the user's explicit A/B selection; the chat path
-  uses scope order). The *set* of changes is always correct; only the arrow direction is order-dependent.
+- **The diff direction is A→B by a deterministic, honestly-labelled pair — never a guessed old/new
+  (audit §5.1, fixed R4).** The app cannot know which of two selected documents is the newer one, so it
+  no longer claims to. "Removed"/"Added" follow the A→B order the documents are supplied in: the doctask
+  uses the user's explicit A/B selection; the chat *what-changed* path orders the pair **deterministically
+  by import date** (`ORDER BY created_at, id`, via the one shared scope helper — no more no-`ORDER BY`
+  private query) and labels the blocks `Document A/B: "title" (imported <date>)`, instructing the model
+  never to call either the "old" or the "new" version. The *set* of changes is always correct; the
+  direction is now stable across runs and truthfully labelled, instead of an unspecified SQL row order
+  asserted to the model as exact old→new fact (which could invert a whole report).
 - **Section-matched comparison is A-driven (asymmetric) UNLESS both documents are deeply
   indexed.** When two documents are too long to compare in full AND both have a ready deep
   index (and the smaller has ≤ 24 summary sections), the comparison is now **symmetric**:

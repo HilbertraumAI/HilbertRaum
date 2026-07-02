@@ -57,17 +57,20 @@ Produce the answer in this order; omit a section only if there is genuinely noth
 3–6 bullets on the most important changes.
 
 ## 2. Material changes
-| Area | Old version | New version | Why it matters | Source |
+The app labels the two documents **A** and **B** by import order only — it does **not** know which
+is the older or newer version. Use those labels; never call one the "old" and the other the "new"
+version unless the documents' own contents say so.
+| Area | Document A | Document B | Why it matters | Source |
 Prioritize: price / fees / payment; scope / deliverables; dates / term / renewal / deadlines;
 obligations / responsibilities; rights / permissions; cancellation / termination; liability /
 indemnity / warranties; confidentiality / privacy / data protection; ownership / IP / licensing;
 governing law / dispute process.
 
-## 3. Added text
-Important new clauses or obligations.
+## 3. Added text (present in Document B, not in Document A)
+Important clauses or obligations that appear in B but not A.
 
-## 4. Removed text
-Important deleted clauses or protections.
+## 4. Removed text (present in Document A, not in Document B)
+Important clauses or protections that appear in A but not B.
 
 ## 5. Wording changes that may matter
 Only where the meaning may have shifted, e.g. "may" → "must", "reasonable efforts" → "best efforts",

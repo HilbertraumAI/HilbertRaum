@@ -17,6 +17,7 @@ import { buildScopeFilter } from '../services/retrieval-scope'
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { getSkillAnalysisHandler } from '../services/skills/analysis'
+import { documentsInScope } from '../services/skills/scope-documents'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
@@ -26,23 +27,6 @@ import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
 import type { Db } from '../services/db'
-
-// The indexed, answerable documents WITHIN a resolved scope (id + title only — no vectors),
-// for filename auto-scope (plan §10.1 rule 5 / N13: a bounded, indexed projection, not the
-// whole corpus). The same membership/id/archived filter retrieval uses is applied here.
-function documentsInScope(db: Db, scope: RetrievalScope): Array<{ id: string; title: string }> {
-  const filter = buildScopeFilter(scope, 'd.id')
-  const where = filter ? ` AND ${filter.sql}` : ''
-  const params = filter ? filter.params : []
-  const rows = db
-    .prepare(
-      `SELECT d.id AS id, d.title AS title FROM documents d
-       WHERE d.status = 'indexed'
-         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)${where}`
-    )
-    .all(...params) as Array<{ id: string; title: string }>
-  return rows
-}
 
 /** Does any in-scope document have precomputed structured-extract data (a `__scan__` marker)?
  *  Gates the router's coverage-extract branch — without it we cannot honestly claim a complete
@@ -178,7 +162,7 @@ export function registerRagIpc(ctx: AppContext): void {
       // only when the user hand-picked specific docs (N2 — keyed off hasExplicitDocSelection,
       // NOT the merged documentIds). Only ever narrows; a live notice names the file(s).
       if (!scope.hasExplicitDocSelection) {
-        const detected = detectFilenameScope(text, documentsInScope(ctx.db, scope))
+        const detected = detectFilenameScope(text, documentsInScope(ctx.db, scope, { requireChunks: true }))
         if (detected) {
           // Narrow to exactly the matched docs (a subset of the resolved scope). `detected.ids`
           // come from `documentsInScope(scope)`, which already applied this scope's archived
@@ -236,7 +220,7 @@ export function registerRagIpc(ctx: AppContext): void {
         // `capped` mode ("covers the whole document" / "the beginning" when truncated). `applies()`
         // guaranteed a single in-scope doc; the fully-chunked refusal above already gated it.
         if (analysisHandler.mode === 'grounded-whole-doc') {
-          const target = documentsInScope(ctx.db, scope)[0]
+          const target = documentsInScope(ctx.db, scope, { requireChunks: true })[0]
           if (target) {
             const documentId = target.id
             return withChatStream(
@@ -268,7 +252,12 @@ export function registerRagIpc(ctx: AppContext): void {
         // overflowed). `applies()` guaranteed exactly two in-scope docs; the fully-chunked refusal
         // above already gated both.
         if (analysisHandler.mode === 'grounded-whole-doc-compare') {
-          const documentIds = documentsInScope(ctx.db, scope).map((d) => d.id)
+          // The shared helper's deterministic `ORDER BY created_at, id` fixes the compare PAIR order
+          // (audit §5.1): `[0]`→Document A, `[1]`→Document B is now import-order-stable, not the
+          // undefined SQL row order the old private query left it. The prompt labels the pair A/B by
+          // title + import date and NEVER asserts which is the older/newer version, so a wrong guess
+          // can no longer invert a whole report.
+          const documentIds = documentsInScope(ctx.db, scope, { requireChunks: true }).map((d) => d.id)
           if (documentIds.length === 2) {
             return withChatStream(
               event,
@@ -338,7 +327,7 @@ export function registerRagIpc(ctx: AppContext): void {
       // falls through to the existing relevance path BYTE-UNCHANGED.
       const decision = routeQuestion({
         question: text,
-        documentCount: documentsInScope(ctx.db, scope).length,
+        documentCount: documentsInScope(ctx.db, scope, { requireChunks: true }).length,
         treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
         extractAvailable: extractionsExistInScope(ctx.db, scope)
       })
