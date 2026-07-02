@@ -17,15 +17,13 @@ permissions:
   network: denied
   filesystem: skill_resources_only
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
-  # Bilingual, share/disclosure-flavoured terms (matching is case-insensitive question.includes). The
-  # pure redaction VERBS (anonymize/schwärzen/redact) are deliberately LEFT to the document-redaction
-  # tool skill so an "anonymize this" turn still suggests the redaction tool, not this advisory review.
-  keywords: [safe to share, share-safe, review before sharing, redact before sharing,
-             sensitive information, personal data, confidential information,
-             remove private information, privacy review, disclosure review, metadata warning, metadata,
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. The pure redaction VERBS (anonymize/schwärzen/redact) stay with the document-redaction
+  # tool skill; the bare `personal data`/`weitergeben` phrasings are route-only. Edit the vocabulary.
+  keywords: [safe to share, share-safe, review before sharing, privacy review, disclosure review,
+             sensitive information, confidential information, metadata,
              sicher teilen, vor dem teilen prüfen, sensible daten, personenbezogene daten,
-             private informationen, vertrauliche informationen, datenschutz prüfen, metadaten,
-             weitergeben, veröffentlichen]
+             vertrauliche informationen, datenschutz prüfen, metadaten]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: ["*share*", "*confidential*", "*personal*", "*sensitive*", "*teilen*", "*vertraulich*", "*datenschutz*"]
 ---

@@ -1,5 +1,6 @@
 import { skillInstallId } from '../registry'
 import { documentsInScope } from '../scope-documents'
+import { routeMatch } from '../vocabulary'
 import type {
   SkillAnalysisContext,
   SkillAnalysisHandler,
@@ -25,22 +26,14 @@ import type {
 /** The bundled redaction skill's install id (`"app:document-redaction"`) — the registry key. */
 export const DOCUMENT_REDACTION_INSTALL_ID = skillInstallId('app', 'document-redaction')
 
-// Redaction-shaped intent: the ACTION verbs + the strong PII phrases (EN + DE for the de-AT target).
-// Conservative by design — when the active redaction skill is asked an OFF-TOPIC question, `applies()`
-// is false and the turn keeps the normal grounded path (the rewritten SKILL.md body still steers the
-// model toward the button). Bare, substring-ambiguous tokens are avoided. Matching is
-// case-insensitive `question.includes(keyword)` (the suggestion-heuristic convention).
-const REDACTION_KEYWORDS: readonly string[] = [
-  'redact', 'redaction', 'anonymize', 'anonymise', 'anonymized', 'anonymised',
-  'anonymisieren', 'anonymisierung', 'anonymisiere', 'pseudonymisieren',
-  'schwärzen', 'schwärzung', 'schwärze', 'geschwärzt',
-  'remove personal data', 'mask personal data', 'personenbezogene daten entfernen',
-  'personenbezogene daten'
-]
-
+// Redaction-shaped intent now reads the ONE canonical redaction vocabulary (W5, audit §3.2/§4.1): its
+// `route|both` entries — the ACTION verbs + strong PII phrases (EN + DE) — word-boundary matched for single
+// tokens (`schwärzen` never a compound). The informational-topic words `datenschutz`/`dsgvo`/`gdpr` are
+// vocabulary `suggest`-only (they OFFER the skill but its tool WRITES a masked copy, so routing must not
+// deflect "Was regelt die DSGVO?" to the button — the §4.4 manifest↔handler alignment is U4). Conservative:
+// an OFF-TOPIC question with redaction active keeps the normal grounded path.
 function isRedactionShaped(question: string): boolean {
-  const q = question.toLowerCase()
-  return REDACTION_KEYWORDS.some((k) => q.includes(k))
+  return routeMatch('document-redaction', question)
 }
 
 // The indexed, answerable documents in scope come from the ONE shared helper (X-1 / audit §4.6): the

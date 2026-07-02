@@ -195,19 +195,18 @@ describe('what-changed — tightened filename patterns no longer auto-fire on co
     expect(suggestSkillsForTurn(db, conv.id, '')).toEqual([])
   })
 
-  it('a version-marked "contract-v2.pdf" still produces a sensible document offer (not nothing)', () => {
+  it('a version-marked "contract-v2.pdf" offers nothing on a doc-only turn, and what-changed WITH a keyword', () => {
     const db = freshDb()
     reconcileSkills(db, realDeps())
     const docId = seedIndexedDoc(db, 'contract-v2.pdf', 'application/pdf')
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
-    // The version marker is still recognised: contract-brief (*contract*), deadline (*contract*) and
-    // what-changed (*-v2*) all score mime+filename = 2; the deterministic tie-break picks the
-    // alphabetically-first installId (contract-brief). The point of THIS test is that a version-marked
-    // file still produces a (sensible, document-related) offer rather than nothing.
-    const offer = suggestSkillsForTurn(db, conv.id, '')
+    // W5 (audit §4.2): a lone document signal (mime + *-v2* / *contract* filename = 2) no longer offers on
+    // its own — a suggestion now REQUIRES a keyword hit. So the empty-question turn is inert…
+    expect(suggestSkillsForTurn(db, conv.id, '')).toEqual([])
+    // …but a compare-shaped question DOES offer what-changed, with the version filename corroborating
+    // (its *-v2* pattern + the 'what changed' keyword outscore contract-brief's lone *contract* filename).
+    const offer = suggestSkillsForTurn(db, conv.id, 'what changed between these two versions?')
     expect(offer.length).toBe(1)
-    expect(['app:contract-brief', 'app:deadline-obligation-finder', 'app:what-changed']).toContain(
-      offer[0].installId
-    )
+    expect(offer[0].installId).toBe('app:what-changed')
   })
 })

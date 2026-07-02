@@ -2,6 +2,7 @@ import type { Db } from '../../db'
 import type { RetrievalScope } from '../../../../shared/types'
 import { documentsInScope } from '../scope-documents'
 import { skillInstallId } from '../registry'
+import { routeMatch, type SkillVocabId } from '../vocabulary'
 import type { SkillAnalysisHandler, SkillAnalysisInput } from './types'
 
 // Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2 — architecture.md §19/§20).
@@ -20,8 +21,10 @@ import type { SkillAnalysisHandler, SkillAnalysisInput } from './types'
 // Conservative by design (the bank/invoice `applies()` precedent): an OFF-TOPIC question, or a
 // multi-document scope, returns false and keeps the ordinary relevance path. Wave 2 is single-document
 // (the run UI + budget reason about one document); multi-doc compare stays on the `compare` engine
-// (`what-changed`). Matching is case-insensitive `question.includes(keyword)`; bare ambiguous tokens
-// are avoided (the same bilingual discipline as the SKILL.md triggers).
+// (`what-changed`). Since W5 the shape gate reads the ONE canonical per-skill vocabulary (`routeMatch`,
+// audit §3.2/§4.1): word-boundary for single tokens, substring for phrases/German stems — single-sourced
+// with the SKILL.md suggestion keywords (parity-tested), so "Summarize this meeting" now BOTH earns the
+// offer and routes to the whole-doc engine (it was offered, then produced minutes from ~2-4 top-k chunks).
 
 export const MEETING_PROTOCOL_INSTALL_ID = skillInstallId('app', 'meeting-protocol')
 export const CONTRACT_BRIEF_INSTALL_ID = skillInstallId('app', 'contract-brief')
@@ -45,14 +48,11 @@ function exactlyTwoInScopeDocuments(db: Db, scope: RetrievalScope): boolean {
   return documentsInScope(db, scope, { requireChunks: true }).length === 2
 }
 
-/** Build a `grounded-whole-doc-compare` handler: applies on a compare-shaped question (any of
- *  `keywords`) over EXACTLY TWO in-scope documents. No `run()` — the chat path streams a model
- *  answer over BOTH documents read whole (budget split across the two). */
-function makeCompareHandler(keywords: readonly string[]): SkillAnalysisHandler {
-  const isShaped = (question: string): boolean => {
-    const q = question.toLowerCase()
-    return keywords.some((k) => q.includes(k))
-  }
+/** Build a `grounded-whole-doc-compare` handler: applies on a compare-shaped question (the skill's
+ *  `route|both` vocabulary) over EXACTLY TWO in-scope documents. No `run()` — the chat path streams a
+ *  model answer over BOTH documents read whole (budget split across the two). */
+function makeCompareHandler(skillId: SkillVocabId): SkillAnalysisHandler {
+  const isShaped = (question: string): boolean => routeMatch(skillId, question)
   return {
     mode: 'grounded-whole-doc-compare',
     // Doc-count-agnostic intent (W2, §2.1): a compare-shaped question, regardless of how many docs are
@@ -68,14 +68,11 @@ function makeCompareHandler(keywords: readonly string[]): SkillAnalysisHandler {
   }
 }
 
-/** Build a `grounded-whole-doc` handler that applies on an analysis-shaped question (any of
- *  `keywords`) over a single in-scope document. No `run()` — the chat path streams the model
+/** Build a `grounded-whole-doc` handler that applies on an analysis-shaped question (the skill's
+ *  `route|both` vocabulary) over a single in-scope document. No `run()` — the chat path streams the model
  *  answer over the whole document directly. */
-function makeWholeDocHandler(keywords: readonly string[]): SkillAnalysisHandler {
-  const isShaped = (question: string): boolean => {
-    const q = question.toLowerCase()
-    return keywords.some((k) => q.includes(k))
-  }
+function makeWholeDocHandler(skillId: SkillVocabId): SkillAnalysisHandler {
+  const isShaped = (question: string): boolean => routeMatch(skillId, question)
   return {
     mode: 'grounded-whole-doc',
     // Doc-count-agnostic intent (W2, §2.1): an analysis-shaped question, regardless of how many docs are
@@ -91,55 +88,14 @@ function makeWholeDocHandler(keywords: readonly string[]): SkillAnalysisHandler 
   }
 }
 
-// meeting-protocol — produce structured minutes from the WHOLE transcript/notes (EN + DE).
-export const meetingProtocolAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler([
-  'meeting minutes', 'meeting notes', 'meeting protocol', 'meeting transcript', 'minutes',
-  'action item', 'action items', 'decisions', 'decisions made', 'write minutes', 'summarize meeting',
-  'summarise meeting', 'agenda',
-  'besprechungsprotokoll', 'sitzungsprotokoll', 'meetingprotokoll', 'gesprächsprotokoll', 'protokoll',
-  'besprechung', 'sitzung', 'tagesordnung', 'aktionspunkte', 'aufgaben', 'beschlüsse', 'entscheidungen',
-  'offene punkte', 'zusammenfassung der besprechung'
-])
-
-// contract-brief — a plain-language brief of the WHOLE contract (EN + DE). Includes the bare domain
-// NOUNS: when the user mentions the contract/agreement while THIS skill is selected, they want the
-// brief — `includes` can't span "summarize <this> contract", so the noun is the robust trigger.
-export const contractBriefAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler([
-  'contract', 'agreement', 'lease', 'terms and conditions',
-  'contract brief', 'contract summary', 'review contract', 'summarize contract', 'summarise contract',
-  'before signing', 'key terms', 'contract risks', 'termination clause', 'renewal clause',
-  'liability clause', 'indemnity',
-  'vertrag', 'vereinbarung', 'mietvertrag', 'dienstleistungsvertrag', 'agb',
-  'vertragsübersicht', 'vertrag zusammenfassen', 'vertrag prüfen', 'vertragsanalyse',
-  'vor der unterschrift', 'wichtige klauseln', 'pflichten im vertrag', 'risiken im vertrag',
-  'kündigung', 'verlängerung', 'haftung'
-])
-
-// share-safe-review — advisory pre-share review across the WHOLE document (EN + DE).
-export const shareSafeReviewAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler([
-  'safe to share', 'share-safe', 'review before sharing', 'before sharing', 'privacy review',
-  'disclosure review', 'sensitive information', 'confidential information', 'remove private information',
-  'sicher teilen', 'vor dem teilen prüfen', 'vor dem teilen', 'datenschutz prüfen', 'sensible daten',
-  'vertrauliche informationen', 'private informationen'
-])
-
-// deadline-obligation-finder — find deadlines/obligations across the WHOLE document (EN + DE).
-export const deadlineObligationAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler([
-  'deadline', 'deadlines', 'due date', 'due dates', 'notice period', 'renewal date',
-  'cancellation deadline', 'obligation', 'obligations', 'duties', 'what do i have to do', 'by when',
-  'action required', 'payment date', 'payment dates',
-  'frist', 'fristen', 'fälligkeit', 'fälligkeiten', 'stichtag', 'kündigungsfrist', 'pflicht',
-  'pflichten', 'verpflichtung', 'verpflichtungen', 'zahlungsfrist', 'bis wann', 'wiedervorlage'
-])
-
-// what-changed — material-change compare over BOTH whole document versions (EN + DE; Follow-up B).
-// Compare-shaped intent over EXACTLY TWO in-scope documents. Mirrors the SKILL.md triggers but as
-// `includes` substrings (the bilingual discipline: multi-word/domain terms, no bare ambiguous tokens).
-export const whatChangedAnalysisHandler: SkillAnalysisHandler = makeCompareHandler([
-  'what changed', 'what has changed', 'compare versions', 'compare documents', 'compare the two',
-  'version difference', 'differences between', 'difference between', 'changed between', 'old and new',
-  'redline', 'compare contract', 'compare these',
-  'was hat sich geändert', 'änderungen', 'unterschiede', 'unterschied zwischen', 'versionen vergleichen',
-  'dokumente vergleichen', 'alte version', 'neue version', 'gegenüberstellung', 'vertragsänderung',
-  'vergleiche', 'vergleich'
-])
+// Each Tier-1 instruction skill's shape gate reads its canonical vocabulary (`vocabulary.ts`) — the SAME
+// source the SKILL.md suggestion keywords are generated from, so the offer and the routing can no longer
+// disagree (audit §4.1). meeting-protocol produces structured minutes from the WHOLE transcript; the
+// vocabulary's word-matched `meeting` + `summarize meeting`/`minutes` route entries close the "Summarize
+// this meeting" gap. what-changed compares BOTH whole versions over EXACTLY TWO in-scope documents.
+export const meetingProtocolAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('meeting-protocol')
+export const contractBriefAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('contract-brief')
+export const shareSafeReviewAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('share-safe-review')
+export const deadlineObligationAnalysisHandler: SkillAnalysisHandler =
+  makeWholeDocHandler('deadline-obligation-finder')
+export const whatChangedAnalysisHandler: SkillAnalysisHandler = makeCompareHandler('what-changed')

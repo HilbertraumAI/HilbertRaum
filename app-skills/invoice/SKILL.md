@@ -23,12 +23,14 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - export_invoice_json        # format-transformation exports (pure serializers; confirm-gated)
   - export_invoice_xml
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
-  # Bilingual + full words only: matching is case-insensitive question.includes(keyword), so short
-  # ambiguous tokens are avoided (no bare "vat"→"private", "ust"→"August", "net"/"gross"→"internet").
-  keywords: [invoice, invoices, rechnung, rechnungen, faktura, bill, billing,
-             mehrwertsteuer, umsatzsteuer, netto, brutto, net amount, gross amount,
-             subtotal, zwischensumme, gesamtbetrag, line item, vendor, lieferant,
-             invoice number, rechnungsnummer]
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. Word-boundary matched, so bare ambiguous tokens are route-only (no `bill`→"Bill" the name,
+  # `tax`→"syntax", `sum`→"assume", `steuer`→"Steuerberatung"). Edit the vocabulary, not this list.
+  keywords: [invoice, invoices, billing, net amount, gross amount, subtotal,
+             line item, line items, invoice number, vendor,
+             rechnung, rechnungen, faktura, rechnungsnummer, rechnungsbetrag, gesamtbetrag,
+             gesamtwert, mehrwertsteuer, umsatzsteuer, netto, brutto, zwischensumme,
+             lieferant, positionen]
   mimeTypes: [application/pdf, text/csv]
   filenamePatterns: ["*invoice*", "*rechnung*", "*faktura*", "*bill*"]
 ---

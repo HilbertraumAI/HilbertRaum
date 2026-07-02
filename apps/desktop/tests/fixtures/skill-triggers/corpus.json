@@ -1,11 +1,13 @@
 {
   "_about": [
-    "Skills S13a — labelled, SYNTHETIC trigger corpus (skills-s13-plan.md §3.1). Text only:",
-    "NO user data, no real bank statements, no telemetry — honours the offline/no-user-data rules.",
-    "Each item: { id, question, inScopeDocs: [{title, mimeType}], expected: <skillId | 'none'>, note }.",
-    "Label space = the four real ENABLED app skills' actual triggers:",
-    "bank-statement | invoice | meeting-protocol | document-redaction | none.",
-    "The `note` records WHY the label is what it is (the hard case it exercises); it is not scored.",
+    "Skills trigger corpus — labelled, SYNTHETIC (skills-s13-plan.md §3.1 / W5 audit §6.4/§8.3). Text",
+    "only: NO user data, no real statements, no telemetry — honours the offline/no-user-data rules.",
+    "Each item: { id, question, inScopeDocs:[{title,mimeType}], expected:<skillId|'none'>, confusion?, note }.",
+    "Label space = ALL EIGHT real ENABLED app skills' actual triggers (W5 widened it from 4):",
+    "bank-statement | invoice | meeting-protocol | contract-brief | share-safe-review |",
+    "deadline-obligation-finder | what-changed | document-redaction | none.",
+    "`confusion:true` marks a CROSS-SKILL pair the SUGGESTION bar must get right (fired-wrong 0 on the set).",
+    "`note` records WHY the label is what it is (the hard case it exercises); it is not scored.",
     "Questions are CONTENT: the harness scores them, never logs them (skills-s13-plan.md §6)."
   ],
   "items": [
@@ -21,14 +23,14 @@
       "question": "Bitte kategorisiere die Buchungen aus meinem Kontoauszug.",
       "inScopeDocs": [{ "title": "kontoauszug-maerz.pdf", "mimeType": "application/pdf" }],
       "expected": "bank-statement",
-      "note": "True positive — clear de-AT intent ('Kontoauszug') + matching filename/MIME."
+      "note": "True positive — de-AT intent ('Buchungen', 'Kontoauszug') + matching filename/MIME."
     },
     {
       "id": "tp-bank-en-02",
       "question": "Summarize the cashflow and check the closing balance.",
       "inScopeDocs": [{ "title": "export.csv", "mimeType": "text/csv" }],
       "expected": "bank-statement",
-      "note": "True positive — 'balance' keyword + a CSV in scope."
+      "note": "True positive — 'cashflow' keyword (bare 'balance' is route-only now) + a CSV in scope."
     },
     {
       "id": "tp-bank-en-03",
@@ -42,14 +44,36 @@
       "question": "Can you reconcile my bank statement for me?",
       "inScopeDocs": [],
       "expected": "bank-statement",
-      "note": "True positive, KEYWORD-ONLY (no doc attached yet). Score is exactly the keyword weight — flips to 'missed' once the bar requires a corroborating doc signal (recall-vs-threshold demo)."
+      "note": "True positive, KEYWORD-ONLY (no doc). 'bank statement' clears the keyword-required bar without a doc."
     },
+    {
+      "id": "tp-bank-de-02",
+      "question": "Wie hoch ist mein Kontostand am Monatsende?",
+      "inScopeDocs": [{ "title": "kontoauszug.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "note": "True positive (de) — 'Kontostand' word + Kontoauszug filename."
+    },
+    {
+      "id": "tp-bank-de-03",
+      "question": "Zeig mir alle Überweisungen und Umsätze.",
+      "inScopeDocs": [{ "title": "kontoauszug.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "note": "True positive (de) — 'Überweisungen'/'Umsätze' (plural word forms listed for boundary matching)."
+    },
+    {
+      "id": "tp-bank-de-04",
+      "question": "Fasse die Umsätze auf dem Kontoauszug zusammen.",
+      "inScopeDocs": [{ "title": "kontoauszug.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "note": "True positive (de) — 'Umsätze' + 'Kontoauszug'."
+    },
+
     {
       "id": "tp-invoice-en-01",
       "question": "Check that the totals on this invoice add up.",
       "inScopeDocs": [{ "title": "invoice-2026-04.pdf", "mimeType": "application/pdf" }],
       "expected": "invoice",
-      "note": "True positive — EN 'invoice' keyword + matching filename/MIME."
+      "note": "True positive — EN 'invoice' keyword + matching filename/MIME (bare 'total' is route-only)."
     },
     {
       "id": "tp-invoice-de-01",
@@ -63,70 +87,368 @@
       "question": "Wie hoch ist der Gesamtbetrag der Rechnung netto und brutto?",
       "inScopeDocs": [{ "title": "rechnung.pdf", "mimeType": "application/pdf" }],
       "expected": "invoice",
-      "note": "True positive — multiple German invoice keywords ('Rechnung', 'netto', 'brutto', 'Gesamtbetrag')."
+      "note": "True positive — multiple German invoice keywords ('Rechnung','netto','brutto','Gesamtbetrag')."
     },
+    {
+      "id": "tp-invoice-en-02",
+      "question": "Who is the vendor and what is the invoice number?",
+      "inScopeDocs": [{ "title": "invoice.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "note": "True positive — 'vendor' + 'invoice number' (the header fields W3 surfaces)."
+    },
+    {
+      "id": "tp-invoice-en-03",
+      "question": "What's the subtotal and the net amount?",
+      "inScopeDocs": [{ "title": "invoice.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "note": "True positive — 'subtotal' + 'net amount' phrase (bare 'net' never in play)."
+    },
+    {
+      "id": "tp-invoice-de-03",
+      "question": "Bitte die Positionen dieser Rechnung auflisten.",
+      "inScopeDocs": [{ "title": "rechnung.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "note": "True positive (de) — 'Positionen' + 'Rechnung'."
+    },
+    {
+      "id": "tp-invoice-kwonly-01",
+      "question": "Does this invoice reconcile?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "True positive, KEYWORD-ONLY — 'invoice' word clears the bar ('reconcile' is route-only)."
+    },
+
     {
       "id": "tp-meeting-en-01",
       "question": "Turn these meeting notes into a structured protocol with action items.",
       "inScopeDocs": [{ "title": "standup-notes.txt", "mimeType": "text/plain" }],
       "expected": "meeting-protocol",
-      "note": "True positive — EN 'meeting notes' / 'protocol' / 'action items' keywords."
+      "note": "True positive — EN 'meeting notes' / 'action items' keywords."
     },
     {
       "id": "tp-meeting-de-01",
       "question": "Erstelle bitte ein Protokoll dieser Besprechung mit Beschlüssen und Aufgaben.",
       "inScopeDocs": [{ "title": "besprechung-notizen.txt", "mimeType": "text/plain" }],
       "expected": "meeting-protocol",
-      "note": "True positive — de-AT 'Protokoll' / 'Besprechung' / 'Beschlüsse' / 'Aufgaben'."
+      "note": "True positive — de-AT 'Protokoll' / 'Besprechung' / 'Beschlüsse'."
     },
     {
       "id": "tp-meeting-mixed-01",
       "question": "Please make a Protokoll of this meeting.",
       "inScopeDocs": [{ "title": "call.md", "mimeType": "text/markdown" }],
       "expected": "meeting-protocol",
-      "note": "True positive — MIXED-language phrasing ('Protokoll' + 'meeting')."
+      "note": "True positive — MIXED-language ('Protokoll' + 'meeting')."
     },
+    {
+      "id": "tp-meeting-en-02",
+      "question": "Summarize this meeting.",
+      "inScopeDocs": [{ "title": "meeting-recording.txt", "mimeType": "text/plain" }],
+      "expected": "meeting-protocol",
+      "note": "REPRODUCTION (§4.1): 'Summarize this meeting' must EARN the offer via the word-matched 'meeting' (and now also route to the whole-doc engine)."
+    },
+    {
+      "id": "tp-meeting-de-02",
+      "question": "Was steht auf der Tagesordnung und welche Entscheidungen gab es?",
+      "inScopeDocs": [{ "title": "sitzung.txt", "mimeType": "text/plain" }],
+      "expected": "meeting-protocol",
+      "note": "True positive (de) — 'Tagesordnung' + 'Entscheidungen'."
+    },
+    {
+      "id": "tp-meeting-de-03",
+      "question": "Fasse die Sitzung als Sitzungsprotokoll zusammen.",
+      "inScopeDocs": [{ "title": "sitzung.txt", "mimeType": "text/plain" }],
+      "expected": "meeting-protocol",
+      "note": "True positive (de) — 'Sitzung' + 'Sitzungsprotokoll'."
+    },
+
     {
       "id": "tp-redaction-en-01",
       "question": "Please anonymize the personal data in this document before I share it.",
       "inScopeDocs": [{ "title": "report.pdf", "mimeType": "application/pdf" }],
       "expected": "document-redaction",
-      "note": "True positive — EN 'anonymize' keyword."
+      "note": "True positive — 'anonymize' action verb (the pure verb stays with redaction, not share-safe)."
     },
     {
       "id": "tp-redaction-de-01",
       "question": "Bitte dieses Dokument anonymisieren und die personenbezogenen Daten schwärzen.",
       "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
       "expected": "document-redaction",
-      "note": "True positive — de-AT 'anonymisieren' / 'personenbezogene Daten' / 'schwärzen'."
+      "note": "True positive — de-AT 'anonymisieren' / 'schwärzen'."
     },
     {
       "id": "tp-redaction-en-02",
       "question": "Remove all personal data for GDPR compliance.",
       "inScopeDocs": [{ "title": "customers.txt", "mimeType": "text/plain" }],
       "expected": "document-redaction",
-      "note": "True positive — 'remove personal data' / 'GDPR' keywords."
+      "note": "True positive — 'GDPR' (suggest-only topic word) fires the offer."
+    },
+    {
+      "id": "tp-redaction-en-03",
+      "question": "Redact this document, please.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "True positive, KEYWORD-ONLY — 'redact' verb."
     },
     {
       "id": "tp-redaction-kwonly-01",
       "question": "Please anonymize this for me.",
       "inScopeDocs": [],
       "expected": "document-redaction",
-      "note": "True positive, KEYWORD-ONLY (no doc). 'anonymize' alone = the keyword weight; flips to 'missed' when the bar requires a corroborating doc signal."
+      "note": "True positive, KEYWORD-ONLY — 'anonymize'."
     },
     {
-      "id": "tp-cross-bank-01",
-      "question": "Reconcile the bank statement transactions, please.",
-      "inScopeDocs": [{ "title": "invoice-april.pdf", "mimeType": "application/pdf" }],
-      "expected": "bank-statement",
-      "note": "Cross-skill: a strong BANK keyword question while an INVOICE doc is in scope — the keyword must win over the other skill's doc signal."
+      "id": "tp-redaction-de-02",
+      "question": "Kannst du den Namen im Dokument schwärzen?",
+      "inScopeDocs": [{ "title": "vertrag.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "confusion": true,
+      "note": "Confusion: a Vertrag PDF is in scope (contract filename signal) but the request is a redaction VERB — redaction's keyword must beat contract's lone doc signal."
+    },
+
+    {
+      "id": "tp-contract-en-01",
+      "question": "Give me a plain-language brief of this contract before signing.",
+      "inScopeDocs": [{ "title": "service-contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "contract-brief",
+      "note": "True positive — 'contract' word + *contract* filename."
     },
     {
-      "id": "tp-cross-invoice-01",
+      "id": "tp-contract-en-02",
+      "question": "Review this lease agreement and flag the key terms.",
+      "inScopeDocs": [{ "title": "office-lease.pdf", "mimeType": "application/pdf" }],
+      "expected": "contract-brief",
+      "note": "True positive — 'lease' + 'agreement' + 'key terms'."
+    },
+    {
+      "id": "tp-contract-de-01",
+      "question": "Fasse mir bitte diesen Vertrag zusammen.",
+      "inScopeDocs": [{ "title": "mietvertrag.pdf", "mimeType": "application/pdf" }],
+      "expected": "contract-brief",
+      "note": "True positive (de) — 'Vertrag' word + *vertrag*/*mietvertrag* filename."
+    },
+    {
+      "id": "tp-contract-de-02",
+      "question": "Welche Kündigung und Haftung sieht die Vereinbarung vor?",
+      "inScopeDocs": [{ "title": "vereinbarung.pdf", "mimeType": "application/pdf" }],
+      "expected": "contract-brief",
+      "note": "True positive (de) — 'Kündigung'/'Haftung'/'Vereinbarung' (word 'kündigung' ≠ deadline's 'kündigungsfrist')."
+    },
+    {
+      "id": "tp-contract-de-03",
+      "question": "Erstelle eine Vertragsübersicht für die AGB.",
+      "inScopeDocs": [{ "title": "agb.pdf", "mimeType": "application/pdf" }],
+      "expected": "contract-brief",
+      "note": "True positive (de) — 'Vertragsübersicht' + 'AGB'."
+    },
+    {
+      "id": "tp-contract-kwonly-01",
+      "question": "Explain the termination clause and renewal clause.",
+      "inScopeDocs": [],
+      "expected": "contract-brief",
+      "note": "True positive, KEYWORD-ONLY — 'termination clause' + 'renewal clause'."
+    },
+
+    {
+      "id": "tp-deadline-en-01",
+      "question": "What are the deadlines and notice periods here?",
+      "inScopeDocs": [{ "title": "contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "deadline-obligation-finder",
+      "note": "True positive — 'deadlines' + 'notice period'; the *contract* doc gives no contract KEYWORD."
+    },
+    {
+      "id": "tp-deadline-de-01",
+      "question": "Bis wann läuft die Kündigungsfrist und welche Fristen gelten?",
+      "inScopeDocs": [{ "title": "mietvertrag.pdf", "mimeType": "application/pdf" }],
+      "expected": "deadline-obligation-finder",
+      "note": "True positive (de) — 'Kündigungsfrist' + 'Fristen' ('bis wann' is route-only)."
+    },
+    {
+      "id": "tp-deadline-de-02",
+      "question": "Welche Zahlungsfrist und welche Pflichten habe ich?",
+      "inScopeDocs": [{ "title": "vertrag.pdf", "mimeType": "application/pdf" }],
+      "expected": "deadline-obligation-finder",
+      "note": "True positive (de) — 'Zahlungsfrist' + 'Pflichten'."
+    },
+    {
+      "id": "tp-deadline-de-03",
+      "question": "Bis wann muss ich kündigen? Welche Kündigungsfrist gilt?",
+      "inScopeDocs": [{ "title": "mietvertrag.pdf", "mimeType": "application/pdf" }],
+      "expected": "deadline-obligation-finder",
+      "note": "True positive (de) — 'Kündigungsfrist' word ('kündigen' ≠ contract's 'kündigung')."
+    },
+    {
+      "id": "tp-deadline-kwonly-01",
+      "question": "When is the payment due date?",
+      "inScopeDocs": [],
+      "expected": "deadline-obligation-finder",
+      "note": "True positive, KEYWORD-ONLY — 'due date' + 'payment date'."
+    },
+
+    {
+      "id": "tp-sharesafe-en-01",
+      "question": "Is this document safe to share externally?",
+      "inScopeDocs": [{ "title": "report.pdf", "mimeType": "application/pdf" }],
+      "expected": "share-safe-review",
+      "note": "True positive — 'safe to share' phrase."
+    },
+    {
+      "id": "tp-sharesafe-en-02",
+      "question": "Run a privacy review before I send this to the client.",
+      "inScopeDocs": [{ "title": "client-contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "share-safe-review",
+      "note": "True positive — 'privacy review'; the *contract* doc gives no contract keyword."
+    },
+    {
+      "id": "tp-sharesafe-en-03",
+      "question": "Do a disclosure review of this document.",
+      "inScopeDocs": [{ "title": "memo.pdf", "mimeType": "application/pdf" }],
+      "expected": "share-safe-review",
+      "note": "True positive — 'disclosure review'."
+    },
+    {
+      "id": "tp-sharesafe-de-01",
+      "question": "Bitte vor dem Teilen prüfen, ob sensible Daten enthalten sind.",
+      "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
+      "expected": "share-safe-review",
+      "note": "True positive (de) — 'vor dem teilen prüfen' + 'sensible daten'."
+    },
+    {
+      "id": "tp-sharesafe-de-02",
+      "question": "Sind sensible Daten oder Metadaten enthalten, bevor ich es weitergebe?",
+      "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
+      "expected": "share-safe-review",
+      "note": "True positive (de) — 'sensible daten' + 'Metadaten' ('weitergebe' is route-only)."
+    },
+    {
+      "id": "tp-sharesafe-kwonly-01",
+      "question": "Are there any confidential information or metadata warnings?",
+      "inScopeDocs": [],
+      "expected": "share-safe-review",
+      "note": "True positive, KEYWORD-ONLY — 'confidential information' + 'metadata'."
+    },
+
+    {
+      "id": "tp-whatchanged-en-01",
+      "question": "What changed between these two versions?",
+      "inScopeDocs": [
+        { "title": "report-v1.pdf", "mimeType": "application/pdf" },
+        { "title": "report-v2.pdf", "mimeType": "application/pdf" }
+      ],
+      "expected": "what-changed",
+      "note": "True positive — 'what changed' + 'changed between' (two overlapping phrases → deduped to 2) + *-v1* filename."
+    },
+    {
+      "id": "tp-whatchanged-en-02",
+      "question": "Give me a redline comparing versions of this file.",
+      "inScopeDocs": [
+        { "title": "doc-v1.pdf", "mimeType": "application/pdf" },
+        { "title": "doc-v2.pdf", "mimeType": "application/pdf" }
+      ],
+      "expected": "what-changed",
+      "note": "True positive — 'redline' word + *-v1*/*-v2* filenames."
+    },
+    {
+      "id": "tp-whatchanged-de-01",
+      "question": "Welche Änderungen gibt es zwischen den beiden Versionen?",
+      "inScopeDocs": [
+        { "title": "entwurf-alt.pdf", "mimeType": "application/pdf" },
+        { "title": "entwurf-neu.pdf", "mimeType": "application/pdf" }
+      ],
+      "expected": "what-changed",
+      "note": "True positive (de) — 'Änderungen' word (not a bare substring) + *entwurf* filename."
+    },
+    {
+      "id": "tp-whatchanged-de-02",
+      "question": "Welche Unterschiede gibt es zwischen den beiden Dokumenten?",
+      "inScopeDocs": [
+        { "title": "entwurf1.pdf", "mimeType": "application/pdf" },
+        { "title": "entwurf2.pdf", "mimeType": "application/pdf" }
+      ],
+      "expected": "what-changed",
+      "note": "True positive (de) — 'Unterschiede' word + *entwurf* filename."
+    },
+    {
+      "id": "tp-whatchanged-kwonly-01",
+      "question": "Show me a redline of the revision.",
+      "inScopeDocs": [],
+      "expected": "what-changed",
+      "note": "True positive, KEYWORD-ONLY — 'redline' + 'revision'."
+    },
+
+    {
+      "id": "cf-bank-vs-invoice-01",
       "question": "What is the gross amount on this invoice?",
       "inScopeDocs": [{ "title": "kontoauszug.pdf", "mimeType": "application/pdf" }],
       "expected": "invoice",
-      "note": "Cross-skill: a strong INVOICE keyword while a BANK-named doc is in scope — invoice must win."
+      "confusion": true,
+      "note": "Confusion: an invoice keyword ('invoice','gross amount') while a BANK-named doc is in scope — invoice must win."
+    },
+    {
+      "id": "cf-invoice-vs-bank-01",
+      "question": "Reconcile the bank statement transactions, please.",
+      "inScopeDocs": [{ "title": "invoice-april.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "confusion": true,
+      "note": "Confusion: a strong BANK keyword ('bank statement','transactions') while an INVOICE doc is in scope — bank must win."
+    },
+    {
+      "id": "cf-invoice-vs-contract-01",
+      "question": "How much is due on this invoice?",
+      "inScopeDocs": [{ "title": "contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "confusion": true,
+      "note": "Confusion: 'invoice' keyword while a *contract* doc is in scope — invoice wins ('how much'/'amount due' are route-only)."
+    },
+    {
+      "id": "cf-contract-vs-deadline-01",
+      "question": "Summarize the key terms of this contract.",
+      "inScopeDocs": [{ "title": "contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "contract-brief",
+      "confusion": true,
+      "note": "Confusion: 'key terms'/'contract' brief question, no deadline keyword — contract-brief, not deadline-obligation-finder."
+    },
+    {
+      "id": "cf-deadline-vs-contract-01",
+      "question": "What are the notice periods and cancellation deadlines in this contract?",
+      "inScopeDocs": [{ "title": "contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "deadline-obligation-finder",
+      "confusion": true,
+      "note": "Confusion: two deadline keywords outscore the single 'contract' word (both share the *contract* doc signal)."
+    },
+    {
+      "id": "cf-whatchanged-vs-contract-01",
+      "question": "What changed between these two documents?",
+      "inScopeDocs": [
+        { "title": "contract-v1.pdf", "mimeType": "application/pdf" },
+        { "title": "contract-v2.pdf", "mimeType": "application/pdf" }
+      ],
+      "expected": "what-changed",
+      "confusion": true,
+      "note": "Confusion: contract-named versions in scope, but the question carries NO 'contract' word — only what-changed has a keyword, so contract-brief cannot fire."
+    },
+    {
+      "id": "cf-redaction-vs-sharesafe-01",
+      "question": "Anonymize the sensitive information before sharing.",
+      "inScopeDocs": [{ "title": "report.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "confusion": true,
+      "note": "Confusion: 'anonymize' (redaction) vs 'sensitive information' (share-safe) tie at 3 — installId tie-break favours document-redaction, the correct action skill."
+    },
+    {
+      "id": "cf-sharesafe-vs-redaction-01",
+      "question": "Is it safe to share this file with sensitive information in it?",
+      "inScopeDocs": [{ "title": "report.pdf", "mimeType": "application/pdf" }],
+      "expected": "share-safe-review",
+      "confusion": true,
+      "note": "Confusion: 'safe to share' + 'sensitive information' (two share-safe keywords) beat any redaction match (there is no redaction verb)."
+    },
+    {
+      "id": "cf-meeting-not-deadline-01",
+      "question": "Summarize the meeting and list the action items.",
+      "inScopeDocs": [{ "title": "meeting-notes.txt", "mimeType": "text/plain" }],
+      "expected": "meeting-protocol",
+      "confusion": true,
+      "note": "Confusion: 'action items' reads deadline-ish, but 'action items' is a MEETING keyword and deadline uses 'action required' — meeting wins."
     },
 
     {
@@ -134,14 +456,14 @@
       "question": "What's the weather like today?",
       "inScopeDocs": [{ "title": "march-statement.pdf", "mimeType": "application/pdf" }],
       "expected": "none",
-      "note": "True NEGATIVE — a statement PDF is in scope but the question is unrelated. The lone doc signal (filename+MIME) must NOT fire a skill."
+      "note": "True NEGATIVE — a statement PDF is in scope but the question is unrelated. The lone doc signal must NOT fire (keyword-required)."
     },
     {
       "id": "tn-doc-joke-01",
       "question": "Tell me a joke.",
       "inScopeDocs": [{ "title": "invoice-2026.pdf", "mimeType": "application/pdf" }],
       "expected": "none",
-      "note": "True NEGATIVE — invoice PDF in scope, unrelated question; lone doc signal must not fire."
+      "note": "True NEGATIVE — invoice PDF in scope, unrelated question."
     },
     {
       "id": "tn-doc-translate-01",
@@ -164,20 +486,41 @@
       "expected": "none",
       "note": "True NEGATIVE — meeting-named doc in scope, unrelated question."
     },
+    {
+      "id": "tn-contract-unrelated-01",
+      "question": "What's a good recipe for dinner tonight?",
+      "inScopeDocs": [{ "title": "contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "True NEGATIVE — a *contract* doc in scope, unrelated question (contract/deadline lone doc must not fire)."
+    },
+    {
+      "id": "tn-deadline-unrelated-01",
+      "question": "Tell me about the history of Rome.",
+      "inScopeDocs": [{ "title": "mietvertrag.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "True NEGATIVE — a *vertrag* doc in scope (contract + deadline both glob it), unrelated question."
+    },
 
     {
       "id": "nm-mission-statement-01",
       "question": "Summarize the key points of this mission statement.",
       "inScopeDocs": [{ "title": "mission-statement.pdf", "mimeType": "application/pdf" }],
       "expected": "none",
-      "note": "Near-miss — a filename that merely CONTAINS 'statement' (a mission statement, not a bank statement) and no bank keyword. Lone doc signal must not fire."
+      "note": "Near-miss — a filename with 'statement' (a mission statement) and no bank keyword ('statement' is route-only)."
     },
     {
       "id": "nm-invoice-template-01",
       "question": "Can you fix the formatting in this file?",
       "inScopeDocs": [{ "title": "invoice-template-blank.pdf", "mimeType": "application/pdf" }],
       "expected": "none",
-      "note": "Near-miss — a filename containing 'invoice' (a blank template) with a formatting question, no invoice keyword."
+      "note": "Near-miss — a filename containing 'invoice' with a formatting question, no invoice keyword."
+    },
+    {
+      "id": "nm-contract-scan-01",
+      "question": "Rotate this scanned image by 90 degrees.",
+      "inScopeDocs": [{ "title": "contract-scan.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "Near-miss — a *contract* filename with an image-editing question, no contract keyword."
     },
 
     {
@@ -185,28 +528,63 @@
       "question": "I'm trying to find a better work-life balance these days.",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "Adversarial — generic use of the trigger word 'balance' with no relevant doc. A substring keyword match fires even though there is no bank intent (the precision CEILING a keyword-required bar still cannot fix)."
+      "note": "Adversarial — 'balance' is now route-only (not a suggest keyword), so this no longer fires bank."
     },
     {
       "id": "adv-bill-01",
       "question": "Bill called me yesterday about getting lunch.",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "Adversarial — 'Bill' (a name) substring-matches the invoice keyword 'bill'."
+      "note": "Adversarial — 'Bill' the name: 'bill' is route-only now (kept 'billing' as the suggest term), so no invoice fire."
     },
     {
       "id": "adv-minutes-01",
       "question": "It only takes a few minutes to walk to the office.",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "Adversarial — 'minutes' (time) substring-matches the meeting keyword 'minutes'."
+      "note": "Adversarial — 'minutes' (time) is route-only now; the offer uses 'meeting minutes'/'meeting' instead."
+    },
+    {
+      "id": "adv-minutes-10-01",
+      "question": "Remind me in 10 minutes.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "REPRODUCTION ('in 10 minutes'→Meeting offer): bare 'minutes' is route-only, so no meeting offer fires."
     },
     {
       "id": "adv-datenschutz-01",
       "question": "Wo finde ich die Datenschutzerklärung auf der Website?",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "Adversarial (de) — 'Datenschutz' substring-matches the redaction keyword 'datenschutz', but the user only asks where to find the privacy policy."
+      "note": "Adversarial (de) — 'datenschutz' is word-matched, so 'Datenschutzerklärung' does not trigger it."
+    },
+    {
+      "id": "adv-net-netflix-01",
+      "question": "Wie kündige ich mein Netflix-Abo?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "REPRODUCTION ('Netflix'→'net'): 'net' is a word-matched ROUTE-only term, so it never hits 'Netflix' and never offers bank."
+    },
+    {
+      "id": "adv-syntax-tax-01",
+      "question": "Explain the syntax of this tax formula.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Adversarial — 'tax' ⊂ 'syntax': 'tax' is word-matched route-only, so no invoice offer."
+    },
+    {
+      "id": "adv-assume-sum-01",
+      "question": "I assume the sum is roughly right.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Adversarial — 'sum' ⊂ 'assume': 'sum' is word-matched route-only, so no bank/invoice offer."
+    },
+    {
+      "id": "adv-meeting-schedule-01",
+      "question": "Können wir ein Meeting für Dienstag ansetzen?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Adversarial — the word-matched 'meeting' offers meeting-protocol on a SCHEDULING ask. The honest precision CEILING of keeping 'meeting' suggest-able (the §4.1 incident requires it); documented, not hidden."
     },
 
     {

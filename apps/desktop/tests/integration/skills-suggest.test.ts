@@ -63,11 +63,14 @@ describe('suggestSkillsForTurn (S8)', () => {
     expect(out[0]).toEqual({ installId: 'user:bank', title: 'Skill bank' })
   })
 
-  it('resolves the document scope MAIN-side: an in-scope file drives the offer (§22-C4)', () => {
+  it('resolves the document scope MAIN-side: an in-scope file corroborates a keyword offer (§22-C4)', () => {
     const db = freshDb()
     const d = dirs()
-    // mime + filename together clear the bar (a lone filename would not).
-    writeSkill(d.userSkillsDir, 'bank', { mimeTypes: ['application/pdf'], filenamePatterns: ['*statement*'] })
+    writeSkill(d.userSkillsDir, 'bank', {
+      keywords: ['bank statement'],
+      mimeTypes: ['application/pdf'],
+      filenamePatterns: ['*statement*']
+    })
     reconcileSkills(db, d)
     setSkillEnabled(db, 'user:bank', true)
     const docId = seedIndexedDoc(db, 'march-statement.pdf', 'application/pdf')
@@ -77,9 +80,28 @@ describe('suggestSkillsForTurn (S8)', () => {
       mode: 'documents',
       scope: { collectionIds: [], documentIds: [docId] }
     })
-    // No question text — the suggestion comes purely from the in-scope document signals.
-    const out = suggestSkillsForTurn(db, conv.id, '')
-    expect(out.map((s) => s.installId)).toEqual(['user:bank'])
+    // W5 (audit §4.2): a suggestion now REQUIRES a keyword hit — the in-scope doc CORROBORATES it (and is
+    // still resolved main-side from the conversationId), but no longer fires on its own.
+    expect(suggestSkillsForTurn(db, conv.id, 'reconcile my bank statement').map((s) => s.installId)).toEqual([
+      'user:bank'
+    ])
+  })
+
+  it('does NOT offer on a lone in-scope document with no keyword (§4.2 — keyword-required)', () => {
+    const db = freshDb()
+    const d = dirs()
+    // mime + filename together used to clear the bar; W5 requires a keyword, so a doc-only turn is inert.
+    writeSkill(d.userSkillsDir, 'bank', { mimeTypes: ['application/pdf'], filenamePatterns: ['*statement*'] })
+    reconcileSkills(db, d)
+    setSkillEnabled(db, 'user:bank', true)
+    const docId = seedIndexedDoc(db, 'march-statement.pdf', 'application/pdf')
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [docId] }
+    })
+    // No question text and no keyword — the standing "there's a statement.pdf in scope" offer is gone.
+    expect(suggestSkillsForTurn(db, conv.id, '')).toEqual([])
+    expect(suggestSkillsForTurn(db, conv.id, 'what is the weather today?')).toEqual([])
   })
 
   it('never suggests a DISABLED skill (candidates are enabled only)', () => {

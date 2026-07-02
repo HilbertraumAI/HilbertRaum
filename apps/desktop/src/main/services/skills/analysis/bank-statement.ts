@@ -5,6 +5,7 @@ import { documentsInScope } from '../scope-documents'
 import { documentChunkCount } from '../../analysis/coverage'
 import { getSkill, skillInstallId } from '../registry'
 import { matchesSkillDocSignals } from '../selector'
+import { routeMatch } from '../vocabulary'
 import {
   isBankStatementStale,
   latestBankStatementId,
@@ -47,38 +48,28 @@ import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, Sk
 /** The bundled bank-statement skill's install id (`"app:bank-statement"`) — the registry key. */
 export const BANK_STATEMENT_INSTALL_ID = skillInstallId('app', 'bank-statement')
 
-// Analysis-shaped intent: accounting/transaction words (EN + DE for the de-AT target). Conservative
-// by design — a tool skill answering an off-topic question keeps the relevance path (plan §3.2).
-// STEMS, not whole words (matched by substring), so German inflections/compounds are covered: e.g.
-// `transaktion` catches "Transaktion"/"Transaktionen"; `zusammenfass` catches "Zusammenfassung"/
-// "zusammenfassen"; `geldfluss` catches the app's own "Geldfluss zusammenfassen" button phrasing. The
-// German noun `Transaktion` and the verb `kategorisier`… do NOT contain the English `transaction`/the
-// noun `kategorie`, so without these a natural de-AT request like "Kategorisiere die Transaktionen" was
-// NOT recognised as analysis-shaped → it fell through this 0-model handler to generic RAG, which stuffs
-// the whole statement into the model and overflows the context window on a multi-page Kontoauszug.
-const ANALYSIS_KEYWORDS: readonly string[] = [
-  'transaction', 'transactions', 'balance', 'balances', 'reconcile', 'reconciliation',
-  'cashflow', 'cash flow', 'total', 'totals', 'sum', 'summary', 'summarize', 'summarise',
-  'spend', 'spending', 'spent', 'income', 'expense', 'expenses', 'net', 'statement',
-  'deposit', 'withdrawal', 'how much', 'how many', 'overview',
-  'kontoauszug', 'buchung', 'buchungen', 'saldo', 'umsatz', 'umsätze', 'ausgabe', 'ausgaben',
-  'einnahme', 'einnahmen', 'betrag', 'beträge', 'summe', 'überweisung', 'abgleich',
-  'zusammenfass', 'geldfluss', 'transaktion', 'kategorie', 'kategorien'
-]
+// Analysis-shaped intent now reads the ONE canonical bank vocabulary (W5, audit §3.2/§4.1): its
+// `route|both` entries — accounting/transaction words, EN + DE for the de-AT target — matched word-boundary
+// for single tokens (`net` no longer intercepts "Netflix") and substring for phrases/German stems (so
+// `transaktion` still catches "Transaktion"/"Transaktionen" and the run seams see "Kategorisiere die
+// Transaktionen" instead of overflowing generic RAG on a multi-page Kontoauszug). The vocabulary is
+// single-sourced with the SKILL.md suggestion keywords (parity-tested), so routing and offers no longer
+// drift. Conservative by design — a tool skill answering an off-topic question keeps the relevance path.
 
-// A category-shaped question additionally wants a per-category breakdown (drives `categorize_*`).
+// A category-shaped question additionally wants a per-category breakdown (drives `categorize_*`). Kept as
+// its OWN stem list (a sub-behaviour gate, not a trigger) — `kategor`/`categor` are substring stems that
+// select the breakdown detail, distinct from the analysis-vs-off-topic trigger the vocabulary owns.
 const CATEGORY_KEYWORDS: readonly string[] = [
   'categor', 'breakdown', 'by category', 'spending on', 'spend on',
   'kategor', 'nach kategorie', 'aufschlüssel'
 ]
 
 function isAnalysisShaped(question: string): boolean {
-  const q = question.toLowerCase()
   // A CATEGORY request ("Kategorisiere …", "nach Kategorie", "break down …") is DEFINITIONALLY an
-  // analysis request, so it must route to this 0-model handler too — otherwise a category question that
-  // happens to miss every ANALYSIS_KEYWORD (e.g. "Kategorisiere die Transaktionen") falls through to
-  // generic RAG and overflows the context window on a long statement. Category-shaped ⟹ analysis-shaped.
-  return ANALYSIS_KEYWORDS.some((k) => q.includes(k)) || isCategoryShaped(q)
+  // analysis request, so it routes to this 0-model handler too — otherwise a category question that
+  // happens to miss every analysis term falls through to generic RAG and overflows the context window on a
+  // long statement. Category-shaped ⟹ analysis-shaped.
+  return routeMatch('bank-statement', question) || isCategoryShaped(question)
 }
 
 function isCategoryShaped(question: string): boolean {

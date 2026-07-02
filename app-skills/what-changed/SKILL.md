@@ -17,11 +17,11 @@ permissions:
   network: denied
   filesystem: skill_resources_only
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
-  # Bilingual, multi-word/domain terms only (matching is case-insensitive question.includes); German
-  # umlaut/ending forms listed separately. Avoids bare ambiguous tokens.
-  keywords: [what changed, compare versions, compare documents, version difference,
-             differences between, changed between, old and new, redline, revision, updated terms,
-             compare contract,
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. Bilingual compare phrases; the bare imperatives (`compare these`, `vergleiche`) are
+  # route-only. `änderungen` is word-matched (not a bare substring). Edit the vocabulary, not this list.
+  keywords: [what changed, what has changed, compare versions, compare documents, version difference,
+             differences between, changed between, redline, revision, updated terms, compare contract,
              was hat sich geändert, änderungen, unterschiede, versionen vergleichen,
              dokumente vergleichen, alte version, neue version, gegenüberstellung,
              vertragsänderung, aktualisierte bedingungen]

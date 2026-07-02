@@ -6,6 +6,57 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation W5: one trigger vocabulary + word-boundary matcher + scoring + 8-skill eval corpus — branch `fix/skills-w5`, UNMERGED.**
+Track-W (plan §W5; audit §3.2/§4.1/§4.2/§8.3), branched off `fix/skills-w4` (deps: none; the plan/audit docs
+live on the W-branch chain, not `master`). Offline / pure / no new deps / **no schema change** / **no
+extractor-version bump** (matching is read-side). **Root cause:** each skill carried TWO drifting keyword
+lists — the SKILL.md `triggers.keywords` (drives the SUGGESTION scorer) and a private routing array in its
+analysis handler (`isAnalysisShaped`, the whole-doc lists, `REDACTION_KEYWORDS`) — and BOTH matched by raw
+`question.includes`, so `net` ⊂ "Netflix", `bill` ⊂ "billboard", `sum` ⊂ "assume" fired confident wrong
+answers, while a term could route-but-never-offer (bank's 6-keyword manifest vs its ~45-term gate) or
+offer-but-never-route ("Summarize this meeting" earned the offer, then produced minutes from ~2-4 top-k
+chunks). **Fix (NEW `services/skills/vocabulary.ts`):** ONE canonical bilingual vocabulary per app skill —
+entries `{term, lang, match:'word'|'phrase'|'stem', use:'suggest'|'route'|'both'}`. `match` drives ROUTING
+only (`entryMatches`: word→`wordIncludes` boundary, phrase/stem→substring); the SUGGESTION scorer instead
+word/phrase-infers from the manifest string itself (`selector.countKeywordHits`), so a `both`-`stem` German
+noun still OFFERS word-anchored (precision) yet ROUTES its compounds (recall under an already-active skill,
+spec §8.2 — `rechnung`→"Rechnungsposten", `frist`→"Kündigungsfrist", `summe`/`steuer`/`überweisung`→plurals).
+The one structural rule (consistency test): whitespace ⟺ `phrase`. **Fix (routing):** all 5 gates
+(`isAnalysisShaped` bank+invoice, the 4 whole-doc shape gates, `isRedactionShaped`) now call
+`routeMatch(skillId: SkillVocabId, q)` — the `SkillVocabId` param makes a mis-wired handler id a COMPILE
+error (the gap the runtime drift test can't catch). `isCategoryShaped`/`SUMMARY_KEYWORDS` (W3/W4 answer-shape)
+left untouched. **Fix (scoring, `selector.ts`):** `countKeywordHits` = word-boundary for single tokens +
+longest-match dedupe ("meeting minutes" counts once, not ×3), EXPORTED and reused by the eval harness so
+faithfulness is structural; `scoreSkillTriggers` caps the keyword contribution at `min(hits,2)×2` (list
+LENGTH no longer decides cross-skill competition); `selectByThreshold` now REQUIRES ≥1 keyword hit (a lone
+`statement.pdf` in scope no longer stands a permanent question-independent offer — §4.2). Auto-fire
+(threshold 3) already implied a keyword, so it is unchanged. **Fix (manifests):** all 8 SKILL.md
+`triggers.keywords` regenerated to EXACTLY the vocabulary's `suggest|both` terms; the bare over-fire tokens
+(`net`/`sum`/`tax`/`bill`/`total`/`balance`/`statement`/`minutes`) are route-only, and the redaction
+informational words (`datenschutz`/`dsgvo`/`gdpr`) are `suggest`-only (they offer but must not deflect "Was
+regelt die DSGVO?" to the Redact button — §4.4/U4). A **bidirectional parity test** pins manifest⇔vocab for
+all 8. **Eval:** corpus expanded 33→**82 items across all 8 skills** (was 4) — German paraphrases + **8
+cross-skill confusion pairs** + the reproduction items. **Measured (keyword-required ≡ runtime
+`selectSuggestion`): precision 98.3 %, recall 100 %, 58 fired-correct / 1 fired-wrong** (the documented
+`adv-meeting-schedule` ceiling — `meeting` is offer-able as a bare word because the §4.1 incident requires it)
+**/ 0 missed.** Asserted bars: keyword-required precision **≥0.95** (tightened from the plan's 0.80 floor to a
+real regression gate) + **fired-wrong 0** on the confusion subset + the reproductions predict `none`;
+threshold-3 auto-fire stays **100 %/0-wrong** on the widened corpus. **Reproductions killed:** `Netflix`→`net`
+(0), `Summarize this meeting` (offers+routes), `in 10 minutes`→Meeting (0), and the German-plural/compound
+route cases (`stimmen die Summen?`, `rechnungsposten bestimmen`). **Adversarial 4-lens diff review
+(routing-correctness · plan-conformance · parity/precision-honesty · test-quality — each finding
+independently verified, default-refute):** 5 confirmed — 2×MEDIUM German-plural route regressions
+(`überweisung`→"Überweisungen", `steuer`→"Steuern") fixed to stems; 3×LOW (precision-floor provenance,
+drift-guard overclaim, toothless 0.80 floor) all addressed (BUILD_STATE records the number; `routeMatch`
+`SkillVocabId`-typed + honest liveness-test wording; floor raised to 0.95). 3 further leads refuted
+(`strukturiere` under-fire = "etc." with no clear skill; `isLetterDigit` duplication = acceptable, commented;
+drift-guard-vs-plan = wiring pinned by the integration tests). **Non-goals held:** answer-shape routing
+(W3/W4), whole-doc internals (W1), auto-fire expansion + §4.4 manifest↔handler alignment (U4). **Residuals
+(known-limitations):** word-anchored offers under-fire German closed compounds (routing broader), the
+`meeting`-word offer ceiling, redaction topic-words suggest-only. **Tests:** +55 net-new (vocabulary 16,
+selector +7, eval gates + reproductions, parity ×8, suggest/prof-docs policy updates); full canonical suite
+green (2932) + typecheck. `fix/skills-w5`._
+
 _2026-07-02 — **Skills remediation W4: third mode — bank port + format parity + follow-ups — branch `fix/skills-w4`, UNMERGED.**
 Track-W (plan §W4; audit §3.1 bank half + §3.3 MEDIUM + §3.6-low), branched off `fix/skills-w3` (deps: W3; the
 plan/audit docs live on the W-branch chain, not `master`). Offline / pure / no new deps / **no schema change** /

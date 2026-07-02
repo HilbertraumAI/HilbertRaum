@@ -17,15 +17,14 @@ permissions:
   network: denied
   filesystem: skill_resources_only
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
-  # Bilingual + full words only: matching is case-insensitive question.includes(keyword). German
-  # umlaut/ending pairs are listed separately (beschluss/beschlüsse); short ambiguous tokens avoided.
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. `meeting` is word-matched (so "Summarize this meeting" both offers AND routes); the bare
+  # ambiguous `minutes` (⊂ "a few minutes") is route-only. Edit the vocabulary, not this list.
   keywords: [meeting minutes, meeting notes, meeting protocol, meeting transcript, meeting,
-             action item, action items, decisions made, formal minutes, write minutes,
-             summarize meeting, minutes from this meeting, minutes, protocol, agenda,
-             besprechungsprotokoll, sitzungsprotokoll, meetingprotokoll, gesprächsprotokoll,
-             protokoll, besprechung, sitzung, notizen, tagesordnung, aktionspunkte,
-             aufgabe, aufgaben, beschluss, beschlüsse, entscheidungen, offene punkte,
-             zusammenfassung der besprechung]
+             action item, action items, agenda,
+             protokoll, besprechungsprotokoll, sitzungsprotokoll, besprechung, sitzung,
+             tagesordnung, aktionspunkte, beschluss, beschlüsse, entscheidungen,
+             aufgabe, aufgaben, notizen]
   mimeTypes: [text/plain, text/markdown, application/pdf]
   filenamePatterns: ["*meeting*", "*minutes*", "*transcript*", "*protokoll*", "*besprechung*", "*sitzung*"]
 ---

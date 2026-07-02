@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
+import { APP_VOCAB_SKILL_IDS, suggestTerms } from '../../src/main/services/skills/vocabulary'
 import { buildBankAnswer } from '../../src/main/services/skills/analysis/bank-statement'
 import { buildInvoiceAnswer } from '../../src/main/services/skills/analysis/invoice'
 import {
@@ -30,6 +32,25 @@ import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 const BANK_SKILL_MD = readFileSync(join(REPO_ROOT, 'app-skills', 'bank-statement', 'SKILL.md'), 'utf8')
 const INVOICE_SKILL_MD = readFileSync(join(REPO_ROOT, 'app-skills', 'invoice', 'SKILL.md'), 'utf8')
+
+const norm = (xs: string[]): string[] => [...new Set(xs.map((x) => x.trim().toLowerCase()))].sort()
+
+// W5 (audit §4.1/§8.3) — the SKILL.md `triggers.keywords` (the SUGGESTION manifest, a public format) must
+// be EXACTLY the skill's `suggest|both` vocabulary terms. `services/skills/vocabulary.ts` is the single
+// source both the suggestion scorer and the routing gates read; regenerating the manifest lists from it and
+// pinning that equality here is what kills the two-drifting-lists class (a term that offered but never
+// routed, or routed but was never offered). Edit the vocabulary — this test then guards the SKILL.md copy.
+describe('SKILL.md triggers.keywords ⇔ vocabulary parity (W5)', () => {
+  for (const id of APP_VOCAB_SKILL_IDS) {
+    it(`${id}: the manifest keyword set equals the vocabulary's suggest|both terms`, () => {
+      const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
+      expect(res.ok, `parse ${id}: ${res.errors.join('; ')}`).toBe(true)
+      const manifestKeywords = norm(res.manifest!.triggers.keywords)
+      const vocabSuggest = norm(suggestTerms(id))
+      expect(manifestKeywords).toEqual(vocabSuggest)
+    })
+  }
+})
 
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 /** Mirrors the answer builders' private `fmt` (two-decimal, like the printed figures). */

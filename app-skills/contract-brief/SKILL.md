@@ -17,15 +17,13 @@ permissions:
   network: denied
   filesystem: skill_resources_only
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
-  # Bilingual, multi-word/domain terms only (matching is case-insensitive question.includes); German
-  # singular/plural and umlaut forms listed separately. Avoids bare ambiguous tokens (law/risk/doc).
-  keywords: [contract brief, contract summary, review contract, summarize contract, before signing,
-             agreement summary, legal agreement, service agreement, lease agreement,
-             terms and conditions, obligations in this contract, contract risks, termination clause,
-             renewal clause, liability clause, indemnity,
-             vertragsübersicht, vertrag zusammenfassen, vertrag prüfen, vertragsanalyse,
-             vor der unterschrift, vereinbarung, mietvertrag, dienstleistungsvertrag, agb,
-             kündigung, verlängerung, haftung, pflichten im vertrag, risiken im vertrag]
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. Bilingual domain nouns + clause phrases; the bare review verbs (`review contract`,
+  # `vertrag prüfen`) are route-only. Edit the vocabulary, not this list.
+  keywords: [contract, agreement, lease, contract brief, contract summary, terms and conditions,
+             key terms, termination clause, renewal clause, liability clause, indemnity,
+             vertrag, vereinbarung, mietvertrag, dienstleistungsvertrag, agb,
+             vertragsübersicht, vertragsanalyse, kündigung, haftung]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: ["*contract*", "*agreement*", "*terms*", "*lease*", "*vertrag*", "*vereinbarung*", "*agb*", "*mietvertrag*"]
 ---

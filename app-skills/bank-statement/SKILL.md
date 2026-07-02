@@ -23,7 +23,12 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - summarize_cashflow
   - export_transactions_csv
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10)
-  keywords: [bank statement, kontoauszug, transaction, balance, IBAN, statement period]
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. Bilingual, word/phrase (never a bare ambiguous token: `balance`/`net`/`statement` are
+  # route-only). Edit the vocabulary, not this list. The routing gate reads the same source, so drift ends.
+  keywords: [bank statement, statement period, transaction, transactions, IBAN,
+             cashflow, cash flow, kontoauszug, kontostand, saldo, buchung, buchungen,
+             umsatz, umsätze, überweisung, geldfluss, transaktion, transaktionen]
   mimeTypes: [application/pdf, text/csv]
   filenamePatterns: ["*statement*", "*kontoauszug*"]
 ---

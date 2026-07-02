@@ -121,6 +121,24 @@ password recovery — are documented in
   title. The two-pointer matcher cannot backtrack at all (and no longer refuses legitimate
   wildcard-heavy globs), so catastrophic backtracking is now **structurally impossible**, not merely
   bounded.
+- **Skill triggering runs on ONE canonical bilingual vocabulary (Skills W5), word-boundary matched — the
+  OFFER is precision-first, ROUTING is recall-first.** `services/skills/vocabulary.ts` single-sources each
+  app skill's trigger terms; the SKILL.md `triggers.keywords` (the suggestion manifest) are regenerated
+  from it and pinned by a parity test, and the routing gates (`isAnalysisShaped`, the whole-doc shape
+  gates, `isRedactionShaped`) read the same source via `routeMatch` — so the two lists can no longer drift.
+  A single-token keyword is matched at **word boundaries** (`net` no longer intercepts "Netflix", `bill`
+  no longer "billboard"), and a suggestion additionally **requires ≥1 keyword hit** (a lone `statement.pdf`
+  in scope no longer stands a permanent question-independent offer). Two deliberate asymmetries remain:
+  (1) an OFFER on a single-token German noun is word-anchored, so a closed compound ("Rechnungsposten",
+  "Kündigungsfrist") does **not** earn the offer even though the same term **routes** once the skill is
+  active (routing uses substring stems — recall beats precision under an already-chosen skill, spec §8.2);
+  (2) `meeting` is offer-able as a bare word (the "Summarize this meeting" incident requires the offer to
+  fire), so a scheduling ask ("schedule a meeting") can still draw a meeting-protocol offer — the measured
+  suggestion precision is ~98 % on the eval corpus, and the offer is inert (in-picker only, never
+  auto-applied). The redaction manifest's informational topic words (`datenschutz`/`dsgvo`/`gdpr`) are
+  **suggest-only**: they offer the skill but its handler does not route on them (its tool WRITES a masked
+  copy, so "Was regelt die DSGVO?" must not be deflected to the Redact button) — aligning that
+  manifest↔handler pair is a later remediation phase (audit §4.4).
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
   offline regexes only** — e-mail addresses, phone numbers, IBANs, dates, and web links. There is **no

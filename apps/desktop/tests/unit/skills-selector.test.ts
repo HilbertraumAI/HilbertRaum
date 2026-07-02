@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  countKeywordHits,
   globMatches,
   matchesSkillDocSignals,
   scoreSkillTriggers,
@@ -123,6 +124,63 @@ describe('matchesSkillDocSignals (W2 doc-count narrowing + plausibility gate)', 
     expect(matchesSkillDocSignals(triggers(), { title: 'anything-statement.pdf', mimeType: 'application/pdf' })).toBe(false)
     expect(matchesSkillDocSignals(bankTriggers, { title: 'march-statement', mimeType: null })).toBe(true) // filename still hits
     expect(matchesSkillDocSignals(bankTriggers, { title: 'contract', mimeType: null })).toBe(false)
+  })
+})
+
+describe('countKeywordHits (W5 — word-boundary, longest-match dedupe)', () => {
+  it('word-boundary matches a single token: `net` hits "net income" but NOT "Netflix"', () => {
+    expect(countKeywordHits(['net'], 'what is my net income?')).toBe(1)
+    expect(countKeywordHits(['net'], 'how do I cancel my Netflix subscription?')).toBe(0)
+    expect(countKeywordHits(['bill'], 'the electricity bill')).toBe(1)
+    expect(countKeywordHits(['bill'], 'Bill called about the billboard')).toBe(1) // "Bill" is a standalone word
+    expect(countKeywordHits(['sum'], 'I assume so')).toBe(0) // sum ⊂ assume
+  })
+
+  it('a phrase (whitespace) is substring-matched', () => {
+    expect(countKeywordHits(['bank statement'], 'reconcile my BANK STATEMENT please')).toBe(1)
+    expect(countKeywordHits(['net amount'], 'the net amount due')).toBe(1)
+  })
+
+  it('dedupes overlapping hits longest-match-wins: "meeting minutes" counts ONCE, not three', () => {
+    // All three keywords match the same "meeting minutes" span → 1 distinct hit.
+    expect(countKeywordHits(['meeting minutes', 'meeting', 'minutes'], 'write the meeting minutes')).toBe(1)
+    // A second, non-overlapping keyword adds a distinct hit.
+    expect(
+      countKeywordHits(['meeting minutes', 'meeting', 'minutes', 'agenda'], 'the meeting minutes and the agenda')
+    ).toBe(2)
+  })
+
+  it('ignores empty/whitespace entries and is case-insensitive', () => {
+    expect(countKeywordHits(['   ', ''], 'anything')).toBe(0)
+    expect(countKeywordHits(['Rechnung'], 'auf dieser rechnung')).toBe(1)
+  })
+})
+
+describe('scoreSkillTriggers (W5 — capped keyword contribution)', () => {
+  it('caps the keyword contribution at two hits (list length cannot inflate the score)', () => {
+    // Five distinct keyword hits, but the score counts at most 2 → 4, not 10.
+    const many = triggers({ keywords: ['alpha', 'beta', 'gamma', 'delta', 'epsilon'] })
+    const score = scoreSkillTriggers(many, { question: 'alpha beta gamma delta epsilon', ...NO_DOCS })
+    expect(score).toBe(4)
+  })
+})
+
+describe('selectSuggestion — keyword-required (W5 §4.2)', () => {
+  it('does NOT offer on a lone doc signal (mime+filename) with no keyword hit', () => {
+    const docOnly: SkillCandidate = {
+      installId: 'user:bank',
+      title: 'Bank',
+      triggers: triggers({ mimeTypes: ['application/pdf'], filenamePatterns: ['*statement*'] })
+    }
+    // Raw score would be 2 (mime+filename), but a suggestion now requires ≥1 keyword hit.
+    const ctx = { question: 'hello', docTitles: ['march-statement.pdf'], docMimeTypes: ['application/pdf'] }
+    expect(scoreSkillTriggers(docOnly.triggers, ctx)).toBe(2) // the signal is still measured…
+    expect(selectSuggestion([docOnly], ctx)).toBeNull() // …but it never fires alone
+  })
+
+  it('still offers on a lone keyword (no doc needed)', () => {
+    const kw: SkillCandidate = { installId: 'user:bank', title: 'Bank', triggers: triggers({ keywords: ['bank statement'] }) }
+    expect(selectSuggestion([kw], { question: 'reconcile my bank statement', ...NO_DOCS })?.installId).toBe('user:bank')
   })
 })
 

@@ -17,13 +17,13 @@ permissions:
   network: denied
   filesystem: skill_resources_only
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
-  # Bilingual, multi-word/domain terms only (matching is case-insensitive question.includes); German
-  # umlaut/ending forms listed separately. Avoids bare ambiguous tokens.
-  keywords: [deadlines, due dates, notice period, renewal date, cancellation deadline, obligations,
-             duties, must do, shall do, required to, action required, what do i have to do, by when,
-             calendar dates,
-             frist, fristen, fälligkeiten, stichtag, kündigungsfrist, verlängerung, pflichten,
-             verpflichtungen, muss ich, müssen wir, zahlungsfrist, bis wann, wiedervorlage]
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. Bilingual deadline/obligation nouns (singular + plural listed for word-boundary matching);
+  # the imperative phrases (`what do i have to do`, `bis wann`) are route-only. Edit the vocabulary.
+  keywords: [deadline, deadlines, due date, due dates, notice period, renewal date,
+             cancellation deadline, obligation, obligations, payment date, payment dates,
+             frist, fristen, fälligkeit, fälligkeiten, stichtag, kündigungsfrist, zahlungsfrist,
+             pflicht, pflichten, verpflichtung, verpflichtungen, wiedervorlage]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: ["*deadline*", "*frist*", "*vertrag*", "*contract*", "*agreement*", "*notice*", "*renewal*", "*kündigung*"]
 ---

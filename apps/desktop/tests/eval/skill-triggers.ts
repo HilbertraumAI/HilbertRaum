@@ -17,9 +17,9 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { SkillTriggers } from '../../src/shared/skill-manifest'
 import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
 import {
+  countKeywordHits,
   scoreSkillTriggers,
   selectSuggestion,
   SUGGEST_SCORE_THRESHOLD,
@@ -27,11 +27,14 @@ import {
   type SkillCandidate,
   type SkillTriggerContext
 } from '../../src/main/services/skills/selector'
+import { APP_VOCAB_SKILL_IDS } from '../../src/main/services/skills/vocabulary'
 
 /** The repo root (…/AI_Drive), four levels up from tests/eval/. */
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-/** The four real, enabled app skills whose ACTUAL triggers form the label space. */
-const APP_SKILL_IDS = ['bank-statement', 'invoice', 'meeting-protocol', 'document-redaction'] as const
+/** W5 (audit §6.4/§8.3): ALL EIGHT real app skills form the label space (was 4 — it excluded exactly the
+ *  collision-prone Professional-Documents skills). Sourced from the vocabulary so the corpus label space
+ *  and the routing/suggestion vocabulary can never diverge. */
+const APP_SKILL_IDS = APP_VOCAB_SKILL_IDS
 
 /** One in-scope document's matchable signals (filename + MIME). */
 export interface CorpusDoc {
@@ -46,6 +49,10 @@ export interface CorpusItem {
   inScopeDocs: CorpusDoc[]
   /** The ground-truth skill id, or 'none' if no skill should fire. */
   expected: string
+  /** W5 (audit §8.3): a CROSS-SKILL confusion pair the SUGGESTION policy must get right (fired-wrong 0
+   *  over the confusion subset is an asserted bar) — one skill's keyword must win over another's docs or
+   *  weaker keyword. Not scored differently; it only marks the subset the bar filters. */
+  confusion?: boolean
   note?: string
 }
 
@@ -76,13 +83,11 @@ export function toContext(item: CorpusItem): SkillTriggerContext {
   }
 }
 
-/** How many of a skill's keywords substring-match the question (the selector's own definition). */
-function keywordHits(triggers: SkillTriggers, question: string): number {
-  const q = question.toLowerCase()
-  return triggers.keywords.filter((k) => {
-    const kw = k.trim().toLowerCase()
-    return kw.length > 0 && q.includes(kw)
-  }).length
+/** How many DISTINCT keyword hits a skill lands (the selector's OWN `countKeywordHits` — word-boundary +
+ *  longest-match dedupe, W5). Reusing the runtime counter keeps the `keyword-required` policy identical to
+ *  the production `selectSuggestion` gate, so the faithfulness guard holds by construction. */
+function keywordHits(triggers: SkillCandidate['triggers'], question: string): number {
+  return countKeywordHits(triggers.keywords, question)
 }
 
 /**
@@ -209,7 +214,9 @@ const pct = (v: number | null): string => (v == null ? '  n/a' : `${(v * 100).to
  */
 export function formatReport(results: PolicyResult[], corpusSize: number): string {
   const lines: string[] = []
-  lines.push(`Skills S13a baseline — ${corpusSize} synthetic turns, 4 app skills as the label space`)
+  lines.push(
+    `Skills trigger baseline — ${corpusSize} synthetic turns, ${APP_SKILL_IDS.length} app skills as the label space`
+  )
   lines.push('')
   lines.push('policy            precision  recall   fired-correct  fired-wrong  missed  abstained')
   for (const r of results) {

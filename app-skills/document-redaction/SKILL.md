@@ -23,12 +23,17 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
                                #   D4, app-only, §6.5 compatibility, and the score ≥ 3 bar — a keyword
                                #   corroborated by ≥1 in-scope doc signal). Proven at 100% precision on
                                #   the S13a corpus (skills-s13-plan.md §3.3 / eval threshold-3 gate).
-  # Bilingual + full words only: matching is case-insensitive question.includes(keyword), so short
-  # ambiguous tokens are avoided (no bare "mask"→"unmask", "pii", or "vat"); German singular+plural
-  # are listed where an umlaut/ending breaks the substring.
-  keywords: [redact, redaction, anonymize, anonymise, anonymisieren, anonymisierung,
-             pseudonymisieren, schwärzen, schwärzung, remove personal data, mask personal data,
-             personenbezogene daten, datenschutz, gdpr, dsgvo, sensitive data, sensible daten]
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` + `suggest`-only terms)
+  # and pinned by a parity test. The action verbs (redact/anonymize/schwärzen…) both OFFER and ROUTE; the
+  # informational topic words (datenschutz/dsgvo/gdpr/sensitive data) are `suggest`-only — they offer the
+  # skill but its tool WRITES a masked copy, so routing must not deflect "Was regelt die DSGVO?" to the
+  # button (the §4.4 manifest↔handler alignment is a later phase). Edit the vocabulary, not this list.
+  keywords: [redact, redaction, anonymize, anonymise, anonymized, anonymised,
+             remove personal data, mask personal data,
+             anonymisieren, anonymisierung, anonymisiere, pseudonymisieren,
+             schwärzen, schwärzung, schwärze, geschwärzt,
+             personenbezogene daten, personenbezogene daten entfernen,
+             datenschutz, dsgvo, gdpr, sensitive data, sensible daten]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: []         # redaction is intent-driven, not filename-driven — leave empty
 ---

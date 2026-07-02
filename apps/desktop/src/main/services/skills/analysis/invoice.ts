@@ -5,6 +5,7 @@ import { documentsInScope } from '../scope-documents'
 import { documentChunkCount } from '../../analysis/coverage'
 import { getSkill, skillInstallId } from '../registry'
 import { matchesSkillDocSignals } from '../selector'
+import { routeMatch } from '../vocabulary'
 import {
   isInvoiceStale,
   latestInvoiceId,
@@ -37,21 +38,14 @@ import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, Sk
 /** The bundled invoice skill's install id (`"app:invoice"`) — the registry key. */
 export const INVOICE_INSTALL_ID = skillInstallId('app', 'invoice')
 
-// Analysis-shaped intent: invoice/billing words (EN + DE for the de-AT target). Conservative by design
-// (plan §3.2) — an invoice skill answering an off-topic question keeps the relevance path. Bare,
-// substring-ambiguous tokens are avoided (no bare "vat"→"private", "ust"→"August", "net"→"internet").
-const ANALYSIS_KEYWORDS: readonly string[] = [
-  'invoice', 'invoices', 'line item', 'line items', 'total', 'totals', 'subtotal',
-  'net total', 'net amount', 'gross', 'amount due', 'tax', 'reconcile', 'reconciles',
-  'reconciliation', 'vendor', 'sum', 'how much', 'how many', 'bill', 'billing',
-  'rechnung', 'rechnungen', 'faktura', 'betrag', 'beträge', 'netto', 'brutto', 'steuer',
-  'umsatzsteuer', 'mehrwertsteuer', 'mwst', 'gesamtbetrag', 'rechnungsbetrag', 'zwischensumme',
-  'position', 'positionen', 'lieferant', 'summe', 'wie viel', 'wie viele'
-]
-
+// Analysis-shaped intent now reads the ONE canonical invoice vocabulary (W5, audit §3.2/§4.1): its
+// `route|both` entries — invoice/billing words, EN + DE — matched word-boundary for single tokens (`tax` no
+// longer intercepts "syntax", `sum` no longer "assume", `steuer` no longer "Steuerberatung") and substring
+// for phrases/German stems. The vocabulary is single-sourced with the SKILL.md suggestion keywords
+// (parity-tested), so routing and offers no longer drift. Conservative — an off-topic question with the
+// invoice skill active keeps the relevance path.
 function isAnalysisShaped(question: string): boolean {
-  const q = question.toLowerCase()
-  return ANALYSIS_KEYWORDS.some((k) => q.includes(k))
+  return routeMatch('invoice', question)
 }
 
 // Format-transformation intent (invoice-format-2026-07-01): "… als JSON", "as CSV", "im xml format".
