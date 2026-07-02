@@ -14,7 +14,7 @@ import {
 } from '../services/chat'
 import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
-import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
+import { detectFilenameScope, generateGroundedAnswer, generateGroundedDataAnswer, ragSettingsFrom } from '../services/rag'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { getSkillAnalysisHandler } from '../services/skills/analysis'
 import { documentsInScope } from '../services/skills/scope-documents'
@@ -391,6 +391,34 @@ export function registerRagIpc(ctx: AppContext): void {
                   skill: turnSkill,
                   onToken: sendToken
                 })
+              }
+              // W3 THIRD answer mode (audit §3.1/§8.1): the question is neither a format ask nor a
+              // summary/reconcile/list shape, so instead of the fixed template the handler returned the
+              // serialized VERIFIED extract — stream a model answer that NARRATES it (strict verbatim
+              // rules, in the SAME locked slot), with the deterministic totals echoed beneath it. The
+              // turn's skill fence + honest extract coverage/citations ride along (parity with the paths
+              // above). The LLM never computes a figure; it reads the data the deterministic tools built.
+              if (result.mode === 'grounded-data') {
+                return generateGroundedDataAnswer(
+                  ctx.db,
+                  runtime,
+                  conversationId,
+                  text,
+                  {
+                    dataBlock: result.dataBlock ?? '',
+                    postscript: result.postscript ?? '',
+                    citations: result.citations,
+                    coverage: result.coverage
+                  },
+                  {
+                    signal,
+                    onCompactionStart: sendCompaction,
+                    onToken: sendToken,
+                    skill: turnSkill,
+                    // W2 (§2.1): carry the auto-narrow scope notice into the grounded-data path too.
+                    answerPrefix: notice ? `${notice}\n\n` : undefined
+                  }
+                )
               }
               // W2 (§2.1): when the scope was auto-narrowed to this doc, prepend the honest notice.
               const answer = notice ? `${notice}\n\n${result.answer}` : result.answer

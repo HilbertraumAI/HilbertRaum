@@ -641,6 +641,20 @@ export const de: Record<keyof typeof en, string> = {
     'Ein Hinweis zu den Daten: Diese Rechnung zeigt nicht, ob sie tag- oder monatszuerst gemeint sind, daher ' +
     'habe ich sie tagzuerst gelesen (Tag.Monat.Jahr) — ein Datum wie 03.05. kann also der 3. Mai oder der ' +
     '5. März sein. Prüf jedes Datum, auf das es ankommt, am Dokument nach.',
+  // W3 (Audit §3.1): die geladenen Kopffelder als kleiner Details-Block, damit die Fragen nach Lieferant /
+  // Rechnungsnummer / Datum auch auf dem deterministischen Template-Pfad beantwortet werden. Werte sind
+  // Dokumentinhalt und werden unverändert als Parameter durchgereicht. Du-Form.
+  'skills.invoiceAnalysis.detailsHeading': 'Details, wie gedruckt:',
+  'skills.invoiceAnalysis.detailVendor': '- Lieferant: {vendor}',
+  'skills.invoiceAnalysis.detailInvoiceNumber': '- Rechnungsnummer: {number}',
+  'skills.invoiceAnalysis.detailInvoiceDate': '- Rechnungsdatum: {date}',
+  'skills.invoiceAnalysis.detailDueDate': '- Fälligkeitsdatum: {date}',
+  // W3 (Audit §8.1): der deterministische Zahlen-Nachtrag UNTER einer grounded-data-Modellantwort, damit ein
+  // Falschzitat des Modells sofort durch die Zahlen des Parsers widerlegt wird. Beträge unverändert.
+  'skills.invoiceAnalysis.figureEcho': 'Beträge wie eingelesen, wörtlich aus dem Dokument: {figures}.',
+  'skills.invoiceAnalysis.figureEchoNet': 'Netto {amount} {currency}',
+  'skills.invoiceAnalysis.figureEchoTax': 'Steuer {amount} {currency}',
+  'skills.invoiceAnalysis.figureEchoGross': 'Brutto {amount} {currency}',
 
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':

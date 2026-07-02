@@ -77,6 +77,21 @@ export interface SkillAnalysisResult {
    * leaves this false and keeps the honest empty answer.
    */
   fallThrough?: boolean
+  /**
+   * W3 THIRD answer mode (audit §3.1/§8.1): set to `'grounded-data'` when the question is neither a
+   * format ask nor a summary/reconcile/list shape but still passed `applies()` — instead of the fixed
+   * template, the chat path STREAMS a model answer that narrates `dataBlock` (the serialized, verified
+   * extract) under the strict quote-figures-verbatim rules, then appends `postscript` (the deterministic
+   * totals echo) beneath it. `answer` is empty and ignored when this is set; `citations`/`coverage` are
+   * used verbatim (source of truth = the extractor). The LLM never computes a figure — it reads the data.
+   */
+  mode?: 'grounded-data'
+  /** The serialized VERIFIED object (e.g. `buildInvoiceJson` + reconciliation results + a provenance
+   *  note) the model narrates. Present iff `mode === 'grounded-data'`. */
+  dataBlock?: string
+  /** The deterministic figure echo appended VERBATIM under the model answer (net/tax/gross as parsed) so a
+   *  model misquote is visibly contradicted (§8.1). Empty ⇒ nothing to echo. Only used with grounded-data. */
+  postscript?: string
 }
 
 export interface SkillAnalysisHandler {

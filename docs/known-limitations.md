@@ -440,6 +440,32 @@ password recovery — are documented in
   `application/pdf` MIME, so the discriminating signal in practice is the **filename** pattern — a
   contract *PDF* (matching the MIME) with the bank skill sticky still keeps the empty template rather than
   falling through; the fix stands for non-PDF/CSV docs and for the multi-doc narrow/route paths.
+  **W3 (audit §3.1/§8.1) added the missing THIRD answer mode — an LLM answer over the deterministically
+  extracted + validated invoice, with figures quoted verbatim.** Before W3 an invoice question hit either a
+  fixed template (`buildInvoiceAnswer`, question-*agnostic* — "who is the vendor?", "wann ist die Rechnung
+  fällig?", "warum stimmen die Summen nicht?" and a repeat follow-up all got the byte-identical totals
+  template) or the raw-chunk relevance path; the extracted rows never reached the model. Now the invoice
+  handler routes by ANSWER SHAPE (not document access — every shape reads the SAME extracted invoice): a
+  **format** ask (`detectFormat`) serializes JSON/CSV/XML (unchanged); a **summary/reconcile/list** shape
+  (a narrow, word-anchored stem list — `summar`/`überblick`/`zusammenfass`/`reconcil`/`aufstellung`/`list
+  the items`/`positionen auflisten`/`\bstimm(en|t)\b`, with a `warum`/`wieso`/`why` explanatory guard so
+  "warum stimmen die Summen nicht?" is NOT the template) keeps the deterministic **template**; **everything
+  else** that passed `applies()` streams a model answer over the serialized verified object (a new handler
+  outcome `{ mode:'grounded-data', dataBlock, postscript }`) via a new `generateGroundedDataAnswer`.
+  `buildGroundedDataPrompt` hands the model `buildInvoiceJson` + the reconciliation results + a provenance
+  note under FIXED rules (answer ONLY from the data, quote figures character-for-character, NO
+  arithmetic/derived numbers, say plainly when the data lacks the fact, answer in the user's language) — the
+  LLM **never computes a figure**, it narrates parsed data. Under every grounded-data answer the app appends
+  a **deterministic totals postscript** (net/tax/gross as parsed, verbatim) so a model misquote is
+  immediately contradicted; the **R5 date caveat also rides that postscript** (a due-date question now
+  routes to grounded-data, so its honesty is preserved). The grounded-data turn uses its OWN system prompt
+  (`GROUNDED_DATA_SYSTEM_PROMPT` — no `[Sn]` excerpt-citation rule, since it carries a data object, not
+  numbered excerpts) and REPLAYS conversation history, so follow-ups no longer re-trigger the byte-identical
+  template. `buildInvoiceAnswer` also gained a **Details block** (vendor / invoice number / invoice + due
+  date), so those header fields surface even on the template path (the "who is the vendor" gap dies on both
+  paths). Citations + honest `extract` coverage pass straight through (source of truth = the deterministic
+  extractor); the data block caps line items at ~150 rows (totals + header always kept). **Bank parity is
+  W4** (the bank handler and its serializers are deliberately untouched — SPLIT-POINT).
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

@@ -6,6 +6,52 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-02 — **Skills remediation W3: the third answer mode (LLM over extracted, verified data) — seam + invoice — branch `fix/skills-w3`, UNMERGED.**
+Track-W (plan §W3; audit §3.1 HIGH + §8.1 — "the single highest-leverage fix"), branched off `fix/skills-w2`
+(deps: R2; the plan/audit docs live on the W-branch chain, not `master`). Offline / pure / no new deps / **no
+schema change**. **Root cause (§3.1):** the invoice handler's `run()` inspected the question once (`detectFormat`)
+and otherwise built `buildInvoiceAnswer` — a question-AGNOSTIC template — so "who is the vendor?", "wann ist die
+Rechnung fällig?", "warum stimmen die Summen nicht?" and a repeat follow-up all got the byte-identical totals
+template; the extracted rows never reached the model. **Fix (seam):** additive `SkillAnalysisResult` outcome
+`{ mode:'grounded-data', dataBlock, postscript }` (`answer:''` ignored, like `fallThrough`). New pure
+`services/rag/grounded-data.ts` — `buildGroundedDataPrompt(question, dataBlock, fence?)` + `GROUNDED_DATA_RULES`
+(answer ONLY from the data, quote figures char-for-char, NO arithmetic/derived numbers, say plainly when the data
+lacks the fact, user's language). New `generateGroundedDataAnswer` in `rag/index.ts` streams a model answer over
+that prompt: sizes the skill fence against the fixed data block, replays conversation history via
+`buildGroundedChatMessages` (follow-ups now see prior turns — the §3.1 "history never consulted" complaint), then
+appends the deterministic `postscript` beneath the model answer. **The LLM never computes a figure** — it narrates
+the parser's data. **Fix (invoice routing, `analysis/invoice.ts`):** `detectFormat`→serializer (unchanged); a
+NARROW word-anchored summary/reconcile/list stem list (`summar`/`überblick`/`zusammenfass`/`reconcil`/`aufstellung`
+/`list the items`/`positionen auflisten`/`\bstimm(en|t)\b`) with a `warum`/`wieso`/`why` explanatory guard (so
+"warum stimmen die Summen nicht?"→grounded-data, not the template)→existing template; everything else that passed
+`applies()` → grounded-data; an EMPTY extraction (`!hasContent`) stays on the template (owns the honest empty
+answer). `dataBlock` = `buildInvoiceDataBlock` (`buildInvoiceJson` + reconciliation results + a provenance note,
+line items capped ~150 with an honest omitted count). `postscript` = `buildTotalsPostscript` (net/tax/gross as
+parsed, verbatim) **plus the R5 date caveat** when the dates defaulted day-first (a due-date question now routes to
+grounded-data, so R5's honesty must ride the postscript). `buildInvoiceAnswer` gained a **Details block** (vendor /
+invoice number / invoice + due date) so the header gap dies on the template path too. **Fix (dispatch,
+`registerRagIpc`):** the `run()` branch, after the `fallThrough` check, streams `generateGroundedDataAnswer` in the
+SAME locked slot when `result.mode==='grounded-data'` (skill fence applied; W2 `answerPrefix` scope-notice carried
+through). **Data contract:** none broken (`mode?`/`dataBlock?`/`postscript?` optional-additive; new optional 5th
+`systemPrompt` arg on `buildGroundedChatMessages`, defaulted). **i18n:** `skills.invoiceAnalysis.detailsHeading`
+/`detailVendor`/`detailInvoiceNumber`/`detailInvoiceDate`/`detailDueDate` + `figureEcho`/`figureEchoNet`/`…Tax`
+/`…Gross` added to en + de (neutral/du). **Files beyond the plan's W3 list (per §0 "say so"):** none of substance
+— `buildGroundedChatMessages`'s optional `systemPrompt` arg lives in the already-listed `rag/index.ts`.
+**Non-goals held:** the bank port + format parity + follow-up copy (W4 — the bank handler/serializers are UNTOUCHED,
+SPLIT-POINT honoured), trigger vocab (W5), whole-doc internals (W1). **Adversarial 4-lens diff review (correctness /
+honesty-determinism / architecture-plan-fidelity / test-adequacy — each finding independently verified,
+default-refute):** 5 of 9 confirmed → **MEDIUM** the grounded-data turn inherited `GROUNDED_SYSTEM_PROMPT`'s "Cite
+[S1]" rule while carrying NO `[Sn]` excerpts (invited dangling citations) → fixed with a dedicated
+`GROUNDED_DATA_SYSTEM_PROMPT` (no cite rule; forbids inline `[S]` markers) passed via the new
+`buildGroundedChatMessages` arg; **MEDIUM** the `|| !hasContent` template arm was untested → pinned; **LOW×3** —
+bare `stimmen` over-fired `bestimmen`/`abstimmen`/`übereinstimmen` (→ word-anchored `\bstimm(en|t)\b`), redundant
+`reconcile` stem (`reconcil` subsumes it), and no test that the W2 scope-notice rides the grounded-data path (→
+multi-doc test added). **Tests:** +18 net-new — grounded-data unit (prompt builder + data block cap + postscript),
+IPC vendor→grounded-data (prompt carries JSON + verbatim rule + no-`[S1]` system prompt + postscript order),
+summary→template (0 model calls) + Details block, `warum`→grounded-data, format unchanged, empty-arm, scope-notice,
+`stimmen` word-anchor, handler-level grounded-data outcome + date-caveat-on-postscript. Full canonical suite green
+(2882) + typecheck. `fix/skills-w3`._
+
 _2026-07-02 — **Skills remediation W2: doc-count fallthrough routing + plausibility gate — branch `fix/skills-w2`, UNMERGED.**
 Track-W (plan §W2; audit §2.1 CRITICAL + §3.4 + §4.5), branched off `fix/skills-w1` (deps: W1; the plan/audit
 docs live on the W-branch chain, not `master`). Offline / pure / no new deps / **no schema change** / **zero new

@@ -69,6 +69,44 @@ function detectFormat(question: string): OutputFormat | null {
   return null
 }
 
+// W3 answer-shape routing (audit §3.1/§8.1). The question selects the ANSWER SHAPE, not document access
+// (all three shapes read the same extracted invoice): a summary/reconcile/list ask keeps the
+// high-stakes deterministic TEMPLATE; everything else that passed `applies()` streams a model answer over
+// the verified data (grounded-data — the new default). A narrow, explicit stem list (the plan's ~10),
+// substring-matched (already inside an invoice-shaped `applies()`, so `sum`⊂`assume` over-fire is out of
+// reach) — deliberately NOT the broad ANALYSIS_KEYWORDS, so "who is the vendor?" / "wann ist sie fällig?"
+// fall through to grounded-data rather than the totals template.
+const SUMMARY_KEYWORDS: readonly string[] = [
+  'summar', // summary / summarize / summarise
+  'overview',
+  'überblick',
+  'zusammenfass', // Zusammenfassung / zusammenfassen
+  'reconcil', // reconcile / reconciliation / reconciled (the shorter stem subsumes the longer)
+  'aufstellung',
+  'list the item',
+  'list the line item',
+  'positionen auflisten',
+  'alle positionen'
+]
+
+// The German reconcile ask "Stimmen die Summen?" / "Stimmt die Summe?" (do the totals add up?). WORD-
+// anchored, NOT a bare `stimmen` substring: `stimmen` ⊂ bestimmen / abstimmen / übereinstimmen — all
+// plausible in an invoice conversation, and a bare match would over-fire them to the template and rob them
+// of the grounded-data model answer the plan intends for non-summary asks.
+const RECONCILE_STIMMT_RE = /\bstimm(en|t)\b/
+
+// A WHY / explanatory marker escapes the summary shape even when a summary stem is present: the template
+// can only PRINT figures, never EXPLAIN, so "Warum stimmen die Summen nicht?" is a grounded-data question
+// (the audit §3.1 / W4 follow-up case — a repeat "summe" intercept must NOT re-serve the byte-identical
+// template). Word-bounded so it never fires inside an unrelated word.
+const EXPLANATORY_RE = /\b(?:warum|wieso|weshalb|why)\b|\bhow come\b/
+
+function isSummaryShaped(question: string): boolean {
+  const q = question.toLowerCase()
+  if (EXPLANATORY_RE.test(q)) return false
+  return SUMMARY_KEYWORDS.some((k) => q.includes(k)) || RECONCILE_STIMMT_RE.test(q)
+}
+
 /** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
  *  analysis path reads the stored `chunks`, so it requires them (`requireChunks: true`) — an indexed
  *  but unchunked document is runnable via the button but not answerable here (X-1, the shared helper).
@@ -258,6 +296,61 @@ export function buildFormatAnswer(tr: Tr, format: OutputFormat, invoice: Invoice
   return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\``
 }
 
+/** The line-item cap for the grounded-data block (W3 §8.1 4096-ctx guard): totals + header ALWAYS stay
+ *  (the fields questions ask about); items past this are dropped from the block with an honest "…and N
+ *  more" note. A coarse structural bound — the skill fence is then pre-sized around the block downstream. */
+const MAX_DATA_BLOCK_ITEMS = 150
+
+/**
+ * Serialize the VERIFIED invoice as the grounded-data block (W3, audit §8.1): the extractor's own JSON +
+ * the deterministic reconciliation results + a one-line provenance note. This is authoritative context
+ * the model NARRATES (never computes over) — `buildInvoiceJson` emits the parser's figures, so nothing
+ * here can invent or transpose a number. Line items past `MAX_DATA_BLOCK_ITEMS` are omitted from the block
+ * with an honest count (header + totals always kept). Fixed English, model-facing (rides in the user turn).
+ */
+export function buildInvoiceDataBlock(invoice: InvoiceInput, validation: InvoiceTotalsResult): string {
+  const omitted = Math.max(0, invoice.lineItems.length - MAX_DATA_BLOCK_ITEMS)
+  const capped: InvoiceInput =
+    omitted > 0 ? { ...invoice, lineItems: invoice.lineItems.slice(0, MAX_DATA_BLOCK_ITEMS) } : invoice
+  const lines: string[] = ['Invoice (JSON):', buildInvoiceJson(capped)]
+  if (omitted > 0) {
+    lines.push(`(${omitted} further line item(s) were parsed but omitted from this block for length.)`)
+  }
+  lines.push(
+    '',
+    'Totals reconciliation (computed deterministically by the extractor — do NOT recompute):',
+    ...validation.checks.map((c) => `- ${c.name}: ${c.status}`),
+    `- overall: ${validation.reconciled ? 'reconciled' : 'NOT reconciled'}`,
+    '',
+    'Provenance: every value above was parsed and reconciled from the whole document by a deterministic ' +
+      'offline extractor. Quote these figures verbatim; do not add, total, convert, or derive any number.'
+  )
+  return lines.join('\n')
+}
+
+/**
+ * The deterministic figure echo appended UNDER a grounded-data model answer (W3 §8.1 caveat): the parsed
+ * net/tax/gross, verbatim, so a model misquote is immediately contradicted. Localized wrapper + labels;
+ * the amounts are the parser's own 2-dp figures. Returns '' when the extraction carried none of the three
+ * totals (nothing to echo) — the streaming path then appends nothing.
+ */
+export function buildTotalsPostscript(tr: Tr, invoice: InvoiceInput): string {
+  const { header, lineItems, totals } = invoice
+  const currency = header.currency ?? lineItems[0]?.currency ?? ''
+  const parts: string[] = []
+  if (totals.netTotal !== undefined) {
+    parts.push(tr('skills.invoiceAnalysis.figureEchoNet', { amount: fmt(totals.netTotal), currency }))
+  }
+  if (totals.taxTotal !== undefined) {
+    parts.push(tr('skills.invoiceAnalysis.figureEchoTax', { amount: fmt(totals.taxTotal), currency }))
+  }
+  if (totals.grossTotal !== undefined) {
+    parts.push(tr('skills.invoiceAnalysis.figureEchoGross', { amount: fmt(totals.grossTotal), currency }))
+  }
+  if (parts.length === 0) return ''
+  return tr('skills.invoiceAnalysis.figureEcho', { figures: parts.join(' · ') })
+}
+
 /**
  * Build the deterministic, localized answer (Markdown, 0 model calls) — the precedent is
  * `analysis/bank-statement.ts`. Failed reconciliation checks lead (SKILL.md "show any uncertain or
@@ -280,6 +373,27 @@ export function buildInvoiceAnswer(
   if (lineItems.length === 0 && !hasTotals) return tr('skills.invoiceAnalysis.empty')
 
   const lines: string[] = [tr('skills.invoiceAnalysis.count', { count: lineItems.length })]
+
+  // W3 (audit §3.1): the loaded header fields as a small "Details" block, so the vendor / invoice-number /
+  // date / due-date questions are answered even on the deterministic template path (they were parsed and
+  // persisted but never surfaced before). Only a field the invoice actually STATES appears — a missing one
+  // is omitted, never invented. The values are the document's own content, quoted verbatim as params.
+  const details: string[] = []
+  if (header.vendor !== undefined) {
+    details.push(tr('skills.invoiceAnalysis.detailVendor', { vendor: header.vendor }))
+  }
+  if (header.invoiceNumber !== undefined) {
+    details.push(tr('skills.invoiceAnalysis.detailInvoiceNumber', { number: header.invoiceNumber }))
+  }
+  if (header.invoiceDate !== undefined) {
+    details.push(tr('skills.invoiceAnalysis.detailInvoiceDate', { date: header.invoiceDate }))
+  }
+  if (header.dueDate !== undefined) {
+    details.push(tr('skills.invoiceAnalysis.detailDueDate', { date: header.dueDate }))
+  }
+  if (details.length > 0) {
+    lines.push('', tr('skills.invoiceAnalysis.detailsHeading'), ...details)
+  }
 
   // Surface FAILED reconciliation checks BEFORE the headline gross (SKILL.md honesty posture).
   const mismatches = validation.checks.filter((c) => c.status === 'mismatch')
@@ -438,14 +552,41 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
       const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 
-      const answer = buildInvoiceAnswer(ctx.tr, {
-        invoice,
-        validation,
-        dateOrderInferred: loadDateOrderInferred(db, invoiceId)
-      })
+      // Citations + coverage are the SAME for the template and grounded-data shapes (both read the whole
+      // extracted invoice); the deterministic extractor is the source of truth for figures on both paths.
       const citations = buildInvoiceCitations(db, target.id, target.title)
       const coverage = computeCoverage(db, target.id)
-      return { answer, citations, coverage }
+
+      // W3 answer-shape routing (audit §3.1/§8.1): a summary/reconcile/list ask keeps the high-stakes
+      // deterministic TEMPLATE (the plan's "keep for the high-stakes summary shapes"); everything else
+      // that passed applies() — "who is the vendor?", "wann ist sie fällig?", "warum stimmt das nicht?" —
+      // streams a model answer that NARRATES the verified data object (grounded-data), with the parsed
+      // totals echoed deterministically beneath it. The LLM never computes a figure; it reads the data.
+      // An EMPTY extraction that reached here (a real invoice with no readable rows/totals — not a
+      // fall-through non-invoice) also stays on the template: it owns the honest "couldn't find anything"
+      // answer, and there is no verified data to hand a model.
+      const dateOrderInferred = loadDateOrderInferred(db, invoiceId)
+      if (isSummaryShaped(ctx.question) || !hasContent) {
+        const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation, dateOrderInferred })
+        return { answer, citations, coverage }
+      }
+      // The grounded-data postscript is the deterministic totals echo (§8.1) PLUS the R5 honest date caveat
+      // when the dates were read day-first with no evidence. That caveat is a template appendix (R5, audit
+      // §5.7) — and a due-date question ("wann ist die Rechnung fällig?") now routes HERE, so it must ride
+      // the grounded-data answer too, else W3 would silently drop R5's honesty for exactly the date
+      // questions that need it. Both are deterministic, content-free (beyond the parser's own figures).
+      const postscriptParts: string[] = []
+      const totalsEcho = buildTotalsPostscript(ctx.tr, invoice)
+      if (totalsEcho) postscriptParts.push(totalsEcho)
+      if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.invoiceAnalysis.dateOrderCaveat'))
+      return {
+        answer: '',
+        mode: 'grounded-data',
+        dataBlock: buildInvoiceDataBlock(invoice, validation),
+        postscript: postscriptParts.join('\n\n'),
+        citations,
+        coverage
+      }
     })
   }
 }

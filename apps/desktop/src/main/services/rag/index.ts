@@ -51,6 +51,8 @@ import {
 } from '../skills/prompt'
 import { getSettings } from '../settings'
 import { answerWholeDocFromTree } from './whole-doc-tree'
+import { buildGroundedDataPrompt } from './grounded-data'
+export { buildGroundedDataPrompt, GROUNDED_DATA_RULES } from './grounded-data'
 
 // RAG service (spec §7.8; pipeline design in rag-design §11). Turns a
 // question into a grounded, cited answer:
@@ -859,6 +861,24 @@ Rules:
 /** The grounded-answer SYSTEM prompt: the base preamble + the stable grounding rules (RT-2). */
 export const GROUNDED_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${GROUNDING_RULES}`
 
+/**
+ * W3 (audit §3.1/§8.1) — the SYSTEM prompt for the grounded-DATA mode. It deliberately does NOT reuse
+ * `GROUNDING_RULES`: that block talks about "document excerpts" and tells the model to "Cite [S1], [S2]…",
+ * but a grounded-data turn carries a serialized data object, NOT numbered `[Sn]` excerpts — inheriting the
+ * excerpt/citation rules would invite dangling `[S1]` markers that point at nothing the user is shown (the
+ * persisted citations render as `extract` provenance, not `[Sn]` cards). So the rules are re-worded for a
+ * data payload and explicitly forbid inline `[S]` markers. The per-turn `GROUNDED_DATA_RULES` (verbatim
+ * quoting / no-arithmetic) still ride in the user turn on top of this.
+ */
+const GROUNDED_DATA_GROUNDING = `You are answering a question using structured data extracted from a local document.
+
+Rules:
+- Use only the extracted data provided in the user message.
+- If the data does not contain enough information to answer, say so plainly.
+- Do NOT add inline [S1], [S2], … citation markers — this turn contains no numbered excerpts.
+- Keep the answer concise unless the user asks for detail.`
+export const GROUNDED_DATA_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${GROUNDED_DATA_GROUNDING}`
+
 /** How many `[Sn]` sections of how many a whole-document read actually provided — the shape of an
  *  in-prompt truncation notice. Absent/null ⇒ the whole document fit ⇒ no notice. */
 export interface WholeDocTruncation {
@@ -1017,11 +1037,14 @@ export function buildGroundedChatMessages(
   db: Db,
   conversationId: string,
   groundedUserContent: string,
-  contextTokens?: number
+  contextTokens?: number,
+  // W3: the grounded-DATA mode overrides this with `GROUNDED_DATA_SYSTEM_PROMPT` (no `[Sn]` citation rule);
+  // defaulted so every existing caller (relevance / whole-doc / compare) stays byte-identical.
+  systemPrompt: string = GROUNDED_SYSTEM_PROMPT
 ): ChatMessage[] {
   // RT-2: the grounded system prompt carries the stable grounding rules so cache_prompt
   // reuses them across documents turns (byte-stable prefix).
-  const messages: ChatMessage[] = [{ role: 'system', content: GROUNDED_SYSTEM_PROMPT }]
+  const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }]
   // L2 (context compaction): when a checkpoint exists, inject its summary as a synthetic
   // user→assistant pair (§4.5) and replay only the turns AFTER it; otherwise replay the whole
   // history (byte-identical to before). The checkpoint is built from the STORED RAW turns
@@ -1414,6 +1437,116 @@ export async function generateGroundedAnswer(
     coverage,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     // Auto-fire provenance rides with the stamp (S13c) — only when the fence was placed (§22-A5).
+    autoFired: skillFence ? opts.skill?.autoFired === true : false
+  })
+}
+
+/** Options for the W3 grounded-DATA stream (audit §3.1/§8.1). A slim sibling of `GroundedAnswerOptions`:
+ *  no retrieval knobs (the context is the fixed `dataBlock`, not top-k), just the fence + streaming. */
+export interface GroundedDataAnswerOptions {
+  signal?: AbortSignal
+  onToken?: (token: string) => void
+  onCompactionStart?: () => void
+  /** The turn's skill: its fence rides in the grounded USER turn (mirrors `buildGroundedPrompt`); the
+   *  assistant row is stamped only when the fence actually fit. */
+  skill?: TurnSkill | null
+  /** W2 scope notice (audit §2.1): streamed + persisted BEFORE the model answer when the scope was
+   *  auto-narrowed to this document. Absent ⇒ no prefix. */
+  answerPrefix?: string
+}
+
+/**
+ * W3 (audit §3.1/§8.1) — the THIRD answer mode: stream a model answer that NARRATES a deterministically
+ * extracted + validated `dataBlock`, then append a deterministic `postscript` (the parsed totals,
+ * verbatim) UNDER it so any model misquote is immediately contradicted (§8.1 caveat). The figures stay
+ * the parser's — the model only reads them. Unlike `generateGroundedAnswer` there is NO retrieval: the
+ * authoritative context is the fixed data object the analysis handler already built and validated, so
+ * the citations + coverage are the handler's (source of truth), passed straight through. Conversation
+ * history IS replayed (via `buildGroundedChatMessages`), so a follow-up ("und warum stimmt das nicht?")
+ * sees the prior turn — the fix for the audit §3.1 "history never consulted" complaint.
+ */
+export async function generateGroundedDataAnswer(
+  db: Db,
+  runtime: ModelRuntime,
+  conversationId: string,
+  question: string,
+  data: { dataBlock: string; postscript: string; citations: Citation[]; coverage?: CoverageInfo },
+  opts: GroundedDataAnswerOptions = {}
+): Promise<Message> {
+  // The REAL launched context window (§L0), for fence sizing + compaction — mirrors generateGroundedAnswer.
+  const contextTokens = effectiveContextWindow(runtime, getSettings(db))
+
+  // Compact older raw turns into a cached checkpoint when history approaches the window, BEFORE assembly
+  // (L2) — identical posture to the relevance path; a no-op below threshold. The data block itself is
+  // NEVER summarized (it is the current grounded turn, always kept by fitMessagesToContext).
+  if (compactionEnabled(db)) {
+    await ensureCompacted(db, runtime, conversationId, contextTokens, {
+      signal: opts.signal,
+      onStart: opts.onCompactionStart
+    })
+  }
+
+  // Pre-size the skill fence against the FENCE-LESS grounded-data turn (§11.3/A6) so it never starves the
+  // data block, the question, or the rules — only the fence + older history yield. The data block is
+  // authoritative content (the excerpt slot) and never trims; this is the "pre-sized against the context
+  // like the skill fence is" guard the plan calls for (the data block's own ~150-row cap bounds it upstream).
+  const groundedNoFence = buildGroundedDataPrompt(question, data.dataBlock, null)
+  let skillFence: string | null = null
+  if (opts.skill) {
+    const fixedTokens =
+      approxPromptTokens(GROUNDED_DATA_SYSTEM_PROMPT) + approxPromptTokens(groundedNoFence) + 16
+    const budget = skillFenceBudgetTokens({
+      contextTokens,
+      reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
+      fixedTokens
+    })
+    skillFence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget).text
+  }
+  const grounded = skillFence ? buildGroundedDataPrompt(question, data.dataBlock, skillFence) : groundedNoFence
+  // The grounded-data mode uses its OWN system prompt (no `[Sn]` citation rule — the turn carries a data
+  // object, not numbered excerpts), so the model is never told to cite excerpts it wasn't given.
+  const messages = buildGroundedChatMessages(db, conversationId, grounded, contextTokens, GROUNDED_DATA_SYSTEM_PROMPT)
+
+  // W2 scope notice (§2.1): stream + seed it first so it leads the answer AND lands in persisted content.
+  const seededPrefix = opts.answerPrefix ?? ''
+  if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
+  let modelContent = ''
+  const stream = runtime.chatStream(messages, { signal: opts.signal })
+  try {
+    for await (const token of stream) {
+      modelContent += token
+      opts.onToken?.(token)
+    }
+  } catch (err) {
+    // A user Stop aborts the stream; persist the partial answer (still cited) and return. Any other error
+    // is a real failure and propagates.
+    if (!isAbortError(err, opts.signal)) throw err
+  }
+  // Reasoning + echoed fence framing never reach the DB (parity with generateGroundedAnswer).
+  modelContent = stripSkillFenceEcho(stripThinkBlocks(modelContent))
+  // A stop before the first model token produced no answer: the scope-notice prefix and the deterministic
+  // postscript are NOT an answer on their own (they'd be a totals husk stamped with `extract` coverage), so
+  // treat that as empty — mirrors generateGroundedAnswer's prefix-only guard.
+  if (modelContent === '') return emptyAssistantMessage(conversationId)
+
+  // Deterministic figure echo (§8.1 caveat): the parsed totals, verbatim, UNDER the model answer — cheap,
+  // honest, zero risk. Streamed as a trailing chunk and folded into the persisted content. Empty when the
+  // extraction carried no net/tax/gross to echo (then nothing is appended).
+  let content = seededPrefix + modelContent
+  if (data.postscript) {
+    const trailer = `\n\n${data.postscript}`
+    content += trailer
+    opts.onToken?.(trailer)
+  }
+  return appendMessage(db, {
+    conversationId,
+    role: 'assistant',
+    content,
+    // The handler's real source citations + honest extract coverage pass straight through (source of
+    // truth = the deterministic extractor, never the model's prose).
+    citations: data.citations,
+    coverage: data.coverage,
+    skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     autoFired: skillFence ? opts.skill?.autoFired === true : false
   })
 }

@@ -628,6 +628,20 @@ export const en = {
     'A note on the dates: this invoice gives no sign whether they’re day-first or month-first, so I read ' +
     'them day-first (day.month.year) — a date like 03.05. could be 3 May or 5 March. Check any date that ' +
     'matters against the document.',
+  // W3 (audit §3.1): the loaded header fields as a small Details block, so the vendor / invoice-number /
+  // date questions are answered even on the deterministic template path. Values are the document's own
+  // content, quoted verbatim as params.
+  'skills.invoiceAnalysis.detailsHeading': 'Details, as printed:',
+  'skills.invoiceAnalysis.detailVendor': '- Vendor: {vendor}',
+  'skills.invoiceAnalysis.detailInvoiceNumber': '- Invoice number: {number}',
+  'skills.invoiceAnalysis.detailInvoiceDate': '- Invoice date: {date}',
+  'skills.invoiceAnalysis.detailDueDate': '- Due date: {date}',
+  // W3 (audit §8.1): the deterministic figure echo printed UNDER a grounded-data model answer, so any
+  // model misquote is immediately contradicted by the parser's own figures. Amounts pass through verbatim.
+  'skills.invoiceAnalysis.figureEcho': 'Figures as parsed, verbatim from the document: {figures}.',
+  'skills.invoiceAnalysis.figureEchoNet': 'net {amount} {currency}',
+  'skills.invoiceAnalysis.figureEchoTax': 'tax {amount} {currency}',
+  'skills.invoiceAnalysis.figureEchoGross': 'gross {amount} {currency}',
 
   // Full-doc-skills Phase 3 (§3.2/D45): the refuse-partial notice. A tool skill can only answer
   // exhaustively over a FULLY-INDEXED document; a legacy/partly-chunked doc is refused (no partial

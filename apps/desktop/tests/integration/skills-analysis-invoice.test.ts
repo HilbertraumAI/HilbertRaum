@@ -118,10 +118,11 @@ describe('invoice analysis handler — date-order caveat (R5, §5.7)', () => {
     'Gross total 144,00 EUR'
   ].join('\n')
 
+  // A summary-shaped ask keeps the deterministic TEMPLATE (W3), which carries the R5 date caveat.
   it('appends the day-first caveat (en) when the invoice gives no date-order evidence', async () => {
     const db = freshDb()
     const id = seedDoc(db, AMBIGUOUS)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
     expect(res.answer).toContain(t('en', 'skills.invoiceAnalysis.dateOrderCaveat'))
   })
 
@@ -129,7 +130,7 @@ describe('invoice analysis handler — date-order caveat (R5, §5.7)', () => {
     const db = freshDb()
     const id = seedDoc(db, AMBIGUOUS)
     const ctx = {
-      ...ctxFor(db, { documentIds: [id] }, 'what are the totals?'),
+      ...ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'),
       tr: (k: MessageKey, p?: MessageParams) => t('de', k, p)
     }
     const res = await invoiceAnalysisHandler.run!(ctx)
@@ -140,8 +141,19 @@ describe('invoice analysis handler — date-order caveat (R5, §5.7)', () => {
   it('adds NO caveat when the invoice date is ISO (evidence — the day-first guess is moot)', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
     expect(res.answer).not.toContain(t('en', 'skills.invoiceAnalysis.dateOrderCaveat'))
+  })
+
+  // W3: a NON-summary question routes to grounded-data (empty deterministic answer, a model stream is
+  // built downstream). R5's honesty must NOT vanish — the date caveat rides the grounded-data POSTSCRIPT.
+  it('grounded-data path carries the R5 date caveat in the deterministic postscript', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, AMBIGUOUS)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'wann ist die rechnung fällig?'))
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).toBe('') // the model answer is streamed by registerRagIpc, not built here
+    expect(res.postscript).toContain(t('en', 'skills.invoiceAnalysis.dateOrderCaveat'))
   })
 })
 
@@ -184,7 +196,9 @@ describe('invoice analysis handler — run()', () => {
   it('exhaustive figures: count + net/tax/gross read from the extracted invoice', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    // W3: a summary-shaped ask keeps the deterministic template (a bare "what are the totals?" now streams
+    // a grounded-data model answer — see rag-skill-analysis-invoice.test.ts).
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
 
     expect(res.answer).toContain(tr('skills.invoiceAnalysis.count', { count: 2 }))
     expect(res.answer).toContain('120.00') // net
@@ -214,17 +228,18 @@ describe('invoice analysis handler — run()', () => {
   it('figures are quoted, never invented — only the invoice’s printed figures appear', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gross amount?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
     const numbers = (res.answer.match(/\d+\.\d{2}/g) ?? []).sort()
     // The two line-item totals (100,00 / 20,00) that the listing surfaces, plus the three printed totals
     // (net 120,00, tax 24,00, gross 144,00). Every figure is printed on the invoice — nothing invented.
     expect(numbers).toEqual(['100.00', '20.00', '120.00', '24.00', '144.00'].sort())
   })
 
-  it('lists the line items so "give me the positions" is answerable (not just a count)', async () => {
+  it('lists the line items so "list all positions" is answerable (not just a count)', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gib mir die positionen'))
+    // An explicit list-ask ("liste alle positionen auf") is a summary shape → the template's listing.
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'liste alle positionen auf'))
     expect(res.answer).toContain(tr('skills.invoiceAnalysis.positionsHeading'))
     // Both line-item descriptions and their printed totals appear, each verbatim.
     expect(res.answer).toContain('Widget')
@@ -245,10 +260,46 @@ describe('invoice analysis handler — run()', () => {
     ].join('\n')
     const db = freshDb()
     const id = seedDoc(db, DEBRIS)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gib mir die positionen'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'liste alle positionen auf'))
     expect(res.answer).toContain('Web hosting 12 Monate') // the identity-confirmed cleaned description
     expect(res.answer).not.toContain('1 Web hosting') // leading row-index gone
     expect(res.answer).not.toContain('0%') // trailing tax-rate debris gone
+  })
+
+  it('W3 grounded-data outcome: a non-summary question returns the verified data block + totals postscript', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'who is the vendor?'))
+
+    // The handler builds the grounded-data OUTCOME (the model stream itself is registerRagIpc's job).
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).toBe('')
+    // The data block is the serialized VERIFIED object: JSON + reconciliation + a provenance note.
+    expect(res.dataBlock).toContain('Invoice (JSON):')
+    expect(res.dataBlock).toContain('"vendor": "Acme GmbH"')
+    expect(res.dataBlock).toContain('- overall: reconciled')
+    expect(res.dataBlock).toContain('Quote these figures verbatim')
+    // The deterministic totals echo is the postscript (net/tax/gross verbatim from the parser).
+    expect(res.postscript).toContain('120.00')
+    expect(res.postscript).toContain('24.00')
+    expect(res.postscript).toContain('144.00')
+    // Real citations + honest extract coverage pass straight through (same as the template path).
+    expect(res.citations.length).toBeGreaterThan(0)
+    expect(res.coverage!.mode).toBe('extract')
+  })
+
+  it('an EMPTY invoice-looking doc + a non-summary question stays on the template (not grounded-data)', async () => {
+    // W3 `|| !hasContent` arm: an extraction that found no line items AND no totals has no verified data to
+    // hand a model, so even a non-summary question ("who is the vendor?") keeps the honest empty template
+    // rather than streaming a model answer over a hollow all-null JSON block. (This db has no installed
+    // skill row, so the W2 plausibility fall-through does not apply — the empty template is correct here.)
+    const db = freshDb()
+    const id = seedDoc(db, 'Just a short note. No line items, no totals, nothing to reconcile.')
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'who is the vendor?'))
+
+    expect(res.mode).not.toBe('grounded-data')
+    expect(res.dataBlock).toBeUndefined()
+    expect(res.answer).toBe(tr('skills.invoiceAnalysis.empty'))
   })
 
   it('answers a "als JSON" request by serializing the extracted invoice (no prose template)', async () => {
@@ -395,8 +446,9 @@ describe('invoice analysis handler — data lifecycle (reuse / replace / stalene
       `UPDATE invoice_line_items SET line_total = 99999 WHERE invoice_id = ?`
     ).run(before.id)
 
-    // The second run sees the stale invoice → re-extracts, REPLACING it in place (no duplicate).
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    // The second run sees the stale invoice → re-extracts, REPLACING it in place (no duplicate). A
+    // summary-shaped ask keeps the deterministic template so the re-extracted figures show in `answer`.
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
 
     const rows = db
       .prepare('SELECT id, extractor_version AS v FROM invoices WHERE document_id = ?')
