@@ -1,10 +1,7 @@
 import type { Db } from '../../db'
-import type { Citation, CoverageInfo, RetrievalScope } from '../../../../shared/types'
+import type { Citation } from '../../../../shared/types'
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
-import { documentsInScope } from '../scope-documents'
-import { documentChunkCount } from '../../analysis/coverage'
-import { getSkill, skillInstallId } from '../registry'
-import { matchesSkillDocSignals } from '../selector'
+import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
   isBankStatementStale,
@@ -32,6 +29,14 @@ import {
   type StatementSnapshot,
   type TransactionInput
 } from '../tools/bank-statement'
+import {
+  chunksToCitations,
+  computeCoverage,
+  fmt,
+  loadCitationChunks,
+  shouldFallThroughOnEmpty,
+  singleInScopeDocument
+} from './common'
 import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, SkillAnalysisResult } from './types'
 
 // The bank-statement analysis handler (full-doc-skills plan §3.1/§3.4, Phase 2). On an analysis-shaped
@@ -143,40 +148,8 @@ function isSummaryShaped(question: string): boolean {
   return SUMMARY_KEYWORDS.some((k) => q.includes(k)) || RECONCILE_STIMMT_RE.test(q) || isCategoryShaped(q)
 }
 
-/** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
- *  analysis path reads the stored `chunks`, so it requires them (`requireChunks: true`) — an indexed
- *  but unchunked document is runnable via the button but not answerable here (X-1, the shared helper).
- *  Carries `mimeType` too so the W2 plausibility gate can test the doc against the skill's signals. */
-function singleInScopeDocument(
-  db: Db,
-  scope: RetrievalScope
-): { id: string; title: string; mimeType: string | null } | null {
-  const docs = documentsInScope(db, scope, { requireChunks: true })
-  return docs.length === 1 ? { id: docs[0].id, title: docs[0].title, mimeType: docs[0].mimeType } : null
-}
-
-/**
- * W2 document-plausibility gate (audit §4.5): after a ZERO-ROW extraction, should the turn abandon the
- * empty template and fall through to the ordinary grounded path? Only when the skill DECLARES doc signals
- * (filenamePatterns/MIME) and the document matches NONE of them — positive evidence it isn't a statement
- * at all (a contract in scope with the bank skill sticky). Absent signals — an unsignalled skill, or the
- * anomaly where the skill row can't be read — give NO basis to judge, so we KEEP the honest empty answer
- * (the D56 property: on a real statement whose rows failed to parse, the honest downgrade must stand, not
- * a fall-through to a top-k model answer). Deterministic; no model call.
- */
-function shouldFallThroughOnEmpty(
-  db: Db,
-  skillInstallId: string,
-  doc: { title: string; mimeType: string | null }
-): boolean {
-  const triggers = getSkill(db, skillInstallId)?.manifest.triggers
-  if (!triggers) return false
-  const hasAnySignal =
-    triggers.mimeTypes.some((m) => m.trim().length > 0) ||
-    triggers.filenamePatterns.some((p) => p.trim().length > 0)
-  if (!hasAnySignal) return false
-  return !matchesSkillDocSignals(triggers, doc)
-}
+// `singleInScopeDocument` (also the W2 plausibility gate's `shouldFallThroughOnEmpty`) is the shared
+// `analysis/common.ts` helper (A1) — the byte-identical copy that lived here + in the invoice handler.
 
 /** A statement row paired with its PERSISTED category name — the two are read in one query so their
  *  alignment is STRUCTURAL (each row carries its own category), never an index match across two arrays.
@@ -298,19 +271,12 @@ function loadDroppedRowCount(db: Db, statementId: string): number {
 
 const MAX_CITATIONS = 12
 
-interface ChunkRow {
-  chunk_index: number
-  text: string
-  source_label: string | null
-  page_number: number | null
-  section_label: string | null
-}
-
 /**
  * Real source chunks behind the figures (M2-safe) — never the synthesised total. We cite the
  * document's actual `chunks` rows, narrowed to the pages the extracted transactions came from (their
- * `sourcePage`) when known, so the citations point at where the figures were read; `[Sn]` labelling
- * matches the rest of the app. Falls back to the document's leading chunks when no row carries a page.
+ * `sourcePage`) when known, so the citations point at where the figures were read; the shared
+ * `loadCitationChunks`/`chunksToCitations` (A1) supply the query + `[Sn]` projection. Falls back to the
+ * document's leading chunks when no row carries a page.
  */
 function buildBankCitations(
   db: Db,
@@ -320,45 +286,15 @@ function buildBankCitations(
 ): Citation[] {
   const pages = new Set<number>()
   for (const r of rows) if (r.sourcePage != null) pages.add(r.sourcePage)
-  const all = db
-    .prepare(
-      `SELECT chunk_index, text, source_label, page_number, section_label
-       FROM chunks WHERE document_id = ? ORDER BY chunk_index`
-    )
-    .all(documentId) as unknown as ChunkRow[]
+  const all = loadCitationChunks(db, documentId)
   const picked = (pages.size > 0 ? all.filter((c) => c.page_number != null && pages.has(c.page_number)) : all).slice(
     0,
     MAX_CITATIONS
   )
-  return picked.map((c, i) => ({
-    label: `S${i + 1}`,
-    sourceTitle: c.source_label ?? title,
-    pageNumber: c.page_number,
-    section: c.section_label,
-    snippet: c.text.length > 280 ? `${c.text.slice(0, 280)}…` : c.text
-  }))
-}
-
-/** Honest extract coverage (D48): every chunk scanned; `fullyChunked` gates the "whole document" wording. */
-function computeCoverage(db: Db, documentId: string): CoverageInfo {
-  const chunksTotal = documentChunkCount(db, documentId)
-  const row = db
-    .prepare('SELECT fully_chunked FROM documents WHERE id = ?')
-    .get(documentId) as { fully_chunked: string | null } | undefined
-  return {
-    mode: 'extract',
-    chunksCovered: chunksTotal, // the tool read every chunk
-    chunksTotal,
-    fullyChunked: row?.fully_chunked != null // NULL (legacy/truncated) → false
-  }
+  return chunksToCitations(picked, title)
 }
 
 type Tr = (key: MessageKey, params?: MessageParams) => string
-
-/** Format a parsed figure as a stable 2-dp decimal — the verbatim numeric (matches the CSV export). */
-function fmt(n: number): string {
-  return n.toFixed(2)
-}
 
 /**
  * The localized DISPLAY label for a category (Phase 33). The PERSISTED identifier stays the canonical

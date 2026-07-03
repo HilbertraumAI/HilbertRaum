@@ -1,14 +1,12 @@
 import type { Db } from '../../db'
-import type { Citation, CoverageInfo, RetrievalScope } from '../../../../shared/types'
+import type { Citation } from '../../../../shared/types'
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
-import { documentsInScope } from '../scope-documents'
-import { documentChunkCount } from '../../analysis/coverage'
-import { getSkill, skillInstallId } from '../registry'
-import { matchesSkillDocSignals } from '../selector'
+import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
   isInvoiceStale,
   latestInvoiceId,
+  loadInvoice,
   runInvoiceExtraction,
   runInvoiceTotalsValidation,
   type InvoiceRunArgs,
@@ -23,6 +21,14 @@ import {
   type InvoiceInput,
   type InvoiceTotalsResult
 } from '../tools/invoice'
+import {
+  chunksToCitations,
+  computeCoverage,
+  fmt,
+  loadCitationChunks,
+  shouldFallThroughOnEmpty,
+  singleInScopeDocument
+} from './common'
 import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, SkillAnalysisResult } from './types'
 
 // The invoice analysis handler (full-doc-skills plan §3.1/§3.4, Phase 4 / D49 fast-follow). It mirrors
@@ -101,99 +107,8 @@ function isSummaryShaped(question: string): boolean {
   return SUMMARY_KEYWORDS.some((k) => q.includes(k)) || RECONCILE_STIMMT_RE.test(q)
 }
 
-/** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
- *  analysis path reads the stored `chunks`, so it requires them (`requireChunks: true`) — an indexed
- *  but unchunked document is runnable via the button but not answerable here (X-1, the shared helper).
- *  Carries `mimeType` too so the W2 plausibility gate can test the doc against the skill's signals. */
-function singleInScopeDocument(
-  db: Db,
-  scope: RetrievalScope
-): { id: string; title: string; mimeType: string | null } | null {
-  const docs = documentsInScope(db, scope, { requireChunks: true })
-  return docs.length === 1 ? { id: docs[0].id, title: docs[0].title, mimeType: docs[0].mimeType } : null
-}
-
-/**
- * W2 document-plausibility gate (audit §4.5): after a ZERO-CONTENT extraction, should the turn abandon
- * the empty template and fall through to the ordinary grounded path? Only when the skill DECLARES doc
- * signals (filenamePatterns/MIME) and the document matches NONE of them — positive evidence it isn't an
- * invoice at all (a contract or statement in scope with the invoice skill sticky). Absent signals — an
- * unsignalled skill, or the anomaly where the skill row can't be read — give NO basis to judge, so we
- * KEEP the honest empty answer (mirrors the bank handler's D56 posture). Deterministic; no model call.
- */
-function shouldFallThroughOnEmpty(
-  db: Db,
-  skillInstallId: string,
-  doc: { title: string; mimeType: string | null }
-): boolean {
-  const triggers = getSkill(db, skillInstallId)?.manifest.triggers
-  if (!triggers) return false
-  const hasAnySignal =
-    triggers.mimeTypes.some((m) => m.trim().length > 0) ||
-    triggers.filenamePatterns.some((p) => p.trim().length > 0)
-  if (!hasAnySignal) return false
-  return !matchesSkillDocSignals(triggers, doc)
-}
-
-/**
- * Reconstruct the structured invoice from its persisted rows (mirrors invoice-run.ts `loadInvoice`):
- * the pure tool functions take the strict schema shape, so null columns are OMITTED, not passed.
- */
-function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
-  const inv = db
-    .prepare(
-      `SELECT vendor, invoice_number AS invoiceNumber, invoice_date AS invoiceDate, due_date AS dueDate,
-              currency, net_total AS netTotal, tax_total AS taxTotal, tax_rate AS taxRatePercent,
-              gross_total AS grossTotal
-       FROM invoices WHERE id = ?`
-    )
-    .get(invoiceId) as {
-    vendor: string | null
-    invoiceNumber: string | null
-    invoiceDate: string | null
-    dueDate: string | null
-    currency: string | null
-    netTotal: number | null
-    taxTotal: number | null
-    taxRatePercent: number | null
-    grossTotal: number | null
-  }
-  const header: InvoiceInput['header'] = {}
-  if (inv.vendor != null) header.vendor = inv.vendor
-  if (inv.invoiceNumber != null) header.invoiceNumber = inv.invoiceNumber
-  if (inv.invoiceDate != null) header.invoiceDate = inv.invoiceDate
-  if (inv.dueDate != null) header.dueDate = inv.dueDate
-  if (inv.currency != null) header.currency = inv.currency
-  const totals: InvoiceInput['totals'] = {}
-  if (inv.netTotal != null) totals.netTotal = inv.netTotal
-  if (inv.taxTotal != null) totals.taxTotal = inv.taxTotal
-  if (inv.taxRatePercent != null) totals.taxRatePercent = inv.taxRatePercent
-  if (inv.grossTotal != null) totals.grossTotal = inv.grossTotal
-
-  const rows = db
-    .prepare(
-      `SELECT description, quantity, unit_price AS unitPrice, line_total AS lineTotal, currency
-       FROM invoice_line_items WHERE invoice_id = ? ORDER BY row_index`
-    )
-    .all(invoiceId) as Array<{
-    description: string
-    quantity: number | null
-    unitPrice: number | null
-    lineTotal: number
-    currency: string
-  }>
-  const lineItems = rows.map((r) => {
-    const li: InvoiceInput['lineItems'][number] = {
-      description: r.description,
-      lineTotal: r.lineTotal,
-      currency: r.currency
-    }
-    if (r.quantity != null) li.quantity = r.quantity
-    if (r.unitPrice != null) li.unitPrice = r.unitPrice
-    return li
-  })
-  return { header, lineItems, totals }
-}
+// `singleInScopeDocument` + `shouldFallThroughOnEmpty` are the shared `analysis/common.ts` helpers (A1).
+// `loadInvoice` is the ONE authoritative loader exported from the run seam (`invoice-run.ts`).
 
 /** The persisted date-order provenance flag (R5, audit §5.7) — drives the one honest date caveat, or null. */
 function loadDateOrderInferred(db: Db, invoiceId: string): 'evidence' | 'default' | null {
@@ -223,27 +138,14 @@ const TAIL_CITATIONS = 4
  *  one CSV export away). Mirrors the bank handler's `MAX_LISTED_TRANSACTIONS`. */
 const MAX_LISTED_ITEMS = 20
 
-interface ChunkRow {
-  chunk_index: number
-  text: string
-  source_label: string | null
-  page_number: number | null
-  section_label: string | null
-}
-
 /**
  * Real source chunks behind the figures (M2-safe) — never a synthesised total. The invoice schema does
  * not record a per-figure source page (unlike `bank_transactions.source_page`), so we cite the
- * document's actual leading `chunks` rows where the header/line items/totals are printed; `[Sn]`
- * labelling matches the rest of the app.
+ * document's actual `chunks` rows (head + tail window) where the header/line items/totals are printed;
+ * the shared `loadCitationChunks`/`chunksToCitations` (A1) supply the query + `[Sn]` projection.
  */
 function buildInvoiceCitations(db: Db, documentId: string, title: string): Citation[] {
-  const all = db
-    .prepare(
-      `SELECT chunk_index, text, source_label, page_number, section_label
-       FROM chunks WHERE document_id = ? ORDER BY chunk_index`
-    )
-    .all(documentId) as unknown as ChunkRow[]
+  const all = loadCitationChunks(db, documentId)
   // U5 stopgap: when the doc fits in MAX_CITATIONS, cite all of it in order; when it exceeds that,
   // take the LEADING chunks (header/first items) PLUS the CLOSING chunks (where the totals live), so
   // the badge points at both ends. The two windows never overlap here (length > MAX_CITATIONS ≥ head +
@@ -252,35 +154,10 @@ function buildInvoiceCitations(db: Db, documentId: string, title: string): Citat
     all.length > MAX_CITATIONS
       ? [...all.slice(0, MAX_CITATIONS - TAIL_CITATIONS), ...all.slice(all.length - TAIL_CITATIONS)]
       : all
-  return selected.map((c, i) => ({
-    label: `S${i + 1}`,
-    sourceTitle: c.source_label ?? title,
-    pageNumber: c.page_number,
-    section: c.section_label,
-    snippet: c.text.length > 280 ? `${c.text.slice(0, 280)}…` : c.text
-  }))
-}
-
-/** Honest extract coverage (D48): every chunk scanned; `fullyChunked` gates the "whole document" wording. */
-function computeCoverage(db: Db, documentId: string): CoverageInfo {
-  const chunksTotal = documentChunkCount(db, documentId)
-  const row = db
-    .prepare('SELECT fully_chunked FROM documents WHERE id = ?')
-    .get(documentId) as { fully_chunked: string | null } | undefined
-  return {
-    mode: 'extract',
-    chunksCovered: chunksTotal, // the tool read every chunk
-    chunksTotal,
-    fullyChunked: row?.fully_chunked != null // NULL (legacy/truncated) → false
-  }
+  return chunksToCitations(selected, title)
 }
 
 type Tr = (key: MessageKey, params?: MessageParams) => string
-
-/** Format a parsed figure as a stable 2-dp decimal — the verbatim numeric (matches the CSV export). */
-function fmt(n: number): string {
-  return n.toFixed(2)
-}
 
 /** Map a mismatched check to its localized, content-free explanation (the printed figure stays in totals). */
 function checkMessage(tr: Tr, name: InvoiceTotalsResult['checks'][number]['name']): string {

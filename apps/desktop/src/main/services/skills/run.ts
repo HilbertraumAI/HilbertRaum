@@ -158,43 +158,191 @@ export function finishRun(
   ).run(status, completedAt, resultRef, error, runId)
 }
 
-/**
- * Run `extract_transactions` on one selected document through the gate and persist the result.
- * Returns ids/counts only — never the extracted content (which lives only in the bank data tables).
- *
- * Serialized per document (audit PC-1): the whole run — including the `replaceExisting` DELETE+INSERT —
- * holds the per-document lock so a concurrent run/categorize on the SAME statement (any lane) cannot
- * race the delete (re-entrant when a lane already holds it; unrelated documents stay concurrent).
- */
-export async function runBankExtraction(
-  db: Db,
-  args: BankExtractionArgs,
-  deps: BankExtractionDeps
-): Promise<BankExtractionResult> {
-  return withDocumentLock(args.documentId, () => runBankExtractionInner(db, args, deps))
+// =====================================================================================
+// The generic domain-run ENGINE (A1, audit §6.1 + §6.4 plumbing bullet). `invoice-run.ts` used to be a
+// ~500-line layer-for-layer COPY of the bank seam below (the class that caused the "45 vs 22" incident:
+// two drifted readers + a missed `replaceExisting`). Both content domains now drive the SAME engine
+// through a per-domain `DomainRunConfig` (the plan's config object): `runDomainExtractionInner` (the
+// extract→persist lifecycle), `prepareDomainRun` (the downstream-tool prefix incl. R3's ONE staleness
+// re-extraction path), `domainPersistFailure`, and `runDomainFileExport` (the confirm-gated export tail).
+// The engine is STRICTLY behavior-preserving: every difference the copies had is a config value/function,
+// so it can reproduce each domain byte-for-byte. The domain adapters (`runBankExtraction` below,
+// `runInvoiceExtraction` in invoice-run.ts) own the per-document lock + reshape the generic result to
+// their named id/count fields, so the public surface is unchanged.
+// =====================================================================================
+
+/** The frozen one-document scope + audit routing every domain run shares (bank + invoice identical). */
+export interface DomainRunArgs {
+  /** The requesting skill's `install_id` ("<source>:<id>") — for the run row + ids/counts audit. */
+  skillInstallId: string
+  /** The conversation the run belongs to, if any (a doc-action run may not be a chat). */
+  conversationId?: string | null
+  /** The single selected document to extract from (becomes the frozen one-id scope). */
+  documentId: string
 }
 
-async function runBankExtractionInner(
-  db: Db,
-  args: BankExtractionArgs,
-  deps: BankExtractionDeps
-): Promise<BankExtractionResult> {
-  const now = deps.now ?? (() => new Date().toISOString())
-  const runId = randomUUID()
-  const documentIds = [args.documentId]
+/** The MAIN-side capabilities + knobs every domain run shares (a superset of both domains' deps). */
+export interface DomainRunDeps {
+  /** ids/counts-only audit sink (the app's recorder adapter; a capturing fn in tests). */
+  audit: SkillToolAudit
+  /** Cooperative cancellation (S11b wires the Cancel affordance to this). */
+  signal?: AbortSignal
+  /** Optional progress, merged into the polling status by the app. */
+  onProgress?: (p: { done: number; total: number }) => void
+  /** Clock seam for deterministic tests. */
+  now?: () => string
+  /**
+   * The verbatim content reach: a document's ordered, non-overlapping, newline-preserving parser
+   * segments (the IPC injects `extractDocumentPreview`). Required for a FAITHFUL extraction — the
+   * stored `chunks` table collapses newlines and overlaps (`resolveDocumentReader`). Absent ⇒ the
+   * legacy chunk-table reader (the integration tests that seed `chunks` directly).
+   */
+  readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
+  /**
+   * Request geometry-aware layout reconstruction from the segment reader (D58 — bank-statement only).
+   * The invoice domain leaves it unset and gets byte-unchanged reading-order text.
+   */
+  layout?: boolean
+  /**
+   * Re-extraction (A9/F5): when set, DELETE the document's prior rows (via `config.deleteForDocument`)
+   * inside the persist transaction BEFORE inserting the fresh one, so a re-extract never accumulates
+   * duplicates and the swap is atomic. Unset (the default) = the additive behaviour.
+   */
+  replaceExisting?: boolean
+}
 
-  // Record the run as started BEFORE the gate (committed; survives a later ROLLBACK of the bank rows).
+/** The normalized re-extraction outcome `prepareDomainRun`'s staleness path consumes (a domain adapter
+ *  wraps its self-locking `run…Extraction` into this so the id/cancel signals read uniformly). */
+export interface DomainReExtractResult {
+  ok: boolean
+  /** The created parent-row id on success (statement/invoice). */
+  resultRef?: string
+  /** True when the re-extraction ended because it was CANCELLED (a calm outcome, not a failure). */
+  cancelled?: boolean
+  error?: string
+}
+
+/** The generic extraction result — the domain adapter reshapes `resultRef`/`count` to its named fields. */
+export interface DomainExtractionResult {
+  ok: boolean
+  runId: string
+  resultRef?: string
+  count?: number
+  cancelled?: boolean
+  errorCode?: string
+  error?: string
+}
+
+/** The content-free failure envelope every downstream tool shares (no `resultRef`/`count` on failure). */
+export interface DomainRunFailure {
+  ok: false
+  runId: string
+  cancelled?: boolean
+  errorCode?: string
+  error?: string
+}
+
+/** What `prepareDomainRun` hands back on success — the run to finalize + the loaded rows + tool output. */
+export interface PreparedDomainRun<TLoaded> {
+  runId: string
+  /** The parent-row id (statement/invoice) the downstream persist finalizes against. */
+  resultRef: string
+  /** The rows the caller reuses for its persist (the SAME shape `config.load` returns). */
+  loaded: TLoaded
+  output: unknown
+  completedAt: string
+}
+
+/** The content-free domain nouns for the run seam's messages/logs (never cross to renderer/audit). */
+export interface DomainRunMessages {
+  /** 'This {noun} could not be saved. Nothing was changed.' (the inner + outer persist catch). */
+  persistFailed: string
+  /** 'Read the {noun} first, then run this tool.' (missing / failed-re-extraction). */
+  needsExtraction: string
+  /** '[skills] {domain} extraction failed to persist' (local technical log — the inner persist catch). */
+  extractPersistLog: string
+  /** '[skills] {domain} extraction failed unexpectedly' (local technical log — the outer B4 catch). */
+  extractUnexpectedLog: string
+  /** '[skills] {domain} run failed unexpectedly' (the downstream-prefix B4 catch). */
+  prepareUnexpectedLog: string
+}
+
+/**
+ * The per-domain values + functions that drive the generic engine (A1). Everything the bank/invoice
+ * seams differed by is here: the extract tool name, the latest/stale/delete/load/persist functions, the
+ * child-count reader, the tool-input adapter, the downstream ctx-reader builder (PRESERVING the bank
+ * lazy-chunk vs invoice eager-segment construction — see `buildDownstreamReader`), and the nouns.
+ */
+export interface DomainRunConfig<TOutput, TLoaded> {
+  /** Registry tool name for the extraction tool ('extract_transactions' / 'extract_invoice'). */
+  extractToolName: string
+  /** Newest persisted row id for a document, or null (`latestBankStatementId` / `latestInvoiceId`). */
+  latestId(db: Db, documentId: string): string | null
+  /** Whether the latest persisted row is from an outdated extractor (`isBankStatementStale` / …). */
+  isStale(db: Db, id: string): boolean
+  /**
+   * Self-locking re-extraction (the public `run…Extraction`, normalized) — used ONLY on the staleness
+   * path inside `prepareDomainRun`. It MUST be the self-locking adapter (not the raw inner), because
+   * some downstream seams (summarize/export) hold no outer lock, so the re-extraction's own re-entrant
+   * `withDocumentLock` is the only guard against a concurrent delete (R3 / audit PC-1).
+   */
+  reExtract(db: Db, args: DomainRunArgs, deps: DomainRunDeps): Promise<DomainReExtractResult>
+  /** Delete the document's prior rows in FK order (inside the caller's transaction; `replaceExisting`). */
+  deleteForDocument(db: Db, documentId: string): void
+  /**
+   * Persist the schema-validated extraction output (parent + child rows) inside the OPEN transaction the
+   * engine holds; returns the created parent-row id. The engine owns BEGIN/COMMIT/ROLLBACK + the
+   * `skill_runs` 'done' update + the `replaceExisting` delete, so this is JUST the domain INSERTs.
+   */
+  insertExtraction(db: Db, p: { output: TOutput; documentId: string; runId: string; completedAt: string }): string
+  /** The child-row count surfaced as the extraction result count (transactions / line items length). */
+  countOf(output: TOutput): number
+  /** Load the persisted rows into the pure tool's structured input (`loadTransactions` / `loadInvoice`). */
+  load(db: Db, id: string): TLoaded
+  /** Adapt the loaded rows into the `runSkillTool` input payload (bank wraps `{transactions}`; invoice
+   *  passes the `InvoiceInput` through unchanged). */
+  toToolInput(loaded: TLoaded): unknown
+  /**
+   * Build the DOWNSTREAM-run ctx reader. The downstream tools take structured rows and never read
+   * chunks, so this reader is inert — but the two domains construct it differently (bank binds the sync
+   * chunk-table reader; invoice awaits the segment-preferring `resolveDocumentReader`, doing an eager,
+   * discarded segment read on the real IPC path). A1 PRESERVES that incidental difference EXACTLY rather
+   * than fixing it inside a refactor (the query/call-count is pinned by tests); unifying the two is a
+   * behavior change left to a follow-up. See BUILD_STATE A1.
+   */
+  buildDownstreamReader(db: Db, documentId: string, deps: DomainRunDeps): Promise<SkillToolContext['readDocumentChunks']>
+  messages: DomainRunMessages
+}
+
+/** Record the run as started BEFORE the gate (committed; survives a later ROLLBACK of the domain rows). */
+function insertStartedRun(db: Db, runId: string, args: DomainRunArgs, now: () => string): void {
   db.prepare(
     `INSERT INTO skill_runs (id, skill_install_id, conversation_id, document_ids_json, status, created_at)
      VALUES (?, ?, ?, ?, 'started', ?)`
-  ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
+  ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify([args.documentId]), now())
+}
 
-  // Everything after the 'started' insert is guarded: any UNEXPECTED throw (e.g. a transiently
-  // locked DB while building the chunk reader) must still drive a terminal status — never leave the
-  // run stranded at 'started' (B4). The expected paths (bad shape, cancel, persist failure) return
-  // their own terminal result inside; this outer catch is the safety net.
+/**
+ * Run the extraction tool on one selected document through the gate and persist the result atomically —
+ * the SINGLE copy of the extract→persist lifecycle (was `runBankExtractionInner` + its invoice twin).
+ * Returns the GENERIC result; the domain adapter owns the per-document lock and reshapes it. A persist
+ * failure ROLLBACKs so NO partial rows survive; the 'started' row always reaches a terminal status (B4).
+ */
+export async function runDomainExtractionInner<TOutput, TLoaded>(
+  db: Db,
+  args: DomainRunArgs,
+  deps: DomainRunDeps,
+  config: DomainRunConfig<TOutput, TLoaded>
+): Promise<DomainExtractionResult> {
+  const now = deps.now ?? (() => new Date().toISOString())
+  const runId = randomUUID()
+  const documentIds = [args.documentId]
+  insertStartedRun(db, runId, args, now)
+
+  // Everything after the 'started' insert is guarded (B4): any UNEXPECTED throw must still drive a
+  // terminal status — never leave the run stranded at 'started'.
   try {
-    const tool = getRegisteredTool(EXTRACT_TOOL_NAME)
+    const tool = getRegisteredTool(config.extractToolName)
     if (!tool) {
       // No run happened ⇒ no audit event (matches the gate's "pre-run refusals are not audited").
       const msg = 'This tool is not available.'
@@ -224,55 +372,18 @@ async function runBankExtractionInner(
     }
 
     // Persist the schema-validated output atomically — a failed write leaves NO partial rows.
-    const output = result.output as ExtractTransactionsOutput
-    const statementId = randomUUID()
+    const output = result.output as TOutput
     const completedAt = now()
+    let resultRef: string
     try {
       db.exec('BEGIN')
-      // Re-extraction (A9): replace the document's prior (stale) statements in the SAME transaction, so
-      // a re-extract never accumulates duplicates and the swap is atomic (a failure rolls back to the old).
-      if (deps.replaceExisting) deleteBankStatementsForDocument(db, args.documentId)
-      db.prepare(
-        `INSERT INTO bank_statements
-           (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance,
-            extractor_version, date_order_inferred, dropped_row_count, created_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        statementId,
-        args.documentId,
-        runId,
-        output.currency ?? null,
-        output.openingBalance ?? null,
-        output.closingBalance ?? null,
-        BANK_EXTRACTOR_VERSION,
-        output.dateOrderInferred ?? null,
-        output.droppedRowCount ?? null,
-        completedAt
-      )
-      const insertTx = db.prepare(
-        `INSERT INTO bank_transactions
-          (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      output.transactions.forEach((t, i) => {
-        insertTx.run(
-          randomUUID(),
-          statementId,
-          runId,
-          i,
-          t.date,
-          t.valueDate ?? null,
-          t.description,
-          t.amount,
-          t.currency,
-          t.balanceAfter ?? null,
-          t.sourcePage ?? null,
-          completedAt
-        )
-      })
+      // Re-extraction (A9/F5): replace the document's prior (stale) rows in the SAME transaction, so a
+      // re-extract never accumulates duplicates and the swap is atomic (a failure rolls back to the old).
+      if (deps.replaceExisting) config.deleteForDocument(db, args.documentId)
+      resultRef = config.insertExtraction(db, { output, documentId: args.documentId, runId, completedAt })
       db.prepare(
         `UPDATE skill_runs SET status = 'done', completed_at = ?, result_ref = ?, error = NULL WHERE id = ?`
-      ).run(completedAt, statementId, runId)
+      ).run(completedAt, resultRef, runId)
       db.exec('COMMIT')
     } catch {
       try {
@@ -281,23 +392,299 @@ async function runBankExtractionInner(
         /* keep the original failure */
       }
       // Technical reason to the local log only — never the renderer/audit (§22-M1).
-      console.error('[skills] bank extraction failed to persist')
-      const msg = 'This statement could not be saved. Nothing was changed.'
+      console.error(config.messages.extractPersistLog)
+      const msg = config.messages.persistFailed
       finishRun(db, runId, 'failed', now(), null, msg)
       return { ok: false, runId, errorCode: 'persistFailed', error: msg }
     }
 
-    return { ok: true, runId, statementId, transactionCount: output.transactions.length }
+    return { ok: true, runId, resultRef, count: config.countOf(output) }
   } catch {
     try {
       db.exec('ROLLBACK')
     } catch {
       /* no active transaction */
     }
-    console.error('[skills] bank extraction failed unexpectedly')
-    const msg = 'This statement could not be saved. Nothing was changed.'
+    console.error(config.messages.extractUnexpectedLog)
+    const msg = config.messages.persistFailed
     finishRun(db, runId, 'failed', now(), null, msg)
     return { ok: false, runId, errorCode: 'persistFailed', error: msg }
+  }
+}
+
+/**
+ * The shared prefix for every DOWNSTREAM tool (was `prepareStatementRun` + `prepareInvoiceRun`): record
+ * the run started, locate the latest row, RE-EXTRACT it in place when stale (R3 / audit §5.6), load it,
+ * and run the PURE tool through the gate with the rows as structured input. Returns the gate output for
+ * the caller to persist, or a finished failure. The run row is left `started` on success — the caller
+ * finalizes it inside its own persist transaction. Guarded (B4) so an unexpected throw still terminates.
+ */
+export async function prepareDomainRun<TOutput, TLoaded>(
+  db: Db,
+  toolName: string,
+  args: DomainRunArgs,
+  deps: DomainRunDeps,
+  config: DomainRunConfig<TOutput, TLoaded>,
+  confirmed?: boolean,
+  // When the caller has ALREADY loaded the rows (the analysis handler loads them once for the answer),
+  // pass them here so this prefix skips its own `config.load` — the single-load audit P-1 collapses — AND
+  // skips the staleness re-extraction (the analysis lane already re-extracted, and re-extracting here
+  // would DELETE the very rows it handed us). Same shape `config.load` returns.
+  preloaded?: TLoaded
+): Promise<{ prepared: PreparedDomainRun<TLoaded> } | { failed: DomainRunFailure }> {
+  const now = deps.now ?? (() => new Date().toISOString())
+  const runId = randomUUID()
+  const documentIds = [args.documentId]
+  insertStartedRun(db, runId, args, now)
+
+  // Guarded like the extraction (B4): an unexpected throw between the 'started' insert and a terminal
+  // result (e.g. a DB error in latestId/load) must not strand the run at 'started'.
+  try {
+    const tool = getRegisteredTool(toolName)
+    if (!tool) {
+      const msg = 'This tool is not available.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
+    }
+
+    let resultRef = config.latestId(db, args.documentId)
+    if (!resultRef) {
+      // Honest, friendly: the downstream tools need an extraction first (no figure invented).
+      const msg = config.messages.needsExtraction
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
+    }
+
+    // Staleness re-extraction (R3 / audit §5.6): a run-bar button OR an export must NEVER serve rows a
+    // since-fixed parser produced. Re-extract in place (`replaceExisting`) before loading. The domain's
+    // self-locking `reExtract` re-enters the same document lock, so this nests safely under a downstream
+    // seam that already holds it. Skip when the caller supplied `preloaded` — the analysis lane already
+    // re-extracted any stale row and re-extracting here would DELETE the very rows it handed us.
+    if (preloaded === undefined && config.isStale(db, resultRef)) {
+      const extraction = await config.reExtract(db, args, { ...deps, replaceExisting: true })
+      if (!extraction.ok || !extraction.resultRef) {
+        // A user CANCEL mid-re-extraction is a calm outcome, not a failure — record 'cancelled', not a
+        // 'failed' run with the misleading needsExtraction message. The seam is the authority on cancel (B2).
+        if (extraction.cancelled) {
+          finishRun(db, runId, 'cancelled', now(), null, null)
+          return { failed: { ok: false, runId, cancelled: true, error: extraction.error } }
+        }
+        // Re-extraction genuinely failed (source gone / unreadable): fail with the SAME code the missing-
+        // extraction branch uses, so the renderer tells the user to read again (never a bad figure).
+        const msg = config.messages.needsExtraction
+        finishRun(db, runId, 'failed', now(), null, msg)
+        return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
+      }
+      resultRef = extraction.resultRef
+    }
+
+    // Reuse the caller's already-loaded rows when provided (audit P-1); otherwise load them here (the
+    // run-bar/IPC path). Branch on `undefined` explicitly so a genuinely empty load is honoured.
+    const loaded = preloaded !== undefined ? preloaded : config.load(db, resultRef)
+    const signal = deps.signal ?? new AbortController().signal
+    const ctx: SkillToolContext = {
+      documentIds,
+      readDocumentChunks: await config.buildDownstreamReader(db, args.documentId, deps),
+      signal,
+      onProgress: deps.onProgress,
+      audit: deps.audit
+    }
+
+    const result = await runSkillTool(tool, {
+      skillId: args.skillInstallId,
+      input: config.toToolInput(loaded),
+      ctx,
+      confirmed
+    })
+    if (!result.ok) {
+      const cancelled = signal.aborted
+      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
+      return { failed: { ok: false, runId, cancelled, error: result.error } }
+    }
+    return {
+      prepared: { runId, resultRef, loaded, output: result.output, completedAt: now() }
+    }
+  } catch {
+    console.error(config.messages.prepareUnexpectedLog)
+    const msg = 'This could not be saved. Nothing was changed.'
+    finishRun(db, runId, 'failed', now(), null, msg)
+    return { failed: { ok: false, runId, errorCode: 'persistFailed', error: msg } }
+  }
+}
+
+/** Roll back a downstream persist failure and mark the run failed — no partial annotations survive.
+ *  Shared by both domains (was a private `persistFailure` copy in each); only the local log text differs. */
+export function domainPersistFailure(db: Db, runId: string, now: () => string, log: string): DomainRunFailure {
+  try {
+    db.exec('ROLLBACK')
+  } catch {
+    /* keep the original failure */
+  }
+  console.error(log)
+  const msg = 'This could not be saved. Nothing was changed.'
+  finishRun(db, runId, 'failed', now(), null, msg)
+  return { ok: false, runId, errorCode: 'persistFailed', error: msg }
+}
+
+/**
+ * The confirm-gated file-export TAIL (was `runCsvExport` + `runInvoiceCsvExport` + `runInvoiceFileExport`).
+ * Produce the serialized text via the pure tool (through `prepareDomainRun`) and write it MAIN-side to a
+ * user-chosen path. A cancel writes nothing and reports it calmly (B2). The content + the chosen path
+ * never touch any log/audit; only "saved N rows" (a count) is surfaced. `readOutput` pulls the serialized
+ * text out of the tool output (CSV tools expose `csv`; the JSON/XML tools expose `content`).
+ */
+export async function runDomainFileExport<TOutput, TLoaded>(
+  db: Db,
+  args: DomainRunArgs,
+  deps: DomainRunDeps & {
+    saveTextFile: (defaultFileName: string, content: string) => Promise<boolean>
+    confirmed?: boolean
+  },
+  config: DomainRunConfig<TOutput, TLoaded>,
+  opts: {
+    toolName: string
+    defaultFileName: string
+    readOutput: (output: unknown) => { text: string; rowCount: number }
+    writeFailLog: string
+  }
+): Promise<{ ok: boolean; runId: string; count?: number; cancelled?: boolean; errorCode?: string; error?: string }> {
+  const now = deps.now ?? (() => new Date().toISOString())
+  const prep = await prepareDomainRun(db, opts.toolName, args, deps, config, deps.confirmed)
+  if ('failed' in prep) return prep.failed
+  const { runId, output, completedAt } = prep.prepared
+  const { text, rowCount } = opts.readOutput(output)
+  // Cancelled after the tool produced the text but before the write — don't even open the save dialog,
+  // and report it as cancelled (not failed), so nothing is written under a cancel (B2).
+  if (deps.signal?.aborted) {
+    finishRun(db, runId, 'cancelled', now(), null, null)
+    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
+  }
+  let saved: boolean
+  try {
+    saved = await deps.saveTextFile(opts.defaultFileName, text)
+  } catch {
+    console.error(opts.writeFailLog)
+    const msg = 'The file could not be saved. Nothing was changed.'
+    finishRun(db, runId, 'failed', now(), null, msg)
+    return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
+  }
+  if (!saved) {
+    // The user cancelled the save dialog — a calm, non-error outcome (history records it cancelled).
+    finishRun(db, runId, 'cancelled', now(), null, null)
+    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
+  }
+  // result_ref stays NULL — the export produces no DB artifact, and the path is never recorded.
+  finishRun(db, runId, 'done', completedAt, null, null)
+  return { ok: true, runId, count: rowCount }
+}
+
+/**
+ * Run `extract_transactions` on one selected document through the gate and persist the result.
+ * Returns ids/counts only — never the extracted content (which lives only in the bank data tables).
+ *
+ * Serialized per document (audit PC-1): the whole run — including the `replaceExisting` DELETE+INSERT —
+ * holds the per-document lock so a concurrent run/categorize on the SAME statement (any lane) cannot
+ * race the delete (re-entrant when a lane already holds it; unrelated documents stay concurrent).
+ */
+export async function runBankExtraction(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps
+): Promise<BankExtractionResult> {
+  return withDocumentLock(args.documentId, async () => {
+    const r = await runDomainExtractionInner(db, args, deps, BANK_RUN_CONFIG)
+    // The generic failure object already carries the exact original key set (no resultRef/count on
+    // failure), so return it verbatim; only success is reshaped to the bank-named id/count fields.
+    if (!r.ok) return r
+    return { ok: true, runId: r.runId, statementId: r.resultRef, transactionCount: r.count }
+  })
+}
+
+/**
+ * Persist a schema-validated `extract_transactions` output — the statement row + its transactions —
+ * inside the engine's OPEN transaction; returns the new `bank_statements.id`. The engine owns
+ * BEGIN/COMMIT/ROLLBACK + the `replaceExisting` delete + the `skill_runs` 'done' update, so this is JUST
+ * the domain INSERTs (the bank half of the config's `insertExtraction`).
+ */
+function insertBankExtraction(
+  db: Db,
+  { output, documentId, runId, completedAt }: {
+    output: ExtractTransactionsOutput
+    documentId: string
+    runId: string
+    completedAt: string
+  }
+): string {
+  const statementId = randomUUID()
+  db.prepare(
+    `INSERT INTO bank_statements
+       (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance,
+        extractor_version, date_order_inferred, dropped_row_count, created_at)
+     VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    statementId,
+    documentId,
+    runId,
+    output.currency ?? null,
+    output.openingBalance ?? null,
+    output.closingBalance ?? null,
+    BANK_EXTRACTOR_VERSION,
+    output.dateOrderInferred ?? null,
+    output.droppedRowCount ?? null,
+    completedAt
+  )
+  const insertTx = db.prepare(
+    `INSERT INTO bank_transactions
+      (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+  output.transactions.forEach((t, i) => {
+    insertTx.run(
+      randomUUID(),
+      statementId,
+      runId,
+      i,
+      t.date,
+      t.valueDate ?? null,
+      t.description,
+      t.amount,
+      t.currency,
+      t.balanceAfter ?? null,
+      t.sourcePage ?? null,
+      completedAt
+    )
+  })
+  return statementId
+}
+
+/**
+ * The bank domain's engine config (A1) — the values/functions that specialize the generic run seam for
+ * the bank-statement content class. Everything `invoice-run.ts`'s copy differed by lives here.
+ */
+const BANK_RUN_CONFIG: DomainRunConfig<ExtractTransactionsOutput, LoadedTransaction[]> = {
+  extractToolName: EXTRACT_TOOL_NAME,
+  latestId: latestBankStatementId,
+  isStale: isBankStatementStale,
+  // Self-locking re-extraction (re-entrant under a downstream seam's own hold), normalized for the
+  // staleness path. Reuses the public `runBankExtraction` so the lock + reshape stay in one place.
+  reExtract: async (db, args, deps) => {
+    const r = await runBankExtraction(db, args, deps)
+    return { ok: r.ok, resultRef: r.statementId, cancelled: r.cancelled, error: r.error }
+  },
+  deleteForDocument: deleteBankStatementsForDocument,
+  insertExtraction: insertBankExtraction,
+  countOf: (output) => output.transactions.length,
+  load: loadTransactions,
+  toToolInput,
+  // Bank downstream prefix binds the SYNC chunk-table reader (lazy, no I/O — inert for structured-input
+  // tools). PRESERVED as-is by A1 (differs from invoice's eager segment read; see the config field doc).
+  buildDownstreamReader: async (db, documentId) => buildReadDocumentChunks(db, new Set([documentId])),
+  messages: {
+    persistFailed: 'This statement could not be saved. Nothing was changed.',
+    needsExtraction: 'Read the statement first, then run this tool.',
+    extractPersistLog: '[skills] bank extraction failed to persist',
+    extractUnexpectedLog: '[skills] bank extraction failed unexpectedly',
+    prepareUnexpectedLog: '[skills] statement run failed unexpectedly'
   }
 }
 
@@ -480,132 +867,21 @@ function toToolInput(txs: LoadedTransaction[]): { transactions: TransactionInput
   }
 }
 
-interface PreparedRun {
-  runId: string
-  statementId: string
-  transactions: LoadedTransaction[]
-  output: unknown
-  completedAt: string
-}
+// The bank domain's downstream prefix + persist-failure are the shared engine helpers `prepareDomainRun`
+// / `domainPersistFailure` driven by `BANK_RUN_CONFIG` (A1) — the per-tool seams below call them, then do
+// their own domain-specific persist (`reconciled` flags / `category_id`). The single staleness
+// re-extraction path (R3 / audit §5.6) now lives in `prepareDomainRun`, not a bank-only copy.
 
-/**
- * The shared prefix for every downstream tool: record the run as started, locate the latest
- * statement, load its rows, run the PURE tool through the gate with the rows as structured input.
- * Returns the gate output for the caller to persist, or a finished failure result. The run row is
- * left `started` on success — the caller finalizes it inside its own persist transaction.
- */
-async function prepareStatementRun(
+/** `prepareDomainRun` specialized to the bank config (the downstream seams' single prefix). */
+function prepareStatementRun(
   db: Db,
   toolName: string,
   args: BankExtractionArgs,
   deps: BankExtractionDeps,
   confirmed?: boolean,
-  // When the caller has ALREADY loaded the statement's rows (the analysis handler loads them once for
-  // the listing + categories), pass them here so this prefix skips its own `loadTransactions` — the
-  // single-row-load that audit P-1 collapses. Same shape `loadTransactions` returns (ids in row order,
-  // null columns omitted), so the persist (`UPDATE … WHERE id = ?`) targets the right rows.
   preloaded?: LoadedTransaction[]
-): Promise<{ prepared: PreparedRun } | { failed: StatementToolResult }> {
-  const now = deps.now ?? (() => new Date().toISOString())
-  const runId = randomUUID()
-  const documentIds = [args.documentId]
-  db.prepare(
-    `INSERT INTO skill_runs (id, skill_install_id, conversation_id, document_ids_json, status, created_at)
-     VALUES (?, ?, ?, ?, 'started', ?)`
-  ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
-
-  // Guarded like runBankExtraction (B4): an unexpected throw between the 'started' insert and a
-  // terminal result (e.g. a DB error in latestStatement/loadTransactions) must not strand the run.
-  try {
-    const tool = getRegisteredTool(toolName)
-    if (!tool) {
-      const msg = 'This tool is not available.'
-      finishRun(db, runId, 'failed', now(), null, msg)
-      return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
-    }
-
-    let statementId = latestBankStatementId(db, args.documentId)
-    if (!statementId) {
-      // Honest, friendly: the downstream tools need an extraction first (no figure invented).
-      const msg = 'Read the statement first, then run this tool.'
-      finishRun(db, runId, 'failed', now(), null, msg)
-      return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
-    }
-
-    // Staleness re-extraction (R3 / audit §5.6): a run-bar button OR an export must NEVER serve rows a
-    // since-fixed parser produced — the extractor version is bumped precisely because those figures were
-    // mis-read (sign theft, wrong currency, 1000× understatement). Mirror the analysis handler's parity
-    // path (`analysis/bank-statement.ts`): re-extract in place (`replaceExisting`) before loading rows.
-    // `runBankExtraction` self-locks the same document re-entrantly (`doc-lock`), so this nests safely
-    // under a downstream seam that already holds the lock. Skip when the caller supplied `preloaded`
-    // rows — the analysis lane already re-extracted any stale statement and re-extracting here would
-    // DELETE the very rows it handed us (stranding the persist that targets their ids).
-    if (preloaded === undefined && isBankStatementStale(db, statementId)) {
-      const extraction = await runBankExtraction(db, args, { ...deps, replaceExisting: true })
-      if (!extraction.ok || !extraction.statementId) {
-        // A user CANCEL mid-re-extraction is a calm outcome, not a failure — mirror the downstream
-        // tool-failure branch below (`const cancelled = signal.aborted`) and the doctask categorize path,
-        // both of which record a cancel as 'cancelled', not a 'failed' run with the misleading
-        // needsExtraction "read the statement first" message. The seam is the authority on cancel (B2).
-        if (extraction.cancelled) {
-          finishRun(db, runId, 'cancelled', now(), null, null)
-          return { failed: { ok: false, runId, cancelled: true, error: extraction.error } }
-        }
-        // Re-extraction genuinely failed (source gone / unreadable): fail with the SAME code the missing-
-        // extraction branch uses, so the renderer tells the user to read the statement again (never a bad figure).
-        const msg = 'Read the statement first, then run this tool.'
-        finishRun(db, runId, 'failed', now(), null, msg)
-        return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
-      }
-      statementId = extraction.statementId
-    }
-
-    // Reuse the caller's already-loaded rows when provided (audit P-1); otherwise load them here (the
-    // run-bar/IPC path, which has no rows in hand). `?? `-guard would treat an empty array as "no rows",
-    // so branch on `undefined` explicitly: a genuinely empty statement passes `[]` and is honoured.
-    const transactions = preloaded !== undefined ? preloaded : loadTransactions(db, statementId)
-    const signal = deps.signal ?? new AbortController().signal
-    const ctx: SkillToolContext = {
-      documentIds,
-      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
-      signal,
-      onProgress: deps.onProgress,
-      audit: deps.audit
-    }
-
-    const result = await runSkillTool(tool, {
-      skillId: args.skillInstallId,
-      input: toToolInput(transactions),
-      ctx,
-      confirmed
-    })
-    if (!result.ok) {
-      const cancelled = signal.aborted
-      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
-      return { failed: { ok: false, runId, cancelled, error: result.error } }
-    }
-    return {
-      prepared: { runId, statementId, transactions, output: result.output, completedAt: now() }
-    }
-  } catch {
-    console.error('[skills] statement run failed unexpectedly')
-    const msg = 'This could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { failed: { ok: false, runId, errorCode: 'persistFailed', error: msg } }
-  }
-}
-
-/** Roll back a persist failure and mark the run failed — no partial annotations survive. */
-function persistFailure(db: Db, runId: string, now: () => string): StatementToolResult {
-  try {
-    db.exec('ROLLBACK')
-  } catch {
-    /* keep the original failure */
-  }
-  console.error('[skills] statement tool failed to persist')
-  const msg = 'This could not be saved. Nothing was changed.'
-  finishRun(db, runId, 'failed', now(), null, msg)
-  return { ok: false, runId, errorCode: 'persistFailed', error: msg }
+): Promise<{ prepared: PreparedDomainRun<LoadedTransaction[]> } | { failed: DomainRunFailure }> {
+  return prepareDomainRun(db, toolName, args, deps, BANK_RUN_CONFIG, confirmed, preloaded)
 }
 
 /**
@@ -633,7 +909,7 @@ async function runBalanceValidationInner(
   const now = deps.now ?? (() => new Date().toISOString())
   const prep = await prepareStatementRun(db, VALIDATE_TOOL_NAME, args, deps, undefined, preloaded)
   if ('failed' in prep) return prep.failed
-  const { runId, statementId, transactions, output, completedAt } = prep.prepared
+  const { runId, resultRef: statementId, loaded: transactions, output, completedAt } = prep.prepared
   const reconcile = output as ReconcileResult
   const mismatchCount = reconcile.rows.filter((r) => r.status === 'mismatch').length
   const checkedAny = reconcile.rows.some((r) => r.status !== 'unknown')
@@ -652,7 +928,7 @@ async function runBalanceValidationInner(
     ).run(completedAt, statementId, runId)
     db.exec('COMMIT')
   } catch {
-    return persistFailure(db, runId, now)
+    return domainPersistFailure(db, runId, now, '[skills] statement tool failed to persist')
   }
   // Surface the validated `ReconcileResult` for in-process reuse (audit P-1) — the analysis handler
   // reuses it instead of recomputing `reconcileBalances` over a re-queried row set. Content (figures):
@@ -722,7 +998,7 @@ async function runCategorizationInner(
   const now = deps.now ?? (() => new Date().toISOString())
   const prep = await prepareStatementRun(db, CATEGORIZE_TOOL_NAME, args, deps, undefined, preloaded)
   if ('failed' in prep) return prep.failed
-  const { runId, statementId, transactions, output, completedAt } = prep.prepared
+  const { runId, resultRef: statementId, loaded: transactions, output, completedAt } = prep.prepared
   const { categories } = output as { categories: CategorizationRow[] }
   try {
     db.exec('BEGIN')
@@ -738,7 +1014,7 @@ async function runCategorizationInner(
     ).run(completedAt, statementId, runId)
     db.exec('COMMIT')
   } catch {
-    return persistFailure(db, runId, now)
+    return domainPersistFailure(db, runId, now, '[skills] statement tool failed to persist')
   }
   return { ok: true, runId, count: categories.length }
 }
@@ -757,17 +1033,17 @@ export async function runCashflowSummary(
   const now = deps.now ?? (() => new Date().toISOString())
   const prep = await prepareStatementRun(db, SUMMARIZE_TOOL_NAME, args, deps, undefined, preloaded)
   if ('failed' in prep) return prep.failed
-  const { runId, statementId, output, completedAt } = prep.prepared
+  const { runId, resultRef: statementId, output, completedAt } = prep.prepared
   const summary = output as CashflowSummary
   // No data table for a summary (no overbuild, §13) — record the run done, persist no figures.
   // Guard the terminal write: `prepareStatementRun` leaves the row at 'started', so an unexpected
   // throw here (e.g. a transiently-locked DB) must still drive a terminal 'failed' status rather
   // than stranding the run at 'started' forever (B4 — the invariant the sibling seams hold via
-  // persistFailure; this is the one downstream seam with no surrounding transaction).
+  // domainPersistFailure; this is the one downstream seam with no surrounding transaction).
   try {
     finishRun(db, runId, 'done', completedAt, statementId, null)
   } catch {
-    return persistFailure(db, runId, now)
+    return domainPersistFailure(db, runId, now, '[skills] statement tool failed to persist')
   }
   // Surface the validated `CashflowSummary` for in-process reuse (audit P-1/P-2) — the analysis handler
   // reuses it instead of recomputing `summarizeCashflow` over a re-queried row set. The summary still
@@ -796,35 +1072,15 @@ export async function runCsvExport(
   args: BankExtractionArgs,
   deps: CsvExportDeps
 ): Promise<StatementToolResult> {
-  const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareStatementRun(db, EXPORT_TOOL_NAME, args, deps, deps.confirmed)
-  if ('failed' in prep) return prep.failed
-  const { runId, output, completedAt } = prep.prepared
-  const { csv, rowCount } = output as { csv: string; rowCount: number }
-  // Cancelled after the tool produced the CSV but before the write — don't even open the save
-  // dialog, and report it as cancelled (not failed), so nothing is written under a cancel (B2).
-  if (deps.signal?.aborted) {
-    finishRun(db, runId, 'cancelled', now(), null, null)
-    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
-  }
-  let saved: boolean
-  try {
-    saved = await deps.saveTextFile('transactions.csv', csv)
-  } catch {
-    console.error('[skills] CSV export failed to write')
-    const msg = 'The file could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
-  }
-  if (!saved) {
-    // The user cancelled the save dialog — a calm, non-error outcome (history records it cancelled,
-    // and the controller surfaces it as cancelled, not a failure — B1).
-    finishRun(db, runId, 'cancelled', now(), null, null)
-    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
-  }
-  // result_ref stays NULL — the export produces no DB artifact, and the path is never recorded.
-  finishRun(db, runId, 'done', completedAt, null, null)
-  return { ok: true, runId, count: rowCount }
+  return runDomainFileExport(db, args, deps, BANK_RUN_CONFIG, {
+    toolName: EXPORT_TOOL_NAME,
+    defaultFileName: 'transactions.csv',
+    readOutput: (output) => {
+      const { csv, rowCount } = output as { csv: string; rowCount: number }
+      return { text: csv, rowCount }
+    },
+    writeFailLog: '[skills] CSV export failed to write'
+  })
 }
 
 // =====================================================================================

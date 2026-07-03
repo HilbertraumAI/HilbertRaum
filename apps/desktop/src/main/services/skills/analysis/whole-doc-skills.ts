@@ -3,6 +3,7 @@ import type { RetrievalScope } from '../../../../shared/types'
 import { documentsInScope } from '../scope-documents'
 import { skillInstallId } from '../registry'
 import { routeMatch, type SkillVocabId } from '../vocabulary'
+import { singleInScopeDocument } from './common'
 import type { SkillAnalysisHandler, SkillAnalysisInput } from './types'
 
 // Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2 — architecture.md §19/§20).
@@ -34,14 +35,9 @@ export const WHAT_CHANGED_INSTALL_ID = skillInstallId('app', 'what-changed')
 
 // The whole-document handlers read the stored `chunks` (the model answers OVER them), so they take the
 // shared helper's `requireChunks: true` predicate (X-1) — an indexed-but-unchunked document is runnable
-// via the button but not answerable here. These handlers only count the in-scope documents (1 or 2), so
-// the helper's id projection is enough; the deterministic ordering is harmless here.
-
-/** The single in-scope answerable document, or null when the scope is not exactly one (Wave 2 scope). */
-function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string } | null {
-  const docs = documentsInScope(db, scope, { requireChunks: true })
-  return docs.length === 1 ? { id: docs[0].id } : null
-}
+// via the button but not answerable here. These handlers only need the existence check (`!== null`); the
+// shared `analysis/common.ts` `singleInScopeDocument` (A1) is that helper (its title/mimeType go unused
+// here). The count check below is the two-document compare gate.
 
 /** True when the scope holds EXACTLY TWO in-scope documents (what-changed compare — Follow-up B). */
 function exactlyTwoInScopeDocuments(db: Db, scope: RetrievalScope): boolean {

@@ -6,6 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation A1: one domain-parameterized run seam + shared analysis plumbing — branch `fix/skills-a1`, UNMERGED.**
+Track-A (plan §A1; audit §6.1 "the second domain was added by copy, not parameterization" + §6.4 plumbing bullet), branched off
+`fix/skills-u5` (dep: R3; plan/audit docs live on the phase-branch chain, not `master`). **STRICTLY BEHAVIOR-PRESERVING refactor —
+green-to-green, 3014 tests unchanged, ZERO assertion changes, no schema change, no extractor-version bump, no new deps.** Root cause:
+`invoice-run.ts` was a ~500-line **layer-for-layer copy** of `run.ts` (the class that shipped the "45 vs 22 transactions" divergence:
+two drifted segment readers + a missed `replaceExisting`, and R3's staleness fix landing on one path only). **The fold:** ONE generic
+engine now lives in `run.ts` — `runDomainExtractionInner` (extract→persist lifecycle), `prepareDomainRun` (downstream prefix + the
+SINGLE R3 staleness re-extraction path), `domainPersistFailure`, `runDomainFileExport` (confirm-gated export tail) — driven by a
+per-domain **`DomainRunConfig`** `{extractToolName, latestId, isStale, reExtract, deleteForDocument, insertExtraction, countOf, load,
+toToolInput, buildDownstreamReader, messages}`. `run.ts` holds `BANK_RUN_CONFIG` + `insertBankExtraction` + the thin public adapters
+(`runBankExtraction` + the four downstream seams) that own the per-document lock and reshape the generic result to `statementId`/
+`transactionCount`; `invoice-run.ts` shrank 602→~350 lines to `INVOICE_RUN_CONFIG` + `insertInvoiceExtraction` + adapters + the **ONE
+authoritative `loadInvoice`** (now exported → `analysis/invoice.ts` imports it, dropping its byte-identical copy). Public export surface
+unchanged (`runBankExtraction`/`runInvoiceExtraction`/`latestBankStatementId`/`latestInvoiceId`/`isBankStatementStale`/`isInvoiceStale`/
+downstream+export seams all still exported with identical signatures + result shapes — key-for-key faithful, verified adversarially).
+**Analysis plumbing** lifted into NEW `services/skills/analysis/common.ts`: `singleInScopeDocument` (×3 — bank, invoice, AND
+`whole-doc-skills.ts`, whose narrower `{id}` variant is inert since it's only `!== null`-tested), `shouldFallThroughOnEmpty`,
+`computeCoverage`, `fmt`, plus the citation query `loadCitationChunks` + `[Sn]` projection `chunksToCitations`; the per-domain citation
+SELECTION strategy stays in each handler (bank narrows to the transactions' source pages + head-only; invoice head+tail window).
+**One incidental difference PRESERVED, not fixed (reported, not silently changed):** the downstream-run ctx reader is built lazily on
+bank (`buildReadDocumentChunks`, no I/O) vs eagerly on invoice (`resolveDocumentReader`, a discarded full-segment read on the real IPC
+path) — inert because structured-input downstream tools never call `readDocumentChunks`; unifying it would change per-run I/O, so it is
+carried as the `buildDownstreamReader` config value and left as a follow-up (candidate for A2). **Divergence audit:** a 7-agent
+adversarial workflow line-by-line-diffed both run seams + the analysis copies (38 differences classified) → NO STOP-and-report
+correctness bug (no copy produced a wrong figure/answer); the 3 flagged "divergences" were the inert-reader difference (preserved),
+`loadTransactions` vs `loadInvoice` (expected per-domain `load` shapes), and the citation SELECTION (designed domain difference). A
+second adversarial diff review confirmed result shapes / `now()` timing / txn boundaries / SQL bind order / export field reads all
+byte-faithful. **NO net-new tests** (a pure refactor — the existing 144+ invoice/bank/run/analysis suite IS the safety net, per the plan);
+`npm test` 3014 green + `npm run typecheck` green before and after. **Supporting edit beyond the plan file list (noted):**
+`analysis/whole-doc-skills.ts` (the 3rd `singleInScopeDocument` copy — migrated to the shared helper to fully close §6.4's "×3";
+behavior-preserving, only `!== null` used)._
+
 _2026-07-03 — **Skills remediation U5: copy & i18n sweep + per-export save-dialog metadata + invoice last-chunks citations + ephemeral analysis notice — branch `fix/skills-u5`, UNMERGED.**
 Track-U (plan §U5; audit ux-12/15/16/17 + §3.6 one-blob + §6.2 dialog), branched off `fix/skills-u4` (dep: none;
 plan/audit docs live on the phase-branch chain, not `master`). Offline / pure / **COPY & METADATA ONLY — no

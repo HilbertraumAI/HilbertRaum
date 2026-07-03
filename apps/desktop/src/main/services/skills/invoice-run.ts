@@ -1,26 +1,30 @@
 import { randomUUID } from 'node:crypto'
 import type { Db } from '../db'
-import type { DocumentChunkRead, SkillToolAudit, SkillToolContext } from '../../../shared/types'
-import { getRegisteredTool, runSkillTool } from './tool-registry'
-import { deleteInvoicesForDocument, finishRun, resolveDocumentReader } from './run'
+import type { DocumentChunkRead, SkillToolAudit } from '../../../shared/types'
+import {
+  deleteInvoicesForDocument,
+  domainPersistFailure,
+  prepareDomainRun,
+  resolveDocumentReader,
+  runDomainExtractionInner,
+  runDomainFileExport,
+  type DomainRunConfig,
+  type DomainRunFailure,
+  type PreparedDomainRun
+} from './run'
 import { withDocumentLock } from './doc-lock'
 import { INVOICE_EXTRACTOR_VERSION } from './tools/invoice'
-import type {
-  ExtractInvoiceOutput,
-  InvoiceInput,
-  InvoiceTotalsResult
-} from './tools/invoice'
+import type { ExtractInvoiceOutput, InvoiceInput, InvoiceTotalsResult } from './tools/invoice'
 
 // The app-orchestrated run seam for the INVOICE Tier-2 domain (architecture.md "Skills — design
-// record" §8). It mirrors `run.ts` (the bank seam) layer-for-layer for the second content class:
-// build the NARROW `SkillToolContext` (frozen scope + the only content reach, `readDocumentChunks`),
-// run the tool THROUGH the gate (`runSkillTool` — validate→run→validate), and persist atomically. The
-// downstream tools operate on the ALREADY-EXTRACTED invoice — the seam loads the LATEST invoice for
-// the in-scope document and passes it as STRUCTURED INPUT (no new SkillToolContext accessor; the §14
-// ceiling is unchanged). The two generic seam helpers (`buildReadDocumentChunks`, `finishRun`) are
-// shared with `run.ts`. A persist failure ROLLBACKs so NO partial invoice rows survive
-// (no-partial-persist, §12.2); the run row is recorded 'started' before the gate and always reaches a
-// terminal status (the B4 guard). The invoice_* tables are content-class: never logged/audited.
+// record" §8). It USED to be a ~500-line layer-for-layer COPY of `run.ts` (audit §6.1); A1 collapsed
+// that copy into a per-domain `DomainRunConfig` (`INVOICE_RUN_CONFIG`) over the SHARED engine in
+// `run.ts` (`runDomainExtractionInner` / `prepareDomainRun` / `domainPersistFailure` /
+// `runDomainFileExport`). This file is now just: the config, the domain persist/load helpers, and thin
+// public adapters that own the per-document lock + reshape the generic result to the invoice-named
+// `invoiceId`/`lineItemCount` fields. R3's staleness re-extraction lives in the ONE shared prepare path.
+// A persist failure ROLLBACKs so NO partial invoice rows survive; the run row is recorded 'started'
+// before the gate and always reaches a terminal status (B4). The invoice_* tables are content-class.
 
 const EXTRACT_TOOL_NAME = 'extract_invoice'
 const VALIDATE_TOOL_NAME = 'validate_invoice_totals'
@@ -98,155 +102,6 @@ export interface InvoiceToolResult {
 }
 
 /**
- * Run `extract_invoice` on one selected document through the gate and persist the structured invoice.
- * Returns ids/counts only — never the extracted content (which lives only in the invoice_* tables).
- *
- * Serialized per document (audit PC-1): the whole extract+persist — including the `replaceExisting`
- * DELETE+INSERT (F5) — holds the per-document lock so a concurrent run on the SAME document (any lane)
- * cannot race the delete (re-entrant when the analysis lane already holds it; unrelated documents stay
- * concurrent).
- */
-export async function runInvoiceExtraction(
-  db: Db,
-  args: InvoiceRunArgs,
-  deps: InvoiceRunDeps
-): Promise<InvoiceExtractionResult> {
-  return withDocumentLock(args.documentId, () => runInvoiceExtractionInner(db, args, deps))
-}
-
-async function runInvoiceExtractionInner(
-  db: Db,
-  args: InvoiceRunArgs,
-  deps: InvoiceRunDeps
-): Promise<InvoiceExtractionResult> {
-  const now = deps.now ?? (() => new Date().toISOString())
-  const runId = randomUUID()
-  const documentIds = [args.documentId]
-
-  // Record the run as started BEFORE the gate (committed; survives a later ROLLBACK of the invoice rows).
-  db.prepare(
-    `INSERT INTO skill_runs (id, skill_install_id, conversation_id, document_ids_json, status, created_at)
-     VALUES (?, ?, ?, ?, 'started', ?)`
-  ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
-
-  // Everything after the 'started' insert is guarded (B4): an unexpected throw must still drive a
-  // terminal status — never leave the run stranded at 'started'.
-  try {
-    const tool = getRegisteredTool(EXTRACT_TOOL_NAME)
-    if (!tool) {
-      const msg = 'This tool is not available.'
-      finishRun(db, runId, 'failed', now(), null, msg)
-      return { ok: false, runId, errorCode: 'unavailable', error: msg }
-    }
-
-    const signal = deps.signal ?? new AbortController().signal
-    const ctx: SkillToolContext = {
-      documentIds,
-      readDocumentChunks: await resolveDocumentReader(db, args.documentId, deps),
-      signal,
-      onProgress: deps.onProgress,
-      audit: deps.audit
-    }
-
-    const result = await runSkillTool(tool, {
-      skillId: args.skillInstallId,
-      input: { documentId: args.documentId },
-      ctx
-    })
-
-    if (!result.ok) {
-      const cancelled = signal.aborted
-      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
-      return { ok: false, runId, cancelled, error: result.error }
-    }
-
-    // Persist the schema-validated output atomically — a failed write leaves NO partial rows.
-    const invoice = result.output as ExtractInvoiceOutput
-    const invoiceId = randomUUID()
-    const completedAt = now()
-    try {
-      db.exec('BEGIN')
-      // Re-extraction (F5): replace the document's prior (stale) invoices in the SAME transaction, so a
-      // re-extract never accumulates duplicates and the swap is atomic (a failure rolls back to the old).
-      if (deps.replaceExisting) deleteInvoicesForDocument(db, args.documentId)
-      const h = invoice.header
-      const t = invoice.totals
-      db.prepare(
-        `INSERT INTO invoices
-          (id, document_id, run_id, vendor, invoice_number, invoice_date, due_date, currency,
-           net_total, tax_total, tax_rate, gross_total, totals_reconciled, extractor_version,
-           date_order_inferred, dropped_row_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`
-      ).run(
-        invoiceId,
-        args.documentId,
-        runId,
-        h.vendor ?? null,
-        h.invoiceNumber ?? null,
-        h.invoiceDate ?? null,
-        h.dueDate ?? null,
-        h.currency ?? null,
-        t.netTotal ?? null,
-        t.taxTotal ?? null,
-        t.taxRatePercent ?? null,
-        t.grossTotal ?? null,
-        INVOICE_EXTRACTOR_VERSION,
-        invoice.dateOrderInferred ?? null,
-        invoice.droppedRowCount ?? null,
-        completedAt
-      )
-      const insertLi = db.prepare(
-        `INSERT INTO invoice_line_items
-          (id, invoice_id, run_id, row_index, description, quantity, unit_price, line_total, currency, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      invoice.lineItems.forEach((li, i) => {
-        insertLi.run(
-          randomUUID(),
-          invoiceId,
-          runId,
-          i,
-          li.description,
-          li.quantity ?? null,
-          li.unitPrice ?? null,
-          li.lineTotal,
-          li.currency,
-          completedAt
-        )
-      })
-      db.prepare(
-        `UPDATE skill_runs SET status = 'done', completed_at = ?, result_ref = ?, error = NULL WHERE id = ?`
-      ).run(completedAt, invoiceId, runId)
-      db.exec('COMMIT')
-    } catch {
-      try {
-        db.exec('ROLLBACK')
-      } catch {
-        /* keep the original failure */
-      }
-      console.error('[skills] invoice extraction failed to persist')
-      const msg = 'This invoice could not be saved. Nothing was changed.'
-      finishRun(db, runId, 'failed', now(), null, msg)
-      return { ok: false, runId, errorCode: 'persistFailed', error: msg }
-    }
-
-    return { ok: true, runId, invoiceId, lineItemCount: invoice.lineItems.length }
-  } catch {
-    try {
-      db.exec('ROLLBACK')
-    } catch {
-      /* no active transaction */
-    }
-    console.error('[skills] invoice extraction failed unexpectedly')
-    const msg = 'This invoice could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { ok: false, runId, errorCode: 'persistFailed', error: msg }
-  }
-}
-
-// ---- The downstream seams (validate / export) ----
-
-/**
  * The newest invoice id for a document, or null if none has been extracted (mirrors
  * `latestBankStatementId`). The single source of truth for "the latest invoice" across both call
  * sites — the downstream run seam (`prepareInvoiceRun`) and the analysis read-back's reuse check
@@ -275,8 +130,13 @@ export function isInvoiceStale(db: Db, invoiceId: string): boolean {
   return row.v == null || row.v < INVOICE_EXTRACTOR_VERSION
 }
 
-/** Reconstruct the structured invoice from its rows (null columns omitted — schema is strict). */
-function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
+/**
+ * Reconstruct the structured invoice from its persisted rows — the pure tool functions take the strict
+ * schema shape, so null columns are OMITTED, not passed. This is the ONE authoritative loader (A1 /
+ * audit §6.4): `analysis/invoice.ts` imports THIS instead of keeping its own byte-identical copy. It is
+ * the invoice half of `INVOICE_RUN_CONFIG.load` (the bank half is `run.ts` `loadTransactions`).
+ */
+export function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
   const inv = db
     .prepare(
       `SELECT vendor, invoice_number AS invoiceNumber, invoice_date AS invoiceDate, due_date AS dueDate,
@@ -332,125 +192,139 @@ function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
   return { header, lineItems, totals }
 }
 
-interface PreparedInvoiceRun {
-  runId: string
-  invoiceId: string
-  invoice: InvoiceInput
-  output: unknown
-  completedAt: string
+/**
+ * Persist a schema-validated `extract_invoice` output — the invoice header/totals row + its line items —
+ * inside the engine's OPEN transaction; returns the new `invoices.id`. The engine owns
+ * BEGIN/COMMIT/ROLLBACK + the `replaceExisting` delete + the `skill_runs` 'done' update, so this is JUST
+ * the domain INSERTs (the invoice half of the config's `insertExtraction`).
+ */
+function insertInvoiceExtraction(
+  db: Db,
+  { output, documentId, runId, completedAt }: {
+    output: ExtractInvoiceOutput
+    documentId: string
+    runId: string
+    completedAt: string
+  }
+): string {
+  const invoiceId = randomUUID()
+  const h = output.header
+  const t = output.totals
+  db.prepare(
+    `INSERT INTO invoices
+      (id, document_id, run_id, vendor, invoice_number, invoice_date, due_date, currency,
+       net_total, tax_total, tax_rate, gross_total, totals_reconciled, extractor_version,
+       date_order_inferred, dropped_row_count, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`
+  ).run(
+    invoiceId,
+    documentId,
+    runId,
+    h.vendor ?? null,
+    h.invoiceNumber ?? null,
+    h.invoiceDate ?? null,
+    h.dueDate ?? null,
+    h.currency ?? null,
+    t.netTotal ?? null,
+    t.taxTotal ?? null,
+    t.taxRatePercent ?? null,
+    t.grossTotal ?? null,
+    INVOICE_EXTRACTOR_VERSION,
+    output.dateOrderInferred ?? null,
+    output.droppedRowCount ?? null,
+    completedAt
+  )
+  const insertLi = db.prepare(
+    `INSERT INTO invoice_line_items
+      (id, invoice_id, run_id, row_index, description, quantity, unit_price, line_total, currency, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+  output.lineItems.forEach((li, i) => {
+    insertLi.run(
+      randomUUID(),
+      invoiceId,
+      runId,
+      i,
+      li.description,
+      li.quantity ?? null,
+      li.unitPrice ?? null,
+      li.lineTotal,
+      li.currency,
+      completedAt
+    )
+  })
+  return invoiceId
 }
 
 /**
- * The shared prefix for every downstream invoice tool: record the run started, locate the latest
- * invoice, load it, run the PURE tool through the gate with the invoice as structured input. Returns
- * the gate output for the caller to persist, or a finished failure result. Guarded like
- * runInvoiceExtraction (B4) so an unexpected throw still drives a terminal status.
+ * The invoice domain's engine config (A1) — the values/functions that specialize the generic run seam
+ * for the invoice content class. Everything this file's former copy of `run.ts` differed by lives here.
  */
-async function prepareInvoiceRun(
+const INVOICE_RUN_CONFIG: DomainRunConfig<ExtractInvoiceOutput, InvoiceInput> = {
+  extractToolName: EXTRACT_TOOL_NAME,
+  latestId: latestInvoiceId,
+  isStale: isInvoiceStale,
+  // Self-locking re-extraction (re-entrant under a downstream seam's own hold), normalized for the
+  // staleness path. Reuses the public `runInvoiceExtraction` so the lock + reshape stay in one place.
+  reExtract: async (db, args, deps) => {
+    const r = await runInvoiceExtraction(db, args, deps)
+    return { ok: r.ok, resultRef: r.invoiceId, cancelled: r.cancelled, error: r.error }
+  },
+  deleteForDocument: deleteInvoicesForDocument,
+  insertExtraction: insertInvoiceExtraction,
+  countOf: (output) => output.lineItems.length,
+  load: loadInvoice,
+  // The invoice is already the strict tool-input shape (`InvoiceInput`) — hand it to the tool unchanged.
+  toToolInput: (invoice) => invoice,
+  // Invoice downstream prefix builds the segment-preferring `resolveDocumentReader` (an EAGER, discarded
+  // segment read on the real IPC path — inert for structured-input tools). PRESERVED as-is by A1 (this
+  // is the one incidental construction difference vs bank's lazy chunk reader; see BUILD_STATE A1).
+  buildDownstreamReader: (db, documentId, deps) => resolveDocumentReader(db, documentId, deps),
+  messages: {
+    persistFailed: 'This invoice could not be saved. Nothing was changed.',
+    needsExtraction: 'Read the invoice first, then run this tool.',
+    extractPersistLog: '[skills] invoice extraction failed to persist',
+    extractUnexpectedLog: '[skills] invoice extraction failed unexpectedly',
+    prepareUnexpectedLog: '[skills] invoice run failed unexpectedly'
+  }
+}
+
+/**
+ * Run `extract_invoice` on one selected document through the gate and persist the structured invoice.
+ * Returns ids/counts only — never the extracted content (which lives only in the invoice_* tables).
+ *
+ * Serialized per document (audit PC-1): the whole extract+persist — including the `replaceExisting`
+ * DELETE+INSERT (F5) — holds the per-document lock so a concurrent run on the SAME document (any lane)
+ * cannot race the delete (re-entrant when the analysis lane already holds it; unrelated documents stay
+ * concurrent). The lifecycle body is the shared `runDomainExtractionInner`; this adapter owns the lock +
+ * reshapes the generic result to the invoice-named `invoiceId`/`lineItemCount` fields.
+ */
+export async function runInvoiceExtraction(
+  db: Db,
+  args: InvoiceRunArgs,
+  deps: InvoiceRunDeps
+): Promise<InvoiceExtractionResult> {
+  return withDocumentLock(args.documentId, async () => {
+    const r = await runDomainExtractionInner(db, args, deps, INVOICE_RUN_CONFIG)
+    // The generic failure object already carries the exact original key set (no resultRef/count on
+    // failure), so return it verbatim; only success is reshaped to the invoice-named id/count fields.
+    if (!r.ok) return r
+    return { ok: true, runId: r.runId, invoiceId: r.resultRef, lineItemCount: r.count }
+  })
+}
+
+// ---- The downstream seams (validate / export) ----
+
+/** `prepareDomainRun` specialized to the invoice config (the downstream seams' single prefix). */
+function prepareInvoiceRun(
   db: Db,
   toolName: string,
   args: InvoiceRunArgs,
   deps: InvoiceRunDeps,
   confirmed?: boolean,
-  // When the caller has ALREADY reconstructed the invoice (the analysis handler loads it once for the
-  // answer), pass it here so this prefix skips its own `loadInvoice` — the single-load that audit P-1
-  // collapses. The persist still targets the latest invoice's id (`latestInvoiceId`), unchanged.
   preloadedInvoice?: InvoiceInput
-): Promise<{ prepared: PreparedInvoiceRun } | { failed: InvoiceToolResult }> {
-  const now = deps.now ?? (() => new Date().toISOString())
-  const runId = randomUUID()
-  const documentIds = [args.documentId]
-  db.prepare(
-    `INSERT INTO skill_runs (id, skill_install_id, conversation_id, document_ids_json, status, created_at)
-     VALUES (?, ?, ?, ?, 'started', ?)`
-  ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
-
-  try {
-    const tool = getRegisteredTool(toolName)
-    if (!tool) {
-      const msg = 'This tool is not available.'
-      finishRun(db, runId, 'failed', now(), null, msg)
-      return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
-    }
-
-    let invoiceId = latestInvoiceId(db, args.documentId)
-    if (!invoiceId) {
-      // Honest, friendly: the downstream tools need an extraction first (no figure invented).
-      const msg = 'Read the invoice first, then run this tool.'
-      finishRun(db, runId, 'failed', now(), null, msg)
-      return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
-    }
-
-    // Staleness re-extraction (R3 / audit §5.6 — mirrors the bank `prepareStatementRun`): a run-bar
-    // button OR a JSON/CSV/XML export must NEVER serve figures a since-fixed parser mis-read. Mirror the
-    // analysis handler (`analysis/invoice.ts`): re-extract in place (`replaceExisting`) before loading.
-    // `runInvoiceExtraction` self-locks the same document re-entrantly, so this nests safely. Skip when
-    // the caller passed a `preloadedInvoice` — the analysis lane already re-extracted any stale invoice
-    // and re-extracting here would delete the very rows it handed us.
-    if (preloadedInvoice === undefined && isInvoiceStale(db, invoiceId)) {
-      const extraction = await runInvoiceExtraction(db, args, { ...deps, replaceExisting: true })
-      if (!extraction.ok || !extraction.invoiceId) {
-        // A user CANCEL mid-re-extraction is a calm outcome, not a failure (mirror the bank
-        // `prepareStatementRun` + the downstream tool-failure branch below): record 'cancelled', not a
-        // 'failed' run with the misleading needsExtraction message.
-        if (extraction.cancelled) {
-          finishRun(db, runId, 'cancelled', now(), null, null)
-          return { failed: { ok: false, runId, cancelled: true, error: extraction.error } }
-        }
-        const msg = 'Read the invoice first, then run this tool.'
-        finishRun(db, runId, 'failed', now(), null, msg)
-        return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
-      }
-      invoiceId = extraction.invoiceId
-    }
-
-    // Reuse the caller's already-reconstructed invoice when provided (audit P-1); otherwise load it
-    // here (the run-bar/IPC path, which has no invoice in hand).
-    const invoice = preloadedInvoice ?? loadInvoice(db, invoiceId)
-    const signal = deps.signal ?? new AbortController().signal
-    const ctx: SkillToolContext = {
-      documentIds,
-      // Downstream invoice tools take structured rows and never read chunks; the reader is built
-      // for ceiling-uniformity only (resolves to the verbatim/legacy reader, frozen to this id).
-      readDocumentChunks: await resolveDocumentReader(db, args.documentId, deps),
-      signal,
-      onProgress: deps.onProgress,
-      audit: deps.audit
-    }
-
-    const result = await runSkillTool(tool, {
-      skillId: args.skillInstallId,
-      input: invoice,
-      ctx,
-      confirmed
-    })
-    if (!result.ok) {
-      const cancelled = signal.aborted
-      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
-      return { failed: { ok: false, runId, cancelled, error: result.error } }
-    }
-    return {
-      prepared: { runId, invoiceId, invoice, output: result.output, completedAt: now() }
-    }
-  } catch {
-    console.error('[skills] invoice run failed unexpectedly')
-    const msg = 'This could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { failed: { ok: false, runId, errorCode: 'persistFailed', error: msg } }
-  }
-}
-
-/** Roll back a persist failure and mark the run failed — no partial annotations survive. */
-function persistFailure(db: Db, runId: string, now: () => string): InvoiceToolResult {
-  try {
-    db.exec('ROLLBACK')
-  } catch {
-    /* keep the original failure */
-  }
-  console.error('[skills] invoice tool failed to persist')
-  const msg = 'This could not be saved. Nothing was changed.'
-  finishRun(db, runId, 'failed', now(), null, msg)
-  return { ok: false, runId, errorCode: 'persistFailed', error: msg }
+): Promise<{ prepared: PreparedDomainRun<InvoiceInput> } | { failed: DomainRunFailure }> {
+  return prepareDomainRun(db, toolName, args, deps, INVOICE_RUN_CONFIG, confirmed, preloadedInvoice)
 }
 
 /**
@@ -480,7 +354,7 @@ async function runInvoiceTotalsValidationInner(
   const now = deps.now ?? (() => new Date().toISOString())
   const prep = await prepareInvoiceRun(db, VALIDATE_TOOL_NAME, args, deps, undefined, preloadedInvoice)
   if ('failed' in prep) return prep.failed
-  const { runId, invoiceId, output, completedAt } = prep.prepared
+  const { runId, resultRef: invoiceId, output, completedAt } = prep.prepared
   const result = output as InvoiceTotalsResult
   const mismatchCount = result.checks.filter((c) => c.status === 'mismatch').length
   const checkedAny = result.checks.some((c) => c.status !== 'unknown')
@@ -494,7 +368,7 @@ async function runInvoiceTotalsValidationInner(
     ).run(completedAt, invoiceId, runId)
     db.exec('COMMIT')
   } catch {
-    return persistFailure(db, runId, now)
+    return domainPersistFailure(db, runId, now, '[skills] invoice tool failed to persist')
   }
   // Surface the validated `InvoiceTotalsResult` for in-process reuse (audit P-1) — the analysis handler
   // reuses it instead of recomputing `validateInvoiceTotals` over a re-queried invoice. Content
@@ -523,33 +397,15 @@ export async function runInvoiceCsvExport(
   args: InvoiceRunArgs,
   deps: InvoiceCsvExportDeps
 ): Promise<InvoiceToolResult> {
-  const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareInvoiceRun(db, EXPORT_TOOL_NAME, args, deps, deps.confirmed)
-  if ('failed' in prep) return prep.failed
-  const { runId, output, completedAt } = prep.prepared
-  const { csv, rowCount } = output as { csv: string; rowCount: number }
-  // Cancelled after the tool produced the CSV but before the write — don't even open the save dialog,
-  // and report it as cancelled (not failed), so nothing is written under a cancel (B2).
-  if (deps.signal?.aborted) {
-    finishRun(db, runId, 'cancelled', now(), null, null)
-    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
-  }
-  let saved: boolean
-  try {
-    saved = await deps.saveTextFile('invoice-line-items.csv', csv)
-  } catch {
-    console.error('[skills] invoice CSV export failed to write')
-    const msg = 'The file could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
-  }
-  if (!saved) {
-    finishRun(db, runId, 'cancelled', now(), null, null)
-    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
-  }
-  // result_ref stays NULL — the export produces no DB artifact, and the path is never recorded.
-  finishRun(db, runId, 'done', completedAt, null, null)
-  return { ok: true, runId, count: rowCount }
+  return runDomainFileExport(db, args, deps, INVOICE_RUN_CONFIG, {
+    toolName: EXPORT_TOOL_NAME,
+    defaultFileName: 'invoice-line-items.csv',
+    readOutput: (output) => {
+      const { csv, rowCount } = output as { csv: string; rowCount: number }
+      return { text: csv, rowCount }
+    },
+    writeFailLog: '[skills] invoice CSV export failed to write'
+  })
 }
 
 export interface InvoiceFileExportDeps extends InvoiceRunDeps {
@@ -574,29 +430,13 @@ export async function runInvoiceFileExport(
   deps: InvoiceFileExportDeps,
   opts: { toolName: string; defaultFileName: string }
 ): Promise<InvoiceToolResult> {
-  const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareInvoiceRun(db, opts.toolName, args, deps, deps.confirmed)
-  if ('failed' in prep) return prep.failed
-  const { runId, output, completedAt } = prep.prepared
-  const { content, rowCount } = output as { content: string; rowCount: number }
-  // Cancelled after the tool produced the text but before the write — don't open the save dialog (B2).
-  if (deps.signal?.aborted) {
-    finishRun(db, runId, 'cancelled', now(), null, null)
-    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
-  }
-  let saved: boolean
-  try {
-    saved = await deps.saveTextFile(opts.defaultFileName, content)
-  } catch {
-    console.error('[skills] invoice file export failed to write')
-    const msg = 'The file could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
-  }
-  if (!saved) {
-    finishRun(db, runId, 'cancelled', now(), null, null)
-    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
-  }
-  finishRun(db, runId, 'done', completedAt, null, null)
-  return { ok: true, runId, count: rowCount }
+  return runDomainFileExport(db, args, deps, INVOICE_RUN_CONFIG, {
+    toolName: opts.toolName,
+    defaultFileName: opts.defaultFileName,
+    readOutput: (output) => {
+      const { content, rowCount } = output as { content: string; rowCount: number }
+      return { text: content, rowCount }
+    },
+    writeFailLog: '[skills] invoice file export failed to write'
+  })
 }

@@ -2676,8 +2676,8 @@ bank tools; in-code comments here citing `architecture.md "Skills — design rec
 domain still resolve, the geometry specifics live in §21).
 
 **The invoice skill is the SECOND Tier-2 reference** (`app-skills/invoice/`, `id:'invoice'`), proving the
-gate generalizes to a second content-class domain with strong EN+DE coverage. It mirrors bank-statement
-layer-for-layer: three tools in `services/skills/tools/invoice.ts` — `extract_invoice` (read-only; the
+gate generalizes to a second content-class domain with strong EN+DE coverage. It covers the same
+three-tool shape as bank-statement: three tools in `services/skills/tools/invoice.ts` — `extract_invoice` (read-only; the
 same `readDocumentChunks` reach over the frozen scope), `validate_invoice_totals` (read-only; deterministic
 checks within a half-cent epsilon — line items → net, net + tax → gross, tax vs. rate — each
 `ok`/`mismatch`/`unknown`, an honest `reconciled` verdict + a `resultKind` discriminator like
@@ -2706,13 +2706,34 @@ a row to *Fees*/*Cash*/*Income* — and the two categorization paths agree on ev
 has a **two-sided STRICT** mode (the short, ambiguous English tokens) and a **one-sided COMPOUND** mode
 (full-audit-2026-06-29 BL-3) the rule table opts the unambiguous German keywords
 (`gebühr`/`gehalt`/`überweisung`/`bargeld`) into, so a de-AT closed compound (`kontoführungsgebühr`)
-categorizes while the C-1 guards hold (see the 2026-06-29 Phase 1 note below). The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
-`run.ts`'s `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, same no-partial-persist
+categorizes while the C-1 guards hold (see the 2026-06-29 Phase 1 note below). The run seam is the sibling
+`services/skills/invoice-run.ts`: same `skill_runs` lifecycle, same no-partial-persist
 (BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
 (no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
 three names; the controller / IPC / renderer stay domain-free (the renderer adds only the three tool labels
 + the invoice `resultKind` copy). Content-class isolation holds: the new `invoices` / `invoice_line_items`
 tables + `skill_runs` never appear in any log/audit/export (audit stays `{skillId, toolName, documentCount}`).
+
+**A1 — one domain-parameterized run seam (audit §6.1 + §6.4 plumbing bullet; 2026-07-03).** `invoice-run.ts`
+was originally a ~500-line **layer-for-layer copy** of `run.ts` — the class that shipped the "45 vs 22
+transactions" divergence (two drifted segment readers + a missed `replaceExisting`) and R3's one-path-only
+staleness fix. A1 folded that copy into ONE generic engine in `run.ts` (`runDomainExtractionInner`,
+`prepareDomainRun` — which owns the SINGLE R3 staleness re-extraction path — `domainPersistFailure`,
+`runDomainFileExport`) driven by a per-domain **`DomainRunConfig`** (`{extractToolName, latestId, isStale,
+reExtract, deleteForDocument, insertExtraction, countOf, load, toToolInput, buildDownstreamReader,
+messages}`). `run.ts` holds `BANK_RUN_CONFIG` + the thin public adapters (`runBankExtraction`, the four
+downstream seams) that own the per-document lock and reshape the generic result to the domain-named
+`statementId`/`transactionCount` fields; `invoice-run.ts` shrank to `INVOICE_RUN_CONFIG` + its adapters +
+`insertInvoiceExtraction` + the ONE authoritative `loadInvoice` (now exported, so `analysis/invoice.ts`
+imports it instead of a byte-identical copy). Strictly behavior-preserving (green-to-green, unchanged test
+count) — every difference the copies had is a config value/function. **One incidental difference is
+PRESERVED, not fixed:** the downstream-run ctx reader is built lazily (bank: `buildReadDocumentChunks`, no
+I/O) vs eagerly (invoice: `resolveDocumentReader`, a discarded full-segment read) — inert because
+structured-input tools never read chunks; unifying it would change per-run I/O, so it is `buildDownstreamReader`
+config and left for a follow-up. The duplicated analysis-handler plumbing (`singleInScopeDocument` ×3,
+`shouldFallThroughOnEmpty`, `computeCoverage`, `fmt`, the citation query + `[Sn]` projection) is lifted into
+`services/skills/analysis/common.ts`; the per-domain citation SELECTION strategy (bank page-narrow+head;
+invoice head+tail) stays in each handler and calls the shared `loadCitationChunks`/`chunksToCitations`.
 
 **The document-redaction skill is the THIRD Tier-2 reference** (`app-skills/document-redaction/`,
 `id:'document-redaction'`), and the **read-transform-export** shape the bank/invoice domains don't exercise:
