@@ -263,6 +263,24 @@ describe('bank-statement analysis handler — honest completeness gate (U1, §2.
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 2, dropped: 0 }))
   })
+
+  // D56 completeness PROOF outranks the parse-gap gate: opening 100 + kept Salary 100 == closing 200 ties out,
+  // so the ambiguous dropped "Foo 1234 50,00" line provably didn't move the balance (a non-transaction figure).
+  // The read IS the whole statement, so the headline must be the plain count — NOT a countPartial hedge over a
+  // body that presents the proven-whole total (the self-contradiction the review caught).
+  const COMPLETE_WITH_DROPPED =
+    'Statement EUR\nOpening balance 100,00\n2026-01-02 Salary 100,00 200,00\n' +
+    '2026-01-03 Foo 1234 50,00\nClosing balance 200,00'
+
+  it('D56 complete OUTRANKS the parse-gap gate: a tying statement with a dropped line keeps the whole-statement count', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE_WITH_DROPPED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 1 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
+    // The body presents the verified total (complete), and it no longer contradicts the headline.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
+  })
 })
 
 describe('bank-statement analysis handler — run()', () => {

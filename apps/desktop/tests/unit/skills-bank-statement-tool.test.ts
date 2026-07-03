@@ -549,6 +549,24 @@ describe('extractTransactionsWithStats — droppedRowCount (U1, audit §2.3)', (
     expect(stats.droppedRowCount).toBe(0) // the period header carries no money-shaped token after date-scrub
   })
 
+  it('counts a booking row dropped for a DATE-parse failure (malformed / no-anchor date) — SHAPE not parse', () => {
+    // "31.02.2026" is date-SHAPED but not a valid calendar date → parseLine drops the row; it is still a
+    // booking-row shape the parser couldn't read, so it IS counted (a parse-gated check would silently miss
+    // it and let the answer keep its "whole statement" claim over a genuinely-dropped row).
+    const text = '2026-01-02 Grocery -45,90 1.954,10\n31.02.2026 Payee 90,00 EUR'
+    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
+    expect(stats.rows).toHaveLength(1) // the malformed-date row dropped
+    expect(stats.droppedRowCount).toBe(1) // …but counted (date-SHAPE test, not date-PARSE)
+  })
+
+  it('a money-bearing line whose DESCRIPTION leads (no date-shaped token) is NOT counted (FX/memo exclusion)', () => {
+    // The plain-path mirror of the geometry Valuta/FX second baseline: a follower line with a figure but no
+    // leading date token is a memo/reference, never a transaction — counting it would falsely gate the read.
+    const text = '2026-01-02 Grocery -45,90 1.954,10\nAuftraggeber Hausverwaltung 12,50 CHF'
+    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
+    expect(stats.droppedRowCount).toBe(0)
+  })
+
   it('extractTransactionRows stays the rows-only wrapper (byte-identical array result)', () => {
     const text = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'
     const rows = extractTransactionRows([chunk(text, 1)], 'EUR')

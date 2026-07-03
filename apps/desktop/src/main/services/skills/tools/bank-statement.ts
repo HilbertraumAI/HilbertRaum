@@ -188,6 +188,16 @@ export interface ExtractTransactionsOutput {
 // a balance column), so a no-balance "Umsätze" listing with numeric payees (`REWE … 1234`) is preserved.
 const DESC_TRAILING_NUMBER = /(?:^|\s)[-+(]?\d[\d.,']*[-)]?$/
 
+// A line whose FIRST whitespace token is DATE-SHAPED — a dotted/slashed `d?d.m?m.[yy[yy]]` (bare/2-digit/
+// 4-digit year) or an ISO `yyyy-mm-dd` — regardless of whether that date PARSES. Used ONLY by the U1
+// dropped-row counter (audit §2.3): a transaction row dropped PURELY because its leading date could not be
+// completed (a malformed calendar date, or a 2-digit/bare year with no document anchor) has
+// `splitLeadingDates().dates.length === 0`, so a parse-gated check would silently miss it and let the answer
+// keep its "whole statement" claim over a genuinely-dropped row. Matching the SHAPE (not the parse) counts it,
+// while still excluding a memo / FX-reference continuation line whose DESCRIPTION leads (the geometry
+// multi-baseline case). It is intentionally looser than a valid date: a mis-read `31.02.2026` still counts.
+const LEADING_DATE_SHAPE_RE = /^(?:\d{1,2}[./]\d{1,2}[./]\d{0,4}|\d{4}-\d{2}-\d{2})(?=\s|$)/
+
 /**
  * Parse one transaction line. Returns the row plus `ambiguousAmount` — true when the row has exactly one
  * money token AND its description ends in a bare number the 2-dp scan rejected (F1). On a statement with a
@@ -568,15 +578,15 @@ export function extractTransactionsWithStats(
         continue
       }
       // U1 (audit §2.3): a rejected, non-continuation line that looks like a TRANSACTION the parser could
-      // not read — a LEADING booking date AND a money-shaped token — is counted, so the answer gates its
-      // "whole statement" claim (a currency-less row, an empty-description figure row, a fused-amount row).
-      // The leading-date requirement is load-bearing: it excludes a money-LESS header/period line AND a
-      // memo / FX-reference continuation line (a Valuta+foreign-currency second baseline whose description
-      // leads, so it carries no leading BOOKING date) — those carry figures but were never transactions, so
-      // counting them would falsely gate a correctly-read statement (the geometry multi-baseline case).
-      if (splitLeadingDates(line, dateOrder, dateAnchor).dates.length > 0 && hasMoneyToken(line)) {
-        droppedWithFigure++
-      }
+      // not read — a DATE-SHAPED leading token AND a money-shaped token — is counted, so the answer gates its
+      // "whole statement" claim (a currency-less row, an empty-description figure row, a fused-amount row, OR
+      // a row dropped purely because its leading date failed to PARSE — a mis-read/no-anchor date). The
+      // leading-date-SHAPE test is load-bearing: it excludes a money-LESS header/period line AND a memo /
+      // FX-reference continuation line (a Valuta+foreign-currency second baseline whose DESCRIPTION leads, so
+      // it carries no leading date token) — those carry figures but were never transactions, so counting them
+      // would falsely gate a correctly-read statement (the geometry multi-baseline case). SHAPE (not parse) so
+      // a `31.02.2026`/`03.05.26`-no-anchor booking row still counts (parse-gated it would silently miss it).
+      if (LEADING_DATE_SHAPE_RE.test(line) && hasMoneyToken(line)) droppedWithFigure++
       pending = null
     }
     if (parsed.length >= MAX_TRANSACTIONS) break

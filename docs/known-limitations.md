@@ -627,14 +627,19 @@ password recovery — are documented in
   `dropped_row_count` per extraction (`bank_statements`/`invoices`, nullable — pre-U1 rows read NULL and the
   answer simply omits the gate) — how many money-bearing lines the parser **rejected** (a currency-less /
   empty-description / fused-amount / ambiguous-balance-as-amount row; a *money-shaped* token via the shared
-  `hasMoneyToken`, so a bare reference integer never counts). A **leading booking date is required** for a
-  bank line to count, so a memo / FX-reference continuation line (the geometry Valuta second baseline, whose
-  description leads) and a money-less header are excluded — they carry figures but were never transactions,
-  and counting them would falsely gate a correctly-read statement. When `> 0` the deterministic answer
-  **replaces the "across the whole statement" / "the whole invoice" headline** with an honest *"**N** read;
-  **M** line(s) with figures I couldn't parse"* (`countPartial`, EN+DE du-form); and a D56-**contradicted**
-  statement now uses a **`countContradicted`** headline instead of claiming "the whole statement" over a body
-  that refuses a total — killing the self-contradicting count line. The currency-adjacent bare-integer read
+  `hasMoneyToken`, so a bare reference integer never counts). A **leading date-SHAPE is required** for a bank
+  line to count (`LEADING_DATE_SHAPE_RE` — the SHAPE, not a successful parse, so a mis-read `31.02.2026` /
+  no-anchor `03.05.26` booking row still counts), so a memo / FX-reference continuation line (the geometry
+  Valuta second baseline, whose DESCRIPTION leads) and a money-less header are excluded — they carry figures
+  but were never transactions, and counting them would falsely gate a correctly-read statement. When `> 0`
+  the deterministic answer **replaces the "across the whole statement" / "the whole invoice" headline** with
+  an honest *"**N** read; **M** line(s) with figures I couldn't parse"* (`countPartial`, EN+DE du-form) —
+  **except** when the D56 balance PROOF holds (`status === 'complete'`: printed opening + Σ == closing ties
+  out over the kept rows, so a dropped line provably did not move the balance and the read IS whole) — the
+  proof outranks the parse-gap hedge and the plain whole-statement count stands. A D56-**contradicted**
+  statement uses a **`countContradicted`** headline instead of claiming "the whole statement" over a body that
+  refuses a total — killing the self-contradicting count line (both the `complete`- and `contradicted`-status
+  interactions were caught by U1's adversarial diff review). The currency-adjacent bare-integer read
   (R1's `totalsMoney` fallback, now the shared `lastCurrencyAdjacentInteger`) is **extended to bank balance
   lines** (`lastMoneyOnLine`), so a round `Opening balance 914 $` feeds the §3.5/D56 completeness gate instead
   of silently losing it. **Both extractor versions → 8.** The **"Every match found …"** structured-extract

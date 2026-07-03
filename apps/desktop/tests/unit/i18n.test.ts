@@ -46,9 +46,11 @@ describe('t — lookup and interpolation', () => {
     // "Every match found" asserted the EXTRACTION was exhaustive — a small model / unusual layout can miss
     // a match. The honest claim is that every section was READ, not that every match was captured.
     for (const key of ['coverage.extract.whole', 'coverage.extract.sections'] as MessageKey[]) {
-      expect(t('en', key)).not.toMatch(/every match/i)
+      // Supply the {scanned} param so the REAL German renders — without it, a missing param makes `t('de')`
+      // fall back to English, and the negative assertion would inspect English (vacuously passing).
+      expect(t('en', key, { scanned: 3 })).not.toMatch(/every match/i)
       expect(t('en', key, { scanned: 3 })).toMatch(/read/i)
-      expect(t('de', key)).not.toMatch(/jeder treffer/i)
+      expect(t('de', key, { scanned: 3 })).not.toMatch(/jeder treffer/i)
       expect(t('de', key, { scanned: 3 })).toMatch(/gelesen/i)
     }
   })

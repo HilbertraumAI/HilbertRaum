@@ -345,11 +345,19 @@ budget call sites (chat.ts + rag/index.ts ×2). **Supporting edit outside the pl
 shared `hasMoneyToken`/`lastCurrencyAdjacentInteger` primitives — the shared-primitives home; DRY over
 duplicating invoice's inline logic into bank). **Data contract:** `dropped_row_count INTEGER` nullable —
 NULL = pre-U1 (gate omitted, never falsely 0); 0 = every money-shaped line parsed; >0 = the partial headline
-fires. Never logged/audited/exported (a provenance count, CONTENT-CLASS adjacent). **+23 net-new tests**
-(droppedRowCount bank+invoice incl. clean-is-0 + geometry-FX-excluded, currency-adjacent balance ±sign +
-no-currency-drop, `countPartial`/`countContradicted` analysis, `logSkillFenceReduction` ids-only, SKILL.md
-rules-lead ×8, badge soften EN+DE); version-pin + geometry-contradicted tests updated to the gated headlines;
-full suite green (**2957** passed / 41 skipped) + typecheck. **Residuals (documented in known-limitations):**
+fires. Never logged/audited/exported (a provenance count, CONTENT-CLASS adjacent). **+26 net-new tests**
+(droppedRowCount bank+invoice incl. clean-is-0 + geometry-FX-excluded + malformed/no-anchor-date-row counted +
+DESCRIPTION-leads excluded, currency-adjacent balance ±sign + no-currency-drop, `countPartial`/`countContradicted`
+/complete-outranks-dropped analysis, `logSkillFenceReduction` ids-only, SKILL.md rules-lead ×8, badge soften
+EN+DE); version-pin + geometry-contradicted tests updated to the gated headlines; full suite green (**2960**
+passed / 41 skipped) + typecheck. **Adversarial 4-lens diff review (each finding independently verified):**
+1 MEDIUM + 2 LOW, all CONFIRMED + FIXED — (M) `countPartial` fired even when D56 `status==='complete'`,
+contradicting the body's proven-whole total → **D56 `complete` now OUTRANKS the parse-gap gate** (a dropped
+line on a tying statement provably didn't move the balance, so the read IS whole → plain count); (L) the bank
+counter required the leading date to PARSE, so a malformed/no-anchor-date booking row was silently uncounted →
+switched to a leading-date-**SHAPE** test (`LEADING_DATE_SHAPE_RE`, still excludes DESCRIPTION-leading FX/memo
+lines); (L) a vacuous German i18n negative assertion (`t('de')` w/o param → English fallback) → param supplied.
+**Residuals (documented in known-limitations):**
 a round-integer-ONLY line with no decimal and no currency marker is uncounted (MONEY_RE's own figure
 definition; indistinguishable from a quantity/reference); the fence trim/omit surfaces only in the LOG, not
 yet a coverage-meter badge (renderer / `CoverageInfo` surface outside U1's file scope — a follow-up). Next: U2

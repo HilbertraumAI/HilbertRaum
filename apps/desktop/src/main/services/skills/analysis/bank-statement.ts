@@ -500,17 +500,23 @@ export function buildBankAnswer(
   const { rows, summary, reconcile, categories, status, modelAssisted, dateOrderInferred } = data
   if (rows.length === 0) return tr('skills.bankAnalysis.empty')
 
-  // U1 (audit §2.3): the headline count is honesty-gated. A dropped figure (parse gap) is the strongest
-  // caveat; else a `contradicted` D56 status still avoids the "whole statement" claim (the printed balances
-  // refute the rows); else the plain "across the whole statement" line stands. The extractor read every
-  // section — this gates the exhaustiveness of the TRANSACTIONS, not the reading pass (see the caveat).
+  // U1 (audit §2.3): the headline count is honesty-gated. The D56 completeness PROOF outranks the parse-gap
+  // hedge: when the printed opening + Σ == closing ties out over the kept rows (`status === 'complete'`), a
+  // dropped money line provably did NOT move the balance (a non-transaction figure), so the read IS the whole
+  // statement and the plain "across the whole statement" line is honest — a `countPartial` hedge would both
+  // contradict the proven-whole total the body then presents AND be factually less accurate. Otherwise a real
+  // parse gap (`dropped > 0`) drops the "whole statement" claim for the honest partial; else a `contradicted`
+  // balance uses the no-whole-claim headline (the printed balances refute the rows); else the plain line. The
+  // extractor read every section — this gates the exhaustiveness of the TRANSACTIONS, not the reading pass.
   const dropped = data.droppedRowCount ?? 0
   const countLine =
-    dropped > 0
-      ? tr('skills.bankAnalysis.countPartial', { count: rows.length, dropped })
-      : status === 'contradicted'
-        ? tr('skills.bankAnalysis.countContradicted', { count: rows.length })
-        : tr('skills.bankAnalysis.count', { count: rows.length })
+    status === 'complete'
+      ? tr('skills.bankAnalysis.count', { count: rows.length })
+      : dropped > 0
+        ? tr('skills.bankAnalysis.countPartial', { count: rows.length, dropped })
+        : status === 'contradicted'
+          ? tr('skills.bankAnalysis.countContradicted', { count: rows.length })
+          : tr('skills.bankAnalysis.count', { count: rows.length })
   const lines: string[] = [countLine]
 
   // Surface unreconciled rows BEFORE the total (printed balance disagrees with the amounts).
