@@ -6,6 +6,9 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation CLOSE-OUT: reconcile the stranded U1-review fix + fold the plan/audit into a design record — branch `fix/skills-close` (off `fix/skills-t1`), UNMERGED.**
+"Closing the plan" session (plan §0.2 all `[x]`); two commits. **Part A — integration pre-flight.** `git branch --merged fix/skills-t1` confirmed `master` + every phase branch (r5/r6, w1–w5, u2–u5, a1–a3; r1–r4 folded to `master`) ⊆ the tip, with ONE stranded commit: `42a4eb9` on `fix/skills-u1` (a real U1-review correctness fix never carried onto the chain — `git grep LEADING_DATE_SHAPE_RE fix/skills-t1` was empty). Cherry-picked as its own commit (`4c1cd64`): the source regions matched its pre-image so the two `.ts` hunks applied clean + the two docs 3-way-auto-merged (no conflict markers). **Semantics preserved:** **D56 `status==='complete'` now OUTRANKS the parse-gap gate** in `buildBankAnswer` (a dropped line on a statement whose kept rows tie opening+Σ==closing provably didn't move the balance → the read IS whole → plain count, not a self-contradicting `countPartial` hedge over the body's proven-whole total), and the bank dropped-row counter switched from a date-**PARSE** test (`splitLeadingDates(...).dates.length > 0`) to a leading-date-**SHAPE** test (`LEADING_DATE_SHAPE_RE`) so a malformed/no-anchor booking row (`31.02.2026`, `03.05.26`) still counts; `contradicted` → `countContradicted` unchanged. **No extractor-version bump owed** — the T1 output-snapshot guard (`extractor-realworld.test.ts`) stayed green (no corpus-fixture output moved; fixtures clean, `droppedRowCount` 0), so `BANK_EXTRACTOR_VERSION` stays **8**. **Part B — fold + retire.** The 20-phase plan + 56-finding audit are condensed into **`architecture.md` §39** "Skills & Tools audit (2026-07-02) — remediation wave close-out" (the three root-cause decisions §8.1/§8.2/§8.3 as the spine → **W3·W4** third mode / **A3·W2** whole-doc gate inversion / **W5·U4** one trigger vocabulary; a per-phase disposition table R/W/U/A/T → audit §§ → code home; posture-held paragraph) plus a **§-anchor legend** mapping every cited `audit §N.M` (§2.1–§8.3) and phase id (R1–R6/W1–W5/U1–U5/A1–A3/T1) into §39 so the in-code/SKILL.md citations stay resolvable (the doc-lifecycle stable-anchor intent; the §23 predecessor's precedent). `rag-design.md` §14 gained a W1/A3/R4 cross-ref; `known-limitations.md` points its skills `audit §` residuals at §39 and keeps the open ones (incl. the T1-surfaced **`USt ∈ TOTALS_FILLER but ∉ TAX_LABELS`** phantom-item gap). **Both working papers DELETED** (`git rm docs/skills-remediation-plan.md docs/skills-audit-2026-07-02.md` — full originals in git history, present through `4c1cd64` / `fix/skills-t1`); the two BUILD_STATE historical links re-pointed to §39, so no dangling clickable link to either file remains in live docs/source/tests (the filename strings survive only as retired-paper history noise here + in §39's own prose). **Manual German 4096-ctx smoke** of the three complaint flows is now AUTOMATED by T1's `skills-smoke.test.ts` (`describe.runIf`); **not run this session** — no local GGUF at `D:/models` (env unset → the 3 smoke tests stay collected-but-skipped). `npm test` **3071 pass / 44 skip** (+3 vs T1's 3068 = 42a4eb9's new tests) + `npm run typecheck` green. Branch left **UNMERGED** (integration to `master` is a separate owner decision). Non-goals honored: no wave→`master` merge, no behavior change beyond faithfully reconciling `42a4eb9`, no phase-history rewrite, record not ballooned beyond decisions+facts+as-built._
+
 _2026-07-03 — **Skills remediation T1: eval & fixture infrastructure + real-model smoke — branch `fix/skills-t1`, UNMERGED.**
 Track-T (plan §T1; audit §7 recs 1/2/5), branched off `fix/skills-a3` (deps R1–R2, in the phase-branch chain; plan/audit docs live on the chain,
 not `master`). Root cause: committed extractor fixtures were synthetic + post-hoc (built to match the parser), so every real-layout incident
@@ -860,7 +863,8 @@ the LLM enough room"). Multi-agent audit (111 agents; 108 raw → 73 deduped fin
 adversarially verified against the working tree): **56 confirmed (2 critical / 17 high / 26 medium
 / 11 low), 5 refuted, 12 testing-dimension findings only partially verified** (spend limit hit; the
 4 load-bearing ones re-verified by hand, incl. running the trigger eval harness). Full report +
-prioritized remediation plan: [`docs/skills-audit-2026-07-02.md`](docs/skills-audit-2026-07-02.md).
+prioritized remediation plan (`docs/skills-audit-2026-07-02.md`, **retired 2026-07-03** — folded into
+[`architecture.md`](docs/architecture.md) §39).
 Headlines: (1) **[CRITICAL]** a multi-document scope silently disables every whole-document engine
 → ~2-chunk top-k (the root cause of the partial-document complaint, compounded by: whole-doc =
 prefix read with NO in-prompt truncation notice at the default 4096 ctx; keyword under-fire; auto-
@@ -879,7 +883,8 @@ correctness (report §5.2–§5.6: label matching, normalization pre-pass, Germa
 compare direction, stale-row exports, sepa rule — each with extractor version bump + real-layout
 fixtures), then P1 = the coverage/routing redesign (report §8).
 **UPDATE (same day):** remediation plan written —
-[`docs/skills-remediation-plan.md`](docs/skills-remediation-plan.md): 20 one-session phases
+`docs/skills-remediation-plan.md` (**retired 2026-07-03** — folded into
+[`architecture.md`](docs/architecture.md) §39): 20 one-session phases
 (R1–R6 correctness, W1–W5 complaint drivers, U1–U5 reach/trust, A1–A3 architecture, T1 eval
 infra) with pre-made design decisions, per-phase copy-paste session prompts (Opus 4.8-tuned,
 context-budget rules), dependency order and a status tracker (plan §0.2). Sessions execute ONE

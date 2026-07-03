@@ -1043,6 +1043,15 @@ data tables live in [`db.ts`](../apps/desktop/src/main/services/db.ts); everythi
 encryption. Summaries, the content cache, extraction records, and node vectors are **content** — never
 logged or audited; audit events stay ids/kinds/counts._
 
+> **Skills remediation wave (2026-07-02) touched this machinery** — the coverage-honesty, budget, and
+> gate changes are recorded in [`architecture.md`](architecture.md) §39: **W1** (audit §2.2) added the
+> in-prompt partial-document notice, the 1.5 German-subword whole-doc/compare budget divisor, char-based
+> (KMP) chunk de-overlap, and the tree-ceiling `coverage.truncated` flip; **A3** (audit §8.2) inverted the
+> whole-doc gate so an `analysis:`-mode skill over a fully-chunked scope defaults to this engine
+> (`isNeedleShaped` downgrades to top-k only when the whole-doc read would truncate); **R4** (audit §5.1)
+> made the symmetric-compare pair deterministic (A/B by import date). See §39's §-anchor legend for the
+> `audit §N.M` mapping.
+
 ### 14.1 Cap honesty + the `fully_chunked` invariant (C1/C2/C4/M13)
 
 The 1000-chunk-per-document cap used to **silently drop** an over-cap document's tail (the doc still

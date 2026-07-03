@@ -1,6 +1,6 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-06-29. The §27–§34 design records carry the 2026-06-29 full and post-merge audit ledgers (final suite 2532). Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. The transcriber/dictation/OCR sections carry the backend-audit-2026-06-27 cancellation & timeout records (REL-1/2/3/6). Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
+_Last updated: 2026-07-03 (**§39** folds the 2026-07-02 Skills & Tools remediation wave — 20 phases across tracks R/W/U/A/T, suite 3071 — and retires its plan + audit working papers; its §-anchor legend keeps every `audit §N.M` / phase-id citation resolvable). Prior: 2026-06-29. The §27–§34 design records carry the 2026-06-29 full and post-merge audit ledgers (final suite 2532). Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. The transcriber/dictation/OCR sections carry the backend-audit-2026-06-27 cancellation & timeout records (REL-1/2/3/6). Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
 
 ## Overview
 
@@ -5206,6 +5206,145 @@ relocation** — the full doctasks suite (154 tests) and the Documents renderer 
 green before and after, and the whole suite is unchanged at **2593 passed / 39 skipped** (+4 vs Phase 7's
 2589, all from SEC-4). The SEC-4 validator, the FE-E route, and the REL-5 wording are the only P8 behavior/
 doc deltas; `npm run typecheck` + `npm run build` green.
+
+
+### §39 Skills & Tools audit (2026-07-02) — remediation wave close-out
+
+A four-axis audit (triggering, coverage, determinism-vs-LLM, architecture) swept the whole Skills &
+Tools surface and filed **56 findings** — but read them as symptoms of **three design decisions**
+(audit §8), not 56 independent bugs. A **20-phase plan** across five tracks (**R** correctness / **W**
+complaint-drivers / **U** reach-&-trust / **A** architecture pay-down / **T** eval-infra) landed all of
+them on a cumulative branch chain tipped by `fix/skills-t1`. Both working papers —
+`docs/skills-remediation-plan.md` (the plan + its §0.2 phase tracker, whose per-phase `[x]` outcome
+notes are the condensed as-built decisions) and `docs/skills-audit-2026-07-02.md` (the report) — were
+**deleted** under the CLAUDE.md doc-lifecycle rule once fully implemented; the full originals stay
+recoverable in git history (present through the Part-A reconcile commit `4c1cd64` and on `fix/skills-t1`;
+removed in this close-out). This record is the durable index — read a code comment's `audit §N.M` or
+phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** below. Direct successor to
+§23 (the 2026-06-26 audit); the residuals live in [`known-limitations.md`](known-limitations.md).
+
+**The three root-cause decisions (the spine — audit §8):**
+
+1. **Third mode — LLM over extracted, verified data (§8.1 → W3/W4).** Before, a question over a
+   tool-skill doc either hit a fixed template (no model) or raw chunks (no structure). The new
+   `{mode:'grounded-data', dataBlock, postscript}` outcome streams a model answer over
+   `buildGroundedDataPrompt(question, dataBlock)` under FIXED rules — answer only from the data,
+   **quote figures verbatim, NO arithmetic**, say when the data lacks the fact, user's language (its own
+   `GROUNDED_DATA_SYSTEM_PROMPT`, history replayed so follow-ups don't re-trigger the template). The
+   figures stay deterministic (`buildInvoiceJson` / `buildStatementJson` + reconciliation + provenance,
+   capped ~150 rows) with a deterministic totals / cashflow **postscript** (verbatim) + the R5 date
+   caveat riding under it — **the LLM never computes or moves a figure**, it narrates a parsed, validated
+   extract. Invoice (W3) then bank (W4) route by ANSWER SHAPE: `detectFormat`→serializer; a narrow
+   word-anchored summary/reconcile stem list (+`warum`/`why` guard)→template; everything else→
+   grounded-data. The high-stakes summary shapes keep the template (the 4B model can misread even
+   provided figures).
+
+2. **Invert the whole-doc gate — scope-shaped, not phrasing-shaped (§8.2 → A3/W2).** Before, per-skill
+   `routeMatch` decided whole-doc vs top-k on the *phrasing*, so the whole-doc machinery was unreachable
+   by default (§2.4). Now an additive manifest `analysis: whole-doc|compare|none` (default none,
+   instruction-only, honored for instruction skills of ANY source via `manifestAnalysisHandler`) makes
+   the whole-document engine the **default** when a matching skill is explicitly active over a
+   fully-chunked scope; keywords only opt *out* (`isSmallTalk`) or distinguish a needle-ask
+   (`isNeedleShaped` → top-k ONLY when the whole-doc read would truncate AND no tree exists — W1's exact
+   budget calculus is the input; deliverable asks never downgrade). Doc-count mismatch **routes
+   deterministically** (W2: a single-doc handler NARROWS to the one manifest-signal match that is also
+   fully-chunked with an honest `scopeNarrowed` notice, else `selectOne`; `what-changed` at ≠2 →
+   `selectTwo`) instead of silently degrading; a document-plausibility gate falls the bank/invoice
+   run through to the ordinary grounded path when the doc matches no declared signal.
+
+3. **One trigger vocabulary, measured (§8.3 → W5/U4).** Before, two drifted keyword lists per skill
+   (manifest triggers vs routing gates) matched by raw substring (§4.1/§3.2). Now
+   `services/skills/vocabulary.ts` single-sources each skill's bilingual `{term,lang,match,use}`; `match`
+   drives ROUTING (word-boundary via `wordIncludes`), the SUGGESTION scorer word/phrase-infers from the
+   manifest string; every routing gate calls `routeMatch(skillId,q)` and the 8 `SKILL.md`
+   `triggers.keywords` regenerate from the `suggest|both` terms (bidirectional parity test). Scoring
+   gained a keyword-REQUIRED gate (a lone doc signal never fires) + longest-match dedupe. An **82→90-item,
+   8-skill eval corpus** gates both thresholds (keyword-required suggestion precision **98.4 %**;
+   auto-fire threshold-3 **fired-wrong 0 / precision 100 %**). Only then (U4) did
+   bank-statement/invoice/meeting-protocol opt into `triggers.autoFire` (default-OFF) with doc signals
+   **narrowed to explicitly-scoped docs** so whole-corpus scope can't vacuously corroborate (§4.4).
+
+**As built, per track (disposition — the full detail is the §0.2 tracker in git history):**
+
+| Phase | Audit §§ | Disposition (one line) | Code home |
+|---|---|---|---|
+| R1 | §5.3 | `normalizeExtractionText` pre-pass (U+2212 / NBSP) at every money/row entry point + sign-aware bare-integer total | `tools/money.ts`, `tools/{bank-statement,invoice}.ts` |
+| R2 | §5.2, §5.4 | structural `labelBoundaryOk` + `isFillerOnly` totals gate (kills the `Steuerberatung`→taxTotal theft); German NET/GROSS labels; header-date consumes only when a date parses | `tools/{invoice,bank-statement}.ts` |
+| R3 | §5.6, §5.5 | staleness re-extraction in the shared prepare path (run-bar + JSON/CSV/XML exports re-extract stale rows); `sepa`/`überweisung` → `confident:false` so the LLM categorizer sees the row | `run.ts`, `categorizer.ts`, `tool-runs.ts` |
+| R4 | §5.1, §4.6 | one `documentsInScope` deterministic order (compare pair labelled A/B by import date, never old/new); id-projection grep-hygiene pin | `analysis/*`, `registerRagIpc.ts`, `what-changed/SKILL.md` |
+| R5 | §5.7 | anchor-gated `parseDate` (2-digit-year + bare `dd.mm.`), cross-year month rollover on plain + geometry; additive `date_order_inferred` → one honest caveat (en+de) | `tools/{bank-statement,invoice}.ts` |
+| R6 | §5.7 | per-page/segment bounded continuation-association (wrapped descriptions); identity-gated invoice column-debris cleanup (`taxRatePercent`) firing only when qty×unit ≈ lineTotal | `tools/{bank-statement,invoice}.ts` |
+| W1 | §2.2 | in-prompt partial-document notice; 1.5 German-subword whole-doc/compare budget divisor; char-based (KMP) chunk de-overlap; tree ceiling flips `coverage.truncated` | `rag/index.ts`, `rag/whole-doc-tree.ts` |
+| W2 | §2.1, §3.4, §4.5 | doc-count-agnostic `intends()`/`fallThrough`; W2 pre-pass narrows-or-routes; zero-row plausibility gate → grounded fallthrough | `registerRagIpc.ts`, `analysis/*`, `selector.ts` |
+| W3 | §3.1, §8.1 | the third-mode seam (`grounded-data.ts`) + invoice answer-shape routing + totals postscript + Details block | `analysis/invoice.ts`, `rag/grounded-data.ts` |
+| W4 | §3.1, §3.3, §3.6 | bank port (`buildStatementDataBlock` / `buildCashflowPostscript`); honest `transactionsMore` + CSV intros | `analysis/bank-statement.ts` |
+| W5 | §4.1, §3.2, §4.2, §8.3 | `vocabulary.ts` single-source + `routeMatch` / `countKeywordHits` + keyword-required gate; 82-item 8-skill corpus | `skills/vocabulary.ts`, `selector.ts` |
+| U1 | §2.3, §3.6, ux-10/11 | additive `dropped_row_count`; `countPartial` / `countContradicted` headlines; **D56 `complete` outranks the parse-gap gate**; date-**SHAPE** counter (`LEADING_DATE_SHAPE_RE`) — incl. the reconciled `42a4eb9` | `tools/bank-statement.ts`, `analysis/bank-statement.ts` |
+| U2 | §5.7, §3.4, §3.5 | Luhn `[CARD]` + 0-leading phone guard + either-order / 2-digit-year dates; read-only `scanRedactionCandidates` (dry-run + share-safe pre-scan, truncation-gated verdict) | `tools/redaction.ts`, `analysis/redaction.ts` |
+| U3 | §4.3, ux-6 | per-turn skill apply (session override) + undo on every stamped turn + `keep-for-conversation`; routed relay pins `askDocuments` to the run's doc | `ChatScreen.tsx`, `SkillRunBar.tsx`, `turn.ts` |
+| U4 | §2.4, §4.4 | auto-fire signals narrowed to explicitly-scoped docs; redaction manifest↔handler aligned; bank/invoice/meeting opt-in (default-off) | `skills/autofire.ts`, `scope-signals.ts` |
+| U5 | §3.6, §6.2, ux | de du-sweep + lint guard; `needsExtraction` names the real button; honest "read-only may auto-run" copy; per-export save-dialog metadata; ephemeral analysis notice | `i18n/{en,de}.ts`, `tool-runs.ts`, `SKILL.md`×8 |
+| A1 | §6.1, §6.4 | invoice-run's layer-for-layer copy folded into ONE `DomainRunConfig`-driven engine (`runDomainExtractionInner`); shared `analysis/common.ts` | `run.ts`, `invoice-run.ts`, `analysis/common.ts` |
+| A2 | §6.2 | `shared/skill-tools.ts` self-describing `SkillToolDescriptor` single-sources the wired-tool lists + labels + dialogs; `SkillRunController` scoped per-document | `shared/skill-tools.ts`, `run-controller.ts` |
+| A3 | §6.3, §8.2 | manifest `analysis:` mode + inverted whole-doc gate (`manifestAnalysisHandler`; `isNeedleShaped` / `isSmallTalk` skill-agnostic) | `analysis/whole-doc-skills.ts`, `registerRagIpc.ts` |
+| T1 | §7 | real-layout fixture corpus run through the production extractors + output-**SNAPSHOT** version-bump guard + env-gated real-model smoke (`describe.runIf`, skipped in CI) | `tests/{fixtures/real-layouts,integration/extractor-realworld,e2e-model}` |
+
+Both extractor versions climbed to **8** over the wave (R1→4, R2→5, R5→6, R6→7, U1→8) — every extractor
+behavior change bumps by exactly 1 so stale rows re-extract — and the T1 output-snapshot guard
+(`extractor-realworld.test.ts`) now FAILS the default suite on any corpus-fixture output change unless the
+version was bumped AND the snapshot regenerated. The `42a4eb9` U1-review fix was reconciled onto the tip
+in this close-out's **Part A** and owed **no** version bump (no corpus-fixture output moved; the fixtures
+are clean, `droppedRowCount` 0). Suite at close: **3071 passed / 44 skipped** (incl. the 3 collected-but-
+skipped smoke tests) + typecheck.
+
+**Posture held across all 20 phases (load-bearing):** offline / no telemetry; the **content class**
+(skill bodies, the draft question, extracted figures, redacted text, document text **and**
+titles/filenames) is never logged / audited / exported — only ids/counts cross the IPC/audit boundary;
+schema changes are additive-nullable (`dropped_row_count`, `date_order_inferred`, `taxRatePercent`); LLM
+prompts stay English; **the LLM never computes or moves a figure** (§8.1's load-bearing rule); every
+behavioral change was adversarially diff-reviewed + teeth-checked. Whole-doc / compare / budget-honesty
+detail cross-refs [`rag-design.md`](rag-design.md) §14; the Tier-2 gate / analysis-mode security posture is
+in [`security-model.md`](security-model.md).
+
+#### §-anchor legend (audit 2026-07-02 + remediation phase ids)
+
+The retired plan + audit are cited across the skills code, the 8 `SKILL.md` bodies, and the kept docs by
+**`audit §N.M`** and **phase id** (`R1`–`R6`, `W1`–`W5`, `U1`–`U5`, `A1`–`A3`, `T1`); those numbers were
+never renumbered, so this legend keeps them **resolvable** (the doc-lifecycle "stable anchors" intent)
+without churning the comments. Read a historical anchor as:
+
+| Historical anchor | Meaning (audit 2026-07-02) | Landed in |
+|---|---|---|
+| §2.1 | Multi-doc scope silently disables every whole-doc engine | W2 (§39) + known-limitations |
+| §2.2 | "Whole document" is a silent prefix read at default context | W1 + `rag-design.md` §14 |
+| §2.3 | Silent row drops asserted as exhaustive reads | U1 (`droppedRowCount`) |
+| §2.4 | Whole-doc machinery unreachable by default | A3 gate inversion + U4 auto-fire |
+| §3.1 | Fixed templates intercept every keyword-matched question | W3 / W4 third mode |
+| §3.2 | Substring gates fail in both directions | W5 word-boundary matcher |
+| §3.3 | Bank template points at a nonexistent escape hatch | W4 (honest `transactionsMore`) |
+| §3.4 | Routing / scope-policing delegated to the model | W2 + U2 dry-run |
+| §3.5 | share-safe: the LLM owns what determinism should | U2 share-safe pre-scan |
+| §3.6 | Smaller determinism items (CSV honesty, badges) | U1 / U5 |
+| §4.1 | Two drifted keyword vocabularies per skill | W5 vocabulary single-source |
+| §4.2 | Raw-substring suggestion + biased scoring | W5 scoring |
+| §4.3 | Sticky-default: no per-turn apply / undo | U3 |
+| §4.4 | Auto-fire corroboration vacuous at whole-corpus scope | U4 narrowed signals |
+| §4.5 | No document-plausibility gate | W2 plausibility gate |
+| §4.6 | "One scope query" already violated | R4 `documentsInScope` |
+| §5.1 | `what-changed` compare direction unspecified | R4 A/B labelling |
+| §5.2 | Invoice label-prefix consumes line items as totals | R2 `labelBoundaryOk` / `isFillerOnly` |
+| §5.3 | Unicode-minus / NBSP side doors | R1 normalization pre-pass |
+| §5.4 | Missing German totals labels → phantom items | R2 label set |
+| §5.5 | `'sepa'` rule blocks the LLM for de-AT rows | R3 `confident:false` |
+| §5.6 | Run-bar serves / exports stale-extractor rows | R3 staleness re-extraction |
+| §5.7 | Medium/low extraction (dates, column debris, redaction gaps) | R5 / R6 / U2 |
+| §6 / §6.1 | Second domain added by copy, not parameterization | A1 run seam |
+| §6.2 | A 9th tool skill costs ≥10 files across four layers | A2 self-describing registry |
+| §6.3 | Routing intelligence is app code; skills portable in name only | A3 manifest analysis mode |
+| §6.4 | Shared handler plumbing | A1 / A2 (`analysis/common.ts`) |
+| §7 | Testing & evaluation infrastructure | T1 |
+| §8.1 / §8.2 / §8.3 | The three root-cause recommendations | the spine above (W3·W4 / A3·W2 / W5·U4) |
+| `R#` / `W#` / `U#` / `A#` / `T1` phase ids | The 20 remediation phases (5 tracks) | the disposition table above (§39) |
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
