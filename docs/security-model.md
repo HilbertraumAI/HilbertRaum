@@ -651,10 +651,20 @@ network, read other files, or widen document scope (the structural ceilings, §1
 Tier-2 is where a skill can finally *do* something beyond inject text — so S10 builds the **gate
 before the tools**. A skill still cannot register a tool: tools live only in the app's static
 `services/skills/tool-registry.ts` map, and a skill merely *declares* names via `allowedTools`. The
-effective set is the three-way intersection `declared ∩ registry ∩ userGrant` — a name the registry
-doesn't know, or the user hasn't granted, is dropped. Runs are **app-orchestrated** (DS4/§2): the
-model never parses `tool_calls`; the app invokes `runSkillTool` and the model only *explains* the
-validated, structured result.
+effective set is `declared ∩ registry ∩ wired` (`resolveWiredTools`) — a name the app never registered
+or wired is dropped. Runs are **app-orchestrated** (DS4/§2): the model never parses `tool_calls`; the
+app invokes `runSkillTool` and the model only *explains* the validated, structured result.
+
+**A2 (audit §6.4-low) simplified the effective-set signature.** The old third leg was a per-tool
+`userGrant`, but **no grant UI ever shipped**, so `resolveEffectiveTools(declared, declared)` fed the
+package's *own declaration* in as its "grant" — a no-op that made the grant look load-bearing when it
+was vestigial (the manifest `permissions` also render identically for all eight bundled skills —
+display-only). A2 **deleted the grant leg** (`resolveWiredTools(declared)`): the effective set now only
+ever **shrinks** a declaration (drops names the app never registered/wired), and the source-based run
+gate `skillCanRunTools` (SEC-1, below) is the trust decision — a skill still cannot register or
+self-grant a tool. The real differentiator a user sees between skills is the **tool list**, not the
+uniform permission badges. A future per-tool grant UI would re-introduce a real third leg; until then
+the signature reflects what actually gates trust.
 
 The containment is **structural, not policy** — it rests on what the tool's context does and does not
 expose:
@@ -791,7 +801,8 @@ localization fixes added no content to any log/audit and no new capability.
 decision is now explicit.** The `kind:'tool'` flip above made a declared `allowedTools` *effective*
 for any non-instruction skill, and the run/runnable surface gated on enabled/compatibility/confirm but
 **never on `source`** — while `resolveEffectiveTools(declared, declared)` collapsed the "user grant"
-to "whatever the package declared." So a user could import a `.skill.zip` with
+to "whatever the package declared" (A2 later removed that no-op leg entirely — see "A2 simplified the
+effective-set signature" above; the helper is now `resolveWiredTools(declared)`). So a user could import a `.skill.zip` with
 `kind: tool` + `allowedTools: [extract_transactions, redact_document, export_transactions_csv, …]`,
 enable it, and drive the bank/invoice/redaction machinery over their own documents. The blast radius
 **is** structurally bounded (the §14 ceiling: no `Db`/SQL/FS/net handle, a single frozen-scope

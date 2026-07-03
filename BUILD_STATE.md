@@ -6,6 +6,37 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation A2: self-describing tool registry + per-document run controller — branch `fix/skills-a2`, UNMERGED.**
+Track-A (plan §A2; audit §6.2 "a 9th tool skill costs ≥10 files across four layers" + §6.4-low "vestigial trust plumbing"), branched off
+`fix/skills-a1` (dep: U5; plan/audit docs live on the phase-branch chain, not `master`). **Behavior-preserving EXCEPT the two fixes the
+plan calls out: per-document run concurrency + per-export dialog metadata.** Root cause: every tool name was repeated across ~9 hardcoded
+sites (a wired-list, an 11-case runner switch, the renderer label/done maps, two save-dialog constants, two locale catalogs) and the
+drift shipped user-visible bugs — one CSV save dialog served EVERY export, and one app-wide `SkillRunController` fired "a skill is already
+working" across unrelated conversations. **The fold:** NEW `shared/skill-tools.ts` single-sources ONE `SkillToolDescriptor` per WIRED tool
+(`{name, labelKey, seamKind:extract|downstream|export, confirm, resultShape:count|reconcile|redaction, doneKey?/reconcileKeys?/redactionKeys?,
+dialog?}`) — **pure data importable from BOTH processes** (like `shared/i18n`), so the renderer builds its copy maps from the SAME table the
+main dispatch uses (no `run` closures / node imports cross the boundary). Derived from it: `WIRED_TOOL_NAMES` (the wired-list), the
+`buildToolRunner` guard (a tool with no descriptor → `null` before the switch — descriptor↔switch can't drift), `SkillRunBar`'s label +
+`doneMessage` (branch off `resultShape`, keys from the descriptor — the renderer holds NO per-tool copy map), and each export's save-dialog
+(`descriptor.dialog`, replacing the four `SAVE_DIALOG_*` constants + the `toolName === json ? … : …` conditional). **Generic count:**
+`ToolRunOutcome.transactionCount`→domain-neutral `count` (the channel also carried invoice line-item + redaction counts under a bank name);
+producers emit `count`, `SkillRunController.finish` mirrors it onto BOTH `count` and the **deprecated** `SkillRunState.transactionCount`
+alias (one release), renderer reads `count ?? transactionCount`. **Per-document controller:** `SkillRunController` now keys a
+`Map<documentId, ActiveRun>` (`start` takes `documentId`; `isRunning(documentId?)`; `get/cancel/clear` search by handle) — refuses only a
+second run on the SAME document, so unrelated documents/chats run in parallel; the doc-lock (`withDocumentLock`, PC-1/architecture.md
+§9) remains the real serializer of true same-document write conflicts, so this is safe. **Trust plumbing:**
+`resolveEffectiveTools(declared, declared)` → `resolveWiredTools(declared)` = `declared ∩ registry ∩ wired` — the vestigial `userGrant`
+leg (a no-op that fed the package's own declaration in as its "grant") deleted until a real grant UI exists; SEC-1 `skillCanRunTools`
+(source-based) is unchanged and remains the trust decision — a skill STILL cannot register or self-grant a tool. **Data contract (additive):**
+`SkillRunState.count` (canonical) + `transactionCount` (deprecated mirror); `ToolRunOutcome.count`; `StartRunArgs.documentId` (required).
+Docs: security-model.md "Skill tool ceiling" (grant-leg removal + tool-list-is-the-differentiator), architecture.md §7 (A2 self-describing
+registry note) + §9 (per-doc controller + descriptor-driven renderer + count rename), known-limitations.md U5(4) (dialog now registry-driven).
+**+9 net-new tests:** descriptor↔registry parity ×5 (`skills-tool-registry.test.ts`: every wired name registered, only the X-2 canary lacks a
+descriptor, `WIRED_TOOL_NAMES`=descriptor order, `confirm`==`toolRequiresConfirmation`, exports carry a dialog + result-shape keys present),
+per-document concurrency + same-doc-restart + `count` alias (`skills-run-controller.test.ts`), dispatch parity every-wired-tool-builds-a-runner
+(`skills-tool-run-ipc.test.ts`); 2 raw-runner-outcome test reads migrated `transactionCount`→`count` (`skills-tool-run-ipc`/`doctasks-categorize`).
+`npm test` **3023 green** + `npm run typecheck` green._
+
 _2026-07-03 — **Skills remediation A1: one domain-parameterized run seam + shared analysis plumbing — branch `fix/skills-a1`, UNMERGED.**
 Track-A (plan §A1; audit §6.1 "the second domain was added by copy, not parameterization" + §6.4 plumbing bullet), branched off
 `fix/skills-u5` (dep: R3; plan/audit docs live on the phase-branch chain, not `master`). **STRICTLY BEHAVIOR-PRESERVING refactor —

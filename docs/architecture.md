@@ -2611,8 +2611,9 @@ higher threshold + an opt-in + a per-turn undo — see **§18**.
 ### §7 Tier-2 tool gate (S10)
 
 `services/skills/tool-registry.ts` is the **static, app-owned** map of `SkillTool`s. A skill never
-registers a tool: it only *declares* names via `allowedTools`, and the effective set is the three-way
-intersection `declared ∩ registry ∩ userGrant` (`resolveEffectiveTools`). Runs are **app-orchestrated**
+registers a tool: it only *declares* names via `allowedTools`, and the effective set is
+`declared ∩ registry ∩ wired` (`resolveWiredTools` — A2 removed the vestigial third `userGrant` leg,
+audit §6.4-low; see the A2 note below). Runs are **app-orchestrated**
 (DS4): the app calls `runSkillTool(tool, {skillId, input, ctx, confirmed})` directly. The gate's fixed
 order: (1) refuse if the `AbortSignal` is already aborted; (2) **validate input** against `inputSchema`
 (a hand-rolled JSON-Schema subset — no validator dep) and refuse **without calling the tool** on a bad
@@ -2643,6 +2644,25 @@ Full rationale in [`security-model.md`](security-model.md) "Skill tool ceiling (
 **API-3:** the audit/run-state `documentCount` is the v1 constant `1` because every wired tool is
 single-document; an in-code TODO at `registerSkillsIpc.ts` marks that it must become a **real count**
 if a multi-document tool ever lands, else the audit would understate scope.)*
+
+*(A2, audit §6.2/§6.4-low — **the self-describing tool registry**. A 9th tool used to cost ~9
+hardcoded edits (the wired-list, the runner switch, the renderer label/done maps, the save-dialog
+constants, two locale catalogs) and the drift shipped user-visible bugs: one CSV save dialog served
+**every** export, and one app-wide run controller fired "a skill is already working" across unrelated
+conversations. A2 makes ONE `SkillToolDescriptor` per wired tool in `shared/skill-tools.ts` the single
+source — `{name, labelKey, seamKind, confirm, resultShape, doneKey?/reconcileKeys?/redactionKeys?,
+dialog?}` — and **derives** the rest: `WIRED_TOOL_NAMES` (the wired-list), the `buildToolRunner` guard
+(dispatch parity — a tool with no descriptor yields `null` before the switch), the renderer's
+label/done copy (`SkillRunBar`), and each export's save-dialog metadata (`descriptor.dialog`). The
+table is **pure data importable from BOTH processes** (like `shared/i18n`), so the renderer builds its
+maps from the same source the main dispatch uses; a parity test pins descriptor ↔ registry (every
+wired name registered; the only registered tool without a descriptor is the X-2 canary; `confirm`
+matches the permission-derived `toolRequiresConfirmation`; every `export` carries a dialog). The
+bank-shaped run-outcome field `transactionCount` became the domain-neutral **`count`** (additive;
+`transactionCount` kept as a deprecated mirror on `SkillRunState` for one release; the renderer reads
+`count ?? transactionCount`). The trust model is **unchanged**: a descriptor is app-authored metadata,
+not a capability — a skill still cannot register or self-grant a tool, and `skillCanRunTools` (SEC-1)
+is the trust decision. Full rationale in [`security-model.md`](security-model.md) "Skill tool ceiling".)*
 
 ### §8 Bank-statement tools + the run seam (S11)
 
@@ -2761,18 +2781,25 @@ label + the redaction `resultKind` copy).
 ### §9 The run trigger + UI (S11b/S11c)
 
 A run is started from a **user action**, never the model. A generic controller
-`services/skills/run-controller.ts` owns the single active run's lifecycle (state/progress/cancel,
-one-at-a-time) and knows nothing about banks; the bank seam is handed in as an opaque runner by the
-dispatch `services/skills/tool-runs.ts` (the one place allowed to map a tool name to `run.ts` — §13).
+`services/skills/run-controller.ts` owns each active run's lifecycle (state/progress/cancel) and knows
+nothing about banks; the bank seam is handed in as an opaque runner by the dispatch
+`services/skills/tool-runs.ts` (the one place allowed to map a tool name to `run.ts` — §13).
+**Concurrency is keyed per-document (A2, audit §6.2):** the controller holds a `Map<documentId,
+ActiveRun>` so unrelated documents/conversations run in parallel; only a second run on the **same**
+document is refused. (The old single app-wide slot fired "a skill is already working" across unrelated
+chats. The **doc-lock** below — §9-PC-1 — is the real serializer of true same-document write conflicts,
+so per-document concurrency here is safe.)
 Four generic `skills:*` IPC channels (`listRunnableTools` / `startSkillRun` / `getSkillRun` /
 `cancelSkillRun`) wrap it: all `requireUnlocked`, the document scope resolved **main-side** (§22-C4),
 the run returning **ids/counts only** (`SkillRunState` = state/progress/counts, never the rows). The
 renderer's calm `SkillRunBar` (a `lib/skillruns.ts` polling store — no new event channel) shows the
 offer, the busy row ("Running: `<tool>` on `<N>` documents… Cancel"), and the result; write/export tools
-are gated by a `ConfirmDialog` before the run starts. The renderer maps each tool to its done copy and
-renders `validate_statement_balances` from a content-free `resultKind` discriminator ('reconciled' |
-'unreconciled' | 'unchecked') — the controller/IPC stay bank-free (the discriminator is an opaque
-string; the bank meaning lives only in the renderer's copy map).
+are gated by a `ConfirmDialog` before the run starts. The renderer derives each tool's label + done
+copy from the shared `SkillToolDescriptor` table (A2 — no parallel renderer copy maps), rendering the
+`reconcile`/`redaction` result shapes from a content-free `resultKind` discriminator ('reconciled' |
+'unreconciled' | 'unchecked'; 'clean' | 'redacted') — the controller/IPC stay bank-free (the
+discriminator is an opaque string; the meaning lives only in the descriptor's copy keys). The run's
+count rides `SkillRunState.count` (A2's domain-neutral rename; `transactionCount` mirrored one release).
 
 **Run-UI target document for a multi-doc scope (audit U-1).** The v1 tools are single-document, but a
 conversation's scope can hold several indexed documents. Rather than silently acting on `docIds[0]`

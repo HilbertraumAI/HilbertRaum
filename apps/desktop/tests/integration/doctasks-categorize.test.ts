@@ -232,7 +232,7 @@ describe('categorize doctask — extract does not auto-categorize (U-2)', () => 
     )!
     const outcome = await runner({ signal: new AbortController().signal, onProgress: () => {} })
     expect(outcome.ok).toBe(true)
-    expect(outcome.transactionCount).toBeGreaterThan(0) // rows WERE extracted (the rows>0 guard would have fired)
+    expect(outcome.count).toBeGreaterThan(0) // rows WERE extracted (A2: the runner emits the generic `count`)
     // The doctask lane was never asked to do anything — no hidden model run.
     expect(started).toHaveLength(0)
     // The freshly-extracted rows stay UNcategorized until the user explicitly taps "Categorize".

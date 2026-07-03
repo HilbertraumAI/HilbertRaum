@@ -6,9 +6,14 @@ import {
   toolRequiresConfirmation,
   getRegisteredTool,
   listRegisteredToolNames,
-  resolveEffectiveTools,
+  resolveWiredTools,
   runSkillTool
 } from '../../src/main/services/skills/tool-registry'
+import {
+  SKILL_TOOL_DESCRIPTORS,
+  WIRED_TOOL_NAMES,
+  getToolDescriptor
+} from '../../src/shared/skill-tools'
 import type {
   AuditEventType,
   SkillTool,
@@ -102,7 +107,7 @@ describe('validateJsonSchema (subset)', () => {
   })
 })
 
-describe('registry + resolveEffectiveTools', () => {
+describe('registry + resolveWiredTools', () => {
   it('ships the reference tool + the bank tools + the invoice tools + the redaction tool', () => {
     // `count_selected_documents` is the gate's test-only CANARY — registered but never wired (X-2, kept
     // deliberately; the "not wired to a run seam" half is pinned in skills-tool-run-ipc.test.ts).
@@ -128,18 +133,60 @@ describe('registry + resolveEffectiveTools', () => {
     expect(getRegisteredTool('__proto__')).toBeUndefined() // own-property lookup only
   })
 
-  it('intersects declared ∩ registry ∩ userGrant; drops unregistered + ungranted; dedups; keeps order', () => {
-    const declared = ['count_selected_documents', 'export_transactions_csv', 'count_selected_documents']
-    const grant = ['count_selected_documents', 'export_transactions_csv']
-    // Both are registered + granted now → both survive, dedup, declared order preserved.
-    expect(resolveEffectiveTools(declared, grant)).toEqual([
-      'count_selected_documents',
-      'export_transactions_csv'
+  it('resolves declared ∩ registry ∩ wired; drops the unwired canary + unregistered names; dedups; keeps order', () => {
+    // A2 (audit §6.4-low): the vestigial `userGrant` leg is gone — the set is declared ∩ registry ∩ wired.
+    // `count_selected_documents` is REGISTERED but not WIRED (the X-2 canary), so it is dropped here.
+    expect(
+      resolveWiredTools(['count_selected_documents', 'export_transactions_csv', 'count_selected_documents'])
+    ).toEqual(['export_transactions_csv'])
+    // The registered-but-unwired canary alone → [] (nothing dispatches it).
+    expect(resolveWiredTools(['count_selected_documents'])).toEqual([])
+    // A declared-but-unregistered tool is dropped (a skill can never register a tool).
+    expect(resolveWiredTools(['made_up_tool'])).toEqual([])
+    // Declared order preserved; duplicates collapsed; only wired names survive.
+    expect(resolveWiredTools(['export_invoice_json', 'extract_transactions', 'export_invoice_json'])).toEqual([
+      'export_invoice_json',
+      'extract_transactions'
     ])
-    // A registered tool the user did not grant is dropped.
-    expect(resolveEffectiveTools(['count_selected_documents'], [])).toEqual([])
-    // A declared-but-unregistered tool is dropped even if "granted" (a skill can't register a tool).
-    expect(resolveEffectiveTools(['made_up_tool'], ['made_up_tool'])).toEqual([])
+  })
+})
+
+// A2 (audit §6.2) — the self-describing tool registry: one descriptor per WIRED tool is the single
+// source the wired-list, runner dispatch, renderer maps and save-dialog metadata all derive from. These
+// pin the descriptor table against the app-owned registry so the two can never drift apart.
+describe('self-describing tool registry (A2)', () => {
+  it('every wired descriptor names a registered tool; the only registered tool WITHOUT a descriptor is the X-2 canary', () => {
+    for (const d of SKILL_TOOL_DESCRIPTORS) {
+      expect(getRegisteredTool(d.name), `${d.name} must be registered`).toBeDefined()
+    }
+    const registeredWithoutDescriptor = listRegisteredToolNames().filter((n) => !getToolDescriptor(n))
+    expect(registeredWithoutDescriptor).toEqual(['count_selected_documents'])
+  })
+
+  it('WIRED_TOOL_NAMES equals the descriptor order and excludes the canary', () => {
+    expect(WIRED_TOOL_NAMES).toEqual(SKILL_TOOL_DESCRIPTORS.map((d) => d.name))
+    expect(WIRED_TOOL_NAMES).not.toContain('count_selected_documents')
+  })
+
+  it('descriptor.confirm agrees with the permission-derived toolRequiresConfirmation (no drift)', () => {
+    for (const d of SKILL_TOOL_DESCRIPTORS) {
+      const tool = getRegisteredTool(d.name)!
+      expect(d.confirm, `${d.name} confirm must match its permissions`).toBe(toolRequiresConfirmation(tool))
+    }
+  })
+
+  it('every export tool carries a save dialog; non-export tools carry none', () => {
+    for (const d of SKILL_TOOL_DESCRIPTORS) {
+      if (d.seamKind === 'export') expect(d.dialog, `${d.name} export needs a dialog`).toBeDefined()
+      else expect(d.dialog, `${d.name} is not an export and must not carry a dialog`).toBeUndefined()
+    }
+  })
+
+  it('each result-shape descriptor carries the copy keys its shape needs', () => {
+    for (const d of SKILL_TOOL_DESCRIPTORS) {
+      if (d.resultShape === 'reconcile') expect(d.reconcileKeys, `${d.name} reconcile keys`).toBeDefined()
+      if (d.resultShape === 'redaction') expect(d.redactionKeys, `${d.name} redaction keys`).toBeDefined()
+    }
   })
 })
 

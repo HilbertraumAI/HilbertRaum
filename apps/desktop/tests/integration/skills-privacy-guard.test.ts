@@ -330,7 +330,7 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     const controller = new SkillRunController()
     const runner = buildToolRunner(db, 'extract_transactions', { skillInstallId, conversationId: '', documentId: docId }, audit)!
 
-    const started = controller.start({ skillInstallId, toolName: 'extract_transactions', documentCount: 1, runner })
+    const started = controller.start({ skillInstallId, toolName: 'extract_transactions', documentId: docId, documentCount: 1, runner })
     // T7 (post-merge audit Phase 5): the old `for (i<50 && running) sleep(5)` was a TEST-1 sibling —
     // bounded iterations × a fixed 5 ms sleep over mutable state (flaky under load, slow when not).
     // vi.waitFor re-polls until the run settles (or its own deadline) — deterministic, no fixed cap.

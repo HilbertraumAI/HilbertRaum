@@ -48,6 +48,7 @@ import {
   toSkillToolAudit
 } from '../../src/main/services/skills/tool-runs'
 import type { DocTaskManager } from '../../src/main/services/doctasks'
+import { WIRED_TOOL_NAMES } from '../../src/shared/skill-tools'
 import { IPC } from '../../src/shared/ipc'
 import { t, type MessageKey } from '../../src/shared/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -513,6 +514,22 @@ describe('skills tool-run IPC (S11b)', () => {
     expect((result as StartSkillRunResult).started).toBe(false)
   })
 
+  it('builds a runner for every WIRED tool (A2 dispatch parity — descriptor table ↔ buildToolRunner switch)', () => {
+    // A2 (audit §6.2): the wired-list is DERIVED from the descriptor table, and `buildToolRunner`
+    // guards on the same table. This pins the two together: every name the table declares wired must
+    // build a runner (given the export deps), and the unwired canary must not.
+    const { db, skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
+    const documentId = resolveInScopeDocumentIds(db, conversationId)[0]
+    const deps = { saveTextFile: async () => true, readDocumentSegments: async () => [] }
+    for (const name of WIRED_TOOL_NAMES) {
+      const runner = buildToolRunner(db, name, { skillInstallId, conversationId, documentId }, toSkillToolAudit(), deps)
+      expect(runner, `${name} must build a runner`).not.toBeNull()
+    }
+    expect(
+      buildToolRunner(db, 'count_selected_documents', { skillInstallId, conversationId, documentId }, toSkillToolAudit(), deps)
+    ).toBeNull()
+  })
+
   it('keeps count_selected_documents as a registry-only canary: registered but NOT wired to a run seam (X-2)', () => {
     // X-2 decision (audit 2026-06-26): the reference tool is kept as the gate's test-only canary. It is
     // registered (the gate tests run it end-to-end) but deliberately exposes NO live capability — it has
@@ -731,7 +748,7 @@ describe('skills tool-run IPC — extract does not auto-categorize (U-2)', () =>
     )!
     const outcome = await runner({ signal: new AbortController().signal, onProgress: () => {} })
     expect(outcome.ok).toBe(true)
-    expect(outcome.transactionCount).toBe(2) // rows WERE extracted (the old auto-offer's rows>0 guard would have fired)
+    expect(outcome.count).toBe(2) // rows WERE extracted (A2: the runner emits the generic `count`)
     // …yet the LLM categorizer was never started on its own — nothing reached the doctask lane.
     expect(enqueued).toHaveLength(0)
   })

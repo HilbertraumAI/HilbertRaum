@@ -360,7 +360,9 @@ export function registerSkillsIpc(ctx: AppContext): void {
       // tool is single-document (`buildToolRunner` targets exactly `targetId`). TODO: when a
       // multi-document tool lands, set this to the real target count (e.g. the resolved scope size)
       // so the run state + audit don't understate scope — it must become a count, not a constant.
-      const run = runController.start({ skillInstallId, toolName, documentCount: 1, runner })
+      // `documentId` is the controller's per-document concurrency key (audit §6.2): "a skill is
+      // already working" now fires only for a run already in flight on this same document.
+      const run = runController.start({ skillInstallId, toolName, documentId: targetId, documentCount: 1, runner })
       return { started: true, run }
     } catch {
       // One-at-a-time: a run is already in flight. Friendly, content-free.

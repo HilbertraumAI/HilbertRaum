@@ -20,6 +20,7 @@ import {
   validateInvoiceTotalsTool
 } from './tools/invoice'
 import { redactDocumentTool } from './tools/redaction'
+import { isWiredToolName } from '../../../shared/skill-tools'
 
 // Tier-2 skill tool registry + the validate→run→validate gate (skills plan §12, Phase S10).
 //
@@ -30,8 +31,14 @@ import { redactDocumentTool } from './tools/redaction'
 //
 // The trust shape (skills plan §4/§12.2/§14):
 //   - A skill can never REGISTER a tool. Tools live only in the static `REGISTRY` below; a skill
-//     merely *declares* names via `allowedTools`. The effective set is the three-way intersection
-//     `declared ∩ registry ∩ userGrant` (`resolveEffectiveTools`).
+//     merely *declares* names via `allowedTools`. The effective set is `declared ∩ registry ∩ wired`
+//     (`resolveWiredTools`). The old third leg was a per-tool `userGrant`, but no grant UI ever
+//     shipped, so `resolveEffectiveTools(declared, declared)` fed the package's own declaration in as
+//     its "grant" — a no-op that made the grant look load-bearing when it was vestigial (audit
+//     §6.4-low). A2 deleted the grant leg until a real grant UI exists; the effective set only ever
+//     SHRINKS a declaration (drops names the app never registered / never wired) — a skill still
+//     cannot register or self-grant a tool, and the source-based trust gate (`skillCanRunTools`,
+//     SEC-1) is unchanged. See security-model.md "Skill tool ceiling".
 //   - Input is validated against `inputSchema` BEFORE `run`; invalid input is refused without ever
 //     calling the tool. Output is validated against `outputSchema` AFTER `run`; a wrong-shape result
 //     fails the run so no half-trusted output reaches the model.
@@ -252,18 +259,21 @@ export function listRegisteredToolNames(): string[] {
 }
 
 /**
- * The effective tool set for a skill: `declared ∩ registry ∩ userGrant` (skills plan §12.2). A
- * declared name that is not in the registry is dropped (a skill can never register a tool); a name
- * the user has not granted is dropped. Declared order is preserved and duplicates collapsed.
+ * The wired tool set a skill may actually run: `declared ∩ registry ∩ wired` (skills plan §12.2,
+ * audit §6.4-low). A declared name the app never registered is dropped (a skill can never register a
+ * tool); a registered-but-unwired name (the `count_selected_documents` canary, X-2) is dropped
+ * (nothing dispatches it). Declared order is preserved and duplicates collapsed. The vestigial
+ * `userGrant` leg (which A2 fed the declaration into itself, a no-op) is GONE — the effective set now
+ * only ever shrinks the declaration, and the source-based run gate (`skillCanRunTools`, SEC-1) is the
+ * one that decides trust. The old name was `resolveEffectiveTools(declared, declared)`.
  */
-export function resolveEffectiveTools(declared: string[], userGrant: string[]): string[] {
-  const granted = new Set(userGrant)
+export function resolveWiredTools(declared: string[]): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const name of declared) {
     if (seen.has(name)) continue
-    if (getRegisteredTool(name) === undefined) continue // ∩ registry
-    if (!granted.has(name)) continue // ∩ userGrant
+    if (getRegisteredTool(name) === undefined) continue // ∩ registry (app-owned; a skill can't add)
+    if (!isWiredToolName(name)) continue // ∩ wired (a registered-but-unwired canary dispatches nothing)
     seen.add(name)
     out.push(name)
   }

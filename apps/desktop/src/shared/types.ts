@@ -1763,7 +1763,14 @@ export interface SkillRunState {
   state: 'running' | 'done' | 'failed' | 'cancelled'
   /** Merged from the tool's `onProgress` (no new event channel). */
   progress: { done: number; total: number }
-  /** A COUNT the run touched (rows extracted/categorized/summarized/saved, or rows not reconciling). */
+  /**
+   * The generic COUNT the run touched (transactions/line items/rows saved/redactions, or rows not
+   * reconciling). A2 renamed the bank-shaped `transactionCount` to this domain-neutral field (audit
+   * §6.2) since the same channel carries invoice and redaction counts. The renderer reads
+   * `count ?? transactionCount`.
+   */
+  count?: number
+  /** @deprecated alias for `count`, mirrored for one release so an un-migrated reader keeps working. */
   transactionCount?: number
   /**
    * A small, content-free outcome discriminator for tools whose result is more than a count (e.g.

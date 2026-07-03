@@ -198,8 +198,9 @@ password recovery — are documented in
   **Per-export save-dialog metadata (§6.2):** the ONE hardcoded CSV dialog no longer serves every export —
   JSON→`.json`, XML→`.xml`, and the redacted copy gets a *"Save redacted copy"* title + a `.txt` filter (it used
   to fight `redacted.txt` with an "Export transactions"/`.csv` dialog on Windows). The dispatch (`tool-runs.ts`)
-  binds the per-tool metadata as **content-free i18n keys** (`SaveFileDialogMeta`) and the IPC `saveTextFile`
-  closure resolves them; CSV stays the default. (5) A **last-chunks citation stopgap** for long invoices: the
+  binds the per-tool metadata as **content-free i18n keys** and the IPC `saveTextFile` closure resolves them;
+  CSV stays the default. **(A2 later folded this into the self-describing tool registry — each export tool
+  names its own dialog in `shared/skill-tools.ts` `descriptor.dialog`, which the dispatch reads.)** (5) A **last-chunks citation stopgap** for long invoices: the
   totals print at the END, past the first `MAX_CITATIONS` cited chunks, so `buildInvoiceCitations` now reserves
   the final `TAIL_CITATIONS` slots for the closing chunks (leading + trailing windows, in document order). (6)
   An **ephemeral "reading the document…" notice** when an exhaustive skill handler starts a long, silent

@@ -1,12 +1,12 @@
 import type { Db } from '../db'
 import type { AuditRecorder } from '../audit'
 import type { AuditEventType, DocumentChunkRead, RunnableTool, SkillToolAudit } from '../../../shared/types'
-import type { MessageKey } from '../../../shared/i18n'
 import type { SkillRecord } from './registry'
 import { resolveScope } from '../collections'
 import { documentsInScope } from './scope-documents'
-import { getRegisteredTool, resolveEffectiveTools, toolRequiresConfirmation } from './tool-registry'
+import { getRegisteredTool, resolveWiredTools, toolRequiresConfirmation } from './tool-registry'
 import { skillNeedsNewerApp } from '../../../shared/skill-manifest'
+import { getToolDescriptor, type SkillToolSaveDialog } from '../../../shared/skill-tools'
 import {
   runBankExtraction,
   runBalanceValidation,
@@ -36,24 +36,11 @@ import type { DocTaskManager } from '../doctasks/manager'
 // `invoice-run.ts` seam. The channel/controller/renderer are unchanged — the per-domain specifics
 // stay in this dispatch + the `run.ts`/`invoice-run.ts` seams (§13).
 
-/** The tools whose run seam is wired (each has a `buildToolRunner` case below). */
-const WIRED_TOOL_NAMES: readonly string[] = [
-  'extract_transactions',
-  'validate_statement_balances',
-  'categorize_transactions',
-  'summarize_cashflow',
-  'export_transactions_csv',
-  // Invoice — the SECOND Tier-2 domain (same gate, same dispatch shape; the invoice-run.ts seam).
-  'extract_invoice',
-  'validate_invoice_totals',
-  'export_invoice_csv',
-  // Format-transformation exports — pure serializers of the already-extracted invoice (same confirm-gated
-  // `export-file` shape as the CSV export; the invoice-run.ts `runInvoiceFileExport` seam).
-  'export_invoice_json',
-  'export_invoice_xml',
-  // Redaction — the read-transform-export shape (confirm-gated `export-file`; no data table).
-  'redact_document'
-]
+// `WIRED_TOOL_NAMES` is now DERIVED from the self-describing tool registry (`shared/skill-tools.ts`,
+// audit §6.2) — one descriptor per wired tool is the single source, so a 9th tool no longer means
+// editing a hardcoded list here, the runner switch, the renderer maps and the dialog metadata
+// separately. Each name below still has a `buildToolRunner` case; the descriptor guard at the top of
+// `buildToolRunner` keeps the wired set and the switch in lockstep (a parity test pins them).
 
 /** Canonical English audit messages for the ids/counts-only run events (the recorder needs one). */
 const SKILL_RUN_MESSAGE: Partial<Record<AuditEventType, string>> = {
@@ -113,9 +100,11 @@ export function skillCanRunTools(skill: SkillRecord): boolean {
 /**
  * The wired tool names a skill may run (skills plan §12.2, S11c). The S11c flip makes the bank skill
  * `kind:'tool'`, so the S2 parser KEEPS its declared `allowedTools` (an instruction skill's stays []
- * — SL-1). The effective set is `declared ∩ registry ∩ grant`; v1 has no per-tool grant UI, so
- * enabling an APP `kind:'tool'` skill grants its declared tools (grant = declared). We then keep only
- * the tools actually wired to a `run.ts` seam below. An instruction skill (allowedTools []) gets none.
+ * — SL-1). The effective set is `declared ∩ registry ∩ wired` (`resolveWiredTools`, audit §6.4-low):
+ * a declared name the app never registered/wired is dropped, so an APP `kind:'tool'` skill runs
+ * exactly the wired tools it declared. An instruction skill (allowedTools []) gets none. The
+ * vestigial per-tool `userGrant` leg is gone (A2 — no grant UI ever shipped; it fed the declaration
+ * into itself), so trust is decided by `skillCanRunTools` (source), not an incidental grant no-op.
  *
  * SEC-1 trust gate: a non-app skill runs NO tools regardless of what it declared (`skillCanRunTools`).
  * This is THE choke point — both `listRunnableTools` and the run bar source their tool set here, so a
@@ -127,8 +116,7 @@ export function skillCanRunTools(skill: SkillRecord): boolean {
 export function runnableToolNames(skill: SkillRecord, appVersion = ''): string[] {
   if (!skillCanRunTools(skill)) return []
   if (skillNeedsNewerApp(skill.manifest.compatibility.minAppVersion, appVersion)) return []
-  const effective = resolveEffectiveTools(skill.manifest.allowedTools, skill.manifest.allowedTools)
-  return effective.filter((n) => WIRED_TOOL_NAMES.includes(n))
+  return resolveWiredTools(skill.manifest.allowedTools)
 }
 
 /** The `RunnableTool` descriptors for a skill (name + whether the renderer must confirm first). */
@@ -154,43 +142,19 @@ export interface BuildRunnerArgs {
 }
 
 /**
- * Per-export save-dialog metadata (U5 / audit §6.2): the save dialog's title, its filter label, and
- * the file extension(s) it offers. Carries i18n KEYS (not resolved strings) — the IPC layer owns
- * `tMain` and resolves them, so this stays content-free + testable. The ONE hardcoded CSV dialog used
- * to serve every export (redaction's "Save redacted copy" got an "Export transactions" title with a
- * `.csv` filter fighting `invoice.json` on Windows); the dispatch below now binds the right metadata
- * per tool. A2 will derive these from the self-describing tool registry — this is the targeted fix.
+ * Per-export save-dialog metadata (U5 / audit §6.2): title / filter label / extension(s), carrying
+ * i18n KEYS (the IPC owns `tMain`). A2 folds this into the self-describing tool registry — each
+ * export tool NAMES its own dialog in `shared/skill-tools.ts` (`descriptor.dialog`), and the dispatch
+ * below reads it from there. The type is the registry's `SkillToolSaveDialog`; the alias keeps the
+ * existing `SaveFileDialogMeta` name for the IPC layer. `SAVE_DIALOG_CSV` is the legacy default a
+ * caller with no metadata falls back to — now derived from the CSV export descriptor, not a hand copy.
+ * This killed the one-CSV-dialog-for-every-export drift (redaction's "Save redacted copy" used to get
+ * an "Export transactions" title with a `.csv` filter fighting `redacted.txt` on Windows).
  */
-export interface SaveFileDialogMeta {
-  titleKey: MessageKey
-  filterNameKey: MessageKey
-  extensions: string[]
-}
+export type SaveFileDialogMeta = SkillToolSaveDialog
 
-/** CSV export dialog — the legacy default when a caller passes no metadata (bank + invoice CSV). */
-export const SAVE_DIALOG_CSV: SaveFileDialogMeta = {
-  titleKey: 'main.dialog.exportCsv',
-  filterNameKey: 'main.dialog.filterCsv',
-  extensions: ['csv']
-}
-/** Invoice JSON export dialog. */
-export const SAVE_DIALOG_JSON: SaveFileDialogMeta = {
-  titleKey: 'main.dialog.exportJson',
-  filterNameKey: 'main.dialog.filterJson',
-  extensions: ['json']
-}
-/** Invoice XML export dialog. */
-export const SAVE_DIALOG_XML: SaveFileDialogMeta = {
-  titleKey: 'main.dialog.exportXml',
-  filterNameKey: 'main.dialog.filterXml',
-  extensions: ['xml']
-}
-/** Redaction copy dialog — "Save redacted copy" with a `.txt` filter (the §6.2 mismatch this fixes). */
-export const SAVE_DIALOG_REDACTED: SaveFileDialogMeta = {
-  titleKey: 'main.dialog.exportRedacted',
-  filterNameKey: 'main.dialog.filterText',
-  extensions: ['txt']
-}
+/** The CSV export dialog — the default when a caller passes none. Derived from the registry (§6.2). */
+export const SAVE_DIALOG_CSV: SaveFileDialogMeta = getToolDescriptor('export_transactions_csv')!.dialog!
 
 /** MAIN-side capabilities the dispatch needs but cannot import (kept out so this stays testable). */
 export interface ToolRunDeps {
@@ -252,7 +216,7 @@ async function runCategorizeViaDocTask(
     for (;;) {
       const status = docTasks.getDocTask(jobId)
       onProgress({ done: status.progress.stepsDone, total: status.progress.stepsTotal })
-      if (status.state === 'done') return { ok: true, transactionCount: status.progress.stepsTotal }
+      if (status.state === 'done') return { ok: true, count: status.progress.stepsTotal }
       if (status.state === 'cancelled') return { ok: false, cancelled: true }
       if (status.state === 'failed') return { ok: false, error: status.error ?? undefined }
       await new Promise((r) => setTimeout(r, 60))
@@ -266,6 +230,12 @@ async function runCategorizeViaDocTask(
  * Build the `ToolRunner` for a wired tool (or `null` if the tool is not wired). The runner closes
  * over the right `run.ts` seam + the ids/counts-only audit and resolves to a content-free outcome.
  * The controller never sees content — persistence + the extracted/derived rows stay in the seam.
+ *
+ * Wired-ness is DERIVED from the self-describing registry (`getToolDescriptor`, audit §6.2): a tool
+ * with no descriptor (the `count_selected_documents` canary, X-2, or an unknown name) yields `null`
+ * before the switch — the switch's per-tool cases and `WIRED_TOOL_NAMES` cannot drift apart (a parity
+ * test pins it). Export tools bind their save-dialog metadata from `descriptor.dialog`, not a hardcoded
+ * per-tool constant.
  */
 export function buildToolRunner(
   db: Db,
@@ -274,6 +244,8 @@ export function buildToolRunner(
   audit: SkillToolAudit,
   deps: ToolRunDeps = {}
 ): ToolRunner | null {
+  const descriptor = getToolDescriptor(toolName)
+  if (!descriptor) return null // not wired (the canary / an unknown name) — nothing dispatches it
   const seamArgs = {
     skillInstallId: args.skillInstallId,
     conversationId: args.conversationId,
@@ -304,7 +276,7 @@ export function buildToolRunner(
         // result row (renderer-side), targeting the same document; the model pass is user-initiated.
         return {
           ok: res.ok,
-          transactionCount: res.transactionCount,
+          count: res.transactionCount,
           cancelled: res.cancelled,
           errorCode: res.errorCode,
           error: res.error
@@ -324,7 +296,7 @@ export function buildToolRunner(
         })
         return {
           ok: res.ok,
-          transactionCount: res.count,
+          count: res.count,
           resultKind: res.resultKind,
           cancelled: res.cancelled,
           errorCode: res.errorCode,
@@ -349,7 +321,7 @@ export function buildToolRunner(
           readDocumentSegments: deps.readDocumentSegments,
           layout: true
         })
-        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+        return { ok: res.ok, count: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'summarize_cashflow':
       return async ({ signal, onProgress }) => {
@@ -360,7 +332,7 @@ export function buildToolRunner(
           readDocumentSegments: deps.readDocumentSegments, // stale re-extraction reads faithful segments (R3 / §5.6)
           layout: true
         })
-        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+        return { ok: res.ok, count: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'export_transactions_csv':
       if (!deps.saveTextFile) return null // cannot export without the MAIN-side save capability
@@ -370,11 +342,12 @@ export function buildToolRunner(
           signal,
           onProgress,
           confirmed: args.confirmed,
-          saveTextFile: deps.saveTextFile!,
+          // Bind the CSV dialog from the tool's own descriptor (§6.2) rather than the seam's default.
+          saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
           readDocumentSegments: deps.readDocumentSegments, // an export of a STALE statement re-extracts first (R3 / §5.6)
           layout: true
         })
-        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+        return { ok: res.ok, count: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'extract_invoice':
       return async ({ signal, onProgress }) => {
@@ -392,7 +365,7 @@ export function buildToolRunner(
         })
         return {
           ok: res.ok,
-          transactionCount: res.lineItemCount,
+          count: res.lineItemCount,
           cancelled: res.cancelled,
           errorCode: res.errorCode,
           error: res.error
@@ -410,7 +383,7 @@ export function buildToolRunner(
         })
         return {
           ok: res.ok,
-          transactionCount: res.count,
+          count: res.count,
           resultKind: res.resultKind,
           cancelled: res.cancelled,
           errorCode: res.errorCode,
@@ -425,10 +398,11 @@ export function buildToolRunner(
           signal,
           onProgress,
           confirmed: args.confirmed,
-          saveTextFile: deps.saveTextFile!,
+          // Bind the CSV dialog from the tool's own descriptor (§6.2) rather than the seam's default.
+          saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
           readDocumentSegments: deps.readDocumentSegments // export of a STALE invoice re-extracts first (R3 / §5.6)
         })
-        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+        return { ok: res.ok, count: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'export_invoice_json':
     case 'export_invoice_xml':
@@ -442,10 +416,9 @@ export function buildToolRunner(
             signal,
             onProgress,
             confirmed: args.confirmed,
-            // U5 (§6.2): bind the format's OWN save-dialog metadata (title/filter/.json|.xml) so the
-            // dialog no longer serves the CSV title/filter to a JSON/XML export.
-            saveTextFile: (name, content) =>
-              deps.saveTextFile!(name, content, toolName === 'export_invoice_json' ? SAVE_DIALOG_JSON : SAVE_DIALOG_XML),
+            // §6.2: bind the format's OWN save-dialog metadata (title/filter/.json|.xml) from the tool's
+            // descriptor so the dialog no longer serves the CSV title/filter to a JSON/XML export.
+            saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
             readDocumentSegments: deps.readDocumentSegments // JSON/XML export of a STALE invoice re-extracts first (R3 / §5.6)
           },
           {
@@ -453,7 +426,7 @@ export function buildToolRunner(
             defaultFileName: toolName === 'export_invoice_json' ? 'invoice.json' : 'invoice.xml'
           }
         )
-        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+        return { ok: res.ok, count: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'redact_document':
       if (!deps.saveTextFile) return null // cannot save the redacted copy without the MAIN-side capability
@@ -463,14 +436,14 @@ export function buildToolRunner(
           signal,
           onProgress,
           confirmed: args.confirmed,
-          // U5 (§6.2): the redacted copy gets its own "Save redacted copy" dialog + a .txt filter,
-          // instead of the "Export transactions" / .csv dialog that used to fight the saved filename.
-          saveTextFile: (name, content) => deps.saveTextFile!(name, content, SAVE_DIALOG_REDACTED),
+          // §6.2: the redacted copy gets its own "Save redacted copy" dialog + a .txt filter (from the
+          // descriptor), instead of the "Export transactions" / .csv dialog that fought the saved filename.
+          saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
           readDocumentSegments: deps.readDocumentSegments
         })
         return {
           ok: res.ok,
-          transactionCount: res.redactionCount,
+          count: res.redactionCount,
           resultKind: res.resultKind,
           cancelled: res.cancelled,
           errorCode: res.errorCode,

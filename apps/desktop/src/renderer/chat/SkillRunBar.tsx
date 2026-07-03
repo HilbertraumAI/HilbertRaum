@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import type { CountMessageKey, MessageKey } from '@shared/i18n'
+import type { MessageKey } from '@shared/i18n'
 import type { RunnableTool, SkillRunState } from '@shared/types'
+import { getToolDescriptor } from '@shared/skill-tools'
 import { useT } from '../i18n'
 import { Button, ConfirmDialog, Spinner } from '../components'
 
@@ -29,34 +30,10 @@ export interface SkillRunTarget {
   name: string
 }
 
-// Tool name → display-label catalog key. A small label map (not logic) keeps copy in the catalogs
-// and the rest of the bar generic; an unmapped tool falls back to its raw name.
-const TOOL_LABEL_KEY: Record<string, MessageKey> = {
-  extract_transactions: 'chat.skill.tool.extractTransactions',
-  validate_statement_balances: 'chat.skill.tool.validateBalances',
-  categorize_transactions: 'chat.skill.tool.categorize',
-  summarize_cashflow: 'chat.skill.tool.summarize',
-  export_transactions_csv: 'chat.skill.tool.exportCsv',
-  extract_invoice: 'chat.skill.tool.extractInvoice',
-  validate_invoice_totals: 'chat.skill.tool.validateInvoiceTotals',
-  export_invoice_csv: 'chat.skill.tool.exportInvoiceCsv',
-  export_invoice_json: 'chat.skill.tool.exportInvoiceJson',
-  export_invoice_xml: 'chat.skill.tool.exportInvoiceXml',
-  redact_document: 'chat.skill.tool.redactDocument'
-}
-
-// Tool name → the count-pluralized "done" message base key (tCount appends .one/.other). Extract has
-// no entry — it keeps the legacy `chat.skill.run.done` base. validate_statement_balances and
-// redact_document are handled separately (their outcome carries a discriminator, not a plain count).
-const TOOL_DONE_KEY: Record<string, CountMessageKey> = {
-  categorize_transactions: 'chat.skill.run.done.categorize',
-  summarize_cashflow: 'chat.skill.run.done.summarize',
-  export_transactions_csv: 'chat.skill.run.done.export',
-  extract_invoice: 'chat.skill.run.done.extractInvoice',
-  export_invoice_csv: 'chat.skill.run.done.export',
-  export_invoice_json: 'chat.skill.run.done.export',
-  export_invoice_xml: 'chat.skill.run.done.export'
-}
+// The tool's display label, done copy and result-shape all come from the self-describing tool
+// registry (`@shared/skill-tools`, audit §6.2) — the renderer no longer keeps parallel label/done
+// maps that drift from the wired set. A tool with no descriptor (should not happen for an offered
+// tool) falls back to its raw name / the legacy count base.
 
 // Failure reason CODE (content-free, set by the run seam — I1) → localized copy key. An unmapped or
 // absent code falls back to the generic failure line, so a German user never sees an English string.
@@ -182,7 +159,7 @@ export function SkillRunBar({
   const selectedId = targets.find((d) => d.id === chosenId)?.id ?? targets[0]?.id ?? ''
 
   const toolLabel = (name: string): string => {
-    const key = TOOL_LABEL_KEY[name]
+    const key = getToolDescriptor(name)?.labelKey
     return key ? t(key) : name
   }
 
@@ -193,26 +170,24 @@ export function SkillRunBar({
       ? t('chat.skill.run.runningOn', { tool: toolLabel(state.toolName), document: runningDocumentName })
       : tCount('chat.skill.run.running', state.documentCount, { tool: toolLabel(state.toolName) })
 
-  // The calm "done" line per tool (content-free — a count and/or a pass/fail discriminator only).
+  // The calm "done" line per tool, fully descriptor-driven (audit §6.2 — content-free: a count
+  // and/or a pass/fail discriminator only). The descriptor's `resultShape` picks the branch and
+  // carries the exact copy keys, so the renderer holds no per-tool copy map. `count ?? transactionCount`
+  // reads the generic count with the deprecated alias as a fallback for one release.
   const doneMessage = (state: SkillRunState): string => {
-    const count = state.transactionCount ?? 0
-    if (state.toolName === 'validate_statement_balances') {
-      if (state.resultKind === 'reconciled') return t('chat.skill.run.done.reconciled')
-      if (state.resultKind === 'unchecked') return t('chat.skill.run.done.unchecked')
-      return tCount('chat.skill.run.done.unreconciled', count)
+    const count = state.count ?? state.transactionCount ?? 0
+    const d = getToolDescriptor(state.toolName)
+    if (d?.resultShape === 'reconcile' && d.reconcileKeys) {
+      if (state.resultKind === 'reconciled') return t(d.reconcileKeys.reconciled)
+      if (state.resultKind === 'unchecked') return t(d.reconcileKeys.unchecked)
+      return tCount(d.reconcileKeys.unreconciled, count)
     }
-    if (state.toolName === 'validate_invoice_totals') {
-      if (state.resultKind === 'reconciled') return t('chat.skill.run.done.invoiceReconciled')
-      if (state.resultKind === 'unchecked') return t('chat.skill.run.done.invoiceUnchecked')
-      return tCount('chat.skill.run.done.invoiceUnreconciled', count)
-    }
-    if (state.toolName === 'redact_document') {
+    if (d?.resultShape === 'redaction' && d.redactionKeys) {
       // 'clean' = nothing detected (a copy was still saved); 'redacted' = N items hidden.
-      if (state.resultKind === 'clean') return t('chat.skill.run.done.redactedClean')
-      return tCount('chat.skill.run.done.redacted', count)
+      if (state.resultKind === 'clean') return t(d.redactionKeys.clean)
+      return tCount(d.redactionKeys.redacted, count)
     }
-    const base = TOOL_DONE_KEY[state.toolName]
-    return tCount(base ?? 'chat.skill.run.done', count)
+    return tCount(d?.doneKey ?? 'chat.skill.run.done', count)
   }
 
   // The localized failure line — mapped from the content-free reason code (I1), never the raw
@@ -265,7 +240,7 @@ export function SkillRunBar({
       offerRoutedFollowups &&
       run.state === 'done' &&
       run.toolName === 'extract_transactions' &&
-      (run.transactionCount ?? 0) > 0
+      (run.count ?? run.transactionCount ?? 0) > 0
     return (
       <div className="skill-run-bar" role="status" aria-live="polite">
         <span className="skill-run-status">{message}</span>
