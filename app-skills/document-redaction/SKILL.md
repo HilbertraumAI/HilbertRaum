@@ -25,15 +25,16 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
                                #   the S13a corpus (skills-s13-plan.md §3.3 / eval threshold-3 gate).
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` + `suggest`-only terms)
   # and pinned by a parity test. The action verbs (redact/anonymize/schwärzen…) both OFFER and ROUTE; the
-  # informational topic words (datenschutz/dsgvo/gdpr/sensitive data) are `suggest`-only — they offer the
-  # skill but its tool WRITES a masked copy, so routing must not deflect "Was regelt die DSGVO?" to the
-  # button (the §4.4 manifest↔handler alignment is a later phase). Edit the vocabulary, not this list.
+  # PII-content topics (sensitive data / sensible daten) are `suggest`-only but the informational dry-run
+  # DOES act on them (per-category counts). U4/§4.4: the pure legal words datenschutz/dsgvo/gdpr were
+  # DROPPED — the handler acts on none of them, so keeping them let redaction auto-fire a wrong-flavoured
+  # fence on "Was regelt die DSGVO?". Edit the vocabulary, not this list.
   keywords: [redact, redaction, anonymize, anonymise, anonymized, anonymised,
              remove personal data, mask personal data,
              anonymisieren, anonymisierung, anonymisiere, pseudonymisieren,
              schwärzen, schwärzung, schwärze, geschwärzt,
              personenbezogene daten, personenbezogene daten entfernen,
-             datenschutz, dsgvo, gdpr, sensitive data, sensible daten]
+             sensitive data, sensible daten]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: []         # redaction is intent-driven, not filename-driven — leave empty
 ---

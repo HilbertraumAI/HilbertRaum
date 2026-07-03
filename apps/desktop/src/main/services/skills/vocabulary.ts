@@ -405,13 +405,13 @@ const DOCUMENT_REDACTION: VocabEntry[] = [
   both('geschwärzt', 'de'),
   both('personenbezogene daten', 'de'),
   both('personenbezogene daten entfernen', 'de'),
-  // suggest-only — informational-topic words the ROUTING handler deliberately does NOT act on (its tool
-  // WRITES a masked copy; "Was regelt die DSGVO?" is not a redaction action). They still SIGNAL the skill
-  // for an offer, so they stay suggest-only until the §4.4 manifest↔handler alignment (U4). Word-matched,
-  // so "Datenschutzerklärung" does not trigger the bare `datenschutz`.
-  suggest('datenschutz', 'de'),
-  suggest('dsgvo', 'de'),
-  suggest('gdpr', 'en'),
+  // suggest-only PII-CONTENT topics — the informational dry-run (`isInformationalPiiQuestion`, `PII_TOPIC_RE`)
+  // recognises these ("what sensitive data is in here?" reports per-category counts), so they align with the
+  // handler and stay auto-fire-eligible. Word-matched, so a compound never trips the bare term.
+  // U4/§4.4: the pure LEGAL/topic words `datenschutz`/`dsgvo`/`gdpr` were DROPPED here — the handler acts on
+  // NEITHER `routeMatch` NOR `PII_TOPIC_RE` for them ("Was regelt die DSGVO?" is a question about the LAW,
+  // not the document), so keeping them as manifest keywords let redaction auto-fire a wrong-flavoured fence.
+  // Aligning the manifest to the handler = removing them (the audit's "take the drop").
   suggest('sensitive data', 'en'),
   suggest('sensible daten', 'de')
 ]

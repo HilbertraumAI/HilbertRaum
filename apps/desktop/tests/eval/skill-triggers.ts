@@ -53,6 +53,14 @@ export interface CorpusItem {
    *  over the confusion subset is an asserted bar) — one skill's keyword must win over another's docs or
    *  weaker keyword. Not scored differently; it only marks the subset the bar filters. */
   confusion?: boolean
+  /**
+   * U4 (audit §4.4): the DOC-SCOPE shape. `'narrowed'` (default) — the `inScopeDocs` are EXPLICITLY in
+   * scope (a chat attachment or a hand-pick), so both the suggestion AND the auto-fire path see them.
+   * `'whole-corpus'` — the `inScopeDocs` are merely present somewhere in the Library / a collection, NOT
+   * explicitly selected: the inert SUGGESTION offer still reads them (full scope), but AUTO-FIRE narrows
+   * them away (`explicitDocumentsOnly`), so they contribute no corroborating signal to a silent fire.
+   */
+  scope?: 'narrowed' | 'whole-corpus'
   note?: string
 }
 
@@ -74,13 +82,29 @@ export function loadSkillCandidates(): SkillCandidate[] {
   })
 }
 
-/** Turn a corpus item into the selector's turn context (the renderer→main scope shape). */
+/** Turn a corpus item into the selector's turn context (the renderer→main scope shape). Full doc
+ *  signals — this is the SUGGESTION path's view (`inScopeDocSignals` reads the whole scope). */
 export function toContext(item: CorpusItem): SkillTriggerContext {
   return {
     question: item.question,
     docTitles: item.inScopeDocs.map((d) => d.title),
     docMimeTypes: item.inScopeDocs.map((d) => d.mimeType).filter((m) => m.length > 0)
   }
+}
+
+/**
+ * The AUTO-FIRE path's turn context (U4/audit §4.4): identical to `toContext` EXCEPT a `whole-corpus`
+ * item contributes NO doc signal — modelling `inScopeDocSignals(…, {explicitDocumentsOnly:true})`, which
+ * counts only EXPLICITLY scoped documents (attachments / hand-picks). A `narrowed` item (the default) is
+ * unchanged: its `inScopeDocs` ARE the explicit selection. So one corpus item can carry a real matching
+ * Library doc — documenting the §4.4 trap AND exercising the suggestion path with full signals — while
+ * the auto-fire path correctly ignores it.
+ */
+export function toAutoFireContext(item: CorpusItem): SkillTriggerContext {
+  if (item.scope === 'whole-corpus') {
+    return { question: item.question, docTitles: [], docMimeTypes: [] }
+  }
+  return toContext(item)
 }
 
 /** How many DISTINCT keyword hits a skill lands (the selector's OWN `countKeywordHits` — word-boundary +
@@ -100,6 +124,13 @@ export interface FirePolicy {
   /** Short human description for the baseline report. */
   description: string
   eligible: (score: number, kwHits: number) => boolean
+  /**
+   * U4 (audit §4.4): does this policy model the AUTO-FIRE path, which reads only EXPLICITLY scoped
+   * documents? When true, `scoreCorpus` scores it through `toAutoFireContext` (a whole-corpus item's doc
+   * signals are zeroed). The ratified auto-fire gate (`threshold-3`) sets it; the SUGGESTION policies
+   * (`threshold-2`, `keyword-required`) leave it false — the inert offer reads the full scope.
+   */
+  narrowsDocSignals?: boolean
 }
 
 /**
@@ -125,10 +156,12 @@ export const POLICIES: FirePolicy[] = [
   {
     // The RATIFIED auto-fire gate (D2): score ≥ AUTOFIRE_SCORE_THRESHOLD ⇒ "a keyword corroborated
     // by ≥1 doc signal". The harness and the runtime (`resolveAutoFireSkill`) share the constant, so
-    // the gate-assertion below measures exactly the production threshold.
+    // the gate-assertion below measures exactly the production threshold. U4/§4.4: it also mirrors the
+    // runtime's `explicitDocumentsOnly` narrowing — a whole-corpus doc signal doesn't count here either.
     name: 'threshold-3',
-    description: `auto-fire gate (score ≥ ${AUTOFIRE_SCORE_THRESHOLD}): a keyword corroborated by ≥1 doc signal`,
-    eligible: (score) => score >= AUTOFIRE_SCORE_THRESHOLD
+    description: `auto-fire gate (score ≥ ${AUTOFIRE_SCORE_THRESHOLD}): a keyword + ≥1 EXPLICITLY-scoped doc signal`,
+    eligible: (score) => score >= AUTOFIRE_SCORE_THRESHOLD,
+    narrowsDocSignals: true
   },
   {
     name: 'threshold-4',
@@ -176,12 +209,29 @@ export interface PolicyResult {
   perItem: Array<{ id: string; expected: string; predicted: string }>
 }
 
+/** Options for `scoreCorpus`. */
+export interface ScoreOptions {
+  /**
+   * Score every policy on the FULL doc signals, bypassing the auto-fire `narrowsDocSignals` narrowing.
+   * Used only by the monotonicity sanity test, which measures the BAR effect on one fixed signal basis —
+   * comparing fired-wrong across policies that treat doc signals differently is not a bar comparison.
+   */
+  forceFullSignals?: boolean
+}
+
 /** Score the whole corpus under one policy. Deterministic, content-free output. */
-export function scoreCorpus(items: CorpusItem[], candidates: SkillCandidate[], policy: FirePolicy): PolicyResult {
+export function scoreCorpus(
+  items: CorpusItem[],
+  candidates: SkillCandidate[],
+  policy: FirePolicy,
+  opts: ScoreOptions = {}
+): PolicyResult {
   const confusion: Confusion = { firedCorrect: 0, firedWrong: 0, missed: 0, correctlyAbstained: 0 }
   const perItem: PolicyResult['perItem'] = []
+  const narrow = policy.narrowsDocSignals && !opts.forceFullSignals
   for (const item of items) {
-    const predicted = predict(candidates, toContext(item), policy)
+    const ctx = narrow ? toAutoFireContext(item) : toContext(item)
+    const predicted = predict(candidates, ctx, policy)
     const expected = item.expected
     if (predicted !== 'none' && predicted === expected) confusion.firedCorrect++
     else if (predicted !== 'none') confusion.firedWrong++ // wrong skill OR a fire where 'none' was right

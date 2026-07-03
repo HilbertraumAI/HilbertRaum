@@ -8,8 +8,26 @@ import { documentsInScope } from './scope-documents'
 // SAME signals from one definition. LOGS NOTHING — titles are content-adjacent (the §6 posture); they
 // are projected MAIN-side from the shared `documentsInScope` query and never cross the IPC boundary.
 
+/** Options for `inScopeDocSignals`. */
+export interface DocSignalOptions {
+  /**
+   * U4 (audit §4.4): count a document as a signal ONLY when it is EXPLICITLY in scope — a chat
+   * attachment or a hand-picked selection (`scope.documentIds`) — and drop the collection membership
+   * (the whole Library / a project). Without this, "keyword + ≥1 doc signal" degrades to "keyword +
+   * any matching PDF anywhere in the library", which makes auto-fire's corroboration nearly vacuous at
+   * whole-corpus scope. The AUTO-FIRE decision passes `true` (silently shaping a turn demands the
+   * narrowed, deliberately-scoped signal); the inert SUGGESTION offer leaves it false and keeps reading
+   * the full scope (an offer on a matching library doc is harmless — the user still chooses).
+   */
+  explicitDocumentsOnly?: boolean
+}
+
 /** Filename + MIME signals of the indexed documents in a conversation's scope (empty-tolerant). */
-export function inScopeDocSignals(db: Db, conversationId: string): { titles: string[]; mimeTypes: string[] } {
+export function inScopeDocSignals(
+  db: Db,
+  conversationId: string,
+  opts: DocSignalOptions = {}
+): { titles: string[]; mimeTypes: string[] } {
   if (!conversationId) return { titles: [], mimeTypes: [] }
   let scope
   try {
@@ -17,6 +35,15 @@ export function inScopeDocSignals(db: Db, conversationId: string): { titles: str
   } catch {
     // Unknown/locked conversation → keyword-only (no doc signals).
     return { titles: [], mimeTypes: [] }
+  }
+  if (opts.explicitDocumentsOnly) {
+    // U4/§4.4: a whole-corpus (Library / collection) scope contributes NO doc signal. Narrow to the
+    // EXPLICIT documents only (`resolveScope` already unions attachments into `documentIds`), and drop
+    // the collection membership. With no explicit documents there is nothing to corroborate — return
+    // empty directly rather than passing a documentId-less scope to `documentsInScope`, which would
+    // (correctly, for retrieval) treat "no id/collection filter" as the whole unfiltered corpus.
+    if (!scope.documentIds || scope.documentIds.length === 0) return { titles: [], mimeTypes: [] }
+    scope = { ...scope, collectionIds: null }
   }
   // `requireChunks: false`: the suggestion is keyword/MIME signal only, so an `indexed` document counts
   // even before it is chunked (it matches the run path, not the analysis handlers — X-1).

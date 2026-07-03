@@ -10,11 +10,12 @@ import type { TurnSkillDeps } from './turn'
 
 // resolveAutoFireSkill — the S13b auto-fire decision (skills-s13-plan.md §4, ratified §2.1).
 //
-// Auto-fire applies the right APP skill to a turn the user left WITHOUT one, saving the tap. It is
-// the SAME main-side scope resolution as suggest.ts (the shared `inScopeDocSignals`, §22-C4) and the
-// SAME deterministic scoring (`scoreSkillTriggers`), differing only in the gate: a SEPARATE higher
-// `AUTOFIRE_SCORE_THRESHOLD` (D2) — structurally "a keyword corroborated by ≥1 doc signal". The
-// ratified guards, in order of cost-to-check:
+// Auto-fire applies the right APP skill to a turn the user left WITHOUT one, saving the tap. It shares
+// suggest.ts's main-side scope resolution (`inScopeDocSignals`, §22-C4) and deterministic scoring
+// (`scoreSkillTriggers`), differing in two ways: a SEPARATE higher `AUTOFIRE_SCORE_THRESHOLD` (D2) —
+// structurally "a keyword corroborated by ≥1 doc signal" — and (U4/audit §4.4) it reads only the
+// EXPLICITLY scoped documents (`explicitDocumentsOnly`), so a whole-corpus Library scope contributes no
+// doc signal and can't turn a lone keyword into a fire. The ratified guards, in order of cost-to-check:
 //   D4  the user OPT-IN (`skillsAutoFireEnabled`, DEFAULT FALSE) — a no-op until on, AND app-only.
 //   D6  the skill author opted in (`triggers.autoFire`).
 //   §6.5 the skill is compatible with the running app (the M1 use-site gate).
@@ -57,7 +58,11 @@ export function resolveAutoFireSkill(
     .map((s) => ({ installId: s.installId, title: s.title, triggers: s.manifest.triggers }))
   if (candidates.length === 0) return null
 
-  const { titles, mimeTypes } = inScopeDocSignals(db, conversationId)
+  // U4/§4.4: auto-fire corroborates the keyword against an EXPLICITLY scoped document only (a chat
+  // attachment or a hand-pick) — a whole-corpus (Library / collection) scope contributes NO doc signal,
+  // so a lone keyword no longer clears the ≥3 bar just because a matching PDF exists somewhere in the
+  // library. The inert suggestion offer (suggest.ts) deliberately keeps reading the full scope.
+  const { titles, mimeTypes } = inScopeDocSignals(db, conversationId, { explicitDocumentsOnly: true })
   const best = selectAutoFire(candidates, { question: q, docTitles: titles, docMimeTypes: mimeTypes })
   if (!best) return null
 

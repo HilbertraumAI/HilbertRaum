@@ -23,6 +23,11 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - export_invoice_json        # format-transformation exports (pure serializers; confirm-gated)
   - export_invoice_xml
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
+  autoFire: true               # U4/§2.4 D6 opt-in: eligible for auto-fire (still gated by the user opt-in
+                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar — a
+                               #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). The
+                               #   applies() gate is already single-doc + intent-shaped; W5's expanded
+                               #   corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
   # parity test. Word-boundary matched, so bare ambiguous tokens are route-only (no `bill`→"Bill" the name,
   # `tax`→"syntax", `sum`→"assume", `steuer`→"Steuerberatung"). Edit the vocabulary, not this list.

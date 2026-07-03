@@ -37,10 +37,11 @@ export const DOCUMENT_REDACTION_INSTALL_ID = skillInstallId('app', 'document-red
 
 // Redaction-shaped intent now reads the ONE canonical redaction vocabulary (W5, audit §3.2/§4.1): its
 // `route|both` entries — the ACTION verbs + strong PII phrases (EN + DE) — word-boundary matched for single
-// tokens (`schwärzen` never a compound). The informational-topic words `datenschutz`/`dsgvo`/`gdpr` are
-// vocabulary `suggest`-only (they OFFER the skill but its tool WRITES a masked copy, so routing must not
-// deflect "Was regelt die DSGVO?" to the button — the §4.4 manifest↔handler alignment is U4). Conservative:
-// an OFF-TOPIC question with redaction active keeps the normal grounded path.
+// tokens (`schwärzen` never a compound). U4/§4.4 completed the manifest↔handler alignment: the pure legal
+// words `datenschutz`/`dsgvo`/`gdpr` are GONE from the redaction vocabulary (the handler acts on neither
+// `routeMatch` nor the informational `PII_TOPIC_RE` for them — "Was regelt die DSGVO?" is about the LAW, not
+// the document), so redaction no longer suggests OR auto-fires on them. Conservative: an OFF-TOPIC question
+// with redaction active keeps the normal grounded path.
 function isRedactionShaped(question: string): boolean {
   return routeMatch('document-redaction', question)
 }

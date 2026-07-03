@@ -4,11 +4,13 @@ import {
   loadCorpus,
   loadSkillCandidates,
   toContext,
+  toAutoFireContext,
   predict,
   scoreCorpus,
   runBaseline,
   formatReport,
-  POLICIES
+  POLICIES,
+  type CorpusItem
 } from './skill-triggers'
 
 // Skills S13a — the offline trigger-evaluation harness over a labelled SYNTHETIC corpus
@@ -117,10 +119,14 @@ describe('S13a harness is faithful to the real selector + deterministic', () => 
 
   it('a stricter bar never increases fired-wrong (monotone precision pressure)', () => {
     // Sanity on the sweep itself: raising the gate can only DROP fires, so false fires are
-    // non-increasing across threshold-2 → threshold-3 → threshold-4.
+    // non-increasing across threshold-2 → threshold-3 → threshold-4. Measured on the FULL doc signals
+    // (forceFullSignals) so this is a pure BAR comparison — threshold-3's U4/§4.4 auto-fire narrowing is
+    // a different axis (it can only DROP fires further) and is asserted by the auto-fire gate below.
     const corpus = loadCorpus()
     const candidates = loadSkillCandidates()
-    const wrong = (name: string) => scoreCorpus(corpus, candidates, POLICIES.find((p) => p.name === name)!).confusion.firedWrong
+    const wrong = (name: string) =>
+      scoreCorpus(corpus, candidates, POLICIES.find((p) => p.name === name)!, { forceFullSignals: true })
+        .confusion.firedWrong
     expect(wrong('threshold-3')).toBeLessThanOrEqual(wrong('threshold-2'))
     expect(wrong('threshold-4')).toBeLessThanOrEqual(wrong('threshold-3'))
   })
@@ -188,10 +194,10 @@ describe('S13b gate — the auto-fire policy clears the ratified D1 precision ba
 // The shipping suggestion policy is `keyword-required` (≡ runtime `selectSuggestion`, W5): a keyword hit is
 // mandatory, doc signals only corroborate. Two bars: (1) precision ≥ 0.95 OVERALL on the whole corpus, and
 // (2) ZERO wrong fires on the cross-skill CONFUSION set (word-boundary discrimination must be exact where
-// two skills compete). The plan's stated floor was 0.80; the MEASURED value on the 82-item / 8-skill corpus
-// is 0.983 (58 fired-correct, 1 fired-wrong = the documented adv-meeting-schedule ceiling; printed by the
-// baseline test above and recorded in BUILD_STATE). We gate at 0.95 — matching the auto-fire bar — so a
-// broad precision regression on the non-confusion majority reddens CI instead of sliding silently to 0.80.
+// two skills compete). The plan's stated floor was 0.80; the MEASURED value on the U4-expanded 90-item /
+// 8-skill corpus is 0.984 (63 fired-correct, 1 fired-wrong = the documented adv-meeting-schedule ceiling;
+// printed by the baseline test above and recorded in BUILD_STATE). We gate at 0.95 — matching the auto-fire
+// bar — so a broad precision regression on the non-confusion majority reddens CI instead of sliding to 0.80.
 describe('W5 gate — the suggestion policy clears the precision bar (§4.2/§8.3)', () => {
   it('keyword-required: precision ≥ 0.95 overall AND fired-wrong == 0 on the confusion pairs', () => {
     const corpus = loadCorpus()
@@ -223,5 +229,70 @@ describe('W5 gate — the suggestion policy clears the precision bar (§4.2/§8.
       expect(item, `corpus item ${id} present`).toBeDefined()
       expect(predict(candidates, toContext(item!), kwReq)).toBe('none')
     }
+  })
+})
+
+// U4 gate (audit §2.4/§4.4) — the auto-fire EXPANSION proof. Bank/invoice/meeting-protocol are now
+// autoFire-eligible (the setting is still default-off), so the auto-fire gate (threshold-3) must hold on
+// the EXPANDED corpus INCLUDING whole-corpus scope shapes: the doc-signal narrowing (a Library doc that is
+// not explicitly selected contributes nothing) must prevent the "keyword + any matching PDF anywhere"
+// misfire while strong keyword intent still fires.
+describe('U4 gate — narrowed auto-fire signals + skill opt-ins (§2.4/§4.4)', () => {
+  const corpus = loadCorpus()
+  const candidates = loadSkillCandidates()
+  const t3 = POLICIES.find((p) => p.name === 'threshold-3')!
+  const kwReq = POLICIES.find((p) => p.name === 'keyword-required')!
+  const item = (id: string): CorpusItem => {
+    const it = corpus.find((c) => c.id === id)
+    expect(it, `corpus item ${id} present`).toBeDefined()
+    return it!
+  }
+
+  it('the corpus actually exercises whole-corpus scope shapes (non-vacuous)', () => {
+    const wc = corpus.filter((c) => c.scope === 'whole-corpus')
+    expect(wc.length).toBeGreaterThanOrEqual(5)
+    // …and at least one whole-corpus item that WOULD auto-fire on full signals (so the narrowing below
+    // has something to actually suppress — the assertion isn't vacuous).
+    expect(wc.some((c) => predict(candidates, toContext(c), t3) !== 'none')).toBe(true)
+  })
+
+  it('a whole-corpus doc signal is narrowed away for auto-fire but kept for the suggestion offer', () => {
+    // The §4.4 trap: a SINGLE keyword + a matching PDF merely present in the Library. The inert offer
+    // still fires (full scope), but auto-fire must NOT — the doc is not explicitly in front of the skill.
+    for (const id of ['wc-bank-weak-01', 'wc-invoice-weak-01', 'wc-meeting-weak-01']) {
+      const it = item(id)
+      expect(predict(candidates, toContext(it), kwReq), `${id}: suggestion offers`).toBe(it.expected)
+      expect(predict(candidates, toContext(it), t3), `${id}: WOULD fire on full signals`).toBe(it.expected)
+      expect(predict(candidates, toAutoFireContext(it), t3), `${id}: narrowed → no auto-fire`).toBe('none')
+    }
+  })
+
+  it('the SAME meeting question auto-fires once the doc is explicitly in scope (§2.4 fix)', () => {
+    // wc-meeting-weak-01 (library only) does NOT auto-fire; wc-meeting-attached-01 (attached / hand-picked)
+    // DOES — the narrowing keys on WHETHER the user put the doc in front of the skill, not on the words.
+    expect(predict(candidates, toAutoFireContext(item('wc-meeting-weak-01')), t3)).toBe('none')
+    expect(predict(candidates, toAutoFireContext(item('wc-meeting-attached-01')), t3)).toBe('meeting-protocol')
+  })
+
+  it('strong keyword intent still auto-fires at whole-corpus scope (narrowing removes only doc corroboration)', () => {
+    // Two distinct keywords reach the ≥3 bar on words alone, so no explicit doc is required.
+    expect(predict(candidates, toAutoFireContext(item('wc-bank-strong-01')), t3)).toBe('bank-statement')
+    expect(predict(candidates, toAutoFireContext(item('wc-invoice-strong-01')), t3)).toBe('invoice')
+  })
+
+  it('the audit example never fires either path — dsgvo dropped AND the library doc narrowed away', () => {
+    const it = item('wc-dsgvo-libdoc-01') // "Was regelt die DSGVO?" + a privacy PDF in the Library
+    expect(predict(candidates, toContext(it), kwReq), 'no suggestion offer').toBe('none')
+    expect(predict(candidates, toAutoFireContext(it), t3), 'no auto-fire').toBe('none')
+  })
+
+  it('threshold-3 holds fired-wrong==0 AND precision ≥ 0.95 over the WHOLE-CORPUS subset', () => {
+    // The plan's explicit bar: the auto-fire gate must survive the whole-corpus shapes specifically.
+    const wc = corpus.filter((c) => c.scope === 'whole-corpus')
+    const result = scoreCorpus(wc, candidates, t3) // scoreCorpus narrows for threshold-3
+    expect(result.confusion.firedWrong).toBe(0)
+    expect(result.confusion.firedCorrect).toBeGreaterThan(0)
+    expect(result.precision).not.toBeNull()
+    expect(result.precision!).toBeGreaterThanOrEqual(0.95)
   })
 })

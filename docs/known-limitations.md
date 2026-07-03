@@ -135,10 +135,12 @@ password recovery — are documented in
   (2) `meeting` is offer-able as a bare word (the "Summarize this meeting" incident requires the offer to
   fire), so a scheduling ask ("schedule a meeting") can still draw a meeting-protocol offer — the measured
   suggestion precision is ~98 % on the eval corpus, and the offer is inert (in-picker only, never
-  auto-applied). The redaction manifest's informational topic words (`datenschutz`/`dsgvo`/`gdpr`) are
-  **suggest-only**: they offer the skill but its handler does not route on them (its tool WRITES a masked
-  copy, so "Was regelt die DSGVO?" must not be deflected to the Redact button) — aligning that
-  manifest↔handler pair is a later remediation phase (audit §4.4).
+  auto-applied). The redaction manifest↔handler pair is now **aligned** (Skills U4, audit §4.4): the pure
+  legal words (`datenschutz`/`dsgvo`/`gdpr`) were **dropped** from the vocabulary — the handler acts on
+  neither `routeMatch` nor the informational PII scan for them ("Was regelt die DSGVO?" is about the LAW,
+  not the document), so redaction no longer offers **or** auto-fires on them; the PII-content topics
+  (`sensitive data`/`sensible daten`) stay, since the informational dry-run reports per-category counts
+  for those.
 - **A skill picked in the composer applies PER-TURN, is visible, and is reversible (Skills U3, audit
   §4.3 / ux-6).** Before U3 every picker pick — including accepting a one-off suggestion — was silently
   written to the conversation's persisted default (`active_skill_id`), so a pick made many turns ago
@@ -163,6 +165,24 @@ password recovery — are documented in
   in-memory, so a per-turn pick that was never "kept" does not survive an app reload (by design — that
   is the point of per-turn); and the relay pin degrades to the ordinary conversation scope if the run's
   target id was lost (a screen remount with no resolved id), rather than failing.
+- **Auto-fire can now reach the three complaint skills, but only on an EXPLICITLY-scoped document — and it
+  stays default-off (Skills U4, audit §2.4/§4.4).** Before U4, only `document-redaction` declared
+  `triggers.autoFire`, so bank-statement, invoice and meeting-protocol could **never** auto-fire even with
+  the user setting on; U4 opts all three in (their `applies()` gates are already single-doc + intent-shaped,
+  and the S13c one-click "answer without it" undo exists). Two guards keep the expansion honest: (1) the
+  master setting `skillsAutoFireEnabled` remains **default-off** (the safe-merge posture — inert in
+  production until the owner flips it); (2) auto-fire's doc-signal corroboration is **narrowed to explicitly
+  scoped documents** — a chat attachment or a hand-pick. A whole-corpus **Library/collection** scope
+  contributes **no** doc signal, so "keyword + ≥1 doc signal" no longer degrades to "keyword + any matching
+  PDF anywhere in the library": a lone keyword with an incidental library match scores only 2 (< the ≥3
+  bar) and does not silently fire. Strong intent (two distinct keywords) still auto-fires without an
+  explicit doc, and the inert **suggestion** offer deliberately keeps reading the full scope. The measured
+  auto-fire gate on the expanded eval corpus (incl. whole-corpus shapes) holds **fired-wrong == 0 and
+  precision ≥ 0.95**. **Residual:** the narrowing keys on `scope.documentIds` (explicit selection ∪
+  attachments), so a *collection*-scoped conversation — even a small hand-curated folder — is treated as
+  whole-corpus for auto-fire and yields no doc signal; that is deliberate (only a document the user put in
+  front of the skill corroborates a silent fire), but it means a narrow-collection user must lean on keyword
+  strength or an explicit pick.
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
   offline regexes only** — e-mail addresses, phone numbers, IBANs, **payment-card numbers**, dates, and

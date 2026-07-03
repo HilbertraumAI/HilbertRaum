@@ -23,6 +23,11 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - summarize_cashflow
   - export_transactions_csv
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10)
+  autoFire: true               # U4/§2.4 D6 opt-in: eligible for auto-fire (still gated by the user opt-in
+                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar — a
+                               #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). The
+                               #   applies() gate is already single-doc + intent-shaped; W5's expanded
+                               #   corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
   # parity test. Bilingual, word/phrase (never a bare ambiguous token: `balance`/`net`/`statement` are
   # route-only). Edit the vocabulary, not this list. The routing gate reads the same source, so drift ends.

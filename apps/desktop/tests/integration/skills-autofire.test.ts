@@ -8,12 +8,14 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
 import { resolveTurnSkill, resolveTurnSkillFromRegistry } from '../../src/main/services/skills/turn'
 import { resolveAutoFireSkill } from '../../src/main/services/skills/autofire'
+import { inScopeDocSignals } from '../../src/main/services/skills/scope-signals'
 import {
   appendMessage,
   createConversation,
   listMessages,
   setConversationDefaultSkill
 } from '../../src/main/services/chat'
+import { addToCollection, getBuiltinCollection, linkConversationDocument } from '../../src/main/services/collections'
 import { updateSettings } from '../../src/main/services/settings'
 
 // Skills S13b — AUTO-FIRE mechanics (skills-s13-plan.md §2.1/§4). Proves the ratified contract:
@@ -352,5 +354,100 @@ describe('document-redaction auto-fires against the real selector (S13b D6 opt-i
     const docId = seedIndexedDoc(db, 'contract.pdf', 'application/pdf')
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
     expect(resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)).toBeNull()
+  })
+})
+
+// U4 (audit §2.4/§4.4) — auto-fire's doc-signal corroboration is NARROWED to EXPLICITLY-scoped documents
+// (a chat attachment or a hand-pick). A whole-corpus Library/collection scope contributes NO doc signal, so
+// "keyword + any matching PDF anywhere in the library" no longer clears the ≥3 bar. The inert suggestion
+// offer (suggest.ts) is deliberately left reading the full scope — proven at the signal level below.
+describe('resolveAutoFireSkill — narrowed doc signals (U4, audit §4.4)', () => {
+  /** autobank (autoFire + `bank statement` keyword + pdf mime) with a matching PDF seeded INTO the Library
+   *  collection — present in the corpus, NOT explicitly selected. */
+  function envWithLibraryDoc(): { db: Db; dirs: { appSkillsDir: string; userSkillsDir: string }; libDocId: string } {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'autobank', {
+      keywords: ['bank statement'],
+      mimeTypes: ['application/pdf'],
+      autoFire: true
+    })
+    reconcileSkills(db, dirs)
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    const libDocId = seedIndexedDoc(db, 'library-statement.pdf', 'application/pdf')
+    addToCollection(db, [libDocId], getBuiltinCollection(db, 'library')!.id)
+    return { db, dirs, libDocId }
+  }
+
+  it('inScopeDocSignals: a whole-corpus library doc shows in the FULL scope but not the narrowed scope', () => {
+    const { db } = envWithLibraryDoc()
+    const conv = createConversation(db, {}) // whole-Library default scope (no explicit selection)
+    // The suggestion path reads the full scope and sees the library doc…
+    expect(inScopeDocSignals(db, conv.id).mimeTypes).toContain('application/pdf')
+    // …but the auto-fire (explicitDocumentsOnly) view drops it — no EXPLICIT document is in scope.
+    expect(inScopeDocSignals(db, conv.id, { explicitDocumentsOnly: true })).toEqual({ titles: [], mimeTypes: [] })
+  })
+
+  it('a matching doc merely IN the Library (whole-corpus scope) does NOT auto-fire (§4.4)', () => {
+    const { db, dirs } = envWithLibraryDoc()
+    const conv = createConversation(db, {}) // whole-Library — the doc is present, not selected
+    // keyword "bank statement" (2) + a narrowed-away library doc (0) = 2 < 3 ⇒ no fire (old behaviour fired).
+    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_MATCH)).toBeNull()
+  })
+
+  it('the SAME library doc EXPLICITLY selected auto-fires (narrowing keeps hand-picks)', () => {
+    const { db, dirs, libDocId } = envWithLibraryDoc()
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [libDocId] }
+    })
+    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_MATCH)?.installId).toBe('app:autobank')
+  })
+
+  it('the SAME doc ATTACHED to the conversation auto-fires (narrowing keeps attachments)', () => {
+    const { db, dirs, libDocId } = envWithLibraryDoc()
+    const conv = createConversation(db, {}) // whole-Library scope…
+    expect(linkConversationDocument(db, conv.id, libDocId)).toBe(true) // …plus an explicit attachment
+    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_MATCH)?.installId).toBe('app:autobank')
+  })
+})
+
+// U4 (audit §2.4) — the three complaint skills (bank-statement, invoice, meeting-protocol) now declare
+// triggers.autoFire in their COMMITTED SKILL.md, so they auto-fire end-to-end against the real manifests
+// with an explicitly-scoped matching document. Regression for the §2.4 "can never auto-fire" gap.
+describe('the complaint skills auto-fire against the real committed manifests (U4 D6 opt-in)', () => {
+  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
+  function realDirs(): { appSkillsDir: string; userSkillsDir: string } {
+    return { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(tempDir(), 'user-skills') }
+  }
+  const cases = [
+    { skill: 'app:bank-statement', q: 'Reconcile the transactions on my bank statement.', title: 'march-statement.pdf', mime: 'application/pdf' },
+    { skill: 'app:invoice', q: 'List the line items and the invoice number.', title: 'invoice-2026.pdf', mime: 'application/pdf' },
+    { skill: 'app:meeting-protocol', q: 'Summarize this meeting.', title: 'team-meeting.md', mime: 'text/markdown' }
+  ]
+  for (const c of cases) {
+    it(`${c.skill} auto-fires with an explicitly-scoped matching doc`, () => {
+      const db = freshDb()
+      const dirs = realDirs()
+      reconcileSkills(db, dirs)
+      updateSettings(db, { skillsAutoFireEnabled: true })
+      const docId = seedIndexedDoc(db, c.title, c.mime)
+      const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+      const skill = resolveAutoFireSkill(db, dirs, conv.id, c.q)
+      expect(skill?.installId).toBe(c.skill)
+      expect(skill?.autoFired).toBe(true)
+    })
+  }
+
+  it('a single-keyword ask at whole-corpus scope with only a library statement does NOT auto-fire', () => {
+    const db = freshDb()
+    const dirs = realDirs()
+    reconcileSkills(db, dirs)
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    const libDoc = seedIndexedDoc(db, 'march-statement.pdf', 'application/pdf')
+    addToCollection(db, [libDoc], getBuiltinCollection(db, 'library')!.id)
+    const conv = createConversation(db, {}) // whole-Library — the statement is present, not selected
+    // "cashflow" (2) + a narrowed-away library doc = 2 < 3 ⇒ no fire (the §4.4 tightening in situ).
+    expect(resolveAutoFireSkill(db, dirs, conv.id, 'give me the cashflow')).toBeNull()
   })
 })

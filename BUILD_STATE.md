@@ -6,6 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation U4: auto-fire reach — doc signals narrowed to explicitly-scoped documents + redaction manifest↔handler alignment + bank/invoice/meeting-protocol opted into auto-fire (setting stays default-OFF) — branch `fix/skills-u4`, UNMERGED.**
+Track-U (plan §U4; audit §2.4 + §4.4), branched off `fix/skills-u3` (dep: W5's canonical vocabulary + expanded
+corpus — verified in-history). Offline / pure / **no schema change** / **no new deps** / **no extractor-version
+bump** (triggering is read-side) / **no routing-engine change**. **Root cause:** (§2.4) only `document-redaction`
+declared `triggers.autoFire`, so bank-statement/invoice/meeting-protocol could **never** auto-fire even with the
+user setting on — the owner's complaint skills were unreachable; (§4.4) auto-fire's doc-signal corroboration was
+computed over the FULL unnarrowed scope, so "keyword + ≥1 doc signal" degraded to "keyword + any matching PDF
+anywhere in the Library", AND the redaction manifest offered/auto-fire-scored the pure legal words
+`datenschutz`/`dsgvo`/`gdpr` its handler acts on neither via `routeMatch` nor `PII_TOPIC_RE` (a redaction-flavoured
+fence on "Was regelt die DSGVO?"). **Fix (narrowing):** `inScopeDocSignals` gains `{explicitDocumentsOnly}` —
+`autofire.ts` passes it; it narrows the resolved scope to its explicit `documentIds` (attachments ∪ hand-picks,
+already unioned by `resolveScope`) and DROPS collection membership, returning empty signals when there is no
+explicit doc (guarding against `documentsInScope`'s "no filter ⇒ whole corpus"). `suggest.ts` is untouched — the
+inert offer keeps reading the full scope. **Fix (alignment):** dropped `datenschutz`/`dsgvo`/`gdpr` from the
+`DOCUMENT_REDACTION` vocabulary (regenerated the SKILL.md keywords via the parity contract); kept
+`sensitive data`/`sensible daten` (the informational dry-run `PII_TOPIC_RE` DOES act on those). **Fix (opt-in):**
+added `triggers.autoFire: true` to bank-statement/invoice/meeting-protocol SKILL.md (their `applies()` gates are
+already single-doc + intent-shaped; S13c undo exists). **Setting `skillsAutoFireEnabled` stays default-OFF.**
+**Eval:** the harness models the narrowing — `CorpusItem.scope?: 'narrowed'|'whole-corpus'`, `toAutoFireContext`
+zeros a whole-corpus item's doc signals, `FirePolicy.narrowsDocSignals` (set on threshold-3) routes `scoreCorpus`
+through it; the monotonicity sanity test pinned to `forceFullSignals` (pure bar comparison). Corpus +8 items → 90
+(whole-corpus weak/strong/none, attached contrast, the `Was regelt die DSGVO?` audit example). **Measured** (printed
+by the baseline test): auto-fire **threshold-3 — fired-wrong 0, precision 100.0 % (55 fired-correct, 9 missed —
+the weak whole-corpus items correctly declining)**; suggestion **keyword-required — precision 98.4 %** (the 1
+fired-wrong is the documented W5 `adv-meeting-schedule` ceiling). **Data contract:** `inScopeDocSignals` third arg
+`opts?: {explicitDocumentsOnly?: boolean}` (additive, defaults to today's full-scope behavior). **+13 net-new tests**
+(DB: `inScopeDocSignals` full-vs-narrowed proof, library-doc whole-corpus no-fire, explicit-selection + attachment
+fire, real committed manifests bank/invoice/meeting-protocol auto-fire ×3, real-manifest whole-corpus no-fire; eval:
+U4 gate block — non-vacuous whole-corpus set, narrowed≠full proof, meeting weak-vs-attached contrast, strong-intent
+fires, dsgvo double-drop, threshold-3 bar over the whole-corpus subset; redaction manifest dsgvo-drop pin) + 1
+pre-existing redaction keyword test updated (asserted gdpr/dsgvo present → now asserts dropped); full suite green
+(**3004** passed / 41 skipped) + typecheck. **Data/UX residual:** the narrowing keys on `scope.documentIds`, so a
+*collection*-scoped conversation (even a small curated folder) is whole-corpus for auto-fire and yields no doc
+signal — deliberate (only a doc the user put in front of the skill corroborates a silent fire). Non-goals honored:
+gate inversion (A3), whole-doc budget internals (W1), any keyword rebinding beyond redaction (W5 owns the vocab)._
+
 _2026-07-03 — **Skills remediation U3: skill-selection UX — per-turn apply + explicit keep-toggle + persistent composer chip with × + "answer without it" on all skill-stamped turns + routed-run relay pinned to the run's document — branch `fix/skills-u3`, UNMERGED.**
 Track-U (plan §U3; audit §4.3 + ux-6), branched off `fix/skills-u2` (deps: none; the plan/audit docs live on
 the phase-branch chain, not `master`). Offline / pure / **no schema change** / **no new deps** / renderer +

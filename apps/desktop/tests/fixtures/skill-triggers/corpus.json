@@ -2,7 +2,10 @@
   "_about": [
     "Skills trigger corpus — labelled, SYNTHETIC (skills-s13-plan.md §3.1 / W5 audit §6.4/§8.3). Text",
     "only: NO user data, no real statements, no telemetry — honours the offline/no-user-data rules.",
-    "Each item: { id, question, inScopeDocs:[{title,mimeType}], expected:<skillId|'none'>, confusion?, note }.",
+    "Each item: { id, question, inScopeDocs:[{title,mimeType}], expected:<skillId|'none'>, confusion?, scope?, note }.",
+    "`scope` (U4/§4.4): 'narrowed' (default) = the inScopeDocs are EXPLICITLY selected (attachment / hand-pick),",
+    "seen by BOTH suggestion + auto-fire; 'whole-corpus' = they merely EXIST in the Library, so the inert",
+    "suggestion offer still reads them but AUTO-FIRE narrows them away (contributes no corroborating signal).",
     "Label space = ALL EIGHT real ENABLED app skills' actual triggers (W5 widened it from 4):",
     "bank-statement | invoice | meeting-protocol | contract-brief | share-safe-review |",
     "deadline-obligation-finder | what-changed | document-redaction | none.",
@@ -556,7 +559,7 @@
       "question": "Wo finde ich die Datenschutzerklärung auf der Website?",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "Adversarial (de) — 'datenschutz' is word-matched, so 'Datenschutzerklärung' does not trigger it."
+      "note": "Adversarial (de) — U4/§4.4 DROPPED 'datenschutz' from the redaction vocabulary (the handler acts on neither routeMatch nor PII_TOPIC_RE for it), so it never offers OR auto-fires; it was already word-matched, so 'Datenschutzerklärung' never hit it either."
     },
     {
       "id": "adv-net-netflix-01",
@@ -621,6 +624,70 @@
       "inScopeDocs": [{ "title": "notes.txt", "mimeType": "text/plain" }],
       "expected": "none",
       "note": "Neutral with a doc whose MIME alone is a SUPPORTING signal (no filename glob, no keyword) — a lone MIME signal must not clear the bar."
+    },
+
+    {
+      "id": "wc-bank-weak-01",
+      "question": "Give me the cashflow.",
+      "inScopeDocs": [{ "title": "q1-statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "scope": "whole-corpus",
+      "note": "U4/§4.4 — a SINGLE bank keyword ('cashflow') + a statement PDF merely present in the Library (NOT selected). SUGGESTION offers bank (full score 4); AUTO-FIRE narrows the library doc away → keyword-only 2 < 3 → correctly does NOT silently fire. This is the '≥1 doc signal degrades to any matching PDF anywhere' trap the narrowing closes."
+    },
+    {
+      "id": "wc-invoice-weak-01",
+      "question": "Who is the vendor here?",
+      "inScopeDocs": [{ "title": "invoice-2026-05.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "scope": "whole-corpus",
+      "note": "U4/§4.4 — a single invoice keyword ('vendor') + a library invoice PDF (not selected). Offer fires (full 4); auto-fire declines (narrowed 2)."
+    },
+    {
+      "id": "wc-meeting-weak-01",
+      "question": "Summarize this meeting.",
+      "inScopeDocs": [{ "title": "team-meeting.md", "mimeType": "text/markdown" }],
+      "expected": "meeting-protocol",
+      "scope": "whole-corpus",
+      "note": "U4/§2.4/§4.4 — the '(Summarize this meeting)' incident, but the meeting doc is only IN the library, not attached. Offer fires (full 4); auto-fire declines (narrowed 2) — a matching doc anywhere in the library must not silently apply the skill. Contrast wc-meeting-attached-01."
+    },
+    {
+      "id": "wc-meeting-attached-01",
+      "question": "Summarize this meeting.",
+      "inScopeDocs": [{ "title": "team-meeting.md", "mimeType": "text/markdown" }],
+      "expected": "meeting-protocol",
+      "note": "U4/§2.4 contrast to wc-meeting-weak-01: the SAME question, but the meeting doc is EXPLICITLY in scope (attachment / hand-pick — default 'narrowed'). Auto-fire keeps the doc signal → 'meeting' (2) + mime (1) + filename (1) = 4 ≥ 3 → correctly auto-fires. This is the §2.4 fix working when the user actually put the doc in front of the skill."
+    },
+    {
+      "id": "wc-bank-strong-01",
+      "question": "Reconcile the transactions on my bank statement.",
+      "inScopeDocs": [{ "title": "q1-statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "scope": "whole-corpus",
+      "note": "U4/§4.4 — STRONG intent (two distinct bank keywords: 'bank statement' + 'transactions', capped → 4) still auto-fires at whole-corpus scope with NO explicit doc: the narrowing removes only the DOC corroboration, never keyword strength."
+    },
+    {
+      "id": "wc-invoice-strong-01",
+      "question": "List the line items and the invoice number.",
+      "inScopeDocs": [{ "title": "invoice-2026-05.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "scope": "whole-corpus",
+      "note": "U4/§4.4 — strong invoice intent ('line items' + 'invoice number', capped → 4) auto-fires at whole-corpus scope without an explicit doc."
+    },
+    {
+      "id": "wc-none-libdoc-01",
+      "question": "What's a good recipe for dinner tonight?",
+      "inScopeDocs": [{ "title": "march-statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "scope": "whole-corpus",
+      "note": "U4/§4.4 — an unrelated question with a statement PDF sitting in the Library. Neither suggestion (no keyword) nor auto-fire (no keyword, and the library doc is narrowed away anyway) may fire."
+    },
+    {
+      "id": "wc-dsgvo-libdoc-01",
+      "question": "Was regelt die DSGVO für Unternehmen?",
+      "inScopeDocs": [{ "title": "privacy-notice.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "scope": "whole-corpus",
+      "note": "U4/§4.4 — the audit's exact example: an auto-fired 'Was regelt die DSGVO?' getting a redaction fence. BOTH fixes converge: 'dsgvo' was dropped from the redaction vocabulary (no keyword) AND the library PDF is narrowed away (no doc signal), so redaction neither offers nor auto-fires."
     }
   ]
 }

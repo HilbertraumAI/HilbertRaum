@@ -85,16 +85,25 @@ describe('document-redaction — committed SKILL.md is a Tier-2 tool skill', () 
     expect(kws).toContain('redact')
     expect(kws).toContain('anonymize')
     expect(kws).toContain('remove personal data')
-    expect(kws).toContain('gdpr')
     // German singular + plural (the ending breaks the substring, so both are listed).
     expect(kws).toContain('anonymisieren')
     expect(kws).toContain('anonymisierung')
     expect(kws).toContain('schwärzen')
     expect(kws).toContain('schwärzung')
     expect(kws).toContain('personenbezogene daten')
-    expect(kws).toContain('dsgvo')
+    // The PII-CONTENT topics stay — the informational dry-run (PII_TOPIC_RE) acts on them.
+    expect(kws).toContain('sensitive data')
+    expect(kws).toContain('sensible daten')
     // It is intent-driven, not filename-driven.
     expect(parseSkillMarkdown(REDACTION_SKILL_MD).manifest!.triggers.filenamePatterns).toEqual([])
+  })
+
+  it('U4/§4.4: the pure legal words (datenschutz/dsgvo/gdpr) are DROPPED from the manifest', () => {
+    // The handler acts on NEITHER routeMatch NOR the informational PII_TOPIC_RE for these, so keeping
+    // them let redaction offer/auto-fire a wrong-flavoured fence on "Was regelt die DSGVO?". Aligning the
+    // manifest to the handler = removing them.
+    const kws = parseSkillMarkdown(REDACTION_SKILL_MD).manifest!.triggers.keywords.map((k) => k.toLowerCase())
+    for (const legal of ['datenschutz', 'dsgvo', 'gdpr']) expect(kws).not.toContain(legal)
   })
 })
 
