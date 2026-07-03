@@ -6,6 +6,56 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation U3: skill-selection UX — per-turn apply + explicit keep-toggle + persistent composer chip with × + "answer without it" on all skill-stamped turns + routed-run relay pinned to the run's document — branch `fix/skills-u3`, UNMERGED.**
+Track-U (plan §U3; audit §4.3 + ux-6), branched off `fix/skills-u2` (deps: none; the plan/audit docs live on
+the phase-branch chain, not `master`). Offline / pure / **no schema change** / **no new deps** / renderer +
+turn-resolution + scope-pin plumbing only — **NO routing-engine change** (the analysis-handler dispatch,
+`applies`/`intends`, selector are untouched). **Root cause:** (§4.3) every composer pick — including accepting a
+one-off suggestion — was silently written to the conversation's persisted default (`active_skill_id`), so a
+pick made many turns ago kept shaping later answers invisibly ("inconsistent results"), and the "answer without
+it" undo existed only for **auto-fired** rows; (ux-6) the Summarize/Categorize run-bar buttons surface their
+real output by routing a question into the transcript (0-model bank handler), but that relay used the ordinary
+conversation scope — so on a multi-doc / whole-library scope the answer scattered across the wrong documents,
+and in plain-chat mode (relay inert) the buttons produced no reachable answer at all. **Fix (renderer):** a pick
+now sets a **session override** (`skillByConv`) that shapes the turn but is **not** persisted; a new
+**`turnSkillArgFor`** returns the SEND arg verbatim (id, or explicit `null` = no-skill-no-auto-fire, or
+`undefined` = resolve the saved default + maybe auto-fire), and `stream()` sends it verbatim (dropped the old
+fresh-send `null→undefined` collapse) so the chip (`skillFor`) and the answer can never disagree; a **persistent
+composer chip** (`SkillPicker`) shows the active skill with an **×** (`clearSkill` = pick None + clear the DB
+default); the picker gained an explicit **"keep for this conversation"** checkbox (`onKeepForConversation` — the
+ONLY path that writes `active_skill_id`; un-keeping pins the skill as a session override so chip+send stay
+consistent with the just-cleared default); pre-existing sticky defaults still shape turns and read as *kept*.
+The **"answer without this skill"** undo (`Transcript`) now rides **every** skill-stamped last turn, not just
+auto-fired. **Fix (ux-6):** the routed-run effect passes the run's resolved target id (`runTargetId`, module-store
+fallback `getActiveSkillRunDocumentId` for a remount) to `stream`→`askDocuments`(**new 5th arg `pinnedDocumentId`**);
+`registerRagIpc` re-validates it against the in-scope set and narrows the scope to that ONE doc (marks
+`hasExplicitDocSelection` so the filename auto-scope defers; an out-of-scope id is ignored). `onRunTool` now
+passes the **resolved** target id to `startSkillRun` so the run store carries it. The two routed buttons
+(`categorize_transactions`/`summarize_cashflow`) + the post-extract "Categorize" follow-up are **hidden in
+plain-chat mode** (`visibleRunnableTools` filter + `SkillRunBar offerRoutedFollowups`). Attach-flow carry
+(`carrySkillToConversation`) made per-turn too (persist only when the source pick was kept). **Data contract:**
+`askDocuments` preload/IPC gains a trailing optional `pinnedDocumentId?: string|null` (content-free id, untrusted,
+main re-validates); the skill-run store gains `activeDocumentId` + `getActiveSkillRunDocumentId`. **i18n:**
+`chat.skill.clear`/`chat.skill.keep` added to en+de (du-form). **+17 net-new tests** (SkillPicker chip×/keep-
+checkbox checked+unchecked+hidden; Transcript undo on picked/auto-fired/no-handler/non-last; SkillRunBar routed
+follow-up hidden; skill-run store documentId set/clear/absent; integration `askDocuments` scope-pin narrows to
+A vs B + ignores a bogus id; **4 ChatScreen-mount tests** — a pick is never persisted, "keep" is the only
+persister, None clears a saved default, chip × clears both) + two pre-existing expectations updated to the FIXED
+behavior (TranscriptA11y: undo now on a picked turn; ChatAttach: unkept pick carries as session override, NOT
+persisted); full suite green (**2989** passed / 41 skipped) + typecheck. **Adversarial 3-lens diff review**
+(state-consistency / relay-pin / plan-i18n-ux, each finding independently verified) caught two REAL bugs — both
+fixed: (a) the routed-run pin was resolved AFTER `acknowledgeSkillRun()` had nulled the run store, so the
+remount fallback was dead code (fixed by resolving `pinnedDocId` BEFORE acknowledge, mirroring `targetConv`);
+(b) `selectSkill` left a saved default lurking — so picking **None** couldn't clear it (the chip × is hidden
+with no skill) and it silently resurfaced on reload, and the keep-checkbox read *unchecked* while the skill was
+still the stored default (fixed by making `selectSkill` clear the saved default, so **keep** is the SINGLE
+writer of `active_skill_id`) — plus a LOW stale comment (fixed). The remaining LOW ("answer without it" leaves
+the visible pick active for the next turn) is a deliberate per-turn choice: the persistent chip keeps the skill
+visible, and it mirrors the S13c per-answer undo. **Residual (documented in known-limitations):** the session
+override is in-memory (an unkept per-turn pick does not survive an app reload — by design), and the relay pin
+degrades to the ordinary scope if the run's target id was lost on a remount. Next: U4 (auto-fire reach; depends
+on W5) or per the recommended order._
+
 _2026-07-03 — **Skills remediation U2: PII detectors — Luhn card detector + fixed 0-leading phone FP + either-order date masking + read-only scan reused for a redaction dry-run and a share-safe pre-pass — branch `fix/skills-u2`, UNMERGED.**
 Track-U (plan §U2; audit §5.7 redaction bullet + §3.5 + §3.4), branched off `fix/skills-u1` (deps: none; the
 plan/audit docs live on the phase-branch chain, not `master`). Offline / pure / no new deps / **no schema

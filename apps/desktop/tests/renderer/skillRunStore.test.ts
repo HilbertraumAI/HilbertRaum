@@ -4,6 +4,7 @@ import {
   startSkillRun,
   getActiveSkillRun,
   getActiveSkillRunConversationId,
+  getActiveSkillRunDocumentId,
   acknowledgeSkillRun,
   resetSkillRunStoreForTests
 } from '../../src/renderer/lib/skillruns'
@@ -68,5 +69,38 @@ describe('skill-run store — origin conversation', () => {
     acknowledgeSkillRun()
     expect(getActiveSkillRun()).toBeNull()
     expect(getActiveSkillRunConversationId()).toBeNull()
+  })
+})
+
+// U3 (audit ux-6): the store also remembers the run's RESOLVED target document, so the routed-run
+// relay can pin its chat answer to that document even after a screen unmount lost the React state.
+describe('skill-run store — routed-run document pin', () => {
+  it('is null before any run starts', () => {
+    expect(getActiveSkillRunDocumentId()).toBeNull()
+  })
+
+  it('remembers the resolved target document id and clears it on acknowledge', async () => {
+    const run = doneRun()
+    stubApi(run)
+    await startSkillRun({
+      skillInstallId: 'app:bank-statement',
+      toolName: 'summarize_cashflow',
+      conversationId: 'conv-42',
+      documentId: 'doc-7'
+    })
+    expect(getActiveSkillRunDocumentId()).toBe('doc-7')
+    acknowledgeSkillRun()
+    expect(getActiveSkillRunDocumentId()).toBeNull()
+  })
+
+  it('is null when the run carried no resolved target (main defaults to first-in-scope)', async () => {
+    const run = doneRun()
+    stubApi(run)
+    await startSkillRun({
+      skillInstallId: 'app:bank-statement',
+      toolName: 'categorize_transactions',
+      conversationId: 'conv-42'
+    })
+    expect(getActiveSkillRunDocumentId()).toBeNull()
   })
 })

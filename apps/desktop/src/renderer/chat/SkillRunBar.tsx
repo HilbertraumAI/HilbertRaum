@@ -94,6 +94,13 @@ export interface SkillRunBarProps {
   onDismiss: () => void
   /** Suppress the offer while a chat answer is streaming (the run still polls). */
   disabled?: boolean
+  /**
+   * U3 (audit ux-6): whether ROUTED follow-ups (the post-extract "Categorize transactions" offer)
+   * may be surfaced. False in plain-chat mode, where the routed answer relay is inert, so the
+   * follow-up's real output (the category breakdown routed into the transcript) would be unreachable.
+   * Defaults to true (documents mode). The offered routed tools themselves are filtered upstream.
+   */
+  offerRoutedFollowups?: boolean
 }
 
 /**
@@ -162,7 +169,8 @@ export function SkillRunBar({
   onRun,
   onCancel,
   onDismiss,
-  disabled
+  disabled,
+  offerRoutedFollowups = true
 }: SkillRunBarProps): JSX.Element | null {
   const { t, tCount } = useT()
   const [confirmTool, setConfirmTool] = useState<RunnableTool | null>(null)
@@ -247,6 +255,7 @@ export function SkillRunBar({
     // SAME document the extract ran on — its id is remembered renderer-side (the run state is
     // content-free); a lost id (null, e.g. after a remount) falls back to main's first-in-scope default.
     const offerCategorize =
+      offerRoutedFollowups &&
       run.state === 'done' &&
       run.toolName === 'extract_transactions' &&
       (run.transactionCount ?? 0) > 0

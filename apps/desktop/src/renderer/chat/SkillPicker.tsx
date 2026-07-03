@@ -26,6 +26,14 @@ interface SkillPickerProps {
   /** U-3: the user explicitly declined the suggestion for this draft (picked "None"). Suppresses the
    *  CLOSED-trigger hint so it never re-nags — the in-picker pinned offer is unaffected. */
   suggestionDismissed?: boolean
+  /** U3 (audit §4.3): clear the active skill — the persistent composer chip's ×. Clears BOTH the
+   *  per-turn pick and any saved conversation default. Rendered only when a skill is active. */
+  onClear?: () => void
+  /** U3: whether the active pick is saved as this conversation's DEFAULT (survives reload). Drives the
+   *  in-picker "Keep for this conversation" checkbox. A pick is per-turn until this opts in. */
+  keptForConversation?: boolean
+  /** U3: toggle whether the active pick is saved as the conversation default (explicit, not implicit). */
+  onKeepChange?: (keep: boolean) => void
 }
 
 export function SkillPicker({
@@ -35,7 +43,10 @@ export function SkillPicker({
   disabled,
   suggestion,
   onOpenChange,
-  suggestionDismissed
+  suggestionDismissed,
+  onClear,
+  keptForConversation,
+  onKeepChange
 }: SkillPickerProps): JSX.Element {
   const { t, lang } = useT()
   const selected = value ? skills.find((s) => s.installId === value) ?? null : null
@@ -101,9 +112,43 @@ export function SkillPicker({
               </DropdownMenu.RadioItem>
             ))}
           </DropdownMenu.RadioGroup>
+          {/* U3 (audit §4.3): a pick is PER-TURN by default; this checkbox is the explicit opt-in to
+              save it as the conversation's default (survives reload). Shown only when a skill is
+              active — "keep None" is meaningless. Toggling off drops only the saved default; the skill
+              stays active for the session (the screen keeps it as a per-turn pick). */}
+          {selected && onKeepChange && (
+            <>
+              <DropdownMenu.Separator className="menu-sep" />
+              <DropdownMenu.CheckboxItem
+                className="menu-item menu-check skill-keep"
+                checked={keptForConversation ?? false}
+                onCheckedChange={(next) => onKeepChange(next === true)}
+                onSelect={(e) => e.preventDefault() /* keep the menu open on toggle */}
+              >
+                <span className="menu-radio-mark" aria-hidden="true">
+                  <DropdownMenu.ItemIndicator>✓</DropdownMenu.ItemIndicator>
+                </span>
+                <span>{t('chat.skill.keep')}</span>
+              </DropdownMenu.CheckboxItem>
+            </>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+    {/* U3 (audit §4.3): the persistent composer chip's × — always visible while a skill is active, so
+        the user can SEE which skill shapes their turns and clear it in one tap (override + saved
+        default) without hunting inside the menu. */}
+    {selected && onClear && (
+      <button
+        type="button"
+        className="footer-menu-btn skill-chip-clear"
+        disabled={disabled}
+        aria-label={t('chat.skill.clear', { title: localizedSkillTitle(selected, lang) })}
+        onClick={onClear}
+      >
+        <span aria-hidden="true">✕</span>
+      </button>
+    )}
     {closedHintSkill && (
       <button
         type="button"

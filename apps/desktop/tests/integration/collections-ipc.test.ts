@@ -31,7 +31,7 @@ import { seedSettings } from '../../src/main/services/settings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
-import type { Collection, Conversation, DocumentInfo, ImportJob, ImportJobStatus } from '../../src/shared/types'
+import type { Collection, Conversation, DocumentInfo, ImportJob, ImportJobStatus, Message } from '../../src/shared/types'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 
@@ -260,6 +260,54 @@ describe('resolveScope-in-IPC: filename auto-scope within the resolved scope', (
     const e2 = makeEvent()
     await invokeWithEvent(handlers, IPC.askDocuments, e2, conv2.id, 'what does contractA say?')
     expect(scopeTitles(e2)).toHaveLength(0)
+  })
+})
+
+// U3 (audit ux-6): the routed-run relay pins `askDocuments` to the run's document via the 5th arg, so
+// a Summarize/Categorize answer can't scatter across a multi-document scope. Untrusted — an
+// out-of-scope id is ignored (the ordinary scope stands).
+describe('askDocuments — U3 routed-run scope pin (audit ux-6)', () => {
+  it('narrows retrieval to the pinned in-scope document; ignores an out-of-scope id', async () => {
+    const h = makeHarness()
+    registerDocsIpc(h.ctx)
+    registerChatIpc(h.ctx)
+    registerCollectionsIpc(h.ctx)
+    registerRagIpc(h.ctx)
+    void documentsDir(h.ctx.paths.workspacePath)
+
+    // Two documents with the SAME text, so retrieval alone can't explain a single-source answer —
+    // only the scope pin can. Both land in the Library (the whole-corpus default scope).
+    const body = 'the account balance summary shows a closing figure of 100\n'
+    const aPath = join(h.rootPath, 'statement.txt')
+    writeFileSync(aPath, body, 'utf8')
+    const aId = await importIndexed(h.ctx, aPath)
+    const bPath = join(h.rootPath, 'invoice.txt')
+    writeFileSync(bPath, body, 'utf8')
+    const bId = await importIndexed(h.ctx, bPath)
+
+    const { result: convRaw } = await invoke(handlers, IPC.createConversation, { mode: 'documents' })
+    const conv = convRaw as Conversation
+    const question = 'what is the balance summary?'
+
+    // Pinned to A → every citation is from statement.txt only.
+    const { result: pinA } = await invoke(handlers, IPC.askDocuments, conv.id, question, null, false, aId)
+    const citesA = (pinA as Message).citations ?? []
+    expect(citesA.length).toBeGreaterThan(0)
+    expect(citesA.every((c) => c.sourceTitle === 'statement.txt')).toBe(true)
+
+    // Pinned to B → every citation is from invoice.txt only. Same question, different pin ⇒ it is the
+    // PIN steering the source, not retrieval luck.
+    const { result: pinB } = await invoke(handlers, IPC.askDocuments, conv.id, question, null, false, bId)
+    const citesB = (pinB as Message).citations ?? []
+    expect(citesB.length).toBeGreaterThan(0)
+    expect(citesB.every((c) => c.sourceTitle === 'invoice.txt')).toBe(true)
+
+    // An out-of-scope / bogus id is IGNORED: the pin never narrows to a non-member, so real citations
+    // remain (the ordinary whole-Library scope stood).
+    const { result: pinBogus } = await invoke(handlers, IPC.askDocuments, conv.id, question, null, false, 'no-such-doc')
+    const citesBogus = (pinBogus as Message).citations ?? []
+    expect(citesBogus.length).toBeGreaterThan(0)
+    expect(citesBogus.every((c) => c.sourceTitle === 'statement.txt' || c.sourceTitle === 'invoice.txt')).toBe(true)
   })
 })
 

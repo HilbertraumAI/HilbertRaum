@@ -302,9 +302,13 @@ const api = {
     conversationId: string,
     question: string,
     skillInstallId?: string | null,
-    regenerate?: boolean
+    regenerate?: boolean,
+    /** U3 (audit ux-6): pin retrieval to ONE document (the routed-run relay passes the run's target),
+     *  narrowing within the resolved scope. UNTRUSTED — main re-validates it against the in-scope set
+     *  and ignores an out-of-scope id. Absent ⇒ the ordinary conversation scope applies. */
+    pinnedDocumentId?: string | null
   ): Promise<Message> =>
-    ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId, regenerate),
+    ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId, regenerate, pinnedDocumentId),
 
   // ---- Documents ----
   /** Open the OS picker for files (default) or a folder; returns the selected paths (display)

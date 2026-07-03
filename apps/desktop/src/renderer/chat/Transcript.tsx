@@ -30,8 +30,9 @@ interface TranscriptProps {
   /** Provided only for the message that can regenerate (last assistant turn, chat mode). */
   onTryAgain?: () => void
   /**
-   * Re-run the turn skill-free (S13c "answer without it" undo). Surfaced ONLY on the last assistant
-   * turn that the app AUTO-FIRED a skill on (`autoFired`). Absent ⇒ the affordance never renders.
+   * Re-run the turn skill-free (S13c "answer without it" undo). Surfaced on the last assistant turn
+   * that ANY skill shaped — auto-fired OR explicitly picked (U3, audit §4.3: a per-turn pick must be
+   * as reversible as an auto-fire). Absent ⇒ the affordance never renders.
    */
   onAnswerWithoutSkill?: () => void
   onCopy: (content: string) => void
@@ -275,12 +276,23 @@ const MessageBlock = memo(function MessageBlock({
           // Show the glyph title in the UI language when the skill carries a `localized`
           // override; fall back to the stamped canonical title otherwise.
           const glyphTitle = resolveSkillTitle ? resolveSkillTitle(m.skillId, m.skillTitle) : m.skillTitle
-          // S13c (D3): an AUTO-FIRED turn reads "Answered with <skill>" and — on the last
-          // assistant turn — carries a one-click "answer without it" undo that re-runs the same
-          // question skill-free. An explicitly-picked turn keeps the plain "Skill: <title>" glyph
-          // (no undo). Either way the glyph keeps the auto-fire visible, never silent.
+          // The "answer without it" undo re-runs the same question skill-free. S13c placed it on
+          // AUTO-FIRED turns only; U3 (audit §4.3) extends it to EVERY skill-stamped last turn — a
+          // per-turn pick is now as reversible as an auto-fire, so no skill-shaped answer is a
+          // dead end. The glyph copy still distinguishes the two: an auto-fired turn reads "Answered
+          // with <skill>" (the app chose it), an explicit pick keeps "Skill: <title>".
+          const canUndo = isLast && onAnswerWithoutSkill != null
+          const undoButton = canUndo && (
+            <button
+              type="button"
+              className="msg-skill-undo"
+              onClick={onAnswerWithoutSkill}
+              disabled={actionsDisabled}
+            >
+              {t('chat.skill.answerWithout')}
+            </button>
+          )
           if (m.autoFired) {
-            const canUndo = isLast && onAnswerWithoutSkill != null
             return (
               <div
                 className="msg-skill msg-skill-auto"
@@ -288,16 +300,7 @@ const MessageBlock = memo(function MessageBlock({
               >
                 <Icon name="brain" className="msg-skill-icon" />
                 <span>{t('chat.skill.autoFired', { title: glyphTitle })}</span>
-                {canUndo && (
-                  <button
-                    type="button"
-                    className="msg-skill-undo"
-                    onClick={onAnswerWithoutSkill}
-                    disabled={actionsDisabled}
-                  >
-                    {t('chat.skill.answerWithout')}
-                  </button>
-                )}
+                {undoButton}
               </div>
             )
           }
@@ -305,6 +308,7 @@ const MessageBlock = memo(function MessageBlock({
             <div className="msg-skill" title={t('chat.skill.usedTitle', { title: glyphTitle })}>
               <Icon name="brain" className="msg-skill-icon" />
               <span>{t('chat.skill.used', { title: glyphTitle })}</span>
+              {undoButton}
             </div>
           )
         })()}

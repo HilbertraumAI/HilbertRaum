@@ -20,6 +20,7 @@ import {
   cancelActiveSkillRun,
   getActiveSkillRun,
   getActiveSkillRunConversationId,
+  getActiveSkillRunDocumentId,
   startSkillRun,
   subscribeSkillRun
 } from '../lib/skillruns'
@@ -172,6 +173,10 @@ export function ChatScreen({
   /** Per-conversation skill selection this session ('new' = no conversation yet). A key present
    *  here overrides the conversation's persisted `activeSkillId`; null = explicitly no skill. */
   const [skillByConv, setSkillByConv] = useState<Record<string, string | null>>({})
+  /** U3 (audit §4.3): per-conversation "keep this pick as the default" intent, OPTIMISTIC over the
+   *  persisted `activeSkillId`. A pick now applies per-turn by DEFAULT; only an explicit opt-in here
+   *  (or a pre-existing sticky default) persists it. A key absent ⇒ derive from the stored default. */
+  const [keepByConv, setKeepByConv] = useState<Record<string, boolean>>({})
   /** The deterministic one-tap suggestion for the picker (skills plan §10.2/S8), or null. Now
    *  recomputed proactively as the draft changes (U-3) so it can ride the CLOSED trigger too. */
   const [skillSuggestion, setSkillSuggestion] = useState<SkillSuggestion | null>(null)
@@ -617,12 +622,14 @@ export function ChatScreen({
   async function ensureConversation(): Promise<string> {
     if (activeId) return activeId
     const conv = await createConversationInMode()
-    // Carry a skill picked while still on the 'new' composer onto the created conversation as its
-    // sticky default (skills plan §10.1), and re-key the session override to the new id.
+    // Carry a skill picked while still on the 'new' composer onto the created conversation, and re-key
+    // the session override to the new id. U3 (audit §4.3): per-turn by default — persist the sticky
+    // default ONLY when the user opted in via "keep for this conversation" (`keepByConv['new']`).
     if ('new' in skillByConv) {
       const picked = skillByConv['new'] ?? null
-      void window.api.setConversationDefaultSkill?.(conv.id, picked)
+      if (picked && keepByConv['new']) void window.api.setConversationDefaultSkill?.(conv.id, picked)
       setSkillByConv((prev) => ({ ...prev, [conv.id]: picked }))
+      if ('new' in keepByConv) setKeepByConv((prev) => ({ ...prev, [conv.id]: keepByConv['new']! }))
     }
     setActiveId(conv.id)
     await refreshConversations()
@@ -723,27 +730,80 @@ export function ChatScreen({
   const currentSkill = currentSkillId
     ? enabledSkills.find((s) => s.installId === currentSkillId) ?? null
     : null
+  // U3 (audit §4.3): whether the active pick is SAVED as this conversation's default (survives
+  // reload) — drives the picker's "keep for this conversation" checkbox. The optimistic `keepByConv`
+  // wins; absent, derive from the persisted `activeSkillId`. A pre-existing sticky default reads as
+  // kept (it is), so legacy defaults keep working and show checked.
+  const keptForConversation =
+    currentSkillId != null &&
+    (depthKey in keepByConv ? keepByConv[depthKey] : activeConversation?.activeSkillId === currentSkillId)
+
+  // The skill ARGUMENT to send to main for this turn (audit §4.3): the session pick VERBATIM when the
+  // user made one this session (id, or an explicit `null` = "no skill, no auto-fire"), else `undefined`
+  // so main resolves the saved default and MAY auto-fire. This is what makes a pick per-turn: the
+  // session pick is authoritative and never silently re-derives the saved default, while an untouched
+  // composer still honours a persisted default. A picked-then-disabled skill degrades to `null`
+  // (no skill this turn), mirroring `skillFor`'s graceful drop.
+  function turnSkillArgFor(key: string): string | null | undefined {
+    if (!(key in skillByConv)) return undefined
+    const raw = skillByConv[key] ?? null
+    if (!raw) return null
+    return enabledSkills.some((s) => s.installId === raw) ? raw : null
+  }
 
   function selectSkill(installId: string | null): void {
     if (busyStreaming) return
+    // Per-turn apply (audit §4.3): a pick sets the SESSION override only — it is NEVER written to the
+    // persisted sticky default (that is the explicit "keep for this conversation" opt-in below).
     setSkillByConv((prev) => ({ ...prev, [depthKey]: installId }))
+    // A fresh pick is unkept — the keep-checkbox reads unchecked.
+    setKeepByConv((prev) => ({ ...prev, [depthKey]: false }))
+    // …and CLEAR any saved sticky default too: a pick that supersedes a legacy default (including an
+    // explicit "None", where the chip's × is hidden so it can't clear it) must not leave that default
+    // lurking to (a) resurface on reload against the user's visible session choice, or (b) contradict
+    // the now-unchecked keep-checkbox (a re-pick of the saved skill would otherwise read "not kept"
+    // while still stored). The store write is unconditional (activeConversation may hold a stale
+    // activeSkillId), so `keep` stays the SINGLE writer of the persisted default. 'new' has no row yet.
+    if (activeId) void window.api.setConversationDefaultSkill?.(activeId, null)
     // U-3: an explicit "None" pick DECLINES the current suggestion — remember it so the quiet
     // closed-trigger hint does not re-nag for this draft. Any real pick clears the flag (the hint
     // is gated on "no skill picked" anyway, but this keeps the next "None" an honest fresh decline).
     setSuggestionDismissed(installId == null)
-    // Persist the sticky default the moment a conversation exists; a still-"new" pick is persisted
-    // when the conversation is created on send (ensureConversation).
-    if (activeId) void window.api.setConversationDefaultSkill?.(activeId, installId)
+  }
+
+  // U3 (audit §4.3): the composer chip's × — clear the active skill for this conversation. Identical to
+  // picking "None": `selectSkill(null)` drops the session override, clears any saved default, and
+  // dismisses the suggestion. Kept as a named handler so the × call site reads intent-first.
+  function clearSkill(): void {
+    selectSkill(null)
+  }
+
+  // U3 (audit §4.3): the explicit opt-in — save (or stop saving) the current pick as this
+  // conversation's default. Keeping writes the sticky default; un-keeping stops persisting BUT pins
+  // the skill as a session override so it stays active this session (only reload-persistence drops) —
+  // the chip and the next turn stay consistent (both read the override, not the just-cleared default).
+  function onKeepForConversation(keep: boolean): void {
+    if (busyStreaming || !currentSkillId) return
+    setKeepByConv((prev) => ({ ...prev, [depthKey]: keep }))
+    if (keep) {
+      if (activeId) void window.api.setConversationDefaultSkill?.(activeId, currentSkillId)
+    } else {
+      setSkillByConv((prev) => ({ ...prev, [depthKey]: currentSkillId }))
+      if (activeId) void window.api.setConversationDefaultSkill?.(activeId, null)
+    }
   }
 
   // Carry the skill the user currently sees selected onto a conversation created on the fly (the
   // attach flow), so adding a document never silently RESETS the pick. Mirrors the 'new'→id carry in
-  // ensureConversation (skills plan §10.1): re-key the session override AND persist the sticky default.
-  // A null pick needs no carry — a brand-new conversation already defaults to none.
-  function carrySkillToConversation(convId: string, skillId: string | null): void {
+  // ensureConversation: re-key the SESSION override (the skill stays active for the turn). U3 (audit
+  // §4.3): per-turn by default — persist the sticky default ONLY when the source pick was explicitly
+  // kept, so an unkept pick isn't silently persisted onto the new conversation. A null pick needs no
+  // carry — a brand-new conversation already defaults to none.
+  function carrySkillToConversation(convId: string, skillId: string | null, keep: boolean): void {
     if (!skillId) return
-    void window.api.setConversationDefaultSkill?.(convId, skillId)
     setSkillByConv((prev) => ({ ...prev, [convId]: skillId }))
+    setKeepByConv((prev) => ({ ...prev, [convId]: keep }))
+    if (keep) void window.api.setConversationDefaultSkill?.(convId, skillId)
   }
 
   // Score the current draft for the one-tap suggestion (deterministic, main-side, never logged) and
@@ -860,6 +920,16 @@ export function ChatScreen({
     () => scopeDocIds.map((id) => ({ id, name: docNameForId(id) })),
     [scopeDocIds, docNameForId]
   )
+  // U3 (audit ux-6): the routed buttons (Categorize / Summarize cashflow) surface their real output by
+  // routing a question into the transcript — a documents-mode-only relay (the routed-run effect below
+  // is inert in plain chat). So HIDE them in plain-chat mode, where their answer would be unreachable;
+  // the other run-bar tools (extract / validate / export) show their result inline and stay. The
+  // post-extract categorize follow-up is gated the same way via `offerRoutedFollowups` on the bar.
+  const routedRunsReachable = mode === 'documents'
+  const visibleRunnableTools = useMemo<RunnableTool[]>(
+    () => (routedRunsReachable ? runnableTools : runnableTools.filter((tool) => !ROUTED_RUN_QUESTION[tool.name])),
+    [runnableTools, routedRunsReachable]
+  )
   // The name of the document the ACTIVE run targets — remembered renderer-side when the run is
   // launched (the run state carries only ids/counts, never the title). Drives the busy/result row.
   const [runTargetName, setRunTargetName] = useState<string | null>(null)
@@ -887,7 +957,10 @@ export function ChatScreen({
     setRunTargetName(targetId ? docNameForId(targetId) : null)
     setRunTargetId(targetId ?? null)
     setError(null)
-    void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, documentId, confirmed })
+    // Pass the RESOLVED target id (not the raw `documentId`, which is undefined when the user relied on
+    // the first-in-scope default): main still re-validates it, and it is what the run store carries so
+    // the U3 routed-run relay can pin its answer to this document even after a screen remount (ux-6).
+    void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, documentId: targetId, confirmed })
       .then((outcome) => {
         // `needsConfirmation` is handled inside SkillRunBar (it raises the modal before calling with
         // confirmed:true); reaching it here would mean a write tool slipped the modal — surface it.
@@ -916,13 +989,20 @@ export function ChatScreen({
     // (survives a remount), else the active conversation.
     const targetConv = routedRunConvRef.current ?? getActiveSkillRunConversationId() ?? activeId
     if (targetConv !== activeId) return
+    // U3 (audit ux-6): PIN the routed answer to the document the run targeted, so a multi-document (or
+    // whole-corpus) scope can't scatter it across the wrong documents — the ux-6 breakage. The id is
+    // the renderer-remembered run target (`runTargetId`), falling back to the module store on a remount
+    // (React state is lost, the run store survives). Resolve it BEFORE `acknowledgeSkillRun()` below,
+    // which clears that store — reading it after would always see null (same ordering as `targetConv`).
+    // Absent ⇒ the ordinary scope (a single-doc chat is unaffected).
+    const pinnedDocId = runTargetId ?? getActiveSkillRunDocumentId() ?? undefined
     handledRoutedRunRef.current = run.runHandle
     acknowledgeSkillRun() // drop the content-free run row; the routed answer replaces it
     const question = t(questionKey)
     setMessages((prev) => [...prev, optimisticUser(targetConv, question)])
     // Route under the skill the RUN used (C2) — never `currentSkillId`, which is whatever the picker
     // shows now; a null/non-bank pick would bypass the 0-model-call bank analysis handler.
-    void stream(targetConv, question, false, depthFor(targetConv), run.skillInstallId)
+    void stream(targetConv, question, false, depthFor(targetConv), run.skillInstallId, pinnedDocId)
     // Keyed on the run + mode/conv/streaming-gate; the other closures are stable for this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSkillRun, mode, activeId, busyStreaming])
@@ -932,7 +1012,12 @@ export function ChatScreen({
     content: string,
     regenerate: boolean,
     depth: ChatDepthMode,
-    skillInstallId: string | null
+    // `undefined` ⇒ main resolves the saved default (and may auto-fire); `null` ⇒ explicit no-skill,
+    // no auto-fire (the per-turn "None" / the "answer without it" undo); an id ⇒ that skill (§4.3).
+    skillInstallId: string | null | undefined,
+    // U3 (audit ux-6): pin the document answer to ONE document (the routed-run relay passes the run's
+    // target). Documents mode only; main re-validates it against scope. Absent ⇒ ordinary scope.
+    pinnedDocumentId?: string
   ): Promise<void> {
     setError(null)
     setStreaming(true)
@@ -982,14 +1067,14 @@ export function ChatScreen({
       }
     }
     try {
-      // On a regenerate, send the resolved skill choice VERBATIM — including `null` (an explicit
-      // per-turn clear) — so the re-run honours exactly that and never re-derives a sticky default or
-      // re-auto-fires. This is what keeps the S13c "answer without it" undo skill-free. On a fresh
-      // send, a null (no pick) maps to undefined so a no-skill turn keeps its plain shape and may still
-      // auto-fire.
-      const turnSkillArg = regenerate ? skillInstallId : (skillInstallId ?? undefined)
+      // Send the resolved skill choice VERBATIM (audit §4.3 per-turn semantics): `undefined` lets main
+      // resolve the saved default (and may auto-fire), an explicit `null` forces a skill-free turn (no
+      // auto-fire — the per-turn "None" pick and the S13c "answer without it" undo), an id forces that
+      // skill. The caller (`onSend`/`onTryAgain`/`onAnswerWithoutSkill`/routed-run) already resolved
+      // this; `stream` no longer collapses `null`→`undefined`, so an explicit decline is honoured.
+      const turnSkillArg = skillInstallId
       if (mode === 'documents') {
-        await window.api.askDocuments(convId, content, turnSkillArg, regenerate)
+        await window.api.askDocuments(convId, content, turnSkillArg, regenerate, pinnedDocumentId)
       } else {
         await window.api.sendChatMessage(convId, content, {
           mode: depth,
@@ -1039,9 +1124,10 @@ export function ChatScreen({
     try {
       // The 'new'-composer depth selection sticks to the conversation that gets created.
       const depth = depthFor(depthKey)
-      // Capture the turn's skill BEFORE ensureConversation re-keys the 'new' selection (the closure
-      // value is stable; the picker's effective resolution already dropped any disabled skill).
-      const turnSkill = currentSkillId
+      // Capture the turn's skill ARGUMENT BEFORE ensureConversation re-keys the 'new' selection
+      // (§4.3 per-turn: the session pick verbatim when made, else undefined so main resolves the saved
+      // default + may auto-fire). The picker's effective resolution already dropped any disabled skill.
+      const turnSkill = turnSkillArgFor(depthKey)
       const convId = await ensureConversation()
       setDepths((prev) => ({ ...prev, [convId]: depth }))
       setMessages((prev) => [...prev, optimisticUser(convId, text)])
@@ -1246,8 +1332,10 @@ export function ChatScreen({
     const fileNames = paths.map(fileBaseName)
     const active = activeId ? conversations.find((c) => c.id === activeId) : undefined
     // The skill the user currently sees selected — captured BEFORE we switch conversations so a docs
-    // conversation created here inherits it instead of resetting to none (attach-flow reset bug).
+    // conversation created here inherits it instead of resetting to none (attach-flow reset bug). Its
+    // "kept" state rides along so a per-turn pick stays per-turn on the new conversation (U3).
     const carrySkill = currentSkillId
+    const carrySkillKept = keptForConversation
     try {
       let convId: string
       if (active && active.mode === 'documents') {
@@ -1255,7 +1343,7 @@ export function ChatScreen({
       } else if (active && active.mode === 'chat' && messages.length > 0) {
         const conv = await createDocsConversationForAttach()
         convId = conv.id
-        carrySkillToConversation(conv.id, carrySkill)
+        carrySkillToConversation(conv.id, carrySkill, carrySkillKept)
         setMode('documents')
         setActiveId(conv.id)
         setMessages([])
@@ -1265,7 +1353,7 @@ export function ChatScreen({
         // Empty (no conversation, or an empty plain chat): switch in place to documents.
         const conv = await createDocsConversationForAttach()
         convId = conv.id
-        carrySkillToConversation(conv.id, carrySkill)
+        carrySkillToConversation(conv.id, carrySkill, carrySkillKept)
         setMode('documents')
         setActiveId(conv.id)
         setMessages([])
@@ -1452,8 +1540,9 @@ export function ChatScreen({
           onThinkingOpenChange={setThinkingOpen}
           emptyState={emptyState}
           onTryAgain={canTryAgain ? handleTryAgain : undefined}
-          // The undo's own placement gate (last auto-fired turn) lives in Transcript; here we only
-          // withhold it while a reply is streaming (it would re-run mid-answer).
+          // The undo's own placement gate (last skill-stamped turn — auto-fired OR picked, U3 §4.3)
+          // lives in Transcript; here we only withhold it while a reply is streaming (it would re-run
+          // mid-answer).
           onAnswerWithoutSkill={busyStreaming ? undefined : handleAnswerWithoutSkill}
           onCopy={handleCopyMessage}
           onSave={handleSaveConversation}
@@ -1494,7 +1583,7 @@ export function ChatScreen({
             content-free. Hidden entirely when no run is active and no tool is offered. */}
         <SkillRunBar
           run={activeSkillRun}
-          runnableTools={runnableTools}
+          runnableTools={visibleRunnableTools}
           targetDocuments={targetDocuments}
           runningDocumentName={runTargetName}
           runningDocumentId={runTargetId}
@@ -1502,6 +1591,7 @@ export function ChatScreen({
           onCancel={() => void cancelActiveSkillRun()}
           onDismiss={acknowledgeSkillRun}
           disabled={busyStreaming}
+          offerRoutedFollowups={routedRunsReachable}
         />
 
         <Composer
@@ -1555,6 +1645,9 @@ export function ChatScreen({
                   suggestion={skillSuggestion}
                   onOpenChange={onSkillPickerOpenChange}
                   suggestionDismissed={suggestionDismissed}
+                  onClear={clearSkill}
+                  keptForConversation={keptForConversation}
+                  onKeepChange={onKeepForConversation}
                 />
               )}
               {/* Context-window usage meter (§5.1): pushed to the right of the footer's quiet

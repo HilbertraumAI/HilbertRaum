@@ -139,6 +139,30 @@ password recovery — are documented in
   **suggest-only**: they offer the skill but its handler does not route on them (its tool WRITES a masked
   copy, so "Was regelt die DSGVO?" must not be deflected to the Redact button) — aligning that
   manifest↔handler pair is a later remediation phase (audit §4.4).
+- **A skill picked in the composer applies PER-TURN, is visible, and is reversible (Skills U3, audit
+  §4.3 / ux-6).** Before U3 every picker pick — including accepting a one-off suggestion — was silently
+  written to the conversation's persisted default (`active_skill_id`), so a pick made many turns ago
+  kept shaping later answers invisibly (a large contributor to "inconsistent results"), and the "answer
+  without it" undo existed only for **auto-fired** rows. Now a pick sets a **session override** that
+  shapes the turn but is **not** persisted; the composer shows a **persistent chip** with an **×**, and
+  the picker gained an explicit **"keep for this conversation"** checkbox that is the **single** writer
+  of the sticky default (`active_skill_id`). Every other path — the ×, picking **None**, and un-checking
+  keep — **clears** any saved default, so a superseded default can neither resurface on reload against
+  the user's visible choice nor contradict the (unchecked) keep-checkbox. Pre-existing sticky defaults
+  keep working: an untouched composer still resolves and applies the saved default (and reads as *kept*). The send path passes the
+  session pick **verbatim** (`turnSkillArgFor`: an id, an explicit `null` = no-skill-no-auto-fire, or
+  `undefined` = "resolve the saved default and maybe auto-fire"), so the chip and the answer can never
+  disagree, and the **"answer without this skill"** undo now rides **every** skill-stamped last turn,
+  not just auto-fired ones. **ux-6:** the **Summarize/Categorize** run-bar buttons surface their real
+  output by routing a question into the transcript answered by the 0-model bank handler; that relay now
+  **pins `askDocuments` to the run's document** (the resolved target id, re-validated main-side and
+  ignored if out-of-scope), so a multi-document or whole-library scope can no longer scatter the answer
+  across the wrong documents — and the two routed buttons (plus the post-extract "Categorize" follow-up)
+  are **hidden in plain-chat mode**, where the routed answer would be unreachable. All renderer +
+  turn-resolution + scope-pin plumbing — no routing-engine change. **Residual:** the session override is
+  in-memory, so a per-turn pick that was never "kept" does not survive an app reload (by design — that
+  is the point of per-turn); and the relay pin degrades to the ordinary conversation scope if the run's
+  target id was lost (a screen remount with no resolved id), rather than failing.
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
   offline regexes only** — e-mail addresses, phone numbers, IBANs, **payment-card numbers**, dates, and

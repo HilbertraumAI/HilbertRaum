@@ -1633,6 +1633,14 @@ code, pre, kbd { font-family: var(--font-mono); }
    the skill; it is never auto-applied. */
 .footer-menu-btn.skill-suggest-hint { color: var(--accent); }
 .footer-menu-btn.skill-suggest-hint:hover:not(:disabled) { color: var(--accent); background: var(--surface-hover); }
+/* U3 (audit §4.3): the persistent composer chip's × — a quiet, compact clear button sitting right
+   after the "Skill: … ▾" trigger, so the active per-turn skill is always visible AND one tap clears
+   it (override + saved default). Muted like the other footer affordances; never alarming. */
+.footer-menu-btn.skill-chip-clear { padding-inline: 6px; color: var(--text-muted); }
+.footer-menu-btn.skill-chip-clear:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+/* U3: the in-picker "keep for this conversation" opt-in — a plain checkbox menu item (reuses the
+   radio-mark slot for its check indicator), so persisting a pick as the default is explicit. */
+.menu-item.skill-keep { color: var(--text-muted); }
 
 /* ---- Settings → Skills (skills plan §15) ---- */
 /* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */

@@ -123,8 +123,10 @@ describe('Transcript SummaryMarker disclosure a11y (FE-D)', () => {
   })
 })
 
-// S13c (D3): the per-turn "answer without it" undo shows ONLY on an auto-fired turn — and only on the
-// LAST assistant turn (re-running drops it). An explicitly-picked skill keeps the plain glyph, no undo.
+// S13c (D3) + U3 (audit §4.3): the per-turn "answer without it" undo rides the LAST assistant turn
+// that ANY skill shaped — auto-fired OR explicitly picked (U3 extended it from auto-fire-only, so a
+// per-turn pick is just as reversible). The glyph copy still distinguishes the two ("Answered with …"
+// vs the plain "Skill: …"); only the LAST assistant turn carries the undo (re-running drops it).
 describe('Transcript auto-fire undo (S13c/D3)', () => {
   function msg(over: Partial<Message>): Message {
     return {
@@ -169,13 +171,18 @@ describe('Transcript auto-fire undo (S13c/D3)', () => {
     expect(undo).toHaveBeenCalledTimes(1)
   })
 
-  it('shows the plain glyph and NO undo on an explicitly-picked turn', () => {
+  it('shows the plain "Skill: …" glyph AND a working undo on an explicitly-picked last turn (U3, §4.3)', () => {
+    // U3 extended the undo from auto-fired-only to EVERY skill-stamped last turn — this expectation
+    // was previously "NO undo on a picked turn"; the per-turn-apply change makes a pick reversible too.
+    const undo = vi.fn()
     renderTranscript(
       [msg({ skillId: 'app:bank', skillTitle: 'Bank statement helper', autoFired: false })],
-      vi.fn()
+      undo
     )
     expect(screen.getByText('Skill: Bank statement helper')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
+    const button = screen.getByRole('button', { name: 'Answer without it' })
+    fireEvent.click(button)
+    expect(undo).toHaveBeenCalledTimes(1)
   })
 
   it('shows no undo on an auto-fired turn that is not the last assistant turn', () => {

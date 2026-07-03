@@ -18,6 +18,12 @@ let active: SkillRunState | null = null
 // passed to `startSkillRun` — NOT sourced from the content-free `SkillRunState`/IPC (which carries
 // ids/counts only), so the ids/counts privacy boundary is unchanged.
 let activeConversationId: string | null = null
+// The document the active run targets (U3, audit ux-6). Kept module-level alongside `active` so it
+// SURVIVES a screen unmount: the routed-run relay (Summarize/Categorize → a real chat answer) pins
+// `askDocuments` to THIS document, so a multi-document scope can't scatter the answer across the
+// wrong documents. It is the resolved id the renderer passed to `startSkillRun` — NOT sourced from
+// the content-free `SkillRunState`/IPC (ids/counts only), so the privacy boundary is unchanged.
+let activeDocumentId: string | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 const listeners = new Set<() => void>()
 
@@ -56,6 +62,16 @@ export function getActiveSkillRunConversationId(): string | null {
   return active ? activeConversationId : null
 }
 
+/**
+ * The document the active run targets, or null when no run is active / none was resolved (U3, audit
+ * ux-6). The routed-run relay pins its chat answer to this id so a Summarize/Categorize result can't
+ * scatter across a multi-document scope. Renderer-only (the resolved id the renderer passed to
+ * `startSkillRun`), so the ids/counts privacy boundary is unchanged.
+ */
+export function getActiveSkillRunDocumentId(): string | null {
+  return active ? activeDocumentId : null
+}
+
 export function isSkillRunTerminal(run: SkillRunState | null): boolean {
   return run != null && (run.state === 'done' || run.state === 'failed' || run.state === 'cancelled')
 }
@@ -84,6 +100,7 @@ export async function startSkillRun(req: StartSkillRunRequest): Promise<StartSki
   const run = result.run
   stopPolling()
   activeConversationId = req.conversationId
+  activeDocumentId = req.documentId ?? null
   setActive(run)
   timer = setInterval(() => {
     void (async () => {
@@ -124,6 +141,7 @@ export function acknowledgeSkillRun(): void {
     stopPolling()
     setActive(null)
     activeConversationId = null
+    activeDocumentId = null
     void window.api.clearSkillRun(handle)
   }
 }
@@ -133,5 +151,6 @@ export function resetSkillRunStoreForTests(): void {
   stopPolling()
   active = null
   activeConversationId = null
+  activeDocumentId = null
   listeners.clear()
 }

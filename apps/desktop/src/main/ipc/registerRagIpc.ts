@@ -111,7 +111,8 @@ export function registerRagIpc(ctx: AppContext): void {
       conversationId: string,
       question: string,
       skillInstallId?: string | null,
-      regenerate?: boolean
+      regenerate?: boolean,
+      pinnedDocumentId?: string | null
     ): Promise<Message> => {
       // F16 (audit-postmerge-2026-06-29): rag:ask is the document-grounded sibling of
       // sendChatMessage and touches ctx.db throughout; gate it FIRST with the same localized chat
@@ -158,6 +159,20 @@ export function registerRagIpc(ctx: AppContext): void {
       // Resolve the conversation's composite scope (plan §10.1 / D1): the UNION of the
       // selected collections (Library / projects), specific docs, and chat attachments.
       let scope = resolveScope(ctx.db, conversationId)
+
+      // U3 routed-run relay pin (audit ux-6): a Summarize/Categorize button routes its question into
+      // the transcript pinned to the run's document, so the answer can't scatter across a multi-doc
+      // scope. The id is UNTRUSTED (renderer-supplied) — re-validate it against the in-scope, indexed
+      // set (the run-start `documentId` precedent) and narrow ONLY to a real member; an id outside
+      // scope is ignored (the ordinary scope stands). `hasExplicitDocSelection` marks it a deliberate
+      // pick so the filename auto-scope below defers to it. NOT a routing-engine change — the same
+      // handler dispatch runs, only over one document.
+      if (typeof pinnedDocumentId === 'string' && pinnedDocumentId.length > 0) {
+        const inScope = documentsInScope(ctx.db, scope, { requireChunks: true })
+        if (inScope.some((d) => d.id === pinnedDocumentId)) {
+          scope = { ...scope, collectionIds: null, documentIds: [pinnedDocumentId], hasExplicitDocSelection: true }
+        }
+      }
 
       // Filename auto-scope narrows WITHIN the resolved scope (plan §10.1 rule 5): when the
       // question names indexed file(s) visible in scope, restrict retrieval to them. Skipped

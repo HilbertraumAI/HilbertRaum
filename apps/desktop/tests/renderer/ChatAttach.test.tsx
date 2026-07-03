@@ -193,7 +193,9 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
   it('carries a skill picked on the new composer onto the documents conversation an attachment creates', async () => {
     // Regression: selecting a skill and THEN uploading a document used to reset the skill to none —
     // attachFiles created/switched to a new conversation without carrying the 'new' composer's pick
-    // (unlike ensureConversation). The pick must ride onto the created conversation.
+    // (unlike ensureConversation). The pick must ride onto the created conversation. U3 (audit §4.3):
+    // per-turn by default — the pick carries as a SESSION override (the picker still shows it) but is
+    // NOT silently persisted as the sticky default (persistence is now the explicit "keep" opt-in).
     const user = userEvent.setup()
     const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
     const createConversation = vi.fn(async () => created)
@@ -228,17 +230,16 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
 
     dropFile('invoice.pdf', '/tmp/invoice.pdf')
 
-    // The created documents conversation inherits the pick: persisted as its sticky default…
-    await waitFor(() =>
-      expect(setConversationDefaultSkill).toHaveBeenCalledWith('c2', 'app:bank-statement')
-    )
+    // The created documents conversation received the import…
     await waitFor(() =>
       expect(importDocuments).toHaveBeenCalledWith(['/tmp/invoice.pdf'], {
         destination: { kind: 'conversation', conversationId: 'c2' }
       })
     )
-    // …and the picker still shows the skill — it was NOT reset by the upload.
+    // …the picker still shows the skill — it was NOT reset by the upload (carried as a session pick)…
     expect(screen.getByRole('button', { name: /^skill:/i })).toHaveTextContent('Bank statement helper')
+    // …and per-turn: the unkept pick was NOT silently persisted as the new conversation's default.
+    expect(setConversationDefaultSkill).not.toHaveBeenCalled()
   })
 
   it('converts a pending attachment to a live "Files in this chat" entry once indexed (N4)', async () => {

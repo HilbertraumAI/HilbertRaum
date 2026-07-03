@@ -194,6 +194,11 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.autoFiredTitle':
     'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
   'chat.skill.answerWithout': 'Ohne ihn antworten',
+  // U3 (audit §4.3): ein Skill gilt jetzt standardmäßig PRO TURN – das × am Chip verwirft die Wahl und
+  // eine gespeicherte Vorgabe, die Checkbox im Menü ist die ausdrückliche Zustimmung, die Wahl als
+  // Vorgabe des Gesprächs zu behalten. Nichts bleibt still über Turns hinweg gesetzt.
+  'chat.skill.clear': 'Skill {title} entfernen',
+  'chat.skill.keep': 'Für dieses Gespräch behalten',
   // Tier-2-Tool-Lauf – die ruhige Aktion im Verlauf + Statuszeile + Bestätigungsdialog (skills plan §12.2/§15, S11b)
   'chat.skill.tool.extractTransactions': 'Transaktionen extrahieren',
   'chat.skill.tool.validateBalances': 'Salden prüfen',

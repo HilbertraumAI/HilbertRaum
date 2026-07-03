@@ -257,6 +257,27 @@ describe('SkillRunBar (S11b)', () => {
     expect(onRun).toHaveBeenCalledWith('categorize_transactions', false, 'd1')
   })
 
+  // U3 (audit ux-6): in plain-chat mode the routed answer relay is inert, so the routed post-extract
+  // categorize follow-up is hidden (its breakdown answer would be unreachable). The extract result
+  // line itself still shows.
+  it('RESULT (extract done, rows>0): hides the categorize follow-up when routed runs are unreachable', () => {
+    render(
+      withI18n(
+        <SkillRunBar
+          run={run({ state: 'done', transactionCount: 2 })}
+          runnableTools={[]}
+          runningDocumentId="d1"
+          offerRoutedFollowups={false}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByText('Extracted 2 transactions.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Categorize transactions' })).not.toBeInTheDocument()
+  })
+
   it('RESULT (extract done, rows>0, id unknown): the categorize offer falls back to main’s default', async () => {
     const onRun = vi.fn()
     const user = userEvent.setup()

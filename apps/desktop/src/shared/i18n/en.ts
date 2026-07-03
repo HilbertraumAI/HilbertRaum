@@ -181,6 +181,11 @@ export const en = {
   'chat.skill.autoFiredTitle':
     'The app applied the skill “{title}” to this answer automatically. You can answer without it.',
   'chat.skill.answerWithout': 'Answer without it',
+  // U3 (audit §4.3): a pick applies PER-TURN by default now — the persistent composer chip's × clears
+  // both the session pick and any saved default, and the in-picker checkbox is the explicit opt-in to
+  // persist the pick as this conversation's default. Nothing is silently kept across turns any more.
+  'chat.skill.clear': 'Clear skill {title}',
+  'chat.skill.keep': 'Keep for this conversation',
   // Tier-2 tool run — the calm transcript affordance + busy row + confirm modal (skills plan §12.2/§15, S11b)
   'chat.skill.tool.extractTransactions': 'Extract transactions',
   'chat.skill.tool.validateBalances': 'Check balances',
