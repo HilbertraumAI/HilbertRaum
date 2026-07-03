@@ -10,6 +10,11 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
     title: Was hat sich geändert?
     description: Verwenden, wenn zwei Versionen eines Dokuments, Vertrags, einer Richtlinie oder eines Angebots verglichen werden sollen – die wesentlichen Änderungen, nicht nur ein roher Diff.
 kind: instruction
+analysis: compare              # A3/§8.2: the model compares BOTH whole versions (not top-k passages). With this
+                               #   skill active over EXACTLY TWO fully-chunked docs the compare engine is the
+                               #   DEFAULT — keywords only opt out for chatter; at ≠2 docs the chat path routes
+                               #   ("select exactly two"). An ENGINE choice, not a tool capability (SEC-1
+                               #   unchanged) — honored for a skill of any source.
 compatibility:
   minAppVersion: 0.1.29
 permissions:

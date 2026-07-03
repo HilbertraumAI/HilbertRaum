@@ -21,6 +21,23 @@ export type SkillKind = 'instruction' | 'tool'
 export const SKILL_KINDS: SkillKind[] = ['instruction', 'tool']
 
 /**
+ * A3 (audit §6.3/§8.2): the whole-document ANALYSIS ENGINE an INSTRUCTION skill declares.
+ *   - `'whole-doc'`  — the model answers over the WHOLE single in-scope document (minutes, contract
+ *                      brief, deadline finder, share-safe review), not top-k passages.
+ *   - `'compare'`    — the model compares EXACTLY TWO whole in-scope documents (what-changed).
+ *   - `'none'`       — no analysis engine; the ordinary top-k relevance path (the default).
+ *
+ * Crucially this is an ENGINE choice, NOT a capability grant (unlike a tool's `allowedTools`, which
+ * stays app-only — SEC-1). It reads only the documents the turn already scopes, adds no DB/FS/net
+ * handle, and is therefore honored for instruction skills of ANY source (app or user-imported) — the
+ * fix for "a user-imported skill silently gets top-k-with-fence" (§6.3). The gate INVERSION lives in
+ * the chat path: with an analysis-mode skill active over a matching fully-chunked scope the engine is
+ * the DEFAULT; keywords only opt OUT for off-topic chatter and classify needle-vs-deliverable (§8.2).
+ */
+export type SkillAnalysisMode = 'whole-doc' | 'compare' | 'none'
+export const SKILL_ANALYSIS_MODES: SkillAnalysisMode[] = ['whole-doc', 'compare', 'none']
+
+/**
  * Trust is APP-ASSIGNED, never self-declared (skills plan §6.5/§14): `app` = shipped + verified
  * product content, `user` = user-created/imported. It is therefore NOT part of the parsed
  * manifest — the type lives here for the registry (S3) to assign and for later phases to import.
@@ -105,6 +122,14 @@ export interface SkillManifest {
    * tool-reserved instruction stub (the bank-statement skill — skills plan §13/§22-D1). Optional/
    * additive (older cached manifest_json may lack it → treat as false). */
   reservesTools?: boolean
+  /**
+   * A3 (audit §6.3/§8.2): the whole-document ANALYSIS ENGINE this INSTRUCTION skill wants (see
+   * `SkillAnalysisMode`). Set ONLY for an instruction skill declaring `whole-doc`/`compare`; absent
+   * ⇒ `'none'` (the top-k default). It is an ENGINE choice, not a tool capability (SEC-1 unchanged),
+   * so it is honored regardless of source. A `tool` skill declaring it is ignored with a note (its
+   * exhaustive/routing behaviour comes from the app-registered tool handler, not this field).
+   * Optional/additive (older cached manifest_json lacks it → treated as `'none'`). */
+  analysis?: SkillAnalysisMode
   triggers: SkillTriggers
 }
 
@@ -434,6 +459,28 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
     }
   }
 
+  // Optional analysis engine (A3, audit §6.3/§8.2) — additive + lenient. Honored ONLY for an
+  // instruction skill (a tool skill's exhaustive/routing behaviour comes from the app-registered tool
+  // handler, so a declared `analysis` there is ignored with a note). Absent / `'none'` ⇒ undefined
+  // (byte-unchanged cache — the top-k default); an unrecognized value is NOTED and dropped, never an
+  // error (a v1 app must never choke on a newer skill's field). Trust-agnostic: it grants nothing.
+  let analysis: SkillAnalysisMode | undefined
+  const analysisRaw = raw['analysis']
+  if (analysisRaw !== undefined && analysisRaw !== null) {
+    if (typeof analysisRaw !== 'string' || !SKILL_ANALYSIS_MODES.includes(analysisRaw.trim().toLowerCase() as SkillAnalysisMode)) {
+      notes.push(`"analysis" must be one of: ${SKILL_ANALYSIS_MODES.join(', ')}; ignoring it`)
+    } else {
+      const mode = analysisRaw.trim().toLowerCase() as SkillAnalysisMode
+      if (mode === 'none') {
+        // Explicit default — leave undefined so the manifest_json stays byte-identical to an omission.
+      } else if (kind !== 'instruction') {
+        notes.push('"analysis" is ignored for a tool skill (its whole-document behaviour is app-owned)')
+      } else {
+        analysis = mode
+      }
+    }
+  }
+
   // Optional triggers — MUST be preserved (audit C2). Lenient: malformed subfields → note + [].
   const triggers: SkillTriggers = { keywords: [], mimeTypes: [], filenamePatterns: [] }
   const trigRaw = raw['triggers']
@@ -526,6 +573,7 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
       permissions,
       allowedTools,
       reservesTools,
+      ...(analysis ? { analysis } : {}),
       triggers
     }
   }

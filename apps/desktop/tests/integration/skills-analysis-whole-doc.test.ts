@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
@@ -12,10 +13,12 @@ import {
   WHAT_CHANGED_INSTALL_ID,
   contractBriefAnalysisHandler,
   deadlineObligationAnalysisHandler,
+  manifestAnalysisHandler,
   meetingProtocolAnalysisHandler,
   shareSafeReviewAnalysisHandler,
   whatChangedAnalysisHandler
 } from '../../src/main/services/skills/analysis/whole-doc-skills'
+import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import {
   clearSkillAnalysisHandlers,
   getSkillAnalysisHandler
@@ -27,11 +30,15 @@ import {
   splitCompareBudget
 } from '../../src/main/services/rag'
 
-// Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2). Two contracts pinned here:
-//   1. the per-skill `applies()` gate — analysis-shaped intent (EN+DE) over a SINGLE in-scope doc,
+// Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2 + A3 gate inversion, §6.3/§8.2).
+// Two contracts pinned here:
+//   1. the INVERTED `applies()`/`intends()` gate — the whole-doc engine is the DEFAULT for any non-chatter
+//      question over a SINGLE in-scope doc (no per-skill keyword list); only clear small talk opts out.
 //      `mode: 'grounded-whole-doc'`, no `run()` (the chat path streams the model answer directly);
 //   2. `retrieveWholeDocument` — loads a document's chunks IN ORDER (not top-k), capped to a token
 //      budget, with the honest `truncated` flag that drives the `capped`/"covers the beginning" badge.
+// A3 also honors the engine for a USER-imported instruction skill via `manifestAnalysisHandler` — pinned
+// below alongside the SKILL.md-declaration ⇔ registered-handler consistency.
 
 function freshDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-wholedoc-'))
@@ -80,10 +87,19 @@ describe('whole-doc analysis handlers — applies() pre-flight', () => {
       expect(h.applies({ db, scope: { documentIds: [id] }, question: deShaped })).toBe(true)
     })
 
-    it(`${name}: does not apply on an off-topic question (keeps the relevance path)`, () => {
+    it(`${name}: does NOT apply on clear small talk (opt-out → keeps the relevance path)`, () => {
       const db = freshDb()
       const id = seedDoc(db, ['line one'])
-      expect(h.applies({ db, scope: { documentIds: [id] }, question: 'what colour is the sky?' })).toBe(false)
+      expect(h.applies({ db, scope: { documentIds: [id] }, question: 'thanks!' })).toBe(false)
+      expect(h.applies({ db, scope: { documentIds: [id] }, question: 'how are you?' })).toBe(false)
+    })
+
+    it(`${name}: A3 inversion — applies on a GENERAL (non-shaped, non-chatter) question over a single doc`, () => {
+      // Pre-A3 this needed a per-skill keyword match; now the whole-doc engine is the default and a
+      // plain document question that matches no per-skill vocabulary still gets it.
+      const db = freshDb()
+      const id = seedDoc(db, ['line one', 'line two'])
+      expect(h.applies({ db, scope: { documentIds: [id] }, question: 'what does this document say?' })).toBe(true)
     })
 
     it(`${name}: does not apply over a multi-document scope (Wave 2 is single-doc)`, () => {
@@ -114,15 +130,17 @@ describe('whole-doc analysis handlers — intends() (W2 doc-count-agnostic inten
       expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: deShaped })).toBe(true)
     })
 
-    it(`${name}: intends() is FALSE on an off-topic question (keeps the relevance path)`, () => {
+    it(`${name}: intends() is FALSE only on clear small talk (keeps the relevance path)`, () => {
       const db = freshDb()
       const a = seedDoc(db, ['a'])
       const b = seedDoc(db, ['b'])
-      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'what colour is the sky?' })).toBe(false)
+      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'hi there' })).toBe(false)
+      // A3 inversion: a general (non-shaped) question DOES intend the engine — it just fails on the count.
+      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'what does this say?' })).toBe(true)
     })
   }
 
-  it('what-changed: intends() is TRUE for a compare-shaped question at 1 or 3 docs (applies is false)', () => {
+  it('what-changed: intends() is TRUE for any non-chatter question at 1 or 3 docs (applies is false on count)', () => {
     const db = freshDb()
     const a = seedDoc(db, ['a'])
     const b = seedDoc(db, ['b'])
@@ -131,9 +149,11 @@ describe('whole-doc analysis handlers — intends() (W2 doc-count-agnostic inten
     for (const ids of [[a], [a, b, c]]) {
       expect(h.applies!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(false)
       expect(h.intends!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(true)
+      // A3 inversion: even a general question intends compare — it fails only on the ≠2 count (→ route).
+      expect(h.intends!({ db, scope: { documentIds: ids }, question: 'summarize the differences' })).toBe(true)
     }
-    // Off-topic stays false at any count.
-    expect(h.intends!({ db, scope: { documentIds: [a] }, question: 'what colour is the sky?' })).toBe(false)
+    // Clear small talk stays false at any count.
+    expect(h.intends!({ db, scope: { documentIds: [a] }, question: 'thanks!' })).toBe(false)
   })
 })
 
@@ -149,29 +169,90 @@ describe('analysis-handler registry — whole-doc skills', () => {
   })
 })
 
+// A3 (audit §6.3/§8.2) — the manifest-driven engine resolver serves an instruction skill of ANY source.
+describe('manifestAnalysisHandler (A3) — honored for instruction skills of any source', () => {
+  it('resolves a whole-doc engine for an instruction skill declaring analysis: whole-doc', () => {
+    const h = manifestAnalysisHandler('instruction', 'whole-doc')
+    expect(h?.mode).toBe('grounded-whole-doc')
+    expect(h?.run).toBeUndefined()
+    // The SAME inverted gate as the bundled handlers: any non-chatter question intends it.
+    const db = freshDb()
+    const id = seedDoc(db, ['line one', 'line two'])
+    expect(h?.applies({ db, scope: { documentIds: [id] }, question: 'what does this say?' })).toBe(true)
+    expect(h?.applies({ db, scope: { documentIds: [id] }, question: 'thanks!' })).toBe(false)
+  })
+
+  it('resolves a compare engine for an instruction skill declaring analysis: compare', () => {
+    const h = manifestAnalysisHandler('instruction', 'compare')
+    expect(h?.mode).toBe('grounded-whole-doc-compare')
+    const db = freshDb()
+    const a = seedDoc(db, ['a'])
+    const b = seedDoc(db, ['b'])
+    expect(h?.applies({ db, scope: { documentIds: [a, b] }, question: 'what changed?' })).toBe(true)
+  })
+
+  it('a user whole-doc skill NEVER gets the app-only PII pre-scan (injectPiiScan absent — SEC-1 posture)', () => {
+    expect(manifestAnalysisHandler('instruction', 'whole-doc')?.injectPiiScan).toBeUndefined()
+  })
+
+  it('returns undefined for a tool skill (whole-document behaviour is app-owned — SEC-1) or no engine', () => {
+    expect(manifestAnalysisHandler('tool', 'whole-doc')).toBeUndefined()
+    expect(manifestAnalysisHandler('tool', 'compare')).toBeUndefined()
+    expect(manifestAnalysisHandler('instruction', 'none')).toBeUndefined()
+    expect(manifestAnalysisHandler('instruction', undefined)).toBeUndefined()
+  })
+})
+
+// A3 — the bundled instruction skills DECLARE their engine in SKILL.md; pin each declaration to the mode
+// the app-registered handler actually provides (so the manifest is the honest source of truth, not decor).
+describe('SKILL.md analysis declaration ⇔ registered handler mode (A3 consistency)', () => {
+  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
+  const analysisOf = (skillId: string): string | undefined => {
+    const md = readFileSync(join(REPO_ROOT, 'app-skills', skillId, 'SKILL.md'), 'utf8')
+    const parsed = parseSkillMarkdown(md)
+    expect(parsed.ok).toBe(true)
+    return parsed.manifest?.analysis
+  }
+
+  it.each([
+    ['meeting-protocol', 'whole-doc', meetingProtocolAnalysisHandler],
+    ['contract-brief', 'whole-doc', contractBriefAnalysisHandler],
+    ['share-safe-review', 'whole-doc', shareSafeReviewAnalysisHandler],
+    ['deadline-obligation-finder', 'whole-doc', deadlineObligationAnalysisHandler],
+    ['what-changed', 'compare', whatChangedAnalysisHandler]
+  ] as const)('%s declares analysis: %s, matching its registered handler mode', (skillId, mode, handler) => {
+    expect(analysisOf(skillId)).toBe(mode)
+    // The manifest field would, for a user skill, resolve to the SAME engine the app registers.
+    expect(manifestAnalysisHandler('instruction', mode)?.mode).toBe(handler.mode)
+  })
+})
+
 describe('what-changed compare handler (Follow-up B) — shape + applies()', () => {
   it('is a grounded-whole-doc-compare handler with NO run() (chat path streams directly)', () => {
     expect(whatChangedAnalysisHandler.mode).toBe('grounded-whole-doc-compare')
     expect(whatChangedAnalysisHandler.run).toBeUndefined()
   })
 
-  it('applies on a compare-shaped question (EN + DE) over EXACTLY two in-scope docs', () => {
+  it('applies on any non-chatter question over EXACTLY two in-scope docs (A3 inversion, EN + DE)', () => {
     const db = freshDb()
     const a = seedDoc(db, ['a'])
     const b = seedDoc(db, ['b'])
     const scope = { documentIds: [a, b] }
     expect(whatChangedAnalysisHandler.applies({ db, scope, question: 'what changed between these?' })).toBe(true)
     expect(whatChangedAnalysisHandler.applies({ db, scope, question: 'was hat sich geändert?' })).toBe(true)
+    // A general question over exactly two docs now defaults to the compare engine (no keyword required).
+    expect(whatChangedAnalysisHandler.applies({ db, scope, question: 'what does this say?' })).toBe(true)
   })
 
-  it('does NOT apply with only one in-scope doc, three docs, or an off-topic question', () => {
+  it('does NOT apply with only one in-scope doc, three docs, or clear small talk', () => {
     const db = freshDb()
     const a = seedDoc(db, ['a'])
     const b = seedDoc(db, ['b'])
     const c = seedDoc(db, ['c'])
     expect(whatChangedAnalysisHandler.applies({ db, scope: { documentIds: [a] }, question: 'what changed?' })).toBe(false)
     expect(whatChangedAnalysisHandler.applies({ db, scope: { documentIds: [a, b, c] }, question: 'what changed?' })).toBe(false)
-    expect(whatChangedAnalysisHandler.applies({ db, scope: { documentIds: [a, b] }, question: 'what colour is the sky?' })).toBe(false)
+    // Small talk opts out even at exactly two docs (→ keeps the relevance path).
+    expect(whatChangedAnalysisHandler.applies({ db, scope: { documentIds: [a, b] }, question: 'thanks!' })).toBe(false)
   })
 })
 

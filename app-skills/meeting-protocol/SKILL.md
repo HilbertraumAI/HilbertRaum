@@ -10,6 +10,11 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
     title: Besprechungsprotokoll
     description: Verwenden, wenn aus einem Besprechungstranskript, Notizen oder einer Tagesordnung ein sauberes, strukturiertes Protokoll entstehen soll – Beschlüsse, Aufgaben und offene Fragen.
 kind: instruction
+analysis: whole-doc            # A3/§8.2: the model answers over the WHOLE transcript (not top-k passages).
+                               #   With this skill active over a single fully-chunked doc the whole-doc engine
+                               #   is the DEFAULT — keywords only opt out for chatter (small talk) and send a
+                               #   NEEDLE lookup to top-k when the read would truncate. An ENGINE choice, not a
+                               #   tool capability (SEC-1 unchanged) — honored for a skill of any source.
 compatibility:
   minAppVersion: 0.1.29
 permissions:

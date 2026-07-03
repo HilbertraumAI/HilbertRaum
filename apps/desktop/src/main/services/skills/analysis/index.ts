@@ -49,7 +49,11 @@ export {
   deadlineObligationAnalysisHandler,
   meetingProtocolAnalysisHandler,
   shareSafeReviewAnalysisHandler,
-  whatChangedAnalysisHandler
+  whatChangedAnalysisHandler,
+  // A3 (audit §6.3/§8.2): the manifest-driven engine resolver for instruction skills of ANY source
+  // (a user-imported skill declaring `analysis: whole-doc`/`compare` — the bundled ones keep the
+  // singletons above). Tool registration stays app-only (SEC-1) — this selects an engine, not a tool.
+  manifestAnalysisHandler
 } from './whole-doc-skills'
 
 /** Register every app-owned analysis handler (called once at app init; the chat path consults it). */

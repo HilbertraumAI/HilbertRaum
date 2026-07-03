@@ -1,8 +1,9 @@
 import type { Db } from '../../db'
 import type { RetrievalScope } from '../../../../shared/types'
+import type { SkillAnalysisMode, SkillKind } from '../../../../shared/skill-manifest'
 import { documentsInScope } from '../scope-documents'
 import { skillInstallId } from '../registry'
-import { routeMatch, type SkillVocabId } from '../vocabulary'
+import { isSmallTalk } from '../vocabulary'
 import { singleInScopeDocument } from './common'
 import type { SkillAnalysisHandler, SkillAnalysisInput } from './types'
 
@@ -19,13 +20,21 @@ import type { SkillAnalysisHandler, SkillAnalysisInput } from './types'
 // ({ wholeDocument })`). These handlers therefore carry NO `run()` — only `mode` + `applies()` (the
 // intent + single-doc gate). The fully-chunked refusal (D45) still gates the turn in `registerRagIpc`.
 //
-// Conservative by design (the bank/invoice `applies()` precedent): an OFF-TOPIC question, or a
-// multi-document scope, returns false and keeps the ordinary relevance path. Wave 2 is single-document
-// (the run UI + budget reason about one document); multi-doc compare stays on the `compare` engine
-// (`what-changed`). Since W5 the shape gate reads the ONE canonical per-skill vocabulary (`routeMatch`,
-// audit §3.2/§4.1): word-boundary for single tokens, substring for phrases/German stems — single-sourced
-// with the SKILL.md suggestion keywords (parity-tested), so "Summarize this meeting" now BOTH earns the
-// offer and routes to the whole-doc engine (it was offered, then produced minutes from ~2-4 top-k chunks).
+// A3 GATE INVERSION (audit §6.3/§8.2): the whole-doc engine is now the DEFAULT for an analysis-mode skill
+// active over a matching fully-chunked scope — it is no longer gated on the question matching a per-skill,
+// per-language keyword list (the recurring incident class: every phrasing gap silently degraded a
+// whole-document ask to top-k-with-fence). The shape gate SHRANK to ONE skill-agnostic opt-out: `intends`
+// is `!isSmallTalk(question)` — anything that is not clearly off-topic chatter (a greeting / thanks /
+// assistant-meta) intends the engine, regardless of phrasing. The needle-vs-deliverable classification (the
+// other half of §8.2) lives in the chat path, where W1's truncation calculus can decide whether a NEEDLE
+// ask over an over-budget doc is better served by top-k. Conservative still: a multi-document scope fails
+// the count precondition (`applies()` false → W2 narrows/routes); Wave-2 whole-doc is single-document, and
+// multi-doc compare stays on the `compare` engine (`what-changed`).
+//
+// Because the gate is skill-agnostic, these handlers are also the ENGINE for a USER-imported instruction
+// skill that declares `analysis: whole-doc`/`compare` in its SKILL.md — resolved via `manifestAnalysisHandler`
+// below (the fix for "any user-imported skill silently gets top-k-with-fence", §6.3). Tool registration stays
+// app-only (SEC-1): this adds no capability, only which context the model reads.
 
 export const MEETING_PROTOCOL_INSTALL_ID = skillInstallId('app', 'meeting-protocol')
 export const CONTRACT_BRIEF_INSTALL_ID = skillInstallId('app', 'contract-brief')
@@ -44,60 +53,77 @@ function exactlyTwoInScopeDocuments(db: Db, scope: RetrievalScope): boolean {
   return documentsInScope(db, scope, { requireChunks: true }).length === 2
 }
 
-/** Build a `grounded-whole-doc-compare` handler: applies on a compare-shaped question (the skill's
- *  `route|both` vocabulary) over EXACTLY TWO in-scope documents. No `run()` — the chat path streams a
- *  model answer over BOTH documents read whole (budget split across the two). */
-function makeCompareHandler(skillId: SkillVocabId): SkillAnalysisHandler {
-  const isShaped = (question: string): boolean => routeMatch(skillId, question)
+/** Build a `grounded-whole-doc-compare` handler (A3-inverted gate): applies on ANY non-small-talk question
+ *  over EXACTLY TWO in-scope documents. No `run()` — the chat path streams a model answer over BOTH
+ *  documents read whole (budget split across the two). Skill-agnostic (no per-skill vocabulary). */
+function makeCompareHandler(): SkillAnalysisHandler {
   return {
     mode: 'grounded-whole-doc-compare',
-    // Doc-count-agnostic intent (W2, §2.1): a compare-shaped question, regardless of how many docs are
-    // in scope. When `applies()` fails only on the count (≠2), the chat path emits the deterministic
-    // "select exactly two documents" routing answer instead of falling through silently.
+    // Doc-count-agnostic intent (W2, §2.1 + A3 §8.2): any question that is not off-topic chatter, regardless
+    // of how many docs are in scope. When `applies()` fails only on the count (≠2), the chat path emits the
+    // deterministic "select exactly two documents" routing answer instead of falling through silently.
     intends(input: SkillAnalysisInput): boolean {
-      return isShaped(input.question)
+      return !isSmallTalk(input.question)
     },
     applies(input: SkillAnalysisInput): boolean {
-      if (!isShaped(input.question)) return false
+      if (isSmallTalk(input.question)) return false
       return exactlyTwoInScopeDocuments(input.db, input.scope)
     }
   }
 }
 
-/** Build a `grounded-whole-doc` handler that applies on an analysis-shaped question (the skill's
- *  `route|both` vocabulary) over a single in-scope document. No `run()` — the chat path streams the model
- *  answer over the whole document directly. */
-function makeWholeDocHandler(skillId: SkillVocabId): SkillAnalysisHandler {
-  const isShaped = (question: string): boolean => routeMatch(skillId, question)
+/** Build a `grounded-whole-doc` handler (A3-inverted gate): applies on ANY non-small-talk question over a
+ *  single in-scope document. No `run()` — the chat path streams the model answer over the whole document
+ *  directly. Skill-agnostic: the same factory serves the bundled instruction skills AND a user-imported
+ *  skill declaring `analysis: whole-doc` (`manifestAnalysisHandler`). */
+function makeWholeDocHandler(): SkillAnalysisHandler {
   return {
     mode: 'grounded-whole-doc',
-    // Doc-count-agnostic intent (W2, §2.1): an analysis-shaped question, regardless of how many docs are
-    // in scope. When `applies()` fails only on the count, the chat path narrows to the skill's best-
+    // Doc-count-agnostic intent (W2, §2.1 + A3 §8.2): any non-chatter question, regardless of how many docs
+    // are in scope. When `applies()` fails only on the count, the chat path narrows to the skill's best-
     // matching document (with an honest scope notice) or routes, instead of falling through silently.
     intends(input: SkillAnalysisInput): boolean {
-      return isShaped(input.question)
+      return !isSmallTalk(input.question)
     },
     applies(input: SkillAnalysisInput): boolean {
-      if (!isShaped(input.question)) return false
+      if (isSmallTalk(input.question)) return false
       return singleInScopeDocument(input.db, input.scope) !== null
     }
   }
 }
 
-// Each Tier-1 instruction skill's shape gate reads its canonical vocabulary (`vocabulary.ts`) — the SAME
-// source the SKILL.md suggestion keywords are generated from, so the offer and the routing can no longer
-// disagree (audit §4.1). meeting-protocol produces structured minutes from the WHOLE transcript; the
-// vocabulary's word-matched `meeting` + `summarize meeting`/`minutes` route entries close the "Summarize
-// this meeting" gap. what-changed compares BOTH whole versions over EXACTLY TWO in-scope documents.
-export const meetingProtocolAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('meeting-protocol')
-export const contractBriefAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('contract-brief')
+// The bundled Tier-1 instruction skills. Each declares its engine in SKILL.md (`analysis: whole-doc` /
+// `compare`) — a consistency test pins each registered handler's `mode` to that declaration — and the app
+// registers these singletons so `getSkillAnalysisHandler(installId)` resolves them (a USER skill with the
+// same field is served by `manifestAnalysisHandler` below, the SAME engine, minus the app-only PII scan).
+export const meetingProtocolAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler()
+export const contractBriefAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler()
 // share-safe review's verdict is a PRIVACY gate — so its whole-doc turn additionally runs the
 // deterministic PII detectors over the WHOLE document and injects their counts into the prompt, and gates
-// the low-risk verdict on non-truncated coverage (U2, audit §3.5). Only this whole-doc handler sets it.
+// the low-risk verdict on non-truncated coverage (U2, audit §3.5). This is APP behaviour (the detectors are
+// app code), keyed to the app share-safe install id — a user whole-doc skill never gets it (SEC-1 posture).
 export const shareSafeReviewAnalysisHandler: SkillAnalysisHandler = {
-  ...makeWholeDocHandler('share-safe-review'),
+  ...makeWholeDocHandler(),
   injectPiiScan: true
 }
-export const deadlineObligationAnalysisHandler: SkillAnalysisHandler =
-  makeWholeDocHandler('deadline-obligation-finder')
-export const whatChangedAnalysisHandler: SkillAnalysisHandler = makeCompareHandler('what-changed')
+export const deadlineObligationAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler()
+export const whatChangedAnalysisHandler: SkillAnalysisHandler = makeCompareHandler()
+
+/**
+ * A3 (audit §6.3/§8.2) — resolve the whole-document ANALYSIS ENGINE for a skill from its MANIFEST, so an
+ * instruction skill of ANY source (not just the bundled ones with a registered handler) reaches the engine
+ * it declares. Called by the chat path ONLY when no app handler is registered for the turn skill (the
+ * bundled instruction skills keep their singletons above; the bank/invoice/redaction TOOL skills keep their
+ * app-registered exhaustive/routing handlers — SEC-1). Honored only for `kind:'instruction'`; a tool skill's
+ * whole-document behaviour is app-owned, never manifest-driven. Adds NO capability — it selects which
+ * context the model reads, nothing else. Returns `undefined` when the skill declares no analysis engine.
+ */
+export function manifestAnalysisHandler(
+  kind: SkillKind,
+  analysis: SkillAnalysisMode | undefined
+): SkillAnalysisHandler | undefined {
+  if (kind !== 'instruction') return undefined
+  if (analysis === 'whole-doc') return makeWholeDocHandler()
+  if (analysis === 'compare') return makeCompareHandler()
+  return undefined
+}

@@ -10,6 +10,11 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
     title: Fristen & Pflichten
     description: Verwenden, wenn Fristen, Kündigungsfristen, Verlängerungs- und Zahlungstermine sowie Pflichten in Dokumenten gefunden werden sollen – was bis wann zu tun ist und was bei Versäumnis passiert.
 kind: instruction
+analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
+                               #   top-k passages). With this skill active over a single fully-chunked doc the
+                               #   whole-doc engine is the DEFAULT — keywords only opt out for chatter and send a
+                               #   NEEDLE lookup (e.g. "when is the renewal date?") to top-k when the read would
+                               #   truncate. An ENGINE choice, not a tool capability (SEC-1 unchanged).
 compatibility:
   minAppVersion: 0.1.29
 permissions:

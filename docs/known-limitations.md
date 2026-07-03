@@ -523,8 +523,8 @@ password recovery — are documented in
   stamping `truncated:false`), now flips to the honest `truncated`/"covers the beginning" badge and a
   softened reduce prompt when it hits the **12-call map ceiling** (`SUMMARY_MAP_CALL_CEILING`) or clamps
   its joined notes to the reduce budget. **Open follow-up (deferred by W1):** auto-building (or one-click
-  offering) the deep index when a whole-doc turn truncates, and routing lookup-shaped questions to top-k
-  when a whole-doc read would truncate — both are W2/A3 territory.
+  offering) the deep index when a whole-doc turn truncates (the routing of lookup-shaped questions to top-k
+  on truncation was since **done by A3** — the needle-vs-deliverable downgrade below).
   **W2 (audit §2.1/§3.4/§4.5) killed the silent doc-count fallthrough and added a document-plausibility
   gate — all deterministic, zero new model calls.** Before W2, when a tool/whole-doc skill was the turn
   skill but the in-scope document **count** was wrong (a multi-doc scope, or the default whole-library
@@ -626,6 +626,32 @@ password recovery — are documented in
   "Office supplies 500") is still not counted — it is genuinely indistinguishable from a quantity/reference;
   and the fence trim/omit surfaces only in the **log**, not yet as a coverage-meter badge (the renderer /
   `CoverageInfo` surface is outside U1's file scope — a follow-up).
+  **A3 (audit §6.3/§8.2) made the whole-document engine manifest-declared and INVERTED its gate, so it is
+  no longer chosen by per-skill phrasing.** Before A3, whether a skill read the whole document was decided
+  by hardcoded app handlers keyed on install ids **and** per-skill, per-language keyword arrays — so every
+  phrasing gap silently degraded a whole-document ask to top-k-with-fence (the recurring incident class),
+  and **any user-imported instruction skill got top-k only**, never the whole-doc engine (§6.3 "skills are
+  portable in name only"). A3 adds an additive manifest field **`analysis: whole-doc | compare | none`**
+  (`shared/skill-manifest.ts`, default none, lenient) that an **instruction skill of any source** declares;
+  the five bundled instruction skills declare it in SKILL.md (a consistency test pins each declaration to
+  its registered handler's mode), and a user-imported instruction skill reaches the SAME engine via
+  `manifestAnalysisHandler`. Tool registration stays **app-only** — this is an **engine choice, not a
+  capability** (SEC-1 unchanged; a user `kind:'tool'` skill still runs no tool, and the share-safe PII
+  pre-scan stays app-keyed). The **gate is inverted** (`registerRagIpc` + `analysis/whole-doc-skills.ts`):
+  with an analysis-mode skill active over a matching **fully-chunked** scope the whole-doc (or, at exactly
+  two docs, compare) engine is the **DEFAULT**; keywords now play only two skill-agnostic roles —
+  **(a)** `isSmallTalk` **opts out** clear chatter (a greeting/thanks/assistant-meta keeps the relevance
+  path), and **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k **only when** the
+  whole-doc read would truncate **and** no deep-index tree exists (a needle past the truncation cut would be
+  missed — W1's exact budget calculus is the input); a **deliverable** ask (summary/minutes/compare/…) never
+  downgrades. **Residuals (documented):** the off-topic opt-out is a bounded **small-talk** detector, so a
+  genuinely off-topic but non-chatter question (e.g. "what colour is the sky?") over a fully-chunked doc now
+  spends a whole-document read and answers "not covered" rather than degrading to top-k — the accepted cost
+  of recall over precision once the user has **explicitly** selected the skill; and both shape classifiers
+  are heuristic keyword lists (deliberately conservative — a false needle is worse than a false deliverable),
+  so an unusual phrasing of a needle over an over-budget doc can still take the truncated whole-doc read
+  (honest via W1's in-prompt "beginning only" notice), and the needle downgrade is applied to the single
+  whole-doc path only (compare keeps its diff-driven/whole-both read).
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

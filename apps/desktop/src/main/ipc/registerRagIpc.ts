@@ -8,18 +8,27 @@ import {
 } from '../../shared/types'
 import {
   appendMessage,
+  effectiveContextWindow,
   hasRegenerableAssistantReply,
   listMessages,
   maybeSetTitleFromFirstMessage
 } from '../services/chat'
 import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
-import { detectFilenameScope, generateGroundedAnswer, generateGroundedDataAnswer, ragSettingsFrom } from '../services/rag'
+import {
+  detectFilenameScope,
+  documentApproxTokenTotal,
+  generateGroundedAnswer,
+  generateGroundedDataAnswer,
+  ragSettingsFrom,
+  wholeDocumentFitBudgetTokens
+} from '../services/rag'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
-import { getSkillAnalysisHandler } from '../services/skills/analysis'
+import { getSkillAnalysisHandler, manifestAnalysisHandler } from '../services/skills/analysis'
 import { documentsInScope } from '../services/skills/scope-documents'
 import { getSkill } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
+import { isNeedleShaped } from '../services/skills/vocabulary'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
@@ -193,13 +202,23 @@ export function registerRagIpc(ctx: AppContext): void {
         }
       }
 
-      // Full-doc-skills Phase 3 (§3.2/D44/D46/D47): a `kind:tool` skill with a REGISTERED analysis
-      // handler that APPLIES to this question over this scope answers EXHAUSTIVELY via its
-      // whole-document read-only tools, not top-k RAG. The registry is the opt-in (D49) — a registered
-      // handler implies `kind:tool`, so no separate kind check is needed. When no handler is
-      // registered for the turn skill, or `applies()` is false (off-topic / multi-doc), this whole
-      // block is skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
-      const analysisHandler = skill ? getSkillAnalysisHandler(skill.installId) : undefined
+      // Full-doc-skills Phase 3 (§3.2/D44/D46/D47) + A3 (audit §6.3/§8.2): the turn skill's analysis
+      // handler. It comes from TWO sources, in precedence order:
+      //   1. the app REGISTRY (`getSkillAnalysisHandler`) — the bank/invoice TOOL skills' exhaustive
+      //      handlers, redaction's routing handler, and the bundled instruction skills' whole-doc/compare
+      //      singletons. Tool handlers are app-only (SEC-1); the registry is that gate.
+      //   2. A3 fallback: for a skill WITHOUT a registered handler, the MANIFEST's `analysis` engine
+      //      (`manifestAnalysisHandler`) — so a user-imported INSTRUCTION skill declaring
+      //      `analysis: whole-doc`/`compare` reaches the same engine (the fix for "a user-imported skill
+      //      silently gets top-k-with-fence", §6.3). Honored only for `kind:'instruction'`; a user tool
+      //      skill resolves to `undefined` here (it declares no analysis engine and runs no tools — SEC-1).
+      // When neither yields a handler, or `applies()` is false (off-topic / multi-doc), this whole block is
+      // skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
+      const skillRecord = skill ? getSkill(ctx.db, skill.installId) : null
+      const analysisHandler = skill
+        ? getSkillAnalysisHandler(skill.installId) ??
+          (skillRecord ? manifestAnalysisHandler(skillRecord.kind, skillRecord.manifest.analysis) : undefined)
+        : undefined
 
       // W2 doc-count-fallthrough routing (audit §2.1/§3.4): a tool/whole-doc skill reads ONE document
       // (two, for compare) at a time, so a multi-document scope can't be analysed exhaustively. When the
@@ -308,33 +327,50 @@ export function registerRagIpc(ctx: AppContext): void {
           const target = documentsInScope(ctx.db, scope, { requireChunks: true })[0]
           if (target) {
             const documentId = target.id
-            return withChatStream(
-              event,
-              conversationId,
-              'Document answer failed',
-              withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
-                generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
-                  signal,
-                  onCompactionStart: sendCompaction,
-                  scope,
-                  reranker: ctx.reranker,
-                  // The turn's skill fence rides in the grounded USER turn; the whole document is the
-                  // context, so the assistant row carries the skill stamp + `capped` coverage.
-                  skill: turnSkill,
-                  wholeDocument: { documentId },
-                  // U2 (audit §3.5): share-safe review injects a deterministic whole-document PII count
-                  // summary into the prompt and gates its low-risk verdict on non-truncated coverage.
-                  wholeDocumentPiiScan: analysisHandler.injectPiiScan === true,
-                  onToken: sendToken,
-                  // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
-                  // answer with the honest scope notice (undefined ⇒ byte-unchanged).
-                  answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined
-                })),
-              (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
-            )
+            // A3 needle-vs-deliverable downgrade (audit §8.2 (b)): the whole-doc engine is the DEFAULT,
+            // but a targeted single-fact LOOKUP over a document that would OVERFLOW the whole-doc budget
+            // with NO ready deep-index tree is better served by top-k — a needle past the truncation cut
+            // would be missed, where relevance retrieval finds the passage wherever it sits. Reuses W1's
+            // exact budget calculus (the de-overlapped token total vs `wholeDocumentFitBudgetTokens`) plus
+            // the same tree availability the tree-rescue path checks. A DELIVERABLE ask (summary/minutes/…)
+            // NEVER downgrades — it keeps the whole read (W1's honest capped/tree path). On downgrade,
+            // control falls through to the relevance path below (the fence + any scope notice ride along),
+            // so "keeps top-k" is literal: an honest relevance answer, no false whole-document claim.
+            const needleDowngrade =
+              isNeedleShaped(text) &&
+              readyTreeCountInScope(ctx.db, scope) === 0 &&
+              documentApproxTokenTotal(ctx.db, documentId) >
+                wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, turnSkill)
+            if (!needleDowngrade) {
+              return withChatStream(
+                event,
+                conversationId,
+                'Document answer failed',
+                withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
+                  generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+                    signal,
+                    onCompactionStart: sendCompaction,
+                    scope,
+                    reranker: ctx.reranker,
+                    // The turn's skill fence rides in the grounded USER turn; the whole document is the
+                    // context, so the assistant row carries the skill stamp + `capped` coverage.
+                    skill: turnSkill,
+                    wholeDocument: { documentId },
+                    // U2 (audit §3.5): share-safe review injects a deterministic whole-document PII count
+                    // summary into the prompt and gates its low-risk verdict on non-truncated coverage.
+                    wholeDocumentPiiScan: analysisHandler.injectPiiScan === true,
+                    onToken: sendToken,
+                    // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
+                    // answer with the honest scope notice (undefined ⇒ byte-unchanged).
+                    answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined
+                  })),
+                (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
+              )
+            }
+            // needleDowngrade: fall through to the relevance (top-k) path below.
           }
-          // Defensive: applies() requires a single in-scope doc, so this is unreachable; fall through
-          // to the relevance path rather than fail the turn.
+          // Defensive: applies() requires a single in-scope doc, so a missing target is unreachable; fall
+          // through to the relevance path rather than fail the turn.
         }
 
         // `grounded-whole-doc-compare` (Follow-up B, what-changed): a compare-shaped request over
@@ -476,7 +512,14 @@ export function registerRagIpc(ctx: AppContext): void {
       if (decision.engine === 'coverage-extract' && decision.recordType) {
         const recordType: ExtractRecordType = decision.recordType
         const listing = aggregateExtractions(ctx.db, scope, recordType)
-        const answer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params))
+        // A3: a needle ask under an active whole-doc skill can be DOWNGRADED off the whole-doc engine
+        // (grounded-whole-doc block above) and land HERE — and it may have been auto-narrowed by the W2
+        // pre-pass first (`scopeNotice` set, `scope` reduced to one doc). Lead the honest scope notice so a
+        // per-doc count never reads as covering the whole multi-doc scope, and stamp the skill so the turn
+        // keeps its provenance glyph (A1). `scopeNotice` is null and `skill` undefined on every ordinary
+        // (non-skill / non-narrowed) coverage-extract turn, so this is byte-unchanged there.
+        const listingAnswer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params))
+        const answer = scopeNotice ? `${scopeNotice}\n\n${listingAnswer}` : listingAnswer
         return withChatStream(
           event,
           conversationId,
@@ -487,7 +530,9 @@ export function registerRagIpc(ctx: AppContext): void {
             return appendMessage(ctx.db, {
               conversationId,
               role: 'assistant',
-              content: answer
+              content: answer,
+              skillId: skill?.installId,
+              autoFired: skill?.autoFired === true
             })
           }),
           // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
@@ -517,6 +562,10 @@ export function registerRagIpc(ctx: AppContext): void {
             // The turn's skill: its fence rides in the grounded user turn; the assistant row is
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,
+            // A3: a needle ask that was auto-narrowed to one doc (W2) and then downgraded off the
+            // whole-doc engine reaches HERE — lead the honest scope notice so the narrowing stays
+            // visible. `scopeNotice` is null on every other route into this path (byte-unchanged).
+            answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined,
             onToken: sendToken
           })),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})

@@ -830,6 +830,27 @@ audited; an app skill with the same tools unchanged — teeth-verified by flippi
 > **§-anchor legend** at the end of architecture.md "Skills — design record" maps each to where it now
 > lives, so the references stay resolvable.
 
+**A3 (audit §6.3/§8.2) — the manifest `analysis` engine is an ENGINE choice, NOT a capability; SEC-1 is
+unchanged.** A3 adds an additive manifest field `analysis: whole-doc | compare | none` that an
+*instruction* skill declares to say the model should answer over the WHOLE document(s) rather than top-k
+passages, and it is honored for instruction skills of **any source** (app or user-imported) — closing
+"routing intelligence is app code; skills are portable in name only" (§6.3). This does **not** widen the
+trust boundary, because choosing which *already-in-scope* context the model reads is not a capability: it
+adds **no** `Db`/SQL/FS/net handle, runs **no** tool, still reads only the turn's frozen document scope,
+and produces the same fenced, cited answer surface. It sits **below** SEC-1, which continues to gate the
+only real capability — running the wired **Tier-2 tools** (`extract_*`, `redact_document`, `export_*`) —
+strictly to `source === 'app'` skills via `skillCanRunTools`. Concretely: a user-imported `kind:'tool'`
+skill still runs **none** of the tools (`manifestAnalysisHandler` returns `undefined` for a tool skill, and
+`skillCanRunTools` refuses it), while a user-imported `kind:'instruction'` skill with `analysis: whole-doc`
+gets the whole-document *engine* and nothing else. The bundled share-safe review's deterministic PII
+pre-scan (U2) stays **app behaviour** keyed to the app install id — a user whole-doc skill gets the engine,
+not the detectors. So the A3 surface a user skill can reach is exactly the pre-A3 grounded-answer surface,
+just with the whole document as context instead of a handful of passages — no new sink, no new tool, no
+`source`-gated decision weakened. Pinned by `skill-manifest.test.ts` (a tool skill's `analysis` is ignored
+with a note), `rag-whole-doc-skill.test.ts` (a **user** `analysis: whole-doc` skill routes to the whole-doc
+engine end-to-end through `askDocuments` — the manifest fallback), and `skills-analysis-whole-doc.test.ts`
+(`manifestAnalysisHandler` returns `undefined` for a tool skill and never carries the app-only PII scan).
+
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 
 `HILBERTRAUM_LLAMA_BIN` and `HILBERTRAUM_WHISPER_BIN` point the sidecar resolvers at an explicit,

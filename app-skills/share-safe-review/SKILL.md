@@ -10,6 +10,12 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
     title: Sicher teilen prüfen
     description: Verwenden, wenn ein Dokument vor dem Teilen geprüft werden soll – sichtbare sensible Informationen und praktische Risiken. Nur beratend; keine Anonymisierung.
 kind: instruction
+analysis: whole-doc            # A3/§8.2: the review reads the WHOLE document (not top-k passages). With this
+                               #   skill active over a single fully-chunked doc the whole-doc engine is the
+                               #   DEFAULT — keywords only opt out for chatter and send a NEEDLE lookup to top-k
+                               #   when the read would truncate. An ENGINE choice, not a tool capability
+                               #   (SEC-1 unchanged). The deterministic PII pre-scan (U2) is APP behaviour on
+                               #   the bundled skill — a user whole-doc skill gets the engine, not the scan.
 compatibility:
   minAppVersion: 0.1.29
 permissions:

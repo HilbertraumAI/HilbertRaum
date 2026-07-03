@@ -313,6 +313,50 @@ describe('validateSkillManifest', () => {
         .autoFire
     ).toBe(true)
   })
+
+  // A3 (audit §6.3/§8.2): the additive whole-document `analysis` engine field — additive + lenient,
+  // honored ONLY for an instruction skill, absent/`none` ⇒ undefined (byte-unchanged cache).
+  describe('analysis engine field (A3)', () => {
+    it('parses analysis: whole-doc and compare on an instruction skill', () => {
+      expect(validateSkillManifest(rawFront({ analysis: 'whole-doc' })).manifest?.analysis).toBe('whole-doc')
+      expect(validateSkillManifest(rawFront({ analysis: 'compare' })).manifest?.analysis).toBe('compare')
+    })
+
+    it('absent ⇒ undefined (the top-k default; no manifest_json churn)', () => {
+      expect(validateSkillManifest(rawFront()).manifest?.analysis).toBeUndefined()
+    })
+
+    it('explicit analysis: none ⇒ undefined (byte-identical to an omission)', () => {
+      const res = validateSkillManifest(rawFront({ analysis: 'none' }))
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.analysis).toBeUndefined()
+    })
+
+    it('an unrecognized value is dropped leniently with a note (never an error)', () => {
+      const res = validateSkillManifest(rawFront({ analysis: 'summarize-everything' }))
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.analysis).toBeUndefined()
+      expect(res.notes.some((n) => n.includes('"analysis"'))).toBe(true)
+    })
+
+    it('a non-string value is dropped leniently with a note', () => {
+      const res = validateSkillManifest(rawFront({ analysis: 42 }))
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.analysis).toBeUndefined()
+      expect(res.notes.some((n) => n.includes('"analysis"'))).toBe(true)
+    })
+
+    it('is IGNORED for a tool skill (whole-doc behaviour is app-owned) — note, not an error (SEC-1)', () => {
+      const res = validateSkillManifest(rawFront({ kind: 'tool', analysis: 'whole-doc' }))
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.analysis).toBeUndefined()
+      expect(res.notes.some((n) => n.includes('"analysis" is ignored for a tool skill'))).toBe(true)
+    })
+
+    it('case-insensitive value (WHOLE-DOC) normalizes', () => {
+      expect(validateSkillManifest(rawFront({ analysis: 'WHOLE-DOC' })).manifest?.analysis).toBe('whole-doc')
+    })
+  })
 })
 
 describe('parseSkillMarkdown', () => {
@@ -408,5 +452,13 @@ describe('manifest cache round-trip (audit C2)', () => {
     const restored = JSON.parse(JSON.stringify(res.manifest)) as SkillManifest
     expect(restored).toEqual(res.manifest)
     expect(restored.triggers.autoFire).toBe(true)
+  })
+
+  it('survives JSON.stringify/parse with analysis intact (A3 cache round-trip)', () => {
+    const res = parseSkillMarkdown(skillMd(rawFront({ analysis: 'compare' })))
+    expect(res.ok).toBe(true)
+    const restored = JSON.parse(JSON.stringify(res.manifest)) as SkillManifest
+    expect(restored).toEqual(res.manifest)
+    expect(restored.analysis).toBe('compare')
   })
 })

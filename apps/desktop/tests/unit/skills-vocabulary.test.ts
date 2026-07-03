@@ -5,6 +5,8 @@ import {
   SKILL_VOCABULARY,
   deriveMatch,
   entryMatches,
+  isNeedleShaped,
+  isSmallTalk,
   routeEntries,
   routeMatch,
   suggestTerms,
@@ -121,5 +123,78 @@ describe('suggest↔route derivation', () => {
     // `routeMatch` is compile-guarded to `SkillVocabId`; the cast checks the runtime stays robust (false,
     // not a throw) if an out-of-union id ever reaches it defensively.
     expect(routeMatch('no-such-skill' as SkillVocabId, 'anything at all')).toBe(false)
+  })
+})
+
+// A3 (audit §6.3/§8.2) — the SKILL-INDEPENDENT shape classifiers driving the inverted whole-doc gate.
+describe('isSmallTalk — off-topic opt-out (A3)', () => {
+  it('fires on pure chatter: greetings, thanks, closings, assistant-meta (EN + DE)', () => {
+    for (const q of [
+      'hi', 'Hello there!', 'hey', 'thanks', 'Thanks!', 'thank you', 'thank you :)', 'ok danke',
+      'bye', 'cheers', 'how are you?', 'How are you doing?', "how's it going", 'who are you?',
+      'what can you do?', 'tell me a joke', 'hallo', 'servus', 'danke', 'tschüss', 'wie gehts?',
+      'wie geht es dir?', 'wer bist du?', 'was kannst du?'
+    ]) {
+      expect(isSmallTalk(q)).toBe(true)
+    }
+  })
+
+  it('NEVER fires on a real document question (the inversion default → whole-doc)', () => {
+    for (const q of [
+      'summarize this contract', 'what colour is the sky?', 'what are the deadlines?',
+      'how much did I spend?', 'write the meeting minutes', 'wann ist die frist?',
+      'thank you, now summarize the contract', 'hi, can you list the obligations?',
+      'what does the document say about termination?', 'is there a renewal clause?'
+    ]) {
+      expect(isSmallTalk(q)).toBe(false)
+    }
+  })
+
+  it('empty / whitespace-only is not small talk (nothing to opt out of)', () => {
+    expect(isSmallTalk('')).toBe(false)
+    expect(isSmallTalk('   ')).toBe(false)
+  })
+})
+
+describe('isNeedleShaped — needle-vs-deliverable classify (A3)', () => {
+  it('fires on a targeted single-fact lookup (EN + DE)', () => {
+    for (const q of [
+      'how much did I spend on groceries?', 'how many transactions were there?',
+      'when is the renewal date?', 'what is the invoice number?', "what's the total due?",
+      'is there a termination clause?', 'find the payment date', 'where is the signature?',
+      'wie viel kostet das?', 'wie viele positionen gibt es?', 'wann ist die frist?',
+      'wo ist die unterschrift?', 'gibt es eine kündigungsklausel?'
+    ]) {
+      expect(isNeedleShaped(q)).toBe(true)
+    }
+  })
+
+  it('a DELIVERABLE verb vetoes the needle (never downgraded to top-k)', () => {
+    for (const q of [
+      'summarize the contract', 'give me an overview', 'write the minutes',
+      'list all the obligations', 'what changed between these?', 'review this document',
+      'what is the main point?', 'zusammenfassung des vertrags', 'überblick über alle fristen',
+      'was hat sich geändert?'
+    ]) {
+      expect(isNeedleShaped(q)).toBe(false)
+    }
+  })
+
+  it('a "what is the <synthesis-noun>" ask is a DELIVERABLE, not a needle (whole-doc synthesis, EN+DE)', () => {
+    // Guards against downgrading a whole-document synthesis question to ~5 top-k passages — the exact
+    // incident A3's inversion exists to kill (a false needle is worse than a false deliverable).
+    for (const q of [
+      'what is the takeaway of this contract?', 'what is the bottom line?',
+      'what is the conclusion of the report?', 'what is the upshot?', 'what is this about?',
+      'was ist das Fazit?', 'was ist die Kernaussage?', 'was ist der Inhalt des Dokuments?'
+    ]) {
+      expect(isNeedleShaped(q)).toBe(false)
+    }
+  })
+
+  it('a non-needle, non-deliverable question is NOT a needle (defaults to whole-doc)', () => {
+    // No lookup interrogative → not a needle → the whole-doc engine stays the default.
+    expect(isNeedleShaped('tell me about the parties')).toBe(false)
+    expect(isNeedleShaped('explain the agreement')).toBe(false)
   })
 })

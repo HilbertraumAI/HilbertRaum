@@ -6,6 +6,44 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation A3: manifest analysis mode + whole-doc gate inversion — branch `fix/skills-a3`, UNMERGED.**
+Track-A (plan §A3; audit §6.3 "routing intelligence is app code; skills are portable in name only" + §8.2 "invert the whole-doc gate"),
+branched off `fix/skills-a2` (deps W1/W2/W5, all in the phase-branch history; plan/audit docs live on the chain, not `master`). Root cause:
+whether a skill read the WHOLE document was decided by hardcoded app handlers keyed on install ids **and** per-skill, per-language keyword
+arrays — so every phrasing gap silently degraded a whole-document ask to top-k-with-fence (the recurring incident class), and **any
+user-imported instruction skill got top-k only**, never the engine. **The fix, two parts.** (1) **Additive manifest field**
+`analysis: whole-doc | compare | none` (`shared/skill-manifest.ts`, default none, lenient: unknown/non-string → note+drop; explicit `none` →
+undefined so the cache stays byte-identical; **instruction-only** — a `kind:'tool'` declaration is noted+ignored, since a tool skill's
+whole-doc behaviour is app-owned). Honored for instruction skills of **ANY source**: `manifestAnalysisHandler(kind, analysis)`
+(`analysis/whole-doc-skills.ts`) synthesises the same engine for a skill WITHOUT a registered handler (a user instruction skill), resolved in
+`registerRagIpc` as `getSkillAnalysisHandler(id) ?? manifestAnalysisHandler(record.kind, record.manifest.analysis)`. The five bundled
+instruction skills DECLARE the field in SKILL.md (meeting-protocol/contract-brief/share-safe-review/deadline-obligation-finder → `whole-doc`;
+what-changed → `compare`), pinned to their registered handler's mode by a consistency test. **Engine choice, NOT a capability (SEC-1
+unchanged):** a user `kind:'tool'` skill still runs no tool, and the share-safe deterministic PII pre-scan (U2) stays app-keyed — restated in
+security-model.md. (2) **Gate INVERTED** (`whole-doc-skills.ts` + `registerRagIpc`): with an analysis-mode skill active over a matching
+**fully-chunked** scope the whole-doc (or, at exactly two docs, compare) engine is the **DEFAULT** — per-skill `routeMatch` retired as the
+deciding gate. Keywords now play two **skill-agnostic** roles (NEW in `vocabulary.ts`): **(a)** `isSmallTalk` opts out clear chatter
+(greeting/thanks/assistant-meta → keeps the relevance path; conservative — every token a filler, or a whole-question chit-chat form, so a real
+document question can't be misclassified), **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k **only when** the whole-doc
+read would truncate **AND** no deep-index tree exists (a needle past the truncation cut would be missed; **W1's exact budget calculus is the
+input** — `documentApproxTokenTotal` vs `wholeDocumentFitBudgetTokens`, `readyTreeCountInScope === 0`; a **deliverable** ask never downgrades).
+On downgrade, control falls through to the relevance path (fence + any W2 scope-notice ride along via `answerPrefix`), so "keeps top-k" is
+literal — no false whole-document claim. **Data contract (additive):** `SkillManifest.analysis?: 'whole-doc'|'compare'` (omitted ⇒ none).
+Docs: security-model.md (analysis = engine choice ≠ capability; SEC-1 restated), known-limitations.md (A3 entry + W1 follow-up updated — needle→
+top-k now done), plan §0.2 [x]. **+~30 net-new tests** (`skill-manifest.test.ts`: field parse/lenient/tool-ignored/case/round-trip;
+`skills-vocabulary.test.ts`: isSmallTalk EN+DE + never-fires-on-real-questions, isNeedleShaped + deliverable-veto; `skills-analysis-whole-doc.test.ts`:
+inverted applies/intends EN+DE, manifestAnalysisHandler any-source + tool→undefined + no-PII-scan, SKILL.md↔handler consistency ×5;
+`rag-whole-doc-skill.test.ts`: small-talk opt-out, general-question-now-whole-doc inversion, needle-downgrade vs deliverable over an over-budget
+doc, coverage-extract-keeps-skill-stamp, **user `analysis:whole-doc` routes to the engine end-to-end**). NO extractor-version bump (read-side
+routing only). **Adversarial 6-lens diff review (each finding independently verified) → 3 confirmed, all fixed:** (a) MEDIUM — the needle
+downgrade fall-through was intercepted by the coverage-extract listing branch (`how many` is in BOTH `NEEDLE_SHAPES` and the router's
+`COVERAGE_RE`), which dropped the W2 scope-narrowing notice + the skill stamp → that branch now leads `scopeNotice` (null-guarded, byte-unchanged
+for non-skill turns) and stamps `skillId`; (b) MEDIUM — `isNeedleShaped` false-fired on `what is the {takeaway/bottom line/conclusion/Fazit/
+Kernaussage/Inhalt…}` synthesis asks (the `what is the`/`was ist der/die/das` stems with no deliverable veto), wrongly downgrading a summary to
+top-k → `DELIVERABLE_SHAPES` extended with those synthesis nouns (EN+DE); (c) LOW — security-model.md cited a user-skill-routing test that did
+not exist → added the `rag-whole-doc-skill` end-to-end user `analysis:whole-doc` routing test (user skill installs DISABLED — enabled in-test)
+and corrected the citation. `npm test` **3056 green** + `npm run typecheck` green._
+
 _2026-07-03 — **Skills remediation A2: self-describing tool registry + per-document run controller — branch `fix/skills-a2`, UNMERGED.**
 Track-A (plan §A2; audit §6.2 "a 9th tool skill costs ≥10 files across four layers" + §6.4-low "vestigial trust plumbing"), branched off
 `fix/skills-a1` (dep: U5; plan/audit docs live on the phase-branch chain, not `master`). **Behavior-preserving EXCEPT the two fixes the

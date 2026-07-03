@@ -457,3 +457,116 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
   const q = question.toLowerCase()
   return routeEntries(skillId).some((e) => entryMatches(e, q))
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// A3 (audit §6.3/§8.2) — the SKILL-INDEPENDENT shape classifiers the INVERTED whole-doc gate uses.
+//
+// Before A3 an analysis skill only reached its whole-doc engine when the question matched that skill's
+// per-language `routeMatch` vocabulary — so every phrasing gap silently degraded a whole-document ask to
+// top-k-with-fence (the recurring incident class). A3 inverts it: with an analysis-mode skill explicitly
+// active over a matching fully-chunked scope, the whole-doc engine is the DEFAULT. Keywords now play only
+// two NARROW roles, and both are skill-agnostic (no per-skill list):
+//   (a) `isSmallTalk` OPTS OUT clearly off-topic chatter (greetings/thanks/assistant-meta) — a "hi"/"danke"
+//       over a document must NOT spend a whole-document read; it keeps the ordinary relevance path.
+//   (b) `isNeedleShaped` classifies a targeted single-fact lookup vs a whole-document DELIVERABLE — the
+//       chat path uses it ONLY to send a needle to top-k WHEN the whole-doc read would truncate and no
+//       deep-index tree exists (a needle past the truncation cut would be missed; top-k finds it anywhere).
+//
+// Both are deliberately conservative. `isSmallTalk` can never fire on a real document question (a question
+// with any content word is not all-filler and matches no whole-question chit-chat form). `isNeedleShaped`
+// requires an unambiguous lookup interrogative AND the absence of any deliverable verb, because a false
+// needle (a summary sent to top-k) is worse than a false deliverable (a truncated whole read, still honest
+// via W1's in-prompt notice). Privacy: the question is CONTENT — matched here, NEVER logged.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Collapse a question to lowercase alnum(+German umlaut/ß) word tokens — the small-talk normalizer.
+ *  Apostrophes are DROPPED (not split on) so a contraction stays one token ("how's" → "hows"). */
+function smallTalkTokens(question: string): string[] {
+  return question
+    .toLowerCase()
+    .replace(/['’‘´`]/g, '')
+    .replace(/[^a-z0-9äöüß]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter((t) => t.length > 0)
+}
+
+/** Greeting / thanks / closing / acknowledgement tokens (EN+DE). A question whose EVERY token is one of
+ *  these is pure chatter — it carries no document ask, so it opts OUT of the whole-doc engine. */
+const SMALL_TALK_WORDS = new Set<string>([
+  // greetings
+  'hi', 'hii', 'hiya', 'hey', 'heya', 'hello', 'yo', 'sup', 'howdy', 'there',
+  'hallo', 'hallöchen', 'servus', 'moin', 'na',
+  // thanks (incl. the "thank you" pair — both tokens are fillers, so "thank you" is chatter but
+  // "thank you, now summarize it" is not: 'summarize'/'it' are not fillers)
+  'thanks', 'thank', 'you', 'thx', 'ty', 'cheers', 'please', 'pls',
+  'danke', 'dankeschön', 'merci', 'vielen', 'dank', 'bitte',
+  // closings / acknowledgements
+  'bye', 'goodbye', 'cya', 'ok', 'okay', 'okey', 'k', 'cool', 'great', 'nice', 'awesome', 'lol', 'haha',
+  'tschüss', 'tschau', 'ciao', 'passt', 'alles', 'klar', 'super'
+])
+
+/** Whole-question chit-chat / assistant-meta forms (EN+DE), compared against the NORMALIZED full question
+ *  (so "how are you going to fix X" — a real ask — never matches "how are you"). */
+const SMALL_TALK_EXACT = new Set<string>([
+  'how are you', 'how are you doing', 'how are you today', 'how is it going', 'hows it going',
+  'how do you do', 'whats up', 'who are you', 'what are you', 'what can you do',
+  'what can you help with', 'what can you help me with', 'tell me a joke', 'nice to meet you', 'good bot',
+  'wie gehts', 'wie geht es', 'wie geht es dir', 'wie geht es ihnen', 'wer bist du', 'was bist du',
+  'was kannst du', 'was kannst du tun', 'erzähl mir einen witz', 'schön dich kennenzulernen'
+])
+
+/**
+ * True when the question is clearly off-topic chatter (greeting / thanks / assistant-meta), so an active
+ * analysis skill should NOT default to a whole-document read (A3 opt-out (a), audit §8.2). Conservative by
+ * construction: it fires only when the WHOLE question is chatter — every token a filler, or the normalized
+ * question is a known chit-chat form — so a genuine document question (which always carries a content word)
+ * can never be misclassified. Deterministic; no model; the question is never logged.
+ */
+export function isSmallTalk(question: string): boolean {
+  const tokens = smallTalkTokens(question)
+  if (tokens.length === 0) return false
+  if (SMALL_TALK_EXACT.has(tokens.join(' '))) return true
+  return tokens.every((t) => SMALL_TALK_WORDS.has(t))
+}
+
+/** Whole-document DELIVERABLE verbs/phrases (EN+DE): a "process the whole document" ask (summary, minutes,
+ *  brief, list-all, compare, review). Their presence VETOES the needle classification — a deliverable is
+ *  never downgraded to top-k. Substring-matched (German compounds included). */
+const DELIVERABLE_SHAPES: string[] = [
+  'summar', 'brief', 'overview', 'recap', 'minutes', 'walk me through', 'key point', 'main point',
+  'list all', 'list every', 'all the', 'everything', 'what changed', 'what has changed', 'compare',
+  'review', 'gist', 'rundown', 'breakdown', 'analy', 'tl;dr', 'the whole', 'entire document',
+  // Whole-document SYNTHESIS nouns that commonly head a "what is the …" ask (which would otherwise trip
+  // the `what is the` needle stem). Vetoing them keeps a summary/gist ask on the whole-doc engine — a
+  // FALSE deliverable (a truncated whole read, honest via W1's notice) is safer than a false needle (a
+  // summary answered from ~5 top-k passages, the exact incident the A3 inversion exists to kill).
+  'takeaway', 'bottom line', 'conclusion', 'upshot', 'big picture', 'main idea', 'in a nutshell',
+  'in short', 'purpose of', 'point of the', 'point of this', 'message of', 'about this document',
+  'what is it about', 'what is this about',
+  'zusammenfass', 'überblick', 'protokoll', 'alle ', 'sämtliche', 'liste', 'auflisten',
+  'was hat sich geändert', 'vergleich', 'überprüf', 'durchgehen', 'wesentlich', 'analyse', 'ganze dokument',
+  'fazit', 'kernaussage', 'kernpunkt', 'quintessenz', 'gesamteindruck', 'inhalt', 'worum geht'
+]
+
+/** Unambiguous single-fact LOOKUP interrogatives (EN+DE) — a "find this one thing" ask. Kept tight (a false
+ *  needle is worse than a false deliverable), substring-matched. */
+const NEEDLE_SHAPES: string[] = [
+  'how much', 'how many', 'how long', 'when is', 'when does', 'when did', 'when will', 'when do',
+  'where is', 'where does', 'where can i', 'find the', 'find a', 'locate', 'look up', 'is there a',
+  'are there any', 'does it say', 'does the document', "what's the", 'what is the', 'what was the',
+  'wie viel', 'wie viele', 'wie lange', 'wann ist', 'wann muss', 'wann wird', 'wo ist', 'wo steht',
+  'finde ', 'gibt es', 'steht im', 'steht in', 'was ist der', 'was ist die', 'was ist das'
+]
+
+/**
+ * True when the question is a targeted single-fact LOOKUP rather than a whole-document deliverable (A3
+ * classify (b), audit §8.2). Used ONLY to prefer top-k over a TRUNCATED whole-doc read (a needle past the
+ * cut would be missed). A deliverable verb vetoes it, so a summary/minutes/compare ask is never a needle.
+ * Deterministic; the question is never logged.
+ */
+export function isNeedleShaped(question: string): boolean {
+  const q = question.toLowerCase()
+  if (DELIVERABLE_SHAPES.some((s) => q.includes(s))) return false
+  return NEEDLE_SHAPES.some((s) => q.includes(s))
+}

@@ -10,6 +10,11 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
     title: Vertragsübersicht
     description: Verwenden, wenn eine verständliche Übersicht eines Vertrags entstehen soll – Parteien, Fristen, Pflichten, wichtige Klauseln und offene Fragen. Keine Rechtsberatung.
 kind: instruction
+analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
+                               #   skill active over a single fully-chunked doc the whole-doc engine is the
+                               #   DEFAULT — keywords only opt out for chatter and send a NEEDLE lookup to top-k
+                               #   when the read would truncate. An ENGINE choice, not a tool capability
+                               #   (SEC-1 unchanged) — honored for a skill of any source.
 compatibility:
   minAppVersion: 0.1.29
 permissions:
