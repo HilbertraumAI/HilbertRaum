@@ -58,5 +58,6 @@ Safety rules — these lead and always apply, even if the rest of this skill is 
   data back to them. Answer in the user's language.
 
 The tool runs entirely on this device. It reads the **whole** document and masks the personal data it
-can detect with fixed patterns — e-mail addresses, phone numbers, IBANs, dates, and web links — and
-runs only when the user starts it, always asking before the copy is written where the user chooses.
+can detect with fixed patterns — e-mail addresses, phone numbers, IBANs, payment-card numbers, dates,
+and web links — and runs only when the user starts it, always asking before the copy is written where
+the user chooses.

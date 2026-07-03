@@ -51,6 +51,7 @@ import {
   stripSkillFenceEcho
 } from '../skills/prompt'
 import { getSettings } from '../settings'
+import { scanRedactionCandidates, type RedactionCounts } from '../skills/tools/redaction'
 import { answerWholeDocFromTree } from './whole-doc-tree'
 import { buildGroundedDataPrompt } from './grounded-data'
 export { buildGroundedDataPrompt, GROUNDED_DATA_RULES } from './grounded-data'
@@ -527,6 +528,26 @@ export function documentApproxTokenTotal(db: Db, documentId: string): number {
 }
 
 /**
+ * Deterministic per-category PII counts over a document's ENTIRE text (U2, audit §3.5 — the share-safe
+ * pre-scan). Reads ALL chunks (never budget-capped: the deterministic detectors CAN see the whole document
+ * even when the model's excerpt view is truncated), de-overlapping consecutive same-segment neighbours so a
+ * value duplicated in the ~80-token overlap is not double-counted, then runs the offline redaction detectors.
+ * Returns COUNTS only — never a detected value (§6). */
+export function scanWholeDocumentForPii(db: Db, documentId: string): RedactionCounts {
+  const rows = db
+    .prepare('SELECT text, page_number, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+    .all(documentId) as unknown as Array<{ text: string; page_number: number | null; section_label: string | null }>
+  let joined = ''
+  let prev: { text: string; page_number: number | null; section_label: string | null } | null = null
+  for (const r of rows) {
+    const text = prev && sameSegment(prev, r) ? deOverlapAgainstPrev(prev.text, r.text) : r.text
+    joined += joined ? `\n${text}` : text
+    prev = r
+  }
+  return scanRedactionCandidates(joined)
+}
+
+/**
  * Split a whole-document budget across two compared documents (Follow-up B). Size-aware with
  * redistribution: each gets up to HALF, then a smaller document donates its unused half to the
  * larger one. So two versions that JOINTLY fit are both read whole (the common what-changed case);
@@ -908,16 +929,42 @@ function truncationNotice(covered: number, total: number, subject: string): stri
 }
 
 /**
+ * Deterministic PII-scan summary injected into the share-safe-review grounded prompt (U2, audit §3.5).
+ * Model-facing, fixed English (app-authored, like `truncationNotice`; rides in the USER turn WITH the
+ * excerpts, never `system`). It reports COUNTS only — never a detected value (§6) — and states plainly that
+ * the scan covered the WHOLE document (so the model does not treat a truncated excerpt view as the whole
+ * picture). When `truncated`, it FORBIDS the "Likely low risk after review" verdict: a privacy-safe verdict
+ * must rest on non-truncated coverage, not on a prefix the model happened to be shown. Pure + unit-testable.
+ */
+export function buildShareSafeScanBlock(counts: RedactionCounts, truncated: boolean): string {
+  const summary =
+    `AUTOMATED PRE-SCAN (deterministic, offline, whole document — counts only): the pattern detectors ` +
+    `found e-mail addresses: ${counts.email}, phone numbers: ${counts.phone}, IBANs: ${counts.iban}, ` +
+    `payment-card numbers: ${counts.card}, dates: ${counts.date}, links: ${counts.url}. This scan covers ` +
+    `the ENTIRE document even where the excerpts below are only its beginning; it detects clearly-shaped ` +
+    `patterns ONLY and cannot see names, postal addresses, or confidential wording — treat it as a floor, ` +
+    `not a ceiling.`
+  const gate = truncated
+    ? ` You are shown only the BEGINNING of this document, so you MUST NOT issue the "Likely low risk ` +
+      `after review" verdict — you have not reviewed the whole document. Use "Review carefully before ` +
+      `sharing" (or a stronger verdict) instead.`
+    : ''
+  return `${summary}${gate}`
+}
+
+/**
  * Build the grounded answer USER turn: the question, the optional skill fence, an optional
- * partial-document notice, then the numbered source excerpts in the spec §7.8 source-context format
- * (`[S1] File: X | Page: 4` then the quoted chunk text). The stable grounding rules now live in
- * `GROUNDED_SYSTEM_PROMPT` (RT-2), so this carries only the per-turn content. Pure + unit-testable.
+ * partial-document notice, an optional analysis block (e.g. the share-safe PII pre-scan), then the numbered
+ * source excerpts in the spec §7.8 source-context format (`[S1] File: X | Page: 4` then the quoted chunk
+ * text). The stable grounding rules now live in `GROUNDED_SYSTEM_PROMPT` (RT-2), so this carries only the
+ * per-turn content. Pure + unit-testable.
  */
 export function buildGroundedPrompt(
   question: string,
   chunks: RetrievedChunk[],
   skillFence?: string | null,
-  truncation?: WholeDocTruncation | null
+  truncation?: WholeDocTruncation | null,
+  analysisBlock?: string | null
 ): string {
   const excerpts = chunks
     .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
@@ -930,9 +977,12 @@ export function buildGroundedPrompt(
   // The partial-document notice sits between the fence and the excerpts (audit §2.2). Absent ⇒ the
   // string is byte-identical to the pre-W1 prompt for a document that fit (no regression).
   const truncationBlock = truncation ? `\n${truncationNotice(truncation.covered, truncation.total, 'DOCUMENT')}\n` : ''
+  // The analysis block (U2 share-safe pre-scan) sits after the truncation notice, before the excerpts.
+  // Absent ⇒ byte-identical to the pre-U2 prompt (every non-share-safe caller passes nothing).
+  const analysis = analysisBlock ? `\n${analysisBlock}\n` : ''
   return `Question:
 ${question}
-${skillBlock}${truncationBlock}
+${skillBlock}${truncationBlock}${analysis}
 Document excerpts:
 ${excerpts}
 
@@ -1110,6 +1160,14 @@ export interface GroundedAnswerOptions {
    */
   wholeDocument?: { documentId: string }
   /**
+   * U2 (audit §3.5): when set WITH `wholeDocument`, run the deterministic PII detectors over the WHOLE
+   * document (all chunks, never budget-capped) and inject their COUNTS summary into the grounded prompt;
+   * when the whole-document read was truncated, the injected block also forbids the "Likely low risk"
+   * verdict (a privacy-safe verdict must rest on non-truncated coverage). Set ONLY by the share-safe-review
+   * handler (`injectPiiScan`). Counts only — no detected value reaches the prompt (§6). No new model call.
+   */
+  wholeDocumentPiiScan?: boolean
+  /**
    * Skill-aware 2-document WHOLE-DOCUMENT compare (Follow-up B, what-changed). When set, BOTH named
    * documents are read IN ORDER (not top-k), the whole-document budget is SPLIT across them
    * (size-aware: each gets up to half, a smaller doc donates its unused half to the larger), the
@@ -1238,6 +1296,10 @@ export async function generateGroundedAnswer(
   // carries an explicit model-facing notice: it names how many sections were provided vs total and
   // forbids asserting an absence beyond the provided beginning (audit §2.2). Null ⇒ no notice.
   let singleDocTruncation: { covered: number; total: number } | null = null
+  // U2 (audit §3.5): the share-safe-review pre-scan block — a deterministic whole-document PII count
+  // summary injected into the grounded prompt, gating the low-risk verdict on non-truncated coverage.
+  // Set only when `opts.wholeDocumentPiiScan` (the share-safe handler). Null ⇒ no injection.
+  let shareSafeScanBlock: string | null = null
   // When set (Follow-up B), the grounded turn presents the two compared documents as labelled blocks
   // (buildCompareWholeDocPrompt) instead of a single excerpt list. Each group carries its own honest
   // per-document coverage so a PARTIAL half prints its own "beginning only" notice in the prompt.
@@ -1281,6 +1343,14 @@ export async function generateGroundedAnswer(
     // No rescue tree fired (else we returned above): the read is the honest beginning. Tell the model
     // exactly what it cannot see so its answer never claims completeness or asserts an absence (§2.2).
     if (whole.truncated) singleDocTruncation = { covered: whole.chunksCovered, total: whole.chunksTotal }
+    // U2 (audit §3.5): the share-safe pre-scan runs the deterministic detectors over the WHOLE document
+    // (not just the budget-capped excerpts the model sees) and injects a counts summary; a truncated read
+    // additionally forbids the low-risk verdict. (A doc rescued by the deep-index tree returned above; that
+    // path's own truncation stamp governs — the pre-scan is the non-tree whole-doc path, the common case.)
+    if (opts.wholeDocumentPiiScan) {
+      const scan = scanWholeDocumentForPii(db, opts.wholeDocument.documentId)
+      shareSafeScanBlock = buildShareSafeScanBlock(scan, whole.truncated)
+    }
   } else if (opts.wholeDocumentCompare) {
     const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
     const ids = opts.wholeDocumentCompare.documentIds
@@ -1359,7 +1429,7 @@ export async function generateGroundedAnswer(
     ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB, null, compareDiff.truncated)
     : compareGroups
       ? buildCompareWholeDocPrompt(question, compareGroups)
-      : buildGroundedPrompt(question, chunks, null, singleDocTruncation)
+      : buildGroundedPrompt(question, chunks, null, singleDocTruncation, shareSafeScanBlock)
   // `contextTokens` was resolved above (the whole-document budget needs it up-front); it is the
   // REAL launched context window the runtime reports (§L0), not settings.contextTokens.
   // L2 (context compaction): summarize older raw turns into a cached checkpoint when the history
@@ -1396,7 +1466,7 @@ export async function generateGroundedAnswer(
       ? buildCompareDiffPrompt(question, compareDiff.redlineText, compareDiff.changesText, compareDiff.labelA, compareDiff.labelB, skillFence, compareDiff.truncated)
       : compareGroups
         ? buildCompareWholeDocPrompt(question, compareGroups, skillFence)
-        : buildGroundedPrompt(question, chunks, skillFence, singleDocTruncation)
+        : buildGroundedPrompt(question, chunks, skillFence, singleDocTruncation, shareSafeScanBlock)
     : groundedNoFence
   // Trim older history to the model context window so the grounded turn (which carries the
   // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow

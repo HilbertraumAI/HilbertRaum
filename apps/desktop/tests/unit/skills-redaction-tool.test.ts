@@ -4,8 +4,10 @@ import {
   maskUrls,
   maskIbans,
   maskPhones,
+  maskCards,
   maskDates,
   redactText,
+  scanRedactionCandidates,
   redactDocumentTool,
   MASK_TOKENS,
   type RedactDocumentOutput
@@ -78,36 +80,59 @@ describe('redaction detectors (each in isolation)', () => {
     expect(maskPhones('it cost 12345 in 2026')).toEqual({ text: 'it cost 12345 in 2026', count: 0 })
   })
 
-  it('maskDates masks supported printed forms (validated) and leaves an impossible date alone', () => {
-    expect(maskDates('on 2026-03-15 and 15.03.2026 and 03/15/2026').count).toBe(2) // ISO + dotted day-first
-    // 03/15/2026 reads day-first as day 3, month 15 → invalid → left alone. This is the documented
-    // BL-N6 under-detection: redaction is day-first only (it does NOT infer locale like extraction does),
-    // so a US-ordered date LEAKS into the redacted copy (known-limitations.md "Document redaction").
+  it('maskDates masks supported printed forms in EITHER order (U2) and leaves an impossible date alone', () => {
+    // U2 (audit §5.7): redaction masks a candidate that parses in EITHER field order — the US-ordered
+    // 03/15/2026 (month 3, day 15) now masks alongside the ISO + EU-ordered forms (was the BL-N6 leak).
+    expect(maskDates('on 2026-03-15 and 15.03.2026 and 03/15/2026').count).toBe(3)
     expect(maskDates('on 2026-03-15 and 15.03.2026 and 03/15/2026').text).toBe(
-      'on [DATE] and [DATE] and 03/15/2026'
+      'on [DATE] and [DATE] and [DATE]'
     )
-    // Near-miss: an impossible date is not masked.
+    // 2-digit-year birthdates now mask too (U2 — they used to pass).
+    expect(maskDates('born 01/02/26 here').text).toBe('born [DATE] here')
+    // Near-miss: an impossible date parses in NEITHER order → not masked.
     expect(maskDates('the code 99.99.9999 here')).toEqual({ text: 'the code 99.99.9999 here', count: 0 })
+  })
+
+  it('maskCards masks Luhn-valid PANs (compact / spaced / dashed) and leaves non-cards alone (U2)', () => {
+    // 4111 1111 1111 1111 is a canonical Luhn-valid test PAN.
+    expect(maskCards('pay 4111 1111 1111 1111 today').text).toBe('pay [CARD] today')
+    expect(maskCards('card 4111-1111-1111-1111 ok').text).toBe('card [CARD] ok')
+    expect(maskCards('compact 4111111111111111 end').count).toBe(1)
+    // Luhn FAILS: a 16-digit run that is not a valid card is left alone (conservative).
+    expect(maskCards('ref 4111 1111 1111 1112 here')).toEqual({ text: 'ref 4111 1111 1111 1112 here', count: 0 })
+    // A 20+ digit account number is out of the 13–19 card window → not masked.
+    expect(maskCards('acct 12345678901234567890 x')).toEqual({ text: 'acct 12345678901234567890 x', count: 0 })
+  })
+
+  it('maskPhones: a separator-less ≥9-digit 0-leading run is a reference number, not a phone (U2)', () => {
+    // audit §5.7: a bare 0-leading reference number used to be masked as [PHONE], corrupting invoices in
+    // the share flow. It is now left alone; a 0-leading number WITH a separator still masks.
+    expect(maskPhones('reference 0001234567 here')).toEqual({ text: 'reference 0001234567 here', count: 0 })
+    expect(maskPhones('call 0664 1234567 now').text).toBe('call [PHONE] now') // separated ⇒ still a phone
+    // A short compact 0-leading run (≤8 digits) is still treated as a phone (unchanged).
+    expect(maskPhones('dial 0123456 please').text).toBe('dial [PHONE] please')
   })
 })
 
 const PII_TEXT = [
   'Reach Jane at jane.doe@example.com or call +43 660 1234567.',
   'Account IBAN AT61 1904 3002 3457 3201, opened on 2026-03-15.',
+  'Card on file 4111 1111 1111 1111.',
   'More at https://example.com/profile.'
 ].join('\n')
 
 describe('redactText (the full deterministic pass)', () => {
   it('masks every planted value, counts per category, and leaks none of the originals', () => {
     const { text, counts, totalRedactions } = redactText(PII_TEXT)
-    expect(counts).toEqual({ email: 1, phone: 1, iban: 1, date: 1, url: 1 })
-    expect(totalRedactions).toBe(5)
+    expect(counts).toEqual({ email: 1, phone: 1, iban: 1, card: 1, date: 1, url: 1 })
+    expect(totalRedactions).toBe(6)
     // Every original PII value is gone, replaced by its fixed token.
     for (const secret of [
       'jane.doe@example.com',
       '+43 660 1234567',
       'AT61 1904 3002 3457 3201',
       '2026-03-15',
+      '4111 1111 1111 1111',
       'https://example.com/profile'
     ]) {
       expect(text).not.toContain(secret)
@@ -119,7 +144,7 @@ describe('redactText (the full deterministic pass)', () => {
     const plain = 'This memo discusses the quarterly roadmap and team morale. Nothing sensitive here.'
     const { text, counts, totalRedactions } = redactText(plain)
     expect(totalRedactions).toBe(0)
-    expect(counts).toEqual({ email: 0, phone: 0, iban: 0, date: 0, url: 0 })
+    expect(counts).toEqual({ email: 0, phone: 0, iban: 0, card: 0, date: 0, url: 0 })
     expect(text).toBe(plain)
   })
 
@@ -155,7 +180,7 @@ describe('redact_document through the gate', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       const out = result.output as RedactDocumentOutput
-      expect(out.totalRedactions).toBe(5)
+      expect(out.totalRedactions).toBe(6)
       expect(out.redactedText).not.toContain('jane.doe@example.com')
       expect(validateToolOutput(redactDocumentTool, result.output)).toEqual([])
     }
@@ -237,9 +262,48 @@ describe('redaction coverage (full-audit-2026-06-28 Phase 1)', () => {
     expect(r.totalRedactions).toBe(0)
     expect(r.text).toContain('Jane Doe') // names are NOT masked (accepted limitation)
     expect(r.text).toContain('42 Main Street') // postal addresses are NOT masked (accepted limitation)
-    // BL-N6 locale asymmetry: an EU-ordered date masks; the US-ordered counterpart LEAKS (redaction
-    // keeps the day-first parseDate default — it does NOT infer locale; that is extraction-only).
+    // U2 (audit §5.7): the BL-N6 locale asymmetry is CLOSED — redaction now masks a date that parses in
+    // EITHER order, so both the EU-ordered and the US-ordered form mask (over-masking is fine here).
     expect(maskDates('signed 31/12/2026').text).toBe('signed [DATE]')
-    expect(maskDates('signed 12/31/2026').text).toBe('signed 12/31/2026') // leaks — documented, not masked
+    expect(maskDates('signed 12/31/2026').text).toBe('signed [DATE]') // was the documented US-order leak
+  })
+})
+
+// U2 (audit §5.7 redaction bullet / §3.4): card PANs, the 0-leading phone false positive, either-order
+// dates, and the read-only counts scan. Detection stays conservative (Luhn-gated cards; reference numbers
+// left intact) — but the accepted BL-N6 date leak is now closed.
+describe('redaction U2 additions', () => {
+  it('redactText masks a card in the fixed order (card before phone) and counts it', () => {
+    const { text, counts, totalRedactions } = redactText('Pay card 4111 1111 1111 1111 or call +43 660 1234567.')
+    expect(counts.card).toBe(1)
+    expect(counts.phone).toBe(1)
+    expect(totalRedactions).toBe(2)
+    expect(text).toContain('[CARD]')
+    expect(text).toContain('[PHONE]')
+    expect(text).not.toContain('4111')
+  })
+
+  it('scanRedactionCandidates returns the same counts as a real redaction, leaking no text', () => {
+    const input = 'Mail jane@example.com, card 4111 1111 1111 1111, IBAN AT61 1904 3002 3457 3201.'
+    expect(scanRedactionCandidates(input)).toEqual(redactText(input).counts)
+    // The scan reports counts only (email 1, card 1, iban 1) — the return type carries no text field.
+    expect(scanRedactionCandidates(input)).toEqual({ email: 1, phone: 0, iban: 1, card: 1, date: 0, url: 0 })
+  })
+
+  it('the card category rides through the tool output schema', async () => {
+    const { ctx } = makeCtx([chunk('Card on file 4111 1111 1111 1111.', 1)])
+    const result = await runSkillTool(redactDocumentTool, {
+      skillId: 'app:document-redaction',
+      input: { documentId: 'd1' },
+      ctx,
+      confirmed: true
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const out = result.output as RedactDocumentOutput
+      expect(out.counts.card).toBe(1)
+      expect(out.redactedText).toContain('[CARD]')
+      expect(validateToolOutput(redactDocumentTool, result.output)).toEqual([])
+    }
   })
 })

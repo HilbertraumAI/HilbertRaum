@@ -735,9 +735,18 @@ export const en = {
     'To redact a document, click the **{button}** button just below the chat box and pick which ' +
     'document to redact, then choose where to save the copy. It works on one document at a time, ' +
     'runs entirely on this device, and masks clearly-formatted personal data — e-mail addresses, ' +
-    'phone numbers, IBANs, dates, and links — reading the whole document. It’s a best-effort first ' +
-    'pass, not a guarantee: it can’t catch names or unusual formats, so review the saved copy ' +
-    'before you share it.',
+    'phone numbers, IBANs, payment-card numbers, dates, and links — reading the whole document. It’s ' +
+    'a best-effort first pass, not a guarantee: it can’t catch names or unusual formats, so review ' +
+    'the saved copy before you share it.',
+  // U2 dry-run (audit §3.4): an INFORMATIONAL "what personal data is in here?" ask over a single document
+  // gets the deterministic per-category counts (COUNTS only — never a detected value) instead of the button
+  // deflection. Runs the same offline detectors the tool would; still no file write.
+  'skills.redactionRouting.scan':
+    'I scanned the whole document for clearly-formatted personal data. Detected — e-mail addresses: ' +
+    '{email}, phone numbers: {phone}, IBANs: {iban}, payment-card numbers: {card}, dates: {date}, ' +
+    'links: {url}. This is a best-effort pattern scan: it can’t catch names, postal addresses, or ' +
+    'unusual formats, so treat these as a floor, not a full inventory. To create a masked copy, click ' +
+    'the **{button}** button just below the chat box and choose where to save it.',
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',

@@ -117,6 +117,14 @@ export interface SkillAnalysisHandler {
    *     it returns no citations/coverage so no breadth badge is shown.
    */
   mode?: 'exhaustive' | 'grounded-whole-doc' | 'grounded-whole-doc-compare' | 'routing'
+  /**
+   * U2 (audit §3.5): a `grounded-whole-doc` handler (share-safe review) whose model verdict is a
+   * PRIVACY gate sets this so the chat path runs the deterministic whole-document PII detectors and
+   * injects their COUNTS summary into the grounded prompt, and — when the model is shown only a
+   * truncated prefix — forbids the "Likely low risk" verdict. Additive/optional; every other handler
+   * omits it (byte-unchanged). Deterministic; no new model call.
+   */
+  injectPiiScan?: boolean
   /** Can this skill answer THIS question over THIS scope? (cheap, pre-flight). */
   applies(input: SkillAnalysisInput): boolean
   /**

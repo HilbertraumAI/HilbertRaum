@@ -40,6 +40,13 @@ to fit the context:
 - Do not invent hidden metadata — warn that it *may* exist.
 - Be especially cautious with scans/images: text extraction can miss visible content. If the document
   is a scan or image-derived OCR, say OCR may be incomplete.
+- Only issue the **"Likely low risk after review"** verdict when you have reviewed the **whole**
+  document. If you were shown only its beginning (a partial-document notice), do not use that verdict —
+  use "Review carefully before sharing" or a stronger one.
+- An automated, offline pattern pre-scan of the **whole** document (counts of e-mails, phone numbers,
+  IBANs, payment-card numbers, dates, links) may be provided above the excerpts. Use its counts to
+  inform your findings; it is a floor, not a ceiling (it cannot see names, addresses, or confidential
+  wording), so never treat "0 found" as "nothing sensitive".
 - Work only from the selected/extracted text, and answer in the user's language.
 
 Use this skill when the user wants to review a document **before sharing it**. Identify visible

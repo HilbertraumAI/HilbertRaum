@@ -141,7 +141,8 @@ password recovery — are documented in
   manifest↔handler pair is a later remediation phase (audit §4.4).
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
-  offline regexes only** — e-mail addresses, phone numbers, IBANs, dates, and web links. There is **no
+  offline regexes only** — e-mail addresses, phone numbers, IBANs, **payment-card numbers**, dates, and
+  web links. There is **no
   ML and no name detection**, so it deliberately **misses** anything without a recognisable pattern:
   most names, postal addresses, unusual number formats, and any text inside images/scans (it sees only
   the extracted chunk text). The detectors are intentionally conservative — they prefer a **false
@@ -153,30 +154,50 @@ password recovery — are documented in
   values never reach any log/audit/`skill_runs` row, and only per-category **counts** are surfaced
   (architecture.md "Skills — design record" §8). A higher-recall redactor (NER, address/name lexicons)
   is a deferred wave.
-  - **Date masking is day-first and four-digit-year only; locale-asymmetric by design
-    (backend-audit-2026-06-27 BL-4; full-audit-2026-06-28 BL-N6).** A date candidate is masked only when
-    the shared `parseDate` (the bank/invoice **day-first** primitive) accepts it, so a **US-ordered**
-    `mm/dd/yyyy` value like `12/31/2026` (read day-first as day 12, month 31 → invalid) is left **unmasked**
-    while its EU counterpart `31/12/2026` masks, and a **two-digit-year** form like `01.02.26` is not even a
-    candidate (the regex requires a 4-digit year). Redaction **deliberately does NOT infer the document's
-    date locale** the way *extraction* now does (full-audit-2026-06-28 BL-N1; see the bank/invoice
-    line-parser note under "Document tasks & summaries") — masking every `parseDate`-valid token with no
-    context is the conservative best-effort posture, and a locale-aware redactor would also mask *more*
-    dates, against the "false-negative over over-masking" stance. The result is asymmetry in
-    **under-detection** of the *output content*; there is **no path where masked text is un-masked or a
-    detected value reaches a log/audit** (the privacy posture is unchanged). A locale-aware / 2-digit-year /
-    opt-in-by-category date matcher is part of the same deferred higher-recall wave.
-  - **Phone and IBAN coverage is broader but still pattern-bound (full-audit-2026-06-28 BL-N4).** Phone
-    masking now also catches **punctuated US/national 3-3-4 numbers** (`555-123-4567`, `1-800-555-1234`,
+  - **Date masking now accepts EITHER field order and a 2-digit year — the BL-N6 leak is closed (U2,
+    audit §5.7).** For *redaction* (unlike extraction, which stays day-first) a candidate is masked when it
+    parses in **day-first OR month-first** order, so a **US-ordered** `mm/dd/yyyy` value like `12/31/2026`
+    now masks alongside its EU counterpart `31/12/2026`, and a **two-digit-year** form like `01.02.26` is a
+    candidate and masks too. **Over-masking a date is the intended posture here** (a privacy-favouring miss
+    is worse than an over-broad mask on a date-shaped token), the inverse of extraction's day-first-only
+    stance — an impossible date (`99.99.9999`) still parses in neither order and is left alone. There is
+    **no path where masked text is un-masked or a detected value reaches a log/audit** (the privacy posture
+    is unchanged). Residual: a locale-aware, opt-in-by-category matcher is still part of the deferred
+    higher-recall wave; the current all-orders masking is deliberately broad.
+  - **Payment-card PANs are masked with a Luhn check (U2, audit §5.7).** A 13–19 digit run in the common
+    print groupings (compact, or single-space/dash-separated groups — `4111 1111 1111 1111`,
+    `4111-1111-1111-1111`) is masked as `[CARD]` when it passes the Luhn mod-10 check with its separators
+    removed. The Luhn gate keeps false positives low; a run outside 13–19 digits (e.g. a 20-digit account
+    number) or one that fails Luhn is left alone. Cards are masked **before** dates and phones so a PAN is
+    never split by them, and **after** IBANs so an IBAN's BBAN digits are not re-read as a card. A card that
+    fails Luhn (or one printed in an unusual grouping) is a documented miss — the conservative posture stands.
+  - **Phone and IBAN coverage is broader but still pattern-bound (full-audit-2026-06-28 BL-N4; U2).** Phone
+    masking catches **punctuated US/national 3-3-4 numbers** (`555-123-4567`, `1-800-555-1234`,
     `555.123.4567`) on top of the `+`-country and leading-`0` forms — but punctuation is **required** (a
     bare 10-digit run is left alone to avoid masking account/ID numbers), so a space-only or run-together
-    national number can still slip. IBAN detection is now **case-insensitive** (a lowercase compact
-    `de89…` is masked), but a *mixed-case space-grouped* IBAN (unconventional) is not specially handled.
-    The case-insensitive compact candidate matches a standalone alphanumeric run and is re-validated by
-    per-country length after compacting, so a real IBAN **glued** to following alphanumerics with no
-    separator (`de89…013000extra`, which does not occur in space-separated extracted text) fails the length
-    check for a known country and is left unmasked — a documented residual, surfaced by the adversarial
-    review. These remain best-effort regex detectors — the conservative miss-over-over-mask posture stands.
+    national number can still slip. **U2 further guards the 0-leading branch (audit §5.7):** a
+    **separator-less run of ≥9 digits** that begins with `0` is a reference/account number (a 0-leading
+    invoice reference), **not** a phone, so it is left unmasked — this fixed the share-flow false positive
+    that corrupted invoices; a 0-leading number *with* a separator still masks. The tradeoff is that a
+    run-together 9+-digit 0-leading phone is now missed (the privacy-favouring choice over corrupting a
+    figure). IBAN detection is **case-insensitive** (a lowercase compact `de89…` is masked), but a
+    *mixed-case space-grouped* IBAN (unconventional) is not specially handled. The case-insensitive compact
+    candidate matches a standalone alphanumeric run and is re-validated by per-country length after
+    compacting, so a real IBAN **glued** to following alphanumerics with no separator (`de89…013000extra`,
+    which does not occur in space-separated extracted text) fails the length check for a known country and
+    is left unmasked — a documented residual. These remain best-effort regex detectors — the conservative
+    miss-over-over-mask posture stands.
+  - **Informational dry-run + share-safe pre-scan (U2, audit §3.4/§3.5).** An INFORMATIONAL redaction
+    question ("welche personenbezogenen Daten enthält das Dokument?", "what personal data is in here?")
+    over a single document now gets a read-only **counts** answer (`scanRedactionCandidates` — the same
+    detectors, run without writing a copy; per-category counts only, never a detected value) instead of the
+    button deflection; an *action* ask keeps the deflection (the write tool stays user-initiated). The
+    **share-safe-review** whole-document turn injects a deterministic whole-document PII count summary into
+    the model prompt and **gates its "Likely low risk after review" verdict on non-truncated coverage** —
+    a truncated read (the model was shown only the beginning) forbids the low-risk verdict. Residual: the
+    verdict-gate is injected on the standard whole-document path; a share-safe review of an over-budget
+    document rescued via the deep-index **tree** map-reduce does not carry the pre-scan block (an edge case
+    — its own coverage stamp still marks truncation).
 
 ## Spec features intentionally not built (MVP scope)
 
@@ -628,7 +649,9 @@ password recovery — are documented in
     so a foreign-format date in a payee MEMO can no longer flip the whole document's order (which used to
     silently day/month-swap every dotted booking date); a MONEY-less header/label line (an invoice `Invoice
     date 06/15/2026`, a statement period) still votes on any date it carries, so labeled US-invoice dates are
-    detected. **Redaction does not infer locale** (it stays day-first — see the redaction bullet's BL-N6 note).
+    detected. **Redaction takes the opposite stance** — it masks a date-shaped token that parses in EITHER
+    order (over-masking is privacy-favouring there; see the redaction date bullet, U2), rather than inferring
+    a single locale.
   - **Two-digit-year and bare dates complete against a document year anchor; cross-year statements roll over
     (skills-remediation R5, audit §5.7).** A `dd.mm.yy` (2-digit year) or a BARE `dd.mm.` date now parses on
     the plain/CSV path (previously `parseDate` dropped BOTH — a `dd.mm.yy` CSV statement extracted **zero

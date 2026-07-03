@@ -159,6 +159,92 @@ describe('redaction routing handler — run()', () => {
   })
 })
 
+// U2 dry-run (audit §3.4): an INFORMATIONAL "which personal data is in here?" ask — which the
+// deterministic detectors can answer — gets the offline per-category COUNTS (never a detected value)
+// instead of the button deflection. An ACTION ask keeps the deflection; a multi-doc scope falls back.
+describe('redaction routing handler — informational dry-run (U2)', () => {
+  it('applies() on a German informational PII ask (declined "personenbezogenen") the route vocab misses', () => {
+    const db = freshDb()
+    const id = seedDoc(db)
+    expect(
+      documentRedactionAnalysisHandler.applies({
+        db,
+        scope: { documentIds: [id] },
+        question: 'Welche personenbezogenen Daten enthält das Dokument?'
+      })
+    ).toBe(true)
+  })
+
+  it('reports the per-category counts (COUNTS only, no PII content) and names the button', async () => {
+    const db = freshDb()
+    const id = seedDoc(db) // chunk holds one phone number: "+49 170 1234567"
+    const res = await documentRedactionAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'what personal data does this document contain?')
+    )
+    const button = tr('chat.skill.tool.redactDocument')
+    expect(res.answer).toBe(
+      tr('skills.redactionRouting.scan', { button, email: 0, phone: 1, iban: 0, card: 0, date: 0, url: 0 })
+    )
+    // The dry-run is NOT the button deflection, names the button, makes no breadth claim…
+    expect(res.answer).not.toBe(tr('skills.redactionRouting.answer', { button }))
+    expect(res.answer).toContain(button)
+    expect(res.citations).toEqual([])
+    expect(res.coverage).toBeUndefined()
+    // …and leaks no detected value — the raw phone number never appears (only its count does).
+    expect(res.answer).not.toContain('+49 170 1234567')
+  })
+
+  it('answers the dry-run in German (du-form)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db)
+    const res = await documentRedactionAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Welche personenbezogenen Daten sind enthalten?', 'de')
+    )
+    expect(res.answer).toBe(
+      trDe('skills.redactionRouting.scan', {
+        button: trDe('chat.skill.tool.redactDocument'),
+        email: 0,
+        phone: 1,
+        iban: 0,
+        card: 0,
+        date: 0,
+        url: 0
+      })
+    )
+  })
+
+  it('an ACTION ask keeps the button deflection (not the dry-run)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db)
+    const res = await documentRedactionAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'anonymize the personal data in this document')
+    )
+    const button = tr('chat.skill.tool.redactDocument')
+    expect(res.answer).toBe(tr('skills.redactionRouting.answer', { button }))
+  })
+
+  it('an informational ask over MULTIPLE documents falls back to the deflection (which document?)', async () => {
+    const db = freshDb()
+    const a = seedDoc(db)
+    const b = seedDoc(db)
+    const res = await documentRedactionAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [a, b] }, 'what personal data is in these documents?')
+    )
+    const button = tr('chat.skill.tool.redactDocument')
+    expect(res.answer).toBe(tr('skills.redactionRouting.answerMulti', { button }))
+  })
+
+  it('the dry-run runs NO tool and emits NO audit event (read-only count)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db)
+    const ctx = ctxFor(db, { documentIds: [id] }, 'welche personenbezogenen daten enthält das dokument?')
+    await documentRedactionAnalysisHandler.run!(ctx)
+    expect(ctx.events).toEqual([])
+    const runs = db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
+    expect(runs.n).toBe(0)
+  })
+})
+
 describe('analysis-handler registry — document-redaction', () => {
   it('registerBuiltinSkillAnalysisHandlers wires the redaction routing handler', () => {
     clearSkillAnalysisHandlers()

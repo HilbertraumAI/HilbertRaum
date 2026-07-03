@@ -307,6 +307,9 @@ export function registerRagIpc(ctx: AppContext): void {
                   // context, so the assistant row carries the skill stamp + `capped` coverage.
                   skill: turnSkill,
                   wholeDocument: { documentId },
+                  // U2 (audit §3.5): share-safe review injects a deterministic whole-document PII count
+                  // summary into the prompt and gates its low-risk verdict on non-truncated coverage.
+                  wholeDocumentPiiScan: analysisHandler.injectPiiScan === true,
                   onToken: sendToken,
                   // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
                   // answer with the honest scope notice (undefined ⇒ byte-unchanged).

@@ -95,7 +95,13 @@ function makeWholeDocHandler(skillId: SkillVocabId): SkillAnalysisHandler {
 // this meeting" gap. what-changed compares BOTH whole versions over EXACTLY TWO in-scope documents.
 export const meetingProtocolAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('meeting-protocol')
 export const contractBriefAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('contract-brief')
-export const shareSafeReviewAnalysisHandler: SkillAnalysisHandler = makeWholeDocHandler('share-safe-review')
+// share-safe review's verdict is a PRIVACY gate — so its whole-doc turn additionally runs the
+// deterministic PII detectors over the WHOLE document and injects their counts into the prompt, and gates
+// the low-risk verdict on non-truncated coverage (U2, audit §3.5). Only this whole-doc handler sets it.
+export const shareSafeReviewAnalysisHandler: SkillAnalysisHandler = {
+  ...makeWholeDocHandler('share-safe-review'),
+  injectPiiScan: true
+}
 export const deadlineObligationAnalysisHandler: SkillAnalysisHandler =
   makeWholeDocHandler('deadline-obligation-finder')
 export const whatChangedAnalysisHandler: SkillAnalysisHandler = makeCompareHandler('what-changed')

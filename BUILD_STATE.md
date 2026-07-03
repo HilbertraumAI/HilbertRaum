@@ -6,6 +6,53 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation U2: PII detectors — Luhn card detector + fixed 0-leading phone FP + either-order date masking + read-only scan reused for a redaction dry-run and a share-safe pre-pass — branch `fix/skills-u2`, UNMERGED.**
+Track-U (plan §U2; audit §5.7 redaction bullet + §3.5 + §3.4), branched off `fix/skills-u1` (deps: none; the
+plan/audit docs live on the phase-branch chain, not `master`). Offline / pure / no new deps / **no schema
+change** / **no extractor-version bump** (redaction is read-side — the persisted extract is byte-identical).
+**Root cause:** the deterministic redaction detectors had real gaps (card PANs passed unmasked; a 0-leading
+reference number was mis-masked as `[PHONE]`, corrupting invoices in the share flow; US-order/2-digit-year
+dates leaked), AND the SAME whole-document detectors that already exist were wired only to the write-a-copy
+flow — so an informational "which personal data is in here?" got a button deflection instead of an answer
+(§3.4), and share-safe review could issue a "Likely low risk" privacy verdict from a truncated prefix while
+the deterministic scan sat unused (§3.5). **Fix (detectors, `tools/redaction.ts`):** new `[CARD]` category —
+a 13–19-digit run (compact / single-space / dash grouping) masked when it passes a **Luhn** mod-10 check with
+separators stripped; ordered **after IBAN** (so an IBAN's BBAN digits aren't re-read) and **before date/phone**
+(so a PAN is never split); a >19-digit account number has its `\b` only at the ends ⇒ no 13–19 subrun matches
+⇒ left alone. `maskPhones` gains a validator: a **separator-less run of ≥9 digits beginning with `0`** is a
+reference/account number, left unmasked (a 0-leading number WITH a separator still masks; `+`/US branches
+untouched). `maskDates` now masks a candidate that parses in **either** field order (day-first OR month-first)
+with a fixed 2000-century anchor for 2-digit years — US `12/31/2026` and `01.02.26` now mask (over-masking is
+the redaction posture, the inverse of extraction's day-first-only stance); `99.99.9999` still parses in
+neither order. New read-only `scanRedactionCandidates(text) → counts` reuses `redactText`'s pipeline (counts
+IDENTICAL to a real run — same detector order), COUNTS only, no text leaked. **Fix (dry-run, `analysis/
+redaction.ts`):** `applies()` now OR-s an `isInformationalPiiQuestion` predicate (a PII topic — `personenbezog`/
+`personal data`/`sensitive (data\|information)`/`sensible daten`/`pii`, deliberately NOT the legal words
+`datenschutz`/`dsgvo`/`gdpr` — with NO redaction action verb), so a declined German "personenbezogenen" the
+route vocab misses still fires WITHOUT touching the W5/U4 vocabulary; `run()` reads the single in-scope doc
+(faithful `readDocumentSegments`, else a direct chunk read) and returns per-category **counts** (`skills.
+redactionRouting.scan`, EN+DE du-form) — an action ask, a multi-doc scope, or an unreadable doc keeps the
+button deflection. **Fix (share-safe, `rag/index.ts` + `whole-doc-skills.ts` + `analysis/types.ts` +
+`registerRagIpc.ts`):** the share-safe handler sets `injectPiiScan: true`; the chat path passes
+`wholeDocumentPiiScan` to `generateGroundedAnswer`, which runs `scanWholeDocumentForPii` (ALL chunks,
+de-overlapped — the deterministic scan sees the whole doc even when the model's excerpt view is truncated)
+and injects `buildShareSafeScanBlock(counts, truncated)` into the grounded prompt via a new optional
+`buildGroundedPrompt` analysis-block param; when the read is **truncated** the block FORBIDS the "Likely low
+risk after review" verdict. SKILL.md §1 wording gates the same verdict (prompt rule + skill wording both).
+**Data contract:** `RedactionCounts`/`MASK_TOKENS`/`REDACT_OUTPUT_SCHEMA` gain `card` — contained: only
+`totalRedactions`/`redactedText` are consumed downstream (`run.ts`), never per-category, so the outcome
+channel is unchanged. The `[CARD]` token carries no digit ⇒ redaction stays idempotent. **+19 net-new tests**
+(card Luhn + compact/spaced/dashed + 20-digit reject; 0-leading reference guard vs separated phone;
+either-order + 2-digit dates; scan==redact parity; card through the output schema; dry-run counts EN+DE +
+action-keeps-deflection + multi-doc fallback + no-tool/no-audit; `buildShareSafeScanBlock` ×truncation;
+`scanWholeDocumentForPii` across chunks; end-to-end scan-block injection + verdict gate on a truncated doc +
+fit doc no-gate); two pre-existing redaction tests updated to the FIXED behavior (US-order date now masks;
+counts include `card`); full suite green (**2972** passed / 41 skipped) + typecheck. **Residuals (documented
+in known-limitations):** a run-together 9+-digit 0-leading phone is now missed (privacy-favouring over
+corrupting a figure); a Luhn-failing or unusually-grouped card is missed; the share-safe pre-scan block is on
+the standard whole-doc path only — an over-budget doc rescued via the deep-index tree map-reduce doesn't carry
+it (its own coverage stamp still marks truncation). Next: U3 (skill-selection UX) or per the recommended order._
+
 _2026-07-03 — **Skills remediation U1: honest completeness — droppedRowCount + gated "whole doc" claims + softened badge + honest empty copy + fence reorder/log — branch `fix/skills-u1`, UNMERGED.**
 Track-U (plan §U1; audit §2.3 + ux-10/ux-11 + §3.6), branched off `fix/skills-w5` (deps: R2; the plan/audit
 docs live on the phase-branch chain, not `master`). Offline / pure / no new deps. **Additive schema** only

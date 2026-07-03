@@ -750,9 +750,19 @@ export const de: Record<keyof typeof en, string> = {
     'aus, welches Dokument geschwärzt werden soll, und lege anschließend fest, wo die Kopie ' +
     'gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft vollständig auf diesem ' +
     'Gerät und maskiert klar erkennbare personenbezogene Daten – E-Mail-Adressen, Telefonnummern, ' +
-    'IBANs, Datumsangaben und Links – und liest dabei das ganze Dokument. Es ist ein bestmöglicher ' +
-    'erster Durchlauf, keine Garantie: Namen oder ungewöhnliche Formate erkennt sie nicht – prüfe ' +
-    'die gespeicherte Kopie, bevor du sie teilst.',
+    'IBANs, Kartennummern, Datumsangaben und Links – und liest dabei das ganze Dokument. Es ist ein ' +
+    'bestmöglicher erster Durchlauf, keine Garantie: Namen oder ungewöhnliche Formate erkennt sie ' +
+    'nicht – prüfe die gespeicherte Kopie, bevor du sie teilst.',
+  // U2 Vorschau (Audit §3.4): eine INFORMATIVE Frage ("welche personenbezogenen Daten…") über ein einzelnes
+  // Dokument liefert die deterministischen Anzahlen je Kategorie (NUR Anzahlen – nie ein erkannter Wert)
+  // statt der Weiterleitung auf die Schaltfläche. Dieselben Offline-Detektoren wie das Werkzeug; kein Schreiben.
+  'skills.redactionRouting.scan':
+    'Ich habe das ganze Dokument nach klar erkennbaren personenbezogenen Daten durchsucht. Gefunden – ' +
+    'E-Mail-Adressen: {email}, Telefonnummern: {phone}, IBANs: {iban}, Kartennummern: {card}, ' +
+    'Datumsangaben: {date}, Links: {url}. Das ist eine bestmögliche Mustererkennung: Namen, Adressen ' +
+    'oder ungewöhnliche Formate erkennt sie nicht – sieh das als Untergrenze, nicht als vollständige ' +
+    'Liste. Für eine geschwärzte Kopie klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
+    'wähle, wo die Kopie gespeichert werden soll.',
 
   // ---- Models ----
   'models.title': 'KI-Modell',

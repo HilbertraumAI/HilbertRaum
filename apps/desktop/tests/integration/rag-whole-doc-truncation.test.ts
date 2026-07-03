@@ -18,10 +18,12 @@ import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
 import { appendMessage, createConversation, CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
 import {
+  buildShareSafeScanBlock,
   documentApproxTokenTotal,
   generateGroundedAnswer,
   ragSettingsFrom,
   retrieveWholeDocument,
+  scanWholeDocumentForPii,
   wholeDocumentBudgetTokens,
   wholeDocumentFitBudgetTokens
 } from '../../src/main/services/rag'
@@ -290,5 +292,105 @@ describe('whole-document budget honesty at the default 4096 context (W1, audit �
     expect(msg.coverage?.truncated).toBe(false)
     const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
     expect(userTurn).not.toContain('PARTIAL DOCUMENT')
+  })
+})
+
+// U2 (audit §3.5): the share-safe review whole-doc turn injects a deterministic whole-document PII count
+// summary into the grounded prompt, and gates the "Likely low risk" verdict on non-truncated coverage.
+describe('share-safe PII pre-scan injection (U2, audit §3.5)', () => {
+  it('buildShareSafeScanBlock reports counts and gates the verdict ONLY when truncated', () => {
+    const counts = { email: 2, phone: 0, iban: 1, card: 0, date: 3, url: 0 }
+    const fit = buildShareSafeScanBlock(counts, false)
+    // Counts only (never a value); no verdict gate when the whole document fit.
+    expect(fit).toContain('e-mail addresses: 2')
+    expect(fit).toContain('IBANs: 1')
+    expect(fit).toContain('payment-card numbers: 0')
+    expect(fit).toContain('dates: 3')
+    expect(fit).not.toContain('MUST NOT')
+    expect(fit).not.toContain('Likely low risk')
+
+    // A truncated read FORBIDS the low-risk verdict (privacy verdict rests on whole-document coverage).
+    const capped = buildShareSafeScanBlock(counts, true)
+    expect(capped).toContain('e-mail addresses: 2')
+    expect(capped).toContain('MUST NOT')
+    expect(capped).toContain('Likely low risk after review')
+  })
+
+  it('scanWholeDocumentForPii counts PII across ALL chunks (whole document, not budget-capped)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-scanpii-'))
+    const db = openDatabase(join(root, 'test.sqlite'))
+    seedSettings(db)
+    const docId = 'doc-scan'
+    db.prepare(
+      `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
+       VALUES (?, 'Letter', 'indexed', 'text/plain', 1, '2026-07-02T00:00:00.000Z', '2026-07-02T00:00:00.000Z')`
+    ).run(docId)
+    insertChunk(db, docId, 0, 'Contact us at team@example.com for details.', 1, null)
+    insertChunk(db, docId, 1, 'Bank: IBAN AT61 1904 3002 3457 3201 and card 4111 1111 1111 1111.', 2, null)
+    const counts = scanWholeDocumentForPii(db, docId)
+    expect(counts.email).toBe(1)
+    expect(counts.iban).toBe(1)
+    expect(counts.card).toBe(1)
+    expect(counts.phone).toBe(0)
+  })
+
+  it('injects the whole-document scan block into the prompt AND gates the verdict on a truncated doc', async () => {
+    const h = await makeHarness() // ~11-page doc, over budget ⇒ truncated
+    const runtime = capturingRuntime()
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+    const msg = (await generateGroundedAnswer(
+      h.db,
+      runtime,
+      new MockEmbedder(),
+      h.conversationId,
+      QUESTION,
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: h.docId }, wholeDocumentPiiScan: true }
+    )) as Message
+
+    expect(msg.coverage?.truncated).toBe(true)
+    const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
+    // The deterministic pre-scan summary rides in the user turn (never the system prompt)…
+    expect(userTurn).toContain('AUTOMATED PRE-SCAN')
+    expect(userTurn).toContain('payment-card numbers:')
+    // …and the truncated read forbids the low-risk verdict.
+    expect(userTurn).toContain('MUST NOT')
+    expect(userTurn).toContain('Likely low risk after review')
+    const systemTurn = runtime.lastMessages.find((m) => m.role === 'system')?.content ?? ''
+    expect(systemTurn).not.toContain('AUTOMATED PRE-SCAN')
+  })
+
+  it('a small (fitting) document injects the scan block WITH counts and NO verdict gate', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-sharesafe-small-'))
+    const workspacePath = join(root, 'workspace')
+    mkdirSync(workspacePath, { recursive: true })
+    const db = openDatabase(join(root, 'test.sqlite'))
+    seedSettings(db)
+    const storeDir = documentsDir(workspacePath)
+    const docPath = join(root, 'letter.txt')
+    writeFileSync(docPath, 'Please review before sharing. Reach me at jane@example.com.', 'utf8')
+    const doc = createQueuedDocument(db, docPath)
+    await processDocument(db, storeDir, doc.id, { embedder: new MockEmbedder() })
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [doc.id] }
+    })
+    const runtime = capturingRuntime()
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Is this safe to share?' })
+    const msg = (await generateGroundedAnswer(
+      db,
+      runtime,
+      new MockEmbedder(),
+      conv.id,
+      'Is this safe to share?',
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: doc.id }, wholeDocumentPiiScan: true }
+    )) as Message
+
+    expect(msg.coverage?.truncated).toBe(false)
+    const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
+    expect(userTurn).toContain('AUTOMATED PRE-SCAN')
+    expect(userTurn).toContain('e-mail addresses: 1') // the planted address was detected (as a COUNT)
+    expect(userTurn).not.toContain('MUST NOT') // fit ⇒ no verdict gate
   })
 })

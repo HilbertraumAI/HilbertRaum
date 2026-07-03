@@ -4,7 +4,7 @@ import type {
   SkillTool,
   ToolResult
 } from '../../../../shared/types'
-import { parseDate } from './money'
+import { parseDate, type DateAnchor } from './money'
 
 // Document-redaction Tier-2 tool (architecture.md "Skills — design record" §8, Phase S11d). Kept OUT
 // of the generic `tool-registry.ts` so redaction specifics never leak into the skills infrastructure
@@ -18,7 +18,7 @@ import { parseDate } from './money'
 //
 // HONESTY (the privacy-aligned posture): the detection is DETERMINISTIC, OFFLINE, and REGEX-ONLY (no
 // ML, no name detection). It is a BEST-EFFORT aid, NOT a guarantee — it masks clearly-shaped personal
-// data (e-mail, phone, IBAN, date, URL) and deliberately MISSES anything without a recognisable
+// data (e-mail, phone, IBAN, payment-card number, date, URL) and deliberately MISSES anything without a recognisable
 // pattern (most names, addresses, unusual formats) rather than corrupting text by over-matching. The
 // SKILL.md body and docs/known-limitations.md say so plainly; we never imply "fully anonymized".
 //
@@ -28,7 +28,7 @@ import { parseDate } from './money'
 
 // ---- Categories + the fixed mask tokens ----
 
-export type RedactionCategory = 'email' | 'phone' | 'iban' | 'date' | 'url'
+export type RedactionCategory = 'email' | 'phone' | 'iban' | 'card' | 'date' | 'url'
 
 /** The fixed token each category is replaced with. Tokens carry no digit/@/scheme, so masking is
  *  idempotent — re-running over already-masked text matches nothing and adds no further redactions. */
@@ -36,6 +36,7 @@ export const MASK_TOKENS: Record<RedactionCategory, string> = {
   email: '[EMAIL]',
   phone: '[PHONE]',
   iban: '[IBAN]',
+  card: '[CARD]',
   date: '[DATE]',
   url: '[URL]'
 }
@@ -44,6 +45,8 @@ export interface RedactionCounts {
   email: number
   phone: number
   iban: number
+  /** Payment-card PANs (13–19 digits, Luhn-validated) — U2, audit §5.7 redaction bullet. */
+  card: number
   date: number
   url: number
 }
@@ -96,6 +99,16 @@ const IBAN_LENGTHS: Record<string, number> = {
   HU: 28, IE: 22, IT: 27, LI: 21, LU: 20, NL: 18, NO: 15, PL: 28, PT: 25, SE: 24, SI: 19, SK: 24
 }
 
+// Payment-card PAN (U2, audit §5.7 redaction bullet): a 13–19 digit run in the common print groupings —
+// compact, or in groups separated by SINGLE spaces or dashes (`4111 1111 1111 1111`, `4111-1111-…`). The
+// candidate is Luhn-validated in `maskCards`, so a random 13–19 digit account/ID number is left alone
+// (over-masking a real non-card number would still be a privacy-safe redaction, but Luhn keeps the false
+// positives low). Linear by construction: each `(?:[ -]?\d)` iteration consumes exactly one digit plus an
+// optional single separator (no nested unbounded quantifier ⇒ no ReDoS). A run of >19 digits has its `\b`
+// only at the ends, so no 13–19 subrun is `\b`-terminated ⇒ a long account number is NOT masked as a card.
+// Cards are masked BEFORE dates and phones (see redactText) so a 13–19 digit run is never split by them.
+const CARD_CANDIDATE_RE = /\b\d(?:[ -]?\d){12,18}\b/g
+
 // Phone: conservative international/German/US shapes only — (a) a `+`-prefixed country code, (b) a
 // leading `0`, then 7–15 digits with optional single separators, OR (c) a US/national 3-3-4 number that
 // is PUNCTUATED ("555-123-4567", "1-800-555-1234", "555.123.4567"), optional leading "1" country code
@@ -104,12 +117,41 @@ const IBAN_LENGTHS: Record<string, number> = {
 // triple ("100 200 3000") and a slashed date are left alone. Plain numbers (amounts, years, account
 // numbers without a leading 0) are intentionally NOT matched. Dates are masked BEFORE phones (see
 // redactText) so a dotted date like "01.02.2026" can never be eaten here.
+//
+// The 0-leading branch is post-validated in `maskPhones` (U2, audit §5.7): a SEPARATOR-LESS run of ≥9
+// digits that begins with `0` is a reference/account number (a 0-leading invoice reference), NOT a phone —
+// masking it corrupted invoices in the share flow. Such a bare run is therefore left unmasked; a 0-leading
+// number that carries a separator (a printed phone) still masks, and the `+`/US branches are unaffected.
 const PHONE_RE =
   /(?<!\d)(?:\+\d{1,3}[\s.\-/]?\d(?:[\s.\-/]?\d){5,13}|0\d(?:[\s.\-/]?\d){5,12}|(?:1[.\-])?\d{3}[.\-]\d{3}[.\-]\d{4})(?!\d)/g
 
-// Date candidate: the three supported printed forms; each is re-validated with the shared `parseDate`
-// (the bank/invoice date primitive) so an impossible date like 99/99/9999 is left untouched.
-const DATE_CANDIDATE_RE = /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{4}\b/g
+// Date candidate: ISO plus dotted/slashed forms with a 4- OR 2-digit year (U2, audit §5.7 — 2-digit-year
+// birthdates used to pass). Each is re-validated in `maskDates`, which masks a candidate that parses in
+// EITHER field order (over-masking a date is fine for redaction — unlike extraction, which stays day-first).
+const DATE_CANDIDATE_RE = /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./](?:\d{4}|\d{2})\b/g
+
+// A fixed anchor so `parseDate` accepts a 2-digit year (it needs a document century, R5). Redaction masks
+// date-SHAPE, never the value, so any century works — the anchor month is irrelevant (candidates always
+// carry a year, so the bare-date month-rollover path is never taken).
+const REDACTION_DATE_ANCHOR: DateAnchor = { year: 2000, month: 1 }
+
+/** Luhn (mod-10) check for a bare digit string, plus the card length window (13–19). */
+function luhnValid(digits: string): boolean {
+  if (digits.length < 13 || digits.length > 19) return false
+  let sum = 0
+  let alt = false
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48
+    if (d < 0 || d > 9) return false
+    if (alt) {
+      d *= 2
+      if (d > 9) d -= 9
+    }
+    sum += d
+    alt = !alt
+  }
+  return sum % 10 === 0
+}
 
 /** Mask every e-mail address; returns the new text and the match count. */
 export function maskEmails(text: string): { text: string; count: number } {
@@ -149,21 +191,45 @@ export function maskIbans(text: string): { text: string; count: number } {
   return { text: out, count }
 }
 
-/** Mask every phone number (conservative shapes only — see PHONE_RE). */
+/** Mask every payment-card PAN — a 13–19 digit candidate (compact / space- / dash-grouped) that passes
+ *  the Luhn check with its separators removed. A non-card number (fails Luhn, or 20+ digits) is left
+ *  alone (U2, audit §5.7). Masked BEFORE dates/phones so a 13–19 digit run is never split by them. */
+export function maskCards(text: string): { text: string; count: number } {
+  let count = 0
+  const out = text.replace(CARD_CANDIDATE_RE, (m) => {
+    if (!luhnValid(m.replace(/[ -]/g, ''))) return m
+    count++
+    return MASK_TOKENS.card
+  })
+  return { text: out, count }
+}
+
+/** Mask every phone number (conservative shapes only — see PHONE_RE). The 0-leading branch is guarded:
+ *  a separator-less run of ≥9 digits beginning with `0` is a reference/account number, not a phone, so
+ *  it is left unmasked (U2, audit §5.7 — the share-flow invoice-corruption false positive). */
 export function maskPhones(text: string): { text: string; count: number } {
   let count = 0
-  const out = text.replace(PHONE_RE, () => {
+  const out = text.replace(PHONE_RE, (m) => {
+    const hasSeparator = /[\s.\-/]/.test(m)
+    if (m.startsWith('0') && !hasSeparator && m.replace(/\D/g, '').length >= 9) return m
     count++
     return MASK_TOKENS.phone
   })
   return { text: out, count }
 }
 
-/** Mask every date in a supported printed form, validated with the shared `parseDate`. */
+/** Mask every date in a supported printed form. For REDACTION the validator accepts EITHER field order
+ *  (day-first OR month-first) and a 2- or 4-digit year: a US-ordered `03/15/2026` or a 2-digit-year
+ *  birthdate `01/02/26` masks (U2, audit §5.7). Over-masking a date is acceptable here (privacy-favouring)
+ *  — unlike extraction, which stays day-first. An impossible date (`99.99.9999`) parses in neither order,
+ *  so it is left untouched. */
 export function maskDates(text: string): { text: string; count: number } {
   let count = 0
   const out = text.replace(DATE_CANDIDATE_RE, (m) => {
-    if (parseDate(m) !== null) {
+    if (
+      parseDate(m, 'dmy', REDACTION_DATE_ANCHOR) !== null ||
+      parseDate(m, 'mdy', REDACTION_DATE_ANCHOR) !== null
+    ) {
       count++
       return MASK_TOKENS.date
     }
@@ -174,11 +240,12 @@ export function maskDates(text: string): { text: string; count: number } {
 
 /**
  * Redact a whole text deterministically. The detectors run in a FIXED order so masks never overlap:
- *   email → url → iban → date → phone.
+ *   email → url → iban → card → date → phone.
  * Rationale for the order: URLs may embed numbers/dates, so they are masked whole first; IBANs are
- * masked before phones so a phone pattern can't eat an IBAN's tail; DATES are masked before PHONES so
- * a dotted date (`01.02.2026`, which a 0-leading phone pattern would otherwise match) is gone first.
- * Each mask token contains no digit/`@`/scheme, so later detectors never match inside an inserted
+ * masked before the pure-digit card scan so an IBAN's BBAN digits aren't re-read as a card; CARDS are
+ * masked before dates and phones so a 13–19 digit PAN is never split by them; DATES are masked before
+ * PHONES so a dotted date (`01.02.2026`, which a 0-leading phone pattern would otherwise match) is gone
+ * first. Each mask token contains no digit/`@`/scheme, so later detectors never match inside an inserted
  * token — which also makes redaction IDEMPOTENT (re-running adds nothing).
  */
 export function redactText(input: string): {
@@ -187,7 +254,7 @@ export function redactText(input: string): {
   totalRedactions: number
 } {
   let text = input
-  const counts: RedactionCounts = { email: 0, phone: 0, iban: 0, date: 0, url: 0 }
+  const counts: RedactionCounts = { email: 0, phone: 0, iban: 0, card: 0, date: 0, url: 0 }
 
   const e = maskEmails(text)
   text = e.text
@@ -198,6 +265,9 @@ export function redactText(input: string): {
   const i = maskIbans(text)
   text = i.text
   counts.iban = i.count
+  const c = maskCards(text)
+  text = c.text
+  counts.card = c.count
   const d = maskDates(text)
   text = d.text
   counts.date = d.count
@@ -205,8 +275,19 @@ export function redactText(input: string): {
   text = p.text
   counts.phone = p.count
 
-  const totalRedactions = counts.email + counts.phone + counts.iban + counts.date + counts.url
+  const totalRedactions =
+    counts.email + counts.phone + counts.iban + counts.card + counts.date + counts.url
   return { text, counts, totalRedactions }
+}
+
+/**
+ * Read-only PII scan (U2, audit §3.4/§3.5): the per-category COUNTS a redaction WOULD produce, without
+ * exposing the redacted text. It runs the full `redactText` pipeline (same detector order, so the counts
+ * are identical to a real run — dates masked before phones etc.) and returns only the counts. Used by the
+ * redaction handler's informational dry-run answer and by the share-safe-review whole-document pre-scan;
+ * both surface COUNTS only — never a detected value (§6 content boundary). */
+export function scanRedactionCandidates(text: string): RedactionCounts {
+  return redactText(text).counts
 }
 
 // ---- The output contract (the `JsonSchema` subset) ----
@@ -220,11 +301,12 @@ const REDACT_OUTPUT_SCHEMA: JsonSchema = {
     counts: {
       type: 'object',
       additionalProperties: false,
-      required: ['email', 'phone', 'iban', 'date', 'url'],
+      required: ['email', 'phone', 'iban', 'card', 'date', 'url'],
       properties: {
         email: { type: 'integer', minimum: 0 },
         phone: { type: 'integer', minimum: 0 },
         iban: { type: 'integer', minimum: 0 },
+        card: { type: 'integer', minimum: 0 },
         date: { type: 'integer', minimum: 0 },
         url: { type: 'integer', minimum: 0 }
       }
@@ -245,7 +327,7 @@ const REDACT_OUTPUT_SCHEMA: JsonSchema = {
 export const redactDocumentTool: SkillTool = {
   name: 'redact_document',
   description:
-    'Read the selected document and produce a copy with detectable personal data (e-mails, phone numbers, IBANs, dates, links) masked, for you to save. Deterministic, offline, best-effort — not a guarantee. Requires your confirmation; you choose where the file is written.',
+    'Read the selected document and produce a copy with detectable personal data (e-mails, phone numbers, IBANs, payment-card numbers, dates, links) masked, for you to save. Deterministic, offline, best-effort — not a guarantee. Requires your confirmation; you choose where the file is written.',
   permissions: ['read-selected-docs', 'export-file'],
   inputSchema: {
     type: 'object',
