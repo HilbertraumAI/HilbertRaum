@@ -356,6 +356,30 @@ export async function verifyDownloadedFile(
 
 export type FetchFn = typeof fetch
 
+/**
+ * A `Range` resume whose server 206 `Content-Range` does not START at the byte we asked to continue
+ * from — appending its body onto the existing `.part` would corrupt the file. The caller (`downloads.ts`)
+ * discards the `.part` so the next attempt restarts clean rather than re-appending onto a poisoned
+ * prefix (BUG dl-size-cap-2026-07-03 hardening).
+ */
+export class ResumeOffsetMismatchError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ResumeOffsetMismatchError'
+  }
+}
+
+/**
+ * Parse the START byte of a `Content-Range: bytes <start>-<end>/<total>` response header. Returns null
+ * when the header is absent or unsatisfiable (`bytes * /<total>`) — i.e. when the resume offset cannot
+ * be validated and the append is trusted as before.
+ */
+export function parseContentRangeStart(header: string | null | undefined): number | null {
+  if (!header) return null
+  const m = /^\s*bytes\s+(\d+)-/i.exec(header)
+  return m ? Number(m[1]) : null
+}
+
 export interface DownloadDeps {
   /** Injected fetch — tests supply a fake; production passes the global `fetch`. */
   fetchImpl?: FetchFn
@@ -371,6 +395,15 @@ export interface DownloadDeps {
    * and restarts. Default false = always truncate.
    */
   append?: boolean
+  /**
+   * The byte offset a `Range` resume asked to continue from (the current `.part` size). When set and
+   * the server answers 206, the response's `Content-Range` start MUST equal this — otherwise the 206 is
+   * serving a DIFFERENT slice than requested and appending it would splice bytes at the wrong position
+   * (silent corruption → later checksum failure). On a mismatch the call throws
+   * `ResumeOffsetMismatchError` and writes nothing (BUG dl-size-cap-2026-07-03 hardening). A server that
+   * omits `Content-Range` cannot be checked and is trusted as before.
+   */
+  resumeFrom?: number
   /** Called once with the response metadata before any body bytes stream. */
   onResponse?: (info: { status: number; contentLength: number | null }) => void
   /**
@@ -410,9 +443,10 @@ const DOWNLOAD_HARD_MAX_BYTES = 48 * 1024 * 1024 * 1024
 export const ENGINE_DOWNLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
 /** Default per-ROLE ceiling for a model-weight download when the manifest omits `size_bytes` (F17).
- *  When `size_bytes` IS present the exact (tight) cap applies; this only bounds the under-specified
- *  case so a hostile/redirected endpoint can't fall through to the multi-GiB backstop. Chat/vision
- *  are generous (a large quantized GGUF — up to ~70B Q4); the small roles are tight. */
+ *  When `size_bytes` IS present a drift-tolerant size-based cap applies (see `modelWeightMaxBytes`);
+ *  this bounds the under-specified case so a hostile/redirected endpoint can't fall through to the
+ *  multi-GiB backstop. Chat/vision are generous (a large quantized GGUF — up to ~70B Q4); the small
+ *  roles are tight. */
 const MODEL_WEIGHT_MAX_BYTES: Record<ModelRole, number> = {
   chat: 40 * 1024 * 1024 * 1024,
   vision: 40 * 1024 * 1024 * 1024,
@@ -420,6 +454,19 @@ const MODEL_WEIGHT_MAX_BYTES: Record<ModelRole, number> = {
   embeddings: 4 * 1024 * 1024 * 1024,
   reranker: 4 * 1024 * 1024 * 1024
 }
+
+/** Headroom over the manifest's declared `size_bytes` for the download body cap (BUG
+ *  dl-size-cap-2026-07-03). `size_bytes` is DECLARED metadata — docs call it "informational (progress +
+ *  sanity check)" — and can be a rounded estimate, or drift when an upstream quantizer re-uploads the
+ *  GGUF. Capping the body at the EXACT `size_bytes` (+ the razor-thin 1 MiB `SIZE_CAP_MARGIN`) therefore
+ *  TRUNCATED a legitimate download whose real file was a few percent larger: the stream aborted near the
+ *  end (~95%), the `.part` was kept, and a resume completed a file whose real SHA no longer matched the
+ *  (also-stale) manifest hash — the exact "stops at 95%, then checksum wrong on resume" report. Growing
+ *  the cap by a comfortable fraction keeps a per-model disk-fill bound far tighter than the per-role
+ *  ceiling while tolerating realistic size drift; wrong bytes are still rejected by the SHA verify. */
+const MODEL_WEIGHT_SIZE_HEADROOM_FRACTION = 0.25
+/** …but at least this many bytes of slack, so a SMALL declared weight still tolerates real-world drift. */
+const MODEL_WEIGHT_SIZE_HEADROOM_FLOOR = 128 * 1024 * 1024
 
 /**
  * The effective byte cap for ONE response body: the smallest known bound (Content-Length and/or the
@@ -434,12 +481,20 @@ export function effectiveDownloadCap(contentLength: number | null, maxBytes?: nu
 }
 
 /**
- * The `maxBytes` to pass to `downloadToFile` for a MODEL weight (F17): the manifest's exact
- * `size_bytes` when known, else the role's bounded default ceiling — NEVER unbounded (so the body is
- * always capped well below the hard backstop even for a manifest that omits `size_bytes`).
+ * The `maxBytes` to pass to `downloadToFile` for a MODEL weight (F17 + BUG dl-size-cap-2026-07-03): the
+ * manifest's `size_bytes` GROWN by a drift-tolerant headroom when known, else the role's bounded default
+ * ceiling — NEVER unbounded, and never the razor-thin EXACT size that truncated a legitimately-larger
+ * file near completion. The declared size is metadata (estimate/rounded/stale-able), so the cap tolerates
+ * it being a bit low; grossly-wrong metadata is a data bug fixed in the manifest, and the SHA verify
+ * remains the integrity control regardless.
  */
 export function modelWeightMaxBytes(role: ModelRole, sizeBytes: number | null): number {
-  return sizeBytes != null ? sizeBytes : MODEL_WEIGHT_MAX_BYTES[role]
+  if (sizeBytes == null) return MODEL_WEIGHT_MAX_BYTES[role]
+  const headroom = Math.max(
+    MODEL_WEIGHT_SIZE_HEADROOM_FLOOR,
+    Math.ceil(sizeBytes * MODEL_WEIGHT_SIZE_HEADROOM_FRACTION)
+  )
+  return sizeBytes + headroom
 }
 
 /**
@@ -551,6 +606,18 @@ export async function downloadToFile(
   // Append only when the caller asked to resume AND the server actually honoured the
   // Range request — appending a full 200 body onto a partial file would corrupt it.
   const append = deps.append === true && res.status === 206
+  // Resume-offset guard (BUG dl-size-cap-2026-07-03): a 206 whose Content-Range starts somewhere OTHER
+  // than the byte we asked to continue from is serving a different slice — appending it would splice
+  // bytes at the wrong position. Validate when both the requested offset and a parseable Content-Range
+  // are known; a server that omits the header can't be checked and is trusted (the existing behaviour).
+  if (append && deps.resumeFrom != null) {
+    const rangeStart = parseContentRangeStart(res.headers?.get?.('content-range'))
+    if (rangeStart != null && rangeStart !== deps.resumeFrom) {
+      throw new ResumeOffsetMismatchError(
+        `Resume offset mismatch for ${currentUrl}: server 206 Content-Range starts at byte ${rangeStart}, requested ${deps.resumeFrom}`
+      )
+    }
+  }
   const out = createWriteStream(dest, { flags: append ? 'a' : 'w' })
   let received = 0
   const nodeStream = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])

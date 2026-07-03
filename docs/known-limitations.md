@@ -323,6 +323,19 @@ password recovery — are documented in
   - **Download progress display is per-renderer-session.** The job itself runs in the main
     process and survives navigation; after an app restart the progress card is gone but the kept
     `.part` resumes on the next Download click.
+  - **A manifest `size_bytes` more than ~25% below the real file truncates the download**
+    (BUG dl-size-cap-2026-07-03). `size_bytes` feeds a disk-fill body cap; the cap is now
+    drift-tolerant (`size_bytes` + headroom), but a grossly-understated size still trips it near
+    completion and then the resume fails the checksum. This is a **manifest-data** bug, not a
+    downloader bug — capture the real hash + exact `size_bytes` with `verify-models --generate` (or
+    from the HF LFS `X-Linked-ETag`/`X-Linked-Size`) from the actual file. *(Instance now fixed: the
+    Qwen3.5 27B/35B wave hashes were wrong and their sizes understated by 5–8%; corrected 2026-07-03
+    with real values captured from HF LFS — the 9B was already correct.)*
+  - **Resume does not send `If-Range`.** A weight **re-uploaded upstream** between an aborted attempt
+    and a resume splices two revisions and fails the checksum. It self-heals by discarding the `.part`
+    and re-downloading, but does not detect the change up front — an accepted residual until
+    `If-Range`/ETag revalidation lands (the `Content-Range` start is validated, which catches a
+    wrong-offset 206 but not a same-offset content change).
 - **Drive updates are manual — Phase 22 (signed offline update bundles, spec §12.3) is still
   OPEN.** There is no update mechanism yet; the `updates/` and `workspace/backups/` directories
   are not created. The manual procedure is documented in [`drive-layout.md`](drive-layout.md)

@@ -978,6 +978,26 @@ for a future caller). Residual: the cap is a disk-fill bound, not an integrity c
 are still caught by the post-download SHA verify; and the DIY `fetch-*` scripts use the OS-native
 downloader (curl), not this seam.
 
+**BUG dl-size-cap-2026-07-03 — the model cap was too tight (keyed to the EXACT `size_bytes`).** F17
+passed the manifest's exact `size_bytes` (+ the 1 MiB `SIZE_CAP_MARGIN`) as the model body cap. But
+`size_bytes` is DECLARED metadata (an estimate, rounded, or stale after an upstream requant), so a
+legitimate file a few percent larger than the declared size hit the cap and **aborted near the end
+(~95%)**; the kept `.part` then resumed to the true size, whose SHA no longer matched the (also-stale)
+manifest hash — surfacing to the user as a mid-download stall + "checksum failed" on resume, with no
+size diagnostic. Fix: `modelWeightMaxBytes` now returns `size_bytes` grown by a drift-tolerant headroom
+(`max(128 MiB, 25%)`), keeping a per-model disk-fill bound far tighter than the per-role ceiling while
+tolerating realistic size drift — the SHA verify remains the integrity control. Also hardened the
+`Range` resume: a 206 whose `Content-Range` start ≠ the requested offset now throws
+`ResumeOffsetMismatchError` (the caller discards the poisoned `.part` and restarts clean) instead of
+blindly appending a wrong-offset slice. Still OPEN (accepted residual): no `If-Range`/ETag
+revalidation, so an upstream file replaced mid-resume is only caught by the final SHA verify, not up
+front. Root-cause instance FIXED: the Qwen3.5 27B/35B wave hashes were **wrong** and their `size_bytes`
+understated by ~5–8% (16.73→17.62 GB / 20.58→22.24 GB → the exact-size cap truncated at ~95% / ~93%);
+corrected 2026-07-03 with the real `sha256` + exact size captured from HF LFS metadata (git-LFS OID =
+the content SHA-256, cross-checked against the resolve `X-Linked-ETag`/`X-Linked-Size` and proven equal
+to a full download+sha256sum via the already-verified qwen3.5-4b). The 9B's wave values were already
+correct.
+
 **S4 (full-audit-2026-06-30) — re-affirmed accepted residual: trust by location, not signature
 (§22-M2).** The SSRF hardening above is positive (https-only, redirect-revalidated, private/loopback/
 metadata + mapped-IPv6 denied), but there is **no positive host allowlist**, and model/runtime

@@ -182,7 +182,7 @@ stay valid, and the validator only checks the sub-fields when the block is prese
 download:
   url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true
   sha256: REPLACE_WITH_REAL_HASH   # when a real hash, MUST equal the top-level sha256 (same file)
-  size_bytes: 2700000000           # optional, informational (progress + sanity check)
+  size_bytes: 2700000000           # optional; progress + a DRIFT-TOLERANT in-app download body cap
   license_url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE   # optional
 ```
 
@@ -192,8 +192,18 @@ Rules (validated in `shared/manifest.ts`):
   A **real** `download.sha256` must equal a **real** top-level `sha256` — they describe one file.
 - `download.size_bytes` (≥ 0) and `download.license_url` are optional.
 
+`size_bytes` feeds the progress bar AND the in-app downloader's disk-fill body cap
+(`modelWeightMaxBytes`). The cap is **drift-tolerant** — `size_bytes` grown by a comfortable headroom
+(BUG dl-size-cap-2026-07-03) — so a file a little larger than the declared size still downloads; the
+SHA verify is the integrity control. Do **not** understate `size_bytes` by more than the headroom:
+an exact cap keyed to a too-small `size_bytes` previously truncated a legitimate download near ~95%
+and then failed the checksum on resume. It is informational, not a hard integrity gate — the **real**
+trust anchor is `sha256`.
+
 Leave `sha256` as the placeholder until a real drive is built; fetch the weight, then run
-`verify-models --generate` to capture the real hash and promote it into the manifest.
+`verify-models --generate` to capture the real hash **and the exact `size_bytes`** and promote them
+into the manifest. A 64-hex value the code treats as a **verified** hash, so never transcribe a hash
+you have not computed from the actual downloaded file — an unverified guess hard-fails the checksum.
 
 ### The DIY download flow + license gate (spec §13)
 `scripts/fetch-models.{ps1,sh}` downloads each weight with a `download` block, **resumes** partials,

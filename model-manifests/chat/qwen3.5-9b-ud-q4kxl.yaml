@@ -26,6 +26,9 @@ recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: true
 local_path: models/chat/qwen3.5-9b-ud-q4kxl.gguf
+# Real hash CONFIRMED 2026-07-03 against HuggingFace LFS metadata (git-LFS OID = the file's SHA-256,
+# cross-checked with the resolve `X-Linked-ETag`/`X-Linked-Size`). Unlike the 27B/35B, the 9B's wave
+# value + size_bytes were already correct, so its download verified fine — kept as-is (dl-size-cap-2026-07-03).
 sha256: 6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293
 # Quantization: unsloth "Dynamic 2.0" UD-Q4_K_XL (keeps the precision-sensitive layers at higher
 # bit depth, squeezes the rest) — preferred over plain Q4_K_M unless a smoke proves it cannot

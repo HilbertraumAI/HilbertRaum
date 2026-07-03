@@ -9,6 +9,7 @@ import {
   downloadToFile,
   modelWeightMaxBytes,
   verifyDownloadedFile,
+  ResumeOffsetMismatchError,
   type FetchFn,
   type ModelDownloadTask
 } from './assets'
@@ -332,7 +333,9 @@ export class DownloadManager {
         // `size_bytes` when known, else a bounded per-role default — never unbounded (so a manifest
         // that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
         maxBytes: modelWeightMaxBytes(task.role, task.sizeBytes),
-        ...(resumeFrom > 0 ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true } : {}),
+        ...(resumeFrom > 0
+          ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true, resumeFrom }
+          : {}),
         onResponse: ({ status, contentLength }) => {
           // A 200 means the server ignored the Range request → the file restarts.
           prefix = status === 206 ? resumeFrom : 0
@@ -413,6 +416,15 @@ export class DownloadManager {
           modelId: job.modelId
         })
         return false
+      }
+      // A misaligned 206 resume (the server served a slice starting at the wrong byte): the on-disk
+      // `.part` can't be safely continued, so discard it — the NEXT attempt restarts from scratch
+      // rather than re-appending onto a poisoned prefix (BUG dl-size-cap-2026-07-03 hardening).
+      if (err instanceof ResumeOffsetMismatchError) {
+        await rm(part, { force: true })
+        this.deps.log?.('Model download resume offset mismatch — partial discarded for a clean restart', {
+          modelId: job.modelId
+        })
       }
       job.status = 'failed'
       job.error = friendlyDownloadError(err)

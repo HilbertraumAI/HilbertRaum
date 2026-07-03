@@ -480,7 +480,9 @@ describe('DownloadManager jobs', () => {
       expect(captured as number).toBeLessThan(64 * GiB)
     })
 
-    it('passes the EXACT manifest size_bytes as the cap when known (tight)', async () => {
+    it('passes a DRIFT-TOLERANT size-based cap when size_bytes is known (not the razor-thin exact size)', async () => {
+      // BUG dl-size-cap-2026-07-03: the cap must be size_bytes + headroom so a file a little larger than
+      // the DECLARED size still fits — the old exact cap truncated a legitimate download near ~95%.
       const body = 'exactly-sized-weights'
       const m = verifiedManifest(body) // size_bytes = body.length
       let captured: unknown = 'unset'
@@ -493,7 +495,60 @@ describe('DownloadManager jobs', () => {
       })
       const job = await mgr.start({ rootPath: tempRoot(), manifest: m, gates: OPEN })
       await waitForTerminal(mgr, job.jobId)
-      expect(captured).toBe(body.length)
+      expect(typeof captured).toBe('number')
+      expect(captured as number).toBeGreaterThan(body.length) // headroom over the declared size
+    })
+
+    it('COMPLETES a fresh download whose real body is larger than the declared size_bytes (regression)', async () => {
+      // The reported failure: the true upstream file is a few % bigger than the manifest's size_bytes,
+      // so the old exact cap (size_bytes + 1 MiB) aborted the stream near the end (~95%). With the
+      // drift-tolerant cap the same download now runs to completion and verifies. Body is 1.5 MiB and
+      // the declared size only 256 KiB — a >1 MiB overshoot that the OLD cap would have truncated.
+      const body = 'q'.repeat(Math.ceil(1.5 * 1024 * 1024))
+      const declared = 256 * 1024
+      const m = manifest({
+        sha256: sha256(body),
+        download: {
+          url: 'https://example.test/big.gguf',
+          sha256: sha256(body),
+          size_bytes: declared, // UNDER-declared vs the real body
+          license_url: 'https://example.test/license'
+        }
+      })
+      const root = tempRoot()
+      const dest = weightPath(root, m)
+      const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('done')
+      expect(finished.unverified).toBe(false)
+      expect(finished.receivedBytes).toBe(body.length)
+      expect(readFileSync(dest, 'utf8')).toBe(body)
+    })
+  })
+
+  // BUG dl-size-cap-2026-07-03 — a misaligned 206 resume discards the poisoned .part for a clean restart.
+  describe('resume-offset self-heal', () => {
+    it('a 206 whose Content-Range starts at the WRONG offset fails the job AND deletes the .part', async () => {
+      const body = 'hello-world-weights'
+      const m = verifiedManifest(body)
+      const root = tempRoot()
+      const dest = weightPath(root, m)
+      mkdirSync(join(dest, '..'), { recursive: true })
+      writeFileSync(partPath(dest), 'hello-') // a prior partial (6 bytes); resume asks for bytes=6-
+      // Server answers 206 but from byte 0 (wrong slice) — appending would corrupt the file.
+      const fetchImpl = (async () =>
+        new Response(body, {
+          status: 206,
+          headers: { 'content-length': String(body.length), 'content-range': `bytes 0-${body.length - 1}/${body.length}` }
+        })) as unknown as FetchFn
+      const mgr = new DownloadManager({ fetchImpl })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('failed')
+      // Poisoned prefix discarded → the next attempt restarts clean rather than re-appending.
+      expect(existsSync(partPath(dest))).toBe(false)
+      expect(existsSync(dest)).toBe(false)
     })
   })
 })

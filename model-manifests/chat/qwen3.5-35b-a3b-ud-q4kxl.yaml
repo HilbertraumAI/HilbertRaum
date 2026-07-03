@@ -5,7 +5,7 @@ role: chat
 format: gguf
 runtime: llama_cpp
 license: apache-2.0
-size_on_disk_gb: 20.6
+size_on_disk_gb: 22.2
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
 # Default 0 — and keep it 0 FOREVER until the local benchmark proves this is better than the
@@ -21,14 +21,22 @@ recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: true
 local_path: models/chat/qwen3.5-35b-a3b-ud-q4kxl.gguf
-sha256: 46b21f2508c86dfe2206de7fb2b311afd95bb3b1663f9fe499c3d991c18ad67e
+# Real SHA-256 + exact byte size captured 2026-07-03 from HuggingFace LFS metadata — the git-LFS OID IS
+# the SHA-256 of the file content, cross-checked against the resolve `X-Linked-ETag`/`X-Linked-Size` and
+# proven equal to a full download+sha256sum via qwen3.5-4b. The 2026-07-01 wave's original value
+# (46b21f25…) did NOT match the real file and, with the then-understated size_bytes, tripped the download
+# size cap near ~93% — the reported bug (dl-size-cap-2026-07-03).
+sha256: 1b0ac637dfa092bbba2793977db9485a40c4f8b42df5fe342f0076d61b66ae83
 # Quantization: unsloth "Dynamic 2.0" UD-Q4_K_XL, NOT plain Q4_K_M, unless a smoke shows the
 # dynamic quant cannot load (then add qwen3.5-35b-a3b-q4km.yaml as the experimental fallback).
-# The dynamic file (20.58 GB) is actually SMALLER than the plain Q4_K_M file (22.02 GB).
+# The dynamic UD-Q4_K_XL file is 22.24 GB (measured 2026-07-03 from HF LFS; earlier "20.58 GB" was the
+# wave's understated estimate — see the download.size_bytes note).
 download:
   url: https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf?download=true
-  sha256: 46b21f2508c86dfe2206de7fb2b311afd95bb3b1663f9fe499c3d991c18ad67e
-  size_bytes: 20581194400
+  sha256: 1b0ac637dfa092bbba2793977db9485a40c4f8b42df5fe342f0076d61b66ae83
+  # Exact byte size from HF LFS (X-Linked-Size); the real file is ~8.1% larger than the wave's original
+  # 20,581,194,400 estimate — that understatement is what tripped the old exact-size download cap.
+  size_bytes: 22241950336
   license_url: https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
 # MANUAL/SELECTABLE, NOT bundled — the download + RAM cost is high, so it must be a deliberate

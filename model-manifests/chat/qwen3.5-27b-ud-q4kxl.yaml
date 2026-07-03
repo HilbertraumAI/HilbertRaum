@@ -5,8 +5,8 @@ role: chat
 format: gguf
 runtime: llama_cpp
 license: apache-2.0
-size_on_disk_gb: 16.7
-# RAM is intentionally conservative: the file is ~16.7 decimal GB and the KV cache + Electron +
+size_on_disk_gb: 17.6
+# RAM is intentionally conservative: the file is ~17.6 decimal GB and the KV cache + Electron +
 # database + embedding/reranker sidecars all need headroom alongside it.
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
@@ -25,14 +25,21 @@ recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: true
 local_path: models/chat/qwen3.5-27b-ud-q4kxl.gguf
-sha256: 4e3d432f433deb39b3ea9696dab31fc6f4e780641db2b52902ee02a804e32f55
+# Real SHA-256 + exact byte size captured 2026-07-03 from HuggingFace LFS metadata — the git-LFS OID IS
+# the SHA-256 of the file content, cross-checked against the resolve `X-Linked-ETag`/`X-Linked-Size` (the
+# object the app downloads) and proven equal to a full download+sha256sum via qwen3.5-4b. The 2026-07-01
+# wave's original value (4e3d432f…) did NOT match the real file and, with the then-understated size_bytes,
+# tripped the download size cap at ~95% — the reported bug (dl-size-cap-2026-07-03).
+sha256: 13cb6228344898afa50d963c02ae0d991ae25094eea8837db8d0e452e91c5888
 # Quantization: unsloth "Dynamic 2.0" UD-Q4_K_XL, NOT plain Q4_K_M, unless a smoke shows the
 # dynamic quant cannot load (then add qwen3.5-27b-q4km.yaml as the experimental fallback). The
 # Qwen org publishes no official GGUF for the 3.5 refresh → established-quantizer fallback.
 download:
   url: https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-UD-Q4_K_XL.gguf?download=true
-  sha256: 4e3d432f433deb39b3ea9696dab31fc6f4e780641db2b52902ee02a804e32f55
-  size_bytes: 16729015680
+  sha256: 13cb6228344898afa50d963c02ae0d991ae25094eea8837db8d0e452e91c5888
+  # Exact byte size from HF LFS (X-Linked-Size); the real file is ~5.3% larger than the wave's original
+  # 16,729,015,680 estimate — that understatement is what tripped the old exact-size download cap at ~95%.
+  size_bytes: 17621125024
   license_url: https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
 # TEXT-ONLY USE: upstream Qwen3.5 is a vision-language model, but this chat manifest ships ONLY

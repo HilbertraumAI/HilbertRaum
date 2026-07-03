@@ -97,6 +97,16 @@ scripts/verify-models.sh --target /Volumes/HILBERTRAUM   # macOS/Linux
 On a developer drive, unverified models are allowed; a commercial drive requires a matching
 checksum.
 
+**If an in-app download stalls near the end (~95%) and then "checksum failed" after Resume**, the
+manifest's fingerprint or `size_bytes` doesn't match the real upstream file — re-copying won't help
+(BUG dl-size-cap-2026-07-03). This affected the manually-selectable **Qwen3.5 27B / 35B-A3B** entries,
+whose hashes were wrong and whose `size_bytes` were understated by ~5–8%, so the (then-exact) download
+cap truncated the transfer near completion. **Fixed 2026-07-03:** the cap is now drift-tolerant and the
+27B/35B manifests carry the real `sha256` + exact `size_bytes` captured from HuggingFace (the 9B was
+already correct), so these models now download and verify normally. If you ever hit this on another
+model, run `scripts/verify-models.sh --generate` (or the `.ps1`) against the actual weight on a machine
+with internet to write the true `sha256` + `size_bytes` back into the manifest.
+
 ---
 
 ## I forgot my workspace password

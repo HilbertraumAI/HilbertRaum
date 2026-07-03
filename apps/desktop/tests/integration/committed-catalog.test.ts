@@ -51,7 +51,9 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
       // Apache-2.0, license reviewed + approved (drive-shippable provenance).
       expect(m.license, `${id} license`).toBe('apache-2.0')
       expect(m.licenseReview.status, `${id} review`).toBe('approved')
-      // Real top-level hash that matches the download hash (same file).
+      // Real top-level hash that matches the download hash (same file). All four carry a hash captured
+      // from the actual upstream file: the 4B by download+sha256sum (2026-06-18), the 9B/27B/35B from HF
+      // LFS metadata (2026-07-03) after the 27B/35B wave values were found WRONG (BUG dl-size-cap-2026-07-03).
       expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
       expect(m.download, `${id} download block`).toBeDefined()
       expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)

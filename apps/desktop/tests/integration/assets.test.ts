@@ -22,6 +22,8 @@ import {
   effectiveDownloadCap,
   modelWeightMaxBytes,
   ENGINE_DOWNLOAD_MAX_BYTES,
+  parseContentRangeStart,
+  ResumeOffsetMismatchError,
   type FetchFn
 } from '../../src/main/services/assets'
 import { validateManifest, isRealSha256, type ModelManifest } from '../../src/shared/manifest'
@@ -855,9 +857,17 @@ describe('download size caps (F17)', () => {
     expect(cap).toBeLessThanOrEqual(64 * GiB)
   })
 
-  it('modelWeightMaxBytes uses the exact size when known, else a bounded per-role default', () => {
-    // Known size → exact (the tight cap).
-    expect(modelWeightMaxBytes('chat', 1234)).toBe(1234)
+  it('modelWeightMaxBytes grows the known size by drift headroom (never the razor-thin exact size), else a bounded per-role default', () => {
+    // BUG dl-size-cap-2026-07-03: the cap is size_bytes + headroom, NOT the exact size — a legitimate
+    // file a few percent larger than the DECLARED size must still fit under the cap (the old exact cap
+    // truncated it near ~95% and then the resume failed checksum).
+    const declared = 16_729_015_680 // qwen3.5-27b's declared size_bytes
+    const cap = modelWeightMaxBytes('chat', declared)
+    expect(cap).toBeGreaterThan(declared)
+    // A real file ~5% larger than declared (the reported case) fits comfortably under the cap.
+    expect(cap).toBeGreaterThan(Math.ceil(declared * 1.05))
+    // Small declared sizes still get a usable floor of slack (not just a tiny fraction).
+    expect(modelWeightMaxBytes('chat', 1234)).toBeGreaterThan(1234 + 100 * 1024 * 1024)
     // Absent size → a bounded role default (never null/unbounded), below the hard backstop.
     const chatDefault = modelWeightMaxBytes('chat', null)
     expect(chatDefault).toBeGreaterThan(0)
@@ -870,6 +880,77 @@ describe('download size caps (F17)', () => {
   it('ENGINE_DOWNLOAD_MAX_BYTES is bounded well below the hard backstop', () => {
     expect(ENGINE_DOWNLOAD_MAX_BYTES).toBeGreaterThan(0)
     expect(ENGINE_DOWNLOAD_MAX_BYTES).toBeLessThan(64 * GiB)
+  })
+})
+
+// BUG dl-size-cap-2026-07-03 — a 206 resume must continue from the EXACT byte we asked for; a server
+// that answers 206 from a different offset (or with the whole object) would corrupt the file if its
+// body were blindly appended. The guard validates the Content-Range start against the requested offset.
+describe('resume-offset guard (Content-Range validation)', () => {
+  it('parseContentRangeStart reads the start byte, and returns null when it cannot', () => {
+    expect(parseContentRangeStart('bytes 6-17/18')).toBe(6)
+    expect(parseContentRangeStart('bytes 0-99/500')).toBe(0)
+    expect(parseContentRangeStart('bytes */18')).toBeNull() // unsatisfiable → cannot validate
+    expect(parseContentRangeStart(null)).toBeNull()
+    expect(parseContentRangeStart(undefined)).toBeNull()
+  })
+
+  it('appends a 206 whose Content-Range starts at the requested offset', async () => {
+    const root = tempDir('hilbertraum-dl-')
+    const dest = join(root, 'x.gguf')
+    writeFileSync(dest, 'hello-') // the resume prefix (6 bytes)
+    const rest = 'world-weights'
+    const fetchImpl = (async () =>
+      new Response(rest, {
+        status: 206,
+        headers: { 'content-length': String(rest.length), 'content-range': `bytes 6-17/${6 + rest.length}` }
+      })) as unknown as FetchFn
+    const res = await downloadToFile('https://cdn.example.test/x', dest, {
+      fetchImpl,
+      append: true,
+      resumeFrom: 6,
+      headers: { Range: 'bytes=6-' }
+    })
+    expect(res.status).toBe(206)
+    expect(readFileSync(dest, 'utf8')).toBe('hello-world-weights')
+  })
+
+  it('refuses (ResumeOffsetMismatchError) a 206 whose Content-Range starts at the WRONG offset — writes nothing', async () => {
+    const root = tempDir('hilbertraum-dl-')
+    const dest = join(root, 'x.gguf')
+    writeFileSync(dest, 'hello-') // 6-byte prefix; we ask to resume from byte 6…
+    const fetchImpl = (async () =>
+      new Response('THE-WHOLE-FILE', {
+        status: 206,
+        // …but the server answers 206 from byte 0 (e.g. served the whole object) — appending would corrupt.
+        headers: { 'content-length': '14', 'content-range': 'bytes 0-13/14' }
+      })) as unknown as FetchFn
+    await expect(
+      downloadToFile('https://cdn.example.test/x', dest, {
+        fetchImpl,
+        append: true,
+        resumeFrom: 6,
+        headers: { Range: 'bytes=6-' }
+      })
+    ).rejects.toBeInstanceOf(ResumeOffsetMismatchError)
+    // The prefix is untouched — no wrong-offset bytes were appended.
+    expect(readFileSync(dest, 'utf8')).toBe('hello-')
+  })
+
+  it('trusts a 206 with NO Content-Range header (cannot validate → appends as before)', async () => {
+    const root = tempDir('hilbertraum-dl-')
+    const dest = join(root, 'x.gguf')
+    writeFileSync(dest, 'hello-')
+    const rest = 'world'
+    const fetchImpl = (async () =>
+      new Response(rest, { status: 206, headers: { 'content-length': String(rest.length) } })) as unknown as FetchFn
+    await downloadToFile('https://cdn.example.test/x', dest, {
+      fetchImpl,
+      append: true,
+      resumeFrom: 6,
+      headers: { Range: 'bytes=6-' }
+    })
+    expect(readFileSync(dest, 'utf8')).toBe('hello-world')
   })
 })
 
