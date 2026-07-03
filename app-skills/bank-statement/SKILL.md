@@ -53,8 +53,9 @@ to fit the context:
   them first.
 - **Do not invent a figure the statement does not state.** A number you would have to work out
   yourself is not a number the statement reports; be explicit about the difference.
-- **The tools run only when the user starts them** — you never run them yourself, and exporting a
-  file always asks the user first.
+- **You never run these tools yourself** — the app runs them. Read-only tools may run automatically
+  to answer the user's question, or when the user starts them; anything that writes or exports a file
+  always asks the user first.
 - Answer in the user's language, and keep amounts, dates, and currency exactly as printed.
 
 Use this skill when the user shares a bank statement (PDF, CSV, or pasted text) or asks

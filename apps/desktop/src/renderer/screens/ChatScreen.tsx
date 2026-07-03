@@ -139,10 +139,12 @@ export function ChatScreen({
   /** Which conversation the live stream belongs to: the bubble renders, and the
    *  completion refresh applies, only when this still matches the visible conversation. */
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
-  /** True while the context-compaction pre-pass is summarizing earlier messages for the live turn
-   *  (context-compaction §5.2). Ephemeral: set on the STREAM.compaction notice, cleared on the
-   *  first answer token + in the stream's finally. Never persisted, lost on remount (R14). */
-  const [compacting, setCompacting] = useState(false)
+  /** The live ephemeral "working on it" notice above the streaming bubble, or null when none
+   *  (context-compaction §5.2). `'compaction'` = summarizing earlier messages; `'analysis'` (U5,
+   *  audit §3.6) = an exhaustive skill handler reading the whole document before its one-blob answer.
+   *  Set on the STREAM.compaction notice (by its `kind`), cleared on the first answer token + in the
+   *  stream's finally. Never persisted, lost on remount (R14). */
+  const [progressNotice, setProgressNotice] = useState<'compaction' | 'analysis' | null>(null)
   /** Resting context-window usage for the composer meter (§5.1); null hides it. Refreshed on
    *  conversation switch + after each completed turn. During a turn the meter climbs LIVE via
    *  `liveUsage` (base + the in-flight user turn + the streaming answer estimate), then reconciles to
@@ -1025,7 +1027,7 @@ export function ChatScreen({
     setStreamText('')
     setStreamThinking('')
     setThinkingOpen(false)
-    setCompacting(false)
+    setProgressNotice(null)
     // Seed the live meter with the user turn about to be sent; the streaming answer estimate is
     // added on top in `liveUsage`. A regenerate re-streams an EXISTING user turn (already counted in
     // the resting usage), so it seeds 0 to avoid double-counting the question.
@@ -1033,20 +1035,23 @@ export function ChatScreen({
     answerStarted.current = false
     stopped.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
-      // The first answer token auto-collapses an expanded Thinking… line and clears the
-      // "summarizing…" notice (§5.2 — the summary, if any, is done once tokens flow).
+      // The first answer token auto-collapses an expanded Thinking… line and clears any live
+      // "working on it" notice (§5.2/U5 — the summary or extraction is done once tokens flow).
       if (!answerStarted.current) {
         answerStarted.current = true
         setThinkingOpen(false)
-        setCompacting(false)
+        setProgressNotice(null)
       }
       pendingTokens.current += token
       scheduleFlush()
     })
-    // One-shot ephemeral "summarizing earlier messages…" notice (§5.2). The optional-chained CALL
-    // tolerates an older bridge; the result is unused there (no unsubscribe needed). Cleared on the
-    // first token (above) and in finally. Never recovered on remount (R14).
-    const unsubscribeCompaction = window.api.onCompaction?.(convId, () => setCompacting(true))
+    // One-shot ephemeral "working on it" notice (§5.2). Its `kind` picks the copy: 'compaction'
+    // (summarizing earlier messages) or 'analysis' (U5 — reading the whole document for a skill's
+    // exhaustive answer). The optional-chained CALL tolerates an older bridge (no unsubscribe there).
+    // Cleared on the first token (above) and in finally. Never recovered on remount (R14).
+    const unsubscribeCompaction = window.api.onCompaction?.(convId, (notice) =>
+      setProgressNotice(notice.kind ?? 'compaction')
+    )
     // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
     // a separate channel from answer tokens and are never part of the persisted reply.
     const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
@@ -1100,7 +1105,7 @@ export function ChatScreen({
       setStreamConvId(null)
       setStreamText('')
       setStreamThinking('')
-      setCompacting(false)
+      setProgressNotice(null)
       // Drop the live delta BEFORE reconciling so the meter never double-counts the turn: the
       // authoritative resting read below already includes the persisted user turn + reply.
       setLiveUserTokens(0)
@@ -1548,7 +1553,7 @@ export function ChatScreen({
           onSave={handleSaveConversation}
           actionsDisabled={busyStreaming}
           resolveSkillTitle={resolveGlyphSkillTitle}
-          compacting={compacting && streamConvId === activeId}
+          progressNotice={streamConvId === activeId ? progressNotice : null}
           summaryMarker={summaryMarker}
         />
 

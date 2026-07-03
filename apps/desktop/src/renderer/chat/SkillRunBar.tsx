@@ -60,9 +60,10 @@ const TOOL_DONE_KEY: Record<string, CountMessageKey> = {
 
 // Failure reason CODE (content-free, set by the run seam — I1) → localized copy key. An unmapped or
 // absent code falls back to the generic failure line, so a German user never sees an English string.
+// `needsExtraction` is handled separately in `failureMessage` (it interpolates the `{button}` label),
+// so it is intentionally not in this static map.
 const RUN_ERROR_KEY: Record<string, MessageKey> = {
   unavailable: 'chat.skill.run.error.unavailable',
-  needsExtraction: 'chat.skill.run.error.needsExtraction',
   persistFailed: 'chat.skill.run.error.persistFailed',
   exportWriteFailed: 'chat.skill.run.error.exportWriteFailed'
 }
@@ -215,8 +216,14 @@ export function SkillRunBar({
   }
 
   // The localized failure line — mapped from the content-free reason code (I1), never the raw
-  // English `run.error` (which stays for the local log only).
+  // English `run.error` (which stays for the local log only). `needsExtraction` names the ACTUAL
+  // extract button the user must click first (U5 / ux-15) — the `{button}` interpolation mirrors the
+  // redaction routing copy — resolved to the failing tool's own domain (invoice vs bank).
   const failureMessage = (state: SkillRunState): string => {
+    if (state.errorCode === 'needsExtraction') {
+      const extractTool = state.toolName.includes('invoice') ? 'extract_invoice' : 'extract_transactions'
+      return t('chat.skill.run.error.needsExtraction', { button: toolLabel(extractTool) })
+    }
     const key = state.errorCode ? RUN_ERROR_KEY[state.errorCode] : undefined
     return t(key ?? 'chat.skill.run.failedGeneric')
   }

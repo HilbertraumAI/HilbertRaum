@@ -123,6 +123,36 @@ describe('SkillRunBar (S11b)', () => {
     expect(screen.getByText('Stopped. Nothing was saved.')).toBeInTheDocument()
   })
 
+  // U5 (audit ux-15): the needsExtraction failure names the ACTUAL extract button to click first —
+  // interpolated per the FAILING tool's domain (bank downstream tool → "Extract transactions";
+  // invoice downstream tool → "Extract invoice"), never the old generic "run this tool".
+  it('RESULT: needsExtraction names the domain-correct extract button', () => {
+    const { rerender } = render(
+      withI18n(
+        <SkillRunBar
+          run={run({ toolName: 'validate_statement_balances', state: 'failed', errorCode: 'needsExtraction' })}
+          runnableTools={[]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByText(/Read the document first with the “Extract transactions” button/)).toBeInTheDocument()
+    rerender(
+      withI18n(
+        <SkillRunBar
+          run={run({ toolName: 'export_invoice_json', state: 'failed', errorCode: 'needsExtraction' })}
+          runnableTools={[]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByText(/Read the document first with the “Extract invoice” button/)).toBeInTheDocument()
+  })
+
   // S11c — per-tool done copy + validate's pass/fail discriminator (resultKind), content-free.
   it('RESULT: per-tool done messages (categorize / summarize / export)', () => {
     const cases: Array<[SkillRunState['toolName'], number, string]> = [

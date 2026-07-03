@@ -382,6 +382,12 @@ export function registerRagIpc(ctx: AppContext): void {
             conversationId,
             'Document analysis failed',
             withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction): Promise<Message> => {
+              // U5 (audit §3.6): the exhaustive path runs a potentially long, SILENT deterministic
+              // extraction before the first token — a "one-blob" answer that reads as a hang. Fire the
+              // ephemeral "reading the document…" notice up front (the compaction-notice channel, an
+              // 'analysis' kind); the renderer clears it on the first answer token, exactly like the
+              // compaction hint. Ephemeral (R14) — never buffered, never persisted.
+              sendCompaction('analysis')
               const result = await runHandler({
                 db: ctx.db,
                 question: text,

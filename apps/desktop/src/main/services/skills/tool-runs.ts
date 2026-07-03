@@ -1,6 +1,7 @@
 import type { Db } from '../db'
 import type { AuditRecorder } from '../audit'
 import type { AuditEventType, DocumentChunkRead, RunnableTool, SkillToolAudit } from '../../../shared/types'
+import type { MessageKey } from '../../../shared/i18n'
 import type { SkillRecord } from './registry'
 import { resolveScope } from '../collections'
 import { documentsInScope } from './scope-documents'
@@ -152,14 +153,54 @@ export interface BuildRunnerArgs {
   confirmed?: boolean
 }
 
+/**
+ * Per-export save-dialog metadata (U5 / audit §6.2): the save dialog's title, its filter label, and
+ * the file extension(s) it offers. Carries i18n KEYS (not resolved strings) — the IPC layer owns
+ * `tMain` and resolves them, so this stays content-free + testable. The ONE hardcoded CSV dialog used
+ * to serve every export (redaction's "Save redacted copy" got an "Export transactions" title with a
+ * `.csv` filter fighting `invoice.json` on Windows); the dispatch below now binds the right metadata
+ * per tool. A2 will derive these from the self-describing tool registry — this is the targeted fix.
+ */
+export interface SaveFileDialogMeta {
+  titleKey: MessageKey
+  filterNameKey: MessageKey
+  extensions: string[]
+}
+
+/** CSV export dialog — the legacy default when a caller passes no metadata (bank + invoice CSV). */
+export const SAVE_DIALOG_CSV: SaveFileDialogMeta = {
+  titleKey: 'main.dialog.exportCsv',
+  filterNameKey: 'main.dialog.filterCsv',
+  extensions: ['csv']
+}
+/** Invoice JSON export dialog. */
+export const SAVE_DIALOG_JSON: SaveFileDialogMeta = {
+  titleKey: 'main.dialog.exportJson',
+  filterNameKey: 'main.dialog.filterJson',
+  extensions: ['json']
+}
+/** Invoice XML export dialog. */
+export const SAVE_DIALOG_XML: SaveFileDialogMeta = {
+  titleKey: 'main.dialog.exportXml',
+  filterNameKey: 'main.dialog.filterXml',
+  extensions: ['xml']
+}
+/** Redaction copy dialog — "Save redacted copy" with a `.txt` filter (the §6.2 mismatch this fixes). */
+export const SAVE_DIALOG_REDACTED: SaveFileDialogMeta = {
+  titleKey: 'main.dialog.exportRedacted',
+  filterNameKey: 'main.dialog.filterText',
+  extensions: ['txt']
+}
+
 /** MAIN-side capabilities the dispatch needs but cannot import (kept out so this stays testable). */
 export interface ToolRunDeps {
   /**
-   * Save CSV text to a user-chosen path (save dialog + write). Returns true once written, false if
-   * the user cancelled. The path + content are NEVER logged/audited — `export_transactions_csv`'s
-   * FS-write boundary (skills-plan §9.5/§22-M1). The IPC layer supplies it; tests inject a stub.
+   * Save text to a user-chosen path (save dialog + write). Returns true once written, false if the
+   * user cancelled. The path + content are NEVER logged/audited — the skill exports' FS-write boundary
+   * (skills-plan §9.5/§22-M1). The IPC layer supplies it; tests inject a stub. The optional `dialog`
+   * (U5 / §6.2) carries the per-export title/filter/extension; omitted ⇒ the CSV default.
    */
-  saveTextFile?: (defaultFileName: string, content: string) => Promise<boolean>
+  saveTextFile?: (defaultFileName: string, content: string, dialog?: SaveFileDialogMeta) => Promise<boolean>
   /**
    * Re-extract a document's ordered, non-overlapping, newline-preserving parser SEGMENTS (the IPC
    * supplies `extractDocumentPreview`). This is the FAITHFUL content reach for the extract/redaction
@@ -401,7 +442,10 @@ export function buildToolRunner(
             signal,
             onProgress,
             confirmed: args.confirmed,
-            saveTextFile: deps.saveTextFile!,
+            // U5 (§6.2): bind the format's OWN save-dialog metadata (title/filter/.json|.xml) so the
+            // dialog no longer serves the CSV title/filter to a JSON/XML export.
+            saveTextFile: (name, content) =>
+              deps.saveTextFile!(name, content, toolName === 'export_invoice_json' ? SAVE_DIALOG_JSON : SAVE_DIALOG_XML),
             readDocumentSegments: deps.readDocumentSegments // JSON/XML export of a STALE invoice re-extracts first (R3 / §5.6)
           },
           {
@@ -419,7 +463,9 @@ export function buildToolRunner(
           signal,
           onProgress,
           confirmed: args.confirmed,
-          saveTextFile: deps.saveTextFile!,
+          // U5 (§6.2): the redacted copy gets its own "Save redacted copy" dialog + a .txt filter,
+          // instead of the "Export transactions" / .csv dialog that used to fight the saved filename.
+          saveTextFile: (name, content) => deps.saveTextFile!(name, content, SAVE_DIALOG_REDACTED),
           readDocumentSegments: deps.readDocumentSegments
         })
         return {

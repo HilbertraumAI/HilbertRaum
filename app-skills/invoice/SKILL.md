@@ -57,8 +57,9 @@ to fit the context:
 - **Do not invent a figure the invoice does not state.** Invoice layouts vary, so a field that could
   not be parsed is left blank on purpose — a number you would have to work out yourself is not a
   number the invoice reports. Be explicit about the difference.
-- **The tools run only when the user starts them** — you never run them yourself, and exporting a
-  file always asks the user first.
+- **You never run these tools yourself** — the app runs them. Read-only tools may run automatically
+  to answer the user's question, or when the user starts them; anything that writes or exports a file
+  always asks the user first.
 - Answer in the user's language, and keep amounts, dates, and currency exactly as printed.
 
 Use this skill when the user shares an invoice (PDF, CSV, or pasted text) or asks billing-style

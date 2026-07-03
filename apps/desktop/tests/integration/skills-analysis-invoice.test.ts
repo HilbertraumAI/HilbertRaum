@@ -420,6 +420,34 @@ describe('invoice analysis handler — run()', () => {
     expect(snippets).toContain('Widget')
     expect(snippets).toContain('Acme GmbH')
   })
+
+  // U5 (audit §6.2/ux stopgap): a LONG invoice prints its totals at the END, past the first 12 chunks.
+  // The invoice schema records no per-figure source page, so citations are chunks — and a leading-only
+  // slice would point ENTIRELY away from where the headline totals were read. The stopgap reserves the
+  // last TAIL_CITATIONS slots for the closing chunks.
+  it('a long invoice cites its CLOSING chunks (totals), not only the first 12 (last-chunks stopgap)', async () => {
+    const db = freshDb()
+    const lines = [
+      'Invoice number INV-LONG',
+      'Vendor Acme GmbH',
+      'Invoice date 2026-01-15',
+      ...Array.from({ length: 11 }, () => 'Widget 1 10,00 10,00'), // 11 line items → net 110
+      'Net total 110,00 EUR',
+      'Gross total ZZTOTALMARKER 110,00 EUR' // the very LAST chunk (index 15, well past MAX_CITATIONS=12)
+    ]
+    const id = seedDoc(db, lines.join('\n'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
+
+    // Capped at MAX_CITATIONS (12), still labelled S1…S12 in order.
+    expect(res.citations).toHaveLength(12)
+    res.citations.forEach((c, i) => expect(c.label).toBe(`S${i + 1}`))
+    const snippets = res.citations.map((c) => c.snippet ?? '')
+    // Leading chunks preserved (header is still cited)…
+    expect(snippets[0]).toContain('INV-LONG')
+    // …AND the closing totals chunk (index 15) is cited — a leading-only slice (first 12) would have
+    // dropped it entirely. The unique marker lives ONLY on the last line, so this can't pass by accident.
+    expect(snippets.some((s) => s.includes('ZZTOTALMARKER'))).toBe(true)
+  })
 })
 
 describe('invoice analysis handler — data lifecycle (reuse / replace / staleness parity, F5)', () => {

@@ -276,9 +276,16 @@ export interface ScopeNotice {
  * Payload of the `compaction` channel (context-compaction plan §5.2). One-shot; `'start'` is the
  * only phase today (`'done'` is implicit when answer tokens begin), but the object shape leaves
  * room to grow without breaking the additive streaming contract.
+ *
+ * `kind` (U5 / audit §3.6) reuses this EPHEMERAL channel for a second kind of "working on it" notice:
+ * `'analysis'` is fired when an exhaustive skill handler starts a potentially long, silent extraction
+ * (the "one-blob answer reads as a hang" gap), so the renderer can show honest "reading the document…"
+ * copy instead of the compaction "summarizing earlier messages…" line. Absent ⇒ `'compaction'` (the
+ * original behaviour, byte-unchanged).
  */
 export interface CompactionNotice {
   phase: 'start'
+  kind?: 'compaction' | 'analysis'
 }
 
 /**

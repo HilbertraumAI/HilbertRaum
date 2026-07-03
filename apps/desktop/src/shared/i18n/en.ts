@@ -239,7 +239,7 @@ export const en = {
   'chat.skill.run.done.redactedClean': 'No personal data was detected; saved a copy. Review it before sharing.',
   'chat.skill.run.failedGeneric': "That didn't work. Nothing was changed.",
   'chat.skill.run.error.unavailable': 'This tool isn’t available.',
-  'chat.skill.run.error.needsExtraction': 'Read the document first, then run this tool.',
+  'chat.skill.run.error.needsExtraction': 'Read the document first with the “{button}” button, then run this tool.',
   'chat.skill.run.error.persistFailed': 'This couldn’t be saved. Nothing was changed.',
   'chat.skill.run.error.exportWriteFailed': 'The file couldn’t be saved. Nothing was changed.',
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
@@ -263,6 +263,9 @@ export const en = {
   // ---- Chat: context compaction (context-compaction plan §5.1–§5.3) ----
   // The one-shot "summarizing…" status above the streaming bubble (§5.2).
   'chat.compaction.inProgress': 'Summarizing earlier messages to free up context…',
+  // U5 (audit §3.6): the sibling one-shot status for an exhaustive skill handler reading the whole
+  // document before its (deterministic, one-blob) answer — so the wait no longer reads as a hang.
+  'chat.analysis.inProgress': 'Reading the whole document…',
   // The transcript summary marker (§5.3, D-b) — a subtle divider, expandable to read the summary.
   'chat.compaction.markerLabel': 'Earlier messages summarized',
   'chat.compaction.viewSummary': 'Show the summary of earlier messages',
@@ -1013,9 +1016,10 @@ export const en = {
   'skills.kind.tool': 'Uses tools',
   // §13/§22-D1 — a tool-reserved skill adds guidance only in v1.
   'skills.tool.note': 'For now this adds guidance only. The tools it describes arrive in a later version.',
-  // S11c — a kind:'tool' skill names its real, app-orchestrated tools; nothing runs on its own.
+  // S11c — a kind:'tool' skill names its real, app-orchestrated tools. Honest about auto-run (U5 /
+  // ux-16): read-only tools may run automatically to answer a question; writes/exports always confirm.
   'skills.tool.note.active':
-    'When you ask, this skill can run approved local tools on a document you choose. The tools run only when you start them, they see only that document, and exporting a file always asks you first.',
+    'When you ask, this skill can run approved local tools on a document you choose. Read-only tools may also run automatically to answer your question; anything that writes or exports a file always asks you first. They see only that document.',
   // The permission block (skills plan §15 copy). Derived from the already-clamped
   // permissions — the renderer localises the result, it does not re-decide it.
   'skills.perm.heading': 'What this skill can do',
@@ -1547,6 +1551,15 @@ export const en = {
   'main.dialog.filterSkill': 'Skill package',
   'main.dialog.exportCsv': 'Export transactions',
   'main.dialog.filterCsv': 'CSV file',
+  // U5 (audit §6.2): per-export save-dialog metadata — the ONE hardcoded CSV dialog used to serve every
+  // export (redaction's "Save redacted copy" got an "Export transactions" title + a .csv filter fighting
+  // invoice.json on Windows). Each format now names its own title/filter/extension.
+  'main.dialog.exportJson': 'Export as JSON',
+  'main.dialog.filterJson': 'JSON file',
+  'main.dialog.exportXml': 'Export as XML',
+  'main.dialog.filterXml': 'XML file',
+  'main.dialog.exportRedacted': 'Save redacted copy',
+  'main.dialog.filterText': 'Text file',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
   'main.skills.incompatible': 'This skill needs a newer version of the app. Update to use it.',

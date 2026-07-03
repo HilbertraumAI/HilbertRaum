@@ -10,9 +10,16 @@ import { randomUUID } from 'node:crypto'
 // the audit). Mirrors the registerSkillsIpc test harness (mocked electron + the invoke helper).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
-// Mutable save-dialog result so a test can drive the export CSV write (default = user cancelled).
+// Mutable save-dialog result so a test can drive the export CSV write (default = user cancelled), plus
+// the LAST save-dialog options (U5 / §6.2) so a test can assert the per-export title/filter/extension.
+type SaveDialogOptions = {
+  title?: string
+  defaultPath?: string
+  filters?: Array<{ name: string; extensions: string[] }>
+}
 const dialogState = vi.hoisted(() => ({
-  saveResult: { canceled: true } as { canceled: boolean; filePath?: string }
+  saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
+  lastSaveOptions: undefined as SaveDialogOptions | undefined
 }))
 vi.mock('electron', () => ({
   ipcMain: {
@@ -22,7 +29,12 @@ vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: {
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
-    showSaveDialog: async () => dialogState.saveResult
+    // Called as showSaveDialog(options) in tests (no focused window). Capture the options so a test can
+    // assert the dialog the user would see, then return the mutable result.
+    showSaveDialog: async (...args: unknown[]) => {
+      dialogState.lastSaveOptions = (args.length > 1 ? args[1] : args[0]) as SaveDialogOptions
+      return dialogState.saveResult
+    }
   },
   app: { getVersion: () => '0.0.0-test' }
 }))
@@ -37,6 +49,7 @@ import {
 } from '../../src/main/services/skills/tool-runs'
 import type { DocTaskManager } from '../../src/main/services/doctasks'
 import { IPC } from '../../src/shared/ipc'
+import { t, type MessageKey } from '../../src/shared/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
@@ -87,6 +100,36 @@ function writeRedactionSkill(appSkillsDir: string): void {
   ]
   writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
 }
+
+function writeInvoiceSkill(appSkillsDir: string): void {
+  const d = join(appSkillsDir, 'invoice')
+  mkdirSync(d, { recursive: true })
+  const lines = [
+    '---',
+    'id: invoice',
+    'title: Invoice',
+    'description: Reads invoices.',
+    'version: 1.0.0',
+    'kind: tool',
+    'allowedTools: [extract_invoice, validate_invoice_totals, export_invoice_csv, export_invoice_json, export_invoice_xml]',
+    '---',
+    'Quote the printed figures.'
+  ]
+  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+}
+
+const INVOICE_TEXT = [
+  'Invoice',
+  'Vendor: ACME Supplies GmbH',
+  'Invoice Number: INV-2026-0042',
+  'Invoice Date: 2026-03-15',
+  'Currency EUR',
+  '',
+  'Widget A               2     12,50        25,00',
+  '',
+  'Net Total              25,00',
+  'Gross Total            25,00'
+].join('\n')
 
 // A USER-imported `kind:'tool'` skill (dropped into user-skills/) that DECLARES the same Tier-2
 // tools an app skill would. Its TITLE carries a sentinel so the SEC-1 refusal can be asserted
@@ -219,6 +262,32 @@ function makeRedactionHarness(docText: string): Harness {
   return { db, conversationId: conv.id, skillInstallId: 'app:document-redaction' }
 }
 
+function makeInvoiceHarness(invoiceText: string): Harness {
+  const root = tempDir()
+  const appSkillsDir = join(root, 'app-skills')
+  const userSkillsDir = join(root, 'user-skills')
+  mkdirSync(appSkillsDir, { recursive: true })
+  mkdirSync(userSkillsDir, { recursive: true })
+  writeInvoiceSkill(appSkillsDir)
+  const db = openDatabase(join(root, 'test.sqlite'))
+  seedSettings(db)
+  const audit = createAuditRecorder(() => db)
+  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
+  const ctx = {
+    db,
+    paths: { workspacePath: root },
+    workspace: { isUnlocked: () => true, documentCipher: () => null },
+    isDev: false,
+    audit,
+    skills,
+    ocrEngine: undefined
+  } as unknown as AppContext
+  registerSkillsIpc(ctx)
+  const docId = seedDocWithChunks(db, invoiceText)
+  const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+  return { db, conversationId: conv.id, skillInstallId: 'app:invoice' }
+}
+
 // A harness whose runnable skill is a USER-imported `kind:'tool'` skill, force-enabled to model the
 // worst case (a drop-in installs DISABLED per DS19; a zip import installs enabled-with-warning per
 // DS7 — either way an ENABLED user tool skill). The SEC-1 gate must still refuse it every Tier-2 tool.
@@ -264,6 +333,7 @@ async function pollUntilTerminal(runHandle: string): Promise<SkillRunState> {
 beforeEach(() => {
   ipcState.handlers.clear()
   dialogState.saveResult = { canceled: true }
+  dialogState.lastSaveOptions = undefined
 })
 
 /** Run a tool to a terminal state via the IPC channels (returns the final ids/counts-only state). */
@@ -768,5 +838,48 @@ describe('skills redact_document IPC (S11d)', () => {
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(SECRET_EMAIL)
     expect(JSON.stringify(stateRaw)).not.toContain(out)
+  })
+})
+
+// U5 (audit §6.2) — each export gets its OWN save-dialog metadata (title / filter label / extension),
+// instead of the ONE hardcoded CSV dialog that used to serve every export. That drift gave redaction's
+// "Save redacted copy" an "Export transactions" title with a `.csv` filter fighting `redacted.txt` on
+// Windows. These assert the OPTIONS the dialog would show (the user-visible surface): the save result
+// stays "cancelled" (the default), but showSaveDialog is called — and its options captured — regardless.
+describe('skills export save-dialog metadata (U5 / §6.2)', () => {
+  const tEn = (key: MessageKey): string => t('en', key)
+  const firstFilter = (): { name: string; extensions: string[] } | undefined =>
+    dialogState.lastSaveOptions?.filters?.[0]
+
+  it('bank CSV export → the CSV dialog (title + .csv filter)', async () => {
+    const { skillInstallId, conversationId } = makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10')
+    await runTool(skillInstallId, conversationId, 'extract_transactions')
+    await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
+    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportCsv'))
+    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterCsv'), extensions: ['csv'] })
+  })
+
+  it('redaction export → the "Save redacted copy" dialog with a .txt filter, NOT the CSV dialog (the §6.2 example)', async () => {
+    const { skillInstallId, conversationId } = makeRedactionHarness('Contact leak.source@example.com today.')
+    await runTool(skillInstallId, conversationId, 'redact_document', true)
+    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportRedacted'))
+    expect(dialogState.lastSaveOptions?.title).not.toBe(tEn('main.dialog.exportCsv')) // the drift this fixes
+    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterText'), extensions: ['txt'] })
+  })
+
+  it('invoice JSON export → the JSON dialog (.json, not .csv)', async () => {
+    const { skillInstallId, conversationId } = makeInvoiceHarness(INVOICE_TEXT)
+    await runTool(skillInstallId, conversationId, 'extract_invoice')
+    await runTool(skillInstallId, conversationId, 'export_invoice_json', true)
+    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportJson'))
+    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterJson'), extensions: ['json'] })
+  })
+
+  it('invoice XML export → the XML dialog (.xml, not .csv)', async () => {
+    const { skillInstallId, conversationId } = makeInvoiceHarness(INVOICE_TEXT)
+    await runTool(skillInstallId, conversationId, 'extract_invoice')
+    await runTool(skillInstallId, conversationId, 'export_invoice_xml', true)
+    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportXml'))
+    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterXml'), extensions: ['xml'] })
   })
 })

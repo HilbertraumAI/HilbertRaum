@@ -118,8 +118,12 @@ describe('S11c — the committed body is the reconcile body and stays §22-D1 ho
   })
 
   it('stays honest: app-orchestrated only + never invents a figure (§22-D1)', () => {
-    // The tools run only on a user action (DS4) — the body must not imply the model acts alone.
-    expect(body).toMatch(/only when the user starts them/i)
+    // The MODEL never invokes tools itself — the app orchestrates them (DS4). U5/ux-16: the body is now
+    // honest that read-only tools MAY auto-run to answer a question, while writes/exports always confirm
+    // (the old "tools run only when the user starts them" wrongly implied read-only tools never auto-run).
+    expect(body).toMatch(/never run these tools yourself/i)
+    expect(body).toMatch(/read-only tools may run automatically/i)
+    expect(body).toMatch(/always asks the user first/i)
     expect(body).toMatch(/do not invent a figure/i)
     expect(body).toMatch(/quote the statement's own printed figures/i)
   })

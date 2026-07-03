@@ -134,4 +134,52 @@ describe('ChatScreen — "summarizing…" notice (§5.2)', () => {
 
     act(() => resolveSend!())
   })
+
+  // U5 (audit §3.6): the SAME ephemeral channel carries an 'analysis' notice when an exhaustive skill
+  // handler starts a long, silent extraction — shown with honest "reading the document…" copy (NOT the
+  // compaction "summarizing…" line), and cleared on the first answer token exactly the same way.
+  it("shows the 'analysis' notice (reading the document…) and clears it on the first token", async () => {
+    const user = userEvent.setup()
+    let tokenCb: ((t: string) => void) | undefined
+    let compactionCb: ((notice: CompactionNotice) => void) | undefined
+    let resolveSend: (() => void) | undefined
+    const sendChatMessage = vi.fn(
+      () =>
+        new Promise<Message>((resolve) => {
+          resolveSend = () => resolve(msg('a9', 'assistant', 'done'))
+        })
+    )
+    stubApi({
+      listConversations: vi.fn(async () => [conv()]),
+      listMessages: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => status()),
+      sendChatMessage,
+      onToken: vi.fn((_id: string, cb: (t: string) => void) => {
+        tokenCb = cb
+        return () => {}
+      }),
+      onReasoning: vi.fn(() => () => {}),
+      onScopeNotice: vi.fn(() => () => {}),
+      onCompaction: vi.fn((_id: string, cb: (notice: CompactionNotice) => void) => {
+        compactionCb = cb
+        return () => {}
+      })
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByText('Compaction chat'))
+    await user.type(screen.getByPlaceholderText('Message…'), 'summarize my statement')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(compactionCb).toBeTypeOf('function'))
+    act(() => compactionCb!({ phase: 'start', kind: 'analysis' }))
+    // The analysis copy shows — NOT the compaction "summarizing…" line.
+    expect(await screen.findByText(/reading the whole document/i)).toBeInTheDocument()
+    expect(screen.queryByText(/summarizing earlier messages/i)).not.toBeInTheDocument()
+
+    // The first answer token clears it.
+    act(() => tokenCb!('hello'))
+    await waitFor(() => expect(screen.queryByText(/reading the whole document/i)).not.toBeInTheDocument())
+
+    act(() => resolveSend!())
+  })
 })

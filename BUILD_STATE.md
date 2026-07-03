@@ -6,6 +6,50 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation U5: copy & i18n sweep + per-export save-dialog metadata + invoice last-chunks citations + ephemeral analysis notice — branch `fix/skills-u5`, UNMERGED.**
+Track-U (plan §U5; audit ux-12/15/16/17 + §3.6 one-blob + §6.2 dialog), branched off `fix/skills-u4` (dep: none;
+plan/audit docs live on the phase-branch chain, not `master`). Offline / pure / **COPY & METADATA ONLY — no
+extractor/routing/answer-generation change / no schema change / no extractor-version bump / no new deps.** Six
+items: **(1) du/Sie sweep** — 4 formal-`Sie` strings in `de.ts` skill assistant-voice keys → `du`
+(`bankAnalysis.incompleteNoTotal`/`categoryRuleBased`/`unverifiedCaveat`, `invoiceAnalysis.positionsMore`); a
+lint-ish guard (`skill-i18n.test.ts`) scans `skills.(bankAnalysis|invoiceAnalysis|analysis|redactionRouting).*`
+for formal markers — `Ihnen`, the possessive `Ihr`/`Ihre…` (bare + declined), and a MID-CLAUSE `Sie` (any
+`<lowercase> Sie`: imperative "prüfen Sie" + prepositional "für Sie") — while TOLERATING a sentence-start pronoun
+`Sie` (`Sie läuft`/`Sie verarbeitet`, preceded by ". " not a lowercase letter — *it/they*, correctly kept; the
+mid-clause + bare-`Ihr` breadth closes an adversarial-review coverage gap in the first-pass `…en Sie`-only guard).
+**(2) needsExtraction**
+— the run-bar error interpolates the ACTUAL extract button via a new `{button}` param, resolved in `SkillRunBar`
+per the FAILING tool's domain (`*invoice*`→"Extract invoice", else "Extract transactions"); rendered as PLAIN
+text so the label is quoted, not `**bold**` (the bar is not markdown); the dead `RUN_ERROR_KEY.needsExtraction`
+entry removed (special-cased first). **(3) honest auto-run copy** — the false "tools run only when you start them"
+claim corrected in `skills.tool.note.active` (settings), BOTH `SKILL.md` bodies (bank+invoice — model-facing:
+"you never run these tools yourself … read-only may run automatically … writes/exports always ask first"), and
+`docs/user-guide.md`; the `skills-bank-statement.test.ts` body assertion updated to the honest copy. **(4)
+per-export save-dialog metadata (§6.2)** — new `SaveFileDialogMeta {titleKey,filterNameKey,extensions}` (content-
+free i18n KEYS) + 4 constants in `tool-runs.ts`; the dispatch WRAPS `deps.saveTextFile` per export
+(JSON→`.json`, XML→`.xml`, redaction→"Save redacted copy"/`.txt`), CSV the default; the `registerSkillsIpc`
+`saveTextFile` closure gains a 3rd `dialogMeta` arg (default CSV) and resolves the keys via `tMain`. Kills the
+one-CSV-dialog-for-every-export drift (redaction's "Save redacted copy" used to get an "Export transactions"
+title + `.csv` filter fighting `redacted.txt`). **run.ts / invoice-run.ts export seams UNTOUCHED** — the wrapper
+lives in the dispatch (forward-compatible with A2's registry-derived dialog). **(5) invoice citation stopgap** —
+`buildInvoiceCitations` cites head (`MAX_CITATIONS-TAIL_CITATIONS`) + tail (`TAIL_CITATIONS=4`) on a
+>`MAX_CITATIONS` doc so the totals page (printed at the end) is cited, not only the leading chunks; windows never
+overlap, document order preserved. **(6) ephemeral analysis notice (§3.6)** — `CompactionNotice` gains
+`kind?:'compaction'|'analysis'` (additive; bare payload byte-unchanged); `sendCompaction('analysis')` fires at the
+START of the exhaustive-handler runFn before the long silent extraction; renderer `compacting:boolean` →
+`progressNotice:'compaction'|'analysis'|null` picks `chat.analysis.inProgress` ("Reading the whole document…")
+vs the compaction line; cleared on first token, never buffered (R14). **Supporting edits beyond the plan file
+list (noted):** `shared/ipc.ts`, `chat-stream.ts`, `renderer/ChatScreen.tsx`, `renderer/chat/Transcript.tsx`
+(the notice plumbing). **Data contract:** `CompactionNotice.kind?` additive; `SaveFileDialogMeta` new; `ToolRunDeps.saveTextFile`
+3rd optional `dialog?` arg (additive). **+10 net-new tests** (du guard ×3, needsExtraction domain button, save-dialog
+metadata ×4 incl. the redaction≠CSV §6.2 regression via captured `showSaveDialog` options + a new invoice IPC
+harness, long-invoice tail citation, `kind:'analysis'` renderer notice); full suite green (**3014** passed / 41
+skipped) + typecheck. Adversarial 3-lens diff review (correctness / i18n-honesty / plan-scope, each finding
+adversarially verified). **Residuals:** invoice CSV export keeps the shared "Export transactions" CSV title (plan
+scoped per-tool titles to JSON/XML/redaction — the `.csv` filter/ext were the §6.2 defect and are correct);
+citations head+tail is a **stopgap** until per-figure invoice provenance; `images.drop.busy` (non-skill Images
+string) still formal `Sie` — out of scope. Non-goals honored: A2 registry derivation, any extractor/routing change._
+
 _2026-07-03 — **Skills remediation U4: auto-fire reach — doc signals narrowed to explicitly-scoped documents + redaction manifest↔handler alignment + bank/invoice/meeting-protocol opted into auto-fire (setting stays default-OFF) — branch `fix/skills-u4`, UNMERGED.**
 Track-U (plan §U4; audit §2.4 + §4.4), branched off `fix/skills-u3` (dep: W5's canonical vocabulary + expanded
 corpus — verified in-history). Offline / pure / **no schema change** / **no new deps** / **no extractor-version

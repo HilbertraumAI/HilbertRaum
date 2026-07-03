@@ -61,12 +61,13 @@ export type SendToken = (token: string) => void
 /** A guarded reasoning-delta sender (Deep mode); buffers like `SendToken`. */
 export type SendReasoning = (delta: string) => void
 /**
- * A guarded one-shot "summarizing earlier messages…" notifier (context-compaction plan §5.2).
- * Fired from the compaction pre-pass's `onStart`. Unlike the token/reasoning senders it is EPHEMERAL
- * (R14): never buffered into `streamBuffers`, so a screen that remounts mid-stream simply misses the
- * transient hint — acceptable, the answer still streams.
+ * A guarded one-shot ephemeral notifier (context-compaction plan §5.2). Fired from the compaction
+ * pre-pass's `onStart` (default `'compaction'` → "summarizing earlier messages…"), and reused by U5
+ * for `'analysis'` → an exhaustive skill handler starting a long extraction ("reading the document…").
+ * Unlike the token/reasoning senders it is EPHEMERAL (R14): never buffered into `streamBuffers`, so a
+ * screen that remounts mid-stream simply misses the transient hint — acceptable, the answer still streams.
  */
-export type SendCompaction = () => void
+export type SendCompaction = (kind?: CompactionNotice['kind']) => void
 
 /** The generation body run under the locked streaming contract — handed the turn's abort signal
  *  and the three guarded senders, resolving with the persisted assistant Message. */
@@ -168,10 +169,13 @@ export async function withChatStream(
       event.sender.send(STREAM.reasoning(conversationId), delta)
     }
   }
-  // One-shot, EPHEMERAL (R14): no `streamBuffers` write, isDestroyed-guarded like the senders.
-  const sendCompaction: SendCompaction = () => {
+  // One-shot, EPHEMERAL (R14): no `streamBuffers` write, isDestroyed-guarded like the senders. A bare
+  // call keeps the original `{ phase: 'start' }` payload byte-for-byte (compaction); an explicit
+  // `'analysis'` kind rides the same channel for the U5 exhaustive-handler notice.
+  const sendCompaction: SendCompaction = (kind) => {
     if (!event.sender.isDestroyed()) {
-      event.sender.send(STREAM.compaction(conversationId), { phase: 'start' } satisfies CompactionNotice)
+      const notice: CompactionNotice = kind ? { phase: 'start', kind } : { phase: 'start' }
+      event.sender.send(STREAM.compaction(conversationId), notice)
     }
   }
   try {

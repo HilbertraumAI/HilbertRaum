@@ -595,8 +595,10 @@ or **Delete** your own.
   version of HilbertRaum than the one you're running. Update the app to use it; until then it stays
   listed but inactive (it can't be switched on, suggested, or run).
 
-Skills never run by themselves — you always pick or confirm. And as everywhere else, the activity log
-records only ids and counts, never your documents' contents or a skill's figures.
+You choose when a skill is active; while it is, its **read-only** tools may run automatically to answer
+a question you ask, and anything that **writes or exports a file** always asks you to confirm first. As
+everywhere else, the activity log records only ids and counts, never your documents' contents or a
+skill's figures.
 
 ---
 

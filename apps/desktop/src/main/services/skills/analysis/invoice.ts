@@ -213,6 +213,11 @@ function loadDroppedRowCount(db: Db, invoiceId: string): number {
 }
 
 const MAX_CITATIONS = 12
+// U5 (audit §6.2/ux stopgap): on a LONG invoice the totals + summary print at the END, past the first
+// MAX_CITATIONS leading chunks — so citing only the leading chunks points away from where the headline
+// figures were read. Until per-figure provenance lands (mirroring `bank_transactions.source_page`),
+// reserve these slots for the CLOSING chunks so a long invoice still cites its totals page.
+const TAIL_CITATIONS = 4
 
 /** Cap the inline line-item listing (an invoice with hundreds of positions stays readable; the rest is
  *  one CSV export away). Mirrors the bank handler's `MAX_LISTED_TRANSACTIONS`. */
@@ -239,7 +244,15 @@ function buildInvoiceCitations(db: Db, documentId: string, title: string): Citat
        FROM chunks WHERE document_id = ? ORDER BY chunk_index`
     )
     .all(documentId) as unknown as ChunkRow[]
-  return all.slice(0, MAX_CITATIONS).map((c, i) => ({
+  // U5 stopgap: when the doc fits in MAX_CITATIONS, cite all of it in order; when it exceeds that,
+  // take the LEADING chunks (header/first items) PLUS the CLOSING chunks (where the totals live), so
+  // the badge points at both ends. The two windows never overlap here (length > MAX_CITATIONS ≥ head +
+  // tail), and the chunks stay in document order.
+  const selected =
+    all.length > MAX_CITATIONS
+      ? [...all.slice(0, MAX_CITATIONS - TAIL_CITATIONS), ...all.slice(all.length - TAIL_CITATIONS)]
+      : all
+  return selected.map((c, i) => ({
     label: `S${i + 1}`,
     sourceTitle: c.source_label ?? title,
     pageNumber: c.page_number,

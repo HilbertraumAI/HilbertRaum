@@ -183,6 +183,33 @@ password recovery — are documented in
   whole-corpus for auto-fire and yields no doc signal; that is deliberate (only a document the user put in
   front of the skill corroborates a silent fire), but it means a narrow-collection user must lean on keyword
   strength or an explicit pick.
+- **Copy, i18n, and export-dialog polish — six user-facing fixes, no engine change (Skills U5, audit
+  ux-12/15/16/17, §3.6, §6.2).** (1) **German assistant-voice → du:** the deterministic bank/invoice analysis
+  answers and the routing/redaction answers now address the user informally (`du`) everywhere; a lint-ish guard
+  test (`skill-i18n.test.ts`) flags any formal `Sie`/`Ihr` regression in the `skills.*Analysis.*` /
+  routing-answer keys, while tolerating a sentence-start pronoun `Sie` (*it/they* — the redaction copy relies on
+  `Sie läuft`/`Sie verarbeitet`). (2) The **`needsExtraction`** run-bar error now names the ACTUAL extract
+  button to click first, interpolated per the failing tool's domain (bank downstream → "Extract transactions";
+  invoice → "Extract invoice"), rendered as plain text with the label in quotes (the bar is not markdown). (3)
+  The **"tools run only when you start them"** claim — false since read-only analysis tools auto-run to answer a
+  question (D46/the exhaustive path) — is corrected in the settings note (`skills.tool.note.active`), **both**
+  SKILL.md bodies, and the user guide to *"read-only tools may run automatically to answer your question;
+  anything that writes or exports a file always asks first"* (the model still never invokes a tool itself). (4)
+  **Per-export save-dialog metadata (§6.2):** the ONE hardcoded CSV dialog no longer serves every export —
+  JSON→`.json`, XML→`.xml`, and the redacted copy gets a *"Save redacted copy"* title + a `.txt` filter (it used
+  to fight `redacted.txt` with an "Export transactions"/`.csv` dialog on Windows). The dispatch (`tool-runs.ts`)
+  binds the per-tool metadata as **content-free i18n keys** (`SaveFileDialogMeta`) and the IPC `saveTextFile`
+  closure resolves them; CSV stays the default. (5) A **last-chunks citation stopgap** for long invoices: the
+  totals print at the END, past the first `MAX_CITATIONS` cited chunks, so `buildInvoiceCitations` now reserves
+  the final `TAIL_CITATIONS` slots for the closing chunks (leading + trailing windows, in document order). (6)
+  An **ephemeral "reading the document…" notice** when an exhaustive skill handler starts a long, silent
+  extraction (the "one-blob answer reads as a hang" gap, §3.6) — it rides the compaction ephemeral channel with
+  a new `kind:'analysis'` and clears on the first answer token (never buffered/persisted, R14). **Residuals:**
+  the invoice CSV export still uses the shared "Export transactions" CSV title (the plan scoped per-tool titles
+  to JSON/XML/redaction; the filter/extension were the §6.2 defect and are correct for CSV); the citation
+  head+tail split is a **stopgap** until per-figure invoice provenance lands (mirroring
+  `bank_transactions.source_page`); and one **non-skill** Images string (`images.drop.busy`) still uses formal
+  `Sie` (outside U5's skill-string scope).
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
   offline regexes only** — e-mail addresses, phone numbers, IBANs, **payment-card numbers**, dates, and

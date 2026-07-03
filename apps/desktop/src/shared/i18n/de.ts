@@ -256,7 +256,7 @@ export const de: Record<keyof typeof en, string> = {
     'Keine personenbezogenen Daten erkannt; Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
   'chat.skill.run.error.unavailable': 'Dieses Werkzeug ist nicht verfügbar.',
-  'chat.skill.run.error.needsExtraction': 'Lies zuerst das Dokument ein, dann führe dieses Werkzeug aus.',
+  'chat.skill.run.error.needsExtraction': 'Lies das Dokument zuerst mit der Schaltfläche „{button}“ ein, dann führe dieses Werkzeug aus.',
   'chat.skill.run.error.persistFailed': 'Das konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.error.exportWriteFailed': 'Die Datei konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
@@ -279,6 +279,9 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Chat: Kontext-Komprimierung (context-compaction plan §5.1–§5.3) ----
   'chat.compaction.inProgress': 'Frühere Nachrichten werden zusammengefasst, um Platz zu schaffen…',
+  // U5 (Audit §3.6): das Pendant für einen erschöpfenden Skill-Handler, der vor seiner
+  // (deterministischen) Antwort das ganze Dokument liest — damit die Wartezeit nicht wie ein Hänger wirkt.
+  'chat.analysis.inProgress': 'Das ganze Dokument wird gelesen…',
   'chat.compaction.markerLabel': 'Frühere Nachrichten zusammengefasst',
   'chat.compaction.viewSummary': 'Zusammenfassung der früheren Nachrichten anzeigen',
   'chat.context.usageTooltip': 'Kontext: {used} / {window} Tokens (ungefähr)',
@@ -576,14 +579,14 @@ export const de: Record<keyof typeof en, string> = {
   'skills.bankAnalysis.incompleteNoTotal':
     'Ich kann nicht bestätigen, dass ich den ganzen Auszug erfasst habe — die gedruckten Salden gehen mit ' +
     'den gelesenen Buchungen nicht auf, daher könnten die Zahlen falsch gelesen oder unvollständig sein. ' +
-    'Damit ich Ihnen keinen womöglich falschen Gesamtbetrag nenne, gebe ich hier keine Summe an; bitte ' +
-    'prüfen Sie die Zahlen im geöffneten Auszug selbst.',
+    'Damit ich dir keinen womöglich falschen Gesamtbetrag nenne, gebe ich hier keine Summe an; bitte ' +
+    'prüf die Zahlen im geöffneten Auszug selbst.',
   'skills.bankAnalysis.categoryHeading': 'Nach Kategorie:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.categoryAssisted':
     '_Die Kategorien sind modellgestützt — eine Zuordnung kann falsch sein, die Summen oben bleiben davon unberührt._',
   'skills.bankAnalysis.categoryRuleBased':
-    '_Dies ist eine schnelle regelbasierte Gruppierung (ohne Modell). Für eine reichhaltigere, modellgestützte Aufschlüsselung nutzen Sie die Schaltfläche „Kategorisieren“._',
+    '_Dies ist eine schnelle regelbasierte Gruppierung (ohne Modell). Für eine reichhaltigere, modellgestützte Aufschlüsselung nutze die Schaltfläche „Kategorisieren“._',
   // Lokalisierte ANZEIGE-Labels für die feste Kategorienmenge (Phase 33). Der GESPEICHERTE Bezeichner
   // bleibt der kanonische englische Name (Enum / Modell-gestützt-Erkennung hängen daran); nur die
   // Anzeige der Aufschlüsselung wird übersetzt. Ein unbekannter Name fällt auf den Bezeichner zurück.
@@ -612,7 +615,7 @@ export const de: Record<keyof typeof en, string> = {
   'skills.bankAnalysis.unverifiedCaveat':
     'Diese Zahlen sind die Summe der **{count}** Buchungen, die ich über das ganze Dokument gelesen habe. ' +
     'Der Auszug enthält keinen Anfangs- und Endsaldo, daher kann ich nicht bestätigen, dass das alle ' +
-    'Buchungen sind — verstehen Sie sie als Summe der angezeigten Zeilen, nicht als geprüften Auszugssaldo. ' +
+    'Buchungen sind — versteh sie als Summe der angezeigten Zeilen, nicht als geprüften Auszugssaldo. ' +
     'Nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
   // R5 (Audit §5.7): der eine ehrliche Datumshinweis — nur angehängt, wenn das Dokument keinen Hinweis auf
   // tag- vs. monatszuerst gab und die Daten daher tagzuerst gelesen wurden (die de-AT-Voreinstellung).
@@ -678,7 +681,7 @@ export const de: Record<keyof typeof en, string> = {
   'skills.invoiceAnalysis.positionsHeading': 'Positionen:',
   'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
   'skills.invoiceAnalysis.positionsMore':
-    '… und **{count}** weitere — bitten Sie mich, die Rechnung als CSV zu exportieren, um alle Positionen zu sehen.',
+    '… und **{count}** weitere — bitte mich, die Rechnung als CSV zu exportieren, um alle Positionen zu sehen.',
   'skills.invoiceAnalysis.formatIntro':
     'Hier ist die Rechnung als {format}, ausschließlich aus den gelesenen Beträgen erstellt — nichts aus Fließtext zusammengerechnet oder erfunden:',
   // §3.6-low (W4): CSV enthält NUR die Positionen — Kopf + Beträge fehlen (die sind in JSON/XML). Der alte
@@ -1036,7 +1039,7 @@ export const de: Record<keyof typeof en, string> = {
   'skills.kind.tool': 'Nutzt Werkzeuge',
   'skills.tool.note': 'Vorerst ergänzt dies nur Hinweise. Die beschriebenen Werkzeuge kommen in einer späteren Version.',
   'skills.tool.note.active':
-    'Wenn du darum bittest, kann dieser Skill zugelassene lokale Werkzeuge auf einem von dir gewählten Dokument ausführen. Die Werkzeuge laufen nur, wenn du sie startest, sehen nur dieses Dokument, und ein Datei-Export fragt dich immer vorher.',
+    'Wenn du darum bittest, kann dieser Skill zugelassene lokale Werkzeuge auf einem von dir gewählten Dokument ausführen. Nur-Lese-Werkzeuge können auch automatisch laufen, um deine Frage zu beantworten; alles, was schreibt oder eine Datei exportiert, fragt dich immer zuerst. Und sie sehen dabei jeweils nur dieses eine Dokument.',
   'skills.perm.heading': 'Was dieser Skill darf',
   'skills.perm.canTitle': 'Dieser Skill kann:',
   'skills.perm.cannotTitle': 'Dieser Skill kann nicht:',
@@ -1611,6 +1614,15 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.filterSkill': 'Skill-Paket',
   'main.dialog.exportCsv': 'Transaktionen exportieren',
   'main.dialog.filterCsv': 'CSV-Datei',
+  // U5 (Audit §6.2): eigene Speicherdialog-Metadaten je Export — der EINE fest verdrahtete CSV-Dialog
+  // diente zuvor jedem Export (die Schwärzung „Geschwärzte Kopie speichern“ bekam den Titel
+  // „Transaktionen exportieren“ + einen .csv-Filter). Jedes Format nennt jetzt Titel/Filter/Endung selbst.
+  'main.dialog.exportJson': 'Als JSON exportieren',
+  'main.dialog.filterJson': 'JSON-Datei',
+  'main.dialog.exportXml': 'Als XML exportieren',
+  'main.dialog.filterXml': 'XML-Datei',
+  'main.dialog.exportRedacted': 'Geschwärzte Kopie speichern',
+  'main.dialog.filterText': 'Textdatei',
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
   'main.skills.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Skills zu verwalten.',

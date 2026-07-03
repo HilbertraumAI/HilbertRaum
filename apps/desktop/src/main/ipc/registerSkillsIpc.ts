@@ -26,7 +26,9 @@ import {
   runnableToolsForSkill,
   skillCanRunTools,
   toSkillToolAudit,
-  toolRunNeedsConfirmation
+  toolRunNeedsConfirmation,
+  SAVE_DIALOG_CSV,
+  type SaveFileDialogMeta
 } from '../services/skills/tool-runs'
 import {
   deleteSkill,
@@ -64,12 +66,21 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // FS-write from a skill tool). The tool only PRODUCES the CSV; this saves it to a user-chosen path
   // via a save dialog (the exportSkill/exportConversation precedent). Returns whether the user saved;
   // the path + CSV content are NEVER logged or audited (only "saved N rows" surfaces — §22-M1).
-  const saveTextFile = async (defaultFileName: string, content: string): Promise<boolean> => {
+  // U5 (audit §6.2): the per-export `dialog` metadata (title/filter/extension) is supplied by the
+  // tool-runs dispatch, which knows the tool→format mapping; it defaults to CSV for callers that pass
+  // none (bank + invoice CSV). The i18n KEYS are resolved here (this closure owns `tMain`), so the
+  // dispatch stays content-free. This kills the one-CSV-dialog-for-every-export drift (a redaction copy
+  // no longer gets an "Export transactions" title + a `.csv` filter fighting `redacted.txt`).
+  const saveTextFile = async (
+    defaultFileName: string,
+    content: string,
+    dialogMeta: SaveFileDialogMeta = SAVE_DIALOG_CSV
+  ): Promise<boolean> => {
     const win = BrowserWindow.getFocusedWindow()
     const options = {
-      title: tMain('main.dialog.exportCsv'),
+      title: tMain(dialogMeta.titleKey),
       defaultPath: defaultFileName,
-      filters: [{ name: tMain('main.dialog.filterCsv'), extensions: ['csv'] }]
+      filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
     }
     const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return false

@@ -44,11 +44,12 @@ interface TranscriptProps {
    */
   resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
   /**
-   * True while the context-compaction pre-pass is summarizing earlier messages for THIS turn
-   * (context-compaction plan §5.2) — a quiet status line above the streaming bubble. Ephemeral:
+   * The live "working on it" notice above the streaming bubble for THIS turn, or null/absent when
+   * none (context-compaction §5.2). `'compaction'` = summarizing earlier messages; `'analysis'` (U5,
+   * audit §3.6) = an exhaustive skill handler reading the whole document before its answer. Ephemeral:
    * cleared by the parent on the first answer token.
    */
-  compacting?: boolean
+  progressNotice?: 'compaction' | 'analysis' | null
   /**
    * The latest compaction summary + where its transcript marker sits (context-compaction §5.3,
    * D-b). The "⌄ Earlier messages summarized" divider renders before the message whose id matches
@@ -75,7 +76,7 @@ export const Transcript = memo(function Transcript({
   onSave,
   actionsDisabled,
   resolveSkillTitle,
-  compacting,
+  progressNotice,
   summaryMarker
 }: TranscriptProps): JSX.Element {
   const { t } = useT()
@@ -139,11 +140,13 @@ export const Transcript = memo(function Transcript({
             />
           </Fragment>
         ))}
-        {/* §5.2: quiet "summarizing earlier messages…" status above the streaming bubble; the parent
-            clears `compacting` on the first answer token. Uses the spinner status vocabulary. */}
-        {compacting && streamingHere && (
+        {/* §5.2/U5: quiet "working on it" status above the streaming bubble; the parent clears
+            `progressNotice` on the first answer token. 'analysis' (U5, §3.6) shows honest "reading the
+            document…" copy instead of the compaction "summarizing…" line. Same spinner vocabulary. */}
+        {progressNotice && streamingHere && (
           <div className="chat-compaction-notice" role="status">
-            <Spinner /> {t('chat.compaction.inProgress')}
+            <Spinner />{' '}
+            {t(progressNotice === 'analysis' ? 'chat.analysis.inProgress' : 'chat.compaction.inProgress')}
           </div>
         )}
         {streamingHere && (
