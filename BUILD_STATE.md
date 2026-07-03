@@ -6,6 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-03 — **Skills remediation T1: eval & fixture infrastructure + real-model smoke — branch `fix/skills-t1`, UNMERGED.**
+Track-T (plan §T1; audit §7 recs 1/2/5), branched off `fix/skills-a3` (deps R1–R2, in the phase-branch chain; plan/audit docs live on the chain,
+not `master`). Root cause: committed extractor fixtures were synthetic + post-hoc (built to match the parser), so every real-layout incident
+(INVOICE-TOTALS-1, HVB zero-transactions, the §5.3 NBSP/Unicode family) slipped a green suite; and NO skill path was ever run against a real model
+(the RUNTIME-5/6 vision-salad / INVOICE-TOTALS-1 test-blindness class). **Three guards.** (1) **Real-layout corpus** — NEW
+`tests/fixtures/real-layouts/corpus.ts` single-homes the incident-class fixtures (constructed AT/DE/CH statements+invoices, NEVER real data;
+special chars as `\u` escapes so a git/editor normalization can't silently defeat the class): NBSP/narrow-NBSP/figure-space,
+U+2212/en-dash/non-breaking-hyphen, Summe/Summe netto/Endbetrag/Rechnungssumme labels, SEPA rows, dd.mm.yy + cross-year, wrapped descriptions,
++ the R2 CRITICAL contrast (`Steuerberatung Jänner`→line item while `Steuer 20%`→taxTotal 300/rate 20). (2) **Output-snapshot guard** — NEW
+`tests/integration/extractor-realworld.test.ts` runs the corpus through the REAL production extraction (normalize→currency-vote→order→anchor→
+extract→balances, mirror of the tool call) and asserts the parsed figures, AND pins a per-fixture hash of the FULL output in
+`extractor-output.snapshot.json` keyed by `BANK/INVOICE_EXTRACTOR_VERSION` + a per-fixture INPUT hash. The input hash discriminates a corpus EDIT
+(input moved → no bump) from an EXTRACTOR change (output moved for UNCHANGED input → MUST bump): a real extractor change fails the default suite, and
+regeneration (`UPDATE_EXTRACTOR_SNAPSHOT=1`) itself REFUSES to write without the bump — so the rule can't be silenced by regenerating (the
+adversarial review's one confirmed finding, closed). (3) **Opt-in real-model smoke** — NEW `tests/e2e-model/skills-smoke.test.ts`
+(`SKILLS_SMOKE_MODEL=<gguf>`, `describe.runIf` → COLLECTED by the full-suite guard but SKIPPED in CI): one bank + one invoice (third-mode
+grounded-data over the corpus — the real model narrates the verified extract, the deterministic echo appended verbatim beneath) + one German
+whole-doc minutes turn; asserts structure/figures (mode engaged, postscript rides under the answer, capped+not-truncated coverage, tail items),
+never prose. Nothing in the default `npm test` needs a model/network. **Data contract:** additive test-only files + the committed snapshot; NO
+extractor-version bump (no production code changed). **Surfaced (documented, NOT fixed — no extractor change in a test-infra phase):** `USt` ∈ invoice
+TOTALS_FILLER but ∉ TAX_LABELS, so a standalone `USt … EUR` line reads as a phantom item (spelled-out Steuer/Umsatzsteuer/MwSt parse) — a future
+R-phase candidate. Docs: model-benchmarks.md §10 (corpus+snapshot+smoke), known-limitations.md (T1 entry), plan §0.2 [x]. **Adversarial 5-lens diff
+review (each finding independently verified) → 1 confirmed LOW (regenerate defeats the version-bump guard) + 3 self-caught improvements, all fixed:**
+(a) the confirmed regenerate-bypass → the input-hash discriminator + UPDATE-refusal (mutation-verified: both the plain-run "unchanged input → bump"
+branch AND the UPDATE "refuse to regenerate" branch fire, and revert→green); (b) FIGSP/NBHYPHEN were exported+claimed but exercised by no fixture →
+added a Sparkasse row using both (non-breaking-hyphen debit + figure-space grouping, `−1000`, balance `2 434,11`); (c) the header comment claimed `\u`
+escapes while the consts held literal chars → converted to real `\u` escapes (runtime-identical, snapshot unchanged); (d) `stableStringify` sorted
+keys with locale-sensitive `localeCompare` → code-point comparison. `npm test` **3068 pass / 44 skip (incl. the 3 smoke)** + `npm run typecheck` green._
+
 _2026-07-03 — **Skills remediation A3: manifest analysis mode + whole-doc gate inversion — branch `fix/skills-a3`, UNMERGED.**
 Track-A (plan §A3; audit §6.3 "routing intelligence is app code; skills are portable in name only" + §8.2 "invert the whole-doc gate"),
 branched off `fix/skills-a2` (deps W1/W2/W5, all in the phase-branch history; plan/audit docs live on the chain, not `master`). Root cause:

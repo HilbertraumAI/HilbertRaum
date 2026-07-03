@@ -522,3 +522,60 @@ tokens):
 `qwen3.5-27b-q4km.yaml` / `qwen3.5-35b-a3b-q4km.yaml` fallback (hashes recorded in the manifest
 templates in the wave plan), keep `UD-Q4_K_XL` as the preferred quant. Do NOT add a fallback
 pre-emptively.
+
+---
+
+## 10. Skills extraction & real-model smoke (skills-remediation T1, audit §7)
+
+Two offline guards for the skills extract/analysis paths — one always-on, one opt-in — added by
+skills-remediation Phase T1. They close the two audit §7 test-blindness classes: committed extractor
+fixtures were synthetic and post-hoc (built to match the parser, so every real-layout incident —
+INVOICE-TOTALS-1, the HVB zero-transactions case, the §5.3 NBSP/Unicode family — slipped through), and NO
+skill path was ever exercised against a real model (the same class that shipped the RUNTIME-5/6 vision
+salad).
+
+### 10.1 Real-layout fixture corpus + output-snapshot guard (always on, in `npm test`)
+
+`tests/fixtures/real-layouts/corpus.ts` is the single committed home for the extractor incident-class
+fixtures — constructed AT/DE/CH bank statements + invoices (**never real user documents**, special
+characters written as `\u` escapes so a git/editor normalization can't silently defeat the incident class)
+carrying the layouts that actually broke: NBSP / narrow-NBSP thousands grouping, U+2212 / en-dash minus
+signs, the German `Summe` / `Summe netto` / `Endbetrag` / `Rechnungssumme` totals labels, SEPA rows,
+`dd.mm.yy` + cross-year dates, and wrapped descriptions.
+[`tests/integration/extractor-realworld.test.ts`](../apps/desktop/tests/integration/extractor-realworld.test.ts)
+runs the corpus through the REAL production extractors (the same currency-vote / date-order / anchor
+inference the tool does) and asserts the parsed figures, AND pins a per-fixture hash of the full extractor
+output in `extractor-output.snapshot.json`, keyed by `BANK_EXTRACTOR_VERSION` / `INVOICE_EXTRACTOR_VERSION`.
+Each entry also stores an **input hash** so the guard can tell a *corpus edit* apart from an *extractor
+change*: an output change on UNCHANGED fixture input means the extractor moved, and MUST bump the version;
+an output change because a fixture was edited needs no bump. Any output change FAILS the default suite until
+the snapshot is regenerated — and regeneration itself REFUSES to write when the output moved for unchanged
+input without a version bump, so the rule cannot be silenced by regenerating alone:
+
+```powershell
+UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts
+```
+
+This is the mechanical backstop for the repo rule "every extractor behaviour change bumps the version by
+exactly 1 so stale rows re-extract" — no model, no network.
+
+### 10.2 The opt-in real-model smoke (`SKILLS_SMOKE_MODEL`)
+
+[`tests/e2e-model/skills-smoke.test.ts`](../apps/desktop/tests/e2e-model/skills-smoke.test.ts), the same
+env-gated pattern as the vision / gpu / rerank smokes (§8.1) — `describe.runIf` keeps it COLLECTED (the
+full-suite guard) but SKIPPED in CI, so the green gate stays zero-model / zero-network:
+
+```powershell
+$env:SKILLS_SMOKE_MODEL = "D:\models\chat\qwen3.5-4b-ud-q4kxl.gguf"
+cd apps\desktop
+npx vitest run tests/e2e-model/skills-smoke.test.ts
+```
+
+It drives the REAL production answer paths against a local chat GGUF (CPU-pinned, `--device none`): the
+invoice + bank THIRD MODE (grounded-data — the model NARRATES the deterministically-verified extract with
+the figure echo appended verbatim beneath) over the real-layout corpus, plus one German whole-document
+minutes turn. It asserts STRUCTURE + FIGURES (the third mode engaged; the deterministic totals / cashflow
+echo rides under the model answer; whole-doc coverage is capped + not truncated; end-of-transcript items
+present) — **never prose / wording**. This is the autonomous stand-in for the manual GUI smoke of the three
+complaint flows (bank statement, invoice, minutes). Overrides: `HILBERTRAUM_LLAMA_BIN`, `SKILLS_SMOKE_ROOT`
+(defaults target `D:\`).

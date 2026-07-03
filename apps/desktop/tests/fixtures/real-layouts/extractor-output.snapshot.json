@@ -1,0 +1,188 @@
+{
+  "$comment": "GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by extractor version. Regenerate in the SAME commit as any extractor version bump: UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts",
+  "bankExtractorVersion": 8,
+  "invoiceExtractorVersion": 8,
+  "fixtures": {
+    "bank-at-elba-nbsp-minus": {
+      "kind": "bank",
+      "inputHash": "5bcbad9963d2abc91a8491189d6f01f43fcdc2434f241cf1928f9f63be8d7f44",
+      "hash": "093d76f9a2d42578c27b23a1478e80393fd510a1df56265c82273d80ffcbc6e3",
+      "output": {
+        "transactions": [
+          {
+            "date": "2025-12-28",
+            "description": "Dauerauftrag Miete",
+            "amount": -900,
+            "currency": "EUR",
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-01-06",
+            "description": "SEPA-Gutschrift Gehalt",
+            "amount": 2500,
+            "currency": "EUR",
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-01-07",
+            "description": "SEPA-Lastschrift NETFLIX INTERNATIONAL B.V.",
+            "amount": -12.99,
+            "currency": "EUR",
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-01-15",
+            "description": "Bankomat Abhebung",
+            "amount": -200,
+            "currency": "EUR",
+            "sourcePage": 1
+          }
+        ],
+        "dateOrderInferred": "evidence",
+        "droppedRowCount": 0,
+        "currency": "EUR",
+        "openingBalance": 1000,
+        "closingBalance": 2387.01
+      }
+    },
+    "bank-de-sparkasse-endash": {
+      "kind": "bank",
+      "inputHash": "84dd779e4df056feab207226df77dd438b03bb6f872425a08e17e171f7a3c1da",
+      "hash": "e38d8c8f6abf3ebefeb20164d57665dac7f9030185e90f36e50e46fc0f8acc40",
+      "output": {
+        "transactions": [
+          {
+            "date": "2026-02-01",
+            "description": "Kartenzahlung REWE",
+            "amount": -45.9,
+            "currency": "EUR",
+            "balanceAfter": 954.1,
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-02-02",
+            "description": "SEPA-Lastschrift STADTWERKE MUENCHEN",
+            "amount": -19.99,
+            "currency": "EUR",
+            "balanceAfter": 934.11,
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-02-05",
+            "description": "SEPA-Gutschrift Lohn",
+            "amount": 2500,
+            "currency": "EUR",
+            "balanceAfter": 3434.11,
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-02-06",
+            "description": "Dauerauftrag Sparplan",
+            "amount": -1000,
+            "currency": "EUR",
+            "balanceAfter": 2434.11,
+            "sourcePage": 1
+          }
+        ],
+        "dateOrderInferred": "default",
+        "droppedRowCount": 0,
+        "currency": "EUR"
+      }
+    },
+    "invoice-at-steuerberatung": {
+      "kind": "invoice",
+      "inputHash": "6ad3d7c971095cd41fbb9b0a248bc3353bcd4e6268ff85031da33308061140b5",
+      "hash": "43f215a357f8bdf02e3e7d2e896dde405852c9487331870c3b53477bf994b5de",
+      "output": {
+        "header": {
+          "invoiceNumber": "2026-014",
+          "invoiceDate": "2026-03-15",
+          "dueDate": "2026-04-14",
+          "currency": "EUR"
+        },
+        "lineItems": [
+          {
+            "description": "Steuerberatung Jänner",
+            "lineTotal": 500,
+            "currency": "EUR"
+          },
+          {
+            "description": "Netto-Miete Objekt 3",
+            "lineTotal": 1000,
+            "currency": "EUR"
+          }
+        ],
+        "totals": {
+          "netTotal": 1500,
+          "taxTotal": 300,
+          "taxRatePercent": 20,
+          "grossTotal": 1800
+        },
+        "droppedRowCount": 0,
+        "dateOrderInferred": "evidence"
+      }
+    },
+    "invoice-ch-summe-apostrophe": {
+      "kind": "invoice",
+      "inputHash": "9d376f585f19abee0e7a9ee17f4a88459cacb8132a842ceb357b214bce84616a",
+      "hash": "0351758e11928659ad940843e42b1c7051dd128ad36ae326e50e38c846f47303",
+      "output": {
+        "header": {
+          "invoiceDate": "2026-02-03",
+          "currency": "CHF"
+        },
+        "lineItems": [
+          {
+            "description": "Beratung Projekt Alpha Onsite-Workshop Zürich",
+            "lineTotal": 2400,
+            "currency": "CHF"
+          },
+          {
+            "description": "Lizenz Jahresabo",
+            "lineTotal": 600,
+            "currency": "CHF"
+          }
+        ],
+        "totals": {
+          "grossTotal": 3000
+        },
+        "droppedRowCount": 0,
+        "dateOrderInferred": "evidence"
+      }
+    },
+    "invoice-de-endbetrag-phantom": {
+      "kind": "invoice",
+      "inputHash": "d5bd8adff6af520345b5f1555b0fc12c03ac7b8015373d9de8492e7f33f4573a",
+      "hash": "e88d276dbd4c595307bbbcaa2a12b009d47c557bd15b7130dd745c7b4d074952",
+      "output": {
+        "header": {
+          "invoiceDate": "2026-02-20",
+          "currency": "EUR"
+        },
+        "lineItems": [
+          {
+            "description": "Material",
+            "lineTotal": 120,
+            "currency": "EUR"
+          },
+          {
+            "description": "Arbeitszeit",
+            "lineTotal": 150,
+            "currency": "EUR"
+          },
+          {
+            "description": "Rabatt",
+            "lineTotal": -20,
+            "currency": "EUR"
+          }
+        ],
+        "totals": {
+          "netTotal": 250,
+          "grossTotal": 250
+        },
+        "droppedRowCount": 0,
+        "dateOrderInferred": "evidence"
+      }
+    }
+  }
+}
