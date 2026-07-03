@@ -38,7 +38,9 @@ export interface LayoutWord {
  * the reconstructed line as TEXT and the line parser's `MONEY_RE` (which reads bare-thousands) parses it as
  * 2500 — see `MONEY_TOKEN_RE` below for why the geometry classifier needn't itself accept bare-thousands.
  * Plausibility (month 1–12, day 1–31) is still checked by the caller so a dot-decimal like `12.50`
- * (impossible "month" 50) is classified as money, not a date.
+ * (impossible "month" 50) is classified as money, not a date. A dot-decimal whose "month" IS plausible
+ * (`5.04`, `1.12` — the CH/UK/US small-amount forms) is disambiguated by GEOMETRY instead: `classifyToken`
+ * reads a yearless `d.dd` as a date only inside the Datum column band (SKA-13, skills-audit-2026-07-03).
  */
 const DATE_TOKEN_RE = /^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4})?)?$/
 
@@ -118,7 +120,11 @@ type TokenClass = 'date' | 'money' | 'currency' | 'sign' | 'text'
 
 /** Classify one whitespace-delimited token. Date is tried first (with a plausibility check) so a
  *  value-date column never masquerades as the amount; then money; then a standalone currency code /
- *  sign marker (kept out of the description); else free text. */
+ *  sign marker (kept out of the description); else free text. A YEARLESS `d.dd` that is also
+ *  money-shaped classifies 'date' HERE — `parseTransactionRow` re-resolves that ambiguity with the row's
+ *  full context (SKA-13, see `isAmbiguousDotDecimal`); the raw-text / continuation / column-vote callers
+ *  keep the conservative date-first read (a kept `d.dd` on a raw line could re-enter the downstream line
+ *  parser as a spurious leading date, and a continuation line must still absorb its wrapped text). */
 function classifyToken(token: string): TokenClass {
   const dm = DATE_TOKEN_RE.exec(token)
   if (dm) {
@@ -131,6 +137,40 @@ function classifyToken(token: string): TokenClass {
   if (SIGN_TOKEN_RE.test(token)) return 'sign'
   return 'text'
 }
+
+/**
+ * SKA-13 (skills-audit-2026-07-03): a YEARLESS, dotless-tail `d.dd` token is BOTH date-shaped (`5.04` =
+ * 5 April) and money-shaped (a dot-decimal amount — the CH/UK/US minor-unit form). Date-first
+ * classification ate every small dot-decimal amount as an out-of-column date and DROPPED it, so the row
+ * reconstructed with the running BALANCE as its only figure (the cardinal balance-as-amount harm) — or,
+ * with no balance column, vanished. `parseTransactionRow` re-reads such a token as MONEY, but only under
+ * FOUR row-context guards (each killing a verified way the bare band test regressed a correct read):
+ *   1. OUT of the Datum band — an in-band `d.dd` is the booking date;
+ *   2. AFTER description text has started — a `d.dd` in the leading date region is a dotless VALUTA
+ *      column (`01.04. 05.04 REWE -23,45`), which must stay a dropped date, never a phantom amount;
+ *   3. BEFORE any money-class token — the amount precedes the balance, so a `d.dd` trailing a real
+ *      comma-money amount is again a Valuta/annotation date, not a second figure;
+ *   4. on a row with NO numeric-TEXT token and NO comma-decimal money token — an apostrophe/bare-
+ *      thousands figure (`1'234.56`, `2.500`) is text-class here (MONEY_TOKEN_RE's deliberate subset),
+ *      and emitting a reclassified `d.dd` next to it REORDERS the columns downstream (balance-as-amount,
+ *      the exact harm this fix targets); and a comma-decimal row (`-23,45`) is a de-AT-style statement
+ *      on which a dot-decimal amount is implausible — both keep the honest legacy drop.
+ * Residual (accepted, documented): a layout printing a dotless Valuta AFTER the description on a
+ * dot-decimal statement is shape-identical to `<desc> <amount> <balance>` and still mis-reads; every
+ * observed Valuta form prints adjacent to the booking date, with a trailing dot, or with a year.
+ */
+function isAmbiguousDotDecimal(token: string): boolean {
+  const dm = DATE_TOKEN_RE.exec(token)
+  return dm !== null && dm[3] === undefined && MONEY_TOKEN_RE.test(token)
+}
+
+/** A digits-and-separators-only TEXT token (guard 4): a figure shape `MONEY_TOKEN_RE` deliberately
+ *  rejects (apostrophe / bare-thousands / a split space-group fragment) — its presence means the row's
+ *  column structure is uncertain, so the dot-decimal reclassification must not fire. */
+const NUMERIC_TEXT_RE = /^[-+(]?\d[\d.,']*\)?-?$/
+
+/** A money-class token whose DECIMAL separator is the comma (guard 4): `-23,45`, `1.234,56`, `45,90-`. */
+const COMMA_DECIMAL_MONEY_RE = /,\d{2}[)\s-]*$/
 
 /** Re-apply a sign marker to a money token: strip ALL existing sign decoration to the bare magnitude,
  *  then prefix `-` for a debit marker (`-`/`S`) or leave positive for a credit marker (`+`/`H`). Strips
@@ -395,7 +435,16 @@ function parseTransactionRow(
   const tokens = rowTokens(row)
   if (tokens.length === 0) return null
 
+  // SKA-13 row context (see `isAmbiguousDotDecimal`): guard 4's two row-wide facts, computed up front.
+  const rowHasNumericText = tokens.some(
+    (t) => classifyToken(t.str) === 'text' && NUMERIC_TEXT_RE.test(t.str)
+  )
+  const rowHasCommaDecimalMoney = tokens.some(
+    (t) => classifyToken(t.str) === 'money' && COMMA_DECIMAL_MONEY_RE.test(t.str)
+  )
+
   let leadDate: string | null = null
+  let sawDescriptionText = false
   const description: string[] = []
   const money: PositionedToken[] = []
   const signs: Array<{ x: number; descIndex: number }> = []
@@ -410,6 +459,19 @@ function parseTransactionRow(
         const full = toFullDate(tok.str, year, anchorMonth)
         if (full) leadDate = full
         // a date we cannot resolve (bare, no page year) is dropped — never guessed
+      } else if (
+        // SKA-13: an out-of-band yearless `d.dd` is a dot-decimal AMOUNT under the four row guards
+        // (out of band; after description text — not a dotless Valuta column; before any money-class
+        // token — the amount precedes the balance; on a row with neither numeric-text nor
+        // comma-decimal money). See `isAmbiguousDotDecimal` for why each guard exists.
+        isAmbiguousDotDecimal(tok.str) &&
+        !inDatumColumn(tok.x, datum) &&
+        sawDescriptionText &&
+        money.length === 0 &&
+        !rowHasNumericText &&
+        !rowHasCommaDecimalMoney
+      ) {
+        money.push(tok)
       }
       continue
     }
@@ -431,6 +493,7 @@ function parseTransactionRow(
       continue
     }
     description.push(tok.str)
+    sawDescriptionText = true
   }
 
   if (leadDate === null) return null // not a dated transaction row

@@ -1,7 +1,7 @@
 {
   "$comment": "GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by extractor version. Regenerate in the SAME commit as any extractor version bump: UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts",
-  "bankExtractorVersion": 8,
-  "invoiceExtractorVersion": 8,
+  "bankExtractorVersion": 9,
+  "invoiceExtractorVersion": 9,
   "fixtures": {
     "bank-at-elba-nbsp-minus": {
       "kind": "bank",
@@ -87,6 +87,95 @@
         "dateOrderInferred": "default",
         "droppedRowCount": 0,
         "currency": "EUR"
+      }
+    },
+    "bank-at-ddmmyy-period-balance": {
+      "kind": "bank",
+      "inputHash": "0c4d457d5f1be43f092838758c6bdc823fb6831fb002b10d849b527764d639f9",
+      "hash": "46aad5d195ae27a6a0586caa6ffaf1b0619f8fa9aca6276d9dd823ea0969a520",
+      "output": {
+        "transactions": [
+          {
+            "date": "2026-03-02",
+            "description": "Kartenzahlung REWE",
+            "amount": -19.15,
+            "currency": "EUR",
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-03-05",
+            "description": "SEPA-Gutschrift Miete Anteil",
+            "amount": 250,
+            "currency": "EUR",
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-03-10",
+            "description": "Dauerauftrag Sparen",
+            "amount": -100,
+            "currency": "EUR",
+            "sourcePage": 1
+          }
+        ],
+        "dateOrderInferred": "evidence",
+        "droppedRowCount": 0,
+        "currency": "EUR",
+        "openingBalance": 1000,
+        "closingBalance": 1130.85
+      }
+    },
+    "bank-ch-geometry-dot-decimal": {
+      "kind": "bank",
+      "inputHash": "4f16197c722d12eab97e90d4ef7fcdef3226b72ba379ea5e2b002ffcd71315d1",
+      "hash": "8d5db0800ab3bb0d015dc1365c9043758ddf013ca283e7ca3512e0eee55c2ca9",
+      "output": {
+        "transactions": [
+          {
+            "date": "2026-02-01",
+            "description": "Gutschrift Zins",
+            "amount": 5.04,
+            "currency": "CHF",
+            "balanceAfter": 1209.44,
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-02-03",
+            "description": "Gutschrift Rueckverguetung",
+            "amount": 1.12,
+            "currency": "CHF",
+            "balanceAfter": 1210.56,
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-02-05",
+            "description": "Gutschrift Erstattung",
+            "amount": 20,
+            "currency": "CHF",
+            "balanceAfter": 1230.56,
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-02-07",
+            "description": "Gutschrift Bonus",
+            "amount": 3.5,
+            "currency": "CHF",
+            "balanceAfter": 1234.06,
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-02-12",
+            "description": "Gutschrift Ausgleich Wert:",
+            "amount": 10,
+            "currency": "CHF",
+            "balanceAfter": 1244.06,
+            "sourcePage": 2
+          }
+        ],
+        "dateOrderInferred": "default",
+        "droppedRowCount": 0,
+        "currency": "CHF",
+        "openingBalance": 1204.4,
+        "closingBalance": 1244.06
       }
     },
     "invoice-at-steuerberatung": {
@@ -179,6 +268,42 @@
         "totals": {
           "netTotal": 250,
           "grossTotal": 250
+        },
+        "droppedRowCount": 0,
+        "dateOrderInferred": "evidence"
+      }
+    },
+    "invoice-de-ddmmyy-money-headers": {
+      "kind": "invoice",
+      "inputHash": "667ce9c25662cd90bc6fd4eb332cc7baacac49c2cda59b49021bf2950d09ce83",
+      "hash": "bdd6aec0cf764843aaf5be724c04090b277c86166803ad8a13533215496ef23a",
+      "output": {
+        "header": {
+          "invoiceDate": "2026-03-15",
+          "currency": "EUR"
+        },
+        "lineItems": [
+          {
+            "description": "Rechnung Nr. 2026-14 vom 03.05.2026 über",
+            "lineTotal": 390,
+            "currency": "EUR"
+          },
+          {
+            "description": "From 01.06.2026 to 30.06.2026 Hosting",
+            "lineTotal": 49,
+            "currency": "EUR"
+          },
+          {
+            "description": "Serverpflege Juni",
+            "lineTotal": 276,
+            "currency": "EUR"
+          }
+        ],
+        "totals": {
+          "netTotal": 325,
+          "taxTotal": 65,
+          "taxRatePercent": 20,
+          "grossTotal": 390
         },
         "droppedRowCount": 0,
         "dateOrderInferred": "evidence"

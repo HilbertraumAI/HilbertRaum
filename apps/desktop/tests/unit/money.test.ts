@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   MONEY_RE,
+  blankDateTokens,
   parseAmount,
   detectCurrency,
   detectDocumentCurrency,
+  hasMoneyToken,
   inferDateOrder,
   normalizeExtractionText,
   parseDate,
@@ -156,6 +158,62 @@ describe('money.ts — inferDateOrder / parseDate / splitLeadingDates / stripDat
     expect(stripDateTokens('Endsaldo 1.234,56 EUR per 30.06.2026')).not.toContain('30.06.2026')
     // A grouped figure is NOT a date token, so scrubbing never eats a real amount.
     expect(stripDateTokens('Kontostand 35.037,04')).toContain('35.037,04')
+  })
+
+  it('stripDateTokens scrubs a 2-digit-year dd.mm.yy date (SKA-2) — money-shaped to MONEY_RE, invisible before', () => {
+    // The R5 first-class cohort: `31.03.26` reads 3103.26 through MONEY_RE, so the un-scrubbed balance/
+    // totals readers took the DATE as the figure. The widened scrub removes it while the guards keep every
+    // real amount intact.
+    expect(stripDateTokens('Endsaldo 1.234,56 EUR per 31.03.26')).not.toContain('31.03.26')
+    expect(stripDateTokens('Endsaldo 1.234,56 EUR per 31.03.26')).toContain('1.234,56')
+    expect(stripDateTokens('Gesamtbetrag 390,00 EUR per 30.06.26')).toContain('390,00')
+    expect(stripDateTokens('Datum: 15.03.26')).not.toContain('15.03.26')
+    // The guards (SKA-2): `\b` refuses a mid-digit start, `(?![\d.,'])` refuses a "year" that continues —
+    // so grouped/apostrophe/space-grouped amounts are never eaten…
+    expect(stripDateTokens('Kontostand 35.037,04')).toContain('35.037,04')
+    expect(stripDateTokens('Betrag 1.234,56')).toContain('1.234,56')
+    expect(stripDateTokens("Saldo 1'234.56")).toContain("1'234.56")
+    expect(stripDateTokens('Gruppe 1.234.567')).toContain('1.234.567')
+    // …and a 4-digit-year date is consumed WHOLE (the 2-digit branch cannot bite off `01.04.20`).
+    expect(stripDateTokens('per 01.04.2026 Ende')).toBe('per   Ende')
+  })
+
+  it('blankDateTokens is SAME-LENGTH (byte offsets preserved) — the SKA-1 row-scan copy', () => {
+    const line = 'bis 30.04.2026 dann 31.03.26 Ende 1.234,56'
+    const blanked = blankDateTokens(line)
+    expect(blanked.length).toBe(line.length) // offsets into the original line stay valid
+    expect(blanked).not.toContain('30.04.2026')
+    expect(blanked).not.toContain('31.03.26')
+    expect(blanked.indexOf('1.234,56')).toBe(line.indexOf('1.234,56')) // real figures untouched, same offset
+    expect(blanked.replace(/\s+/g, ' ').trim()).toBe('bis dann Ende 1.234,56')
+  })
+
+  it('hasMoneyToken: a money-less dd.mm.yy period line is NOT money-bearing (SKA-2 droppedRowCount fix)', () => {
+    expect(hasMoneyToken('01.04.26 bis 30.04.26')).toBe(false)
+    expect(hasMoneyToken('15.03.26 bis 31.03.26 Zinsperiode')).toBe(false)
+    expect(hasMoneyToken('Zeitraum 01.04.2026 bis 30.04.2026')).toBe(false)
+    expect(hasMoneyToken('15.03.26 Zinsen 1,25')).toBe(true) // a real figure still counts
+  })
+
+  it('a PUNCTUATION-trailed dd.mm.yy still scrubs (R7 review): terminal `.`/`,` is not a continuation', () => {
+    // A plain `(?![\d.,'])` lookahead treated sentence punctuation as a money continuation and left the
+    // date in place — un-fixing SKA-2 on `per 31.03.26.` / mid-sentence `vom 15.03.26, …` shapes.
+    expect(stripDateTokens('Endsaldo 1.234,56 EUR per 31.03.26.')).not.toContain('31.03.26')
+    expect(stripDateTokens('Gesamtbetrag 390,00 EUR per 30.06.26,')).not.toContain('30.06.26')
+    expect(stripDateTokens('Leistung vom 15.03.26, Pauschale 100,00')).not.toContain('15.03.26')
+    // …while a separator FOLLOWED BY A DIGIT is still a continuation and stays unscrubbed:
+    expect(stripDateTokens('Betrag 31.03.26,50')).toContain('31.03.26,50') // ambiguous money-ish tail
+    expect(stripDateTokens("Konto 26'000 Stand 31.03.26'000")).toContain("31.03.26'000") // Swiss grouping
+    expect(stripDateTokens('Version 1.2.26.5 Build')).toContain('1.2.26.5') // dotted version/section code
+  })
+
+  it('detectDocumentCurrency: a code IMMEDIATELY left of the first figure votes (R7 review — the per-row currency-cell layout)', () => {
+    // The SKA-2 scrub widening removed dd.mm.yy lines' accidental vote (the date used to be the first
+    // "money" match, so the region started left of the code); adjacency restores it deliberately.
+    expect(detectDocumentCurrency('15.06.26 REWE Markt EUR 19,15-')).toBe('EUR')
+    expect(detectDocumentCurrency('01.06.2026 Miete EUR 850,00-')).toBe('EUR') // fixes the 4-digit twin too
+    // The FIN-1 memo exclusion is untouched: a code NOT adjacent to the figure still never votes.
+    expect(detectDocumentCurrency('USD Memo -12,00 100,00\nWährung EUR')).toBe('EUR')
   })
 })
 

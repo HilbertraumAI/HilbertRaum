@@ -117,6 +117,9 @@ This is the one live violation of the §22-D1 "never invent a figure" posture.
 kills the 3004.26 variant. Bump both extractor versions.
 **Testing:** corpus fixtures for the period-line shapes (4-digit + 2-digit year), assert zero rows and
 no `droppedRowCount` increment. **Docs:** none.
+**Status: FIXED in R7** (`scanMoneyWithBlankedDates` — same-length blanked scan with trailing-sign
+re-validation against the original bytes — in `parseLine`/`parseLineItem`; versions → 9; corpus fixture
+`bank-at-ddmmyy-period-balance` + unit pins incl. byte-level description/figure-region slices).
 
 **SKA-2 — 2-digit-year dotted dates are money-shaped and invisible to every date scrub.** · bug
 (extraction) · **High** · High · `tools/money.ts:479` (`DATE_TOKEN_RE` requires `\d{4}`),
@@ -134,6 +137,10 @@ headlines on correctly-read statements.
 `\b\d{1,2}[./]\d{1,2}[./]\d{2}(?![\d.,])` — keeps `1.234,56`/`35.037,04` safe); bump both versions.
 **Testing:** the four scenarios above as fixtures; extend the existing BL-N2 4-digit test with the
 2-digit twin. **Docs:** known-limitations R5 bullet gains the closed gap.
+**Status: FIXED in R7** (double-guarded `(?!\d)(?![.,']\d)` 2-digit-year alternative in both
+`DATE_TOKEN_RE`s — the review-hardened form also scrubs punctuation-trailed dates; versions → 9; all
+four scenarios pinned in fixtures/unit tests; the document currency vote gained a figure-adjacent
+left-code arm so per-row currency-cell layouts keep their vote).
 
 **SKA-3 — Redaction misses NBSP/Unicode-separator variants of IBAN, card, and phone (and the
 parenthesized US phone form).** · bug (privacy false negative) · **High** · High ·
@@ -302,6 +309,11 @@ confidently-wrong-money harm, on the geometry path that exists to prevent it); w
 the row silently vanishes. The corpus itself contains dot-decimal CHF.
 **Fix:** classify `d.dd`-shaped tokens as 'date' only inside the detected Datum column band, else
 'money'. **Testing:** dot-decimal geometry fixture. **Docs:** §21 boundary note.
+**Status: FIXED in R7** (row-context-guarded reclassification in `parseTransactionRow` — the bare band
+gate alone regressed dotless Valuta dates and apostrophe-balance rows in the adversarial review, so the
+money re-read fires only out-of-band, after description text, before any money-class token, and on rows
+without numeric-text/comma-decimal figures; geometry corpus fixture `bank-ch-geometry-dot-decimal`
+runs the full multi-page reconstructPage→extraction pipeline into the snapshot).
 
 **SKA-14 — Invoice vendor/number header labels still swallow money-bearing lines — R2's gate covers
 date labels only.** · bug (extraction) + doc-mismatch · **Medium** · High · `tools/invoice.ts:227-229,
@@ -315,6 +327,10 @@ money-bearing line") overstates the shipped fix.
 **Fix:** vendor/number branches fall through when the line carries a money token (`hasMoneyToken`).
 Bump invoice extractor version. **Testing:** the two shapes as fixtures. **Docs:** correct the R2
 bullet.
+**Status: FIXED in R7** (`applyHeader` gate on AMOUNT-shaped money — `carriesAmountShapedMoney`, a 2-dp
+figure or currency-adjacent money; the review showed a plain `hasMoneyToken` gate inverted the harm on
+grouped header VALUES like `Rechnung Nr. 26.001`; fixture `invoice-de-ddmmyy-money-headers` + unit pins
+incl. the rejected-line droppedRowCount half; known-limitations R2 bullet corrected).
 
 **SKA-15 — The fence-trim "guaranteed minimum" is the bare `#` heading: at tight budgets the honesty
 rules are still decapitated, and the parity test pins the wrong paragraph.** · bug (prompt assembly) ·
@@ -524,7 +540,8 @@ Doc↔code mismatches found (fix the doc or the code, per the SKA item):
    I spend on groceries?" as the canonical grounded-data example — it routes to the template (SKA-20);
    the W4 comment's "wer hat die höchste Zahlung bekommen?" example doesn't route at all (SKA-7).
 2. **known-limitations.md R2 bullet** — "header matching likewise no longer swallows a money-bearing
-   line" overstates: only date labels were gated (SKA-14).
+   line" overstates: only date labels were gated (SKA-14). **Fixed in R7** (bullet corrected + the
+   vendor/number gate shipped).
 3. **known-limitations.md U1 bullet** — "the budget-driven fence trim — which keeps leading paragraphs"
    implies the rules survive any trim; the guaranteed minimum is the bare heading (SKA-15), and the
    parity test's comment codifies the wrong model.
@@ -566,6 +583,9 @@ suites assert behavior (figures, masks, routes), not internals.
 - *Extractor fixtures:* the corpus has no dd.mm.yy balance/period lines (SKA-1/2), no dot-decimal
   geometry statement (SKA-13), no money-bearing vendor/number header line (SKA-14), no Unicode
   redaction fixtures (SKA-3), and no fixture with `droppedRowCount > 0` or a `contradicted` gate.
+  *(R7 closed the first three: `bank-at-ddmmyy-period-balance`, `bank-ch-geometry-dot-decimal` — the
+  geometry fixtures now snapshot through the real `reconstructPage` pipeline — and
+  `invoice-de-ddmmyy-money-headers`. SKA-3 fixtures are R8's; droppedRowCount>0 / contradicted are T2's.)*
 - *Lifecycle:* discovery-survives-a-bad-folder (SKA-16); case-folded zip duplicate (SKA-30); YAML
   canary sentinel (SKA-31); import→export→re-import round-trip (SKA-34); trimming the REAL SKILL.md
   bodies through `buildSkillFence` (SKA-15).

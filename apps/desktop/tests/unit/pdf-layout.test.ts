@@ -194,6 +194,127 @@ describe('reconstructLine', () => {
   })
 })
 
+describe('SKA-13 — a yearless d.dd token is a date only INSIDE the Datum band (skills-audit-2026-07-03)', () => {
+  const datum = { min: 40, max: 40 }
+
+  it('a dot-decimal amount (`5.04`) out of the band is MONEY — no more balance-as-amount', () => {
+    // Before: `5.04` classified date-first, fell out of the Datum band, was DROPPED — the row
+    // reconstructed as `01.02.2026 Coffee 1,234.06`, i.e. the running BALANCE became the amount.
+    const row: LayoutWord[] = [
+      word('01.02.', 40, 700),
+      word('Coffee', 100, 700),
+      word('5.04', 300, 700),
+      word('1,234.06', 380, 700)
+    ]
+    expect(reconstructLine(row, 2026, datum)).toBe('01.02.2026 Coffee 5.04 1,234.06')
+  })
+
+  it('with no balance column the row survives instead of silently vanishing', () => {
+    const row: LayoutWord[] = [word('03.02.', 40, 700), word('Parking', 100, 700), word('1.12', 300, 700)]
+    expect(reconstructLine(row, 2026, datum)).toBe('03.02.2026 Parking 1.12')
+  })
+
+  it('an ambiguous d.dd IN the Datum band stays the booking DATE', () => {
+    const row: LayoutWord[] = [word('7.02', 40, 700), word('Bakery', 100, 700), word('3.50', 300, 700)]
+    expect(reconstructLine(row, 2026, datum)).toBe('07.02.2026 Bakery 3.50')
+  })
+
+  it('an out-of-band date WITH a year / trailing dot keeps unconditional date classification (Valuta safety)', () => {
+    // `02.02.24` is not money-shaped-ambiguous (it has a year), so it is still a dropped out-of-band
+    // date — it must never be read as an amount.
+    const row: LayoutWord[] = [
+      word('01.02.', 40, 700),
+      word('02.02.24', 90, 700),
+      word('Miete', 130, 700),
+      word('900,00', 300, 700)
+    ]
+    expect(reconstructLine(row, 2026, datum)).toBe('01.02.2026 Miete 900,00')
+  })
+
+  it('guard 2: a DOTLESS yearless Valuta BEFORE the description stays a dropped date (R7 review)', () => {
+    // `05.04` next to the booking date is a Valuta column, not an amount — reclassifying it made a
+    // phantom 5.04 amount + a phantom balance on no-balance-column statements.
+    const row: LayoutWord[] = [
+      word('01.04.', 40, 700),
+      word('05.04', 90, 700),
+      word('REWE SAGT DANKE', 150, 700),
+      word('-23,45', 330, 700)
+    ]
+    expect(reconstructLine(row, 2026, datum)).toBe('01.04.2026 REWE SAGT DANKE -23,45')
+  })
+
+  it('guard 3: a d.dd AFTER a real money token stays a dropped date (trailing Valuta/annotation)', () => {
+    const row: LayoutWord[] = [
+      word('01.04.', 40, 700),
+      word('Shop', 100, 700),
+      word('19,15-', 300, 700),
+      word('05.04', 360, 700)
+    ]
+    expect(reconstructLine(row, 2026, datum)).toBe('01.04.2026 Shop 19,15-')
+  })
+
+  it('guard 4a: a numeric-TEXT figure on the row (apostrophe/bare-thousands balance) vetoes the reclassification', () => {
+    // `1'234.56` is text-class here (MONEY_TOKEN_RE's deliberate subset); emitting a reclassified `5.04`
+    // beside it would REORDER the columns downstream (balance-as-amount). The row keeps the honest
+    // legacy drop (no money-class figure → not a transaction).
+    const row: LayoutWord[] = [
+      word('01.04.', 40, 700),
+      word('Coffee', 100, 700),
+      word('Shop', 140, 700),
+      word('5.04', 300, 700),
+      word("1'234.56", 380, 700)
+    ]
+    expect(reconstructLine(row, 2026, datum)).toBeNull()
+    const bareThousands: LayoutWord[] = [
+      word('01.04.', 40, 700),
+      word('Sparen', 100, 700),
+      word('5.04', 300, 700),
+      word('2.500', 380, 700)
+    ]
+    expect(reconstructLine(bareThousands, 2026, datum)).toBeNull()
+  })
+
+  it('guard 4b: comma-decimal money on the row (a de-AT-style statement) vetoes the reclassification', () => {
+    // On a comma-decimal statement a dot-decimal amount is implausible — `05.04` after the description
+    // is a Valuta/annotation date there, so it is dropped, and the comma figure stays the amount.
+    const row: LayoutWord[] = [
+      word('01.04.', 40, 700),
+      word('Miete', 100, 700),
+      word('05.04', 200, 700),
+      word('-23,45', 300, 700)
+    ]
+    expect(reconstructLine(row, 2026, datum)).toBe('01.04.2026 Miete -23,45')
+  })
+
+  it('a wrapped-payee continuation with a d.dd annotation is still absorbed (legacy continuation classing)', () => {
+    // continuationText keeps the conservative date-first read: the out-of-band `13.02` annotation is
+    // dropped and the wrapped text still glues onto the booking row above.
+    const words: LayoutWord[] = [
+      word('Kontoauszug', 40, 800),
+      word('2026', 200, 800),
+      word('12.02.', 40, 700),
+      word('Lastschrift', 100, 700),
+      word('-49,00', 300, 700),
+      word('Wert:', 100, 685),
+      word('13.02', 160, 685)
+    ]
+    const { text } = reconstructPage(words)
+    expect(text.split('\n')).toContain('12.02.2026 Lastschrift Wert: -49,00')
+  })
+
+  it('with NO column model the legacy date-first classification stands (the documented fallback)', () => {
+    // detectDatumColumn returns null only for a page with no date tokens (no transactions anyway);
+    // direct null-datum calls keep the pre-SKA-13 semantics byte-identically.
+    const row: LayoutWord[] = [
+      word('01.02.', 40, 700),
+      word('Coffee', 100, 700),
+      word('5.04', 300, 700),
+      word('1,234.06', 380, 700)
+    ]
+    expect(reconstructLine(row, 2026, null)).toBe('01.02.2026 Coffee 1,234.06')
+  })
+})
+
 describe('reconstructPage (end-to-end on word boxes)', () => {
   it('rebuilds every transaction row as a clean parseable line, year from the header', () => {
     const words: LayoutWord[] = [

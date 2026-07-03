@@ -758,6 +758,23 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   amount 2000, cents lost), so a row whose **ONLY** figure is a no-cents bare-thousands / apostrophe token
   carries no money token at the classifier and is dropped — a recall loss, never a wrong figure (it
   reconstructs correctly whenever a 2-dp figure also anchors the row, e.g. amount + cents balance).
+  (5) **[skills-audit-2026-07-03 R7, SKA-13 — dot-decimal `d.dd` amounts.]** A yearless `d.dd` token
+  (`5.04`, `1.12` — the CH/UK/US small-amount forms) is BOTH date- and money-shaped; date-first
+  classification ate it as an out-of-column date, so dot-decimal statements reconstructed with the
+  running balance as the row's only figure (balance-as-amount) or lost the row. `parseTransactionRow`
+  now re-reads such a token as MONEY under **four row-context guards** (out of the Datum band; after
+  description text — a dotless VALUTA next to the booking date stays a dropped date; before any
+  money-class token; and only on rows with no numeric-TEXT token and no comma-decimal money — an
+  apostrophe/bare-thousands "text" figure or a de-AT comma amount on the row keeps the honest legacy
+  drop, since reclassifying beside them re-created balance-as-amount in the adversarial R7 review).
+  Raw-text and continuation rows keep the conservative date-first read (a kept `d.dd` on a raw line
+  could re-enter the line parser as a spurious leading date; a continuation must still absorb its
+  wrapped text). **Residuals:** a layout printing a dotless yearless Valuta AFTER the description on a
+  dot-decimal statement is shape-identical to `<desc> <amount> <balance>` and still mis-reads (every
+  observed Valuta form prints adjacent to the booking date, with a trailing dot, or with a year); and
+  the Datum-band bootstrap vote counts ambiguous `d.dd` tokens as dates, so a page with MORE
+  date-plausible dot-decimal figures in one band than booking dates could in principle mis-place the
+  band (pre-existing lens gap; ties break leftmost, which protects every constructed real layout).
 - **The bank/invoice LINE PARSER makes deliberate locale/column assumptions (full-audit-2026-06-28
   Phase 1, BL-N1/N2/N3 + DECISION 2).** The deterministic line parser shared by the bank and invoice tools
   (`tools/money.ts`, distinct from the geometry pass above) carries these accepted behaviors, all pinned by
@@ -792,7 +809,30 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     additionally gets **cross-year month-rollover**: a December/November row on a January/February-anchored
     statement is assigned the **previous** year (the mirror case, the next year), so a statement whose period
     spans year-end no longer stamps one page year on every bare date. This mirrors the geometry path's
-    `toFullDate`/`resolvePageAnchor` (which gained the same rollover). **Residual:** the anchor is the FIRST
+    `toFullDate`/`resolvePageAnchor` (which gained the same rollover). **R5 left one gap, closed in R7
+    (skills-audit-2026-07-03 SKA-1/SKA-2):** while R5 made `dd.mm.yy` documents a first-class *parsed*
+    cohort, every date **scrub** stayed 4-digit-year-only — a `dd.mm.yy` token is money-shaped to
+    `MONEY_RE` (`31.03.26` → 3103.26), so a balance/totals line's trailing `per 31.03.26` was read as the
+    figure, `Datum: 15.03.26` became a phantom invoice item, money-less dd.mm.yy period lines inflated
+    `droppedRowCount`, and a MID-LINE date on a period line (`01.04.2026 bis 30.04.2026`, both year forms)
+    was read as an invented transaction/line-item amount by the row money scan. R7 widened both
+    `DATE_TOKEN_RE`s with a double-guarded 2-digit-year alternative (`\b` + `(?!\d)(?![.,']\d)` — the
+    lookahead accepts terminal punctuation, `per 31.03.26.` / `vom 15.03.26, …`, while refusing a "year"
+    that continues into digits or a separator-plus-digit) and runs the row parsers' money scan over a
+    SAME-LENGTH date-blanked copy of the line (`scanMoneyWithBlankedDates` — byte offsets preserved, so
+    description slicing and figure-region currency detection are untouched; a match's trailing sign/paren
+    is re-validated against the ORIGINAL bytes, so a blanked billing-period range after the amount —
+    `1.500,00 01.04.2026 - 30.06.2026` — can never read the range dash as a trailing debit minus). Two
+    behavior notes from the R7 adversarial review: **(a)** a spaced dash between an amount and a
+    FOLLOWING date now reads positive-as-printed (the dash is treated as the range separator; before, the
+    date's digits blocked the trailing-minus lookahead AND became a phantom second figure — both readings
+    were wrong, the new one is the honest half of BL-1's documented ambiguity); **(b)** the document
+    currency vote gained a deliberate widening: a code IMMEDIATELY left of a line's first figure
+    (`<desc> EUR 19,15-`, the per-row currency-cell layout) now votes — the scrub widening had removed
+    such dd.mm.yy lines' only (accidental) vote, extracting ZERO rows; the FIN-1 memo exclusion is
+    unchanged. Descriptions now retain a mid-line/trailing date verbatim (previously the date's digits
+    were mis-read as figures; the bytes are kept — cosmetic input to the categorizer). Both extractor
+    versions → 9. **Residual:** the anchor is the FIRST
     fully-printed date in document order — a document whose first 4-digit-year date is in a foreign century
     (an old memo date) would expand `yy` into that wrong century (the same first-date-wins risk the geometry
     path already carries); and rollover keys only off the anchor month, so a genuinely multi-year listing with
@@ -938,8 +978,22 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     **totals** line only when its remainder is essentially just the figure (`isFillerOnly`): tax
     qualifiers / currency / `%` may follow, but a real description ("Netto-Miete Objekt 3 1.000,00",
     "Total hours consulting 40,00") means the line **falls through to `parseLineItem`** and stays a line
-    item; header matching likewise no longer swallows a money-bearing line (`Due diligence review 2.000,00`
-    — a date label only consumes when a date actually parses). Totals are **last-block-wins** (a real
+    item. Header matching is money-gated in two steps: R2 gated only the **date** labels (`Due diligence
+    review 2.000,00` — a date label only consumes when a date actually parses), while the **vendor/number**
+    labels still consumed unconditionally — `From 01.06.2026 to 30.06.2026 Hosting 49,00` ("from" is a
+    vendor label) or `Rechnung Nr. 2026-14 vom 03.05.2026 über 1.500,00 EUR` was swallowed whole: the item
+    deleted, `droppedRowCount` NOT incremented, garbage in vendor/invoiceNumber (the 2026-07-03 audit's
+    SKA-14; the earlier wording of this bullet overstated R2's fix). **Closed in R7:** `applyHeader`'s
+    vendor/number branches fall through on any line carrying **amount-shaped** money
+    (`carriesAmountShapedMoney` — a 2-dp decimal figure, or any money token beside a named currency), so
+    a figure can never silently vanish behind a header claim. The gate deliberately does NOT fire on a
+    bare dotted/thousands GROUP with no currency (`Rechnung Nr. 26.001` — a real DACH `yy.nnn` numbering
+    convention — or `Lieferant: Firma 1.000 GmbH`): the adversarial R7 review showed a plain
+    `hasMoneyToken` gate INVENTED a €26,001/€1,000 line item from those header values, the inversion of
+    the harm this fix closes. **Residual:** a genuine 2-dp figure inside a vendor/number VALUE
+    (`Rechnungsnummer 2026/1.234,56`) falls through and is read as a figure — §22-D1 prefers reading a
+    printed 2-dp figure as a figure over silently discarding it. `INVOICE_EXTRACTOR_VERSION` → 9. Totals
+    are **last-block-wins** (a real
     invoice prints its totals after the items). The German summary vocabulary is extended — `Summe`,
     `Gesamtsumme`, `Rechnungssumme`, `Endsumme`, `Endbetrag`, `summe netto` — and a summary-line guard
     (`isSummaryLabelLine`, mirroring the bank `isBalanceLabelLine`) drops phantom "Summe" items so a

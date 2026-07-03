@@ -6,6 +6,7 @@ import type {
 } from '../../../../shared/types'
 import {
   MONEY_RE,
+  blankDateTokens,
   csvField,
   detectCurrency,
   detectDocumentCurrency,
@@ -17,6 +18,7 @@ import {
   normalizeExtractionText,
   parseAmount,
   parseDate,
+  scanMoneyWithBlankedDates,
   splitLeadingDates,
   stripDateTokens,
   wordIncludes,
@@ -125,8 +127,23 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       MONEY_RE finds none, so a round `Opening balance 914 $` feeds the §3.5/D56 completeness gate
  *       instead of silently losing it. The new field + the recovered balances change the persisted output
  *       on affected statements, so stale v7 rows re-extract.
+ *   9 — skills-audit-2026-07-03 R7 (SKA-1, SKA-2, SKA-13): a mid-line/trailing date can no longer be read
+ *       as an amount. `parseLine` scans money via `scanMoneyWithBlankedDates` — a same-length date-BLANKED
+ *       copy with each match's trailing sign re-validated against the original bytes (SKA-1) — so a
+ *       period line `01.04.2026 bis 30.04.2026` no longer invents a transaction, a trailing date is never
+ *       a phantom balance, and a blanked billing-period range never reads as a trailing debit minus; the
+ *       shared `DATE_TOKEN_RE` scrub gained a double-guarded 2-digit-year alternative incl. terminal
+ *       punctuation (SKA-2), so `Endsaldo 1.234,56 EUR per 31.03.26` reads the balance (not 3103.26) and a
+ *       money-less dd.mm.yy period line no longer inflates `droppedRowCount`; `detectDocumentCurrency`
+ *       additionally counts a code IMMEDIATELY left of a line's first figure (the per-row currency-cell
+ *       layout, whose accidental vote the widened scrub had removed); and the geometry path
+ *       (`pdf-layout.ts parseTransactionRow`) re-reads a yearless `d.dd` outside the Datum band as MONEY
+ *       under four row-context guards (SKA-13), so a dot-decimal amount (`5.04`) on a CH/UK/US statement
+ *       is no longer eaten as a date (balance-as-amount / silent row loss) while dotless Valuta dates and
+ *       apostrophe/comma-decimal rows keep their safe legacy reads. Each changes persisted rows/balances
+ *       on affected statements, so stale v8 rows re-extract.
  */
-export const BANK_EXTRACTOR_VERSION = 8
+export const BANK_EXTRACTOR_VERSION = 9
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -224,10 +241,23 @@ function parseLine(
   const { dates, rest } = splitLeadingDates(line, order, anchor)
   if (dates.length === 0) return null
   const date = dates[0]
-  const matches = [...rest.matchAll(MONEY_RE)]
+  // SKA-1 (skills-audit-2026-07-03): scan money over a DATE-BLANKED copy of `rest`. `splitLeadingDates`
+  // consumes only the LEADING date run, so a MID-LINE date stayed in `rest`, where MONEY_RE read its
+  // `dd.mm.yy(yy)` tail as a 2-dp amount — a period line `01.04.2026 bis 30.04.2026` invented the
+  // transaction `{description: "bis", amount: 30.04}` (the dd.mm.yy twin invented 3004.26), and a
+  // TRAILING date became a phantom balance column. The blanking is SAME-LENGTH (spaces), so every match
+  // index below stays valid in the ORIGINAL `rest`: the `description` slice and the figure-region
+  // currency slice are byte-identical to before on any date-free row.
+  const { matches } = scanMoneyWithBlankedDates(rest)
   if (matches.length === 0) return null
+  // The figure boundary is the first NON-SPACE of the first match, not `match.index`: MONEY_RE tolerates
+  // up to 4 leading spaces (`\s{0,4}`), and on the BLANKED scan those spaces can be a blanked date's TAIL
+  // — slicing at `match.index` would chop those original bytes out of the description. On a date-free row
+  // the skipped chars are real whitespace, so this is byte-identical to the pre-SKA-1 slice.
+  const first = matches[0]
+  const figureStart = first.index + (first.token.length - first.token.trimStart().length)
   // The description is the text before the FIRST money token (everything to the left of the figure run).
-  const description = rest.slice(0, matches[0].index).trim()
+  const description = rest.slice(0, figureStart).trim()
   if (!description) return null
   // F1 (full-audit-2026-06-29-postmerge) — FLAG (don't yet drop) an ambiguous amount column. A whole-euro
   // amount (`50`) or single-decimal (`12,5`) is REJECTED by MONEY_RE (no 2-dp tail, not grouped), so a
@@ -237,14 +267,18 @@ function parseLine(
   // `extractTransactionRows` using whether a balance column exists. (The flag is the LEFT-side uncaptured
   // column because the bank amount is the second-to-last figure; the invoice path flags a RIGHT-side column
   // because it reads the line total as the LAST figure — `invoice.ts parseLineItem`.)
-  const ambiguousAmount = matches.length === 1 && DESC_TRAILING_NUMBER.test(description)
+  // The F1 flag reads the BLANKED description tail (R7 review): a trailing VALUE-DATE in the description
+  // (`REWE DANKT 02.03.2026 -19,15`) is knowably NOT an uncaptured amount column — the scan just blanked
+  // it as a date — so it must not flag the row (which would silently drop it on any balance-column
+  // statement). A genuine bare-number tail is never date-shaped and still flags.
+  const ambiguousAmount = matches.length === 1 && DESC_TRAILING_NUMBER.test(blankDateTokens(description))
   // BL-N3 — choose the amount column by POSITION, not the first money token. With ≥2 figures the LAST is
   // the balance and the SECOND-TO-LAST is the movement amount; a money-shaped reference inside the
   // description (e.g. an "…100,00 EUR…" note) therefore no longer steals the amount (and its sign). With
   // exactly one figure there is no balance column, so that figure is the amount. (For the normal 2-figure
   // row the second-to-last IS the first, so this is byte-identical to before on every existing fixture.)
   const hasBalance = matches.length >= 2
-  const amount = parseAmount(matches[hasBalance ? matches.length - 2 : 0][0])
+  const amount = parseAmount(matches[hasBalance ? matches.length - 2 : 0].token)
   if (amount === null) return null
   // Per-row currency detection is restricted to the FIGURE REGION — the text from the FIRST money token
   // onward (audit BL-2). Scanning the whole line let a currency WORD in the free-text description (a EUR
@@ -254,7 +288,7 @@ function parseLine(
   // currency row prints its code/symbol NEXT TO the amount (inside the figure region), so it is still
   // detected and mixed-currency honesty is preserved (this is why we slice the figure region rather than
   // simply preferring statementCurrency, which would silently sum a truly-mixed line in one currency).
-  const figureRegion = rest.slice(matches[0].index)
+  const figureRegion = rest.slice(figureStart)
   const currency = detectCurrency(figureRegion) ?? statementCurrency
   if (!currency) return null
   const row: ExtractedTransaction = { date, description, amount, currency }
@@ -262,7 +296,7 @@ function parseLine(
   // schema/CSV already carry it; the booking date (de-AT Buchungstag) is conventionally printed first.
   if (dates.length >= 2) row.valueDate = dates[1]
   if (hasBalance) {
-    const bal = parseAmount(matches[matches.length - 1][0])
+    const bal = parseAmount(matches[matches.length - 1].token)
     if (bal !== null) row.balanceAfter = bal
   }
   if (page != null) row.sourcePage = page
