@@ -273,21 +273,44 @@ typical briefs complete on ≥8 k windows (full 3072 reserve); Phase 1 coverage 
 
 ---
 
-## 5. Phase 3 — Progress affordance (perceived-latency UX)
+## 5. Phase 3 — Progress affordance (perceived-latency UX) ✅ IMPLEMENTED (2026-07-05)
 
 **Goal:** the silent map calls before the first streamed token must not read as a hang.
 
-### Files
-- `apps/desktop/src/main/ipc/registerRagIpc.ts` (or the whole-doc branch in `rag/index.ts`) — fire
-  the existing ephemeral notice `sendCompaction('analysis')` before the map loop (same channel the
-  exhaustive path already uses, [reg] ~L464; cleared on the first answer token).
-- `apps/desktop/src/shared/i18n/{en,de}.ts` — copy: EN *"Analysing the whole document, section by
-  section…"* / DE *"Das ganze Dokument wird abschnittweise analysiert…"* (avoid the forbidden
-  UI words chunk/tree/embedding).
+**As built:** the fire lives in the shared core `streamWholeDocMapReduce` ([wdt] — `rag/whole-doc-tree.ts`),
+NOT in an IPC branch — so BOTH the tree rescue and the chunk map-reduce path get the notice for free
+(consistent with Phase 1/2). It fires `onCompactionStart?.('analysis')` **only when `windows.length > 1`**
+(a real map loop): a single-window (reduce-only) turn, the fits-budget single read, and the needle/relevance
+paths never run silent map calls and show NO notice. It is fired **after** the `if (answerPrefix)
+onToken?.(answerPrefix)` line and **immediately before** the map loop, so it is visible for exactly the
+silent map-call window and clears on the first reduce token (the renderer clears on the first answer token).
+`onCompactionStart?` was threaded through `WholeDocMapReduceInput` + `WholeDocTreeDeps` + `WholeDocChunksDeps`
+and the `opts.wholeDocument` wiring in `rag/index.ts` (both the tree and chunk calls pass
+`opts.onCompactionStart`); `GroundedAnswerOptions.onCompactionStart` was widened to `(kind?: 'analysis') =>
+void`. The IPC layer already passes `sendCompaction` (which sends `{ phase:'start', kind }`) as
+`onCompactionStart` on the grounded-whole-doc path, so no IPC change was needed. Ephemeral (R14 — never
+buffered/persisted); no new handle (SEC-1 — a callback); Stop/abort, needle-downgrade, and relevance paths
+byte-unchanged.
 
-### Tests / done
-- Renderer: the notice shows during a multi-call whole-doc turn and clears on first token
-  (mirror the existing compaction-notice renderer test). German smoke covers the DE string.
+**Copy decision — REUSED the existing kind, no churn:** the `'analysis'` `CompactionNotice` kind + the
+`chat.analysis.inProgress` copy (EN *"Reading the whole document…"* / DE *"Das ganze Dokument wird
+gelesen…"*) already fit and were fully wired end-to-end for the exhaustive path — kept as-is (forbidden-word-
+safe; no new kind added, so `shared/ipc.ts` / `chat-stream.ts` / `Transcript.tsx` / `ChatScreen.tsx`
+untouched). The plan's alternate wording ("Analysing… section by section") was NOT adopted (it would also
+change the exhaustive path's notice).
+
+### Files
+- `apps/desktop/src/main/services/rag/whole-doc-tree.ts` — fire in the shared core; thread the callback.
+- `apps/desktop/src/main/services/rag/index.ts` — thread `onCompactionStart` through `WholeDocChunksDeps`,
+  `answerWholeDocFromChunks`, and both whole-doc calls; widen `GroundedAnswerOptions.onCompactionStart`.
+
+### Tests / done ✅
+- Renderer (`tests/renderer/ChatCompaction.test.tsx`): a whole-doc analysis turn shows the notice and
+  clears it on the first reduce token (mirrors the existing 'analysis' notice test).
+- Integration (`tests/integration/rag-whole-doc-mapreduce.test.ts`): a recording `onCompactionStart` passed
+  through `generateGroundedAnswer` is called **exactly once with `'analysis'`** on a multi-window (280-
+  sentence) turn and **not at all** on a single-window (90-sentence) turn.
+- `npm test` + `npm run typecheck` + `npm run build` green.
 
 ---
 

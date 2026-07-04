@@ -182,4 +182,51 @@ describe('ChatScreen — "summarizing…" notice (§5.2)', () => {
 
     act(() => resolveSend!())
   })
+
+  // Phase 3 (wholedoc-truncation-fix-plan §5): the whole-doc map-reduce path fires the SAME ephemeral
+  // 'analysis' notice before its silent map calls. The renderer can't tell which main-side path fired it —
+  // this pins that a whole-doc analysis turn shows the progress affordance and clears it on the first token.
+  it('shows the whole-doc analysis progress notice and clears it on the first reduce token', async () => {
+    const user = userEvent.setup()
+    let tokenCb: ((t: string) => void) | undefined
+    let compactionCb: ((notice: CompactionNotice) => void) | undefined
+    let resolveSend: (() => void) | undefined
+    const sendChatMessage = vi.fn(
+      () =>
+        new Promise<Message>((resolve) => {
+          resolveSend = () => resolve(msg('a9', 'assistant', 'done'))
+        })
+    )
+    stubApi({
+      listConversations: vi.fn(async () => [conv()]),
+      listMessages: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => status()),
+      sendChatMessage,
+      onToken: vi.fn((_id: string, cb: (t: string) => void) => {
+        tokenCb = cb
+        return () => {}
+      }),
+      onReasoning: vi.fn(() => () => {}),
+      onScopeNotice: vi.fn(() => () => {}),
+      onCompaction: vi.fn((_id: string, cb: (notice: CompactionNotice) => void) => {
+        compactionCb = cb
+        return () => {}
+      })
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByText('Compaction chat'))
+    await user.type(screen.getByPlaceholderText('Message…'), 'write a contract brief for this document')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    // The whole-doc map-reduce core fires the 'analysis' notice before its silent map calls.
+    await waitFor(() => expect(compactionCb).toBeTypeOf('function'))
+    act(() => compactionCb!({ phase: 'start', kind: 'analysis' }))
+    expect(await screen.findByText(/reading the whole document/i)).toBeInTheDocument()
+
+    // The first streamed reduce token clears the progress notice.
+    act(() => tokenCb!('The brief begins'))
+    await waitFor(() => expect(screen.queryByText(/reading the whole document/i)).not.toBeInTheDocument())
+
+    act(() => resolveSend!())
+  })
 })

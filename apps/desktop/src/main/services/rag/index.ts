@@ -538,6 +538,8 @@ export interface WholeDocChunksDeps {
   contextTokens: number
   signal?: AbortSignal
   onToken?: (token: string) => void
+  /** Phase 3 (§5) — the ephemeral 'analysis' progress notice, threaded to the shared map-reduce core. */
+  onCompactionStart?: (kind: 'analysis') => void
   answerPrefix?: string
   /** Share-safe (or other app-authored) block for the reduce USER turn — never the system prompt. */
   extraReduceBlock?: string
@@ -589,6 +591,7 @@ export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promis
     contextTokens: deps.contextTokens,
     signal: deps.signal,
     onToken: deps.onToken,
+    onCompactionStart: deps.onCompactionStart,
     answerPrefix: deps.answerPrefix,
     sourceTexts,
     citations,
@@ -1285,10 +1288,12 @@ export interface GroundedAnswerOptions {
    */
   wholeDocumentCompare?: { documentIds: string[] }
   /**
-   * Fired exactly once if the context-compaction pre-pass starts a summarization for this turn.
-   * Phase 1 only plumbs the callback; the `STREAM.compaction` UX channel is Phase 2.
+   * Fired once when a pre-first-token "working on it" phase begins for this turn — either the context-
+   * compaction pre-pass (a bare call ⇒ `'compaction'`) or, on the whole-doc map-reduce path, the SILENT
+   * map loop before the first streamed reduce token (Phase 3, §5 ⇒ `'analysis'`). The IPC layer forwards
+   * it to the ephemeral `STREAM.compaction` channel; the renderer clears it on the first answer token.
    */
-  onCompactionStart?: () => void
+  onCompactionStart?: (kind?: 'analysis') => void
   /**
    * W2 scope notice (audit §2.1): when the chat path AUTO-NARROWED a multi-document scope to the one
    * document this skill best matches, this fixed, localized notice ("I answered from «title» only — the
@@ -1441,6 +1446,8 @@ export async function generateGroundedAnswer(
         contextTokens,
         signal: opts.signal,
         onToken: opts.onToken,
+        // Phase 3 (§5): fire the 'analysis' progress notice when the rescue runs a real map loop.
+        onCompactionStart: opts.onCompactionStart,
         // W2 (§2.1): carry the auto-narrow scope notice into the tree rescue path too.
         answerPrefix: opts.answerPrefix
       })
@@ -1455,6 +1462,8 @@ export async function generateGroundedAnswer(
         contextTokens,
         signal: opts.signal,
         onToken: opts.onToken,
+        // Phase 3 (§5): same 'analysis' progress notice for the no-tree chunk map-reduce path.
+        onCompactionStart: opts.onCompactionStart,
         answerPrefix: opts.answerPrefix,
         // Share-safe parity: the chunk map-reduce covers the WHOLE document, so the verdict gate is NOT
         // applied (truncated=false) — the low-risk verdict is legitimately allowed. Rides in the reduce

@@ -338,3 +338,48 @@ describe('whole-document chunk map-reduce — adaptive reduce output reserve (Ph
     expect(reduceUser).toContain('BEGINNING of the document')
   })
 })
+
+// Phase 3 — progress affordance (wholedoc-truncation-fix-plan §5). A multi-window whole-doc turn runs
+// SILENT map calls before the first streamed reduce token; the shared core fires the ephemeral 'analysis'
+// progress notice ("Reading the whole document…") so that gap doesn't read as a hang. It fires ONLY when
+// there is a real map loop: a single-window (reduce-only) turn — and the fits-budget single read / needle
+// paths, which never enter this core — must show no spurious notice.
+describe('whole-document chunk map-reduce — analysis progress notice (Phase 3)', () => {
+  it('fires onCompactionStart("analysis") exactly once on a multi-window (map-loop) turn', async () => {
+    const h = await makeHarness(280) // over-budget, no tree ⇒ multi-window map-reduce (a real map loop)
+    const runtime = recordingRuntime()
+    const kinds: Array<'analysis' | undefined> = []
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+    await generateGroundedAnswer(
+      h.db,
+      runtime,
+      new MockEmbedder(),
+      h.conversationId,
+      QUESTION,
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: h.docId }, onCompactionStart: (kind) => kinds.push(kind) }
+    )
+
+    expect(runtime.calls).toBeGreaterThan(1) // precondition: a real map loop ran (map windows + reduce)
+    expect(kinds).toEqual(['analysis']) // fired exactly once, with the analysis kind
+  })
+
+  it('does NOT fire on a single-window (reduce-only) whole-doc turn', async () => {
+    const h = await makeHarness(90) // over-budget but packs into ONE window ⇒ reduce only, no silent map step
+    const runtime = recordingRuntime()
+    const kinds: Array<'analysis' | undefined> = []
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+    await generateGroundedAnswer(
+      h.db,
+      runtime,
+      new MockEmbedder(),
+      h.conversationId,
+      QUESTION,
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: h.docId }, onCompactionStart: (kind) => kinds.push(kind) }
+    )
+
+    expect(runtime.calls).toBe(1) // precondition: no map fan-out (the single call is the reduce)
+    expect(kinds).toEqual([]) // no silent map window ⇒ no notice
+  })
+})

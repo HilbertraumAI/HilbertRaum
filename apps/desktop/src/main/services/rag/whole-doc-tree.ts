@@ -185,6 +185,9 @@ export interface WholeDocTreeDeps {
   signal?: AbortSignal
   /** Streams the FINAL reduce tokens to the renderer (the map steps are internal, not streamed). */
   onToken?: (token: string) => void
+  /** Phase 3 (§5) — the ephemeral 'analysis' progress notice, fired by the core when a real map loop runs
+   *  (threaded straight through to `streamWholeDocMapReduce`). Absent ⇒ no notice. */
+  onCompactionStart?: (kind: 'analysis') => void
   /** W2 scope notice (§2.1): prepended to the streamed + persisted answer when the scope was auto-
    *  narrowed to this document. App-authored, content-free. Absent ⇒ no prefix. */
   answerPrefix?: string
@@ -218,6 +221,10 @@ export interface WholeDocMapReduceInput {
   signal?: AbortSignal
   /** Streams the FINAL reduce tokens to the renderer (the map steps are internal, not streamed). */
   onToken?: (token: string) => void
+  /** Phase 3 (§5) — fires the ephemeral 'analysis' progress notice ("Reading the whole document…") when a
+   *  real map loop runs before the first streamed token. Same channel/kind the exhaustive path uses
+   *  (registerRagIpc); ephemeral (R14), no new handle (SEC-1). Absent ⇒ no notice (e.g. tests, or no IPC). */
+  onCompactionStart?: (kind: 'analysis') => void
   /** W2 scope notice (§2.1): prepended to the streamed + persisted answer. Absent ⇒ no prefix. */
   answerPrefix?: string
   /** The whole-document material: node summaries (tree) OR de-overlapped chunk texts (chunk path). */
@@ -243,6 +250,7 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     contextTokens,
     signal,
     onToken,
+    onCompactionStart,
     answerPrefix,
     sourceTexts,
     citations,
@@ -293,6 +301,15 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   const seeded = answerPrefix ?? ''
   let content = seeded
   if (answerPrefix) onToken?.(answerPrefix)
+  // Phase 3 — progress affordance (wholedoc-truncation-fix-plan §5): a MULTI-window source runs SILENT
+  // map calls before the first streamed reduce token; that gap otherwise reads as a hang. Fire the SAME
+  // ephemeral 'analysis' notice the exhaustive path uses (registerRagIpc — "Reading the whole document…").
+  // ONLY when there is a real map loop: a single window streams the reduce directly (no silent step), and
+  // the fits-budget single read + needle/relevance paths never enter this core — none of them fires a
+  // spurious notice. Fired AFTER the answerPrefix token (which the renderer treats as a first token,
+  // clearing any prior notice) and BEFORE the map loop, so it is visible for exactly the silent map window
+  // and clears on the first reduce token. Ephemeral (R14); it is a callback, so no new handle (SEC-1).
+  if (windows.length > 1) onCompactionStart?.('analysis')
   try {
     // MAP: when the source fits one window there is no map step — the reduce runs over it directly (it
     // still carries the fence). More than one window → fence-applied notes per section. All-empty maps
@@ -382,8 +399,19 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
  * — behavior byte-identical to the pre-Phase-1 inline path (pinned by rag-whole-doc-tree.test.ts).
  */
 export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Message | null> {
-  const { db, runtime, conversationId, documentId, question, skill, contextTokens, signal, onToken, answerPrefix } =
-    deps
+  const {
+    db,
+    runtime,
+    conversationId,
+    documentId,
+    question,
+    skill,
+    contextTokens,
+    signal,
+    onToken,
+    onCompactionStart,
+    answerPrefix
+  } = deps
 
   // Pre-model gate (pure reads): a ready tree + at least one usable node summary, else fall back.
   const meta = db
@@ -420,6 +448,7 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     contextTokens,
     signal,
     onToken,
+    onCompactionStart,
     answerPrefix,
     sourceTexts: nodeTexts,
     citations,
