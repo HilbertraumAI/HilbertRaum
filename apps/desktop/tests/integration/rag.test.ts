@@ -31,6 +31,7 @@ import {
   listMessages
 } from '../../src/main/services/chat'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
   createQueuedDocument,
@@ -624,6 +625,68 @@ describe('generateGroundedAnswer', () => {
     appendMessage(db, { conversationId: conv2.id, role: 'user', content: question })
     const clean = await generateGroundedAnswer(db, runtime(), embedder, conv2.id, question, SETTINGS)
     expect(clean.truncated).toBeUndefined()
+  })
+
+  // Continue-generation on the single-turn grounded path (follow-up #1): a grounded answer cut off at the
+  // context ceiling ('length', no explicit cap) is FINISHED across bounded re-prompts via the shared engine
+  // instead of persisting a mid-word partial — the same engine the map-reduce reduce uses. A scripted runtime
+  // fires a finish reason + reply per chatStream call so a test can drive the loop and assert the outcome.
+  function groundedScriptRuntime(
+    script: Array<{ reply: string; finish?: string }>
+  ): ModelRuntime & { calls: number } {
+    const rt = {
+      modelId: 'script',
+      calls: 0,
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      contextWindow: () => 2048,
+      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
+        const step = script[Math.min(rt.calls, script.length - 1)]
+        rt.calls++
+        yield step.reply
+        options?.onFinish?.(step.finish ?? 'stop')
+      }
+    } as unknown as ModelRuntime & { calls: number }
+    return rt
+  }
+
+  async function askGrounded(runtime: ModelRuntime) {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'science.pdf', [
+      { text: 'photosynthesis converts sunlight into chemical energy in plants' }
+    ])
+    const conv = createConversation(db, { mode: 'documents' })
+    const question = 'photosynthesis converts sunlight into chemical energy in plants'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+    return generateGroundedAnswer(db, runtime, embedder, conv.id, question, SETTINGS)
+  }
+
+  it('continue-generation FINISHES a grounded answer cut off at the ceiling (follow-up #1)', async () => {
+    const runtime = groundedScriptRuntime([
+      { reply: 'The first half of the answer', finish: 'length' },
+      { reply: ' and the second half completes it.', finish: 'stop' }
+    ])
+    const msg = await askGrounded(runtime)
+
+    expect(runtime.calls).toBe(2) // the first cut-off stream + one continuation
+    expect(msg.content).toBe('The first half of the answer and the second half completes it.')
+    expect(msg.truncated).toBeUndefined() // completed cleanly ⇒ no output-truncated badge
+  })
+
+  it('continue-generation is bounded and seam-deduped: an always-cut answer stamps truncated after the cap (follow-up #1)', async () => {
+    // Distinct replies whose openings repeat the prior tail (the seam) — the dedup must emit each once.
+    const runtime = groundedScriptRuntime([
+      { reply: 'alpha beta', finish: 'length' },
+      { reply: 'beta gamma', finish: 'length' },
+      { reply: 'gamma delta', finish: 'length' }
+    ])
+    const msg = await askGrounded(runtime)
+
+    expect(runtime.calls).toBe(1 + MAX_REDUCE_CONTINUATIONS) // bounded: the first stream + 2 continuations
+    expect(msg.truncated).toBe(true) // exhausted while still cut ⇒ honest output-truncated stamp
+    expect(msg.content).toBe('alpha beta gamma delta') // 'beta'/'gamma' seams de-duplicated, not doubled
   })
 
   it('strips inline think blocks from the persisted grounded answer (D6)', async () => {

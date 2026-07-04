@@ -1396,8 +1396,14 @@ EXHAUSTED and the last pass is still 'length' — an honest **OUTPUT**-truncatio
 **parity with the single-turn grounded path's `messages.truncated`**, kept STRICTLY separate from
 `coverage.truncated` (**INPUT** coverage). The whole document can be covered (`coverage.truncated:false`) while
 the deliverable is output-cut (`Message.truncated:true`); a user Stop leaves it false. **Scope:** the shared
-reduce core only (tree rescue + chunk map-reduce + single-window reduce); the single-turn small-doc fits-budget
-read is a documented follow-up (ample output room ⇒ minor residual).
+reduce core, and — since **follow-up #1** (2026-07-05) — the **single-turn grounded path** too: the continuation
+loop was extracted into the shared engine **`continueUntilComplete`** (`whole-doc-tree.ts`), which takes the
+whole prior message array (system + history + the grounded/reduce USER turn) and appends the resume
+instruction + anchor to its last user turn, so `generateGroundedAnswer`'s stream (relevance top-k, the
+small-doc fits-budget read, and the whole-doc capped read) finishes a 'length'-cut answer the same way,
+stamping `Message.truncated` only when the cap is exhausted. `withContinuation` (append the resume hint to the
+last user turn) + `seamOverlap` (the dedup) are the shared primitives; the room guard sizes each pass against
+the ACTUAL assembled prompt so history + the grounded block never overflow `n_ctx`.
 
 **Invariants preserved across all four phases (plan §2).** SEC-1 capability ceiling (pure DB reads + the chat
 runtime, no new handle); the SKILL.md fence rides every map/reduce/continuation USER turn, never the system

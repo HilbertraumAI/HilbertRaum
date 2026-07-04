@@ -748,13 +748,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   question plus a resume anchor (the last ~200 chars, seam de-duplicated) — across at most
   `MAX_REDUCE_CONTINUATIONS` (2) extra passes, each output cap sized against the actual assembled prompt so
   `prompt + output ≤ n_ctx` still holds (no HTTP 400). Only a document whose notes cannot fit alongside even
-  the floor output is notes-truncated (honestly badged `coverage.truncated` — the INPUT-coverage flag). **New
-  residual:** a deliverable long enough to STILL be cut after the 2-continuation cap keeps an honest
-  **OUTPUT**-truncated badge (`Message.truncated`, "Answer truncated — model context limit reached") — this is
-  distinct from `coverage.truncated` and never conflated with it (the whole document can be covered while the
-  deliverable is output-cut); and the single-turn small-doc fits-budget read is deliberately left out of
-  continue-generation (ample output room ⇒ minor residual — a documented follow-up). Guarantee unchanged:
-  `prompt + output ≤ n_ctx` at every context size (no HTTP 400 "exceeds context size").
+  the floor output is notes-truncated (honestly badged `coverage.truncated` — the INPUT-coverage flag). The
+  continuation engine was **extended to the single-turn grounded path** (follow-up #1, 2026-07-05): any
+  grounded answer cut at the context ceiling — relevance top-k, the small-doc fits-budget read, or the
+  whole-doc capped read — is now finished the same way (re-sending the whole grounded prompt + a resume
+  anchor), so a mid-word grounded reply no longer persists as if complete. **New residual:** a deliverable
+  long enough to STILL be cut after the 2-continuation cap keeps an honest **OUTPUT**-truncated badge
+  (`Message.truncated`, "Answer truncated — model context limit reached") — this is distinct from
+  `coverage.truncated` and never conflated with it (the whole document can be covered while the deliverable is
+  output-cut). Guarantee unchanged: `prompt + output ≤ n_ctx` at every context size (no HTTP 400 "exceeds
+  context size").
   **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
   (budget split size-aware across them, `capped` coverage — `truncated` when either overflowed) and

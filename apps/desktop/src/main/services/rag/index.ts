@@ -53,7 +53,7 @@ import {
 } from '../skills/prompt'
 import { getSettings } from '../settings'
 import { scanRedactionCandidates, type RedactionCounts } from '../skills/tools/redaction'
-import { answerWholeDocFromTree, streamWholeDocMapReduce } from './whole-doc-tree'
+import { answerWholeDocFromTree, continueUntilComplete, streamWholeDocMapReduce } from './whole-doc-tree'
 import { documentChunkCount } from '../analysis/coverage'
 import { SUMMARY_MAP_CALL_CEILING } from '../doctasks/summary'
 import { buildGroundedDataPrompt } from './grounded-data'
@@ -1643,6 +1643,32 @@ export async function generateGroundedAnswer(
     // return normally. Any other error is a real failure and propagates.
     if (!isAbortError(err, opts.signal)) throw err
   }
+  // Continue-generation (follow-up #1): when the grounded answer was cut off at the model's context ceiling
+  // ('length' with NO explicit cap in play — the map-reduce reduce's fix extended to the single-turn path),
+  // finish it across bounded re-prompts via the shared engine instead of persisting a mid-word partial. It
+  // re-sends the whole grounded prompt (system + history + the grounded USER turn with its retrieved block)
+  // plus a resume anchor, streams the seam-deduped remainder live, and stamps output-truncated only when the
+  // cap is exhausted. A user Stop mid-continuation persists the accumulated partial (the engine swallows it);
+  // a set `maxTokens` (an explicit cap) is never continued past — same gate as the truncated stamp below.
+  let outputTruncated = finishReason === 'length' && opts.runtimeOptions?.maxTokens == null
+  if (outputTruncated) {
+    const acc = { content }
+    const finalReason = await continueUntilComplete({
+      runtime,
+      signal: opts.signal,
+      onToken: opts.onToken,
+      baseMessages: messages,
+      contextTokens,
+      // No cap was set on the first pass, so let each continuation use as much of the window as fits after
+      // its (larger) prompt — the room guard caps it to `contextTokens − prompt`, never overflowing n_ctx.
+      outputCap: contextTokens,
+      temperature: opts.runtimeOptions?.temperature,
+      acc,
+      finishReason
+    })
+    content = acc.content
+    outputTruncated = finalReason === 'length'
+  }
   // Reasoning never reaches the DB — same defense-in-depth strip as plain chat.
   content = stripThinkBlocks(content)
   // Drop any skill-fence framing the model echoed back (e.g. a trailing "--- END LOCAL SKILL ---").
@@ -1665,9 +1691,10 @@ export async function generateGroundedAnswer(
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     // Auto-fire provenance rides with the stamp (S13c) — only when the fence was placed (§22-A5).
     autoFired: skillFence ? opts.skill?.autoFired === true : false,
-    // 'length' with no max_tokens cap in play = cut off at the model's context ceiling (the
-    // grounded path passes no mode, so only an explicit runtimeOptions cap counts as a cap).
-    truncated: finishReason === 'length' && opts.runtimeOptions?.maxTokens == null
+    // Honest OUTPUT-truncation stamp: 'length' with no cap = cut off at the context ceiling; after
+    // continue-generation this is true only when the bounded re-prompts were EXHAUSTED and the answer is
+    // still cut (false on a clean finish and on a user Stop — computed above).
+    truncated: outputTruncated
   })
 }
 

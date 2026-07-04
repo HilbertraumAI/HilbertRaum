@@ -113,18 +113,32 @@ export const CONTINUATION_ANCHOR_CHARS = 200
  *  output-truncated (never assemble a prompt the runtime rejects — the HTTP 400 class, invariant §2). */
 export const CONTINUATION_MIN_OUTPUT_TOKENS = 256
 
-/** CONTINUE step (streamed): re-send the WHOLE reduce USER turn (fence + notes + question + extraReduceBlock
- *  — "fence at every step", §2, so the model keeps full grounding) PLUS a short instruction to resume and an
- *  `anchor` = the tail already produced, so it continues exactly where it stopped without repeating. The
- *  seam overlap between the anchor and the continuation's opening is de-duplicated by the caller. */
-function continuationUserPrompt(reduceUser: string, anchor: string): string {
+/** CONTINUE step: append a short resume instruction + an `anchor` (the tail already produced) to a USER
+ *  turn, so the model continues exactly where it stopped without repeating. The seam overlap between the
+ *  anchor and the continuation's opening is de-duplicated by the caller. */
+function appendResumeInstruction(userContent: string, anchor: string): string {
   return (
-    `${reduceUser}\n\n` +
+    `${userContent}\n\n` +
     'You already produced the answer up to the passage below, but were cut off before finishing. Continue ' +
     'the answer exactly from where it stops — do NOT repeat anything already written, do NOT restart, and ' +
     'do NOT add any preamble or heading.\n\n' +
     `Already written (your answer ends with this — continue immediately after it):\n${anchor}\n\nContinuation:`
   )
+}
+
+/** Build the continuation prompt: re-send `base` VERBATIM (system + any history + the grounded/reduce USER
+ *  turn — full grounding, "fence at every step" §2) with the resume instruction + anchor appended to the
+ *  LAST user turn. A shallow clone so `base` is never mutated. */
+function withContinuation(base: ChatMessage[], anchor: string): ChatMessage[] {
+  const out = base.map((m) => ({ ...m }))
+  for (let i = out.length - 1; i >= 0; i--) {
+    if (out[i].role === 'user') {
+      out[i] = { ...out[i], content: appendResumeInstruction(out[i].content, anchor) }
+      return out
+    }
+  }
+  out.push({ role: 'user', content: appendResumeInstruction('', anchor) })
+  return out
 }
 
 /** Longest seam overlap between the tail of `produced` and the head of `cont`, capped at `maxOverlap` chars
@@ -137,6 +151,96 @@ function seamOverlap(produced: string, cont: string, maxOverlap: number): number
     if (produced.endsWith(cont.slice(0, l))) return l
   }
   return 0
+}
+
+export interface ContinueGenerationInput {
+  runtime: ModelRuntime
+  signal?: AbortSignal
+  /** Streams the de-duplicated continuation tokens to the renderer (same channel as the first pass). */
+  onToken?: (token: string) => void
+  /** The messages the just-completed stream used (system + any history + the grounded/reduce USER turn);
+   *  re-sent verbatim each pass with the resume instruction appended to its last user turn. */
+  baseMessages: ChatMessage[]
+  /** The REAL launched context window (model tokens) — the no-overflow room guard sizes each pass against it. */
+  contextTokens: number
+  /** Per-pass output ceiling (the first pass's cap); each continuation is shrunk to fit its larger prompt. */
+  outputCap: number
+  temperature?: number
+  /** Mutable accumulator: the text produced so far; the engine appends the continuation text here. */
+  acc: { content: string }
+  /** The finish reason of the pass that just completed ('length' = cut at the ceiling ⇒ continue). */
+  finishReason: string | null
+}
+
+/**
+ * Shared continue-generation engine (wholedoc-truncation-fix-plan §6 + follow-up #1). When a stream ended
+ * `finishReason === 'length'` (cut at the output ceiling — NOT a user Stop, which fires no finish reason), it
+ * re-prompts to FINISH the deliverable: each pass re-sends `baseMessages` with a resume instruction + anchor
+ * (the last `CONTINUATION_ANCHOR_CHARS` produced) appended to the last user turn, streams the seam-deduped
+ * remainder live into `acc.content`, and loops while still 'length'. Bounded by `MAX_REDUCE_CONTINUATIONS`
+ * (runaway guard) AND a per-pass no-`n_ctx`-overflow room guard (each continuation's `maxTokens` is sized
+ * against the ACTUAL assembled prompt, and the loop stops rather than assemble a prompt the runtime would
+ * reject — the HTTP 400 class). A user Stop mid-continuation flushes the seam-deduped partial into
+ * `acc.content` and returns (swallowed — the caller persists the accumulated partial); a real error
+ * propagates. Returns the FINAL finish reason: the caller stamps an honest OUTPUT-truncation when it is still
+ * 'length' (the cap was exhausted); `null` on a user Stop (intentional, not an overflow).
+ */
+export async function continueUntilComplete(input: ContinueGenerationInput): Promise<string | null> {
+  const { runtime, signal, onToken, baseMessages, contextTokens, outputCap, temperature, acc } = input
+  let finishReason = input.finishReason
+  let continuations = 0
+  try {
+    while (finishReason === 'length' && continuations < MAX_REDUCE_CONTINUATIONS) {
+      continuations++
+      const anchor = acc.content.slice(-CONTINUATION_ANCHOR_CHARS)
+      const continueMessages = withContinuation(baseMessages, anchor)
+      const continuePromptTokens = continueMessages.reduce((sum, m) => sum + approxPromptTokens(m.content), 0)
+      const continueCap = Math.min(outputCap, contextTokens - continuePromptTokens)
+      if (continueCap < CONTINUATION_MIN_OUTPUT_TOKENS) break
+      finishReason = null
+      // Hold back the continuation's opening until enough is buffered to resolve the seam overlap against
+      // the anchor, then stream the DE-DUPLICATED remainder live.
+      let seam = ''
+      let seamResolved = false
+      const flushSeam = (): void => {
+        const emit = seam.slice(seamOverlap(acc.content, seam, anchor.length))
+        if (emit.length > 0) {
+          acc.content += emit
+          onToken?.(emit)
+        }
+        seam = ''
+        seamResolved = true
+      }
+      try {
+        for await (const token of runtime.chatStream(continueMessages, {
+          signal,
+          maxTokens: continueCap,
+          temperature,
+          onFinish: (reason) => {
+            finishReason = reason
+          }
+        })) {
+          if (seamResolved) {
+            acc.content += token
+            onToken?.(token)
+          } else {
+            seam += token
+            if (seam.length >= anchor.length) flushSeam()
+          }
+        }
+      } finally {
+        // A short pass (never reached the anchor length) OR a Stop mid-continuation still emits the
+        // de-duplicated partial, so the accumulated answer is persisted (abort contract, §2).
+        if (!seamResolved) flushSeam()
+      }
+    }
+  } catch (err) {
+    if (!isAbortError(err, signal)) throw err
+    // A user Stop mid-continuation: the seam partial was flushed into acc.content by the finally above.
+    // Swallow and report null so the caller persists the partial and does NOT stamp it output-truncated.
+    return null
+  }
+  return finishReason
 }
 
 // ── Reduce output/notes budget (Phase 2 — wholedoc-truncation-fix-plan §4) ────────────────────────────
@@ -420,70 +524,27 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     }
 
     // CONTINUE-GENERATION (Phase 4 — §6): the reduce was cut at the output ceiling, not stopped by the user.
-    // Re-prompt to FINISH the deliverable instead of persisting a mid-sentence answer. Loop while the latest
-    // pass is still 'length' AND the hard cap is not hit; each pass re-sends the reduce turn + a resume
-    // anchor, streams the DE-DUPLICATED continuation live, and appends. Bounded by MAX_REDUCE_CONTINUATIONS
-    // (runaway guard) and the no-`n_ctx`-overflow room guard below. All INSIDE this try/catch, so a user
-    // Stop mid-continuation is caught and the accumulated partial persisted — never a fresh pass past abort.
-    let continuations = 0
-    while (finishReason === 'length' && continuations < MAX_REDUCE_CONTINUATIONS) {
-      continuations++
-      const anchor = content.slice(-CONTINUATION_ANCHOR_CHARS)
-      const continueUser = continuationUserPrompt(reduceUser, anchor)
-      // No `n_ctx` overflow (§2): the continuation prompt is LARGER than the reduce prompt (it adds the
-      // anchor + instruction), so size its output cap against the ACTUAL assembled prompt — never let
-      // `prompt + cap` exceed the launched window (the HTTP 400 "exceeds context size" class). If the window
-      // cannot fit the prompt plus a worthwhile minimum output, stop here and let the honest output-
-      // truncated stamp stand rather than assemble a prompt the runtime would reject.
-      const continuePromptTokens =
-        approxPromptTokens(WHOLE_DOC_TREE_SYSTEM_PROMPT) + approxPromptTokens(continueUser)
-      const continueCap = Math.min(reduceOutputCap, contextTokens - continuePromptTokens)
-      if (continueCap < CONTINUATION_MIN_OUTPUT_TOKENS) break
-      const continueMessages: ChatMessage[] = [
-        { role: 'system', content: WHOLE_DOC_TREE_SYSTEM_PROMPT },
-        { role: 'user', content: continueUser }
-      ]
-      finishReason = null
-      // Hold back the continuation's opening until enough is buffered to resolve the seam overlap against
-      // the anchor, then stream the DE-DUPLICATED remainder live (same onToken channel as the first pass).
-      let seam = ''
-      let seamResolved = false
-      const flushSeam = (): void => {
-        const emit = seam.slice(seamOverlap(content, seam, anchor.length))
-        if (emit.length > 0) {
-          content += emit
-          onToken?.(emit)
-        }
-        seam = ''
-        seamResolved = true
-      }
-      try {
-        for await (const token of runtime.chatStream(continueMessages, {
-          signal,
-          maxTokens: continueCap,
-          temperature: SUMMARY_TEMPERATURE,
-          onFinish: (reason) => {
-            finishReason = reason
-          }
-        })) {
-          if (seamResolved) {
-            content += token
-            onToken?.(token)
-          } else {
-            seam += token
-            if (seam.length >= anchor.length) flushSeam()
-          }
-        }
-      } finally {
-        // A short pass (never reached the anchor length) OR a Stop mid-continuation still emits the
-        // de-duplicated partial, so the accumulated answer is persisted (abort contract, §2).
-        if (!seamResolved) flushSeam()
-      }
-    }
-    // Exhausted the continuation budget while still cut at the ceiling ⇒ an honest OUTPUT-truncated answer
-    // (parity with the single-turn grounded path's `messages.truncated`). Reached only on a CLEAN loop exit:
-    // a user Stop throws out of the loop into the catch below, leaving this false (the abort is user-known).
-    outputTruncated = finishReason === 'length'
+    // Finish the deliverable across bounded re-prompts via the SHARED engine `continueUntilComplete` (also
+    // used by the single-turn grounded path — follow-up #1). It re-sends the reduce turn + a resume anchor,
+    // streams the seam-deduped continuation live into `acc.content`, and stops at the cap or the no-overflow
+    // room guard. It handles its OWN Stop mid-continuation (flushes the partial, returns null), so the
+    // accumulated partial is persisted; a real error propagates to the outer catch. Reaching the assignment
+    // below means a CLEAN return — an exhausted-while-'length' reduce is honestly stamped output-truncated;
+    // a user Stop returns null ⇒ false (intentional, not an overflow).
+    const acc = { content }
+    const finalReason = await continueUntilComplete({
+      runtime,
+      signal,
+      onToken,
+      baseMessages: messages,
+      contextTokens,
+      outputCap: reduceOutputCap,
+      temperature: SUMMARY_TEMPERATURE,
+      acc,
+      finishReason
+    })
+    content = acc.content
+    outputTruncated = finalReason === 'length'
   } catch (err) {
     // A user Stop aborts mid-map (no partial) or mid-reduce (keep the partial); any other error is a
     // real failure and propagates. Same contract as `generateGroundedAnswer`'s stream.
