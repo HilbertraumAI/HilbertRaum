@@ -5295,9 +5295,8 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
    fully-chunked with an honest `scopeNarrowed` notice, else `selectOne`; `what-changed` at ≠2 →
    `selectTwo`) instead of silently degrading; a document-plausibility gate falls the bank/invoice
    run through to the ordinary grounded path when the doc matches no declared signal.
-   **A4 (2026-07-03 audit, SKA-7-structural/8/12/23 — detail in `docs/skills-audit-2026-07-03.md` §7, to
-   fold into this record's successor at that wave's close) finished the inversion for the TOOL skills and
-   refined the composition:** (SKA-7) with a bank/invoice skill active over a single fully-chunked doc that
+   **A4 (2026-07-03 audit, SKA-7-structural/8/12/23 — that wave's record is §41 below) finished the
+   inversion for the TOOL skills and refined the composition:** (SKA-7) with a bank/invoice skill active over a single fully-chunked doc that
    is plausibly its class (`classMatches` — manifest signals OR a prior extraction; `singleDocMatchesSkillClass`),
    EVERY non-small-talk question runs the handler even on a `routeMatch` miss (answered from the verified
    extract, not top-k) — a separate chat-path composition, distinct from `intends()`; (SKA-8) `intends()` —
@@ -5402,6 +5401,152 @@ without churning the comments. Read a historical anchor as:
 | §7 | Testing & evaluation infrastructure | T1 |
 | §8.1 / §8.2 / §8.3 | The three root-cause recommendations | the spine above (W3·W4 / A3·W2 / W5·U4) |
 | `R#` / `W#` / `U#` / `A#` / `T1` phase ids | The 20 remediation phases (5 tracks) | the disposition table above (§39) |
+
+
+### §41 Skills & Tools audit 2 (2026-07-03) — remediation wave close-out
+
+The follow-up pass over the post-§39 surface (five scoped lenses — extractors; analysis + routing; run
+seam/IPC/persistence; package lifecycle; renderer UX — plus an orchestrator sweep of the activation
+core; audited at `fix/skills-close` @ `e1d63f1`, 3071 green). Verdict: **the 2026-07-02 wave held** —
+no Critical, no security-boundary breach, no data-loss path; SEC-1 survived every id-shadowing and
+manifest probe. **45 findings (`SKA-1`…`SKA-45`: 6 High · 12 Medium · 24 Low · 3 Info)** landed in a
+**nine-phase wave** (`R7 → R8 → W6 → W7 → A4 → U6 ∥ U7 → R9 → T2`) on stacked `fix/skills2-*` branches.
+The working paper `docs/skills-audit-2026-07-03.md` was **deleted** under the CLAUDE.md doc-lifecycle
+rule (full original in git history, last present on `fix/skills2-t2`); this record is the durable
+index — read a code comment's **`SKA-N`** or `skills-audit-2026-07-03 §N.M` citation through the
+**§-anchor legend** below. Direct successor to §39; residuals live in
+[`known-limitations.md`](known-limitations.md).
+
+**The audit's assessment (kept):** the activation ladder (manual per-turn pick → measured suggestion →
+opt-in auto-fire → scope-shaped active-skill routing) is well designed and stays as built; the one
+wrong layer was **tool-skill routing still gating on phrasing** — fixed as the wave's spine, below.
+
+**The three clusters the findings reduced to (the spine):**
+
+1. **Compose the honesty gates into the third mode (SKA-4/5/21/22 → W6).** Grounded-data shipped
+   (§39 spine 1) without the wave's own honesty plumbing: its deterministic postscript echoed computed
+   in/out/net on `contradicted`/`unverified` statements the template refuses to total, and
+   `droppedRowCount` never reached the mode. Now `buildCashflowPostscript` takes the D56
+   `CompletenessStatus` (echo only when not contradicted; `unverifiedCaveat` + `countPartial` hedges
+   ride when owed), both data blocks declare MISSING lines vs whole-document provenance honestly,
+   `invoiceTotalsCurrency` never stamps mixed-currency totals with one row's code, and the data block
+   is delimited (`BEGIN/END DOCUMENT DATA` + not-instructions line). D56 `complete` still OUTRANKS the
+   parse-gap hedge (a tying balance proves the dropped line didn't move it).
+2. **Kill the last invented-figure classes (SKA-1/2/13/14 → R7; SKA-3 → R8).** A mid-line/trailing
+   date in a row's money region read as the AMOUNT (a period line became a transaction); dd.mm.yy
+   dates were money-shaped and invisible to every date scrub; the geometry classifier ate `d.dd`
+   amounts as out-of-column dates (balance-as-amount); money-bearing vendor/number header lines
+   vanished into headers. Fixed structurally: `scanMoneyWithBlankedDates` (same-length blanked scan so
+   description slicing never shifts), the double-guarded 2-digit-year date alternative, row-context-
+   gated geometry reclassification, and an amount-shaped-money gate on header consumption — **both
+   extractor versions → 9**, snapshot regenerated once. R8 gave redaction a same-length **detection
+   shadow** (NBSP/U+2011/print-variant separators + parenthesized US phones mask; offsets stay exact).
+3. **Finish the inversion + tune the classifiers (SKA-7/8/12/23 → A4; SKA-9/10/11/19/20 → W7).** The
+   §39 gate inversion stopped one layer short of the highest-stakes answers: bank/invoice TOOL skills
+   still routed by `routeMatch` phrasing. W7 first closed the measured vocabulary gaps (German money
+   terms, separable-verb summary stems, the explanatory `warum/why` format guard, thanks/ack
+   small-talk fillers, synthesis-ask needle vetoes; decision: `spend on` DROPPED from the category
+   stems), growing the eval corpus per family; then A4 added the structural half — the detail formerly
+   noted at §39 spine 2 as "to fold into this record": `classMatches` (manifest doc signals OR a prior
+   extraction) + fully-chunked + not-small-talk runs the handler on ANY `routeMatch` miss, `intends()`
+   became vocabulary-shaped so multi-doc off-topic questions fall through instead of "pick one
+   document", the needle downgrade dropped its tree conjunct (SKA-12) and moved before the D45 refusal
+   (SKA-23). Read-side only; no new capability (SEC-1 unchanged).
+
+**As built, per phase (dispositions; branch chain `fix/skills2-r7` … `fix/skills2-t2`):**
+
+| Phase | SKA items | Disposition (one line) | Code home |
+|---|---|---|---|
+| R7 | 1, 2, 13, 14 | date-vs-money disambiguation quartet (blanked-date money scan; yy-date guard; geometry row-context gate; header amount-gate); versions → **9**; 3 new corpus fixtures | `tools/{money,bank-statement,invoice}.ts`, `parsers/pdf-layout.ts` |
+| R8 | 3 | same-length detection shadow for Unicode print-variant separators + `(ddd)` US phones, both `run` and `scanRedactionCandidates` | `tools/redaction.ts` |
+| W6 | 4, 5, 21, 22 | grounded-data honesty composition: status-gated postscript echo, droppedRowCount threading + MISSING note, mixed-currency never stamped, delimited data block | `analysis/{bank-statement,invoice}.ts`, `rag/grounded-data.ts` |
+| W7 | 9, 10, 11, 19, 20, 7-vocab, 45-minors | answer-shape + classifier vocabulary tuning (route-only); eval corpus grown per family; decision: DROP the spend-stems | `skills/vocabulary.ts`, both handlers |
+| A4 | 7-structural, 8, 12, 23 | tool-skill single-doc inversion (`classMatches`), vocabulary-shaped `intends()`, needle-downgrade tree conjunct dropped + evaluated before D45 | `registerRagIpc.ts`, `analysis/*` |
+| U6 | 6, 17, 18, 25, 29, 37–41 | per-run renderer store keyed by handle, conversation-gated run bar, `listSkillRuns` re-adopt IPC, empty-handle cancel refused, confirm-gated out-of-scope hard refusal, shallow-compare + poll tolerance, one aria-live region, undo/stamp fixes | `renderer/lib/skillruns.ts`, `ChatScreen.tsx`, `SkillRunBar.tsx`, `registerSkillsIpc.ts` |
+| U7 | 15, 16, 30–36, 42, 45-riders | package lifecycle hardening: paragraph-merged SKILL.md bodies (fence-trim keeps the rules), per-folder discovery guards + surfaced error codes, case-fold zip guard, content-free YAML errors (before 32), note codes, staging sweep, export mirrors import (decision), bidi rejection | `registry.ts`, `installer.ts`, `shared/skill-manifest.ts`, `SkillsTab.tsx`, SKILL.md ×8 |
+| R9 | 24, 26, 27, 28, 44 | abort-aware `withDocumentLock`; staleness flipped to `v !== CURRENT` (decision — downgrade re-extracts); B4-guarded export tail + write-time 'done' (+ the redaction-seam rider); one lock across prepare+load+serialize (TOCTOU); EN `transfer` demoted (decision) | `doc-lock.ts`, `run.ts`, `invoice-run.ts`, `categorizer.ts` |
+| T2 | test-infra + ledger | snapshot self-checks (hash recompute + version pin); controller reject/throw-after-abort edges; persist-failure-keeps-old ×2 domains; two-conversations-same-doc IPC; dropped-row + contradicted corpus fixtures e2e; SEC-1 + mixed-currency IPC pins; :743 reachability repair; **SKA-43 declined** (accepted residual) | `tests/*` only — zero production changes |
+
+Extractor versions climbed **8 → 9** exactly once (R7); every other phase verified NO snapshot
+interaction. The T1 output-snapshot guard gained self-checks (T2): a hand-edited hash or a
+bump-without-regenerate now fails the default suite; the same-commit input-edit exemption is the
+recorded acceptance. Suite at close: **3272 passed / 44 skipped** + typecheck; the env-gated
+real-model smoke ran 3/3 green against a local Qwen3.5-4B GGUF as the wave's final sanity pass.
+
+**Posture held across all nine phases:** offline / no telemetry; the content class never crosses the
+IPC/audit/log boundary (ids/counts only — re-verified by sentinel tests each phase); **the LLM never
+computes or moves a figure**; additive-only schema/IPC surface (`listSkillRuns`,
+`SkillRunState.conversationId?`/`documentId?`, `runningHandle` on the busy refusal); every behavioral
+phase adversarially reviewed + every fix teeth-checked RED against its revert. Decisions taken inside
+the wave (all recorded with rationale in known-limitations): SKA-20 drop the spend-stems; SKA-26 flip
+staleness to `!==`; SKA-34 export mirrors import; SKA-44 demote EN `transfer`; SKA-43 accept the
+double needle-turn scan (no cache — milliseconds vs the following model call, and a stale memoized
+total would mis-size the needle downgrade / compare split); SKA-45's `buildSkillFence` O(n²) loop
+accepted (64 KiB-cap-bounded).
+
+#### §-anchor legend (audit 2026-07-03 — `SKA-N` + section citations)
+
+Code comments, tests, and the kept docs cite this audit as **`SKA-N`** and
+`skills-audit-2026-07-03 §N.M`; neither was renumbered. Read them as:
+
+| Section anchor | Meaning (audit 2026-07-03) | Now lives at |
+|---|---|---|
+| §1 / §2 | Executive summary / activation-model assessment (kept as built) | this record's intro + assessment |
+| §3.1–§3.4 | The findings, by severity (High/Medium/Low/Info) | the `SKA-N` table below |
+| §4 | Documentation audit (9 doc↔code mismatches) | fixed inside the owning phases (W6/W7/R7/U7/A4) |
+| §5 | Testing audit (gaps by theme) | T2 row above + U6/R9 attributions |
+| §6 | Performance audit | W7/A4 routing fixes + the SKA-43/39 residual notes |
+| §7 / §8 | The nine phase specs / execution order | the disposition table above |
+| §9 | Checked clean (activation ladder, W2/A3 plumbing, run seam, installer matrix, prompt assembly, extractor internals, i18n, eval corpus) | verified sound — not re-filed, no record needed |
+
+| SKA | Finding (one line) | Landed in |
+|---|---|---|
+| 1 | mid-line/trailing date in the money region parsed as the AMOUNT (invented rows/items) | R7 |
+| 2 | dd.mm.yy dates money-shaped + invisible to every date scrub | R7 |
+| 3 | redaction missed NBSP/U+2011 print-variants + parenthesized US phones | R8 |
+| 4 | grounded-data postscript echoed totals on contradicted/unverified statements (D56 bypass) | W6 |
+| 5 | droppedRowCount honesty never reached grounded-data | W6 |
+| 6 | renderer run store single-slot; run bar cross-conversation (wrong-doc categorize chain) | U6 |
+| 7 | tool-skill analysis phrasing-gated (on-topic misses fell to raw top-k) | W7 (vocabulary) + A4 (structural) |
+| 8 | A3×W2: sticky instruction skill + multi-doc scope → "pick one document" for everything | A4 |
+| 9 | German separable verbs evaded the summary-template stems | W7 |
+| 10 | format detection lacked an explanatory (warum/why) guard | W7 |
+| 11 | `isSmallTalk` missed high-frequency thanks/ack variants | W7 |
+| 12 | needle over an over-budget doc WITH a tree ran a ~13-call map-reduce | A4 |
+| 13 | geometry classifier read d.dd amounts as dates (balance-as-amount) | R7 |
+| 14 | money-bearing vendor/number header lines swallowed (figure vanished) | R7 |
+| 15 | fence-trim guaranteed minimum was the bare heading (honesty rules trimmable) | U7 |
+| 16 | one unreadable SKILL.md killed ALL skill discovery | U7 |
+| 17 | a renderer reload orphaned an in-flight run irrecoverably | U6 |
+| 18 | the 'new'-composer skill pick resurrected on later empty composers | U6 |
+| 19 | `isNeedleShaped` fired on synthesis asks | W7 |
+| 20 | 'spend on' routed to the category template (decision: stems dropped) | W7 |
+| 21 | mixed-currency invoice totals stamped with one row's currency | W6 |
+| 22 | grounded-data block undelimited (document text rode under prompt authority) | W6 |
+| 23 | needle over a not-fully-chunked doc refused where a smaller doc answers | A4 |
+| 24 | Cancel did not reach a run parked on the document lock | R9 |
+| 25 | empty-handle `cancelSkillRun` aborted EVERY in-flight run | U6 |
+| 26 | extractor-version DOWNGRADE unhandled (decision: staleness flipped to `!==`) | R9 |
+| 27 | export tail lacked the B4 terminal-status guard (+ the redaction-seam rider) | R9 |
+| 28 | summarize/export loaded rows after the staleness re-extract lock released (TOCTOU) | R9 |
+| 29 | a CONFIRMED export could run against a different doc via the single-doc fallback | U6 |
+| 30 | zip duplicate-path rejection was case-sensitive | U7 |
+| 31 | YAML parse errors embedded raw attacker frontmatter | U7 |
+| 32 | discovery/reconcile errors computed then dropped by every consumer | U7 |
+| 33 | a failed import showed only the generic toast | U7 |
+| 34 | import/export tree asymmetry (decision: export mirrors import) | U7 |
+| 35 | import-preview notes unlocalized + attacker-influenced | U7 |
+| 36 | crash-leftover `.skill-import-*` staging dirs never swept | U7 |
+| 37 | undo/try-again rendered on a stale last-assistant turn | U6 |
+| 38 | deleting a skill erased the stamp AND the undo | U6 |
+| 39 | run-store poll re-notified (re-rendered) every 400 ms with no change | U6 |
+| 40 | one transient poll error silently dropped a live run | U6 |
+| 41 | per-state-branch aria-live region missed the first announcement | U6 |
+| 42 | document-redaction SKILL.md named only the English button | U7 |
+| 43 | double full-document scan per needle turn | **accepted residual** (T2 decision; known-limitations) |
+| 44 | EN `transfer` categorizer rule confident (decision: demoted) | R9 |
+| 45 | content/robustness minors (keyword gaps, trailing-space entries, autoFire comment, bidi titles, fence O(n²)) | W7 + U7; fence-loop = accepted residual (T2) |
+| `R7`–`T2` phase ids | the nine remediation phases | the disposition table above (§41) |
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
