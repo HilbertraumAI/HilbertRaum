@@ -400,8 +400,21 @@ export function buildStatementDataBlock(args: {
   reconcile: ReconcileResult
   status: CompletenessStatus
   categories: CategoryTotal[]
+  /**
+   * How many money-bearing lines the extractor could NOT parse (U1/SKA-5, audit §2.3/§3.1). When the
+   * hedge fires (see below) a MISSING-lines note is added and the provenance line drops its "whole
+   * document" claim, so the model NARRATING the block cannot assert the transaction list is complete.
+   */
+  droppedRowCount?: number
 }): string {
   const { snap, reconcile, status, categories } = args
+  // SKA-5 (W6) — D56 OUTRANKS the parse gap on the BANK side (mirror U1 / decision D56 / commit 42a4eb9):
+  // a `complete` status means the printed opening + Σ == closing balance PROOF shows the dropped line(s)
+  // provably did not move the balance → the read IS the whole statement, so NO missing-lines hedge. The
+  // hedge (and the softened provenance) fire only on a NON-complete status (`unverified`/`contradicted`),
+  // where there is no balance proof that the dropped figures were non-transactions.
+  const dropped = args.droppedRowCount ?? 0
+  const hedgeDropped = dropped > 0 && status !== 'complete'
   const omitted = Math.max(0, snap.rows.length - MAX_DATA_BLOCK_ROWS)
   const capped: StatementSnapshot =
     omitted > 0 ? { ...snap, rows: snap.rows.slice(0, MAX_DATA_BLOCK_ROWS) } : snap
@@ -425,29 +438,75 @@ export function buildStatementDataBlock(args: {
       lines.push(`- ${c.category}: ${fmt(c.amount)} ${c.currency} (${c.count} row(s))`)
     }
   }
+  // SKA-5 (W6): the honest MISSING-lines note — some money-bearing line(s) could not be parsed into rows,
+  // so the model must NOT narrate this list as complete. Suppressed when D56 proves the read whole (above).
+  if (hedgeDropped) {
+    lines.push(
+      '',
+      `NOTE: ${dropped} money-bearing line(s) could not be parsed into rows and are MISSING from this data — ` +
+        'do NOT claim the transaction list is complete or that this is the whole statement.'
+    )
+  }
+  // The provenance line's "from the whole document" claim is conditional on the same gate: when lines were
+  // dropped (and D56 did not prove wholeness) it must not assert the extract is whole.
   lines.push(
     '',
-    'Provenance: every value above was parsed and reconciled from the whole document by a deterministic ' +
-      'offline extractor. Quote these figures verbatim; do not add, total, convert, or derive any number.'
+    hedgeDropped
+      ? 'Provenance: the values above were parsed and reconciled by a deterministic offline extractor, but ' +
+          'some money-bearing lines could not be parsed and are missing (see the NOTE above). Quote these ' +
+          'figures verbatim; do not add, total, convert, or derive any number.'
+      : 'Provenance: every value above was parsed and reconciled from the whole document by a deterministic ' +
+          'offline extractor. Quote these figures verbatim; do not add, total, convert, or derive any number.'
   )
   return lines.join('\n')
 }
 
 /**
  * The deterministic figure echo appended UNDER a grounded-data model answer (W4 §8.1 caveat, mirror of
- * the invoice `buildTotalsPostscript`): the parsed money-in / money-out / net, verbatim, so a model
- * misquote is immediately contradicted. Returns '' on a MIXED-currency statement (`summary.currency`
- * absent) — there is no single meaningful total to echo (BL-2/D56), so the streaming path appends nothing
- * and the model narrates the per-currency rows itself. The amounts are the parser's own 2-dp figures.
+ * the invoice `buildTotalsPostscript`): the COMPUTED money-in / money-out / net (`summarizeCashflow` sums,
+ * NOT figures printed in the document — SKA-4), so a model misquote is immediately contradicted. The echo
+ * is now GATED on the D56 completeness `status`, so the deterministic app-authored postscript can never
+ * hand the user a total the TEMPLATE path refuses (SKA-4, audit §3.1):
+ *   - `complete`     — the computed-sums echo, as before (proven whole).
+ *   - `unverified`   — the echo PLUS the `unverifiedCaveat` line (a clearly-labelled sum of the rows read,
+ *                      not a verified statement total), mirroring the template's `unverifiedCaveat` branch.
+ *   - `contradicted` — SUPPRESS the echo entirely (chosen over echoing the printed opening/closing: the
+ *                      postscript builder is not threaded the printed balances, and re-surfacing a figure a
+ *                      refuted statement contradicts would add a new money surface for no honesty gain —
+ *                      this mirrors the template's `incompleteNoTotal` refusal, which prints no sum).
+ * Plus the SKA-5 dropped-line hedge (D56 outranks on the bank side — fires only on a non-`complete` status).
+ * Returns '' on a MIXED-currency statement (`summary.currency` absent) for the ECHO — there is no single
+ * meaningful total to echo (BL-2/D56) — but a dropped-line hedge still rides when applicable. The R5 date
+ * caveat is appended by the CALLER regardless of status, so it is unaffected by this gating.
  */
-export function buildCashflowPostscript(tr: Tr, summary: CashflowSummary): string {
-  if (!summary.currency) return ''
-  const figures = [
-    tr('skills.bankAnalysis.figureEchoIn', { amount: fmt(summary.totalIn), currency: summary.currency }),
-    tr('skills.bankAnalysis.figureEchoOut', { amount: fmt(summary.totalOut), currency: summary.currency }),
-    tr('skills.bankAnalysis.figureEchoNet', { amount: fmt(summary.net), currency: summary.currency })
-  ].join(' · ')
-  return tr('skills.bankAnalysis.figureEcho', { figures })
+export function buildCashflowPostscript(
+  tr: Tr,
+  summary: CashflowSummary,
+  status: CompletenessStatus,
+  droppedRowCount?: number
+): string {
+  const parts: string[] = []
+  // The computed in/out/net echo — only with a single currency AND when D56 does not refuse a total.
+  if (summary.currency && status !== 'contradicted') {
+    const figures = [
+      tr('skills.bankAnalysis.figureEchoIn', { amount: fmt(summary.totalIn), currency: summary.currency }),
+      tr('skills.bankAnalysis.figureEchoOut', { amount: fmt(summary.totalOut), currency: summary.currency }),
+      tr('skills.bankAnalysis.figureEchoNet', { amount: fmt(summary.net), currency: summary.currency })
+    ].join(' · ')
+    const echo = tr('skills.bankAnalysis.figureEcho', { figures })
+    parts.push(
+      status === 'unverified'
+        ? [echo, tr('skills.bankAnalysis.unverifiedCaveat', { count: summary.count })].join('\n\n')
+        : echo // 'complete'
+    )
+  }
+  // SKA-5: the dropped-line hedge. D56 OUTRANKS on the bank side (mirror U1 / commit 42a4eb9) — a `complete`
+  // balance proof means the dropped figures did not move the balance, so NO hedge; it fires only otherwise.
+  const dropped = droppedRowCount ?? 0
+  if (dropped > 0 && status !== 'complete') {
+    parts.push(tr('skills.bankAnalysis.countPartial', { count: summary.count, dropped }))
+  }
+  return parts.join('\n\n')
 }
 
 /**
@@ -786,7 +845,9 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       // (so a "how much on groceries?" question is answerable) — no model, no persistence (categoryTotals
       // falls back to the rule-based categorizeRow when nothing is persisted).
       const postscriptParts: string[] = []
-      const cashflowEcho = buildCashflowPostscript(ctx.tr, summary)
+      // SKA-4/SKA-5 (W6): the echo is D56-status-gated and carries the dropped-line hedge (the composition
+      // the wave built in separate phases and never wired). The R5 date caveat still rides regardless.
+      const cashflowEcho = buildCashflowPostscript(ctx.tr, summary, status, droppedRowCount)
       if (cashflowEcho) postscriptParts.push(cashflowEcho)
       if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.bankAnalysis.dateOrderCaveat'))
       return {
@@ -796,7 +857,8 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
           snap: { rows, summary, ...balances },
           reconcile,
           status,
-          categories: categories ?? categoryTotals(paired)
+          categories: categories ?? categoryTotals(paired),
+          droppedRowCount
         }),
         postscript: postscriptParts.join('\n\n'),
         citations,

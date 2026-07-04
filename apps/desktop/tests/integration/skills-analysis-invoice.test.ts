@@ -371,7 +371,7 @@ describe('invoice analysis handler — run()', () => {
     expect(res.answer).toContain(heading)
     expect(res.answer).toContain(tr('skills.invoiceAnalysis.checkNetPlusTaxIsGross'))
     // The unreconciled block precedes the totals (which carry the localized gross-total line).
-    const grossLabel = tr('skills.invoiceAnalysis.gross', { amount: '200.00', currency: 'EUR' })
+    const grossLabel = tr('skills.invoiceAnalysis.gross', { value: '200.00 EUR' })
     expect(res.answer.indexOf(heading)).toBeLessThan(res.answer.indexOf(grossLabel))
   })
 
@@ -524,6 +524,43 @@ describe('invoice analysis handler — data lifecycle (reuse / replace / stalene
       )
       .get(id) as { n: number }
     expect(lineItems.n).toBe(2)
+  })
+})
+
+// W6 (audit §3.1, SKA-5) — the grounded-data honesty COMPOSITION for the invoice: droppedRowCount now
+// reaches the mode's data block + postscript (an invoice has no balance proof, so any dropped line
+// hedges). A non-summary question ("who is the vendor?") routes to grounded-data.
+describe('invoice grounded-data honesty composition (W6, §3.1 SKA-5)', () => {
+  // One good line item + one dropped fused space-group amount ("Gizmo 10 100" → 10 100). dropped 1.
+  const ONE_DROPPED = [
+    'Invoice number INV-001',
+    'Vendor Acme GmbH',
+    'Widget 2 50,00 100,00',
+    'Gizmo 10 100',
+    'Net total 100,00 EUR'
+  ].join('\n')
+
+  it('SKA-5: droppedRowCount reaches the grounded-data postscript (countPartial hedge) AND the data block (MISSING note)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, ONE_DROPPED)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'who is the vendor?'))
+    expect(res.mode).toBe('grounded-data')
+    // The totals echo still rides (net 100,00), plus the honest dropped hedge beneath it (count 1, dropped 1).
+    expect(res.postscript).toContain('100.00')
+    expect(res.postscript).toContain(tr('skills.invoiceAnalysis.countPartial', { count: 1, dropped: 1 }))
+    // The data block declares the missing line — a "how many line items?" narration cannot claim completeness.
+    expect(res.dataBlock).toContain('MISSING from this data')
+    expect(res.dataBlock).not.toContain('parsed and reconciled from the whole document')
+  })
+
+  it('SKA-5: a clean invoice keeps whole-document provenance and no hedge (no false gate)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'who is the vendor?'))
+    expect(res.mode).toBe('grounded-data')
+    expect(res.dataBlock).toContain('every value above was parsed and reconciled from the whole document')
+    expect(res.dataBlock).not.toContain('MISSING')
+    expect(res.postscript).not.toContain(tr('skills.invoiceAnalysis.countPartial', { count: 2, dropped: 0 }))
   })
 })
 

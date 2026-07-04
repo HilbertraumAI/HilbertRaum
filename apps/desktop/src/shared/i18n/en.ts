@@ -622,7 +622,10 @@ export const en = {
     'whole statement, or just ask for it as CSV or JSON right here in chat.',
   // W4 (audit §8.1): the deterministic figure echo printed UNDER a grounded-data model answer, so any model
   // misquote is immediately contradicted by the parser's own money-in / money-out / net. Amounts verbatim.
-  'skills.bankAnalysis.figureEcho': 'Figures as parsed, verbatim from the document: {figures}.',
+  // SKA-4 (W6, audit §4.5): the bank in/out/net are COMPUTED sums (summarizeCashflow), NOT figures printed
+  // in the document — so the label says "computed", not "verbatim from the document" (that wording is
+  // accurate only for the invoice echo, whose net/tax/gross ARE printed totals; do NOT churn that one).
+  'skills.bankAnalysis.figureEcho': 'Totals computed from the parsed transactions: {figures}.',
   'skills.bankAnalysis.figureEchoIn': 'money in {amount} {currency}',
   'skills.bankAnalysis.figureEchoOut': 'money out {amount} {currency}',
   'skills.bankAnalysis.figureEchoNet': 'net change {amount} {currency}',
@@ -660,10 +663,13 @@ export const en = {
   'skills.invoiceAnalysis.checkTaxMatchesRate': 'the tax amount doesn’t match the stated tax rate',
   'skills.invoiceAnalysis.unreconciledItem': '- {check}',
   'skills.invoiceAnalysis.totalsHeading': 'Totals, exactly as printed:',
-  'skills.invoiceAnalysis.net': '- Net: **{amount} {currency}**',
-  'skills.invoiceAnalysis.tax': '- Tax: **{amount} {currency}**',
-  'skills.invoiceAnalysis.taxWithRate': '- Tax ({rate}%): **{amount} {currency}**',
-  'skills.invoiceAnalysis.gross': '- Gross total (amount due): **{amount} {currency}**',
+  // SKA-21 (W6): {value} is "{amount} {currency}", or just the amount when the currency is unknown/mixed
+  // (a mixed-currency invoice with no header currency stamps NO code rather than lineItems[0]'s — and no
+  // dangling space). Built by `amountText` in the handler.
+  'skills.invoiceAnalysis.net': '- Net: **{value}**',
+  'skills.invoiceAnalysis.tax': '- Tax: **{value}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Tax ({rate}%): **{value}**',
+  'skills.invoiceAnalysis.gross': '- Gross total (amount due): **{value}**',
   'skills.invoiceAnalysis.positionsHeading': 'Line items:',
   'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
   'skills.invoiceAnalysis.positionsMore':
@@ -698,9 +704,11 @@ export const en = {
   // W3 (audit §8.1): the deterministic figure echo printed UNDER a grounded-data model answer, so any
   // model misquote is immediately contradicted by the parser's own figures. Amounts pass through verbatim.
   'skills.invoiceAnalysis.figureEcho': 'Figures as parsed, verbatim from the document: {figures}.',
-  'skills.invoiceAnalysis.figureEchoNet': 'net {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoTax': 'tax {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoGross': 'gross {amount} {currency}',
+  // SKA-21 (W6): {value} is "{amount} {currency}", or the bare amount on a mixed-currency invoice with no
+  // header currency (no misleading lineItems[0] code, no dangling space) — built by `amountText`.
+  'skills.invoiceAnalysis.figureEchoNet': 'net {value}',
+  'skills.invoiceAnalysis.figureEchoTax': 'tax {value}',
+  'skills.invoiceAnalysis.figureEchoGross': 'gross {value}',
 
   // Full-doc-skills Phase 3 (§3.2/D45): the refuse-partial notice. A tool skill can only answer
   // exhaustively over a FULLY-INDEXED document; a legacy/partly-chunked doc is refused (no partial

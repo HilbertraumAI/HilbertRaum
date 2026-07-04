@@ -749,6 +749,73 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
   })
 })
 
+// W6 (audit §3.1, SKA-4/SKA-5) — the grounded-data honesty COMPOSITION: the mode's postscript + data
+// block now honour the D56 completeness gate and the U1 droppedRowCount, end-to-end through run(). A
+// non-summary question ("what was my largest transaction?") routes to grounded-data over each fixture.
+describe('bank-statement grounded-data honesty composition (W6, §3.1 SKA-4/SKA-5)', () => {
+  const NON_SUMMARY = 'what was my largest transaction?'
+
+  it('SKA-4 complete: the postscript echoes the COMPUTED sums (no "verbatim" mislabel), no hedge', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    expect(res.postscript).toContain('2454.10')
+    expect(res.postscript).toContain('computed') // reworded label (SKA-4, audit §4.5)
+    expect(res.postscript).not.toContain('verbatim from the document')
+    expect(res.postscript).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 2, dropped: 0 }))
+    // The data block asserts whole-document provenance (nothing dropped, complete).
+    expect(res.dataBlock).toContain('every value above was parsed and reconciled from the whole document')
+    expect(res.dataBlock).not.toContain('MISSING')
+  })
+
+  // One kept row + one dropped money line, NO printed balances → status 'unverified', dropped 1.
+  const ONE_DROPPED = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Sparen 50 1.234,56'
+  it('SKA-4/SKA-5 unverified + dropped: echo + unverifiedCaveat + the dropped hedge; data block MISSING note', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, ONE_DROPPED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    // The unverified caveat rides under the echo (SKA-4), and the dropped hedge fires (SKA-5, no balance proof).
+    expect(res.postscript).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 1 }))
+    expect(res.postscript).toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
+    // The data block honestly declares the missing line (a "how many?" narration can't claim completeness).
+    expect(res.dataBlock).toContain('MISSING from this data')
+    expect(res.dataBlock).not.toContain('parsed and reconciled from the whole document')
+  })
+
+  // D56 PROOF outranks the parse gap: opening 100 + Salary 100 == closing 200 ties, so the dropped
+  // "Foo 1234 50,00" line provably didn't move the balance → complete, NO hedge (mirrors the template).
+  const COMPLETE_WITH_DROPPED =
+    'Statement EUR\nOpening balance 100,00\n2026-01-02 Salary 100,00 200,00\n' +
+    '2026-01-03 Foo 1234 50,00\nClosing balance 200,00'
+  it('SKA-5 D56 OUTRANKS: complete + dropped>0 → echo present, NO dropped hedge, whole-document provenance', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE_WITH_DROPPED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    expect(res.postscript).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
+    expect(res.dataBlock).not.toContain('MISSING')
+    expect(res.dataBlock).toContain('every value above was parsed and reconciled from the whole document')
+  })
+
+  // A per-row balance the amounts refute → status 'contradicted' (dropped 0).
+  const CONTRADICTED =
+    'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+    '2026-01-03 Salary 2.500,00 9.999,99\nClosing balance 9.999,99'
+  it('SKA-4 contradicted: the postscript SUPPRESSES the figure echo (mirrors incompleteNoTotal)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CONTRADICTED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    // No app-authored total under the model answer on a statement the balances refute.
+    expect(res.postscript).not.toContain('2454.10')
+    expect(res.postscript).not.toContain('computed')
+    // The data block still carries the honest contradicted verdict for the model to narrate.
+    expect(res.dataBlock).toContain('NOT verified as the whole statement')
+  })
+})
+
 describe('analysis-handler registry', () => {
   it('register/get round-trips by install id; an unknown id returns undefined', () => {
     clearSkillAnalysisHandlers()

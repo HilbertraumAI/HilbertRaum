@@ -636,7 +636,10 @@ export const de: Record<keyof typeof en, string> = {
     'Aktionsleiste, um den ganzen Auszug zu speichern, oder frag hier im Chat einfach nach dem Auszug als CSV oder JSON.',
   // W4 (Audit §8.1): der deterministische Zahlen-Nachtrag UNTER einer grounded-data-Modellantwort, damit ein
   // Falschzitat des Modells sofort durch die Ein-/Ausgänge/Saldoänderung des Parsers widerlegt wird. Beträge unverändert.
-  'skills.bankAnalysis.figureEcho': 'Beträge wie eingelesen, wörtlich aus dem Dokument: {figures}.',
+  // SKA-4 (W6, Audit §4.5): Die Ein-/Ausgänge/Saldoänderung sind BERECHNETE Summen (summarizeCashflow), NICHT
+  // im Dokument gedruckte Zahlen — daher „berechnet“ statt „wörtlich aus dem Dokument“ (das gilt nur für den
+  // Rechnungs-Nachtrag, dessen Netto/Steuer/Brutto gedruckte Beträge sind; diesen NICHT ändern).
+  'skills.bankAnalysis.figureEcho': 'Aus den eingelesenen Buchungen berechnete Summen: {figures}.',
   'skills.bankAnalysis.figureEchoIn': 'Eingang {amount} {currency}',
   'skills.bankAnalysis.figureEchoOut': 'Ausgang {amount} {currency}',
   'skills.bankAnalysis.figureEchoNet': 'Saldoänderung {amount} {currency}',
@@ -674,10 +677,13 @@ export const de: Record<keyof typeof en, string> = {
   'skills.invoiceAnalysis.checkTaxMatchesRate': 'der Steuerbetrag passt nicht zum angegebenen Steuersatz',
   'skills.invoiceAnalysis.unreconciledItem': '- {check}',
   'skills.invoiceAnalysis.totalsHeading': 'Beträge, genau wie gedruckt:',
-  'skills.invoiceAnalysis.net': '- Netto: **{amount} {currency}**',
-  'skills.invoiceAnalysis.tax': '- Steuer: **{amount} {currency}**',
-  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{amount} {currency}**',
-  'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{amount} {currency}**',
+  // SKA-21 (W6): {value} ist „{amount} {currency}“ oder nur der Betrag, wenn die Währung unbekannt/gemischt
+  // ist (eine gemischte Rechnung ohne Kopf-Währung stempelt KEINEN Code statt dem von lineItems[0] — und
+  // kein hängendes Leerzeichen). Wird von `amountText` im Handler gebaut.
+  'skills.invoiceAnalysis.net': '- Netto: **{value}**',
+  'skills.invoiceAnalysis.tax': '- Steuer: **{value}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{value}**',
+  'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{value}**',
   'skills.invoiceAnalysis.positionsHeading': 'Positionen:',
   'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
   'skills.invoiceAnalysis.positionsMore':
@@ -712,9 +718,11 @@ export const de: Record<keyof typeof en, string> = {
   // W3 (Audit §8.1): der deterministische Zahlen-Nachtrag UNTER einer grounded-data-Modellantwort, damit ein
   // Falschzitat des Modells sofort durch die Zahlen des Parsers widerlegt wird. Beträge unverändert.
   'skills.invoiceAnalysis.figureEcho': 'Beträge wie eingelesen, wörtlich aus dem Dokument: {figures}.',
-  'skills.invoiceAnalysis.figureEchoNet': 'Netto {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoTax': 'Steuer {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoGross': 'Brutto {amount} {currency}',
+  // SKA-21 (W6): {value} ist „{amount} {currency}“ oder nur der Betrag bei einer gemischten Rechnung ohne
+  // Kopf-Währung (kein irreführender lineItems[0]-Code, kein hängendes Leerzeichen) — von `amountText` gebaut.
+  'skills.invoiceAnalysis.figureEchoNet': 'Netto {value}',
+  'skills.invoiceAnalysis.figureEchoTax': 'Steuer {value}',
+  'skills.invoiceAnalysis.figureEchoGross': 'Brutto {value}',
 
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':

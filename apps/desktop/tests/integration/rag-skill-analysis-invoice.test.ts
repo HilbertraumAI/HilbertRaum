@@ -242,7 +242,7 @@ describe('askDocuments — invoice analysis routing (full-doc-skills Phase 4)', 
     expect(msg.content).toContain('120.00')
     expect(msg.content).toContain('24.00')
     expect(msg.content).toContain('144.00')
-    expect(msg.content).toContain(t('en', 'skills.invoiceAnalysis.figureEchoNet', { amount: '120.00', currency: 'EUR' }))
+    expect(msg.content).toContain(t('en', 'skills.invoiceAnalysis.figureEchoNet', { value: '120.00 EUR' }))
     expect(msg.content.indexOf('Model answer.')).toBeLessThan(msg.content.indexOf('120.00'))
 
     // Honest extract coverage + citations pass straight through from the handler; the skill fence rode the

@@ -625,7 +625,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   LLM **never computes a figure**, it narrates parsed data. Under every grounded-data answer the app appends
   a **deterministic totals postscript** (net/tax/gross as parsed, verbatim) so a model misquote is
   immediately contradicted; the **R5 date caveat also rides that postscript** (a due-date question now
-  routes to grounded-data, so its honesty is preserved). The grounded-data turn uses its OWN system prompt
+  routes to grounded-data, so its honesty is preserved). **W6 (audit §3.1, SKA-5) then threaded the U1
+  `droppedRowCount` into this mode**: the invoice data block gains a MISSING-lines note + a softened
+  (non-"whole document") provenance line and the postscript appends the `countPartial` hedge whenever a
+  money-bearing line was dropped (an invoice has no balance proof, so any drop hedges) — closing the gap
+  where a `dropped>0` invoice answered "how many line items?" over the mode as if the list were complete.
+  **W6 (SKA-21)** also fixed the totals/echo currency: a mixed-currency invoice with no header currency now
+  stamps **no** code (via `invoiceTotalsCurrency`/`amountText`) instead of misleadingly using `lineItems[0]`'s,
+  and no dangling space when the currency is absent. The grounded-data turn uses its OWN system prompt
   (`GROUNDED_DATA_SYSTEM_PROMPT` — no `[Sn]` excerpt-citation rule, since it carries a data object, not
   numbered excerpts) and REPLAYS conversation history, so follow-ups no longer re-trigger the byte-identical
   template. `buildInvoiceAnswer` also gained a **Details block** (vendor / invoice number / invoice + due
@@ -644,7 +651,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   model answer over `buildStatementDataBlock` (the JSON + the balance-reconciliation + the **D56
   completeness verdict** + a deterministic per-category grouping + provenance, capped ~150 rows) with a
   **deterministic in/out/net postscript** (`buildCashflowPostscript` — empty on a mixed-currency statement,
-  since there is no single meaningful total; the R5 date caveat rides it too). The self-referential
+  since there is no single meaningful total; the R5 date caveat rides it too). **W6 (audit §3.1, SKA-4/SKA-5)
+  then made this postscript honour the D56 gate** the template already ran: the in/out/net echo prints only on
+  `complete` (proven-whole) or `unverified` (with the `unverifiedCaveat` sum-of-rows-read line appended), and
+  is **suppressed on `contradicted`** (mirroring the template's `incompleteNoTotal` refusal — no app-authored
+  total under the model answer on a statement the balances refute). The `droppedRowCount` hedge also rides,
+  but **D56 outranks it** (mirroring U1 / commit 42a4eb9): a `complete` balance proof means the dropped line
+  did not move the balance, so **no** hedge fires; it fires only on a non-complete status, and the data block's
+  MISSING-lines note + softened provenance follow the same gate. Its label was also corrected — the bank
+  in/out/net are **computed sums** (`summarizeCashflow`), so the echo now says "Totals **computed** from the
+  parsed transactions" rather than the old "verbatim from the document" (accurate only for the invoice echo,
+  whose net/tax/gross **are** printed totals — audit §4.5). The self-referential
   `transactionsMore` copy now names the **real** affordances (the run-bar **Export to CSV** button for a
   saved file + "ask for it as CSV or JSON here in chat"), and the inline **CSV intros** (bank + invoice,
   §3.6-low) state honestly that CSV carries the rows/line-items only while the summary/balances (bank) or
@@ -678,6 +695,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   coverage badge is softened to **"Read across …"** (ux-10 — it overclaimed *exhaustive extraction*; a small
   model / odd layout can miss a match), and the **empty-extraction copy** no longer dead-ends — it blames the
   reader not the document and names the next step (OCR a scan; else the layout may not be machine-readable).
+  U1 originally gated only the deterministic **template** headline; **W6 (audit §3.1, SKA-5) composed the same
+  `droppedRowCount` honesty into the grounded-data mode** (data-block MISSING-lines note + postscript hedge,
+  both domains), so the count/list questions the third mode owns no longer silently revert U1 — the bank side
+  honouring the D56-outranks rule (a `complete` proof suppresses the hedge). See the W4 bullet above.
   Finally, every shipped SKILL.md body is **reordered so its honesty/safety rules LEAD the first content
   paragraph** (they used to trail, so the budget-driven fence trim — which keeps leading paragraphs —
   silently decapitated them, §3.6), and the `buildSkillFence` **`trimmed`/`omitted` flags are now LOGGED**

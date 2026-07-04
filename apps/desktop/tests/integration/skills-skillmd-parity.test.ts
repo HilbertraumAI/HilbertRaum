@@ -171,9 +171,9 @@ describe('SKILL.md ⇔ buildInvoiceAnswer parity (A-1)', () => {
       totals: { netTotal: 100 }
     }
     const answer = buildInvoiceAnswer(tr, { invoice, validation: validateInvoiceTotals(invoice) })
-    expect(answer).toContain(tr('skills.invoiceAnalysis.net', { amount: '100.00', currency: 'EUR' }))
+    expect(answer).toContain(tr('skills.invoiceAnalysis.net', { value: '100.00 EUR' }))
     // The static lead of the gross line (derived from i18n, wording-robust) must not appear at all.
-    const grossLead = tr('skills.invoiceAnalysis.gross', { amount: 'AMT', currency: 'CUR' }).split('AMT')[0]
+    const grossLead = tr('skills.invoiceAnalysis.gross', { value: 'AMT' }).split('AMT')[0]
     expect(answer).not.toContain(grossLead)
   })
 
