@@ -41,10 +41,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # Invoice Analysis
-
 Honesty and safety rules — these lead and always apply, even if the rest of this skill is shortened
 to fit the context:
-
 - **Work from the extracted invoice, not from raw prose.** Once the invoice has been extracted, rely
   on that structured table of line items and totals; never add up figures by reading them out of
   sentences.

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
+import { approxPromptTokens, buildSkillFence } from '../../src/main/services/skills/prompt'
 import { APP_VOCAB_SKILL_IDS, suggestTerms } from '../../src/main/services/skills/vocabulary'
 import { buildBankAnswer } from '../../src/main/services/skills/analysis/bank-statement'
 import { buildInvoiceAnswer } from '../../src/main/services/skills/analysis/invoice'
@@ -52,10 +53,14 @@ describe('SKILL.md triggers.keywords ⇔ vocabulary parity (W5)', () => {
   }
 })
 
-// U1 (audit §3.6) — every SKILL.md body now LEADS with its honesty/safety rules. `buildSkillFence` keeps
-// leading paragraphs when it trims to a budget, so rules-last bodies were silently decapitated. The parser's
-// `body` starts with the `# Heading` paragraph; the rules block must be the very next paragraph, so it
-// survives to the guaranteed-kept minimum. This pins the reorder for all 8 shipped app skills.
+// U1 (audit §3.6) + SKA-15 (audit 2026-07-03, U7) — every SKILL.md body LEADS with its honesty/safety
+// rules, and the rules live in the paragraph `buildSkillFence` actually GUARANTEES. The builder's
+// guaranteed minimum is `paragraphs[0]` ONLY: U1's original layout (P0 = "# Heading", P1 = intro,
+// P2 = bullets) still decapitated the rules at a tight budget — the minimum shipped a bare heading, or
+// (as this test previously pinned at paras[1]) an intro PROMISING rules with none delivered. SKA-15
+// merges heading + intro + bullets into ONE paragraph, so the guaranteed-kept minimum IS the rules
+// block. Pinned for all 8 shipped app skills, both statically (paragraph shape) and end-to-end
+// (trimming the REAL body through `buildSkillFence` at a rules-only budget keeps the bullets).
 const ALL_APP_SKILL_IDS = [
   'bank-statement',
   'invoice',
@@ -67,15 +72,37 @@ const ALL_APP_SKILL_IDS = [
   'what-changed'
 ] as const
 
-describe('SKILL.md bodies lead with honesty/safety rules (U1, audit §3.6)', () => {
+describe('SKILL.md honesty/safety rules survive the fence-trim minimum (U1 + SKA-15)', () => {
   for (const id of ALL_APP_SKILL_IDS) {
-    it(`${id}: the rules block is the FIRST content paragraph (survives fence trimming)`, () => {
+    it(`${id}: heading + rules are ONE paragraph — the buildSkillFence guaranteed minimum`, () => {
       const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
       expect(res.ok, `parse ${id}: ${res.errors.join('; ')}`).toBe(true)
       const paras = (res.body ?? '').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
-      // paragraph[0] is the "# Heading"; the consolidated rules block is paragraph[1].
+      // paragraph[0] — the ONLY paragraph the builder guarantees — must carry the heading, the
+      // "always apply" intro, AND the actual rule bullets (≥ 3 of them), not just a promise of rules.
       expect(paras[0].startsWith('#')).toBe(true)
-      expect(paras[1]).toMatch(/lead and always apply/i)
+      expect(paras[0]).toMatch(/lead and always apply/i)
+      expect(paras[0].split('\n').filter((l) => l.startsWith('- ')).length).toBeGreaterThanOrEqual(3)
+    })
+
+    it(`${id}: the REAL body trimmed at a rules-only budget still ships the rule bullets`, () => {
+      const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
+      expect(res.ok).toBe(true)
+      const body = res.body ?? ''
+      const title = res.manifest!.title
+      const paras = body.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
+      expect(paras.length).toBeGreaterThan(1) // sanity: there IS something to trim away
+      // A budget sized to EXACTLY the minimum fence (framing + guard + paragraphs[0]): build the
+      // one-paragraph fence unbounded, measure it, then trim the FULL body to that budget.
+      const minimumFence = buildSkillFence({ title, body: paras[0] })
+      const budget = approxPromptTokens(minimumFence.text!)
+      const trimmed = buildSkillFence({ title, body }, budget)
+      // The audit acceptance (SKA-15): a budget-squeezed turn must never ship the intro without the
+      // rules. The kept text carries the "always apply" lead AND the bullets.
+      expect(trimmed.omitted).toBe(false)
+      expect(trimmed.trimmed).toBe(true) // the later paragraphs were dropped — this IS the minimum
+      expect(trimmed.text!).toMatch(/lead and always apply/i)
+      expect(trimmed.text!.split('\n').filter((l) => l.startsWith('- ')).length).toBeGreaterThanOrEqual(3)
     })
   }
 })

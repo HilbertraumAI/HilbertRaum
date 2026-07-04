@@ -133,12 +133,108 @@ export interface SkillManifest {
   triggers: SkillTriggers
 }
 
+/**
+ * SKA-35 (skills audit 2026-07-03, U7): every advisory note is emitted as a stable CODE + app-fixed
+ * params ALONGSIDE its fixed English string — the `SKILL_IMPORT_ERRORS`/`errorCodes` precedent
+ * applied to notes, so the renderer can localize the import-preview advisories instead of showing
+ * raw English. Params only ever carry APP-CHOSEN values (a fixed frontmatter field name, a numeric
+ * cap) — never skill content: in particular the `localized.<key>` family DROPPED the raw locale key
+ * (bounded attacker-chosen text that was previously interpolated into the message).
+ */
+export type SkillNoteCode =
+  | 'permissionNotString'
+  | 'permissionUnrecognized'
+  | 'permissionClamped'
+  | 'listInvalid'
+  | 'listItemsTooLong'
+  | 'listTruncated'
+  | 'languageInvalid'
+  | 'allowedToolsIgnored'
+  | 'analysisInvalid'
+  | 'analysisIgnoredForTool'
+  | 'triggersInvalid'
+  | 'autoFireInvalid'
+  | 'localizedInvalid'
+  | 'localizedLocaleInvalid'
+  | 'localizedEntryInvalid'
+  | 'localizedTitleIgnored'
+  | 'localizedDescriptionIgnored'
+  | 'localizedTooMany'
+  | 'trustIgnored'
+  | 'manifestJsonConflict'
+
+/** One structured advisory note: a stable code + app-fixed params (SKA-35). */
+export interface SkillNoteRef {
+  code: SkillNoteCode
+  params?: Record<string, string | number>
+}
+
+/**
+ * The fixed English template per note code — the single source of the `notes` strings. `{field}` /
+ * `{max}` / `{value}` are replaced from app-fixed params; unknown placeholders stay literal.
+ */
+const SKILL_NOTE_TEXT: Record<SkillNoteCode, string> = {
+  permissionNotString: '"permissions.{field}" should be a string; using the v1 default "{value}"',
+  permissionUnrecognized:
+    '"permissions.{field}" has a value that is not recognized; using the v1 default "{value}"',
+  permissionClamped: '"permissions.{field}" requested more than v1 allows; clamped to "{value}" (DS6)',
+  listInvalid: '"{field}" must be a list of strings; ignoring it',
+  listItemsTooLong: '"{field}" has entries that are too long; ignoring them',
+  listTruncated: '"{field}" has more entries than allowed; keeping the first {max}',
+  languageInvalid: '"language" should be a short BCP-47 tag (e.g. en, de); using "en"',
+  allowedToolsIgnored: '"allowedTools" is ignored for an instruction skill in v1 (Tier-2 only)',
+  analysisInvalid: '"analysis" must be one of: whole-doc, compare, none; ignoring it',
+  analysisIgnoredForTool: '"analysis" is ignored for a tool skill (its whole-document behaviour is app-owned)',
+  triggersInvalid: '"triggers" must be a mapping; ignoring it',
+  autoFireInvalid: '"triggers.autoFire" must be true or false; treating it as false',
+  localizedInvalid: '"localized" must be a mapping of locale entries; ignoring it',
+  localizedLocaleInvalid: '"localized" has an invalid locale key; ignoring that entry',
+  localizedEntryInvalid: 'a "localized" entry must be a mapping; ignoring it',
+  localizedTitleIgnored: 'a "localized" title override was ignored (must be a short single line)',
+  localizedDescriptionIgnored:
+    'a "localized" description override was ignored (must be a short single line)',
+  localizedTooMany: '"localized" has more locales than allowed; keeping the first {max}',
+  trustIgnored: 'a "trust"/"trustedLevel" field in frontmatter is ignored; the app assigns trust (§14)',
+  manifestJsonConflict: 'manifest.json "{field}" disagrees with SKILL.md; using SKILL.md (DS2)'
+} as const
+
+/** Render one note code + params to its fixed English string (params are app-fixed, never content). */
+export function formatSkillNote(ref: SkillNoteRef): string {
+  return SKILL_NOTE_TEXT[ref.code].replace(/\{(\w+)\}/g, (raw, name: string) => {
+    const v = ref.params?.[name]
+    return v === undefined ? raw : String(v)
+  })
+}
+
+/** Collects the paired string + structured forms of every note (they stay index-parallel). */
+interface NoteCollector {
+  notes: string[]
+  refs: SkillNoteRef[]
+  add(code: SkillNoteCode, params?: Record<string, string | number>): void
+}
+
+function makeNoteCollector(): NoteCollector {
+  const notes: string[] = []
+  const refs: SkillNoteRef[] = []
+  return {
+    notes,
+    refs,
+    add(code, params) {
+      const ref: SkillNoteRef = params ? { code, params } : { code }
+      refs.push(ref)
+      notes.push(formatSkillNote(ref))
+    }
+  }
+}
+
 /** Result of validating a pre-parsed frontmatter object. `notes` are non-fatal (clamps, ignores). */
 export interface SkillManifestValidation {
   ok: boolean
   manifest?: SkillManifest
   errors: string[]
   notes: string[]
+  /** Structured note codes parallel to `notes` (SKA-35). */
+  noteCodes?: SkillNoteRef[]
 }
 
 /** Result of parsing a whole SKILL.md (frontmatter + body). */
@@ -149,6 +245,8 @@ export interface SkillParseResult {
   body?: string
   errors: string[]
   notes: string[]
+  /** Structured note codes parallel to `notes` (SKA-35). */
+  noteCodes?: SkillNoteRef[]
 }
 
 export interface SkillParseOptions {
@@ -163,6 +261,9 @@ export interface SkillParseOptions {
 
 /** `^[a-z0-9]` then 1–62 of `[a-z0-9-]`: lowercase kebab, also a safe on-disk filename (§6.5). */
 export const SKILL_ID_RE = /^[a-z0-9][a-z0-9-]{1,62}$/
+/** SKA-45: Unicode bidi controls (LRE/RLE/PDF/LRO/RLO + LRI/RLI/FSI/PDI) — display-spoofing only.
+ *  `\u` escapes on purpose (the T1 convention): a git/editor normalization must not defeat this. */
+const BIDI_CONTROL_RE = new RegExp('[\\u202A-\\u202E\\u2066-\\u2069]')
 /** Strict semver core MAJOR.MINOR.PATCH (drives upgrade/downgrade comparison — §6.5/§9). */
 export const SKILL_SEMVER_RE = /^\d+\.\d+\.\d+$/
 
@@ -267,13 +368,13 @@ function clampPermission(
   rankMap: Record<string, number>,
   ceilingRank: number,
   canonicalByRank: string[],
-  notes: string[]
+  notes: NoteCollector
 ): string {
   if (raw === undefined || raw === null) {
     return canonicalByRank[ceilingRank]
   }
   if (typeof raw !== 'string') {
-    notes.push(`"permissions.${field}" should be a string; using the v1 default "${canonicalByRank[ceilingRank]}"`)
+    notes.add('permissionNotString', { field, value: canonicalByRank[ceilingRank] })
     return canonicalByRank[ceilingRank]
   }
   const key = raw.trim().toLowerCase()
@@ -281,12 +382,12 @@ function clampPermission(
   if (rank === undefined) {
     // Content-free: never echo the raw (attacker-supplied) value — only the fixed field name and
     // the app-derived default (§22-M1; the note rides the same IPC payload as a structural error).
-    notes.push(`"permissions.${field}" has a value that is not recognized; using the v1 default "${canonicalByRank[ceilingRank]}"`)
+    notes.add('permissionUnrecognized', { field, value: canonicalByRank[ceilingRank] })
     return canonicalByRank[ceilingRank]
   }
   const eff = Math.min(rank, ceilingRank)
   if (rank > ceilingRank) {
-    notes.push(`"permissions.${field}" requested more than v1 allows; clamped to "${canonicalByRank[eff]}" (DS6)`)
+    notes.add('permissionClamped', { field, value: canonicalByRank[eff] })
   }
   return canonicalByRank[eff]
 }
@@ -301,17 +402,17 @@ const MAX_TRIGGER_ITEMS = 64
 const MAX_TRIGGER_ITEM_LEN = 200
 
 /** Coerce a YAML value into a trimmed string[]; non-array / non-string members → note + []. */
-function stringArray(v: unknown, field: string, notes: string[]): string[] {
+function stringArray(v: unknown, field: string, notes: NoteCollector): string[] {
   if (v === undefined || v === null) return []
   if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) {
-    notes.push(`"${field}" must be a list of strings; ignoring it`)
+    notes.add('listInvalid', { field })
     return []
   }
   const items = (v as string[]).map((x) => x.trim()).filter((x) => x !== '')
   const bounded = items.filter((x) => x.length <= MAX_TRIGGER_ITEM_LEN)
-  if (bounded.length < items.length) notes.push(`"${field}" has entries that are too long; ignoring them`)
+  if (bounded.length < items.length) notes.add('listItemsTooLong', { field })
   if (bounded.length > MAX_TRIGGER_ITEMS) {
-    notes.push(`"${field}" has more entries than allowed; keeping the first ${MAX_TRIGGER_ITEMS}`)
+    notes.add('listTruncated', { field, max: MAX_TRIGGER_ITEMS })
     return bounded.slice(0, MAX_TRIGGER_ITEMS)
   }
   return bounded
@@ -324,12 +425,14 @@ function stringArray(v: unknown, field: string, notes: string[]): string[] {
  */
 export function validateSkillManifest(raw: unknown): SkillManifestValidation {
   const errors: string[] = []
-  const notes: string[] = []
+  const collector = makeNoteCollector()
+  const notes = collector.notes
   if (!isObject(raw)) {
     return {
       ok: false,
       errors: ['SKILL.md frontmatter must be a YAML mapping (key: value pairs)'],
-      notes
+      notes,
+      noteCodes: collector.refs
     }
   }
 
@@ -348,6 +451,13 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
     }
     if (value && /[\r\n]/.test(value)) {
       errors.push(`"${key}" must be a single line`)
+    }
+    // SKA-45 (rider, U7): Unicode bidirectional-control characters in a display field can reorder
+    // the rendered text (RTL-override picker/title spoofing — e.g. a title that shows a different
+    // "file type" than it is). Purely cosmetic here, but there is no legitimate use in a short
+    // display string — reject structurally.
+    if (value && BIDI_CONTROL_RE.test(value)) {
+      errors.push(`"${key}" must not contain Unicode direction-control characters`)
     }
   }
 
@@ -380,12 +490,20 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
   }
 
   // Optional display language (BCP-47-ish; display/filtering only — does NOT change prompt
-  // language, D-L6). Lenient: malformed → note + default 'en'.
+  // language, D-L6). Lenient: malformed → note + default 'en'. SKA-45 (review hardening): it is a
+  // DISPLAYED string (the detail pane), so an embedded newline or bidi direction control falls to
+  // the same lenient default instead of rendering.
   let language = 'en'
   const langRaw = raw['language']
   if (langRaw !== undefined && langRaw !== null) {
-    if (typeof langRaw !== 'string' || langRaw.trim() === '' || langRaw.trim().length > MAX_LANGUAGE_LEN) {
-      notes.push('"language" should be a short BCP-47 tag (e.g. en, de); using "en"')
+    if (
+      typeof langRaw !== 'string' ||
+      langRaw.trim() === '' ||
+      langRaw.trim().length > MAX_LANGUAGE_LEN ||
+      /[\r\n]/.test(langRaw) ||
+      BIDI_CONTROL_RE.test(langRaw)
+    ) {
+      collector.add('languageInvalid')
     } else {
       language = langRaw.trim()
     }
@@ -428,9 +546,9 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
       errors.push('"permissions" must be a mapping when present')
     } else {
       permissions = {
-        documents: clampPermission(permRaw['documents'], 'documents', DOC_RANK, 1, DOC_BY_RANK, notes) as SkillDocumentsPermission,
-        network: clampPermission(permRaw['network'], 'network', NET_RANK, 0, NET_BY_RANK, notes) as SkillNetworkPermission,
-        filesystem: clampPermission(permRaw['filesystem'], 'filesystem', FS_RANK, 1, FS_BY_RANK, notes) as SkillFilesystemPermission
+        documents: clampPermission(permRaw['documents'], 'documents', DOC_RANK, 1, DOC_BY_RANK, collector) as SkillDocumentsPermission,
+        network: clampPermission(permRaw['network'], 'network', NET_RANK, 0, NET_BY_RANK, collector) as SkillNetworkPermission,
+        filesystem: clampPermission(permRaw['filesystem'], 'filesystem', FS_RANK, 1, FS_BY_RANK, collector) as SkillFilesystemPermission
       }
     }
   }
@@ -451,7 +569,7 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
       reservesTools = declared.length > 0
       if (kind === 'instruction') {
         if (declared.length > 0) {
-          notes.push('"allowedTools" is ignored for an instruction skill in v1 (Tier-2 only)')
+          collector.add('allowedToolsIgnored')
         }
       } else {
         allowedTools = declared
@@ -468,13 +586,13 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
   const analysisRaw = raw['analysis']
   if (analysisRaw !== undefined && analysisRaw !== null) {
     if (typeof analysisRaw !== 'string' || !SKILL_ANALYSIS_MODES.includes(analysisRaw.trim().toLowerCase() as SkillAnalysisMode)) {
-      notes.push(`"analysis" must be one of: ${SKILL_ANALYSIS_MODES.join(', ')}; ignoring it`)
+      collector.add('analysisInvalid')
     } else {
       const mode = analysisRaw.trim().toLowerCase() as SkillAnalysisMode
       if (mode === 'none') {
         // Explicit default — leave undefined so the manifest_json stays byte-identical to an omission.
       } else if (kind !== 'instruction') {
-        notes.push('"analysis" is ignored for a tool skill (its whole-document behaviour is app-owned)')
+        collector.add('analysisIgnoredForTool')
       } else {
         analysis = mode
       }
@@ -486,14 +604,14 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
   const trigRaw = raw['triggers']
   if (trigRaw !== undefined && trigRaw !== null) {
     if (!isObject(trigRaw)) {
-      notes.push('"triggers" must be a mapping; ignoring it')
+      collector.add('triggersInvalid')
     } else {
-      triggers.keywords = stringArray(trigRaw['keywords'], 'triggers.keywords', notes)
-      triggers.mimeTypes = stringArray(trigRaw['mimeTypes'] ?? trigRaw['mime_types'], 'triggers.mimeTypes', notes)
+      triggers.keywords = stringArray(trigRaw['keywords'], 'triggers.keywords', collector)
+      triggers.mimeTypes = stringArray(trigRaw['mimeTypes'] ?? trigRaw['mime_types'], 'triggers.mimeTypes', collector)
       triggers.filenamePatterns = stringArray(
         trigRaw['filenamePatterns'] ?? trigRaw['filename_patterns'],
         'triggers.filenamePatterns',
-        notes
+        collector
       )
       // D6 auto-fire eligibility (additive, lenient). Only an explicit boolean `true` opts in; a
       // non-boolean value is NOTED and clamped to `false`; absent/false leaves it undefined (treated
@@ -502,44 +620,64 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
       if (afRaw === true) {
         triggers.autoFire = true
       } else if (afRaw !== undefined && afRaw !== null && typeof afRaw !== 'boolean') {
-        notes.push('"triggers.autoFire" must be true or false; treating it as false')
+        collector.add('autoFireInvalid')
       }
     }
   }
 
   // Optional per-locale DISPLAY overrides (title/description only — additive, lenient). A malformed
   // entry is NOTED and skipped (never an error); only non-empty, single-line, length-bounded strings
-  // are kept. Display only — it never changes the prompt/body language (D-L6).
+  // are kept. Display only — it never changes the prompt/body language (D-L6). SKA-35: the notes for
+  // this family DROP the raw locale key — it is bounded attacker-chosen text, and interpolating it
+  // put package content into the preview payload; the fixed message + code describe the entry alone.
+  // Locales past the MAX_LOCALIZED_LOCALES cap were previously dropped SILENTLY — now noted.
   let localized: Record<string, SkillLocalizedText> | undefined
   const locRaw = raw['localized']
   if (locRaw !== undefined && locRaw !== null) {
     if (!isObject(locRaw)) {
-      notes.push('"localized" must be a mapping of locale → {title, description}; ignoring it')
+      collector.add('localizedInvalid')
     } else {
       const out: Record<string, SkillLocalizedText> = {}
-      for (const loc of Object.keys(locRaw).slice(0, MAX_LOCALIZED_LOCALES)) {
+      const locKeys = Object.keys(locRaw)
+      if (locKeys.length > MAX_LOCALIZED_LOCALES) {
+        collector.add('localizedTooMany', { max: MAX_LOCALIZED_LOCALES })
+      }
+      for (const loc of locKeys.slice(0, MAX_LOCALIZED_LOCALES)) {
         const key = loc.trim().toLowerCase()
         if (!key || key.length > MAX_LANGUAGE_LEN) {
-          notes.push('"localized" has an invalid locale key; ignoring that entry')
+          collector.add('localizedLocaleInvalid')
           continue
         }
         const entryRaw = locRaw[loc]
         if (!isObject(entryRaw)) {
-          notes.push(`"localized.${key}" must be a mapping; ignoring it`)
+          collector.add('localizedEntryInvalid')
           continue
         }
         const entry: SkillLocalizedText = {}
         const lt = entryRaw['title']
-        if (typeof lt === 'string' && lt.trim() !== '' && !/[\r\n]/.test(lt) && lt.trim().length <= MAX_TITLE_LEN) {
+        // SKA-45 rider: bidi direction controls are refused in localized titles too (picker copy).
+        if (
+          typeof lt === 'string' &&
+          lt.trim() !== '' &&
+          !/[\r\n]/.test(lt) &&
+          !BIDI_CONTROL_RE.test(lt) &&
+          lt.trim().length <= MAX_TITLE_LEN
+        ) {
           entry.title = lt.trim()
         } else if (lt !== undefined) {
-          notes.push(`"localized.${key}.title" was ignored (must be a short single line)`)
+          collector.add('localizedTitleIgnored')
         }
         const ld = entryRaw['description']
-        if (typeof ld === 'string' && ld.trim() !== '' && !/[\r\n]/.test(ld) && ld.trim().length <= MAX_DESCRIPTION_LEN) {
+        if (
+          typeof ld === 'string' &&
+          ld.trim() !== '' &&
+          !/[\r\n]/.test(ld) &&
+          !BIDI_CONTROL_RE.test(ld) &&
+          ld.trim().length <= MAX_DESCRIPTION_LEN
+        ) {
           entry.description = ld.trim()
         } else if (ld !== undefined) {
-          notes.push(`"localized.${key}.description" was ignored (must be a short single line)`)
+          collector.add('localizedDescriptionIgnored')
         }
         if (entry.title || entry.description) out[key] = entry
       }
@@ -549,17 +687,18 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
 
   // Self-declared trust is ignored — the app assigns trustedLevel (§6.5/§14).
   if (raw['trust'] !== undefined || raw['trustedLevel'] !== undefined || raw['trusted_level'] !== undefined) {
-    notes.push('a "trust"/"trustedLevel" field in frontmatter is ignored; the app assigns trust (§14)')
+    collector.add('trustIgnored')
   }
 
   if (errors.length > 0) {
-    return { ok: false, errors, notes }
+    return { ok: false, errors, notes, noteCodes: collector.refs }
   }
 
   return {
     ok: true,
     errors: [],
     notes,
+    noteCodes: collector.refs,
     manifest: {
       id,
       title,
@@ -592,7 +731,7 @@ const FRONTMATTER_RE = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\
 export function parseSkillMarkdown(source: string, opts: SkillParseOptions = {}): SkillParseResult {
   const notes: string[] = []
   if (typeof source !== 'string' || source.trim() === '') {
-    return { ok: false, errors: ['SKILL.md is empty'], notes }
+    return { ok: false, errors: ['SKILL.md is empty'], notes, noteCodes: [] }
   }
 
   const m = source.match(FRONTMATTER_RE)
@@ -600,7 +739,8 @@ export function parseSkillMarkdown(source: string, opts: SkillParseOptions = {})
     return {
       ok: false,
       errors: ['SKILL.md must begin with a YAML frontmatter block delimited by --- lines'],
-      notes
+      notes,
+      noteCodes: []
     }
   }
 
@@ -608,12 +748,22 @@ export function parseSkillMarkdown(source: string, opts: SkillParseOptions = {})
   try {
     raw = parseYaml(m[1])
   } catch (err) {
-    return { ok: false, errors: [`SKILL.md frontmatter YAML parse error — ${String(err)}`], notes }
+    // SKA-31 (audit 2026-07-03, U7): NEVER embed `String(err)` — the yaml package's pretty errors
+    // include a code frame quoting the raw (attacker-supplied) frontmatter line, which would ride
+    // this error string into IPC payloads / app.log the moment any consumer surfaces it (§22-M1
+    // content-free rule; SKA-32 surfaces discovery errors). A FIXED structural message + at most
+    // the numeric line/column from `err.linePos` — numbers carry no package content.
+    const pos = (err as { linePos?: Array<{ line?: unknown; col?: unknown }> })?.linePos?.[0]
+    const line = typeof pos?.line === 'number' && Number.isFinite(pos.line) ? pos.line : null
+    const col = typeof pos?.col === 'number' && Number.isFinite(pos.col) ? pos.col : null
+    const where = line !== null ? (col !== null ? ` (line ${line}, column ${col})` : ` (line ${line})`) : ''
+    return { ok: false, errors: [`SKILL.md frontmatter is not valid YAML${where}`], notes, noteCodes: [] }
   }
 
   const v = validateSkillManifest(raw)
   const errors = [...v.errors]
   notes.push(...v.notes)
+  const noteCodes: SkillNoteRef[] = [...(v.noteCodes ?? [])]
 
   const body = (m[2] ?? '').trim()
   if (body === '') {
@@ -625,13 +775,16 @@ export function parseSkillMarkdown(source: string, opts: SkillParseOptions = {})
   }
 
   if (opts.manifestJson !== undefined && opts.manifestJson !== null && v.manifest) {
-    noteManifestJsonConflicts(v.manifest, opts.manifestJson, notes)
+    for (const ref of manifestJsonConflictNotes(v.manifest, opts.manifestJson)) {
+      noteCodes.push(ref)
+      notes.push(formatSkillNote(ref))
+    }
   }
 
   if (errors.length > 0 || !v.manifest) {
-    return { ok: false, errors, notes }
+    return { ok: false, errors, notes, noteCodes }
   }
-  return { ok: true, manifest: v.manifest, body, errors: [], notes }
+  return { ok: true, manifest: v.manifest, body, errors: [], notes, noteCodes }
 }
 
 /**
@@ -639,15 +792,17 @@ export function parseSkillMarkdown(source: string, opts: SkillParseOptions = {})
  * any disagreement. SKILL.md is always authoritative (DS2) — this never changes the manifest and
  * never produces an error; it only records that the cache was stale.
  */
-function noteManifestJsonConflicts(canonical: SkillManifest, manifestJson: unknown, notes: string[]): void {
-  if (!isObject(manifestJson)) return
+function manifestJsonConflictNotes(canonical: SkillManifest, manifestJson: unknown): SkillNoteRef[] {
+  if (!isObject(manifestJson)) return []
+  const refs: SkillNoteRef[] = []
   const fields: (keyof SkillManifest)[] = ['id', 'version', 'title']
   for (const f of fields) {
     const mv = manifestJson[f]
     if (typeof mv === 'string' && mv.trim() !== '' && mv.trim() !== canonical[f]) {
       // Content-free: name only the (fixed) field — never the raw cache or manifest values, which
       // are attacker-supplied and would otherwise ride the preview IPC payload into the UI (§22-M1).
-      notes.push(`manifest.json "${f}" disagrees with SKILL.md; using SKILL.md (DS2)`)
+      refs.push({ code: 'manifestJsonConflict', params: { field: f } })
     }
   }
+  return refs
 }

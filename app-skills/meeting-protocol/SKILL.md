@@ -40,10 +40,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # Meeting Minutes
-
 Honesty rules — these lead and always apply, even if the rest of this skill is shortened to fit the
 context:
-
 - Work **only** from the selected material — never add facts, names, dates, or decisions the source
   does not contain.
 - **Separate what was decided from what was merely discussed.** If the notes are ambiguous about

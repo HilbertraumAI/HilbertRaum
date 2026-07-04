@@ -12,49 +12,22 @@ import {
 } from '../../components'
 import { useT } from '../../i18n'
 import { localizedSkillDescription, localizedSkillTitle } from '../../lib/skillI18n'
+import { IMPORT_ERROR_KEY, importErrorKeyForMessage, localizeSkillNote } from '../../lib/skillImportI18n'
 import type { MessageKey } from '@shared/i18n'
 import type { SkillKind, SkillPermissions } from '@shared/skill-manifest'
-import type { AppSettings, SkillInfo, SkillPreview } from '@shared/types'
+import type { AppSettings, SkillInfo, SkillPreview, SkillReconcileStatus } from '@shared/types'
 
 // Settings → Skills (skills plan §15 + §18.1). The one place to see and add skills.
 // Everything destructive/file-touching is resolved MAIN-side (S4): the renderer hands a
 // chosen path to previewSkillPackage/importSkill and otherwise reads SkillInfo. No fs,
 // no dialog, no validation here. Copy is calm (guidelines §1), every status is icon+word
 // (never colour-only, §9), and the warning for imported skills is reassuring, not alarming.
+// The import-error/note localization tables live in lib/skillImportI18n.ts (SKA-33/SKA-35).
 
 type ImportState = { path: string; preview: SkillPreview } | null
 
-// Import-error reason CODE (content-free, computed main-side — I2) → localized copy key, so a
-// German user never sees the English structural string. An unmapped code falls back to the raw
-// (English, structural) message the preview carried.
-const IMPORT_ERROR_KEY: Record<string, MessageKey> = {
-  notFound: 'skills.import.error.notFound',
-  notZipOrFolder: 'skills.import.error.notZipOrFolder',
-  unreadableZip: 'skills.import.error.unreadableZip',
-  encryptedZip: 'skills.import.error.encryptedZip',
-  unsupportedCompression: 'skills.import.error.unsupportedCompression',
-  pathTraversal: 'skills.import.error.pathTraversal',
-  absolutePath: 'skills.import.error.absolutePath',
-  invalidPath: 'skills.import.error.invalidPath',
-  symlink: 'skills.import.error.symlink',
-  tooDeep: 'skills.import.error.tooDeep',
-  pathTooLong: 'skills.import.error.pathTooLong',
-  tooManyFiles: 'skills.import.error.tooManyFiles',
-  tooLarge: 'skills.import.error.tooLarge',
-  fileTooLarge: 'skills.import.error.fileTooLarge',
-  duplicatePath: 'skills.import.error.duplicatePath',
-  badExtension: 'skills.import.error.badExtension',
-  nestedArchive: 'skills.import.error.nestedArchive',
-  noSkillMd: 'skills.import.error.noSkillMd',
-  invalidManifest: 'skills.import.error.invalidManifest',
-  idMismatch: 'skills.import.error.idMismatch',
-  downgradeBlocked: 'skills.import.error.downgradeBlocked',
-  appReadOnly: 'skills.import.error.appReadOnly',
-  locked: 'skills.import.error.locked'
-}
-
 export function SkillsTab(): JSX.Element {
-  const { t } = useT()
+  const { t, tCount } = useT()
   const toast = useToast()
   const [skills, setSkills] = useState<SkillInfo[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -66,6 +39,9 @@ export function SkillsTab(): JSX.Element {
   // S13c (D4): the global auto-fire opt-in. Loaded best-effort; the toggle hides until it resolves so
   // a failed read never shows a misleading "off". Mirrors the SettingsScreen patch pattern.
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  // SKA-32: the last reconcile's structural error summary (counts+codes only, never a folder
+  // name). Non-zero → the calm "N skill folders could not be read" notice below the toolbar.
+  const [reconcileStatus, setReconcileStatus] = useState<SkillReconcileStatus | null>(null)
   // Per-skill enable/disable in-flight set (audit FE-3): the Switch is disabled while a toggle is
   // pending and a second toggle for the same skill is ignored, so rapid clicks can't race (no
   // overlapping enable/disable whose last-resolved refresh wins). Disable-while-pending over
@@ -80,6 +56,13 @@ export function SkillsTab(): JSX.Element {
     } catch {
       setSkills([])
       setLoadError(t('skills.loadFailed'))
+    }
+    // SKA-32: best-effort — an unreadable/absent status simply shows no notice (never blocks the list).
+    try {
+      const status = await window.api.getSkillReconcileStatus()
+      setReconcileStatus(typeof status?.errorCount === 'number' ? status : null)
+    } catch {
+      setReconcileStatus(null)
     }
   }, [t])
 
@@ -147,8 +130,13 @@ export function SkillsTab(): JSX.Element {
       await window.api.importSkill(path)
       await refresh()
       toast(t('skills.import.added'))
-    } catch {
-      toast(t('skills.import.failed'))
+    } catch (e) {
+      // SKA-33: the import throws the same STRUCTURAL reasons the preview localizes, but wrapped
+      // in Electron's IPC error message — map it back through the code table so the toast names
+      // the precise reason (downgrade race, vanished zip, locked folder…), as the preview does.
+      const message = e instanceof Error ? e.message : String(e)
+      const key = importErrorKeyForMessage(message)
+      toast(key ? t(key) : t('skills.import.failed'))
     }
   }
 
@@ -239,6 +227,13 @@ export function SkillsTab(): JSX.Element {
           </DropdownMenu.Root>
         </div>
         {loadError && <Banner tone="error">{loadError}</Banner>}
+        {/* SKA-32: reconcile errors were previously dropped silently — a drop-in with one YAML typo
+            simply never appeared. Count only; the folder itself is user content and never named. */}
+        {(reconcileStatus?.errorCount ?? 0) > 0 && (
+          <Banner tone="warning">
+            {tCount('skills.reconcile.folderErrors', reconcileStatus!.errorCount)}
+          </Banner>
+        )}
       </div>
 
       {/* S13c (D3/D4): the global auto-fire opt-in. Off by default — until this is on, the app never
@@ -592,9 +587,11 @@ function ImportDialog({
             </Banner>
           )
         })}
+        {/* SKA-35: advisories are localized via their stable note CODE + app-fixed params (the
+            error-code precedent); an entry with no known code falls back to the structural text. */}
         {preview.notes.map((msg, i) => (
           <Banner key={`n${i}`} tone="info">
-            {msg}
+            {localizeSkillNote(t, msg, preview.noteCodes?.[i])}
           </Banner>
         ))}
 

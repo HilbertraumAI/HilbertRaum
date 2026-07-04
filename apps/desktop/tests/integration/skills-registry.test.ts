@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, listTables, type Db } from '../../src/main/services/db'
@@ -101,10 +101,46 @@ describe('skills registry — discovery', () => {
 
     const res = discoverSkillsInDir(dirs.userSkillsDir, 'user')
     expect(res.skills.map((s) => s.folderName)).toEqual(['good'])
-    expect(res.errors.some((e) => e.includes('Bad_Name'))).toBe(true)
+    // SKA-32 content nuance: an INVALID folder name is arbitrary user text — the error line carries
+    // the structural reason WITHOUT the name; the parallel code identifies it.
+    expect(res.errors.some((e) => e.includes('Bad_Name'))).toBe(false)
+    expect(res.errors.some((e) => e.includes('not a valid skill id'))).toBe(true)
+    expect(res.errorCodes).toContain('invalidFolderName')
+    // A VALID folder name (it IS a skill id) may ride the human-readable line.
     expect(res.errors.some((e) => e.includes('broken'))).toBe(true)
+    expect(res.errorCodes).toContain('invalidManifest')
+    // Codes stay parallel to the lines.
+    expect(res.errorCodes).toHaveLength(res.errors.length)
     // The non-skill folder is skipped without an error.
     expect(res.errors.some((e) => e.includes('not-a-skill'))).toBe(false)
+  })
+
+  // SKA-16 (audit 2026-07-03, U7): one unreadable SKILL.md used to THROW out of discovery and kill
+  // ALL reconciliation for the session. TEETH: revert the manifest.ts isFile() guard + the per-folder
+  // try/catch → the directory-SKILL.md fixture throws EISDIR here and this test errors.
+  it('survives a DIRECTORY named SKILL.md among good skills (skips it quietly — SKA-16)', () => {
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'good-one')
+    // The hand-unpack accident: user-skills/foo/SKILL.md is a DIRECTORY.
+    mkdirSync(join(dirs.userSkillsDir, 'foo', 'SKILL.md'), { recursive: true })
+    writeSkill(dirs.userSkillsDir, 'zz-good-two')
+
+    const res = discoverSkillsInDir(dirs.userSkillsDir, 'user')
+    // Discovery stayed alive past the bad folder; the good skills on BOTH sides of it are found.
+    expect(res.skills.map((s) => s.folderName)).toEqual(['good-one', 'zz-good-two'])
+    // A non-file SKILL.md is "not a skill package" — skipped quietly, not an error.
+    expect(res.errors).toHaveLength(0)
+    expect(res.errorCodes).toHaveLength(0)
+  })
+
+  it('a directory-SKILL.md folder does not break reconcile (good skills insert — SKA-16)', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'good-one')
+    mkdirSync(join(dirs.userSkillsDir, 'foo', 'SKILL.md'), { recursive: true })
+    const res = reconcileSkills(db, opts(dirs))
+    expect(res.inserted).toBe(1)
+    expect(getSkill(db, skillInstallId('user', 'good-one'))).not.toBeNull()
   })
 
   it('keeps the first of two folders declaring the same id within a source', () => {
@@ -121,6 +157,53 @@ describe('skills registry — discovery', () => {
     const res = discoverSkillsInDir(join(tempDir(), 'does-not-exist'), 'app')
     expect(res.skills).toHaveLength(0)
     expect(res.errors).toHaveLength(0)
+  })
+})
+
+// SKA-36 (audit 2026-07-03, U7): crash-leftover `.skill-import-*` staging dirs and stale
+// `.skill-backup-*` dirs (dot-names — excluded from discovery) accumulated invisibly on the
+// portable drive forever. Reconcile now sweeps them, AGE-GATED (> 1 h by mtime) so a dir a live
+// import could still own is never touched. TEETH: drop the sweep call in reconcileSkills → the
+// stale-dir assertions fail.
+describe('skills registry — stale staging/backup sweep (SKA-36)', () => {
+  it('removes >1h-old .skill-import-*/.skill-backup-* dirs; spares fresh ones and real skills', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'keeper')
+    const stale = join(dirs.userSkillsDir, '.skill-import-abc123')
+    const staleBackup = join(dirs.userSkillsDir, '.skill-backup-keeper')
+    const fresh = join(dirs.userSkillsDir, '.skill-import-live')
+    mkdirSync(stale, { recursive: true })
+    writeFileSync(join(stale, 'SKILL.md'), 'half-written import leftovers')
+    mkdirSync(staleBackup, { recursive: true })
+    mkdirSync(fresh, { recursive: true })
+    // Make the crash leftovers look 2 h old (the fresh dir keeps its just-created mtime).
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    utimesSync(stale, twoHoursAgo, twoHoursAgo)
+    utimesSync(staleBackup, twoHoursAgo, twoHoursAgo)
+
+    reconcileSkills(db, opts(dirs))
+
+    expect(existsSync(stale)).toBe(false) // crash leftover swept
+    expect(existsSync(staleBackup)).toBe(false) // stale backup swept
+    expect(existsSync(fresh)).toBe(true) // a dir a live import could own is NEVER swept
+    expect(existsSync(join(dirs.userSkillsDir, 'keeper'))).toBe(true) // real skills untouched
+    expect(getSkill(db, skillInstallId('user', 'keeper'))).not.toBeNull()
+  })
+
+  // Review hardening: a NOT-yet-sweepable (< 1 h) crash leftover carrying a half-written SKILL.md
+  // must not surface as a "folder could not be read" error either — dot-named dirs are skipped
+  // before any discovery check (they are lifecycle names, never packages).
+  it('a fresh dot-named leftover is invisible to discovery (no phantom SKA-32 error)', () => {
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'good')
+    const fresh = join(dirs.userSkillsDir, '.skill-import-crashed')
+    mkdirSync(fresh, { recursive: true })
+    writeFileSync(join(fresh, 'SKILL.md'), 'half-written')
+    const res = discoverSkillsInDir(dirs.userSkillsDir, 'user')
+    expect(res.skills.map((s) => s.folderName)).toEqual(['good'])
+    expect(res.errors).toHaveLength(0)
+    expect(res.errorCodes).toHaveLength(0)
   })
 })
 
@@ -336,6 +419,33 @@ describe('skills registry — handle + loader', () => {
     expect(registry.get('user:user-one')!.enabled).toBe(false)
     expect(registry.setEnabled('user:user-one', true)).toBe(true)
     expect(registry.get('user:user-one')!.enabled).toBe(true)
+  })
+
+  // SKA-32 (audit 2026-07-03, U7): discovery errors were computed and then DROPPED by every
+  // consumer — a drop-in with one YAML typo simply never appeared, with no toast/log/badge. The
+  // registry now summarizes the last reconcile's errors as COUNTS + structural CODES (never folder
+  // names or content — §22-M1), for the startup log + the Settings → Skills surfacing.
+  it('reconcileStatus() summarizes the last reconcile errors as counts + codes (SKA-32)', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'good')
+    writeSkill(dirs.userSkillsDir, 'broken', { version: 'not-semver' })
+    writeSkill(dirs.userSkillsDir, 'Bad_Name')
+    const registry = createSkillRegistry({ getDb: () => db, ...dirs })
+
+    expect(registry.reconcileStatus()).toEqual({ errorCount: 0, errorCodes: [] }) // before any run
+    registry.reconcile()
+    const status = registry.reconcileStatus()
+    expect(status.errorCount).toBe(2)
+    expect([...status.errorCodes].sort()).toEqual(['invalidFolderName', 'invalidManifest'])
+    // The summary is structural only — no folder name rides it (it is what gets logged/surfaced).
+    expect(JSON.stringify(status)).not.toContain('Bad_Name')
+
+    // A clean follow-up reconcile resets the summary (the fixed drop-in appears; errors go to 0).
+    rmSync(join(dirs.userSkillsDir, 'broken'), { recursive: true, force: true })
+    rmSync(join(dirs.userSkillsDir, 'Bad_Name'), { recursive: true, force: true })
+    registry.reconcile()
+    expect(registry.reconcileStatus()).toEqual({ errorCount: 0, errorCodes: [] })
   })
 
   it('the loader reads the folder for both sources (one mode)', () => {

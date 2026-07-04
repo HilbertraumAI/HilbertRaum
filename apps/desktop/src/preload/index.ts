@@ -45,6 +45,7 @@ import type {
   VisionStatus,
   SkillInfo,
   SkillPreview,
+  SkillReconcileStatus,
   SkillRunState,
   SkillSuggestion,
   StartDocTaskRequest,
@@ -438,6 +439,9 @@ const api = {
   /** Acknowledge a user skill's import warning (DS7). */
   acknowledgeSkillWarning: (installId: string): Promise<SkillInfo> =>
     ipcRenderer.invoke(IPC.acknowledgeSkillWarning, installId),
+  /** Counts + fixed reason codes of skill folders the last reconcile could not read (SKA-32). */
+  getSkillReconcileStatus: (): Promise<SkillReconcileStatus> =>
+    ipcRenderer.invoke(IPC.skillReconcileStatus),
 
   /** Deterministic skill suggestion for the composer picker (skills plan §10.2/S8). The draft
    *  question is content — the main handler scores it and logs nothing. Returns at most one. */

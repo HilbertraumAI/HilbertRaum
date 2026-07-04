@@ -990,6 +990,11 @@ export const en = {
   'skills.loading': 'Loading skills…',
   'skills.locked': 'Unlock your workspace to manage skills.',
   'skills.loadFailed': 'Skills couldn’t be loaded.',
+  // SKA-32: the reconcile-error notice (count only — never a folder name; §22-M1).
+  'skills.reconcile.folderErrors.one':
+    '{count} skill folder could not be read and is skipped. Its SKILL.md is missing, invalid, or unreadable.',
+  'skills.reconcile.folderErrors.other':
+    '{count} skill folders could not be read and are skipped. Each folder needs a valid SKILL.md.',
   'skills.empty.title': 'No skills yet',
   'skills.empty.line': 'Skills teach the assistant how to do a specific task. Add one to get started.',
   // Trust chip (icon + word, never colour-only — guidelines §9).
@@ -1090,6 +1095,28 @@ export const en = {
   'skills.import.error.downgradeBlocked': 'A newer version of this skill is already installed. Turn on developer mode to install an older version.',
   'skills.import.error.appReadOnly': 'App-provided skills cannot be changed or deleted.',
   'skills.import.error.locked': 'Unlock the workspace to manage skills.',
+  // SKA-35: import-preview advisory notes, localized via their stable code + app-fixed params
+  // ({field} = a fixed frontmatter field name, {max}/{value} = app constants — never skill content).
+  'skills.import.note.permissionNotString': 'The "{field}" permission isn’t a text value; the default "{value}" is used.',
+  'skills.import.note.permissionUnrecognized': 'The "{field}" permission has a value this app doesn’t recognize; the default "{value}" is used.',
+  'skills.import.note.permissionClamped': 'The skill asks for more "{field}" access than this app allows; it is limited to "{value}".',
+  'skills.import.note.listInvalid': 'The "{field}" list is not a list of texts and is ignored.',
+  'skills.import.note.listItemsTooLong': 'Some entries in "{field}" are too long and are ignored.',
+  'skills.import.note.listTruncated': '"{field}" has more entries than allowed; only the first {max} are kept.',
+  'skills.import.note.languageInvalid': 'The "language" field is not a valid language tag; "en" is used.',
+  'skills.import.note.allowedToolsIgnored': 'The declared tools are ignored for an instruction skill (tools come with a later version).',
+  'skills.import.note.analysisInvalid': 'The "analysis" field has an unknown value and is ignored.',
+  'skills.import.note.analysisIgnoredForTool': 'The "analysis" field is ignored for a tool skill (the app decides its whole-document behaviour).',
+  'skills.import.note.triggersInvalid': 'The "triggers" block is invalid and is ignored.',
+  'skills.import.note.autoFireInvalid': 'The "triggers.autoFire" field must be true or false; it is treated as false.',
+  'skills.import.note.localizedInvalid': 'The "localized" block is invalid and is ignored.',
+  'skills.import.note.localizedLocaleInvalid': 'A "localized" entry has an invalid language key and is ignored.',
+  'skills.import.note.localizedEntryInvalid': 'A "localized" entry is invalid and is ignored.',
+  'skills.import.note.localizedTitleIgnored': 'A translated title was ignored (it must be a short single line).',
+  'skills.import.note.localizedDescriptionIgnored': 'A translated description was ignored (it must be a short single line).',
+  'skills.import.note.localizedTooMany': 'The "localized" block has more languages than allowed; only the first {max} are kept.',
+  'skills.import.note.trustIgnored': 'A "trust" field in the skill is ignored; the app assigns trust itself.',
+  'skills.import.note.manifestJsonConflict': 'The packaged manifest.json "{field}" differs from SKILL.md; SKILL.md is used.',
   // DS12 — enabling a skill whose name is shared turns the other one off.
   'skills.replace.title': 'Use this skill instead?',
   'skills.replace.body': 'Another skill with this name is on. Turning this one on turns the other one off.',

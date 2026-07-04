@@ -217,6 +217,12 @@ export const IPC = {
   disableSkill: 'skills:disable',
   /** Acknowledge a user skill's import warning (DS7 — clears the persistent warning state). */
   acknowledgeSkillWarning: 'skills:acknowledgeWarning',
+  /**
+   * Structural summary of the last disk reconcile's discovery errors — `SkillReconcileStatus`
+   * (SKA-32, skills audit 2026-07-03, U7). Counts + fixed reason codes ONLY (never folder names or
+   * package content — §22-M1); drives the Settings → Skills "N folders could not be read" notice.
+   */
+  skillReconcileStatus: 'skills:reconcileStatus',
   // Tier-2 app-orchestrated tool runs (skills plan §12.2/§16, S11b). Generic `skills:*` shape (NOT
   // bank-named) so S11c's tools slot in with no renderer/IPC change; bank specifics stay in the
   // `tool-runs.ts` dispatch + `run.ts` seam (§13). All requireUnlocked; the document scope is

@@ -327,6 +327,51 @@ describe('safe extractor — DoS hardening (S-1 input bound, S-2 collision)', ()
     expect(existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir) : []).toEqual([])
   })
 
+  // SKA-30 (audit 2026-07-03, U7): the S-2 duplicate check compared EXACT strings, but the
+  // portable drive's filesystems (NTFS/exFAT) are case-insensitive — `SKILL.md` + `skill.md`
+  // last-writer-wins on write (the preview-validated-then-shadowed bypass), while a case-sensitive
+  // OS keeps both: a polyglot package installs DIFFERENT instructions per OS. TEETH: revert the
+  // guard to the exact-string `seen.has(rel)` → both fixtures import cleanly and these fail.
+  it('SKA-30: rejects two members that collide only by CASE (SKILL.md + skill.md)', () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const zip = writeRawZip([
+      { name: 'SKILL.md', data: Buffer.from(skillMd({ id: 'case-collide' })) },
+      { name: 'skill.md', data: Buffer.from(skillMd({ id: 'evil-shadow' })) }
+    ])
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual(['duplicatePath'])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.duplicatePath)
+    expect(existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir) : []).toEqual([])
+  })
+
+  it('SKA-30: rejects a file-vs-directory casing merge (Notes.md file + notes.md/… dir)', () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    // On a case-insensitive write, mkdir('notes.md') collides with the file 'Notes.md'.
+    const zip = writeRawZip([
+      { name: 'SKILL.md', data: Buffer.from(skillMd({ id: 'dir-merge' })) },
+      { name: 'Notes.md', data: Buffer.from('a file') },
+      { name: 'notes.md/inner.md', data: Buffer.from('a dir of the same folded name') }
+    ])
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual(['duplicatePath'])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.duplicatePath)
+  })
+
+  it('SKA-30: same-name members in DIFFERENT folders still import fine (no over-reject)', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const zip = await writeZip([
+      { name: 'SKILL.md', content: skillMd({ id: 'no-over-reject' }) },
+      { name: 'examples/readme.md', content: 'a' },
+      { name: 'resources/readme.md', content: 'b' }
+    ])
+    expect(importSkill(db, zip, deps).info.id).toBe('no-over-reject')
+  })
+
   it('a legitimate well-formed package still imports unchanged after the new bounds', async () => {
     const db = freshDb()
     const deps = makeDeps()
@@ -515,7 +560,7 @@ describe('downgrade is developer-mode gated (DS15)', () => {
   })
 })
 
-describe('export excludes the cache + includes the package tree (§9.5)', () => {
+describe('export excludes the cache + includes the package tree (§9.5 / SKA-34)', () => {
   it('exports SKILL.md + subtrees, never manifest.json', async () => {
     const db = freshDb()
     const deps = makeDeps()
@@ -534,6 +579,84 @@ describe('export excludes the cache + includes the package tree (§9.5)', () => 
     expect(names).toContain('SKILL.md')
     expect(names).toContain('examples/one.md')
     expect(names).not.toContain('manifest.json')
+  })
+
+  // SKA-34 (audit 2026-07-03, U7) — the DECISION: export mirrors IMPORT's acceptance (everything
+  // allowed under the skill dir minus the manifest.json cache), so `export(import(pkg)) == pkg`.
+  // Before, export collected only the four canonical subdirs: a third-party skill's
+  // `notes/usage.md` installed fine and silently VANISHED from a shared re-export. TEETH: restore
+  // the EXPORT_SUBDIRS allowlist → `notes/usage.md` is missing and the fidelity assertions fail.
+  it('SKA-34: import → export → re-import round-trips a NON-canonical tree byte-identically', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const members = [
+      { name: 'SKILL.md', content: skillMd({ id: 'fidelity' }) },
+      { name: 'examples/one.md', content: 'a canonical-subdir file' },
+      { name: 'notes/usage.md', content: 'a third-party NON-canonical file' },
+      { name: 'data.csv', content: 'a,root,file' }
+    ]
+    importSkill(db, await writeZip(members), deps)
+
+    const dest = join(tempDir(), 'roundtrip.skill.zip')
+    exportSkill(db, skillInstallId('user', 'fidelity'), dest, deps)
+
+    // Fidelity half 1: the exported zip carries EXACTLY the imported package files (no cache).
+    const exported = await JSZip.loadAsync(readFileSync(dest))
+    const names = Object.keys(exported.files).filter((n) => !exported.files[n].dir)
+    expect(names.sort()).toEqual(members.map((m) => m.name).sort())
+    for (const m of members) {
+      expect((await exported.files[m.name].async('nodebuffer')).toString('utf8')).toBe(m.content)
+    }
+
+    // Fidelity half 2: the export RE-IMPORTS cleanly on a second machine (a fresh db + dirs).
+    const db2 = freshDb()
+    const deps2 = makeDeps()
+    const info = importSkill(db2, dest, deps2).info
+    expect(info.id).toBe('fidelity')
+    expect(existsSync(join(deps2.userSkillsDir, 'fidelity', 'notes', 'usage.md'))).toBe(true)
+    expect(readFileSync(join(deps2.userSkillsDir, 'fidelity', 'data.csv'), 'utf8')).toBe('a,root,file')
+  })
+
+  // Review hardening: import skips dot-named entries too (export always did), so a dot-file can no
+  // longer install and then silently vanish from a shared re-export — the two sides agree exactly.
+  it('SKA-34: dot-named members are skipped at IMPORT (zip + folder), mirroring export', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    const zip = await writeZip([
+      { name: 'SKILL.md', content: skillMd({ id: 'dotted' }) },
+      { name: '.hidden.md', content: 'dot file' },
+      { name: '.notes/tips.md', content: 'dot dir' }
+    ])
+    importSkill(db, zip, deps)
+    expect(existsSync(join(deps.userSkillsDir, 'dotted', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(deps.userSkillsDir, 'dotted', '.hidden.md'))).toBe(false)
+    expect(existsSync(join(deps.userSkillsDir, 'dotted', '.notes'))).toBe(false)
+
+    // Folder source: a VCS-tracked skill folder (a .git tree full of disallowed files) imports
+    // cleanly — the dot tree is skipped instead of tripping badExtension.
+    const folder = join(tempDir(), 'gitted')
+    mkdirSync(join(folder, '.git'), { recursive: true })
+    writeFileSync(join(folder, '.git', 'HEAD'), 'ref: refs/heads/main')
+    writeFileSync(join(folder, 'SKILL.md'), skillMd({ id: 'gitted' }))
+    const info = importSkill(db, folder, deps).info
+    expect(info.id).toBe('gitted')
+    expect(existsSync(join(deps.userSkillsDir, 'gitted', '.git'))).toBe(false)
+  })
+
+  it('SKA-34: export skips dot-dirs and disallowed extensions (never staging litter)', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    importSkill(db, await validZip({ id: 'litter' }), deps)
+    const skillDir = join(deps.userSkillsDir, 'litter')
+    // Simulate on-disk litter a power user / a crash could leave INSIDE the skill folder.
+    mkdirSync(join(skillDir, '.git'), { recursive: true })
+    writeFileSync(join(skillDir, '.git', 'config.txt'), 'x')
+    writeFileSync(join(skillDir, '.DS_Store.txt'), 'x')
+    writeFileSync(join(skillDir, 'tool.exe'), 'MZ')
+    const dest = join(tempDir(), 'litter.skill.zip')
+    exportSkill(db, skillInstallId('user', 'litter'), dest, deps)
+    const names = Object.keys((await JSZip.loadAsync(readFileSync(dest))).files)
+    expect(names).toEqual(['SKILL.md'])
   })
 })
 

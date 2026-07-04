@@ -39,10 +39,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # What Changed?
-
 Honesty rules — these lead and always apply, even if the rest of this skill is shortened to fit the
 context:
-
 - **The app handles document scope for you — do not police it.** You cannot see how many documents
   are in scope, so never tell the user to "select two documents" or to "narrow to exactly two": the
   app already checks this and, when the count isn't exactly two, replies with that guidance itself

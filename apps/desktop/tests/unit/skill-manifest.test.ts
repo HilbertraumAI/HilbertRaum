@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  formatSkillNote,
   parseSkillMarkdown,
   validateSkillManifest,
   SKILL_V1_PERMISSION_CEILING,
@@ -266,6 +267,105 @@ describe('validateSkillManifest', () => {
     expect(res.manifest?.localized).toBeUndefined()
   })
 
+  // SKA-35 (audit 2026-07-03, U7): notes are emitted as stable CODES + app-fixed params alongside
+  // the fixed English strings, and the `localized.<key>` family DROPS the raw locale key (bounded
+  // attacker-chosen text that used to be interpolated into the preview payload).
+  describe('structured note codes (SKA-35)', () => {
+    it('noteCodes parallels notes, and formatSkillNote reproduces each string exactly', () => {
+      const res = validateSkillManifest(
+        rawFront({
+          permissions: { documents: 'all' },
+          allowedTools: ['extract_transactions'],
+          localized: { de: 'not-a-mapping' },
+          trust: 'app'
+        })
+      )
+      expect(res.ok).toBe(true)
+      expect(res.noteCodes).toHaveLength(res.notes.length)
+      expect(res.notes.length).toBeGreaterThanOrEqual(4)
+      for (let i = 0; i < res.notes.length; i++) {
+        expect(formatSkillNote(res.noteCodes![i])).toBe(res.notes[i])
+      }
+      expect(res.noteCodes!.map((n) => n.code)).toEqual(
+        expect.arrayContaining(['permissionClamped', 'allowedToolsIgnored', 'localizedEntryInvalid', 'trustIgnored'])
+      )
+    })
+
+    it('the localized-family notes NEVER echo the attacker-chosen locale key (canary)', () => {
+      const canary = 'EVIL_LOCALE_7bd2'
+      const res = validateSkillManifest(
+        rawFront({
+          localized: {
+            [canary]: 'not-a-mapping',
+            de: { title: 'x'.repeat(200) } // over-long → ignored-title note
+          }
+        })
+      )
+      expect(res.ok).toBe(true)
+      // Both entries produce notes — the entry note and the ignored-title note — with NO key echoed.
+      expect(res.noteCodes!.map((n) => n.code)).toEqual(
+        expect.arrayContaining(['localizedEntryInvalid', 'localizedTitleIgnored'])
+      )
+      expect(JSON.stringify(res.notes) + JSON.stringify(res.noteCodes)).not.toContain(canary)
+    })
+
+    it('locales past the 16-cap are dropped WITH a note now (previously silent)', () => {
+      const many = Object.fromEntries(
+        Array.from({ length: 18 }, (_, i) => [`l${i}`, { title: `Title ${i}` }])
+      )
+      const res = validateSkillManifest(rawFront({ localized: many }))
+      expect(res.ok).toBe(true)
+      expect(Object.keys(res.manifest!.localized ?? {})).toHaveLength(16)
+      const tooMany = res.noteCodes!.find((n) => n.code === 'localizedTooMany')
+      expect(tooMany).toBeDefined()
+      expect(tooMany!.params).toEqual({ max: 16 })
+    })
+
+    it('noteCodes ride parseSkillMarkdown too (validation + manifest.json conflicts)', () => {
+      const res = parseSkillMarkdown(skillMd(rawFront({ permissions: { network: 'allowed' } })), {
+        manifestJson: { id: 'bank-statement', version: '9.9.9', title: 'Stale' }
+      })
+      expect(res.ok).toBe(true)
+      expect(res.noteCodes).toHaveLength(res.notes.length)
+      const codes = res.noteCodes!.map((n) => n.code)
+      expect(codes).toContain('permissionClamped')
+      expect(codes.filter((c) => c === 'manifestJsonConflict')).toHaveLength(2) // version + title
+    })
+  })
+
+  // SKA-45 (rider, U7): Unicode bidi direction controls in display fields are refused — an
+  // RTL-override title renders reordered in the picker (cosmetic spoofing).
+  describe('bidi direction controls in display fields (SKA-45)', () => {
+    const RLO = String.fromCharCode(0x202e) // U+202E RIGHT-TO-LEFT OVERRIDE (built via code — T1 convention)
+    it('rejects a title carrying a bidi control', () => {
+      const res = validateSkillManifest(rawFront({ title: `Totally${RLO}fine skill` }))
+      expect(res.ok).toBe(false)
+      expect(res.errors.some((e) => e.includes('direction-control'))).toBe(true)
+    })
+
+    it('ignores a localized title carrying a bidi control (lenient note path)', () => {
+      const res = validateSkillManifest(rawFront({ localized: { de: { title: `Titel${RLO}!` } } }))
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.localized).toBeUndefined()
+      expect(res.noteCodes!.map((n) => n.code)).toContain('localizedTitleIgnored')
+    })
+
+    it('a plain title without controls stays accepted (no over-reject)', () => {
+      expect(validateSkillManifest(rawFront({ title: 'Ganz normale Überschrift — ok' })).ok).toBe(true)
+    })
+
+    // Review hardening: `language` is also displayed (the detail pane) — a bidi control or an
+    // embedded newline falls to the lenient default instead of rendering.
+    it('a language value carrying a bidi control / newline falls back to "en" with a note', () => {
+      for (const bad of [`de${RLO}`, 'de\nen']) {
+        const res = validateSkillManifest(rawFront({ language: bad }))
+        expect(res.ok).toBe(true)
+        expect(res.manifest?.language).toBe('en')
+        expect(res.noteCodes!.map((n) => n.code)).toContain('languageInvalid')
+      }
+    })
+  })
+
   it('accepts snake_case trigger subfields', () => {
     const res = validateSkillManifest(
       rawFront({ triggers: { mime_types: ['text/csv'], filename_patterns: ['*kontoauszug*'] } })
@@ -404,6 +504,26 @@ describe('parseSkillMarkdown', () => {
     const res = parseSkillMarkdown(doc)
     expect(res.ok).toBe(false)
     expect(res.errors.some((e) => e.includes('YAML'))).toBe(true)
+  })
+
+  // SKA-31 (audit 2026-07-03, U7) — the YAML canary sentinel. The yaml package's pretty errors quote
+  // the offending source line in a code frame, so `String(err)` would embed raw attacker-supplied
+  // frontmatter in the error string — a loaded gun against the §22-M1 content-free rule the moment any
+  // consumer logs/surfaces it (SKA-32 does). The existing sentinel (above, permission notes) covers
+  // notes only; this one covers the PARSE-error path. TEETH: revert the fixed-message fix (back to
+  // `String(err)`) → the canary appears in the error and both assertions fail.
+  it('a YAML parse error NEVER echoes the frontmatter source (canary sentinel, SKA-31)', () => {
+    const canary = 'CANARY_FRONTMATTER_9f31c'
+    // An unterminated double-quoted scalar carrying the canary — parseYaml throws, and the yaml
+    // package's default pretty error would include a code frame quoting this exact line.
+    const doc = `---\nid: ok\ntitle: "${canary}\n---\nBody.`
+    const res = parseSkillMarkdown(doc)
+    expect(res.ok).toBe(false)
+    expect(res.errors.length).toBeGreaterThan(0)
+    const all = JSON.stringify(res)
+    expect(all).not.toContain(canary)
+    // The structural message is fixed English + at most numeric line/column coordinates.
+    expect(res.errors.some((e) => /^SKILL\.md frontmatter is not valid YAML( \(line \d+(, column \d+)?\))?$/.test(e))).toBe(true)
   })
 
   it('resolves a manifest.json conflict to SKILL.md with a note (DS2)', () => {

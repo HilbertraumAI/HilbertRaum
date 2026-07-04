@@ -586,7 +586,15 @@ staging dir and only places it on a clean pass. Each defence:
   the **same** `relPath`, where the final `writeFileSync` is last-writer-wins — so a later duplicate
   could silently shadow a `SKILL.md` the preview already validated. The stager now **re-asserts
   `safeRelPath` on the stripped path** (belt-and-braces) and **rejects a colliding `relPath`** with the
-  structural `duplicatePath` reason, so the materialized tree is one-write-per-path.
+  structural `duplicatePath` reason, so the materialized tree is one-write-per-path. **U7 (SKA-30, skills
+  audit 2026-07-03) made the collision check CASE-FOLDED** and extended it to the folder-import path: the
+  destination filesystems (NTFS/exFAT on the portable drive) are case-insensitive, so `SKILL.md` +
+  `skill.md` in one package last-writer-wins on write — the exact preview-validated-then-shadowed bypass
+  this guard exists to stop — while a case-sensitive OS keeps both, i.e. a polyglot package installing
+  DIFFERENT instructions per OS on a cross-OS drive. The guard tracks lowercased file paths + directory
+  prefixes (also refusing the file-vs-directory casing merge). ASCII fold (`String.toLowerCase`), not the
+  exact NTFS/exFAT fold tables — documented residual. Dot-named members are skipped at import (they are
+  lifecycle/OS litter, never package content — keeps import↔export symmetric, see below).
 - **Nested-archive sniff (E2)** — every inflated member's leading bytes are checked against archive
   signatures (zip `PK`, gzip, xz, zstd, tar `ustar`), so a zip renamed `data.csv` is rejected even
   though its extension is allowlisted.
@@ -608,9 +616,20 @@ nothing — a plain cleanup, not a shred (nothing is secret under revised §0). 
 importer moves any existing install aside to a `.skill-backup-<id>` dir, `renameSync`es staging into
 place, then drops the backup — restoring the backup if the rename fails — so a mid-place error can
 never leave the user with neither the old nor a valid new skill (the earlier `rmSync` + `cpSync`
-could). Export writes the
-package tree (SKILL.md + `examples/schemas/prompts/resources`, never the `manifest.json` cache or
-run history) as a minimal STORE-method zip built the same dependency-free way. **App-shipped skills
+could); the backup dir's mtime is touched after the rename so the SKA-36 age-gated temp-dir sweep
+(crash-leftover `.skill-import-*`/`.skill-backup-*` dirs, > 1 h old, removed at reconcile) can never
+mistake a live backup for a stale one. Export writes the package tree as a minimal STORE-method zip
+built the same dependency-free way — **U7 (SKA-34) changed the export policy**: instead of the four
+canonical subdirs, export now packs EVERYTHING under the skill folder that import would accept
+(allowed extensions, within the depth cap; never the `manifest.json` cache, dot-entries, symlinks, or
+run history), so `export(import(pkg)) == pkg` — a third-party package file outside the canonical tree
+no longer silently vanishes from a shared re-export. U7 also extended the content-free posture to the
+two remaining string surfaces: a YAML parse error is a fixed message + numeric line/column, never the
+yaml package's code frame quoting raw frontmatter (SKA-31, canary-pinned), and import-preview NOTES
+are emitted as stable codes + app-fixed params, with the attacker-chosen `localized.<key>` locale key
+dropped from the message (SKA-35). Discovery/reconcile errors now surface as COUNTS + fixed reason
+codes only (startup log + Settings → Skills; SKA-32) — an invalid drop-in folder name is arbitrary
+user text and never rides a log line or IPC payload. **App-shipped skills
 are read-only and cannot be deleted or overwritten** (the built-in-collection precedent); the
 residual that a hash manifest on a writable drive is unanchored (real integrity = off-drive
 signing) is the same one already accepted for the engine binary (§22-M2).

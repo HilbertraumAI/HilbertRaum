@@ -35,10 +35,17 @@ export function parseSkillManifestFromDir(dir: string, opts: { limits?: SkillLim
   // skill loads), SKIP the optional manifest.json cache (the same fate as a malformed one).
   const limits = opts.limits ?? resolveSkillLimits()
   const skillMdPath = join(dir, 'SKILL.md')
-  if (!existsSync(skillMdPath)) {
+  // SKA-16 (audit 2026-07-03, U7): stat once with `throwIfNoEntry: false` and require a REAL file.
+  // A DIRECTORY named SKILL.md (trivially created by hand-unpacking a zip) used to sail past
+  // `existsSync` into an unguarded `readFileSync` — the EISDIR throw propagated through
+  // `discoverSkillsInDir` and killed ALL reconciliation for the session. A non-file SKILL.md is
+  // simply "no SKILL.md here" (structural, content-free). EACCES on the stat/read itself can still
+  // throw — the discovery loop guards per folder (registry.ts).
+  const st = statSync(skillMdPath, { throwIfNoEntry: false })
+  if (!st || !st.isFile()) {
     return { ok: false, errors: ['SKILL.md was not found in the skill package'], notes: [] }
   }
-  if (statSync(skillMdPath).size > limits.maxFileBytes) {
+  if (st.size > limits.maxFileBytes) {
     return { ok: false, errors: ['SKILL.md is larger than the allowed size'], notes: [] }
   }
   const source = readFileSync(skillMdPath, 'utf8')

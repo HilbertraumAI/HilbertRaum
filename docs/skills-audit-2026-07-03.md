@@ -421,6 +421,12 @@ always apply…:" followed by `--- END LOCAL SKILL ---` — the U1 decapitation 
 bodies; re-point the parity test at the bullets inside the actually-guaranteed paragraph (or make the
 builder's minimum "first paragraph containing the rules"). **Testing:** trim the REAL bodies through
 `buildSkillFence` at rule-only budgets. **Docs:** U1 bullet nuance in known-limitations.
+**Status: FIXED in U7** (DATA-ONLY as prescribed: all 8 SKILL.md bodies merge heading + intro + rule
+bullets into ONE paragraph, so `paragraphs[0]` — the only paragraph `buildSkillFence` guarantees — IS
+the rules block; the builder is untouched. The parity test now pins the shape (paras[0] starts `#`,
+matches "lead and always apply", carries ≥3 bullets) AND trims each REAL body through `buildSkillFence`
+at a minimum-sized budget asserting the bullets survive. The `logSkillFenceReduction` docstring's
+phantom "paragraph count" claim corrected (rider).)
 
 **SKA-16 — One unreadable `SKILL.md` (e.g. a *directory* with that name) silently kills ALL skill
 reconciliation for the session; imports then fail with a misleading error.** · bug (lifecycle
@@ -433,6 +439,11 @@ files, so imports error while the files sit installed-but-rowless.
 **Fix:** per-folder try/catch → structural error + `continue`; treat a non-file SKILL.md as "not a
 package"; log reconcile error counts. **Testing:** discovery test with a bad folder among good ones.
 **Docs:** none.
+**Status: FIXED in U7** (`parseSkillManifestFromDir` stats SKILL.md with `throwIfNoEntry:false` and
+requires `isFile()` — a directory named SKILL.md is "no SKILL.md here", structural + content-free;
+`discoverSkillsInDir` guards EVERY per-folder read (stat + parse try/catch → structural `unreadable`
+code + `continue`), so one bad folder can never abort discovery. Tests: a directory-SKILL.md among
+good skills — both neighbours still discover AND reconcile; the non-package is skipped quietly.)
 
 **SKA-17 — A renderer reload orphans an in-flight run irrecoverably: "cancel it first" with nothing to
 cancel; terminal controller entries are never reclaimed.** · bug (lifecycle) · **Medium** · High ·
@@ -573,35 +584,73 @@ AND the requested id is non-empty and out of the freshly-resolved scope — even
 `skill.md` in one `.skill.zip` last-writer-wins on Windows/exFAT — the exact shadowing S-2 exists to
 stop, and a polyglot package installs different instructions per OS. Collision-check on
 `rel.toLowerCase()`; add a case-folded S-2 test.
+**Status: FIXED in U7** (`createCaseFoldGuard` — lowercased file paths + directory PREFIXES, shared by
+`stageZip` AND `stageFolder` (a case-sensitive source FS can hold both casings too); also refuses the
+file-vs-directory casing merge (`Notes.md` + `notes.md/inner.md`). Tests: case-folded SKILL.md/skill.md
+zip refused, the file-vs-dir merge refused, same-name-in-different-folders still imports. ASCII-fold
+residual (String.toLowerCase vs the exact NTFS/exFAT fold tables) documented in known-limitations.)
 
 **SKA-31 — YAML parse errors embed raw (attacker-supplied) frontmatter** (`shared/skill-manifest.ts:610-612`
 — `String(err)` includes the yaml code frame): every current sink defuses it, but the natural fix for
 SKA-32 (logging discovery errors) would pipe package content into `app.log`, violating the content-free
 rule. Replace with a fixed string + `err.linePos`; add a canary sentinel test.
+**Status: FIXED in U7** (landed BEFORE SKA-32, per the phase ordering constraint: fixed structural
+"SKILL.md frontmatter is not valid YAML (line N, column M)" — the coordinates are validated numbers
+from `err.linePos`, nothing else from the error. Canary sentinel test: a canary in bad YAML never
+appears anywhere in the serialized `SkillParseResult`.)
 
 **SKA-32 — Discovery/reconcile errors are computed and then dropped by every consumer**
 (`registry.ts:64-65, 165, 171`; `main/index.ts` logs counts only; the Skills tab never sees them): a
 power user's drop-in with one YAML typo simply never appears — no toast, no log, no badge. Surface "N
 folders could not be read" in Settings → Skills (after SKA-31).
+**Status: FIXED in U7** (structured `errorCodes` — 'invalidFolderName'|'unreadable'|'invalidManifest'|
+'duplicateId' — parallel to the discovery error strings; startup logs COUNT + deduplicated codes
+(`main/index.ts`); the registry keeps a `reconcileStatus()` summary and the NEW `skills:reconcileStatus`
+IPC surfaces "N skill folders could not be read" in Settings → Skills (en+de, count-pluralized).
+Content nuance honoured: an INVALID folder name is arbitrary user text — omitted from the error line,
+the code alone describes it (a VALID name is a skill id and may ride the in-process string, which is
+never logged). IPC test pins the sentinel-free payload.)
 
 **SKA-33 — A failed *import* (post-preview) shows only the generic toast** (`SkillsTab.tsx:150-152`)
 though the `IMPORT_ERROR_KEY` map already localizes every structural code — the user sees WHY at
 preview but not at import (downgrade race, vanished zip, locked folder). Map the wrapped IPC message
 back through the code table.
+**Status: FIXED in U7** (NEW `renderer/lib/skillImportI18n.ts`: `importErrorKeyForMessage` finds the
+known structural English string INSIDE the wrapped Electron IPC message (longest-first, so the
+tooLarge ⊂ fileTooLarge pair resolves correctly) and the import toast shows the precise localized
+reason, falling back to the generic toast for unknown failures. A parity test pins the EN catalog
+strings byte-identical to `SKILL_IMPORT_ERRORS` so the matcher can't silently drift.)
 
 **SKA-34 — Import/export tree asymmetry** (`installer.ts:759` `EXPORT_SUBDIRS` vs import's
 any-path-≤-depth-4 acceptance): `export(import(pkg)) ≠ pkg` — a third-party skill's `notes/usage.md`
 installs fine and silently vanishes from the shared re-export. Restrict import to the canonical tree
 (with a structural note) or export everything allowed; add a round-trip test.
+**Status: FIXED in U7** (DECISION: option (b) — export mirrors IMPORT's acceptance: everything under
+the skill dir with an allowed extension up to the import depth cap, minus the root manifest.json
+cache, dot-entries, and symlinks; `EXPORT_SUBDIRS` deleted. Option (a) was rejected because it would
+refuse packages every prior version accepted. Round-trip fidelity test: import→export→re-import of a
+non-canonical tree (`notes/usage.md`, root `data.csv`) is byte-identical and re-imports on a fresh
+machine; a litter test pins dot-dirs/bad extensions excluded. security-model.md §9.5 note updated.)
 
 **SKA-35 — Import-preview notes are unlocalized and can carry bounded attacker-chosen text**
 (`skill-manifest.ts:523-542` interpolates the attacker's `localized.<key>` string; rendered raw at
 `SkillsTab.tsx:595-599`; locales beyond the 16-cap are dropped with no note). Emit note *codes* +
 fixed params like the error codes.
+**Status: FIXED in U7** (a `NoteCollector` emits every advisory as a stable `SkillNoteCode` + APP-FIXED
+params (a frontmatter field name, a cap) alongside the fixed English string — `noteCodes` parallels
+`notes` through `SkillManifestValidation`/`SkillParseResult`/`SkillPreview`; the `localized.<key>`
+family DROPS the raw locale key from the message; NEW over-cap `localizedTooMany` note; the renderer
+localizes via `IMPORT_NOTE_KEY` (en+de) with structural fallback. Canary test: an attacker locale key
+never appears in notes/noteCodes; a formatSkillNote round-trip pins string↔code parity.)
 
 **SKA-36 — Crash-leftover `.skill-import-*` staging dirs are never swept** (`installer.ts:639`;
 `.skill-backup-<id>` cleared only on the next same-id import): accumulate invisibly on the portable
 drive. Sweep at reconcile.
+**Status: FIXED in U7** (`sweepStaleSkillTempDirs` at the top of `reconcileSkills` — AGE-GATED (> 1 h
+by mtime), because reconcile also runs DURING `importSkill` and a concurrent import could own a fresh
+staging dir, so "sweep only at startup" alone would not be safe; best-effort per entry (a locked dir
+retries next reconcile). Test: a 2 h-old staging + backup dir are removed, a fresh one and real
+skills are spared.)
 
 **SKA-37 — The undo/try-again affordance renders on the last *assistant* turn even when a newer
 unanswered user turn exists** (`Transcript.tsx:104-109, 287`): clicking "Answer without this skill" on
@@ -652,6 +701,12 @@ long run isn't announced per tick [adversarial-review hardening]. Empty-state + 
 personal data** button…") the DE UI never shows (`Personenbezogene Daten schwärzen`): when the routing
 handler misses and the 4B model answers from the fence in German, it names a nonexistent affordance.
 Name both labels in the body.
+**Status: FIXED in U7** (the body names BOTH labels — "**Redact personal data** / **Personenbezogene
+Daten schwärzen** … (its label follows the app language)" — matching the `chat.skill.tool.redactDocument`
+catalog entries exactly. Riders in the same file/phase: the stale S13a-era autoFire comment refreshed to
+the U4-era wording (SKA-45), and Unicode bidi direction controls (U+202A–202E, U+2066–2069) are now
+rejected in title/description/author at manifest validation + ignored-with-note in localized overrides
+(SKA-45, cosmetic picker-spoofing).)
 
 **SKA-43 — Per-turn double full-document scan for the needle-downgrade calculus**
 (`registerRagIpc.ts:342` `documentApproxTokenTotal` then `rag/index.ts` `retrieveWholeDocument` repeat
@@ -679,6 +734,10 @@ the dead trailing-space entries replaced with word-anchored regexes — `'finde 
 `NEEDLE_SHAPE_RES` and `'alle '` → `/\balle\b/` in `DELIVERABLE_SHAPE_RES` (they now match/veto at
 end-of-question without hitting `finden`/`findest`/`alles`; linear, ReDoS-safe). The remaining SKA-45
 items (stale SKILL.md `autoFire` comment, `buildSkillFence` O(n²), RTL/bidi titles) stay for U7.
+**Two more FIXED in U7:** the stale S13a-era `autoFire` comment refreshed to the U4-era wording, and
+Unicode bidi direction controls rejected in every displayed frontmatter string (title/description/
+author/language; ignored-with-note in localized overrides). The `buildSkillFence` O(n²) growth loop
+stays open (bounded by the 64 KiB cap; a perf micro, not a correctness item) — T2/R9 candidate.
 
 ---
 
@@ -697,15 +756,19 @@ Doc↔code mismatches found (fix the doc or the code, per the SKA item):
    vendor/number gate shipped).
 3. **known-limitations.md U1 bullet** — "the budget-driven fence trim — which keeps leading paragraphs"
    implies the rules survive any trim; the guaranteed minimum is the bare heading (SKA-15), and the
-   parity test's comment codifies the wrong model.
+   parity test's comment codifies the wrong model. **Fixed in U7** (bullet annotated with the SKA-15
+   closure; the parity test now pins the CORRECT model — rules inside paragraph[0] — and trims the real
+   bodies through the builder).
 4. **`prompt.ts:156` docstring** claims `logSkillFenceReduction` logs "the paragraph count" — it logs
-   only skillId + two booleans.
+   only skillId + two booleans. **Fixed in U7** (docstring corrected to the two booleans).
 5. **`skills.bankAnalysis.figureEcho`** ("Figures as parsed, verbatim from the document") mislabels
    computed sums on the bank side (SKA-4); accurate for invoice. **Fixed in W6** (reworded to "Totals
    computed from the parsed transactions"; the invoice echo is left unchanged).
 6. **`registry.ts` docstring** — a failing folder "is recorded as an error and skipped": recorded into
    a return value no consumer reads (SKA-32), and a *throwing* folder aborts discovery entirely
-   (SKA-16).
+   (SKA-16). **Fixed in U7** (per-folder guards make the docstring true; the errors now HAVE consumers —
+   startup log counts+codes, the Settings → Skills notice — and the docstring records the never-log rule
+   for the human-readable lines).
 7. **The relevance-fallback framing** ("a tool skill answering an **off-topic** question keeps the
    ordinary relevance path", known-limitations + §39) silently includes on-topic vocabulary misses —
    after A4 (or if deferred), reword to make the phrasing-gate residual explicit (SKA-7). **W7 note:** the
@@ -715,7 +778,7 @@ Doc↔code mismatches found (fix the doc or the code, per the SKA item):
    fully-chunked doc answers every non-small-talk question from the verified extract; only a no-signal /
    never-extracted doc keeps relevance) in both the tool-skill bullet and the A3 residual paragraph.
 8. **document-redaction/SKILL.md** — English-only button name (SKA-42) + the stale S13a-era autoFire
-   comment (SKA-45).
+   comment (SKA-45). **Fixed in U7** (both labels named; comment refreshed to the U4-era wording).
 9. If any SKA item is deferred rather than fixed, it must gain a known-limitations entry (the accepted-
    residual contract this audit relied on).
 
@@ -752,7 +815,10 @@ suites assert behavior (figures, masks, routes), not internals.
   `invoice-de-ddmmyy-money-headers`. SKA-3 fixtures are R8's; droppedRowCount>0 / contradicted are T2's.)*
 - *Lifecycle:* discovery-survives-a-bad-folder (SKA-16); case-folded zip duplicate (SKA-30); YAML
   canary sentinel (SKA-31); import→export→re-import round-trip (SKA-34); trimming the REAL SKILL.md
-  bodies through `buildSkillFence` (SKA-15).
+  bodies through `buildSkillFence` (SKA-15). *(ALL landed in U7 — plus the file-vs-dir casing merge,
+  the dot-entry import/export symmetry pair, the reconcile-status IPC + phantom-notice-refresh test,
+  the stale-staging sweep age-gate test, the note-code canary/over-cap tests, the bidi display-field
+  tests, and the SKA-33 wrapped-message mapper unit + renderer toast tests.)*
 - *Run lifecycle:* throwing-runner + mid-abort-throw controller paths; renderer-reload-mid-run;
   `extractor_version = CURRENT+1` downgrade; persist-failure-keeps-old-extraction under
   `replaceExisting`; cancel(null) blast radius; two-conversations-same-document via IPC (all run-seam
@@ -857,7 +923,13 @@ Acceptance: the SKA-6 chain is impossible (test-pinned); reload re-adopts; secon
 Docs: architecture §9 renderer notes.
 
 **U7 — Package lifecycle hardening (SKA-15, SKA-16, SKA-30, SKA-31, SKA-32, SKA-33, SKA-34, SKA-35,
-SKA-36, SKA-42).**
+SKA-36, SKA-42).** *(FIXED in U7 — branch `fix/skills2-u7` (off `fix/skills2-u6`), all ten stamped above
+plus the SKA-45 bidi/autoFire riders; SKA-31 landed BEFORE SKA-32 per the ordering constraint. SKA-34
+decision: export mirrors import's acceptance (option b) + import skips dot-entries, so the round-trip is
+exact. Adversarial 3-lens review hardenings: backup-dir mtime touch [the rename-preserves-mtime sweep
+race], reconcile-status refresh after import/delete [phantom notice], the unexpected-import-failure
+fallback kept UNMAPPED [wrong-specific toast], the `language` bidi/newline gate, and the discovery
+dot-dir skip.)*
 Scope: SKILL.md ×8 paragraph merge + parity-test re-point; `registry.ts`/`manifest.ts` per-folder
 guards + error surfacing; `installer.ts` case-fold + staging sweep + export-fidelity decision;
 `skill-manifest.ts` content-free YAML errors + note codes; `SkillsTab.tsx` import-error mapping.

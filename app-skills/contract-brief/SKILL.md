@@ -34,10 +34,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # Contract Brief
-
 Safety and honesty rules — these lead and always apply, even if the rest of this skill is shortened
 to fit the context:
-
 - **This is not legal advice.** Never say "safe to sign", and never give legal advice. For high-risk
   or unclear terms, write "consider asking a qualified professional."
 - Always distinguish "the contract says…" from "a possible implication is…".

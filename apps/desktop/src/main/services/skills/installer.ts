@@ -32,6 +32,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs'
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path'
@@ -42,7 +43,8 @@ import {
   SKILL_SEMVER_RE,
   skillNeedsNewerApp,
   summarizeSkillPermissions,
-  type SkillManifest
+  type SkillManifest,
+  type SkillNoteRef
 } from '../../../shared/skill-manifest'
 import type { SkillInfo, SkillPreview } from '../../../shared/types'
 import { parseSkillManifestFromDir } from './manifest'
@@ -290,6 +292,36 @@ interface StagedFile {
 }
 
 /**
+ * SKA-30 (audit 2026-07-03, U7): CASE-FOLDED collision guard over a staged tree's rel paths. The
+ * S-2 duplicate check compared exact strings, but the destination filesystems are
+ * case-INSENSITIVE (NTFS/exFAT on the portable drive): `SKILL.md` + `skill.md` in one package
+ * last-writer-wins on write — the exact preview-validated-then-shadowed bypass S-2 exists to stop —
+ * while a case-SENSITIVE OS keeps both, so a polyglot package installs DIFFERENT instructions per
+ * OS on a cross-OS drive. Also refuses the file-vs-directory casing merge (`Notes` the file +
+ * `notes/x.md`), which on a case-insensitive write collides mkdir-vs-file. Tracks lowercased file
+ * paths + directory prefixes; any overlap → the fixed structural `duplicatePath` (no echoed
+ * content — §22-M1). ASCII-approximate folding (String.toLowerCase) — matching NTFS/exFAT's exact
+ * fold table is out of scope; the common attack shapes are ASCII.
+ */
+function createCaseFoldGuard(): (relPath: string) => void {
+  const files = new Set<string>()
+  const dirs = new Set<string>()
+  return (relPath: string): void => {
+    const folded = relPath.toLowerCase()
+    if (files.has(folded) || dirs.has(folded)) {
+      throw new SkillImportError(SKILL_IMPORT_ERRORS.duplicatePath)
+    }
+    const parts = folded.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      const prefix = parts.slice(0, i).join('/')
+      if (files.has(prefix)) throw new SkillImportError(SKILL_IMPORT_ERRORS.duplicatePath)
+      dirs.add(prefix)
+    }
+    files.add(folded)
+  }
+}
+
+/**
  * Strip a single common top-level folder if every entry shares it (skills plan §6.1 — a
  * `.skill.zip` may be zipped at the `<skill-id>/` level OR with the files at the archive root;
  * the importer normalizes to the latter).
@@ -303,6 +335,17 @@ function stripCommonPrefix(paths: string[]): (p: string) => string {
     return parts.length > 1 && parts[0] === first
   })
   return allShare ? (p) => p.split('/').slice(1).join('/') : (p) => p
+}
+
+/**
+ * SKA-34 (review hardening): a DOT-named file/folder anywhere in the path is not package content —
+ * export excludes dot-entries (OS/VCS litter, the `.skill-*` staging names), so ACCEPTING them at
+ * import would re-open the exact installed-then-silently-vanishes-on-re-export asymmetry this phase
+ * closes. Skipped quietly on import (never installed), keeping `export(import(pkg)) == pkg` exact.
+ * (`.`/`..` themselves are already rejected as traversal by `safeRelPath`.)
+ */
+function hasDotSegment(rel: string): boolean {
+  return rel.split('/').some((s) => s.startsWith('.'))
 }
 
 // ---- staging: validate a whole source into in-memory StagedFiles ---------------------
@@ -331,9 +374,11 @@ function stageZip(zipPath: string, limits: SkillLimits): StagedFile[] {
   if (declaredTotal > limits.maxTotalBytes) throw new SkillImportError(SKILL_IMPORT_ERRORS.tooLarge)
 
   // Validate every member's PATH + symlink/extension up front (enumerate-before-extract).
+  // Dot-named members are skipped (see `hasDotSegment`) — but a dot-named SYMLINK still rejects.
   for (const e of entries) {
     if (isSymlinkEntry(e)) throw new SkillImportError(SKILL_IMPORT_ERRORS.symlink)
     const rel = safeRelPath(e.name, limits)
+    if (hasDotSegment(rel)) continue
     if (!e.isDir && rel !== '' && !ALLOWED_EXTENSIONS.has(extname(rel).toLowerCase())) {
       throw new SkillImportError(SKILL_IMPORT_ERRORS.badExtension)
     }
@@ -347,20 +392,20 @@ function stageZip(zipPath: string, limits: SkillLimits): StagedFile[] {
   // collapse to the same stripped relPath (e.g. a duplicate central-directory name) — `writeStaged`
   // is last-writer-wins, so a later duplicate could silently shadow a preview-validated SKILL.md.
   // Re-assert `safeRelPath` on the STRIPPED path (belt-and-braces) and reject a collision with a
-  // fixed structural reason (`relPath` carries no echoed content — §22-M1).
-  const seen = new Set<string>()
+  // fixed structural reason (`relPath` carries no echoed content — §22-M1). SKA-30: the collision
+  // check is CASE-FOLDED (+ file-vs-dir merge) — see `createCaseFoldGuard`.
+  const guard = createCaseFoldGuard()
   let actualTotal = 0
   for (const e of fileEntries) {
     const rel0 = safeRelPath(e.name, limits)
-    if (rel0 === '') continue
+    if (rel0 === '' || hasDotSegment(rel0)) continue // dot-named ⇒ not package content (SKA-34)
     const data = inflateEntry(buf, e, limits.maxFileBytes)
     actualTotal += data.length
     if (actualTotal > limits.maxTotalBytes) throw new SkillImportError(SKILL_IMPORT_ERRORS.tooLarge)
     if (looksLikeArchive(data)) throw new SkillImportError(SKILL_IMPORT_ERRORS.nestedArchive)
     const rel = safeRelPath(strip(rel0), limits)
-    if (rel === '') continue
-    if (seen.has(rel)) throw new SkillImportError(SKILL_IMPORT_ERRORS.duplicatePath)
-    seen.add(rel)
+    if (rel === '' || hasDotSegment(rel)) continue // the strip can expose a dot-named tail too
+    guard(rel)
     staged.push({ relPath: rel, data })
   }
   return staged
@@ -369,6 +414,10 @@ function stageZip(zipPath: string, limits: SkillLimits): StagedFile[] {
 /** Read a skill FOLDER into validated StagedFiles (the same checks as a zip, applied to disk). */
 function stageFolder(folderPath: string, limits: SkillLimits): StagedFile[] {
   const staged: StagedFile[] = []
+  // SKA-30: a case-SENSITIVE source filesystem (Linux/macOS) can hold `SKILL.md` + `skill.md` as
+  // distinct files; writing them onto the case-insensitive portable drive last-writer-wins the
+  // same way a crafted zip would. The zip and folder paths share one guard.
+  const guard = createCaseFoldGuard()
   let total = 0
   const walk = (dir: string, depth: number): void => {
     if (depth > limits.maxDepth) throw new SkillImportError(SKILL_IMPORT_ERRORS.tooDeep)
@@ -376,6 +425,9 @@ function stageFolder(folderPath: string, limits: SkillLimits): StagedFile[] {
       const abs = join(dir, entry.name)
       // Reject symlinks the same way the zip path does (no "safe handling" in v1).
       if (entry.isSymbolicLink()) throw new SkillImportError(SKILL_IMPORT_ERRORS.symlink)
+      // Dot-named entries (a `.git/` tree, `.DS_Store`-style litter) are not package content —
+      // skipped, mirroring export (SKA-34); a folder that carries them still imports cleanly.
+      if (entry.name.startsWith('.')) continue
       const rel = relative(folderPath, abs).replace(/\\/g, '/')
       if (rel.length > limits.maxPathLen) throw new SkillImportError(SKILL_IMPORT_ERRORS.pathTooLong)
       if (entry.isDirectory()) {
@@ -393,6 +445,7 @@ function stageFolder(folderPath: string, limits: SkillLimits): StagedFile[] {
       if (total > limits.maxTotalBytes) throw new SkillImportError(SKILL_IMPORT_ERRORS.tooLarge)
       const data = readFileSync(abs)
       if (looksLikeArchive(data)) throw new SkillImportError(SKILL_IMPORT_ERRORS.nestedArchive)
+      guard(rel)
       staged.push({ relPath: rel, data })
     }
   }
@@ -527,14 +580,17 @@ export function previewSkillPackage(
     }),
     errors: [],
     errorCodes: [],
-    notes: []
+    notes: [],
+    noteCodes: []
   }
   // A failed preview carrying ONE structural reason + its stable code (for renderer localization, I2).
-  const fail = (message: string, notes: string[] = []): SkillPreview => ({
+  // Notes ride along with their structured codes (SKA-35) so the renderer can localize them too.
+  const fail = (message: string, notes: string[] = [], noteCodes: SkillNoteRef[] = []): SkillPreview => ({
     ...base,
     errors: [message],
     errorCodes: [skillImportErrorCode(message)],
-    notes
+    notes,
+    noteCodes
   })
 
   let staged: { kind: 'zip' | 'folder'; files: StagedFile[] }
@@ -552,11 +608,11 @@ export function previewSkillPackage(
     if (!existsSync(join(tmp, 'SKILL.md'))) return fail(SKILL_IMPORT_ERRORS.noSkillMd)
     const parsed = parseSkillManifestFromDir(tmp, { limits })
     if (!parsed.ok || !parsed.manifest) {
-      return fail(SKILL_IMPORT_ERRORS.invalidManifest, parsed.notes)
+      return fail(SKILL_IMPORT_ERRORS.invalidManifest, parsed.notes, parsed.noteCodes)
     }
     const m = parsed.manifest
     if (!SKILL_ID_RE.test(m.id) || !SKILL_SEMVER_RE.test(m.version)) {
-      return fail(SKILL_IMPORT_ERRORS.idMismatch, parsed.notes)
+      return fail(SKILL_IMPORT_ERRORS.idMismatch, parsed.notes, parsed.noteCodes)
     }
 
     // Collision / version analysis against the installed skills sharing this id.
@@ -593,7 +649,8 @@ export function previewSkillPackage(
       isDowngrade,
       downgradeBlocked,
       errors: [],
-      notes: parsed.notes
+      notes: parsed.notes,
+      noteCodes: parsed.noteCodes
     }
   } catch (e) {
     // SEC-N1 — defence in depth for the documented "never throws / returns ok:false" contract
@@ -672,6 +729,16 @@ export function importSkill(
       backupDir = join(deps.userSkillsDir, `.skill-backup-${manifest.id}`)
       rmSync(backupDir, { recursive: true, force: true }) // clear any stale crash leftover
       renameSync(finalDir, backupDir)
+      // SKA-36 (review hardening): rename PRESERVES the directory's mtime — the fresh backup would
+      // carry the mtime of the weeks-old install and look sweep-stale the instant it exists, so a
+      // CONCURRENT second app instance's reconcile sweep could delete it mid-import and break the
+      // restore path below. Touch it so the > 1 h age gate actually protects a live backup.
+      try {
+        const backupNow = new Date()
+        utimesSync(backupDir, backupNow, backupNow)
+      } catch {
+        /* best-effort — an untouchable dir only weakens the cross-instance race guard */
+      }
     }
     try {
       renameSync(stagingDir, finalDir)
@@ -755,27 +822,42 @@ function crc32(buf: Buffer): number {
   return (c ^ 0xffffffff) >>> 0
 }
 
-/** The package tree to export: SKILL.md + the four optional subdirs ONLY (excludes manifest.json). */
-const EXPORT_SUBDIRS = ['examples', 'schemas', 'prompts', 'resources']
-
-/** Collect {name, data} for the export, relative to the skill folder (skills plan §9.5). */
-function collectExportFiles(skillDir: string): Array<{ name: string; data: Buffer }> {
+/**
+ * Collect {name, data} for the export, relative to the skill folder (skills plan §9.5).
+ *
+ * SKA-34 DECISION (audit 2026-07-03, U7): export mirrors IMPORT's acceptance — everything under
+ * the skill folder with an ALLOWED extension, up to the import depth cap — rather than the old
+ * canonical-subdir list (`examples/schemas/prompts/resources`). Import accepted ANY
+ * allowed-extension path ≤ depth 4, so a third-party skill's `notes/usage.md` installed fine and
+ * then silently VANISHED from a shared re-export: `export(import(pkg)) ≠ pkg`. Restricting import
+ * instead (option a) was rejected — it would refuse packages every prior version accepted.
+ * Still EXCLUDED: the root `manifest.json` (the OPTIONAL, non-authoritative cache — SKILL.md is
+ * always re-validated as the single truth on import, so dropping the cache loses nothing, DS2),
+ * dot-entries (`.skill-import-*`/`.skill-backup-*` staging litter, OS junk), symlinks, disallowed
+ * extensions, and anything past the import depth cap (it could not have been imported, and keeping
+ * it would make the exported zip refuse to re-import). Sorted for a deterministic zip.
+ */
+function collectExportFiles(skillDir: string, limits: SkillLimits): Array<{ name: string; data: Buffer }> {
   const out: Array<{ name: string; data: Buffer }> = []
-  const skillMd = join(skillDir, 'SKILL.md')
-  if (existsSync(skillMd)) out.push({ name: 'SKILL.md', data: readFileSync(skillMd) })
-  const walk = (dir: string, prefix: string): void => {
+  const walk = (dir: string, prefix: string, depth: number): void => {
     if (!existsSync(dir)) return
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) continue
+      if (entry.name.startsWith('.')) continue // staging/backup/OS litter never exports
       const abs = join(dir, entry.name)
-      const rel = `${prefix}/${entry.name}`
-      if (entry.isDirectory()) walk(abs, rel)
-      else if (entry.isFile() && ALLOWED_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
-        out.push({ name: rel, data: readFileSync(abs) })
+      const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      if (entry.isDirectory()) {
+        if (depth < limits.maxDepth) walk(abs, rel, depth + 1)
+        continue
       }
+      if (!entry.isFile()) continue
+      if (prefix === '' && entry.name === 'manifest.json') continue // the optional cache; SKILL.md wins (§9.5/DS2)
+      if (!ALLOWED_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue
+      out.push({ name: rel, data: readFileSync(abs) })
     }
   }
-  for (const sub of EXPORT_SUBDIRS) walk(join(skillDir, sub), sub)
+  walk(skillDir, '', 1)
+  out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   return out
 }
 
@@ -838,17 +920,19 @@ function buildStoreZip(files: Array<{ name: string; data: Buffer }>): Buffer {
 
 /**
  * Export a skill as a `.skill.zip` written to `destPath` (skills plan §9.5). EXCLUDES the
- * manifest.json cache, run history, and any caches — includes SKILL.md + the
- * examples/schemas/prompts/resources tree only. Resolves the source folder from the registry
- * record (app or user). Returns the byte count written (for an ids/counts-only audit).
+ * manifest.json cache, run history, and any caches — includes SKILL.md + every allowed-extension
+ * package file (SKA-34: import↔export symmetry — `export(import(pkg)) == pkg`). Resolves the
+ * source folder from the registry record (app or user). Returns the byte count written (for an
+ * ids/counts-only audit).
  */
 export function exportSkill(db: Db, installId: string, destPath: string, deps: SkillInstallerDeps): number {
   const record = getSkill(db, installId)
   if (!record) throw new SkillImportError(SKILL_IMPORT_ERRORS.notFound)
+  const limits = deps.limits ?? resolveSkillLimits()
   const baseDir = record.source === 'app' ? deps.appSkillsDir : deps.userSkillsDir
   const skillDir = join(baseDir, record.path)
   if (!existsSync(join(skillDir, 'SKILL.md'))) throw new SkillImportError(SKILL_IMPORT_ERRORS.notFound)
-  const files = collectExportFiles(skillDir)
+  const files = collectExportFiles(skillDir, limits)
   const zip = buildStoreZip(files)
   writeFileSync(destPath, zip)
   return zip.length

@@ -247,6 +247,41 @@ password recovery — are documented in
   30-minute TTL sweep, the re-adopted terminal routed run would relay its answer a second time (a duplicate
   transcript turn). Accepted: `clearSkillRun` is a trivial in-process IPC that effectively never fails, and the
   window is a reload before the answer even finished persisting.
+- **Skill package lifecycle hardening (skills-audit-2026-07-03 U7, SKA-15/16/30–36/42 + SKA-45 riders).**
+  Ten package/manifest/installer/Settings fixes. **(SKA-15)** all 8 bundled SKILL.md bodies merge heading +
+  honesty-rules intro + bullets into ONE paragraph — the only paragraph `buildSkillFence` GUARANTEES at a
+  tight budget — closing the residual decapitation the U1 reorder left (P0 was the bare `#` heading, so a
+  budget-squeezed turn shipped an intro *promising* rules with none delivered; the parity test had pinned
+  the wrong paragraph and now trims the REAL bodies through the builder at a rules-only budget).
+  **(SKA-16)** a non-file SKILL.md (a directory, from hand-unpacking) or one unreadable folder no longer
+  kills ALL reconciliation for the session — the manifest reader requires a real file and discovery guards
+  every per-folder read (structural error + continue). **(SKA-30)** the zip/folder duplicate-path guard is
+  CASE-FOLDED (+ file-vs-directory merge), so `SKILL.md`+`skill.md` polyglot packages refuse instead of
+  installing different instructions per OS; ASCII fold only (`String.toLowerCase`, not the exact NTFS/exFAT
+  fold tables) — an exotic non-ASCII casing pair could still merge on write (residual). **(SKA-31)** YAML
+  parse errors are a fixed structural string + numeric line/column — never `String(err)` with the yaml code
+  frame quoting attacker frontmatter (canary-pinned). **(SKA-32)** discovery/reconcile errors surface:
+  startup logs count + structural codes, and Settings → Skills shows "N skill folders could not be read"
+  (count only — an invalid folder name is arbitrary user text and never crosses the IPC/log). **(SKA-33)**
+  a failed import toast shows the precise localized structural reason (mapped back out of the wrapped IPC
+  message), with the generic toast kept for unexpected failures (an ENOSPC/lock throw is deliberately NOT
+  mapped — wrong-specific copy is worse than generic). **(SKA-34, decision)** export mirrors import's
+  acceptance (everything allowed under the skill dir minus the root manifest.json cache, dot-entries,
+  symlinks; the canonical-subdir allowlist deleted) and import now skips dot-named entries too, so
+  `export(import(pkg)) == pkg` holds exactly (round-trip test); **residual:** a hand-made DROP-IN folder
+  can still hold files an export packs but a re-import refuses (over-cap sizes; a case-colliding pair
+  created on a case-sensitive FS) — export applies no size caps to the user's own files by design.
+  **(SKA-35)** import-preview notes are localized via stable note CODES + app-fixed params (the error-code
+  precedent); the `localized.<key>` family no longer interpolates the attacker-chosen locale key, and
+  locales dropped at the 16-cap now emit a note. **(SKA-36)** crash-leftover `.skill-import-*` staging and
+  `.skill-backup-*` dirs are swept at reconcile, age-gated > 1 h by mtime (a live import's dirs are never
+  swept; the backup's mtime is TOUCHED after the rename so it doesn't inherit the old install's stale
+  mtime); a younger leftover is skipped by discovery (dot-names are never packages), so it can't surface as
+  a phantom folder error meanwhile. **(SKA-42)** document-redaction's SKILL.md names BOTH button labels
+  (EN + DE) so a German fence-answered turn no longer points at a nonexistent affordance. **(SKA-45
+  riders)** Unicode bidi direction controls are rejected in every displayed frontmatter string (title/
+  description/author/language; ignored-with-note in localized overrides) — cosmetic picker spoofing — and
+  the stale S13a-era autoFire comment was refreshed.
 - **Extractor evaluation infrastructure — a real-layout corpus, an output-snapshot version-bump guard, and an
   opt-in real-model smoke (Skills T1, audit §7 recs 1/2/5).** The recurring wrong-figure incidents
   (INVOICE-TOTALS-1, HVB zero-transactions, the §5.3 NBSP/Unicode family) were real-LAYOUT features that
@@ -767,7 +802,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   honouring the D56-outranks rule (a `complete` proof suppresses the hedge). See the W4 bullet above.
   Finally, every shipped SKILL.md body is **reordered so its honesty/safety rules LEAD the first content
   paragraph** (they used to trail, so the budget-driven fence trim — which keeps leading paragraphs —
-  silently decapitated them, §3.6), and the `buildSkillFence` **`trimmed`/`omitted` flags are now LOGGED**
+  silently decapitated them, §3.6) — **U7 (SKA-15) then closed the residual**: the U1 layout still put the
+  rules in paragraph[1] while the builder's guaranteed minimum is paragraph[0] only, so a tight budget
+  shipped an intro promising rules with none delivered; heading + intro + bullets are now ONE paragraph and
+  the parity test trims the REAL bodies through `buildSkillFence` at a rules-only budget — and the
+  `buildSkillFence` **`trimmed`/`omitted` flags are now LOGGED**
   (ids/counts only, `logSkillFenceReduction`) at every call site instead of discarded, so a decapitated-rule
   turn is diagnosable. **Residuals (documented):** `droppedRowCount` uses the parser's own `MONEY_RE`
   definition of a figure, so a **round-integer-only** line with no decimal and no currency marker (a bare

@@ -34,10 +34,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # Deadlines & Obligations
-
 Safety and honesty rules — these lead and always apply, even if the rest of this skill is shortened
 to fit the context:
-
 - This is **not** a complete compliance calendar. Say "I found these deadlines and obligations in the
   available material." If the user asks for "all deadlines", be especially cautious and mention any
   coverage limitation that is visible (e.g. only some passages were retrieved).

@@ -187,12 +187,24 @@ export function registerSkillsIpc(ctx: AppContext): void {
       log.info('Skill imported', { id: info.id, source: info.source, fileCount })
       // Audit privacy: declared id + source + file COUNT only — never names/content.
       ctx.audit?.('skill_imported', 'Skill imported', { id: info.id, source: info.source, fileCount })
+      // SKA-32 (review hardening): the installer reconciles through the MODULE function, which the
+      // registry handle's `reconcileStatus()` summary never sees — without this, a user who FIXES a
+      // broken drop-in by importing a corrected zip keeps a phantom "folder could not be read"
+      // notice until restart (and a newly-broken tree keeps a phantom all-clear). Refresh via the
+      // handle so the Settings notice tracks the tree the import just changed.
+      ctx.skills!.reconcile()
       return info
     } catch (e) {
       // Re-throw the structural (content-free) message; never leak a raw stack/path.
       if (e instanceof SkillImportError) throw new Error(e.message)
       log.warn('Skill import failed', { reason: 'unexpected' })
-      throw new Error(SKILL_IMPORT_ERRORS.invalidManifest)
+      // SKA-33 (review hardening): an UNEXPECTED throw (ENOSPC, an antivirus rename-lock, a DB
+      // write failure) is NOT a manifest problem — rethrowing `invalidManifest` here used to be
+      // harmless because the renderer collapsed every import failure to the generic toast, but the
+      // SKA-33 mapping would now surface it as confident WRONG copy ("The skill manifest is
+      // invalid.") for a perfectly valid package. A fixed, content-free, UNMAPPED message keeps the
+      // renderer on the generic "couldn't be added" toast for this path.
+      throw new Error('The skill could not be added.')
     }
   })
 
@@ -223,6 +235,9 @@ export function registerSkillsIpc(ctx: AppContext): void {
     deleteSkill(ctx.db, installId, installerDeps())
     log.info('Skill deleted', { id: record.id, source: record.source })
     ctx.audit?.('skill_deleted', 'Skill deleted', { id: record.id, source: record.source })
+    // SKA-32: keep the reconcile-status summary in step with the tree this delete just changed
+    // (e.g. the deleted folder was the one that could not be read).
+    ctx.skills!.reconcile()
   })
 
   // Enable a skill, enforcing one-active-per-id (DS12): enabling X disables every other installed
@@ -254,6 +269,17 @@ export function registerSkillsIpc(ctx: AppContext): void {
     ctx.audit?.('skill_disabled', 'Skill disabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
     return skillInfo(ctx.db, updated, appVersion)
+  })
+
+  // SKA-32 (audit 2026-07-03, U7): the structural summary of the last reconcile's discovery errors —
+  // previously computed and dropped by every consumer, so a power user's drop-in with one YAML typo
+  // simply never appeared (no toast, no log, no badge). COUNTS + fixed reason codes only, NEVER a
+  // folder name or package content (§22-M1; an invalid folder name is arbitrary user text). The
+  // `list()` call first ensures the lazy post-unlock reconcile has actually run this session.
+  ipcMain.handle(IPC.skillReconcileStatus, () => {
+    requireUnlocked()
+    ctx.skills!.list()
+    return ctx.skills!.reconcileStatus()
   })
 
   // Acknowledge a user skill's import warning (DS7) — clears the persistent "review what it can do"

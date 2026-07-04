@@ -3,7 +3,8 @@
 // Keep these in sync with the IPC handlers in src/main/ipc and the spec §9.1.
 
 import { t, type UiLanguageSetting } from './i18n'
-import type { SkillKind, SkillPermissions, SkillTrustedLevel } from './skill-manifest'
+import type { SkillKind, SkillNoteRef, SkillPermissions, SkillTrustedLevel } from './skill-manifest'
+export type { SkillNoteRef } from './skill-manifest'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
@@ -1560,8 +1561,26 @@ export interface SkillPreview {
    * English structural string. Same length/order as `errors`; an unrecognized message → 'unknown'.
    */
   errorCodes?: string[]
-  /** Non-fatal advisories (permission clamps, ignored fields). */
+  /** Non-fatal advisories (permission clamps, ignored fields) — fixed structural English. */
   notes: string[]
+  /**
+   * Stable, content-free note CODES + app-fixed params paralleling `notes` (SKA-35 — the
+   * `errorCodes` precedent applied to advisories), which the renderer maps to localized copy so a
+   * German user never sees the English structural string. Params only ever carry app-chosen
+   * values (a fixed frontmatter field name, a cap) — never skill content. Same length/order as
+   * `notes`; an entry the renderer doesn't know falls back to the structural message.
+   */
+  noteCodes?: SkillNoteRef[]
+}
+
+/**
+ * Structural summary of the last skills disk-reconcile (SKA-32, skills audit 2026-07-03, U7).
+ * Counts + fixed reason codes ONLY — never folder names or package content (§22-M1). Drives the
+ * Settings → Skills "N skill folders could not be read" notice.
+ */
+export interface SkillReconcileStatus {
+  errorCount: number
+  errorCodes: string[]
 }
 
 /**

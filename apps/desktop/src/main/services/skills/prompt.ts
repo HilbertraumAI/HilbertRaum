@@ -114,7 +114,10 @@ function assemble(title: string, body: string): string {
  * paragraphs, never a mid-instruction cut (a half-cut instruction can read as a *changed* rule —
  * worse than no skill). The guaranteed minimum is the framing + guard + the FIRST paragraph; if
  * even that won't fit, the skill is omitted entirely (`text: null`) rather than injecting a
- * fragment. `budgetTokens` omitted ⇒ no trimming (the pure builder, for tests / the unbounded path).
+ * fragment. Because ONLY paragraph[0] is guaranteed, the bundled SKILL.md bodies merge their
+ * heading + honesty-rules block into that one paragraph (SKA-15) — parity-test-pinned, so a
+ * budget-squeezed turn can never ship a rules intro with the rules trimmed away.
+ * `budgetTokens` omitted ⇒ no trimming (the pure builder, for tests / the unbounded path).
  */
 export function buildSkillFence(input: SkillFenceInput, budgetTokens?: number): SkillFenceResult {
   const title = input.title.trim()
@@ -152,9 +155,10 @@ export function buildSkillFence(input: SkillFenceInput, budgetTokens?: number): 
  * Diagnose a budget-driven fence reduction (U1, audit §3.6). A fence that was TRIMMED (whole paragraphs
  * dropped to fit) or OMITTED (not even the minimum fit) is now logged — the flags were previously
  * discarded at every call site, so a decapitated-rule turn was undiagnosable. IDS/COUNTS ONLY (the skill
- * install id + the two booleans + the paragraph count) — NEVER the skill body (the no-content-in-logs
- * rule). A no-op on a fully-placed fence, so a normal turn logs nothing. The SKILL.md bodies now lead with
- * the honesty/safety rules (U1), so a trimmed fence keeps them; this log is the diagnostic backstop.
+ * install id + the two booleans) — NEVER the skill body (the no-content-in-logs rule). A no-op on a
+ * fully-placed fence, so a normal turn logs nothing. The SKILL.md bodies keep heading + honesty/safety
+ * rules in their FIRST paragraph (U1 + SKA-15) — the paragraph the trim guarantees — so a trimmed fence
+ * keeps the rules; this log is the diagnostic backstop.
  */
 export function logSkillFenceReduction(skillId: string, result: SkillFenceResult): void {
   if (!result.trimmed && !result.omitted) return

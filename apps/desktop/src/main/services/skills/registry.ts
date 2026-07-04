@@ -13,7 +13,7 @@
 // from disk, so there is no orphan and no recovery path (revised §0). All synchronous SQLite +
 // local file reads — no network, no model calls.
 
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from '../db'
 import {
@@ -58,10 +58,20 @@ export interface DiscoveredSkill {
   manifest: SkillManifest
 }
 
+/**
+ * Structural reason code per discovery error (SKA-32) — the ONLY log/IPC-safe projection of a
+ * failed folder. The parallel human-readable `errors` strings may carry a (SKILL_ID_RE-validated)
+ * folder path and the parser's fixed structural messages; they are for tests/debugging in-process
+ * and must never be logged or sent to the renderer (§22-M1).
+ */
+export type SkillDiscoveryErrorCode = 'invalidFolderName' | 'unreadable' | 'invalidManifest' | 'duplicateId'
+
 export interface DiscoveryResult {
   skills: DiscoveredSkill[]
-  /** One human-readable line per folder that exists but failed to parse/validate. */
+  /** One human-readable line per folder that exists but failed to parse/validate (never logged). */
   errors: string[]
+  /** Structural reason codes parallel to `errors` (SKA-32) — safe to log/surface as counts+codes. */
+  errorCodes: SkillDiscoveryErrorCode[]
 }
 
 export interface ReconcileResult {
@@ -71,6 +81,8 @@ export interface ReconcileResult {
   /** Total skills present on disk after reconcile. */
   present: number
   errors: string[]
+  /** Structural reason codes parallel to `errors` (SKA-32) — safe to log/surface as counts+codes. */
+  errorCodes: SkillDiscoveryErrorCode[]
 }
 
 export interface ReconcileOptions {
@@ -126,12 +138,17 @@ function rowToRecord(r: SkillRow): SkillRecord {
 
 /**
  * Discover + validate every skill folder under one source directory. A subdirectory with no
- * SKILL.md is silently skipped (not every folder is a skill); a folder whose name is not a safe
- * skill id (SKILL_ID_RE — the on-disk-name safety check) or whose SKILL.md fails validation is
- * recorded as an error and skipped. Duplicate declared ids within the same source keep the first
- * (deterministic readdir order) and record an error for the rest — they cannot both own
- * `"<source>:<id>"`. An absent/unreadable directory yields zero skills (graceful — app-skills/ is
- * empty on a fresh install). Pure-ish: reads disk only, no DB.
+ * SKILL.md — or a NON-FILE SKILL.md (a directory of that name, trivially created by
+ * hand-unpacking; SKA-16) — is silently skipped (not every folder is a skill); a folder whose
+ * name is not a safe skill id (SKILL_ID_RE — the on-disk-name safety check) or whose SKILL.md
+ * fails validation is recorded as an error and skipped. Duplicate declared ids within the same
+ * source keep the first (deterministic readdir order) and record an error for the rest — they
+ * cannot both own `"<source>:<id>"`. An absent/unreadable directory yields zero skills (graceful —
+ * app-skills/ is empty on a fresh install). SKA-16: every per-folder read is guarded, so ONE
+ * unreadable folder (EACCES, a mid-scan vanish) can never abort discovery — before this guard a
+ * single throw here killed ALL reconciliation for the session (drop-ins never appeared, disk edits
+ * never propagated, mark-unavailable never ran, and every import errored AFTER placing its files).
+ * Pure-ish: reads disk only, no DB.
  */
 export function discoverSkillsInDir(
   dir: string,
@@ -140,7 +157,17 @@ export function discoverSkillsInDir(
 ): DiscoveryResult {
   const skills: DiscoveredSkill[] = []
   const errors: string[] = []
+  const errorCodes: SkillDiscoveryErrorCode[] = []
   const limits = opts.limits ?? resolveSkillLimits()
+
+  // §22-M1 + the SKA-32 content nuance: a folder name may ride the human-readable line ONLY when
+  // it is a valid skill id (then it is exactly what audit events already carry); an INVALID name
+  // is arbitrary user text and is omitted — the structural code alone describes the failure.
+  const pushError = (code: SkillDiscoveryErrorCode, folderName: string, detail: string): void => {
+    const label = SKILL_ID_RE.test(folderName) ? `${source}-skills/${folderName}` : `${source}-skills`
+    errors.push(`${label}: ${detail}`)
+    errorCodes.push(code)
+  }
 
   let entries: string[]
   try {
@@ -149,32 +176,54 @@ export function discoverSkillsInDir(
       .map((e) => e.name)
       .sort()
   } catch {
-    return { skills, errors } // absent/unreadable dir → no skills (not an error)
+    return { skills, errors, errorCodes } // absent/unreadable dir → no skills (not an error)
   }
 
   const seenIds = new Map<string, string>() // declared id → folder it was first claimed by
   for (const folderName of entries) {
+    // Dot-named dirs are NEVER skill packages (the `.skill-import-*`/`.skill-backup-*` lifecycle
+    // names live here by design) — skip before any check, so a crash leftover younger than the
+    // SKA-36 sweep's age gate doesn't surface as a "folder could not be read" error (SKA-32).
+    if (folderName.startsWith('.')) continue
     const full = join(dir, folderName)
-    if (!existsSync(join(full, 'SKILL.md'))) continue // not a skill package — skip quietly
-    if (!SKILL_ID_RE.test(folderName)) {
-      errors.push(`${source}-skills/${folderName}: folder name is not a valid skill id (skipped)`)
+    // SKA-16: require a real SKILL.md FILE. Absent or a non-file (directory/socket) → not a skill
+    // package, skip quietly; a throwing stat (EACCES) → structural error, keep discovering.
+    let skillMdStat
+    try {
+      skillMdStat = statSync(join(full, 'SKILL.md'), { throwIfNoEntry: false })
+    } catch {
+      pushError('unreadable', folderName, 'the folder could not be read (skipped)')
       continue
     }
-    const parsed = parseSkillManifestFromDir(full, { limits })
+    if (!skillMdStat || !skillMdStat.isFile()) continue // not a skill package — skip quietly
+    if (!SKILL_ID_RE.test(folderName)) {
+      pushError('invalidFolderName', folderName, 'folder name is not a valid skill id (skipped)')
+      continue
+    }
+    // SKA-16: the parse does further I/O (SKILL.md read, manifest.json stat) — guard it per folder
+    // so a race/permission throw skips THIS folder instead of aborting the whole discovery.
+    let parsed
+    try {
+      parsed = parseSkillManifestFromDir(full, { limits })
+    } catch {
+      pushError('unreadable', folderName, 'the folder could not be read (skipped)')
+      continue
+    }
     if (!parsed.ok || !parsed.manifest) {
-      errors.push(`${source}-skills/${folderName}: ${parsed.errors.join('; ')}`)
+      // The parser's errors are fixed structural strings (content-free by SKA-31/§22-M1).
+      pushError('invalidManifest', folderName, parsed.errors.join('; '))
       continue
     }
     const id = parsed.manifest.id
     const dup = seenIds.get(id)
     if (dup) {
-      errors.push(`${source}-skills/${folderName}: duplicate skill id "${id}" (also in ${dup}); skipped`)
+      pushError('duplicateId', folderName, `duplicate skill id "${id}" (also in ${dup}); skipped`)
       continue
     }
     seenIds.set(id, folderName)
     skills.push({ source, folderName, manifest: parsed.manifest })
   }
-  return { skills, errors }
+  return { skills, errors, errorCodes }
 }
 
 /**
@@ -198,10 +247,15 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
     /* best-effort; discovery tolerates an absent dir */
   }
 
+  // SKA-36: sweep crash-leftover `.skill-import-*` staging / `.skill-backup-*` dirs (dot-names are
+  // excluded from discovery, so they otherwise accumulate invisibly on the portable drive forever).
+  sweepStaleSkillTempDirs(opts.userSkillsDir, now)
+
   const app = discoverSkillsInDir(opts.appSkillsDir, 'app', { limits })
   const user = discoverSkillsInDir(opts.userSkillsDir, 'user', { limits })
   const discovered = [...app.skills, ...user.skills]
   const errors = [...app.errors, ...user.errors]
+  const errorCodes = [...app.errorCodes, ...user.errorCodes]
 
   const present = new Set<string>()
   let inserted = 0
@@ -290,7 +344,43 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
   // could leave two AVAILABLE rows of one declared id enabled at once. Collapse to one here.
   enforceOneActivePerId(db, now)
 
-  return { inserted, updated, markedUnavailable, present: present.size, errors }
+  return { inserted, updated, markedUnavailable, present: present.size, errors, errorCodes }
+}
+
+/** Age gate for the SKA-36 temp-dir sweep: only dirs this stale are certainly not a live import. */
+const SKILL_TEMP_SWEEP_MIN_AGE_MS = 60 * 60 * 1000 // 1 h
+
+/**
+ * SKA-36 (audit 2026-07-03, U7): remove crash-leftover import staging dirs (`.skill-import-*`,
+ * mkdtemp'd by `importSkill` and normally consumed by the atomic rename) and stale placement
+ * backups (`.skill-backup-<id>`, normally dropped at the end of the same import). Their dot-names
+ * fail SKILL_ID_RE so discovery skips them — correct, but it also means nothing ever cleaned them
+ * up after a crash/kill mid-import. AGE-GATED (> 1 h by mtime) so a dir a LIVE import could still
+ * own is never swept — reconcile runs during `importSkill` itself (and a second window could be
+ * importing concurrently), so "sweep only at startup" would not be a sufficient guard by itself.
+ * Best-effort per entry: a locked dir is skipped and retried on a later reconcile.
+ */
+function sweepStaleSkillTempDirs(userSkillsDir: string, nowIso: string): void {
+  const nowMs = Date.parse(nowIso)
+  if (!Number.isFinite(nowMs)) return
+  let entries
+  try {
+    entries = readdirSync(userSkillsDir, { withFileTypes: true })
+  } catch {
+    return // absent dir — nothing to sweep
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    if (!entry.name.startsWith('.skill-import-') && !entry.name.startsWith('.skill-backup-')) continue
+    const full = join(userSkillsDir, entry.name)
+    try {
+      const st = statSync(full)
+      if (nowMs - st.mtimeMs < SKILL_TEMP_SWEEP_MIN_AGE_MS) continue // possibly a live import — spare it
+      rmSync(full, { recursive: true, force: true })
+    } catch {
+      /* locked/vanished — leave it for the next reconcile */
+    }
+  }
 }
 
 /** A row considered for the one-active-per-id check. */
@@ -396,6 +486,14 @@ export function setSkillEnabled(db: Db, installId: string, enabled: boolean, now
 
 // ---- registry handle (wired into AppContext.skills) ---------------------------------
 
+/** Structural summary of the LAST reconcile's discovery errors (SKA-32) — counts+codes only. */
+export interface SkillReconcileStatus {
+  /** Skill folders that exist but could not be read/validated on the last reconcile. */
+  errorCount: number
+  /** Structural reason codes (deduplicated) — never folder names or package content (§22-M1). */
+  errorCodes: SkillDiscoveryErrorCode[]
+}
+
 /** The registry object carried on `AppContext.skills` — bundles the resolved dirs + a DB getter. */
 export interface SkillRegistry {
   readonly appSkillsDir: string
@@ -406,6 +504,8 @@ export interface SkillRegistry {
   list(): SkillRecord[]
   get(installId: string): SkillRecord | null
   setEnabled(installId: string, enabled: boolean): boolean
+  /** SKA-32: counts+codes of the last reconcile's discovery errors (zeros before the first one). */
+  reconcileStatus(): SkillReconcileStatus
 }
 
 export interface SkillRegistryDeps {
@@ -426,12 +526,17 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
   // reconcile in main/index.ts no-ops while an encrypted DB is locked; rather than hook the
   // unlock critical path, the FIRST registry read after unlock reconciles disk→DB exactly once
   // per session. The flag is set only on a SUCCESSFUL reconcile, so a read attempted while still
-  // locked (reconcile throws) simply retries on the next read. The S4 importer/deleter mutate
-  // disk and call `reconcile()` explicitly, which also arms the flag.
+  // locked (reconcile throws) simply retries on the next read. The S4 import/delete IPC handlers
+  // mutate disk and then call THIS handle's `reconcile()`, which also arms the flag and refreshes
+  // the SKA-32 status summary (the installer's own internal reconcile bypasses this closure).
   let reconciledThisSession = false
+  // SKA-32: the last reconcile's structural error summary, for the Settings → Skills surfacing.
+  // Counts + deduplicated codes only — the human-readable strings never leave the process (§22-M1).
+  let lastStatus: SkillReconcileStatus = { errorCount: 0, errorCodes: [] }
   const doReconcile = (): ReconcileResult => {
     const result = reconcileSkills(getDb(), { appSkillsDir, userSkillsDir, limits, appVersion })
     reconciledThisSession = true
+    lastStatus = { errorCount: result.errors.length, errorCodes: [...new Set(result.errorCodes)] }
     return result
   }
   const ensureReconciled = (): void => {
@@ -456,6 +561,7 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
       ensureReconciled()
       return getSkill(getDb(), installId)
     },
-    setEnabled: (installId, enabled) => setSkillEnabled(getDb(), installId, enabled)
+    setEnabled: (installId, enabled) => setSkillEnabled(getDb(), installId, enabled),
+    reconcileStatus: () => lastStatus
   }
 }
