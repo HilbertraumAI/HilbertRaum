@@ -1325,6 +1325,97 @@ partially (no breadth claim → NULL coverage → the relevance fallback). The s
 and the bank + invoice adopters are recorded in [`architecture.md`](architecture.md) "Skills — design
 record" §19 (D44–D49); this subsection is the coverage-half cross-link.
 
+### 14.10 Whole-doc analysis truncation fix — chunk map-reduce, adaptive reduce budget, progress notice, continue-generation (2026-07-04/05)
+
+_Condensed from `docs/wholedoc-truncation-fix-plan.md` at its close (2026-07-05, Phase 4); full original —
+incl. the diagnosis tables, the notes-first owner deviation rationale, and the worked budget examples — in
+git history. This is a distinct **4-phase wave** (its own "Phase 1–4"), not §14's original phases. **§14.10 is
+the stable anchor: code/test comments citing `wholedoc-truncation-fix-plan §2/§3/§4/§5/§6` all resolve here
+(legend at the end).**_
+
+**The two truncations it fixes.** A `contract-brief`-style `analysis: whole-doc` turn over a multi-page PDF hit
+two independent cuts: (1) **input** — an over-budget document with **no deep-index tree** was read from the
+**beginning only** (the §20 tree rescue auto-builds only at ~50 pages, so every doc between ~1.5 and ~50 pages
+truncated to the beginning and never got a tree — the **"gap band"**); (2) **output** — the reduce reserved a
+fixed 1024 output tokens and stamped `truncated` when a 9-section brief overran `n_ctx`. Map-reduce (bounded
+input windows) is the answer to both, but pre-fix it was gated behind a tree that never built for mid-size docs.
+
+**Phase 1 — chunk map-reduce closes the gap band (§3).** The fence→pack→map→reduce→stream→persist body was
+**extracted from `answerWholeDocFromTree` into the shared core `streamWholeDocMapReduce(input)`**
+([`rag/whole-doc-tree.ts`](../apps/desktop/src/main/services/rag/whole-doc-tree.ts)); the tree path is now a
+thin pre-model gate calling it with `coverageMode:'tree'` (**byte-identical**, pinned by
+`rag-whole-doc-tree.test.ts`). New **`answerWholeDocFromChunks(deps)`** ([`rag/index.ts`](../apps/desktop/src/main/services/rag/index.ts))
+runs an on-the-fly map-reduce over the document's **de-overlapped RAW chunks** (`coverageMode:'capped'`),
+wired as `viaTree ?? viaChunks ?? (capped floor)` in the `opts.wholeDocument` branch. The de-overlap read is
+the single private `readWholeDocumentChunkTexts` (`retrieveWholeDocument` consumes it too). Citations = a
+bounded representative sample of REAL leaf chunks (≤ `SUMMARY_MAP_CALL_CEILING`, M2). Share-safe parity: the
+chunk path passes `buildShareSafeScanBlock(scan, false)` as `extraReduceBlock` (reduce USER turn, never
+system). **Coverage stamp (data contract):** `mode:'capped', truncated:false, chunksCovered===chunksTotal` =
+whole-doc via map-reduce (the meter's existing "covers the whole document"); `truncated:true` only on a
+> ceiling window count or a notes hard-cut. A doc between the single-read budget and one summary window packs
+into ONE window ⇒ the reduce runs directly over the whole document, no map step (no extra latency for the
+common small case).
+
+**Phase 2 — adaptive, notes-first reduce budget (§4).** `ANALYSIS_RESPONSE_RESERVE_TOKENS = 3072` (the *desired*
+reduce output; `CHAT_RESPONSE_RESERVE_TOKENS = 1024` stays the floor) + a pure, unit-tested
+**`computeReduceBudget({contextTokens, fenceTokens, questionTokens, notesTokens})`** size the reduce
+`maxTokens` (`reduceOutputCap`) and the notes hard-cut (`reduceNotesBudget`) from the REAL launched context,
+inside the shared core (so BOTH paths get it). **Owner-approved policy is NOTES-FIRST** (a deliberate deviation
+from the plan's original output-first clamp): the output reserve **yields** to the actual notes — it aims for
+3072 but shrinks toward 1024 (never below) so a small (4 k) window keeps **whole-document coverage** and only
+the *deliverable* shrinks; the notes are hard-truncated (⇒ `truncated:true`) only when even the floor output
+leaves no room. **Data contract (model tokens):** `overhead = fence + question + 128`; `available = ctx −
+overhead`; `reduceOutputCap = clamp(aim 3072, floor 1024, available − max(notesTokens, 512))`;
+`reduceNotesBudget = max(512, available − reduceOutputCap)`; **guarantee** `overhead + reduceNotesBudget +
+reduceOutputCap ≤ ctx` at every real window (the HTTP-400 regression guard). `wholeDocumentFitBudgetTokens`
+(the single-turn input-budget + needle-downgrade boundary) is UNCHANGED.
+
+**Phase 3 — analysis progress notice (§5).** A multi-window source runs SILENT map calls before the first
+streamed reduce token; the shared core fires the existing ephemeral `'analysis'` notice
+(`onCompactionStart?.('analysis')` — "Reading the whole document…") **only when `windows.length > 1`** (a real
+map loop), placed after the `answerPrefix` token and before the map loop, cleared on the first reduce token.
+Threaded through the deps + both whole-doc calls; the grounded-whole-doc IPC path already passed
+`sendCompaction`, so no IPC change and no new `CompactionNotice` kind. Single-window / fits-budget / needle /
+relevance paths fire nothing. Ephemeral (R14); a callback ⇒ no new handle (SEC-1).
+
+**Phase 4 — continue-generation for over-cap deliverables (§6).** The reduce stream now captures its finish
+reason (`onFinish`, mirroring the single-turn grounded path). When a reduce pass ends `finishReason ===
+'length'` (a ceiling cut — NOT a user Stop, which fires no finish reason), a **continuation loop** re-prompts
+to FINISH: each pass re-sends the SAME reduce USER turn (fence + notes + question + `extraReduceBlock` — "fence
+at every step") via `continuationUserPrompt(reduceUser, anchor)` that adds a resume instruction + an `anchor` =
+the last `CONTINUATION_ANCHOR_CHARS` (200) chars produced; it streams live via `onToken`, holding back only the
+opening until the seam overlap against the anchor is resolved (`seamOverlap` — the longest anchor-tail↔head
+match, ≤ the anchor) then emits the DE-DUPLICATED remainder. **Bounds:** `MAX_REDUCE_CONTINUATIONS = 2`
+(runaway guard) AND a per-pass no-overflow room guard — the continuation prompt is larger than the reduce
+prompt, so its `maxTokens = min(reduceOutputCap, contextTokens − continuePromptTokens)` is sized against the
+ACTUAL assembled prompt, stopping (`CONTINUATION_MIN_OUTPUT_TOKENS = 256` floor) rather than assemble a prompt
+the runtime rejects. All INSIDE the existing try/catch: a Stop mid-continuation is caught and the accumulated
+partial persisted (the aborted pass's partial folded in via a `finally` seam-flush) — never a fresh pass past
+the abort. **Stamp decision (data contract):** `Message.truncated = true` is set ONLY when continuation is
+EXHAUSTED and the last pass is still 'length' — an honest **OUTPUT**-truncation badge ("Answer truncated…"),
+**parity with the single-turn grounded path's `messages.truncated`**, kept STRICTLY separate from
+`coverage.truncated` (**INPUT** coverage). The whole document can be covered (`coverage.truncated:false`) while
+the deliverable is output-cut (`Message.truncated:true`); a user Stop leaves it false. **Scope:** the shared
+reduce core only (tree rescue + chunk map-reduce + single-window reduce); the single-turn small-doc fits-budget
+read is a documented follow-up (ample output room ⇒ minor residual).
+
+**Invariants preserved across all four phases (plan §2).** SEC-1 capability ceiling (pure DB reads + the chat
+runtime, no new handle); the SKILL.md fence rides every map/reduce/continuation USER turn, never the system
+prompt; coverage honesty (`truncated:false` only when the whole doc was processed — a ceiling cut or notes
+hard-cut ⇒ `truncated:true`, INPUT); `[Sn]` citations are real leaf chunks (M2); needle-downgrade + relevance
+paths byte-unchanged; the abort/Stop contract (a Stop before the first reduce token ⇒ `emptyAssistantMessage`;
+a Stop mid-stream/mid-continuation ⇒ the partial persisted, never a second capped pass); and `prompt + outputCap
+≤ n_ctx` at every context size (no HTTP 400). **Residuals** (see `known-limitations.md`): the ≥~50-page tail is
+still beginning-only (map-call ceiling, INPUT); a deliverable long enough to still be cut after the 2-cap keeps
+the honest OUTPUT-truncated badge; 2–12 map calls of latency on a mid-size analysis (now with the Phase 3
+affordance). Tests: `rag-whole-doc-mapreduce.test.ts` (Phase 1 reach + Phase 2 `maxTokens` + Phase 3 notice +
+Phase 4 continuation/dedup/cap/abort) and `tests/unit/wholedoc-reduce-budget.test.ts` (pure budget math).
+
+**§-anchor legend (retired plan → here).** `wholedoc-truncation-fix-plan §2` (invariants), `§3` (Phase 1 —
+chunk map-reduce), `§4` (Phase 2 — adaptive reduce budget), `§5` (Phase 3 — progress notice), `§6` (Phase 4 —
+continue-generation) **all map to §14.10**. Architecture-level summary: `architecture.md` §20 ("Skill-aware
+whole-document analysis", "Large documents").
+
 ## 15. Context budgeting + conversation compaction — design record (Phases 0–2)
 
 _When a conversation approaches the model's context window, summarize the **older** turns once into a

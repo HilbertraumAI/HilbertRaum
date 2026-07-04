@@ -3784,6 +3784,22 @@ bracketing the untrusted body in every step's USER turn, the app-authored system
 inside the 2-doc compare below) for the DISSIMILAR-document fallback — a similar version pair now goes
 through the **diff-driven** path (compare-diff record below), which reads both docs whole without capping.
 
+**Whole-doc analysis truncation fix (2026-07-04/05, 4-phase wave — full record: `rag-design.md` §14.10).** The
+tree rescue above only fires for a document with a **ready** deep-index tree, which auto-builds at ~50 pages —
+so every document in the **"gap band"** (~1.5–50 pages) still truncated to its beginning, and a long deliverable
+still overran `n_ctx`. Four phases closed both cuts, all in the **shared core `streamWholeDocMapReduce`** (so the
+tree rescue and the new chunk path share one engine): **(1)** the map-reduce body was extracted from
+`answerWholeDocFromTree` into that core, and a new **`answerWholeDocFromChunks`** runs the same map-reduce over
+the document's **de-overlapped raw chunks** (no tree needed) — honest `capped`/untruncated "covers the whole
+document"; **(2)** the reduce output cap is **adaptive + notes-first** (`computeReduceBudget` — aims for a
+3072-token deliverable, yields toward the 1024 floor so whole-doc coverage survives a 4 k window, `prompt +
+output ≤ n_ctx` always); **(3)** the ephemeral `'analysis'` progress notice fires for the silent map-call window
+(`windows.length > 1`); **(4)** **continue-generation** re-prompts to FINISH a `finishReason==='length'`
+deliverable (same fence + notes + question + a resume anchor, seam de-duplicated) across ≤ 2 bounded passes,
+stamping an honest **`Message.truncated`** (OUTPUT-cut, parity with the single-turn grounded path) — kept
+distinct from `coverage.truncated` (INPUT coverage) — only when the cap is exhausted. The §14 ceiling + the
+fence/guard bracketing are unchanged throughout.
+
 **2-document whole-doc compare (Follow-up B, Wave 3, 2026-06-22).** `what-changed` registers a
 **`grounded-whole-doc-compare`** handler (`analysis/whole-doc-skills.ts`) whose `applies()` matches a
 compare-shaped keyword set (EN+DE) over **exactly two** in-scope documents. `registerRagIpc` detects the
