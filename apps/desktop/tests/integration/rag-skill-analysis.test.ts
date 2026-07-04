@@ -46,7 +46,7 @@ const CLEAN =
   'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
   '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
 
-function writeBankSkill(appSkillsDir: string): void {
+function writeBankSkill(appSkillsDir: string, opts: { triggers?: boolean } = {}): void {
   const d = join(appSkillsDir, 'bank-statement')
   mkdirSync(d, { recursive: true })
   const lines = [
@@ -57,6 +57,16 @@ function writeBankSkill(appSkillsDir: string): void {
     'version: 1.0.0',
     'kind: tool',
     'allowedTools: [extract_transactions, validate_statement_balances, categorize_transactions, summarize_cashflow, export_transactions_csv]',
+    // A4 (SKA-7): the single-doc inversion consults the skill's manifest doc signals. With triggers the
+    // `*statement*` filename pattern marks a `statement.txt` in scope as "plausibly a statement".
+    ...(opts.triggers
+      ? [
+          'triggers:',
+          '  keywords: [bank statement, kontoauszug, transaction, balance]',
+          '  mimeTypes: [application/pdf, text/csv]',
+          '  filenamePatterns: ["*statement*", "*kontoauszug*"]'
+        ]
+      : []),
     '---',
     'Quote the printed figures.'
   ]
@@ -74,14 +84,16 @@ interface Harness {
 /** Real DB + an ingested single bank statement + an ENABLED app:bank-statement tool skill + the
  *  analysis registry, wired through the real `askDocuments` handler. `fullyChunked: false` clears the
  *  ingestion-set marker to simulate a legacy (not exhaustively analysable) index. */
-async function makeHarness(opts: { fullyChunked?: boolean; text?: string } = {}): Promise<Harness> {
+async function makeHarness(
+  opts: { fullyChunked?: boolean; text?: string; triggers?: boolean; docFile?: string } = {}
+): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ragskill-'))
   const workspacePath = join(root, 'workspace')
   const appSkillsDir = join(root, 'app-skills')
   const userSkillsDir = join(root, 'user-skills')
   mkdirSync(appSkillsDir, { recursive: true })
   mkdirSync(userSkillsDir, { recursive: true })
-  writeBankSkill(appSkillsDir)
+  writeBankSkill(appSkillsDir, { triggers: opts.triggers })
 
   const db = openDatabase(join(root, 'test.sqlite'))
   seedSettings(db)
@@ -89,8 +101,9 @@ async function makeHarness(opts: { fullyChunked?: boolean; text?: string } = {})
   skills.reconcile() // installs app:bank-statement ENABLED
 
   // A REAL ingested statement: stored copy + chunks + embeddings + fully_chunked (the production path).
+  // The filename drives the A4 signal match (`*statement*`) — a test can override it to a non-matching name.
   const storeDir = documentsDir(workspacePath)
-  const docPath = join(root, 'statement.txt')
+  const docPath = join(root, opts.docFile ?? 'statement.txt')
   writeFileSync(docPath, opts.text ?? CLEAN, 'utf8')
   const doc = createQueuedDocument(db, docPath)
   await processDocument(db, storeDir, doc.id, { embedder: createMockEmbedder() })
@@ -330,6 +343,135 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
     expect(h.runtime.calls).toBe(0)
     expect(msg.content).toContain('```json')
     expect(msg.content).toContain('"totalIn": 2500')
+  })
+})
+
+// ---- A4: tool-skill single-doc gate inversion (SKA-7 structural, audit §3.2/§8.2) ----
+// With the bank skill ACTIVE over a single fully-chunked statement that plausibly IS a statement (manifest
+// doc signals OR a prior extraction), a NON-vocabulary on-topic question is answered from the VERIFIED
+// extract (grounded-data), NOT raw top-k + model arithmetic (the pre-W3 incident class). A doc matching NO
+// signal keeps the phrasing gate (relevance); small talk opts out (no extraction).
+
+describe('askDocuments — A4 tool-skill inversion (SKA-7 structural)', () => {
+  const bankRows = (h: Harness): number =>
+    (h.db.prepare('SELECT COUNT(*) AS n FROM bank_statements').get() as { n: number }).n
+
+  it('signal-matching statement + NON-vocabulary question → grounded-data over the extract (never top-k)', async () => {
+    // "An wen ging das meiste Geld?" misses the ~45-term bank vocabulary, so pre-A4 it fell to top-k.
+    const h = await makeHarness({ fullyChunked: true, triggers: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'An wen ging das meiste Geld?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    // The handler ran (extraction persisted) and the answer streamed grounded-data over the JSON block.
+    expect(bankRows(h)).toBe(1)
+    expect(h.runtime.calls).toBe(1)
+    const lastTurn = h.runtime.lastMessages[h.runtime.lastMessages.length - 1]
+    expect(lastTurn.content).toContain('Bank statement (JSON):')
+    expect(lastTurn.content).toContain('quote them EXACTLY')
+    // Honest extract coverage + the deterministic net echo (never a top-k relevance badge).
+    expect(msg.coverage?.mode).toBe('extract')
+    expect(msg.content).toContain('2454.10')
+    // Provenance flows through the inverted gate: the grounded-data dispatch stamps skillId + auto_fired
+    // exactly as the applies()-path does (false here — an explicit pick). For a TOOL skill an auto-fire
+    // keyword is always a route-term (so applies() is already true), so auto-fire never NEEDS the inversion;
+    // the stamp rides the identical dispatch regardless — this pins that it isn't dropped.
+    expect(msg.skillId).toBe(BANK_INSTALL_ID)
+    expect(msg.autoFired).toBe(false)
+  })
+
+  it('NO signal + no prior extraction → relevance path, extraction NOT run', async () => {
+    // Same non-vocabulary question, but the doc matches no manifest signal (no triggers, non-statement
+    // filename) and has never been extracted → the phrasing gate stands (the W2 plausibility posture,
+    // inverted): the ordinary relevance path answers, and the bank extractor is never force-run.
+    const h = await makeHarness({ fullyChunked: true, triggers: false, docFile: 'letter.txt' })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'An wen ging das meiste Geld?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(bankRows(h)).toBe(0) // extraction NOT run
+    expect(msg.coverage?.mode).not.toBe('extract') // relevance path, not the exhaustive handler
+    expect(msg.content).not.toContain('Bank statement (JSON):')
+  })
+
+  it('inversion requires FULLY-CHUNKED: a phrasing-miss over a signal-matching but NOT-fully-chunked doc falls through to relevance (never a refusal)', async () => {
+    // The `allInScopeDocsFullyChunked` conjunct of the inversion gate: a legacy/partly-chunked statement
+    // can't be analysed exhaustively, so a vocabulary MISS must keep its pre-A4 relevance behaviour — it
+    // must NOT invert-then-refuse. (Drop that conjunct and this turn would hit the else-branch D45 refusal.)
+    const h = await makeHarness({ fullyChunked: false, triggers: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'An wen ging das meiste Geld?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.content).not.toBe(t('en', 'skills.analysis.refusePartial'))
+    expect(msg.coverage?.mode).not.toBe('extract') // relevance, not the exhaustive handler
+    expect(bankRows(h)).toBe(0) // extraction NOT run
+    expect(h.runtime.calls).toBe(1) // the relevance model call
+  })
+
+  it('small talk ("danke") over an active tool skill → relevance path, no extraction, no narration', async () => {
+    const h = await makeHarness({ fullyChunked: true, triggers: true })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'danke', BANK_INSTALL_ID)
+    const msg = result as Message
+    // The inversion's `!isSmallTalk` guard holds: a pleasantry over a signal-matching statement does NOT
+    // extract-and-narrate — it keeps the relevance path.
+    expect(bankRows(h)).toBe(0)
+    expect(msg.coverage?.mode).not.toBe('extract')
+  })
+
+  it('zero-row extraction on a signal-matching doc keeps the honest empty template (unchanged posture)', async () => {
+    // A doc that LOOKS like a statement (name + triggers) but carries no parseable transactions: the
+    // inversion runs the handler, the extractor finds nothing, and — because the doc DOES match a signal —
+    // the honest empty template stands (it does NOT fall through to relevance). 0 model calls.
+    const h = await makeHarness({
+      fullyChunked: true,
+      triggers: true,
+      text: 'Monthly statement summary. No transactions were posted this period.'
+    })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'An wen ging das meiste Geld?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.content).toBe(t('en', 'skills.bankAnalysis.empty'))
+    expect(h.runtime.calls).toBe(0)
+  })
+
+  it('a doc with a PRIOR extraction inverts even without a manifest signal match', async () => {
+    // classMatches also fires when a persisted extraction already exists (the strongest evidence the skill
+    // has read this doc). No triggers + a non-statement filename, but a first vocabulary turn seeds an
+    // extraction; the follow-up NON-vocabulary question then inverts to grounded-data.
+    const h = await makeHarness({ fullyChunked: true, triggers: false, docFile: 'ledger.txt' })
+    // Seed the extraction via a vocabulary-shaped turn (applies() true).
+    await invoke(handlers, IPC.askDocuments, h.conversationId, 'summarize the transactions', BANK_INSTALL_ID)
+    expect(bankRows(h)).toBe(1)
+    // The follow-up misses the vocabulary; classMatches now sees the prior extraction → grounded-data.
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'An wen ging das meiste Geld?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.coverage?.mode).toBe('extract')
+    const lastTurn = h.runtime.lastMessages[h.runtime.lastMessages.length - 1]
+    expect(lastTurn.content).toContain('Bank statement (JSON):')
   })
 })
 
@@ -681,6 +823,61 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
       .result as Message
     expect(r3.content).toBe(t('en', 'skills.analysis.selectTwo', { count: 3 }))
     expect(three.runtime.calls).toBe(0)
+  })
+
+  // A4 (SKA-8, audit §3.2): the W2 count-mismatch routing is now VOCABULARY-gated uniformly. A sticky
+  // skill over a MULTI-doc scope no longer turns EVERY non-chatter question into a "pick one / select two"
+  // dead-end — only a vocabulary-shaped one narrows/routes; a general/off-topic question falls through to
+  // the ordinary engines (relevance/coverage-extract).
+  it('SKA-8: an instruction skill + multi-doc + OFF-TOPIC question falls through to relevance, NOT selectOne', async () => {
+    const h = await makeMultiHarness({
+      docs: [
+        { file: 'notes-a.txt', text: 'General notes about the weather and the weekend plans.' },
+        { file: 'notes-b.txt', text: 'More notes about lunch and the office plants.' },
+        { file: 'notes-c.txt', text: 'Even more notes about nothing in particular at all.' }
+      ],
+      installContractBrief: true
+    })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'who is Angela Merkel?',
+      'app:contract-brief'
+    )
+    const msg = result as Message
+    // The off-topic question misses contract-brief's vocabulary → the pre-pass does NOT fire → the ordinary
+    // relevance engine answers (model consulted), never the "pick one document" dead-end.
+    expect(msg.content).not.toBe(t('en', 'skills.analysis.selectOne', { count: 3 }))
+    expect(h.runtime.calls).toBe(1)
+  })
+
+  it('SKA-8 uniformity: a tool skill + multi-doc + OFF-TOPIC question falls through AND the A4 inversion does NOT over-fire at multi-doc', async () => {
+    // Tool `intends()` was already vocabulary-shaped pre-A4, so the fall-through (content ≠ selectOne,
+    // calls===1) is unchanged W2 behaviour — kept here as a uniformity check. The A4-relevant guard is
+    // `skill_runs.n === 0`: the new single-doc `classMatches` inversion must NOT engage over a MULTI-doc
+    // scope (`singleDocMatchesSkillClass` returns false unless exactly one doc is in scope), so no
+    // extraction is force-run for an off-topic multi-doc question.
+    const h = await makeMultiHarness({
+      docs: [
+        { file: 'statement-jan.txt', text: CLEAN },
+        { file: 'statement-feb.txt', text: CLEAN },
+        { file: 'notes.txt', text: 'Some notes.' }
+      ]
+    })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'who is Angela Merkel?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.content).not.toBe(t('en', 'skills.analysis.selectOne', { count: 3 }))
+    expect(h.runtime.calls).toBe(1)
+    // A4 teeth: the single-doc inversion never engages at multi-doc scope → no extraction force-run.
+    const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
+    expect(runs.n).toBe(0)
   })
 
   it('single-statement happy path is byte-unchanged — no W2 notice/routing leaks in', async () => {

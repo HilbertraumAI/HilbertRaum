@@ -546,9 +546,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   message, not hardcoded `relevance`). If any in-scope doc is **not** fully chunked the turn is
   **refused** with a fixed message pointing at Documents → Re-index — no partial answer, no model call
   (D45) — rather than silently answering from a few passages (for accounting, a partial read is a wrong
-  total). A tool skill answering an **off-topic** question keeps the ordinary relevance path unchanged;
-  an **intent-shaped** question over a **multi-document** scope is no longer silently degraded — it is
-  narrowed or routed (**W2**, audit §2.1, recorded below). `document-redaction` is an action skill: it registers a
+  total). **A4 (SKA-7 structural, audit §3.2/§8.2) finished the inversion for tool skills:** with the
+  bank/invoice skill active over a **single fully-chunked** document that **plausibly is** the skill's
+  class (it matches the skill's manifest doc signals, OR a persisted extraction already exists for it),
+  **every** non-small-talk question now reaches the handler — the phrasing (`routeMatch`) veto is retired,
+  so an on-topic money question that **misses** the ~45-term vocabulary is answered from the **verified
+  extract** (grounded-data, which post-W6 honestly declines an off-data question with "the data does not
+  carry that") instead of silently degrading to raw top-k chunks + model arithmetic (the pre-W3 incident
+  class, on the two highest-stakes skills). A document matching **no** signal and never extracted keeps the
+  ordinary relevance path (the W2 plausibility posture, inverted — a contract with the bank skill sticky is
+  never force-extracted on "who signed this?"); clear **small talk** ("danke") opts out too (no extraction,
+  no narration). An **intent-shaped** question over a **multi-document** scope is narrowed or routed
+  (**W2**, audit §2.1, recorded below). `document-redaction` is an action skill: it registers a
   **`routing`** handler (not an exhaustive one — D49a, 2026-06-22), so a redaction-shaped request
   returns a short answer pointing at its run button (no content read, no tool run, **no coverage
   badge**) instead of a top-k Q&A that lectured and falsely claimed a relevance-limited reading; the
@@ -688,8 +697,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   German money terms to the bank vocabulary (`wie viel`, `wie viele`, `zahlung`-stem, `bezahlt`, `ausgegeben`,
   `payment`) and `fällig`-stem/`due` to invoice, so an on-topic money/due question under an already-active
   tool skill reaches the handler instead of falling to raw top-k (§8.2 — route-only never touches the
-  suggestion offer). **The STRUCTURAL half of SKA-7 remains open for A4** (a phrasing miss with the tool
-  skill active can still fall to top-k; the "off-topic keeps relevance" framing is reworded there).
+  suggestion offer). **The STRUCTURAL half of SKA-7 was then closed in A4** (the tool-skill gate inversion
+  above): with the skill active over a plausibly-in-class single fully-chunked doc, a phrasing miss no
+  longer falls to top-k — it reaches the handler (grounded-data over the verified extract), so the widened
+  vocabulary is now belt-and-suspenders rather than the sole guard.
   **U1 (audit §2.3 / ux-10 / ux-11 / §3.6) made the completeness claim honest and stopped silent row drops
   from masquerading as exhaustive reads.** The bank + invoice extractors now record an additive
   `dropped_row_count` per extraction (`bank_statements`/`invoices`, nullable — pre-U1 rows read NULL and the
@@ -742,17 +753,38 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   with an analysis-mode skill active over a matching **fully-chunked** scope the whole-doc (or, at exactly
   two docs, compare) engine is the **DEFAULT**; keywords now play only two skill-agnostic roles —
   **(a)** `isSmallTalk` **opts out** clear chatter (a greeting/thanks/assistant-meta keeps the relevance
-  path), and **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k **only when** the
-  whole-doc read would truncate **and** no deep-index tree exists (a needle past the truncation cut would be
-  missed — W1's exact budget calculus is the input); a **deliverable** ask (summary/minutes/compare/…) never
-  downgrades. **Residuals (documented):** the off-topic opt-out is a bounded **small-talk** detector, so a
-  genuinely off-topic but non-chatter question (e.g. "what colour is the sky?") over a fully-chunked doc now
-  spends a whole-document read and answers "not covered" rather than degrading to top-k — the accepted cost
-  of recall over precision once the user has **explicitly** selected the skill; and both shape classifiers
-  are heuristic keyword lists (deliberately conservative — a false needle is worse than a false deliverable),
-  so an unusual phrasing of a needle over an over-budget doc can still take the truncated whole-doc read
-  (honest via W1's in-prompt "beginning only" notice), and the needle downgrade is applied to the single
-  whole-doc path only (compare keeps its diff-driven/whole-both read).
+  path), and **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k when the whole-doc
+  read would truncate (a needle past the truncation cut would be missed — W1's exact budget calculus is the
+  input); a **deliverable** ask (summary/minutes/compare/…) never downgrades.
+  **A4 (audit §3.2/§3.3) tuned this composition (SKA-8/SKA-12/SKA-23):**
+  **(SKA-8)** the `intends()` predicate — the **W2 count-mismatch routing** gate, consulted only at the
+  wrong doc count — was decoupled from `applies()` and made **vocabulary-shaped** (`routeMatch`) for the
+  whole-doc/compare handlers too (it had been `!isSmallTalk`, which made the W2 pre-pass intercept **every**
+  non-chatter question at multi-doc scope — a sticky instruction skill over a Library turned "who is Angela
+  Merkel?" into a "pick one document" dead-end and made the relevance/coverage-extract engines unreachable).
+  Now, at a wrong doc count, only a **vocabulary-shaped** question narrows/routes; a general/off-topic one
+  **falls through** to the ordinary engines. `applies()` keeps A3's single-doc inversion (any non-chatter
+  question over ONE doc still defaults to the engine). A user-imported skill has no routing vocabulary, so it
+  never W2-routes (falls through) but still gets the single-doc engine.
+  **(SKA-12)** the needle downgrade **dropped the "no ready tree" conjunct**: a needle prefers top-k
+  whenever the whole read would truncate, **tree or no tree** — a ~13-call map-reduce over lossy node
+  summaries is worse than one top-k retrieval for a single-fact lookup (the tree keeps rescuing
+  **deliverables**, which never reach the downgrade).
+  **(SKA-23)** the needle downgrade is now evaluated **before** the D45 fully-chunked refusal for
+  grounded-whole-doc handlers: a downgraded needle takes the relevance path, which makes **no** whole-document
+  claim, so D45's premise (a partial whole read passed off as complete) doesn't apply — a needle over a
+  not-fully-chunked doc is served by top-k, not refused; a **deliverable** over a not-fully-chunked doc keeps
+  the whole read and still hits the refusal.
+  **Residuals (documented):** the off-topic opt-out is a bounded **small-talk** detector, so a genuinely
+  off-topic but non-chatter question (e.g. "what colour is the sky?") over a fully-chunked doc — under an
+  instruction skill, OR now under a tool skill via the SKA-7 inversion when the doc is plausibly in-class —
+  spends a whole-document/extract read and answers "not covered" / "the data does not carry that" rather than
+  degrading to top-k, the accepted cost of recall over precision once the user has **explicitly** selected the
+  skill; a **row-specific needle** past the tool skill's ~150-row data-block cap gets the honest "N omitted"
+  note rather than the row; both shape classifiers are heuristic keyword lists (deliberately conservative — a
+  false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
+  can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
+  needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

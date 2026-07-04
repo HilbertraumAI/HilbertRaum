@@ -5251,6 +5251,19 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
    fully-chunked with an honest `scopeNarrowed` notice, else `selectOne`; `what-changed` at ≠2 →
    `selectTwo`) instead of silently degrading; a document-plausibility gate falls the bank/invoice
    run through to the ordinary grounded path when the doc matches no declared signal.
+   **A4 (2026-07-03 audit, SKA-7-structural/8/12/23 — detail in `docs/skills-audit-2026-07-03.md` §7, to
+   fold into this record's successor at that wave's close) finished the inversion for the TOOL skills and
+   refined the composition:** (SKA-7) with a bank/invoice skill active over a single fully-chunked doc that
+   is plausibly its class (`classMatches` — manifest signals OR a prior extraction; `singleDocMatchesSkillClass`),
+   EVERY non-small-talk question runs the handler even on a `routeMatch` miss (answered from the verified
+   extract, not top-k) — a separate chat-path composition, distinct from `intends()`; (SKA-8) `intends()` —
+   the W2 count-mismatch routing predicate — was decoupled from `applies()` and made VOCABULARY-shaped for
+   the whole-doc/compare handlers too, so a general/off-topic question at multi-doc scope falls through to
+   the ordinary engines instead of a "pick one document" dead-end; (SKA-12) the needle downgrade **dropped
+   the "AND no tree exists" conjunct** — a needle prefers top-k whenever the whole read would truncate, tree
+   or no tree (the tree rescues DELIVERABLES only); (SKA-23) the needle downgrade is evaluated **before** the
+   D45 fully-chunked refusal for grounded-whole-doc handlers (a downgraded needle makes no whole-document
+   claim, so the refusal's premise doesn't apply). Read-side only; no extractor-version bump; SEC-1 unchanged.
 
 3. **One trigger vocabulary, measured (§8.3 → W5/U4).** Before, two drifted keyword lists per skill
    (manifest triggers vs routing gates) matched by raw substring (§4.1/§3.2). Now

@@ -851,6 +851,22 @@ with a note), `rag-whole-doc-skill.test.ts` (a **user** `analysis: whole-doc` sk
 engine end-to-end through `askDocuments` — the manifest fallback), and `skills-analysis-whole-doc.test.ts`
 (`manifestAnalysisHandler` returns `undefined` for a tool skill and never carries the app-only PII scan).
 
+**A4 (skills-audit-2026-07-03 SKA-7 structural) — the tool-skill gate inversion changes WHICH questions
+reach an already-app-owned handler; it is NOT a new capability; SEC-1 is unchanged.** A4 finishes A3's
+inversion for the bank/invoice TOOL skills: with such a skill active over a single fully-chunked document
+that plausibly is the skill's class (it matches the skill's manifest doc signals, OR a persisted extraction
+already exists for it — `classMatches`/`singleDocMatchesSkillClass`), a question that MISSES the routing
+vocabulary now still reaches the app's exhaustive handler (grounded-data over the verified extract) instead
+of the top-k relevance path. This runs the SAME app-owned read-only tools the handler already auto-ran for a
+vocabulary-matching question — the export tier stays confirm-gated and user-initiated, tool registration
+stays `source === 'app'` via `skillCanRunTools`, and a user `kind:'tool'` skill still resolves to no handler
+and runs nothing (`classMatches` is defined only on the app-registered bank/invoice handlers). So the
+inversion widens the set of *questions* that hit an already-permitted, already-app-owned code path over the
+turn's frozen scope — it adds **no** new sink, no new tool, and weakens **no** `source`-gated decision. It
+sits **below** SEC-1, exactly like A3's engine choice. Pinned by `rag-skill-analysis.test.ts` /
+`rag-skill-analysis-invoice.test.ts` (the inversion runs the app handler over a signal-matching / prior-
+extracted doc; a no-signal doc keeps relevance and the extractor is never force-run).
+
 **R8 (skills-audit-2026-07-03 SKA-3) — redaction and the share-safe/dry-run counts now detect the
 common Unicode print variants of exactly the identifiers they exist to mask.** Before R8 the
 `tools/redaction.ts` detectors ran over the raw joined chunk text (D58 keeps redaction byte-verbatim,

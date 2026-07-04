@@ -308,7 +308,12 @@ describe('askDocuments — invoice analysis routing (full-doc-skills Phase 4)', 
     expect(runs.n).toBe(0)
   })
 
-  it('relevance path is byte-unchanged for an off-topic question (no handler fire)', async () => {
+  it('A4 (SKA-7 structural): a NON-vocabulary question over a signal-matching invoice inverts to grounded-data', async () => {
+    // Pre-A4 an on-topic-but-vocabulary-miss question over an active invoice skill fell to raw top-k. Now,
+    // because the document matches the invoice skill's manifest signals (`invoice.txt` / `*invoice*`), the
+    // gate INVERTS: the handler answers from the VERIFIED extract (grounded-data) — post-W6 it honestly
+    // declines an off-data question rather than doing top-k arithmetic. (The bank analogue is pinned in
+    // rag-skill-analysis.test.ts; here the harness already ships invoice doc signals.)
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -319,7 +324,29 @@ describe('askDocuments — invoice analysis routing (full-doc-skills Phase 4)', 
     )
     const msg = result as Message
 
-    expect(msg.coverage).toBeUndefined()
+    // The handler ran (grounded-data over the JSON), NOT the relevance path.
+    expect(msg.coverage?.mode).toBe('extract')
+    expect(h.runtime.calls).toBe(1)
+    const lastTurn = h.runtime.lastMessages[h.runtime.lastMessages.length - 1]
+    expect(lastTurn.content).toContain('Invoice (JSON):')
+    expect(msg.skillId).toBe(INVOICE_INSTALL_ID)
+  })
+
+  it('A4: a NON-vocabulary question over a NON-invoice doc (no signal, no prior extraction) keeps relevance', async () => {
+    // The doc matches none of the invoice manifest signals (a plain letter) and was never extracted → the
+    // phrasing gate stands (the W2 plausibility posture, inverted): the ordinary relevance path answers and
+    // the invoice extractor is never force-run.
+    const h = await makeHarness({ fullyChunked: true, file: 'letter.txt', text: 'Dear Sir, thank you for your correspondence regarding the matter at hand.' })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'who wrote this letter?',
+      INVOICE_INSTALL_ID
+    )
+    const msg = result as Message
+
+    expect(msg.coverage?.mode).not.toBe('extract')
     expect(msg.content).not.toContain(t('en', 'skills.invoiceAnalysis.count', { count: 2 }))
     const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
     expect(runs.n).toBe(0)

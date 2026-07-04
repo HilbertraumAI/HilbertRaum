@@ -27,6 +27,7 @@ import {
   fmt,
   loadCitationChunks,
   shouldFallThroughOnEmpty,
+  singleDocMatchesSkillClass,
   singleInScopeDocument
 } from './common'
 import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, SkillAnalysisResult } from './types'
@@ -440,11 +441,22 @@ export function buildInvoiceAnswer(
 }
 
 export const invoiceAnalysisHandler: SkillAnalysisHandler = {
+  mode: 'exhaustive',
   // The doc-count-agnostic intent (W2, audit §2.1): an analysis-shaped invoice question, regardless of
   // how many documents are in scope. `applies()` = this AND a single in-scope doc; when it fails ONLY on
   // the count, the chat path narrows to the best-matching invoice or routes (never a silent fall-through).
   intends(input: SkillAnalysisInput): boolean {
     return isAnalysisShaped(input.question)
+  },
+
+  // A4 (SKA-7 structural, audit §3.2/§8.2): the single-doc INVERSION gate (mirror of the bank handler). The
+  // single in-scope document is plausibly an invoice when it matches the skill's manifest doc signals OR a
+  // persisted extraction already exists for it (`latestInvoiceId`). When true and `applies()` is false (a
+  // phrasing miss), the chat path runs this handler anyway, so an on-topic invoice question that misses the
+  // vocabulary is answered from the verified extract (grounded-data), not raw top-k. A doc matching neither
+  // keeps the phrasing gate. No new capability, no new model call (SEC-1).
+  classMatches(input: SkillAnalysisInput, skillInstallId: string): boolean {
+    return singleDocMatchesSkillClass(input.db, skillInstallId, input.scope, (db, id) => latestInvoiceId(db, id) != null)
   },
 
   applies(input: SkillAnalysisInput): boolean {

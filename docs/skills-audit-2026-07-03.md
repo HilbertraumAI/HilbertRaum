@@ -270,13 +270,21 @@ no signal (the W2 plausibility posture, inverted).
 **Testing:** eval-corpus routing family for the misses; IPC test asserting no silent top-k with an
 active tool skill over a matching doc. **Docs:** §39-successor + known-limitations rewrite of the
 "off-topic keeps relevance" wording.
-**Status: VOCABULARY HALF FIXED in W7; STRUCTURAL HALF OPEN for A4.** W7 added the route-only terms
+**Status: VOCABULARY HALF FIXED in W7; STRUCTURAL HALF FIXED in A4.** W7 added the route-only terms
 (`wie viel`/`wie viele`/`zahlung`-stem/`bezahlt`/`ausgegeben`/`payment` to bank; `fällig`-stem/`due` to
 invoice; the bare separable imperatives `fasse`/`fass`/`liste` on both) so the probed misses now ROUTE
 under an already-active skill (§8.2 — route-only, no suggestion/offer churn), with routing assertions in
-`skills-vocabulary.test.ts`. The STRUCTURAL gate inversion (default every non-small-talk question into the
-handler; retire the phrasing veto; reword the "off-topic keeps relevance" framing) remains **A4** — a
-phrasing miss the widened vocabulary still doesn't cover can fall to top-k until then.
+`skills-vocabulary.test.ts`. **A4 then inverted the gate structurally** (`registerRagIpc.ts` +
+`analysis/{bank-statement,invoice}.ts` `classMatches` + `analysis/common.ts` `singleDocMatchesSkillClass`):
+with the tool skill active over a SINGLE fully-chunked doc that matches the skill's manifest doc signals OR
+already carries a persisted extraction, EVERY non-small-talk question runs the handler — the phrasing
+(`routeMatch`) veto is retired, so a vocabulary miss is answered from the verified extract (grounded-data,
+post-W6 honest) instead of top-k. A doc matching NEITHER signal keeps the phrasing gate (the W2 plausibility
+posture, inverted); `isSmallTalk` opts tool skills out (no extract-and-narrate on "danke"). No new capability
+(SEC-1) — it changes WHICH questions reach an already-app-owned handler; no extractor-version bump. IPC tests
+in `rag-skill-analysis.test.ts` / `rag-skill-analysis-invoice.test.ts` (signal-match → grounded-data; prior-
+extraction → grounded-data; no-signal → relevance, extraction NOT run; small talk → no extraction; zero-row
+on a signal doc → honest empty template).
 
 **SKA-8 — A3×W2 composition: a sticky instruction skill over a multi-doc scope turns EVERY non-chatter
 question into the selectOne/selectTwo dead-end — the relevance and coverage engines become unreachable.**
@@ -294,6 +302,16 @@ through to the ordinary engines (router → relevance). Alternatively append "or
 across all documents" to the selectOne/selectTwo copy as a stopgap.
 **Testing:** IPC test: instruction skill + multi-doc + cross-doc/off-topic question reaches relevance
 (or the improved copy). **Docs:** A3 residual paragraph.
+**Status: FIXED in A4** (`analysis/whole-doc-skills.ts` — the whole-doc/compare `intends()` predicate,
+consulted ONLY by the W2 count-mismatch pre-pass, was DECOUPLED from `applies()` and made VOCABULARY-shaped
+(`routeMatch(vocabId)`) instead of `!isSmallTalk`). At the wrong doc count only a vocabulary-shaped question
+narrows/routes; a general/off-topic one falls through to the ordinary engines (relevance/coverage-extract).
+`applies()` keeps A3's single-doc inversion (`!isSmallTalk` over one doc). Applied UNIFORMLY — the tool
+handlers were already vocabulary-shaped, so the SKA-7 inversion (single-doc only) imports no multi-doc
+dead-end. A user-imported instruction skill has no `vocabId` → never W2-routes (falls through), still gets
+the single-doc engine via `applies()`. IPC tests: instruction + multi-doc + off-topic → relevance not
+selectOne; tool + multi-doc + off-topic → relevance, no extraction; a vocabulary-shaped question at the
+wrong count STILL narrows/selectOne/selectTwo (the W2 regression suite is unchanged and green).
 
 **SKA-9 — German separable verbs evade the summary-template stems: "Fasse den Kontoauszug zusammen" /
 "Liste die Transaktionen auf" go to 4B narration instead of the D56-gated template.** · bug (routing) ·
@@ -345,6 +363,11 @@ elided the one date — minutes of CPU where top-k finds the exact passage in on
 deliverables; for a single-fact lookup it is strictly worse on cost and recall.
 **Fix:** drop the tree conjunct for needle-shaped questions (a needle prefers top-k whenever the whole
 read would truncate). **Testing:** needle+tree-ready IPC test. **Docs:** A3 bullet update.
+**Status: FIXED in A4** (`registerRagIpc.ts` — the `readyTreeCountInScope(...) === 0` conjunct was removed
+from the grounded-whole-doc `needleDowngrade`; a needle prefers top-k whenever the whole read would truncate,
+tree or no tree — the tree keeps rescuing DELIVERABLES, which never reach the downgrade). IPC test in
+`rag-whole-doc-skill.test.ts`: a needle over an over-budget doc WITH a ready tree now keeps top-k (no capped
+whole-document claim); teeth-checked (re-adding the conjunct → red).
 
 **SKA-13 — The geometry classifier reads small dot-decimal amounts (`1.12`, `5.04`) as DATES — amount
 dropped, balance-as-amount on dot-decimal (CH/UK/US) statements.** · bug (extraction/geometry) ·
@@ -481,6 +504,13 @@ the cache-prefix posture holds. Pinned prompt-string tests updated deliberately;
 needle over a worse-covered over-budget doc is served by top-k** (`registerRagIpc.ts:297-319` D45
 refusal precedes the `:339-344` needle downgrade; post-A3 every non-chatter question reaches it).
 Evaluate the needle downgrade before the D45 refusal for `grounded-whole-doc` handlers.
+**Status: FIXED in A4** (`registerRagIpc.ts` — for a `grounded-whole-doc` handler the `needleDowngrade` is
+now computed BEFORE the D45 fully-chunked refusal; the refusal (refactored into a `refusePartial()` closure)
+fires only for a NON-downgraded whole read. Rationale validated: a downgraded needle takes the relevance
+path, which makes NO whole-document claim, so D45's premise doesn't apply — and partially-chunked docs are
+legacy-only, already served by relevance on every non-skill turn. A DELIVERABLE over a partly-chunked doc
+keeps the refusal — it never downgrades. IPC tests in `rag-whole-doc-skill.test.ts`: needle + over-budget +
+not-fully-chunked → top-k (not refuse); deliverable + not-fully-chunked → refuse; teeth-checked both ways.)
 
 **SKA-24 — Cancel does not reach a run parked on the document lock** (`doc-lock.ts:65` `await wait` is
 not abort-aware): with a long categorize holding the lock, a cancelled queued run shows a dead spinner
@@ -635,7 +665,10 @@ Doc↔code mismatches found (fix the doc or the code, per the SKA item):
    ordinary relevance path", known-limitations + §39) silently includes on-topic vocabulary misses —
    after A4 (or if deferred), reword to make the phrasing-gate residual explicit (SKA-7). **W7 note:** the
    known-limitations W4 bullet now records the phrasing-gate residual explicitly (SKA-7 structural half
-   open for A4); the full reword of the "off-topic keeps relevance" wording lands with A4.
+   open for A4); the full reword of the "off-topic keeps relevance" wording lands with A4. **Fixed in A4:**
+   the "off-topic keeps relevance" framing is reworded to the inverted reality (a plausibly-in-class single
+   fully-chunked doc answers every non-small-talk question from the verified extract; only a no-signal /
+   never-extracted doc keeps relevance) in both the tool-skill bullet and the A3 residual paragraph.
 8. **document-redaction/SKILL.md** — English-only button name (SKA-42) + the stale S13a-era autoFire
    comment (SKA-45).
 9. If any SKA item is deferred rather than fixed, it must gain a known-limitations entry (the accepted-
@@ -751,7 +784,11 @@ space fixes; singular forms), both handlers' `isSummaryShaped` (separable-verb r
 precision bars asserted. Acceptance: probe strings route as intended; eval precision ≥ existing bars;
 never-fires-on-real-questions guard green. Docs: fix the flagship-example comments (§4.1).
 
-**A4 — Gate composition: finish the inversion (SKA-7 structural, SKA-8, SKA-12, SKA-23).**
+**A4 — Gate composition: finish the inversion (SKA-7 structural, SKA-8, SKA-12, SKA-23).** *(FIXED in A4 —
+branch `fix/skills2-a4`, all four stamped above; read-side routing only, NO extractor-version bump, NO T1
+snapshot interaction. Two DIFFERENT predicates for two decisions: the single-doc tool inversion is a chat-path
+composition keyed on `classMatches` (signal-or-extraction), while `intends()` stays the vocabulary-shaped W2
+count-mismatch predicate.)*
 Scope: `registerRagIpc.ts` + `analysis/{bank-statement,invoice}.ts` (tool-skill gate inversion over
 signal-matching/already-extracted single docs, small-talk opt-out; W2 pre-pass falls through to the
 ordinary engines for non-vocabulary questions at count-mismatch; needle downgrade before D45; drop the

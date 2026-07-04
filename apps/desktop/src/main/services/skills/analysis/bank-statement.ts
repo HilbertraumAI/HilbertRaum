@@ -35,6 +35,7 @@ import {
   fmt,
   loadCitationChunks,
   shouldFallThroughOnEmpty,
+  singleDocMatchesSkillClass,
   singleInScopeDocument
 } from './common'
 import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, SkillAnalysisResult } from './types'
@@ -700,11 +701,22 @@ export function buildBankAnswer(
 }
 
 export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
+  mode: 'exhaustive',
   // The doc-count-agnostic intent (W2, audit §2.1): an analysis-shaped bank question, regardless of how
   // many documents are in scope. `applies()` = this AND a single in-scope doc; when it fails ONLY on the
   // count, the chat path narrows to the best-matching statement or routes (never a silent fall-through).
   intends(input: SkillAnalysisInput): boolean {
     return isAnalysisShaped(input.question)
+  },
+
+  // A4 (SKA-7 structural, audit §3.2/§8.2): the single-doc INVERSION gate. The single in-scope document is
+  // plausibly a statement when it matches the skill's manifest doc signals OR a persisted extraction already
+  // exists for it (`latestBankStatementId`). When true and `applies()` is false (a phrasing miss), the chat
+  // path runs this handler anyway, so an on-topic money question that misses the vocabulary is answered from
+  // the verified extract (grounded-data) instead of raw top-k + 4B arithmetic. A doc matching neither keeps
+  // the phrasing gate (the W2 plausibility posture, inverted). No new capability, no new model call (SEC-1).
+  classMatches(input: SkillAnalysisInput, skillInstallId: string): boolean {
+    return singleDocMatchesSkillClass(input.db, skillInstallId, input.scope, (db, id) => latestBankStatementId(db, id) != null)
   },
 
   applies(input: SkillAnalysisInput): boolean {
