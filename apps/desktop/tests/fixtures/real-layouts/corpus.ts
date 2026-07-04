@@ -40,7 +40,9 @@ export const INCIDENT_CLASSES = [
   'midline-date', // a mid-line/trailing date read as the AMOUNT by the row money scan (R7, SKA-1)
   'ddmmyy-money-shape', // dd.mm.yy dates money-shaped + invisible to the date scrubs (R7, SKA-2)
   'dot-decimal-geometry', // geometry classifier ate d.dd amounts as dates on CH/UK/US statements (R7, SKA-13)
-  'money-bearing-header' // invoice vendor/number header labels swallowed money-bearing lines (R7, SKA-14)
+  'money-bearing-header', // invoice vendor/number header labels swallowed money-bearing lines (R7, SKA-14)
+  'dropped-row-honesty', // an unparseable money-bearing booking line must COUNT (droppedRowCount, U1/T2)
+  'contradicted-balance-claim' // printed opening/closing the rows refute — the D56 'contradicted' gate (T2)
 ] as const
 
 export type IncidentClass = (typeof INCIDENT_CLASSES)[number]
@@ -154,6 +156,56 @@ const bankDdmmyy: BankFixture = {
       '10.03.2026 Dauerauftrag Sparen -100,00',
       '15.03.26 bis 31.03.26 Zinsperiode',
       'Endsaldo 1.130,85 EUR per 31.03.26'
+    ].join('\n')
+  ]
+}
+
+/**
+ * Bawag-style AT statement with an OCR-MISREAD booking date (T2, skills-audit-2026-07-03 §5 / U1
+ * honesty): `31.02.2026` is date-SHAPED but invalid (Feb 31 — a 21→31 OCR confusion), so the
+ * Rücklastschrift row cannot parse. It IS money-bearing (`${MINUS}25,00`), so it must be COUNTED in
+ * `droppedRowCount` (the post-R7 LEADING_DATE_SHAPE + hasMoneyToken rule) — the whole-statement claim
+ * downgrades to the honest partial headline. No printed opening/closing balance (a transaction listing),
+ * so nothing outranks the gate (D56 'unverified'). Correct read: 2 rows (−19,15 / +2.100,00), dropped 1.
+ */
+const bankDroppedRow: BankFixture = {
+  id: 'bank-at-ocr-dropped-row',
+  kind: 'bank',
+  title: 'BAWAG — Umsatzliste (AT, OCR-garbled booking date)',
+  incidentClasses: ['dropped-row-honesty', 'nbsp', 'u2212'],
+  note: 'AT listing: an invalid-date (31.02.) money-bearing Rücklastschrift row must be dropped AND counted (droppedRowCount 1), never silently vanish.',
+  chunks: [
+    [
+      'BAWAG P.S.K. — Umsatzliste April 2026',
+      'Alle Beträge in EUR',
+      `02.04.2026 Kartenzahlung REWE${NBSP}${NBSP}${MINUS}19,15`,
+      `31.02.2026 SEPA-Rücklastschrift Strom${NBSP}${NBSP}${MINUS}25,00`,
+      `10.04.2026 SEPA-Gutschrift Gehalt${NBSP}${NBSP}2${NBSP}100,00`
+    ].join('\n')
+  ]
+}
+
+/**
+ * Sparkasse-style DE statement whose PRINTED closing balance the rows refute (T2, the D56
+ * 'contradicted' gate): opening 500,00 + Σ(−20,00 + 100,00) = 580,00, but the statement prints
+ * `Endsaldo 999,99` (a mis-scanned/garbled closing line — the class where trusting the document's own
+ * claim would present a wrong total as verified). Both rows parse cleanly (droppedRowCount 0), so the
+ * headline must be the CONTRADICTED count (not countPartial) and no total/echo may be presented.
+ */
+const bankContradicted: BankFixture = {
+  id: 'bank-de-contradicted-closing',
+  kind: 'bank',
+  title: 'Sparkasse — Kontoauszug (DE, widerlegter Endsaldo)',
+  incidentClasses: ['contradicted-balance-claim'],
+  note: 'DE statement: printed Endsaldo refutes opening + Σ(rows) — the read is suspect, so no total may be presented (D56 contradicted).',
+  chunks: [
+    [
+      'Sparkasse — Kontoauszug Nr. 5/2026',
+      'Buchungen in EUR',
+      'Anfangssaldo 500,00 EUR',
+      '02.05.2026 Kartenzahlung REWE -20,00',
+      '05.05.2026 SEPA-Gutschrift Erstattung 100,00',
+      'Endsaldo 999,99 EUR'
     ].join('\n')
   ]
 }
@@ -368,7 +420,7 @@ const geometryDotDecimal: GeometryBankFixture = {
 }
 
 /** Every bank fixture, in stable order. */
-export const BANK_FIXTURES: BankFixture[] = [bankElba, bankSparkasse, bankDdmmyy]
+export const BANK_FIXTURES: BankFixture[] = [bankElba, bankSparkasse, bankDdmmyy, bankDroppedRow, bankContradicted]
 
 /** Every invoice fixture, in stable order. */
 export const INVOICE_FIXTURES: InvoiceFixture[] = [invoiceSteuer, invoiceSwiss, invoicePhantom, invoiceMoneyHeaders]

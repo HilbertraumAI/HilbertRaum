@@ -221,6 +221,51 @@ describe('invoice — the run seams (extract → validate → export) on a real 
     expect((events as Array<{ type: string }>).map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
   })
 
+  it('a persist failure under replaceExisting rolls back to the PREVIOUS invoice — old rows survive, readable (T2)', async () => {
+    // The invoice half of the A9 atomic-swap claim (parity with the bank test in skills-run.test.ts):
+    // the replaceExisting DELETE and the fresh INSERTs share one transaction, so a mid-swap failure —
+    // injected on the fresh LINE-ITEMS insert, after the delete AND the new parent row — must roll back
+    // to the prior invoice intact. Teeth: drop the engine's ROLLBACK (or move the delete out of the
+    // transaction) → red.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT)
+    const { audit } = capturingAudit()
+    const first = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit })
+    expect(first.ok).toBe(true)
+    const oldId = first.invoiceId!
+
+    const real = db.prepare.bind(db)
+    const target = db as unknown as { prepare: Db['prepare'] }
+    target.prepare = ((sql: string) => {
+      if (/INSERT INTO invoice_line_items/i.test(sql)) throw new Error('injected persist failure')
+      return real(sql)
+    }) as Db['prepare']
+    let second
+    try {
+      second = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit, replaceExisting: true })
+    } finally {
+      target.prepare = real
+    }
+    expect(second.ok).toBe(false)
+    expect(second.errorCode).toBe('persistFailed')
+    expect(second.error).toBe('This invoice could not be saved. Nothing was changed.')
+
+    // The PREVIOUS invoice survived the rollback — same id, both line items, still the latest.
+    const invs = db.prepare('SELECT id FROM invoices WHERE document_id = ?').all(docId) as Array<{ id: string }>
+    expect(invs.map((i) => i.id)).toEqual([oldId])
+    expect(latestInvoiceId(db, docId)).toBe(oldId)
+    const items = db
+      .prepare('SELECT description, line_total FROM invoice_line_items WHERE invoice_id = ? ORDER BY row_index')
+      .all(oldId) as Array<{ description: string; line_total: number }>
+    expect(items).toEqual([
+      { description: 'Widget A', line_total: 25 },
+      { description: 'Consulting hours', line_total: 300 }
+    ])
+    // The failed run reached a terminal status (B4).
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(second.runId) as { status: string }
+    expect(run.status).toBe('failed')
+  })
+
   it('a downstream tool fails friendly when no invoice has been extracted yet', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, INVOICE_TEXT)

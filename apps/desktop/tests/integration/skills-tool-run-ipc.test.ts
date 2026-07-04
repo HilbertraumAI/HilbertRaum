@@ -818,6 +818,92 @@ describe('skills tool-run IPC — U6 run lifecycle (SKA-6/17/25/29)', () => {
   })
 })
 
+// T2 (skills-audit-2026-07-03 §3.3 run-lifecycle gaps) — the A2 per-document concurrency semantics
+// pinned at the REAL IPC layer (the unit tier already covers the controller): the concurrency key is
+// the DOCUMENT, not the conversation — two conversations resolving to the SAME document collide (the
+// second is refused busy, with the running handle to re-adopt), while different documents run
+// concurrently from different conversations.
+describe('skills tool-run IPC — two conversations, same document (A2 semantics, T2)', () => {
+  const STATEMENT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'
+
+  it('a second conversation on the SAME document is refused busy — conversation-independent keying', async () => {
+    // Teeth: key the controller's slot map on conversationId (or drop the per-document refusal) → the
+    // second start succeeds → red.
+    const { db, skillInstallId, conversationId: convA } = makeHarness(STATEMENT)
+    const docId = (db.prepare('SELECT id FROM documents LIMIT 1').get() as { id: string }).id
+    const convB = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } }).id
+
+    await runTool(skillInstallId, convA, 'extract_transactions') // give the export data
+    // Hold a run on the document open (conversation A's export parked on the save dialog).
+    let openGate = (): void => {}
+    dialogState.gate = new Promise<void>((res) => {
+      openGate = () => res()
+    })
+    const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'export_transactions_csv',
+      conversationId: convA,
+      confirmed: true
+    })
+    const startA = startRaw as StartSkillRunResult
+    if (!startA.started) throw new Error('expected conversation A’s export to start')
+
+    // Conversation B resolves to the SAME document → refused busy, carrying A's handle for re-adopt.
+    const { result: busyRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'validate_statement_balances',
+      conversationId: convB
+    })
+    const busy = busyRaw as StartSkillRunResult
+    expect(busy.started).toBe(false)
+    if (busy.started) throw new Error('expected a busy refusal')
+    expect('error' in busy && busy.error).toBe(t('en', 'main.skills.run.busy'))
+    expect('runningHandle' in busy && busy.runningHandle).toBe(startA.run.runHandle)
+
+    // Release the dialog; once A is terminal + cleared, conversation B's turn proceeds normally.
+    openGate()
+    dialogState.gate = undefined
+    await pollUntilTerminal(startA.run.runHandle)
+    await invoke(handlers, IPC.clearSkillRun, startA.run.runHandle)
+    const after = await runTool(skillInstallId, convB, 'validate_statement_balances')
+    expect(after.state).toBe('done')
+  })
+
+  it('DIFFERENT documents from different conversations run concurrently (no cross-conversation serialization)', async () => {
+    const TWO_TXN = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+    const { db, skillInstallId, docIds } = makeMultiDocHarness([STATEMENT, TWO_TXN])
+    const convA = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docIds[0]] } }).id
+    const convB = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docIds[1]] } }).id
+
+    await runTool(skillInstallId, convA, 'extract_transactions')
+    // Hold conversation A's export on its document open…
+    let openGate = (): void => {}
+    dialogState.gate = new Promise<void>((res) => {
+      openGate = () => res()
+    })
+    const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'export_transactions_csv',
+      conversationId: convA,
+      confirmed: true
+    })
+    const startA = startRaw as StartSkillRunResult
+    if (!startA.started) throw new Error('expected conversation A’s export to start')
+
+    // …while conversation B's run on the OTHER document starts AND finishes alongside it.
+    const finalB = await runTool(skillInstallId, convB, 'extract_transactions')
+    expect(finalB.state).toBe('done')
+    expect(finalB.transactionCount).toBe(2) // it really ran against document B
+
+    // A is still in flight the whole time (per-document isolation, not app-wide serialization).
+    const stateA = (await invoke(handlers, IPC.getSkillRun, startA.run.runHandle)).result as SkillRunState
+    expect(stateA.state).toBe('running')
+    openGate()
+    dialogState.gate = undefined
+    await pollUntilTerminal(startA.run.runHandle)
+  })
+})
+
 // U-2 — a read-only "Extract transactions" click must NOT silently start the LLM categorizer in the
 // background. The Phase-33 auto-offer that enqueued a `categorize` doctask on extract is removed; the
 // categorize is now an explicit one-tap follow-up on the run-bar result row (SkillRunBar.test.tsx).

@@ -739,6 +739,14 @@ rejected in title/description/author at manifest validation + ignored-with-note 
 the identical all-chunks read + KMP de-overlap + token estimate; twice more per compare): two full ~MB
 text passes per needle-shaped turn before any model call. Cache the de-overlapped token total per
 document (invalidate on re-chunk).
+**Status: DOCUMENTED RESIDUAL (T2 decision: accept — no cache).** The sanctioned rider was weighed and
+declined: the two passes are milliseconds of in-memory string work per turn, dominated by the model call
+that follows (seconds to minutes on CPU — the audit's own §6 ranking calls the class perceived-perf, not
+hot-path), while a memoized per-document total needs invalidation at every chunk-mutation site (re-index
+`ingestion/index.ts:755`, purge `:1523`, plus any direct `chunks` UPDATE — a pattern that exists) and a
+STALE total silently mis-sizes the needle downgrade and the compare budget split. A correctness-adjacent
+risk for an imperceptible win, in a test-infra phase. known-limitations.md records it; revisit only if
+profiling ever shows the scan itself hot.
 
 ### 3.4 Info
 
@@ -770,6 +778,10 @@ items (stale SKILL.md `autoFire` comment, `buildSkillFence` O(n²), RTL/bidi tit
 Unicode bidi direction controls rejected in every displayed frontmatter string (title/description/
 author/language; ignored-with-note in localized overrides). The `buildSkillFence` O(n²) growth loop
 stays open (bounded by the 64 KiB cap; a perf micro, not a correctness item) — T2/R9 candidate.
+**T2 close (last sub-item): the `buildSkillFence` O(n²) loop is a DOCUMENTED RESIDUAL** — bounded by the
+64 KiB body cap (hostile-input worst case ~100–300 ms, once per turn); known-limitations.md records it.
+With that, every SKA-45 sub-item — and every SKA-1…SKA-45 item of this audit — carries a disposition
+(fixed-in-phase or documented residual).
 
 ---
 
@@ -834,17 +846,31 @@ suites assert behavior (figures, masks, routes), not internals.
   droppedRowCount × grounded-data matrix — both domains, incl. the bank D56-outranks cell — in
   `rag-grounded-data.test.ts` unit tests + `skills-analysis-{bank,invoice}.test.ts` integration turns;
   mixed-currency invoice echo unit-tested via the pure builder. The user-`kind:tool` IPC test remains a
-  T2 gap.)*
+  T2 gap.)* *(T2 closed the remainder: the SEC-1 user-`kind:tool` end-to-end IPC test — an enabled user
+  tool skill declaring `analysis: whole-doc` over a matching doc takes plain relevance, no handler, no
+  tool run — and the mixed-currency grounded-data IPC pin — the persisted turn carries NO cashflow echo;
+  both in `rag-skill-analysis.test.ts`.)*
 - *Routing:* no format+explanatory test (SKA-10); no instruction-skill+multi-doc+off-topic IPC test
   (SKA-8); no needle+tree-ready test (SKA-12); `skills-analysis-bank.test.ts:743` exercises
   "what was my biggest payment?" by calling `run()` directly — a **production-unreachable string**
   (fails `applies()`), so the test validates a path no user can reach (SKA-7).
+  *(W7/A4 landed the routing tests; T2 repaired the reachability: the :743 test now ASSERTS
+  `applies()` before `run()` — post-W7 the string routes, and a vocabulary regression reds the test
+  instead of silently re-pinning an unreachable path. A T2 sweep of every other question the bank +
+  invoice analysis suites drive through `run()` found all pass `applies()` — this was the only bypass;
+  the whole-doc/redaction suites assert `applies()`/`intends()` explicitly already.)*
 - *Extractor fixtures:* the corpus has no dd.mm.yy balance/period lines (SKA-1/2), no dot-decimal
   geometry statement (SKA-13), no money-bearing vendor/number header line (SKA-14), no Unicode
   redaction fixtures (SKA-3), and no fixture with `droppedRowCount > 0` or a `contradicted` gate.
   *(R7 closed the first three: `bank-at-ddmmyy-period-balance`, `bank-ch-geometry-dot-decimal` — the
   geometry fixtures now snapshot through the real `reconstructPage` pipeline — and
   `invoice-de-ddmmyy-money-headers`. SKA-3 fixtures are R8's; droppedRowCount>0 / contradicted are T2's.)*
+  *(T2 landed the last two: `bank-at-ocr-dropped-row` — an invalid-date money-bearing row is dropped AND
+  counted (droppedRowCount 1) — and `bank-de-contradicted-closing` — a printed Endsaldo the rows refute.
+  Both snapshot through the production extractor as NEW entries with NO version bump (the guard accepts
+  new keys cleanly — verified additive-only diff), and both run end-to-end through the analysis handler:
+  the U1 countPartial/countContradicted headlines on the template path and the W6 postscript echo
+  suppression on the contradicted statement's grounded-data path.)*
 - *Lifecycle:* discovery-survives-a-bad-folder (SKA-16); case-folded zip duplicate (SKA-30); YAML
   canary sentinel (SKA-31); import→export→re-import round-trip (SKA-34); trimming the REAL SKILL.md
   bodies through `buildSkillFence` (SKA-15). *(ALL landed in U7 — plus the file-vs-dir casing merge,
@@ -855,11 +881,25 @@ suites assert behavior (figures, masks, routes), not internals.
   `extractor_version = CURRENT+1` downgrade; persist-failure-keeps-old-extraction under
   `replaceExisting`; cancel(null) blast radius; two-conversations-same-document via IPC (all run-seam
   lens, §3.3).
+  *(ALL closed: U6 landed renderer-reload-mid-run [`listSkillRuns` re-adopt] and the cancel(null)
+  boundary no-op [SKA-25 IPC test]; R9 landed the CURRENT+1 downgrade pin [SKA-26]; T2 landed the
+  rejecting-runner → 'failed' and throw-after-abort → 'cancelled' controller edges
+  [skills-run-controller.test.ts], persist-failure-keeps-old under `replaceExisting` for BOTH domains —
+  the injected mid-swap failure rolls back to the intact prior statement/invoice
+  [skills-run.test.ts / skills-invoice.test.ts] — and two-conversations-same-document through the real
+  startSkillRun IPC: same document busy-refused conversation-independently (with the running handle),
+  different documents concurrent [skills-tool-run-ipc.test.ts].)*
 - *Renderer:* the routed-run relay effect (C1/C2/ux-6 pinning) has zero renderer tests; store
   concurrency/poll-error paths untested; documents-mode undo arg untested end-to-end.
+  *(Closed in U6 — the ChatScreen-level relay/acknowledge-ordering tests, the per-run store
+  concurrency/poll-resilience tests, and the undo placement tests.)*
 - *T1 snapshot guard robustness (Low):* same-commit fixture edits exempt an extractor change from the
   version bump; the committed hash is trusted, never recomputed — add a `sha256(stableStringify(output))
   == hash` self-check and pin recorded versions to the constants.
+  *(Closed in T2: both self-checks landed in `extractor-realworld.test.ts` — a hand-edited hash and a
+  stale recorded version each fail the default suite (teeth-checked). The input-edit exemption is
+  RECORDED as accepted — inherent to corpus upkeep; the acceptance is documented in the test file +
+  known-limitations.)*
 
 **Over-mocking:** none found worth flagging — the integration suites drive real SQLite + real parsers;
 prompt-string pins are deliberate (cache-prefix contract).
@@ -983,6 +1023,16 @@ persist-failure-keeps-old test, cancel(null) pin, routed-relay renderer tests, t
 production-unreachable bank test string swap, corpus additions not landed by R7/W7 (droppedRowCount>0
 and `contradicted` fixtures). Acceptance: every new test fails on revert of its target fix
 (teeth-check), suite green.
+*(DONE in T2 — branch `fix/skills2-t2`, TEST-INFRA ONLY (zero production-source changes, no extractor
+bump; the T1 snapshot diff is additive-only). Landed: the two snapshot self-checks; the rejecting-runner
+and throw-after-abort controller edges; persist-failure-keeps-old for BOTH domains;
+two-conversations-same-document + different-documents-concurrent via the real IPC; the
+`bank-at-ocr-dropped-row` + `bank-de-contradicted-closing` corpus fixtures with U1/W6 end-to-end
+assertions; the SEC-1 user-`kind:tool` and W6 mixed-currency IPC pins; and the :743 reachability repair
+(+ a sweep proving it was the only run()-direct bypass). Items already covered by earlier phases were
+stamped rather than re-landed: cancel(null) + routed-relay renderer tests (U6), CURRENT+1 downgrade (R9).
+Decisions: SKA-43 accepted as a perf residual (no cache — see §3.3 stamp) and the SKA-45 fence-loop
+residual recorded; ALL 45 SKA items now dispositioned.)*
 
 ## 8 Recommended execution order
 

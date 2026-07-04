@@ -239,6 +239,38 @@ describe('real-layout corpus — figures parse correctly through the real extrac
     expect(out.droppedRowCount).toBe(0)
   })
 
+  it('bank-at-ocr-dropped-row: an invalid-date money-bearing row is dropped AND counted — droppedRowCount 1 (T2, U1)', () => {
+    // T2 (skills-audit-2026-07-03 §5): the corpus finally carries a droppedRowCount > 0 statement. The
+    // `31.02.2026` Rücklastschrift line is date-SHAPED (LEADING_DATE_SHAPE) and money-bearing
+    // (hasMoneyToken) but cannot parse (Feb 31) — it must be counted, never silently vanish.
+    // Teeth: revert U1's droppedWithFigure counting (or the R7 SHAPE gate) → dropped reads 0 → red.
+    const out = runBank(BANK_FIXTURES[3])
+    expect(out.currency).toBe('EUR')
+    expect(out.transactions).toHaveLength(2)
+    expect(out.transactions.map((t) => t.description)).toEqual(['Kartenzahlung REWE', 'SEPA-Gutschrift Gehalt'])
+    // NBSP grouping + U+2212 signs still hold on the kept rows (R1) — the dropped line stole nothing.
+    expect(out.transactions.map((t) => t.amount)).toEqual([-19.15, 2100])
+    // The one unreadable money-bearing line is COUNTED (the honesty signal the analysis gate consumes).
+    expect(out.droppedRowCount).toBe(1)
+    // A listing prints no opening/closing balance — nothing may invent one.
+    expect(out.openingBalance).toBeUndefined()
+    expect(out.closingBalance).toBeUndefined()
+  })
+
+  it('bank-de-contradicted-closing: rows + printed balances all parse; the refuted Endsaldo is served AS PRINTED (T2, D56)', () => {
+    // The extractor is a faithful reader: it reports the printed opening/closing VERBATIM even when the
+    // rows refute them — the 'contradicted' verdict is the ANALYSIS layer's (assessCompleteness), pinned
+    // end-to-end in skills-analysis-bank.test.ts. Here: both rows parse (dropped 0), opening 500,
+    // closing 999.99 (the refuted print), Σ(rows) = 80 ≠ 499.99.
+    const out = runBank(BANK_FIXTURES[4])
+    expect(out.currency).toBe('EUR')
+    expect(out.transactions).toHaveLength(2)
+    expect(out.transactions.map((t) => t.amount)).toEqual([-20, 100])
+    expect(out.droppedRowCount).toBe(0)
+    expect(out.openingBalance).toBe(500)
+    expect(out.closingBalance).toBe(999.99)
+  })
+
   it('bank-ch-geometry-dot-decimal: d.dd amounts survive the geometry path; in-band d.dd stays the date (R7, SKA-13)', () => {
     const out = runGeometryBank(GEOMETRY_BANK_FIXTURES[0])
     expect(out.currency).toBe('CHF')
@@ -369,6 +401,39 @@ describe('extractor output snapshot — any output change forces a version bump 
 
     it('the committed snapshot covers exactly the current corpus', () => {
       expect(Object.keys(committed.fixtures).sort()).toEqual(Object.keys(fresh.fixtures).sort())
+    })
+
+    // T2 (skills-audit-2026-07-03, §5 closing bullet) — the guard's SELF-CHECKS. The per-fixture
+    // comparison below trusts two committed artifacts it never verified: (a) each entry's `hash` field —
+    // hand-editing it to match a drifted output would silence the version-bump rule while the committed
+    // `output` quietly lies; and (b) the file's recorded extractor versions — after a bump whose fixtures
+    // all kept byte-identical output, a stale snapshot would stay green forever, disarming the
+    // "bump ⇒ regenerate in the SAME commit" rule at exactly the moment output next moves.
+    // Teeth-checked (T2): flip one hex digit of a committed hash → (a) reds; set the snapshot's
+    // bankExtractorVersion to CURRENT−1 → (b) reds.
+    // ACCEPTED (recorded, not closed): the same-commit INPUT-edit exemption stands — an edited fixture
+    // exempts its OWN output change from the bump (`inputHash` differs ⇒ corpus upkeep, not an extractor
+    // change). That exemption is inherent to legitimate corpus maintenance; smuggling an extractor change
+    // through it would require also editing a fixture, which the corpus half of the diff makes visible.
+    it('self-check (a): every committed hash equals sha256(stableStringify(output)) — a hand-edited hash fails', () => {
+      for (const [id, entry] of Object.entries(committed.fixtures)) {
+        expect(
+          sha256(stableStringify(entry.output)),
+          `snapshot entry "${id}": the committed hash does not match its own committed output — ` +
+            'the snapshot file was hand-edited; regenerate it instead'
+        ).toBe(entry.hash)
+      }
+    })
+
+    it('self-check (b): the snapshot records the CURRENT extractor versions — a stale snapshot after a bump fails loudly', () => {
+      expect(
+        committed.bankExtractorVersion,
+        'BANK_EXTRACTOR_VERSION moved but the committed snapshot was not regenerated in the same commit'
+      ).toBe(BANK_EXTRACTOR_VERSION)
+      expect(
+        committed.invoiceExtractorVersion,
+        'INVOICE_EXTRACTOR_VERSION moved but the committed snapshot was not regenerated in the same commit'
+      ).toBe(INVOICE_EXTRACTOR_VERSION)
     })
 
     for (const [id, cur] of Object.entries(fresh.fixtures)) {

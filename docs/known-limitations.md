@@ -317,6 +317,26 @@ password recovery — are documented in
   being pre-filtered into 'Transfer' (same rails-not-merchant semantics; the offline deterministic
   fallback still labels it Transfer). No extractor bump; the T1 snapshot is untouched (categories are not
   extraction output).
+- **Eval & test-infra sweep close (skills-audit-2026-07-03 T2) — two accepted residuals + one recorded
+  test-guard acceptance.** **(SKA-43, decision: accept — no cache)** the needle-downgrade calculus still
+  re-scans the document per needle-shaped turn (`documentApproxTokenTotal`'s all-chunks read + KMP
+  de-overlap, then `retrieveWholeDocument` repeating the same pass; twice more per compare). NOT cached:
+  the passes are milliseconds of in-memory string work against the model call the turn then makes
+  (seconds to minutes on CPU), while a memoized per-document token total would need invalidation at every
+  chunk-mutation site (re-index, purge — plus any direct `chunks` UPDATE) and a STALE total would silently
+  mis-size the needle downgrade and the compare budget split: a correctness-adjacent risk bought for an
+  imperceptible win. Revisit only if profiling ever shows the scan itself hot. **(SKA-45, last open
+  sub-item)** the `buildSkillFence` O(n²) growth loop stays as written — bounded by the 64 KiB body cap
+  (hostile-input worst case ~100–300 ms, once per turn), a perf micro, not a correctness item. With these
+  two recorded, every SKA-1…SKA-45 item of the 2026-07-03 audit is dispositioned (fixed or documented
+  residual). **(T1 snapshot guard — accepted input-edit exemption)** editing a fixture in the same commit
+  exempts its OWN output change from the extractor-version bump (the `inputHash` discriminator): that is
+  inherent to legitimate corpus upkeep, and smuggling an extractor change through it would require a
+  visible fixture edit in the same diff. The two REAL guard gaps are closed by T2's self-checks: each
+  committed hash is recomputed against its own committed output, and the snapshot's recorded extractor
+  versions are pinned to the live constants — a hand-edited hash or a bump-without-regenerate now fails
+  the default suite.
+- **Extractor evaluation infrastructure — a real-layout corpus, an output-snapshot version-bump guard, and an
   opt-in real-model smoke (Skills T1, audit §7 recs 1/2/5).** The recurring wrong-figure incidents
   (INVOICE-TOTALS-1, HVB zero-transactions, the §5.3 NBSP/Unicode family) were real-LAYOUT features that
   post-hoc synthetic fixtures never carried, and no skill path was ever exercised against a real model (the

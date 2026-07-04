@@ -17,6 +17,7 @@ import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/sk
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
+import { BANK_FIXTURES } from '../fixtures/real-layouts/corpus'
 
 // full-doc-skills plan §3.1, Phase 2 — the analysis-handler seam + bank handler, driven DIRECTLY (no
 // IPC, no chat wiring). Seeds the `chunks` table (the legacy reader path — no segment reader injected),
@@ -739,9 +740,14 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
       'Statement EUR\nOpening balance 2.000,00\n03.05.2026 Grocery -45,90 1.954,10\n' +
         '04.06.2026 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
     )
-    const res = await bankStatementAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'what was my biggest payment?')
-    )
+    // T2 reachability pin (SKA-7 history): pre-W7 this exact string FAILED applies() — the test called
+    // run() directly and so pinned a production-UNREACHABLE path. W7's `zahlung`/payment route stems made
+    // it reachable; this assertion keeps it that way — if the vocabulary ever regresses, this reds instead
+    // of the suite silently validating a path no user can reach. (A T2 sweep checked every other question
+    // this suite drives through run(): all pass applies() — this was the only historic bypass.)
+    const question = 'what was my biggest payment?'
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
     expect(res.mode).toBe('grounded-data')
     // Both the deterministic in/out/net echo AND the R5 caveat ride the postscript (R5 honesty preserved).
     expect(res.postscript).toContain('2454.10')
@@ -868,6 +874,61 @@ describe('bank-statement W7 answer-shape tuning (SKA-9/SKA-10/SKA-20)', () => {
       ctxFor(db, { documentIds: [id] }, 'break down spending by category')
     )
     expect(res.mode).toBeUndefined() // 'by category' still routes to the template
+  })
+})
+
+// T2 (skills-audit-2026-07-03 §5/§7) — the REAL-LAYOUT honesty fixtures end-to-end: the same corpus
+// statements the extractor snapshot pins (tests/fixtures/real-layouts/corpus.ts) run through the FULL
+// analysis handler, so the U1 partial/contradicted headlines and the W6 postscript suppression are
+// proven over realistic layouts, not only the constructed one-liners above. Questions here are
+// production-reachable (they pass applies() — asserted, the T2 reachability discipline).
+describe('bank-statement analysis over the real-layout corpus (T2 — U1 headlines + W6 suppression)', () => {
+  const fixtureText = (id: string): string => {
+    const fx = BANK_FIXTURES.find((f) => f.id === id)
+    if (!fx) throw new Error(`corpus fixture ${id} missing`)
+    return fx.chunks.join('\n')
+  }
+
+  it('bank-at-ocr-dropped-row: the template headline is the honest countPartial (2 kept, 1 dropped) — U1 e2e', async () => {
+    // Teeth: revert U1's countPartial gate (headline always the plain count) → red.
+    const db = freshDb()
+    const id = seedDoc(db, fixtureText('bank-at-ocr-dropped-row'))
+    const question = 'summarize the cashflow'
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countPartial', { count: 2, dropped: 1 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    // No printed balance → the totals stay a clearly-labelled unverified sum, never a verified total.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 2 }))
+  })
+
+  it('bank-de-contradicted-closing: the template headline is countContradicted and NO total is presented — U1/D56 e2e', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, fixtureText('bank-de-contradicted-closing'))
+    const question = 'summarize the cashflow'
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
+    // dropped 0 + a refuted printed balance → the CONTRADICTED headline (not countPartial, not plain).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countContradicted', { count: 2 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    // The body refuses a total (the D56 downgrade) — net 80.00 must never be presented.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain('80.00')
+  })
+
+  it('bank-de-contradicted-closing: the grounded-data postscript SUPPRESSES the figure echo — W6 e2e', async () => {
+    // Teeth: revert W6's status-gated buildCashflowPostscript (echo unconditional) → red.
+    const db = freshDb()
+    const id = seedDoc(db, fixtureText('bank-de-contradicted-closing'))
+    const question = 'what was my largest transaction?' // non-summary shape → grounded-data
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
+    expect(res.mode).toBe('grounded-data')
+    // No app-authored in/out/net rides under the model answer on a statement the balances refute.
+    expect(res.postscript).not.toContain('80.00')
+    expect(res.postscript).not.toContain('computed')
+    // The data block still hands the model the honest contradicted verdict to narrate.
+    expect(res.dataBlock).toContain('NOT verified as the whole statement')
   })
 })
 

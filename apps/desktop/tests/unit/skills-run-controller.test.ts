@@ -81,6 +81,40 @@ describe('SkillRunController (S11b)', () => {
     expect(c.get(runHandle)!.count).toBe(3)
   })
 
+  // T2 (skills-audit-2026-07-03 §3.3 run-lifecycle gaps) — the two previously-untested finish() paths.
+  it('a runner whose promise REJECTS is mapped to failed by the .catch → finish({ok:false}) path (T2)', async () => {
+    // The seam normally resolves a failure envelope; an UNEXPECTED throw (a bug past the seam's own B4
+    // guards) must still terminate the run — never leave the renderer polling 'running' forever.
+    // Teeth: drop the `.catch(...)` in start() → the run never goes terminal → waitForTerminal throws.
+    const c = new SkillRunController()
+    const runner: ToolRunner = async () => {
+      throw new Error('seam blew up unexpectedly')
+    }
+    const { runHandle } = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-a', documentCount: 1, runner })
+    expect(await waitForTerminal(c, runHandle)).toBe('failed')
+    // The thrown error's text never crosses (content-free posture) — the fixed friendly copy stands in.
+    const final = c.get(runHandle)!
+    expect(final.error).toBe('This tool could not finish. Nothing was changed.')
+    expect(final.error).not.toContain('seam blew up')
+  })
+
+  it('a runner that THROWS after abort (no cancelled flag) is cancelled via the signal.aborted fallback, not failed (T2)', async () => {
+    // A cancel that lands mid-work can surface as a REJECTION (an aborted fetch/write throwing) rather
+    // than a calm `{ok:false, cancelled:true}` envelope. The .catch has no outcome flag to read, so
+    // finish() must fall back to `controller.signal.aborted` — the user pressed Cancel and must see
+    // "cancelled", never a red "failed". Teeth: drop the `|| controller.signal.aborted` fallback in
+    // finish() → this reds with state 'failed'.
+    const c = new SkillRunController()
+    const runner: ToolRunner = ({ signal }) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('interrupted mid-write')))
+      })
+    const { runHandle } = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-a', documentCount: 1, runner })
+    c.cancel(runHandle)
+    expect(await waitForTerminal(c, runHandle)).toBe('cancelled')
+    expect(c.get(runHandle)!.error).toBeUndefined() // a calm cancel carries no failure copy
+  })
+
   it('refuses a second run on the SAME document while one is in flight (per-document one-at-a-time)', () => {
     const c = new SkillRunController()
     const runner: ToolRunner = ({ signal }) =>

@@ -124,6 +124,60 @@
         "closingBalance": 1130.85
       }
     },
+    "bank-at-ocr-dropped-row": {
+      "kind": "bank",
+      "inputHash": "0df7a8b089c7a31f75f2d4d4e0439ad65d7c04ecba6b00114a413c9fd06747bd",
+      "hash": "d2b95a6c5de1bc81d3e4de61a014021cbe66e7dc257fc55c755d4c1f9779b6cc",
+      "output": {
+        "transactions": [
+          {
+            "date": "2026-04-02",
+            "description": "Kartenzahlung REWE",
+            "amount": -19.15,
+            "currency": "EUR",
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-04-10",
+            "description": "SEPA-Gutschrift Gehalt",
+            "amount": 2100,
+            "currency": "EUR",
+            "sourcePage": 1
+          }
+        ],
+        "dateOrderInferred": "evidence",
+        "droppedRowCount": 1,
+        "currency": "EUR"
+      }
+    },
+    "bank-de-contradicted-closing": {
+      "kind": "bank",
+      "inputHash": "7f44d0f96fc0c7a25bba5eaca679971adaffb68dab5a2e2168c173e1b4fd0498",
+      "hash": "638949087f4f538ac9095d4cd8bd52bf1edf9bf466ac81f68e3b97141b756752",
+      "output": {
+        "transactions": [
+          {
+            "date": "2026-05-02",
+            "description": "Kartenzahlung REWE",
+            "amount": -20,
+            "currency": "EUR",
+            "sourcePage": 1
+          },
+          {
+            "date": "2026-05-05",
+            "description": "SEPA-Gutschrift Erstattung",
+            "amount": 100,
+            "currency": "EUR",
+            "sourcePage": 1
+          }
+        ],
+        "dateOrderInferred": "default",
+        "droppedRowCount": 0,
+        "currency": "EUR",
+        "openingBalance": 500,
+        "closingBalance": 999.99
+      }
+    },
     "bank-ch-geometry-dot-decimal": {
       "kind": "bank",
       "inputHash": "4f16197c722d12eab97e90d4ef7fcdef3226b72ba379ea5e2b002ffcd71315d1",

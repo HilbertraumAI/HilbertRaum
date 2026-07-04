@@ -26,7 +26,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
-import { createSkillRegistry } from '../../src/main/services/skills/registry'
+import { createSkillRegistry, getSkill } from '../../src/main/services/skills/registry'
 import { createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers, clearSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
@@ -73,6 +73,32 @@ function writeBankSkill(appSkillsDir: string, opts: { triggers?: boolean } = {})
   writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
 }
 
+// SEC-1 end-to-end (T2): a USER-imported `kind:'tool'` skill that DECLARES `analysis: whole-doc` plus the
+// same Tier-2 tools the app bank skill runs. THREE layered gates must all hold at the chat surface: the
+// manifest parser ignores `analysis` on a tool skill, `manifestAnalysisHandler` honors instruction skills
+// only, and the app registry holds no handler under a `user:` install id — so askDocuments must take the
+// plain relevance path (no analysis engine, no tool run) even with the skill force-enabled.
+function writeUserToolSkill(userSkillsDir: string): void {
+  const d = join(userSkillsDir, 'imported-bank')
+  mkdirSync(d, { recursive: true })
+  const lines = [
+    '---',
+    'id: imported-bank',
+    'title: Imported bank tool',
+    'description: A user-imported tool skill.',
+    'version: 1.0.0',
+    'kind: tool',
+    'analysis: whole-doc',
+    'allowedTools: [extract_transactions, validate_statement_balances, summarize_cashflow]',
+    'triggers:',
+    '  keywords: [bank statement, kontoauszug, transaction, balance]',
+    '  filenamePatterns: ["*statement*"]',
+    '---',
+    'Quote the printed figures.'
+  ]
+  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+}
+
 interface Harness {
   db: Db
   conversationId: string
@@ -85,7 +111,7 @@ interface Harness {
  *  analysis registry, wired through the real `askDocuments` handler. `fullyChunked: false` clears the
  *  ingestion-set marker to simulate a legacy (not exhaustively analysable) index. */
 async function makeHarness(
-  opts: { fullyChunked?: boolean; text?: string; triggers?: boolean; docFile?: string } = {}
+  opts: { fullyChunked?: boolean; text?: string; triggers?: boolean; docFile?: string; userToolSkill?: boolean } = {}
 ): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ragskill-'))
   const workspacePath = join(root, 'workspace')
@@ -93,12 +119,15 @@ async function makeHarness(
   const userSkillsDir = join(root, 'user-skills')
   mkdirSync(appSkillsDir, { recursive: true })
   mkdirSync(userSkillsDir, { recursive: true })
-  writeBankSkill(appSkillsDir, { triggers: opts.triggers })
+  if (opts.userToolSkill) writeUserToolSkill(userSkillsDir)
+  else writeBankSkill(appSkillsDir, { triggers: opts.triggers })
 
   const db = openDatabase(join(root, 'test.sqlite'))
   seedSettings(db)
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir, appVersion: '0.0.0-test' })
   skills.reconcile() // installs app:bank-statement ENABLED
+  // A drop-in user skill installs DISABLED (DS19); force-enable to model the SEC-1 worst case.
+  if (opts.userToolSkill) db.prepare('UPDATE skills SET enabled = 1 WHERE install_id = ?').run('user:imported-bank')
 
   // A REAL ingested statement: stored copy + chunks + embeddings + fully_chunked (the production path).
   // The filename drives the A4 signal match (`*statement*`) — a test can override it to a non-matching name.
@@ -895,5 +924,78 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
     expect(msg.content).not.toContain('ask again')
     expect(h.runtime.calls).toBe(0)
     expect(msg.coverage?.mode).toBe('extract')
+  })
+})
+
+// T2 (skills-audit-2026-07-03 §5) — SEC-1 end-to-end at the CHAT surface. The resolver unit tests pin
+// that `manifestAnalysisHandler` refuses a tool-kind manifest; this drives the full askDocuments IPC:
+// an ENABLED user-imported `kind:'tool'` skill declaring `analysis: whole-doc` over a signal-matching,
+// fully-chunked statement must land on plain RELEVANCE — no analysis engine, no Tier-2 tool run.
+describe('askDocuments — SEC-1 end-to-end (user kind:tool skill never reaches an analysis engine, T2)', () => {
+  it('user tool skill + analysis: whole-doc + matching doc → the relevance path (no handler, no tool run)', async () => {
+    // Teeth: honor `manifestAnalysisHandler` for kind:'tool' (drop its instruction-only guard AND the
+    // parser's analysisIgnoredForTool note) → the whole-doc engine would fire here → red.
+    const h = await makeHarness({ fullyChunked: true, userToolSkill: true })
+    // Sanity: the worst case really is on the board — an ENABLED user TOOL skill that declared tools
+    // (the manifest parser already stripped its `analysis: whole-doc`; that strip is one of the gates).
+    const record = getSkill(h.db, 'user:imported-bank')!
+    expect(record.source).toBe('user')
+    expect(record.kind).toBe('tool')
+    expect(record.enabled).toBe(true)
+    expect(record.manifest.analysis).toBeUndefined() // parser gate: ignored for a tool skill
+    expect(record.manifest.allowedTools.length).toBeGreaterThan(0)
+
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'summarize the transactions', // would engage any analysis engine, were one resolvable
+      'user:imported-bank'
+    )
+    const msg = result as Message
+
+    // Relevance, not analysis: one ordinary grounded model call whose prompt carries retrieved excerpts,
+    // never the serialized extract; the answer is the model's, not the deterministic template.
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.content).toContain('Model answer.')
+    expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
+    expect(msg.coverage).toBeUndefined() // no extract/whole-document breadth claim
+    const lastTurn = h.runtime.lastMessages[h.runtime.lastMessages.length - 1]
+    expect(lastTurn.content).not.toContain('Bank statement (JSON):')
+
+    // No Tier-2 tool ever ran for the user skill — no run row, no run lifecycle in the audit.
+    const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
+    expect(runs.n).toBe(0)
+    expect(h.audit.map((e) => e.type)).not.toContain('skill_run_started')
+  })
+})
+
+// T2 (skills-audit-2026-07-03 §5 honesty-matrix gap) — W6's multi-currency grounded-data behaviour at
+// the IPC layer: W6 pinned the pure builder (rag-grounded-data.test.ts); this pins what the user KEEPS.
+describe('askDocuments — W6 multi-currency grounded-data (IPC pin, T2)', () => {
+  const MIXED = 'Statement\n2026-01-02 Coffee -3,50 EUR\n2026-01-03 Book -10,00 USD'
+
+  it('a mixed-currency statement PERSISTS no cashflow echo under the model answer', async () => {
+    // Teeth: make buildCashflowPostscript echo unconditionally (drop its `summary.currency` gate) → the
+    // persisted content would carry a cross-currency net figure → red.
+    const h = await makeHarness({ fullyChunked: true, text: MIXED })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'what was my largest transaction?', // non-summary shape → grounded-data
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+
+    // The grounded-data narration ran (model called over the serialized extract)…
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.content).toContain('Model answer.')
+    expect(h.runtime.lastMessages[h.runtime.lastMessages.length - 1].content).toContain('Bank statement (JSON):')
+    // …but the persisted turn carries NO app-authored cashflow echo: summing EUR and USD into one net
+    // (−13.50) would be an invented figure, so no "computed" totals line may ride under the answer.
+    expect(msg.content).not.toContain('13.50')
+    expect(msg.content).not.toContain('computed')
+    expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.figureEchoNet', { amount: '13.50', currency: 'EUR' }))
   })
 })

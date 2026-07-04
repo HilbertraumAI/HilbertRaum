@@ -258,6 +258,58 @@ describe('runBankExtraction (S11a)', () => {
     expect(run.status).toBe('failed')
   })
 
+  it('a persist failure under replaceExisting rolls back to the PREVIOUS statement — old rows survive, readable (T2)', async () => {
+    // The load-bearing "a failure rolls back to the old" claim on the A9 atomic swap (run.ts:381-383):
+    // the replaceExisting DELETE and the fresh INSERTs share ONE transaction, so a mid-swap failure must
+    // leave the PRIOR statement fully intact — never a document whose extraction vanished. The injected
+    // failure lands on the fresh TRANSACTIONS insert, i.e. AFTER the delete AND after the new statement
+    // row — the deepest partial state the rollback has to unwind.
+    // Teeth: move the deleteForDocument outside the BEGIN/COMMIT (or drop the ROLLBACK) → red.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [
+      { text: 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10', page: 1 }
+    ])
+    const { audit } = capturingAudit()
+    const first = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit })
+    expect(first.ok).toBe(true)
+    const oldId = first.statementId!
+
+    const real = db.prepare.bind(db)
+    const target = db as unknown as { prepare: Db['prepare'] }
+    target.prepare = ((sql: string) => {
+      if (/INSERT INTO bank_transactions/i.test(sql)) throw new Error('injected persist failure')
+      return real(sql)
+    }) as Db['prepare']
+    let second
+    try {
+      second = await runBankExtraction(
+        db,
+        { skillInstallId: 'app:bank-statement', documentId: docId },
+        { audit, replaceExisting: true }
+      )
+    } finally {
+      target.prepare = real
+    }
+    expect(second.ok).toBe(false)
+    expect(second.errorCode).toBe('persistFailed')
+    expect(second.error).toBe('This statement could not be saved. Nothing was changed.')
+
+    // The PREVIOUS statement survived the rollback — same id, both rows, still the latest, still loadable.
+    const stmts = db.prepare('SELECT id FROM bank_statements WHERE document_id = ?').all(docId) as Array<{ id: string }>
+    expect(stmts.map((s) => s.id)).toEqual([oldId])
+    expect(latestBankStatementId(db, docId)).toBe(oldId)
+    const rows = db
+      .prepare('SELECT description, amount FROM bank_transactions WHERE statement_id = ? ORDER BY row_index')
+      .all(oldId) as Array<{ description: string; amount: number }>
+    expect(rows).toEqual([
+      { description: 'Grocery', amount: -45.9 },
+      { description: 'Salary', amount: 2500 }
+    ])
+    // The failed run reached a terminal status (B4) — the swap failure never strands the lifecycle.
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(second.runId) as { status: string }
+    expect(run.status).toBe('failed')
+  })
+
   it('a DB error before the gate still drives the run to a terminal state (B4 — no stranded "started")', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'EUR\n2026-01-02 Coffee -3,50', page: 1 }])
