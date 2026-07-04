@@ -732,6 +732,19 @@ export const de: Record<keyof typeof en, string> = {
   'skills.invoiceAnalysis.figureEchoNet': 'Netto {value}',
   'skills.invoiceAnalysis.figureEchoTax': 'Steuer {value}',
   'skills.invoiceAnalysis.figureEchoGross': 'Brutto {value}',
+  // invoice-hardening-2026-07-04 P2: das Abgleich-GATE. Bei einem widersprüchlichen Summen-Check ersetzt
+  // das Template die selbstbewusste Beträge-Überschrift durch die ungeprüfte Variante samt Hinweis, und
+  // der grounded-data-Zahlen-Nachtrag wird durch die Unterdrückungs-Notiz ersetzt. Du-Form.
+  'skills.invoiceAnalysis.totalsHeadingUnverified':
+    'Beträge wie gedruckt — **sie gehen nicht auf**, behandle sie also als ungeprüft:',
+  'skills.invoiceAnalysis.unreconciledCaveat':
+    'Diese gedruckten Beträge widersprechen einander — meist heißt das, dass das Dokument nicht sauber ' +
+    'gelesen werden konnte (ein Scan, ein Bild-PDF oder ein ungewöhnliches Layout). Verlass dich auf ' +
+    'keine dieser Zahlen, ohne das Originaldokument zu prüfen.',
+  'skills.invoiceAnalysis.figureEchoSuppressed':
+    'Die eingelesenen Summen wiederhole ich hier nicht: Sie stimmen weder untereinander noch mit den ' +
+    'Positionen überein — sie als verlässliche Beträge zu zitieren wäre irreführend. Prüf das ' +
+    'Originaldokument.',
 
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':

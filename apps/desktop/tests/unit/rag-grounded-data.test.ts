@@ -210,6 +210,56 @@ describe('buildTotalsPostscript (W3 §8.1)', () => {
   })
 })
 
+// invoice-hardening-2026-07-04 P2 — the reconciliation GATE on the grounded-data surfaces (the invoice
+// mirror of the bank `contradicted` suppression). A real transcript echoed "net 4.00 · tax 0.00 ·
+// gross 914.00" as "verbatim from the document" under an answer while the line items summed to ~484 —
+// a mismatched check must suppress the echo and put a warning in the model-facing data block.
+describe('P2 reconciliation gating (invoice-hardening-2026-07-04)', () => {
+  // The incident shape: totals contradict the line items and each other.
+  const GARBAGE: InvoiceInput = {
+    header: { currency: 'USD' },
+    lineItems: [
+      { description: 'Stablecoin article', lineTotal: 167.7, currency: 'USD' },
+      { description: 'Yield product', lineTotal: 316.4, currency: 'USD' }
+    ],
+    totals: { netTotal: 4, taxTotal: 0, grossTotal: 914 }
+  }
+
+  it('buildTotalsPostscript suppresses the echo when a check mismatched (no "verbatim" garbage)', () => {
+    const post = buildTotalsPostscript(tr, GARBAGE, 0, validateInvoiceTotals(GARBAGE))
+    expect(post).toBe(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
+    expect(post).not.toContain('914')
+  })
+
+  it('a RECONCILED validation keeps the echo byte-identical (the param is additive)', () => {
+    expect(buildTotalsPostscript(tr, CLEAN, 0, validateInvoiceTotals(CLEAN))).toBe(buildTotalsPostscript(tr, CLEAN))
+  })
+
+  it('an all-unknown validation (no mismatch) keeps the echo — absence of proof is not contradiction', () => {
+    const lone: InvoiceInput = { header: { currency: 'EUR' }, lineItems: [], totals: { grossTotal: 914 } }
+    const post = buildTotalsPostscript(tr, lone, 0, validateInvoiceTotals(lone))
+    expect(post).toContain('914.00')
+    expect(post).not.toContain(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
+  })
+
+  it('the dropped-line hedge still rides beneath the suppression note', () => {
+    const post = buildTotalsPostscript(tr, GARBAGE, 2, validateInvoiceTotals(GARBAGE))
+    expect(post).toContain(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
+    expect(post).toContain(tr('skills.invoiceAnalysis.countPartial', { count: 2, dropped: 2 }))
+  })
+
+  it('buildInvoiceDataBlock carries the unverified WARNING when a check mismatched', () => {
+    const block = buildInvoiceDataBlock(GARBAGE, validateInvoiceTotals(GARBAGE))
+    expect(block).toContain('- overall: NOT reconciled')
+    expect(block).toContain('WARNING: the checks above MISMATCH')
+    expect(block).toContain('Treat EVERY figure as unverified')
+  })
+
+  it('buildInvoiceDataBlock stays WARNING-free when reconciled', () => {
+    expect(buildInvoiceDataBlock(CLEAN, validateInvoiceTotals(CLEAN))).not.toContain('WARNING')
+  })
+})
+
 // ---- W4 (audit §3.1/§3.3/§8.1): the BANK port of the third mode's pure builders ----
 // A clean 2-row statement: Grocery −45.90 (out), Salary +2500.00 (in); opening 2000 + Σ 2454.10 == 4454.10.
 const ROWS: TransactionInput[] = [

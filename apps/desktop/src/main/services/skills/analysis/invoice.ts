@@ -325,6 +325,19 @@ export function buildInvoiceDataBlock(
     ...validation.checks.map((c) => `- ${c.name}: ${c.status}`),
     `- overall: ${validation.reconciled ? 'reconciled' : 'NOT reconciled'}`
   )
+  // invoice-hardening-2026-07-04 P2: a MISMATCHED check means the document's own printed figures
+  // contradict each other — the extraction is suspect (misread layout, scan, glyph-soup text). The model
+  // must not narrate any of these totals as authoritative; without this instruction it answered follow-up
+  // questions by quoting the contradictory totals as literal document figures (real transcript).
+  if (validation.checks.some((c) => c.status === 'mismatch')) {
+    lines.push(
+      '',
+      'WARNING: the checks above MISMATCH — the printed figures contradict each other and/or the line ' +
+        'items, so the document was probably not extracted cleanly. Treat EVERY figure as unverified: ' +
+        'if the user asks about a total, say the figures do not add up and point them to the original ' +
+        'document instead of presenting any total as reliable.'
+    )
+  }
   if (hedgeDropped) {
     lines.push(
       '',
@@ -350,9 +363,20 @@ export function buildInvoiceDataBlock(
  * the amounts are the parser's own 2-dp figures. Returns '' when the extraction carried none of the three
  * totals (nothing to echo) — the streaming path then appends nothing.
  */
-export function buildTotalsPostscript(tr: Tr, invoice: InvoiceInput, droppedRowCount?: number): string {
+export function buildTotalsPostscript(
+  tr: Tr,
+  invoice: InvoiceInput,
+  droppedRowCount?: number,
+  validation?: InvoiceTotalsResult
+): string {
   const { totals } = invoice
   const currency = invoiceTotalsCurrency(invoice) // SKA-21: '' when header-less AND line items are mixed
+  // invoice-hardening-2026-07-04 P2 (the bank `contradicted` suppression, mirrored): a MISMATCHED check
+  // means the parsed totals contradict each other/the line items — echoing them as "verbatim from the
+  // document" lent garbage figures the postscript's authority (real transcript: "Netto 4.00 · Steuer
+  // 0.00 · Brutto 914.00" asserted under an answer, against line items summing to ~1401). Replace the
+  // echo with an honest suppression note; the dropped-line hedge below still applies.
+  const contradicted = validation?.checks.some((c) => c.status === 'mismatch') === true
   const figs: string[] = []
   if (totals.netTotal !== undefined) {
     figs.push(tr('skills.invoiceAnalysis.figureEchoNet', { value: amountText(totals.netTotal, currency) }))
@@ -364,7 +388,8 @@ export function buildTotalsPostscript(tr: Tr, invoice: InvoiceInput, droppedRowC
     figs.push(tr('skills.invoiceAnalysis.figureEchoGross', { value: amountText(totals.grossTotal, currency) }))
   }
   const out: string[] = []
-  if (figs.length > 0) out.push(tr('skills.invoiceAnalysis.figureEcho', { figures: figs.join(' · ') }))
+  if (contradicted) out.push(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
+  else if (figs.length > 0) out.push(tr('skills.invoiceAnalysis.figureEcho', { figures: figs.join(' · ') }))
   // SKA-5 (W6): the dropped-line hedge — an invoice has no balance proof, so any dropped money-bearing
   // line always hedges (mirrors the template's `countPartial` headline, appended beneath the echo).
   const dropped = droppedRowCount ?? 0
@@ -445,7 +470,17 @@ export function buildInvoiceAnswer(
   // declares none AND the line items are mixed — the old `lineItems[0]?.currency` picked a misleading code.
   const currency = invoiceTotalsCurrency(invoice)
   if (hasTotals) {
-    lines.push('', tr('skills.invoiceAnalysis.totalsHeading'))
+    // invoice-hardening-2026-07-04 P2: when a check MISMATCHED, the totals keep printing (the user may
+    // want to see what the document says) but under the UNVERIFIED heading, with an explicit caveat
+    // after them — never under "Totals, exactly as printed:" as if they were dependable. The old
+    // behaviour listed the failed checks and then printed the incoherent totals confidently anyway.
+    const contradicted = mismatches.length > 0
+    lines.push(
+      '',
+      contradicted
+        ? tr('skills.invoiceAnalysis.totalsHeadingUnverified')
+        : tr('skills.invoiceAnalysis.totalsHeading')
+    )
     if (totals.netTotal !== undefined) {
       lines.push(tr('skills.invoiceAnalysis.net', { value: amountText(totals.netTotal, currency) }))
     }
@@ -461,6 +496,9 @@ export function buildInvoiceAnswer(
     }
     if (totals.grossTotal !== undefined) {
       lines.push(tr('skills.invoiceAnalysis.gross', { value: amountText(totals.grossTotal, currency) }))
+    }
+    if (contradicted) {
+      lines.push('', tr('skills.invoiceAnalysis.unreconciledCaveat'))
     }
   } else {
     lines.push('', tr('skills.invoiceAnalysis.noTotals'))
@@ -643,7 +681,8 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       const postscriptParts: string[] = []
       // SKA-5 (W6): the totals echo carries the dropped-line hedge (an invoice has no balance proof, so any
       // dropped money line hedges); the mixed-currency echo is fixed in `buildTotalsPostscript` (SKA-21).
-      const totalsEcho = buildTotalsPostscript(ctx.tr, invoice, droppedRowCount)
+      // P2: the echo is validation-gated — contradictory totals are suppressed, never echoed as reliable.
+      const totalsEcho = buildTotalsPostscript(ctx.tr, invoice, droppedRowCount, validation)
       if (totalsEcho) postscriptParts.push(totalsEcho)
       if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.invoiceAnalysis.dateOrderCaveat'))
       return {

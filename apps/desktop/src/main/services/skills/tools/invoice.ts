@@ -174,8 +174,15 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       Hosting 49,00` / `Rechnung Nr. 2026-14 … über 1.500,00 EUR` stay line items instead of vanishing
  *       into garbage header values. Each changes the persisted items/totals/header on affected invoices,
  *       so stale v8 rows re-extract.
+ *  10 — invoice-hardening-2026-07-04 P2: uncorroborated WEAK totals are retracted. A totals figure read
+ *       via the bare-integer currency-adjacent fallback (no decimal, no grouping — extractor v3) is now
+ *       tracked as a weak read, and `dropUncorroboratedWeakTotals` deletes it when it participates in a
+ *       mismatched reconciliation check and in no ok check (one validation snapshot of the assembled
+ *       invoice; decimal-shaped reads are never touched). A glyph-soup document can no longer assert a
+ *       confident net/tax/gross from stray currency-adjacent digits. Changes the persisted totals on
+ *       affected invoices, so stale v9 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 9
+export const INVOICE_EXTRACTOR_VERSION = 10
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -458,13 +465,18 @@ const EXCL_TAX_RE = /\bexcl|\bexkl|excluding|net of tax|before tax|ohne (?:steue
  * mistaken for the amount, while the totals LABEL already scopes this to a net/tax/gross line. Line
  * items never use this — an unlabeled row's bare integer stays ambiguous (the §22-D1 honesty posture).
  */
-function totalsMoney(line: string): number | null {
+function totalsMoney(line: string): { value: number; weak: boolean } | null {
   const v = lastMoney(line)
-  if (v !== null) return v
+  if (v !== null) return { value: v, weak: false }
   // R1 (audit §5.7-low): the currency-adjacent bare-integer fallback, sign-aware (a credit note
   // `Gesamtbetrag -914 EUR` reads −914) — now the shared `lastCurrencyAdjacentInteger` (U1: the bank
   // balance reader uses the SAME helper so a round `Opening balance 914 $` is read identically).
-  return lastCurrencyAdjacentInteger(line)
+  // invoice-hardening-2026-07-04 P2: a bare-integer read is flagged WEAK — on a mangled document
+  // (glyph-soup PDF text) stray digits routinely sit next to a `$`, and a real transcript showed a
+  // fallback-read gross of `914` asserted from soup like `$   914   =   $`. `extractInvoice` keeps a
+  // weak total only when the assembled totals do not contradict it (`dropUncorroboratedWeakTotals`).
+  const f = lastCurrencyAdjacentInteger(line)
+  return f === null ? null : { value: f, weak: true }
 }
 
 /** Read a percent figure (e.g. "20%", "19,5 %") from a line, or null. */
@@ -557,21 +569,31 @@ function applyHeader(
  * a later totals block overwrites an earlier one, since real invoices print the totals after the line
  * items (audit §5.2). The figure itself is re-read over the whole line by `totalsMoney`.
  */
-function applyTotals(line: string, totals: InvoiceTotals): boolean {
+/** The three assignable totals fields — the keys `dropUncorroboratedWeakTotals` (P2) can retract. */
+type WeakTotalsKey = 'netTotal' | 'taxTotal' | 'grossTotal'
+
+function applyTotals(line: string, totals: InvoiceTotals, weakReads?: Set<WeakTotalsKey>): boolean {
   const lower = line.toLowerCase()
   const isTotalsLine = (labels: readonly string[]): boolean => {
     const label = labels.find((l) => lower.startsWith(l) && labelBoundaryOk(lower, l))
     return label !== undefined && isFillerOnly(line.slice(label.length))
   }
+  // P2: assignment helper — last-wins stays, and the weak flag FOLLOWS the winning read (a later strong
+  // read of the same field clears the earlier weak mark; a later weak read re-marks it).
+  const assign = (key: WeakTotalsKey, v: { value: number; weak: boolean }): void => {
+    totals[key] = v.value
+    if (v.weak) weakReads?.add(key)
+    else weakReads?.delete(key)
+  }
   // net first, then tax, then gross (the bare "total" is a gross label — so "Net Total" wins as net).
   if (isTotalsLine(NET_LABELS)) {
     const v = totalsMoney(line)
-    if (v !== null) totals.netTotal = v
+    if (v !== null) assign('netTotal', v)
     return true
   }
   if (isTotalsLine(TAX_LABELS)) {
     const v = totalsMoney(line)
-    if (v !== null) totals.taxTotal = v
+    if (v !== null) assign('taxTotal', v)
     const rate = parsePercent(line)
     if (rate !== null) totals.taxRatePercent = rate
     return true
@@ -582,13 +604,40 @@ function applyTotals(line: string, totals: InvoiceTotals): boolean {
     // layout prints both "Total (excl. Tax)" and "Total (incl. Tax)"); the unqualified/"incl." total
     // stays gross. Without this, "Total (excl. Tax)" landed as the gross and the real gross was dropped.
     if (v !== null && EXCL_TAX_RE.test(lower)) {
-      totals.netTotal = v
+      assign('netTotal', v)
       return true
     }
-    if (v !== null) totals.grossTotal = v
+    if (v !== null) assign('grossTotal', v)
     return true
   }
   return false
+}
+
+/**
+ * invoice-hardening-2026-07-04 P2: retract UNCORROBORATED weak totals. A bare-integer
+ * currency-adjacent read (`totalsMoney`'s fallback — no decimal, no grouping) is the extractor's
+ * weakest figure: on a clean round-total layout ("Total (excl. Tax) 914 $") it is right, but on a
+ * mangled document (glyph-soup PDF text) stray digits next to a `$` produce confident garbage — a real
+ * transcript asserted net 4 / tax 0 / gross 914 against line items summing to ~1401. The rule, applied
+ * against ONE validation snapshot of the assembled invoice: a weak figure that participates in a
+ * mismatched check and in NO ok check is dropped (never printed); a weak figure corroborated by at
+ * least one ok check — or contradicted by nothing — stays. Decimal-shaped (strong) reads are never
+ * touched: they are the document's own printed figures, and the ANSWER layer presents any residual
+ * mismatch honestly (analysis/invoice.ts P2). §22-D1: dropping a figure we cannot stand behind beats
+ * asserting one the document's own arithmetic contradicts.
+ */
+function dropUncorroboratedWeakTotals(invoice: ExtractedInvoice, weakReads: Set<WeakTotalsKey>): void {
+  if (weakReads.size === 0) return
+  const status = new Map(validateInvoiceTotals(invoice).checks.map((c) => [c.name, c.status]))
+  const participation: Record<WeakTotalsKey, InvoiceCheckName[]> = {
+    netTotal: ['lineItemsSumToNet', 'netPlusTaxIsGross', 'taxMatchesRate'],
+    taxTotal: ['netPlusTaxIsGross', 'taxMatchesRate'],
+    grossTotal: ['netPlusTaxIsGross']
+  }
+  for (const key of weakReads) {
+    const statuses = participation[key].map((name) => status.get(name))
+    if (statuses.includes('mismatch') && !statuses.includes('ok')) delete invoice.totals[key]
+  }
 }
 
 /**
@@ -717,6 +766,9 @@ export function extractInvoice(
   const header: InvoiceHeader = {}
   const lineItems: InvoiceLineItem[] = []
   const totals: InvoiceTotals = {}
+  // P2: which totals fields were read via the bare-integer fallback (weak reads) — see
+  // `dropUncorroboratedWeakTotals`. Tracked here, resolved once the whole invoice is assembled.
+  const weakReads = new Set<WeakTotalsKey>()
   // U1 (audit §2.3): money-bearing lines the parser could not turn into a line item / total / header.
   let droppedWithFigure = 0
   for (const text of texts) {
@@ -747,7 +799,7 @@ export function extractInvoice(
       // A boundary-matched totals label whose remainder is just the figure is a total; one that still
       // carries a real description ("Netto-Miete Objekt 3 1.000,00", "Total hours consulting 40,00")
       // falls through to `parseLineItem` and stays a line item (audit §5.2).
-      if (applyTotals(line, totals)) {
+      if (applyTotals(line, totals, weakReads)) {
         pending = null
         continue
       }
@@ -762,7 +814,9 @@ export function extractInvoice(
         pending = { item, absorbed: 0 }
         if (lineItems.length >= MAX_LINE_ITEMS) {
           if (documentCurrency && !header.currency) header.currency = documentCurrency
-          return { header, lineItems, totals, droppedRowCount: droppedWithFigure }
+          const invoice = { header, lineItems, totals, droppedRowCount: droppedWithFigure }
+          dropUncorroboratedWeakTotals(invoice, weakReads) // P2 — same retraction as the normal exit
+          return invoice
         }
         continue
       }
@@ -787,7 +841,10 @@ export function extractInvoice(
     }
   }
   if (documentCurrency && !header.currency) header.currency = documentCurrency
-  return { header, lineItems, totals, droppedRowCount: droppedWithFigure }
+  const invoice = { header, lineItems, totals, droppedRowCount: droppedWithFigure }
+  // P2: retract bare-integer (weak) totals the assembled invoice's own arithmetic contradicts.
+  dropUncorroboratedWeakTotals(invoice, weakReads)
+  return invoice
 }
 
 // ---- extract_invoice (read-only over the selected document scope) ----

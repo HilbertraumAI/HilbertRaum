@@ -604,6 +604,49 @@ describe('invoice W7 answer-shape tuning (SKA-9/SKA-10)', () => {
   })
 })
 
+// invoice-hardening-2026-07-04 P2 — the reconciliation GATE end-to-end through run(): mismatched totals
+// never print under the confident "exactly as printed" heading, and the grounded-data postscript
+// suppresses the figure echo instead of asserting contradictory figures as document quotes.
+describe('invoice P2 reconciliation gating through run() (invoice-hardening-2026-07-04)', () => {
+  // Strong 2-dp totals that mismatch: gross 200,00 ≠ net 120,00 + tax 24,00 (P2's weak-read retraction
+  // does not touch decimal-shaped figures — the ANSWER layer owns this case).
+  const MISMATCHED = CLEAN.replace('Gross total 144,00 EUR', 'Gross total 200,00 EUR')
+
+  it('template path: mismatched totals print under the UNVERIFIED heading with the caveat', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, MISMATCHED)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen')
+    )
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.totalsHeadingUnverified'))
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.unreconciledCaveat'))
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.totalsHeading'))
+  })
+
+  it('template path: reconciled totals keep the confident heading, no caveat', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen')
+    )
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.totalsHeading'))
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.unreconciledCaveat'))
+  })
+
+  it('grounded-data path: the postscript suppresses the figure echo on a mismatched invoice', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, MISMATCHED)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'wann ist die rechnung fällig?')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.postscript).toContain(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
+    expect(res.postscript).not.toContain('200.00')
+    // The model-facing block carries the mismatch warning.
+    expect(res.dataBlock).toContain('WARNING: the checks above MISMATCH')
+  })
+})
+
 // invoice-hardening-2026-07-04 P1 — negation-aware format detection + the byte-identical replay
 // backstop. The incident: "Analysiere die Rechnung im Roh format - nicht im json" matched the bare
 // `\bjson\b` token and re-served the byte-identical JSON dump (0 model calls, ~9 ms) against a question

@@ -388,13 +388,13 @@ describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
 })
 
 describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
-  it('is at 9 — the R7 date-vs-money / header-money-gate bump (SKA-1/2/14)', () => {
-    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: R7 (skills-audit-2026-07-03) date-blanks the line-item
-    // money scan (SKA-1), widens both date scrubs to dd.mm.yy (SKA-2 — totals/headers no longer read a
-    // trailing `per 30.06.26` as the figure), and gates the vendor/number header branches on money (SKA-14)
-    // — each changes the persisted items/totals/header, so an invoice an OLDER (v8…v1 / pre-versioning
-    // NULL) parser produced must re-extract via the F5 path.
-    expect(INVOICE_EXTRACTOR_VERSION).toBe(9)
+  it('is at 10 — the P2 uncorroborated-weak-totals retraction (invoice-hardening-2026-07-04)', () => {
+    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: P2 retracts a bare-integer (weak) totals read that a
+    // mismatched reconciliation check contradicts with no ok check corroborating it — a glyph-soup
+    // document can no longer assert confident totals from stray currency-adjacent digits. Changes the
+    // persisted totals, so an invoice an OLDER (v9…v1 / pre-versioning NULL) parser produced must
+    // re-extract via the F5 path.
+    expect(INVOICE_EXTRACTOR_VERSION).toBe(10)
   })
 })
 
@@ -905,6 +905,57 @@ describe('R1 — invoice Unicode normalization + sign-aware bare-integer total (
   it('§5.7-low: a POSITIVE bare-integer total is unchanged — no regression (Gesamtbetrag 914 EUR → 914)', () => {
     const invoice = extractInvoice([chunk('Gesamtbetrag 914 EUR', 1)], 'EUR')
     expect(invoice.totals.grossTotal).toBe(914)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// invoice-hardening-2026-07-04 P2 — uncorroborated WEAK totals are retracted. A bare-integer
+// currency-adjacent totals read (the v3 fallback) is the extractor's weakest figure; on a mangled
+// (glyph-soup) document stray digits next to a `$` produced a confident net 4 / tax 0 / gross 914
+// against line items summing to ~1401 (real user transcript). The rule: a weak figure that
+// participates in a MISMATCHED reconciliation check and in NO ok check is dropped; a weak figure
+// corroborated by an ok check — or contradicted by nothing (all-unknown, e.g. the lone credit-note
+// total above) — stays. Strong (decimal-shaped) reads are never touched.
+// ---------------------------------------------------------------------------------------------------
+describe('P2 — uncorroborated weak (bare-integer) totals are retracted (invoice-hardening-2026-07-04)', () => {
+  it('the incident shape: weak net/tax/gross contradicted by strong line items are ALL dropped', () => {
+    const text = [
+      'Stablecoin article 167,70',
+      'Yield product 316,40',
+      'Netto 4 $',
+      'Tax 0 $',
+      'Total 914 $'
+    ].join('\n')
+    const invoice = extractInvoice([chunk(text, 1)], 'USD')
+    // The strong 2-dp line items stay; every weak total sat in a mismatched check with no ok check.
+    expect(invoice.lineItems).toHaveLength(2)
+    expect(invoice.totals).toEqual({})
+  })
+
+  it('a weak gross corroborated by strong net + tax (net + tax = gross ok) is KEPT', () => {
+    const text = ['Alpha 100,00 EUR', 'Beta 20,00 EUR', 'Net total 120,00 EUR', 'VAT 24,00 EUR', 'Total 144 EUR'].join(
+      '\n'
+    )
+    const invoice = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(invoice.totals).toEqual({ netTotal: 120, taxTotal: 24, grossTotal: 144 })
+  })
+
+  it('a weak net with one ok check survives a mismatch elsewhere (ok outweighs)', () => {
+    // Weak net 120 is corroborated by the line items (sum 120 → lineItemsSumToNet ok) even though the
+    // STRONG gross 200,00 mismatches net+tax — the strong misprint is the answer layer's problem, not
+    // grounds to retract the corroborated weak read.
+    const text = ['Alpha 100,00 EUR', 'Beta 20,00 EUR', 'Netto 120 EUR', 'MwSt 24,00 EUR', 'Gesamt 200,00 EUR'].join(
+      '\n'
+    )
+    const invoice = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(invoice.totals.netTotal).toBe(120)
+    expect(invoice.totals.grossTotal).toBe(200)
+  })
+
+  it('STRONG (decimal-shaped) totals are never retracted, even when they mismatch everything', () => {
+    const text = ['Alpha 100,00 EUR', 'Netto 999,99 EUR', 'Gesamt 5,00 EUR'].join('\n')
+    const invoice = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(invoice.totals).toEqual({ netTotal: 999.99, grossTotal: 5 })
   })
 })
 
