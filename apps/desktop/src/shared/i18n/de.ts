@@ -894,6 +894,16 @@ export const de: Record<keyof typeof en, string> = {
   'models.tech.context': 'Kontextfenster',
   'models.tech.contextValue': '{count} Tokens',
   'models.tech.file': 'Datei',
+  // ---- Kontextgrößen-Auswahl (Nutzerbericht 2026-07-04 — der Abschneide-Hinweis verweist hierher) ----
+  'models.context.title': 'Kontextgröße',
+  'models.context.label': 'Kontextfenster für Antworten:',
+  'models.context.auto': 'Automatisch — empfohlene Größe des Modells',
+  'models.context.hint':
+    'Ein größerer Kontext lässt eine Unterhaltung oder eine Dokument-Antwort mehr Text auf einmal ' +
+    'nutzen, braucht aber mehr Arbeitsspeicher und kann Antworten verlangsamen. Wird beim ' +
+    'nächsten Modellstart wirksam.',
+  'models.context.restartHint':
+    'Gerade läuft ein Modell — stoppe und starte es, damit die neue Größe wirkt.',
   'models.verifyTitle':
     'Die Datei auf dem Laufwerk neu hashen und mit ihrer SHA-256-Prüfsumme vergleichen ' +
     '(umgeht den Zwischenspeicher)',
@@ -980,6 +990,8 @@ export const de: Record<keyof typeof en, string> = {
   'settings.workspace.modeEncrypted': 'Verschlüsselt',
   'settings.workspace.modePlaintext': 'Unverschlüsselt (Entwickler)',
   'settings.workspace.contextTokens': 'Kontext-Tokens',
+  // Ohne Override folgt das gestartete Fenster der Modell-Empfehlung.
+  'settings.workspace.contextAuto': 'Automatisch (Modell-Standard) — änderbar im Bereich „KI-Modell“',
   'settings.workspace.encryptedHint':
     'Dieser Arbeitsbereich ist im gesperrten Zustand verschlüsselt. Mit „Jetzt sperren“ in ' +
     'der Seitenleiste verschlüsselst und sperrst du ihn sofort; beim Beenden sperrt er ' +

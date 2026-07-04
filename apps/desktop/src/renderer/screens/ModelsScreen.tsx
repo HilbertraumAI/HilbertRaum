@@ -66,6 +66,14 @@ function plainHintKey(m: ModelInfo): MessageKey {
   return 'models.hint.large'
 }
 
+/**
+ * Context-size picker presets (the "Kontextgröße" card). "Auto" (null override) launches with
+ * the model's recommended window; a fixed pick becomes llama-server's `--ctx-size` at the next
+ * model start. Bounded set: the main-process clamp allows [2048, 32768], and larger windows cost
+ * RAM (KV cache) + prefill time, so the UI offers the sane rungs rather than a free number.
+ */
+const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768] as const
+
 // The in-flight download survives leaving + re-entering the screen (the job itself
 // lives in the main process; this only remembers which one to keep polling).
 let rememberedJob: DownloadJob | null = null
@@ -236,6 +244,20 @@ export function ModelsScreen(): JSX.Element {
       setError(friendlyIpcError(e))
     } finally {
       setBusy(null)
+    }
+  }
+
+  /** Persist the context-size pick ('auto' = null override = the model's recommended window).
+   *  Applies at the next model start — the card's hint (+ restart note while one runs) says so. */
+  async function onContextSizeChange(value: string): Promise<void> {
+    setError(null)
+    try {
+      const s = await window.api.updateSettings({
+        contextTokensOverride: value === 'auto' ? null : Number(value)
+      })
+      if (mountedRef.current) setSettings(s)
+    } catch (e) {
+      if (mountedRef.current) setError(friendlyIpcError(e))
     }
   }
 
@@ -752,6 +774,32 @@ export function ModelsScreen(): JSX.Element {
           <div className="section-title">{t('models.section.yourModel')}</div>
           {card(activeChat)}
         </>
+      )}
+
+      {/* Context-size picker (2026-07-04 user report): the truncation notice already pointed
+          users here to "raise the context size", and the setting existed but was never applied
+          for catalog models (the manifest recommendation always won). "Auto" keeps the model's
+          recommended window; a fixed pick becomes the launched --ctx-size at the next start. */}
+      {settings && chat.length > 0 && (
+        <div className="card">
+          <h2>{t('models.context.title')}</h2>
+          <label className="hint" style={{ display: 'block' }}>
+            {t('models.context.label')}{' '}
+            <select
+              value={settings.contextTokensOverride != null ? String(settings.contextTokensOverride) : 'auto'}
+              onChange={(e) => void onContextSizeChange(e.target.value)}
+            >
+              <option value="auto">{t('models.context.auto')}</option>
+              {CONTEXT_SIZE_PRESETS.map((n) => (
+                <option key={n} value={String(n)}>
+                  {t('models.tech.contextValue', { count: n.toLocaleString(lang) })}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="hint">{t('models.context.hint')}</p>
+          {runtime?.running && <p className="hint">{t('models.context.restartHint')}</p>}
+        </div>
       )}
 
       {otherChat.length > 0 && (

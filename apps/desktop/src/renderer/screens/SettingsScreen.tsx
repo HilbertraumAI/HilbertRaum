@@ -195,8 +195,14 @@ function GeneralTab(): JSX.Element {
               : t('settings.workspace.modePlaintext')}
           </dd>
           <dt>{t('settings.workspace.contextTokens')}</dt>
-          {/* M-U5: group the token count by locale (German "8.192"). */}
-          <dd>{settings.contextTokens.toLocaleString(lang)}</dd>
+          {/* M-U5: group the token count by locale (German "8.192"). With no override the
+              launched window follows the model's recommendation, so a bare number here would
+              be a value nothing uses — say "Automatic" and point at the real control. */}
+          <dd>
+            {settings.contextTokensOverride != null
+              ? settings.contextTokensOverride.toLocaleString(lang)
+              : t('settings.workspace.contextAuto')}
+          </dd>
         </dl>
         <p className="hint">
           {settings.workspaceMode === 'encrypted'

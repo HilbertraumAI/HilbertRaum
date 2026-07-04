@@ -49,6 +49,16 @@ describe('effectiveContextWindow (§L0 — budget against the real launched wind
   it('falls back to settings when the reported window is zero/non-positive', () => {
     expect(effectiveContextWindow({ contextWindow: () => 0 }, { contextTokens: 4096 })).toBe(4096)
   })
+
+  it('the no-runtime fallback honours the user context-size override before the legacy setting', () => {
+    expect(
+      effectiveContextWindow({}, { contextTokens: 4096, contextTokensOverride: 16384 })
+    ).toBe(16384)
+    // A reported window still wins — the launched --ctx-size is the authority (§L0).
+    expect(
+      effectiveContextWindow({ contextWindow: () => 8192 }, { contextTokens: 4096, contextTokensOverride: 16384 })
+    ).toBe(8192)
+  })
 })
 
 describe('collapseToAlternating (orphan turns from failed answers)', () => {
@@ -328,6 +338,60 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(msg.truncated).toBe(true)
     // Round-trips through the DB read (messages.truncated → Message.truncated).
     expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
+  })
+
+  // 2026-07-04 user report: a Fast-mode reply that hit the FAST_MAX_TOKENS cap also finishes with
+  // 'length', and the badge then claimed "reached the model's context limit" while the meter
+  // (truthfully) sat at single-digit percent. A capped run must NOT wear the context-limit badge.
+  it('does NOT flag truncated when finish_reason "length" came from a max_tokens cap (Fast mode)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'tell me everything' })
+
+    const cappedRuntime: ModelRuntime = {
+      modelId: 'capped',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      contextWindow: () => 2048,
+      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
+        yield 'a quick answer that hits'
+        yield ' the fast-mode token cap'
+        options?.onFinish?.('length')
+      }
+    }
+
+    // Fast mode maps to a max_tokens cap inside the runtime — 'length' here means "cap", not window.
+    const fast = await generateAssistantMessage(db, cappedRuntime, conv.id, { mode: 'fast' })
+    expect(fast.truncated).toBeUndefined()
+
+    // An explicit runtimeOptions cap counts the same way.
+    const conv2 = createConversation(db, {})
+    appendMessage(db, { conversationId: conv2.id, role: 'user', content: 'again' })
+    const capped = await generateAssistantMessage(db, cappedRuntime, conv2.id, {
+      runtimeOptions: { maxTokens: 64 }
+    })
+    expect(capped.truncated).toBeUndefined()
+  })
+
+  // Meter honesty: the assembled prompt (system + fitted history) is reported over the LAUNCHED
+  // window so the live meter mirrors what the model actually received — not a renderer guess.
+  it('reports the real assembled-prompt usage via onPromptUsage', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping pong ping pong' })
+
+    let usage: { usedTokens: number; window: number } | null = null
+    await generateAssistantMessage(db, runtime(), conv.id, {
+      onPromptUsage: (u) => {
+        usage = u
+      }
+    })
+    expect(usage).not.toBeNull()
+    // The launched window (mock runtime contextTokens), not settings.contextTokens.
+    expect(usage!.window).toBe(2048)
+    // System prompt + the user turn are both counted — well above the bare question's words.
+    expect(usage!.usedTokens).toBeGreaterThan(4)
   })
 
   it('a user Stop is NOT flagged truncated even though the reply is partial (no finish_reason)', async () => {

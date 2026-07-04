@@ -1,6 +1,6 @@
 import type { Db } from '../db'
 import { t } from '../../../shared/i18n'
-import type { AppSettings, Citation, CoverageInfo, Message, RetrievalScope } from '../../../shared/types'
+import type { AppSettings, Citation, ContextUsage, CoverageInfo, Message, RetrievalScope } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
@@ -39,6 +39,7 @@ import {
   getLatestCheckpoint,
   isAbortError,
   listConversationTurns,
+  messageTokens,
   stripThinkBlocks,
   type TurnSkill
 } from '../chat'
@@ -1132,6 +1133,14 @@ export interface GroundedAnswerOptions {
   onToken?: (token: string) => void
   runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
   /**
+   * Fired once with the REAL assembled grounded prompt's usage (fitted history + the injected
+   * excerpt/whole-document block, in the budget's own estimate) over the launched window, right
+   * before generation. The IPC layer forwards it to the composer meter — the renderer cannot
+   * estimate a document turn from the visible history alone (the excerpt block never persists),
+   * which is how the meter read 7% while the window was actually full.
+   */
+  onPromptUsage?: (usage: ContextUsage) => void
+  /**
    * Legacy "ask selected documents" doc-id scope. Null = whole corpus. Kept for existing
    * callers; ignored when `scope` is provided.
    */
@@ -1472,14 +1481,30 @@ export async function generateGroundedAnswer(
   // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow
   // and trigger an HTTP 400 from the runtime.
   const messages = buildGroundedChatMessages(db, conversationId, grounded, contextTokens)
+  // Meter honesty: the grounded turn carries the whole excerpt/document block, which never
+  // persists — report the REAL assembled usage so the live meter shows how full the window is.
+  opts.onPromptUsage?.({
+    usedTokens: messages.reduce((sum, m) => sum + messageTokens(m), 0),
+    window: contextTokens
+  })
   // W2 scope notice (§2.1): when the scope was auto-narrowed to this one document, lead with the fixed
   // localized notice so it streams first AND lands in the persisted content (never a silent narrowing).
   const seededPrefix = opts.answerPrefix ?? ''
   let content = seededPrefix
   if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
+  // Honest-signal parity with plain chat (§L0): capture the finish reason so a grounded answer the
+  // model cut off at the context ceiling gets the truncated badge instead of persisting a mid-word
+  // partial as if complete — a budget-filling document turn is exactly where the ceiling hits.
+  let finishReason: string | null = null
   // No `mode` is passed: document answers always run 'balanced' — grounded
   // answers should be fast + literal.
-  const stream = runtime.chatStream(messages, { signal: opts.signal, ...opts.runtimeOptions })
+  const stream = runtime.chatStream(messages, {
+    signal: opts.signal,
+    onFinish: (reason) => {
+      finishReason = reason
+    },
+    ...opts.runtimeOptions
+  })
   try {
     for await (const token of stream) {
       content += token
@@ -1511,7 +1536,10 @@ export async function generateGroundedAnswer(
     coverage,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     // Auto-fire provenance rides with the stamp (S13c) — only when the fence was placed (§22-A5).
-    autoFired: skillFence ? opts.skill?.autoFired === true : false
+    autoFired: skillFence ? opts.skill?.autoFired === true : false,
+    // 'length' with no max_tokens cap in play = cut off at the model's context ceiling (the
+    // grounded path passes no mode, so only an explicit runtimeOptions cap counts as a cap).
+    truncated: finishReason === 'length' && opts.runtimeOptions?.maxTokens == null
   })
 }
 
@@ -1521,6 +1549,8 @@ export interface GroundedDataAnswerOptions {
   signal?: AbortSignal
   onToken?: (token: string) => void
   onCompactionStart?: () => void
+  /** The real assembled-prompt usage for the composer meter — mirrors `GroundedAnswerOptions`. */
+  onPromptUsage?: (usage: ContextUsage) => void
   /** The turn's skill: its fence rides in the grounded USER turn (mirrors `buildGroundedPrompt`); the
    *  assistant row is stamped only when the fence actually fit. */
   skill?: TurnSkill | null
@@ -1583,12 +1613,25 @@ export async function generateGroundedDataAnswer(
   // The grounded-data mode uses its OWN system prompt (no `[Sn]` citation rule — the turn carries a data
   // object, not numbered excerpts), so the model is never told to cite excerpts it wasn't given.
   const messages = buildGroundedChatMessages(db, conversationId, grounded, contextTokens, GROUNDED_DATA_SYSTEM_PROMPT)
+  // Meter honesty: the data block rides only in this transient turn — report the real usage.
+  opts.onPromptUsage?.({
+    usedTokens: messages.reduce((sum, m) => sum + messageTokens(m), 0),
+    window: contextTokens
+  })
 
   // W2 scope notice (§2.1): stream + seed it first so it leads the answer AND lands in persisted content.
   const seededPrefix = opts.answerPrefix ?? ''
   if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
   let modelContent = ''
-  const stream = runtime.chatStream(messages, { signal: opts.signal })
+  // Honest-signal parity with plain chat/grounded (§L0): flag a narration the model cut off at the
+  // context ceiling (no max_tokens cap is ever set on this path).
+  let finishReason: string | null = null
+  const stream = runtime.chatStream(messages, {
+    signal: opts.signal,
+    onFinish: (reason) => {
+      finishReason = reason
+    }
+  })
   try {
     for await (const token of stream) {
       modelContent += token
@@ -1624,6 +1667,7 @@ export async function generateGroundedDataAnswer(
     citations: data.citations,
     coverage: data.coverage,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
-    autoFired: skillFence ? opts.skill?.autoFired === true : false
+    autoFired: skillFence ? opts.skill?.autoFired === true : false,
+    truncated: finishReason === 'length'
   })
 }

@@ -6,6 +6,7 @@ import { applyUiLanguageSetting, initMainI18n } from './services/i18n'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
 import { getSettings, updateSettings } from './services/settings'
+import { effectiveContextWindow } from './services/chat'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
@@ -239,7 +240,17 @@ function initBackend(): void {
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
     isChatStreaming: () => inFlightStreams.size > 0,
-    getContextTokens: () => getSettings(workspace.requireDb()).contextTokens,
+    // Doc-task window budgets follow the REAL launched context window (§L0 — the same source
+    // chat/RAG assembly budgets against), not bare `settings.contextTokens`: the runtime is
+    // launched with the user's override ?? the manifest's recommended size, which can diverge
+    // from the setting — "different context sizes in different areas" was exactly the 2026-07-04
+    // user-report confusion. With no runtime up (tasks then refuse anyway) fall back to the
+    // same override-aware value the next start would use.
+    getContextTokens: () => {
+      const s = getSettings(workspace.requireDb())
+      const active = runtime.active()
+      return active ? effectiveContextWindow(active, s) : (s.contextTokensOverride ?? s.contextTokens)
+    },
     getStoreDir: () => documentsDir(paths.workspacePath),
     getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher(), ocrEngine }),
     beginDocumentWork: () => workspace.beginDocumentWork(),

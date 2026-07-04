@@ -87,7 +87,11 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   const status = await ctx.runtime.start({
     modelId,
     modelPath: weightPath(ctx.paths.rootPath, found.manifest),
-    contextTokens: found.manifest.recommendedContextTokens || s.contextTokens
+    // The user's context-size pick (AI Model screen) wins; automatic (null) = the model's
+    // recommended window, falling back to the legacy setting for a manifest without one.
+    // Every downstream budget follows the LAUNCHED window via ModelRuntime.contextWindow() (§L0).
+    contextTokens:
+      s.contextTokensOverride ?? (found.manifest.recommendedContextTokens || s.contextTokens)
   })
   ctx.audit?.('runtime_started', `Model runtime started: ${modelId}`, {
     modelId,

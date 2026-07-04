@@ -872,6 +872,15 @@ export const en = {
   'models.tech.context': 'Context window',
   'models.tech.contextValue': '{count} tokens',
   'models.tech.file': 'File',
+  // ---- Context-size picker (2026-07-04 user report — the truncation hint points here) ----
+  'models.context.title': 'Context size',
+  'models.context.label': 'Context window for answers:',
+  'models.context.auto': 'Automatic — the model’s recommended size',
+  'models.context.hint':
+    'A larger context lets a conversation or a document answer carry more text at once, but it ' +
+    'needs more memory and can slow answers down. Takes effect the next time a model starts.',
+  'models.context.restartHint':
+    'A model is running right now — stop and start it to apply the new size.',
   'models.verifyTitle':
     'Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)',
   'models.verifying': 'Verifying…',
@@ -951,6 +960,8 @@ export const en = {
   'settings.workspace.modeEncrypted': 'Encrypted',
   'settings.workspace.modePlaintext': 'Plaintext (developer)',
   'settings.workspace.contextTokens': 'Context tokens',
+  // Shown when no override is set: the launched window follows the model's recommendation.
+  'settings.workspace.contextAuto': 'Automatic (model default) — change it on the AI Model screen',
   'settings.workspace.encryptedHint':
     'This workspace is encrypted at rest. Use “Lock now” in the sidebar to re-encrypt and ' +
     'lock it; it also locks automatically on quit.',

@@ -24,7 +24,13 @@ import {
   type RagRetrievalSettings,
   type RetrievedChunk
 } from '../../src/main/services/rag'
-import { appendMessage, createConversation, listMessages } from '../../src/main/services/chat'
+import {
+  appendMessage,
+  createConversation,
+  getConversationContextUsage,
+  listMessages
+} from '../../src/main/services/chat'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
   createQueuedDocument,
@@ -548,6 +554,76 @@ describe('generateGroundedAnswer', () => {
     expect(chatSpy).toHaveBeenCalledTimes(1)
     const options = chatSpy.mock.calls[0][1]
     expect(options?.mode).toBeUndefined()
+  })
+
+  // Meter honesty (2026-07-04 user report "meter says 7% while the window is full"): the grounded
+  // turn carries the injected excerpt block — content that never persists — so the reported usage
+  // must exceed what the resting (persisted-history) read can see.
+  it('reports the real grounded prompt usage via onPromptUsage, larger than the resting read', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'science.pdf', [
+      {
+        text:
+          'photosynthesis converts sunlight into chemical energy in plants using chlorophyll ' +
+          'inside the chloroplasts of every green leaf across many words of excerpt text'
+      }
+    ])
+    const conv = createConversation(db, { mode: 'documents' })
+    const question = 'photosynthesis converts sunlight into chemical energy'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+
+    const rt = runtime()
+    const resting = getConversationContextUsage(db, rt, conv.id)
+    let usage: { usedTokens: number; window: number } | null = null
+    await generateGroundedAnswer(db, rt, embedder, conv.id, question, SETTINGS, {
+      onPromptUsage: (u) => {
+        usage = u
+      }
+    })
+
+    expect(usage).not.toBeNull()
+    // Budgeted over the LAUNCHED window (the mock runtime's contextTokens).
+    expect(usage!.window).toBe(2048)
+    // The excerpt block (+ grounded framing) is counted — strictly more than the persisted history.
+    expect(usage!.usedTokens).toBeGreaterThan(resting.usedTokens)
+  })
+
+  // Honest-signal parity with plain chat (§L0): a grounded answer the model cut off at the
+  // context ceiling persists with the truncated flag, so the transcript shows the badge instead
+  // of passing a mid-word partial off as complete.
+  it('stamps truncated on a grounded answer cut off at the context ceiling', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'science.pdf', [
+      { text: 'photosynthesis converts sunlight into chemical energy in plants' }
+    ])
+    const conv = createConversation(db, { mode: 'documents' })
+    const question = 'photosynthesis converts sunlight into chemical energy in plants'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+
+    const cutOffRuntime: ModelRuntime = {
+      modelId: 'cutoff',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      contextWindow: () => 2048,
+      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
+        yield 'a grounded answer that runs'
+        yield ' right into the wall'
+        options?.onFinish?.('length')
+      }
+    }
+
+    const msg = await generateGroundedAnswer(db, cutOffRuntime, embedder, conv.id, question, SETTINGS)
+    expect(msg.truncated).toBe(true)
+    expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
+
+    // A clean finish ('stop' from the mock runtime) stays unflagged.
+    const conv2 = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv2.id, role: 'user', content: question })
+    const clean = await generateGroundedAnswer(db, runtime(), embedder, conv2.id, question, SETTINGS)
+    expect(clean.truncated).toBeUndefined()
   })
 
   it('strips inline think blocks from the persisted grounded answer (D6)', async () => {

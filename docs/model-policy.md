@@ -96,6 +96,9 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
   `recommended_context_tokens` to a small **local runtime budget** (8192 for the new three; the
   incumbent 4B keeps 4096). That field is the *recommended runtime context for normal laptops*, not
   the theoretical native window — revisit only after KV-cache/RAM budgeting + a long-context eval.
+  Since 2026-07-04 the user can override it: the chat sidecar launches with
+  `settings.contextTokensOverride ?? (recommended_context_tokens || settings.contextTokens)` — the
+  AI Model screen's "Context size" card (presets 4k–32k, default Automatic; rag-design §15.8).
 - **Runtime pin bumped to b9849** (see "runtime-sources.yaml" below) specifically because Qwen3.5 is
   a newer architecture than the old b9585 build. b9849 *should* load these models, but that is not
   yet confirmed by a local smoke — see the manual-smoke checklist in `model-benchmarks.md` §9 / the

@@ -13,6 +13,11 @@ const MAX_SETTINGS_ARRAY = 10_000
  *  window. A renderer-supplied value below it is clamped UP, never dropped. */
 const MIN_CONTEXT_TOKENS = 2048
 
+/** Ceiling for the user's `contextTokensOverride` (AI Model screen context-size picker). The KV
+ *  cache grows linearly with the window and an over-eager value OOMs/thrashes mid-chat on the
+ *  very laptops this app targets; 32k covers every preset the UI offers with headroom. */
+export const MAX_CONTEXT_TOKENS_OVERRIDE = 32_768
+
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.
 // The table lives inside the workspace database, so on an encrypted workspace the
@@ -68,6 +73,15 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (key === 'contextTokens') {
       const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : MIN_CONTEXT_TOKENS
       toStore = Math.max(MIN_CONTEXT_TOKENS, n)
+    }
+    // contextTokensOverride: null = automatic (model default) and stores as-is. A number is
+    // clamped into [MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS_OVERRIDE] — the same tree-builder
+    // floor as contextTokens (the override becomes the doc-task window when it launches the
+    // runtime) plus a RAM-safety ceiling. The default is null, so the generic type check above
+    // passes ANY value for this key — reject non-numeric junk here instead of storing it.
+    if (key === 'contextTokensOverride' && value !== null) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue
+      toStore = Math.min(MAX_CONTEXT_TOKENS_OVERRIDE, Math.max(MIN_CONTEXT_TOKENS, Math.floor(value)))
     }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue

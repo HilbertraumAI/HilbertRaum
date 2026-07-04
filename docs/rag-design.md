@@ -1550,3 +1550,55 @@ reply" affordance on a truncated turn. **The exact `finish_reason`/`usage` captu
 D:\ transcript; the fix makes the app self-report it going forward. Tests: `llama-runtime.test.ts`
 (onFinish length/stop + null-intermediate) and `chat.test.ts` (truncated persist round-trip; clean-`stop`
 and user-Stop both unflagged).
+
+### 15.8 Context truth end-to-end: real-usage meter, grounded truncation parity, one window, user context size (2026-07-04 user report)
+
+Triggered by a user report: *"the context display sits at 7% but the context is full — a 5-page PDF hit
+the limit almost immediately; is the context different per area? I'd offer a UI option to change the
+context size."* All four observations were real seams:
+
+- **The meter under-read document turns by the whole document.** The resting meter (§15.5) sums only the
+  PERSISTED history, and the live climb added only the visible user turn + streaming answer — but a
+  grounded turn injects the retrieved-excerpt / whole-document block (sized to ~the whole window by
+  design), which never persists. So a documents chat could run its window ~full every turn while the
+  meter honestly-but-misleadingly showed single digits. Fix: `generateAssistantMessage` /
+  `generateGroundedAnswer` / `generateGroundedDataAnswer` gain `onPromptUsage(usage)` — fired once after
+  assembly with the REAL assembled prompt's `messageTokens` sum over the launched window (the same
+  estimate currency the trim uses). `withChatStream` forwards it on the new ephemeral `STREAM.usage`
+  channel (`sendUsage`, R14 posture: isDestroyed-guarded, never buffered), preload exposes
+  `onContextUsage`, and `ChatScreen` keeps it as `streamUsage`: while THIS conversation streams, the
+  meter's base is the reported real usage (+ the streaming-answer estimate; `liveUserTokens` is ignored —
+  the report already contains the user turn), then the stream `finally` clears it so the meter reconciles
+  to the resting read. The post-turn drop-back is CORRECT: the excerpt block is per-turn, so at rest the
+  window really is mostly free again. Tests: `chat.test.ts` (usage over the launched window),
+  `rag.test.ts` (grounded usage strictly exceeds the resting read).
+- **Grounded answers now wear the truncation badge too.** §15.7 scoped the honest `'length'` signal to
+  plain chat, but a budget-filling document turn is exactly where the ceiling hits. Both grounded
+  generators now pass `onFinish` and stamp `messages.truncated` (rag.test.ts: cut-off flagged, clean run
+  unflagged).
+- **A `max_tokens` cap no longer masquerades as "context limit".** llama-server reports `'length'` for
+  BOTH ceilings; a Fast-mode reply that hit `FAST_MAX_TOKENS` (1024) showed "reached the model's context
+  limit" at single-digit meter usage — a false "context is full" signal. `generateAssistantMessage` flags
+  truncated only when NO cap was in effect (`runtimeOptions.maxTokens ?? requestParamsForMode(mode).maxTokens`
+  is null); prompt fitting reserves ≥ the Fast cap of answer room, so with a cap set the cap is what fired.
+- **One window for every area.** Doc tasks budgeted against bare `settings.contextTokens` while chat/RAG
+  budgeted against the launched window — the literal "different context sizes in different areas". The
+  `DocTaskManager.getContextTokens` dep (main/index.ts) now returns `effectiveContextWindow(active, s)`
+  when a runtime is up (fallback: the override-aware next-start value).
+- **User-settable context size.** `settings.contextTokensOverride` (nullable; DEFAULT null = automatic),
+  clamped by `updateSettings` into `[MIN_CONTEXT_TOKENS 2048, MAX_CONTEXT_TOKENS_OVERRIDE 32768]` with
+  junk rejected (the null default defeats the generic type check). The chat launch
+  (`registerModelIpc.startModel`) becomes `override ?? (manifest.recommendedContextTokens ||
+  settings.contextTokens)` — before this, the manifest ALWAYS won, so the `chat.truncated.hint` copy
+  ("raise the context size on the AI Model screen") pointed at a control that neither existed nor would
+  have had any effect. The AI Model screen gains the "Context size" card (`CONTEXT_SIZE_PRESETS`
+  4k/8k/16k/32k + Automatic; applies at the next model start, restart note while one runs);
+  `effectiveContextWindow`'s no-runtime fallback and the Settings→Workspace display are override-aware
+  (the latter shows "Automatic (model default)" instead of a number nothing uses). Larger windows cost
+  KV-cache RAM + prefill time — hence the bounded presets and the ceiling. Tests:
+  `settings-context-override.test.ts` (round-trip/clamp/junk), `chat.test.ts` (fallback precedence).
+
+**Also answered for the report:** context is **per conversation** (assembly replays only
+`conversationId`'s history — nothing accumulates across chats), and the 5-page-PDF limit is real on a
+4096-token model: the whole-doc budget is `(window − reserve − framing) ÷ 1.5` ≈ 2–3 pages (§15.1) — the
+new context-size picker is the remedy the report asked for.

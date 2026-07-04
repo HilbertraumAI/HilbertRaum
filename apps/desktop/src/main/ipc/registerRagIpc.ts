@@ -375,10 +375,12 @@ export function registerRagIpc(ctx: AppContext): void {
                 event,
                 conversationId,
                 'Document answer failed',
-                withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
+                withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction, sendUsage) =>
                   generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
                     signal,
                     onCompactionStart: sendCompaction,
+                    // The real assembled-prompt usage (incl. the whole-document block) for the meter.
+                    onPromptUsage: sendUsage,
                     scope,
                     reranker: ctx.reranker,
                     // The turn's skill fence rides in the grounded USER turn; the whole document is the
@@ -425,10 +427,11 @@ export function registerRagIpc(ctx: AppContext): void {
                 event,
                 conversationId,
                 'Document answer failed',
-                withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
+                withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction, sendUsage) =>
                   generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
                     signal,
                     onCompactionStart: sendCompaction,
+                    onPromptUsage: sendUsage,
                     scope,
                     reranker: ctx.reranker,
                     skill: turnSkill,
@@ -452,7 +455,7 @@ export function registerRagIpc(ctx: AppContext): void {
               event,
               conversationId,
               'Document analysis failed',
-              withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction): Promise<Message> => {
+              withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction, sendUsage): Promise<Message> => {
                 // U5 (audit §3.6): the exhaustive path runs a potentially long, SILENT deterministic
                 // extraction before the first token — a "one-blob" answer that reads as a hang. Fire the
                 // ephemeral "reading the document…" notice up front (the compaction-notice channel, an
@@ -481,6 +484,7 @@ export function registerRagIpc(ctx: AppContext): void {
                   return generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
                     signal,
                     onCompactionStart: sendCompaction,
+                    onPromptUsage: sendUsage,
                     scope,
                     reranker: ctx.reranker,
                     skill: turnSkill,
@@ -508,6 +512,7 @@ export function registerRagIpc(ctx: AppContext): void {
                     {
                       signal,
                       onCompactionStart: sendCompaction,
+                      onPromptUsage: sendUsage,
                       onToken: sendToken,
                       skill: turnSkill,
                       // W2 (§2.1): carry the auto-narrow scope notice into the grounded-data path too.
@@ -582,12 +587,14 @@ export function registerRagIpc(ctx: AppContext): void {
         conversationId,
         'Document answer failed',
         // F2: defer the regenerate delete into the runFn (slot held) + restore on a non-abort failure.
-        withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
+        withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction, sendUsage) =>
           generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
             signal,
             // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);
             // isDestroyed-guarded inside withChatStream, never buffered (R14).
             onCompactionStart: sendCompaction,
+            // The real assembled-prompt usage (incl. the retrieved excerpt block) for the meter.
+            onPromptUsage: sendUsage,
             // Composite retrieval scope (plan §10.2): membership ∪ specific docs ∪ attachments,
             // archived excluded by default. Also makes the empty-context re-index check
             // scope-aware (M2). An empty resolved scope = whole corpus.

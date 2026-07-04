@@ -942,7 +942,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `contextTokens` (the production callers pass `getSettings(db).contextTokens`; omitted = the
   pure, untrimmed builder used by unit tests). This complements the doc-task window budgets
   (`doctasks/summary.ts`), which already sized their inputs to `contextTokens` — the gap was
-  only the conversational path. **German subword safety (2026-07-01):** `messageTokens` scales the
+  only the conversational path. **Since 2026-07-04** the doc-task budgets follow the LAUNCHED
+  window too (`DocTaskManager.getContextTokens` → `effectiveContextWindow` of the active runtime),
+  so no area budgets against a different context size than the one the sidecar runs with; the
+  user can change that size via `settings.contextTokensOverride` (AI Model screen "Context size"
+  card, applied at the next model start — rag-design §15.8). **German subword safety (2026-07-01):** `messageTokens` scales the
   1.3 base word rate by `CHAT_TOKENS_PER_WORD_SAFETY` (1.5 → ≈1.95 real tokens/word) because a
   German machine reply tokenizes at ~1.5–2 tokens/word; the 1.3 base under-counted it, so the trim
   kept too much history and the answer overflowed. Mirrors the RAG ÷1.5 German safety (rag-design
@@ -958,7 +962,10 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   off) behaviour is byte-identical to drop-oldest. Every new path fails safe (any summarizer failure ⇒ no
   checkpoint, turn proceeds). UX: a composer context-usage meter (now with an **always-visible %** that
   updates **live** as the answer streams — `ChatScreen` `liveUsage` = resting read + in-flight user turn +
-  streaming-answer estimate, reconciled to the main-process resting read when the turn settles), a one-shot
+  streaming-answer estimate, reconciled to the main-process resting read when the turn settles; since
+  2026-07-04 the in-flight base is the **REAL assembled prompt usage** reported by the generators over the
+  ephemeral `STREAM.usage` channel, so a document turn's injected excerpt block — invisible to any
+  renderer estimate — reads true, rag-design §15.8), a one-shot
   "summarizing…" notice (`STREAM.compaction`), and an expandable transcript summary marker. Full design
   record (L0/L1/L2 + trigger + summarizer + UX, with the deferred Phase-3 `/tokenize`):
   [`rag-design.md`](rag-design.md) §15.
@@ -970,7 +977,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   (additive nullable column; threaded through `Message`, `appendMessage`, and the regenerate delete/restore
   snapshot). The transcript renders a quiet amber "Reply cut off — reached the model's context limit" note
   (`.msg-truncated`, `chat.truncated.*`) with an actionable tooltip. A user Stop carries no finish reason, so
-  the intentional partial is **not** flagged. Scope: plain chat (the grounded doc-answer path is out of scope).
+  the intentional partial is **not** flagged. **Since 2026-07-04** (rag-design §15.8) the grounded
+  doc-answer paths (`generateGroundedAnswer`/`generateGroundedDataAnswer`) stamp the same flag — a
+  budget-filling document turn is where the ceiling actually hits — and a `'length'` that came from a
+  `max_tokens` CAP (Fast mode's 1024) is **no longer flagged**: the badge claims "context limit", and a
+  capped reply at single-digit meter usage wearing it was a false "context is full" signal.
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`

@@ -154,6 +154,13 @@ export function ChatScreen({
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   /** Estimated tokens of the in-flight user turn, added to the live meter until the turn settles. */
   const [liveUserTokens, setLiveUserTokens] = useState(0)
+  /** The REAL assembled-prompt usage of the in-flight turn (STREAM.usage, fired post-assembly).
+   *  A document answer injects the retrieved excerpt/whole-document block into its prompt —
+   *  content that never persists, so the resting read + word estimate under-count it by the whole
+   *  document ("meter says 7% while the window is full"). When present it REPLACES the estimate
+   *  base while streaming; cleared when the turn settles (the excerpt block is per-turn, so the
+   *  meter honestly drops back to the resting read). */
+  const [streamUsage, setStreamUsage] = useState<ContextUsage | null>(null)
   /** The latest compaction summary + its transcript marker position (§5.3, D-b); null hides it. */
   const [summaryMarker, setSummaryMarker] = useState<ConversationSummaryMarker | null>(null)
   // True while RECOVERING an in-flight generation that this component instance did not
@@ -679,12 +686,21 @@ export function ChatScreen({
   // as the answer grows (and warns before it overflows). Off-stream it is just the resting value; on
   // completion the resting read is reconciled from the main process (the `finally` above).
   const liveUsage = useMemo<ContextUsage | null>(() => {
-    if (!contextUsage) return null
     const streamingHere = busyStreaming && streamConvId === activeId
+    // The main process reported the REAL assembled prompt (incl. a document turn's injected
+    // excerpt block): it already contains the user turn + fence + history, so only the streaming
+    // answer estimate rides on top — never `liveUserTokens` (that would double-count the question).
+    if (streamingHere && streamUsage) {
+      return {
+        usedTokens: streamUsage.usedTokens + estimateLiveTokens(streamText),
+        window: streamUsage.window
+      }
+    }
+    if (!contextUsage) return null
     if (!streamingHere) return contextUsage
     const extra = liveUserTokens + estimateLiveTokens(streamText)
     return { ...contextUsage, usedTokens: contextUsage.usedTokens + extra }
-  }, [contextUsage, busyStreaming, streamConvId, activeId, liveUserTokens, streamText])
+  }, [contextUsage, busyStreaming, streamConvId, activeId, liveUserTokens, streamText, streamUsage])
 
   function selectDepth(d: ChatDepthMode): void {
     if (busyStreaming) return
@@ -1068,6 +1084,8 @@ export function ChatScreen({
     // added on top in `liveUsage`. A regenerate re-streams an EXISTING user turn (already counted in
     // the resting usage), so it seeds 0 to avoid double-counting the question.
     setLiveUserTokens(regenerate ? 0 : estimateLiveTokens(content))
+    // A stale prior turn's real-usage report must not leak into this turn's meter.
+    setStreamUsage(null)
     answerStarted.current = false
     stopped.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
@@ -1088,6 +1106,10 @@ export function ChatScreen({
     const unsubscribeCompaction = window.api.onCompaction?.(convId, (notice) =>
       setProgressNotice(notice.kind ?? 'compaction')
     )
+    // The REAL assembled-prompt usage for this turn (fired once, post-assembly): the live meter's
+    // base while streaming — the only way a document turn's injected excerpt block reaches the
+    // meter. Optional-chained like onCompaction (tolerates an older bridge); ephemeral (R14).
+    const unsubscribeUsage = window.api.onContextUsage?.(convId, (usage) => setStreamUsage(usage))
     // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
     // a separate channel from answer tokens and are never part of the persisted reply.
     const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
@@ -1136,6 +1158,7 @@ export function ChatScreen({
       unsubscribeReasoning()
       unsubscribeScope()
       unsubscribeCompaction?.()
+      unsubscribeUsage?.()
       clearStreamBuffers()
       setStreaming(false)
       setStreamConvId(null)
@@ -1145,6 +1168,9 @@ export function ChatScreen({
       // Drop the live delta BEFORE reconciling so the meter never double-counts the turn: the
       // authoritative resting read below already includes the persisted user turn + reply.
       setLiveUserTokens(0)
+      // The per-turn excerpt block is gone with the turn — drop the real-usage base so the meter
+      // reconciles to the resting read (what actually persists across turns).
+      setStreamUsage(null)
       // The turn may have cut a fresh checkpoint and changed fullness — reconcile the meter + marker
       // to the persisted truth (runs on success AND error, so a partial/stopped reply settles too).
       if (activeIdRef.current === convId) void refreshContextInfo(convId)

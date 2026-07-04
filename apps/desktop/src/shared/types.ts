@@ -154,6 +154,16 @@ export interface AppSettings {
   developerMode: boolean
   /** Retrieval + chat tuning, with safe defaults. */
   contextTokens: number
+  /**
+   * User override for the chat model's context window — the `--ctx-size` the next model start
+   * launches with. NULL (default) = automatic: the model's `recommendedContextTokens`, falling
+   * back to `contextTokens` for a manifest without one. Set from the AI Model screen's context-
+   * size picker; a larger window lets conversations and document answers carry more text at once
+   * but costs RAM (KV cache) and prefill time. Clamped by `updateSettings` to
+   * [MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS_OVERRIDE]. Applies at the NEXT model start — the
+   * launched window (`ModelRuntime.contextWindow()`) stays authoritative for all budgets (§L0).
+   */
+  contextTokensOverride: number | null
   // ---- RAG retrieval knobs (spec §7.8 defaults) ----
   /** How many chunks to pull from the vector index before dedup/trim. */
   ragTopKInitial: number
@@ -258,6 +268,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // developer regardless of this setting (`AppContext.isDev`).
   developerMode: false,
   contextTokens: 4096,
+  // Automatic: launch with the model's recommended context size (see AppSettings doc).
+  contextTokensOverride: null,
   ragTopKInitial: 12,
   ragTopKFinal: 6,
   ragMaxContextTokens: 2500,

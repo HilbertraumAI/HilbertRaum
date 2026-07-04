@@ -27,6 +27,7 @@ import {
   stripSkillFenceEcho
 } from './skills/prompt'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
+import { requestParamsForMode } from './runtime/llama'
 import { ensureCompacted } from './chat/compaction'
 import { log } from './logging'
 
@@ -1017,10 +1018,13 @@ export function messageTokens(m: ChatMessage): number {
  */
 export function effectiveContextWindow(
   runtime: Pick<ModelRuntime, 'contextWindow'>,
-  settings: { contextTokens: number }
+  settings: { contextTokens: number; contextTokensOverride?: number | null }
 ): number {
   const reported = runtime.contextWindow?.()
-  return reported != null && reported > 0 ? reported : settings.contextTokens
+  if (reported != null && reported > 0) return reported
+  // No launched window to report (bare test stub): honour the user's context-size override
+  // (the value the next start will launch with) before the legacy fallback.
+  return settings.contextTokensOverride ?? settings.contextTokens
 }
 
 /**
@@ -1038,7 +1042,9 @@ export function getConversationContextUsage(
   conversationId: string
 ): ContextUsage {
   const settings = getSettings(db)
-  const window = runtime ? effectiveContextWindow(runtime, settings) : settings.contextTokens
+  const window = runtime
+    ? effectiveContextWindow(runtime, settings)
+    : (settings.contextTokensOverride ?? settings.contextTokens)
   const messages = buildChatMessages(db, conversationId, window)
   const usedTokens = messages.reduce((sum, m) => sum + messageTokens(m), 0)
   return { usedTokens, window }
@@ -1165,6 +1171,15 @@ export interface GenerateOptions {
    * `STREAM.compaction` UX channel that consumes it is Phase 2.
    */
   onCompactionStart?: () => void
+  /**
+   * Fired exactly once with the REAL assembled prompt's usage (the same over-counting estimate
+   * the budget trims with, over the launched window) right before generation starts. The IPC
+   * layer forwards it to the composer meter so the live bar reflects what the model actually
+   * received — for plain chat that includes the skill fence + any checkpoint pair the renderer
+   * estimate can't see; for grounded answers (rag/index.ts) it includes the whole injected
+   * excerpt/document block.
+   */
+  onPromptUsage?: (usage: ContextUsage) => void
 }
 
 /**
@@ -1201,6 +1216,12 @@ export async function generateAssistantMessage(
   // history. Stamp the assistant row only when the fence actually fit (skill shaped the answer).
   const fence = buildTurnFence(db, conversationId, opts.skill, contextTokens)
   const messages = buildChatMessages(db, conversationId, contextTokens, fence)
+  // Meter honesty: report what the model actually receives (fitted history + system/fence),
+  // in the same estimate currency the budget uses, so the live meter never under-reads a turn.
+  opts.onPromptUsage?.({
+    usedTokens: messages.reduce((sum, m) => sum + messageTokens(m), 0),
+    window: contextTokens
+  })
   let content = ''
   // Capture the completion's finish reason so we can honestly flag a reply the model cut off at the
   // token/context ceiling ('length') instead of persisting the mid-word partial as if complete
@@ -1226,8 +1247,15 @@ export async function generateAssistantMessage(
     // Any other error is a real failure and propagates to the IPC layer.
     if (!isAbortError(err, opts.signal)) throw err
   }
-  // 'length' = the reply hit the ceiling and is cut off; any other reason (or none) = a clean reply.
-  const truncated = finishReason === 'length'
+  // 'length' = the reply hit a ceiling and is cut off — but llama-server reports the SAME reason
+  // for two very different ceilings: the model's context window AND a per-request `max_tokens`
+  // cap (Fast mode caps at FAST_MAX_TOKENS). The badge claims "reached the model's context
+  // limit", so flag ONLY the uncapped case: with a cap in effect the cap is what fired (prompt
+  // fitting reserved ≥ CHAT_RESPONSE_RESERVE_TOKENS ≥ the Fast cap of answer room), and showing
+  // the context-limit badge at 7% meter usage is exactly the false "context is full" signal the
+  // 2026-07-04 user report described.
+  const capTokens = opts.runtimeOptions?.maxTokens ?? requestParamsForMode(opts.mode).maxTokens
+  const truncated = finishReason === 'length' && capTokens == null
   // Reasoning never reaches the DB: the runtime already streams it separately,
   // and any inline think block that slipped into the answer is stripped here.
   content = stripThinkBlocks(content)

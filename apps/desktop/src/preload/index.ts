@@ -514,6 +514,16 @@ const api = {
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },
+  /** Subscribe to the one-shot REAL assembled-prompt context usage of an in-flight turn (fired
+   *  once after prompt assembly; ephemeral, never persisted). It carries what the renderer's
+   *  word estimate cannot see — a document turn's injected excerpt/whole-document block — so the
+   *  composer meter reads true while the answer streams. */
+  onContextUsage: (requestId: string, cb: (usage: ContextUsage) => void): (() => void) => {
+    const ch = STREAM.usage(requestId)
+    const handler = (_e: unknown, usage: ContextUsage) => cb(usage)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
   /** Subscribe to one-line runtime notices (e.g. the compatibility-mode fallback). */
   onRuntimeNotice: (cb: (message: string) => void): (() => void) => {
     const handler = (_e: unknown, message: string) => cb(message)

@@ -271,6 +271,13 @@ export const STREAM = {
   // token — context-compaction plan §5.2). Never persisted, not in `streamBuffers` (R14 — a
   // transient hint, fine to miss on remount); cleared in the renderer when answer tokens begin.
   compaction: (requestId: string) => `chat:compaction:${requestId}`,
+  // ADDITIVE: the REAL assembled-prompt context usage for the in-flight turn (a ContextUsage
+  // payload), fired once right after prompt assembly. A document answer injects the retrieved
+  // excerpts / whole-document block into the prompt — content the renderer cannot see in the
+  // persisted history, so its word-count estimate under-reads a doc turn by the entire document
+  // ("meter says 7% while the window is full"). Ephemeral like `compaction` (R14): never
+  // buffered, fine to miss on remount — the meter then falls back to the resting estimate.
+  usage: (requestId: string) => `chat:usage:${requestId}`,
   // Image understanding (vision) per-job streaming (image-understanding plan §9.1). Mirrors the
   // chat token/done/error contract, keyed by analyze jobId: the vision sidecar emits SSE
   // byte-identical to chat (V1-confirmed), so `readChatSSE` forwards the deltas as imgToken.

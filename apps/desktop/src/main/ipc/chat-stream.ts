@@ -1,7 +1,12 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import { STREAM, type CompactionNotice } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message } from '../../shared/types'
+import {
+  DOC_TASK_BUSY_MESSAGE,
+  type ContextUsage,
+  type Conversation,
+  type Message
+} from '../../shared/types'
 import {
   deleteLastAssistantMessage,
   emptyAssistantMessage,
@@ -68,14 +73,23 @@ export type SendReasoning = (delta: string) => void
  * screen that remounts mid-stream simply misses the transient hint — acceptable, the answer still streams.
  */
 export type SendCompaction = (kind?: CompactionNotice['kind']) => void
+/**
+ * A guarded one-shot sender for the REAL assembled-prompt context usage of the in-flight turn
+ * (meter honesty): fired right after prompt assembly so the composer meter reflects what the
+ * model actually received — including a document turn's injected excerpt/whole-document block,
+ * which the renderer-side word estimate cannot see. EPHEMERAL like `SendCompaction` (R14):
+ * never buffered; a remount misses it and the meter falls back to the resting estimate.
+ */
+export type SendUsage = (usage: ContextUsage) => void
 
 /** The generation body run under the locked streaming contract — handed the turn's abort signal
- *  and the three guarded senders, resolving with the persisted assistant Message. */
+ *  and the guarded senders, resolving with the persisted assistant Message. */
 export type ChatStreamRunFn = (
   signal: AbortSignal,
   sendToken: SendToken,
   sendReasoning: SendReasoning,
-  sendCompaction: SendCompaction
+  sendCompaction: SendCompaction,
+  sendUsage: SendUsage
 ) => Promise<Message>
 
 /**
@@ -102,10 +116,10 @@ export function withRegenerateGuard(
   runFn: ChatStreamRunFn
 ): ChatStreamRunFn {
   if (!regenerate) return runFn
-  return async (signal, sendToken, sendReasoning, sendCompaction) => {
+  return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage) => {
     const deleted = deleteLastAssistantMessage(db, conversationId)
     try {
-      return await runFn(signal, sendToken, sendReasoning, sendCompaction)
+      return await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage)
     } catch (err) {
       // Restore the prior reply only on a real failure; a user Stop (abort) keeps the delete.
       if (deleted && !isAbortError(err, signal)) restoreMessage(db, deleted)
@@ -178,12 +192,20 @@ export async function withChatStream(
       event.sender.send(STREAM.compaction(conversationId), notice)
     }
   }
+  // The real assembled-prompt usage for the meter (fired once, post-assembly). EPHEMERAL (R14):
+  // no `streamBuffers` write, isDestroyed-guarded — a remounted screen simply falls back to the
+  // resting estimate until the turn settles.
+  const sendUsage: SendUsage = (usage) => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send(STREAM.usage(conversationId), usage)
+    }
+  }
   try {
     // Hand the model slot off from a yielding build before any model call (no-op when none).
     // The abort signal is threaded in (REL-3) so a Stop while parked waiting for the build's
     // handoff rejects this acquire instead of blocking for up to one tree-node summarization.
     if (acquireSlot) releaseSlot = await acquireSlot(controller.signal)
-    const assistant = await runFn(controller.signal, sendToken, sendReasoning, sendCompaction)
+    const assistant = await runFn(controller.signal, sendToken, sendReasoning, sendCompaction, sendUsage)
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.done(conversationId), assistant)
     }
