@@ -14,7 +14,10 @@ import { seedSettings } from '../../src/main/services/settings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
 import { createConversation } from '../../src/main/services/chat'
-import { answerWholeDocFromTree } from '../../src/main/services/rag/whole-doc-tree'
+import {
+  answerWholeDocFromTree,
+  SUMMARY_MAP_CALL_HARD_CEILING
+} from '../../src/main/services/rag/whole-doc-tree'
 import { SUMMARY_MAP_CALL_CEILING } from '../../src/main/services/doctasks/summary'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import type { TurnSkill } from '../../src/main/services/chat'
@@ -239,13 +242,15 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     expect(rt.calls).toBe(0)
   })
 
-  it('map-call ceiling: more than N sections → capped map calls, truncated stamp, softened reduce (§2.2)', async () => {
+  it('map-call HARD ceiling: more than N sections → capped map calls, truncated stamp, softened reduce (§2.2, #2)', async () => {
     const h = await makeDoc()
-    // Many level-1 node summaries under a level-2 root: at a small context each fills its own window,
-    // so the window count exceeds SUMMARY_MAP_CALL_CEILING and the rescue must stop at the ceiling.
+    // Many level-1 node summaries under a level-2 root: at a small context each fills its own window, so the
+    // window count exceeds the HARD ceiling and the rescue must stop there (beyond it, deep-index tree
+    // territory). Windows between the single-level ceiling and the hard ceiling are folded (covered whole);
+    // beyond the hard ceiling the answer stays honestly beginning-only.
     const section = (label: string): string => `${label}. ${'detail point '.repeat(60)}`.trim()
     const nodes: string[] = []
-    for (let i = 0; i < SUMMARY_MAP_CALL_CEILING + 4; i++) {
+    for (let i = 0; i < SUMMARY_MAP_CALL_HARD_CEILING + 4; i++) {
       nodes.push(insertNode(h.db, h.docId, 1, i, false, section(`Section ${i}`)))
     }
     const root = insertNode(h.db, h.docId, 2, 0, true, 'Whole-document root summary.')
@@ -268,9 +273,11 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     })
 
     expect(msg).not.toBeNull()
-    // The map calls are capped at the ceiling (+1 reduce) — the rescue never fans out unbounded.
-    expect(rt.calls).toBeLessThanOrEqual(SUMMARY_MAP_CALL_CEILING + 1)
-    // Honest coverage: a ceiling cut covers only the BEGINNING even though every leaf is reachable.
+    // The map calls are capped at the HARD ceiling (+ the fold + 1 reduce) — the rescue never fans out
+    // unbounded even with the raised reach. (These short node summaries don't overflow the fold target, so no
+    // condense level runs: exactly the hard-ceiling map calls + the final reduce.)
+    expect(rt.calls).toBeLessThanOrEqual(SUMMARY_MAP_CALL_HARD_CEILING + 1)
+    // Honest coverage: a hard-ceiling cut covers only the BEGINNING even though every leaf is reachable.
     expect(msg!.coverage?.mode).toBe('tree')
     expect(msg!.coverage?.truncated).toBe(true)
     // The reduce prompt is softened: it no longer claims the notes cover the WHOLE document.

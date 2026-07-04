@@ -65,6 +65,20 @@ function mapUserPrompt(skillFence: string | null, part: number, total: number, t
   )
 }
 
+/** FOLD step (hierarchical reduce, follow-up #2): condense a batch of already-mapped section NOTES into a
+ *  shorter faithful summary, so a document beyond the single map-call ceiling still folds down to notes that
+ *  fit ONE final reduce (instead of dropping its tail). The fence rides this USER turn too (§2, fence at
+ *  every step); the app-authored system prompt stays outside it. */
+function foldUserPrompt(skillFence: string | null, part: number, total: number, notes: string): string {
+  const fence = skillFence ? `\n${skillFence}\n` : ''
+  return (
+    `You are condensing the notes from part ${part} of ${total} of ONE document into a shorter summary, to ` +
+    'complete the task described below. Keep every name, number, date, decision, and obligation exact — drop ' +
+    `only repetition and filler. Write condensed notes, not the final answer.\n${fence}\n` +
+    `Part ${part} of ${total} (section notes):\n${notes}\n\nCondensed notes:`
+  )
+}
+
 /** REDUCE step (streamed): produce the final skill-formatted deliverable from the notes. When the
  *  document was too large to process in full (map-call ceiling hit or the joined notes were
  *  truncated to fit the reduce budget), the prompt is SOFTENED to the honest beginning-only framing
@@ -112,6 +126,25 @@ export const CONTINUATION_ANCHOR_CHARS = 200
  *  its (anchor-enlarged) prompt — otherwise the no-`n_ctx`-overflow guard stops and the answer is honestly
  *  output-truncated (never assemble a prompt the runtime rejects — the HTTP 400 class, invariant §2). */
 export const CONTINUATION_MIN_OUTPUT_TOKENS = 256
+
+// ── Hierarchical fold for the ≥~50-page tail (follow-up #2) ────────────────────────────────────────────
+//
+// A document whose window count exceeds `SUMMARY_MAP_CALL_CEILING` (~12 windows ≈ ~50 pages) used to drop
+// its tail — only the first 12 windows were mapped and the answer was honestly badged beginning-only. That
+// is the designed hand-off point to the deep-index TREE (which auto-builds at ~this size), but a document in
+// the transient window BEFORE its tree exists still read beginning-only. Follow-up #2 raises the reach: up to
+// `SUMMARY_MAP_CALL_HARD_CEILING` windows are mapped, and the per-window notes are CONDENSED down through
+// bounded fenced intermediate reduces (`foldUserPrompt`) until they fit ONE final reduce — so the WHOLE
+// document (to the hard ceiling) is covered. Beyond the hard ceiling the answer stays honestly beginning-only
+// (the tree is the right rescue at that size — this is a query-time cost lever, deliberately bounded: the
+// dominant cost is one map call per window, on CPU, so the raise is moderate, not unbounded).
+
+/** Raised ceiling on windows actually MAPPED before the answer is honestly beginning-only (2× the single-
+ *  level ceiling ≈ ~100 pages). Beyond it, deep-index tree territory — `truncated` stays true. */
+export const SUMMARY_MAP_CALL_HARD_CEILING = SUMMARY_MAP_CALL_CEILING * 2
+/** Hard cap on the fold's condense levels (the runaway guard). Each level shrinks the notes ~fan-out-fold, so
+ *  a hard-ceiling document converges in 1–2 levels; a residual overflow falls to the notes hard-cut (honest). */
+export const MAX_FOLD_DEPTH = 3
 
 /** CONTINUE step: append a short resume instruction + an `anchor` (the tail already produced) to a USER
  *  turn, so the model continues exactly where it stopped without repeating. The seam overlap between the
@@ -419,13 +452,15 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   const questionTokens = approxPromptTokens(question)
   const reserveWords = Math.ceil((fenceTokens + questionTokens + 200) / SUMMARY_TOKENS_PER_WORD)
   const budgetWords = Math.max(200, summaryBudgetWords(contextTokens) - reserveWords)
-  // Map-call ceiling (parity with `planSummaryWindows` / SUMMARY_MAP_CALL_CEILING): beyond ~12 windows
-  // the rescue would fan out without bound. Keep the first N windows and mark the answer truncated so the
-  // coverage stamp AND the reduce prompt stay honest ("covers the beginning") — audit §2.2.
+  // Map-call HARD ceiling (follow-up #2): beyond `SUMMARY_MAP_CALL_HARD_CEILING` windows (~100 pages) the
+  // rescue would fan out without useful bound, and the deep-index tree is the designed answer at that size —
+  // keep the first N windows and mark the answer truncated so the coverage stamp AND the reduce prompt stay
+  // honest ("covers the beginning", audit §2.2). Windows BETWEEN the single-level ceiling and the hard ceiling
+  // are covered whole via the hierarchical fold below (they are no longer dropped at 12).
   let truncated = false
   let windows = packIntoWindows(sourceTexts, budgetWords)
-  if (windows.length > SUMMARY_MAP_CALL_CEILING) {
-    windows = windows.slice(0, SUMMARY_MAP_CALL_CEILING)
+  if (windows.length > SUMMARY_MAP_CALL_HARD_CEILING) {
+    windows = windows.slice(0, SUMMARY_MAP_CALL_HARD_CEILING)
     truncated = true
   }
 
@@ -477,7 +512,41 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
         const partial = await collect(mapUserPrompt(skillFence, i + 1, windows.length, windows[i]))
         if (partial.length > 0) partials.push(partial)
       }
-      notes = partials.length > 0 ? partials.join('\n\n') : sourceTexts.join('\n\n')
+      if (partials.length === 0) {
+        notes = sourceTexts.join('\n\n') // all-empty maps → fall back to the raw source (unchanged)
+      } else if (windows.length <= SUMMARY_MAP_CALL_CEILING) {
+        notes = partials.join('\n\n') // ≤ ceiling windows: single-level reduce (byte-identical to pre-#2)
+      } else {
+        // Hierarchical FOLD (follow-up #2): a document beyond the single map-call ceiling used to drop its
+        // tail; now every mapped window's notes are CONDENSED down through fenced intermediate reduces until
+        // they fit ONE final reduce, so the WHOLE document (to the hard ceiling) is covered. Fold until the
+        // joined notes fit alongside at least the floor output (so the reduce's notes-cut does NOT bind ⇒
+        // `truncated` stays false); a residual overflow after the depth cap falls to that notes-cut (honest).
+        const foldOverhead = fenceTokens + questionTokens + REDUCE_CHROME_TOKENS
+        const foldTargetTokens = Math.max(
+          REDUCE_MIN_NOTES_TOKENS,
+          contextTokens - foldOverhead - CHAT_RESPONSE_RESERVE_TOKENS
+        )
+        let level = partials
+        let depth = 0
+        while (
+          level.length > 1 &&
+          depth < MAX_FOLD_DEPTH &&
+          approxPromptTokens(level.join('\n\n')) > foldTargetTokens
+        ) {
+          depth++
+          const batches = packIntoWindows(level, budgetWords)
+          if (batches.length >= level.length) break // notes too big to group further → let the notes-cut bind
+          const condensed: string[] = []
+          for (let i = 0; i < batches.length; i++) {
+            const c = await collect(foldUserPrompt(skillFence, i + 1, batches.length, batches[i]))
+            if (c.length > 0) condensed.push(c)
+          }
+          if (condensed.length === 0) break // degenerate condense (think-only) → keep the prior level
+          level = condensed
+        }
+        notes = level.join('\n\n')
+      }
     }
 
     // Adaptive reduce budget (Phase 2 — §4): size the deliverable's output cap + the notes from the REAL

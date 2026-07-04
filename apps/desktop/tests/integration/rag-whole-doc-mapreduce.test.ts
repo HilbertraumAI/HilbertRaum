@@ -534,3 +534,69 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
     expect(msg.truncated).toBeUndefined()
   })
 })
+
+// Follow-up #2 — hierarchical fold for the ≥~50-page tail (wholedoc-truncation-fix-plan §14.10 residual (a)).
+// A document whose window count exceeds SUMMARY_MAP_CALL_CEILING (~12 windows) used to drop its tail (read
+// beginning-only, honestly badged). Now every window up to SUMMARY_MAP_CALL_HARD_CEILING is mapped and the
+// per-window notes are CONDENSED down through fenced intermediate reduces until they fit one final reduce —
+// so the WHOLE document (to the hard ceiling) is covered; beyond the hard ceiling the answer stays honestly
+// beginning-only. Driven at ctx 2048 (a small window packs the document into many windows) — the doc must be
+// large enough to exceed the ceiling in window count.
+describe('whole-document chunk map-reduce — hierarchical fold for the large-document tail (follow-up #2)', () => {
+  const CTX2 = 2048
+  // Medium map/condense notes: large enough that the joined per-window notes overflow the fold target (so a
+  // real condense level runs), small enough to still batch (< one summary window).
+  const MEDIUM_NOTE = `${'Detailpunkt Nummer '.repeat(40)}`.trim()
+
+  it('folds a document beyond the single map-call ceiling into WHOLE-document coverage (not beginning-only)', async () => {
+    const SENTENCES = 350 // > SUMMARY_MAP_CALL_CEILING windows at ctx 2048, comfortably ≤ the hard ceiling
+    const h = await makeHarness(SENTENCES)
+    const runtime = optionRecordingRuntime(CTX2, MEDIUM_NOTE)
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+    const msg = (await generateGroundedAnswer(
+      h.db,
+      runtime,
+      new MockEmbedder(),
+      h.conversationId,
+      QUESTION,
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: h.docId } }
+    )) as Message
+
+    // Honest WHOLE-document coverage — the tail was folded in, NOT dropped at the single-level ceiling.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(false)
+    // A real condense (fold) level ran — its prompt is distinctive.
+    expect(runtime.turns.some((t) => userTurnOf(t).includes('Condensed notes:'))).toBe(true)
+    // Whole-doc reach: the FIRST and LAST document markers both reached the MAP inputs (markers ride only the
+    // raw windows — the condense/reduce turns carry notes, not markers), so no window was dropped.
+    const allTurns = runtime.turns.map(userTurnOf).join('\n')
+    expect(allTurns).toContain('M0000')
+    expect(allTurns).toContain(`M${String(SENTENCES - 1).padStart(4, '0')}`)
+  })
+
+  it('beyond the HARD ceiling the tail is honestly dropped (deep-index tree territory)', async () => {
+    const SENTENCES = 1000 // > SUMMARY_MAP_CALL_HARD_CEILING windows at ctx 2048 ⇒ sliced + truncated
+    const h = await makeHarness(SENTENCES)
+    const runtime = optionRecordingRuntime(CTX2, MEDIUM_NOTE)
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+    const msg = (await generateGroundedAnswer(
+      h.db,
+      runtime,
+      new MockEmbedder(),
+      h.conversationId,
+      QUESTION,
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: h.docId } }
+    )) as Message
+
+    // Beyond the hard ceiling: honestly beginning-only (INPUT coverage truncated), never a false whole-doc claim.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(true)
+    // The dropped tail never reached the model: the LAST document marker is absent from every map input, while
+    // the FIRST is present (the beginning WAS covered).
+    const allTurns = runtime.turns.map(userTurnOf).join('\n')
+    expect(allTurns).toContain('M0000')
+    expect(allTurns).not.toContain(`M${String(SENTENCES - 1).padStart(4, '0')}`)
+  })
+})

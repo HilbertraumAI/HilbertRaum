@@ -731,8 +731,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   tree it is now covered whole by an on-the-fly **map-reduce over its raw chunks** (whole-doc-truncation-fix
   **Phase 1**, 2026-07-04 — `capped`/untruncated badge, "covers the whole document"), which **closes the
   "gap band"** where a document too large for a single read but too small to auto-build a tree was read from
-  the beginning only. New residuals: (a) the ≥~50-page tail is still beginning-only when its window count
-  exceeds `SUMMARY_MAP_CALL_CEILING` (~12 windows) — honestly badged `truncated`; (b) a mid-size analysis
+  the beginning only. New residuals: (a) a very large document is covered whole up to a **raised** ceiling —
+  since **follow-up #2** (2026-07-05) a window count between `SUMMARY_MAP_CALL_CEILING` (~12 windows, ~50
+  pages) and `SUMMARY_MAP_CALL_HARD_CEILING` (~24 windows, ~100 pages) is no longer dropped: every mapped
+  window's notes are **condensed** down through bounded fenced intermediate reduces (a hierarchical fold, cap
+  `MAX_FOLD_DEPTH`) until they fit one final reduce, so the whole document is covered (`truncated:false`).
+  Only **beyond** the hard ceiling (~100 pages) does the tail stay honestly beginning-only (`truncated:true`)
+  — that is deep-index **tree** territory (the tree auto-builds at ~this size and is the designed rescue; the
+  fold is a bounded query-time lever, deliberately not unbounded — the dominant cost is one map call per
+  window on CPU, covered by the Phase 3 progress notice); (b) a mid-size analysis
   now costs 2–12 model calls (map windows + reduce) of extra latency before the first streamed token —
   since **Phase 3** (2026-07-05) that gap carries the ephemeral `'analysis'` progress notice ("Reading the
   whole document…"), fired in the shared map-reduce core only when a real map loop runs (`windows.length >

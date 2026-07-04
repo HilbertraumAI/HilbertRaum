@@ -1411,11 +1411,29 @@ prompt; coverage honesty (`truncated:false` only when the whole doc was processe
 hard-cut ⇒ `truncated:true`, INPUT); `[Sn]` citations are real leaf chunks (M2); needle-downgrade + relevance
 paths byte-unchanged; the abort/Stop contract (a Stop before the first reduce token ⇒ `emptyAssistantMessage`;
 a Stop mid-stream/mid-continuation ⇒ the partial persisted, never a second capped pass); and `prompt + outputCap
-≤ n_ctx` at every context size (no HTTP 400). **Residuals** (see `known-limitations.md`): the ≥~50-page tail is
-still beginning-only (map-call ceiling, INPUT); a deliverable long enough to still be cut after the 2-cap keeps
-the honest OUTPUT-truncated badge; 2–12 map calls of latency on a mid-size analysis (now with the Phase 3
+≤ n_ctx` at every context size (no HTTP 400).
+
+**Follow-up #2 — hierarchical fold for the large-document tail (2026-07-05).** The map-call ceiling used to
+drop the tail of any document past `SUMMARY_MAP_CALL_CEILING` (~12 windows ≈ ~50 pages). #2 raises the reach:
+up to **`SUMMARY_MAP_CALL_HARD_CEILING`** (= `SUMMARY_MAP_CALL_CEILING × 2`, ~100 pages) windows are mapped,
+and when the window count exceeds the single-level ceiling the per-window notes are **condensed** down through
+bounded fenced intermediate reduces (`foldUserPrompt`, the fence riding each — §2) until the joined notes fit
+alongside at least the floor output (so the reduce's notes-cut does not bind ⇒ `truncated:false`, whole
+document covered). The fold loop is bounded by **`MAX_FOLD_DEPTH`** (each level shrinks the notes ~fan-out-fold,
+so a hard-ceiling document converges in 1–2 levels); a residual overflow after the depth cap falls to the
+existing notes hard-cut (honest `truncated`). The ≤ ceiling path is **byte-identical** to pre-#2 (single-level
+join → reduce). Beyond the hard ceiling the tail stays honestly beginning-only — deep-index **tree** territory
+(the tree auto-builds at ~this size and is the designed rescue; the fold is a deliberately-bounded query-time
+lever, not unbounded — the dominant cost is one map call per window on CPU, covered by the Phase 3 progress
+notice).
+
+**Residuals** (see `known-limitations.md`): a document beyond the **hard** ceiling (~100 pages) is still
+beginning-only (INPUT, tree territory); a deliverable long enough to still be cut after the 2-cap keeps the
+honest OUTPUT-truncated badge; 2–24 map calls (+ fold) of latency on a large analysis (with the Phase 3
 affordance). Tests: `rag-whole-doc-mapreduce.test.ts` (Phase 1 reach + Phase 2 `maxTokens` + Phase 3 notice +
-Phase 4 continuation/dedup/cap/abort) and `tests/unit/wholedoc-reduce-budget.test.ts` (pure budget math).
+Phase 4 continuation/dedup/cap/abort + #2 fold-coverage/hard-ceiling), `rag-whole-doc-tree.test.ts` (the hard
+ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation), and
+`tests/unit/wholedoc-reduce-budget.test.ts` (pure budget math).
 
 **§-anchor legend (retired plan → here).** `wholedoc-truncation-fix-plan §2` (invariants), `§3` (Phase 1 —
 chunk map-reduce), `§4` (Phase 2 — adaptive reduce budget), `§5` (Phase 3 — progress notice), `§6` (Phase 4 —
