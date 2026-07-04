@@ -8,11 +8,17 @@ import {
   BANK_EXTRACTOR_VERSION,
   type ExtractTransactionsOutput
 } from '../../src/main/services/skills/tools/bank-statement'
-import { extractInvoice, INVOICE_EXTRACTOR_VERSION, type ExtractedInvoice } from '../../src/main/services/skills/tools/invoice'
+import {
+  extractInvoice,
+  validateInvoiceTotals,
+  INVOICE_EXTRACTOR_VERSION,
+  type ExtractedInvoice
+} from '../../src/main/services/skills/tools/invoice'
 import {
   detectDocumentCurrency,
   inferDateOrderResult,
   inferDateAnchor,
+  looksLikeGlyphSoup,
   normalizeExtractionText
 } from '../../src/main/services/skills/tools/money'
 import type { DocumentChunkRead } from '../../src/shared/types'
@@ -21,10 +27,12 @@ import {
   ALL_FIXTURES,
   BANK_FIXTURES,
   GEOMETRY_BANK_FIXTURES,
+  GEOMETRY_INVOICE_FIXTURES,
   INVOICE_FIXTURES,
   INCIDENT_CLASSES,
   type BankFixture,
   type GeometryBankFixture,
+  type GeometryInvoiceFixture,
   type InvoiceFixture
 } from '../fixtures/real-layouts/corpus'
 
@@ -82,15 +90,37 @@ function runBankChunks(chunks: DocumentChunkRead[]): ExtractTransactionsOutput {
   return output
 }
 
-/** Exactly what `extractInvoiceTool.run` assembles (currency vote + order/anchor + dateOrderInferred stamp). */
+/** Exactly what `extractInvoiceTool.run` assembles (currency vote + order/anchor + dateOrderInferred +
+ *  the P3 glyph-soup textQuality stamp). */
 function runInvoice(fx: InvoiceFixture): ExtractedInvoice {
-  const chunks = toChunks(fx.chunks)
+  return runInvoiceChunks(toChunks(fx.chunks))
+}
+
+/** The geometry INVOICE pipeline end-to-end (invoice-hardening P4): positioned words → the REAL
+ *  `reconstructPage` → the same invoice extraction the plain fixtures run — the production shape of the
+ *  P3 suspect-retry (`analysis/invoice.ts` re-reads a soup document via the layout segment reader). */
+function runGeometryInvoice(fx: GeometryInvoiceFixture): ExtractedInvoice {
+  const texts: string[] = []
+  let fallbackYear: number | null = null
+  let fallbackMonth: number | null = null
+  for (const page of fx.pages) {
+    const { text, year, month } = reconstructPage(page, { fallbackYear, fallbackMonth })
+    texts.push(text)
+    fallbackYear = year
+    fallbackMonth = month
+  }
+  return runInvoiceChunks(toChunks(texts))
+}
+
+function runInvoiceChunks(chunks: DocumentChunkRead[]): ExtractedInvoice {
   const joined = normalizeExtractionText(chunks.map((c) => c.text).join('\n'))
   const currency = detectDocumentCurrency(joined)
   const { order, inferred } = inferDateOrderResult(joined)
   const anchor = inferDateAnchor(joined, order)
   const invoice = extractInvoice(chunks, currency, order, anchor)
   invoice.dateOrderInferred = inferred
+  // P3 mirror of `extractInvoiceTool.run`: the glyph-soup verdict over the RAW text layer.
+  if (looksLikeGlyphSoup(chunks.map((c) => c.text))) invoice.textQuality = 'suspect'
   return invoice
 }
 
@@ -147,6 +177,12 @@ function currentSnapshot(): SnapshotFile {
     const output = runInvoice(fx)
     fixtures[fx.id] = { kind: 'invoice', inputHash: sha256(stableStringify(fx.chunks)), hash: sha256(stableStringify(output)), output }
   }
+  // Geometry invoice fixtures snapshot as 'invoice' (invoice-hardening P4): keyed on the INVOICE
+  // extractor version; `reconstructPage` changes ride the bank version's bump policy (see above).
+  for (const fx of GEOMETRY_INVOICE_FIXTURES) {
+    const output = runGeometryInvoice(fx)
+    fixtures[fx.id] = { kind: 'invoice', inputHash: sha256(stableStringify(fx.pages)), hash: sha256(stableStringify(output)), output }
+  }
   return {
     $comment:
       'GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by ' +
@@ -162,13 +198,13 @@ function currentSnapshot(): SnapshotFile {
 
 describe('real-layout corpus — figures parse correctly through the real extractors', () => {
   it('fixture ids are unique across the plain and geometry corpora (a collision would silently shadow a snapshot entry)', () => {
-    const ids = [...ALL_FIXTURES, ...GEOMETRY_BANK_FIXTURES].map((f) => f.id)
+    const ids = [...ALL_FIXTURES, ...GEOMETRY_BANK_FIXTURES, ...GEOMETRY_INVOICE_FIXTURES].map((f) => f.id)
     expect(new Set(ids).size).toBe(ids.length)
   })
 
   it('the corpus exercises every incident class (audit §7 rec 1 consolidation)', () => {
     const covered = new Set(
-      [...ALL_FIXTURES, ...GEOMETRY_BANK_FIXTURES].flatMap((f) => f.incidentClasses)
+      [...ALL_FIXTURES, ...GEOMETRY_BANK_FIXTURES, ...GEOMETRY_INVOICE_FIXTURES].flatMap((f) => f.incidentClasses)
     )
     for (const cls of INCIDENT_CLASSES) {
       expect(covered.has(cls), `no fixture exercises incident class "${cls}"`).toBe(true)
@@ -360,6 +396,40 @@ describe('real-layout corpus — figures parse correctly through the real extrac
     expect(inv.totals.netTotal).toBe(250)
     expect(inv.totals.grossTotal).toBe(250)
     expect(inv.lineItems).toHaveLength(3)
+  })
+
+  it('invoice-us-glyph-soup: suspect textQuality stamped; every uncorroborated weak total retracted (P2/P3)', () => {
+    const inv = runInvoice(INVOICE_FIXTURES[4])
+    // P3: the fragmented text layer is flagged — the answer layer keys its refusal/retry on this.
+    expect(inv.textQuality).toBe('suspect')
+    // P2: the incident's confident garbage (net 4 / tax 0 / gross 914, all bare-integer weak reads that
+    // contradict the strong 2-dp items) is RETRACTED — the extract carries NO totals.
+    expect(inv.totals).toEqual({})
+    // The strong 2-dp figures still parse as items (drop-don't-guess applies to the weak reads only).
+    expect(inv.lineItems.length).toBeGreaterThan(0)
+  })
+
+  it('invoice-de-unreconcilable-totals: printed 2-dp totals kept VERBATIM; the validator reports the mismatch', () => {
+    const inv = runInvoice(INVOICE_FIXTURES[5])
+    // Strong decimal-shaped figures are the document's own print — never retracted (the answer layer
+    // gates their presentation; P2 touches only weak bare-integer reads).
+    expect(inv.totals).toEqual({ netTotal: 300, taxTotal: 60, taxRatePercent: 20, grossTotal: 999 })
+    const validation = validateInvoiceTotals(inv)
+    expect(validation.reconciled).toBe(false)
+    expect(validation.checks.find((c) => c.name === 'lineItemsSumToNet')?.status).toBe('mismatch') // 270 ≠ 300
+    expect(validation.checks.find((c) => c.name === 'netPlusTaxIsGross')?.status).toBe('mismatch') // 360 ≠ 999
+  })
+
+  it('invoice-de-geometry-columns: a columnar invoice reconstructs and parses CLEANLY through reconstructPage (P3 retry path)', () => {
+    const inv = runGeometryInvoice(GEOMETRY_INVOICE_FIXTURES[0])
+    expect(inv.textQuality).toBeUndefined() // the reconstructed text is NOT soup
+    expect(inv.header.invoiceNumber).toBe('G-2026-3')
+    expect(inv.header.invoiceDate).toBe('2026-03-15')
+    expect(inv.header.currency).toBe('EUR')
+    expect(inv.lineItems).toHaveLength(2)
+    expect(inv.lineItems.map((l) => l.lineTotal)).toEqual([200, 50])
+    expect(inv.totals).toEqual({ netTotal: 250, taxTotal: 50, taxRatePercent: 20, grossTotal: 300 })
+    expect(validateInvoiceTotals(inv).reconciled).toBe(true)
   })
 })
 

@@ -354,12 +354,31 @@ password recovery — are documented in
   third-mode grounded-data path) + one German minutes turn against a real local model, asserting STRUCTURE +
   FIGURES (the deterministic echo, the extract count) not prose. Details: [`model-benchmarks.md`](model-benchmarks.md)
   §10. **Residuals:** nothing in the default `npm test` needs a model or the network (the smoke skips cleanly
-  without a path and is NOT wired into CI — it is a manual pre-release / post-pin-bump gate); the corpus feeds
-  the PLAIN-TEXT extractor path only (the geometry `pdf-layout.ts` reconstruction keeps its own tests, out of
-  the corpus's scope); and the corpus surfaced one still-open gap — the abbreviation `USt` is in the invoice
+  without a path and is NOT wired into CI — it is a manual pre-release / post-pin-bump gate); the corpus fed
+  the PLAIN-TEXT extractor path only until invoice-hardening-2026-07-04 P4 added the first geometry INVOICE
+  fixture (`invoice-de-geometry-columns`, through the real `reconstructPage`) — geometry BANK coverage was
+  already there, and the reconstruction's own unit tests remain the deep coverage; and the corpus surfaced
+  one still-open gap — the abbreviation `USt` is in the invoice
   `TOTALS_FILLER` set but NOT in `TAX_LABELS`, so a standalone `USt … EUR` tax-total line reads as a phantom
   line item (a spelled-out `Steuer` / `Umsatzsteuer` / `MwSt` label parses correctly) — a candidate for a
   future R-phase, recorded here rather than fixed under a test-infrastructure phase (no extractor change).
+- **Glyph-mangled (per-glyph) PDF text layers are DETECTED and refused, not repaired
+  (invoice-hardening-2026-07-04, architecture.md "Skills — design record" §42).** A PDF whose text layer
+  fragments into single-glyph runs ("1   0 % 3   Article") now stamps `textQuality: 'suspect'`, gets ONE
+  re-read through the geometry (`reconstructPage`) path, and — unless the figures then POSITIVELY
+  reconcile — an honest "this document's text doesn't extract cleanly" refusal pointing at OCR/the
+  original, instead of confident garbage totals (the 2026-07-04 incident class). **Residuals, accepted:**
+  (a) the `looksLikeGlyphSoup` heuristic is deliberately conservative (≥ 3 soup-shaped lines AND ≥ 20% of
+  non-empty lines) — a lightly-mangled document below both floors still parses without the caveat;
+  (b) the geometry retry runs ONCE per document (`suspect-confirmed` is final) — re-import/re-index to
+  retry after an upstream fix; (c) geometry reconstruction recovers COLUMN-scrambled layouts, not
+  per-glyph spacing (those correctly end at the refusal + OCR guidance); (d) the format-negation window
+  is 24 chars — an exotic phrasing with a farther negator falls to the conversation-level
+  byte-identical-replay backstop, whose own trade-off is that a *repeat* format ask carrying an unrelated
+  negation streams grounded-data (same figures, narrated) instead of re-serving the dump; (e) the new
+  `recipient` header field reads LABELED lines only ("Bill to:", "Rechnungsempfänger:", "Kunde:" …) — an
+  address-block recipient with no label stays unextracted, and the recipient-shaped question then falls
+  through to the relevance path over the document text (by design, never a fabricated party).
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
   offline regexes only** — e-mail addresses, phone numbers, IBANs, **payment-card numbers**, dates, and

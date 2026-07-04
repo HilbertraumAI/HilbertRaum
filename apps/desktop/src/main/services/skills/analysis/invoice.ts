@@ -61,12 +61,51 @@ function isAnalysisShaped(question: string): boolean {
 // template. `applies()` stays TRUE (an invoice keyword still owns the turn), so a format ask never leaks
 // the raw invoice into the generic RAG/LLM path. Word-bounded so `json`/`csv`/`xml` match only as
 // standalone tokens. JSON is checked first (the most common request).
+//
+// invoice-hardening-2026-07-04 P1: the bare token test mis-fired on NEGATED mentions. Real transcript:
+// "Analysiere die Rechnung im Roh format - nicht im json" matched `\bjson\b` and re-served the
+// byte-identical JSON dump (0 model calls, ~9 ms) — the user had explicitly asked AWAY from JSON.
+// Two fixes, layered:
+//   (a) an explicit RAW/prose ask anywhere in the question wins: no format short-circuit at all;
+//   (b) a format token counts only when the text immediately BEFORE it carries no negator
+//       ("nicht im json", "not as csv", "ohne xml", "statt json") — checked per MENTION, so
+//       "als CSV, nicht als JSON" still serializes CSV.
+// A question whose only format mention is negated falls to the template/grounded-data shapes, where the
+// model can actually honour the phrasing. (A third, conversation-level backstop lives in `run()`.)
 type OutputFormat = 'json' | 'csv' | 'xml'
+
+// An explicit raw/prose ask — "im Roh format" (split), "Rohformat"/"Rohfassung"/"Rohtext"/"Rohdaten"
+// (joined), "raw", "Fließtext", "Klartext", "plain text", "Prosa"/"prose". Word-bounded. Deliberately NOT
+// a bare `plain` ("plain json" is a JSON ask); `raw` alone is accepted as raw-ish intent — the safe side
+// is the model path, whose grounded-data block still carries the full serialized invoice.
+const RAW_FORMAT_RE =
+  /\broh(?:format|fassung|text|daten)?\b|\braw\b|\bfließtext\b|\bfliesstext\b|\bklartext\b|\bplain\s?text\b|\bprosa\b|\bprose\b/
+
+// Negators that flip a following format mention. Tested against a short window immediately before the
+// token so a clause-level negation elsewhere ("nicht die Summe — als json bitte") stays out of reach.
+const FORMAT_NEGATOR_RE =
+  /\b(?:nicht|not|no|kein(?:e[nms]?)?|ohne|without|statt|anstatt|anstelle|instead of|rather than)\b/
+
+/** Chars of question text before a format token scanned for a negator — enough for "nicht im ",
+ *  "instead of the ", "anstelle von " plus one filler word; small enough to skip unrelated negations. */
+const NEGATION_WINDOW = 24
+
+/** True when `token` appears word-bounded at least once WITHOUT a negator in its leading window. */
+function hasAffirmedFormatToken(q: string, token: OutputFormat): boolean {
+  const re = new RegExp(`\\b${token}\\b`, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(q)) !== null) {
+    if (!FORMAT_NEGATOR_RE.test(q.slice(Math.max(0, m.index - NEGATION_WINDOW), m.index))) return true
+  }
+  return false
+}
+
 function detectFormat(question: string): OutputFormat | null {
   const q = question.toLowerCase()
-  if (/\bjson\b/.test(q)) return 'json'
-  if (/\bxml\b/.test(q)) return 'xml'
-  if (/\bcsv\b/.test(q)) return 'csv'
+  if (RAW_FORMAT_RE.test(q)) return null
+  if (hasAffirmedFormatToken(q, 'json')) return 'json'
+  if (hasAffirmedFormatToken(q, 'xml')) return 'xml'
+  if (hasAffirmedFormatToken(q, 'csv')) return 'csv'
   return null
 }
 
@@ -141,6 +180,63 @@ function loadDroppedRowCount(db: Db, invoiceId: string): number {
     .prepare('SELECT dropped_row_count AS n FROM invoices WHERE id = ?')
     .get(invoiceId) as { n: number | null } | undefined
   return row?.n ?? 0
+}
+
+/** The persisted glyph-soup verdict (invoice-hardening-2026-07-04 P3): null = normal text layer;
+ *  'suspect' = soup on the plain read (retry via geometry pending); 'suspect-confirmed' = the geometry
+ *  retry also read soup (final). */
+function loadTextQuality(db: Db, invoiceId: string): 'suspect' | 'suspect-confirmed' | null {
+  const row = db
+    .prepare('SELECT text_quality AS q FROM invoices WHERE id = ?')
+    .get(invoiceId) as { q: string | null } | undefined
+  return row?.q === 'suspect' ? 'suspect' : row?.q === 'suspect-confirmed' ? 'suspect-confirmed' : null
+}
+
+/**
+ * invoice-hardening-2026-07-04 P3: header fields a question can ask for BY NAME. When the question names
+ * one and the extract does NOT carry it, the handler falls through to the ordinary grounded (relevance)
+ * path — the model then reads the DOCUMENT text instead of being confined to a data block that cannot
+ * contain the answer (the real-transcript "Wer ist der Empfänger?" answered "not in the extracted data"
+ * and then padded with garbage totals). Word-bounded, EN + DE; a bare "due" is ignored after
+ * amount/balance/total ("amount due" asks the gross, not the due date).
+ */
+const HEADER_FIELD_ASKS: ReadonlyArray<{ field: keyof InvoiceInput['header']; re: RegExp }> = [
+  {
+    field: 'recipient',
+    re: /\b(?:empfänger(?:in)?|rechnungsempfänger(?:in)?|recipient|bill(?:ed)?\s+to|invoice\s+to|kunde|kundin|customer|addressee|adressat(?:in)?)\b/
+  },
+  {
+    field: 'vendor',
+    re: /\b(?:vendor|lieferant(?:in)?|supplier|seller|verkäufer(?:in)?|aussteller(?:in)?|rechnungssteller(?:in)?)\b/
+  },
+  { field: 'invoiceNumber', re: /\b(?:rechnungsnummer|rechnungs-?nr|invoice\s+(?:number|no)|belegnummer)\b/ },
+  {
+    field: 'dueDate',
+    re: /\b(?:fällig(?:keit(?:sdatum)?)?|due\s+date|zahlbar\s+bis|zahlungsziel)\b|(?<!\b(?:amount|balance|total)\s)\bdue\b/
+  },
+  { field: 'invoiceDate', re: /\b(?:rechnungsdatum|invoice\s+date|ausgestellt|ausstellungsdatum|issued?)\b/ }
+]
+
+/** True when the question names a header field the extracted invoice does not carry (P3). */
+function asksMissingHeaderField(question: string, header: InvoiceInput['header']): boolean {
+  const q = question.toLowerCase()
+  return HEADER_FIELD_ASKS.some(({ field, re }) => header[field] === undefined && re.test(q))
+}
+
+/**
+ * The previous assistant turn's persisted content, or null (no conversation yet / first turn / tests
+ * without a conversation). invoice-hardening-2026-07-04 P1: read via `rowid` (insertion order) — message
+ * ids are UUIDs and `created_at` can tie within a millisecond on the deterministic 0-model-call paths.
+ */
+function lastAssistantContent(db: Db, conversationId: string | null | undefined): string | null {
+  if (!conversationId) return null
+  const row = db
+    .prepare(
+      `SELECT content FROM messages WHERE conversation_id = ? AND role = 'assistant'
+       ORDER BY rowid DESC LIMIT 1`
+    )
+    .get(conversationId) as { content: string } | undefined
+  return row?.content ?? null
 }
 
 const MAX_CITATIONS = 12
@@ -270,6 +366,19 @@ export function buildInvoiceDataBlock(
     ...validation.checks.map((c) => `- ${c.name}: ${c.status}`),
     `- overall: ${validation.reconciled ? 'reconciled' : 'NOT reconciled'}`
   )
+  // invoice-hardening-2026-07-04 P2: a MISMATCHED check means the document's own printed figures
+  // contradict each other — the extraction is suspect (misread layout, scan, glyph-soup text). The model
+  // must not narrate any of these totals as authoritative; without this instruction it answered follow-up
+  // questions by quoting the contradictory totals as literal document figures (real transcript).
+  if (validation.checks.some((c) => c.status === 'mismatch')) {
+    lines.push(
+      '',
+      'WARNING: the checks above MISMATCH — the printed figures contradict each other and/or the line ' +
+        'items, so the document was probably not extracted cleanly. Treat EVERY figure as unverified: ' +
+        'if the user asks about a total, say the figures do not add up and point them to the original ' +
+        'document instead of presenting any total as reliable.'
+    )
+  }
   if (hedgeDropped) {
     lines.push(
       '',
@@ -295,9 +404,20 @@ export function buildInvoiceDataBlock(
  * the amounts are the parser's own 2-dp figures. Returns '' when the extraction carried none of the three
  * totals (nothing to echo) — the streaming path then appends nothing.
  */
-export function buildTotalsPostscript(tr: Tr, invoice: InvoiceInput, droppedRowCount?: number): string {
+export function buildTotalsPostscript(
+  tr: Tr,
+  invoice: InvoiceInput,
+  droppedRowCount?: number,
+  validation?: InvoiceTotalsResult
+): string {
   const { totals } = invoice
   const currency = invoiceTotalsCurrency(invoice) // SKA-21: '' when header-less AND line items are mixed
+  // invoice-hardening-2026-07-04 P2 (the bank `contradicted` suppression, mirrored): a MISMATCHED check
+  // means the parsed totals contradict each other/the line items — echoing them as "verbatim from the
+  // document" lent garbage figures the postscript's authority (real transcript: "Netto 4.00 · Steuer
+  // 0.00 · Brutto 914.00" asserted under an answer, against line items summing to ~1401). Replace the
+  // echo with an honest suppression note; the dropped-line hedge below still applies.
+  const contradicted = validation?.checks.some((c) => c.status === 'mismatch') === true
   const figs: string[] = []
   if (totals.netTotal !== undefined) {
     figs.push(tr('skills.invoiceAnalysis.figureEchoNet', { value: amountText(totals.netTotal, currency) }))
@@ -309,7 +429,8 @@ export function buildTotalsPostscript(tr: Tr, invoice: InvoiceInput, droppedRowC
     figs.push(tr('skills.invoiceAnalysis.figureEchoGross', { value: amountText(totals.grossTotal, currency) }))
   }
   const out: string[] = []
-  if (figs.length > 0) out.push(tr('skills.invoiceAnalysis.figureEcho', { figures: figs.join(' · ') }))
+  if (contradicted) out.push(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
+  else if (figs.length > 0) out.push(tr('skills.invoiceAnalysis.figureEcho', { figures: figs.join(' · ') }))
   // SKA-5 (W6): the dropped-line hedge — an invoice has no balance proof, so any dropped money-bearing
   // line always hedges (mirrors the template's `countPartial` headline, appended beneath the echo).
   const dropped = droppedRowCount ?? 0
@@ -363,6 +484,10 @@ export function buildInvoiceAnswer(
   if (header.vendor !== undefined) {
     details.push(tr('skills.invoiceAnalysis.detailVendor', { vendor: header.vendor }))
   }
+  // P3 (invoice-hardening-2026-07-04): the bill-to party, when the invoice labels one.
+  if (header.recipient !== undefined) {
+    details.push(tr('skills.invoiceAnalysis.detailRecipient', { recipient: header.recipient }))
+  }
   if (header.invoiceNumber !== undefined) {
     details.push(tr('skills.invoiceAnalysis.detailInvoiceNumber', { number: header.invoiceNumber }))
   }
@@ -390,7 +515,17 @@ export function buildInvoiceAnswer(
   // declares none AND the line items are mixed — the old `lineItems[0]?.currency` picked a misleading code.
   const currency = invoiceTotalsCurrency(invoice)
   if (hasTotals) {
-    lines.push('', tr('skills.invoiceAnalysis.totalsHeading'))
+    // invoice-hardening-2026-07-04 P2: when a check MISMATCHED, the totals keep printing (the user may
+    // want to see what the document says) but under the UNVERIFIED heading, with an explicit caveat
+    // after them — never under "Totals, exactly as printed:" as if they were dependable. The old
+    // behaviour listed the failed checks and then printed the incoherent totals confidently anyway.
+    const contradicted = mismatches.length > 0
+    lines.push(
+      '',
+      contradicted
+        ? tr('skills.invoiceAnalysis.totalsHeadingUnverified')
+        : tr('skills.invoiceAnalysis.totalsHeading')
+    )
     if (totals.netTotal !== undefined) {
       lines.push(tr('skills.invoiceAnalysis.net', { value: amountText(totals.netTotal, currency) }))
     }
@@ -406,6 +541,9 @@ export function buildInvoiceAnswer(
     }
     if (totals.grossTotal !== undefined) {
       lines.push(tr('skills.invoiceAnalysis.gross', { value: amountText(totals.grossTotal, currency) }))
+    }
+    if (contradicted) {
+      lines.push('', tr('skills.invoiceAnalysis.unreconciledCaveat'))
     }
   } else {
     lines.push('', tr('skills.invoiceAnalysis.noTotals'))
@@ -512,7 +650,31 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
       // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
       // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
-      const invoice = loadInvoice(db, invoiceId)
+      let invoice = loadInvoice(db, invoiceId)
+
+      // P3 (invoice-hardening-2026-07-04): the glyph-soup retry. When the plain reading-order text was
+      // soup ('suspect'), re-extract ONCE through the geometry (layout) reader — `reconstructPage`
+      // rebuilds rows/columns from glyph positions and often recovers exactly what per-glyph text loses.
+      // Whatever the retry reads becomes the persisted invoice; if its text was STILL soup, the flag is
+      // promoted to 'suspect-confirmed' so no later turn retries again (one geometry pass is final).
+      let textQuality = loadTextQuality(db, invoiceId)
+      if (textQuality === 'suspect' && ctx.readDocumentSegments) {
+        const retry = await runInvoiceExtraction(db, args, {
+          ...deps,
+          readDocumentSegments: (id) => ctx.readDocumentSegments!(id, { layout: true }),
+          replaceExisting: true
+        })
+        if (retry.ok && retry.invoiceId) {
+          invoiceId = retry.invoiceId
+          invoice = loadInvoice(db, invoiceId)
+          textQuality = loadTextQuality(db, invoiceId)
+        }
+        if (textQuality === 'suspect') {
+          db.prepare(`UPDATE invoices SET text_quality = 'suspect-confirmed' WHERE id = ?`).run(invoiceId)
+          textQuality = 'suspect-confirmed'
+        }
+      }
+      const lowTextQuality = textQuality !== null
 
       // A machine-FORMAT request ("als JSON"/"as CSV"/"xml") is answered by SERIALIZING the already-
       // extracted invoice — deterministic, 0 model calls, no reconciliation needed. Guarded to a
@@ -539,11 +701,47 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         return { answer: '', citations: [], fallThrough: true }
       }
 
-      if (format && hasContent) {
+      // P3 low-text-quality gate — BEFORE the format short-circuit (a JSON dump of soup is still soup).
+      // On a scrambled text layer the parsed "fields" are glyph fragments, so the bar INVERTS: figures
+      // are presented only when the invoice's own arithmetic POSITIVELY corroborates them
+      // (`reconciled` = at least one check ran ok and none mismatched). Anything less — a mismatch, or
+      // nothing checkable (P2's weak-total retraction typically leaves soup with no verifiable totals) —
+      // gets the honest refusal naming the scrambled layer and the OCR/original next step, instead of
+      // fragments dressed up as line items. Soup that genuinely reconciles keeps its answer + a caveat.
+      if (lowTextQuality && !validateInvoiceTotals(invoice).reconciled) {
         return {
-          answer: buildFormatAnswer(ctx.tr, format, invoice),
+          answer: ctx.tr('skills.invoiceAnalysis.unreadableLayout'),
           citations: buildInvoiceCitations(db, target.id, target.title),
           coverage: computeCoverage(db, target.id)
+        }
+      }
+
+      // P3: the question names a header field the extract does NOT carry ("Wer ist der Empfänger?" with
+      // no recipient parsed) — fall through to the ordinary grounded (relevance) path so the model reads
+      // the DOCUMENT text, instead of narrating a data block that structurally cannot hold the answer.
+      if (hasContent && asksMissingHeaderField(ctx.question, invoice.header)) {
+        return { answer: '', citations: [], fallThrough: true }
+      }
+
+      if (format && hasContent) {
+        const formatAnswer = buildFormatAnswer(ctx.tr, format, invoice)
+        // invoice-hardening-2026-07-04 P1 backstop: when the question carries ANY negator and the
+        // deterministic dump would byte-duplicate the previous assistant turn, the negation-window in
+        // `detectFormat` probably missed a "not …this… format" phrasing — never re-serve the identical
+        // dump against a new question; fall through to grounded-data (its block carries the same JSON,
+        // so a genuinely repeated format ask still gets its figures, narrated). A repeat ask WITHOUT a
+        // negator ("nochmal als json") is untouched — re-serving the dump is then the correct answer.
+        const suspectNegation = FORMAT_NEGATOR_RE.test(ctx.question.toLowerCase())
+        const previous = suspectNegation ? lastAssistantContent(db, ctx.conversationId) : null
+        if (!(previous !== null && previous.includes(formatAnswer))) {
+          return {
+            // P3: reconciled-but-soupy text still hedges (the gate above already refused the bad case).
+            answer: lowTextQuality
+              ? `${formatAnswer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}`
+              : formatAnswer,
+            citations: buildInvoiceCitations(db, target.id, target.title),
+            coverage: computeCoverage(db, target.id)
+          }
         }
       }
 
@@ -567,7 +765,12 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       const droppedRowCount = loadDroppedRowCount(db, invoiceId)
       if (isSummaryShaped(ctx.question) || !hasContent) {
         const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation, dateOrderInferred, droppedRowCount })
-        return { answer, citations, coverage }
+        return {
+          // P3: reconciled-but-soupy text hedges the template too.
+          answer: lowTextQuality ? `${answer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}` : answer,
+          citations,
+          coverage
+        }
       }
       // The grounded-data postscript is the deterministic totals echo (§8.1) PLUS the R5 honest date caveat
       // when the dates were read day-first with no evidence. That caveat is a template appendix (R5, audit
@@ -577,9 +780,12 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       const postscriptParts: string[] = []
       // SKA-5 (W6): the totals echo carries the dropped-line hedge (an invoice has no balance proof, so any
       // dropped money line hedges); the mixed-currency echo is fixed in `buildTotalsPostscript` (SKA-21).
-      const totalsEcho = buildTotalsPostscript(ctx.tr, invoice, droppedRowCount)
+      // P2: the echo is validation-gated — contradictory totals are suppressed, never echoed as reliable.
+      const totalsEcho = buildTotalsPostscript(ctx.tr, invoice, droppedRowCount, validation)
       if (totalsEcho) postscriptParts.push(totalsEcho)
       if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.invoiceAnalysis.dateOrderCaveat'))
+      // P3: reconciled-but-soupy text hedges the grounded-data answer beneath the echo.
+      if (lowTextQuality) postscriptParts.push(ctx.tr('skills.invoiceAnalysis.textQualityCaveat'))
       return {
         answer: '',
         mode: 'grounded-data',

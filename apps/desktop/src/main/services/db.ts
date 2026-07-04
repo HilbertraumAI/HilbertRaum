@@ -813,6 +813,15 @@ export function openDatabase(path: string): Db {
   // money-shaped line parsed ("whole invoice" stands); > 0 = the answer swaps "the whole invoice" for an
   // honest "M lines with figures could not be parsed". A provenance COUNT — never logged/audited/exported.
   ensureColumn(db, 'invoices', 'dropped_row_count', 'dropped_row_count INTEGER')
+  // The bill-to party (invoice-hardening-2026-07-04 P3) — read from a labeled line only. Additive +
+  // nullable: NULL = not stated / extracted before this column (the version bump re-extracts).
+  // CONTENT (a name): lives only in the content-class invoices table, never logged/audited/exported.
+  ensureColumn(db, 'invoices', 'recipient', 'recipient TEXT')
+  // The glyph-soup text-quality verdict (invoice-hardening-2026-07-04 P3): NULL = the text layer looked
+  // normal; 'suspect' = the extractor read glyph-mangled text (the answer layer retries once via the
+  // geometry reader); 'suspect-confirmed' = the retry ALSO read soup (final — the handler stops
+  // retrying and refuses confident figures). A provenance flag — never logged/audited/exported.
+  ensureColumn(db, 'invoices', 'text_quality', 'text_quality TEXT')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

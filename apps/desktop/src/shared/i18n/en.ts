@@ -707,6 +707,8 @@ export const en = {
   // content, quoted verbatim as params.
   'skills.invoiceAnalysis.detailsHeading': 'Details, as printed:',
   'skills.invoiceAnalysis.detailVendor': '- Vendor: {vendor}',
+  // P3 (invoice-hardening-2026-07-04): the bill-to party, read from a labeled line only.
+  'skills.invoiceAnalysis.detailRecipient': '- Recipient (billed to): {recipient}',
   'skills.invoiceAnalysis.detailInvoiceNumber': '- Invoice number: {number}',
   'skills.invoiceAnalysis.detailInvoiceDate': '- Invoice date: {date}',
   'skills.invoiceAnalysis.detailDueDate': '- Due date: {date}',
@@ -718,6 +720,31 @@ export const en = {
   'skills.invoiceAnalysis.figureEchoNet': 'net {value}',
   'skills.invoiceAnalysis.figureEchoTax': 'tax {value}',
   'skills.invoiceAnalysis.figureEchoGross': 'gross {value}',
+  // invoice-hardening-2026-07-04 P2: the reconciliation GATE. When any totals check MISMATCHED, the
+  // template swaps the confident totals heading for the unverified one and appends the caveat, and the
+  // grounded-data figure echo is replaced by the suppressed note — figures the document's own arithmetic
+  // contradicts must never be presented as reliable ("verbatim from the document" is technically true
+  // but misleading when the document was probably misread).
+  'skills.invoiceAnalysis.totalsHeadingUnverified':
+    'Figures as printed — **they don’t add up**, so treat them as unverified:',
+  'skills.invoiceAnalysis.unreconciledCaveat':
+    'These printed figures contradict each other, which usually means the document didn’t extract ' +
+    'cleanly (a scan, an image-based PDF, or an unusual layout). Don’t rely on any of these numbers ' +
+    'without checking the original document.',
+  'skills.invoiceAnalysis.figureEchoSuppressed':
+    'I’m not repeating the parsed totals here: they don’t reconcile with each other or with the line ' +
+    'items, so quoting them as reliable figures would be misleading. Check the original document.',
+  // invoice-hardening-2026-07-04 P3: the glyph-soup outcomes. `unreadableLayout` is the refusal when the
+  // text layer is scrambled AND the figures are contradictory/empty (after the geometry retry);
+  // `textQualityCaveat` hedges the rare scrambled-but-reconciling read.
+  'skills.invoiceAnalysis.unreadableLayout':
+    'This document’s text doesn’t extract cleanly — the characters come out scrambled (glyph by glyph), ' +
+    'which usually means an image-based or unusually encoded PDF. I couldn’t read reliable line items or ' +
+    'totals from it, so I won’t quote figures. If it’s a scan, run OCR (text recognition) on it first; ' +
+    'otherwise open the invoice and read the figures directly.',
+  'skills.invoiceAnalysis.textQualityCaveat':
+    'A caution: parts of this document’s text extracted in a scrambled (glyph-by-glyph) layout. The ' +
+    'figures above do reconcile, but check anything important against the original document.',
 
   // Full-doc-skills Phase 3 (§3.2/D45): the refuse-partial notice. A tool skill can only answer
   // exhaustively over a FULLY-INDEXED document; a legacy/partly-chunked doc is refused (no partial

@@ -1,7 +1,7 @@
 {
   "$comment": "GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by extractor version. Regenerate in the SAME commit as any extractor version bump: UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts",
   "bankExtractorVersion": 9,
-  "invoiceExtractorVersion": 9,
+  "invoiceExtractorVersion": 11,
   "fixtures": {
     "bank-at-elba-nbsp-minus": {
       "kind": "bank",
@@ -358,6 +358,104 @@
           "taxTotal": 65,
           "taxRatePercent": 20,
           "grossTotal": 390
+        },
+        "droppedRowCount": 0,
+        "dateOrderInferred": "evidence"
+      }
+    },
+    "invoice-us-glyph-soup": {
+      "kind": "invoice",
+      "inputHash": "a19dd29217b0ccb95a84357d31856aa2696e2612067a32d51a5b139f630f5e89",
+      "hash": "aab543fa2652d82b3a4e7af44977853ebf3d4ae668e91c2979a9a0a5b9f660c3",
+      "output": {
+        "header": {
+          "currency": "USD"
+        },
+        "lineItems": [
+          {
+            "description": "1   0 % 3   Article — Stablecoin Yield Farming or Passive",
+            "lineTotal": 167.7,
+            "currency": "USD"
+          },
+          {
+            "description": "$ 9 1 4 = $",
+            "lineTotal": 915.92,
+            "currency": "USD"
+          },
+          {
+            "description": "( 1 U S D T = $",
+            "lineTotal": 0.99,
+            "currency": "USD"
+          }
+        ],
+        "totals": {},
+        "droppedRowCount": 0,
+        "dateOrderInferred": "evidence",
+        "textQuality": "suspect"
+      }
+    },
+    "invoice-de-unreconcilable-totals": {
+      "kind": "invoice",
+      "inputHash": "283f101f42f7fe6c8d7e0c322c94defeb1d53e52e6f9a183a1b553b0743a4543",
+      "hash": "b514ad3665ae0a93735b3696e2ec59fb3e9c7e53de8e164a6aef5692719418ef",
+      "output": {
+        "header": {
+          "invoiceNumber": "2026-99",
+          "invoiceDate": "2026-06-01",
+          "currency": "EUR"
+        },
+        "lineItems": [
+          {
+            "description": "Material",
+            "lineTotal": 120,
+            "currency": "EUR"
+          },
+          {
+            "description": "Arbeitszeit",
+            "lineTotal": 150,
+            "currency": "EUR"
+          }
+        ],
+        "totals": {
+          "netTotal": 300,
+          "taxTotal": 60,
+          "taxRatePercent": 20,
+          "grossTotal": 999
+        },
+        "droppedRowCount": 0,
+        "dateOrderInferred": "evidence"
+      }
+    },
+    "invoice-de-geometry-columns": {
+      "kind": "invoice",
+      "inputHash": "ea8985ff197036bf70937d0fc9f4ab5d3864a20500630491f60936d30c1822c5",
+      "hash": "22aff383172d5e19b033646b3c3e30985d4d5ca76d318a7bde4ae7213da98c13",
+      "output": {
+        "header": {
+          "invoiceNumber": "G-2026-3",
+          "invoiceDate": "2026-03-15",
+          "currency": "EUR"
+        },
+        "lineItems": [
+          {
+            "description": "Beratung",
+            "lineTotal": 200,
+            "currency": "EUR",
+            "unitPrice": 2100
+          },
+          {
+            "description": "Workshop",
+            "lineTotal": 50,
+            "currency": "EUR",
+            "quantity": 1,
+            "unitPrice": 50
+          }
+        ],
+        "totals": {
+          "netTotal": 250,
+          "taxTotal": 50,
+          "taxRatePercent": 20,
+          "grossTotal": 300
         },
         "droppedRowCount": 0,
         "dateOrderInferred": "evidence"

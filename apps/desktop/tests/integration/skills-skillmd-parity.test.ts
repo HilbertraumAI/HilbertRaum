@@ -185,7 +185,10 @@ describe('SKILL.md ⇔ buildInvoiceAnswer parity (A-1)', () => {
     expect(validation.checks.some((c) => c.status === 'mismatch')).toBe(true) // sanity: it does not reconcile
     const answer = buildInvoiceAnswer(tr, { invoice, validation })
     const unreconciled = answer.indexOf(tr('skills.invoiceAnalysis.unreconciledHeading'))
-    const totals = answer.indexOf(tr('skills.invoiceAnalysis.totalsHeading'))
+    // invoice-hardening-2026-07-04 P2: a MISMATCHED invoice prints its totals under the UNVERIFIED
+    // heading (never "exactly as printed") — the SKILL.md "before presenting a total" bullet is
+    // satisfied by the unreconciled block preceding that unverified totals block.
+    const totals = answer.indexOf(tr('skills.invoiceAnalysis.totalsHeadingUnverified'))
     expect(unreconciled).toBeGreaterThanOrEqual(0)
     expect(totals).toBeGreaterThan(unreconciled)
   })

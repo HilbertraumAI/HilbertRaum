@@ -388,13 +388,12 @@ describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
 })
 
 describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
-  it('is at 9 — the R7 date-vs-money / header-money-gate bump (SKA-1/2/14)', () => {
-    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: R7 (skills-audit-2026-07-03) date-blanks the line-item
-    // money scan (SKA-1), widens both date scrubs to dd.mm.yy (SKA-2 — totals/headers no longer read a
-    // trailing `per 30.06.26` as the figure), and gates the vendor/number header branches on money (SKA-14)
-    // — each changes the persisted items/totals/header, so an invoice an OLDER (v8…v1 / pre-versioning
-    // NULL) parser produced must re-extract via the F5 path.
-    expect(INVOICE_EXTRACTOR_VERSION).toBe(9)
+  it('is at 11 — the P3 recipient field + glyph-soup verdict (invoice-hardening-2026-07-04)', () => {
+    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin. P2 (v10) retracts uncorroborated weak bare-integer
+    // totals; P3 (v11) adds the labeled bill-to `recipient` header field and stamps
+    // `textQuality: 'suspect'` on a glyph-mangled text layer. Each changes the persisted output, so an
+    // invoice an OLDER (v10…v1 / pre-versioning NULL) parser produced must re-extract via the F5 path.
+    expect(INVOICE_EXTRACTOR_VERSION).toBe(11)
   })
 })
 
@@ -905,6 +904,127 @@ describe('R1 — invoice Unicode normalization + sign-aware bare-integer total (
   it('§5.7-low: a POSITIVE bare-integer total is unchanged — no regression (Gesamtbetrag 914 EUR → 914)', () => {
     const invoice = extractInvoice([chunk('Gesamtbetrag 914 EUR', 1)], 'EUR')
     expect(invoice.totals.grossTotal).toBe(914)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// invoice-hardening-2026-07-04 P2 — uncorroborated WEAK totals are retracted. A bare-integer
+// currency-adjacent totals read (the v3 fallback) is the extractor's weakest figure; on a mangled
+// (glyph-soup) document stray digits next to a `$` produced a confident net 4 / tax 0 / gross 914
+// against line items summing to ~1401 (real user transcript). The rule: a weak figure that
+// participates in a MISMATCHED reconciliation check and in NO ok check is dropped; a weak figure
+// corroborated by an ok check — or contradicted by nothing (all-unknown, e.g. the lone credit-note
+// total above) — stays. Strong (decimal-shaped) reads are never touched.
+// ---------------------------------------------------------------------------------------------------
+describe('P2 — uncorroborated weak (bare-integer) totals are retracted (invoice-hardening-2026-07-04)', () => {
+  it('the incident shape: weak net/tax/gross contradicted by strong line items are ALL dropped', () => {
+    const text = [
+      'Stablecoin article 167,70',
+      'Yield product 316,40',
+      'Netto 4 $',
+      'Tax 0 $',
+      'Total 914 $'
+    ].join('\n')
+    const invoice = extractInvoice([chunk(text, 1)], 'USD')
+    // The strong 2-dp line items stay; every weak total sat in a mismatched check with no ok check.
+    expect(invoice.lineItems).toHaveLength(2)
+    expect(invoice.totals).toEqual({})
+  })
+
+  it('a weak gross corroborated by strong net + tax (net + tax = gross ok) is KEPT', () => {
+    const text = ['Alpha 100,00 EUR', 'Beta 20,00 EUR', 'Net total 120,00 EUR', 'VAT 24,00 EUR', 'Total 144 EUR'].join(
+      '\n'
+    )
+    const invoice = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(invoice.totals).toEqual({ netTotal: 120, taxTotal: 24, grossTotal: 144 })
+  })
+
+  it('a weak net with one ok check survives a mismatch elsewhere (ok outweighs)', () => {
+    // Weak net 120 is corroborated by the line items (sum 120 → lineItemsSumToNet ok) even though the
+    // STRONG gross 200,00 mismatches net+tax — the strong misprint is the answer layer's problem, not
+    // grounds to retract the corroborated weak read.
+    const text = ['Alpha 100,00 EUR', 'Beta 20,00 EUR', 'Netto 120 EUR', 'MwSt 24,00 EUR', 'Gesamt 200,00 EUR'].join(
+      '\n'
+    )
+    const invoice = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(invoice.totals.netTotal).toBe(120)
+    expect(invoice.totals.grossTotal).toBe(200)
+  })
+
+  it('STRONG (decimal-shaped) totals are never retracted, even when they mismatch everything', () => {
+    const text = ['Alpha 100,00 EUR', 'Netto 999,99 EUR', 'Gesamt 5,00 EUR'].join('\n')
+    const invoice = extractInvoice([chunk(text, 1)], 'EUR')
+    expect(invoice.totals).toEqual({ netTotal: 999.99, grossTotal: 5 })
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// invoice-hardening-2026-07-04 P3 — (a) the labeled bill-to `recipient` header field (the schema gap
+// that made "who is the recipient?" structurally unanswerable), and (b) the glyph-soup text-quality
+// verdict (`looksLikeGlyphSoup` → `textQuality: 'suspect'`) the answer layer gates on.
+// ---------------------------------------------------------------------------------------------------
+describe('P3 — recipient header field (invoice-hardening-2026-07-04)', () => {
+  it('reads the labeled bill-to party (EN and DE label sets)', () => {
+    for (const line of ['Bill to: Example Corp', 'Rechnungsempfänger: Max Mustermann', 'Kunde: Max Mustermann']) {
+      const invoice = extractInvoice([chunk(line, 1)], 'EUR')
+      expect(invoice.header.recipient, line).toBe(line.split(': ')[1])
+    }
+  })
+
+  it('a reference-noun value is NOT a recipient (Customer Reference / Kunde Nr.)', () => {
+    for (const line of ['Customer Reference: ABC-123', 'Kunde Nr. 12345', 'Kundennummer: 12345']) {
+      const invoice = extractInvoice([chunk(line, 1)], 'EUR')
+      expect(invoice.header.recipient, line).toBeUndefined()
+    }
+  })
+
+  it('recipient rides the JSON and XML serializations', () => {
+    const invoice = extractInvoice(
+      [chunk(['Vendor: Acme GmbH', 'Bill to: Example Corp', 'Widget 100,00 EUR'].join('\n'), 1)],
+      'EUR'
+    )
+    expect(JSON.parse(buildInvoiceJson(invoice)).recipient).toBe('Example Corp')
+    expect(buildInvoiceXml(invoice)).toContain('<recipient>Example Corp</recipient>')
+  })
+
+  it('an amount-bearing line is never consumed as a recipient (the SKA-14 money gate applies)', () => {
+    const invoice = extractInvoice([chunk('Kunde Beratung Jänner 500,00 EUR', 1)], 'EUR')
+    expect(invoice.header.recipient).toBeUndefined()
+    expect(invoice.lineItems).toHaveLength(1)
+  })
+})
+
+describe('P3 — glyph-soup text-quality verdict (invoice-hardening-2026-07-04)', () => {
+  // The incident shape: per-glyph spacing fragments the text layer into single-glyph token runs.
+  const SOUP = [
+    'I n v o i c e',
+    '1   0 % 3   Article — Stablecoin Yield Farming 167,70',
+    '$ 9 1 4 = $ 915,92',
+    '( 1 U S D T = $ 0,99',
+    'Netto 4 $',
+    'Total 914 $'
+  ].join('\n')
+
+  it('a glyph-mangled text layer stamps textQuality: suspect through the real tool', async () => {
+    const { ctx } = makeCtx([chunk(SOUP, 1)])
+    const res = await runSkillTool(extractInvoiceTool, { skillId: 'app:invoice', input: { documentId: 'd1' }, ctx })
+    expect(res.ok).toBe(true)
+    if (res.ok) expect((res.output as ExtractInvoiceOutput).textQuality).toBe('suspect')
+  })
+
+  it('a clean invoice carries NO textQuality flag (the clean fixture stays byte-compatible)', async () => {
+    const { ctx } = makeCtx([chunk(INVOICE_TEXT, 1)])
+    const res = await runSkillTool(extractInvoiceTool, { skillId: 'app:invoice', input: { documentId: 'd1' }, ctx })
+    expect(res.ok).toBe(true)
+    if (res.ok) expect((res.output as ExtractInvoiceOutput).textQuality).toBeUndefined()
+  })
+
+  it('a columnar-but-clean layout ("Widget   2   50,00   100,00") is NOT soup (multi-char column tokens)', async () => {
+    const text = ['Rechnung', 'Widget   2   50,00   100,00', 'Gadget   1   20,00   20,00', 'Summe 120,00 EUR'].join('\n')
+    const { ctx } = makeCtx([chunk(text, 1)])
+    const res = await runSkillTool(extractInvoiceTool, { skillId: 'app:invoice', input: { documentId: 'd1' }, ctx })
+    expect(res.ok).toBe(true)
+    if (res.ok) expect((res.output as ExtractInvoiceOutput).textQuality).toBeUndefined()
   })
 })
 

@@ -5560,6 +5560,56 @@ Code comments, tests, and the kept docs cite this audit as **`SKA-N`** and
 | `R7`–`T2` phase ids | the nine remediation phases | the disposition table above (§41) |
 
 
+### §42 Invoice hardening (invoice-hardening-2026-07-04) — incident-driven wave
+
+A real user transcript (a glyph-mangled crypto-scam invoice PDF) surfaced four compounding failures:
+(1) *"Analysiere die Rechnung im Roh format - **nicht im json**"* re-served the **byte-identical JSON
+dump** 9 ms after the question (`detectFormat` matched the bare `\bjson\b` token inside a negation;
+the serialization path is deterministic, 0 model calls); (2) the extractor scraped **confident garbage
+totals** (net 4 / tax 0 / gross 914 against items summing ~1084) from per-glyph text —
+`validateInvoiceTotals` *detected* the mismatch but every answer shape printed the figures anyway, and
+the grounded-data echo asserted them as *"wörtlich aus dem Dokument"*; (3) *"Wer ist der Empfänger?"*
+was structurally unanswerable — the schema had **no recipient field** and grounded-data confines the
+model to the extract; (4) the exported transcript rendered **mojibake** in CP1252-defaulting viewers
+(UTF-8 with no BOM). Landed as four stacked `fix/invoice-hardening-p1…p4` branches:
+
+- **P1 — format-intent correctness.** `detectFormat` is negation-aware per MENTION (a format token
+  preceded by `nicht/not/ohne/statt/kein…` within a 24-char window does not count; "als CSV, nicht als
+  JSON" still serializes CSV) and raw-aware (an explicit `Rohformat/raw/Fließtext/Klartext/plain
+  text/Prosa` ask disables the short-circuit). Backstop in `run()`: when the question carries any
+  negator and the dump would byte-duplicate the previous assistant turn, fall through to grounded-data.
+- **P2 — reconciliation is gating, not decorative.** Extractor v10: a bare-integer currency-adjacent
+  totals read is tracked WEAK and retracted when it participates in a mismatched check with no ok check
+  corroborating it (one validation snapshot; decimal reads untouched). Answer layers mirror the bank
+  `contradicted` suppression: mismatched totals print under an UNVERIFIED heading + caveat, the
+  grounded-data figure echo is replaced by a suppression note, and the data block carries a WARNING
+  instructing the model to treat every figure as unverified.
+- **P3 — text-quality signal + recipient + off-schema fall-through.** Extractor v11:
+  `looksLikeGlyphSoup` (shared, `money.ts` — ≥3 single-glyph-run lines AND ≥20% of non-empty lines)
+  stamps `textQuality:'suspect'` (persisted, `invoices.text_quality`); the analysis handler re-extracts
+  ONCE through the geometry (layout) segment reader — `reconstructPage` emits non-transaction rows as
+  raw visual-order text, exactly what a columnar invoice needs — and a still-soupy retry persists
+  `'suspect-confirmed'` (final). On a suspect layer, figures are presented only when the invoice's own
+  arithmetic POSITIVELY reconciles them; otherwise the localized `unreadableLayout` refusal (OCR/original
+  guidance). The header gains `recipient` (labeled lines only, reference-noun guard;
+  `invoices.recipient`). A question naming a header field the extract does NOT carry falls through to
+  the relevance path (`fallThrough`) so the model reads the document text.
+- **P4 — enforcement + polish.** Real-layout corpus gains the adversarial invoice fixtures
+  (`invoice-us-glyph-soup`, `invoice-de-unreconcilable-totals`) and the FIRST geometry-invoice fixture
+  (`invoice-de-geometry-columns`, via the real `reconstructPage` — closes the T1 residual); the snapshot
+  guard covers all of them. Plain-text exports (`.md`/`.txt` only — never JSON/log) get a UTF-8 BOM
+  (`bomFor`, `save-export.ts`) so legacy Windows viewers stop rendering mojibake.
+
+Decisions worth keeping: negation windows beat sentence-level negation detection (clause-level negators
+must not disarm a distant format ask); weak-read retraction is CORROBORATION-weighted (an ok check
+outweighs a mismatch — a corroborated weak figure survives a strong misprint elsewhere); under a soup
+text layer the presentation bar INVERTS (reconciled-or-refuse), because "printed verbatim" is
+meaningless when the print itself was misread; the geometry retry is once-per-document
+(`suspect-confirmed`), never per-turn. i18n keys added (en+de): `totalsHeadingUnverified`,
+`unreconciledCaveat`, `figureEchoSuppressed`, `detailRecipient`, `unreadableLayout`,
+`textQualityCaveat`.
+
+
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 
 The 2026-06-29 audit's testing review flagged a class of gap distinct from a bug: a **security/reliability

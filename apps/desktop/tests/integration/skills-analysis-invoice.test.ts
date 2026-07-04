@@ -14,6 +14,7 @@ import {
   registerSkillAnalysisHandler
 } from '../../src/main/services/skills/analysis/registry'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
+import { appendMessage, createConversation } from '../../src/main/services/chat'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
@@ -57,7 +58,12 @@ function capturingAudit(): {
   return { audit: (type, meta) => events.push({ type, meta }), events }
 }
 
-function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisContext & {
+function ctxFor(
+  db: Db,
+  scope: RetrievalScope,
+  question: string,
+  conversationId: string | null = null
+): SkillAnalysisContext & {
   events: Array<{ type: string; meta?: Record<string, unknown> }>
 } {
   const { audit, events } = capturingAudit()
@@ -66,7 +72,7 @@ function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisC
     scope,
     question,
     skillInstallId: INVOICE_INSTALL_ID,
-    conversationId: null,
+    conversationId,
     audit,
     tr,
     events
@@ -150,7 +156,9 @@ describe('invoice analysis handler — date-order caveat (R5, §5.7)', () => {
   it('grounded-data path carries the R5 date caveat in the deterministic postscript', async () => {
     const db = freshDb()
     const id = seedDoc(db, AMBIGUOUS)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'wann ist die rechnung fällig?'))
+    // (P3 note: the fixture states no due date, so a "fällig" question now falls through to the
+    // relevance path by design — a non-field figure question keeps this turn on grounded-data.)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'was kostet das widget?'))
     expect(res.mode).toBe('grounded-data')
     expect(res.answer).toBe('') // the model answer is streamed by registerRagIpc, not built here
     expect(res.postscript).toContain(t('en', 'skills.invoiceAnalysis.dateOrderCaveat'))
@@ -595,6 +603,230 @@ describe('invoice W7 answer-shape tuning (SKA-9/SKA-10)', () => {
     )
     expect(res.mode).toBe('grounded-data')
     expect(res.answer).not.toContain('```json')
+  })
+})
+
+// invoice-hardening-2026-07-04 P2 — the reconciliation GATE end-to-end through run(): mismatched totals
+// never print under the confident "exactly as printed" heading, and the grounded-data postscript
+// suppresses the figure echo instead of asserting contradictory figures as document quotes.
+describe('invoice P2 reconciliation gating through run() (invoice-hardening-2026-07-04)', () => {
+  // Strong 2-dp totals that mismatch: gross 200,00 ≠ net 120,00 + tax 24,00 (P2's weak-read retraction
+  // does not touch decimal-shaped figures — the ANSWER layer owns this case).
+  const MISMATCHED = CLEAN.replace('Gross total 144,00 EUR', 'Gross total 200,00 EUR')
+
+  it('template path: mismatched totals print under the UNVERIFIED heading with the caveat', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, MISMATCHED)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen')
+    )
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.totalsHeadingUnverified'))
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.unreconciledCaveat'))
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.totalsHeading'))
+  })
+
+  it('template path: reconciled totals keep the confident heading, no caveat', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen')
+    )
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.totalsHeading'))
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.unreconciledCaveat'))
+  })
+
+  it('grounded-data path: the postscript suppresses the figure echo on a mismatched invoice', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, MISMATCHED)
+    // (P3 note: the question must not name a missing header field — "fällig" would now fall through to
+    // the relevance path on this due-date-less fixture, which is P3's own tested behaviour.)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'warum stimmen die summen nicht?')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.postscript).toContain(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
+    expect(res.postscript).not.toContain('200.00')
+    // The model-facing block carries the mismatch warning.
+    expect(res.dataBlock).toContain('WARNING: the checks above MISMATCH')
+  })
+})
+
+// invoice-hardening-2026-07-04 P1 — negation-aware format detection + the byte-identical replay
+// backstop. The incident: "Analysiere die Rechnung im Roh format - nicht im json" matched the bare
+// `\bjson\b` token and re-served the byte-identical JSON dump (0 model calls, ~9 ms) against a question
+// that explicitly asked AWAY from JSON.
+describe('invoice P1 format negation + replay backstop (invoice-hardening-2026-07-04)', () => {
+  it('the incident question "… im Roh format - nicht im json" reaches grounded-data, never the dump', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Analysiere die Rechnung im Roh format - nicht im json')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('an English negated ask "not as json — explain the invoice" reaches grounded-data', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'not as json — explain the invoice please')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('an affirmed format NEXT TO a negated one ("als CSV, nicht als JSON") still serializes CSV', async () => {
+    // The negation check is per MENTION: the negated json token is skipped, the affirmed csv wins.
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'die rechnung als csv, nicht als json')
+    )
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('a raw/prose ask ("die Rechnung im Rohformat bitte") never serializes', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'zeig mir die Rechnung im Rohformat bitte')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('backstop: a negator OUTSIDE the window never re-serves the previous byte-identical dump', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const conv = createConversation(db)
+    // Turn 1: a genuine JSON ask; its answer is persisted as the previous assistant turn.
+    const first = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'die rechnung als json bitte', conv.id)
+    )
+    expect(first.answer).toContain('```json')
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: first.answer })
+    // Turn 2: "nicht" sits > NEGATION_WINDOW chars before "json", so detectFormat still affirms JSON —
+    // the conversation-level backstop must catch the byte-identical replay and fall to grounded-data.
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'bitte nicht in dem komischen kaputten json', conv.id)
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('a repeat format ask WITHOUT a negator ("nochmal als json") re-serves the dump — correct repeat', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const conv = createConversation(db)
+    const first = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'die rechnung als json bitte', conv.id)
+    )
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: first.answer })
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'nochmal als json bitte', conv.id)
+    )
+    // No negator in the question ⇒ the backstop stays out of the way; the dump IS the right answer.
+    expect(res.answer).toBe(first.answer)
+  })
+})
+
+// invoice-hardening-2026-07-04 P3 — the glyph-soup gate (+ one geometry retry) and the missing-field
+// fall-through, end-to-end through run().
+describe('invoice P3 glyph-soup gate + geometry retry + missing-field fall-through', () => {
+  // The incident shape: per-glyph spacing fragments the text layer into single-glyph token runs, and
+  // the scraped figures cannot corroborate each other.
+  const SOUP = [
+    'I n v o i c e',
+    '1   0 % 3   Article — Stablecoin Yield Farming 167,70',
+    '$ 9 1 4 = $ 915,92',
+    '( 1 U S D T = $ 0,99',
+    'Netto 4 $',
+    'Total 914 $'
+  ].join('\n')
+
+  const toSegments = (text: string) => text.split('\n').map((line, index) => ({ text: line, page: 1, index }))
+
+  it('soup + unverifiable figures → the unreadable-layout refusal (never fragments as an invoice)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, SOUP)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'))
+    expect(res.answer).toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
+    expect(res.mode).not.toBe('grounded-data')
+  })
+
+  it('soup blocks the JSON dump too (the gate precedes the format short-circuit)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, SOUP)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'die rechnung als json bitte'))
+    expect(res.answer).toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('the geometry retry recovers a document whose LAYOUT read is clean', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, SOUP)
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'),
+      readDocumentSegments: async (_id: string, opts?: { layout?: boolean }) =>
+        opts?.layout ? toSegments(CLEAN) : toSegments(SOUP)
+    }
+    const res = await invoiceAnalysisHandler.run!(ctx)
+    // The layout re-read replaced the soup extraction: the CLEAN totals answer — no refusal, no caveat.
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.totalsHeading'))
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.unreadableLayout'))
+    expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.textQualityCaveat'))
+    const row = db.prepare('SELECT text_quality AS q FROM invoices').get() as { q: string | null }
+    expect(row.q).toBeNull()
+  })
+
+  it('a still-soupy retry is FINAL: suspect-confirmed persists and later turns re-extract nothing', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, SOUP)
+    const reads: Array<boolean | undefined> = []
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'),
+      readDocumentSegments: async (_id: string, opts?: { layout?: boolean }) => {
+        reads.push(opts?.layout)
+        return toSegments(SOUP)
+      }
+    }
+    const first = await invoiceAnalysisHandler.run!(ctx)
+    expect(first.answer).toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
+    const row = db.prepare('SELECT text_quality AS q FROM invoices').get() as { q: string | null }
+    expect(row.q).toBe('suspect-confirmed')
+    const readsAfterFirst = reads.length
+    const second = await invoiceAnalysisHandler.run!({ ...ctx, question: 'summarize the invoice' })
+    expect(second.answer).toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
+    expect(reads.length).toBe(readsAfterFirst) // the confirmed flag reuses the rows — no new reads
+  })
+
+  it('a question naming a MISSING header field falls through to the relevance path (Empfänger)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN) // no recipient line
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Wer ist der Empfänger der Rechnung?')
+    )
+    expect(res.fallThrough).toBe(true)
+  })
+
+  it('the same question with the field EXTRACTED stays on the skill (grounded-data carries it)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, ['Bill to: Example Corp', ...CLEAN.split('\n')].join('\n'))
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Wer ist der Empfänger der Rechnung?')
+    )
+    expect(res.fallThrough).toBeUndefined()
+    expect(res.mode).toBe('grounded-data')
+    expect(res.dataBlock).toContain('"recipient": "Example Corp"')
+  })
+
+  it('a recipient line surfaces in the summary Details block', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, ['Bill to: Example Corp', ...CLEAN.split('\n')].join('\n'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'))
+    expect(res.answer).toContain(tr('skills.invoiceAnalysis.detailRecipient', { recipient: 'Example Corp' }))
   })
 })
 
