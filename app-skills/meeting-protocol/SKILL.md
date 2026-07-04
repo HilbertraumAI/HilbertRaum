@@ -33,7 +33,7 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
   keywords: [meeting minutes, meeting notes, meeting protocol, meeting transcript, meeting,
              action item, action items, agenda,
              protokoll, besprechungsprotokoll, sitzungsprotokoll, besprechung, sitzung,
-             tagesordnung, aktionspunkte, beschluss, beschlüsse, entscheidungen,
+             tagesordnung, aktionspunkte, beschluss, beschlüsse, entscheidung, entscheidungen,
              aufgabe, aufgaben, notizen]
   mimeTypes: [text/plain, text/markdown, application/pdf]
   filenamePatterns: ["*meeting*", "*minutes*", "*transcript*", "*protokoll*", "*besprechung*", "*sitzung*"]

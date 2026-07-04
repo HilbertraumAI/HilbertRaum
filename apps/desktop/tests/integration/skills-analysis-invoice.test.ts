@@ -564,6 +564,40 @@ describe('invoice grounded-data honesty composition (W6, §3.1 SKA-5)', () => {
   })
 })
 
+// W7 (audit §3.2/§3.3) — answer-shape tuning for the invoice, end-to-end through run().
+describe('invoice W7 answer-shape tuning (SKA-9/SKA-10)', () => {
+  it('SKA-9 separable verbs "Fasse die Rechnung zusammen" / "Liste die Positionen auf" keep the TEMPLATE', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    for (const q of ['Fasse die Rechnung zusammen', 'Liste die Positionen auf']) {
+      const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
+      expect(res.mode, `"${q}" must keep the template`).not.toBe('grounded-data')
+      expect(res.answer.length, `"${q}" template answer is non-empty`).toBeGreaterThan(0)
+    }
+  })
+
+  it('SKA-9 a separable ask WITH a format word ("… als json zusammen") still serializes (format wins first)', async () => {
+    // The format short-circuit precedes isSummaryShaped, so a genuine "als JSON" request is untouched by
+    // the new separable-summary regex (guards against the regex hijacking a format ask to the template).
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'fasse die rechnung als json zusammen')
+    )
+    expect(res.answer).toContain('```json')
+  })
+
+  it('SKA-10 explanatory format Q "Warum fehlt im JSON die MwSt?" reaches grounded-data, not the JSON dump', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Warum fehlt im JSON die MwSt?')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+})
+
 describe('analysis-handler registry — invoice', () => {
   it('register/get round-trips by install id; an unknown id returns undefined', () => {
     clearSkillAnalysisHandlers()

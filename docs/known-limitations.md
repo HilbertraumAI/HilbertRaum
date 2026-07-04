@@ -671,6 +671,25 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   The bank port added **no** extractor-version bump (the serializers are read-side; extraction output is
   byte-identical). **Residual:** bank has no statement **XML** serializer (JSON/CSV only, per the plan), so
   an "as xml" ask falls through to grounded-data rather than an inline XML block.
+  **W7 (audit §3.2/§3.3/§3.4) tuned the answer-shape routing** (vocabulary + classifiers only, no
+  extractor bump): (a) **SKA-9** German *separable* verb forms — "Fasse … zusammen" / "Liste … auf" — now
+  reach the **D56-gated template** via word-anchored two-particle regexes on both handlers' `isSummaryShaped`
+  (the joined `zusammenfass`/`auflisten` stems missed them); the preposition "auf" ("Liste die Buchungen auf
+  dem Konto") over-fires to the template — the safe deterministic side, accepted. (b) **SKA-10** a
+  WHY/how-come **format** question ("Warum fehlt im JSON die MwSt?") is now guarded by `EXPLANATORY_RE`
+  **before** `detectFormat`, so it reaches grounded-data (which can explain) instead of re-serving the
+  byte-identical serializer dump (the repeat-loop class W3/W4 killed on the summary path). (c) **SKA-20**
+  the `spend on`/`spending on` stems were **dropped from `CATEGORY_KEYWORDS`**: "how much did I spend on
+  groceries?" (the flagship grounded-data example cited across the W3/W4 record, the in-code comment, and a
+  test) now routes to **grounded-data** (the per-category grouping still rides the block, so it stays
+  answerable) instead of the category template — removing the tense-flip where the absent `spent on` reached
+  grounded-data while `spend on` reached the template. The explicit "break down by category" ask keeps the
+  template (`categor`/`breakdown`/`kategor`/`aufschlüssel`). (d) **SKA-7 (vocabulary half)** added route-only
+  German money terms to the bank vocabulary (`wie viel`, `wie viele`, `zahlung`-stem, `bezahlt`, `ausgegeben`,
+  `payment`) and `fällig`-stem/`due` to invoice, so an on-topic money/due question under an already-active
+  tool skill reaches the handler instead of falling to raw top-k (§8.2 — route-only never touches the
+  suggestion offer). **The STRUCTURAL half of SKA-7 remains open for A4** (a phrasing miss with the tool
+  skill active can still fall to top-k; the "off-topic keeps relevance" framing is reworded there).
   **U1 (audit §2.3 / ux-10 / ux-11 / §3.6) made the completeness claim honest and stopped silent row drops
   from masquerading as exhaustive reads.** The bank + invoice extractors now record an additive
   `dropped_row_count` per extraction (`bank_statements`/`invoices`, nullable — pre-U1 rows read NULL and the

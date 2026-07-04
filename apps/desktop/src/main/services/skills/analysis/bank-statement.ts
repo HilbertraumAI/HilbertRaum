@@ -64,8 +64,15 @@ export const BANK_STATEMENT_INSTALL_ID = skillInstallId('app', 'bank-statement')
 // A category-shaped question additionally wants a per-category breakdown (drives `categorize_*`). Kept as
 // its OWN stem list (a sub-behaviour gate, not a trigger) — `kategor`/`categor` are substring stems that
 // select the breakdown detail, distinct from the analysis-vs-off-topic trigger the vocabulary owns.
+// SKA-20 (W7, audit §3.4/§4.1) — the `spend on`/`spending on` stems were DROPPED here. They routed
+// "how much did I spend on groceries?" to the category TEMPLATE, while the past tense (`spent on`, never
+// present) reached grounded-data — the engine flipped on tense, and the W3/W4 record + the run() comment
+// + a test comment ALL cite that exact question as the flagship GROUNDED-DATA example. Dropping the
+// spend-stems makes the flagship true (a filtered spend ask now narrates the verified extract, with the
+// deterministic per-category grouping still riding the grounded-data block), tense-independent. The
+// explicit "break down by category" ask keeps the template via `categor`/`breakdown`/`kategor`/`aufschlüssel`.
 const CATEGORY_KEYWORDS: readonly string[] = [
-  'categor', 'breakdown', 'by category', 'spending on', 'spend on',
+  'categor', 'breakdown', 'by category',
   'kategor', 'nach kategorie', 'aufschlüssel'
 ]
 
@@ -104,7 +111,10 @@ function detectFormat(question: string): OutputFormat | null {
 // total, a posture the LLM must never own — while everything else that passed `applies()` (a specific
 // filter, a superlative, an entity, or a "why" follow-up: "how much did I spend on groceries?", "wer hat
 // die höchste Zahlung bekommen?", "warum stimmen die Summen nicht?") streams a model answer that NARRATES
-// the verified data (grounded-data). Substring-matched, already inside a bank-shaped `applies()`. The set
+// the verified data (grounded-data). All three examples now ROUTE and land on grounded-data as written:
+// W7 dropped `spend on` from `CATEGORY_KEYWORDS` (SKA-20) so the groceries ask is grounded-data not the
+// category template, and added the `zahlung` route stem (SKA-7) so the Zahlung ask reaches the handler at
+// all (audit §4.1). Substring-matched, already inside a bank-shaped `applies()`. The set
 // is DELIBERATELY broader than the invoice one: for a statement the totals ARE the D56-gated headline
 // (a mis-read partial sum masquerading as the verified total is the cardinal harm), so `total`/`summe`/
 // `saldo`/`kontostand`/`net change`/`cashflow` stay on the gated template, not the model.
@@ -134,6 +144,18 @@ const SUMMARY_KEYWORDS: readonly string[] = [
 // bare match would over-fire those to the template. Mirrors the invoice `RECONCILE_STIMMT_RE`.
 const RECONCILE_STIMMT_RE = /\bstimm(en|t)\b/
 
+// SKA-9 (W7, audit §3.2) — German SEPARABLE verb forms the joined-stem SUMMARY_KEYWORDS miss: the
+// imperative "Fasse den Kontoauszug zusammen" / "Liste die Transaktionen auf" are the most common list/
+// summary phrasings, and must reach the D56-gated TEMPLATE (ordering + completeness posture) instead of
+// streaming grounded-data. Word-anchored on BOTH particles, linear (a single unbounded `[\s\S]*` between
+// two anchors — no nested quantifier, ReDoS-safe per the suite's precedents). NOTE: "auf" doubles as a
+// preposition ("Liste die Buchungen auf dem Konto"), so `/\blist…\bauf\b/` OVER-fires that to the template —
+// the safe deterministic side (a listing ask is a template ask anyway); accepted, pinned by an eval item.
+const SEPARABLE_SUMMARY_RES: readonly RegExp[] = [
+  /\bfass(e|t|en)?\b[\s\S]*\bzusammen\b/, // fasse/fasst/fassen … zusammen
+  /\blist(e|et)?\b[\s\S]*\bauf\b/ // liste/listet … auf
+]
+
 // A WHY / explanatory marker escapes the summary shape even when a summary stem is present: the template
 // can only PRINT figures, never EXPLAIN, so "Warum stimmen die Summen nicht?" is a grounded-data question
 // (the audit §3.1 / W4 follow-up case — a repeat "summe"/"total" intercept must NOT re-serve the
@@ -145,7 +167,12 @@ function isSummaryShaped(question: string): boolean {
   if (EXPLANATORY_RE.test(q)) return false // "warum …" always explains → grounded-data
   // A CATEGORY breakdown is a high-stakes deterministic shape too (the template renders the per-category
   // totals + the honest model-assisted note); keep it on the template unless it ASKS WHY (guarded above).
-  return SUMMARY_KEYWORDS.some((k) => q.includes(k)) || RECONCILE_STIMMT_RE.test(q) || isCategoryShaped(q)
+  return (
+    SUMMARY_KEYWORDS.some((k) => q.includes(k)) ||
+    RECONCILE_STIMMT_RE.test(q) ||
+    SEPARABLE_SUMMARY_RES.some((re) => re.test(q)) ||
+    isCategoryShaped(q)
+  )
 }
 
 // `singleInScopeDocument` (also the W2 plausibility gate's `shouldFallThroughOnEmpty`) is the shared
@@ -763,7 +790,11 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       // the validate seam). Guarded to a non-empty statement so a zero-row extraction still gets the honest
       // prose fallback below (never an empty JSON husk dressed up as an answer). JSON carries rows +
       // cashflow summary + balances; CSV reuses the export serializer (rows only) — computed purely here.
-      const format = detectFormat(ctx.question)
+      // SKA-10 (W7, audit §3.3): a WHY/how-come format question ("Warum fehlt im JSON die MwSt?") is an
+      // EXPLANATION, not a serialization request — re-serving the byte-identical dump is the repeat-loop
+      // class W3/W4 killed elsewhere. Guard the format short-circuit with EXPLANATORY_RE so it reaches
+      // grounded-data (which can explain) instead. The serializer is deterministic; it cannot say WHY.
+      const format = EXPLANATORY_RE.test(ctx.question.toLowerCase()) ? null : detectFormat(ctx.question)
       if (format && rows.length > 0) {
         const snap: StatementSnapshot = { rows, summary: summarizeCashflow(rows), ...balances }
         return { answer: buildFormatAnswer(ctx.tr, format, snap), citations, coverage }

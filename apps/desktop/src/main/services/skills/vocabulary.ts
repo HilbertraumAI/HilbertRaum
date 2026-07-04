@@ -159,7 +159,23 @@ const BANK_STATEMENT: VocabEntry[] = [
   route('einnahmen', 'de'),
   route('abgleich', 'de'),
   route('gesamtwert', 'de'),
-  route('zusammenfass', 'de', 'stem') // Zusammenfassung / zusammenfassen
+  route('zusammenfass', 'de', 'stem'), // Zusammenfassung / zusammenfassen
+  // SKA-7 (W7, audit §3.2/§8.2) — the core German money phrasings the bank routing vocabulary missed, so
+  // with the bank skill ACTIVE they fell to raw top-k + 4B arithmetic ("Wie viel habe ich ausgegeben?",
+  // "Wer hat die höchste Zahlung bekommen?", "Wofür habe ich am meisten bezahlt?"). Route-only — recall is
+  // safe under an already-active skill (§8.2) and these never touch the suggestion offer / SKILL.md keywords.
+  route('wie viel', 'de'),
+  route('wie viele', 'de'),
+  route('zahlung', 'de', 'stem'), // routes "Zahlung"/"Zahlungen"/"Zahlungseingang"
+  route('bezahlt', 'de'),
+  route('ausgegeben', 'de'),
+  route('payment', 'en'),
+  // SKA-7 rider (W7) — bare separable imperatives ("Fasse das zusammen", "Liste das auf") at least REACH
+  // the handler on their leading verb (A4 supersedes with the structural inversion; cheap now, and the
+  // handler's SKA-9 separable-summary regex then keeps them on the D56-gated template). Route-only.
+  route('fasse', 'de'),
+  route('fass', 'de'),
+  route('liste', 'de')
 ]
 
 const INVOICE: VocabEntry[] = [
@@ -211,7 +227,17 @@ const INVOICE: VocabEntry[] = [
   route('mwst', 'de'),
   route('position', 'de'),
   route('wie viel', 'de'),
-  route('wie viele', 'de')
+  route('wie viele', 'de'),
+  // SKA-7 (W7, audit §3.2/§8.2) — a due-date ask must reach the invoice handler: today only the deadline
+  // skill knows "fällig", so "Wann ist sie fällig?" fell through with the invoice skill active. `fällig` as
+  // a STEM routes "fällig"/"Fälligkeit"/"fällige"; `due` word-bounded (safe under an already-active skill).
+  route('fällig', 'de', 'stem'),
+  route('due', 'en'),
+  // SKA-7 rider (W7) — bare separable imperatives ("Fasse die Rechnung zusammen", "Liste die Positionen
+  // auf") reach the handler on their leading verb (mirrors the bank rider; A4 supersedes). Route-only.
+  route('fasse', 'de'),
+  route('fass', 'de'),
+  route('liste', 'de')
 ]
 
 const MEETING_PROTOCOL: VocabEntry[] = [
@@ -232,6 +258,7 @@ const MEETING_PROTOCOL: VocabEntry[] = [
   both('aktionspunkte', 'de'),
   both('beschluss', 'de'), // umlaut breaks the substring, so singular + plural are both offered
   both('beschlüsse', 'de'),
+  both('entscheidung', 'de'), // SKA-45 (W7): the singular gap — each form appears in its own right
   both('entscheidungen', 'de'),
   both('aufgabe', 'de'),
   both('aufgaben', 'de'),
@@ -365,6 +392,7 @@ const WHAT_CHANGED: VocabEntry[] = [
   both('updated terms', 'en'),
   both('compare contract', 'en'),
   both('was hat sich geändert', 'de'),
+  both('änderung', 'de'), // SKA-45 (W7): the singular gap — each form appears in its own right
   both('änderungen', 'de'),
   both('unterschiede', 'de'),
   both('versionen vergleichen', 'de'),
@@ -501,6 +529,14 @@ const SMALL_TALK_WORDS = new Set<string>([
   // "thank you, now summarize it" is not: 'summarize'/'it' are not fillers)
   'thanks', 'thank', 'you', 'thx', 'ty', 'cheers', 'please', 'pls',
   'danke', 'dankeschön', 'merci', 'vielen', 'dank', 'bitte',
+  // SKA-11 (W7, audit §3.3) — top-frequency thanks/ack INTENSIFIERS + acknowledgement fillers the detector
+  // missed, each miss spending a full whole-document model read on a pleasantry ("thank you very much",
+  // "thanks a lot!", "danke dir!", "danke schön", "vielen lieben dank", "perfect, thanks", "sounds good",
+  // "all good, thanks!"). SAFE against the never-fires-on-real-questions invariant: a real document question
+  // always carries a non-filler content word, so no all-filler set here can swallow one ("ist das gut?" →
+  // 'ist'/'das' aren't fillers → not small talk). Verified by the extended guard test.
+  'very', 'much', 'so', 'a', 'lot', 'sounds', 'all', 'good', 'perfect', 'sure',
+  'dir', 'dich', 'schön', 'lieben', 'gut', 'sehr', 'genau', 'perfekt',
   // closings / acknowledgements
   'bye', 'goodbye', 'cya', 'ok', 'okay', 'okey', 'k', 'cool', 'great', 'nice', 'awesome', 'lol', 'haha',
   'tschüss', 'tschau', 'ciao', 'passt', 'alles', 'klar', 'super'
@@ -544,10 +580,22 @@ const DELIVERABLE_SHAPES: string[] = [
   'takeaway', 'bottom line', 'conclusion', 'upshot', 'big picture', 'main idea', 'in a nutshell',
   'in short', 'purpose of', 'point of the', 'point of this', 'message of', 'about this document',
   'what is it about', 'what is this about',
-  'zusammenfass', 'überblick', 'protokoll', 'alle ', 'sämtliche', 'liste', 'auflisten',
+  // SKA-19 (W7, audit §3.3) — more whole-document SYNTHESIS heads that trip the `what is the …` needle stem:
+  // "what is the most important point?", "what is the verdict?", "what is the overall picture?" (EN) +
+  // "was ist das Wichtigste/die Schlussfolgerung?" (DE). Vetoing them keeps a synthesis ask on the whole-doc
+  // engine (a false deliverable is safer than a false needle — the module's own rule).
+  'important point', 'key insight', 'verdict', 'overall',
+  'zusammenfass', 'überblick', 'protokoll', 'sämtliche', 'liste', 'auflisten',
   'was hat sich geändert', 'vergleich', 'überprüf', 'durchgehen', 'wesentlich', 'analyse', 'ganze dokument',
-  'fazit', 'kernaussage', 'kernpunkt', 'quintessenz', 'gesamteindruck', 'inhalt', 'worum geht'
+  'fazit', 'kernaussage', 'kernpunkt', 'quintessenz', 'gesamteindruck', 'inhalt', 'worum geht',
+  'wichtigste', 'schlussfolgerung', 'erkenntnis', 'gesamtbild'
 ]
+
+// SKA-45 (W7, audit §3.4) — the deliverable shapes that must be WORD-anchored, not the old dead
+// trailing-space substrings. 'alle ' could never veto a needle when 'alle' ended the question ("sind das
+// alle?"); \balle\b matches the bare word without hitting 'alles'/'allen' (word boundary before the 's').
+// Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
+const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [/\balle\b/]
 
 /** Unambiguous single-fact LOOKUP interrogatives (EN+DE) — a "find this one thing" ask. Kept tight (a false
  *  needle is worse than a false deliverable), substring-matched. */
@@ -556,8 +604,14 @@ const NEEDLE_SHAPES: string[] = [
   'where is', 'where does', 'where can i', 'find the', 'find a', 'locate', 'look up', 'is there a',
   'are there any', 'does it say', 'does the document', "what's the", 'what is the', 'what was the',
   'wie viel', 'wie viele', 'wie lange', 'wann ist', 'wann muss', 'wann wird', 'wo ist', 'wo steht',
-  'finde ', 'gibt es', 'steht im', 'steht in', 'was ist der', 'was ist die', 'was ist das'
+  'gibt es', 'steht im', 'steht in', 'was ist der', 'was ist die', 'was ist das'
 ]
+
+// SKA-45 (W7, audit §3.4) — the needle shapes that must be WORD-anchored, not the old dead trailing-space
+// substrings. 'finde ' could never match when 'finde' ended the question ("wo ich das finde?"); \bfinde\b
+// matches the bare imperative without hitting 'finden'/'findest'/'befinde' (word boundary after 'finde').
+// Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
+const NEEDLE_SHAPE_RES: readonly RegExp[] = [/\bfinde\b/]
 
 /**
  * True when the question is a targeted single-fact LOOKUP rather than a whole-document deliverable (A3
@@ -567,6 +621,7 @@ const NEEDLE_SHAPES: string[] = [
  */
 export function isNeedleShaped(question: string): boolean {
   const q = question.toLowerCase()
-  if (DELIVERABLE_SHAPES.some((s) => q.includes(s))) return false
-  return NEEDLE_SHAPES.some((s) => q.includes(s))
+  if (DELIVERABLE_SHAPES.some((s) => q.includes(s)) || DELIVERABLE_SHAPE_RES.some((re) => re.test(q)))
+    return false
+  return NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))
 }

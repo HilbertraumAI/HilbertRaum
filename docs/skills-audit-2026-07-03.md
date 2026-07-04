@@ -270,6 +270,13 @@ no signal (the W2 plausibility posture, inverted).
 **Testing:** eval-corpus routing family for the misses; IPC test asserting no silent top-k with an
 active tool skill over a matching doc. **Docs:** §39-successor + known-limitations rewrite of the
 "off-topic keeps relevance" wording.
+**Status: VOCABULARY HALF FIXED in W7; STRUCTURAL HALF OPEN for A4.** W7 added the route-only terms
+(`wie viel`/`wie viele`/`zahlung`-stem/`bezahlt`/`ausgegeben`/`payment` to bank; `fällig`-stem/`due` to
+invoice; the bare separable imperatives `fasse`/`fass`/`liste` on both) so the probed misses now ROUTE
+under an already-active skill (§8.2 — route-only, no suggestion/offer churn), with routing assertions in
+`skills-vocabulary.test.ts`. The STRUCTURAL gate inversion (default every non-small-talk question into the
+handler; retire the phrasing veto; reword the "off-topic keeps relevance" framing) remains **A4** — a
+phrasing miss the widened vocabulary still doesn't cover can fall to top-k until then.
 
 **SKA-8 — A3×W2 composition: a sticky instruction skill over a multi-doc scope turns EVERY non-chatter
 question into the selectOne/selectTwo dead-end — the relevance and coverage engines become unreachable.**
@@ -298,6 +305,9 @@ grounded-data instead (postscript mitigates figures; ordering/completeness postu
 **Fix:** add separable-form regexes to both `isSummaryShaped`s (e.g. `/\bfass(e|t|en)?\b[\s\S]*\bzusammen\b/`,
 `/\blist(e|et)?\b[\s\S]*\bauf\b/` — word-anchored, question-length-bounded). **Testing:** stem tests +
 eval items. **Docs:** none.
+**Status: FIXED in W7** (`SEPARABLE_SUMMARY_RES` on BOTH handlers' `isSummaryShaped`, the two word-anchored
+two-particle regexes; linear, no nested quantifier. The "auf"-preposition over-fire to the template is
+accepted (safe deterministic side) and pinned by an eval item; end-to-end template-routing tests both domains.)
 
 **SKA-10 — Format detection has no explanatory guard: "Warum fehlt im JSON die MwSt?" re-serves the
 byte-identical JSON dump.** · bug (routing, repeat-loop class) · **Medium** · High ·
@@ -306,6 +316,9 @@ byte-identical JSON dump.** · bug (routing, repeat-loop class) · **Medium** ·
 guards only the summary shape — the exact repeat-intercept loop W3/W4 killed elsewhere, alive on the
 format path. **Fix:** test `EXPLANATORY_RE` before `detectFormat` (or require a serialization-verb
 shape: "als/as/in … json"). **Testing:** format+warum tests both domains. **Docs:** none.
+**Status: FIXED in W7** (the `detectFormat` call in both `run()`s is now guarded —
+`EXPLANATORY_RE.test(q) ? null : detectFormat(q)` — so a WHY/how-come format question reaches grounded-data
+instead of re-serving the byte-identical serializer dump; format+warum tests both domains.)
 
 **SKA-11 — `isSmallTalk` misses top-frequency thanks/ack variants; each miss spends a full
 whole-document model read.** · bug (routing/perf) · **Medium** · High · `vocabulary.ts:496-531`.
@@ -317,6 +330,10 @@ inside the detector's own claimed class (chatter), unlike the documented off-top
 **Fix:** add the missing filler tokens (`very much so a lot dir dich schön lieben gut sehr genau
 perfekt good perfect sure`) and/or a "≥1 thanks token + only short filler tokens" rule. **Testing:**
 extend `skills-vocabulary.test.ts` both ways (the never-fires-on-real-questions guard must stay green).
+**Status: FIXED in W7** (the missing intensifier/ack fillers — `very much so a lot sounds all good perfect
+sure dir dich schön lieben gut sehr genau perfekt` — added to `SMALL_TALK_WORDS`; every verified miss now
+opts out, and the never-fires guard was extended with adversarial near-misses ("ist das gut?", "is this a
+good summary?") that must NOT be small talk — a real question always carries a non-filler content word.)
 
 **SKA-12 — A needle over an over-budget doc WITH a ready tree runs a ~13-call map-reduce over lossy
 summaries instead of one top-k retrieval.** · bug (gate order/perf) · **Medium** · High ·
@@ -419,6 +436,8 @@ important point?", "was ist das Wichtigste?", "was ist die Schlussfolgerung?", "
 the report?") — the "dangerous direction" the module comment forbids; gated on over-budget+no-tree so
 Low. `vocabulary.ts:536-559`. Fix: extend `DELIVERABLE_SHAPES` (`important point`, `key insight`,
 `verdict`, `overall`, `wichtigste`, `schlussfolgerung`, `erkenntnis`, `gesamtbild`).
+**Status: FIXED in W7** (all eight synthesis synonyms added to `DELIVERABLE_SHAPES`; the probed asks now
+veto the needle — `isNeedleShaped` false — keeping a whole-doc synthesis question on the whole-doc engine.)
 
 **SKA-20 — `'spend on'`/`'spending on'` route to the category template while the W3/W4 record and the
 in-code comment cite "how much did I spend on groceries?" as the flagship grounded-data example; the
@@ -426,6 +445,14 @@ past tense (`spent on`, absent from `CATEGORY_KEYWORDS`) flips the engine.** Cod
 decide a side: either add `spent on` and re-document category asks as template-owned, or drop the
 spend-stems from `CATEGORY_KEYWORDS`. `analysis/bank-statement.ts:67-70, 104-107, 143-149`;
 `known-limitations.md` W4 text; `tests/integration/skills-analysis-bank.test.ts:655` comment.
+**Status: FIXED in W7 — DECISION: DROP the spend-stems** (option b). `spend on`/`spending on` were removed
+from `CATEGORY_KEYWORDS` (keeping `categor`/`breakdown`/`by category`/`kategor`/`nach kategorie`/`aufschlüssel`),
+so "how much did I spend on groceries?" now routes to **grounded-data** — making the flagship example TRUE
+across all three doc sites (the run() comment, the known-limitations W4 bullet, and the test comment, now
+aligned) and removing the tense-flip (both `spend on` and `spent on` reach grounded-data). The per-category
+grouping still rides the grounded-data block, so a spend ask stays answerable; the explicit "break down by
+category" ask keeps the template. Chosen over option (a) because re-framing category asks as template-owned
+would contradict the grounded-data flagship the whole W3/W4 record rests on.
 
 **SKA-21 — Invoice totals postscript/template stamp a mixed-currency invoice's totals with
 `lineItems[0]`'s currency** (`invoice.ts:237, 319` — `header.currency ?? lineItems[0]?.currency ?? ''`);
@@ -570,6 +597,13 @@ missing where the doc'd convention says each form appears in its own right); the
 the 64 KiB cap; hostile-input worst case ~100–300 ms); RTL/bidi controls allowed in user-skill titles
 (picker spoofing, cosmetic); vocabulary trailing-space entries (`'finde '`, `'alle '`) that can never
 match at end-of-question.
+**Partially FIXED in W7 (the two vocabulary minors):** the singular German keyword gaps closed —
+`entscheidung` added to meeting-protocol and `änderung` to what-changed (both `both` terms, so their
+SKILL.md `triggers.keywords` regenerated + the parity test guards them; each form in its own right); and
+the dead trailing-space entries replaced with word-anchored regexes — `'finde '` → `/\bfinde\b/` in
+`NEEDLE_SHAPE_RES` and `'alle '` → `/\balle\b/` in `DELIVERABLE_SHAPE_RES` (they now match/veto at
+end-of-question without hitting `finden`/`findest`/`alles`; linear, ReDoS-safe). The remaining SKA-45
+items (stale SKILL.md `autoFire` comment, `buildSkillFence` O(n²), RTL/bidi titles) stay for U7.
 
 ---
 
@@ -580,6 +614,9 @@ Doc↔code mismatches found (fix the doc or the code, per the SKA item):
 1. **known-limitations.md W4 bullet + `analysis/bank-statement.ts:104-107` comment** cite "how much did
    I spend on groceries?" as the canonical grounded-data example — it routes to the template (SKA-20);
    the W4 comment's "wer hat die höchste Zahlung bekommen?" example doesn't route at all (SKA-7).
+   **Fixed in W7:** both examples are now TRUE as written — `spend on` dropped from `CATEGORY_KEYWORDS`
+   (groceries ask → grounded-data) and `zahlung` route-stem added (Zahlung ask now routes); the run()
+   comment + the known-limitations W4 bullet updated to say so.
 2. **known-limitations.md R2 bullet** — "header matching likewise no longer swallows a money-bearing
    line" overstates: only date labels were gated (SKA-14). **Fixed in R7** (bullet corrected + the
    vendor/number gate shipped).
@@ -596,7 +633,9 @@ Doc↔code mismatches found (fix the doc or the code, per the SKA item):
    (SKA-16).
 7. **The relevance-fallback framing** ("a tool skill answering an **off-topic** question keeps the
    ordinary relevance path", known-limitations + §39) silently includes on-topic vocabulary misses —
-   after A4 (or if deferred), reword to make the phrasing-gate residual explicit (SKA-7).
+   after A4 (or if deferred), reword to make the phrasing-gate residual explicit (SKA-7). **W7 note:** the
+   known-limitations W4 bullet now records the phrasing-gate residual explicitly (SKA-7 structural half
+   open for A4); the full reword of the "off-topic keeps relevance" wording lands with A4.
 8. **document-redaction/SKILL.md** — English-only button name (SKA-42) + the stale S13a-era autoFire
    comment (SKA-45).
 9. If any SKA item is deferred rather than fixed, it must gain a known-limitations entry (the accepted-
@@ -702,7 +741,9 @@ Acceptance: the D56/U1 honesty matrix tests pass on both domains; no figure echo
 Docs: §39-successor record; U1/W4 bullets.
 
 **W7 — Answer-shape + classifier vocabulary tuning (SKA-9, SKA-10, SKA-11, SKA-19, SKA-20, SKA-7's
-vocabulary half, SKA-45 keyword minors).**
+vocabulary half, SKA-45 keyword minors).** *(FIXED in W7 — branch `fix/skills2-w7`, all seven stamped
+above; ROUTING-ONLY, no extractor-version bump, no T1 snapshot interaction. SKA-20 decided: DROP the
+spend-stems. SKA-7's STRUCTURAL half remains open for A4.)*
 Scope: `vocabulary.ts` (bank German money terms; small-talk fillers; deliverable synonyms; trailing-
 space fixes; singular forms), both handlers' `isSummaryShaped` (separable-verb regexes) and
 `detectFormat` (explanatory guard), the spend-on decision. Grow the eval corpus with each family

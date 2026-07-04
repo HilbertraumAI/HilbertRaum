@@ -816,6 +816,61 @@ describe('bank-statement grounded-data honesty composition (W6, §3.1 SKA-4/SKA-
   })
 })
 
+// W7 (audit §3.2/§3.3/§3.4) — answer-shape + classifier vocabulary tuning, end-to-end through run().
+describe('bank-statement W7 answer-shape tuning (SKA-9/SKA-10/SKA-20)', () => {
+  it('SKA-9 separable verbs "Fasse … zusammen" / "Liste … auf" keep the D56-gated TEMPLATE (mode unset)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    for (const q of ['Fasse den Kontoauszug zusammen', 'Liste die Transaktionen auf']) {
+      const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
+      expect(res.mode, `"${q}" must keep the template`).toBeUndefined()
+      expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    }
+  })
+
+  it('SKA-9 accepted "auf"-preposition over-fire: "Liste die Buchungen auf dem Konto" → template (safe side)', async () => {
+    // "auf" doubles as a preposition; the /\blist…\bauf\b/ regex over-fires this to the TEMPLATE — the
+    // deterministic side (a listing ask is a template ask anyway). Documented, pinned here.
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Liste die Buchungen auf dem Konto')
+    )
+    expect(res.mode).toBeUndefined()
+  })
+
+  it('SKA-10 explanatory format Q "Warum fehlt der Saldo im JSON?" reaches grounded-data, not the JSON dump', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Warum fehlt der Saldo im JSON?')
+    )
+    // The WHY guard suppresses the serializer short-circuit → grounded-data can explain (not re-dump JSON).
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('SKA-20 "how much did I spend on groceries?" is GROUNDED-DATA (the flagship), not the category template', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'how much did I spend on groceries?')
+    )
+    expect(res.mode).toBe('grounded-data') // was the category TEMPLATE while 'spend on' ∈ CATEGORY_KEYWORDS
+    // The per-category grouping still rides the grounded-data block, so the spend ask is answerable.
+    expect(res.dataBlock).toContain('Category totals')
+  })
+
+  it('SKA-20 an EXPLICIT "break down … by category" ask STILL gets the category template', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'break down spending by category')
+    )
+    expect(res.mode).toBeUndefined() // 'by category' still routes to the template
+  })
+})
+
 describe('analysis-handler registry', () => {
   it('register/get round-trips by install id; an unknown id returns undefined', () => {
     clearSkillAnalysisHandlers()

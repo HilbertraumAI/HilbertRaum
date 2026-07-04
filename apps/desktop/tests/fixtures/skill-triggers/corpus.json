@@ -688,6 +688,55 @@
       "expected": "none",
       "scope": "whole-corpus",
       "note": "U4/§4.4 — the audit's exact example: an auto-fired 'Was regelt die DSGVO?' getting a redaction fence. BOTH fixes converge: 'dsgvo' was dropped from the redaction vocabulary (no keyword) AND the library PDF is narrowed away (no doc signal), so redaction neither offers nor auto-fires."
+    },
+    {
+      "id": "w7-bank-moneyq-de-01",
+      "question": "Wie viel habe ich für Lebensmittel ausgegeben?",
+      "inScopeDocs": [{ "title": "kontoauszug-maerz.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "W7/SKA-7 — a German money question whose terms ('wie viel', 'ausgegeben') are ROUTE-ONLY: with the bank skill ACTIVE they route (asserted in skills-vocabulary.test.ts), but they never OFFER, so no suggestion fires even with a Kontoauszug PDF in scope (keyword-required needs a suggest keyword in the question, not a filename)."
+    },
+    {
+      "id": "w7-bank-separable-de-01",
+      "question": "Fasse das bitte für mich zusammen.",
+      "inScopeDocs": [{ "title": "statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "W7/SKA-9 — a bare separable imperative ('fasse … zusammen'): route-only (reaches the handler under an active skill; kept on the D56 template by the separable-summary regex), never a suggestion keyword, so it does not offer."
+    },
+    {
+      "id": "w7-thanks-en-01",
+      "question": "Thank you very much!",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "W7/SKA-11 — a thanks/ack pleasantry (small-talk opt-out in the active-skill router, asserted in skills-vocabulary.test.ts). It carries no suggestion keyword, so it correctly abstains here too."
+    },
+    {
+      "id": "w7-synthesis-en-01",
+      "question": "What is the most important point of this document?",
+      "inScopeDocs": [{ "title": "contract.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "W7/SKA-19 — a whole-document SYNTHESIS ask (deliverable-vetoes the needle in the active-skill router). 'important point' is not a suggestion keyword, so no offer fires (routing/veto asserted in skills-vocabulary.test.ts)."
+    },
+    {
+      "id": "w7-spendon-en-01",
+      "question": "How much did I spend on groceries?",
+      "inScopeDocs": [{ "title": "march-statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "W7/SKA-20 — the flagship grounded-data question ('how much'/'spend on' are route-only, no offer). The routing decision (grounded-data, not the category template) is asserted in skills-analysis-bank.test.ts."
+    },
+    {
+      "id": "w7-meeting-entscheidung-de-01",
+      "question": "Wurde dazu eine Entscheidung dokumentiert?",
+      "inScopeDocs": [{ "title": "sitzungsprotokoll.pdf", "mimeType": "application/pdf" }],
+      "expected": "meeting-protocol",
+      "note": "W7/SKA-45 — the SINGULAR 'Entscheidung' now offers in its own right (plural 'entscheidungen' existed; the singular was the gap). One keyword + a protocol PDF → meeting-protocol."
+    },
+    {
+      "id": "w7-whatchanged-aenderung-de-01",
+      "question": "Gab es eine Änderung gegenüber der alten Fassung?",
+      "inScopeDocs": [{ "title": "vertrag-v2.pdf", "mimeType": "application/pdf" }],
+      "expected": "what-changed",
+      "note": "W7/SKA-45 — the SINGULAR 'Änderung' now offers in its own right (plural 'änderungen' existed). One keyword + a versioned PDF → what-changed."
     }
   ]
 }

@@ -95,6 +95,17 @@ const SUMMARY_KEYWORDS: readonly string[] = [
 // of the grounded-data model answer the plan intends for non-summary asks.
 const RECONCILE_STIMMT_RE = /\bstimm(en|t)\b/
 
+// SKA-9 (W7, audit §3.2) — German SEPARABLE verb forms the joined-stem SUMMARY_KEYWORDS miss: the
+// imperative "Fasse die Rechnung zusammen" / "Liste die Positionen auf" are common list/summary phrasings
+// and must reach the D56-gated TEMPLATE, not stream grounded-data. Word-anchored on BOTH particles, linear
+// (a single unbounded `[\s\S]*` between two anchors — no nested quantifier, ReDoS-safe). Mirrors the bank
+// handler. "auf" doubles as a preposition ("Liste die Positionen auf der Rechnung"): that over-fires to the
+// template — the safe deterministic side (a listing ask is a template ask anyway); accepted, eval-pinned.
+const SEPARABLE_SUMMARY_RES: readonly RegExp[] = [
+  /\bfass(e|t|en)?\b[\s\S]*\bzusammen\b/, // fasse/fasst/fassen … zusammen
+  /\blist(e|et)?\b[\s\S]*\bauf\b/ // liste/listet … auf
+]
+
 // A WHY / explanatory marker escapes the summary shape even when a summary stem is present: the template
 // can only PRINT figures, never EXPLAIN, so "Warum stimmen die Summen nicht?" is a grounded-data question
 // (the audit §3.1 / W4 follow-up case — a repeat "summe" intercept must NOT re-serve the byte-identical
@@ -104,7 +115,11 @@ const EXPLANATORY_RE = /\b(?:warum|wieso|weshalb|why)\b|\bhow come\b/
 function isSummaryShaped(question: string): boolean {
   const q = question.toLowerCase()
   if (EXPLANATORY_RE.test(q)) return false
-  return SUMMARY_KEYWORDS.some((k) => q.includes(k)) || RECONCILE_STIMMT_RE.test(q)
+  return (
+    SUMMARY_KEYWORDS.some((k) => q.includes(k)) ||
+    RECONCILE_STIMMT_RE.test(q) ||
+    SEPARABLE_SUMMARY_RES.some((re) => re.test(q))
+  )
 }
 
 // `singleInScopeDocument` + `shouldFallThroughOnEmpty` are the shared `analysis/common.ts` helpers (A1).
@@ -490,7 +505,11 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // extracted invoice — deterministic, 0 model calls, no reconciliation needed. Guarded to a
       // non-empty invoice so an empty extraction still gets the honest prose fallback below (never an
       // empty JSON husk dressed up as an answer).
-      const format = detectFormat(ctx.question)
+      // SKA-10 (W7, audit §3.3): a WHY/how-come format question ("Warum fehlt im JSON die MwSt?") is an
+      // EXPLANATION, not a serialization request — re-serving the byte-identical dump is the repeat-loop
+      // class W3/W4 killed elsewhere. Guard the short-circuit with EXPLANATORY_RE so it reaches grounded-
+      // data (which can explain) instead. The serializer is deterministic; it cannot say WHY.
+      const format = EXPLANATORY_RE.test(ctx.question.toLowerCase()) ? null : detectFormat(ctx.question)
       const hasContent =
         invoice.lineItems.length > 0 ||
         invoice.totals.netTotal !== undefined ||
