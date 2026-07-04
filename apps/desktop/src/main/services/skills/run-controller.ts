@@ -63,6 +63,12 @@ export interface StartRunArgs {
   /** The document this run acts on — the per-document concurrency key (content-free id, U-1). */
   documentId: string
   documentCount: number
+  /**
+   * The conversation that started this run (SKA-6/SKA-17, U6). A content-free id, threaded onto the
+   * run state so the renderer's per-run store can gate the run bar to the launching conversation and
+   * re-adopt the right conversation after a reload. Optional (tests omit it); the real IPC passes it.
+   */
+  conversationId?: string
   runner: ToolRunner
 }
 
@@ -71,9 +77,18 @@ interface ActiveRun {
   controller: AbortController
   /** The document this run is keyed by (its concurrency slot in `runs`). */
   documentId: string
+  /** Epoch ms when the run went terminal — drives the TTL sweep (SKA-17). Unset while running. */
+  finishedAt?: number
 }
 
 const TERMINAL: ReadonlySet<SkillRunState['state']> = new Set(['done', 'failed', 'cancelled'])
+
+// SKA-17 (skills audit 2026-07-03, U6): a terminal run lingers in its slot until the renderer
+// acknowledges it (so a finished run's outcome is never lost to a quick unmount / reload). But a
+// renderer that CLOSES without acknowledging would leak the entry forever, so a never-acknowledged
+// terminal run is swept after this TTL — the Map stays bounded. Generous (a reloaded renderer
+// re-adopts + acknowledges well within it); the entry is only an ids/counts snapshot regardless.
+const TERMINAL_TTL_MS = 30 * 60 * 1000
 
 export class SkillRunController {
   // Keyed by documentId: unrelated documents/conversations never collide. At most one non-terminal
@@ -100,6 +115,7 @@ export class SkillRunController {
    * WITHOUT awaiting (the renderer polls `get`); returns the initial `running` snapshot.
    */
   start(args: StartRunArgs): SkillRunState {
+    this.sweepTerminal()
     if (this.isRunning(args.documentId)) {
       throw new Error('A skill is already working on this document. Let it finish or cancel it first.')
     }
@@ -110,7 +126,12 @@ export class SkillRunController {
       toolName: args.toolName,
       documentCount: args.documentCount,
       state: 'running',
-      progress: { done: 0, total: 0 }
+      progress: { done: 0, total: 0 },
+      // SKA-6/SKA-17 (U6): carry the launching conversation + target document onto the content-free
+      // run state so the renderer's per-run store can gate the bar to the right conversation and
+      // re-adopt/re-pin after a reload. Both are ids (never titles) — the ids/counts posture holds.
+      conversationId: args.conversationId,
+      documentId: args.documentId
     }
     // Replace this document's slot (a lingering terminal run, if any — the next run supersedes it).
     this.runs.set(args.documentId, { state, controller, documentId: args.documentId })
@@ -151,6 +172,7 @@ export class SkillRunController {
   private finish(handle: string, controller: AbortController, outcome: ToolRunOutcome): void {
     const entry = this.findByHandle(handle)
     if (!entry) return // a newer run replaced this slot, or it was already cleared
+    entry.finishedAt = Date.now() // SKA-17: start the TTL clock for a never-acknowledged terminal run
     const s = entry.state
     if (outcome.ok) {
       s.state = 'done'
@@ -176,8 +198,39 @@ export class SkillRunController {
   }
 
   /**
-   * Cancel a run by handle. With no handle, cancels every in-flight run (a convenience for a
-   * single-run caller; with per-document concurrency the renderer passes the specific handle).
+   * The current run on a document's slot (running OR terminal-unacknowledged), or null (SKA-6/SKA-17).
+   * Used to surface the RUNNING handle in a busy refusal so the renderer can re-adopt the orphaned run
+   * (a reload lost its own store) instead of being stuck with "cancel it first" and nothing to cancel.
+   */
+  getByDocument(documentId: string): SkillRunState | null {
+    const r = this.runs.get(documentId)
+    return r ? { ...r.state, progress: { ...r.state.progress } } : null
+  }
+
+  /**
+   * Every run the controller holds — running AND terminal-but-unacknowledged (SKA-17). A freshly
+   * reloaded renderer re-adopts these so an in-flight run keeps its bar and a finished run's outcome
+   * is still shown/acknowledgeable. Copies only (never the mutable engine state); ids/counts only.
+   */
+  list(): SkillRunState[] {
+    this.sweepTerminal()
+    return Array.from(this.runs.values()).map((r) => ({ ...r.state, progress: { ...r.state.progress } }))
+  }
+
+  /** Drop terminal runs a renderer never acknowledged past the TTL, so the Map stays bounded (SKA-17). */
+  private sweepTerminal(): void {
+    const now = Date.now()
+    for (const [key, r] of this.runs) {
+      if (TERMINAL.has(r.state.state) && r.finishedAt != null && now - r.finishedAt > TERMINAL_TTL_MS) {
+        this.runs.delete(key)
+      }
+    }
+  }
+
+  /**
+   * Cancel a run by handle. With no handle, cancels every in-flight run — INTERNAL/TEST-ONLY since
+   * per-document concurrency (A2): the IPC boundary requires a non-empty handle (SKA-25), so a
+   * renderer can never blast every window's runs; only in-process callers/tests use the no-arg form.
    */
   cancel(runHandle?: string | null): void {
     if (runHandle) {

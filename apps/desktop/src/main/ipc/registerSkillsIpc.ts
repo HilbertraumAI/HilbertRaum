@@ -56,9 +56,10 @@ export function registerSkillsIpc(ctx: AppContext): void {
     if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.skills.locked'))
   }
 
-  // The single app-orchestrated tool-run lifecycle (skills plan §12.2, S11b). Held in this closure
-  // (at most one run at a time) — no AppContext plumbing needed. Generic: it knows nothing about
-  // banks; the `tool-runs.ts` dispatch supplies the bank seam as an opaque runner.
+  // The app-orchestrated tool-run lifecycle controller (skills plan §12.2, S11b). Held in this closure
+  // — no AppContext plumbing needed. Keys runs PER DOCUMENT (A2), so unrelated documents/conversations
+  // run in parallel; `listSkillRuns` projects them for a reloaded renderer to re-adopt (U6). Generic:
+  // it knows nothing about banks; the `tool-runs.ts` dispatch supplies the bank seam as an opaque runner.
   const runController = new SkillRunController()
   const runAudit = toSkillToolAudit(ctx.audit)
 
@@ -186,12 +187,24 @@ export function registerSkillsIpc(ctx: AppContext): void {
       log.info('Skill imported', { id: info.id, source: info.source, fileCount })
       // Audit privacy: declared id + source + file COUNT only — never names/content.
       ctx.audit?.('skill_imported', 'Skill imported', { id: info.id, source: info.source, fileCount })
+      // SKA-32 (review hardening): the installer reconciles through the MODULE function, which the
+      // registry handle's `reconcileStatus()` summary never sees — without this, a user who FIXES a
+      // broken drop-in by importing a corrected zip keeps a phantom "folder could not be read"
+      // notice until restart (and a newly-broken tree keeps a phantom all-clear). Refresh via the
+      // handle so the Settings notice tracks the tree the import just changed.
+      ctx.skills!.reconcile()
       return info
     } catch (e) {
       // Re-throw the structural (content-free) message; never leak a raw stack/path.
       if (e instanceof SkillImportError) throw new Error(e.message)
       log.warn('Skill import failed', { reason: 'unexpected' })
-      throw new Error(SKILL_IMPORT_ERRORS.invalidManifest)
+      // SKA-33 (review hardening): an UNEXPECTED throw (ENOSPC, an antivirus rename-lock, a DB
+      // write failure) is NOT a manifest problem — rethrowing `invalidManifest` here used to be
+      // harmless because the renderer collapsed every import failure to the generic toast, but the
+      // SKA-33 mapping would now surface it as confident WRONG copy ("The skill manifest is
+      // invalid.") for a perfectly valid package. A fixed, content-free, UNMAPPED message keeps the
+      // renderer on the generic "couldn't be added" toast for this path.
+      throw new Error('The skill could not be added.')
     }
   })
 
@@ -222,6 +235,9 @@ export function registerSkillsIpc(ctx: AppContext): void {
     deleteSkill(ctx.db, installId, installerDeps())
     log.info('Skill deleted', { id: record.id, source: record.source })
     ctx.audit?.('skill_deleted', 'Skill deleted', { id: record.id, source: record.source })
+    // SKA-32: keep the reconcile-status summary in step with the tree this delete just changed
+    // (e.g. the deleted folder was the one that could not be read).
+    ctx.skills!.reconcile()
   })
 
   // Enable a skill, enforcing one-active-per-id (DS12): enabling X disables every other installed
@@ -253,6 +269,17 @@ export function registerSkillsIpc(ctx: AppContext): void {
     ctx.audit?.('skill_disabled', 'Skill disabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
     return skillInfo(ctx.db, updated, appVersion)
+  })
+
+  // SKA-32 (audit 2026-07-03, U7): the structural summary of the last reconcile's discovery errors —
+  // previously computed and dropped by every consumer, so a power user's drop-in with one YAML typo
+  // simply never appeared (no toast, no log, no badge). COUNTS + fixed reason codes only, NEVER a
+  // folder name or package content (§22-M1; an invalid folder name is arbitrary user text). The
+  // `list()` call first ensures the lazy post-unlock reconcile has actually run this session.
+  ipcMain.handle(IPC.skillReconcileStatus, () => {
+    requireUnlocked()
+    ctx.skills!.list()
+    return ctx.skills!.reconcileStatus()
   })
 
   // Acknowledge a user skill's import warning (DS7) — clears the persistent "review what it can do"
@@ -342,7 +369,14 @@ export function registerSkillsIpc(ctx: AppContext): void {
     // document the pick is genuinely ambiguous, so the user is asked to re-choose.
     const requestedId = typeof req?.documentId === 'string' ? req.documentId : ''
     const requestedInScope = requestedId !== '' && docIds.includes(requestedId)
-    if (requestedId !== '' && !requestedInScope && docIds.length > 1) {
+    // SKA-29 (skills audit 2026-07-03, U6 — the main-side half of SKA-6's wrong-doc chain): the
+    // single-doc fallback below is a READ-ONLY convenience (a stale/first-in-scope id conveniently
+    // resolves to the one document). For a CONFIRM-GATED write/export tool it is unsafe: a confirmation
+    // the user gave for document X must NEVER execute against document Y, so an out-of-scope requested
+    // id HARD-REFUSES even when exactly one document is in scope. Read-only tools keep the documented,
+    // tested single-doc fallback (its stale-id convenience is the U-1 behaviour).
+    const confirmGated = toolRunNeedsConfirmation(toolName)
+    if (requestedId !== '' && !requestedInScope && (docIds.length > 1 || confirmGated)) {
       return { started: false, error: tMain('main.skills.run.documentOutOfScope') }
     }
     const targetId = requestedInScope ? requestedId : docIds[0]
@@ -362,25 +396,54 @@ export function registerSkillsIpc(ctx: AppContext): void {
       // so the run state + audit don't understate scope — it must become a count, not a constant.
       // `documentId` is the controller's per-document concurrency key (audit §6.2): "a skill is
       // already working" now fires only for a run already in flight on this same document.
-      const run = runController.start({ skillInstallId, toolName, documentId: targetId, documentCount: 1, runner })
+      // `conversationId` (SKA-6/SKA-17, U6) rides onto the content-free run state so the renderer can
+      // gate the bar to the launching conversation and re-adopt it after a reload.
+      const run = runController.start({
+        skillInstallId,
+        toolName,
+        documentId: targetId,
+        documentCount: 1,
+        conversationId,
+        runner
+      })
       return { started: true, run }
     } catch {
-      // One-at-a-time: a run is already in flight. Friendly, content-free.
-      return { started: false, error: tMain('main.skills.run.busy') }
+      // One-at-a-time: a run is already in flight ON THIS DOCUMENT. Surface its handle (SKA-17) so a
+      // renderer whose own store was reset (a reload) can RE-ADOPT the orphaned run — the fallback
+      // re-attach path — instead of being stuck with "cancel it first" and nothing to cancel.
+      const running = runController.getByDocument(targetId)
+      return { started: false, error: tMain('main.skills.run.busy'), runningHandle: running?.runHandle }
     }
   })
 
-  ipcMain.handle(IPC.getSkillRun, (_e, runHandle: string): SkillRunState | null =>
-    runController.get(typeof runHandle === 'string' ? runHandle : '')
-  )
+  ipcMain.handle(IPC.getSkillRun, (_e, runHandle: string): SkillRunState | null => {
+    requireUnlocked()
+    return runController.get(typeof runHandle === 'string' ? runHandle : '')
+  })
 
+  // All runs main currently holds (running + terminal-unacknowledged), ids/counts only — a freshly
+  // reloaded renderer re-adopts them so an in-flight run keeps its bar and a finished run's outcome is
+  // still shown/acknowledgeable (SKA-17; the `listActiveStreamConversations` precedent for skill runs).
+  ipcMain.handle(IPC.listSkillRuns, (): SkillRunState[] => {
+    requireUnlocked()
+    return runController.list()
+  })
+
+  // Cancel a run by handle. SKA-25: a NON-EMPTY handle is REQUIRED at the IPC boundary — the no-arg
+  // cancel-all (a pre-A2 relic that aborted every in-flight run across all documents/windows) is now
+  // internal/test-only. An empty/absent handle is refused (no-op) rather than blasting every run.
   ipcMain.handle(IPC.cancelSkillRun, (_e, runHandle?: string | null): void => {
-    runController.cancel(typeof runHandle === 'string' && runHandle.length > 0 ? runHandle : null)
+    requireUnlocked()
+    if (typeof runHandle !== 'string' || runHandle.length === 0) return
+    runController.cancel(runHandle)
   })
 
   // Drop a terminal run once the renderer has shown its outcome (the acknowledge handshake — the
   // controller keeps a terminal run readable until this clears it). No-op on a still-running handle.
+  // SKA-25: a non-empty handle is required here too (the no-arg clear-all stays internal/test-only).
   ipcMain.handle(IPC.clearSkillRun, (_e, runHandle?: string | null): void => {
-    runController.clear(typeof runHandle === 'string' && runHandle.length > 0 ? runHandle : null)
+    requireUnlocked()
+    if (typeof runHandle !== 'string' || runHandle.length === 0) return
+    runController.clear(runHandle)
   })
 }

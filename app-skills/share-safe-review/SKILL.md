@@ -35,10 +35,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # Share-Safe Review
-
 Safety and wording rules — these lead and always apply, even if the rest of this skill is shortened
 to fit the context:
-
 - This skill is **advisory** — it must never claim to anonymize, legally de-identify, sanitize
   metadata, or guarantee safe publication. It complements the separate **Document Redaction** tool.
 - Never say "fully anonymized." Never say "GDPR-compliant", "DSGVO-compliant", "HIPAA-compliant", or

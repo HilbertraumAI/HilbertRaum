@@ -17,6 +17,7 @@ import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/sk
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
+import { BANK_FIXTURES } from '../fixtures/real-layouts/corpus'
 
 // full-doc-skills plan §3.1, Phase 2 — the analysis-handler seam + bank handler, driven DIRECTLY (no
 // IPC, no chat wiring). Seeds the `chunks` table (the legacy reader path — no segment reader injected),
@@ -739,13 +740,195 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
       'Statement EUR\nOpening balance 2.000,00\n03.05.2026 Grocery -45,90 1.954,10\n' +
         '04.06.2026 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
     )
-    const res = await bankStatementAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'what was my biggest payment?')
-    )
+    // T2 reachability pin (SKA-7 history): pre-W7 this exact string FAILED applies() — the test called
+    // run() directly and so pinned a production-UNREACHABLE path. W7's `zahlung`/payment route stems made
+    // it reachable; this assertion keeps it that way — if the vocabulary ever regresses, this reds instead
+    // of the suite silently validating a path no user can reach. (A T2 sweep checked every other question
+    // this suite drives through run(): all pass applies() — this was the only historic bypass.)
+    const question = 'what was my biggest payment?'
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
     expect(res.mode).toBe('grounded-data')
     // Both the deterministic in/out/net echo AND the R5 caveat ride the postscript (R5 honesty preserved).
     expect(res.postscript).toContain('2454.10')
     expect(res.postscript).toContain(tr('skills.bankAnalysis.dateOrderCaveat'))
+  })
+})
+
+// W6 (audit §3.1, SKA-4/SKA-5) — the grounded-data honesty COMPOSITION: the mode's postscript + data
+// block now honour the D56 completeness gate and the U1 droppedRowCount, end-to-end through run(). A
+// non-summary question ("what was my largest transaction?") routes to grounded-data over each fixture.
+describe('bank-statement grounded-data honesty composition (W6, §3.1 SKA-4/SKA-5)', () => {
+  const NON_SUMMARY = 'what was my largest transaction?'
+
+  it('SKA-4 complete: the postscript echoes the COMPUTED sums (no "verbatim" mislabel), no hedge', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    expect(res.postscript).toContain('2454.10')
+    expect(res.postscript).toContain('computed') // reworded label (SKA-4, audit §4.5)
+    expect(res.postscript).not.toContain('verbatim from the document')
+    expect(res.postscript).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 2, dropped: 0 }))
+    // The data block asserts whole-document provenance (nothing dropped, complete).
+    expect(res.dataBlock).toContain('every value above was parsed and reconciled from the whole document')
+    expect(res.dataBlock).not.toContain('MISSING')
+  })
+
+  // One kept row + one dropped money line, NO printed balances → status 'unverified', dropped 1.
+  const ONE_DROPPED = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Sparen 50 1.234,56'
+  it('SKA-4/SKA-5 unverified + dropped: echo + unverifiedCaveat + the dropped hedge; data block MISSING note', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, ONE_DROPPED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    // The unverified caveat rides under the echo (SKA-4), and the dropped hedge fires (SKA-5, no balance proof).
+    expect(res.postscript).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 1 }))
+    expect(res.postscript).toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
+    // The data block honestly declares the missing line (a "how many?" narration can't claim completeness).
+    expect(res.dataBlock).toContain('MISSING from this data')
+    expect(res.dataBlock).not.toContain('parsed and reconciled from the whole document')
+  })
+
+  // D56 PROOF outranks the parse gap: opening 100 + Salary 100 == closing 200 ties, so the dropped
+  // "Foo 1234 50,00" line provably didn't move the balance → complete, NO hedge (mirrors the template).
+  const COMPLETE_WITH_DROPPED =
+    'Statement EUR\nOpening balance 100,00\n2026-01-02 Salary 100,00 200,00\n' +
+    '2026-01-03 Foo 1234 50,00\nClosing balance 200,00'
+  it('SKA-5 D56 OUTRANKS: complete + dropped>0 → echo present, NO dropped hedge, whole-document provenance', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE_WITH_DROPPED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    expect(res.postscript).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
+    expect(res.dataBlock).not.toContain('MISSING')
+    expect(res.dataBlock).toContain('every value above was parsed and reconciled from the whole document')
+  })
+
+  // A per-row balance the amounts refute → status 'contradicted' (dropped 0).
+  const CONTRADICTED =
+    'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+    '2026-01-03 Salary 2.500,00 9.999,99\nClosing balance 9.999,99'
+  it('SKA-4 contradicted: the postscript SUPPRESSES the figure echo (mirrors incompleteNoTotal)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CONTRADICTED)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
+    expect(res.mode).toBe('grounded-data')
+    // No app-authored total under the model answer on a statement the balances refute.
+    expect(res.postscript).not.toContain('2454.10')
+    expect(res.postscript).not.toContain('computed')
+    // The data block still carries the honest contradicted verdict for the model to narrate.
+    expect(res.dataBlock).toContain('NOT verified as the whole statement')
+  })
+})
+
+// W7 (audit §3.2/§3.3/§3.4) — answer-shape + classifier vocabulary tuning, end-to-end through run().
+describe('bank-statement W7 answer-shape tuning (SKA-9/SKA-10/SKA-20)', () => {
+  it('SKA-9 separable verbs "Fasse … zusammen" / "Liste … auf" keep the D56-gated TEMPLATE (mode unset)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    for (const q of ['Fasse den Kontoauszug zusammen', 'Liste die Transaktionen auf']) {
+      const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
+      expect(res.mode, `"${q}" must keep the template`).toBeUndefined()
+      expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    }
+  })
+
+  it('SKA-9 accepted "auf"-preposition over-fire: "Liste die Buchungen auf dem Konto" → template (safe side)', async () => {
+    // "auf" doubles as a preposition; the /\blist…\bauf\b/ regex over-fires this to the TEMPLATE — the
+    // deterministic side (a listing ask is a template ask anyway). Documented, pinned here.
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Liste die Buchungen auf dem Konto')
+    )
+    expect(res.mode).toBeUndefined()
+  })
+
+  it('SKA-10 explanatory format Q "Warum fehlt der Saldo im JSON?" reaches grounded-data, not the JSON dump', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Warum fehlt der Saldo im JSON?')
+    )
+    // The WHY guard suppresses the serializer short-circuit → grounded-data can explain (not re-dump JSON).
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('SKA-20 "how much did I spend on groceries?" is GROUNDED-DATA (the flagship), not the category template', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'how much did I spend on groceries?')
+    )
+    expect(res.mode).toBe('grounded-data') // was the category TEMPLATE while 'spend on' ∈ CATEGORY_KEYWORDS
+    // The per-category grouping still rides the grounded-data block, so the spend ask is answerable.
+    expect(res.dataBlock).toContain('Category totals')
+  })
+
+  it('SKA-20 an EXPLICIT "break down … by category" ask STILL gets the category template', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'break down spending by category')
+    )
+    expect(res.mode).toBeUndefined() // 'by category' still routes to the template
+  })
+})
+
+// T2 (skills-audit-2026-07-03 §5/§7) — the REAL-LAYOUT honesty fixtures end-to-end: the same corpus
+// statements the extractor snapshot pins (tests/fixtures/real-layouts/corpus.ts) run through the FULL
+// analysis handler, so the U1 partial/contradicted headlines and the W6 postscript suppression are
+// proven over realistic layouts, not only the constructed one-liners above. Questions here are
+// production-reachable (they pass applies() — asserted, the T2 reachability discipline).
+describe('bank-statement analysis over the real-layout corpus (T2 — U1 headlines + W6 suppression)', () => {
+  const fixtureText = (id: string): string => {
+    const fx = BANK_FIXTURES.find((f) => f.id === id)
+    if (!fx) throw new Error(`corpus fixture ${id} missing`)
+    return fx.chunks.join('\n')
+  }
+
+  it('bank-at-ocr-dropped-row: the template headline is the honest countPartial (2 kept, 1 dropped) — U1 e2e', async () => {
+    // Teeth: revert U1's countPartial gate (headline always the plain count) → red.
+    const db = freshDb()
+    const id = seedDoc(db, fixtureText('bank-at-ocr-dropped-row'))
+    const question = 'summarize the cashflow'
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countPartial', { count: 2, dropped: 1 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    // No printed balance → the totals stay a clearly-labelled unverified sum, never a verified total.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 2 }))
+  })
+
+  it('bank-de-contradicted-closing: the template headline is countContradicted and NO total is presented — U1/D56 e2e', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, fixtureText('bank-de-contradicted-closing'))
+    const question = 'summarize the cashflow'
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
+    // dropped 0 + a refuted printed balance → the CONTRADICTED headline (not countPartial, not plain).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countContradicted', { count: 2 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    // The body refuses a total (the D56 downgrade) — net 80.00 must never be presented.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain('80.00')
+  })
+
+  it('bank-de-contradicted-closing: the grounded-data postscript SUPPRESSES the figure echo — W6 e2e', async () => {
+    // Teeth: revert W6's status-gated buildCashflowPostscript (echo unconditional) → red.
+    const db = freshDb()
+    const id = seedDoc(db, fixtureText('bank-de-contradicted-closing'))
+    const question = 'what was my largest transaction?' // non-summary shape → grounded-data
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
+    expect(res.mode).toBe('grounded-data')
+    // No app-authored in/out/net rides under the model answer on a statement the balances refute.
+    expect(res.postscript).not.toContain('80.00')
+    expect(res.postscript).not.toContain('computed')
+    // The data block still hands the model the honest contradicted verdict to narrate.
+    expect(res.dataBlock).toContain('NOT verified as the whole statement')
   })
 })
 

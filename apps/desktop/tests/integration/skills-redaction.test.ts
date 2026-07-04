@@ -183,6 +183,42 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     expect((events as Array<{ type: string }>).map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
   })
 
+  it('SKA-27 rider (R9): a transient finishRun(done) throw after the write neither fails the run nor strands it', async () => {
+    // Redaction is the OTHER dialog-shaped seam: pre-R9 an unguarded terminal 'done' throw (workspace
+    // transiently locked during the minutes-open dialog) fell into the outer B4 catch, stamping the run
+    // 'failed' and reporting "Nothing was changed." after the redacted copy WAS written.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, PII_TEXT)
+    const { audit } = capturingAudit()
+    let fileWritten = false
+    let failuresInjected = 0
+    const realPrepare = db.prepare.bind(db)
+    ;(db as unknown as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+      if (fileWritten && failuresInjected === 0 && /UPDATE skill_runs SET status/.test(sql)) {
+        failuresInjected++
+        throw new Error('database is locked')
+      }
+      return realPrepare(sql)
+    }) as typeof db.prepare
+    try {
+      const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        saveTextFile: async () => {
+          fileWritten = true
+          return true
+        }
+      })
+      expect(failuresInjected).toBe(1) // the injected throw hit the terminal 'done' write
+      expect(res.ok).toBe(true) // the file WAS written — never "failed. Nothing was changed."
+      expect(res.redactionCount).toBe(5)
+      const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+      expect(run.status).toBe('done') // the guarded retry landed the terminal status
+    } finally {
+      ;(db as unknown as { prepare: typeof db.prepare }).prepare = realPrepare
+    }
+  })
+
   it('writes a FAITHFUL copy from the verbatim segments — newlines preserved, no collapsed chunk text', async () => {
     const db = freshDb()
     // Production chunk text collapses newlines to spaces; saving THAT would hand the user a

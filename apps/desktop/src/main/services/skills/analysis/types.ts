@@ -125,20 +125,51 @@ export interface SkillAnalysisHandler {
    * omits it (byte-unchanged). Deterministic; no new model call.
    */
   injectPiiScan?: boolean
-  /** Can this skill answer THIS question over THIS scope? (cheap, pre-flight). */
+  /**
+   * Can this skill ENGAGE its engine over THIS scope? (cheap, pre-flight). For a TOOL skill this is a
+   * vocabulary-shaped bank/invoice question over a single in-scope doc; for a whole-doc/compare INSTRUCTION
+   * skill it is A3's inversion — ANY non-small-talk question over a single (resp. exactly-two) in-scope doc,
+   * with no per-skill keyword required.
+   */
   applies(input: SkillAnalysisInput): boolean
   /**
-   * The DOC-COUNT-AGNOSTIC half of `applies()` (W2, audit §2.1): does the question match this skill's
-   * answer shape, IGNORING how many documents are in scope? By construction `applies()` ⟺ `intends()`
-   * AND the scope-count precondition (single doc, or exactly two for compare). So when `applies()` is
-   * false but `intends()` is true, the turn IS intent-shaped and failed ONLY on document count — the
-   * chat path then narrows to the skill's best-matching document (with an honest scope notice) or emits
-   * a deterministic routing answer, instead of the old silent fall-through to top-k retrieval.
+   * The W2 COUNT-MISMATCH ROUTING predicate (audit §2.1; A4/SKA-8 §3.2): does this question match the
+   * skill's OWN routing VOCABULARY (`routeMatch`), IGNORING how many documents are in scope? Consulted by
+   * the chat path ONLY when `applies()` is false (so the turn failed on the document count): a
+   * vocabulary-shaped question then narrows to the skill's best-matching document (with an honest scope
+   * notice) or emits a deterministic "pick one / select two" routing answer, instead of falling through.
+   *
+   * A4 (SKA-8) DECOUPLED this from `applies()`. Post-A3 the whole-doc handlers set `intends = !isSmallTalk`,
+   * which made the W2 pre-pass intercept EVERY non-chatter question at multi-doc scope — the relevance and
+   * coverage-extract engines became unreachable ("pick one document" for "who is Angela Merkel?"). Now
+   * `intends()` stays VOCABULARY-shaped for every handler, so a general/off-topic question at the wrong doc
+   * count falls through to the ordinary engines; only a vocabulary-shaped one narrows/routes. `applies()`
+   * keeps A3's broader single-doc inversion for whole-doc skills, so the identity `applies() ⟺ intends()
+   * AND count` NO LONGER holds for them (it still does for the vocabulary-gated tool skills).
    *
    * Optional/additive: a handler that omits it opts OUT of the W2 doc-count routing (e.g. the redaction
    * routing handler, whose `applies()` already accepts any count ≥ 1). Never a NEW model call.
    */
   intends?(input: SkillAnalysisInput): boolean
+  /**
+   * A4 (SKA-7 STRUCTURAL, audit §3.2/§8.2): the SINGLE-DOC INVERSION gate for a TOOL (exhaustive) skill —
+   * the composition that finishes A3's inversion for bank/invoice. True when this ONE in-scope document
+   * plausibly belongs to the skill's class (it matches the skill's manifest doc signals OR a persisted
+   * extraction already exists for it). When true AND `applies()` is false (a phrasing miss) AND the doc is
+   * fully chunked AND the question is not small talk, the chat path runs the handler ANYWAY — so an on-topic
+   * money question that misses the ~45-term vocabulary is answered from the VERIFIED extract (grounded-data
+   * narrates; post-W6 it honestly declines an off-data question) instead of silently degrading to raw top-k
+   * chunks + model arithmetic (the pre-W3 incident class, on the two highest-stakes skills). A doc matching
+   * NEITHER signal keeps the phrasing gate (the W2 plausibility posture, inverted). Passed the requesting
+   * skill's `install_id` so it can read the manifest doc signals.
+   *
+   * Optional/additive: ONLY the bank/invoice exhaustive handlers define it. The whole-doc/compare handlers
+   * omit it — their inversion already lives in `applies()` (`!isSmallTalk`), which is unconditional for a
+   * whole read (no plausibility gate needed: reading a document and answering is always safe). Never a NEW
+   * model call and NO new capability (SEC-1): it changes only WHICH questions reach an already-app-owned
+   * handler, never what that handler can do.
+   */
+  classMatches?(input: SkillAnalysisInput, skillInstallId: string): boolean
   /**
    * Run the whole-document read-only tools and synthesise the grounded answer + real coverage, OR
    * (for a `routing` handler) return the action-routing answer with no citations/coverage. OMITTED

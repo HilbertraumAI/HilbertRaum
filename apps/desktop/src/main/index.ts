@@ -297,8 +297,18 @@ function initBackend(): void {
       present: result.present,
       inserted: result.inserted,
       updated: result.updated,
-      markedUnavailable: result.markedUnavailable
+      markedUnavailable: result.markedUnavailable,
+      errorCount: result.errors.length
     })
+    // SKA-32 (skills audit 2026-07-03, U7): discovery errors used to be silently dropped here.
+    // COUNT + structural reason codes ONLY — never the human-readable lines, which can carry a
+    // (validated) folder path, and never arbitrary folder names/content (§22-M1).
+    if (result.errors.length > 0) {
+      log.warn('Some skill folders could not be read', {
+        count: result.errors.length,
+        codes: [...new Set(result.errorCodes)]
+      })
+    }
   } catch {
     /* workspace locked — reconcile deferred to a post-unlock pass in a later phase */
   }

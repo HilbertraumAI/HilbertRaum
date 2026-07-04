@@ -99,13 +99,16 @@ export const Transcript = memo(function Transcript({
     if (atBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [messages, streamText, streamThinking])
 
-  // Id of the last assistant turn — drives the regenerate / "answer without it" affordances.
-  // Memoized so a 40 ms streaming flush doesn't re-scan the whole transcript (perf audit FE-1).
+  // Id of the assistant turn that drives the regenerate / "answer without it" affordances. SKA-37
+  // (skills audit 2026-07-03, U6): these affordances re-answer via the REGENERATE path, which acts on
+  // the conversation's LAST turn — so they must render ONLY when the last message IS that assistant
+  // turn. A trailing UNANSWERED user turn (e.g. a send that failed to produce an answer) otherwise let
+  // "Answer without this skill" on A1 actually re-answer the later Q2 skill-free. So the id is the last
+  // message's id only when it is an assistant turn — a trailing user turn suppresses both affordances
+  // (the failed-generation retry is covered by the error banner instead). Memoized (perf audit FE-1).
   const lastAssistantId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') return messages[i].id
-    }
-    return undefined
+    const last = messages[messages.length - 1]
+    return last && last.role === 'assistant' ? last.id : undefined
   }, [messages])
 
   // localizeServerCopy is an O(n) Map-lookup + two regex .exec over the WHOLE growing buffer; it
@@ -272,13 +275,17 @@ const MessageBlock = memo(function MessageBlock({
           </>
         )}
         {/* Per-message skill glyph (skills plan §15/DS16/§22-A5): a quiet, labelled marker on
-            the answer a skill shaped — icon + word, never colour-only (guidelines §9). The
-            read resolves a DELETED skill to null (no skillTitle), so the glyph never points at
-            a vanished skill. Decorative-but-labelled; never alarming. */}
-        {m.role === 'assistant' && m.skillTitle && (() => {
-          // Show the glyph title in the UI language when the skill carries a `localized`
-          // override; fall back to the stamped canonical title otherwise.
-          const glyphTitle = resolveSkillTitle ? resolveSkillTitle(m.skillId, m.skillTitle) : m.skillTitle
+            the answer a skill shaped — icon + word, never colour-only (guidelines §9). SKA-38
+            (skills audit 2026-07-03, U6): gated off the PERSISTED `m.skillId`, not the JOIN-resolved
+            title, so DELETING the skill no longer erases the glyph + undo from an already-stamped turn
+            (a disabled skill already kept both). A stamped turn whose skill is gone (null title) shows
+            a localized "(removed skill)" label. Decorative-but-labelled; never alarming. */}
+        {m.role === 'assistant' && m.skillId && (() => {
+          // Show the glyph title in the UI language when the skill carries a `localized` override;
+          // fall back to the stamped canonical title; and to "(removed skill)" when the skill is gone.
+          const removedLabel = t('chat.skill.removed')
+          const fallback = m.skillTitle ?? removedLabel
+          const glyphTitle = resolveSkillTitle ? resolveSkillTitle(m.skillId, fallback) : fallback
           // The "answer without it" undo re-runs the same question skill-free. S13c placed it on
           // AUTO-FIRED turns only; U3 (audit §4.3) extends it to EVERY skill-stamped last turn — a
           // per-turn pick is now as reversible as an auto-fire, so no skill-shaped answer is a

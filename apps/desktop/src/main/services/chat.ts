@@ -274,10 +274,14 @@ function serializeCoverage(coverage: CoverageInfo | null | undefined): string | 
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
   const coverage = parseCoverage(r.coverage_json)
-  // Resolve the stamped skill (DS16/§22-A5): the LEFT JOIN yields skill_title only while the skill
-  // row still exists. A DELETED skill (no join) ⇒ skillId/skillTitle NULL, so the glyph never
-  // points at a vanished skill (the FK-less delete relies on this — audit C3).
-  const skillResolved = r.skill_id != null && r.skill_title != null
+  // Resolve the stamped skill (DS16/§22-A5). SKA-38 (skills audit 2026-07-03, U6): key the provenance
+  // off the PERSISTED `messages.skill_id`, NOT the JOIN-resolved title. `skillId` is the raw stamped
+  // install id (present even when the skill row was later DELETED); `skillTitle` is the JOINed title,
+  // NULL only when the skill is gone. The renderer renders a localized "(removed skill)" label for a
+  // NULL-title-but-stamped turn — so deleting a skill no longer erases the glyph + the "answer without
+  // it" undo from an already-stamped turn (a DISABLED skill already kept both — this makes DELETED
+  // consistent). Auto-fire provenance follows the stamp, not the join.
+  const hasStamp = r.skill_id != null
   return {
     id: r.id,
     conversationId: r.conversation_id,
@@ -286,11 +290,9 @@ function rowToMessage(r: MessageRow): Message {
     createdAt: r.created_at,
     tokenCount: r.token_count,
     citations,
-    skillId: skillResolved ? r.skill_id : null,
-    skillTitle: skillResolved ? r.skill_title : null,
-    // Auto-fire provenance (S13c) only means anything when a skill actually shaped (and still resolves
-    // for) this turn; a deleted skill drops the glyph AND the undo together.
-    autoFired: skillResolved ? r.auto_fired === 1 : false,
+    skillId: r.skill_id,
+    skillTitle: r.skill_title,
+    autoFired: hasStamp ? r.auto_fired === 1 : false,
     coverage,
     // Only surface truncation as a positive flag (undefined on complete replies / user turns), so a
     // pre-migration NULL row and a normal reply both read exactly as before.

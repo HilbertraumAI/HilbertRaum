@@ -36,7 +36,13 @@ export const INCIDENT_CLASSES = [
   'sepa-rows', // SEPA-Lastschrift / SEPA-Gutschrift transfer boilerplate (R3, §5.5)
   'dd.mm.yy', // two-digit-year dates completed against a document anchor (R5, §5.7)
   'cross-year', // a December row on a January-anchored statement rolls to the previous year (R5, §5.7)
-  'wrapped-descriptions' // a payee/purpose that wrapped to the next printed line (R6, §5.7)
+  'wrapped-descriptions', // a payee/purpose that wrapped to the next printed line (R6, §5.7)
+  'midline-date', // a mid-line/trailing date read as the AMOUNT by the row money scan (R7, SKA-1)
+  'ddmmyy-money-shape', // dd.mm.yy dates money-shaped + invisible to the date scrubs (R7, SKA-2)
+  'dot-decimal-geometry', // geometry classifier ate d.dd amounts as dates on CH/UK/US statements (R7, SKA-13)
+  'money-bearing-header', // invoice vendor/number header labels swallowed money-bearing lines (R7, SKA-14)
+  'dropped-row-honesty', // an unparseable money-bearing booking line must COUNT (droppedRowCount, U1/T2)
+  'contradicted-balance-claim' // printed opening/closing the rows refute — the D56 'contradicted' gate (T2)
 ] as const
 
 export type IncidentClass = (typeof INCIDENT_CLASSES)[number]
@@ -121,6 +127,85 @@ const bankSparkasse: BankFixture = {
       // A non-breaking-hyphen (U+2011) debit sign + a figure-space (U+2007) grouped amount AND balance —
       // exercises the last two normalization side-doors that the other rows don't (R1, §5.3).
       `06.02.2026 Dauerauftrag Sparplan${NBSP}${NBHYPHEN}1${FIGSP}000,00${NBSP}${NBSP}2${FIGSP}434,11`
+    ].join('\n')
+  ]
+}
+
+/**
+ * Austrian Volksbank-style statement whose PERIOD lines and balance lines carry the date shapes that used
+ * to be read as MONEY (R7, skills-audit-2026-07-03): a standalone period line (`01.03.2026 bis 31.03.2026`
+ * — SKA-1's invented "bis" transaction), its dd.mm.yy twin (`15.03.26 bis 31.03.26` → invented 3103.26),
+ * and dd.mm.yy TRAILING dates on the opening/closing balance lines (`per 01.03.26` → opening 103.26,
+ * `per 31.03.26` → closing 3103.26 — SKA-2). Correct read: 3 rows, droppedRowCount 0, opening 1000 +
+ * (−19,15 + 250 − 100) = closing 1130,85 (the tie proves no row was invented).
+ */
+const bankDdmmyy: BankFixture = {
+  id: 'bank-at-ddmmyy-period-balance',
+  kind: 'bank',
+  title: 'Volksbank — Kontoauszug (AT, dd.mm.yy Perioden-/Saldozeilen)',
+  incidentClasses: ['midline-date', 'ddmmyy-money-shape', 'dd.mm.yy'],
+  note: 'AT statement: standalone period line (4-digit + dd.mm.yy variants) must not invent a transaction; dd.mm.yy trailing dates on balance lines must not become the balances.',
+  chunks: [
+    [
+      'Volksbank — Kontoauszug Nr. 3/2026',
+      'Alle Beträge in EUR',
+      '01.03.2026 bis 31.03.2026',
+      'Anfangssaldo 1.000,00 EUR per 01.03.26',
+      '02.03.2026 Kartenzahlung REWE -19,15',
+      '05.03.26 SEPA-Gutschrift Miete Anteil 250,00',
+      '10.03.2026 Dauerauftrag Sparen -100,00',
+      '15.03.26 bis 31.03.26 Zinsperiode',
+      'Endsaldo 1.130,85 EUR per 31.03.26'
+    ].join('\n')
+  ]
+}
+
+/**
+ * Bawag-style AT statement with an OCR-MISREAD booking date (T2, skills-audit-2026-07-03 §5 / U1
+ * honesty): `31.02.2026` is date-SHAPED but invalid (Feb 31 — a 21→31 OCR confusion), so the
+ * Rücklastschrift row cannot parse. It IS money-bearing (`${MINUS}25,00`), so it must be COUNTED in
+ * `droppedRowCount` (the post-R7 LEADING_DATE_SHAPE + hasMoneyToken rule) — the whole-statement claim
+ * downgrades to the honest partial headline. No printed opening/closing balance (a transaction listing),
+ * so nothing outranks the gate (D56 'unverified'). Correct read: 2 rows (−19,15 / +2.100,00), dropped 1.
+ */
+const bankDroppedRow: BankFixture = {
+  id: 'bank-at-ocr-dropped-row',
+  kind: 'bank',
+  title: 'BAWAG — Umsatzliste (AT, OCR-garbled booking date)',
+  incidentClasses: ['dropped-row-honesty', 'nbsp', 'u2212'],
+  note: 'AT listing: an invalid-date (31.02.) money-bearing Rücklastschrift row must be dropped AND counted (droppedRowCount 1), never silently vanish.',
+  chunks: [
+    [
+      'BAWAG P.S.K. — Umsatzliste April 2026',
+      'Alle Beträge in EUR',
+      `02.04.2026 Kartenzahlung REWE${NBSP}${NBSP}${MINUS}19,15`,
+      `31.02.2026 SEPA-Rücklastschrift Strom${NBSP}${NBSP}${MINUS}25,00`,
+      `10.04.2026 SEPA-Gutschrift Gehalt${NBSP}${NBSP}2${NBSP}100,00`
+    ].join('\n')
+  ]
+}
+
+/**
+ * Sparkasse-style DE statement whose PRINTED closing balance the rows refute (T2, the D56
+ * 'contradicted' gate): opening 500,00 + Σ(−20,00 + 100,00) = 580,00, but the statement prints
+ * `Endsaldo 999,99` (a mis-scanned/garbled closing line — the class where trusting the document's own
+ * claim would present a wrong total as verified). Both rows parse cleanly (droppedRowCount 0), so the
+ * headline must be the CONTRADICTED count (not countPartial) and no total/echo may be presented.
+ */
+const bankContradicted: BankFixture = {
+  id: 'bank-de-contradicted-closing',
+  kind: 'bank',
+  title: 'Sparkasse — Kontoauszug (DE, widerlegter Endsaldo)',
+  incidentClasses: ['contradicted-balance-claim'],
+  note: 'DE statement: printed Endsaldo refutes opening + Σ(rows) — the read is suspect, so no total may be presented (D56 contradicted).',
+  chunks: [
+    [
+      'Sparkasse — Kontoauszug Nr. 5/2026',
+      'Buchungen in EUR',
+      'Anfangssaldo 500,00 EUR',
+      '02.05.2026 Kartenzahlung REWE -20,00',
+      '05.05.2026 SEPA-Gutschrift Erstattung 100,00',
+      'Endsaldo 999,99 EUR'
     ].join('\n')
   ]
 }
@@ -212,11 +297,138 @@ const invoicePhantom: InvoiceFixture = {
   ]
 }
 
+/**
+ * German invoice whose header-label lines carry MONEY (R7, skills-audit-2026-07-03 SKA-14) and whose
+ * dates print dd.mm.yy (SKA-2). `Rechnung Nr. … über 390,00 EUR` (a number label) and `From … to …
+ * Hosting 49,00 EUR` ("from" is a vendor label) used to be consumed as headers: the figure vanished,
+ * droppedRowCount stayed 0, and vendor/invoiceNumber captured garbage tails — now both stay LINE ITEMS
+ * (their descriptions keep the untouched mid-line dates byte-exact, the SKA-1 same-length-scrub pin).
+ * `Datum: 15.03.26` is a HEADER date (was the phantom item {description: "Datum:", lineTotal: 1503.26})
+ * and `Gesamtbetrag 390,00 EUR per 30.06.26` reads gross 390 (was 3006.26).
+ */
+const invoiceMoneyHeaders: InvoiceFixture = {
+  id: 'invoice-de-ddmmyy-money-headers',
+  kind: 'invoice',
+  title: 'Webhosting Alpen — Rechnung (DE, money-bearing Header-Zeilen)',
+  incidentClasses: ['money-bearing-header', 'ddmmyy-money-shape', 'midline-date'],
+  note: 'DE invoice: money-bearing vendor/number label lines stay line items; dd.mm.yy header/totals dates are scrubbed, not read as figures.',
+  chunks: [
+    [
+      'Webhosting Alpen GmbH',
+      'Rechnung Nr. 2026-14 vom 03.05.2026 über 390,00 EUR',
+      'Datum: 15.03.26',
+      '',
+      'From 01.06.2026 to 30.06.2026 Hosting 49,00 EUR',
+      'Serverpflege Juni 276,00 EUR',
+      '',
+      'Summe netto 325,00 EUR',
+      'MwSt. 20% 65,00 EUR',
+      'Gesamtbetrag 390,00 EUR per 30.06.26'
+    ].join('\n')
+  ]
+}
+
+// =====================================================================================================
+// GEOMETRY STATEMENTS (positioned words — run through the REAL `reconstructPage`, then the extractors)
+// =====================================================================================================
+
+/** A positioned word for a geometry fixture — mirrors `LayoutWord` (pdf-layout.ts) structurally so this
+ *  fixtures module needs no import from `src` (`w` is unused by clustering today). */
+export interface GeometryWord {
+  str: string
+  x: number
+  y: number
+  w: number
+}
+
+export interface GeometryBankFixture {
+  id: string
+  kind: 'bank-geometry'
+  title: string
+  incidentClasses: Array<IncidentClass | string>
+  note: string
+  /** Positioned words, one entry per PAGE — the test feeds them through the REAL `reconstructPage`
+   *  (year/column resolution included) and then the bank extractors, the full geometry pipeline. */
+  pages: GeometryWord[][]
+}
+
+const gw = (str: string, x: number, y: number): GeometryWord => ({ str, x, y, w: 8 })
+
+/**
+ * Swiss dot-decimal statement (R7, skills-audit-2026-07-03 SKA-13): small `d.dd` amounts (`5.04`,
+ * `1.12`) are BOTH date-shaped and money-shaped. The geometry classifier tried date first, dropped them
+ * as out-of-column dates, and the reconstructed rows carried only the running BALANCE — balance-as-amount
+ * on exactly the path built to prevent it. Correct read: 4 rows with the dot-decimal AMOUNTS (5.04, 1.12,
+ * 20.00, 3.50) and their balances; the in-band `7.02` stays a booking DATE (2026-02-07); opening 1,204.40
+ * + Σ = closing 1,234.06 ties (proves no row lost its amount).
+ */
+const geometryDotDecimal: GeometryBankFixture = {
+  id: 'bank-ch-geometry-dot-decimal',
+  kind: 'bank-geometry',
+  title: 'Bank Zuerich — Kontoauszug (CH, dot-decimal geometry)',
+  incidentClasses: ['dot-decimal-geometry'],
+  note: 'CH geometry statement: d.dd amounts out of the Datum band are MONEY, not dates; an in-band d.dd stays the booking date.',
+  pages: [
+    [
+      // Header band (top quarter): the page year + the statement currency declaration.
+      gw('Bank Zuerich Kontoauszug Februar 2026', 40, 800),
+      gw('Alle Betraege in CHF', 40, 780),
+      // Opening balance (raw non-transaction row; read by the balance gate).
+      gw('Anfangssaldo', 40, 760),
+      gw('1,204.40', 380, 760),
+      gw('CHF', 430, 760),
+      // Booking rows: Datum column x=40, description x=100/160, amount x=300, running balance x=380.
+      gw('01.02.', 40, 700),
+      gw('Gutschrift', 100, 700),
+      gw('Zins', 160, 700),
+      gw('5.04', 300, 700),
+      gw('1,209.44', 380, 700),
+      gw('03.02.', 40, 680),
+      gw('Gutschrift', 100, 680),
+      gw('Rueckverguetung', 160, 680),
+      gw('1.12', 300, 680),
+      gw('1,210.56', 380, 680),
+      gw('05.02.', 40, 660),
+      gw('Gutschrift', 100, 660),
+      gw('Erstattung', 160, 660),
+      gw('20.00', 300, 660),
+      gw('1,230.56', 380, 660),
+      // An IN-band yearless d.dd booking date (no trailing dot) — must STAY a date under the SKA-13 gate.
+      gw('7.02', 40, 640),
+      gw('Gutschrift', 100, 640),
+      gw('Bonus', 160, 640),
+      gw('3.50', 300, 640),
+      gw('1,234.06', 380, 640)
+    ],
+    // Page 2 prints NO year header (exercises the document-level year fallback carry) and a WRAPPED
+    // payee continuation whose annotation carries a dotless d.dd (`13.02`) — the continuation must still
+    // absorb (legacy classing: the annotation date is dropped, the text glues onto the row above).
+    [
+      gw('12.02.', 40, 700),
+      gw('Gutschrift', 100, 700),
+      gw('Ausgleich', 160, 700),
+      gw('10.00', 300, 700),
+      gw('1,244.06', 380, 700),
+      gw('Wert:', 100, 685),
+      gw('13.02', 160, 685),
+      // Closing balance.
+      gw('Schlusssaldo', 40, 600),
+      gw('1,244.06', 380, 600),
+      gw('CHF', 430, 600)
+    ]
+  ]
+}
+
 /** Every bank fixture, in stable order. */
-export const BANK_FIXTURES: BankFixture[] = [bankElba, bankSparkasse]
+export const BANK_FIXTURES: BankFixture[] = [bankElba, bankSparkasse, bankDdmmyy, bankDroppedRow, bankContradicted]
 
 /** Every invoice fixture, in stable order. */
-export const INVOICE_FIXTURES: InvoiceFixture[] = [invoiceSteuer, invoiceSwiss, invoicePhantom]
+export const INVOICE_FIXTURES: InvoiceFixture[] = [invoiceSteuer, invoiceSwiss, invoicePhantom, invoiceMoneyHeaders]
 
-/** The whole corpus, bank then invoice, stable order (the snapshot + coverage iterate this). */
+/** Every geometry fixture, in stable order (snapshot-keyed on the BANK extractor version — the bump
+ *  policy explicitly covers `pdf-layout.ts` reconstruction changes). */
+export const GEOMETRY_BANK_FIXTURES: GeometryBankFixture[] = [geometryDotDecimal]
+
+/** The whole plain-text corpus, bank then invoice, stable order (the snapshot + coverage iterate this;
+ *  the geometry fixtures ride beside it — the coverage test unions their incident classes too). */
 export const ALL_FIXTURES: Fixture[] = [...BANK_FIXTURES, ...INVOICE_FIXTURES]

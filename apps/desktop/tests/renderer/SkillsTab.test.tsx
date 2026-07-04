@@ -266,6 +266,53 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     expect(dialog.getByRole('button', { name: 'Add skill' })).toBeDisabled()
   })
 
+  // SKA-33 (audit 2026-07-03, U7): a failed IMPORT used to show only the generic "couldn't be
+  // added" toast although the preview already localizes every structural code. The wrapped IPC
+  // message is mapped back through the code table. TEETH: revert doImport's catch to the generic
+  // toast → the precise reason never renders and this fails.
+  it('shows the PRECISE structural reason when the import itself fails (SKA-33)', async () => {
+    const user = userEvent.setup()
+    const importSkill = vi.fn(async () => {
+      // What the renderer actually receives: Electron wraps the main-side structural throw.
+      throw new Error(
+        "Error invoking remote method 'skills:import': Error: A newer version of this skill is already installed. Turn on developer mode to install an older version."
+      )
+    })
+    stubApi({
+      listSkills: vi.fn(async () => []),
+      pickSkillPackage: vi.fn(async () => '/tmp/race.skill.zip'),
+      previewSkillPackage: vi.fn(async () => preview()),
+      importSkill: importSkill as never
+    })
+    renderTab()
+    await screen.findByText('No skills yet')
+    await user.click(screen.getByRole('button', { name: /Import a skill/ }))
+    await user.click(await screen.findByRole('menuitem', { name: /From a file/ }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Add skill' }))
+    // The precise localized reason — not the generic failure toast.
+    expect(await screen.findByText(/needs developer mode|developer mode to install an older version/i)).toBeInTheDocument()
+    expect(screen.queryByText('This skill couldn’t be added.')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the generic toast for an unrecognized import failure', async () => {
+    const user = userEvent.setup()
+    const importSkill = vi.fn(async () => {
+      throw new Error('ECONNRESET or some other novel failure')
+    })
+    stubApi({
+      listSkills: vi.fn(async () => []),
+      pickSkillPackage: vi.fn(async () => '/tmp/new.skill.zip'),
+      previewSkillPackage: vi.fn(async () => preview()),
+      importSkill: importSkill as never
+    })
+    renderTab()
+    await screen.findByText('No skills yet')
+    await user.click(screen.getByRole('button', { name: /Import a skill/ }))
+    await user.click(await screen.findByRole('menuitem', { name: /From a file/ }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Add skill' }))
+    expect(await screen.findByText('This skill couldn’t be added.')).toBeInTheDocument()
+  })
+
   it('shows friendly structural errors and blocks confirm when the preview is not ok', async () => {
     const user = userEvent.setup()
     stubApi({
@@ -322,6 +369,56 @@ describe('SkillsTab — auto-fire opt-in (S13c/D4)', () => {
     expect(
       screen.queryByRole('switch', { name: 'Apply a matching skill automatically' })
     ).not.toBeInTheDocument()
+  })
+})
+
+// SKA-32 (audit 2026-07-03, U7): reconcile errors were computed and dropped — a drop-in with one
+// YAML typo simply never appeared, with no toast/log/badge. Settings → Skills now surfaces the
+// count (never a folder name).
+describe('SkillsTab — reconcile-error notice (SKA-32)', () => {
+  it('shows "N skill folders could not be read" when the status reports errors', async () => {
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      getSkillReconcileStatus: vi.fn(async () => ({ errorCount: 2, errorCodes: ['invalidManifest'] }))
+    })
+    renderTab()
+    expect(await screen.findByText(/2 skill folders could not be read/)).toBeInTheDocument()
+  })
+
+  it('shows no notice for a clean tree, and tolerates an absent status (older main)', async () => {
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      getSkillReconcileStatus: vi.fn(async () => ({ errorCount: 0, errorCodes: [] }))
+    })
+    renderTab()
+    await screen.findByText('Bank statement helper')
+    expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument()
+  })
+})
+
+// SKA-35: preview notes are localized via their stable code (+ app-fixed params); an unknown code
+// falls back to the structural English string.
+describe('SkillsTab — import preview notes localized by code (SKA-35)', () => {
+  it('renders a coded note through the copy table, not the raw structural string', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listSkills: vi.fn(async () => []),
+      pickSkillPackage: vi.fn(async () => '/tmp/new.skill.zip'),
+      previewSkillPackage: vi.fn(async () =>
+        preview({
+          notes: ['"permissions.documents" requested more than v1 allows; clamped to "selected_only" (DS6)'],
+          noteCodes: [{ code: 'permissionClamped', params: { field: 'documents', value: 'selected_only' } }]
+        })
+      )
+    })
+    renderTab()
+    await screen.findByText('No skills yet')
+    await user.click(screen.getByRole('button', { name: /Import a skill/ }))
+    await user.click(await screen.findByRole('menuitem', { name: /From a file/ }))
+    const dialog = within(await screen.findByRole('dialog'))
+    // The localized copy (not the structural DS6 string) renders.
+    expect(dialog.getByText(/asks for more "documents" access/)).toBeInTheDocument()
+    expect(dialog.queryByText(/DS6/)).not.toBeInTheDocument()
   })
 })
 

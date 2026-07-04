@@ -48,6 +48,30 @@ export function shouldFallThroughOnEmpty(
   return !matchesSkillDocSignals(triggers, doc)
 }
 
+/**
+ * A4 (SKA-7 structural, audit §3.2/§8.2): the INVERSION gate for a TOOL skill (bank/invoice). Does the
+ * SINGLE in-scope document plausibly belong to the skill's class, so the chat path should run the handler
+ * for EVERY non-small-talk question — RETIRING the phrasing (`routeMatch`) veto? True when the one in-scope
+ * doc matches the skill's manifest doc signals (filename/MIME, `matchesSkillDocSignals`) OR a persisted
+ * extraction already exists for it (`hasExtraction` — the strongest evidence: the skill has already read
+ * this document). A doc matching NEITHER keeps the phrasing gate (the W2 plausibility posture, inverted:
+ * the signals GATE the inversion, so a contract with the bank skill sticky is never force-extracted on
+ * "who signed this?"). Returns false unless the scope is exactly one answerable doc — the inversion is
+ * single-document (multi-doc is the W2 pre-pass's job). Deterministic; no model.
+ */
+export function singleDocMatchesSkillClass(
+  db: Db,
+  skillInstallId: string,
+  scope: RetrievalScope,
+  hasExtraction: (db: Db, documentId: string) => boolean
+): boolean {
+  const doc = singleInScopeDocument(db, scope)
+  if (!doc) return false
+  const triggers = getSkill(db, skillInstallId)?.manifest.triggers
+  if (triggers && matchesSkillDocSignals(triggers, doc)) return true
+  return hasExtraction(db, doc.id)
+}
+
 /** Honest extract coverage (D48): every chunk scanned; `fullyChunked` gates the "whole document" wording. */
 export function computeCoverage(db: Db, documentId: string): CoverageInfo {
   const chunksTotal = documentChunkCount(db, documentId)

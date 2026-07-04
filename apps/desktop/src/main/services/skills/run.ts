@@ -282,9 +282,10 @@ export interface DomainRunConfig<TOutput, TLoaded> {
   isStale(db: Db, id: string): boolean
   /**
    * Self-locking re-extraction (the public `run…Extraction`, normalized) — used ONLY on the staleness
-   * path inside `prepareDomainRun`. It MUST be the self-locking adapter (not the raw inner), because
-   * some downstream seams (summarize/export) hold no outer lock, so the re-extraction's own re-entrant
-   * `withDocumentLock` is the only guard against a concurrent delete (R3 / audit PC-1).
+   * path inside `prepareDomainRun`. It MUST be the self-locking adapter (not the raw inner) so a
+   * future caller cannot forget the lock; since R9 (SKA-28) EVERY downstream seam holds an outer
+   * per-document lock across prepare+load, so this self-lock is a re-entrant no-op in practice — the
+   * belt under the outer braces (R3 / audit PC-1).
    */
   reExtract(db: Db, args: DomainRunArgs, deps: DomainRunDeps): Promise<DomainReExtractResult>
   /** Delete the document's prior rows in FK order (inside the caller's transaction; `replaceExisting`). */
@@ -532,6 +533,22 @@ export function domainPersistFailure(db: Db, runId: string, now: () => string, l
  * user-chosen path. A cancel writes nothing and reports it calmly (B2). The content + the chosen path
  * never touch any log/audit; only "saved N rows" (a count) is surfaced. `readOutput` pulls the serialized
  * text out of the tool output (CSV tools expose `csv`; the JSON/XML tools expose `content`).
+ *
+ * Lock scope (SKA-28): prepare + load + serialization run under ONE per-document hold — this seam held
+ * no outer lock, so a competing `replaceExisting` extract could interleave between the R3 staleness
+ * re-extraction (self-locked, released) and the row load, and the export wrote an EMPTY file reported
+ * "saved 0 rows". The hold is RELEASED before the save dialog: the serialized text is already
+ * materialized, so a later re-extract cannot corrupt it — while holding a per-document lock across a
+ * minutes-open user dialog would block the categorize doctask and chat analysis on that document for
+ * the whole duration. Abort-aware while parked (SKA-24) — an export queued behind a long categorize is
+ * cancellable.
+ *
+ * Terminal tail (SKA-27, the B4 pattern the sibling seams already hold): every `finishRun` after the
+ * prepare is guarded — the dialog can sit open for minutes and the workspace can lock underneath it, and
+ * an unguarded terminal write both stranded the `skill_runs` row at 'started' forever AND told the user
+ * "failed. Nothing was changed." after the file WAS written. The returned outcome is decided by what
+ * happened to the FILE, never by bookkeeping; 'done' is stamped at the actual write time, not the
+ * pre-dialog prepare time.
  */
 export async function runDomainFileExport<TOutput, TLoaded>(
   db: Db,
@@ -549,14 +566,41 @@ export async function runDomainFileExport<TOutput, TLoaded>(
   }
 ): Promise<{ ok: boolean; runId: string; count?: number; cancelled?: boolean; errorCode?: string; error?: string }> {
   const now = deps.now ?? (() => new Date().toISOString())
-  const prep = await prepareDomainRun(db, opts.toolName, args, deps, config, deps.confirmed)
+  // SKA-28: one hold across prepare (incl. the R3 staleness re-extract, re-entrant) + load + serialize.
+  const prep = await withDocumentLock(
+    args.documentId,
+    async () => {
+      const p = await prepareDomainRun(db, opts.toolName, args, deps, config, deps.confirmed)
+      if ('failed' in p) return p
+      // Serialize INSIDE the hold — after release only this materialized text is used, never the rows.
+      return { serialized: { runId: p.prepared.runId, ...opts.readOutput(p.prepared.output) } }
+    },
+    deps.signal
+  )
   if ('failed' in prep) return prep.failed
-  const { runId, output, completedAt } = prep.prepared
-  const { text, rowCount } = opts.readOutput(output)
+  const { runId, text, rowCount } = prep.serialized
+
+  // SKA-27 (B4): a guarded terminal write for everything past the prepare. A transiently-failing
+  // UPDATE (the workspace-locked-mid-dialog class) gets ONE retry so the row doesn't strand at
+  // 'started'; a still-failing write is logged (content-free) and the outcome stands — the caller's
+  // result reports what happened to the file, which no bookkeeping failure can change.
+  const finishTail = (status: 'done' | 'failed' | 'cancelled', error: string | null): void => {
+    try {
+      finishRun(db, runId, status, now(), null, error)
+    } catch {
+      console.error('[skills] export run bookkeeping failed')
+      try {
+        finishRun(db, runId, status, now(), null, error)
+      } catch {
+        /* the DB is genuinely unwritable — the file outcome stands (SKA-27) */
+      }
+    }
+  }
+
   // Cancelled after the tool produced the text but before the write — don't even open the save dialog,
   // and report it as cancelled (not failed), so nothing is written under a cancel (B2).
   if (deps.signal?.aborted) {
-    finishRun(db, runId, 'cancelled', now(), null, null)
+    finishTail('cancelled', null)
     return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
   }
   let saved: boolean
@@ -565,16 +609,18 @@ export async function runDomainFileExport<TOutput, TLoaded>(
   } catch {
     console.error(opts.writeFailLog)
     const msg = 'The file could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
+    finishTail('failed', msg)
     return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
   }
   if (!saved) {
     // The user cancelled the save dialog — a calm, non-error outcome (history records it cancelled).
-    finishRun(db, runId, 'cancelled', now(), null, null)
+    finishTail('cancelled', null)
     return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
   }
   // result_ref stays NULL — the export produces no DB artifact, and the path is never recorded.
-  finishRun(db, runId, 'done', completedAt, null, null)
+  // 'done' is stamped NOW (the write just happened), not at the pre-dialog prepare (SKA-27) — run
+  // history no longer timestamps the export minutes early.
+  finishTail('done', null)
   return { ok: true, runId, count: rowCount }
 }
 
@@ -585,6 +631,7 @@ export async function runDomainFileExport<TOutput, TLoaded>(
  * Serialized per document (audit PC-1): the whole run — including the `replaceExisting` DELETE+INSERT —
  * holds the per-document lock so a concurrent run/categorize on the SAME statement (any lane) cannot
  * race the delete (re-entrant when a lane already holds it; unrelated documents stay concurrent).
+ * Abort-aware while parked (SKA-24): a cancel rejects the queued run instead of a dead spinner.
  */
 export async function runBankExtraction(
   db: Db,
@@ -597,7 +644,7 @@ export async function runBankExtraction(
     // failure), so return it verbatim; only success is reshaped to the bank-named id/count fields.
     if (!r.ok) return r
     return { ok: true, runId: r.runId, statementId: r.resultRef, transactionCount: r.count }
-  })
+  }, deps.signal)
 }
 
 /**
@@ -760,10 +807,18 @@ export function latestBankStatementId(db: Db, documentId: string): string | null
 }
 
 /**
- * Whether a statement was produced by an OUTDATED extractor (A9). True when its `extractor_version` is
- * NULL (extracted before versioning / by an older parser) or LESS than the current
- * `BANK_EXTRACTOR_VERSION` — i.e. a since-fixed parser bug may have mis-signed an amount or lost a payee
- * in these rows. The reuse paths (analysis read-back + categorize doctask) re-extract a stale statement
+ * Whether a statement was produced by a DIFFERENT extractor than the one running (A9). True when its
+ * `extractor_version` is NULL (extracted before versioning) or NOT EQUAL to the current
+ * `BANK_EXTRACTOR_VERSION` — older rows may carry a since-fixed parser bug (a mis-signed amount, a
+ * lost payee), and NEWER rows (SKA-26, skills-audit-2026-07-03 §3.3) are the downgrade case: the app
+ * runs from the portable drive so it normally roams WITH the workspace, and a version mismatch in
+ * either direction means a deliberate rollback (where the newer extractor IS the suspected bug — the
+ * one moment serving its rows as fresh would be worst) or a second install against the same workspace.
+ * Deterministic extractors make `!==` safe: same version ⇒ same rows, so re-extraction never loops.
+ * The accepted cost (BUILD_STATE R9): a workspace alternating between two app versions re-extracts on
+ * every switch, and each `replaceExisting` re-extract drops the persisted per-row categories — but the
+ * rows changed with the parser, so recomputing them is the honest move (the `replaceExisting` doctrine).
+ * The reuse paths (analysis read-back + categorize doctask) re-extract a stale statement
  * (with `replaceExisting`) instead of serving its rows. A statement at the current version is fresh.
  */
 export function isBankStatementStale(db: Db, statementId: string): boolean {
@@ -771,7 +826,7 @@ export function isBankStatementStale(db: Db, statementId: string): boolean {
     .prepare('SELECT extractor_version AS v FROM bank_statements WHERE id = ?')
     .get(statementId) as { v: number | null } | undefined
   if (!row) return false // unknown id — nothing to re-extract (callers handle the missing case)
-  return row.v == null || row.v < BANK_EXTRACTOR_VERSION
+  return row.v == null || row.v !== BANK_EXTRACTOR_VERSION
 }
 
 /**
@@ -896,8 +951,9 @@ export async function runBalanceValidation(
   preloaded?: LoadedTransaction[]
 ): Promise<StatementToolResult> {
   // Serialized per document (audit PC-1): the `reconciled` persist must not run against a statement a
-  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock.
-  return withDocumentLock(args.documentId, () => runBalanceValidationInner(db, args, deps, preloaded))
+  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock;
+  // abort-aware while parked behind another lane (SKA-24).
+  return withDocumentLock(args.documentId, () => runBalanceValidationInner(db, args, deps, preloaded), deps.signal)
 }
 
 async function runBalanceValidationInner(
@@ -985,8 +1041,9 @@ export async function runCategorization(
   preloaded?: LoadedTransaction[]
 ): Promise<StatementToolResult> {
   // Serialized per document (audit PC-1): the `category_id` persist must not run against a statement a
-  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock.
-  return withDocumentLock(args.documentId, () => runCategorizationInner(db, args, deps, preloaded))
+  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock;
+  // abort-aware while parked behind another lane (SKA-24).
+  return withDocumentLock(args.documentId, () => runCategorizationInner(db, args, deps, preloaded), deps.signal)
 }
 
 async function runCategorizationInner(
@@ -1025,6 +1082,25 @@ async function runCategorizationInner(
  * view / the model-explains step is a later wave); the run proves the pipeline + reports the count.
  */
 export async function runCashflowSummary(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
+): Promise<StatementToolResult> {
+  // Serialized per document (audit PC-1 / SKA-28): this seam held NO outer lock, so the R3 staleness
+  // re-extraction inside `prepareStatementRun` (self-locked) RELEASED before the subsequent row load —
+  // a competing `replaceExisting` extract could interleave in that gap and the summary would read the
+  // rows of a just-deleted statement (0 rows). One re-entrant hold across prepare+load closes it and
+  // makes the design comment above `prepareStatementRun` true by construction. Abort-aware while
+  // parked behind another lane (SKA-24). Cheap: no dialog/model call anywhere under this hold.
+  return withDocumentLock(
+    args.documentId,
+    () => runCashflowSummaryInner(db, args, deps, preloaded),
+    deps.signal
+  )
+}
+
+async function runCashflowSummaryInner(
   db: Db,
   args: BankExtractionArgs,
   deps: BankExtractionDeps,
@@ -1203,7 +1279,21 @@ export async function runDocumentRedaction(
       return { ok: false, runId, cancelled: true, error: 'Redaction cancelled. Nothing was saved.' }
     }
     // result_ref stays NULL — redaction produces no DB artifact, and the path is never recorded.
-    finishRun(db, runId, 'done', now(), null, null)
+    // SKA-27 rider (R9 review): redaction is the OTHER dialog-shaped seam — this terminal 'done' runs
+    // after a minutes-open dialog too, and an unguarded throw here fell into the outer B4 catch, which
+    // stamped the run 'failed' and told the user "Nothing was changed." after the redacted copy WAS
+    // written. Same treatment as the export tail: one guarded retry, and past this point the outcome
+    // reports what happened to the FILE — a bookkeeping failure can only log, never flip it.
+    try {
+      finishRun(db, runId, 'done', now(), null, null)
+    } catch {
+      console.error('[skills] redaction run bookkeeping failed')
+      try {
+        finishRun(db, runId, 'done', now(), null, null)
+      } catch {
+        /* the DB is genuinely unwritable — the file outcome stands */
+      }
+    }
     return { ok: true, runId, redactionCount: output.totalRedactions, resultKind }
   } catch {
     console.error('[skills] redaction failed unexpectedly')

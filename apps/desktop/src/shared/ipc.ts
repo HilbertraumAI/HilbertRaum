@@ -217,6 +217,12 @@ export const IPC = {
   disableSkill: 'skills:disable',
   /** Acknowledge a user skill's import warning (DS7 — clears the persistent warning state). */
   acknowledgeSkillWarning: 'skills:acknowledgeWarning',
+  /**
+   * Structural summary of the last disk reconcile's discovery errors — `SkillReconcileStatus`
+   * (SKA-32, skills audit 2026-07-03, U7). Counts + fixed reason codes ONLY (never folder names or
+   * package content — §22-M1); drives the Settings → Skills "N folders could not be read" notice.
+   */
+  skillReconcileStatus: 'skills:reconcileStatus',
   // Tier-2 app-orchestrated tool runs (skills plan §12.2/§16, S11b). Generic `skills:*` shape (NOT
   // bank-named) so S11c's tools slot in with no renderer/IPC change; bank specifics stay in the
   // `tool-runs.ts` dispatch + `run.ts` seam (§13). All requireUnlocked; the document scope is
@@ -227,6 +233,13 @@ export const IPC = {
   startSkillRun: 'skills:startToolRun',
   /** Poll one run's ids/counts-only state/progress (the doc-task polling precedent). */
   getSkillRun: 'skills:getToolRun',
+  /**
+   * All runs the controller currently holds (running + terminal-but-unacknowledged), ids/counts only
+   * (SKA-17, skills audit 2026-07-03, U6). Lets a freshly-reloaded renderer re-adopt in-flight runs
+   * (its module-level store died with the reload; main kept them) — the `listActiveStreamConversations`
+   * precedent, for skill runs. Content-free: each entry is a `SkillRunState` (state/progress/counts +
+   * the content-free conversation/document ids), never the extracted rows. */
+  listSkillRuns: 'skills:listToolRuns',
   /** Cancel a run (aborts its `AbortSignal`); with no handle, the active run. */
   cancelSkillRun: 'skills:cancelToolRun',
   /** Drop a terminal run main-side once the renderer has shown its outcome (the acknowledge handshake). */

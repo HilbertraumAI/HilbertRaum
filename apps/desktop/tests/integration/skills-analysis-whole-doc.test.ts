@@ -30,11 +30,12 @@ import {
   splitCompareBudget
 } from '../../src/main/services/rag'
 
-// Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2 + A3 gate inversion, §6.3/§8.2).
-// Two contracts pinned here:
-//   1. the INVERTED `applies()`/`intends()` gate — the whole-doc engine is the DEFAULT for any non-chatter
-//      question over a SINGLE in-scope doc (no per-skill keyword list); only clear small talk opts out.
-//      `mode: 'grounded-whole-doc'`, no `run()` (the chat path streams the model answer directly);
+// Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2 + A3 gate inversion, §6.3/§8.2 +
+// A4/SKA-8 §3.2). Two contracts pinned here:
+//   1. the gate: `applies()` is A3-INVERTED — the whole-doc engine is the DEFAULT for any non-chatter
+//      question over a SINGLE (resp. exactly-two) in-scope doc (no per-skill keyword list); only clear
+//      small talk opts out. `intends()` (A4/SKA-8) is the SEPARATE, VOCABULARY-shaped W2 count-mismatch
+//      routing predicate — decoupled from `applies()`. `mode: 'grounded-whole-doc'`, no `run()`;
 //   2. `retrieveWholeDocument` — loads a document's chunks IN ORDER (not top-k), capped to a token
 //      budget, with the honest `truncated` flag that drives the `capped`/"covers the beginning" badge.
 // A3 also honors the engine for a USER-imported instruction skill via `manifestAnalysisHandler` — pinned
@@ -117,30 +118,37 @@ describe('whole-doc analysis handlers — applies() pre-flight', () => {
   }
 })
 
-describe('whole-doc analysis handlers — intends() (W2 doc-count-agnostic intent)', () => {
+// A4 (SKA-8, audit §3.2): `intends()` — the W2 COUNT-MISMATCH routing predicate, consulted ONLY at the
+// wrong doc count — is VOCABULARY-shaped (`routeMatch`), NOT the A3 `!isSmallTalk`. So at multi-doc scope
+// the pre-pass narrows/routes ONLY a question matching the skill's OWN routing vocabulary; a general or
+// off-topic question there falls through to the ordinary engines (no "pick one document" dead-end). This
+// DECOUPLES `intends()` from `applies()` — the A3 single-doc inversion stays in `applies()` (above).
+describe('whole-doc analysis handlers — intends() (A4/SKA-8 vocabulary-shaped W2 routing)', () => {
   for (const { name, h, shaped, deShaped } of HANDLERS) {
-    it(`${name}: intends() is TRUE on a shaped question (EN+DE) regardless of the doc count`, () => {
+    it(`${name}: intends() is TRUE on a VOCABULARY-shaped question (EN+DE) regardless of the doc count`, () => {
       const db = freshDb()
       const a = seedDoc(db, ['a'])
       const b = seedDoc(db, ['b'])
-      // Two docs → applies() is false (Wave 2 is single-doc), but the intent is still shaped, so W2
-      // narrows/routes instead of falling through silently.
+      // Two docs → applies() is false (Wave 2 is single-doc), but the question matches the skill's routing
+      // vocabulary, so W2 narrows/routes instead of falling through silently.
       expect(h.applies!({ db, scope: { documentIds: [a, b] }, question: shaped })).toBe(false)
       expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: shaped })).toBe(true)
       expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: deShaped })).toBe(true)
     })
 
-    it(`${name}: intends() is FALSE only on clear small talk (keeps the relevance path)`, () => {
+    it(`${name}: intends() is FALSE on small talk AND on a general/off-topic (non-vocabulary) question`, () => {
       const db = freshDb()
       const a = seedDoc(db, ['a'])
       const b = seedDoc(db, ['b'])
       expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'hi there' })).toBe(false)
-      // A3 inversion: a general (non-shaped) question DOES intend the engine — it just fails on the count.
-      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'what does this say?' })).toBe(true)
+      // SKA-8: a general (non-vocabulary) question at multi-doc scope NO LONGER intends the engine — it
+      // falls through to the ordinary engines (relevance/coverage-extract), not a "pick one document" route.
+      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'who is Angela Merkel?' })).toBe(false)
+      expect(h.intends!({ db, scope: { documentIds: [a, b] }, question: 'what does this say?' })).toBe(false)
     })
   }
 
-  it('what-changed: intends() is TRUE for any non-chatter question at 1 or 3 docs (applies is false on count)', () => {
+  it('what-changed: intends() is TRUE only for a compare-VOCABULARY question at ≠2 docs (SKA-8)', () => {
     const db = freshDb()
     const a = seedDoc(db, ['a'])
     const b = seedDoc(db, ['b'])
@@ -148,9 +156,11 @@ describe('whole-doc analysis handlers — intends() (W2 doc-count-agnostic inten
     const h = whatChangedAnalysisHandler
     for (const ids of [[a], [a, b, c]]) {
       expect(h.applies!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(false)
+      // A compare-vocabulary question at the wrong count still routes ("select exactly two").
       expect(h.intends!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(true)
-      // A3 inversion: even a general question intends compare — it fails only on the ≠2 count (→ route).
-      expect(h.intends!({ db, scope: { documentIds: ids }, question: 'summarize the differences' })).toBe(true)
+      // SKA-8: a general/off-vocabulary question does NOT intend compare — it fails the count AND misses the
+      // vocabulary, so it falls through to the ordinary engines instead of the "select two" dead-end.
+      expect(h.intends!({ db, scope: { documentIds: ids }, question: 'summarize the differences' })).toBe(false)
     }
     // Clear small talk stays false at any count.
     expect(h.intends!({ db, scope: { documentIds: [a] }, question: 'thanks!' })).toBe(false)

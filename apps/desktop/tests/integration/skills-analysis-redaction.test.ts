@@ -33,7 +33,7 @@ function freshDb(): Db {
 }
 
 /** Seed one indexed document with a single chunk so it counts as in-scope/answerable. */
-function seedDoc(db: Db): string {
+function seedDoc(db: Db, text = 'Dear Jane, call me at +49 170 1234567.'): string {
   const now = new Date().toISOString()
   const docId = randomUUID()
   db.prepare(
@@ -42,8 +42,8 @@ function seedDoc(db: Db): string {
   ).run(docId, now, now)
   db.prepare(
     `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, 'Dear Jane, call me at +49 170 1234567.', 'Letter', 1, ?)`
-  ).run(randomUUID(), docId, now)
+     VALUES (?, ?, 0, ?, 'Letter', 1, ?)`
+  ).run(randomUUID(), docId, text, now)
   return docId
 }
 
@@ -211,6 +211,25 @@ describe('redaction routing handler — informational dry-run (U2)', () => {
         url: 0
       })
     )
+  })
+
+  it('SKA-3 R8: the dry-run counts the Unicode print variants (NBSP IBAN, U+2011 phone) too', async () => {
+    // Before R8 this document scanned as iban 0 / phone 0 — the share-safe/dry-run counts asserted a
+    // typographically-set document was clean while it carried both identifiers verbatim. The counts
+    // come from the same shadowed pipeline the real redaction uses, so they stay identical to a run.
+    // Special characters as \u escapes (the T1 convention).
+    const db = freshDb()
+    const id = seedDoc(db, 'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Tel +43 664\u20111234567.')
+    const res = await documentRedactionAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'what personal data does this document contain?')
+    )
+    const button = tr('chat.skill.tool.redactDocument')
+    expect(res.answer).toBe(
+      tr('skills.redactionRouting.scan', { button, email: 0, phone: 1, iban: 1, card: 0, date: 0, url: 0 })
+    )
+    // Counts only — neither Unicode-set value leaks into the answer.
+    expect(res.answer).not.toContain('3457')
+    expect(res.answer).not.toContain('1234567')
   })
 
   it('an ACTION ask keeps the button deflection (not the dry-run)', async () => {

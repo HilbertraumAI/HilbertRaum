@@ -28,7 +28,7 @@ import { getSkillAnalysisHandler, manifestAnalysisHandler } from '../services/sk
 import { documentsInScope } from '../services/skills/scope-documents'
 import { getSkill } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
-import { isNeedleShaped } from '../services/skills/vocabulary'
+import { isNeedleShaped, isSmallTalk } from '../services/skills/vocabulary'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
@@ -287,25 +287,48 @@ export function registerRagIpc(ctx: AppContext): void {
         }
       }
 
-      if (skill && analysisHandler && analysisHandler.applies({ question: text, scope, db: ctx.db })) {
+      // A4 (SKA-7 structural, audit §3.2/§8.2): does the turn skill's engine ENGAGE this (possibly
+      // W2-narrowed) scope? TWO ways in:
+      //   (1) `applies()` — the ordinary gate (a bank/invoice VOCABULARY question, or A3's any-non-chatter
+      //       whole-doc/compare question, over the right doc count); OR
+      //   (2) the TOOL-skill single-doc INVERSION: `applies()` is false (a phrasing MISS) but the ONE
+      //       in-scope FULLY-CHUNKED document plausibly belongs to the skill's class (`classMatches` —
+      //       manifest doc signals or a prior extraction) and the question is NOT small talk. This finishes
+      //       the inversion for bank/invoice: an on-topic money question that misses the ~45-term vocabulary
+      //       is answered from the VERIFIED extract (grounded-data narrates; post-W6 it honestly declines an
+      //       off-data question) instead of silently degrading to raw top-k chunks + model arithmetic (the
+      //       pre-W3 incident class). Only the exhaustive tool handlers define `classMatches`; requiring
+      //       fully-chunked here means a phrasing miss over a legacy/partly-chunked doc falls through to
+      //       relevance (its pre-A4 behaviour), never a refusal. A doc matching NO signal (and with no prior
+      //       extraction) keeps the phrasing gate (the W2 plausibility posture, inverted). No new capability
+      //       and no new model call (SEC-1): it changes WHICH questions reach an already-app-owned handler.
+      const analysisApplies =
+        skill != null && analysisHandler != null && analysisHandler.applies({ question: text, scope, db: ctx.db })
+      const toolSkillInverts =
+        skill != null &&
+        analysisHandler != null &&
+        typeof analysisHandler.classMatches === 'function' &&
+        !analysisApplies &&
+        !isSmallTalk(text) &&
+        allInScopeDocsFullyChunked(ctx.db, scope) &&
+        analysisHandler.classMatches({ question: text, scope, db: ctx.db }, skill.installId)
+
+      if (skill && analysisHandler && (analysisApplies || toolSkillInverts)) {
         const turnSkill = skill
-        // Exhaustiveness precondition (D45/R4): every in-scope doc must be FULLY chunked at turn time.
-        // A legacy/partly-chunked doc cannot be analysed exhaustively, so we REFUSE — a fixed,
-        // localized message + the existing Re-index affordance, no model call, no partial answer.
-        // A `routing` handler is EXEMPT: it reads no content (it only points the user at the skill's
-        // run affordance), so full chunking is irrelevant and the refusal must not fire.
-        if (analysisHandler.mode !== 'routing' && !allInScopeDocsFullyChunked(ctx.db, scope)) {
-          const refusal = tMain('skills.analysis.refusePartial')
-          return withChatStream(
+        // The D45/R4 exhaustiveness refusal (fixed localized message + the Re-index affordance, no model,
+        // no partial answer), skill-stamped so the user sees which skill declined. Closured so BOTH the
+        // grounded-whole-doc branch (which enforces it only for a non-downgraded whole read — SKA-23) and
+        // the exhaustive/compare branch reuse one body. A `routing` handler is EXEMPT: it reads no content.
+        // F2: on regenerate the destructive delete runs inside the runFn (slot held), restored on a
+        // non-abort failure — symmetric with the chat channel.
+        const refusePartial = (): Promise<Message> =>
+          withChatStream(
             event,
             conversationId,
             'Document analysis refused',
-            // F2: on regenerate the destructive delete runs inside the runFn (slot held) and is
-            // restored on a non-abort failure — symmetric with the chat channel.
             withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (_signal, sendToken): Promise<Message> => {
+              const refusal = tMain('skills.analysis.refusePartial')
               sendToken(refusal)
-              // Honest coverage on a refusal: NULL (omitted) — we make NO breadth claim. Stamp the
-              // skill (A1) so the re-routed turn still carries its glyph + auto-fire provenance.
               return appendMessage(ctx.db, {
                 conversationId,
                 role: 'assistant',
@@ -316,32 +339,38 @@ export function registerRagIpc(ctx: AppContext): void {
             }),
             (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
           )
-        }
-        // `grounded-whole-doc` (skill-whole-doc engine, Wave 2): an INSTRUCTION skill whose
-        // deliverable is the MODEL's answer over the WHOLE document, formatted to the SKILL.md body
-        // (minutes, contract brief, …). Stream a grounded answer where the context is the single
-        // in-scope document read IN ORDER (not top-k) with the fence applied; coverage is the honest
-        // `capped` mode ("covers the whole document" / "the beginning" when truncated). `applies()`
-        // guaranteed a single in-scope doc; the fully-chunked refusal above already gated it.
+
+        // `grounded-whole-doc` (skill-whole-doc engine, Wave 2): an INSTRUCTION skill whose deliverable is
+        // the MODEL's answer over the WHOLE document, formatted to the SKILL.md body (minutes, contract
+        // brief, …). Stream a grounded answer where the context is the single in-scope document read IN
+        // ORDER (not top-k) with the fence applied; coverage is the honest `capped` mode. `applies()`
+        // guaranteed a single in-scope doc. SKA-23 (A4): the D45 refusal is evaluated INSIDE this branch,
+        // AFTER the needle downgrade — so a downgraded needle reaches top-k rather than a refusal.
         if (analysisHandler.mode === 'grounded-whole-doc') {
           const target = documentsInScope(ctx.db, scope, { requireChunks: true })[0]
           if (target) {
             const documentId = target.id
-            // A3 needle-vs-deliverable downgrade (audit §8.2 (b)): the whole-doc engine is the DEFAULT,
-            // but a targeted single-fact LOOKUP over a document that would OVERFLOW the whole-doc budget
-            // with NO ready deep-index tree is better served by top-k — a needle past the truncation cut
-            // would be missed, where relevance retrieval finds the passage wherever it sits. Reuses W1's
-            // exact budget calculus (the de-overlapped token total vs `wholeDocumentFitBudgetTokens`) plus
-            // the same tree availability the tree-rescue path checks. A DELIVERABLE ask (summary/minutes/…)
-            // NEVER downgrades — it keeps the whole read (W1's honest capped/tree path). On downgrade,
-            // control falls through to the relevance path below (the fence + any scope notice ride along),
-            // so "keeps top-k" is literal: an honest relevance answer, no false whole-document claim.
+            // A3 needle-vs-deliverable downgrade (audit §8.2 (b)) + SKA-12/SKA-23 (A4). The whole-doc engine
+            // is the DEFAULT, but a targeted single-fact LOOKUP over a document that would OVERFLOW the
+            // whole-doc budget is better served by top-k — a needle past the truncation cut would be missed,
+            // where relevance retrieval finds the passage wherever it sits. Reuses W1's exact budget calculus
+            // (the de-overlapped token total vs `wholeDocumentFitBudgetTokens`). A DELIVERABLE ask never
+            // downgrades — it keeps the whole read (W1's honest capped/tree path).
+            //   - SKA-12: the `readyTreeCountInScope === 0` conjunct is GONE. A needle prefers top-k whenever
+            //     the whole read would truncate, TREE OR NO TREE: a ~13-call map-reduce over lossy node
+            //     summaries is worse for a single-fact lookup than one top-k retrieval (the tree keeps
+            //     rescuing DELIVERABLES, which never reach this downgrade).
+            //   - SKA-23: this is evaluated BEFORE the D45 fully-chunked refusal below. A downgraded needle
+            //     takes the relevance path, which makes NO whole-document claim, so D45's premise (a partial
+            //     WHOLE read passed off as complete) doesn't apply — a needle over a not-fully-chunked doc is
+            //     served by top-k, not refused. A DELIVERABLE keeps the whole read and DOES hit the refusal.
             const needleDowngrade =
               isNeedleShaped(text) &&
-              readyTreeCountInScope(ctx.db, scope) === 0 &&
               documentApproxTokenTotal(ctx.db, documentId) >
                 wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, turnSkill)
             if (!needleDowngrade) {
+              // Only a whole (capped/tree) read makes the whole-document claim → enforce the D45 refusal now.
+              if (!allInScopeDocsFullyChunked(ctx.db, scope)) return refusePartial()
               return withChatStream(
                 event,
                 conversationId,
@@ -367,134 +396,141 @@ export function registerRagIpc(ctx: AppContext): void {
                 (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
               )
             }
-            // needleDowngrade: fall through to the relevance (top-k) path below.
+            // needleDowngrade: fall through to the relevance (top-k) path below — no refusal (SKA-23).
           }
           // Defensive: applies() requires a single in-scope doc, so a missing target is unreachable; fall
           // through to the relevance path rather than fail the turn.
-        }
+        } else {
+          // exhaustive (bank/invoice) / compare / routing: the D45 refusal gates FIRST (routing exempt — it
+          // reads no content), then the mode dispatch. (grounded-whole-doc handled its own refusal above.)
+          if (analysisHandler.mode !== 'routing' && !allInScopeDocsFullyChunked(ctx.db, scope)) {
+            return refusePartial()
+          }
 
-        // `grounded-whole-doc-compare` (Follow-up B, what-changed): a compare-shaped request over
-        // EXACTLY TWO in-scope docs streams a model answer over BOTH documents read whole (budget
-        // split across them) with the fence applied; coverage is `capped` (truncated when either
-        // overflowed). `applies()` guaranteed exactly two in-scope docs; the fully-chunked refusal
-        // above already gated both.
-        if (analysisHandler.mode === 'grounded-whole-doc-compare') {
-          // The shared helper's deterministic `ORDER BY created_at, id` fixes the compare PAIR order
-          // (audit §5.1): `[0]`→Document A, `[1]`→Document B is now import-order-stable, not the
-          // undefined SQL row order the old private query left it. The prompt labels the pair A/B by
-          // title + import date and NEVER asserts which is the older/newer version, so a wrong guess
-          // can no longer invert a whole report.
-          const documentIds = documentsInScope(ctx.db, scope, { requireChunks: true }).map((d) => d.id)
-          if (documentIds.length === 2) {
+          // `grounded-whole-doc-compare` (Follow-up B, what-changed): a compare-shaped request over
+          // EXACTLY TWO in-scope docs streams a model answer over BOTH documents read whole (budget
+          // split across them) with the fence applied; coverage is `capped` (truncated when either
+          // overflowed). `applies()` guaranteed exactly two in-scope docs; the fully-chunked refusal
+          // above already gated both. (Needle downgrade stays single-doc — compare keeps its whole-both
+          // read; existing residual, audit §3.3.)
+          if (analysisHandler.mode === 'grounded-whole-doc-compare') {
+            // The shared helper's deterministic `ORDER BY created_at, id` fixes the compare PAIR order
+            // (audit §5.1): `[0]`→Document A, `[1]`→Document B is now import-order-stable, not the
+            // undefined SQL row order the old private query left it. The prompt labels the pair A/B by
+            // title + import date and NEVER asserts which is the older/newer version, so a wrong guess
+            // can no longer invert a whole report.
+            const documentIds = documentsInScope(ctx.db, scope, { requireChunks: true }).map((d) => d.id)
+            if (documentIds.length === 2) {
+              return withChatStream(
+                event,
+                conversationId,
+                'Document answer failed',
+                withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
+                  generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+                    signal,
+                    onCompactionStart: sendCompaction,
+                    scope,
+                    reranker: ctx.reranker,
+                    skill: turnSkill,
+                    wholeDocumentCompare: { documentIds },
+                    onToken: sendToken
+                  })),
+                (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
+              )
+            }
+            // Defensive: applies() requires exactly two in-scope docs; otherwise fall through.
+          }
+
+          // `exhaustive` / `routing`: auto-run the read-only whole-document tools (D46) and persist the
+          // exhaustive answer with its honest extract/whole coverage (D48) + real citations, OR (routing)
+          // return the action-routing answer. NO model call — deterministic, localized copy (D47). A
+          // `grounded-whole-doc` handler omits `run()` and returned above; the guard keeps types honest.
+          if (analysisHandler.run) {
+            const runHandler = analysisHandler.run.bind(analysisHandler)
+            const notice = scopeNotice
             return withChatStream(
               event,
               conversationId,
-              'Document answer failed',
-              withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, sendCompaction) =>
-                generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
-                  signal,
-                  onCompactionStart: sendCompaction,
+              'Document analysis failed',
+              withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction): Promise<Message> => {
+                // U5 (audit §3.6): the exhaustive path runs a potentially long, SILENT deterministic
+                // extraction before the first token — a "one-blob" answer that reads as a hang. Fire the
+                // ephemeral "reading the document…" notice up front (the compaction-notice channel, an
+                // 'analysis' kind); the renderer clears it on the first answer token, exactly like the
+                // compaction hint. Ephemeral (R14) — never buffered, never persisted.
+                sendCompaction('analysis')
+                const result = await runHandler({
+                  db: ctx.db,
+                  question: text,
                   scope,
-                  reranker: ctx.reranker,
-                  skill: turnSkill,
-                  wholeDocumentCompare: { documentIds },
-                  onToken: sendToken
-                })),
+                  skillInstallId: turnSkill.installId,
+                  conversationId,
+                  // The app's real ids/counts-only audit sink (the skills-run adapter — never invent one).
+                  audit: toSkillToolAudit(ctx.audit),
+                  // Thread the chat slot's abort signal so Cancel stops the auto-run.
+                  signal,
+                  tr: (key, params) => tMain(key, params),
+                  // Faithful newline-preserving segments (not the overlap-collapsing chunks table).
+                  readDocumentSegments
+                })
+                // W2 plausibility gate (audit §4.5): the extractor found nothing on a document that doesn't
+                // look like this skill's type — answer the user's ACTUAL question via the ordinary grounded
+                // (relevance) path in the SAME locked slot, instead of the misleading empty template. The
+                // turn's skill fence still rides along (parity with the ordinary document path below).
+                if (result.fallThrough) {
+                  return generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+                    signal,
+                    onCompactionStart: sendCompaction,
+                    scope,
+                    reranker: ctx.reranker,
+                    skill: turnSkill,
+                    onToken: sendToken
+                  })
+                }
+                // W3 THIRD answer mode (audit §3.1/§8.1): the question is neither a format ask nor a
+                // summary/reconcile/list shape, so instead of the fixed template the handler returned the
+                // serialized VERIFIED extract — stream a model answer that NARRATES it (strict verbatim
+                // rules, in the SAME locked slot), with the deterministic totals echoed beneath it. The
+                // turn's skill fence + honest extract coverage/citations ride along (parity with the paths
+                // above). The LLM never computes a figure; it reads the data the deterministic tools built.
+                if (result.mode === 'grounded-data') {
+                  return generateGroundedDataAnswer(
+                    ctx.db,
+                    runtime,
+                    conversationId,
+                    text,
+                    {
+                      dataBlock: result.dataBlock ?? '',
+                      postscript: result.postscript ?? '',
+                      citations: result.citations,
+                      coverage: result.coverage
+                    },
+                    {
+                      signal,
+                      onCompactionStart: sendCompaction,
+                      onToken: sendToken,
+                      skill: turnSkill,
+                      // W2 (§2.1): carry the auto-narrow scope notice into the grounded-data path too.
+                      answerPrefix: notice ? `${notice}\n\n` : undefined
+                    }
+                  )
+                }
+                // W2 (§2.1): when the scope was auto-narrowed to this doc, prepend the honest notice.
+                const answer = notice ? `${notice}\n\n${result.answer}` : result.answer
+                sendToken(answer)
+                return appendMessage(ctx.db, {
+                  conversationId,
+                  role: 'assistant',
+                  content: answer,
+                  citations: result.citations,
+                  coverage: result.coverage,
+                  skillId: turnSkill.installId,
+                  autoFired: turnSkill.autoFired === true
+                })
+              }),
               (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
             )
           }
-          // Defensive: applies() requires exactly two in-scope docs; otherwise fall through.
-        }
-
-        // `exhaustive` / `routing`: auto-run the read-only whole-document tools (D46) and persist the
-        // exhaustive answer with its honest extract/whole coverage (D48) + real citations, OR (routing)
-        // return the action-routing answer. NO model call — deterministic, localized copy (D47). A
-        // `grounded-whole-doc` handler omits `run()` and returned above; the guard keeps types honest.
-        if (analysisHandler.run) {
-          const runHandler = analysisHandler.run.bind(analysisHandler)
-          const notice = scopeNotice
-          return withChatStream(
-            event,
-            conversationId,
-            'Document analysis failed',
-            withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction): Promise<Message> => {
-              // U5 (audit §3.6): the exhaustive path runs a potentially long, SILENT deterministic
-              // extraction before the first token — a "one-blob" answer that reads as a hang. Fire the
-              // ephemeral "reading the document…" notice up front (the compaction-notice channel, an
-              // 'analysis' kind); the renderer clears it on the first answer token, exactly like the
-              // compaction hint. Ephemeral (R14) — never buffered, never persisted.
-              sendCompaction('analysis')
-              const result = await runHandler({
-                db: ctx.db,
-                question: text,
-                scope,
-                skillInstallId: turnSkill.installId,
-                conversationId,
-                // The app's real ids/counts-only audit sink (the skills-run adapter — never invent one).
-                audit: toSkillToolAudit(ctx.audit),
-                // Thread the chat slot's abort signal so Cancel stops the auto-run.
-                signal,
-                tr: (key, params) => tMain(key, params),
-                // Faithful newline-preserving segments (not the overlap-collapsing chunks table).
-                readDocumentSegments
-              })
-              // W2 plausibility gate (audit §4.5): the extractor found nothing on a document that doesn't
-              // look like this skill's type — answer the user's ACTUAL question via the ordinary grounded
-              // (relevance) path in the SAME locked slot, instead of the misleading empty template. The
-              // turn's skill fence still rides along (parity with the ordinary document path below).
-              if (result.fallThrough) {
-                return generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
-                  signal,
-                  onCompactionStart: sendCompaction,
-                  scope,
-                  reranker: ctx.reranker,
-                  skill: turnSkill,
-                  onToken: sendToken
-                })
-              }
-              // W3 THIRD answer mode (audit §3.1/§8.1): the question is neither a format ask nor a
-              // summary/reconcile/list shape, so instead of the fixed template the handler returned the
-              // serialized VERIFIED extract — stream a model answer that NARRATES it (strict verbatim
-              // rules, in the SAME locked slot), with the deterministic totals echoed beneath it. The
-              // turn's skill fence + honest extract coverage/citations ride along (parity with the paths
-              // above). The LLM never computes a figure; it reads the data the deterministic tools built.
-              if (result.mode === 'grounded-data') {
-                return generateGroundedDataAnswer(
-                  ctx.db,
-                  runtime,
-                  conversationId,
-                  text,
-                  {
-                    dataBlock: result.dataBlock ?? '',
-                    postscript: result.postscript ?? '',
-                    citations: result.citations,
-                    coverage: result.coverage
-                  },
-                  {
-                    signal,
-                    onCompactionStart: sendCompaction,
-                    onToken: sendToken,
-                    skill: turnSkill,
-                    // W2 (§2.1): carry the auto-narrow scope notice into the grounded-data path too.
-                    answerPrefix: notice ? `${notice}\n\n` : undefined
-                  }
-                )
-              }
-              // W2 (§2.1): when the scope was auto-narrowed to this doc, prepend the honest notice.
-              const answer = notice ? `${notice}\n\n${result.answer}` : result.answer
-              sendToken(answer)
-              return appendMessage(ctx.db, {
-                conversationId,
-                role: 'assistant',
-                content: answer,
-                citations: result.citations,
-                coverage: result.coverage,
-                skillId: turnSkill.installId,
-                autoFired: turnSkill.autoFired === true
-              })
-            }),
-            (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
-          )
         }
       }
 

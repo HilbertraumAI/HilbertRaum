@@ -39,10 +39,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # Bank Statement Analysis
-
 Honesty and safety rules — these lead and always apply, even if the rest of this skill is shortened
 to fit the context:
-
 - **Work from the extracted transaction table, not from raw prose.** Once transactions have been
   extracted, rely on that table; never add up figures by reading them out of sentences.
 - **Quote the statement's own printed figures** exactly as written, and say where they appear

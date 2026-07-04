@@ -211,6 +211,131 @@ password recovery — are documented in
   head+tail split is a **stopgap** until per-figure invoice provenance lands (mirroring
   `bank_transactions.source_page`); and one **non-skill** Images string (`images.drop.busy`) still uses formal
   `Sie` (outside U5's skill-string scope).
+- **The renderer run store is per-run and conversation-gated (skills-audit-2026-07-03 U6, SKA-6/17/18/25/29/37/38/39/40/41).**
+  After A2 made tool runs per-document concurrent MAIN-side, the renderer kept a SINGLE module-level `active`
+  run, and ChatScreen rendered that one app-wide run's bar in EVERY conversation. U6 re-architects
+  `renderer/lib/skillruns.ts` into a **multi-run store keyed by `runHandle`** (each entry carries
+  `{run, conversationId, documentId}`), mirroring the A2 controller; ChatScreen gates the busy/result bar to
+  the run whose `conversationId === activeId` and shows a quiet **"a skill is working in another chat"** chip
+  for runs elsewhere (SKA-6). A second run no longer silently abandons the first (both outcomes are shown +
+  acknowledged); the post-extract **Categorize** offer refuses (hidden) when its remembered document is not in
+  the current conversation's scope, and MAIN **hard-refuses** a confirm-gated tool run whose requested document
+  is out of scope even when exactly one doc is in scope (SKA-29 — a confirmation for doc X never executes
+  against doc Y; read-only tools keep the tested single-doc convenience fallback). A **`listSkillRuns` IPC**
+  (ids/counts only) lets a reloaded renderer **re-adopt** in-flight AND terminal-unacknowledged runs — the
+  launching conversation + target document are threaded onto the content-free `SkillRunState`
+  (`conversationId?`/`documentId?`, additive) so a reload can re-gate + re-pin the routed relay; a busy refusal
+  carries the running handle as a fallback re-attach path; never-acknowledged terminal runs are TTL-swept in
+  the controller (bounded Map) (SKA-17). The store **shallow-compares** (state/count/resultKind/progress)
+  before notifying so a 400 ms no-op poll no longer re-renders ChatScreen ~2.5×/s (SKA-39), and **tolerates N
+  consecutive poll failures** then keeps a labelled *"couldn't check on this skill"* row instead of silently
+  dropping a live run (SKA-40). The run bar's live region is now **one always-mounted `aria-live` status
+  container** whose text swaps (SKA-41, the app's M-U1 lesson). The transcript's *"answer without it"* undo +
+  *Try again* render only when the LAST message is that assistant turn (SKA-37 — a trailing unanswered user
+  turn no longer misdirects the undo to a later question), and the skill glyph + undo are keyed off the
+  persisted `messages.skill_id` with a localized **"(removed skill)"** label, so DELETING a skill keeps the
+  provenance (consistent with a disabled skill) (SKA-38). The 'new'-composer skill pick is deleted after being
+  carried onto the created conversation, so it no longer resurrects on a later empty composer (SKA-18).
+  **Residuals (accepted):** when a single conversation holds two concurrent runs (a multi-document scope,
+  different docs), the bar shows only the MOST RECENT one (v1 tools are single-document, so this is rare); a
+  reloaded run's busy/result row falls back to the count label until its target name re-resolves (the U-1
+  renderer-remembered name is React state, lost on reload — the document id is re-pinned from the store); and a
+  run whose polling gave up shows a *"state unknown"* row rather than a definitive outcome (main may still hold
+  the true terminal state, re-adopted on the next reload). One narrow re-attach edge: the routed relay
+  acknowledges (clears main-side) a routed run BEFORE its answer streams, so a reload normally never re-adopts
+  an already-relayed run; but if that `clearSkillRun` IPC silently fails AND the renderer reloads before the
+  30-minute TTL sweep, the re-adopted terminal routed run would relay its answer a second time (a duplicate
+  transcript turn). Accepted: `clearSkillRun` is a trivial in-process IPC that effectively never fails, and the
+  window is a reload before the answer even finished persisting.
+- **Skill package lifecycle hardening (skills-audit-2026-07-03 U7, SKA-15/16/30–36/42 + SKA-45 riders).**
+  Ten package/manifest/installer/Settings fixes. **(SKA-15)** all 8 bundled SKILL.md bodies merge heading +
+  honesty-rules intro + bullets into ONE paragraph — the only paragraph `buildSkillFence` GUARANTEES at a
+  tight budget — closing the residual decapitation the U1 reorder left (P0 was the bare `#` heading, so a
+  budget-squeezed turn shipped an intro *promising* rules with none delivered; the parity test had pinned
+  the wrong paragraph and now trims the REAL bodies through the builder at a rules-only budget).
+  **(SKA-16)** a non-file SKILL.md (a directory, from hand-unpacking) or one unreadable folder no longer
+  kills ALL reconciliation for the session — the manifest reader requires a real file and discovery guards
+  every per-folder read (structural error + continue). **(SKA-30)** the zip/folder duplicate-path guard is
+  CASE-FOLDED (+ file-vs-directory merge), so `SKILL.md`+`skill.md` polyglot packages refuse instead of
+  installing different instructions per OS; ASCII fold only (`String.toLowerCase`, not the exact NTFS/exFAT
+  fold tables) — an exotic non-ASCII casing pair could still merge on write (residual). **(SKA-31)** YAML
+  parse errors are a fixed structural string + numeric line/column — never `String(err)` with the yaml code
+  frame quoting attacker frontmatter (canary-pinned). **(SKA-32)** discovery/reconcile errors surface:
+  startup logs count + structural codes, and Settings → Skills shows "N skill folders could not be read"
+  (count only — an invalid folder name is arbitrary user text and never crosses the IPC/log). **(SKA-33)**
+  a failed import toast shows the precise localized structural reason (mapped back out of the wrapped IPC
+  message), with the generic toast kept for unexpected failures (an ENOSPC/lock throw is deliberately NOT
+  mapped — wrong-specific copy is worse than generic). **(SKA-34, decision)** export mirrors import's
+  acceptance (everything allowed under the skill dir minus the root manifest.json cache, dot-entries,
+  symlinks; the canonical-subdir allowlist deleted) and import now skips dot-named entries too, so
+  `export(import(pkg)) == pkg` holds exactly (round-trip test); **residual:** a hand-made DROP-IN folder
+  can still hold files an export packs but a re-import refuses (over-cap sizes; a case-colliding pair
+  created on a case-sensitive FS) — export applies no size caps to the user's own files by design.
+  **(SKA-35)** import-preview notes are localized via stable note CODES + app-fixed params (the error-code
+  precedent); the `localized.<key>` family no longer interpolates the attacker-chosen locale key, and
+  locales dropped at the 16-cap now emit a note. **(SKA-36)** crash-leftover `.skill-import-*` staging and
+  `.skill-backup-*` dirs are swept at reconcile, age-gated > 1 h by mtime (a live import's dirs are never
+  swept; the backup's mtime is TOUCHED after the rename so it doesn't inherit the old install's stale
+  mtime); a younger leftover is skipped by discovery (dot-names are never packages), so it can't surface as
+  a phantom folder error meanwhile. **(SKA-42)** document-redaction's SKILL.md names BOTH button labels
+  (EN + DE) so a German fence-answered turn no longer points at a nonexistent affordance. **(SKA-45
+  riders)** Unicode bidi direction controls are rejected in every displayed frontmatter string (title/
+  description/author/language; ignored-with-note in localized overrides) — cosmetic picker spoofing — and
+  the stale S13a-era autoFire comment was refreshed.
+- **Run-seam edge hardening (skills-audit-2026-07-03 R9, SKA-24/26/27/28/44).** Five run-seam edges.
+  **(SKA-24)** `withDocumentLock` acquisition is **abort-aware**: a run PARKED behind another lane (queued
+  behind a long categorize holding the lock for minutes of LLM batches) now rejects on Cancel — the
+  controller flips it to `cancelled` immediately instead of a dead "running" spinner + busy refusals until
+  the other lane finishes; the aborted waiter settles its already-published chain link, so later callers
+  never wedge (pinned by a third-caller test). The chat-analysis turn signal and the categorize doctask
+  signal ride the same rail. **Residual (accepted):** cancellation INSIDE the critical section stays
+  cooperative (the tools' own signal checks) — abort only interrupts the park; and an already-cancelled
+  run facing a FREE lock still runs the seam far enough to record its honest 'cancelled' run row (the
+  pre-R9 tested contract). **(SKA-27)** the file-export tail is B4-guarded: a `finishRun` throw after the
+  minutes-open save dialog (workspace locked underneath it) no longer strands the run at 'started' NOR
+  reports *"failed. Nothing was changed."* after the file WAS written — the outcome reports what happened
+  to the FILE; bookkeeping gets one guarded retry and then only a local log. 'done' is stamped at the
+  actual write, not the pre-dialog prepare (run history no longer timestamps an export minutes early).
+  The adversarial review found `runDocumentRedaction` — the other dialog-shaped seam — carried the same
+  class (its unguarded post-write 'done' fell into the outer catch → 'failed' + "Nothing was changed."
+  after the copy WAS written); same treatment applied there.
+  **Residual:** if the workspace is PERMANENTLY unwritable, the row genuinely cannot reach a terminal
+  status — the user still gets the truthful success. **(SKA-28)** `runCashflowSummary` and the file
+  exports now hold ONE per-document lock across prepare + load + serialization (the last two downstream
+  seams that held none), closing the microtask-narrow TOCTOU where a competing `replaceExisting` extract
+  interleaved between the staleness re-extract's release and the row load (empty CSV, "saved 0 rows");
+  the export's hold RELEASES before the save dialog, so a parked dialog never blocks the document's other
+  lanes. **(SKA-26, decision: flip)** extractor-version staleness is now `v !== CURRENT`, not `v <`: rows
+  written by a NEWER extractor re-extract too — on a portable drive the app roams with the workspace, so
+  a mismatch means a deliberate rollback (where the newer extractor IS the suspected bug) or a second
+  install; serving its rows as fresh was exactly backwards. Deterministic extractors make the flip safe
+  (same version ⇒ same rows ⇒ no loop). **Accepted cost:** a workspace alternated between two app
+  versions re-extracts on EVERY switch, and each `replaceExisting` re-extract drops the persisted per-row
+  categories (the rows changed with the parser; the honest move is recomputing — the next categorize run
+  restores them). **(SKA-44, decision: demote)** the EN `transfer` categorizer rule is `confident: false`
+  like R3's `sepa`/`überweisung` — "TRANSFER TO NETFLIX…" now reaches the 15-category LLM instead of
+  being pre-filtered into 'Transfer' (same rails-not-merchant semantics; the offline deterministic
+  fallback still labels it Transfer). No extractor bump; the T1 snapshot is untouched (categories are not
+  extraction output).
+- **Eval & test-infra sweep close (skills-audit-2026-07-03 T2) — two accepted residuals + one recorded
+  test-guard acceptance.** **(SKA-43, decision: accept — no cache)** the needle-downgrade calculus still
+  re-scans the document per needle-shaped turn (`documentApproxTokenTotal`'s all-chunks read + KMP
+  de-overlap, then `retrieveWholeDocument` repeating the same pass; twice more per compare). NOT cached:
+  the passes are milliseconds of in-memory string work against the model call the turn then makes
+  (seconds to minutes on CPU), while a memoized per-document token total would need invalidation at every
+  chunk-mutation site (re-index, purge — plus any direct `chunks` UPDATE) and a STALE total would silently
+  mis-size the needle downgrade and the compare budget split: a correctness-adjacent risk bought for an
+  imperceptible win. Revisit only if profiling ever shows the scan itself hot. **(SKA-45, last open
+  sub-item)** the `buildSkillFence` O(n²) growth loop stays as written — bounded by the 64 KiB body cap
+  (hostile-input worst case ~100–300 ms, once per turn), a perf micro, not a correctness item. With these
+  two recorded, every SKA-1…SKA-45 item of the 2026-07-03 audit is dispositioned (fixed or documented
+  residual). **(T1 snapshot guard — accepted input-edit exemption)** editing a fixture in the same commit
+  exempts its OWN output change from the extractor-version bump (the `inputHash` discriminator): that is
+  inherent to legitimate corpus upkeep, and smuggling an extractor change through it would require a
+  visible fixture edit in the same diff. The two REAL guard gaps are closed by T2's self-checks: each
+  committed hash is recomputed against its own committed output, and the snapshot's recorded extractor
+  versions are pinned to the live constants — a hand-edited hash or a bump-without-regenerate now fails
+  the default suite.
 - **Extractor evaluation infrastructure — a real-layout corpus, an output-snapshot version-bump guard, and an
   opt-in real-model smoke (Skills T1, audit §7 recs 1/2/5).** The recurring wrong-figure incidents
   (INVOICE-TOTALS-1, HVB zero-transactions, the §5.3 NBSP/Unicode family) were real-LAYOUT features that
@@ -283,6 +408,34 @@ password recovery — are documented in
     which does not occur in space-separated extracted text) fails the length check for a known country and
     is left unmasked — a documented residual. These remain best-effort regex detectors — the conservative
     miss-over-over-mask posture stands.
+  - **Unicode print variants + the parenthesized US phone now mask (R8, skills-audit-2026-07-03 SKA-3).**
+    The detectors used to run on the raw byte-verbatim text (D58), so the common Unicode print separators
+    defeated exactly the identifiers redaction exists to mask: an **NBSP/narrow-NBSP/figure-space-grouped
+    IBAN or card** yielded zero candidates, a phone with the **non-breaking hyphen U+2011** Word
+    auto-inserts (or an en dash) never matched, and the most common US form **`(555) 123-4567`** had no
+    branch — while the U2 dry-run/share-safe counts reported 0 for them. R8 closed this with a
+    **same-length detection shadow** (match on a 1:1 ASCII-normalized copy — NBSP family → space,
+    U+2011/U+2013/U+2212 → `-` — mask the original bytes at the same offsets), so the unmasked remainder
+    stays byte-identical and every existing guard (Luhn, per-country IBAN length, the 0-leading reference
+    guard, the punctuation anchors) applies to the Unicode twins unchanged; the `(ddd) ddd-dddd` branch
+    was added punctuation-anchored. The R8 review hardened the mechanism (see security-model.md R8
+    note): a shadow-joined neighbour (one NBSP away) can no longer UN-mask the IBAN/PAN inside a
+    failed whole-span candidate (sub-span narrowing), and **en dash / minus in the original bytes are
+    range/math typography, never phone/card punctuation** on a non-`+`-led, non-parenthesized match —
+    so `Budget 10.000–15.000 EUR`, `05.2025–06.2026`, `PLZ 01067–01099` and a Luhn-lucky en-dash
+    invoice-number range stay untouched. **Deliberately still out:** an en-dash-set bare/0-leading
+    phone (`Tel. 0664–1234567`) is missed (the refusal above — miss-over-eating; the U+2011 and
+    `+`/parenthesized en-dash forms mask); exotic Unicode separators beyond the six
+    mapped print variants (e.g. hair/thin/ideographic spaces, U+2014 em dash as a digit separator),
+    spelled-out numbers ("null sechs sechs vier…"), and RTL/bidi-reordered digits — the shadow maps only
+    what real PDF/Word pipelines emit around identifiers; anything else remains the documented
+    best-effort miss (the deferred higher-recall wave). Two residuals shared with the ASCII twins
+    (unchanged by R8, now reachable via NBSP/figure space too): digit table CELLS joined by a single
+    separator can merge into a Luhn-lucky `[CARD]` or a generic-country `[IBAN]` over-mask
+    (privacy-favouring direction), and the review surfaced a **pre-existing** super-linear
+    backtracking hazard in `IBAN_CANDIDATE_RE`'s grouped alternative on hostile uppercase runs
+    (multi-second on a ~500 KB adversarial document, R7-identical, neither caused nor worsened by
+    R8) — an open R-phase candidate for the vuln-scan linearization treatment.
   - **Informational dry-run + share-safe pre-scan (U2, audit §3.4/§3.5).** An INFORMATIONAL redaction
     question ("welche personenbezogenen Daten enthält das Dokument?", "what personal data is in here?")
     over a single document now gets a read-only **counts** answer (`scanRedactionCandidates` — the same
@@ -531,9 +684,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   message, not hardcoded `relevance`). If any in-scope doc is **not** fully chunked the turn is
   **refused** with a fixed message pointing at Documents → Re-index — no partial answer, no model call
   (D45) — rather than silently answering from a few passages (for accounting, a partial read is a wrong
-  total). A tool skill answering an **off-topic** question keeps the ordinary relevance path unchanged;
-  an **intent-shaped** question over a **multi-document** scope is no longer silently degraded — it is
-  narrowed or routed (**W2**, audit §2.1, recorded below). `document-redaction` is an action skill: it registers a
+  total). **A4 (SKA-7 structural, audit §3.2/§8.2) finished the inversion for tool skills:** with the
+  bank/invoice skill active over a **single fully-chunked** document that **plausibly is** the skill's
+  class (it matches the skill's manifest doc signals, OR a persisted extraction already exists for it),
+  **every** non-small-talk question now reaches the handler — the phrasing (`routeMatch`) veto is retired,
+  so an on-topic money question that **misses** the ~45-term vocabulary is answered from the **verified
+  extract** (grounded-data, which post-W6 honestly declines an off-data question with "the data does not
+  carry that") instead of silently degrading to raw top-k chunks + model arithmetic (the pre-W3 incident
+  class, on the two highest-stakes skills). A document matching **no** signal and never extracted keeps the
+  ordinary relevance path (the W2 plausibility posture, inverted — a contract with the bank skill sticky is
+  never force-extracted on "who signed this?"); clear **small talk** ("danke") opts out too (no extraction,
+  no narration). An **intent-shaped** question over a **multi-document** scope is narrowed or routed
+  (**W2**, audit §2.1, recorded below). `document-redaction` is an action skill: it registers a
   **`routing`** handler (not an exhaustive one — D49a, 2026-06-22), so a redaction-shaped request
   returns a short answer pointing at its run button (no content read, no tool run, **no coverage
   badge**) instead of a top-k Q&A that lectured and falsely claimed a relevance-limited reading; the
@@ -610,7 +772,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   LLM **never computes a figure**, it narrates parsed data. Under every grounded-data answer the app appends
   a **deterministic totals postscript** (net/tax/gross as parsed, verbatim) so a model misquote is
   immediately contradicted; the **R5 date caveat also rides that postscript** (a due-date question now
-  routes to grounded-data, so its honesty is preserved). The grounded-data turn uses its OWN system prompt
+  routes to grounded-data, so its honesty is preserved). **W6 (audit §3.1, SKA-5) then threaded the U1
+  `droppedRowCount` into this mode**: the invoice data block gains a MISSING-lines note + a softened
+  (non-"whole document") provenance line and the postscript appends the `countPartial` hedge whenever a
+  money-bearing line was dropped (an invoice has no balance proof, so any drop hedges) — closing the gap
+  where a `dropped>0` invoice answered "how many line items?" over the mode as if the list were complete.
+  **W6 (SKA-21)** also fixed the totals/echo currency: a mixed-currency invoice with no header currency now
+  stamps **no** code (via `invoiceTotalsCurrency`/`amountText`) instead of misleadingly using `lineItems[0]`'s,
+  and no dangling space when the currency is absent. The grounded-data turn uses its OWN system prompt
   (`GROUNDED_DATA_SYSTEM_PROMPT` — no `[Sn]` excerpt-citation rule, since it carries a data object, not
   numbered excerpts) and REPLAYS conversation history, so follow-ups no longer re-trigger the byte-identical
   template. `buildInvoiceAnswer` also gained a **Details block** (vendor / invoice number / invoice + due
@@ -629,7 +798,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   model answer over `buildStatementDataBlock` (the JSON + the balance-reconciliation + the **D56
   completeness verdict** + a deterministic per-category grouping + provenance, capped ~150 rows) with a
   **deterministic in/out/net postscript** (`buildCashflowPostscript` — empty on a mixed-currency statement,
-  since there is no single meaningful total; the R5 date caveat rides it too). The self-referential
+  since there is no single meaningful total; the R5 date caveat rides it too). **W6 (audit §3.1, SKA-4/SKA-5)
+  then made this postscript honour the D56 gate** the template already ran: the in/out/net echo prints only on
+  `complete` (proven-whole) or `unverified` (with the `unverifiedCaveat` sum-of-rows-read line appended), and
+  is **suppressed on `contradicted`** (mirroring the template's `incompleteNoTotal` refusal — no app-authored
+  total under the model answer on a statement the balances refute). The `droppedRowCount` hedge also rides,
+  but **D56 outranks it** (mirroring U1 / commit 42a4eb9): a `complete` balance proof means the dropped line
+  did not move the balance, so **no** hedge fires; it fires only on a non-complete status, and the data block's
+  MISSING-lines note + softened provenance follow the same gate. Its label was also corrected — the bank
+  in/out/net are **computed sums** (`summarizeCashflow`), so the echo now says "Totals **computed** from the
+  parsed transactions" rather than the old "verbatim from the document" (accurate only for the invoice echo,
+  whose net/tax/gross **are** printed totals — audit §4.5). The self-referential
   `transactionsMore` copy now names the **real** affordances (the run-bar **Export to CSV** button for a
   saved file + "ask for it as CSV or JSON here in chat"), and the inline **CSV intros** (bank + invoice,
   §3.6-low) state honestly that CSV carries the rows/line-items only while the summary/balances (bank) or
@@ -639,6 +818,27 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   The bank port added **no** extractor-version bump (the serializers are read-side; extraction output is
   byte-identical). **Residual:** bank has no statement **XML** serializer (JSON/CSV only, per the plan), so
   an "as xml" ask falls through to grounded-data rather than an inline XML block.
+  **W7 (audit §3.2/§3.3/§3.4) tuned the answer-shape routing** (vocabulary + classifiers only, no
+  extractor bump): (a) **SKA-9** German *separable* verb forms — "Fasse … zusammen" / "Liste … auf" — now
+  reach the **D56-gated template** via word-anchored two-particle regexes on both handlers' `isSummaryShaped`
+  (the joined `zusammenfass`/`auflisten` stems missed them); the preposition "auf" ("Liste die Buchungen auf
+  dem Konto") over-fires to the template — the safe deterministic side, accepted. (b) **SKA-10** a
+  WHY/how-come **format** question ("Warum fehlt im JSON die MwSt?") is now guarded by `EXPLANATORY_RE`
+  **before** `detectFormat`, so it reaches grounded-data (which can explain) instead of re-serving the
+  byte-identical serializer dump (the repeat-loop class W3/W4 killed on the summary path). (c) **SKA-20**
+  the `spend on`/`spending on` stems were **dropped from `CATEGORY_KEYWORDS`**: "how much did I spend on
+  groceries?" (the flagship grounded-data example cited across the W3/W4 record, the in-code comment, and a
+  test) now routes to **grounded-data** (the per-category grouping still rides the block, so it stays
+  answerable) instead of the category template — removing the tense-flip where the absent `spent on` reached
+  grounded-data while `spend on` reached the template. The explicit "break down by category" ask keeps the
+  template (`categor`/`breakdown`/`kategor`/`aufschlüssel`). (d) **SKA-7 (vocabulary half)** added route-only
+  German money terms to the bank vocabulary (`wie viel`, `wie viele`, `zahlung`-stem, `bezahlt`, `ausgegeben`,
+  `payment`) and `fällig`-stem/`due` to invoice, so an on-topic money/due question under an already-active
+  tool skill reaches the handler instead of falling to raw top-k (§8.2 — route-only never touches the
+  suggestion offer). **The STRUCTURAL half of SKA-7 was then closed in A4** (the tool-skill gate inversion
+  above): with the skill active over a plausibly-in-class single fully-chunked doc, a phrasing miss no
+  longer falls to top-k — it reaches the handler (grounded-data over the verified extract), so the widened
+  vocabulary is now belt-and-suspenders rather than the sole guard.
   **U1 (audit §2.3 / ux-10 / ux-11 / §3.6) made the completeness claim honest and stopped silent row drops
   from masquerading as exhaustive reads.** The bank + invoice extractors now record an additive
   `dropped_row_count` per extraction (`bank_statements`/`invoices`, nullable — pre-U1 rows read NULL and the
@@ -663,9 +863,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   coverage badge is softened to **"Read across …"** (ux-10 — it overclaimed *exhaustive extraction*; a small
   model / odd layout can miss a match), and the **empty-extraction copy** no longer dead-ends — it blames the
   reader not the document and names the next step (OCR a scan; else the layout may not be machine-readable).
+  U1 originally gated only the deterministic **template** headline; **W6 (audit §3.1, SKA-5) composed the same
+  `droppedRowCount` honesty into the grounded-data mode** (data-block MISSING-lines note + postscript hedge,
+  both domains), so the count/list questions the third mode owns no longer silently revert U1 — the bank side
+  honouring the D56-outranks rule (a `complete` proof suppresses the hedge). See the W4 bullet above.
   Finally, every shipped SKILL.md body is **reordered so its honesty/safety rules LEAD the first content
   paragraph** (they used to trail, so the budget-driven fence trim — which keeps leading paragraphs —
-  silently decapitated them, §3.6), and the `buildSkillFence` **`trimmed`/`omitted` flags are now LOGGED**
+  silently decapitated them, §3.6) — **U7 (SKA-15) then closed the residual**: the U1 layout still put the
+  rules in paragraph[1] while the builder's guaranteed minimum is paragraph[0] only, so a tight budget
+  shipped an intro promising rules with none delivered; heading + intro + bullets are now ONE paragraph and
+  the parity test trims the REAL bodies through `buildSkillFence` at a rules-only budget — and the
+  `buildSkillFence` **`trimmed`/`omitted` flags are now LOGGED**
   (ids/counts only, `logSkillFenceReduction`) at every call site instead of discarded, so a decapitated-rule
   turn is diagnosable. **Residuals (documented):** `droppedRowCount` uses the parser's own `MONEY_RE`
   definition of a figure, so a **round-integer-only** line with no decimal and no currency marker (a bare
@@ -687,17 +895,38 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   with an analysis-mode skill active over a matching **fully-chunked** scope the whole-doc (or, at exactly
   two docs, compare) engine is the **DEFAULT**; keywords now play only two skill-agnostic roles —
   **(a)** `isSmallTalk` **opts out** clear chatter (a greeting/thanks/assistant-meta keeps the relevance
-  path), and **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k **only when** the
-  whole-doc read would truncate **and** no deep-index tree exists (a needle past the truncation cut would be
-  missed — W1's exact budget calculus is the input); a **deliverable** ask (summary/minutes/compare/…) never
-  downgrades. **Residuals (documented):** the off-topic opt-out is a bounded **small-talk** detector, so a
-  genuinely off-topic but non-chatter question (e.g. "what colour is the sky?") over a fully-chunked doc now
-  spends a whole-document read and answers "not covered" rather than degrading to top-k — the accepted cost
-  of recall over precision once the user has **explicitly** selected the skill; and both shape classifiers
-  are heuristic keyword lists (deliberately conservative — a false needle is worse than a false deliverable),
-  so an unusual phrasing of a needle over an over-budget doc can still take the truncated whole-doc read
-  (honest via W1's in-prompt "beginning only" notice), and the needle downgrade is applied to the single
-  whole-doc path only (compare keeps its diff-driven/whole-both read).
+  path), and **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k when the whole-doc
+  read would truncate (a needle past the truncation cut would be missed — W1's exact budget calculus is the
+  input); a **deliverable** ask (summary/minutes/compare/…) never downgrades.
+  **A4 (audit §3.2/§3.3) tuned this composition (SKA-8/SKA-12/SKA-23):**
+  **(SKA-8)** the `intends()` predicate — the **W2 count-mismatch routing** gate, consulted only at the
+  wrong doc count — was decoupled from `applies()` and made **vocabulary-shaped** (`routeMatch`) for the
+  whole-doc/compare handlers too (it had been `!isSmallTalk`, which made the W2 pre-pass intercept **every**
+  non-chatter question at multi-doc scope — a sticky instruction skill over a Library turned "who is Angela
+  Merkel?" into a "pick one document" dead-end and made the relevance/coverage-extract engines unreachable).
+  Now, at a wrong doc count, only a **vocabulary-shaped** question narrows/routes; a general/off-topic one
+  **falls through** to the ordinary engines. `applies()` keeps A3's single-doc inversion (any non-chatter
+  question over ONE doc still defaults to the engine). A user-imported skill has no routing vocabulary, so it
+  never W2-routes (falls through) but still gets the single-doc engine.
+  **(SKA-12)** the needle downgrade **dropped the "no ready tree" conjunct**: a needle prefers top-k
+  whenever the whole read would truncate, **tree or no tree** — a ~13-call map-reduce over lossy node
+  summaries is worse than one top-k retrieval for a single-fact lookup (the tree keeps rescuing
+  **deliverables**, which never reach the downgrade).
+  **(SKA-23)** the needle downgrade is now evaluated **before** the D45 fully-chunked refusal for
+  grounded-whole-doc handlers: a downgraded needle takes the relevance path, which makes **no** whole-document
+  claim, so D45's premise (a partial whole read passed off as complete) doesn't apply — a needle over a
+  not-fully-chunked doc is served by top-k, not refused; a **deliverable** over a not-fully-chunked doc keeps
+  the whole read and still hits the refusal.
+  **Residuals (documented):** the off-topic opt-out is a bounded **small-talk** detector, so a genuinely
+  off-topic but non-chatter question (e.g. "what colour is the sky?") over a fully-chunked doc — under an
+  instruction skill, OR now under a tool skill via the SKA-7 inversion when the doc is plausibly in-class —
+  spends a whole-document/extract read and answers "not covered" / "the data does not carry that" rather than
+  degrading to top-k, the accepted cost of recall over precision once the user has **explicitly** selected the
+  skill; a **row-specific needle** past the tool skill's ~150-row data-block cap gets the honest "N omitted"
+  note rather than the row; both shape classifiers are heuristic keyword lists (deliberately conservative — a
+  false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
+  can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
+  needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented
@@ -771,6 +1000,23 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   amount 2000, cents lost), so a row whose **ONLY** figure is a no-cents bare-thousands / apostrophe token
   carries no money token at the classifier and is dropped — a recall loss, never a wrong figure (it
   reconstructs correctly whenever a 2-dp figure also anchors the row, e.g. amount + cents balance).
+  (5) **[skills-audit-2026-07-03 R7, SKA-13 — dot-decimal `d.dd` amounts.]** A yearless `d.dd` token
+  (`5.04`, `1.12` — the CH/UK/US small-amount forms) is BOTH date- and money-shaped; date-first
+  classification ate it as an out-of-column date, so dot-decimal statements reconstructed with the
+  running balance as the row's only figure (balance-as-amount) or lost the row. `parseTransactionRow`
+  now re-reads such a token as MONEY under **four row-context guards** (out of the Datum band; after
+  description text — a dotless VALUTA next to the booking date stays a dropped date; before any
+  money-class token; and only on rows with no numeric-TEXT token and no comma-decimal money — an
+  apostrophe/bare-thousands "text" figure or a de-AT comma amount on the row keeps the honest legacy
+  drop, since reclassifying beside them re-created balance-as-amount in the adversarial R7 review).
+  Raw-text and continuation rows keep the conservative date-first read (a kept `d.dd` on a raw line
+  could re-enter the line parser as a spurious leading date; a continuation must still absorb its
+  wrapped text). **Residuals:** a layout printing a dotless yearless Valuta AFTER the description on a
+  dot-decimal statement is shape-identical to `<desc> <amount> <balance>` and still mis-reads (every
+  observed Valuta form prints adjacent to the booking date, with a trailing dot, or with a year); and
+  the Datum-band bootstrap vote counts ambiguous `d.dd` tokens as dates, so a page with MORE
+  date-plausible dot-decimal figures in one band than booking dates could in principle mis-place the
+  band (pre-existing lens gap; ties break leftmost, which protects every constructed real layout).
 - **The bank/invoice LINE PARSER makes deliberate locale/column assumptions (full-audit-2026-06-28
   Phase 1, BL-N1/N2/N3 + DECISION 2).** The deterministic line parser shared by the bank and invoice tools
   (`tools/money.ts`, distinct from the geometry pass above) carries these accepted behaviors, all pinned by
@@ -805,7 +1051,30 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     additionally gets **cross-year month-rollover**: a December/November row on a January/February-anchored
     statement is assigned the **previous** year (the mirror case, the next year), so a statement whose period
     spans year-end no longer stamps one page year on every bare date. This mirrors the geometry path's
-    `toFullDate`/`resolvePageAnchor` (which gained the same rollover). **Residual:** the anchor is the FIRST
+    `toFullDate`/`resolvePageAnchor` (which gained the same rollover). **R5 left one gap, closed in R7
+    (skills-audit-2026-07-03 SKA-1/SKA-2):** while R5 made `dd.mm.yy` documents a first-class *parsed*
+    cohort, every date **scrub** stayed 4-digit-year-only — a `dd.mm.yy` token is money-shaped to
+    `MONEY_RE` (`31.03.26` → 3103.26), so a balance/totals line's trailing `per 31.03.26` was read as the
+    figure, `Datum: 15.03.26` became a phantom invoice item, money-less dd.mm.yy period lines inflated
+    `droppedRowCount`, and a MID-LINE date on a period line (`01.04.2026 bis 30.04.2026`, both year forms)
+    was read as an invented transaction/line-item amount by the row money scan. R7 widened both
+    `DATE_TOKEN_RE`s with a double-guarded 2-digit-year alternative (`\b` + `(?!\d)(?![.,']\d)` — the
+    lookahead accepts terminal punctuation, `per 31.03.26.` / `vom 15.03.26, …`, while refusing a "year"
+    that continues into digits or a separator-plus-digit) and runs the row parsers' money scan over a
+    SAME-LENGTH date-blanked copy of the line (`scanMoneyWithBlankedDates` — byte offsets preserved, so
+    description slicing and figure-region currency detection are untouched; a match's trailing sign/paren
+    is re-validated against the ORIGINAL bytes, so a blanked billing-period range after the amount —
+    `1.500,00 01.04.2026 - 30.06.2026` — can never read the range dash as a trailing debit minus). Two
+    behavior notes from the R7 adversarial review: **(a)** a spaced dash between an amount and a
+    FOLLOWING date now reads positive-as-printed (the dash is treated as the range separator; before, the
+    date's digits blocked the trailing-minus lookahead AND became a phantom second figure — both readings
+    were wrong, the new one is the honest half of BL-1's documented ambiguity); **(b)** the document
+    currency vote gained a deliberate widening: a code IMMEDIATELY left of a line's first figure
+    (`<desc> EUR 19,15-`, the per-row currency-cell layout) now votes — the scrub widening had removed
+    such dd.mm.yy lines' only (accidental) vote, extracting ZERO rows; the FIN-1 memo exclusion is
+    unchanged. Descriptions now retain a mid-line/trailing date verbatim (previously the date's digits
+    were mis-read as figures; the bytes are kept — cosmetic input to the categorizer). Both extractor
+    versions → 9. **Residual:** the anchor is the FIRST
     fully-printed date in document order — a document whose first 4-digit-year date is in a foreign century
     (an old memo date) would expand `yy` into that wrong century (the same first-date-wins risk the geometry
     path already carries); and rollover keys only off the anchor month, so a genuinely multi-year listing with
@@ -951,8 +1220,22 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     **totals** line only when its remainder is essentially just the figure (`isFillerOnly`): tax
     qualifiers / currency / `%` may follow, but a real description ("Netto-Miete Objekt 3 1.000,00",
     "Total hours consulting 40,00") means the line **falls through to `parseLineItem`** and stays a line
-    item; header matching likewise no longer swallows a money-bearing line (`Due diligence review 2.000,00`
-    — a date label only consumes when a date actually parses). Totals are **last-block-wins** (a real
+    item. Header matching is money-gated in two steps: R2 gated only the **date** labels (`Due diligence
+    review 2.000,00` — a date label only consumes when a date actually parses), while the **vendor/number**
+    labels still consumed unconditionally — `From 01.06.2026 to 30.06.2026 Hosting 49,00` ("from" is a
+    vendor label) or `Rechnung Nr. 2026-14 vom 03.05.2026 über 1.500,00 EUR` was swallowed whole: the item
+    deleted, `droppedRowCount` NOT incremented, garbage in vendor/invoiceNumber (the 2026-07-03 audit's
+    SKA-14; the earlier wording of this bullet overstated R2's fix). **Closed in R7:** `applyHeader`'s
+    vendor/number branches fall through on any line carrying **amount-shaped** money
+    (`carriesAmountShapedMoney` — a 2-dp decimal figure, or any money token beside a named currency), so
+    a figure can never silently vanish behind a header claim. The gate deliberately does NOT fire on a
+    bare dotted/thousands GROUP with no currency (`Rechnung Nr. 26.001` — a real DACH `yy.nnn` numbering
+    convention — or `Lieferant: Firma 1.000 GmbH`): the adversarial R7 review showed a plain
+    `hasMoneyToken` gate INVENTED a €26,001/€1,000 line item from those header values, the inversion of
+    the harm this fix closes. **Residual:** a genuine 2-dp figure inside a vendor/number VALUE
+    (`Rechnungsnummer 2026/1.234,56`) falls through and is read as a figure — §22-D1 prefers reading a
+    printed 2-dp figure as a figure over silently discarding it. `INVOICE_EXTRACTOR_VERSION` → 9. Totals
+    are **last-block-wins** (a real
     invoice prints its totals after the items). The German summary vocabulary is extended — `Summe`,
     `Gesamtsumme`, `Rechnungssumme`, `Endsumme`, `Endbetrag`, `summe netto` — and a summary-line guard
     (`isSummaryLabelLine`, mirroring the bank `isBalanceLabelLine`) drops phantom "Summe" items so a

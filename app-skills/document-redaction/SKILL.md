@@ -19,10 +19,11 @@ permissions:                   # DECLARED INTENT only — the app is authoritati
 allowedTools:                  # The app-owned tools this skill may run (declared ∩ registry ∩ grant);
   - redact_document            #   it reads the selected document and asks before saving the copy.
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
-  autoFire: true               # S13b D6 opt-in: eligible for auto-fire (still gated by the user opt-in
-                               #   D4, app-only, §6.5 compatibility, and the score ≥ 3 bar — a keyword
-                               #   corroborated by ≥1 in-scope doc signal). Proven at 100% precision on
-                               #   the S13a corpus (skills-s13-plan.md §3.3 / eval threshold-3 gate).
+  autoFire: true               # U4/§2.4 D6 opt-in: eligible for auto-fire (still gated by the user opt-in
+                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar — a
+                               #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). W5's
+                               #   expanded corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.
+                               #   (Comment refreshed from the stale S13a-era wording — SKA-45, U7.)
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` + `suggest`-only terms)
   # and pinned by a parity test. The action verbs (redact/anonymize/schwärzen…) both OFFER and ROUTE; the
   # PII-content topics (sensitive data / sensible daten) are `suggest`-only but the informational dry-run
@@ -40,12 +41,11 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 ---
 
 # Document Redaction
-
 Safety rules — these lead and always apply, even if the rest of this skill is shortened to fit:
-
 - **Do the routing, not the work.** When the user asks to redact, anonymize, or remove personal data
   from the document they have selected, tell them — briefly, in their own language — to click the
-  **Redact personal data** button just below the chat box and choose where to save the copy. Do not
+  **Redact personal data** / **Personenbezogene Daten schwärzen** button just below the chat box
+  (its label follows the app language) and choose where to save the copy. Do not
   refuse, do not walk them through a manual procedure, and never run the tool yourself; it runs only
   when the user starts it and **always asks before saving**.
 - **Never state whether the document does or does not contain personal data** — you have seen only

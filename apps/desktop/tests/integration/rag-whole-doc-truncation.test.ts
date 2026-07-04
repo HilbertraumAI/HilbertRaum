@@ -334,6 +334,29 @@ describe('share-safe PII pre-scan injection (U2, audit §3.5)', () => {
     expect(counts.phone).toBe(0)
   })
 
+  it('SKA-3 R8: the share-safe pre-scan counts Unicode print variants — the verdict input is no longer 0', () => {
+    // Before R8 a typographically-set document (NBSP-grouped IBAN/card, non-breaking-hyphen phone,
+    // parenthesized US phone) pre-scanned as ALL ZEROS, so the share-safe verdict rested on "no PII
+    // found" while the export carried every identifier verbatim. The scan shares the shadowed
+    // redactText pipeline, so these now count exactly as a real redaction would mask them.
+    // Special characters as \u escapes (the T1 convention).
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-scanpii-uni-'))
+    const db = openDatabase(join(root, 'test.sqlite'))
+    seedSettings(db)
+    const docId = 'doc-scan-uni'
+    db.prepare(
+      `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
+       VALUES (?, 'Brief', 'indexed', 'text/plain', 1, '2026-07-04T00:00:00.000Z', '2026-07-04T00:00:00.000Z')`
+    ).run(docId)
+    insertChunk(db, docId, 0, 'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Karte 4111\u00a01111\u00a01111\u00a01111.', 1, null)
+    insertChunk(db, docId, 1, 'Tel +43 664\u20111234567, US office (555) 123-4567.', 2, null)
+    const counts = scanWholeDocumentForPii(db, docId)
+    expect(counts.iban).toBe(1)
+    expect(counts.card).toBe(1)
+    expect(counts.phone).toBe(2)
+    expect(counts.email).toBe(0)
+  })
+
   it('injects the whole-document scan block into the prompt AND gates the verdict on a truncated doc', async () => {
     const h = await makeHarness() // ~11-page doc, over budget ⇒ truncated
     const runtime = capturingRuntime()

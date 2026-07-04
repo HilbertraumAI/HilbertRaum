@@ -131,9 +131,34 @@ describe('categorizer — transfer boilerplate is demoted from the confident pre
     }
   })
 
-  it('the English `transfer` keyword stays confident (still prefiltered)', () => {
-    // Only sepa/überweisung were demoted (§5.5); the explicit `transfer` word remains confident.
-    expect(prefilterCategory(row('Bank transfer to savings', -100))).toBe('Transfer')
+  it('SKA-44 (R9): the English `transfer` keyword is demoted too — an EN transfer row reaches the model', () => {
+    // R3 demoted only the de-AT pair; the EN `transfer` twin has the same rails-not-merchant semantics
+    // ("TRANSFER TO NETFLIX…" is a Netflix charge), so it now goes to the LLM batch instead of being
+    // pre-filtered into 'Transfer'. The deterministic no-model fallback still labels it Transfer.
+    for (const desc of ['TRANSFER TO NETFLIX INTERNATIONAL B.V.', 'Bank transfer to savings']) {
+      expect(prefilterCategory(row(desc, -100))).toBeNull()
+      expect(categorizeRow(row(desc, -100))).toBe('Transfer')
+    }
+  })
+
+  it('SKA-44: with a runtime, the EN transfer row is IN the model batch and takes the richer bucket', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(
+      validReplyFor((desc) => (desc.includes('NETFLIX') ? 'Shopping' : 'Uncategorized')),
+      calls
+    )
+    const rows = [row('Kontoführung Gebühr', -3.5), row('TRANSFER TO NETFLIX INTERNATIONAL', -12.99)]
+    const { assignments, modelAssisted } = await categorizeTransactions(rows, {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(modelAssisted).toBe(true)
+    expect(assignments).toEqual([
+      { index: 0, category: 'Fees' }, // confident keyword — still prefiltered, never sent
+      { index: 1, category: 'Shopping' } // the EN transfer row reached the model (pre-R9: vetoed to 'Transfer')
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0].messages[1].content).toContain('NETFLIX')
   })
 
   it('with a runtime, a SEPA row reaches the model and gets its richer category (not Transfer)', async () => {

@@ -43,6 +43,8 @@ export async function runCategorize(
   // concurrent run on the same statement (a button re-extract / a chat analysis re-extract that would
   // delete the statement mid-categorize → "vanished mid-read" / orphaned rows). The inner
   // `runBankExtraction` self-lock is re-entrant under this hold; unrelated documents stay concurrent.
+  // The task signal rides along (SKA-24): a categorize cancelled while PARKED behind another lane
+  // rejects with the AbortError the manager already maps to 'cancelled' (same class as line (1)'s throw).
   return withDocumentLock(documentId, async () => {
     const signal = task.controller.signal
     const db = ctx.deps.getDb()
@@ -130,5 +132,5 @@ export async function runCategorize(
       throw err
     }
     return documentId
-  })
+  }, task.controller.signal)
 }

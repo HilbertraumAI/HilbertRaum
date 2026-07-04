@@ -298,6 +298,59 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     expect(msg.coverage?.truncated).toBe(true)
   })
 
+  it('SKA-12 (A4): a NEEDLE over an over-budget doc WITH a ready tree ALSO keeps top-k (tree conjunct dropped)', async () => {
+    // Pre-A4 the downgrade required NO ready tree, so a needle over a deep-indexed over-budget doc ran a
+    // ~13-call map-reduce over lossy node summaries. A4 drops the tree conjunct: a needle prefers top-k
+    // whenever the whole read would truncate — the tree keeps rescuing DELIVERABLES only.
+    const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
+    h.db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(h.docId)
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'what is the decision on the budget?',
+      MEETING_INSTALL_ID
+    )
+    const msg = result as Message
+    // Downgraded to relevance despite the ready tree ⇒ NO capped whole-document coverage claim.
+    expect(msg.coverage?.mode).not.toBe('capped')
+    expect(msg.skillId).toBe(MEETING_INSTALL_ID)
+  })
+
+  it('SKA-23 (A4): a NEEDLE over a NOT-fully-chunked over-budget doc is served by top-k, NOT refused', async () => {
+    // The needle downgrade is now evaluated BEFORE the D45 fully-chunked refusal: a downgraded needle takes
+    // the relevance path (no whole-document claim), so the refusal's premise doesn't apply. Pre-A4 the
+    // refusal fired first → the fixed "re-index" message with no answer.
+    const h = await makeHarness({ fullyChunked: false, text: bigTranscript(400), contextWindow: 4096 })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'what is the decision on the budget?',
+      MEETING_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.content).not.toBe(t('en', 'skills.analysis.refusePartial'))
+    expect(h.runtime.calls).toBe(1) // the relevance (top-k) model call, not the 0-call refusal
+    expect(msg.coverage?.mode).not.toBe('capped')
+  })
+
+  it('SKA-23 (A4): a DELIVERABLE over a NOT-fully-chunked doc still hits the D45 refusal (premise applies)', async () => {
+    // A deliverable never downgrades → it keeps the WHOLE read, which over a partly-chunked doc is refused
+    // (the refusal's premise — a partial whole read passed off as complete — does apply).
+    const h = await makeHarness({ fullyChunked: false, text: bigTranscript(400), contextWindow: 4096 })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'write the meeting minutes',
+      MEETING_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.content).toBe(t('en', 'skills.analysis.refusePartial'))
+    expect(h.runtime.calls).toBe(0)
+  })
+
   it('when a downgraded needle lands on the coverage-extract listing, the turn KEEPS its skill stamp (A3 review fix)', async () => {
     // A "how many X" needle is in BOTH NEEDLE_SHAPES and the coverage-extract router, so a downgraded needle
     // over a doc with precomputed extractions is answered by the deterministic listing — which must still

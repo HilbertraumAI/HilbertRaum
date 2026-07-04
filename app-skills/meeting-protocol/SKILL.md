@@ -33,17 +33,15 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
   keywords: [meeting minutes, meeting notes, meeting protocol, meeting transcript, meeting,
              action item, action items, agenda,
              protokoll, besprechungsprotokoll, sitzungsprotokoll, besprechung, sitzung,
-             tagesordnung, aktionspunkte, beschluss, beschlüsse, entscheidungen,
+             tagesordnung, aktionspunkte, beschluss, beschlüsse, entscheidung, entscheidungen,
              aufgabe, aufgaben, notizen]
   mimeTypes: [text/plain, text/markdown, application/pdf]
   filenamePatterns: ["*meeting*", "*minutes*", "*transcript*", "*protokoll*", "*besprechung*", "*sitzung*"]
 ---
 
 # Meeting Minutes
-
 Honesty rules — these lead and always apply, even if the rest of this skill is shortened to fit the
 context:
-
 - Work **only** from the selected material — never add facts, names, dates, or decisions the source
   does not contain.
 - **Separate what was decided from what was merely discussed.** If the notes are ambiguous about

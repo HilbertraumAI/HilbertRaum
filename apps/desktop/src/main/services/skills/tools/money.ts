@@ -193,7 +193,17 @@ export function detectDocumentCurrency(text: string): string | null {
     const matches = [...scrubbed.matchAll(MONEY_RE)]
     // Money line → figure region (right of the first amount, excluding a left memo); else the whole line.
     const region = matches.length > 0 ? scrubbed.slice(matches[0].index) : scrubbed
-    const cur = detectCurrency(region)
+    let cur = detectCurrency(region)
+    // A code IMMEDIATELY left of the first figure (`<desc> EUR 19,15-` — the per-row currency-CELL
+    // layout HVB-style exports print) is figure-ADJACENT, not a memo, so it votes too (R7 review): the
+    // SKA-2 scrub widening removed such dd.mm.yy lines' only vote by accident (the unscrubbed date used
+    // to BE the first "money" match, so the region started left of the code). Adjacency — only
+    // whitespace between the code and the figure — keeps the FIN-1 memo exclusion intact (`USD Memo
+    // -12,00 …` still never votes).
+    if (!cur && matches.length > 0) {
+      const adjacent = /\b([A-Z]{3})\s*$/.exec(scrubbed.slice(0, matches[0].index))
+      if (adjacent) cur = detectCurrency(adjacent[1])
+    }
     if (!cur) continue
     if (!counts.has(cur)) order.push(cur)
     counts.set(cur, (counts.get(cur) ?? 0) + 1)
@@ -451,7 +461,10 @@ export function parseDate(token: string, order: DateOrder = 'dmy', anchor?: Date
  * token, which a TRAILING date can corrupt — a balance line shaped `Endsaldo 1.234,56 EUR per 30.06.2026`
  * read `30.06.20` → 3006.20 (full-audit-2026-06-28 BL-N2, correcting the earlier "never affected" claim).
  * Those readers therefore scrub ALL date tokens via `stripDateTokens` BEFORE the money scan (handling a
- * date at EITHER end), rather than splitting only leading dates here.
+ * date at EITHER end), rather than splitting only leading dates here. Since R7 (SKA-1) the ROW parsers
+ * (`parseLine`/`parseLineItem`) also scrub — over the SAME-LENGTH `blankDateTokens` copy, so their
+ * description/figure-region byte offsets survive — closing the old asymmetry where only the last-money
+ * readers were date-safe and a MID-LINE date became an invented row amount.
  */
 export function splitLeadingDates(
   line: string,
@@ -472,11 +485,26 @@ export function splitLeadingDates(
   return { dates, rest }
 }
 
-// A date-shaped token: dotted/slashed `d?d[./]m?m[./]yyyy` or ISO `yyyy-mm-dd`. Order-agnostic — it
+// A date-shaped token: dotted/slashed `d?d[./]m?m[./](yy|yyyy)` or ISO `yyyy-mm-dd`. Order-agnostic — it
 // removes the whole token regardless of dmy/mdy (it never parses the fields). It is intentionally
 // stricter than a money token: a grouped figure like `1.234,56` / `35.037,04` is NOT a date (its third
-// group is not a bare 4-digit year), so scrubbing dates never eats a real amount.
-const DATE_TOKEN_RE = /\b\d{1,2}[./]\d{1,2}[./]\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/g
+// group is not a bare year), so scrubbing dates never eats a real amount.
+//
+// The 2-DIGIT-YEAR alternative (SKA-2, skills-audit-2026-07-03): `31.03.26` is money-shaped (`MONEY_RE`
+// reads its `.26` tail as a minor unit → 3103.26), and the old 4-digit-only scrub left it in place — so a
+// balance/total line `Endsaldo 1.234,56 EUR per 31.03.26` read the DATE as the figure, a `Datum: 15.03.26`
+// invoice line fell through as a phantom item, and money-less dd.mm.yy period lines inflated
+// `droppedRowCount` — even though R5 made dd.mm.yy documents a first-class parsed cohort. The alternative
+// is guarded on BOTH sides so it can never eat part of a real amount: `\b` refuses to start mid-digit-run,
+// and the `(?!\d)(?![.,']\d)` lookahead refuses a "year" that CONTINUES into more digits (`31.03.265`, the
+// 4-digit form's `01.04.20` prefix — the 4-digit alternative then takes that token whole) or into a
+// separator-plus-digit (`31.03.26,50`, `26'000` Swiss grouping, dotted numeric codes `12.34.56.78`) —
+// while accepting terminal PUNCTUATION (`per 31.03.26.` / `vom 15.03.26,` mid-sentence), which the
+// adversarial R7 review showed a plain `(?![\d.,'])` wrongly treated as a continuation, un-fixing SKA-2
+// on any punctuation-trailed date. `1.234,56`, `35.037,04`, `1'234.56` are structurally unreachable
+// (separator classes + `\b`), lookahead aside.
+const DATE_TOKEN_RE =
+  /\b\d{1,2}[./]\d{1,2}[./]\d{4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{2}(?!\d)(?![.,']\d)/g
 
 /**
  * Remove every date-shaped token from a line, replacing it with a space (BL-N2). The LAST-money balance/
@@ -486,6 +514,58 @@ const DATE_TOKEN_RE = /\b\d{1,2}[./]\d{1,2}[./]\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/g
  */
 export function stripDateTokens(line: string): string {
   return line.replace(DATE_TOKEN_RE, ' ')
+}
+
+/**
+ * Like `stripDateTokens`, but SAME-LENGTH: every date-shaped token is overwritten with spaces, so byte
+ * OFFSETS into the original line stay valid (SKA-1, skills-audit-2026-07-03). The row parsers
+ * (`parseLine` / `parseLineItem`) run their `MONEY_RE` scan over the blanked copy — a MID-LINE date
+ * (`01.04.2026 bis 30.04.2026`, or its dd.mm.yy twin) can then never be read as an amount — while the
+ * `description` slice and the figure-region currency slice keep using the ORIGINAL text at the matched
+ * indices; a scrub that changed the length would silently shift both.
+ */
+export function blankDateTokens(line: string): string {
+  return line.replace(DATE_TOKEN_RE, (m) => ' '.repeat(m.length))
+}
+
+/** One money match from `scanMoneyWithBlankedDates`: the (possibly tail-truncated) token + its index —
+ *  both valid in the blanked AND the original text (same length). */
+export interface BlankedMoneyMatch {
+  token: string
+  index: number
+}
+
+/**
+ * The SKA-1 row money scan: `MONEY_RE` over the same-length date-BLANKED copy of `rest`, with each
+ * match's TRAILING sign/paren re-validated against the ORIGINAL bytes. The trailing region's whitespace
+ * runs (`\s*\)`, `\s+-`) are unbounded, so on the blanked text they can span a BLANKED DATE — the
+ * adversarial R7 review showed `Miete 1.500,00 01.04.2026 - 30.06.2026` (an amount followed by a billing-
+ * period RANGE) reading the range dash as a spaced trailing debit minus → a silent −1500 sign flip (the
+ * blanked digits also blinded the "not followed by a figure" lookahead). A trailing decoration whose gap
+ * covers any blanked byte is therefore stripped back to the magnitude (the figure reads positive-as-
+ * printed); a decoration over GENUINE whitespace keeps the BL-1 spaced/glued-minus semantics unchanged.
+ * The LEADING side needs no such check: a blanked date is ≥6 chars, longer than the `\s{0,4}` gap, so a
+ * sign can never bridge one (the leading spaces a match may absorb are handled by the callers'
+ * `figureStart` trim). Returns the blanked text too (the callers' `afterLast` region test reads it).
+ */
+export function scanMoneyWithBlankedDates(rest: string): { scanRest: string; matches: BlankedMoneyMatch[] } {
+  const scanRest = blankDateTokens(rest)
+  const matches: BlankedMoneyMatch[] = []
+  for (const m of scanRest.matchAll(MONEY_RE)) {
+    let token = m[0]
+    const start = m.index ?? 0
+    // Everything after the LAST DIGIT is trailing decoration (whitespace/sign/paren).
+    let lastDigit = token.length - 1
+    while (lastDigit >= 0 && !/\d/.test(token[lastDigit])) lastDigit--
+    for (let k = lastDigit + 1; k < token.length; k++) {
+      if (scanRest[start + k] !== rest[start + k]) {
+        token = token.slice(0, lastDigit + 1) // the gap crossed a blanked date → not this figure's sign
+        break
+      }
+    }
+    matches.push({ token, index: start })
+  }
+  return { scanRest, matches }
 }
 
 // ---- Currency-adjacent bare-integer read + money-presence test (U1, audit §2.3) ----

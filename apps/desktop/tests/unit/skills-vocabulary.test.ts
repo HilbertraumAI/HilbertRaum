@@ -198,3 +198,89 @@ describe('isNeedleShaped — needle-vs-deliverable classify (A3)', () => {
     expect(isNeedleShaped('explain the agreement')).toBe(false)
   })
 })
+
+// W7 (audit §3.2/§3.3/§3.4) — answer-shape + classifier vocabulary tuning. Each probe from the findings
+// gets an assertion on its INTENDED shape; teeth-check by reverting the W7 change → the probe flips.
+describe('W7 — SKA-7 bank/invoice German money routing (route-only; §3.2/§8.2)', () => {
+  it('bank: the German money phrasings that used to fall to raw top-k now ROUTE', () => {
+    // Probe-verified misses from the finding — with the bank skill ACTIVE these must reach the handler.
+    for (const q of [
+      'Wie viel habe ich für Lebensmittel ausgegeben?',
+      'Wer hat die höchste Zahlung bekommen?',
+      'Wofür habe ich am meisten bezahlt?',
+      'what was my biggest payment?',
+      'Wie viele Buchungen gab es?' // 'wie viele' + 'buchung'
+    ]) {
+      expect(routeMatch('bank-statement', q), q).toBe(true)
+    }
+  })
+
+  it('invoice: a due-date ask reaches the invoice handler (fällig / due)', () => {
+    expect(routeMatch('invoice', 'Wann ist sie fällig?')).toBe(true)
+    expect(routeMatch('invoice', 'Was ist die Fälligkeit?')).toBe(true)
+    expect(routeMatch('invoice', 'when is this invoice due?')).toBe(true)
+  })
+
+  it('the bare separable imperatives reach BOTH tool handlers (the A4 rider)', () => {
+    expect(routeMatch('bank-statement', 'Fasse das zusammen')).toBe(true)
+    expect(routeMatch('bank-statement', 'Liste das auf')).toBe(true)
+    expect(routeMatch('invoice', 'Fasse die Rechnung zusammen')).toBe(true)
+    expect(routeMatch('invoice', 'Liste die Positionen auf')).toBe(true)
+  })
+
+  it('these route-only additions still do NOT hit an off-topic question', () => {
+    expect(routeMatch('bank-statement', 'what is the weather today?')).toBe(false)
+    expect(routeMatch('invoice', 'tell me a joke')).toBe(false)
+  })
+})
+
+describe('W7 — SKA-11 small-talk thanks/ack variants + the never-fires guard (§3.3)', () => {
+  it('fires on the top-frequency thanks/ack variants the detector used to miss', () => {
+    for (const q of [
+      'thank you very much', 'thanks a lot!', 'danke dir!', 'danke schön', 'vielen lieben dank',
+      'perfect, thanks', 'sounds good', 'all good, thanks!', 'perfekt danke', 'sehr gut, danke'
+    ]) {
+      expect(isSmallTalk(q), q).toBe(true)
+    }
+  })
+
+  it('STILL never fires on a real document question (adversarial near-misses)', () => {
+    // A real ask always carries a non-filler content word — the module's safety invariant. The new
+    // fillers must not swallow one: "ist das gut?" (is that good?) is a real question, NOT small talk.
+    for (const q of [
+      'ist das gut?', 'is this a good summary?', 'how much did I spend?', 'sind alle Fristen aufgeführt?',
+      'is the invoice all paid?', 'sounds like a penalty — is it?', 'was ist das Fazit?'
+    ]) {
+      expect(isSmallTalk(q), q).toBe(false)
+    }
+  })
+})
+
+describe('W7 — SKA-19 synthesis asks veto the needle (§3.3)', () => {
+  it('the extended deliverable synonyms keep a "what is the …" synthesis ask on the whole-doc engine', () => {
+    for (const q of [
+      'what is the most important point?', 'what is the key insight?', 'what is the verdict of the report?',
+      'what is the overall picture?', 'was ist das Wichtigste?', 'was ist die Schlussfolgerung?',
+      'was ist die zentrale Erkenntnis?', 'wie ist das Gesamtbild?'
+    ]) {
+      expect(isNeedleShaped(q), q).toBe(false)
+    }
+  })
+})
+
+describe('W7 — SKA-45 word-anchored needle/deliverable shapes (§3.4)', () => {
+  it('the German imperative "finde" is a needle even at END of question (was dead as "finde ")', () => {
+    expect(isNeedleShaped('wo ich das finde')).toBe(true) // 'finde' is the last token
+    expect(isNeedleShaped('finde die Kündigungsfrist')).toBe(true)
+    // …but the word boundary keeps it off inflections/compounds (over-fire control).
+    expect(isNeedleShaped('was findest du am Vertrag gut?')).toBe(false) // 'findest', not 'finde'
+  })
+
+  it('the German "alle" vetoes a needle even at END of question (was dead as "alle ")', () => {
+    // "wie viele" would classify this as a needle; the \balle\b deliverable veto keeps it whole-doc.
+    expect(isNeedleShaped('wie viele sind das — alle')).toBe(false)
+    expect(isNeedleShaped('sind das wirklich alle')).toBe(false)
+    // …and does not fire inside 'alles' (word boundary before the 's').
+    expect(isNeedleShaped('wie viele Positionen sind es')).toBe(true) // no 'alle' → stays a needle
+  })
+})

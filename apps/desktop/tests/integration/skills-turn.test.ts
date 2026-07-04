@@ -182,7 +182,7 @@ describe('fence placement (§11.2/§22-H2)', () => {
   })
 })
 
-describe('assistant-row stamping (DS16/§22-A5) + the deleted→NULL invariant', () => {
+describe('assistant-row stamping (DS16/§22-A5) + the deleted-skill provenance (SKA-38)', () => {
   it('stamps messages.skill_id when a skill shaped the plain-chat turn; resolves the title back', async () => {
     const { db, installId } = envWithSkill()
     const conv = createConversation(db, {})
@@ -206,7 +206,11 @@ describe('assistant-row stamping (DS16/§22-A5) + the deleted→NULL invariant',
     expect(msgs[msgs.length - 1].skillId ?? null).toBeNull()
   })
 
-  it('resolves a DELETED skill back to NULL on read (the FK-less delete relies on it — §22-C3)', async () => {
+  it('keeps the stamped id but drops the JOIN title for a DELETED skill (SKA-38: provenance survives)', async () => {
+    // SKA-38 (skills audit 2026-07-03, U6): the provenance is keyed off the PERSISTED `messages.skill_id`
+    // now — deleting the skill must NOT erase the glyph + the "answer without it" undo from an
+    // already-stamped turn (a disabled skill already kept both). The read keeps `skillId` (raw) and
+    // drops only `skillTitle` (no JOIN row); the renderer labels such a turn "(removed skill)".
     const { db, installId } = envWithSkill()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Go.' })
@@ -214,10 +218,10 @@ describe('assistant-row stamping (DS16/§22-A5) + the deleted→NULL invariant',
       skill: { installId, title: 'Skill bank', body: 'Quote totals.' }
     })
     expect(listMessages(db, conv.id).at(-1)?.skillId).toBe(installId)
-    // Delete the skill row — the stamped id now dangles and must read back NULL.
+    // Delete the skill row — the stamped id SURVIVES (provenance), only the JOIN title is now NULL.
     db.prepare('DELETE FROM skills WHERE install_id = ?').run(installId)
     const after = listMessages(db, conv.id).at(-1)
-    expect(after?.skillId ?? null).toBeNull()
+    expect(after?.skillId).toBe(installId)
     expect(after?.skillTitle ?? null).toBeNull()
   })
 

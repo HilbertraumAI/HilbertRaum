@@ -516,14 +516,15 @@ describe('extractTransactionRows — wrapped descriptions (R6, §5.7)', () => {
 })
 
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 8 — the U1 droppedRowCount + currency-adjacent-balance bump (audit §2.3)', () => {
+  it('is at 9 — the R7 date-vs-money disambiguation bump (SKA-1/2/13)', () => {
     // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
     // added the `normalizeExtractionText` pre-pass (v4); R2 extended the dual-role balance label (v5); R5
-    // completes 2-digit-year / bare dates + cross-year rollover (v6); R6 appends wrapped continuations (v7).
-    // U1 records `droppedRowCount` (money-bearing lines the parser couldn't parse) and reads a
-    // currency-ADJACENT bare integer for a round balance line — both change the persisted output, so v7
-    // (and older) rows MUST re-extract once this reads 8.
-    expect(BANK_EXTRACTOR_VERSION).toBe(8)
+    // completes 2-digit-year / bare dates + cross-year rollover (v6); R6 appends wrapped continuations (v7);
+    // U1 records `droppedRowCount` + reads a currency-adjacent round balance (v8). R7 (skills-audit-
+    // 2026-07-03 SKA-1/2/13) date-blanks the row money scan, widens the date scrub to dd.mm.yy, and
+    // column-gates the geometry `d.dd` classification — each changes persisted rows/balances, so v8
+    // (and older) rows MUST re-extract once this reads 9.
+    expect(BANK_EXTRACTOR_VERSION).toBe(9)
   })
 })
 
@@ -572,6 +573,129 @@ describe('extractTransactionsWithStats — droppedRowCount (U1, audit §2.3)', (
     const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
     expect(rows).toEqual(extractTransactionsWithStats([chunk(text, 1)], 'EUR').rows)
     expect(rows).toHaveLength(1)
+  })
+})
+
+describe('R7 — a mid-line/trailing date is never an amount (skills-audit-2026-07-03 SKA-1/SKA-2)', () => {
+  it('a period line `01.04.2026 bis 30.04.2026` no longer invents a "bis" transaction (SKA-1)', () => {
+    // splitLeadingDates consumes only the LEADING date; the un-blanked money scan then read the second
+    // date's `30.04` as the amount → {date: 2026-04-01, description: "bis", amount: 30.04}.
+    const text = 'Statement EUR\n01.04.2026 bis 30.04.2026\n02.04.2026 Grocery -45,90'
+    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
+    expect(stats.rows).toHaveLength(1)
+    expect(stats.rows[0].description).toBe('Grocery')
+    expect(stats.droppedRowCount).toBe(0) // the period line carries NO money token → never counted
+  })
+
+  it('the dd.mm.yy period variant no longer invents a 3103.26-style transaction (SKA-1 + SKA-2)', () => {
+    // `31.03.26` is money-shaped whole (→ 3103.26); with the widened scrub the blanked scan sees nothing.
+    const text = '01.03.2026 bis 31.03.2026\n15.03.26 bis 31.03.26 Zinsperiode\n02.03.2026 Grocery -45,90 EUR'
+    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
+    expect(stats.rows).toHaveLength(1)
+    expect(stats.rows[0].description).toBe('Grocery')
+    expect(stats.droppedRowCount).toBe(0)
+  })
+
+  it('a TRAILING date on a booking row is not a phantom balance column (SKA-1)', () => {
+    // Before: matches were [900,00, 31.03.26] → hasBalance → balanceAfter 3103.26 (a confidently-wrong figure).
+    const rows = extractTransactionRows([chunk('05.03.2026 Miete 900,00 EUR per 31.03.26', 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].amount).toBe(900)
+    expect(rows[0].balanceAfter).toBeUndefined()
+    expect(rows[0].description).toBe('Miete')
+  })
+
+  it('the SKA-1 blanking is SAME-LENGTH: description slicing and figure-region currency stay byte-correct', () => {
+    // A mid-line date LEFT of the figure stays in the description byte-exact (the slice uses ORIGINAL
+    // text at blanked-scan indices), and the figure-region slice still sees the adjacent foreign code.
+    const rows = extractTransactionRows(
+      [chunk('05.03.2026 Ref 31.12.2026 Gutschrift 100,00 USD 1.100,00', 1)],
+      'EUR'
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].description).toBe('Ref 31.12.2026 Gutschrift') // byte-exact incl. the untouched date
+    expect(rows[0].currency).toBe('USD') // figure-region currency detection unshifted (BL-2 slice intact)
+    expect(rows[0].amount).toBe(100)
+    expect(rows[0].balanceAfter).toBe(1100)
+  })
+
+  it('a dd.mm.yy TRAILING date on a balance line is scrubbed — the printed figure wins (SKA-2, the BL-N2 twin)', () => {
+    // `Endsaldo 1.234,56 EUR per 31.03.26` read closing 3103.26 before (the 2-digit year was invisible
+    // to the scrub); the opening's `per 01.03.26` likewise read 103.26.
+    const text = [
+      'Zeitraum 01.03.2026 bis 31.03.2026',
+      'Anfangssaldo 1.000,00 EUR per 01.03.26',
+      'Endsaldo 1.234,56 EUR per 31.03.26'
+    ].join('\n')
+    const balances = extractStatementBalances([chunk(text, 1)])
+    expect(balances.openingBalance).toBe(1000)
+    expect(balances.closingBalance).toBe(1234.56)
+  })
+
+  it('a PUNCTUATION-trailed dd.mm.yy balance date is scrubbed too (R7 review)', () => {
+    const balances = extractStatementBalances([
+      chunk('Zeitraum 01.03.2026 bis 31.03.2026\nEndsaldo 1.234,56 EUR per 31.03.26.', 1)
+    ])
+    expect(balances.closingBalance).toBe(1234.56) // was 3103.26 with the plain (?![\d.,']) lookahead
+  })
+
+  it('a blanked date RANGE after the amount is not a spaced trailing debit minus (R7 review — sign-flip guard)', () => {
+    // MONEY_RE's trailing `\s+-` region is unbounded whitespace, so on the blanked scan it reached
+    // ACROSS the blanked first date of `1.500,00 01.04.2026 - 30.06.2026` and read the range dash as a
+    // de-AT trailing debit → a silent −1500. The decoration is re-validated against the ORIGINAL bytes.
+    for (const range of ['01.04.2026 - 30.06.2026', '01.04.2026-30.06.2026', '01.04.26 - 30.06.26']) {
+      const stats = extractTransactionsWithStats([chunk(`01.06.2026 Miete Q2 1.500,00 ${range}`, 1)], 'EUR')
+      expect(stats.rows).toHaveLength(1)
+      expect(stats.rows[0].amount).toBe(1500) // positive-as-printed; the dash belongs to the range
+      expect(stats.rows[0].balanceAfter).toBeUndefined()
+      expect(stats.droppedRowCount).toBe(0)
+    }
+    // …while a GENUINE spaced trailing minus (real whitespace gap) keeps its BL-1 debit semantics.
+    const debit = extractTransactionRows([chunk('05.03.2026 Lastschrift 45,90 -', 1)], 'EUR')
+    expect(debit[0].amount).toBe(-45.9)
+  })
+
+  it('a trailing VALUE-DATE in the description no longer false-flags the F1 ambiguous-amount drop (R7 review)', () => {
+    // The F1 flag read the ORIGINAL description tail, whose `02.03.2026` the scan itself had just
+    // blanked as a date — on a balance-column statement the row was silently dropped.
+    const text = [
+      '01.03.2026 Gehalt 2.500,00 3.500,00', // establishes the balance column
+      '02.03.2026 REWE DANKT 02.03.2026 -19,15'
+    ].join('\n')
+    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
+    expect(stats.rows).toHaveLength(2)
+    expect(stats.rows[1].amount).toBe(-19.15)
+    expect(stats.droppedRowCount).toBe(0)
+    // A GENUINE bare-number description tail still flags (and drops, on this balance-column statement).
+    const flagged = extractTransactionsWithStats(
+      [chunk('01.03.2026 Gehalt 2.500,00 3.500,00\n02.03.2026 Sparen 50 1.234,56', 1)],
+      'EUR'
+    )
+    expect(flagged.rows).toHaveLength(1)
+    expect(flagged.droppedRowCount).toBe(1)
+  })
+
+  it('the figureStart trim is pinned with the date ADJACENT to the figure (R7 review — the \\s{0,4} window)', () => {
+    // The blanked date's tail sits inside MONEY_RE's up-to-4-space leading gap, so a raw `match.index`
+    // slice would chop `…31.03.26` bytes out of the description.
+    const rows = extractTransactionRows([chunk('05.03.2026 Zinsen bis 31.03.26 100,00 1.100,00', 1)], 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].description).toBe('Zinsen bis 31.03.26') // byte-exact, date intact
+    expect(rows[0].amount).toBe(100)
+    expect(rows[0].balanceAfter).toBe(1100)
+  })
+
+  it('dd.mm.yy rows with a per-row currency CELL keep their document currency vote (R7 review — zero-rows regression)', () => {
+    // The `<date> <desc> EUR <amount>` layout's only EUR sits LEFT of the amount; the SKA-2 scrub
+    // removed its accidental vote (the date used to be the first "money" match). The figure-ADJACENT
+    // code now votes deliberately, so the whole pipeline still extracts every row.
+    const text = ['01.06.2026 Miete EUR 850,00-', '15.06.26 REWE Markt EUR 19,15-', '20.06.26 Gutschrift EUR 250,00'].join('\n')
+    const joined = text
+    const currency = detectDocumentCurrency(joined)
+    expect(currency).toBe('EUR')
+    const stats = extractTransactionsWithStats([chunk(text, 1)], currency)
+    expect(stats.rows.map((r) => r.amount)).toEqual([-850, -19.15, 250])
+    expect(stats.droppedRowCount).toBe(0)
   })
 })
 
@@ -1132,11 +1256,12 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
     }
   })
 
-  it('R3 / §5.5: transfer boilerplate DIVERGES — categorizeRow labels Transfer, but the prefilter sends it to the model', () => {
-    // `sepa`/`überweisung` are `confident: false`: they describe the payment rails, not the merchant, so
-    // most de-AT rows carry them. The deterministic NO-model fallback still buckets them 'Transfer', but
-    // the LLM prefilter must return null so a runtime can assign the richer 15-category taxonomy instead.
-    for (const desc of ['SEPA-Überweisung Miete', 'Dauerüberweisung Sparen', 'SEPA-Lastschrift NETFLIX']) {
+  it('R3 / §5.5 + SKA-44: transfer boilerplate DIVERGES — categorizeRow labels Transfer, but the prefilter sends it to the model', () => {
+    // `sepa`/`überweisung` (R3) and the EN `transfer` twin (SKA-44, R9) are `confident: false`: they
+    // describe the payment rails, not the merchant. The deterministic NO-model fallback still buckets
+    // them 'Transfer', but the LLM prefilter must return null so a runtime can assign the richer
+    // 15-category taxonomy instead.
+    for (const desc of ['SEPA-Überweisung Miete', 'Dauerüberweisung Sparen', 'SEPA-Lastschrift NETFLIX', 'TRANSFER TO NETFLIX']) {
       expect(categorizeRow(tx({ description: desc, amount: -12 }))).toBe('Transfer')
       expect(prefilterCategory(tx({ description: desc, amount: -12 }))).toBeNull()
     }

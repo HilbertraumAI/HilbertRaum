@@ -17,12 +17,14 @@ import {
 import { cancelActiveDocTask } from '../lib/doctasks'
 import {
   acknowledgeSkillRun,
-  cancelActiveSkillRun,
-  getActiveSkillRun,
-  getActiveSkillRunConversationId,
-  getActiveSkillRunDocumentId,
+  adoptSkillRuns,
+  cancelSkillRun,
+  getReattachConversationId,
+  getSkillRunsSnapshot,
+  hasRunningRunElsewhere,
+  pickConversationRun,
   startSkillRun,
-  subscribeSkillRun
+  subscribeSkillRuns
 } from '../lib/skillruns'
 import { localizeServerCopy } from '../lib/displayMap'
 import { skillTitleResolver } from '../lib/skillI18n'
@@ -547,11 +549,16 @@ export function ChatScreen({
   // `activeIdRef` guards make it a no-op once the user hand-picks a conversation, and it never fires
   // when nothing is running (the conversation id is renderer-owned — the one passed to `startSkillRun`).
   useEffect(() => {
-    if (activeIdRef.current != null) return
-    const runConvId = getActiveSkillRunConversationId()
-    if (!runConvId) return
     let cancelled = false
     void (async () => {
+      // SKA-17: a reload destroyed the renderer's per-run store but main kept the runs — re-adopt them
+      // FIRST (their bars/outcomes come back) so `getReattachConversationId` below can see a run to
+      // land on. `adoptSkillRuns` is idempotent (it skips already-tracked handles), so re-running it
+      // on a later mount is a no-op.
+      await adoptSkillRuns()
+      if (cancelled || activeIdRef.current != null) return
+      const runConvId = getReattachConversationId()
+      if (!runConvId) return
       let convs: Conversation[] = []
       try {
         convs = await window.api.listConversations()
@@ -630,8 +637,22 @@ export function ChatScreen({
     if ('new' in skillByConv) {
       const picked = skillByConv['new'] ?? null
       if (picked && keepByConv['new']) void window.api.setConversationDefaultSkill?.(conv.id, picked)
-      setSkillByConv((prev) => ({ ...prev, [conv.id]: picked }))
-      if ('new' in keepByConv) setKeepByConv((prev) => ({ ...prev, [conv.id]: keepByConv['new']! }))
+      // SKA-18: re-key the 'new'-composer pick onto the created conversation AND DELETE the 'new' keys.
+      // Leaving them behind resurrects the pick on any later empty composer (a mode toggle, a
+      // conversation delete), so the NEXT send would persist a keep opt-in made for conversation 1 as
+      // conversation 2's sticky default. "New chat" starts clean — the re-key must too.
+      setSkillByConv((prev) => {
+        const next = { ...prev, [conv.id]: picked }
+        delete next['new']
+        return next
+      })
+      if ('new' in keepByConv) {
+        setKeepByConv((prev) => {
+          const next = { ...prev, [conv.id]: keepByConv['new']! }
+          delete next['new']
+          return next
+        })
+      }
     }
     setActiveId(conv.id)
     await refreshConversations()
@@ -863,8 +884,16 @@ export function ChatScreen({
   }, [activeId])
 
   // ---- Tier-2 tool runs (skills plan §12.2/§15, S11b) ------------------------------------------
-  // The single active run survives screen unmounts (the doc-task store precedent), polled main-side.
-  const activeSkillRun = useSyncExternalStore(subscribeSkillRun, getActiveSkillRun)
+  // SKA-6 (audit 2026-07-03, U6): the per-run store survives screen unmounts (the doc-task precedent),
+  // polled main-side. It now holds MANY runs keyed by handle — the run bar is gated to the run whose
+  // conversation is active, and a quiet chip covers runs working in OTHER chats. `skillRuns` is a
+  // referentially-stable snapshot (SKA-39), so a 400 ms no-op poll doesn't re-render the screen.
+  const skillRuns = useSyncExternalStore(subscribeSkillRuns, getSkillRunsSnapshot)
+  // The run to show in THIS conversation's bar (null when it has none) + whether some OTHER conversation
+  // has a run in flight (the "a skill is working in another chat" chip).
+  const activeRunEntry = useMemo(() => pickConversationRun(skillRuns, activeId), [skillRuns, activeId])
+  const activeSkillRun = activeRunEntry?.run ?? null
+  const otherChatRunBusy = useMemo(() => hasRunningRunElsewhere(skillRuns, activeId), [skillRuns, activeId])
   // Wired, runnable tools for the active skill in THIS conversation's scope — empty unless the skill
   // reserves Tier-2 tools AND there is an in-scope document. Main resolves the scope (§22-C4); the
   // renderer stays bank-free (it renders whatever descriptors come back).
@@ -940,19 +969,26 @@ export function ChatScreen({
   // extract ran on — the id rides back through `onRunTool('categorize_transactions', …, id)`.
   const [runTargetId, setRunTargetId] = useState<string | null>(null)
 
-  // The conversation a routed run (categorize / summarize) was started in (C1): the routed answer below
-  // must land in THIS conversation, never whatever conversation happens to be active when the
-  // (module-level, app-wide) run finishes — switching conversations mid-run would otherwise inject the
-  // answer into the wrong transcript. A React ref is lost on unmount, so the effect also falls back to
-  // the module-level skill-run store (`getActiveSkillRunConversationId`), which survives a remount.
-  const routedRunConvRef = useRef<string | null>(null)
+  // The active run's target document, resolved for the busy/result row. The AUTHORITATIVE source is the
+  // active conversation's run ENTRY (`activeRunEntry.documentId`, threaded main-side per-run) — NOT the
+  // single global `runTargetId`, which `onRunTool` overwrites on every launch across ALL conversations
+  // and so goes STALE the moment a second run starts in another chat (it would then pin/name/scope the
+  // wrong document). `runTargetId`/`runTargetName` are only a fallback for the brief window before the
+  // store entry exists (and, for the name, when the document isn't in the renderer's loaded list). The
+  // NAME is resolved renderer-side (never IPC).
+  const resolvedRunDocId = activeRunEntry?.documentId ?? runTargetId ?? null
+  const resolvedRunDocName = resolvedRunDocId ? docNameForId(resolvedRunDocId) : runTargetName
+  // SKA-6: the post-extract "Categorize" offer must NOT retarget across scopes. Refuse it when the
+  // remembered target is a KNOWN document that is NOT in THIS conversation's current scope (e.g. it was
+  // removed, or — before conversation-gating — belonged to another chat). An unknown id (null) is safe:
+  // main falls back to the first in-scope document. Never relies on main's single-doc fallback (SKA-29).
+  const categorizeTargetInScope = resolvedRunDocId == null || scopeDocIds.includes(resolvedRunDocId)
 
   // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model). The
   // chosen `documentId` (U-1) is an in-scope id the renderer offered; main re-validates it against the
   // resolved scope. Defaults to the first in-scope document when none was chosen.
   function onRunTool(toolName: string, confirmed: boolean, documentId?: string): void {
     if (!currentSkillId || !activeId) return
-    if (ROUTED_RUN_QUESTION[toolName]) routedRunConvRef.current = activeId
     const targetId = documentId ?? scopeDocIds[0]
     // Remember the target NAME + ID for the busy/result row (resolved renderer-side; never from the
     // IPC). The id powers the U-2 post-extract categorize offer (same-document targeting).
@@ -985,21 +1021,21 @@ export function ChatScreen({
     if (!questionKey) return
     if (handledRoutedRunRef.current === run.runHandle) return
     if (mode !== 'documents' || !activeId || busyStreaming) return
-    // Only route into the conversation that STARTED the run (C1). If the user navigated to another
-    // conversation, skip — without marking it handled — so the answer surfaces when they return, and is
-    // never injected into the wrong transcript. The origin is the ref, else the module-level store
-    // (survives a remount), else the active conversation.
-    const targetConv = routedRunConvRef.current ?? getActiveSkillRunConversationId() ?? activeId
+    // C1 — the routed answer lands ONLY in the conversation that STARTED the run. `activeSkillRun` is
+    // now the per-run store's entry for THE ACTIVE conversation (SKA-6), so a run that finished in
+    // another chat is simply not this effect's `run`; it surfaces when the user returns there. The
+    // explicit guard stays as defense (the entry's own conversationId must equal the active id).
+    const targetConv = activeRunEntry?.conversationId ?? activeId
     if (targetConv !== activeId) return
     // U3 (audit ux-6): PIN the routed answer to the document the run targeted, so a multi-document (or
-    // whole-corpus) scope can't scatter it across the wrong documents — the ux-6 breakage. The id is
-    // the renderer-remembered run target (`runTargetId`), falling back to the module store on a remount
-    // (React state is lost, the run store survives). Resolve it BEFORE `acknowledgeSkillRun()` below,
-    // which clears that store — reading it after would always see null (same ordering as `targetConv`).
-    // Absent ⇒ the ordinary scope (a single-doc chat is unaffected).
-    const pinnedDocId = runTargetId ?? getActiveSkillRunDocumentId() ?? undefined
+    // whole-corpus) scope can't scatter it across the wrong documents — the ux-6 breakage. The
+    // AUTHORITATIVE id is the run ENTRY's own `documentId` (threaded main-side, per-run, survives a
+    // reload) — NOT the global `runTargetId`, which a later run in another chat overwrites (it would
+    // then pin THIS conversation's answer to the wrong document). `runTargetId` is only a fallback for
+    // the pre-store-entry window. Absent ⇒ the ordinary scope (a single-doc chat is unaffected).
+    const pinnedDocId = activeRunEntry?.documentId ?? runTargetId ?? undefined
     handledRoutedRunRef.current = run.runHandle
-    acknowledgeSkillRun() // drop the content-free run row; the routed answer replaces it
+    acknowledgeSkillRun(run.runHandle) // drop the content-free run row; the routed answer replaces it
     const question = t(questionKey)
     setMessages((prev) => [...prev, optimisticUser(targetConv, question)])
     // Route under the skill the RUN used (C2) — never `currentSkillId`, which is whatever the picker
@@ -1584,17 +1620,29 @@ export function ChatScreen({
           )}
         </ErrorBanner>
 
+        {/* SKA-6: a quiet chip when a skill is working in ANOTHER chat — the per-run store keeps that
+            run alive + acknowledgeable there; here it is just a non-alarming presence hint (the bar
+            itself only ever shows THIS conversation's run). */}
+        {otherChatRunBusy && (
+          <div className="skill-run-elsewhere hint" role="status">
+            {t('chat.skill.run.otherChatBusy')}
+          </div>
+        )}
+
         {/* Tier-2 tool run (skills plan §12.2/§15, S11b): a calm offer / busy row / result, all
-            content-free. Hidden entirely when no run is active and no tool is offered. */}
+            content-free. Gated to THIS conversation's run (SKA-6). Hidden entirely when this
+            conversation has no run active and no tool is offered. */}
         <SkillRunBar
           run={activeSkillRun}
           runnableTools={visibleRunnableTools}
           targetDocuments={targetDocuments}
-          runningDocumentName={runTargetName}
-          runningDocumentId={runTargetId}
+          runningDocumentName={resolvedRunDocName}
+          runningDocumentId={resolvedRunDocId}
+          categorizeTargetInScope={categorizeTargetInScope}
+          stateUnknown={activeRunEntry?.stateUnknown ?? false}
           onRun={onRunTool}
-          onCancel={() => void cancelActiveSkillRun()}
-          onDismiss={acknowledgeSkillRun}
+          onCancel={() => activeSkillRun && void cancelSkillRun(activeSkillRun.runHandle)}
+          onDismiss={() => activeSkillRun && acknowledgeSkillRun(activeSkillRun.runHandle)}
           disabled={busyStreaming}
           offerRoutedFollowups={routedRunsReachable}
         />

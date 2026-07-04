@@ -16,6 +16,7 @@ import {
   latestBankStatementId,
   type LoadedTransaction
 } from '../../src/main/services/skills/run'
+import { activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
 import {
   BANK_EXTRACTOR_VERSION,
   reconcileBalances,
@@ -154,15 +155,16 @@ describe('runBankExtraction (S11a)', () => {
     expect(cols).toEqual(expect.arrayContaining(['category_id', 'reconciled', 'confidence']))
   })
 
-  it('isBankStatementStale: an older statement is STALE now the extractor is at v7 (R6 wrapped-description bump); current is fresh', async () => {
+  it('isBankStatementStale: an older statement is STALE now the extractor is at v9 (R7 date-vs-money bump); current is fresh', async () => {
     // C-4 moved the version 1 → 2; the full-audit-2026-06-29 follow-up Phase 1 (FIN-1/3/4) moved it 2 → 3;
     // skills-remediation R1 (audit §5.3, Unicode normalization pre-pass) moved it 3 → 4; R2 (audit §5.4,
     // `Kontostand am`/`zum` balance labels) moved it 4 → 5; R5 (audit §5.7, anchor-gated year completion +
     // cross-year rollover) moved it 5 → 6; R6 (audit §5.7, wrapped-description continuation) moved it 6 → 7;
-    // U1 (audit §2.3, droppedRowCount + currency-adjacent balance read) moves it 7 → 8, so every statement an
-    // OLDER (v7…v1 / pre-versioning NULL) parser produced must re-extract via the A9 path. A fresh extraction
+    // U1 (audit §2.3, droppedRowCount + currency-adjacent balance read) moved it 7 → 8; R7 (skills-audit-
+    // 2026-07-03 SKA-1/2/13, date-vs-money disambiguation) moves it 8 → 9, so every statement an OLDER
+    // (v8…v1 / pre-versioning NULL) parser produced must re-extract via the A9 path. A fresh extraction
     // is stamped at the current version → never stale.
-    expect(BANK_EXTRACTOR_VERSION).toBe(8)
+    expect(BANK_EXTRACTOR_VERSION).toBe(9)
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
     const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })
@@ -173,6 +175,12 @@ describe('runBankExtraction (S11a)', () => {
     expect(isBankStatementStale(db, id)).toBe(true) // produced by the pre-R2 parser → re-extract
     db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(id)
     expect(isBankStatementStale(db, id)).toBe(true) // legacy / pre-versioning → re-extract
+    // SKA-26 (R9): the DOWNGRADE half — rows a NEWER extractor wrote are stale to this (older) code
+    // too. On a rollback the newer extractor IS the suspected bug, so serving its rows as fresh would
+    // be exactly backwards; `!==` (not `<`) makes the mismatch symmetric. Deterministic extractors
+    // make this safe (same version ⇒ same rows ⇒ no re-extract loop).
+    db.prepare('UPDATE bank_statements SET extractor_version = ? WHERE id = ?').run(BANK_EXTRACTOR_VERSION + 1, id)
+    expect(isBankStatementStale(db, id)).toBe(true) // written by a newer app → re-extract after rollback
   })
 
   it('runs end-to-end: persists statement + transactions and marks the run done', async () => {
@@ -247,6 +255,58 @@ describe('runBankExtraction (S11a)', () => {
     )
     expect(res.ok).toBe(false)
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('failed')
+  })
+
+  it('a persist failure under replaceExisting rolls back to the PREVIOUS statement — old rows survive, readable (T2)', async () => {
+    // The load-bearing "a failure rolls back to the old" claim on the A9 atomic swap (run.ts:381-383):
+    // the replaceExisting DELETE and the fresh INSERTs share ONE transaction, so a mid-swap failure must
+    // leave the PRIOR statement fully intact — never a document whose extraction vanished. The injected
+    // failure lands on the fresh TRANSACTIONS insert, i.e. AFTER the delete AND after the new statement
+    // row — the deepest partial state the rollback has to unwind.
+    // Teeth: move the deleteForDocument outside the BEGIN/COMMIT (or drop the ROLLBACK) → red.
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [
+      { text: 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10', page: 1 }
+    ])
+    const { audit } = capturingAudit()
+    const first = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit })
+    expect(first.ok).toBe(true)
+    const oldId = first.statementId!
+
+    const real = db.prepare.bind(db)
+    const target = db as unknown as { prepare: Db['prepare'] }
+    target.prepare = ((sql: string) => {
+      if (/INSERT INTO bank_transactions/i.test(sql)) throw new Error('injected persist failure')
+      return real(sql)
+    }) as Db['prepare']
+    let second
+    try {
+      second = await runBankExtraction(
+        db,
+        { skillInstallId: 'app:bank-statement', documentId: docId },
+        { audit, replaceExisting: true }
+      )
+    } finally {
+      target.prepare = real
+    }
+    expect(second.ok).toBe(false)
+    expect(second.errorCode).toBe('persistFailed')
+    expect(second.error).toBe('This statement could not be saved. Nothing was changed.')
+
+    // The PREVIOUS statement survived the rollback — same id, both rows, still the latest, still loadable.
+    const stmts = db.prepare('SELECT id FROM bank_statements WHERE document_id = ?').all(docId) as Array<{ id: string }>
+    expect(stmts.map((s) => s.id)).toEqual([oldId])
+    expect(latestBankStatementId(db, docId)).toBe(oldId)
+    const rows = db
+      .prepare('SELECT description, amount FROM bank_transactions WHERE statement_id = ? ORDER BY row_index')
+      .all(oldId) as Array<{ description: string; amount: number }>
+    expect(rows).toEqual([
+      { description: 'Grocery', amount: -45.9 },
+      { description: 'Salary', amount: 2500 }
+    ])
+    // The failed run reached a terminal status (B4) — the swap failure never strands the lifecycle.
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(second.runId) as { status: string }
     expect(run.status).toBe('failed')
   })
 
@@ -451,11 +511,19 @@ describe('downstream statement seams (S11c)', () => {
     const docId = await extractFirst(db, `Statement EUR\n2026-01-02 ${SENTINEL} -12,00 1.000,00`)
     const { audit, events } = capturingAudit()
     let written: { name: string; content: string } | null = null
+    let locksDuringDialog = -1
     const saveTextFile = async (name: string, content: string): Promise<boolean> => {
+      // SKA-28 scope pin: the per-document hold must be RELEASED before the save dialog opens — a
+      // minutes-open dialog must not block the categorize doctask / chat analysis on this document.
+      // No competitor is queued in this test, so a released hold means ZERO live chains here (a
+      // variant holding the lock across the dialog reads 1). Recorded, asserted after the run —
+      // an expect() throw inside the stub would be swallowed as exportWriteFailed.
+      locksDuringDialog = activeDocumentLockCount()
       written = { name, content }
       return true
     }
     const res = await runCsvExport(db, { skillInstallId, documentId: docId }, { audit, saveTextFile, confirmed: true })
+    expect(locksDuringDialog).toBe(0)
     expect(res.ok).toBe(true)
     expect(res.count).toBe(1)
     expect(written!.name).toBe('transactions.csv')
@@ -521,6 +589,75 @@ describe('downstream statement seams (S11c)', () => {
     expect(saveCalled).toBe(false) // nothing was written under a cancel
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('cancelled')
+  })
+
+  it('SKA-27: a transient finishRun(done) failure neither strands started nor reports failure after the write', async () => {
+    // The pre-R9 defect: the terminal 'done' UPDATE after the (minutes-open) save dialog was UNGUARDED —
+    // a workspace transiently locked mid-dialog threw out of the seam, stranding the skill_runs row at
+    // 'started' forever AND telling the user "failed. Nothing was changed." after the file WAS written.
+    const db = freshDb()
+    const docId = await extractFirst(db)
+    const { audit } = capturingAudit()
+
+    // Inject the throwing seam: once the file is written, the FIRST terminal `UPDATE skill_runs` throws
+    // (the transiently-locked-DB class); the guarded retry must land the second one.
+    let fileWritten = false
+    let failuresInjected = 0
+    const realPrepare = db.prepare.bind(db)
+    ;(db as unknown as { prepare: Db['prepare'] }).prepare = ((sql: string) => {
+      if (fileWritten && failuresInjected === 0 && /UPDATE skill_runs SET status/.test(sql)) {
+        failuresInjected++
+        throw new Error('database is locked')
+      }
+      return realPrepare(sql)
+    }) as Db['prepare']
+
+    try {
+      const res = await runCsvExport(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        saveTextFile: async () => {
+          fileWritten = true
+          return true
+        }
+      })
+      expect(failuresInjected).toBe(1) // the injected throw actually fired on the 'done' write
+      expect(res.ok).toBe(true) // NEVER "failed. Nothing was changed." after a successful write
+      expect(res.count).toBe(2)
+      expect(res.error).toBeUndefined()
+      const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+      expect(run.status).toBe('done') // the guarded retry landed the terminal status — no stranded 'started'
+    } finally {
+      ;(db as unknown as { prepare: Db['prepare'] }).prepare = realPrepare
+    }
+  })
+
+  it('SKA-27: the done timestamp is taken at the WRITE, not before the save dialog', async () => {
+    const db = freshDb()
+    const docId = await extractFirst(db)
+    const { audit } = capturingAudit()
+    // Deterministic clock: every now() before the file write returns T_PREP; after it, T_WRITE. The
+    // pre-R9 code stamped 'done' with prepareDomainRun's pre-dialog `completedAt` (T_PREP) — run
+    // history timestamped an export minutes early when the dialog sat open.
+    const T_PREP = '2026-07-04T10:00:00.000Z'
+    const T_WRITE = '2026-07-04T10:07:00.000Z'
+    let wrote = false
+    const res = await runCsvExport(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      now: () => (wrote ? T_WRITE : T_PREP),
+      saveTextFile: async () => {
+        wrote = true // the dialog "sat open" — every later now() is write-time
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    const run = db.prepare('SELECT status, completed_at AS c FROM skill_runs WHERE id = ?').get(res.runId) as {
+      status: string
+      c: string
+    }
+    expect(run.status).toBe('done')
+    expect(run.c).toBe(T_WRITE) // not the pre-dialog prepare time
   })
 })
 

@@ -388,11 +388,133 @@ describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
 })
 
 describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
-  it('is at 8 — the U1 droppedRowCount bump (audit §2.3)', () => {
-    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: U1 records `droppedRowCount` (money-bearing lines the
-    // parser couldn't turn into a line item / total) on every extraction, changing the persisted output, so
-    // an invoice an OLDER (v7…v1 / pre-versioning NULL) parser produced must re-extract via the F5 path.
-    expect(INVOICE_EXTRACTOR_VERSION).toBe(8)
+  it('is at 9 — the R7 date-vs-money / header-money-gate bump (SKA-1/2/14)', () => {
+    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin: R7 (skills-audit-2026-07-03) date-blanks the line-item
+    // money scan (SKA-1), widens both date scrubs to dd.mm.yy (SKA-2 — totals/headers no longer read a
+    // trailing `per 30.06.26` as the figure), and gates the vendor/number header branches on money (SKA-14)
+    // — each changes the persisted items/totals/header, so an invoice an OLDER (v8…v1 / pre-versioning
+    // NULL) parser produced must re-extract via the F5 path.
+    expect(INVOICE_EXTRACTOR_VERSION).toBe(9)
+  })
+})
+
+describe('R7 — headers/dates never swallow or invent a figure (skills-audit-2026-07-03 SKA-1/2/14)', () => {
+  it('a money-bearing VENDOR-label line stays a line item (SKA-14): `From … Hosting 49,00` is not a header', () => {
+    const text = ['From 01.06.2026 to 30.06.2026 Hosting 49,00 EUR', 'Serverpflege Juni 276,00 EUR'].join('\n')
+    const inv = extractInvoice([chunk(text)], 'EUR')
+    // Before: the "from" vendor branch consumed the line unconditionally — the 49,00 vanished, vendor
+    // captured the garbage tail, droppedRowCount stayed 0, and the "whole invoice" claim stood.
+    expect(inv.header.vendor).toBeUndefined()
+    expect(inv.lineItems.map((l) => l.description)).toContain('From 01.06.2026 to 30.06.2026 Hosting')
+    expect(inv.lineItems.find((l) => l.description.endsWith('Hosting'))?.lineTotal).toBe(49)
+    expect(inv.droppedRowCount).toBe(0)
+  })
+
+  it('a money-bearing NUMBER-label line stays a line item (SKA-14); a clean number line still consumes', () => {
+    const text = [
+      'Rechnungsnummer 2026-14',
+      'Rechnung Nr. 2026-14 vom 03.05.2026 über 1.500,00 EUR'
+    ].join('\n')
+    const inv = extractInvoice([chunk(text)], 'EUR')
+    expect(inv.header.invoiceNumber).toBe('2026-14') // the money-less label line consumes exactly as before
+    const item = inv.lineItems.find((l) => l.lineTotal === 1500)
+    expect(item).toBeDefined()
+    expect(item?.description).toBe('Rechnung Nr. 2026-14 vom 03.05.2026 über') // byte-exact (SKA-1 slice)
+    expect(inv.droppedRowCount).toBe(0)
+  })
+
+  it('a money-bearing header line the item parser REJECTS is COUNTED (SKA-14 honesty half)', () => {
+    // Currency-less document: the fallen-through line cannot become an item (no detectable currency), so
+    // it must reach the droppedRowCount — before, header consumption preceded the count and hid it.
+    const inv = extractInvoice([chunk('From 01.06.2026 to 30.06.2026 Hosting 49,00')], null)
+    expect(inv.lineItems).toHaveLength(0)
+    expect(inv.droppedRowCount).toBe(1)
+  })
+
+  it('`Datum: 15.03.26` is a HEADER date (SKA-2), not the phantom item {description: "Datum:", lineTotal: 1503.26}', () => {
+    const text = ['Rechnung Nr. 2026-77', 'Rechnungsdatum 03.05.2026', 'Datum: 15.03.26', 'Hosting 49,00 EUR'].join('\n')
+    const inv = extractInvoice([chunk(text)], 'EUR')
+    // The 4-digit Rechnungsdatum wins the invoiceDate slot (first wins) AND anchors the century; the
+    // widened local DATE_TOKEN_RE surfaces `15.03.26`, so the line is consumed as a header — no item.
+    expect(inv.lineItems.map((l) => l.description)).toEqual(['Hosting'])
+    expect(inv.droppedRowCount).toBe(0)
+  })
+
+  it('an anchor-less `Datum: 15.03.26` is still no phantom item (the blanked scan sees no money)', () => {
+    const inv = extractInvoice([chunk('Datum: 15.03.26\nHosting 49,00 EUR')], 'EUR')
+    // No 4-digit-year date anywhere → the header date cannot complete (drop-don't-guess) — but the line
+    // also never falls through as a 1503.26 item, and it is money-less so it is not counted either.
+    expect(inv.header.invoiceDate).toBeUndefined()
+    expect(inv.lineItems.map((l) => l.description)).toEqual(['Hosting'])
+    expect(inv.droppedRowCount).toBe(0)
+  })
+
+  it('a dd.mm.yy TRAILING date on a totals line is scrubbed (SKA-2): `Gesamtbetrag 390,00 EUR per 30.06.26` → 390', () => {
+    const inv = extractInvoice([chunk('Hosting 325,00 EUR\nGesamtbetrag 390,00 EUR per 30.06.26')], 'EUR')
+    expect(inv.totals.grossTotal).toBe(390) // was 3006.26 — the date read as the last money token
+  })
+
+  it('parseLineItem: a mid-line date is never the line total, and the description slice is byte-exact (SKA-1)', () => {
+    const item = parseLineItem('Beratung vom 03.05.2026 bis 31.05.2026 250,00 EUR', 'EUR')
+    expect(item?.description).toBe('Beratung vom 03.05.2026 bis 31.05.2026') // original bytes, dates intact
+    expect(item?.lineTotal).toBe(250)
+    expect(item?.currency).toBe('EUR') // figure-region slice unshifted
+  })
+
+  it('parseLineItem: a TRAILING date neither becomes the total nor trips the F1 uncaptured-column drop (SKA-1)', () => {
+    const item = parseLineItem('Hosting 49,00 30.06.2026', 'EUR')
+    expect(item?.description).toBe('Hosting')
+    expect(item?.lineTotal).toBe(49) // was 30.06 — the date's tail read as the last money token
+  })
+
+  it('a blanked date RANGE after the amount is not a trailing debit minus (R7 review — sign-flip guard)', () => {
+    // The trailing `\s+-` region reached across the blanked first date of the billing-period range and
+    // silently flipped the sign (−1500); the decoration is re-validated against the ORIGINAL bytes.
+    for (const range of ['01.04.2026 - 30.06.2026', '01.04.2026-30.06.2026', '01.04.26 - 30.06.26']) {
+      const item = parseLineItem(`Miete 1.500,00 ${range}`, 'EUR')
+      expect(item?.lineTotal).toBe(1500) // positive-as-printed
+    }
+    // A paren reaching across a blanked date is stripped the same way (`Fee (49,00 30.06.2026)` → +49)…
+    expect(parseLineItem('Fee (49,00 30.06.2026)', 'EUR')?.lineTotal).toBe(49)
+    // …while a REAL glued/spaced trailing minus keeps its de-AT debit semantics.
+    expect(parseLineItem('Gutschrift Storno 20,00-', 'EUR')?.lineTotal).toBe(-20)
+  })
+
+  it('punctuation-trailed dd.mm.yy dates neither invent figures nor phantom items (R7 review)', () => {
+    // `vom 15.03.26, …` mid-sentence: the comma-trailed date is scrubbed, so the 100,00 is the ONLY
+    // figure (no phantom 1503.26 unit price) and the description keeps its original bytes.
+    const item = parseLineItem('Leistung vom 15.03.26, Pauschale 100,00 EUR', 'EUR')
+    expect(item?.lineTotal).toBe(100)
+    expect(item?.unitPrice).toBeUndefined()
+    expect(item?.description).toBe('Leistung vom 15.03.26, Pauschale')
+    // Totals line with a period-trailed date: the printed figure wins.
+    const inv = extractInvoice([chunk('Hosting 325,00 EUR\nGesamtbetrag 390,00 EUR per 30.06.26.')], 'EUR')
+    expect(inv.totals.grossTotal).toBe(390)
+  })
+
+  it('the SKA-14 gate keys on AMOUNT-shaped money, not any grouped digits (R7 review — header inversion guard)', () => {
+    // A dotted-grouped invoice NUMBER (`yy.nnn`, a real DACH convention) and a vendor name carrying a
+    // bare-thousands figure are header VALUES — falling through invented a €26,001/€1,000 item and lost
+    // the header entirely.
+    const inv = extractInvoice(
+      [chunk('Rechnung Nr. 26.001\nLieferant: Firma 1.000 GmbH\nHosting 49,00 EUR\nGesamtbetrag 49,00 EUR')],
+      'EUR'
+    )
+    expect(inv.header.invoiceNumber).toBe('26.001')
+    expect(inv.header.vendor).toBe('Firma 1.000 GmbH')
+    expect(inv.lineItems.map((l) => l.description)).toEqual(['Hosting'])
+    // …while a bare-thousands figure WITH a currency marker is an amount and still falls through:
+    const over = extractInvoice([chunk('Rechnung Nr. 14 über 1.500 EUR')], 'EUR')
+    expect(over.header.invoiceNumber).toBeUndefined()
+    expect(over.lineItems[0]?.lineTotal).toBe(1500) // the figure never vanishes behind the header
+  })
+
+  it('a money-less, DATE-bearing number label line is still consumed as a header (R7 review — gate scrubs dates)', () => {
+    // Pins that the gate tests money on the DATE-SCRUBBED line: a raw MONEY_RE test would read `03.05`
+    // inside the date as money and wrongly refuse the header.
+    const inv = extractInvoice([chunk('Rechnungsnummer 2026-14 vom 03.05.2026\nHosting 49,00 EUR')], 'EUR')
+    expect(inv.header.invoiceNumber).toBe('2026-14 vom 03.05.2026')
+    expect(inv.lineItems.map((l) => l.description)).toEqual(['Hosting'])
   })
 })
 

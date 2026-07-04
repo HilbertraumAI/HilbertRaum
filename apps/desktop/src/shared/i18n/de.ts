@@ -194,6 +194,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.autoFiredTitle':
     'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
   'chat.skill.answerWithout': 'Ohne ihn antworten',
+  // SKA-38 (Skills-Audit 2026-07-03, U6): das Glyph-Label, wenn der Skill einer markierten Antwort
+  // später GELÖSCHT wurde – die Herkunft (und der Rückgängig-Weg) bleiben, ehrlich beschriftet.
+  'chat.skill.removed': '(entfernter Skill)',
   // U3 (audit §4.3): ein Skill gilt jetzt standardmäßig PRO TURN – das × am Chip verwirft die Wahl und
   // eine gespeicherte Vorgabe, die Checkbox im Menü ist die ausdrückliche Zustimmung, die Wahl als
   // Vorgabe des Gesprächs zu behalten. Nichts bleibt still über Turns hinweg gesetzt.
@@ -260,6 +263,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.error.persistFailed': 'Das konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.error.exportWriteFailed': 'Die Datei konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
+  // SKA-40 (Skills-Audit 2026-07-03, U6): der Status ließ sich nach mehreren Fehlern nicht mehr prüfen –
+  // eine beschriftete, schließbare Zeile statt einer still verschwundenen Ausführung.
+  'chat.skill.run.stateUnknown': 'Diese Funktion ließ sich nicht prüfen – das Ergebnis ist evtl. unvollständig.',
+  // SKA-6: ein ruhiger Hinweis, wenn eine Funktion gerade in einem ANDEREN Chat arbeitet (sie läuft
+  // dort weiter und wird dort angezeigt; hier nur ein unaufdringlicher Präsenzhinweis). Inhaltsfrei.
+  'chat.skill.run.otherChatBusy': 'Eine Funktion arbeitet gerade in einem anderen Chat.',
   // U-2: die Ein-Klick-Folgeaktion in der Ergebniszeile nach dem Extrahieren. Die KI-Kategorisierung
   // wird hier vom Nutzer ausgelöst, nicht still im Hintergrund. Inhaltsfrei (benennt eine Aktion).
   'chat.skill.run.categorizeOffer': 'Transaktionen kategorisieren',
@@ -636,7 +645,10 @@ export const de: Record<keyof typeof en, string> = {
     'Aktionsleiste, um den ganzen Auszug zu speichern, oder frag hier im Chat einfach nach dem Auszug als CSV oder JSON.',
   // W4 (Audit §8.1): der deterministische Zahlen-Nachtrag UNTER einer grounded-data-Modellantwort, damit ein
   // Falschzitat des Modells sofort durch die Ein-/Ausgänge/Saldoänderung des Parsers widerlegt wird. Beträge unverändert.
-  'skills.bankAnalysis.figureEcho': 'Beträge wie eingelesen, wörtlich aus dem Dokument: {figures}.',
+  // SKA-4 (W6, Audit §4.5): Die Ein-/Ausgänge/Saldoänderung sind BERECHNETE Summen (summarizeCashflow), NICHT
+  // im Dokument gedruckte Zahlen — daher „berechnet“ statt „wörtlich aus dem Dokument“ (das gilt nur für den
+  // Rechnungs-Nachtrag, dessen Netto/Steuer/Brutto gedruckte Beträge sind; diesen NICHT ändern).
+  'skills.bankAnalysis.figureEcho': 'Aus den eingelesenen Buchungen berechnete Summen: {figures}.',
   'skills.bankAnalysis.figureEchoIn': 'Eingang {amount} {currency}',
   'skills.bankAnalysis.figureEchoOut': 'Ausgang {amount} {currency}',
   'skills.bankAnalysis.figureEchoNet': 'Saldoänderung {amount} {currency}',
@@ -674,10 +686,13 @@ export const de: Record<keyof typeof en, string> = {
   'skills.invoiceAnalysis.checkTaxMatchesRate': 'der Steuerbetrag passt nicht zum angegebenen Steuersatz',
   'skills.invoiceAnalysis.unreconciledItem': '- {check}',
   'skills.invoiceAnalysis.totalsHeading': 'Beträge, genau wie gedruckt:',
-  'skills.invoiceAnalysis.net': '- Netto: **{amount} {currency}**',
-  'skills.invoiceAnalysis.tax': '- Steuer: **{amount} {currency}**',
-  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{amount} {currency}**',
-  'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{amount} {currency}**',
+  // SKA-21 (W6): {value} ist „{amount} {currency}“ oder nur der Betrag, wenn die Währung unbekannt/gemischt
+  // ist (eine gemischte Rechnung ohne Kopf-Währung stempelt KEINEN Code statt dem von lineItems[0] — und
+  // kein hängendes Leerzeichen). Wird von `amountText` im Handler gebaut.
+  'skills.invoiceAnalysis.net': '- Netto: **{value}**',
+  'skills.invoiceAnalysis.tax': '- Steuer: **{value}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{value}**',
+  'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{value}**',
   'skills.invoiceAnalysis.positionsHeading': 'Positionen:',
   'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
   'skills.invoiceAnalysis.positionsMore':
@@ -712,9 +727,11 @@ export const de: Record<keyof typeof en, string> = {
   // W3 (Audit §8.1): der deterministische Zahlen-Nachtrag UNTER einer grounded-data-Modellantwort, damit ein
   // Falschzitat des Modells sofort durch die Zahlen des Parsers widerlegt wird. Beträge unverändert.
   'skills.invoiceAnalysis.figureEcho': 'Beträge wie eingelesen, wörtlich aus dem Dokument: {figures}.',
-  'skills.invoiceAnalysis.figureEchoNet': 'Netto {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoTax': 'Steuer {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoGross': 'Brutto {amount} {currency}',
+  // SKA-21 (W6): {value} ist „{amount} {currency}“ oder nur der Betrag bei einer gemischten Rechnung ohne
+  // Kopf-Währung (kein irreführender lineItems[0]-Code, kein hängendes Leerzeichen) — von `amountText` gebaut.
+  'skills.invoiceAnalysis.figureEchoNet': 'Netto {value}',
+  'skills.invoiceAnalysis.figureEchoTax': 'Steuer {value}',
+  'skills.invoiceAnalysis.figureEchoGross': 'Brutto {value}',
 
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':
@@ -1005,6 +1022,11 @@ export const de: Record<keyof typeof en, string> = {
   'skills.loading': 'Skills werden geladen…',
   'skills.locked': 'Entsperre deinen Arbeitsbereich, um Skills zu verwalten.',
   'skills.loadFailed': 'Skills konnten nicht geladen werden.',
+  // SKA-32: Hinweis auf Reconcile-Fehler (nur die Anzahl — nie ein Ordnername; §22-M1).
+  'skills.reconcile.folderErrors.one':
+    '{count} Skill-Ordner konnte nicht gelesen werden und wird übersprungen. Seine SKILL.md fehlt, ist ungültig oder nicht lesbar.',
+  'skills.reconcile.folderErrors.other':
+    '{count} Skill-Ordner konnten nicht gelesen werden und werden übersprungen. Jeder Ordner braucht eine gültige SKILL.md.',
   'skills.empty.title': 'Noch keine Skills',
   'skills.empty.line': 'Skills bringen der KI bei, eine bestimmte Aufgabe zu erledigen. Füge einen hinzu, um zu starten.',
   'skills.trusted.app': 'App',
@@ -1089,6 +1111,28 @@ export const de: Record<keyof typeof en, string> = {
   'skills.import.error.downgradeBlocked': 'Eine neuere Version dieses Skills ist bereits installiert. Aktiviere den Entwicklermodus, um eine ältere Version zu installieren.',
   'skills.import.error.appReadOnly': 'Von der App bereitgestellte Skills können nicht geändert oder gelöscht werden.',
   'skills.import.error.locked': 'Entsperre den Arbeitsbereich, um Skills zu verwalten.',
+  // SKA-35: Hinweise der Import-Vorschau, lokalisiert über den stabilen Code + app-feste Parameter
+  // ({field} = fester Frontmatter-Feldname, {max}/{value} = App-Konstanten — nie Skill-Inhalt).
+  'skills.import.note.permissionNotString': 'Die Berechtigung "{field}" ist kein Textwert; der Standard "{value}" wird verwendet.',
+  'skills.import.note.permissionUnrecognized': 'Die Berechtigung "{field}" hat einen unbekannten Wert; der Standard "{value}" wird verwendet.',
+  'skills.import.note.permissionClamped': 'Der Skill fordert mehr "{field}"-Zugriff an, als diese App erlaubt; er wird auf "{value}" begrenzt.',
+  'skills.import.note.listInvalid': 'Die Liste "{field}" ist ungültig und wird ignoriert.',
+  'skills.import.note.listItemsTooLong': 'Einige Einträge in "{field}" sind zu lang und werden ignoriert.',
+  'skills.import.note.listTruncated': '"{field}" hat mehr Einträge als erlaubt; nur die ersten {max} werden übernommen.',
+  'skills.import.note.languageInvalid': 'Das Feld "language" ist kein gültiges Sprachkürzel; "en" wird verwendet.',
+  'skills.import.note.allowedToolsIgnored': 'Die deklarierten Werkzeuge werden bei einem Anleitungs-Skill ignoriert (Werkzeuge kommen mit einer späteren Version).',
+  'skills.import.note.analysisInvalid': 'Das Feld "analysis" hat einen unbekannten Wert und wird ignoriert.',
+  'skills.import.note.analysisIgnoredForTool': 'Das Feld "analysis" wird bei einem Werkzeug-Skill ignoriert (die App bestimmt sein Ganzdokument-Verhalten).',
+  'skills.import.note.triggersInvalid': 'Der Block "triggers" ist ungültig und wird ignoriert.',
+  'skills.import.note.autoFireInvalid': 'Das Feld "triggers.autoFire" muss true oder false sein; es wird als false behandelt.',
+  'skills.import.note.localizedInvalid': 'Der Block "localized" ist ungültig und wird ignoriert.',
+  'skills.import.note.localizedLocaleInvalid': 'Ein "localized"-Eintrag hat einen ungültigen Sprachschlüssel und wird ignoriert.',
+  'skills.import.note.localizedEntryInvalid': 'Ein "localized"-Eintrag ist ungültig und wird ignoriert.',
+  'skills.import.note.localizedTitleIgnored': 'Ein übersetzter Titel wurde ignoriert (er muss eine kurze einzelne Zeile sein).',
+  'skills.import.note.localizedDescriptionIgnored': 'Eine übersetzte Beschreibung wurde ignoriert (sie muss eine kurze einzelne Zeile sein).',
+  'skills.import.note.localizedTooMany': 'Der Block "localized" hat mehr Sprachen als erlaubt; nur die ersten {max} werden übernommen.',
+  'skills.import.note.trustIgnored': 'Ein "trust"-Feld im Skill wird ignoriert; die App vergibt Vertrauen selbst.',
+  'skills.import.note.manifestJsonConflict': 'Das Feld "{field}" in der beigelegten manifest.json weicht von SKILL.md ab; SKILL.md gilt.',
   'skills.replace.title': 'Stattdessen diesen Skill nutzen?',
   'skills.replace.body': 'Ein anderer Skill mit diesem Namen ist an. Wenn du diesen einschaltest, wird der andere ausgeschaltet.',
   'skills.replace.confirm': 'Einschalten',

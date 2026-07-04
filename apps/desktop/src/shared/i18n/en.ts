@@ -181,6 +181,9 @@ export const en = {
   'chat.skill.autoFiredTitle':
     'The app applied the skill “{title}” to this answer automatically. You can answer without it.',
   'chat.skill.answerWithout': 'Answer without it',
+  // SKA-38 (skills audit 2026-07-03, U6): the glyph label when a stamped turn's skill was later
+  // DELETED — the provenance (and the undo) survive the deletion, honestly labelled.
+  'chat.skill.removed': '(removed skill)',
   // U3 (audit §4.3): a pick applies PER-TURN by default now — the persistent composer chip's × clears
   // both the session pick and any saved default, and the in-picker checkbox is the explicit opt-in to
   // persist the pick as this conversation's default. Nothing is silently kept across turns any more.
@@ -243,6 +246,12 @@ export const en = {
   'chat.skill.run.error.persistFailed': 'This couldn’t be saved. Nothing was changed.',
   'chat.skill.run.error.exportWriteFailed': 'The file couldn’t be saved. Nothing was changed.',
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
+  // SKA-40 (skills audit 2026-07-03, U6): the store gave up polling a run after repeated errors — a
+  // labelled, dismissable row rather than a silently vanished run.
+  'chat.skill.run.stateUnknown': "Couldn't check on this skill — its result may be incomplete.",
+  // SKA-6: a quiet chip when a skill run is working in ANOTHER chat (the run keeps going + is shown
+  // there; here it is just a non-alarming presence hint). Content-free — names no document.
+  'chat.skill.run.otherChatBusy': 'A skill is working in another chat.',
   // U-2: the one-tap follow-up on the extract RESULT row. The LLM categorize is user-initiated here,
   // not silently auto-run on extract. Content-free (names a tool action, never a document).
   'chat.skill.run.categorizeOffer': 'Categorize transactions',
@@ -622,7 +631,10 @@ export const en = {
     'whole statement, or just ask for it as CSV or JSON right here in chat.',
   // W4 (audit §8.1): the deterministic figure echo printed UNDER a grounded-data model answer, so any model
   // misquote is immediately contradicted by the parser's own money-in / money-out / net. Amounts verbatim.
-  'skills.bankAnalysis.figureEcho': 'Figures as parsed, verbatim from the document: {figures}.',
+  // SKA-4 (W6, audit §4.5): the bank in/out/net are COMPUTED sums (summarizeCashflow), NOT figures printed
+  // in the document — so the label says "computed", not "verbatim from the document" (that wording is
+  // accurate only for the invoice echo, whose net/tax/gross ARE printed totals; do NOT churn that one).
+  'skills.bankAnalysis.figureEcho': 'Totals computed from the parsed transactions: {figures}.',
   'skills.bankAnalysis.figureEchoIn': 'money in {amount} {currency}',
   'skills.bankAnalysis.figureEchoOut': 'money out {amount} {currency}',
   'skills.bankAnalysis.figureEchoNet': 'net change {amount} {currency}',
@@ -660,10 +672,13 @@ export const en = {
   'skills.invoiceAnalysis.checkTaxMatchesRate': 'the tax amount doesn’t match the stated tax rate',
   'skills.invoiceAnalysis.unreconciledItem': '- {check}',
   'skills.invoiceAnalysis.totalsHeading': 'Totals, exactly as printed:',
-  'skills.invoiceAnalysis.net': '- Net: **{amount} {currency}**',
-  'skills.invoiceAnalysis.tax': '- Tax: **{amount} {currency}**',
-  'skills.invoiceAnalysis.taxWithRate': '- Tax ({rate}%): **{amount} {currency}**',
-  'skills.invoiceAnalysis.gross': '- Gross total (amount due): **{amount} {currency}**',
+  // SKA-21 (W6): {value} is "{amount} {currency}", or just the amount when the currency is unknown/mixed
+  // (a mixed-currency invoice with no header currency stamps NO code rather than lineItems[0]'s — and no
+  // dangling space). Built by `amountText` in the handler.
+  'skills.invoiceAnalysis.net': '- Net: **{value}**',
+  'skills.invoiceAnalysis.tax': '- Tax: **{value}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Tax ({rate}%): **{value}**',
+  'skills.invoiceAnalysis.gross': '- Gross total (amount due): **{value}**',
   'skills.invoiceAnalysis.positionsHeading': 'Line items:',
   'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
   'skills.invoiceAnalysis.positionsMore':
@@ -698,9 +713,11 @@ export const en = {
   // W3 (audit §8.1): the deterministic figure echo printed UNDER a grounded-data model answer, so any
   // model misquote is immediately contradicted by the parser's own figures. Amounts pass through verbatim.
   'skills.invoiceAnalysis.figureEcho': 'Figures as parsed, verbatim from the document: {figures}.',
-  'skills.invoiceAnalysis.figureEchoNet': 'net {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoTax': 'tax {amount} {currency}',
-  'skills.invoiceAnalysis.figureEchoGross': 'gross {amount} {currency}',
+  // SKA-21 (W6): {value} is "{amount} {currency}", or the bare amount on a mixed-currency invoice with no
+  // header currency (no misleading lineItems[0] code, no dangling space) — built by `amountText`.
+  'skills.invoiceAnalysis.figureEchoNet': 'net {value}',
+  'skills.invoiceAnalysis.figureEchoTax': 'tax {value}',
+  'skills.invoiceAnalysis.figureEchoGross': 'gross {value}',
 
   // Full-doc-skills Phase 3 (§3.2/D45): the refuse-partial notice. A tool skill can only answer
   // exhaustively over a FULLY-INDEXED document; a legacy/partly-chunked doc is refused (no partial
@@ -973,6 +990,11 @@ export const en = {
   'skills.loading': 'Loading skills…',
   'skills.locked': 'Unlock your workspace to manage skills.',
   'skills.loadFailed': 'Skills couldn’t be loaded.',
+  // SKA-32: the reconcile-error notice (count only — never a folder name; §22-M1).
+  'skills.reconcile.folderErrors.one':
+    '{count} skill folder could not be read and is skipped. Its SKILL.md is missing, invalid, or unreadable.',
+  'skills.reconcile.folderErrors.other':
+    '{count} skill folders could not be read and are skipped. Each folder needs a valid SKILL.md.',
   'skills.empty.title': 'No skills yet',
   'skills.empty.line': 'Skills teach the assistant how to do a specific task. Add one to get started.',
   // Trust chip (icon + word, never colour-only — guidelines §9).
@@ -1073,6 +1095,28 @@ export const en = {
   'skills.import.error.downgradeBlocked': 'A newer version of this skill is already installed. Turn on developer mode to install an older version.',
   'skills.import.error.appReadOnly': 'App-provided skills cannot be changed or deleted.',
   'skills.import.error.locked': 'Unlock the workspace to manage skills.',
+  // SKA-35: import-preview advisory notes, localized via their stable code + app-fixed params
+  // ({field} = a fixed frontmatter field name, {max}/{value} = app constants — never skill content).
+  'skills.import.note.permissionNotString': 'The "{field}" permission isn’t a text value; the default "{value}" is used.',
+  'skills.import.note.permissionUnrecognized': 'The "{field}" permission has a value this app doesn’t recognize; the default "{value}" is used.',
+  'skills.import.note.permissionClamped': 'The skill asks for more "{field}" access than this app allows; it is limited to "{value}".',
+  'skills.import.note.listInvalid': 'The "{field}" list is not a list of texts and is ignored.',
+  'skills.import.note.listItemsTooLong': 'Some entries in "{field}" are too long and are ignored.',
+  'skills.import.note.listTruncated': '"{field}" has more entries than allowed; only the first {max} are kept.',
+  'skills.import.note.languageInvalid': 'The "language" field is not a valid language tag; "en" is used.',
+  'skills.import.note.allowedToolsIgnored': 'The declared tools are ignored for an instruction skill (tools come with a later version).',
+  'skills.import.note.analysisInvalid': 'The "analysis" field has an unknown value and is ignored.',
+  'skills.import.note.analysisIgnoredForTool': 'The "analysis" field is ignored for a tool skill (the app decides its whole-document behaviour).',
+  'skills.import.note.triggersInvalid': 'The "triggers" block is invalid and is ignored.',
+  'skills.import.note.autoFireInvalid': 'The "triggers.autoFire" field must be true or false; it is treated as false.',
+  'skills.import.note.localizedInvalid': 'The "localized" block is invalid and is ignored.',
+  'skills.import.note.localizedLocaleInvalid': 'A "localized" entry has an invalid language key and is ignored.',
+  'skills.import.note.localizedEntryInvalid': 'A "localized" entry is invalid and is ignored.',
+  'skills.import.note.localizedTitleIgnored': 'A translated title was ignored (it must be a short single line).',
+  'skills.import.note.localizedDescriptionIgnored': 'A translated description was ignored (it must be a short single line).',
+  'skills.import.note.localizedTooMany': 'The "localized" block has more languages than allowed; only the first {max} are kept.',
+  'skills.import.note.trustIgnored': 'A "trust" field in the skill is ignored; the app assigns trust itself.',
+  'skills.import.note.manifestJsonConflict': 'The packaged manifest.json "{field}" differs from SKILL.md; SKILL.md is used.',
   // DS12 — enabling a skill whose name is shared turns the other one off.
   'skills.replace.title': 'Use this skill instead?',
   'skills.replace.body': 'Another skill with this name is on. Turning this one on turns the other one off.',

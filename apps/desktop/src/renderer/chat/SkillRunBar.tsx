@@ -64,6 +64,17 @@ export interface SkillRunBarProps {
    *  offer (U-2), so the categorize runs on the SAME document the extract did. Null ⇒ main defaults to
    *  the first in-scope document. */
   runningDocumentId?: string | null
+  /**
+   * SKA-6 (audit 2026-07-03, U6): whether the post-extract "Categorize" offer's remembered target
+   * document is still in THIS conversation's scope. False ⇒ hide the offer (never retarget across
+   * scopes — extract doc X, then categorize must not silently run against doc Y). Defaults to true.
+   */
+  categorizeTargetInScope?: boolean
+  /**
+   * SKA-40: the store gave up polling this run after repeated IPC errors — show a labelled "state
+   * unknown" row (dismissable) instead of silently dropping a live run. Defaults to false.
+   */
+  stateUnknown?: boolean
   /** Start a tool: `confirmed=true` once the user accepted the write/export modal; `documentId` is the
    *  chosen in-scope target (undefined ⇒ main targets the first in-scope document). */
   onRun: (toolName: string, confirmed: boolean, documentId?: string) => void
@@ -144,12 +155,14 @@ export function SkillRunBar({
   targetDocuments,
   runningDocumentName,
   runningDocumentId,
+  categorizeTargetInScope = true,
+  stateUnknown = false,
   onRun,
   onCancel,
   onDismiss,
   disabled,
   offerRoutedFollowups = true
-}: SkillRunBarProps): JSX.Element | null {
+}: SkillRunBarProps): JSX.Element {
   const { t, tCount } = useT()
   const [confirmTool, setConfirmTool] = useState<RunnableTool | null>(null)
   // The user's chosen target. Defaults to (and clamps back to) the first in-scope document, so a
@@ -164,7 +177,9 @@ export function SkillRunBar({
   }
 
   // The busy/result "what document" line. Prefers the renderer-resolved target NAME (U-1); falls back
-  // to the legacy count label when the name is unknown (e.g. after a screen remount lost it).
+  // to the legacy count label when the name is unknown (e.g. after a screen remount lost it). This is
+  // the ANNOUNCED text; SKA-39's `done/total` progress rides a SEPARATE aria-hidden span below so a
+  // long run doesn't fire one polite announcement per tick (the whole line stays announced once).
   const runningLine = (state: SkillRunState): string =>
     runningDocumentName
       ? t('chat.skill.run.runningOn', { tool: toolLabel(state.toolName), document: runningDocumentName })
@@ -210,22 +225,46 @@ export function SkillRunBar({
     else runTool(tool)
   }
 
-  // --- RUNNING ---
-  if (run && run.state === 'running') {
-    return (
-      <div className="skill-run-bar" role="status" aria-live="polite">
+  // The RUN row (running / result / state-unknown) renders INSIDE the always-mounted live region below
+  // (SKA-41), so its text is both visible AND announced from ONE element (no hidden duplicate). The
+  // OFFER renders OUTSIDE the region — a passive affordance, not a status change to announce.
+  let runRow: JSX.Element | null = null
+  let offerRow: JSX.Element | null = null
+
+  if (run && stateUnknown) {
+    // SKA-40: the store gave up polling after repeated IPC errors — keep a labelled, dismissable row
+    // rather than silently dropping a live run (today one transient error orphaned it).
+    runRow = (
+      <div className="skill-run-bar">
+        <span className="skill-run-status">{t('chat.skill.run.stateUnknown')}</span>
+        <Button size="sm" onClick={onDismiss}>
+          {t('chat.skill.run.dismiss')}
+        </Button>
+      </div>
+    )
+  } else if (run && run.state === 'running') {
+    // --- RUNNING ---
+    runRow = (
+      <div className="skill-run-bar">
         <span className="skill-run-status">
           <Spinner /> {runningLine(run)}
+          {/* SKA-39: the live `done/total` progress is aria-hidden — visible, but excluded from the
+              polite live region's announced content so a 45-step extract doesn't queue 45 spoken
+              updates (the run line itself is announced once when it appears). */}
+          {run.progress.total > 0 && (
+            <span className="skill-run-progress" aria-hidden="true">
+              {' '}
+              ({run.progress.done}/{run.progress.total})
+            </span>
+          )}
         </span>
         <Button size="sm" onClick={onCancel}>
           {t('chat.skill.run.cancel')}
         </Button>
       </div>
     )
-  }
-
-  // --- RESULT (terminal) ---
-  if (run) {
+  } else if (run) {
+    // --- RESULT (terminal) ---
     const message =
       run.state === 'done'
         ? doneMessage(run)
@@ -236,13 +275,17 @@ export function SkillRunBar({
     // USER-initiated action (it is NO LONGER auto-enqueued in the background on extract). Targets the
     // SAME document the extract ran on — its id is remembered renderer-side (the run state is
     // content-free); a lost id (null, e.g. after a remount) falls back to main's first-in-scope default.
+    // SKA-6: `categorizeTargetInScope` hides the offer when that remembered id is NO LONGER in the
+    // current conversation's scope, so a categorize can never retarget across scopes (never trusting
+    // main's single-doc fallback).
     const offerCategorize =
       offerRoutedFollowups &&
+      categorizeTargetInScope &&
       run.state === 'done' &&
       run.toolName === 'extract_transactions' &&
       (run.count ?? run.transactionCount ?? 0) > 0
-    return (
-      <div className="skill-run-bar" role="status" aria-live="polite">
+    runRow = (
+      <div className="skill-run-bar">
         <span className="skill-run-status">{message}</span>
         {offerCategorize && (
           <Button
@@ -258,33 +301,46 @@ export function SkillRunBar({
         </Button>
       </div>
     )
+  } else if (runnableTools.length > 0) {
+    // --- OFFER ---
+    offerRow = (
+      <div className="skill-run-bar">
+        {targets.length > 0 && (
+          <TargetMenu targets={targets} selectedId={selectedId} onSelect={setChosenId} disabled={disabled} />
+        )}
+        {runnableTools.map((tool) => (
+          <Button key={tool.name} size="sm" disabled={disabled} onClick={() => onClickTool(tool)}>
+            {toolLabel(tool.name)}
+          </Button>
+        ))}
+        <ConfirmDialog
+          open={confirmTool != null}
+          title={t('chat.skill.confirm.title')}
+          confirmLabel={t('chat.skill.confirm.ok')}
+          onConfirm={() => {
+            if (confirmTool) onRun(confirmTool.name, true, selectedId || undefined)
+            setConfirmTool(null)
+          }}
+          onCancel={() => setConfirmTool(null)}
+          t={t}
+        >
+          {t('chat.skill.confirm.body')}
+        </ConfirmDialog>
+      </div>
+    )
   }
 
-  // --- OFFER ---
-  if (runnableTools.length === 0) return null
+  // SKA-41: ONE always-mounted aria-live status region (the app's own M-U1 lesson — a live region
+  // created per state branch can MISS the first announcement, because AT registers the region and its
+  // text in the same tick). The region is always present (ChatScreen mounts the bar unconditionally);
+  // the RUN row renders inside it so a state change is announced exactly once, from the same element
+  // the user sees. Empty when there is no run.
   return (
-    <div className="skill-run-bar">
-      {targets.length > 0 && (
-        <TargetMenu targets={targets} selectedId={selectedId} onSelect={setChosenId} disabled={disabled} />
-      )}
-      {runnableTools.map((tool) => (
-        <Button key={tool.name} size="sm" disabled={disabled} onClick={() => onClickTool(tool)}>
-          {toolLabel(tool.name)}
-        </Button>
-      ))}
-      <ConfirmDialog
-        open={confirmTool != null}
-        title={t('chat.skill.confirm.title')}
-        confirmLabel={t('chat.skill.confirm.ok')}
-        onConfirm={() => {
-          if (confirmTool) onRun(confirmTool.name, true, selectedId || undefined)
-          setConfirmTool(null)
-        }}
-        onCancel={() => setConfirmTool(null)}
-        t={t}
-      >
-        {t('chat.skill.confirm.body')}
-      </ConfirmDialog>
+    <div className="skill-run-bar-wrap">
+      <div className="skill-run-live" role="status" aria-live="polite">
+        {runRow}
+      </div>
+      {offerRow}
     </div>
   )
 }

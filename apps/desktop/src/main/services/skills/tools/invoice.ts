@@ -13,6 +13,7 @@ import {
   normalizeExtractionText,
   parseAmount,
   parseDate,
+  scanMoneyWithBlankedDates,
   splitLeadingDates,
   stripDateTokens,
   type DateAnchor,
@@ -100,8 +101,9 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
 /**
  * The deterministic invoice extractor version (F5 — mirrors `BANK_EXTRACTOR_VERSION`). Stamped onto
  * every `invoices` row (`invoice-run.ts` `runInvoiceExtraction`) and compared on reuse: an invoice whose
- * stored `extractor_version` is NULL (legacy / extracted before versioning) or LESS than this is STALE —
- * the analysis read-back RE-EXTRACTS it (`replaceExisting`, replacing the rows) rather than keep serving
+ * stored `extractor_version` is NULL (legacy / extracted before versioning) or DIFFERS from this is
+ * STALE (SKA-26/R9: `!==`, not `<` — a newer-version row after a rollback re-extracts too) — the
+ * analysis read-back RE-EXTRACTS it (`replaceExisting`, replacing the rows) rather than keep serving
  * figures a since-fixed parser bug mis-read. An invoice at the current version is FRESH and reused.
  *
  * BUMP THIS by one whenever a change alters the extractor's OUTPUT for the same input — in the line
@@ -158,8 +160,22 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       money-bearing lines it REJECTED (couldn't turn into a line item / total / header) — so the answer
  *       gates its "the whole invoice" claim honestly instead of asserting exhaustiveness while dropping
  *       figures silently. The new field changes the persisted output, so stale v7 rows re-extract.
+ *   9 — skills-audit-2026-07-03 R7 (SKA-1, SKA-2, SKA-14): a date or a header label can no longer swallow
+ *       or invent a figure. `parseLineItem` scans money via `scanMoneyWithBlankedDates` — a same-length
+ *       date-BLANKED copy with each match's trailing sign re-validated against the original bytes (SKA-1)
+ *       — so a mid-line/trailing date is never read as a line total, a trailing date no longer trips the
+ *       F1 uncaptured-column drop, and a blanked billing-period range never reads as a trailing debit
+ *       minus; the date scrubs gained a double-guarded 2-digit-year alternative incl. terminal punctuation
+ *       (SKA-2), so `Gesamtbetrag 390,00 EUR per 30.06.26` reads 390 (not 3006.26), `Datum: 15.03.26` is a
+ *       header (not a phantom 1503.26 item), and money-less dd.mm.yy lines no longer inflate
+ *       `droppedRowCount`; and the vendor/number header branches fall through on an AMOUNT-shaped line
+ *       (`carriesAmountShapedMoney` — a 2-dp figure or currency-adjacent money; a bare grouped header
+ *       VALUE like `Rechnung Nr. 26.001` is still consumed, SKA-14), so `From 01.06.2026 to 30.06.2026
+ *       Hosting 49,00` / `Rechnung Nr. 2026-14 … über 1.500,00 EUR` stay line items instead of vanishing
+ *       into garbage header values. Each changes the persisted items/totals/header on affected invoices,
+ *       so stale v8 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 8
+export const INVOICE_EXTRACTOR_VERSION = 9
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -310,7 +326,14 @@ function isSummaryLabelLine(line: string): boolean {
   return isFillerOnly(beforeFigure)
 }
 
-const DATE_TOKEN_RE = /\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4}/
+// The header-value date surfacer (`parseDateInText`). SKA-2 (skills-audit-2026-07-03): mirrors the shared
+// scrub's guarded 2-digit-year alternative, so a `Datum: 15.03.26` header line surfaces its date (and is
+// CONSUMED as a header once an anchor completes it) instead of falling through to `parseLineItem`, where
+// the money-shaped `15.03.26` became the phantom item `{description: "Datum:", lineTotal: 1503.26}`. The
+// `\b` + `(?!\d)(?![.,']\d)` guards keep it off real amounts while accepting terminal punctuation
+// (`Datum: 15.03.26.`) — see the shared DATE_TOKEN_RE in money.ts for the full rationale.
+const DATE_TOKEN_RE =
+  /\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4}|\b\d{1,2}[./]\d{1,2}[./]\d{2}(?!\d)(?![.,']\d)/
 const PERCENT_RE = /(\d+(?:[.,]\d+)?)\s*%/
 // A bare quantity at the end of the description region: an integer/decimal, optionally with a unit
 // word (x / × / Stk / pcs / units). Captures the cleaned description, the numeric quantity, AND the unit
@@ -452,25 +475,55 @@ function parsePercent(line: string): number | null {
   return Number.isFinite(v) ? v : null
 }
 
+/**
+ * The SKA-14 gate signal, tightened by the R7 adversarial review: does the line carry an AMOUNT-shaped
+ * money token — a 2-dp DECIMAL figure (`49,00`, `1.500,00`, `(45,00)`), or any money-shaped token on a
+ * line that also names a currency (`… über 1.500 EUR`)? A bare dotted/thousands GROUP with no currency
+ * is NOT amount-shaped here: `Rechnung Nr. 26.001` (a real DACH `yy.nnn` numbering convention) and
+ * `Lieferant: Firma 1.000 GmbH` are header VALUES whose digits merely look grouped — falling through on
+ * them INVENTED a €26,001 / €1,000 line item and lost the header (verified review finding), the exact
+ * inversion of the harm SKA-14 closes. Dates are scrubbed first so a date is never "money". Residual
+ * (accepted, documented): a 2-dp figure genuinely inside a vendor/number VALUE
+ * (`Rechnungsnummer 2026/1.234,56`) still falls through and reads as a figure — a 2-dp token is an
+ * amount to every other reader in this file, and §22-D1 prefers reading a printed 2-dp figure as a
+ * figure over silently discarding it.
+ */
+function carriesAmountShapedMoney(line: string): boolean {
+  const scrubbed = stripDateTokens(line)
+  const matches = [...scrubbed.matchAll(MONEY_RE)]
+  if (matches.length === 0) return false
+  if (matches.some((m) => /[.,]\d{2}[)\s-]*$/.test(m[0].trim()))) return true
+  return detectCurrency(scrubbed) !== null
+}
+
 /** Apply a header label to the line; returns true when the line WAS a header line (consumed). `anchor` (R5)
- *  is passed through to the shared date parser; the local `DATE_TOKEN_RE` only surfaces 4-digit-year header
- *  dates, so it is forward-compatible plumbing here (a header `dd.mm.yy` is not surfaced without widening it,
- *  a deliberate non-goal). */
+ *  completes a 2-digit-year header date (`Datum: 15.03.26`) via the widened local `DATE_TOKEN_RE` (SKA-2). */
 function applyHeader(
   line: string,
   header: InvoiceHeader,
   order: DateOrder = 'dmy',
   anchor?: DateAnchor | null
 ): boolean {
-  const vendor = labeledValue(line, VENDOR_LABELS)
-  if (vendor !== null) {
-    if (!header.vendor) header.vendor = vendor
-    return true
-  }
-  const number = labeledValue(line, NUMBER_LABELS)
-  if (number !== null) {
-    if (!header.invoiceNumber) header.invoiceNumber = number
-    return true
+  // SKA-14 (skills-audit-2026-07-03): an AMOUNT-bearing line is never consumed as a vendor/number header.
+  // R2 gated only the date branches below (a date label consumes only when a date parses); the vendor/
+  // number branches consumed UNCONDITIONALLY, so `From 01.06.2026 to 30.06.2026 Hosting 49,00` ("from" is
+  // a vendor label) and `Rechnung Nr. 2026-14 vom 03.05.2026 über 1.500,00 EUR` were swallowed whole: the
+  // line item was deleted, `droppedRowCount` was NOT incremented (consumption precedes the count), the
+  // "whole invoice" claim stood, and vendor/invoiceNumber captured garbage tails. Such a line falls
+  // through to `parseLineItem` instead — a figure must never silently vanish behind a whole-invoice
+  // claim (§22-D1). The gate keys on `carriesAmountShapedMoney` (NOT bare `hasMoneyToken`) so a
+  // grouped-looking header VALUE (`Rechnung Nr. 26.001`) is still consumed as the header it is.
+  if (!carriesAmountShapedMoney(line)) {
+    const vendor = labeledValue(line, VENDOR_LABELS)
+    if (vendor !== null) {
+      if (!header.vendor) header.vendor = vendor
+      return true
+    }
+    const number = labeledValue(line, NUMBER_LABELS)
+    if (number !== null) {
+      if (!header.invoiceNumber) header.invoiceNumber = number
+      return true
+    }
   }
   // A date label consumes the line ONLY when a date actually parses from its value (audit §5.2): a line
   // that merely BEGINS with a date word but carries a money-bearing description — `Due diligence review
@@ -557,16 +610,21 @@ export function parseLineItem(
   // `order` is the per-document date ordering (BL-N1), so a US `mm/dd/yyyy` lead column is recognised;
   // `anchor` (R5) completes a 2-digit-year / bare lead date, else it parses to null and stays in the text.
   const { rest } = splitLeadingDates(line, order, anchor)
-  const matches = [...rest.matchAll(MONEY_RE)]
+  // SKA-1 (skills-audit-2026-07-03): scan money over a DATE-BLANKED copy of `rest` — a MID-LINE or
+  // trailing date (`… über 1.500,00 EUR vom 03.05.2026`, a period line's `bis 30.04.2026`) was read by
+  // MONEY_RE as a 2-dp amount and became a phantom line total. Same-length blanking (spaces), so every
+  // match index below stays valid in the ORIGINAL `rest`: the `description` slice and the figure-region
+  // currency slice are byte-identical to before on any date-free row.
+  const { scanRest, matches } = scanMoneyWithBlankedDates(rest)
   if (matches.length === 0) return null
   // F6 — DROP a space-column FUSION (`Widget 10 100` → `10 100` → 10100, ~100× too large). The bank path
   // is mitigated by the geometry column model (D58); the invoice path has NO geometry backstop (F10), so
   // a fusion-prone space-grouped token (no 2-dp decimal tail) on ANY column makes the row ambiguous.
-  if (matches.some((m) => isFusedSpaceGroup(m[0]))) return null
+  if (matches.some((m) => isFusedSpaceGroup(m.token))) return null
 
   const amounts: number[] = []
   for (const m of matches) {
-    const a = parseAmount(m[0])
+    const a = parseAmount(m.token)
     if (a !== null) amounts.push(a)
   }
   if (amounts.length === 0) return null
@@ -578,10 +636,19 @@ export function parseLineItem(
   // of the bank `parseLine` drop, but RIGHT-side: the bank amount is the second-to-last figure whereas the
   // invoice line total is the LAST, so the dangerous uncaptured column is on the opposite side.
   const lastMatch = matches[matches.length - 1]
-  const afterLast = rest.slice((lastMatch.index ?? 0) + lastMatch[0].length)
+  // The uncaptured-column test reads the BLANKED tail (SKA-1): a trailing DATE after the last money token
+  // (`Hosting 49,00 30.06.2026`) is blanks there, so it is never mistaken for an uncaptured amount column
+  // (which would delete a valid item); a real bare-number column still triggers the F1 drop.
+  const afterLast = scanRest.slice(lastMatch.index + lastMatch.token.length)
   if (UNCAPTURED_AMOUNT_AFTER.test(afterLast)) return null
 
-  let description = rest.slice(0, matches[0].index).trim()
+  // The figure boundary is the first NON-SPACE of the first match, not `match.index`: MONEY_RE tolerates
+  // up to 4 leading spaces (`\s{0,4}`), and on the BLANKED scan those spaces can be a blanked date's TAIL
+  // — slicing at `match.index` would chop those original bytes out of the description (SKA-1). On a
+  // date-free row the skipped chars are real whitespace, so this is byte-identical to the old slice.
+  const first = matches[0]
+  const figureStart = first.index + (first.token.length - first.token.trimStart().length)
+  let description = rest.slice(0, figureStart).trim()
   if (!description) return null
   // F3 — detect the per-line currency only in the FIGURE REGION (the text from the first money token on),
   // mirroring the bank `parseLine` BL-2 fix. detectCurrency scans ISO codes before symbols, so scanning
@@ -591,7 +658,7 @@ export function parseLineItem(
   // code/symbol NEXT TO the amount (inside the figure region) and is still detected (mixed-currency
   // honesty preserved) — preferred over `documentCurrency ?? detectCurrency`, which would silently fold a
   // truly-mixed line into the document currency.
-  const figureRegion = rest.slice(matches[0].index)
+  const figureRegion = rest.slice(figureStart)
   const currency = detectCurrency(figureRegion) ?? documentCurrency
   if (!currency) return null
 

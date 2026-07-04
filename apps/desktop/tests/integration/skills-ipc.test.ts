@@ -255,3 +255,53 @@ describe('skills IPC — content-class sentinel grep (§22-M1)', () => {
     expect(allAuditText(db)).not.toContain(SENTINEL)
   })
 })
+
+// SKA-32 (audit 2026-07-03, U7): the Settings → Skills "N folders could not be read" surfacing.
+// The payload is COUNTS + fixed reason codes only — a broken drop-in folder's name (arbitrary user
+// text) must never cross the IPC (§22-M1).
+describe('skills IPC — reconcile status (SKA-32)', () => {
+  it('reports counts + codes for unreadable drop-in folders, never the folder name', async () => {
+    const { userSkillsDir } = makeHarness()
+    // A drop-in with a YAML typo (the audit's motivating case) + an invalid folder name carrying
+    // the sentinel. Both must surface only as count/code.
+    mkdirSync(join(userSkillsDir, 'broken-yaml'), { recursive: true })
+    writeFileSync(
+      join(userSkillsDir, 'broken-yaml', 'SKILL.md'),
+      `---\nid: broken-yaml\ntitle: "unterminated\n---\nBody.`
+    )
+    mkdirSync(join(userSkillsDir, `Bad ${SENTINEL}`), { recursive: true })
+    writeFileSync(join(userSkillsDir, `Bad ${SENTINEL}`, 'SKILL.md'), 'not even frontmatter')
+
+    await invoke(handlers, IPC.listSkills) // triggers the lazy post-unlock reconcile
+    const { result } = await invoke(handlers, IPC.skillReconcileStatus)
+    const status = result as { errorCount: number; errorCodes: string[] }
+    expect(status.errorCount).toBe(2)
+    expect([...status.errorCodes].sort()).toEqual(['invalidFolderName', 'invalidManifest'])
+    expect(JSON.stringify(status)).not.toContain(SENTINEL)
+  })
+
+  it('reports zeros for a clean skills tree', async () => {
+    makeHarness()
+    await invoke(handlers, IPC.listSkills)
+    const { result } = await invoke(handlers, IPC.skillReconcileStatus)
+    expect(result).toEqual({ errorCount: 0, errorCodes: [] })
+  })
+
+  // Review hardening: an import (which reconciles through the MODULE function) must refresh the
+  // handle's summary — otherwise fixing a broken drop-in by importing a corrected zip left a
+  // phantom "folder could not be read" notice until restart.
+  it('the status refreshes after an import fixes the tree (no phantom notice)', async () => {
+    const { userSkillsDir } = makeHarness()
+    mkdirSync(join(userSkillsDir, 'fixme'), { recursive: true })
+    writeFileSync(join(userSkillsDir, 'fixme', 'SKILL.md'), 'not even frontmatter')
+    await invoke(handlers, IPC.listSkills)
+    const { result: before } = await invoke(handlers, IPC.skillReconcileStatus)
+    expect((before as { errorCount: number }).errorCount).toBe(1)
+
+    // The user fixes it by importing a corrected package of the same id (replaces the folder).
+    const fixed = await writeZip([{ name: 'SKILL.md', content: skillMd('fixme', 'Now valid.') }])
+    await invoke(handlers, IPC.importSkill, fixed)
+    const { result: after } = await invoke(handlers, IPC.skillReconcileStatus)
+    expect(after).toEqual({ errorCount: 0, errorCodes: [] })
+  })
+})

@@ -1,79 +1,189 @@
 import type { SkillRunState, StartSkillRunRequest } from '@shared/types'
 
-// Renderer-side watcher for the single active Tier-2 tool run (skills plan §12.2, S11b — the
-// `doctasks.ts` precedent). Module-level (not inside a screen) so a run survives a screen unmount,
-// driven by polling `getSkillRun` (the run's `onProgress` is merged into that status main-side — no
-// new event channel). The run carries ids/counts ONLY (never the extracted rows). Screens subscribe
-// via `useSyncExternalStore(subscribeSkillRun, getActiveSkillRun)`.
+// Renderer-side watcher for the app's Tier-2 tool runs (skills plan §12.2, S11b — the `doctasks.ts`
+// precedent). Module-level (not inside a screen) so runs survive a screen unmount, driven by polling
+// `getSkillRun` per live handle (the run's `onProgress` is merged into that status main-side — no new
+// event channel). Runs carry ids/counts ONLY (never the extracted rows).
 //
-// Lifecycle: start → poll every POLL_MS → terminal state stays visible until a screen dismisses it
-// with `acknowledgeSkillRun()` (the calm result row), so the outcome isn't lost on a quick unmount.
+// SKA-6 (skills audit 2026-07-03, U6) — MULTI-RUN store keyed by `runHandle`, mirroring A2's
+// per-document controller. The store was a single module-level `active` slot: a second run silently
+// abandoned the first (its outcome never shown, never acknowledged), and ChatScreen rendered that one
+// app-wide run in EVERY conversation. Now each live/terminal run is a first-class entry carrying its
+// {run, conversationId, documentId}; every live handle is polled on its own timer; the screen gates the
+// run bar to the run whose `conversationId === activeId` and shows a quiet chip for runs in OTHER chats.
+//
+// Lifecycle per entry: start/adopt → poll every POLL_MS → a terminal state stays visible until a screen
+// dismisses it with `acknowledgeSkillRun(handle)` (the calm result row), so the outcome isn't lost on a
+// quick unmount. SKA-17: `adoptSkillRuns()` re-adopts main's runs on a fresh mount (a reload destroyed
+// the module state; main kept the runs) — including terminal-unacknowledged ones so a finished run's
+// outcome is finally shown/acknowledgeable after a reload.
 
 const POLL_MS = 400
 
-let active: SkillRunState | null = null
-// The conversation that started the active run. Kept module-level (like `active`) so it SURVIVES a
-// screen unmount: navigating away mid-run and back must re-attach to the running document chat, not
-// drop the user onto a fresh empty chat while the badge still spins. It is the id the renderer itself
-// passed to `startSkillRun` — NOT sourced from the content-free `SkillRunState`/IPC (which carries
-// ids/counts only), so the ids/counts privacy boundary is unchanged.
-let activeConversationId: string | null = null
-// The document the active run targets (U3, audit ux-6). Kept module-level alongside `active` so it
-// SURVIVES a screen unmount: the routed-run relay (Summarize/Categorize → a real chat answer) pins
-// `askDocuments` to THIS document, so a multi-document scope can't scatter the answer across the
-// wrong documents. It is the resolved id the renderer passed to `startSkillRun` — NOT sourced from
-// the content-free `SkillRunState`/IPC (ids/counts only), so the privacy boundary is unchanged.
-let activeDocumentId: string | null = null
-let timer: ReturnType<typeof setInterval> | null = null
+// SKA-40: how many CONSECUTIVE poll failures a live run tolerates before the store gives up polling it.
+// On give-up it keeps a labelled "state unknown" row (never silently dropping a live run — today ONE
+// transient IPC error orphaned it), so the user can still dismiss it.
+const MAX_POLL_FAILURES = 3
+
+/** One tracked run: the content-free state plus the ids the store needs to gate/pin/re-adopt it. */
+export interface SkillRunEntry {
+  run: SkillRunState
+  /** The conversation that started the run (gates the run bar to the launching conversation). */
+  conversationId: string
+  /** The run's target document (routed-relay pin + cross-scope categorize refusal). Null if unknown. */
+  documentId: string | null
+  /** SKA-40: true after MAX_POLL_FAILURES consecutive poll errors — live state unknown, row kept. */
+  stateUnknown: boolean
+}
+
+interface InternalEntry extends SkillRunEntry {
+  timer: ReturnType<typeof setInterval> | null
+  pollFailures: number
+}
+
+const entries = new Map<string, InternalEntry>()
+// The immutable snapshot handed to `useSyncExternalStore`. Rebuilt ONLY when something actually changed
+// (SKA-39 shallow-compare gates that), so the reference stays stable between changes and the 400 ms poll
+// no longer re-renders ChatScreen ~2.5×/s for a run's whole duration.
+let snapshot: readonly SkillRunEntry[] = []
 const listeners = new Set<() => void>()
 
+function project(e: InternalEntry): SkillRunEntry {
+  return { run: e.run, conversationId: e.conversationId, documentId: e.documentId, stateUnknown: e.stateUnknown }
+}
+
+function rebuildSnapshot(): void {
+  snapshot = Array.from(entries.values()).map(project)
+}
+
 function notify(): void {
+  rebuildSnapshot()
   for (const fn of listeners) fn()
 }
 
-function setActive(next: SkillRunState | null): void {
-  active = next
-  notify()
-}
-
-function stopPolling(): void {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
+function stopTimer(e: InternalEntry): void {
+  if (e.timer) {
+    clearInterval(e.timer)
+    e.timer = null
   }
 }
 
-export function subscribeSkillRun(fn: () => void): () => void {
+export function subscribeSkillRuns(fn: () => void): () => void {
   listeners.add(fn)
   return () => listeners.delete(fn)
 }
 
-/** Snapshot for useSyncExternalStore — a fresh object per change, stable between. */
-export function getActiveSkillRun(): SkillRunState | null {
-  return active
-}
-
-/**
- * The conversation that owns the active run, or null when no run is active. A screen re-selects it on
- * remount so an in-flight run (e.g. a "categorize transactions" doctask) keeps the user on its document
- * chat instead of a new empty one. Renderer-only (the id the renderer passed to `startSkillRun`).
- */
-export function getActiveSkillRunConversationId(): string | null {
-  return active ? activeConversationId : null
-}
-
-/**
- * The document the active run targets, or null when no run is active / none was resolved (U3, audit
- * ux-6). The routed-run relay pins its chat answer to this id so a Summarize/Categorize result can't
- * scatter across a multi-document scope. Renderer-only (the resolved id the renderer passed to
- * `startSkillRun`), so the ids/counts privacy boundary is unchanged.
- */
-export function getActiveSkillRunDocumentId(): string | null {
-  return active ? activeDocumentId : null
+/** Snapshot for useSyncExternalStore — a stable reference between changes (SKA-39). */
+export function getSkillRunsSnapshot(): readonly SkillRunEntry[] {
+  return snapshot
 }
 
 export function isSkillRunTerminal(run: SkillRunState | null): boolean {
   return run != null && (run.state === 'done' || run.state === 'failed' || run.state === 'cancelled')
+}
+
+/**
+ * The run to show in the run bar for a conversation: the MOST-RECENTLY-started entry whose
+ * `conversationId` matches (there is at most one live run per document; a multi-doc scope could hold
+ * several, and the newest is the one the user just acted on). Null when the conversation has no run.
+ */
+export function pickConversationRun(runs: readonly SkillRunEntry[], conversationId: string | null): SkillRunEntry | null {
+  if (!conversationId) return null
+  let found: SkillRunEntry | null = null
+  for (const e of runs) if (e.conversationId === conversationId) found = e // last match = most recent
+  return found
+}
+
+/** True when a run is RUNNING in some OTHER conversation (drives the "working in another chat" chip). */
+export function hasRunningRunElsewhere(runs: readonly SkillRunEntry[], conversationId: string | null): boolean {
+  return runs.some((e) => e.conversationId !== conversationId && e.run.state === 'running')
+}
+
+/**
+ * A conversation to re-attach a fresh mount to (SKA-17): prefer a RUNNING run's conversation, else any
+ * tracked run's, so a user who reloaded mid-run lands back on the running document chat instead of a
+ * new empty one. Null when nothing is tracked.
+ */
+export function getReattachConversationId(): string | null {
+  let fallback: string | null = null
+  for (const e of entries.values()) {
+    if (e.conversationId === '') continue
+    if (e.run.state === 'running') return e.conversationId
+    fallback ??= e.conversationId
+  }
+  return fallback
+}
+
+/** SKA-39: the fields whose change means the run bar must re-render — anything else is a no-op poll. */
+function sameRun(a: SkillRunState, b: SkillRunState): boolean {
+  return (
+    a.state === b.state &&
+    a.count === b.count &&
+    a.transactionCount === b.transactionCount &&
+    a.resultKind === b.resultKind &&
+    a.errorCode === b.errorCode &&
+    a.progress.done === b.progress.done &&
+    a.progress.total === b.progress.total
+  )
+}
+
+/** Add/replace a tracked run and (if live) begin polling it; refresh its full state once immediately. */
+function adopt(run: SkillRunState, conversationId: string, documentId: string | null): void {
+  const prev = entries.get(run.runHandle)
+  if (prev) stopTimer(prev)
+  const e: InternalEntry = { run, conversationId, documentId, stateUnknown: false, timer: null, pollFailures: 0 }
+  entries.set(run.runHandle, e)
+  if (!isSkillRunTerminal(run)) {
+    e.timer = setInterval(() => void pollOnce(run.runHandle), POLL_MS)
+  }
+  notify()
+  // One immediate poll refreshes a just-adopted terminal run's count/resultKind (SKA-17 re-adopt) and
+  // speeds the first live update; harmless for a fresh 'running' run the timer will also poll.
+  void pollOnce(run.runHandle)
+}
+
+async function pollOnce(handle: string): Promise<void> {
+  const before = entries.get(handle)
+  if (!before) return // acknowledged / replaced since the tick was scheduled
+  let next: SkillRunState | null
+  try {
+    next = await window.api.getSkillRun(handle)
+  } catch {
+    const e = entries.get(handle)
+    if (!e) return
+    e.pollFailures += 1
+    // SKA-40: tolerate transient IPC errors; give up only after N in a row, and KEEP a labelled
+    // "state unknown" row rather than silently dropping a live run (today one error orphaned it).
+    if (e.pollFailures >= MAX_POLL_FAILURES) {
+      stopTimer(e)
+      if (!e.stateUnknown) {
+        e.stateUnknown = true
+        notify()
+      }
+    }
+    return
+  }
+  const e = entries.get(handle)
+  if (!e) return
+  e.pollFailures = 0
+  if (next) {
+    if (!sameRun(e.run, next) || e.stateUnknown) {
+      e.run = { ...next, conversationId: e.conversationId, documentId: e.documentId ?? undefined }
+      e.stateUnknown = false
+      if (isSkillRunTerminal(next)) stopTimer(e)
+      notify() // SKA-39: only when a tracked field actually changed
+    }
+  } else {
+    // A null poll means the run was cleared/replaced/LOST main-side (a swept slot, or a main restart).
+    // Stop polling and keep the entry — but if it was still 'running', mark it state-unknown so the row
+    // stays DISMISSIBLE: a running row shows only Cancel, and cancelling a run main no longer holds is a
+    // dead no-op, which would strand the bar spinning until a reload (SKA-40 sibling).
+    stopTimer(e)
+    if (!isSkillRunTerminal(e.run) && !e.stateUnknown) {
+      e.stateUnknown = true
+      notify()
+    }
+  }
 }
 
 /**
@@ -87,70 +197,78 @@ export type StartSkillRunOutcome =
   | { started: false; error: string }
 
 /**
- * Ask main to start a run from a user action (DS4). On success, sets the active run and begins
- * polling. Never throws for the expected refusals — returns the structured outcome instead.
+ * Ask main to start a run from a user action (DS4). On success, tracks the run + begins polling. Never
+ * throws for the expected refusals — returns the structured outcome instead. On a BUSY refusal that
+ * carries the running handle (SKA-17), RE-ADOPTS that orphaned run so a reloaded renderer recovers it.
  */
 export async function startSkillRun(req: StartSkillRunRequest): Promise<StartSkillRunOutcome> {
   const result = await window.api.startSkillRun(req)
   if (!result.started) {
-    return 'needsConfirmation' in result
-      ? { started: false, needsConfirmation: true }
-      : { started: false, error: result.error }
+    if ('needsConfirmation' in result) return { started: false, needsConfirmation: true }
+    if ('runningHandle' in result && typeof result.runningHandle === 'string' && result.runningHandle) {
+      void adoptHandle(result.runningHandle)
+    }
+    return { started: false, error: result.error }
   }
-  const run = result.run
-  stopPolling()
-  activeConversationId = req.conversationId
-  activeDocumentId = req.documentId ?? null
-  setActive(run)
-  timer = setInterval(() => {
-    void (async () => {
-      const current = active
-      if (!current || current.runHandle !== run.runHandle) {
-        stopPolling()
-        return
-      }
-      try {
-        const next = await window.api.getSkillRun(run.runHandle)
-        // A null poll means the run was cleared/replaced main-side — keep the last known snapshot
-        // terminal-ish by stopping; otherwise adopt the fresh state.
-        if (next) {
-          setActive(next)
-          if (isSkillRunTerminal(next)) stopPolling()
-        } else {
-          stopPolling()
-        }
-      } catch {
-        stopPolling()
-        setActive(null)
-      }
-    })()
-  }, POLL_MS)
+  adopt(result.run, req.conversationId, req.documentId ?? null)
   return { started: true }
 }
 
-/** Cancel the active run (the busy row's Cancel). */
-export async function cancelActiveSkillRun(): Promise<void> {
-  if (active) await window.api.cancelSkillRun(active.runHandle)
+/** Re-adopt a single run by handle, learning its conversation/document from the polled state (SKA-17). */
+async function adoptHandle(handle: string): Promise<void> {
+  if (entries.has(handle)) return
+  let state: SkillRunState | null
+  try {
+    state = await window.api.getSkillRun(handle)
+  } catch {
+    return
+  }
+  if (!state) return
+  adopt(state, state.conversationId ?? '', state.documentId ?? null)
 }
 
-/** Dismiss a finished (terminal) run after a screen has shown its outcome. Also releases the
- *  terminal run main-side (the acknowledge handshake) so the controller doesn't hold stale state. */
-export function acknowledgeSkillRun(): void {
-  if (active && isSkillRunTerminal(active)) {
-    const handle = active.runHandle
-    stopPolling()
-    setActive(null)
-    activeConversationId = null
-    activeDocumentId = null
-    void window.api.clearSkillRun(handle)
+/**
+ * Re-adopt every run main currently holds on a fresh mount (SKA-17): a reload destroyed the module
+ * state but main kept the runs (the controller lives in the main process). Includes terminal-but-
+ * unacknowledged runs so a finished run's outcome is finally shown/acknowledgeable after a reload.
+ */
+export async function adoptSkillRuns(): Promise<void> {
+  let runs: SkillRunState[]
+  try {
+    runs = (await window.api.listSkillRuns?.()) ?? []
+  } catch {
+    return
   }
+  for (const run of runs) {
+    if (entries.has(run.runHandle)) continue
+    adopt(run, run.conversationId ?? '', run.documentId ?? null)
+  }
+}
+
+/** Cancel a run by handle (the busy row's Cancel). A non-empty handle is required (SKA-25). */
+export async function cancelSkillRun(runHandle: string): Promise<void> {
+  if (runHandle) await window.api.cancelSkillRun(runHandle)
+}
+
+/**
+ * Dismiss a finished (terminal or state-unknown) run after a screen has shown its outcome. Also
+ * releases the terminal run main-side (the acknowledge handshake) so the controller doesn't hold
+ * stale state. A no-op on a still-running, known run.
+ */
+export function acknowledgeSkillRun(runHandle: string): void {
+  const e = entries.get(runHandle)
+  if (!e) return
+  if (!isSkillRunTerminal(e.run) && !e.stateUnknown) return
+  stopTimer(e)
+  entries.delete(runHandle)
+  notify()
+  void window.api.clearSkillRun?.(runHandle)
 }
 
 /** Test-only: drop module-level state between renderer tests. */
 export function resetSkillRunStoreForTests(): void {
-  stopPolling()
-  active = null
-  activeConversationId = null
-  activeDocumentId = null
+  for (const e of entries.values()) stopTimer(e)
+  entries.clear()
+  snapshot = []
   listeners.clear()
 }

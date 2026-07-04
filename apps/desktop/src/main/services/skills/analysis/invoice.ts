@@ -27,6 +27,7 @@ import {
   fmt,
   loadCitationChunks,
   shouldFallThroughOnEmpty,
+  singleDocMatchesSkillClass,
   singleInScopeDocument
 } from './common'
 import type { SkillAnalysisContext, SkillAnalysisHandler, SkillAnalysisInput, SkillAnalysisResult } from './types'
@@ -95,6 +96,17 @@ const SUMMARY_KEYWORDS: readonly string[] = [
 // of the grounded-data model answer the plan intends for non-summary asks.
 const RECONCILE_STIMMT_RE = /\bstimm(en|t)\b/
 
+// SKA-9 (W7, audit §3.2) — German SEPARABLE verb forms the joined-stem SUMMARY_KEYWORDS miss: the
+// imperative "Fasse die Rechnung zusammen" / "Liste die Positionen auf" are common list/summary phrasings
+// and must reach the D56-gated TEMPLATE, not stream grounded-data. Word-anchored on BOTH particles, linear
+// (a single unbounded `[\s\S]*` between two anchors — no nested quantifier, ReDoS-safe). Mirrors the bank
+// handler. "auf" doubles as a preposition ("Liste die Positionen auf der Rechnung"): that over-fires to the
+// template — the safe deterministic side (a listing ask is a template ask anyway); accepted, eval-pinned.
+const SEPARABLE_SUMMARY_RES: readonly RegExp[] = [
+  /\bfass(e|t|en)?\b[\s\S]*\bzusammen\b/, // fasse/fasst/fassen … zusammen
+  /\blist(e|et)?\b[\s\S]*\bauf\b/ // liste/listet … auf
+]
+
 // A WHY / explanatory marker escapes the summary shape even when a summary stem is present: the template
 // can only PRINT figures, never EXPLAIN, so "Warum stimmen die Summen nicht?" is a grounded-data question
 // (the audit §3.1 / W4 follow-up case — a repeat "summe" intercept must NOT re-serve the byte-identical
@@ -104,7 +116,11 @@ const EXPLANATORY_RE = /\b(?:warum|wieso|weshalb|why)\b|\bhow come\b/
 function isSummaryShaped(question: string): boolean {
   const q = question.toLowerCase()
   if (EXPLANATORY_RE.test(q)) return false
-  return SUMMARY_KEYWORDS.some((k) => q.includes(k)) || RECONCILE_STIMMT_RE.test(q)
+  return (
+    SUMMARY_KEYWORDS.some((k) => q.includes(k)) ||
+    RECONCILE_STIMMT_RE.test(q) ||
+    SEPARABLE_SUMMARY_RES.some((re) => re.test(q))
+  )
 }
 
 // `singleInScopeDocument` + `shouldFallThroughOnEmpty` are the shared `analysis/common.ts` helpers (A1).
@@ -159,6 +175,29 @@ function buildInvoiceCitations(db: Db, documentId: string, title: string): Citat
 
 type Tr = (key: MessageKey, params?: MessageParams) => string
 
+/**
+ * The currency to stamp on the invoice-level TOTALS/echo (SKA-21, W6). The header's declared currency
+ * wins; otherwise ONLY when every line item shares ONE currency do we use that shared code (the same
+ * single-currency guard `validateInvoiceTotals` applies before it sums line items — a mixed set there is
+ * reported `unknown`). When the header declares NO currency AND the line items are mixed, there is no
+ * single currency for a combined total, so return '' — the totals/echo then print the bare amount rather
+ * than misleadingly stamping `lineItems[0]`'s currency (the old `header.currency ?? lineItems[0]?.currency
+ * ?? ''` bug). An empty line-item list likewise yields '' (unchanged from before).
+ */
+function invoiceTotalsCurrency(invoice: InvoiceInput): string {
+  const { header, lineItems } = invoice
+  if (header.currency !== undefined) return header.currency
+  const currencies = new Set(lineItems.map((li) => li.currency))
+  return currencies.size === 1 ? lineItems[0]!.currency : ''
+}
+
+/** Render an amount with its currency, or the BARE amount when the currency is unknown/mixed (SKA-21) —
+ *  so a missing currency never leaves a dangling space (`**123.45 **`). Used only where the currency can
+ *  be absent (the invoice-level totals + echo); the per-line listing always has `li.currency`. */
+function amountText(amount: number, currency: string): string {
+  return currency ? `${fmt(amount)} ${currency}` : fmt(amount)
+}
+
 /** Map a mismatched check to its localized, content-free explanation (the printed figure stays in totals). */
 function checkMessage(tr: Tr, name: InvoiceTotalsResult['checks'][number]['name']): string {
   switch (name) {
@@ -205,8 +244,19 @@ const MAX_DATA_BLOCK_ITEMS = 150
  * the model NARRATES (never computes over) — `buildInvoiceJson` emits the parser's figures, so nothing
  * here can invent or transpose a number. Line items past `MAX_DATA_BLOCK_ITEMS` are omitted from the block
  * with an honest count (header + totals always kept). Fixed English, model-facing (rides in the user turn).
+ *
+ * SKA-5 (W6): `droppedRowCount` threads the U1 honesty into the mode. Unlike the bank side, an invoice has
+ * NO balance proof, so any dropped money-bearing line ALWAYS hedges (there is nothing to prove the missing
+ * figures were non-items): a MISSING-lines note is added and the provenance line drops its "whole document"
+ * claim, so the model narrating the block cannot answer "how many line items?" as if the list were complete.
  */
-export function buildInvoiceDataBlock(invoice: InvoiceInput, validation: InvoiceTotalsResult): string {
+export function buildInvoiceDataBlock(
+  invoice: InvoiceInput,
+  validation: InvoiceTotalsResult,
+  droppedRowCount?: number
+): string {
+  const dropped = droppedRowCount ?? 0
+  const hedgeDropped = dropped > 0 // invoice has no balance proof → a dropped line always hedges
   const omitted = Math.max(0, invoice.lineItems.length - MAX_DATA_BLOCK_ITEMS)
   const capped: InvoiceInput =
     omitted > 0 ? { ...invoice, lineItems: invoice.lineItems.slice(0, MAX_DATA_BLOCK_ITEMS) } : invoice
@@ -218,10 +268,23 @@ export function buildInvoiceDataBlock(invoice: InvoiceInput, validation: Invoice
     '',
     'Totals reconciliation (computed deterministically by the extractor — do NOT recompute):',
     ...validation.checks.map((c) => `- ${c.name}: ${c.status}`),
-    `- overall: ${validation.reconciled ? 'reconciled' : 'NOT reconciled'}`,
+    `- overall: ${validation.reconciled ? 'reconciled' : 'NOT reconciled'}`
+  )
+  if (hedgeDropped) {
+    lines.push(
+      '',
+      `NOTE: ${dropped} money-bearing line(s) could not be parsed into line items and are MISSING from this ` +
+        'data — do NOT claim the line-item list is complete or that this is the whole invoice.'
+    )
+  }
+  lines.push(
     '',
-    'Provenance: every value above was parsed and reconciled from the whole document by a deterministic ' +
-      'offline extractor. Quote these figures verbatim; do not add, total, convert, or derive any number.'
+    hedgeDropped
+      ? 'Provenance: the values above were parsed and reconciled by a deterministic offline extractor, but ' +
+          'some money-bearing lines could not be parsed and are missing (see the NOTE above). Quote these ' +
+          'figures verbatim; do not add, total, convert, or derive any number.'
+      : 'Provenance: every value above was parsed and reconciled from the whole document by a deterministic ' +
+          'offline extractor. Quote these figures verbatim; do not add, total, convert, or derive any number.'
   )
   return lines.join('\n')
 }
@@ -232,21 +295,28 @@ export function buildInvoiceDataBlock(invoice: InvoiceInput, validation: Invoice
  * the amounts are the parser's own 2-dp figures. Returns '' when the extraction carried none of the three
  * totals (nothing to echo) — the streaming path then appends nothing.
  */
-export function buildTotalsPostscript(tr: Tr, invoice: InvoiceInput): string {
-  const { header, lineItems, totals } = invoice
-  const currency = header.currency ?? lineItems[0]?.currency ?? ''
-  const parts: string[] = []
+export function buildTotalsPostscript(tr: Tr, invoice: InvoiceInput, droppedRowCount?: number): string {
+  const { totals } = invoice
+  const currency = invoiceTotalsCurrency(invoice) // SKA-21: '' when header-less AND line items are mixed
+  const figs: string[] = []
   if (totals.netTotal !== undefined) {
-    parts.push(tr('skills.invoiceAnalysis.figureEchoNet', { amount: fmt(totals.netTotal), currency }))
+    figs.push(tr('skills.invoiceAnalysis.figureEchoNet', { value: amountText(totals.netTotal, currency) }))
   }
   if (totals.taxTotal !== undefined) {
-    parts.push(tr('skills.invoiceAnalysis.figureEchoTax', { amount: fmt(totals.taxTotal), currency }))
+    figs.push(tr('skills.invoiceAnalysis.figureEchoTax', { value: amountText(totals.taxTotal, currency) }))
   }
   if (totals.grossTotal !== undefined) {
-    parts.push(tr('skills.invoiceAnalysis.figureEchoGross', { amount: fmt(totals.grossTotal), currency }))
+    figs.push(tr('skills.invoiceAnalysis.figureEchoGross', { value: amountText(totals.grossTotal, currency) }))
   }
-  if (parts.length === 0) return ''
-  return tr('skills.invoiceAnalysis.figureEcho', { figures: parts.join(' · ') })
+  const out: string[] = []
+  if (figs.length > 0) out.push(tr('skills.invoiceAnalysis.figureEcho', { figures: figs.join(' · ') }))
+  // SKA-5 (W6): the dropped-line hedge — an invoice has no balance proof, so any dropped money-bearing
+  // line always hedges (mirrors the template's `countPartial` headline, appended beneath the echo).
+  const dropped = droppedRowCount ?? 0
+  if (dropped > 0) {
+    out.push(tr('skills.invoiceAnalysis.countPartial', { count: invoice.lineItems.length, dropped }))
+  }
+  return out.join('\n\n')
 }
 
 /**
@@ -315,26 +385,27 @@ export function buildInvoiceAnswer(
     }
   }
 
-  // Totals — print only the figures the invoice states, each verbatim, with the document currency.
-  const currency = header.currency ?? lineItems[0]?.currency ?? ''
+  // Totals — print only the figures the invoice states, each verbatim, with the document currency. SKA-21:
+  // `invoiceTotalsCurrency` stamps NO currency (and `amountText` leaves no dangling space) when the header
+  // declares none AND the line items are mixed — the old `lineItems[0]?.currency` picked a misleading code.
+  const currency = invoiceTotalsCurrency(invoice)
   if (hasTotals) {
     lines.push('', tr('skills.invoiceAnalysis.totalsHeading'))
     if (totals.netTotal !== undefined) {
-      lines.push(tr('skills.invoiceAnalysis.net', { amount: fmt(totals.netTotal), currency }))
+      lines.push(tr('skills.invoiceAnalysis.net', { value: amountText(totals.netTotal, currency) }))
     }
     if (totals.taxTotal !== undefined) {
       lines.push(
         totals.taxRatePercent !== undefined
           ? tr('skills.invoiceAnalysis.taxWithRate', {
-              amount: fmt(totals.taxTotal),
-              currency,
+              value: amountText(totals.taxTotal, currency),
               rate: String(totals.taxRatePercent)
             })
-          : tr('skills.invoiceAnalysis.tax', { amount: fmt(totals.taxTotal), currency })
+          : tr('skills.invoiceAnalysis.tax', { value: amountText(totals.taxTotal, currency) })
       )
     }
     if (totals.grossTotal !== undefined) {
-      lines.push(tr('skills.invoiceAnalysis.gross', { amount: fmt(totals.grossTotal), currency }))
+      lines.push(tr('skills.invoiceAnalysis.gross', { value: amountText(totals.grossTotal, currency) }))
     }
   } else {
     lines.push('', tr('skills.invoiceAnalysis.noTotals'))
@@ -370,11 +441,22 @@ export function buildInvoiceAnswer(
 }
 
 export const invoiceAnalysisHandler: SkillAnalysisHandler = {
+  mode: 'exhaustive',
   // The doc-count-agnostic intent (W2, audit §2.1): an analysis-shaped invoice question, regardless of
   // how many documents are in scope. `applies()` = this AND a single in-scope doc; when it fails ONLY on
   // the count, the chat path narrows to the best-matching invoice or routes (never a silent fall-through).
   intends(input: SkillAnalysisInput): boolean {
     return isAnalysisShaped(input.question)
+  },
+
+  // A4 (SKA-7 structural, audit §3.2/§8.2): the single-doc INVERSION gate (mirror of the bank handler). The
+  // single in-scope document is plausibly an invoice when it matches the skill's manifest doc signals OR a
+  // persisted extraction already exists for it (`latestInvoiceId`). When true and `applies()` is false (a
+  // phrasing miss), the chat path runs this handler anyway, so an on-topic invoice question that misses the
+  // vocabulary is answered from the verified extract (grounded-data), not raw top-k. A doc matching neither
+  // keeps the phrasing gate. No new capability, no new model call (SEC-1).
+  classMatches(input: SkillAnalysisInput, skillInstallId: string): boolean {
+    return singleDocMatchesSkillClass(input.db, skillInstallId, input.scope, (db, id) => latestInvoiceId(db, id) != null)
   },
 
   applies(input: SkillAnalysisInput): boolean {
@@ -395,7 +477,8 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
     // Serialize the WHOLE extract→validate→read-back sequence per document (audit PC-1): the seams
     // self-lock, but one outer lock spanning the sequence keeps a re-extract from ANOTHER lane from
     // replacing the invoice BETWEEN this handler's own steps. Re-entrant (inner locks become no-ops);
-    // unrelated documents still answer concurrently.
+    // unrelated documents still answer concurrently. The turn signal rides along (SKA-24): a Stop
+    // while parked rejects out to `withChatStream`, which maps an aborted rejection to the calm cancel.
     return withDocumentLock(target.id, async () => {
       const args: InvoiceRunArgs = {
         skillInstallId: ctx.skillInstallId,
@@ -435,7 +518,11 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // extracted invoice — deterministic, 0 model calls, no reconciliation needed. Guarded to a
       // non-empty invoice so an empty extraction still gets the honest prose fallback below (never an
       // empty JSON husk dressed up as an answer).
-      const format = detectFormat(ctx.question)
+      // SKA-10 (W7, audit §3.3): a WHY/how-come format question ("Warum fehlt im JSON die MwSt?") is an
+      // EXPLANATION, not a serialization request — re-serving the byte-identical dump is the repeat-loop
+      // class W3/W4 killed elsewhere. Guard the short-circuit with EXPLANATORY_RE so it reaches grounded-
+      // data (which can explain) instead. The serializer is deterministic; it cannot say WHY.
+      const format = EXPLANATORY_RE.test(ctx.question.toLowerCase()) ? null : detectFormat(ctx.question)
       const hasContent =
         invoice.lineItems.length > 0 ||
         invoice.totals.netTotal !== undefined ||
@@ -488,17 +575,19 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // the grounded-data answer too, else W3 would silently drop R5's honesty for exactly the date
       // questions that need it. Both are deterministic, content-free (beyond the parser's own figures).
       const postscriptParts: string[] = []
-      const totalsEcho = buildTotalsPostscript(ctx.tr, invoice)
+      // SKA-5 (W6): the totals echo carries the dropped-line hedge (an invoice has no balance proof, so any
+      // dropped money line hedges); the mixed-currency echo is fixed in `buildTotalsPostscript` (SKA-21).
+      const totalsEcho = buildTotalsPostscript(ctx.tr, invoice, droppedRowCount)
       if (totalsEcho) postscriptParts.push(totalsEcho)
       if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.invoiceAnalysis.dateOrderCaveat'))
       return {
         answer: '',
         mode: 'grounded-data',
-        dataBlock: buildInvoiceDataBlock(invoice, validation),
+        dataBlock: buildInvoiceDataBlock(invoice, validation, droppedRowCount),
         postscript: postscriptParts.join('\n\n'),
         citations,
         coverage
       }
-    })
+    }, ctx.signal)
   }
 }

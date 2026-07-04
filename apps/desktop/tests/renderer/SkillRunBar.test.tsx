@@ -31,11 +31,16 @@ const writeTool: RunnableTool = { name: 'synthetic_write', requiresConfirmation:
 afterEach(cleanup)
 
 describe('SkillRunBar (S11b)', () => {
-  it('renders nothing with no run and no offered tools', () => {
+  it('renders no visible bar with no run and no offered tools (only the always-mounted live region — SKA-41)', () => {
     const { container } = render(
       withI18n(<SkillRunBar run={null} runnableTools={[]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />)
     )
-    expect(container).toBeEmptyDOMElement()
+    // SKA-41: the aria-live status region is ALWAYS mounted (so the first announcement isn't missed),
+    // but it is empty and there is no visible bar content.
+    expect(container.querySelector('.skill-run-bar')).toBeNull()
+    const live = container.querySelector('[role="status"]')
+    expect(live).not.toBeNull()
+    expect(live).toBeEmptyDOMElement()
   })
 
   it('OFFER: a read-only tool runs immediately (no confirm modal)', async () => {
@@ -325,6 +330,71 @@ describe('SkillRunBar (S11b)', () => {
     await user.click(screen.getByRole('button', { name: 'Categorize transactions' }))
     // No remembered id (e.g. after a remount) ⇒ undefined ⇒ main targets the first in-scope document.
     expect(onRun).toHaveBeenCalledWith('categorize_transactions', false, undefined)
+  })
+
+  // SKA-6 (audit 2026-07-03, U6): the categorize offer must REFUSE (hide) when its remembered target
+  // document is no longer in this conversation's scope — never retarget across scopes.
+  it('RESULT (extract done, rows>0): hides the categorize offer when its target is out of scope', () => {
+    render(
+      withI18n(
+        <SkillRunBar
+          run={run({ state: 'done', transactionCount: 2 })}
+          runnableTools={[]}
+          runningDocumentId="d1"
+          categorizeTargetInScope={false}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByText('Extracted 2 transactions.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Categorize transactions' })).not.toBeInTheDocument()
+  })
+
+  // SKA-40: a run the store gave up polling shows a labelled, dismissable "state unknown" row.
+  it('STATE UNKNOWN: shows the labelled row and Dismiss fires onDismiss', async () => {
+    const onDismiss = vi.fn()
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={run({ state: 'running' })}
+          stateUnknown
+          runnableTools={[]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={onDismiss}
+        />
+      )
+    )
+    expect(screen.getByText(/Couldn.t check on this skill/)).toBeInTheDocument()
+    // No Cancel — the run's live state is unknown, only Dismiss remains.
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(onDismiss).toHaveBeenCalled()
+  })
+
+  // SKA-39: the busy row renders the run's done/total when the tool reports real progress (dead before).
+  // The progress rides a SEPARATE aria-hidden span (visible, not announced per tick), so the run line
+  // and the progress are asserted separately.
+  it('RUNNING: shows done/total progress (aria-hidden) when the tool reports it', () => {
+    const { container } = render(
+      withI18n(
+        <SkillRunBar
+          run={run({ progress: { done: 12, total: 45 } })}
+          runningDocumentName="statement.pdf"
+          runnableTools={[]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByText(/Running: Extract transactions on statement\.pdf…/)).toBeInTheDocument()
+    const progress = container.querySelector('.skill-run-progress')
+    expect(progress).toHaveTextContent('(12/45)')
+    expect(progress).toHaveAttribute('aria-hidden', 'true') // announced once, not per tick
   })
 
   it('RESULT: the categorize offer is absent for a 0-row extract, a non-extract done, and a non-done run', () => {
