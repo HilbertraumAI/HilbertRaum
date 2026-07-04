@@ -721,6 +721,8 @@ export const de: Record<keyof typeof en, string> = {
   // Dokumentinhalt und werden unverändert als Parameter durchgereicht. Du-Form.
   'skills.invoiceAnalysis.detailsHeading': 'Details, wie gedruckt:',
   'skills.invoiceAnalysis.detailVendor': '- Lieferant: {vendor}',
+  // P3 (invoice-hardening-2026-07-04): der Rechnungsempfänger, nur aus einer beschrifteten Zeile gelesen.
+  'skills.invoiceAnalysis.detailRecipient': '- Empfänger (Rechnungsempfänger): {recipient}',
   'skills.invoiceAnalysis.detailInvoiceNumber': '- Rechnungsnummer: {number}',
   'skills.invoiceAnalysis.detailInvoiceDate': '- Rechnungsdatum: {date}',
   'skills.invoiceAnalysis.detailDueDate': '- Fälligkeitsdatum: {date}',
@@ -745,6 +747,18 @@ export const de: Record<keyof typeof en, string> = {
     'Die eingelesenen Summen wiederhole ich hier nicht: Sie stimmen weder untereinander noch mit den ' +
     'Positionen überein — sie als verlässliche Beträge zu zitieren wäre irreführend. Prüf das ' +
     'Originaldokument.',
+  // invoice-hardening-2026-07-04 P3: die Glyphen-Salat-Fälle. `unreadableLayout` = die Verweigerung bei
+  // verwürfeltem Text UND widersprüchlichen/leeren Zahlen (nach dem Geometrie-Neuversuch);
+  // `textQualityCaveat` = der Hinweis im seltenen verwürfelt-aber-stimmig-Fall. Du-Form.
+  'skills.invoiceAnalysis.unreadableLayout':
+    'Der Text dieses Dokuments lässt sich nicht sauber auslesen — die Zeichen kommen verwürfelt (Glyphe ' +
+    'für Glyphe) heraus; meist ist das ein Bild-PDF oder ein ungewöhnlich kodiertes PDF. Ich konnte keine ' +
+    'verlässlichen Positionen oder Beträge daraus lesen und zitiere deshalb keine Zahlen. Wenn es ein ' +
+    'Scan ist, lass zuerst OCR (Texterkennung) darüberlaufen; sonst öffne die Rechnung und lies die ' +
+    'Zahlen direkt.',
+  'skills.invoiceAnalysis.textQualityCaveat':
+    'Ein Hinweis: Teile des Dokumenttexts kamen verwürfelt (Glyphe für Glyphe) heraus. Die Beträge oben ' +
+    'gehen zwar auf, aber prüf alles Wichtige am Originaldokument nach.',
 
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':

@@ -182,6 +182,47 @@ function loadDroppedRowCount(db: Db, invoiceId: string): number {
   return row?.n ?? 0
 }
 
+/** The persisted glyph-soup verdict (invoice-hardening-2026-07-04 P3): null = normal text layer;
+ *  'suspect' = soup on the plain read (retry via geometry pending); 'suspect-confirmed' = the geometry
+ *  retry also read soup (final). */
+function loadTextQuality(db: Db, invoiceId: string): 'suspect' | 'suspect-confirmed' | null {
+  const row = db
+    .prepare('SELECT text_quality AS q FROM invoices WHERE id = ?')
+    .get(invoiceId) as { q: string | null } | undefined
+  return row?.q === 'suspect' ? 'suspect' : row?.q === 'suspect-confirmed' ? 'suspect-confirmed' : null
+}
+
+/**
+ * invoice-hardening-2026-07-04 P3: header fields a question can ask for BY NAME. When the question names
+ * one and the extract does NOT carry it, the handler falls through to the ordinary grounded (relevance)
+ * path — the model then reads the DOCUMENT text instead of being confined to a data block that cannot
+ * contain the answer (the real-transcript "Wer ist der Empfänger?" answered "not in the extracted data"
+ * and then padded with garbage totals). Word-bounded, EN + DE; a bare "due" is ignored after
+ * amount/balance/total ("amount due" asks the gross, not the due date).
+ */
+const HEADER_FIELD_ASKS: ReadonlyArray<{ field: keyof InvoiceInput['header']; re: RegExp }> = [
+  {
+    field: 'recipient',
+    re: /\b(?:empfänger(?:in)?|rechnungsempfänger(?:in)?|recipient|bill(?:ed)?\s+to|invoice\s+to|kunde|kundin|customer|addressee|adressat(?:in)?)\b/
+  },
+  {
+    field: 'vendor',
+    re: /\b(?:vendor|lieferant(?:in)?|supplier|seller|verkäufer(?:in)?|aussteller(?:in)?|rechnungssteller(?:in)?)\b/
+  },
+  { field: 'invoiceNumber', re: /\b(?:rechnungsnummer|rechnungs-?nr|invoice\s+(?:number|no)|belegnummer)\b/ },
+  {
+    field: 'dueDate',
+    re: /\b(?:fällig(?:keit(?:sdatum)?)?|due\s+date|zahlbar\s+bis|zahlungsziel)\b|(?<!\b(?:amount|balance|total)\s)\bdue\b/
+  },
+  { field: 'invoiceDate', re: /\b(?:rechnungsdatum|invoice\s+date|ausgestellt|ausstellungsdatum|issued?)\b/ }
+]
+
+/** True when the question names a header field the extracted invoice does not carry (P3). */
+function asksMissingHeaderField(question: string, header: InvoiceInput['header']): boolean {
+  const q = question.toLowerCase()
+  return HEADER_FIELD_ASKS.some(({ field, re }) => header[field] === undefined && re.test(q))
+}
+
 /**
  * The previous assistant turn's persisted content, or null (no conversation yet / first turn / tests
  * without a conversation). invoice-hardening-2026-07-04 P1: read via `rowid` (insertion order) — message
@@ -443,6 +484,10 @@ export function buildInvoiceAnswer(
   if (header.vendor !== undefined) {
     details.push(tr('skills.invoiceAnalysis.detailVendor', { vendor: header.vendor }))
   }
+  // P3 (invoice-hardening-2026-07-04): the bill-to party, when the invoice labels one.
+  if (header.recipient !== undefined) {
+    details.push(tr('skills.invoiceAnalysis.detailRecipient', { recipient: header.recipient }))
+  }
   if (header.invoiceNumber !== undefined) {
     details.push(tr('skills.invoiceAnalysis.detailInvoiceNumber', { number: header.invoiceNumber }))
   }
@@ -605,7 +650,31 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
       // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
       // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
-      const invoice = loadInvoice(db, invoiceId)
+      let invoice = loadInvoice(db, invoiceId)
+
+      // P3 (invoice-hardening-2026-07-04): the glyph-soup retry. When the plain reading-order text was
+      // soup ('suspect'), re-extract ONCE through the geometry (layout) reader — `reconstructPage`
+      // rebuilds rows/columns from glyph positions and often recovers exactly what per-glyph text loses.
+      // Whatever the retry reads becomes the persisted invoice; if its text was STILL soup, the flag is
+      // promoted to 'suspect-confirmed' so no later turn retries again (one geometry pass is final).
+      let textQuality = loadTextQuality(db, invoiceId)
+      if (textQuality === 'suspect' && ctx.readDocumentSegments) {
+        const retry = await runInvoiceExtraction(db, args, {
+          ...deps,
+          readDocumentSegments: (id) => ctx.readDocumentSegments!(id, { layout: true }),
+          replaceExisting: true
+        })
+        if (retry.ok && retry.invoiceId) {
+          invoiceId = retry.invoiceId
+          invoice = loadInvoice(db, invoiceId)
+          textQuality = loadTextQuality(db, invoiceId)
+        }
+        if (textQuality === 'suspect') {
+          db.prepare(`UPDATE invoices SET text_quality = 'suspect-confirmed' WHERE id = ?`).run(invoiceId)
+          textQuality = 'suspect-confirmed'
+        }
+      }
+      const lowTextQuality = textQuality !== null
 
       // A machine-FORMAT request ("als JSON"/"as CSV"/"xml") is answered by SERIALIZING the already-
       // extracted invoice — deterministic, 0 model calls, no reconciliation needed. Guarded to a
@@ -632,6 +701,28 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         return { answer: '', citations: [], fallThrough: true }
       }
 
+      // P3 low-text-quality gate — BEFORE the format short-circuit (a JSON dump of soup is still soup).
+      // On a scrambled text layer the parsed "fields" are glyph fragments, so the bar INVERTS: figures
+      // are presented only when the invoice's own arithmetic POSITIVELY corroborates them
+      // (`reconciled` = at least one check ran ok and none mismatched). Anything less — a mismatch, or
+      // nothing checkable (P2's weak-total retraction typically leaves soup with no verifiable totals) —
+      // gets the honest refusal naming the scrambled layer and the OCR/original next step, instead of
+      // fragments dressed up as line items. Soup that genuinely reconciles keeps its answer + a caveat.
+      if (lowTextQuality && !validateInvoiceTotals(invoice).reconciled) {
+        return {
+          answer: ctx.tr('skills.invoiceAnalysis.unreadableLayout'),
+          citations: buildInvoiceCitations(db, target.id, target.title),
+          coverage: computeCoverage(db, target.id)
+        }
+      }
+
+      // P3: the question names a header field the extract does NOT carry ("Wer ist der Empfänger?" with
+      // no recipient parsed) — fall through to the ordinary grounded (relevance) path so the model reads
+      // the DOCUMENT text, instead of narrating a data block that structurally cannot hold the answer.
+      if (hasContent && asksMissingHeaderField(ctx.question, invoice.header)) {
+        return { answer: '', citations: [], fallThrough: true }
+      }
+
       if (format && hasContent) {
         const formatAnswer = buildFormatAnswer(ctx.tr, format, invoice)
         // invoice-hardening-2026-07-04 P1 backstop: when the question carries ANY negator and the
@@ -644,7 +735,10 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         const previous = suspectNegation ? lastAssistantContent(db, ctx.conversationId) : null
         if (!(previous !== null && previous.includes(formatAnswer))) {
           return {
-            answer: formatAnswer,
+            // P3: reconciled-but-soupy text still hedges (the gate above already refused the bad case).
+            answer: lowTextQuality
+              ? `${formatAnswer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}`
+              : formatAnswer,
             citations: buildInvoiceCitations(db, target.id, target.title),
             coverage: computeCoverage(db, target.id)
           }
@@ -671,7 +765,12 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       const droppedRowCount = loadDroppedRowCount(db, invoiceId)
       if (isSummaryShaped(ctx.question) || !hasContent) {
         const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation, dateOrderInferred, droppedRowCount })
-        return { answer, citations, coverage }
+        return {
+          // P3: reconciled-but-soupy text hedges the template too.
+          answer: lowTextQuality ? `${answer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}` : answer,
+          citations,
+          coverage
+        }
       }
       // The grounded-data postscript is the deterministic totals echo (§8.1) PLUS the R5 honest date caveat
       // when the dates were read day-first with no evidence. That caveat is a template appendix (R5, audit
@@ -685,6 +784,8 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       const totalsEcho = buildTotalsPostscript(ctx.tr, invoice, droppedRowCount, validation)
       if (totalsEcho) postscriptParts.push(totalsEcho)
       if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.invoiceAnalysis.dateOrderCaveat'))
+      // P3: reconciled-but-soupy text hedges the grounded-data answer beneath the echo.
+      if (lowTextQuality) postscriptParts.push(ctx.tr('skills.invoiceAnalysis.textQualityCaveat'))
       return {
         answer: '',
         mode: 'grounded-data',

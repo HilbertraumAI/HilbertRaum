@@ -10,6 +10,7 @@ import {
   inferDateOrder,
   inferDateOrderResult,
   lastCurrencyAdjacentInteger,
+  looksLikeGlyphSoup,
   normalizeExtractionText,
   parseAmount,
   parseDate,
@@ -39,6 +40,10 @@ import {
 
 export interface InvoiceHeader {
   vendor?: string
+  /** The bill-to party (invoice-hardening-2026-07-04 P3) — read from a labeled line only ("Bill to:",
+   *  "Rechnungsempfänger:", "Kunde:"), never inferred. The schema gap made "who is the recipient?"
+   *  structurally unanswerable from the extract (real transcript). */
+  recipient?: string
   invoiceNumber?: string
   invoiceDate?: string
   dueDate?: string
@@ -81,6 +86,14 @@ export interface ExtractedInvoice {
    * structure — a downstream tool taking an `InvoiceInput` (validate/export) ignores it.
    */
   droppedRowCount?: number
+  /**
+   * invoice-hardening-2026-07-04 P3: 'suspect' when the document's text layer looked GLYPH-MANGLED
+   * (`looksLikeGlyphSoup`) — the line-oriented parser read fragments, so every parsed field is doubtful.
+   * Persisted to `invoices.text_quality`; the analysis handler retries once through the geometry
+   * (layout) reader and, if still suspect, refuses to present figures instead of asserting soup.
+   * Absent = the text layer looked normal. A document-level provenance flag; downstream tools ignore it.
+   */
+  textQuality?: 'suspect'
 }
 
 /** What the extractor returns (and what every downstream tool takes as structured input). */
@@ -181,8 +194,14 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       invoice; decimal-shaped reads are never touched). A glyph-soup document can no longer assert a
  *       confident net/tax/gross from stray currency-adjacent digits. Changes the persisted totals on
  *       affected invoices, so stale v9 rows re-extract.
+ *  11 — invoice-hardening-2026-07-04 P3: (a) the header gains `recipient` (the bill-to party), read from
+ *       a labeled line only ("Bill to:", "Rechnungsempfänger:", "Kunde:") with a reference-noun guard —
+ *       the schema gap made "who is the recipient?" structurally unanswerable; (b) the extractor stamps
+ *       `textQuality: 'suspect'` when the document's text layer looks glyph-mangled (`looksLikeGlyphSoup`)
+ *       so the answer layer can retry via geometry and refuse confident figures over soup. Both change
+ *       the persisted output, so stale v10 rows re-extract.
  */
-export const INVOICE_EXTRACTOR_VERSION = 10
+export const INVOICE_EXTRACTOR_VERSION = 11
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -192,6 +211,7 @@ const HEADER_SCHEMA: JsonSchema = {
   required: [],
   properties: {
     vendor: { type: 'string', minLength: 1 },
+    recipient: { type: 'string', minLength: 1 },
     invoiceNumber: { type: 'string', minLength: 1 },
     invoiceDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
     dueDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -239,7 +259,10 @@ const INVOICE_SCHEMA: JsonSchema = {
     dateOrderInferred: { type: 'string', enum: ['evidence', 'default'] },
     // How many money-bearing lines the extractor rejected (U1, audit §2.3) — optional; gates the "whole
     // invoice" answer claim. Ignored by the downstream tools that take an `InvoiceInput`.
-    droppedRowCount: { type: 'integer', minimum: 0 }
+    droppedRowCount: { type: 'integer', minimum: 0 },
+    // P3: the glyph-soup verdict over the document's text layer — optional; drives the geometry retry +
+    // the low-quality answer gate. Ignored by the downstream tools that take an `InvoiceInput`.
+    textQuality: { type: 'string', enum: ['suspect'] }
   }
 }
 
@@ -248,6 +271,12 @@ const INVOICE_SCHEMA: JsonSchema = {
 // Header field labels — matched only at the START of a line (a header field line), case-insensitively,
 // so a word appearing mid-sentence is never mistaken for a label. EN + DE for the de-AT target.
 const VENDOR_LABELS = ['vendor', 'lieferant', 'seller', 'verkäufer', 'supplier', 'rechnungssteller', 'from']
+// P3: the bill-to party. Labeled lines only (the conservative posture — 'an'/'to' alone are far too
+// ambiguous to be labels). 'rechnungsempfänger' precedes the bare 'empfänger' so the longer label wins
+// its own prefix; 'bill to'/'billed to'/'invoice to' cover the common EN layouts, 'kunde' the DACH ones.
+const RECIPIENT_LABELS = [
+  'rechnungsempfänger', 'empfänger', 'bill to', 'billed to', 'invoice to', 'kunde', 'customer', 'rechnung an'
+]
 const NUMBER_LABELS = [
   'invoice number', 'invoice no', 'invoice #', 'rechnungsnummer', 'rechnungs-nr', 'rechnung nr', 'rechnung-nr'
 ]
@@ -529,6 +558,15 @@ function applyHeader(
     const vendor = labeledValue(line, VENDOR_LABELS)
     if (vendor !== null) {
       if (!header.vendor) header.vendor = vendor
+      return true
+    }
+    // P3: the bill-to party — checked AFTER vendor (a 'rechnungssteller' line must never be read as a
+    // bare 'rechnung an' variant) and under the same money gate, first-wins like every header field.
+    // A value that is itself a reference noun ("Customer Reference: ABC", "Kunde Nr. 12345") is NOT a
+    // recipient name — leave the line unconsumed rather than capture a label tail as a party.
+    const recipient = labeledValue(line, RECIPIENT_LABELS)
+    if (recipient !== null && !/^(?:number|no|nr|nummer|reference|ref|id)\b/i.test(recipient)) {
+      if (!header.recipient) header.recipient = recipient
       return true
     }
     const number = labeledValue(line, NUMBER_LABELS)
@@ -890,6 +928,9 @@ export const extractInvoiceTool: SkillTool = {
     const dateAnchor = inferDateAnchor(joined, dateOrder)
     const invoice = extractInvoice(chunks, currency, dateOrder, dateAnchor)
     invoice.dateOrderInferred = dateOrderInferred
+    // P3: assess the RAW text layer (pre-normalization — soup is a spacing shape, not a Unicode one).
+    // 'suspect' rides the output so the answer layer can retry via geometry and gate its confidence.
+    if (looksLikeGlyphSoup(chunks.map((c) => c.text))) invoice.textQuality = 'suspect'
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     return { ok: true, output: invoice }
   }
@@ -1063,6 +1104,7 @@ function invoiceToPlainObject(invoice: InvoiceInput): Record<string, unknown> {
   const { header, lineItems, totals } = invoice
   return {
     vendor: header.vendor ?? null,
+    recipient: header.recipient ?? null,
     invoiceNumber: header.invoiceNumber ?? null,
     invoiceDate: header.invoiceDate ?? null,
     dueDate: header.dueDate ?? null,
@@ -1109,6 +1151,7 @@ export function buildInvoiceXml(invoice: InvoiceInput): string {
     lines.push(`${indent}<${name}>${text}</${name}>`)
   }
   el('vendor', header.vendor)
+  el('recipient', header.recipient)
   el('invoiceNumber', header.invoiceNumber)
   el('invoiceDate', header.invoiceDate)
   el('dueDate', header.dueDate)

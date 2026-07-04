@@ -141,13 +141,14 @@ export function isInvoiceStale(db: Db, invoiceId: string): boolean {
 export function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
   const inv = db
     .prepare(
-      `SELECT vendor, invoice_number AS invoiceNumber, invoice_date AS invoiceDate, due_date AS dueDate,
-              currency, net_total AS netTotal, tax_total AS taxTotal, tax_rate AS taxRatePercent,
-              gross_total AS grossTotal
+      `SELECT vendor, recipient, invoice_number AS invoiceNumber, invoice_date AS invoiceDate,
+              due_date AS dueDate, currency, net_total AS netTotal, tax_total AS taxTotal,
+              tax_rate AS taxRatePercent, gross_total AS grossTotal
        FROM invoices WHERE id = ?`
     )
     .get(invoiceId) as {
     vendor: string | null
+    recipient: string | null
     invoiceNumber: string | null
     invoiceDate: string | null
     dueDate: string | null
@@ -159,6 +160,7 @@ export function loadInvoice(db: Db, invoiceId: string): InvoiceInput {
   }
   const header: InvoiceInput['header'] = {}
   if (inv.vendor != null) header.vendor = inv.vendor
+  if (inv.recipient != null) header.recipient = inv.recipient // P3 (invoice-hardening-2026-07-04)
   if (inv.invoiceNumber != null) header.invoiceNumber = inv.invoiceNumber
   if (inv.invoiceDate != null) header.invoiceDate = inv.invoiceDate
   if (inv.dueDate != null) header.dueDate = inv.dueDate
@@ -214,15 +216,16 @@ function insertInvoiceExtraction(
   const t = output.totals
   db.prepare(
     `INSERT INTO invoices
-      (id, document_id, run_id, vendor, invoice_number, invoice_date, due_date, currency,
+      (id, document_id, run_id, vendor, recipient, invoice_number, invoice_date, due_date, currency,
        net_total, tax_total, tax_rate, gross_total, totals_reconciled, extractor_version,
-       date_order_inferred, dropped_row_count, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`
+       date_order_inferred, dropped_row_count, text_quality, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
   ).run(
     invoiceId,
     documentId,
     runId,
     h.vendor ?? null,
+    h.recipient ?? null, // P3 (invoice-hardening-2026-07-04)
     h.invoiceNumber ?? null,
     h.invoiceDate ?? null,
     h.dueDate ?? null,
@@ -234,6 +237,7 @@ function insertInvoiceExtraction(
     INVOICE_EXTRACTOR_VERSION,
     output.dateOrderInferred ?? null,
     output.droppedRowCount ?? null,
+    output.textQuality ?? null, // P3: 'suspect' when the text layer looked glyph-mangled
     completedAt
   )
   const insertLi = db.prepare(

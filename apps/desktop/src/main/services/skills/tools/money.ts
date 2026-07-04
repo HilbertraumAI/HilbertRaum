@@ -55,6 +55,56 @@ export function normalizeExtractionText(s: string): string {
     .replace(/\u2019/g, "'") // RIGHT SINGLE QUOTATION MARK
 }
 
+// ---- Extraction text quality (invoice-hardening-2026-07-04 P3) ----
+
+/**
+ * A line is GLYPH-SOUP-shaped when its tokens fragment into single glyphs: a run of \u2265 3 single-character
+ * tokens ("1 0 % 3", "P O S I T I O N"), or a token-rich line (\u2265 6 tokens) where nearly half the tokens
+ * are single glyphs. A per-glyph or column-fused PDF text layer (the reading-order concatenation of
+ * fragmented pdf.js text items) produces exactly this shape; a clean invoice line \u2014 even a columnar
+ * "Widget   2   50,00   100,00" \u2014 does not (its column tokens are multi-character figures).
+ */
+function isGlyphSoupLine(line: string): boolean {
+  const tokens = line.split(/\s+/)
+  let run = 0
+  let maxRun = 0
+  let single = 0
+  for (const t of tokens) {
+    if (t.length === 1) {
+      run++
+      single++
+      if (run > maxRun) maxRun = run
+    } else {
+      run = 0
+    }
+  }
+  if (maxRun >= 3) return true
+  return tokens.length >= 6 && single / tokens.length >= 0.45
+}
+
+/**
+ * Whether a document's extracted text layer looks GLYPH-MANGLED \u2014 enough soup-shaped lines that the
+ * line-oriented extractors read fragments, not fields (the real-transcript incident: line-item
+ * descriptions like "1   0 % 3   Article" and totals scraped from "$   914   =   $"). Deterministic and
+ * deliberately CONSERVATIVE (an absolute floor AND a ratio, so one decorative spaced-out heading never
+ * flags a clean document): at least 3 soup-shaped non-empty lines AND \u2265 20% of all non-empty lines.
+ * Shared here (beside `normalizeExtractionText`) so any extraction entry point can assess its input;
+ * the invoice extractor stamps the verdict as `textQuality: 'suspect'` for the answer layer.
+ */
+export function looksLikeGlyphSoup(texts: readonly string[]): boolean {
+  let nonEmpty = 0
+  let soupy = 0
+  for (const text of texts) {
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim()
+      if (!line) continue
+      nonEmpty++
+      if (isGlyphSoupLine(line)) soupy++
+    }
+  }
+  return soupy >= 3 && soupy / nonEmpty >= 0.2
+}
+
 // ---- Amounts ----
 
 // A money token is either a figure ending in a 2-digit minor unit (",56" / ".56") OR a bare GROUPED
