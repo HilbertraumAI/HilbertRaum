@@ -2,6 +2,7 @@ import type { Db } from '../db'
 import type { Citation, CoverageInfo, Message } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import {
+  ANALYSIS_RESPONSE_RESERVE_TOKENS,
   appendMessage,
   CHAT_RESPONSE_RESERVE_TOKENS,
   emptyAssistantMessage,
@@ -25,7 +26,7 @@ import {
   SUMMARY_TEMPERATURE,
   SUMMARY_TOKENS_PER_WORD
 } from '../doctasks/summary'
-import { approxTokenCount, truncateToApproxTokens } from '../ingestion/chunker'
+import { truncateToApproxTokens } from '../ingestion/chunker'
 
 // Skill-aware WHOLE-DOCUMENT answer over a DEEP-INDEX TREE (skill-whole-doc engine, Follow-up A —
 // architecture.md §20). Wave 2 read an over-budget document from the BEGINNING and stamped the honest
@@ -90,6 +91,85 @@ function reduceUserPrompt(
   // identical to the pre-Phase-1 tree prompt (the tree path passes none).
   const extra = extraReduceBlock ? `\n${extraReduceBlock}\n` : ''
   return `${coverageLine}\n\nUser request:\n${question}\n${fence}${extra}\n${notesLabel}:\n${notes}\n\nAnswer:`
+}
+
+// ── Reduce output/notes budget (Phase 2 — wholedoc-truncation-fix-plan §4) ────────────────────────────
+//
+// The reduce step needs a MUCH larger output reserve than a chat reply to finish a structured
+// deliverable, but at a small `n_ctx` you cannot both hold the document notes AND emit a long answer.
+// `computeReduceBudget` sizes both from the REAL launched context so `notes + output` provably fit the
+// window at EVERY size — the regression guard against the HTTP 400 "exceeds context size" (invariant §2,
+// "no n_ctx overflow").
+//
+// POLICY (owner-approved 2026-07-04, a deliberate deviation from §4's fixed output-first clamp): the
+// deliverable reserve is NOTES-FIRST. It aims for `ANALYSIS_RESPONSE_RESERVE_TOKENS` but YIELDS toward
+// `CHAT_RESPONSE_RESERVE_TOKENS` (today's floor — never worse) so the WHOLE document's notes survive.
+// Only when even the floor output leaves no room are the notes hard-truncated (⇒ `truncated:true`, honest
+// coverage). Consequence: a long brief gets the full reserve on a ≥ ~8 k window; on a 4 k window the
+// OUTPUT shrinks (the documented residual) rather than reopening Phase 1's whole-doc coverage.
+//
+// UNIT CONVENTION — all arithmetic is in MODEL tokens (the unit of `contextTokens`, `maxTokens`, and
+// `approxPromptTokens`, which is `approxTokenCount × TOKENS_PER_WORD`). `notesTokens` is the reduce
+// notes measured with `approxPromptTokens`; `reduceOutputCap` is passed straight to `maxTokens`;
+// `reduceNotesBudget` is the max model tokens the notes may occupy — the caller divides it by
+// `SUMMARY_TOKENS_PER_WORD` to get the WORD budget the `truncateToApproxTokens`/`approxTokenCount`
+// helpers count in (word_units × SUMMARY_TOKENS_PER_WORD ≈ model tokens).
+//
+// GUARANTEE: `fenceTokens + questionTokens + REDUCE_CHROME_TOKENS + reduceNotesBudget + reduceOutputCap
+// ≤ contextTokens` at every context size ≥ `CHAT_RESPONSE_RESERVE_TOKENS + REDUCE_MIN_NOTES_TOKENS +
+// overhead` (~1.9 k + fence — i.e. every real window; the smallest supported is 2 048). Below that the
+// output floor alone exceeds the window (an inherent small-`n_ctx` limit, no worse than today's fixed
+// 1024 reserve) and the notes retain `REDUCE_MIN_NOTES_TOKENS` of material.
+
+/** Reduce prompt chrome (system prompt + coverage line + labels), in model tokens (§4 CHROME=128). */
+export const REDUCE_CHROME_TOKENS = 128
+/** Never starve the reduce notes below this many model tokens (§4 MIN_NOTES=512). */
+export const REDUCE_MIN_NOTES_TOKENS = 512
+
+export interface ReduceBudgetInput {
+  /** The REAL launched context window (§L0), in model tokens. */
+  contextTokens: number
+  /** Skill-fence cost in the reduce user turn (`approxPromptTokens`), model tokens. 0 when no skill. */
+  fenceTokens: number
+  /** Question cost in the reduce user turn (`approxPromptTokens`), model tokens. */
+  questionTokens: number
+  /** Actual assembled reduce-notes size (`approxPromptTokens(notes)`), model tokens. */
+  notesTokens: number
+}
+
+export interface ReduceBudget {
+  /** `maxTokens` for the reduce stream (model tokens): the deliverable reserve after yielding to notes. */
+  reduceOutputCap: number
+  /** Max model tokens the notes may occupy; truncate the notes to this (÷ SUMMARY_TOKENS_PER_WORD words). */
+  reduceNotesBudget: number
+  /** The notes exceed `reduceNotesBudget` and must be hard-truncated ⇒ the answer covers only the
+   *  beginning (coverage honesty C1/L2). */
+  notesTruncated: boolean
+}
+
+/**
+ * Size the reduce step's output cap + notes budget from the launched context (see the module note above).
+ * Pure — unit-tested at the boundaries (wholedoc-reduce-budget.test.ts).
+ */
+export function computeReduceBudget({
+  contextTokens,
+  fenceTokens,
+  questionTokens,
+  notesTokens
+}: ReduceBudgetInput): ReduceBudget {
+  const overhead = fenceTokens + questionTokens + REDUCE_CHROME_TOKENS
+  const available = Math.max(0, contextTokens - overhead) // model tokens shared by notes + output
+  // Notes-first: output aims for ANALYSIS…, but reserves the ACTUAL notes (never below MIN_NOTES) and
+  // never drops under CHAT… (today's floor). Output takes whatever the notes leave.
+  const reduceOutputCap = Math.max(
+    CHAT_RESPONSE_RESERVE_TOKENS,
+    Math.min(ANALYSIS_RESPONSE_RESERVE_TOKENS, available - Math.max(notesTokens, REDUCE_MIN_NOTES_TOKENS))
+  )
+  // The notes may fill whatever the (final) output cap leaves — at least MIN_NOTES of material. At every
+  // real context (≥ 2 048 with a realistic fence) `available − cap ≥ MIN_NOTES`, so this floor does not
+  // bind and `overhead + reduceNotesBudget + reduceOutputCap === contextTokens` (fits exactly, no overflow).
+  const reduceNotesBudget = Math.max(REDUCE_MIN_NOTES_TOKENS, available - reduceOutputCap)
+  return { reduceOutputCap, reduceNotesBudget, notesTruncated: notesTokens > reduceNotesBudget }
 }
 
 export interface WholeDocTreeDeps {
@@ -178,9 +258,8 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // fits the launched context.
   const skillFence = skill ? buildSkillFence({ title: skill.title, body: skill.body }).text : null
   const fenceTokens = skillFence ? approxPromptTokens(skillFence) : 0
-  const reserveWords = Math.ceil(
-    (fenceTokens + approxPromptTokens(question) + 200) / SUMMARY_TOKENS_PER_WORD
-  )
+  const questionTokens = approxPromptTokens(question)
+  const reserveWords = Math.ceil((fenceTokens + questionTokens + 200) / SUMMARY_TOKENS_PER_WORD)
   const budgetWords = Math.max(200, summaryBudgetWords(contextTokens) - reserveWords)
   // Map-call ceiling (parity with `planSummaryWindows` / SUMMARY_MAP_CALL_CEILING): beyond ~12 windows
   // the rescue would fan out without bound. Keep the first N windows and mark the answer truncated so the
@@ -216,7 +295,9 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   if (answerPrefix) onToken?.(answerPrefix)
   try {
     // MAP: when the source fits one window there is no map step — the reduce runs over it directly (it
-    // still carries the fence). More than one window → fence-applied notes per section.
+    // still carries the fence). More than one window → fence-applied notes per section. All-empty maps
+    // (e.g. a reasoning model that emitted only think blocks): fall back to the raw source so the reduce
+    // still has document material.
     let notes: string
     if (windows.length <= 1) {
       notes = windows[0] ?? sourceTexts.join('\n\n')
@@ -226,16 +307,25 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
         const partial = await collect(mapUserPrompt(skillFence, i + 1, windows.length, windows[i]))
         if (partial.length > 0) partials.push(partial)
       }
-      // All-empty maps (e.g. a reasoning model that emitted only think blocks): fall back to the raw
-      // source so the reduce still has document material. Either way, when the joined notes exceed the
-      // reduce budget they are hard-truncated → mark the answer truncated so the coverage stamp + reduce
-      // prompt stop claiming whole-document coverage (audit §2.2, the "lies at the margin" defect).
-      let joined = partials.length > 0 ? partials.join('\n\n') : sourceTexts.join('\n\n')
-      if (approxTokenCount(joined) > budgetWords) {
-        joined = truncateToApproxTokens(joined, budgetWords)
-        truncated = true
-      }
-      notes = joined
+      notes = partials.length > 0 ? partials.join('\n\n') : sourceTexts.join('\n\n')
+    }
+
+    // Adaptive reduce budget (Phase 2 — §4): size the deliverable's output cap + the notes from the REAL
+    // launched context so `notes + output` fit `n_ctx` at every size (no HTTP 400). The output reserve
+    // yields to the actual notes (notes-first), so a large single-window document keeps WHOLE-document
+    // coverage and only the deliverable shrinks on a small window. When even the floor output leaves no
+    // room, the notes are hard-truncated → mark the answer truncated so the coverage stamp + reduce prompt
+    // stop claiming whole-document coverage (audit §2.2, the "lies at the margin" defect). Model-token math
+    // is converted to the chunker's word units (÷ SUMMARY_TOKENS_PER_WORD) for `truncateToApproxTokens`.
+    const { reduceOutputCap, reduceNotesBudget, notesTruncated } = computeReduceBudget({
+      contextTokens,
+      fenceTokens,
+      questionTokens,
+      notesTokens: approxPromptTokens(notes)
+    })
+    if (notesTruncated) {
+      notes = truncateToApproxTokens(notes, Math.max(1, Math.floor(reduceNotesBudget / SUMMARY_TOKENS_PER_WORD)))
+      truncated = true
     }
 
     // REDUCE (streamed to the user): the final skill-formatted deliverable. The prompt is softened to
@@ -246,7 +336,7 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     ]
     for await (const token of runtime.chatStream(messages, {
       signal,
-      maxTokens: CHAT_RESPONSE_RESERVE_TOKENS,
+      maxTokens: reduceOutputCap,
       temperature: SUMMARY_TEMPERATURE
     })) {
       content += token

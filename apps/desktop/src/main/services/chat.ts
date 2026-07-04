@@ -971,6 +971,17 @@ export function exportTranscript(db: Db, conversationId: string): { title: strin
 /** Model tokens reserved for the streamed answer + chat-template chrome (so a fitted
  *  prompt still leaves room to generate; below this an answer would be truncated). */
 export const CHAT_RESPONSE_RESERVE_TOKENS = 1024
+/**
+ * DESIRED output reserve for a whole-document ANALYSIS deliverable — the streamed map-reduce reduce
+ * step (whole-doc engine, wholedoc-truncation-fix-plan §4 / Phase 2). A structured brief (a 9-section
+ * contract analysis, minutes, a share-safe review) needs far more room than a conversational reply, so
+ * the reduce aims for this instead of `CHAT_RESPONSE_RESERVE_TOKENS`. It is only a TARGET: the reduce
+ * budget (`computeReduceBudget`, whole-doc-tree.ts) yields it back toward `CHAT_RESPONSE_RESERVE_TOKENS`
+ * (never below — never worse than today) so the actual notes + this cap provably fit the launched
+ * `n_ctx` at every context size. On a large window (≥ ~8 k) the deliverable gets the full reserve; on a
+ * small window (4 k) it shrinks so whole-document coverage survives (the "output cut" residual — Phase 4).
+ */
+export const ANALYSIS_RESPONSE_RESERVE_TOKENS = 3072
 /** Base real-tokens-per-whitespace-word rate for typical English/Latin prose. */
 const CHAT_TOKENS_PER_WORD = 1.3
 /**

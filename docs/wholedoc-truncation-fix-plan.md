@@ -1,7 +1,7 @@
 # Whole-document analysis truncation — fix plan
 
-**Status:** OPEN (working paper). **Phase 1 IMPLEMENTED (2026-07-04)** — see §3; Phases 2–4 remain
-open. Fold into `docs/architecture.md` §19/§20 (skill-whole-doc engine) + `docs/rag-design.md` as a
+**Status:** OPEN (working paper). **Phases 1–2 IMPLEMENTED (2026-07-04)** — see §3 and §4; Phases 3–4
+remain open. Fold into `docs/architecture.md` §19/§20 (skill-whole-doc engine) + `docs/rag-design.md` as a
 §-numbered design record when fully implemented, then delete this file (CLAUDE.md doc-lifecycle rule).
 
 **Owner-approved decisions (2026-07-04):** (1) close the gap band with an *on-the-fly map-reduce
@@ -190,11 +190,36 @@ The reduce output reserve is UNCHANGED (`CHAT_RESPONSE_RESERVE_TOKENS`) — that
 
 ---
 
-## 4. Phase 2 — Complete the deliverable (safe, adaptive output reserve)
+## 4. Phase 2 — Complete the deliverable (safe, adaptive output reserve) ✅ IMPLEMENTED (2026-07-04)
 
 **Goal:** the reduce step emits as long a deliverable as the launched window *safely* allows,
 without ever overflowing `n_ctx`. Removes the mid-sentence cut on any window ≥ ~6 k; shrinks it on
 4 k. (The complete-at-any-size fix is optional Phase 4.)
+
+**As built:** `ANALYSIS_RESPONSE_RESERVE_TOKENS = 3072` added in [chat.ts][chat] (the *desired* reduce
+output; `CHAT_RESPONSE_RESERVE_TOKENS` stays the floor). A new pure, unit-tested helper
+`computeReduceBudget({contextTokens, fenceTokens, questionTokens, notesTokens})` in [whole-doc-tree.ts][wdt]
+sizes the reduce step's `reduceOutputCap` (→ `maxTokens`) and `reduceNotesBudget` (→ the notes hard-cut,
+replacing the old `budgetWords` cut) from the REAL launched context. It runs in `streamWholeDocMapReduce`
+(the shared core), so BOTH the tree and chunk paths get the adaptive budget. All arithmetic is in **model
+tokens**; the notes cut converts to the chunker's word units via `SUMMARY_TOKENS_PER_WORD`. Tests: new
+`tests/unit/wholedoc-reduce-budget.test.ts` (budget math) + two cases in `rag-whole-doc-mapreduce.test.ts`
+(ctx 8192 full reserve / untruncated; ctx 4096 floored + honest badge, asserting `maxTokens`). The
+existing tree + Phase-1 chunk tests stayed **byte-identical outcomes** (see the policy note).
+
+> **⚠️ Owner-approved deviation from the formula below (2026-07-04): NOTES-FIRST.** The formula as
+> originally written (fixed `reduceOutputCap = clamp(desired, floor, ctx − overhead − MIN_NOTES)`, then
+> notes clamped to whatever is left) is **output-first**: at the default 4096 context it reserves up to
+> 3072 for output and leaves the reduce **less** input room (~500 words) than the single read it replaces
+> (~1500 words), so every mid-size document — exactly Phase 1's gap band — would truncate back to the
+> beginning. That reopens Phase 1's closure and contradicts residual (c)'s "output cut" framing. The
+> implemented policy instead lets the output reserve **yield** to the actual notes: it aims for
+> `ANALYSIS…` but shrinks toward `CHAT…` (never below) so the WHOLE document survives; the notes are
+> hard-truncated (⇒ `truncated:true`) **only** when even the floor output leaves no room. Consequence at
+> 4 k: the *deliverable* shrinks (the honest residual), Phase 1's whole-doc coverage is *preserved*.
+> Result: with a realistic ~980-token fence+question and notes that fit, the numbers **match the worked
+> examples anyway** (4096 → cap 2476, notes 512; 8192 → cap 3072); the policies only diverge for
+> over-budget notes.
 
 ### Why not just raise the reserve
 At 4096 with a ~900-token fence, reserving 3072 output while notes fill ~3200 tokens ⇒ prompt +
@@ -206,27 +231,25 @@ be recomputed against it.
 - `apps/desktop/src/main/services/skills/analysis/whole-doc-tree.ts` — reduce budget math in the core.
 - `apps/desktop/tests/unit/wholedoc-reduce-budget.test.ts` — new (pure budget math).
 
-### Changes (in `streamWholeDocMapReduce`, reduce step only)
-Compute, from the REAL launched `contextTokens`, fence tokens, and question tokens:
+### Changes (in `streamWholeDocMapReduce`, reduce step only) — AS BUILT (notes-first, per the note above)
+`computeReduceBudget` takes the actual assembled `notesTokens` (= `approxPromptTokens(notes)`) and yields
+the output reserve to it (all in model tokens; `CHROME = 128`, `MIN_NOTES = 512`):
 ```ts
-const CHROME = 128            // system + coverage line + labels
-const MIN_NOTES = 512         // never starve the notes below this
-const SAFETY = 1.3            // subword headroom (keeps prompt+cap under n_ctx)
-
-const reduceOutputCap = clamp(
-  ANALYSIS_RESPONSE_RESERVE_TOKENS,               // desired
-  CHAT_RESPONSE_RESERVE_TOKENS,                   // floor (never worse than today)
-  contextTokens - fenceTokens - questionTokens - CHROME - MIN_NOTES  // ceiling
+const overhead   = fenceTokens + questionTokens + REDUCE_CHROME_TOKENS
+const available  = Math.max(0, contextTokens - overhead)          // notes + output share this
+const reduceOutputCap = Math.max(                                 // aim for ANALYSIS…, yield to notes
+  CHAT_RESPONSE_RESERVE_TOKENS,                                   // …but never below today's floor
+  Math.min(ANALYSIS_RESPONSE_RESERVE_TOKENS, available - Math.max(notesTokens, REDUCE_MIN_NOTES_TOKENS))
 )
-const reduceNotesBudget = Math.max(
-  MIN_NOTES,
-  Math.floor((contextTokens - reduceOutputCap - fenceTokens - questionTokens - CHROME) / SAFETY)
-)
-// notes truncated to reduceNotesBudget (was: budgetWords); reduce streamed with maxTokens: reduceOutputCap
+const reduceNotesBudget = Math.max(REDUCE_MIN_NOTES_TOKENS, available - reduceOutputCap)
+// notes hard-cut to reduceNotesBudget (÷ SUMMARY_TOKENS_PER_WORD → word units) ONLY when they overflow it
+// (⇒ truncated); reduce streamed with maxTokens: reduceOutputCap.
 ```
-Guarantee: `prompt + reduceOutputCap ≤ contextTokens` at every size (worked example: 4096 → cap
-≈ 2 476, notes ≈ 512, fits exactly; 8192 → cap 3072, notes ≈ 3 086). The `maxTokens` cap means a
-cut is now a deliberate cap, not an `n_ctx` crash.
+Guarantee (the invariant §2 no-overflow guard): `overhead + reduceNotesBudget + reduceOutputCap ≤
+contextTokens` at every real window (≥ 2 048 with a realistic fence — it fits *exactly*). Worked examples
+(fence+q ≈ 980, notes fit): 4096 → cap 2476, notes 512; 8192 → cap 3072. The original output-first
+formula is retained above the note for the historical record — the pure helper's shape differs (it takes
+`notesTokens`) but its unit-testable guarantee is identical.
 
 The MAP step is unchanged (`SUMMARY_OUTPUT_TOKENS = 512` — notes, not deliverable).
 
@@ -243,8 +266,10 @@ so the truncation/needle decision boundaries don't shift. The single-turn capped
 - Integration: a reduce that would emit a long answer at ctx 8192 is NOT stamped `truncated` when
   it fits the cap; at ctx 4096 the honest badge still appears for a genuinely over-cap answer.
 
-### Done criteria
-No `n_ctx` overflow at any context; typical briefs complete on ≥8 k windows; `npm test` green.
+### Done criteria ✅
+No `n_ctx` overflow at any context (pinned by the pure budget test + the integration `maxTokens` asserts);
+typical briefs complete on ≥8 k windows (full 3072 reserve); Phase 1 coverage preserved at 4 k (notes-first);
+`npm test` + `npm run typecheck` + `npm run build` green.
 
 ---
 

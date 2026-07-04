@@ -734,8 +734,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the beginning only. New residuals: (a) the ≥~50-page tail is still beginning-only when its window count
   exceeds `SUMMARY_MAP_CALL_CEILING` (~12 windows) — honestly badged `truncated`; (b) a mid-size analysis
   now costs 2–12 model calls (map windows + reduce) of extra latency before the first streamed token (a
-  progress affordance is Phase 3); (c) on a small (4 k) window a very long deliverable is still output-cut
-  by the unchanged `CHAT_RESPONSE_RESERVE_TOKENS` reduce reserve — honestly badged, removed by Phase 2/4.
+  progress affordance is Phase 3); (c) on a small (4 k) window a very long deliverable is **output-cut**:
+  since **Phase 2** (2026-07-04) the reduce output reserve is adaptive (`computeReduceBudget`) — it aims
+  for `ANALYSIS_RESPONSE_RESERVE_TOKENS` (3072) so a brief completes in full on a ≥ ~8 k window, and on a
+  4 k window it **yields the reserve toward `CHAT_RESPONSE_RESERVE_TOKENS`** (never below) so whole-document
+  coverage is *preserved* and the *deliverable* shrinks instead (notes-first — Phase 1's gap-band closure
+  survives at the default 4 k). Only a document whose notes cannot fit alongside even the floor output is
+  notes-truncated (honestly badged `truncated`). A truly complete-at-any-`n_ctx` deliverable (continue-
+  generation) is the optional Phase 4. Guarantee: `prompt + output ≤ n_ctx` at every context size (no
+  HTTP 400 "exceeds context size").
   **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
   (budget split size-aware across them, `capped` coverage — `truncated` when either overflowed) and

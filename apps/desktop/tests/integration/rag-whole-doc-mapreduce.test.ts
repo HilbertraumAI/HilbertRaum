@@ -20,7 +20,12 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
-import { appendMessage, createConversation } from '../../src/main/services/chat'
+import {
+  ANALYSIS_RESPONSE_RESERVE_TOKENS,
+  appendMessage,
+  CHAT_RESPONSE_RESERVE_TOKENS,
+  createConversation
+} from '../../src/main/services/chat'
 import {
   generateGroundedAnswer,
   ragSettingsFrom,
@@ -243,5 +248,93 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
     for (const turn of runtime.turns) {
       expect(systemTurnOf(turn)).not.toContain('AUTOMATED PRE-SCAN')
     }
+  })
+})
+
+// Phase 2 — adaptive reduce output reserve (wholedoc-truncation-fix-plan §4). The reduce step no longer
+// reserves a fixed CHAT_RESPONSE_RESERVE_TOKENS (1024); it sizes the deliverable's output cap from the
+// REAL launched window so a long brief completes on a large window, while `notes + output` provably fit
+// `n_ctx` at every size (no HTTP 400). The reserve is NOTES-FIRST: it yields toward the floor so the whole
+// document survives a small window, truncating the notes (⇒ truncated) only when even the floor leaves no
+// room. These cases capture the reduce call's runtime options to pin `maxTokens === reduceOutputCap`.
+
+interface OptionRecordingRuntime extends ModelRuntime {
+  calls: number
+  turns: ChatMessage[][]
+  options: Array<{ maxTokens?: number } | undefined>
+}
+
+/** Reports `ctx` as the launched window and records EVERY call's turns AND runtime options, so a test can
+ *  assert the reduce received a specific `maxTokens`. `reply` sizes the map/reduce output (long ⇒ the
+ *  joined notes overflow the reduce budget → the honest truncation path). */
+function optionRecordingRuntime(ctx: number, reply: string): OptionRecordingRuntime {
+  const rt = {
+    modelId: 'mock',
+    calls: 0,
+    turns: [] as ChatMessage[][],
+    options: [] as Array<{ maxTokens?: number } | undefined>,
+    contextWindow: () => ctx,
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: 'ok', port: null }),
+    async *chatStream(messages: ChatMessage[], options?: { maxTokens?: number }) {
+      rt.calls++
+      rt.turns.push(messages)
+      rt.options.push(options)
+      yield reply
+    }
+  } as unknown as OptionRecordingRuntime
+  return rt
+}
+
+describe('whole-document chunk map-reduce — adaptive reduce output reserve (Phase 2)', () => {
+  it('ctx 8192: a long deliverable gets the FULL desired reserve and is NOT stamped truncated', async () => {
+    const h = await makeHarness(280) // over the 8 k single-read budget ⇒ multi-window map-reduce
+    // Short map notes ⇒ the joined notes are tiny, so the reduce keeps the whole ANALYSIS reserve.
+    const runtime = optionRecordingRuntime(8192, 'Notiz zum Abschnitt.')
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+    const msg = (await generateGroundedAnswer(
+      h.db,
+      runtime,
+      new MockEmbedder(),
+      h.conversationId,
+      QUESTION,
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: h.docId } }
+    )) as Message
+
+    // Whole-document coverage survives — the long answer fit the cap, no honest-truncation badge.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(false)
+    // The final REDUCE call streamed with the FULL desired analysis reserve (not the old 1024 floor).
+    const reduceOptions = runtime.options[runtime.options.length - 1]
+    expect(reduceOptions?.maxTokens).toBe(ANALYSIS_RESPONSE_RESERVE_TOKENS)
+    expect(reduceOptions?.maxTokens).toBeGreaterThan(CHAT_RESPONSE_RESERVE_TOKENS)
+  })
+
+  it('ctx 4096: a genuinely over-cap answer floors the output and shows the honest truncated badge', async () => {
+    const h = await makeHarness(280)
+    // Long map notes ⇒ the joined notes exceed (context − overhead − floor-output): even the floor output
+    // leaves no room, so the output sits at the floor and the notes are hard-truncated (honest coverage).
+    const runtime = optionRecordingRuntime(4096, `${'Detailpunkt '.repeat(1000)}`.trim())
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+    const msg = (await generateGroundedAnswer(
+      h.db,
+      runtime,
+      new MockEmbedder(),
+      h.conversationId,
+      QUESTION,
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { wholeDocument: { documentId: h.docId } }
+    )) as Message
+
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(true)
+    // The reduce output was floored (nothing left to yield) — never below today's reserve.
+    const reduceOptions = runtime.options[runtime.options.length - 1]
+    expect(reduceOptions?.maxTokens).toBe(CHAT_RESPONSE_RESERVE_TOKENS)
+    // The softened, honest reduce framing accompanies the truncated stamp.
+    const reduceUser = userTurnOf(runtime.turns[runtime.turns.length - 1])
+    expect(reduceUser).toContain('BEGINNING of the document')
   })
 })
