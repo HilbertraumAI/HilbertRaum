@@ -243,6 +243,13 @@ chat" chip otherwise); make the categorize offer refuse rather than retarget whe
 not in the current scope; require confirm-gated tools to hard-refuse on out-of-scope ids (SKA-29).
 **Testing:** renderer tests for second-start, cross-conversation bar, wrong-doc categorize chain.
 **Docs:** architecture §9 renderer note.
+**Status: FIXED in U6** (`renderer/lib/skillruns.ts` re-architected into a multi-run store keyed by
+`runHandle`, each entry `{run, conversationId, documentId}`, all live handles polled independently;
+ChatScreen gates the bar to `pickConversationRun(skillRuns, activeId)` and shows a quiet "working in
+another chat" chip for runs elsewhere; the post-extract Categorize offer is hidden when its remembered
+document left the current scope (`categorizeTargetInScope`), never relying on main's single-doc fallback
+(SKA-29). Store + IPC + SkillRunBar + ChatScreen-relay tests; the two-runs-coexist / result-never-in-foreign
+/ wrong-doc-categorize chain is test-pinned.)
 
 ### 3.2 Medium
 
@@ -439,6 +446,13 @@ runs have no analogue.)
 **Fix:** `listSkillRuns` IPC (handle + documentId + state, ids-only) + mount-time re-adopt; include the
 running handle in the busy refusal as a fallback; TTL-sweep unacknowledged terminal entries.
 **Testing:** reload/re-attach renderer test; controller sweep test. **Docs:** architecture §9.
+**Status: FIXED in U6** (`listSkillRuns` IPC returns `SkillRunState[]` — running AND terminal-unacknowledged;
+the store's `adoptSkillRuns()` re-adopts on a fresh mount and the ChatScreen mount effect re-lands on the
+run's conversation via `getReattachConversationId`. `conversationId`/`documentId` are threaded additively onto
+the content-free `SkillRunState` (+ `StartRunArgs`), a busy refusal carries `runningHandle` as a single-handle
+re-attach fallback (`adoptHandle`), and the controller TTL-sweeps never-acknowledged terminal runs on
+`start()`/`list()`. Controller `list()`/`getByDocument()`/TTL tests + store re-adopt + IPC listSkillRuns
+tests.)
 
 **SKA-18 — A skill picked on the 'new' composer (with "keep") is never cleared after being carried: it
 resurrects on any later empty composer and persists a default onto a FUTURE conversation.** · bug (U3
@@ -451,6 +465,10 @@ next send creates conv 2 **and persists bank-statement as conv 2's sticky defaul
 made for conv 1. Inconsistent with "New chat", which starts clean.
 **Fix:** delete the `'new'` keys in `ensureConversation` after re-keying. **Testing:** renderer test for
 the mode-toggle resurrect. **Docs:** none.
+**Status: FIXED in U6** (`ChatScreen.ensureConversation` deletes the `'new'` keys from `skillByConv`/
+`keepByConv` after re-keying them onto the created conversation; the mode-toggle resurrect is test-pinned in
+`SkillRunLifecycle.test.tsx` — pick+keep on 'new' → send → toggle mode → composer shows "No skill", nothing
+re-persisted).
 
 ### 3.3 Low
 
@@ -521,6 +539,10 @@ already tolerates rejected predecessors).
 documents/windows** (`registerSkillsIpc.ts:377-379` → `run-controller.ts:186-189`); latent (the shipped
 UI passes handles) but the no-handle form is a pre-A2 relic. Require a non-empty handle at the IPC
 boundary; keep cancel-all internal. Add `requireUnlocked` to get/cancel/clear for surface consistency.
+**Status: FIXED in U6** (the `cancelSkillRun`/`clearSkillRun` IPC handlers refuse an empty/absent handle
+[no-op], so the controller's no-arg cancel-all/clear-all is internal/test-only; `requireUnlocked` added to
+get/list/cancel/clear. IPC test: an empty-handle cancel does NOT abort an in-flight run [held on the save
+dialog], while a real handle does.)
 
 **SKA-26 — Extractor-version DOWNGRADE is unhandled** (`run.ts:769-775`, `invoice-run.ts:125-131` —
 `row.v < CURRENT`): on a portable drive roaming to an older app, newer-version rows are served as
@@ -544,6 +566,8 @@ comment is true by construction.
 than the one confirmed** (`registerSkillsIpc.ts:343-348`; the generic confirm body names no document).
 Keep the fallback for read-only tools; hard-refuse (or re-confirm) when `toolRunNeedsConfirmation` and
 the requested id fell out of scope. (Also the main-side half of SKA-6's wrong-doc chain.)
+**Status: FIXED in U6** (`startSkillRun` refuses `documentOutOfScope` when `toolRunNeedsConfirmation(toolName)`
+AND the requested id is non-empty and out of the freshly-resolved scope — even at a single-doc scope [`docIds.length > 1 || confirmGated`]. Read-only tools keep the documented single-doc fallback. IPC test: confirm-gated export with an out-of-scope id + one in-scope doc hard-refuses; a read-only tool falls back.)
 
 **SKA-30 — Zip duplicate-path rejection is case-sensitive** (`installer.ts:351-364`): `SKILL.md` +
 `skill.md` in one `.skill.zip` last-writer-wins on Windows/exFAT — the exact shadowing S-2 exists to
@@ -583,25 +607,46 @@ drive. Sweep at reconcile.
 unanswered user turn exists** (`Transcript.tsx:104-109, 287`): clicking "Answer without this skill" on
 A1 actually re-answers the later Q2 skill-free — placement promises one thing, regenerate semantics do
 another. Suppress when the conversation doesn't end with that assistant turn.
+**Status: FIXED in U6** (`Transcript.tsx` `lastAssistantId` is now the LAST message's id only when it is an
+assistant turn — a trailing user turn yields `undefined`, suppressing both the undo and Try again [gated on
+`isLast`]; the failed-generation retry stays covered by the error banner. Transcript test pins the
+trailing-user-turn suppression.)
 
 **SKA-38 — Deleting a skill erases the stamp AND the undo from an already-stamped last turn**
 (`services/chat.ts:277-290` LEFT JOIN nulls both; `Transcript.tsx:278` gates glyph+undo on
 `skillTitle`; documents mode has no other re-answer affordance): inconsistent with a *disabled* skill
 (kept via stamped-title fallback) and with "the undo rides every skill-stamped last turn". Key the undo
 off `messages.skill_id` with a "(removed skill)" label.
+**Status: FIXED in U6** (`chat.ts rowToMessage` now returns the RAW `messages.skill_id` [present even when
+deleted] + the JOIN `skillTitle` [null when deleted], and `autoFired` follows the stamp; `Transcript.tsx`
+gates the glyph+undo on `m.skillId` and labels a gone-skill turn "(removed skill)" [`chat.skill.removed`,
+en+de]. Transcript test: a removed-skill last turn keeps the glyph + undo; `skills-turn.test.ts` updated to
+the new deleted→stamp-survives contract.)
 
 **SKA-39 — The run store re-notifies with a fresh object every 400 ms poll tick even when nothing
 changed** (`skillruns.ts:105-127`; main returns a fresh copy per `get()`), re-rendering ChatScreen
 ~2.5×/s for the run's duration; `SkillRunState.progress` is polled but never rendered (dead plumbing —
 the busy row is static text). Shallow-compare before `setActive`; optionally render `done/total`.
+**Status: FIXED in U6** (the store rebuilds the `useSyncExternalStore` snapshot [and notifies] ONLY when a
+tracked field changed — a `sameRun` shallow-compare over `state`/`count`/`resultKind`/`progress`/`errorCode`;
+the busy row now renders `(done/total)` when `progress.total > 0`. Store test: an identical poll produces no
+notify.)
 
 **SKA-40 — One transient poll error permanently and silently drops a live run**
 (`skillruns.ts:122-125` — `catch { stopPolling(); setActive(null) }`): bar vanishes mid-run with the
 SKA-17 orphan consequences. Tolerate N consecutive failures; keep a "state unknown" row on give-up.
+**Status: FIXED in U6** (the store tolerates `MAX_POLL_FAILURES` [3] consecutive `getSkillRun` errors,
+then keeps a labelled, dismissable *"couldn't check on this skill"* row [`stateUnknown`] instead of
+dropping the run; a null poll on a still-running run is treated the same [a dead Cancel would otherwise
+strand the bar]. Store tests pin both the give-up and the null-poll paths.)
 
 **SKA-41 — The run bar's `aria-live` region is created per state branch, so the first-ever
 announcement can be missed by AT** (`SkillRunBar.tsx:216, 245`) — the app's own M-U1 lesson
 (always-mounted live regions) applied everywhere but here. One always-mounted status container.
+**Status: FIXED in U6** (one always-mounted `role="status" aria-live="polite"` container [`.skill-run-live`]
+that the run row renders INSIDE; the offer sits outside it, and the component always returns an element so
+the region pre-exists the first run. The SKA-39 `done/total` progress rides a SEPARATE aria-hidden span so a
+long run isn't announced per tick [adversarial-review hardening]. Empty-state + progress-aria-hidden tests.)
 
 **SKA-42 — `document-redaction/SKILL.md` hardcodes the ENGLISH button label** ("click the **Redact
 personal data** button…") the DE UI never shows (`Personenbezogene Daten schwärzen`): when the routing
@@ -800,7 +845,10 @@ honestly declines; multi-doc instruction-skill scope reaches relevance for cross
 paths per SKA-12/23. Docs: known-limitations rewrite of the off-topic framing; §39-successor.
 
 **U6 — Renderer run lifecycle (SKA-6, SKA-17, SKA-18, SKA-29, SKA-25, SKA-37, SKA-38, SKA-39, SKA-40,
-SKA-41).**
+SKA-41).** *(FIXED in U6 — branch `fix/skills2-u6` (off `fix/skills2-a4`), all ten stamped above; renderer
+store + a small additive IPC surface [`listSkillRuns`, `SkillRunState.conversationId?`/`documentId?`, the
+busy-refusal `runningHandle`], no extractor/routing change. The routed-run relay invariants C1/C2/ux-6 +
+acknowledge-ordering are preserved and now test-pinned [ChatScreen-level, previously zero coverage].)*
 Scope: `skillruns.ts` (per-handle store, poll resilience, shallow-compare), `ChatScreen.tsx`
 (conversation-gated bar, 'new'-key cleanup, undo placement), `SkillRunBar.tsx` (always-mounted live
 region, progress display), `registerSkillsIpc.ts` (`listSkillRuns` re-attach IPC; non-empty-handle

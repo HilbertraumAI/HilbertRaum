@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { SkillRunController, type ToolRunner } from '../../src/main/services/skills/run-controller'
 import { runSkillTool } from '../../src/main/services/skills/tool-registry'
 import type { SkillTool, SkillToolContext } from '../../src/shared/types'
@@ -166,5 +166,59 @@ describe('SkillRunController (S11b)', () => {
     const c = new SkillRunController()
     const { runHandle } = c.start({ skillInstallId: 's', toolName: 'synthetic_write', documentId: 'doc-w', documentCount: 0, runner: writeRunner(true) })
     expect(await waitForTerminal(c, runHandle)).toBe('done')
+  })
+})
+
+// SKA-6/SKA-17 (skills audit 2026-07-03, U6): the controller now carries the launching conversation on
+// its content-free run state, lists every run for a renderer reload to re-adopt, surfaces a busy run's
+// handle by document, and TTL-sweeps a never-acknowledged terminal run so the Map stays bounded.
+describe('SkillRunController — re-attach surface (U6)', () => {
+  const idle = (): ToolRunner => ({ signal }) =>
+    new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false })))
+
+  it('threads conversationId onto the content-free run state (SKA-6/SKA-17)', () => {
+    const c = new SkillRunController()
+    const s = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-a', documentCount: 1, conversationId: 'conv-1', runner: idle() })
+    expect(s.conversationId).toBe('conv-1')
+    expect(s.documentId).toBe('doc-a')
+    expect(c.get(s.runHandle)!.conversationId).toBe('conv-1')
+  })
+
+  it('list() returns every run — running AND terminal-but-unacknowledged (SKA-17 re-adopt)', async () => {
+    const c = new SkillRunController()
+    const live = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-a', documentCount: 1, conversationId: 'conv-a', runner: idle() })
+    const done = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-b', documentCount: 1, conversationId: 'conv-b', runner: async () => ({ ok: true, count: 2 }) })
+    expect(await waitForTerminal(c, done.runHandle)).toBe('done')
+    const all = c.list()
+    expect(all.map((r) => r.runHandle).sort()).toEqual([live.runHandle, done.runHandle].sort())
+    // The terminal run kept its count + conversationId so the reloaded renderer shows the outcome.
+    const terminal = all.find((r) => r.runHandle === done.runHandle)!
+    expect(terminal.state).toBe('done')
+    expect(terminal.count).toBe(2)
+    expect(terminal.conversationId).toBe('conv-b')
+    c.cancel(live.runHandle)
+  })
+
+  it('getByDocument() surfaces a running run so a busy refusal can carry its handle (SKA-17)', () => {
+    const c = new SkillRunController()
+    const s = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-a', documentCount: 1, conversationId: 'conv-a', runner: idle() })
+    expect(c.getByDocument('doc-a')!.runHandle).toBe(s.runHandle)
+    expect(c.getByDocument('doc-none')).toBeNull()
+    c.cancel(s.runHandle)
+  })
+
+  it('TTL-sweeps a never-acknowledged terminal run on the next start() (SKA-17 — bounded Map)', async () => {
+    const now = vi.spyOn(Date, 'now')
+    now.mockReturnValue(1_000)
+    const c = new SkillRunController()
+    const first = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-a', documentCount: 1, runner: async () => ({ ok: true, count: 1 }) })
+    expect(await waitForTerminal(c, first.runHandle)).toBe('done')
+    expect(c.get(first.runHandle)).not.toBeNull() // retained within the TTL (a quick reload re-adopts it)
+    // Advance well past the 30-minute TTL; the next start() sweeps the stale terminal entry.
+    now.mockReturnValue(1_000 + 31 * 60 * 1000)
+    const second = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-b', documentCount: 1, runner: async () => ({ ok: true }) })
+    expect(c.get(first.runHandle)).toBeNull() // swept
+    expect(c.list().map((r) => r.runHandle)).toContain(second.runHandle)
+    now.mockRestore()
   })
 })

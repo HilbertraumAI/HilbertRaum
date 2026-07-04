@@ -194,9 +194,17 @@ describe('per-message skill glyph (Transcript, DS16/§22-A5)', () => {
     expect(screen.getByText('Skill: Bank statement helper')).toBeInTheDocument()
   })
 
-  it('shows no glyph when the answer carried no skill (or the skill was deleted → null)', () => {
+  it('shows no glyph when the answer carried no skill (null skillId)', () => {
     renderTranscript([msg({ skillId: null, skillTitle: null })])
     expect(screen.queryByText(/^Skill:/)).not.toBeInTheDocument()
+  })
+
+  // SKA-38 (skills audit 2026-07-03, U6): a stamped turn whose skill was DELETED (skillId present, no
+  // JOIN-resolved title) keeps the glyph, labelled "(removed skill)" — deleting a skill no longer
+  // erases the provenance. Keyed off the persisted skillId, not the title.
+  it('labels a stamped turn whose skill was deleted "(removed skill)"', () => {
+    renderTranscript([msg({ skillId: 'user:gone', skillTitle: null })])
+    expect(screen.getByText('Skill: (removed skill)')).toBeInTheDocument()
   })
 })
 
@@ -320,5 +328,32 @@ describe('per-message "answer without it" undo — extended to picked turns (U3)
     // The skill glyph sits on m1, but the undo only rides the LAST assistant turn (m3, skill-free).
     expect(screen.getByText('Skill: Bank statement helper')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
+  })
+
+  // SKA-37 (skills audit 2026-07-03, U6): a TRAILING UNANSWERED user turn after the skill-stamped
+  // assistant turn must SUPPRESS the undo — otherwise "Answer without it" on A1 re-answers the later
+  // Q2 skill-free (the regenerate path acts on the conversation's last turn). Before the fix, the
+  // skill glyph's own turn was the "last assistant" and wrongly kept the undo.
+  it('suppresses the undo when a trailing unanswered USER turn follows the skill turn (SKA-37)', () => {
+    renderT(
+      [
+        msg({ id: 'm1', skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: true }),
+        msg({ id: 'm2', role: 'user', content: 'a new, still-unanswered question' })
+      ],
+      vi.fn()
+    )
+    // The glyph still marks m1, but its undo is gone (the last message is the unanswered user turn).
+    expect(screen.getByText('Answered with Bank statement helper')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
+  })
+
+  // SKA-38: the undo survives a DELETED skill on the last turn (keyed off skillId, not the title).
+  it('keeps the undo on a removed-skill last turn, labelled "(removed skill)"', async () => {
+    const onAnswerWithoutSkill = vi.fn()
+    const user = userEvent.setup()
+    renderT([msg({ skillId: 'user:gone', skillTitle: null, autoFired: true })], onAnswerWithoutSkill)
+    expect(screen.getByText('Answered with (removed skill)')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Answer without it' }))
+    expect(onAnswerWithoutSkill).toHaveBeenCalled()
   })
 })

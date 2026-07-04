@@ -211,6 +211,42 @@ password recovery — are documented in
   head+tail split is a **stopgap** until per-figure invoice provenance lands (mirroring
   `bank_transactions.source_page`); and one **non-skill** Images string (`images.drop.busy`) still uses formal
   `Sie` (outside U5's skill-string scope).
+- **The renderer run store is per-run and conversation-gated (skills-audit-2026-07-03 U6, SKA-6/17/18/25/29/37/38/39/40/41).**
+  After A2 made tool runs per-document concurrent MAIN-side, the renderer kept a SINGLE module-level `active`
+  run, and ChatScreen rendered that one app-wide run's bar in EVERY conversation. U6 re-architects
+  `renderer/lib/skillruns.ts` into a **multi-run store keyed by `runHandle`** (each entry carries
+  `{run, conversationId, documentId}`), mirroring the A2 controller; ChatScreen gates the busy/result bar to
+  the run whose `conversationId === activeId` and shows a quiet **"a skill is working in another chat"** chip
+  for runs elsewhere (SKA-6). A second run no longer silently abandons the first (both outcomes are shown +
+  acknowledged); the post-extract **Categorize** offer refuses (hidden) when its remembered document is not in
+  the current conversation's scope, and MAIN **hard-refuses** a confirm-gated tool run whose requested document
+  is out of scope even when exactly one doc is in scope (SKA-29 — a confirmation for doc X never executes
+  against doc Y; read-only tools keep the tested single-doc convenience fallback). A **`listSkillRuns` IPC**
+  (ids/counts only) lets a reloaded renderer **re-adopt** in-flight AND terminal-unacknowledged runs — the
+  launching conversation + target document are threaded onto the content-free `SkillRunState`
+  (`conversationId?`/`documentId?`, additive) so a reload can re-gate + re-pin the routed relay; a busy refusal
+  carries the running handle as a fallback re-attach path; never-acknowledged terminal runs are TTL-swept in
+  the controller (bounded Map) (SKA-17). The store **shallow-compares** (state/count/resultKind/progress)
+  before notifying so a 400 ms no-op poll no longer re-renders ChatScreen ~2.5×/s (SKA-39), and **tolerates N
+  consecutive poll failures** then keeps a labelled *"couldn't check on this skill"* row instead of silently
+  dropping a live run (SKA-40). The run bar's live region is now **one always-mounted `aria-live` status
+  container** whose text swaps (SKA-41, the app's M-U1 lesson). The transcript's *"answer without it"* undo +
+  *Try again* render only when the LAST message is that assistant turn (SKA-37 — a trailing unanswered user
+  turn no longer misdirects the undo to a later question), and the skill glyph + undo are keyed off the
+  persisted `messages.skill_id` with a localized **"(removed skill)"** label, so DELETING a skill keeps the
+  provenance (consistent with a disabled skill) (SKA-38). The 'new'-composer skill pick is deleted after being
+  carried onto the created conversation, so it no longer resurrects on a later empty composer (SKA-18).
+  **Residuals (accepted):** when a single conversation holds two concurrent runs (a multi-document scope,
+  different docs), the bar shows only the MOST RECENT one (v1 tools are single-document, so this is rare); a
+  reloaded run's busy/result row falls back to the count label until its target name re-resolves (the U-1
+  renderer-remembered name is React state, lost on reload — the document id is re-pinned from the store); and a
+  run whose polling gave up shows a *"state unknown"* row rather than a definitive outcome (main may still hold
+  the true terminal state, re-adopted on the next reload). One narrow re-attach edge: the routed relay
+  acknowledges (clears main-side) a routed run BEFORE its answer streams, so a reload normally never re-adopts
+  an already-relayed run; but if that `clearSkillRun` IPC silently fails AND the renderer reloads before the
+  30-minute TTL sweep, the re-adopted terminal routed run would relay its answer a second time (a duplicate
+  transcript turn). Accepted: `clearSkillRun` is a trivial in-process IPC that effectively never fails, and the
+  window is a reload before the answer even finished persisting.
 - **Extractor evaluation infrastructure — a real-layout corpus, an output-snapshot version-bump guard, and an
   opt-in real-model smoke (Skills T1, audit §7 recs 1/2/5).** The recurring wrong-figure incidents
   (INVOICE-TOTALS-1, HVB zero-transactions, the §5.3 NBSP/Unicode family) were real-LAYOUT features that

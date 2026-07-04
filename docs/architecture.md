@@ -2849,6 +2849,37 @@ than `DocTaskManager.acquireChatSlot()` / the `ModelSlotArbiter` and is always r
 the analysis lane acquires the chat slot FIRST and only then the doc lock, and Lanes B/C never acquire
 the chat slot — so no party ever holds the doc lock while waiting on the chat slot (no cycle).
 
+**Renderer run lifecycle — the per-run store (skills-audit-2026-07-03 U6, SKA-6/17/18/25/29/37/38/39/40/41).**
+A2 made runs per-document concurrent MAIN-side, but the renderer kept a SINGLE module-level `active` run and
+ChatScreen rendered that one app-wide run's bar in EVERY conversation — a second run silently abandoned the
+first, a conversation switch could categorize the WRONG document, and a routed answer could be dismissed from
+the wrong chat. U6 gives the renderer the same per-document model A2 gave the controller.
+`renderer/lib/skillruns.ts` is now a **multi-run store keyed by `runHandle`**: each entry carries
+`{run, conversationId, documentId}`, every live handle is polled on its own timer, and the
+`useSyncExternalStore` snapshot is rebuilt (a new array) ONLY on a real change — a **shallow-compare**
+(`state`/`count`/`resultKind`/`progress`) gates the notify, so a 400 ms no-op poll no longer re-renders
+ChatScreen (SKA-39). ChatScreen derives the active conversation's run via `pickConversationRun` and renders
+the busy/result bar ONLY when `conversationId === activeId`; a quiet **"working in another chat"** chip covers
+runs elsewhere (SKA-6). Poll resilience: **N consecutive failures** flip the entry to a labelled
+*"state unknown"* row rather than silently dropping a live run (SKA-40). Reload re-attach: a **`listSkillRuns`
+IPC** (ids/counts only — `SkillRunState[]`, which now additively carries the content-free `conversationId?` +
+`documentId?`) lets a freshly-mounted renderer **re-adopt** every run main still holds (running AND
+terminal-unacknowledged), so a finished run's outcome is shown/acknowledgeable after a reload; a busy refusal
+returns the running handle as a fallback re-attach path; the controller **TTL-sweeps** never-acknowledged
+terminal runs so its Map stays bounded (SKA-17). The routed-run relay invariants survive the rewrite: the
+answer lands only in the launching conversation (C1 — the bar is conversation-gated, so a foreign run is
+simply not this effect's run), routed under the RUN's skill (C2), pinned to the run's document resolved from
+the store entry BEFORE acknowledge (ux-6). Confirm-refusal: the post-extract **Categorize** offer is hidden
+when its remembered document left the current scope, and MAIN **hard-refuses** a confirm-gated run whose
+requested document is out of scope even at a single-doc scope (SKA-29 — never trusting main's single-doc
+fallback for a write/export; read-only tools keep it). The transcript's undo/*Try again* render only on the
+conversation's LAST message when it is the assistant turn (SKA-37), and the glyph + undo key off the persisted
+`messages.skill_id` with a *"(removed skill)"* label so a deleted skill keeps its provenance (SKA-38). The
+run bar's `aria-live` region is a single always-mounted status container (SKA-41); the 'new'-composer pick is
+cleared after being carried onto the created conversation (SKA-18); and the cancel IPC requires a non-empty
+handle, with `requireUnlocked` on get/list/cancel/clear (SKA-25). Full residuals in
+[`known-limitations.md`](known-limitations.md).
+
 ### §10 Data model (additive `db.ts`)
 
 `skills` (the registry index, keyed by `install_id`) + nullable `conversations.active_skill_id` /

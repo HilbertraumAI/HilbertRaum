@@ -194,6 +194,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.autoFiredTitle':
     'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
   'chat.skill.answerWithout': 'Ohne ihn antworten',
+  // SKA-38 (Skills-Audit 2026-07-03, U6): das Glyph-Label, wenn der Skill einer markierten Antwort
+  // später GELÖSCHT wurde – die Herkunft (und der Rückgängig-Weg) bleiben, ehrlich beschriftet.
+  'chat.skill.removed': '(entfernter Skill)',
   // U3 (audit §4.3): ein Skill gilt jetzt standardmäßig PRO TURN – das × am Chip verwirft die Wahl und
   // eine gespeicherte Vorgabe, die Checkbox im Menü ist die ausdrückliche Zustimmung, die Wahl als
   // Vorgabe des Gesprächs zu behalten. Nichts bleibt still über Turns hinweg gesetzt.
@@ -260,6 +263,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.error.persistFailed': 'Das konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.error.exportWriteFailed': 'Die Datei konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
+  // SKA-40 (Skills-Audit 2026-07-03, U6): der Status ließ sich nach mehreren Fehlern nicht mehr prüfen –
+  // eine beschriftete, schließbare Zeile statt einer still verschwundenen Ausführung.
+  'chat.skill.run.stateUnknown': 'Diese Funktion ließ sich nicht prüfen – das Ergebnis ist evtl. unvollständig.',
+  // SKA-6: ein ruhiger Hinweis, wenn eine Funktion gerade in einem ANDEREN Chat arbeitet (sie läuft
+  // dort weiter und wird dort angezeigt; hier nur ein unaufdringlicher Präsenzhinweis). Inhaltsfrei.
+  'chat.skill.run.otherChatBusy': 'Eine Funktion arbeitet gerade in einem anderen Chat.',
   // U-2: die Ein-Klick-Folgeaktion in der Ergebniszeile nach dem Extrahieren. Die KI-Kategorisierung
   // wird hier vom Nutzer ausgelöst, nicht still im Hintergrund. Inhaltsfrei (benennt eine Aktion).
   'chat.skill.run.categorizeOffer': 'Transaktionen kategorisieren',

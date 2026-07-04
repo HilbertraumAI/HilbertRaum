@@ -227,6 +227,13 @@ export const IPC = {
   startSkillRun: 'skills:startToolRun',
   /** Poll one run's ids/counts-only state/progress (the doc-task polling precedent). */
   getSkillRun: 'skills:getToolRun',
+  /**
+   * All runs the controller currently holds (running + terminal-but-unacknowledged), ids/counts only
+   * (SKA-17, skills audit 2026-07-03, U6). Lets a freshly-reloaded renderer re-adopt in-flight runs
+   * (its module-level store died with the reload; main kept them) — the `listActiveStreamConversations`
+   * precedent, for skill runs. Content-free: each entry is a `SkillRunState` (state/progress/counts +
+   * the content-free conversation/document ids), never the extracted rows. */
+  listSkillRuns: 'skills:listToolRuns',
   /** Cancel a run (aborts its `AbortSignal`); with no handle, the active run. */
   cancelSkillRun: 'skills:cancelToolRun',
   /** Drop a terminal run main-side once the renderer has shown its outcome (the acknowledge handshake). */

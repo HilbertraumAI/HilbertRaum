@@ -857,6 +857,16 @@ code, pre, kbd { font-family: var(--font-mono); }
   color: var(--text-muted);
 }
 .skill-run-status { display: inline-flex; align-items: center; gap: 8px; }
+/* SKA-39 (U6): the live done/total progress — quiet, tabular, and non-shifting as the digits climb. */
+.skill-run-progress { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+/* SKA-6 (U6): the quiet "a skill is working in another chat" chip; shares the 720px conversation column. */
+.skill-run-elsewhere {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 8px 4px 0;
+  font-size: var(--text-sm);
+}
 /* U-1 target-document chooser: a quiet footer-style trigger; long filenames truncate, never wrap. */
 .skill-run-target { max-width: 16rem; }
 .skill-run-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

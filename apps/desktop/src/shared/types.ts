@@ -681,18 +681,23 @@ export interface Message {
   citations?: Citation[]
   /**
    * The skill that shaped this assistant turn (skills plan §8.2/DS16) — the install_id stamped at
-   * generation. RESOLVED at read time: a DELETED skill (no matching row) reads back NULL (no FK —
-   * audit C3), so the per-message glyph never points at a vanished skill. Null on user turns and
-   * on turns produced without a skill.
+   * generation. SKA-38 (skills audit 2026-07-03, U6): this is the RAW persisted `messages.skill_id`,
+   * present even when the skill was later DELETED (so the glyph + the "answer without it" undo survive
+   * a deletion, like a disabled skill already did). Null on user turns and turns produced without a
+   * skill. The renderer keys the glyph off THIS, and labels a stamped turn whose skill is gone
+   * "(removed skill)".
    */
   skillId?: string | null
-  /** The shaping skill's title, for the per-message glyph label (null when none / deleted). */
+  /** The shaping skill's title (JOIN-resolved), for the per-message glyph label. NULL when the skill
+   *  was DELETED — the renderer then shows a localized "(removed skill)" label (SKA-38). */
   skillTitle?: string | null
   /**
    * S13c — true only when the app AUTO-FIRED `skillId` (the user set no skill; the resolver filled the
-   * gap). Powers the per-turn "answer without it" undo, shown ONLY on an auto-fired turn. False on an
-   * explicit pick, a no-skill turn, or a turn whose stamped skill was later deleted (glyph + undo drop
-   * together). A boolean — never content.
+   * gap). Powers the "answer without it" undo. False on an explicit pick and a no-skill turn. SKA-38
+   * (skills audit 2026-07-03, U6): `auto_fired` is a PERSISTED column that follows the stamp, so it
+   * SURVIVES a skill deletion (a deleted auto-fired turn keeps `autoFired: true` and reads "Answered
+   * with (removed skill)") — the glyph + undo no longer drop when the skill row is gone. A boolean —
+   * never content.
    */
   autoFired?: boolean
   /**
@@ -1741,11 +1746,16 @@ export interface StartSkillRunRequest {
  * The result of asking to start a run (skills plan §16, S11b). `needsConfirmation` means a
  * write/export tool was requested without `confirmed: true` — the renderer raises the confirm modal
  * and retries. Both `error` and the run are FRIENDLY + content-free (ids/counts only).
+ *
+ * SKA-6/SKA-17 (skills audit 2026-07-03, U6): a BUSY refusal (a run already in flight on the same
+ * document) may carry that run's `runningHandle` so the renderer can RE-ADOPT the orphaned run
+ * instead of losing it — the fallback re-attach path when the renderer's own store was reset (a
+ * reload) but main still holds the run. Content-free (an opaque poll handle, never a document/title).
  */
 export type StartSkillRunResult =
   | { started: true; run: SkillRunState }
   | { started: false; needsConfirmation: true }
-  | { started: false; error: string }
+  | { started: false; error: string; runningHandle?: string }
 
 /**
  * The ids/counts-only snapshot of one app-orchestrated tool run, polled by the renderer's busy row
@@ -1760,6 +1770,22 @@ export interface SkillRunState {
   toolName: string
   /** How many documents the run processes (the busy row's "on N documents"). */
   documentCount: number
+  /**
+   * The conversation that started this run (SKA-6/SKA-17, skills audit 2026-07-03, U6). A content-free
+   * id (like `conversationId` everywhere else — never a title). Threaded through the run state so the
+   * renderer's per-run store can gate the run bar to the launching conversation AND re-adopt the right
+   * conversation after a reload (the module-level renderer state that used to hold it dies on reload).
+   * Absent on runs started before U6 / by callers that pass none (tests).
+   */
+  conversationId?: string
+  /**
+   * The document this run targets (SKA-6/SKA-17). A content-free id (the run's per-document
+   * concurrency key — ids/refs only, like `skill_runs.document_ids_json` and `RunnableToolSet.
+   * documentIds`, never a title). Threaded so a reload can re-pin the routed-run relay to the run's
+   * document (ux-6) and refuse a cross-scope categorize (SKA-6) without renderer state. Absent when
+   * the caller passed none.
+   */
+  documentId?: string
   state: 'running' | 'done' | 'failed' | 'cancelled'
   /** Merged from the tool's `onProgress` (no new event channel). */
   progress: { done: number; total: number }

@@ -181,6 +181,9 @@ export const en = {
   'chat.skill.autoFiredTitle':
     'The app applied the skill “{title}” to this answer automatically. You can answer without it.',
   'chat.skill.answerWithout': 'Answer without it',
+  // SKA-38 (skills audit 2026-07-03, U6): the glyph label when a stamped turn's skill was later
+  // DELETED — the provenance (and the undo) survive the deletion, honestly labelled.
+  'chat.skill.removed': '(removed skill)',
   // U3 (audit §4.3): a pick applies PER-TURN by default now — the persistent composer chip's × clears
   // both the session pick and any saved default, and the in-picker checkbox is the explicit opt-in to
   // persist the pick as this conversation's default. Nothing is silently kept across turns any more.
@@ -243,6 +246,12 @@ export const en = {
   'chat.skill.run.error.persistFailed': 'This couldn’t be saved. Nothing was changed.',
   'chat.skill.run.error.exportWriteFailed': 'The file couldn’t be saved. Nothing was changed.',
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
+  // SKA-40 (skills audit 2026-07-03, U6): the store gave up polling a run after repeated errors — a
+  // labelled, dismissable row rather than a silently vanished run.
+  'chat.skill.run.stateUnknown': "Couldn't check on this skill — its result may be incomplete.",
+  // SKA-6: a quiet chip when a skill run is working in ANOTHER chat (the run keeps going + is shown
+  // there; here it is just a non-alarming presence hint). Content-free — names no document.
+  'chat.skill.run.otherChatBusy': 'A skill is working in another chat.',
   // U-2: the one-tap follow-up on the extract RESULT row. The LLM categorize is user-initiated here,
   // not silently auto-run on extract. Content-free (names a tool action, never a document).
   'chat.skill.run.categorizeOffer': 'Categorize transactions',

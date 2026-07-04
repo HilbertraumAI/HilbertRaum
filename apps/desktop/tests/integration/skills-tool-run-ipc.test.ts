@@ -19,7 +19,10 @@ type SaveDialogOptions = {
 }
 const dialogState = vi.hoisted(() => ({
   saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
-  lastSaveOptions: undefined as SaveDialogOptions | undefined
+  lastSaveOptions: undefined as SaveDialogOptions | undefined,
+  // An optional gate a test can set to HOLD a save-dialog (and thus an export run) in flight — used to
+  // prove the SKA-25 empty-handle cancel is a boundary no-op against a genuinely running run.
+  gate: undefined as Promise<void> | undefined
 }))
 vi.mock('electron', () => ({
   ipcMain: {
@@ -30,9 +33,10 @@ vi.mock('electron', () => ({
   dialog: {
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
     // Called as showSaveDialog(options) in tests (no focused window). Capture the options so a test can
-    // assert the dialog the user would see, then return the mutable result.
+    // assert the dialog the user would see, optionally BLOCK on a test gate, then return the result.
     showSaveDialog: async (...args: unknown[]) => {
       dialogState.lastSaveOptions = (args.length > 1 ? args[1] : args[0]) as SaveDialogOptions
+      if (dialogState.gate) await dialogState.gate
       return dialogState.saveResult
     }
   },
@@ -335,6 +339,7 @@ beforeEach(() => {
   ipcState.handlers.clear()
   dialogState.saveResult = { canceled: true }
   dialogState.lastSaveOptions = undefined
+  dialogState.gate = undefined
 })
 
 /** Run a tool to a terminal state via the IPC channels (returns the final ids/counts-only state). */
@@ -715,6 +720,101 @@ describe('skills tool-run IPC — multi-document targeting (U-1)', () => {
     const final = await runTool(skillInstallId, conversationId, 'extract_transactions')
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(TITLE_SENTINEL)
+  })
+})
+
+// SKA-6/SKA-17/SKA-25/SKA-29 (skills audit 2026-07-03, U6): the renderer-run-lifecycle main-side
+// surface — a confirm-gated out-of-scope hard refusal, the `listSkillRuns` re-attach IPC (with the
+// launching conversation threaded onto the content-free state), and the non-empty-handle cancel guard.
+describe('skills tool-run IPC — U6 run lifecycle (SKA-6/17/25/29)', () => {
+  const STATEMENT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'
+
+  it('HARD-REFUSES an out-of-scope id for a CONFIRM-GATED tool even with one in-scope doc (SKA-29)', async () => {
+    // A confirmation given for document X must never execute against document Y. Unlike a read-only
+    // tool (which keeps the convenience single-doc fallback), a confirm-gated export/redaction with an
+    // out-of-scope id HARD-REFUSES — the main-side half of SKA-6's wrong-doc chain.
+    const { skillInstallId, conversationId } = makeHarness(STATEMENT)
+    await runTool(skillInstallId, conversationId, 'extract_transactions') // give the export data
+    const { result } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'export_transactions_csv',
+      conversationId,
+      documentId: randomUUID(), // out of scope
+      confirmed: true // past the confirm gate → the SKA-29 scope check is what refuses
+    })
+    const start = result as StartSkillRunResult
+    expect(start.started).toBe(false)
+    if (start.started) throw new Error('expected a hard refusal')
+    expect('error' in start && start.error).toBe(t('en', 'main.skills.run.documentOutOfScope'))
+  })
+
+  it('a READ-ONLY tool KEEPS the single-doc fallback for a stale id (contrast to SKA-29)', async () => {
+    const { skillInstallId, conversationId } = makeHarness(STATEMENT)
+    await runTool(skillInstallId, conversationId, 'extract_transactions')
+    const { result } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'validate_statement_balances',
+      conversationId,
+      documentId: randomUUID() // out of scope, but read-only → convenience fallback to the one doc
+    })
+    const start = result as StartSkillRunResult
+    expect(start.started).toBe(true)
+    if (start.started) await pollUntilTerminal(start.run.runHandle)
+  })
+
+  it('threads the launching conversation onto the run + listSkillRuns re-adopts it (SKA-17)', async () => {
+    const { skillInstallId, conversationId } = makeHarness(STATEMENT)
+    const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'extract_transactions',
+      conversationId
+    })
+    const start = startRaw as StartSkillRunResult
+    if (!start.started) throw new Error('expected the run to start')
+    // The initial state already carries the content-free conversation/document ids.
+    expect(start.run.conversationId).toBe(conversationId)
+    expect(typeof start.run.documentId).toBe('string')
+    const final = await pollUntilTerminal(start.run.runHandle)
+    // The terminal-but-unacknowledged run is still LISTED for a reloaded renderer to re-adopt.
+    const { result: listRaw } = await invoke(handlers, IPC.listSkillRuns)
+    const runs = listRaw as SkillRunState[]
+    const entry = runs.find((r) => r.runHandle === start.run.runHandle)
+    expect(entry).toBeTruthy()
+    expect(entry!.state).toBe('done')
+    expect(entry!.conversationId).toBe(conversationId)
+    expect(final.state).toBe('done')
+  })
+
+  it('cancelSkillRun with an empty/absent handle is a boundary no-op — it does NOT abort in-flight runs (SKA-25)', async () => {
+    const { skillInstallId, conversationId } = makeHarness(STATEMENT)
+    await runTool(skillInstallId, conversationId, 'extract_transactions')
+    // Hold the export in flight on the save dialog.
+    let openGate = (): void => {}
+    dialogState.gate = new Promise<void>((res) => {
+      openGate = () => res()
+    })
+    const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'export_transactions_csv',
+      conversationId,
+      confirmed: true
+    })
+    const start = startRaw as StartSkillRunResult
+    if (!start.started) throw new Error('expected the export to start')
+    const runningState = (await invoke(handlers, IPC.getSkillRun, start.run.runHandle)).result as SkillRunState
+    expect(runningState.state).toBe('running')
+    // The no-handle / empty-handle cancel is refused at the boundary (before SKA-25 it aborted EVERY
+    // in-flight run across all documents/windows) — the run keeps running.
+    await invoke(handlers, IPC.cancelSkillRun, '')
+    await invoke(handlers, IPC.cancelSkillRun, null)
+    await flush()
+    expect(((await invoke(handlers, IPC.getSkillRun, start.run.runHandle)).result as SkillRunState).state).toBe('running')
+    // A REAL handle DOES cancel it (the abort is honoured once the dialog releases).
+    await invoke(handlers, IPC.cancelSkillRun, start.run.runHandle)
+    openGate()
+    dialogState.gate = undefined
+    const terminal = await pollUntilTerminal(start.run.runHandle)
+    expect(terminal.state).not.toBe('running')
   })
 })
 
