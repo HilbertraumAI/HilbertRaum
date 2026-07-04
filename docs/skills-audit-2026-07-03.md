@@ -545,6 +545,13 @@ not-fully-chunked → top-k (not refuse); deliverable + not-fully-chunked → re
 not abort-aware): with a long categorize holding the lock, a cancelled queued run shows a dead spinner
 until the other lane finishes. Thread the runner's `AbortSignal` into `withDocumentLock` (the chain
 already tolerates rejected predecessors).
+**Status: FIXED in R9** (`withDocumentLock(id, fn, signal?)` — a PARKED waiter rejects with `AbortError`
+on abort; the already-published chain tail still settles [the aborted waiter releases its link + prunes
+once the chain drains], so later callers never wedge. Threaded from every seam's `deps.signal`, the
+analysis handlers' turn signal, and the categorize doctask's task signal; the controller's existing
+catch + `signal.aborted` fallback flips the run to 'cancelled'. An already-aborted caller at a FREE lock
+still runs the seam's own honest-cancel path [pre-R9 contract]. Tests: parked-waiter abort + third-caller
+acquires; controller end-to-end cancel-while-parked; free-lock pre-aborted contract; teeth-checked.)
 
 **SKA-25 — `cancelSkillRun` with no/empty handle aborts EVERY in-flight run across all
 documents/windows** (`registerSkillsIpc.ts:377-379` → `run-controller.ts:186-189`); latent (the shipped
@@ -560,18 +567,37 @@ dialog], while a real handle does.)
 fresh; if the newer extractor *was* the bug, R3 never re-extracts after rollback. Flip to
 `row.v !== CURRENT` (deterministic extractors make it safe) or record the choice as a residual; add a
 `v = CURRENT+1` test either way.
+**Status: FIXED in R9 (decision: FLIP to `!==`, both domains).** Rationale: the app roams WITH the
+workspace, so a mismatch means a deliberate rollback (the moment the newer extractor is the suspected
+bug — serving its rows as fresh is exactly backwards) or a second install; determinism prevents loops.
+Accepted cost (known-limitations): an alternating-installs workspace re-extracts on every switch and
+drops persisted per-row categories each time (the `replaceExisting` recompute doctrine). `v = CURRENT+1`
+stale pins added for bank + invoice; teeth-checked (`!==`→`<` → both red).
 
 **SKA-27 — `runDomainFileExport` lacks the B4 terminal-status guard its sibling seams have**
 (`run.ts:552-578`): a post-save-dialog `finishRun` throw (workspace locked during the minutes-open
 dialog) strands the `skill_runs` row at `'started'` and reports "failed. Nothing was changed." after
 the file WAS written; `completedAt` is also stamped pre-dialog. Wrap the tail in the B4 try/catch, take
 `now()` for 'done', and report success-with-warning on post-write bookkeeping failure.
+**Status: FIXED in R9** (`finishTail` guards EVERY terminal write past the prepare [done/cancelled/
+failed] with one retry for the transient-lock class; after a successful file write the outcome is
+success regardless of bookkeeping — never "nothing was changed" after a write; 'done' stamped at
+write-time `now()`, not the pre-dialog prepare. Tests: injected once-throwing `UPDATE skill_runs` seam
+→ ok:true + row lands 'done' [no stranded 'started']; write-time timestamp pin; teeth-checked.
+**Review rider:** `runDocumentRedaction` — the OTHER dialog-shaped seam — carried the same class [its
+unguarded post-write 'done' fell into the outer B4 catch → 'failed' + "Nothing was changed." after the
+redacted copy WAS written]; same guarded-retry treatment + test, found by the R9 adversarial review.)
 
 **SKA-28 — The summarize/export staleness path loads rows AFTER the re-extract lock releases**
 (`run.ts:463-483`; `runCashflowSummary`/`runDomainFileExport` hold no outer lock, unlike
 validate/categorize): a competing `replaceExisting` extract can interleave → empty CSV "saved 0 rows".
 Microtask-narrow in production; wrap both seams in `withDocumentLock` (re-entrant, cheap) so the design
 comment is true by construction.
+**Status: FIXED in R9** (both seams hold ONE re-entrant lock across prepare + load + serialization; the
+export RELEASES it before the save dialog — the text is materialized, and a minutes-open dialog must not
+block the document's other lanes. Synergy with SKA-24: a parked export/summarize is now cancellable.
+Tests: barrier-forced TOCTOU [export + summarize twins] — a competing replace-delete parked on the lock
+never yields an empty file / 0-count; teeth-checked [lock removed → "saved 0 rows" reproduced red].)
 
 **SKA-29 — The single-doc fallback can run a CONFIRMED export/redaction against a different document
 than the one confirmed** (`registerSkillsIpc.ts:343-348`; the generic confirm body names no document).
@@ -720,6 +746,12 @@ document (invalidate on re-chunk).
 next to R3's demoted `sepa`/`überweisung` — an English "TRANSFER TO NETFLIX…" row never reaches the LLM
 categorizer (audit §5.5's class, EN side; R3 was explicitly scoped de-AT, so this may be deliberate —
 decide + record).
+**Status: FIXED in R9 (decision: DEMOTE — the R3 treatment).** "transfer" names the rails, not the
+merchant, in EN statements exactly as `überweisung` does in German; `confident: false` sends the row to
+the 15-category model while `categorizeRow` keeps the deterministic offline 'Transfer' fallback. NO
+extractor bump (R3 precedent — categories are not extraction output); T1 snapshot verified untouched.
+Tests: EN transfer row prefilters null + reaches the model batch + takes the richer bucket; the old
+stays-confident pin rewritten; teeth-checked (revert → 3 red).
 
 **SKA-45 — Content/robustness minors:** singular German keyword gaps (`änderung`, `entscheidung`
 missing where the doc'd convention says each form appears in its own right); the stale S13a-era
@@ -936,12 +968,14 @@ guards + error surfacing; `installer.ts` case-fold + staging sweep + export-fide
 Acceptance: a bad folder never kills reconcile; canary never leaks; round-trip test green; real-body
 fence trim keeps the rules. Docs: security-model note if export policy changes.
 
-**R9 — Run-seam edge hardening (SKA-24, SKA-26, SKA-27, SKA-28, SKA-44).**
+**R9 — Run-seam edge hardening (SKA-24, SKA-26, SKA-27, SKA-28, SKA-44). — DONE (fix/skills2-r9):
+all five landed; both decide-and-record items became CHANGES (SKA-26 flip to `!==`, SKA-44 demote).**
 Scope: `doc-lock.ts` (abort-aware wait), `run.ts` (export-tail B4 guard + timestamps; lock-wrapped
 summarize/export prepare), staleness downgrade decision (`!==` or documented residual + test),
 categorizer EN `transfer` decision. Acceptance: cancel-parked test; stranded-'started' impossible on
 the export tail; downgrade test pinned. Docs: known-limitations for whichever decisions are "record,
-don't change".
+don't change". (All acceptance tests landed + teeth-checked; the SKA-26 category-loss cost and the
+SKA-24/27 residuals recorded in known-limitations; §3.3/§3.4 entries stamped.)
 
 **T2 — Eval & test-infra sweep (remaining §5 gaps).**
 Scope: snapshot self-check (hash recompute + version-constant pin), controller throw/reload tests,

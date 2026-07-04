@@ -101,8 +101,9 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
 /**
  * The deterministic invoice extractor version (F5 — mirrors `BANK_EXTRACTOR_VERSION`). Stamped onto
  * every `invoices` row (`invoice-run.ts` `runInvoiceExtraction`) and compared on reuse: an invoice whose
- * stored `extractor_version` is NULL (legacy / extracted before versioning) or LESS than this is STALE —
- * the analysis read-back RE-EXTRACTS it (`replaceExisting`, replacing the rows) rather than keep serving
+ * stored `extractor_version` is NULL (legacy / extracted before versioning) or DIFFERS from this is
+ * STALE (SKA-26/R9: `!==`, not `<` — a newer-version row after a rollback re-extracts too) — the
+ * analysis read-back RE-EXTRACTS it (`replaceExisting`, replacing the rows) rather than keep serving
  * figures a since-fixed parser bug mis-read. An invoice at the current version is FRESH and reused.
  *
  * BUMP THIS by one whenever a change alters the extractor's OUTPUT for the same input — in the line

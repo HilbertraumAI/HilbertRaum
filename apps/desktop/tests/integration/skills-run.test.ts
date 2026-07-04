@@ -16,6 +16,7 @@ import {
   latestBankStatementId,
   type LoadedTransaction
 } from '../../src/main/services/skills/run'
+import { activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
 import {
   BANK_EXTRACTOR_VERSION,
   reconcileBalances,
@@ -174,6 +175,12 @@ describe('runBankExtraction (S11a)', () => {
     expect(isBankStatementStale(db, id)).toBe(true) // produced by the pre-R2 parser → re-extract
     db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(id)
     expect(isBankStatementStale(db, id)).toBe(true) // legacy / pre-versioning → re-extract
+    // SKA-26 (R9): the DOWNGRADE half — rows a NEWER extractor wrote are stale to this (older) code
+    // too. On a rollback the newer extractor IS the suspected bug, so serving its rows as fresh would
+    // be exactly backwards; `!==` (not `<`) makes the mismatch symmetric. Deterministic extractors
+    // make this safe (same version ⇒ same rows ⇒ no re-extract loop).
+    db.prepare('UPDATE bank_statements SET extractor_version = ? WHERE id = ?').run(BANK_EXTRACTOR_VERSION + 1, id)
+    expect(isBankStatementStale(db, id)).toBe(true) // written by a newer app → re-extract after rollback
   })
 
   it('runs end-to-end: persists statement + transactions and marks the run done', async () => {
@@ -452,11 +459,19 @@ describe('downstream statement seams (S11c)', () => {
     const docId = await extractFirst(db, `Statement EUR\n2026-01-02 ${SENTINEL} -12,00 1.000,00`)
     const { audit, events } = capturingAudit()
     let written: { name: string; content: string } | null = null
+    let locksDuringDialog = -1
     const saveTextFile = async (name: string, content: string): Promise<boolean> => {
+      // SKA-28 scope pin: the per-document hold must be RELEASED before the save dialog opens — a
+      // minutes-open dialog must not block the categorize doctask / chat analysis on this document.
+      // No competitor is queued in this test, so a released hold means ZERO live chains here (a
+      // variant holding the lock across the dialog reads 1). Recorded, asserted after the run —
+      // an expect() throw inside the stub would be swallowed as exportWriteFailed.
+      locksDuringDialog = activeDocumentLockCount()
       written = { name, content }
       return true
     }
     const res = await runCsvExport(db, { skillInstallId, documentId: docId }, { audit, saveTextFile, confirmed: true })
+    expect(locksDuringDialog).toBe(0)
     expect(res.ok).toBe(true)
     expect(res.count).toBe(1)
     expect(written!.name).toBe('transactions.csv')
@@ -522,6 +537,75 @@ describe('downstream statement seams (S11c)', () => {
     expect(saveCalled).toBe(false) // nothing was written under a cancel
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('cancelled')
+  })
+
+  it('SKA-27: a transient finishRun(done) failure neither strands started nor reports failure after the write', async () => {
+    // The pre-R9 defect: the terminal 'done' UPDATE after the (minutes-open) save dialog was UNGUARDED —
+    // a workspace transiently locked mid-dialog threw out of the seam, stranding the skill_runs row at
+    // 'started' forever AND telling the user "failed. Nothing was changed." after the file WAS written.
+    const db = freshDb()
+    const docId = await extractFirst(db)
+    const { audit } = capturingAudit()
+
+    // Inject the throwing seam: once the file is written, the FIRST terminal `UPDATE skill_runs` throws
+    // (the transiently-locked-DB class); the guarded retry must land the second one.
+    let fileWritten = false
+    let failuresInjected = 0
+    const realPrepare = db.prepare.bind(db)
+    ;(db as unknown as { prepare: Db['prepare'] }).prepare = ((sql: string) => {
+      if (fileWritten && failuresInjected === 0 && /UPDATE skill_runs SET status/.test(sql)) {
+        failuresInjected++
+        throw new Error('database is locked')
+      }
+      return realPrepare(sql)
+    }) as Db['prepare']
+
+    try {
+      const res = await runCsvExport(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        saveTextFile: async () => {
+          fileWritten = true
+          return true
+        }
+      })
+      expect(failuresInjected).toBe(1) // the injected throw actually fired on the 'done' write
+      expect(res.ok).toBe(true) // NEVER "failed. Nothing was changed." after a successful write
+      expect(res.count).toBe(2)
+      expect(res.error).toBeUndefined()
+      const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+      expect(run.status).toBe('done') // the guarded retry landed the terminal status — no stranded 'started'
+    } finally {
+      ;(db as unknown as { prepare: Db['prepare'] }).prepare = realPrepare
+    }
+  })
+
+  it('SKA-27: the done timestamp is taken at the WRITE, not before the save dialog', async () => {
+    const db = freshDb()
+    const docId = await extractFirst(db)
+    const { audit } = capturingAudit()
+    // Deterministic clock: every now() before the file write returns T_PREP; after it, T_WRITE. The
+    // pre-R9 code stamped 'done' with prepareDomainRun's pre-dialog `completedAt` (T_PREP) — run
+    // history timestamped an export minutes early when the dialog sat open.
+    const T_PREP = '2026-07-04T10:00:00.000Z'
+    const T_WRITE = '2026-07-04T10:07:00.000Z'
+    let wrote = false
+    const res = await runCsvExport(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      now: () => (wrote ? T_WRITE : T_PREP),
+      saveTextFile: async () => {
+        wrote = true // the dialog "sat open" — every later now() is write-time
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    const run = db.prepare('SELECT status, completed_at AS c FROM skill_runs WHERE id = ?').get(res.runId) as {
+      status: string
+      c: string
+    }
+    expect(run.status).toBe('done')
+    expect(run.c).toBe(T_WRITE) // not the pre-dialog prepare time
   })
 })
 

@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { runBankExtraction, runCategorization, latestBankStatementId } from '../../src/main/services/skills/run'
+import { runBankExtraction, runCashflowSummary, runCategorization, runCsvExport, latestBankStatementId } from '../../src/main/services/skills/run'
 import { withDocumentLock, activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
+import { SkillRunController } from '../../src/main/services/skills/run-controller'
 import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
 
 // Cross-lane write safety (skills-tools-audit-2026-06-26 PC-1, §2.3). The main process is
@@ -164,6 +165,236 @@ describe('cross-lane write safety — per-document serialization (audit PC-1)', 
     expect(resY.ok).toBe(true)
     expect(countStatements(db, docX)).toBe(1)
     expect(countStatements(db, docY)).toBe(1)
+    expect(activeDocumentLockCount()).toBe(0)
+  })
+
+  it('SKA-24: an aborted PARKED waiter rejects immediately, never runs, and a THIRD caller still acquires', async () => {
+    // The chain invariant under abort: the waiter's tail is PUBLISHED before it parks, so the abort
+    // path must still settle it (release + prune) — otherwise every later caller deadlocks forever.
+    const docId = 'doc-abort-parked'
+    let releaseHolder!: () => void
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve
+    })
+    const order: string[] = []
+
+    // Caller 1 HOLDS the lock (parked inside its own fn, like a long categorize).
+    let holderStarted!: () => void
+    const holderAcquired = new Promise<void>((resolve) => {
+      holderStarted = resolve
+    })
+    const holder = withDocumentLock(docId, async () => {
+      order.push('holder:start')
+      holderStarted()
+      await holderGate
+      order.push('holder:end')
+    })
+    await holderAcquired // the holder provably holds the lock
+
+    // Caller 2 parks behind it with a signal, then aborts.
+    const ac = new AbortController()
+    let waiterRan = false
+    const waiter = withDocumentLock(docId, async () => {
+      waiterRan = true
+    }, ac.signal)
+    const waiterErr = waiter.then(
+      () => null,
+      (e: unknown) => e
+    )
+    ac.abort()
+    // Assertions before the holder releases run in a try/finally: a red one must still release the
+    // gate, or the leaked module-global chain poisons every later activeDocumentLockCount() test.
+    try {
+      const err = await waiterErr // rejects IMMEDIATELY — the holder is still parked on its gate
+      expect(err).toBeInstanceOf(DOMException)
+      expect((err as DOMException).name).toBe('AbortError')
+      expect(waiterRan).toBe(false)
+      expect(order).toEqual(['holder:start']) // the holder had NOT finished when the waiter rejected
+    } finally {
+      releaseHolder()
+    }
+
+    // Caller 3 (no signal) queues after the aborted waiter — the chain must not be wedged.
+    const third = withDocumentLock(docId, async () => {
+      order.push('third')
+      return 7
+    })
+    await holder
+    expect(await third).toBe(7)
+    expect(order).toEqual(['holder:start', 'holder:end', 'third'])
+    await Promise.resolve() // let the aborted waiter's deferred prune run
+    expect(activeDocumentLockCount()).toBe(0) // no leaked chain entry from the aborted waiter
+  })
+
+  it('SKA-24: an already-aborted caller facing a FREE lock still runs fn (the seam records the honest cancel)', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    let ran = false
+    await withDocumentLock('doc-abort-free', async () => {
+      ran = true
+    }, ac.signal)
+    expect(ran).toBe(true) // pre-R9 behaviour preserved: the seam's own first signal check owns this case
+    expect(activeDocumentLockCount()).toBe(0)
+  })
+
+  it('SKA-24 end-to-end: Cancel flips a run QUEUED on the doc lock to cancelled while the holder still runs', async () => {
+    // The user-visible defect: a run queued behind a long categorize showed a dead "running" spinner
+    // after Cancel until the other lane finished. Now the parked waiter rejects, the controller's
+    // catch runs `finish`, and `signal.aborted` maps it to 'cancelled' (the documented fallback).
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, STATEMENT_TEXT)
+    const pre = await runBankExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {} })
+    expect(pre.ok).toBe(true)
+
+    // Lane A (the "long categorize" stand-in): a re-extract parked at its segment read, HOLDING the lock.
+    let releaseBarrier!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    let laneAReached!: () => void
+    const laneAAtBarrier = new Promise<void>((resolve) => {
+      laneAReached = resolve
+    })
+    const laneA = runBankExtraction(
+      db,
+      { skillInstallId, documentId: docId },
+      { audit: () => {}, replaceExisting: true, layout: true, readDocumentSegments: barrierReader(STATEMENT_TEXT, laneAReached, barrier) }
+    )
+    await laneAAtBarrier
+
+    // Lane B: a controller-started categorize on the SAME document — it parks on the doc lock.
+    const controller = new SkillRunController()
+    const started = controller.start({
+      skillInstallId,
+      toolName: 'categorize_transactions',
+      documentId: docId,
+      documentCount: 1,
+      runner: ({ signal, onProgress }) =>
+        runCategorization(db, { skillInstallId, documentId: docId }, { audit: () => {}, signal, onProgress })
+    })
+    expect(started.state).toBe('running')
+
+    controller.cancel(started.runHandle)
+    // Assertions before the barrier releases run in a try/finally: a red one must still release lane A,
+    // or the leaked module-global chain poisons every later activeDocumentLockCount() test.
+    try {
+      // The parked waiter rejects on the abort; the controller flips to 'cancelled' WITHOUT waiting for
+      // lane A (which is still parked on its barrier). Bounded poll — no dependence on hop counts.
+      for (let i = 0; i < 50 && controller.get(started.runHandle)!.state === 'running'; i++) {
+        await new Promise((r) => setTimeout(r, 10))
+      }
+      expect(controller.get(started.runHandle)!.state).toBe('cancelled')
+
+      // Lane B never created ANY run row (cancelled BEFORE acquiring — nothing to strand, and no
+      // phantom terminal row either): only the pre-seed 'done' + lane A's in-flight 'started' exist.
+      const rows = db.prepare('SELECT status FROM skill_runs ORDER BY created_at').all() as Array<{ status: string }>
+      expect(rows.map((r) => r.status).sort()).toEqual(['done', 'started'])
+    } finally {
+      releaseBarrier()
+    }
+    const resA = await laneA
+    expect(resA.ok).toBe(true) // the holder was never disturbed
+
+    // A THIRD caller acquires after both settled — the chain was not wedged by the aborted waiter.
+    const resC = await runCategorization(db, { skillInstallId, documentId: docId }, { audit: () => {} })
+    expect(resC.ok).toBe(true)
+    expect(activeDocumentLockCount()).toBe(0)
+  })
+
+  it('SKA-28: an export racing a competing replace-delete never writes an empty file (TOCTOU closed)', async () => {
+    // Pre-R9, `runDomainFileExport` held NO outer lock: its R3 staleness re-extract self-locked and
+    // RELEASED, and the subsequent row load ran unlocked — a competing lane's DELETE (the doctask
+    // replace step, reduced here to its interleave-relevant essence) could land between the two, so the
+    // export loaded 0 rows and wrote an empty CSV reported "saved 0 rows". The audit notes the window
+    // is microtask-narrow in production but test environments can invert the timing — this barrier
+    // forces exactly that inversion. Post-fix the export's ONE hold spans prepare+load+serialize, so it
+    // writes either its re-extracted rows or runs strictly before/after the competitor — never [].
+    const db = freshDb()
+    const COLLAPSED = 'Statement EUR 2026-01-02 Grocery -45,90 1.954,10 2026-01-03 Salary 2.500,00 4.454,10'
+    const docId = seedDocWithChunks(db, COLLAPSED)
+
+    // Seed a statement extracted from FAITHFUL segments, then force it stale so the export re-extracts.
+    const pre = await runBankExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: async () => segmentsFor(STATEMENT_TEXT) })
+    expect(pre.transactionCount).toBe(2)
+    db.prepare('UPDATE bank_statements SET extractor_version = 2 WHERE id = ?').run(pre.statementId!)
+
+    // The export parks at its re-extract's segment read (holding the outer lock post-fix).
+    let releaseBarrier!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    let exportReached!: () => void
+    const exportAtBarrier = new Promise<void>((resolve) => {
+      exportReached = resolve
+    })
+    let written: string | null = null
+    const exportRun = runCsvExport(db, { skillInstallId, documentId: docId }, {
+      audit: () => {},
+      confirmed: true,
+      readDocumentSegments: barrierReader(STATEMENT_TEXT, exportReached, barrier),
+      saveTextFile: async (_name, content) => {
+        written = content
+        return true
+      }
+    })
+    await exportAtBarrier
+
+    // The competing replace-delete queues on the lock. Its body is SYNCHRONOUS on acquisition — the
+    // most aggressive interleave a cooperative scheduler allows (pre-fix it deterministically ran
+    // between the export's re-extract release and its unlocked load).
+    const competitor = withDocumentLock(docId, async () => {
+      db.prepare(
+        `DELETE FROM bank_transactions WHERE statement_id IN (SELECT id FROM bank_statements WHERE document_id = ?)`
+      ).run(docId)
+      db.prepare('DELETE FROM bank_statements WHERE document_id = ?').run(docId)
+    })
+
+    releaseBarrier()
+    const res = await exportRun
+    await competitor
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(2) // never "saved 0 rows"
+    expect(written!).toContain('Grocery') // the serialized text carries the re-extracted rows…
+    expect(written!).toContain('Salary') // …not an empty header-only CSV
+    expect(activeDocumentLockCount()).toBe(0)
+  })
+
+  it('SKA-28: summarize under the same racing replace-delete serves the re-extracted rows, never 0', async () => {
+    // The summarize twin: `runCashflowSummary` was the OTHER downstream seam holding no outer lock
+    // (validate/categorize already wrap). Same interleave, same fix — one hold across prepare+load.
+    const db = freshDb()
+    const COLLAPSED = 'Statement EUR 2026-01-02 Grocery -45,90 1.954,10 2026-01-03 Salary 2.500,00 4.454,10'
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const pre = await runBankExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: async () => segmentsFor(STATEMENT_TEXT) })
+    expect(pre.transactionCount).toBe(2)
+    db.prepare('UPDATE bank_statements SET extractor_version = 2 WHERE id = ?').run(pre.statementId!)
+
+    let releaseBarrier!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    let summarizeReached!: () => void
+    const summarizeAtBarrier = new Promise<void>((resolve) => {
+      summarizeReached = resolve
+    })
+    const summaryRun = runCashflowSummary(db, { skillInstallId, documentId: docId }, {
+      audit: () => {},
+      readDocumentSegments: barrierReader(STATEMENT_TEXT, summarizeReached, barrier)
+    })
+    await summarizeAtBarrier
+
+    const competitor = withDocumentLock(docId, async () => {
+      db.prepare(
+        `DELETE FROM bank_transactions WHERE statement_id IN (SELECT id FROM bank_statements WHERE document_id = ?)`
+      ).run(docId)
+      db.prepare('DELETE FROM bank_statements WHERE document_id = ?').run(docId)
+    })
+
+    releaseBarrier()
+    const res = await summaryRun
+    await competitor
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(2) // the summary read the rows its own re-extract persisted — never 0
     expect(activeDocumentLockCount()).toBe(0)
   })
 

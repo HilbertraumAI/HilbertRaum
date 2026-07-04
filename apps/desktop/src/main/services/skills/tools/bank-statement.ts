@@ -76,8 +76,9 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
 /**
  * The deterministic bank-statement extractor version (A9, Phase 31–33 follow-up). Stamped onto every
  * `bank_statements` row (`run.ts` `runBankExtraction`) and compared on reuse: a statement whose stored
- * `extractor_version` is NULL (legacy) or LESS than this is STALE — the analysis read-back + the
- * categorize doctask re-extract it (replacing the rows) rather than keep serving figures a since-fixed
+ * `extractor_version` is NULL (legacy) or DIFFERS from this is STALE (SKA-26/R9: `!==`, not `<` — a
+ * NEWER-version row after a rollback re-extracts too) — the analysis read-back + the categorize doctask
+ * re-extract it (replacing the rows) rather than keep serving figures a since-fixed
  * parser bug mis-signed or whose payee it lost.
  *
  * BUMP THIS by one whenever a change alters the extractor's OUTPUT for the same input — in EITHER the
@@ -914,10 +915,13 @@ export const UNCATEGORIZED = 'Uncategorized'
 // gebühr/gehalt/überweisung/bargeld. The short English tokens (fee/charge/atm/…) and the ambiguous
 // `lohn` (⊂ muehlohn/Belohnung) stay STRICT — income from salary is still covered by the positive-amount
 // sign fallback, so `lohn` need not (and must not) be relaxed.
-// `confident: false` marks TRANSFER-BOILERPLATE (`sepa`, `überweisung`): these describe the payment RAILS,
-// not the merchant, so most de-AT rows carry them (R3 / audit §5.5). They stay here as the deterministic
-// NO-model fallback (`categorizeRow` still labels them 'Transfer' offline) but `prefilterCategory` skips
-// them, so with a runtime loaded those rows reach the 15-category LLM instead of collapsing into 'Transfer'.
+// `confident: false` marks TRANSFER-BOILERPLATE (`sepa`, `überweisung`, and — SKA-44, R9 — the EN
+// `transfer`): these describe the payment RAILS, not the merchant, so most de-AT rows carry the German
+// pair and every EN wire/standing-order row carries "transfer" ("TRANSFER TO NETFLIX…" is a Netflix
+// charge, not a 'Transfer'; R3 was scoped de-AT and left the EN twin confident — same semantics, same
+// treatment). They stay here as the deterministic NO-model fallback (`categorizeRow` still labels them
+// 'Transfer' offline) but `prefilterCategory` skips them, so with a runtime loaded those rows reach the
+// 15-category LLM instead of collapsing into 'Transfer'.
 export const BUILTIN_CATEGORY_RULES: readonly CategoryRule[] = [
   { category: 'Fees', matchKind: 'description-substring', pattern: 'fee' },
   { category: 'Fees', matchKind: 'description-substring', pattern: 'gebühr', compound: true },
@@ -926,7 +930,7 @@ export const BUILTIN_CATEGORY_RULES: readonly CategoryRule[] = [
   { category: 'Income', matchKind: 'description-substring', pattern: 'gehalt', compound: true },
   { category: 'Income', matchKind: 'description-substring', pattern: 'lohn' },
   { category: 'Income', matchKind: 'description-substring', pattern: 'payroll' },
-  { category: 'Transfer', matchKind: 'description-substring', pattern: 'transfer' },
+  { category: 'Transfer', matchKind: 'description-substring', pattern: 'transfer', confident: false },
   { category: 'Transfer', matchKind: 'description-substring', pattern: 'überweisung', compound: true, confident: false },
   { category: 'Transfer', matchKind: 'description-substring', pattern: 'sepa', confident: false },
   { category: 'Cash', matchKind: 'description-substring', pattern: 'atm' },

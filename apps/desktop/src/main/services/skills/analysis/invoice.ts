@@ -477,7 +477,8 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
     // Serialize the WHOLE extract→validate→read-back sequence per document (audit PC-1): the seams
     // self-lock, but one outer lock spanning the sequence keeps a re-extract from ANOTHER lane from
     // replacing the invoice BETWEEN this handler's own steps. Re-entrant (inner locks become no-ops);
-    // unrelated documents still answer concurrently.
+    // unrelated documents still answer concurrently. The turn signal rides along (SKA-24): a Stop
+    // while parked rejects out to `withChatStream`, which maps an aborted rejection to the calm cancel.
     return withDocumentLock(target.id, async () => {
       const args: InvoiceRunArgs = {
         skillInstallId: ctx.skillInstallId,
@@ -587,6 +588,6 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         citations,
         coverage
       }
-    })
+    }, ctx.signal)
   }
 }

@@ -2838,8 +2838,19 @@ section by `documentId`: the write seams (`runBankExtraction` incl. its `replace
 **self-lock**, and the two MULTI-step lanes wrap their WHOLE sequence in one outer `withDocumentLock`
 (the analysis handlers' extract→validate→categorize, and `runCategorize`'s extract→categorize-persist),
 so a re-extract from another lane cannot slip BETWEEN a lane's own steps (the inner self-locks are
-re-entrant no-ops under the outer hold). Read-only/export paths (`summarize_cashflow`, the CSV exports,
-`redact_document`) need not lock. **Posture:** NO new DB/FS/net capability (an in-memory map in the one
+re-entrant no-ops under the outer hold). **R9 (skills-audit-2026-07-03 SKA-28) closed the last two
+unlocked downstream seams:** `runCashflowSummary` and `runDomainFileExport` (all CSV/JSON/XML exports)
+now hold ONE re-entrant lock across prepare (incl. the R3 staleness re-extract) + row load +
+serialization — previously the self-locked re-extract RELEASED before the load, and a competing
+`replaceExisting` extract could interleave in that microtask gap (empty CSV, "saved 0 rows"). The
+export's hold is **released BEFORE the save dialog** (the serialized text is materialized first — a
+minutes-open dialog must not block the categorize doctask / chat analysis on that document);
+`redact_document` still needs no lock (no bank/invoice table). **R9 (SKA-24) also made acquisition
+abort-aware:** `withDocumentLock(id, fn, signal?)` — a waiter still PARKED behind another lane (a run
+queued behind a long categorize) rejects with `AbortError` on cancel instead of a dead "running"
+spinner; the published chain tail still settles (the aborted waiter releases its own link), so later
+callers never wedge. The seams thread `deps.signal`, the analysis handlers thread the turn signal, the
+categorize doctask threads its task signal. **Posture:** NO new DB/FS/net capability (an in-memory map in the one
 main process; the workspace DB is single-writer anyway), no schema change, no IPC change, the audit
 payload still `{skillId, toolName, documentCount}`; the key is a document **id** (never content) and
 nothing new is logged. The DELETE+INSERT re-extract is already one `BEGIN…COMMIT` — the mutex serializes
@@ -3275,7 +3286,9 @@ behind the unchanged §14 ceiling (no new capability, still offline, audit still
   serializes every write-capable section by `documentId`: the write seams self-lock and the two
   multi-step lanes wrap their whole sequence (re-entrant inner locks). In-memory, per-document (unrelated
   docs stay concurrent), no new capability/schema/IPC, finer than `acquireChatSlot` and `finally`-released
-  (no deadlock). Full record in §9.
+  (no deadlock). R9 (skills-audit-2026-07-03 SKA-24/SKA-28) extended it: acquisition is **abort-aware**
+  (a parked waiter rejects on cancel; the published tail still settles) and the summarize/export seams
+  gained the outer prepare+load hold (released before the save dialog). Full record in §9.
 
 ### §14 Content-reach + compatibility audit fixes (2026-06-17b)
 

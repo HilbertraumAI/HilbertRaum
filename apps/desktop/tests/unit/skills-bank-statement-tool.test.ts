@@ -1256,11 +1256,12 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
     }
   })
 
-  it('R3 / §5.5: transfer boilerplate DIVERGES — categorizeRow labels Transfer, but the prefilter sends it to the model', () => {
-    // `sepa`/`überweisung` are `confident: false`: they describe the payment rails, not the merchant, so
-    // most de-AT rows carry them. The deterministic NO-model fallback still buckets them 'Transfer', but
-    // the LLM prefilter must return null so a runtime can assign the richer 15-category taxonomy instead.
-    for (const desc of ['SEPA-Überweisung Miete', 'Dauerüberweisung Sparen', 'SEPA-Lastschrift NETFLIX']) {
+  it('R3 / §5.5 + SKA-44: transfer boilerplate DIVERGES — categorizeRow labels Transfer, but the prefilter sends it to the model', () => {
+    // `sepa`/`überweisung` (R3) and the EN `transfer` twin (SKA-44, R9) are `confident: false`: they
+    // describe the payment rails, not the merchant. The deterministic NO-model fallback still buckets
+    // them 'Transfer', but the LLM prefilter must return null so a runtime can assign the richer
+    // 15-category taxonomy instead.
+    for (const desc of ['SEPA-Überweisung Miete', 'Dauerüberweisung Sparen', 'SEPA-Lastschrift NETFLIX', 'TRANSFER TO NETFLIX']) {
       expect(categorizeRow(tx({ description: desc, amount: -12 }))).toBe('Transfer')
       expect(prefilterCategory(tx({ description: desc, amount: -12 }))).toBeNull()
     }

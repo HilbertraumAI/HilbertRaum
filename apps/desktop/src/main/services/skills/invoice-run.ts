@@ -116,18 +116,20 @@ export function latestInvoiceId(db: Db, documentId: string): string | null {
 }
 
 /**
- * Whether an invoice was produced by an OUTDATED extractor (F5 — mirrors `isBankStatementStale`). True
- * when its `extractor_version` is NULL (extracted before versioning / by an older parser) or LESS than
- * the current `INVOICE_EXTRACTOR_VERSION` — i.e. a since-fixed parser bug may have mis-read a figure in
- * these rows. The reuse path (analysis read-back) re-extracts a stale invoice (with `replaceExisting`)
- * instead of serving its rows. An invoice at the current version is fresh.
+ * Whether an invoice was produced by a DIFFERENT extractor than the one running (F5 — mirrors
+ * `isBankStatementStale`, incl. the SKA-26 downgrade half). True when its `extractor_version` is NULL
+ * (extracted before versioning) or NOT EQUAL to the current `INVOICE_EXTRACTOR_VERSION` — older rows
+ * may carry a since-fixed parser bug, and NEWER rows are the rollback case (the roaming-drive
+ * rationale + the accepted alternating-installs cost live on the bank twin's doc comment). The reuse
+ * path (analysis read-back) re-extracts a stale invoice (with `replaceExisting`) instead of serving
+ * its rows. An invoice at the current version is fresh.
  */
 export function isInvoiceStale(db: Db, invoiceId: string): boolean {
   const row = db
     .prepare('SELECT extractor_version AS v FROM invoices WHERE id = ?')
     .get(invoiceId) as { v: number | null } | undefined
   if (!row) return false // unknown id — nothing to re-extract (callers handle the missing case)
-  return row.v == null || row.v < INVOICE_EXTRACTOR_VERSION
+  return row.v == null || row.v !== INVOICE_EXTRACTOR_VERSION
 }
 
 /**
@@ -310,7 +312,7 @@ export async function runInvoiceExtraction(
     // failure), so return it verbatim; only success is reshaped to the invoice-named id/count fields.
     if (!r.ok) return r
     return { ok: true, runId: r.runId, invoiceId: r.resultRef, lineItemCount: r.count }
-  })
+  }, deps.signal)
 }
 
 // ---- The downstream seams (validate / export) ----
@@ -339,9 +341,12 @@ export async function runInvoiceTotalsValidation(
   preloadedInvoice?: InvoiceInput
 ): Promise<InvoiceToolResult> {
   // Serialized per document (audit PC-1): the `totals_reconciled` persist must not run against an
-  // invoice a concurrent re-extract is replacing. Re-entrant when the analysis lane already holds it.
-  return withDocumentLock(args.documentId, () =>
-    runInvoiceTotalsValidationInner(db, args, deps, preloadedInvoice)
+  // invoice a concurrent re-extract is replacing. Re-entrant when the analysis lane already holds it;
+  // abort-aware while parked behind another lane (SKA-24).
+  return withDocumentLock(
+    args.documentId,
+    () => runInvoiceTotalsValidationInner(db, args, deps, preloadedInvoice),
+    deps.signal
   )
 }
 

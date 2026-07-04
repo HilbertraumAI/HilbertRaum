@@ -282,7 +282,41 @@ password recovery — are documented in
   riders)** Unicode bidi direction controls are rejected in every displayed frontmatter string (title/
   description/author/language; ignored-with-note in localized overrides) — cosmetic picker spoofing — and
   the stale S13a-era autoFire comment was refreshed.
-- **Extractor evaluation infrastructure — a real-layout corpus, an output-snapshot version-bump guard, and an
+- **Run-seam edge hardening (skills-audit-2026-07-03 R9, SKA-24/26/27/28/44).** Five run-seam edges.
+  **(SKA-24)** `withDocumentLock` acquisition is **abort-aware**: a run PARKED behind another lane (queued
+  behind a long categorize holding the lock for minutes of LLM batches) now rejects on Cancel — the
+  controller flips it to `cancelled` immediately instead of a dead "running" spinner + busy refusals until
+  the other lane finishes; the aborted waiter settles its already-published chain link, so later callers
+  never wedge (pinned by a third-caller test). The chat-analysis turn signal and the categorize doctask
+  signal ride the same rail. **Residual (accepted):** cancellation INSIDE the critical section stays
+  cooperative (the tools' own signal checks) — abort only interrupts the park; and an already-cancelled
+  run facing a FREE lock still runs the seam far enough to record its honest 'cancelled' run row (the
+  pre-R9 tested contract). **(SKA-27)** the file-export tail is B4-guarded: a `finishRun` throw after the
+  minutes-open save dialog (workspace locked underneath it) no longer strands the run at 'started' NOR
+  reports *"failed. Nothing was changed."* after the file WAS written — the outcome reports what happened
+  to the FILE; bookkeeping gets one guarded retry and then only a local log. 'done' is stamped at the
+  actual write, not the pre-dialog prepare (run history no longer timestamps an export minutes early).
+  The adversarial review found `runDocumentRedaction` — the other dialog-shaped seam — carried the same
+  class (its unguarded post-write 'done' fell into the outer catch → 'failed' + "Nothing was changed."
+  after the copy WAS written); same treatment applied there.
+  **Residual:** if the workspace is PERMANENTLY unwritable, the row genuinely cannot reach a terminal
+  status — the user still gets the truthful success. **(SKA-28)** `runCashflowSummary` and the file
+  exports now hold ONE per-document lock across prepare + load + serialization (the last two downstream
+  seams that held none), closing the microtask-narrow TOCTOU where a competing `replaceExisting` extract
+  interleaved between the staleness re-extract's release and the row load (empty CSV, "saved 0 rows");
+  the export's hold RELEASES before the save dialog, so a parked dialog never blocks the document's other
+  lanes. **(SKA-26, decision: flip)** extractor-version staleness is now `v !== CURRENT`, not `v <`: rows
+  written by a NEWER extractor re-extract too — on a portable drive the app roams with the workspace, so
+  a mismatch means a deliberate rollback (where the newer extractor IS the suspected bug) or a second
+  install; serving its rows as fresh was exactly backwards. Deterministic extractors make the flip safe
+  (same version ⇒ same rows ⇒ no loop). **Accepted cost:** a workspace alternated between two app
+  versions re-extracts on EVERY switch, and each `replaceExisting` re-extract drops the persisted per-row
+  categories (the rows changed with the parser; the honest move is recomputing — the next categorize run
+  restores them). **(SKA-44, decision: demote)** the EN `transfer` categorizer rule is `confident: false`
+  like R3's `sepa`/`überweisung` — "TRANSFER TO NETFLIX…" now reaches the 15-category LLM instead of
+  being pre-filtered into 'Transfer' (same rails-not-merchant semantics; the offline deterministic
+  fallback still labels it Transfer). No extractor bump; the T1 snapshot is untouched (categories are not
+  extraction output).
   opt-in real-model smoke (Skills T1, audit §7 recs 1/2/5).** The recurring wrong-figure incidents
   (INVOICE-TOTALS-1, HVB zero-transactions, the §5.3 NBSP/Unicode family) were real-LAYOUT features that
   post-hoc synthetic fixtures never carried, and no skill path was ever exercised against a real model (the

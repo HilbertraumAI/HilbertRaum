@@ -22,6 +22,7 @@ import {
   isInvoiceStale
 } from '../../src/main/services/skills/invoice-run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
+import { INVOICE_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/invoice'
 import type { InvoiceInput } from '../../src/main/services/skills/tools/invoice'
 import type { AuditEventType, DocumentChunkRead, RunnableTool } from '../../src/shared/types'
 
@@ -451,6 +452,18 @@ describe('R3 — downstream invoice runs re-extract a STALE invoice before servi
     const freshId = latestInvoiceId(db, docId)!
     expect(freshId).not.toBe(staleId)
     expect(isInvoiceStale(db, freshId)).toBe(false)
+  })
+
+  it('SKA-26 (R9): an invoice written by a NEWER extractor is stale too (the downgrade half)', async () => {
+    // Mirror of the bank downgrade pin: after a rollback the newer extractor IS the suspected bug, so
+    // its rows must re-extract rather than be served as fresh (`!==`, not `<`).
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, COLLAPSED)
+    const res = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: faithfulReader })
+    const id = res.invoiceId!
+    expect(isInvoiceStale(db, id)).toBe(false)
+    db.prepare('UPDATE invoices SET extractor_version = ? WHERE id = ?').run(INVOICE_EXTRACTOR_VERSION + 1, id)
+    expect(isInvoiceStale(db, id)).toBe(true)
   })
 
   it('a FRESH invoice is NOT re-extracted (same id, no duplicate)', async () => {

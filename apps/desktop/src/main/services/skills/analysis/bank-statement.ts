@@ -738,7 +738,9 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     // PC-1): the individual seams self-lock, but only one outer lock spanning the sequence keeps a
     // re-extract from ANOTHER lane (a button run / a categorize doctask) from deleting the statement
     // BETWEEN two of this handler's own steps. Re-entrant — the inner seam locks become no-ops while
-    // this hold is in effect; unrelated documents still answer concurrently.
+    // this hold is in effect; unrelated documents still answer concurrently. The turn signal rides
+    // along (SKA-24): a Stop while parked behind another lane rejects out to `withChatStream`, which
+    // treats an aborted rejection as the calm empty-done cancel — no dead wait behind a long categorize.
     return withDocumentLock(target.id, async () => {
       const args: BankExtractionArgs = {
         skillInstallId: ctx.skillInstallId,
@@ -907,6 +909,6 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         citations,
         coverage
       }
-    })
+    }, ctx.signal)
   }
 }
