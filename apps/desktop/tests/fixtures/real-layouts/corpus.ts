@@ -42,7 +42,10 @@ export const INCIDENT_CLASSES = [
   'dot-decimal-geometry', // geometry classifier ate d.dd amounts as dates on CH/UK/US statements (R7, SKA-13)
   'money-bearing-header', // invoice vendor/number header labels swallowed money-bearing lines (R7, SKA-14)
   'dropped-row-honesty', // an unparseable money-bearing booking line must COUNT (droppedRowCount, U1/T2)
-  'contradicted-balance-claim' // printed opening/closing the rows refute — the D56 'contradicted' gate (T2)
+  'contradicted-balance-claim', // printed opening/closing the rows refute — the D56 'contradicted' gate (T2)
+  'glyph-soup-text-layer', // per-glyph/fused PDF text: fragments scraped as fields (invoice-hardening P3/P4)
+  'unreconcilable-strong-totals', // printed 2-dp totals that contradict the items — the gate case (P2/P4)
+  'invoice-geometry-columns' // a columnar invoice through the REAL reconstructPage (the P3 retry path, P4)
 ] as const
 
 export type IncidentClass = (typeof INCIDENT_CLASSES)[number]
@@ -328,6 +331,62 @@ const invoiceMoneyHeaders: InvoiceFixture = {
   ]
 }
 
+/**
+ * The invoice-hardening-2026-07-04 incident, reconstructed (P4): a crypto-scam-style invoice whose PDF
+ * text layer fragments into per-glyph runs ("1   0 % 3   Article", "$ 9 1 4 = $"). The line-oriented
+ * parser scrapes fragments as descriptions and stray currency-adjacent digits as totals — the real
+ * transcript asserted net 4 / tax 0 / gross 914 against items summing to ~1084. The guards under test:
+ * `textQuality: 'suspect'` is stamped (P3), and every bare-integer (weak) total is RETRACTED because the
+ * assembled arithmetic contradicts it (P2) — the extract must carry NO totals, never confident garbage.
+ */
+const invoiceGlyphSoup: InvoiceFixture = {
+  id: 'invoice-us-glyph-soup',
+  kind: 'invoice',
+  title: 'Stablecoin Yield Ltd — invoice (glyph-mangled text layer)',
+  incidentClasses: ['glyph-soup-text-layer'],
+  note: 'Per-glyph PDF text: suspect textQuality stamped; uncorroborated weak totals retracted (no confident garbage).',
+  chunks: [
+    [
+      'I n v o i c e',
+      '1   0 % 3   Article — Stablecoin Yield Farming or Passive 167,70',
+      '$ 9 1 4 = $ 915,92',
+      '( 1 U S D T = $ 0,99',
+      'Netto 4 $',
+      'Tax 0 $',
+      'Total 914 $'
+    ].join('\n')
+  ]
+}
+
+/**
+ * Strong-figure mismatch (P4): a well-formed DE invoice whose PRINTED 2-dp totals contradict the line
+ * items (a real-world misprint / partially-read document). The decimal-shaped figures are never
+ * retracted (they are the document's own print — P2 touches only weak bare-integer reads); the ANSWER
+ * layer owns this case (unverified heading + caveat, echo suppression). The extract must carry the
+ * printed figures verbatim and `validateInvoiceTotals` must report the mismatches.
+ */
+const invoiceUnreconcilable: InvoiceFixture = {
+  id: 'invoice-de-unreconcilable-totals',
+  kind: 'invoice',
+  title: 'Druckfehler GmbH — Rechnung (DE, widersprüchliche Summen)',
+  incidentClasses: ['unreconcilable-strong-totals'],
+  note: 'Printed 2-dp totals contradict the items: kept verbatim by the extractor; the answer layer gates them.',
+  chunks: [
+    [
+      'Druckfehler GmbH',
+      'Rechnung Nr. 2026-99',
+      'Rechnungsdatum 01.06.2026',
+      '',
+      'Material                              120,00 EUR',
+      'Arbeitszeit                           150,00 EUR',
+      '',
+      'Summe netto                           300,00 EUR',
+      'MwSt 20%                               60,00 EUR',
+      'Gesamtbetrag                          999,00 EUR'
+    ].join('\n')
+  ]
+}
+
 // =====================================================================================================
 // GEOMETRY STATEMENTS (positioned words — run through the REAL `reconstructPage`, then the extractors)
 // =====================================================================================================
@@ -419,15 +478,88 @@ const geometryDotDecimal: GeometryBankFixture = {
   ]
 }
 
+export interface GeometryInvoiceFixture {
+  id: string
+  kind: 'invoice-geometry'
+  title: string
+  incidentClasses: Array<IncidentClass | string>
+  note: string
+  /** Positioned words, one entry per PAGE — fed through the REAL `reconstructPage`, then `extractInvoice`
+   *  (the P3 glyph-soup RETRY path: `analysis/invoice.ts` re-reads a suspect document via layout). */
+  pages: GeometryWord[][]
+}
+
+/**
+ * Columnar invoice through the geometry pipeline (invoice-hardening-2026-07-04 P4 — the first geometry
+ * INVOICE coverage; T1 recorded the gap). An invoice printed in description/qty/unit/total columns:
+ * `reconstructPage` clusters each visual row and emits its raw left-to-right text (no booking-date
+ * column, so every row is a non-transaction "raw" row), which the plain invoice extractor then parses —
+ * exactly what the P3 suspect-retry does in production. The read must be CLEAN: 2 items, reconciling
+ * totals, header fields intact.
+ */
+const geometryInvoiceColumns: GeometryInvoiceFixture = {
+  id: 'invoice-de-geometry-columns',
+  kind: 'invoice-geometry',
+  title: 'Muster Consulting — Rechnung (DE, columnar geometry)',
+  incidentClasses: ['invoice-geometry-columns'],
+  note: 'Columnar DE invoice via reconstructPage → extractInvoice: rows reassemble left-to-right and parse cleanly.',
+  pages: [
+    [
+      gw('Muster', 40, 800),
+      gw('Consulting', 95, 800),
+      gw('GmbH', 165, 800),
+      gw('Rechnung', 40, 780),
+      gw('Nr.', 100, 780),
+      gw('G-2026-3', 125, 780),
+      gw('Rechnungsdatum', 40, 760),
+      gw('15.03.2026', 145, 760),
+      // Line items: description x=40, qty x=200, unit price x=260, line total x=340, currency x=410.
+      gw('Beratung', 40, 700),
+      gw('2', 200, 700),
+      gw('100,00', 260, 700),
+      gw('200,00', 340, 700),
+      gw('EUR', 410, 700),
+      gw('Workshop', 40, 680),
+      gw('1', 200, 680),
+      gw('50,00', 260, 680),
+      gw('50,00', 340, 680),
+      gw('EUR', 410, 680),
+      // Totals block.
+      gw('Summe', 40, 620),
+      gw('netto', 90, 620),
+      gw('250,00', 340, 620),
+      gw('EUR', 410, 620),
+      gw('MwSt', 40, 600),
+      gw('20%', 90, 600),
+      gw('50,00', 340, 600),
+      gw('EUR', 410, 600),
+      gw('Gesamtbetrag', 40, 580),
+      gw('300,00', 340, 580),
+      gw('EUR', 410, 580)
+    ]
+  ]
+}
+
 /** Every bank fixture, in stable order. */
 export const BANK_FIXTURES: BankFixture[] = [bankElba, bankSparkasse, bankDdmmyy, bankDroppedRow, bankContradicted]
 
 /** Every invoice fixture, in stable order. */
-export const INVOICE_FIXTURES: InvoiceFixture[] = [invoiceSteuer, invoiceSwiss, invoicePhantom, invoiceMoneyHeaders]
+export const INVOICE_FIXTURES: InvoiceFixture[] = [
+  invoiceSteuer,
+  invoiceSwiss,
+  invoicePhantom,
+  invoiceMoneyHeaders,
+  invoiceGlyphSoup,
+  invoiceUnreconcilable
+]
 
 /** Every geometry fixture, in stable order (snapshot-keyed on the BANK extractor version — the bump
  *  policy explicitly covers `pdf-layout.ts` reconstruction changes). */
 export const GEOMETRY_BANK_FIXTURES: GeometryBankFixture[] = [geometryDotDecimal]
+
+/** Geometry INVOICE fixtures (invoice-hardening P4) — snapshot-keyed on the INVOICE extractor version;
+ *  reconstruction changes are covered by the bank version's bump policy, invoice parsing by its own. */
+export const GEOMETRY_INVOICE_FIXTURES: GeometryInvoiceFixture[] = [geometryInvoiceColumns]
 
 /** The whole plain-text corpus, bank then invoice, stable order (the snapshot + coverage iterate this;
  *  the geometry fixtures ride beside it — the coverage test unions their incident classes too). */
