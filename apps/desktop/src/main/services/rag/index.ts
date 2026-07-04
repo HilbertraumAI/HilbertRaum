@@ -53,7 +53,9 @@ import {
 } from '../skills/prompt'
 import { getSettings } from '../settings'
 import { scanRedactionCandidates, type RedactionCounts } from '../skills/tools/redaction'
-import { answerWholeDocFromTree } from './whole-doc-tree'
+import { answerWholeDocFromTree, streamWholeDocMapReduce } from './whole-doc-tree'
+import { documentChunkCount } from '../analysis/coverage'
+import { SUMMARY_MAP_CALL_CEILING } from '../doctasks/summary'
 import { buildGroundedDataPrompt } from './grounded-data'
 export { buildGroundedDataPrompt, GROUNDED_DATA_RULES } from './grounded-data'
 
@@ -437,6 +439,39 @@ function sameSegment(
     (prev.section_label ?? null) === (cur.section_label ?? null)
 }
 
+/** A document chunk paired with its DE-OVERLAPPED text (the ~80-token same-segment boundary stripped). */
+interface DeOverlappedChunk {
+  row: ChunkRow
+  text: string
+}
+
+/**
+ * Read ALL of a document's chunks IN ORDER, de-overlapping consecutive same-segment neighbours — the
+ * single home of the whole-document de-overlap read (audit §2.2). Both `retrieveWholeDocument` (which then
+ * budget-caps + labels the prefix) and `answerWholeDocFromChunks` (Phase 1 chunk map-reduce — the WHOLE
+ * document, uncapped) consume this, so the ~80-token boundary is stripped identically on both paths. No
+ * budget cap here: the caller decides how much of the de-overlapped run it takes. Pure DB read (SEC-1).
+ */
+function readWholeDocumentChunkTexts(db: Db, documentId: string): DeOverlappedChunk[] {
+  const rows = db
+    .prepare(
+      'SELECT id, document_id, text, source_label, page_number, section_label, token_count ' +
+        'FROM chunks WHERE document_id = ? ORDER BY chunk_index'
+    )
+    .all(documentId) as unknown as ChunkRow[]
+  const out: DeOverlappedChunk[] = []
+  let prevRow: ChunkRow | null = null
+  for (const row of rows) {
+    // A same-segment neighbour repeats ~80 tokens of `prevRow`'s tail as its own prefix; strip it so the
+    // read carries real coverage. `prevRow` is the RAW row (its `.text` un-de-overlapped) — the overlap is
+    // measured against the original tail, exactly as the former inline loop did.
+    const text = prevRow && sameSegment(prevRow, row) ? deOverlapAgainstPrev(prevRow.text, row.text) : row.text
+    out.push({ row, text })
+    prevRow = row
+  }
+  return out
+}
+
 /**
  * Load a SINGLE document's chunks IN ORDER (not top-k retrieval) for a skill-aware whole-document
  * answer (skill-whole-doc engine, Wave 2 — `architecture.md` §19/§20). Unlike `retrieve`, this does
@@ -458,21 +493,14 @@ export function retrieveWholeDocument(
   documentId: string,
   budgetTokens: number
 ): WholeDocumentResult {
-  const rows = db
-    .prepare(
-      'SELECT id, document_id, text, source_label, page_number, section_label, token_count ' +
-        'FROM chunks WHERE document_id = ? ORDER BY chunk_index'
-    )
-    .all(documentId) as unknown as ChunkRow[]
-  const chunksTotal = rows.length
+  // The whole-document de-overlap read lives in one place (`readWholeDocumentChunkTexts`); here we take a
+  // budget-capped PREFIX of it. Charging the DE-OVERLAPPED text against the budget means the ~16% overlap
+  // tax buys ~a whole extra chunk of reach.
+  const deOverlapped = readWholeDocumentChunkTexts(db, documentId)
+  const chunksTotal = deOverlapped.length
   const selected: Array<Omit<RetrievedChunk, 'label'>> = []
   let usedTokens = 0
-  let prevRow: ChunkRow | null = null
-  for (const row of rows) {
-    // De-overlap: a same-segment neighbour repeats ~80 tokens of `prevRow`'s tail as its own prefix
-    // (audit §2.2). Strip that duplication so the excerpt block carries real coverage, and charge the
-    // DE-OVERLAPPED text against the budget so the ~16% overlap tax buys ~a whole extra chunk of reach.
-    const text = prevRow && sameSegment(prevRow, row) ? deOverlapAgainstPrev(prevRow.text, row.text) : row.text
+  for (const { row, text } of deOverlapped) {
     const tokens = Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
     // Always include the first chunk (a single over-budget chunk must not yield "no context");
     // after that, stop as soon as the next chunk would overflow the whole-document budget.
@@ -487,7 +515,6 @@ export function retrieveWholeDocument(
       score: 0
     })
     usedTokens += tokens
-    prevRow = row
   }
   const chunks: RetrievedChunk[] = selected.map((c, i) => ({ ...c, label: `S${i + 1}` }))
   const citations: Citation[] = chunks.map((c) => ({
@@ -498,6 +525,78 @@ export function retrieveWholeDocument(
     snippet: truncateSnippet(c.text)
   }))
   return { chunks, citations, chunksCovered: chunks.length, chunksTotal, truncated: chunks.length < chunksTotal }
+}
+
+/** Dependencies for the no-tree over-budget whole-doc chunk map-reduce (Phase 1). */
+export interface WholeDocChunksDeps {
+  db: Db
+  runtime: ModelRuntime
+  conversationId: string
+  documentId: string
+  question: string
+  skill?: TurnSkill | null
+  contextTokens: number
+  signal?: AbortSignal
+  onToken?: (token: string) => void
+  answerPrefix?: string
+  /** Share-safe (or other app-authored) block for the reduce USER turn — never the system prompt. */
+  extraReduceBlock?: string
+}
+
+/**
+ * Answer an over-budget whole-document skill turn that has NO deep-index tree by running an on-the-fly
+ * map-reduce over the document's RAW chunks (Phase 1 — wholedoc-truncation-fix-plan §3). This closes the
+ * "gap band": documents between ~1.5 pages (the single-read budget) and ~50 pages (where the tree
+ * auto-builds) were previously read from the BEGINNING only; now the WHOLE document is analysed and the
+ * coverage stamp is honest (`mode:'capped', truncated:false` — untruncated capped = whole-doc via
+ * map-reduce, the meter's meaning). Co-located with the private de-overlap helpers (no circular import
+ * back into whole-doc-tree.ts); the shared `streamWholeDocMapReduce` core does the fence/map/reduce/persist.
+ *
+ * Returns `null` ONLY when the document has zero non-empty chunk texts (defensive; the caller then uses the
+ * capped beginning-only floor). Capability ceiling unchanged: pure DB reads + the chat runtime (SEC-1).
+ */
+export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promise<Message | null> {
+  const { db, documentId } = deps
+  // ALL de-overlapped chunks (the WHOLE document, uncapped) — the same read `retrieveWholeDocument`
+  // budget-caps. Drop empty/whitespace texts (parity with the tree path's node-summary filter).
+  const nonEmpty = readWholeDocumentChunkTexts(db, documentId).filter((c) => c.text.trim().length > 0)
+  if (nonEmpty.length === 0) return null
+  const sourceTexts = nonEmpty.map((c) => c.text)
+
+  // Citations = a bounded, representative sample of REAL leaf chunks (M2 — never node summaries), evenly
+  // spaced across the document so provenance spans it without the noise of one citation per chunk. Bounded
+  // to ≤ SUMMARY_MAP_CALL_CEILING (the map-call ceiling), matching the reduce's window budget.
+  const step = Math.max(1, Math.ceil(nonEmpty.length / SUMMARY_MAP_CALL_CEILING))
+  const reps = nonEmpty.filter((_, i) => i % step === 0).slice(0, SUMMARY_MAP_CALL_CEILING)
+  const citations: Citation[] = reps.map((c, i) => ({
+    label: `S${i + 1}`,
+    sourceTitle: c.row.source_label ?? 'Untitled',
+    pageNumber: c.row.page_number,
+    section: c.row.section_label,
+    snippet: truncateSnippet(c.text)
+  }))
+
+  // The whole document IS the source ⇒ covered == total (documentChunkCount is the whole-doc denominator
+  // the meter uses). `truncated` is finalized inside the core (only a > ceiling window count / notes cut).
+  const total = documentChunkCount(db, documentId)
+  return streamWholeDocMapReduce({
+    db: deps.db,
+    runtime: deps.runtime,
+    conversationId: deps.conversationId,
+    documentId: deps.documentId,
+    question: deps.question,
+    skill: deps.skill,
+    contextTokens: deps.contextTokens,
+    signal: deps.signal,
+    onToken: deps.onToken,
+    answerPrefix: deps.answerPrefix,
+    sourceTexts,
+    citations,
+    chunksCovered: total,
+    chunksTotal: total,
+    coverageMode: 'capped',
+    extraReduceBlock: deps.extraReduceBlock
+  })
 }
 
 /** The `[Sn] File: X | Page: 4` / `| Section: Y` metadata line for a chunk (spec §7.8). */
@@ -1321,10 +1420,16 @@ export async function generateGroundedAnswer(
   if (opts.wholeDocument) {
     const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
-    // Over-budget document (Follow-up A): rather than truncate to the beginning, run a skill-fenced
-    // map-reduce over its READY deep-index tree (true whole-document coverage, `mode:'tree'`). Returns
-    // null when there is no usable tree — then fall through to the honest Wave 2 capped/"beginning"
-    // path below, byte-unchanged. A document that FITS the budget never enters here (truncated:false).
+    // U2 (audit §3.5): the deterministic whole-document PII pre-scan (share-safe handler) — COUNTS only
+    // (§6). Computed once here so both the chunk map-reduce (extraReduceBlock) and the capped/fit grounded
+    // prompt reuse it. Null ⇒ not the share-safe handler.
+    const scan = opts.wholeDocumentPiiScan ? scanWholeDocumentForPii(db, opts.wholeDocument.documentId) : null
+    // Over-budget document: rather than truncate to the beginning, cover the WHOLE document via map-reduce.
+    // First the deep-index TREE rescue (`mode:'tree'`) when one is ready (Follow-up A); else an on-the-fly
+    // map-reduce over the RAW chunks (Phase 1 — `mode:'capped', truncated:false` — closes the "gap band" of
+    // documents too large for a single read but too small to have auto-built a tree). Only when BOTH decline
+    // (no usable tree / zero chunks) do we fall through to the honest beginning-only capped floor below. A
+    // document that FITS the budget never enters here (truncated:false).
     if (whole.truncated) {
       const viaTree = await answerWholeDocFromTree({
         db,
@@ -1340,6 +1445,23 @@ export async function generateGroundedAnswer(
         answerPrefix: opts.answerPrefix
       })
       if (viaTree) return viaTree
+      const viaChunks = await answerWholeDocFromChunks({
+        db,
+        runtime,
+        conversationId,
+        documentId: opts.wholeDocument.documentId,
+        question,
+        skill: opts.skill,
+        contextTokens,
+        signal: opts.signal,
+        onToken: opts.onToken,
+        answerPrefix: opts.answerPrefix,
+        // Share-safe parity: the chunk map-reduce covers the WHOLE document, so the verdict gate is NOT
+        // applied (truncated=false) — the low-risk verdict is legitimately allowed. Rides in the reduce
+        // USER turn (never the system prompt). Closes the tree-path share-safe residual for gap-band docs.
+        extraReduceBlock: scan ? buildShareSafeScanBlock(scan, false) : undefined
+      })
+      if (viaChunks) return viaChunks
     }
     chunks = whole.chunks
     citations = whole.citations
@@ -1349,17 +1471,14 @@ export async function generateGroundedAnswer(
       chunksTotal: whole.chunksTotal,
       truncated: whole.truncated
     }
-    // No rescue tree fired (else we returned above): the read is the honest beginning. Tell the model
-    // exactly what it cannot see so its answer never claims completeness or asserts an absence (§2.2).
+    // The last-resort capped FLOOR (both map-reduce rescues declined — zero chunks, or a disabled path): the
+    // read is the honest beginning. Tell the model exactly what it cannot see so its answer never claims
+    // completeness or asserts an absence (§2.2).
     if (whole.truncated) singleDocTruncation = { covered: whole.chunksCovered, total: whole.chunksTotal }
-    // U2 (audit §3.5): the share-safe pre-scan runs the deterministic detectors over the WHOLE document
-    // (not just the budget-capped excerpts the model sees) and injects a counts summary; a truncated read
-    // additionally forbids the low-risk verdict. (A doc rescued by the deep-index tree returned above; that
-    // path's own truncation stamp governs — the pre-scan is the non-tree whole-doc path, the common case.)
-    if (opts.wholeDocumentPiiScan) {
-      const scan = scanWholeDocumentForPii(db, opts.wholeDocument.documentId)
-      shareSafeScanBlock = buildShareSafeScanBlock(scan, whole.truncated)
-    }
+    // U2: the share-safe pre-scan summary rides in the grounded (floor/fit) prompt; a truncated FLOOR read
+    // additionally forbids the low-risk verdict. (The common over-budget case now returns via the chunk
+    // map-reduce above, whose reduce turn carries the untruncated scan block.)
+    if (scan) shareSafeScanBlock = buildShareSafeScanBlock(scan, whole.truncated)
   } else if (opts.wholeDocumentCompare) {
     const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
     const ids = opts.wholeDocumentCompare.documentIds

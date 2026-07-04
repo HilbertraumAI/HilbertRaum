@@ -264,7 +264,8 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
 // A3 needle-vs-deliverable downgrade (audit §8.2 (b)): the whole-doc engine is the DEFAULT, but a targeted
 // single-fact LOOKUP over a document that OVERFLOWS the whole-doc budget with NO deep-index tree is better
 // served by top-k — a needle past the truncation cut would be missed. A DELIVERABLE over the SAME doc keeps
-// the whole (capped) read. Proven on one over-budget transcript at a 4096 window.
+// the whole-doc engine — now covering the WHOLE document via the Phase-1 chunk map-reduce (capped,
+// untruncated), not a beginning-only read. Proven on one over-budget transcript at a 4096 window.
 describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
   it('a NEEDLE ask keeps top-k (relevance path, no capped whole-doc claim)', async () => {
     const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
@@ -282,7 +283,7 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     expect(msg.skillId).toBe(MEETING_INSTALL_ID)
   })
 
-  it('a DELIVERABLE ask over the SAME over-budget doc keeps the whole (capped, truncated) read', async () => {
+  it('a DELIVERABLE ask over the SAME over-budget doc covers the WHOLE doc via chunk map-reduce (Phase 1)', async () => {
     const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
     const { result } = await invoke(
       handlers,
@@ -292,10 +293,13 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
       MEETING_INSTALL_ID
     )
     const msg = result as Message
-    expect(h.runtime.calls).toBe(1)
-    // A deliverable never downgrades: it keeps the whole-doc engine (capped + honestly truncated + W1 notice).
+    // A deliverable never downgrades: it keeps the whole-doc engine. BEFORE Phase 1 an over-budget doc with
+    // no tree was read from the beginning only (1 call, capped + truncated). Now the chunk map-reduce covers
+    // the WHOLE document (>1 call: map windows + reduce) and stamps honest untruncated capped coverage.
+    expect(h.runtime.calls).toBeGreaterThan(1)
     expect(msg.coverage?.mode).toBe('capped')
-    expect(msg.coverage?.truncated).toBe(true)
+    expect(msg.coverage?.truncated).toBe(false)
+    expect(msg.coverage?.chunksCovered).toBe(msg.coverage?.chunksTotal)
   })
 
   it('SKA-12 (A4): a NEEDLE over an over-budget doc WITH a ready tree ALSO keeps top-k (tree conjunct dropped)', async () => {

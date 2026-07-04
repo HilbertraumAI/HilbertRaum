@@ -9,8 +9,10 @@ import { join } from 'node:path'
 // This suite pins, on a realistic ~10-page German fixture at contextTokens=4096:
 //   1. the 1.5 German-subword safety divisor on the whole-doc budget,
 //   2. de-overlap: consecutive same-segment chunks no longer repeat their ~80-token boundary,
-//   3. the in-prompt truncation notice (the model is TOLD what it cannot see, forbidden to assert
-//      an absence), and the honest `capped`/truncated coverage stamp.
+//   3. Phase 1 (wholedoc-truncation-fix-plan §3): an over-budget doc with NO tree now covers the WHOLE
+//      document via the on-the-fly chunk map-reduce (`capped`, untruncated) — the old beginning-only
+//      "PARTIAL DOCUMENT" notice was the reported defect. The rich map-reduce assertions (call count,
+//      whole-doc marker reach, Stop contract) live in rag-whole-doc-mapreduce.test.ts.
 
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
@@ -221,7 +223,10 @@ describe('whole-document budget honesty at the default 4096 context (W1, audit �
     expect(partial.chunksCovered).toBeGreaterThan(0)
   })
 
-  it('injects the in-prompt truncation notice and stamps honest capped/truncated coverage', async () => {
+  it('over-budget doc with NO tree covers the WHOLE document via chunk map-reduce (Phase 1, gap band closed)', async () => {
+    // BEFORE Phase 1 this ~11-page doc (no tree) was read from the BEGINNING only and stamped
+    // `truncated:true` + a "PARTIAL DOCUMENT" notice — the reported defect. Now the on-the-fly chunk
+    // map-reduce analyses the WHOLE document and stamps honest whole-doc coverage (`capped`, untruncated).
     const h = await makeHarness()
     const runtime = capturingRuntime()
     appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
@@ -235,30 +240,24 @@ describe('whole-document budget honesty at the default 4096 context (W1, audit �
       { wholeDocument: { documentId: h.docId } }
     )) as Message
 
-    // Honest coverage: covered a beginning, flagged truncated (never "whole document").
+    // Honest whole-document coverage: capped mode (via map-reduce), NOT truncated, whole doc reached.
     expect(msg.coverage?.mode).toBe('capped')
-    expect(msg.coverage?.truncated).toBe(true)
+    expect(msg.coverage?.truncated).toBe(false)
     const covered = msg.coverage?.chunksCovered ?? 0
     const total = msg.coverage?.chunksTotal ?? 0
     expect(covered).toBeGreaterThan(0)
-    expect(covered).toBeLessThan(total)
+    expect(covered).toBe(total) // the whole document IS the source
 
-    // The grounded USER turn carries the partial-document notice — the model is TOLD what it cannot
-    // see, that its answer covers only the beginning, and is FORBIDDEN to assert an absence (§2.2).
+    // The final REDUCE turn is framed for the WHOLE document — never the old beginning-only notice.
     const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
-    expect(userTurn).toContain('PARTIAL DOCUMENT')
-    expect(userTurn).toContain(`the first ${covered} of ${total} sections`)
-    expect(userTurn).toContain('did not fit and were NOT provided')
-    expect(userTurn).toMatch(/do NOT say that anything is absent or missing/i)
-    expect(userTurn).toContain('covers only the beginning')
+    expect(userTurn).toContain('cover the WHOLE document')
+    expect(userTurn).toContain('Notes (whole document)')
+    expect(userTurn).not.toContain('PARTIAL DOCUMENT')
+    expect(userTurn).not.toContain('covers only the beginning')
 
-    // The notice rides WITH the excerpts (user turn), never the system prompt (untrusted-text class).
+    // No untrusted-text leakage into the system prompt.
     const systemTurn = runtime.lastMessages.find((m) => m.role === 'system')?.content ?? ''
     expect(systemTurn).not.toContain('PARTIAL DOCUMENT')
-
-    // End-to-end de-overlap: the excerpts the model actually saw carry no duplicated markers.
-    const markers = userTurn.match(/M\d{4}/g) ?? []
-    expect(new Set(markers).size).toBe(markers.length)
   })
 
   it('a small (non-truncating) document keeps the whole-doc read honest and notice-free', async () => {
@@ -357,8 +356,11 @@ describe('share-safe PII pre-scan injection (U2, audit §3.5)', () => {
     expect(counts.email).toBe(0)
   })
 
-  it('injects the whole-document scan block into the prompt AND gates the verdict on a truncated doc', async () => {
-    const h = await makeHarness() // ~11-page doc, over budget ⇒ truncated
+  it('over-budget doc: the scan block rides in the chunk map-reduce reduce turn, whole-doc coverage lifts the gate', async () => {
+    // BEFORE Phase 1 this over-budget doc read the beginning only ⇒ `truncated:true` and the low-risk
+    // verdict was FORBIDDEN. Now the chunk map-reduce covers the WHOLE document, so the pre-scan block
+    // rides in the reduce USER turn WITHOUT the gate — a low-risk verdict now rests on real whole-doc review.
+    const h = await makeHarness() // ~11-page doc, over budget, no tree ⇒ chunk map-reduce
     const runtime = capturingRuntime()
     appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
     const msg = (await generateGroundedAnswer(
@@ -371,14 +373,13 @@ describe('share-safe PII pre-scan injection (U2, audit §3.5)', () => {
       { wholeDocument: { documentId: h.docId }, wholeDocumentPiiScan: true }
     )) as Message
 
-    expect(msg.coverage?.truncated).toBe(true)
+    expect(msg.coverage?.truncated).toBe(false) // whole document analysed
     const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
-    // The deterministic pre-scan summary rides in the user turn (never the system prompt)…
+    // The deterministic pre-scan summary rides in the reduce user turn (never the system prompt)…
     expect(userTurn).toContain('AUTOMATED PRE-SCAN')
     expect(userTurn).toContain('payment-card numbers:')
-    // …and the truncated read forbids the low-risk verdict.
-    expect(userTurn).toContain('MUST NOT')
-    expect(userTurn).toContain('Likely low risk after review')
+    // …and whole-document coverage means NO verdict gate (the low-risk verdict is legitimately allowed).
+    expect(userTurn).not.toContain('MUST NOT')
     const systemTurn = runtime.lastMessages.find((m) => m.role === 'system')?.content ?? ''
     expect(systemTurn).not.toContain('AUTOMATED PRE-SCAN')
   })

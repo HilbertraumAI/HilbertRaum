@@ -462,10 +462,13 @@ password recovery — are documented in
     button deflection; an *action* ask keeps the deflection (the write tool stays user-initiated). The
     **share-safe-review** whole-document turn injects a deterministic whole-document PII count summary into
     the model prompt and **gates its "Likely low risk after review" verdict on non-truncated coverage** —
-    a truncated read (the model was shown only the beginning) forbids the low-risk verdict. Residual: the
-    verdict-gate is injected on the standard whole-document path; a share-safe review of an over-budget
-    document rescued via the deep-index **tree** map-reduce does not carry the pre-scan block (an edge case
-    — its own coverage stamp still marks truncation).
+    a truncated read (the model was shown only the beginning) forbids the low-risk verdict. Since the
+    whole-doc-truncation-fix Phase 1, an over-budget document with NO tree is covered whole via the **chunk
+    map-reduce**, whose reduce turn carries the pre-scan block with NO gate (whole-doc coverage legitimately
+    permits the low-risk verdict) — so the pre-scan now reaches the common over-budget case. Residual: a
+    share-safe review of an over-budget document rescued via the deep-index **tree** map-reduce still does
+    not carry the pre-scan block (a narrower edge case — ≥~50-page docs with a ready tree; its own coverage
+    stamp still marks any truncation).
 
 ## Spec features intentionally not built (MVP scope)
 
@@ -724,9 +727,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   over a single in-scope, fully-chunked document streams a model answer over the **whole** document
   (read in order, not top-k) with the SKILL.md format applied, stamping honest `capped` coverage. A
   document larger than the context budget that has a **ready deep index** is answered by a skill-fenced
-  **map-reduce over its tree** instead of truncating (`tree` badge — Follow-up A, §20);
-  **without** a ready tree it is still read **from the beginning** with a "covers the beginning" badge,
-  never silently complete. **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
+  **map-reduce over its tree** instead of truncating (`tree` badge — Follow-up A, §20); **without** a ready
+  tree it is now covered whole by an on-the-fly **map-reduce over its raw chunks** (whole-doc-truncation-fix
+  **Phase 1**, 2026-07-04 — `capped`/untruncated badge, "covers the whole document"), which **closes the
+  "gap band"** where a document too large for a single read but too small to auto-build a tree was read from
+  the beginning only. New residuals: (a) the ≥~50-page tail is still beginning-only when its window count
+  exceeds `SUMMARY_MAP_CALL_CEILING` (~12 windows) — honestly badged `truncated`; (b) a mid-size analysis
+  now costs 2–12 model calls (map windows + reduce) of extra latency before the first streamed token (a
+  progress affordance is Phase 3); (c) on a small (4 k) window a very long deliverable is still output-cut
+  by the unchanged `CHAT_RESPONSE_RESERVE_TOKENS` reduce reserve — honestly badged, removed by Phase 2/4.
+  **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
   (budget split size-aware across them, `capped` coverage — `truncated` when either overflowed) and
   presents them as labelled blocks, instead of top-k. A tree-backed compare (the §20 map-reduce applied
