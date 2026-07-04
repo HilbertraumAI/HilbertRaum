@@ -1,6 +1,6 @@
 {
   "name": "hilbertraum",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "private": true,
   "description": "Open-source offline AI workspace that runs local models from a portable drive. No cloud, no telemetry.",
   "license": "GPL-3.0-or-later",
