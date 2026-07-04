@@ -61,12 +61,51 @@ function isAnalysisShaped(question: string): boolean {
 // template. `applies()` stays TRUE (an invoice keyword still owns the turn), so a format ask never leaks
 // the raw invoice into the generic RAG/LLM path. Word-bounded so `json`/`csv`/`xml` match only as
 // standalone tokens. JSON is checked first (the most common request).
+//
+// invoice-hardening-2026-07-04 P1: the bare token test mis-fired on NEGATED mentions. Real transcript:
+// "Analysiere die Rechnung im Roh format - nicht im json" matched `\bjson\b` and re-served the
+// byte-identical JSON dump (0 model calls, ~9 ms) — the user had explicitly asked AWAY from JSON.
+// Two fixes, layered:
+//   (a) an explicit RAW/prose ask anywhere in the question wins: no format short-circuit at all;
+//   (b) a format token counts only when the text immediately BEFORE it carries no negator
+//       ("nicht im json", "not as csv", "ohne xml", "statt json") — checked per MENTION, so
+//       "als CSV, nicht als JSON" still serializes CSV.
+// A question whose only format mention is negated falls to the template/grounded-data shapes, where the
+// model can actually honour the phrasing. (A third, conversation-level backstop lives in `run()`.)
 type OutputFormat = 'json' | 'csv' | 'xml'
+
+// An explicit raw/prose ask — "im Roh format" (split), "Rohformat"/"Rohfassung"/"Rohtext"/"Rohdaten"
+// (joined), "raw", "Fließtext", "Klartext", "plain text", "Prosa"/"prose". Word-bounded. Deliberately NOT
+// a bare `plain` ("plain json" is a JSON ask); `raw` alone is accepted as raw-ish intent — the safe side
+// is the model path, whose grounded-data block still carries the full serialized invoice.
+const RAW_FORMAT_RE =
+  /\broh(?:format|fassung|text|daten)?\b|\braw\b|\bfließtext\b|\bfliesstext\b|\bklartext\b|\bplain\s?text\b|\bprosa\b|\bprose\b/
+
+// Negators that flip a following format mention. Tested against a short window immediately before the
+// token so a clause-level negation elsewhere ("nicht die Summe — als json bitte") stays out of reach.
+const FORMAT_NEGATOR_RE =
+  /\b(?:nicht|not|no|kein(?:e[nms]?)?|ohne|without|statt|anstatt|anstelle|instead of|rather than)\b/
+
+/** Chars of question text before a format token scanned for a negator — enough for "nicht im ",
+ *  "instead of the ", "anstelle von " plus one filler word; small enough to skip unrelated negations. */
+const NEGATION_WINDOW = 24
+
+/** True when `token` appears word-bounded at least once WITHOUT a negator in its leading window. */
+function hasAffirmedFormatToken(q: string, token: OutputFormat): boolean {
+  const re = new RegExp(`\\b${token}\\b`, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(q)) !== null) {
+    if (!FORMAT_NEGATOR_RE.test(q.slice(Math.max(0, m.index - NEGATION_WINDOW), m.index))) return true
+  }
+  return false
+}
+
 function detectFormat(question: string): OutputFormat | null {
   const q = question.toLowerCase()
-  if (/\bjson\b/.test(q)) return 'json'
-  if (/\bxml\b/.test(q)) return 'xml'
-  if (/\bcsv\b/.test(q)) return 'csv'
+  if (RAW_FORMAT_RE.test(q)) return null
+  if (hasAffirmedFormatToken(q, 'json')) return 'json'
+  if (hasAffirmedFormatToken(q, 'xml')) return 'xml'
+  if (hasAffirmedFormatToken(q, 'csv')) return 'csv'
   return null
 }
 
@@ -141,6 +180,22 @@ function loadDroppedRowCount(db: Db, invoiceId: string): number {
     .prepare('SELECT dropped_row_count AS n FROM invoices WHERE id = ?')
     .get(invoiceId) as { n: number | null } | undefined
   return row?.n ?? 0
+}
+
+/**
+ * The previous assistant turn's persisted content, or null (no conversation yet / first turn / tests
+ * without a conversation). invoice-hardening-2026-07-04 P1: read via `rowid` (insertion order) — message
+ * ids are UUIDs and `created_at` can tie within a millisecond on the deterministic 0-model-call paths.
+ */
+function lastAssistantContent(db: Db, conversationId: string | null | undefined): string | null {
+  if (!conversationId) return null
+  const row = db
+    .prepare(
+      `SELECT content FROM messages WHERE conversation_id = ? AND role = 'assistant'
+       ORDER BY rowid DESC LIMIT 1`
+    )
+    .get(conversationId) as { content: string } | undefined
+  return row?.content ?? null
 }
 
 const MAX_CITATIONS = 12
@@ -540,10 +595,21 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       }
 
       if (format && hasContent) {
-        return {
-          answer: buildFormatAnswer(ctx.tr, format, invoice),
-          citations: buildInvoiceCitations(db, target.id, target.title),
-          coverage: computeCoverage(db, target.id)
+        const formatAnswer = buildFormatAnswer(ctx.tr, format, invoice)
+        // invoice-hardening-2026-07-04 P1 backstop: when the question carries ANY negator and the
+        // deterministic dump would byte-duplicate the previous assistant turn, the negation-window in
+        // `detectFormat` probably missed a "not …this… format" phrasing — never re-serve the identical
+        // dump against a new question; fall through to grounded-data (its block carries the same JSON,
+        // so a genuinely repeated format ask still gets its figures, narrated). A repeat ask WITHOUT a
+        // negator ("nochmal als json") is untouched — re-serving the dump is then the correct answer.
+        const suspectNegation = FORMAT_NEGATOR_RE.test(ctx.question.toLowerCase())
+        const previous = suspectNegation ? lastAssistantContent(db, ctx.conversationId) : null
+        if (!(previous !== null && previous.includes(formatAnswer))) {
+          return {
+            answer: formatAnswer,
+            citations: buildInvoiceCitations(db, target.id, target.title),
+            coverage: computeCoverage(db, target.id)
+          }
         }
       }
 

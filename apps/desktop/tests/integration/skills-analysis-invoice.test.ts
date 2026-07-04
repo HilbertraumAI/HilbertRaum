@@ -14,6 +14,7 @@ import {
   registerSkillAnalysisHandler
 } from '../../src/main/services/skills/analysis/registry'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
+import { appendMessage, createConversation } from '../../src/main/services/chat'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
@@ -57,7 +58,12 @@ function capturingAudit(): {
   return { audit: (type, meta) => events.push({ type, meta }), events }
 }
 
-function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisContext & {
+function ctxFor(
+  db: Db,
+  scope: RetrievalScope,
+  question: string,
+  conversationId: string | null = null
+): SkillAnalysisContext & {
   events: Array<{ type: string; meta?: Record<string, unknown> }>
 } {
   const { audit, events } = capturingAudit()
@@ -66,7 +72,7 @@ function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisC
     scope,
     question,
     skillInstallId: INVOICE_INSTALL_ID,
-    conversationId: null,
+    conversationId,
     audit,
     tr,
     events
@@ -595,6 +601,87 @@ describe('invoice W7 answer-shape tuning (SKA-9/SKA-10)', () => {
     )
     expect(res.mode).toBe('grounded-data')
     expect(res.answer).not.toContain('```json')
+  })
+})
+
+// invoice-hardening-2026-07-04 P1 — negation-aware format detection + the byte-identical replay
+// backstop. The incident: "Analysiere die Rechnung im Roh format - nicht im json" matched the bare
+// `\bjson\b` token and re-served the byte-identical JSON dump (0 model calls, ~9 ms) against a question
+// that explicitly asked AWAY from JSON.
+describe('invoice P1 format negation + replay backstop (invoice-hardening-2026-07-04)', () => {
+  it('the incident question "… im Roh format - nicht im json" reaches grounded-data, never the dump', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Analysiere die Rechnung im Roh format - nicht im json')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('an English negated ask "not as json — explain the invoice" reaches grounded-data', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'not as json — explain the invoice please')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('an affirmed format NEXT TO a negated one ("als CSV, nicht als JSON") still serializes CSV', async () => {
+    // The negation check is per MENTION: the negated json token is skipped, the affirmed csv wins.
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'die rechnung als csv, nicht als json')
+    )
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('a raw/prose ask ("die Rechnung im Rohformat bitte") never serializes', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'zeig mir die Rechnung im Rohformat bitte')
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('backstop: a negator OUTSIDE the window never re-serves the previous byte-identical dump', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const conv = createConversation(db)
+    // Turn 1: a genuine JSON ask; its answer is persisted as the previous assistant turn.
+    const first = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'die rechnung als json bitte', conv.id)
+    )
+    expect(first.answer).toContain('```json')
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: first.answer })
+    // Turn 2: "nicht" sits > NEGATION_WINDOW chars before "json", so detectFormat still affirms JSON —
+    // the conversation-level backstop must catch the byte-identical replay and fall to grounded-data.
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'bitte nicht in dem komischen kaputten json', conv.id)
+    )
+    expect(res.mode).toBe('grounded-data')
+    expect(res.answer).not.toContain('```json')
+  })
+
+  it('a repeat format ask WITHOUT a negator ("nochmal als json") re-serves the dump — correct repeat', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const conv = createConversation(db)
+    const first = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'die rechnung als json bitte', conv.id)
+    )
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: first.answer })
+    const res = await invoiceAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'nochmal als json bitte', conv.id)
+    )
+    // No negator in the question ⇒ the backstop stays out of the way; the dump IS the right answer.
+    expect(res.answer).toBe(first.answer)
   })
 })
 
