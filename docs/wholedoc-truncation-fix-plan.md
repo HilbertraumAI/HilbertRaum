@@ -1,8 +1,10 @@
 # Whole-document analysis truncation — fix plan
 
-**Status:** OPEN (working paper). **Phases 1–2 IMPLEMENTED (2026-07-04)** — see §3 and §4; Phases 3–4
-remain open. Fold into `docs/architecture.md` §19/§20 (skill-whole-doc engine) + `docs/rag-design.md` as a
-§-numbered design record when fully implemented, then delete this file (CLAUDE.md doc-lifecycle rule).
+**Status:** ALL PHASES IMPLEMENTED. **Phases 1–2 (2026-07-04)** — §3/§4; **Phase 3 (2026-07-05)** — §5;
+**Phase 4 (2026-07-05)** — §6. This working paper is now being retired: its decisions + research are folded
+into `docs/rag-design.md` (§-numbered design record) with a brief update to `docs/architecture.md` §19/§20
+(skill-whole-doc engine), then this file is deleted per the CLAUDE.md doc-lifecycle rule (the fold lands in a
+SEPARATE docs-fold commit after the Phase-4 code commit — §7 commit plan). Full history stays in git.
 
 **Owner-approved decisions (2026-07-04):** (1) close the gap band with an *on-the-fly map-reduce
 over the raw chunks* — no waiting for a background tree; (2) commit each phase directly to `master`
@@ -314,22 +316,68 @@ change the exhaustive path's notice).
 
 ---
 
-## 6. Phase 4 — (OPTIONAL) continue-generation for complete deliverables at small `n_ctx`
+## 6. Phase 4 — continue-generation for complete deliverables at small `n_ctx` ✅ IMPLEMENTED (2026-07-05)
 
-**Only if the owner wants zero output truncation even on 4 k models.** Phase 2 caps output to fit;
-on a 4 k window a very long brief is still cut (honestly badged). Continue-generation removes the
-ceiling.
+**Goal:** remove the residual (c) output cut — on a 4 k window a very long brief that Phase 2 caps to fit
+is still cut at the ceiling (honestly badged). Continue-generation finishes the deliverable across bounded
+re-prompts instead of persisting a mid-sentence answer.
 
-**Approach:** when the reduce stream ends with `finishReason === 'length'`, re-prompt with the same
-system + fence + notes + question plus *"Continue exactly from where you left off; do not repeat"*
-and the last ~200 chars as an anchor; append, de-duplicating the seam overlap; cap at 2 extra
-continuations. Applies to both the map-reduce reduce and (optionally) the single-turn grounded path.
+**As built:** the reduce stream in the shared core `streamWholeDocMapReduce` ([wdt] — `rag/whole-doc-tree.ts`)
+now captures its finish reason (`onFinish`, mirroring the single-turn grounded path in [rag]). When a reduce
+pass ends `finishReason === 'length'` (cut at the output ceiling — NOT a user Stop, which fires no finish
+reason), a continuation loop re-prompts to FINISH: each pass re-sends the SAME reduce USER turn (fence +
+notes + question + `extraReduceBlock` — the §2 "fence at every step" invariant, full grounding preserved)
+via a new `continuationUserPrompt(reduceUser, anchor)` that appends a short resume instruction ("Continue the
+answer exactly from where it stops — do NOT repeat…") and an `anchor` = the last `CONTINUATION_ANCHOR_CHARS`
+(200) chars produced so far. Each continuation streams live via `onToken`, holding back only its opening
+until the seam overlap against the anchor is resolved (`seamOverlap` — the longest anchor-tail↔continuation-
+head match, ≤ the anchor length), then emits the DE-DUPLICATED remainder so a re-emitted anchor is never
+doubled. The loop is bounded by `MAX_REDUCE_CONTINUATIONS = 2` (runaway guard) **and** a per-pass no-overflow
+room guard: the continuation prompt is larger than the reduce prompt, so its `maxTokens` is sized against the
+ACTUAL assembled prompt (`min(reduceOutputCap, contextTokens − continuePromptTokens)`) and the loop stops
+(`CONTINUATION_MIN_OUTPUT_TOKENS = 256` floor) rather than assemble a prompt the runtime would reject
+(HTTP 400 "exceeds context size", invariant §2). All of this stays INSIDE the existing try/catch, so a Stop
+mid-continuation is caught and the accumulated partial persisted (the aborted pass's partial is folded in via
+a `finally` seam-flush) — never a fresh pass past the abort.
 
-**Risks to test:** seam duplication, drift, runaway loops. Tests: seam-overlap dedup, hard
-continuation cap, Stop mid-continuation, no duplication when the first pass already finished.
+**OUTPUT-truncation stamp (decision):** the reduce previously ignored its finish reason entirely, so an
+over-cap answer was persisted with NO output-truncated signal. Phase 4 stamps `Message.truncated = true` ONLY
+when continue-generation is EXHAUSTED (the 2-cap or room guard is hit and the last pass is still 'length') —
+an honest OUTPUT-truncation badge ("Answer truncated — model context limit reached"), **parity with the
+single-turn grounded path's `messages.truncated`**. It is kept STRICTLY separate from `coverage.truncated`
+(INPUT coverage — "covers the beginning"): the whole document can be covered (`coverage.truncated: false`)
+while the deliverable is output-cut (`Message.truncated: true`). A user Stop leaves it false (intentional,
+not an overflow).
 
-**Recommendation:** ship Phases 1–3 first (they fix the reported UX); schedule Phase 4 only if
-4 k-window truncation is still observed in practice.
+**Scope:** the shared reduce core only (so BOTH the tree rescue and the chunk map-reduce, plus the single-
+window reduce, get continuation). The single-turn grounded path (the small-doc fits-budget read) was left
+UNCHANGED — a follow-up, per this section's original OPTIONAL marking: a small doc that fits the budget has
+ample output room, so its residual output cut is minor.
+
+### Files
+- `apps/desktop/src/main/services/rag/whole-doc-tree.ts` — `continuationUserPrompt` + `seamOverlap` helpers,
+  the `MAX_REDUCE_CONTINUATIONS` / `CONTINUATION_ANCHOR_CHARS` / `CONTINUATION_MIN_OUTPUT_TOKENS` constants,
+  and the finish-reason capture + continuation loop + `outputTruncated` stamp in `streamWholeDocMapReduce`.
+- `apps/desktop/tests/integration/rag-whole-doc-mapreduce.test.ts` — a `finishScriptingRuntime` (scripts a
+  finish reason + reply per call, and FIRES `options.onFinish` — the signal the Phase 1–3 recording runtimes
+  never send, so those cases still never continue) + the Phase 4 cases.
+
+### Tests ✅
+- Happy path: first reduce 'length', one continuation 'stop' → the persisted content is the concatenation
+  (seam de-duplicated), >1 reduce-family call, NO output-truncated stamp; the continuation turn re-carries the
+  reduce framing + the resume instruction + the anchor.
+- Seam-overlap dedup: the continuation's opening repeats the anchor tail → the marker appears exactly once.
+- Hard cap: a runtime returning 'length' on every pass → exactly `1 + MAX_REDUCE_CONTINUATIONS` calls, then
+  `Message.truncated: true` while `coverage.truncated` stays false.
+- Stop mid-continuation → the accumulated partial is persisted (seam-flushed in the `finally`), no further
+  pass, no output-truncated stamp.
+- First pass 'stop' → zero continuation calls (and the existing Phase 1–3 recording-runtime cases, which never
+  fire `onFinish`, stay byte-identical).
+
+### Done criteria ✅
+`npm test` + `npm run typecheck` + `npm run build` green; a 'length'-cut deliverable is finished across ≤ 2
+bounded re-prompts (no `n_ctx` overflow at any window); residual (c) closes (honest note: a deliverable long
+enough to still be cut after the 2-cap keeps the honest output-truncated badge).
 
 ---
 

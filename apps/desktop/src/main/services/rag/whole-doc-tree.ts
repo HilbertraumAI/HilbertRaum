@@ -93,6 +93,52 @@ function reduceUserPrompt(
   return `${coverageLine}\n\nUser request:\n${question}\n${fence}${extra}\n${notesLabel}:\n${notes}\n\nAnswer:`
 }
 
+// ── Continue-generation for an over-cap deliverable (Phase 4 — wholedoc-truncation-fix-plan §6) ────────
+//
+// Phase 2 sizes the reduce output to fit `n_ctx`; on a small (4 k) window a very long deliverable is still
+// cut at the ceiling (the reduce stream ends `finishReason === 'length'`) and persisted mid-sentence.
+// Continue-generation removes that ceiling: when a reduce pass ends 'length' (the model was cut off — NOT a
+// user Stop, which fires no finish reason), re-prompt to FINISH from where it stopped, append, and
+// de-duplicate the seam overlap. Bounded by a hard cap so a model that never emits EOS cannot fan out
+// without end; when the cap is exhausted the answer carries an honest OUTPUT-truncated stamp
+// (`Message.truncated` — distinct from `coverage.truncated`, which is INPUT coverage; the two are never
+// conflated). Applies to BOTH the tree rescue and the chunk map-reduce (they share this reduce core).
+
+/** Hard cap on EXTRA reduce passes after a 'length'-cut deliverable (the runaway guard). */
+export const MAX_REDUCE_CONTINUATIONS = 2
+/** Tail (chars) of the produced answer fed to a continuation as its resume anchor + the seam-dedup window. */
+export const CONTINUATION_ANCHOR_CHARS = 200
+/** A continuation is launched only when the launched window leaves at least this many OUTPUT tokens after
+ *  its (anchor-enlarged) prompt — otherwise the no-`n_ctx`-overflow guard stops and the answer is honestly
+ *  output-truncated (never assemble a prompt the runtime rejects — the HTTP 400 class, invariant §2). */
+export const CONTINUATION_MIN_OUTPUT_TOKENS = 256
+
+/** CONTINUE step (streamed): re-send the WHOLE reduce USER turn (fence + notes + question + extraReduceBlock
+ *  — "fence at every step", §2, so the model keeps full grounding) PLUS a short instruction to resume and an
+ *  `anchor` = the tail already produced, so it continues exactly where it stopped without repeating. The
+ *  seam overlap between the anchor and the continuation's opening is de-duplicated by the caller. */
+function continuationUserPrompt(reduceUser: string, anchor: string): string {
+  return (
+    `${reduceUser}\n\n` +
+    'You already produced the answer up to the passage below, but were cut off before finishing. Continue ' +
+    'the answer exactly from where it stops — do NOT repeat anything already written, do NOT restart, and ' +
+    'do NOT add any preamble or heading.\n\n' +
+    `Already written (your answer ends with this — continue immediately after it):\n${anchor}\n\nContinuation:`
+  )
+}
+
+/** Longest seam overlap between the tail of `produced` and the head of `cont`, capped at `maxOverlap` chars
+ *  (the model only ever saw the anchor, so the overlap cannot exceed it). Returns the number of leading
+ *  `cont` chars that duplicate `produced`'s tail — the caller drops them before appending, so a continuation
+ *  that re-emits the anchor tail does not double the seam. */
+function seamOverlap(produced: string, cont: string, maxOverlap: number): number {
+  const limit = Math.min(maxOverlap, cont.length, produced.length)
+  for (let l = limit; l > 0; l--) {
+    if (produced.endsWith(cont.slice(0, l))) return l
+  }
+  return 0
+}
+
 // ── Reduce output/notes budget (Phase 2 — wholedoc-truncation-fix-plan §4) ────────────────────────────
 //
 // The reduce step needs a MUCH larger output reserve than a chat reply to finish a structured
@@ -300,6 +346,9 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // the scope was auto-narrowed to this document (mirrors the main grounded path).
   const seeded = answerPrefix ?? ''
   let content = seeded
+  // Phase 4 (§6): set true ONLY when continue-generation is exhausted and the deliverable is still cut at
+  // the output ceiling — an honest OUTPUT-truncation stamp, distinct from the INPUT-coverage `truncated`.
+  let outputTruncated = false
   if (answerPrefix) onToken?.(answerPrefix)
   // Phase 3 — progress affordance (wholedoc-truncation-fix-plan §5): a MULTI-window source runs SILENT
   // map calls before the first streamed reduce token; that gap otherwise reads as a hang. Fire the SAME
@@ -346,19 +395,95 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     }
 
     // REDUCE (streamed to the user): the final skill-formatted deliverable. The prompt is softened to
-    // the honest "beginning only" framing when the document did not fit in full (audit §2.2).
+    // the honest "beginning only" framing when the document did not fit in full (audit §2.2). The reduce
+    // USER turn is built ONCE and reused verbatim by each continuation pass (fence + notes + question +
+    // extraReduceBlock — the §2 "fence at every step" invariant, carried through with full grounding).
+    const reduceUser = reduceUserPrompt(skillFence, question, notes, truncated, extraReduceBlock)
     const messages: ChatMessage[] = [
       { role: 'system', content: WHOLE_DOC_TREE_SYSTEM_PROMPT },
-      { role: 'user', content: reduceUserPrompt(skillFence, question, notes, truncated, extraReduceBlock) }
+      { role: 'user', content: reduceUser }
     ]
+    // Capture the reduce's finish reason ('length' = cut at the output ceiling, 'stop' = a clean EOS). A
+    // user Stop aborts before any final chunk so onFinish never fires → stays null → not continued and not
+    // output-truncated (the abort partial is intentional; parity with the single-turn grounded path).
+    let finishReason: string | null = null
     for await (const token of runtime.chatStream(messages, {
       signal,
       maxTokens: reduceOutputCap,
-      temperature: SUMMARY_TEMPERATURE
+      temperature: SUMMARY_TEMPERATURE,
+      onFinish: (reason) => {
+        finishReason = reason
+      }
     })) {
       content += token
       onToken?.(token)
     }
+
+    // CONTINUE-GENERATION (Phase 4 — §6): the reduce was cut at the output ceiling, not stopped by the user.
+    // Re-prompt to FINISH the deliverable instead of persisting a mid-sentence answer. Loop while the latest
+    // pass is still 'length' AND the hard cap is not hit; each pass re-sends the reduce turn + a resume
+    // anchor, streams the DE-DUPLICATED continuation live, and appends. Bounded by MAX_REDUCE_CONTINUATIONS
+    // (runaway guard) and the no-`n_ctx`-overflow room guard below. All INSIDE this try/catch, so a user
+    // Stop mid-continuation is caught and the accumulated partial persisted — never a fresh pass past abort.
+    let continuations = 0
+    while (finishReason === 'length' && continuations < MAX_REDUCE_CONTINUATIONS) {
+      continuations++
+      const anchor = content.slice(-CONTINUATION_ANCHOR_CHARS)
+      const continueUser = continuationUserPrompt(reduceUser, anchor)
+      // No `n_ctx` overflow (§2): the continuation prompt is LARGER than the reduce prompt (it adds the
+      // anchor + instruction), so size its output cap against the ACTUAL assembled prompt — never let
+      // `prompt + cap` exceed the launched window (the HTTP 400 "exceeds context size" class). If the window
+      // cannot fit the prompt plus a worthwhile minimum output, stop here and let the honest output-
+      // truncated stamp stand rather than assemble a prompt the runtime would reject.
+      const continuePromptTokens =
+        approxPromptTokens(WHOLE_DOC_TREE_SYSTEM_PROMPT) + approxPromptTokens(continueUser)
+      const continueCap = Math.min(reduceOutputCap, contextTokens - continuePromptTokens)
+      if (continueCap < CONTINUATION_MIN_OUTPUT_TOKENS) break
+      const continueMessages: ChatMessage[] = [
+        { role: 'system', content: WHOLE_DOC_TREE_SYSTEM_PROMPT },
+        { role: 'user', content: continueUser }
+      ]
+      finishReason = null
+      // Hold back the continuation's opening until enough is buffered to resolve the seam overlap against
+      // the anchor, then stream the DE-DUPLICATED remainder live (same onToken channel as the first pass).
+      let seam = ''
+      let seamResolved = false
+      const flushSeam = (): void => {
+        const emit = seam.slice(seamOverlap(content, seam, anchor.length))
+        if (emit.length > 0) {
+          content += emit
+          onToken?.(emit)
+        }
+        seam = ''
+        seamResolved = true
+      }
+      try {
+        for await (const token of runtime.chatStream(continueMessages, {
+          signal,
+          maxTokens: continueCap,
+          temperature: SUMMARY_TEMPERATURE,
+          onFinish: (reason) => {
+            finishReason = reason
+          }
+        })) {
+          if (seamResolved) {
+            content += token
+            onToken?.(token)
+          } else {
+            seam += token
+            if (seam.length >= anchor.length) flushSeam()
+          }
+        }
+      } finally {
+        // A short pass (never reached the anchor length) OR a Stop mid-continuation still emits the
+        // de-duplicated partial, so the accumulated answer is persisted (abort contract, §2).
+        if (!seamResolved) flushSeam()
+      }
+    }
+    // Exhausted the continuation budget while still cut at the ceiling ⇒ an honest OUTPUT-truncated answer
+    // (parity with the single-turn grounded path's `messages.truncated`). Reached only on a CLEAN loop exit:
+    // a user Stop throws out of the loop into the catch below, leaving this false (the abort is user-known).
+    outputTruncated = finishReason === 'length'
   } catch (err) {
     // A user Stop aborts mid-map (no partial) or mid-reduce (keep the partial); any other error is a
     // real failure and propagates. Same contract as `generateGroundedAnswer`'s stream.
@@ -387,7 +512,11 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     coverage,
     // The fence shaped the answer at every step, so the skill is always stamped here.
     skillId: skill?.installId ?? null,
-    autoFired: skill?.autoFired === true
+    autoFired: skill?.autoFired === true,
+    // Phase 4 (§6): honest OUTPUT-truncation stamp when continue-generation was exhausted and the
+    // deliverable is still cut at the ceiling — the "Answer truncated" badge, distinct from the coverage
+    // (INPUT) truncation above. False on a clean finish and on a user Stop.
+    truncated: outputTruncated
   })
 }
 

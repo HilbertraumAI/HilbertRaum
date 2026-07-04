@@ -737,15 +737,24 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   since **Phase 3** (2026-07-05) that gap carries the ephemeral `'analysis'` progress notice ("Reading the
   whole document…"), fired in the shared map-reduce core only when a real map loop runs (`windows.length >
   1`) and cleared on the first reduce token, so it no longer reads as a hang; (c) on a small (4 k) window a
-  very long deliverable is **output-cut**:
+  very long deliverable used to be **output-cut**:
   since **Phase 2** (2026-07-04) the reduce output reserve is adaptive (`computeReduceBudget`) — it aims
   for `ANALYSIS_RESPONSE_RESERVE_TOKENS` (3072) so a brief completes in full on a ≥ ~8 k window, and on a
   4 k window it **yields the reserve toward `CHAT_RESPONSE_RESERVE_TOKENS`** (never below) so whole-document
   coverage is *preserved* and the *deliverable* shrinks instead (notes-first — Phase 1's gap-band closure
-  survives at the default 4 k). Only a document whose notes cannot fit alongside even the floor output is
-  notes-truncated (honestly badged `truncated`). A truly complete-at-any-`n_ctx` deliverable (continue-
-  generation) is the optional Phase 4. Guarantee: `prompt + output ≤ n_ctx` at every context size (no
-  HTTP 400 "exceeds context size").
+  survives at the default 4 k). **Since Phase 4** (2026-07-05) that output cut is closed by
+  **continue-generation**: when the reduce stream ends `finishReason === 'length'` (cut at the ceiling, not a
+  user Stop), the shared core re-prompts to FINISH the deliverable — re-sending the same fence + notes +
+  question plus a resume anchor (the last ~200 chars, seam de-duplicated) — across at most
+  `MAX_REDUCE_CONTINUATIONS` (2) extra passes, each output cap sized against the actual assembled prompt so
+  `prompt + output ≤ n_ctx` still holds (no HTTP 400). Only a document whose notes cannot fit alongside even
+  the floor output is notes-truncated (honestly badged `coverage.truncated` — the INPUT-coverage flag). **New
+  residual:** a deliverable long enough to STILL be cut after the 2-continuation cap keeps an honest
+  **OUTPUT**-truncated badge (`Message.truncated`, "Answer truncated — model context limit reached") — this is
+  distinct from `coverage.truncated` and never conflated with it (the whole document can be covered while the
+  deliverable is output-cut); and the single-turn small-doc fits-budget read is deliberately left out of
+  continue-generation (ample output room ⇒ minor residual — a documented follow-up). Guarantee unchanged:
+  `prompt + output ≤ n_ctx` at every context size (no HTTP 400 "exceeds context size").
   **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
   (budget split size-aware across them, `capped` coverage — `truncated` when either overflowed) and

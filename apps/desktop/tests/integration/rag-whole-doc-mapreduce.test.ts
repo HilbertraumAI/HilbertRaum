@@ -33,7 +33,8 @@ import {
   wholeDocumentFitBudgetTokens
 } from '../../src/main/services/rag'
 import { DEFAULT_SETTINGS, type Message } from '../../src/shared/types'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
 
 const CTX = 4096
 const QUESTION = 'Fasse das gesamte Dokument zusammen: welche Entscheidungen wurden getroffen?'
@@ -381,5 +382,155 @@ describe('whole-document chunk map-reduce — analysis progress notice (Phase 3)
 
     expect(runtime.calls).toBe(1) // precondition: no map fan-out (the single call is the reduce)
     expect(kinds).toEqual([]) // no silent map window ⇒ no notice
+  })
+})
+
+// Phase 4 — continue-generation for an over-cap deliverable (wholedoc-truncation-fix-plan §6). Phase 2 caps
+// the reduce output to fit `n_ctx`; on a small (4 k) window a very long deliverable is still cut at the
+// ceiling (`finishReason === 'length'`) and persisted mid-sentence. When a reduce pass ends 'length' (the
+// model was cut off — NOT a user Stop), the shared core re-prompts to FINISH from where it stopped, appends,
+// and de-duplicates the seam overlap; it is bounded by a hard cap (`MAX_REDUCE_CONTINUATIONS`), and when the
+// cap is exhausted the answer carries an honest OUTPUT-truncated stamp (`Message.truncated`) — kept distinct
+// from `coverage.truncated` (INPUT coverage). These cases use a SINGLE-window fixture (90 sentences) so
+// chatStream call 0 IS the reduce (no map fan-out) and calls 1..N are its continuations.
+
+interface ScriptStep {
+  reply: string
+  /** finish_reason fired via `options.onFinish` after yielding `reply`; omit ⇒ 'stop'. Ignored when `abort`. */
+  finish?: string
+  /** Throw an AbortError after yielding `reply` (a user Stop mid-stream) — fires NO finish reason (the
+   *  runtime contract: an aborted request carries no final chunk). */
+  abort?: boolean
+}
+
+interface FinishScriptingRuntime extends ModelRuntime {
+  calls: number
+  turns: ChatMessage[][]
+}
+
+/** Scripts a finish-reason + reply per chatStream call (index-aligned): a test drives continue-generation
+ *  by scripting 'length' on the first reduce and 'stop'/'length'/abort on the continuations. Unlike the
+ *  recording/option runtimes above, it FIRES `options.onFinish` — the signal those runtimes never send (so
+ *  every Phase 1–3 case still never continues). Calls past the script reuse its LAST step (defensive). */
+function finishScriptingRuntime(script: ScriptStep[]): FinishScriptingRuntime {
+  const rt = {
+    modelId: 'mock',
+    calls: 0,
+    turns: [] as ChatMessage[][],
+    contextWindow: () => CTX,
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: 'ok', port: null }),
+    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+      const step = script[Math.min(rt.calls, script.length - 1)]
+      rt.calls++
+      rt.turns.push(messages)
+      yield step.reply
+      if (step.abort) {
+        const err = new Error('aborted')
+        err.name = 'AbortError'
+        throw err
+      }
+      options?.onFinish?.(step.finish ?? 'stop')
+    }
+  } as unknown as FinishScriptingRuntime
+  return rt
+}
+
+async function answerWith(h: Harness, runtime: ModelRuntime): Promise<Message> {
+  appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
+  return (await generateGroundedAnswer(
+    h.db,
+    runtime,
+    new MockEmbedder(),
+    h.conversationId,
+    QUESTION,
+    ragSettingsFrom(DEFAULT_SETTINGS),
+    { wholeDocument: { documentId: h.docId } }
+  )) as Message
+}
+
+describe('whole-document chunk map-reduce — continue-generation for an over-cap deliverable (Phase 4)', () => {
+  it('first reduce ends length, one continuation ends stop → concatenated content, >1 reduce call, no output-truncated stamp', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptingRuntime([
+      { reply: 'Teil eins des Ergebnisses.', finish: 'length' },
+      { reply: ' Teil zwei schließt den Bericht ab.', finish: 'stop' }
+    ])
+    const msg = await answerWith(h, runtime)
+
+    expect(runtime.calls).toBe(2) // the reduce + exactly one continuation
+    expect(msg.content).toBe('Teil eins des Ergebnisses. Teil zwei schließt den Bericht ab.')
+    expect(msg.truncated).toBeUndefined() // the last pass ended 'stop' ⇒ NO output-truncated stamp
+    expect(msg.coverage?.truncated).toBe(false) // INPUT coverage is whole-document, untouched
+
+    // The continuation re-sends the reduce framing (notes + question) PLUS the resume instruction + anchor —
+    // the model keeps full grounding at every step (§2 "fence at every step"), never a bare "continue".
+    const contUser = runtime.turns[1].find((m) => m.role === 'user')?.content ?? ''
+    expect(contUser).toContain('Notes (whole document)')
+    expect(contUser).toContain('Continue the answer exactly from where it stops')
+    expect(contUser).toContain('Teil eins des Ergebnisses.') // the anchor = the tail produced so far
+  })
+
+  it('the continuation repeats the anchor tail → the persisted content has no duplicated seam', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptingRuntime([
+      { reply: 'Die Analyse beginnt hier und endet mit NAHTSTELLE', finish: 'length' },
+      { reply: 'NAHTSTELLE und wird danach fortgesetzt.', finish: 'stop' }
+    ])
+    const msg = await answerWith(h, runtime)
+
+    expect(runtime.calls).toBe(2)
+    // The overlapping 'NAHTSTELLE' seam between the anchor tail and the continuation start is emitted ONCE.
+    expect(msg.content.split('NAHTSTELLE').length - 1).toBe(1)
+    expect(msg.content).toBe('Die Analyse beginnt hier und endet mit NAHTSTELLE und wird danach fortgesetzt.')
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  it('a runtime that returns length on every pass → exactly MAX_REDUCE_CONTINUATIONS extra passes, then an honest output-truncated stamp', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptingRuntime([
+      { reply: 'Eins. ', finish: 'length' },
+      { reply: 'Zwei. ', finish: 'length' },
+      { reply: 'Drei. ', finish: 'length' }
+    ])
+    const msg = await answerWith(h, runtime)
+
+    // Exactly one reduce + MAX_REDUCE_CONTINUATIONS continuations: the runaway cap prevents a further pass
+    // even though EVERY pass reported 'length'.
+    expect(runtime.calls).toBe(1 + MAX_REDUCE_CONTINUATIONS)
+    expect(msg.content).toContain('Eins.')
+    expect(msg.content).toContain('Zwei.')
+    expect(msg.content).toContain('Drei.')
+    // Continuation exhausted while still cut ⇒ the honest OUTPUT-truncation stamp (parity with single-turn)…
+    expect(msg.truncated).toBe(true)
+    // …but INPUT coverage is untouched: the whole document was processed, only the deliverable is cut.
+    expect(msg.coverage?.truncated).toBe(false)
+  })
+
+  it('a user Stop mid-continuation persists the accumulated partial and starts no further pass', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptingRuntime([
+      { reply: 'Erster vollständiger und ausführlicher Teil des Berichts.', finish: 'length' },
+      { reply: ' zweiter Teil', abort: true } // a user Stop mid-continuation (no finish reason fired)
+    ])
+    const msg = await answerWith(h, runtime)
+
+    // The aborted continuation's partial is folded in (seam de-duplicated), not discarded…
+    expect(msg.content).toBe('Erster vollständiger und ausführlicher Teil des Berichts. zweiter Teil')
+    // …and the abort started NO further pass (the reduce + the one aborted continuation only).
+    expect(runtime.calls).toBe(2)
+    // A user Stop is intentional, never an output overflow ⇒ no output-truncated stamp (parity with chat).
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  it('a first reduce that ends stop starts no continuation at all', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptingRuntime([{ reply: 'Eine vollständige Antwort.', finish: 'stop' }])
+    const msg = await answerWith(h, runtime)
+
+    expect(runtime.calls).toBe(1) // the reduce finished cleanly ⇒ zero continuation passes
+    expect(msg.content).toBe('Eine vollständige Antwort.')
+    expect(msg.truncated).toBeUndefined()
   })
 })
