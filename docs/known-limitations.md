@@ -283,6 +283,34 @@ password recovery — are documented in
     which does not occur in space-separated extracted text) fails the length check for a known country and
     is left unmasked — a documented residual. These remain best-effort regex detectors — the conservative
     miss-over-over-mask posture stands.
+  - **Unicode print variants + the parenthesized US phone now mask (R8, skills-audit-2026-07-03 SKA-3).**
+    The detectors used to run on the raw byte-verbatim text (D58), so the common Unicode print separators
+    defeated exactly the identifiers redaction exists to mask: an **NBSP/narrow-NBSP/figure-space-grouped
+    IBAN or card** yielded zero candidates, a phone with the **non-breaking hyphen U+2011** Word
+    auto-inserts (or an en dash) never matched, and the most common US form **`(555) 123-4567`** had no
+    branch — while the U2 dry-run/share-safe counts reported 0 for them. R8 closed this with a
+    **same-length detection shadow** (match on a 1:1 ASCII-normalized copy — NBSP family → space,
+    U+2011/U+2013/U+2212 → `-` — mask the original bytes at the same offsets), so the unmasked remainder
+    stays byte-identical and every existing guard (Luhn, per-country IBAN length, the 0-leading reference
+    guard, the punctuation anchors) applies to the Unicode twins unchanged; the `(ddd) ddd-dddd` branch
+    was added punctuation-anchored. The R8 review hardened the mechanism (see security-model.md R8
+    note): a shadow-joined neighbour (one NBSP away) can no longer UN-mask the IBAN/PAN inside a
+    failed whole-span candidate (sub-span narrowing), and **en dash / minus in the original bytes are
+    range/math typography, never phone/card punctuation** on a non-`+`-led, non-parenthesized match —
+    so `Budget 10.000–15.000 EUR`, `05.2025–06.2026`, `PLZ 01067–01099` and a Luhn-lucky en-dash
+    invoice-number range stay untouched. **Deliberately still out:** an en-dash-set bare/0-leading
+    phone (`Tel. 0664–1234567`) is missed (the refusal above — miss-over-eating; the U+2011 and
+    `+`/parenthesized en-dash forms mask); exotic Unicode separators beyond the six
+    mapped print variants (e.g. hair/thin/ideographic spaces, U+2014 em dash as a digit separator),
+    spelled-out numbers ("null sechs sechs vier…"), and RTL/bidi-reordered digits — the shadow maps only
+    what real PDF/Word pipelines emit around identifiers; anything else remains the documented
+    best-effort miss (the deferred higher-recall wave). Two residuals shared with the ASCII twins
+    (unchanged by R8, now reachable via NBSP/figure space too): digit table CELLS joined by a single
+    separator can merge into a Luhn-lucky `[CARD]` or a generic-country `[IBAN]` over-mask
+    (privacy-favouring direction), and the review surfaced a **pre-existing** super-linear
+    backtracking hazard in `IBAN_CANDIDATE_RE`'s grouped alternative on hostile uppercase runs
+    (multi-second on a ~500 KB adversarial document, R7-identical, neither caused nor worsened by
+    R8) — an open R-phase candidate for the vuln-scan linearization treatment.
   - **Informational dry-run + share-safe pre-scan (U2, audit §3.4/§3.5).** An INFORMATIONAL redaction
     question ("welche personenbezogenen Daten enthält das Dokument?", "what personal data is in here?")
     over a single document now gets a read-only **counts** answer (`scanRedactionCandidates` — the same

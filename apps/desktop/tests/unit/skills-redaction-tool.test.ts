@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  detectionShadow,
   maskEmails,
   maskUrls,
   maskIbans,
@@ -288,6 +289,147 @@ describe('redaction U2 additions', () => {
     expect(scanRedactionCandidates(input)).toEqual(redactText(input).counts)
     // The scan reports counts only (email 1, card 1, iban 1) — the return type carries no text field.
     expect(scanRedactionCandidates(input)).toEqual({ email: 1, phone: 0, iban: 1, card: 1, date: 0, url: 0 })
+  })
+
+  it('SKA-3 R8: masks the Unicode print variants of exactly the identifiers it exists to mask', () => {
+    // Verified failures from the audit (each yielded ZERO candidates / no match before R8). Special
+    // characters as \u escapes (the T1 convention) so a git/editor normalization can't silently
+    // defeat the fixtures.
+
+    // IBAN grouped by NBSP / narrow NBSP / figure space (typographically-set PDFs).
+    expect(maskIbans('IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201 bitte')).toEqual({
+      text: 'IBAN [IBAN] bitte',
+      count: 1
+    })
+    expect(maskIbans('IBAN AT61\u202f1904\u202f3002\u202f3457\u202f3201 bitte').count).toBe(1)
+    expect(maskIbans('IBAN DE89\u20073704\u20070044\u20070532\u20070130\u200700 ok').count).toBe(1)
+
+    // Card PAN grouped by NBSP / figure space / en dash — masked as ONE card.
+    expect(maskCards('Karte 4111\u00a01111\u00a01111\u00a01111 ok')).toEqual({
+      text: 'Karte [CARD] ok',
+      count: 1
+    })
+    expect(maskCards('Karte 4111\u20071111\u20071111\u20071111 ok').count).toBe(1)
+    // Non-breaking hyphen (U+2011) is genuine card/phone typography and masks; the en dash is NOT \u2014
+    // it is range typography and is refused (see the negative controls below; R8 review).
+    expect(maskCards('Karte 4111\u20111111\u20111111\u20111111 ok').count).toBe(1)
+
+    // Phone with the non-breaking hyphen Word auto-inserts (U+2011) and the en dash (U+2013).
+    // (\s already covered the NBSP family — phones failed only on the hyphen variants.)
+    expect(maskPhones('call +43 664\u20111234567 now')).toEqual({ text: 'call [PHONE] now', count: 1 })
+    expect(maskPhones('call +43 664\u20131234567 now').count).toBe(1)
+    // A 0-leading number whose ONLY separator is the Unicode hyphen counts as SEPARATED (a printed
+    // phone), not as a bare reference number — the U2 guard reads the shadow.
+    expect(maskPhones('oder 0664\u20111234567 bitte').text).toBe('oder [PHONE] bitte')
+
+    // The parenthesized US print form — the most common US layout had no branch at all.
+    expect(maskPhones('call (555) 123-4567 today')).toEqual({ text: 'call [PHONE] today', count: 1 })
+    expect(maskPhones('or (555)123.4567 instead').count).toBe(1)
+  })
+
+  it('SKA-3 R8: the conservative negative controls survive the widened detection', () => {
+    // A prose digit triple stays unmasked — spaces (ASCII or NBSP) are not phone punctuation.
+    expect(maskPhones('totals 100 200 3000 here')).toEqual({ text: 'totals 100 200 3000 here', count: 0 })
+    expect(maskPhones('totals 100\u00a0200\u00a03000 here').count).toBe(0)
+    // The parenthesized branch stays punctuation-anchored: a space-separated tail is NOT a phone.
+    expect(maskPhones('lot (555) 123 4567 series').count).toBe(0)
+    // The U2 0-leading bare-reference guard is untouched.
+    expect(maskPhones('reference 0001234567 here').count).toBe(0)
+    // A Luhn-FAILING Unicode-grouped 16-digit run is left alone (same guard as its ASCII twin).
+    expect(maskCards('ref 4111\u00a01111\u00a01111\u00a01112 here').count).toBe(0)
+    // A >19-digit compact account number still has no \b-terminated 13..19 subrun.
+    expect(maskCards('acct 12345678901234567890 x').count).toBe(0)
+  })
+
+  it('SKA-3 R8 review: en dash / minus are RANGE typography \u2014 never phone/card punctuation', () => {
+    // The review found the naive en-dash\u2192'-' mapping fed PHONE_RE's 0-leading branch, deterministically
+    // eating correctly-typeset German prose. Each input below was a verified false positive; all must
+    // stay byte-untouched (the miss-over-eating posture).
+    for (const prose of [
+      'Budget 10.000\u201315.000 EUR', // round-thousands amount range
+      'Abrechnungszeitraum 05.2025\u201306.2026', // month.year billing period
+      'Zeitraum 01/2025\u201312/2025', // slashed billing period
+      'PLZ 01067\u201301099', // 0-leading postal-code range
+      'Ge\u00f6ffnet 08.00\u201317.00 Uhr', // dotted time range
+      'Bereich 100\u2013200\u20133000 St\u00fcck', // range chain that shadows into the US 3-3-4 shape
+      '10.000\u22122.500 ergibt 7.500' // minus-sign subtraction
+    ]) {
+      expect(redactText(prose)).toEqual({
+        text: prose,
+        counts: { email: 0, phone: 0, iban: 0, card: 0, date: 0, url: 0 },
+        totalRedactions: 0
+      })
+    }
+    // A Luhn-PASSING en-dash invoice-number range (8+8 digits concatenate to a Luhn-valid 16) must NOT
+    // mask as a card \u2014 the sub-range refusal has teeth precisely because plain Luhn would accept it.
+    expect(maskCards('Rechnungen 12345678\u201390345014 hier').count).toBe(0)
+    // The cost, pinned: an en-dash-set 0-leading phone is MISSED (documented residual) \u2026
+    expect(maskPhones('Tel. 0664\u20131234567').count).toBe(0)
+    // \u2026 while the unambiguous anchors keep masking: '+'-led and parenthesized en-dash forms.
+    expect(maskPhones('call +43 664\u20131234567 now').count).toBe(1)
+    expect(maskPhones('US (555) 123\u20134567 ok').count).toBe(1)
+  })
+
+  it('SKA-3 R8 review: a shadow-joined neighbour cannot UN-mask the identifier inside the candidate', () => {
+    // Review F1/F2: the shadow joins the identifier's neighbour (one NBSP away \u2014 exactly the typeset-PDF
+    // layout SKA-3 targets) into one greedy candidate; whole-span validation then fails and the OLD
+    // all-or-nothing accept leaked the identifier verbatim. The accept now narrows to the valid sub-span.
+    // Grouped IBAN + NBSP + BIC token:
+    expect(redactText('Konto DE89 3704 0044 0532 0130 00\u00a0COBADEFF Ende').text).toBe(
+      'Konto [IBAN]\u00a0COBADEFF Ende'
+    )
+    // Compact IBAN + NBSP + currency word:
+    expect(redactText('Konto DE89370400440532013000\u00a0EUR 100').text).toBe('Konto [IBAN]\u00a0EUR 100')
+    // Card + NBSP + 3-digit tail (19 digits joined, Luhn fails whole, PAN sub-range masks):
+    expect(redactText('Karte 4111 1111 1111 1111\u00a0123.').text).toBe('Karte [CARD]\u00a0123.')
+    // Head-side: row number + NBSP + card (19 digits joined, Luhn fails whole \u2014 verified):
+    const head = redactText('Nr. 123\u00a04111 1111 1111 1111 Ende')
+    expect(head.counts.card).toBe(1)
+    expect(head.text).not.toContain('4111')
+  })
+
+  it('SKA-3 R8: detection is shadowed, masking is byte-faithful — unmasked text stays byte-identical', () => {
+    // Mechanism (a): the detectors run on a same-length ASCII shadow, the masks land on the ORIGINAL
+    // bytes. So the redacted output differs from the input ONLY in the masked spans — the NBSP and
+    // narrow NBSP in the surrounding prose survive verbatim (D58's byte-unchanged posture).
+    const input =
+      'Zahlung\u00a0fällig. IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201. Danke\u202fsehr.'
+    const { text, counts, totalRedactions } = redactText(input)
+    expect(text).toBe('Zahlung\u00a0fällig. IBAN [IBAN]. Danke\u202fsehr.')
+    expect(counts.iban).toBe(1)
+    expect(totalRedactions).toBe(1)
+
+    // The shadow itself is 1:1 — every mapped character is a single BMP code unit.
+    const allMapped = '\u00a0\u202f\u2007\u2011\u2013\u2212'
+    expect(detectionShadow(allMapped)).toBe('   ---')
+    expect(detectionShadow(allMapped).length).toBe(allMapped.length)
+    expect(detectionShadow('plain ascii-text 123')).toBe('plain ascii-text 123')
+
+    // U+2212 end-to-end through a masking detector (not just the map): a minus-set ISO date masks.
+    expect(maskDates('am 2026\u221203\u221215 hier')).toEqual({ text: 'am [DATE] hier', count: 1 })
+  })
+
+  it('SKA-3 R8: a Unicode-grouped card masks as ONE card through the full pipeline (order guard)', () => {
+    // Cards are masked before dates/phones — the NBSP-grouped PAN must not be split by either.
+    const { counts, text } = redactText('Karte 4111\u00a01111\u00a01111\u00a01111, Tel +43 664\u20111234567.')
+    expect(counts).toEqual({ email: 0, phone: 1, iban: 0, card: 1, date: 0, url: 0 })
+    expect(text).toBe('Karte [CARD], Tel [PHONE].')
+  })
+
+  it('SKA-3 R8: scanRedactionCandidates counts the Unicode variants identically to a real run', () => {
+    // The dry-run/share-safe invariant: the pre-scan and the real redaction share ONE pipeline, so a
+    // typographically-set document can no longer scan as "0 IBANs / 0 phones" while containing both.
+    const input =
+      'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Karte 4111\u20071111\u20071111\u20071111, Tel (555) 123-4567.'
+    expect(scanRedactionCandidates(input)).toEqual(redactText(input).counts)
+    expect(scanRedactionCandidates(input)).toEqual({ email: 0, phone: 1, iban: 1, card: 1, date: 0, url: 0 })
+  })
+
+  it('SKA-3 R8: redaction stays idempotent over a Unicode-variant document', () => {
+    const once = redactText('IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Tel +43 664\u20111234567.')
+    const twice = redactText(once.text)
+    expect(twice.totalRedactions).toBe(0)
+    expect(twice.text).toBe(once.text)
   })
 
   it('the card category rides through the tool output schema', async () => {

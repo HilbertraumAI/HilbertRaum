@@ -158,6 +158,20 @@ acceptable for a redacted copy), or widen the three separator classes; add
 `\(\d{3}\)[ ]?\d{3}[.\-]\d{4}` for the US form.
 **Testing:** Unicode fixtures in `skills-redaction-tool.test.ts` (currently zero non-ASCII coverage).
 **Docs:** security-model redaction note.
+**Status: FIXED in R8** (same-length detection shadow — `detectionShadow`/`maskStep` in
+`tools/redaction.ts`: detectors match a 1:1 ASCII-normalized copy (NBSP/narrow-NBSP/figure-space →
+space; U+2011/U+2013/U+2212 → `-`), masks land on the ORIGINAL bytes at the same offsets, so unmasked
+text stays byte-identical (D58 holds) and Luhn/IBAN-length/0-leading guards see the ASCII form; the
+parenthesized US branch `\(\d{3}\)[ ]?\d{3}[.\-]\d{4}` added punctuation-anchored; the fix lives
+inside `redactText`, so `scanRedactionCandidates` — the share-safe pre-scan and dry-run — counts
+identically by construction; SKA-3 fixture family + Unicode share-safe/dry-run integration tests.
+Review-hardened: accept callbacks narrow a failed whole-span candidate to the valid sub-span so a
+shadow-joined neighbour can't UN-mask the IBAN/PAN; en dash/minus in the original bytes are treated
+as range/math typography and refused on non-`+`/non-parenthesized phone matches and card sub-ranges
+— `Budget 10.000–15.000 EUR`-class prose stays untouched; the shadow is computed once per
+`redactText` (NBSP-dense hostile-document DoS amplifier removed). Surfaced pre-existing, NOT fixed:
+`IBAN_CANDIDATE_RE`'s grouped alternative backtracks super-linearly on hostile uppercase runs
+(R7-identical) — recorded in known-limitations as an R-phase candidate.)
 
 **SKA-4 — The bank grounded-data postscript prints computed in/out/net on `contradicted`/`unverified`
 statements — a deterministic, app-authored D56 bypass.** · bug (honesty/D56) · **High** · High ·
@@ -635,7 +649,10 @@ Acceptance: the four failure inputs produce no invented figure and correct `drop
 snapshot green. Risk: date-scrub index mapping must not shift `description` slicing — pin with
 byte-level fixtures. Docs: known-limitations R2/R5 corrections (§4.2).
 
-**R8 — Redaction Unicode + US-phone recall (SKA-3, + the SKA-45 phone nit).**
+**R8 — Redaction Unicode + US-phone recall (SKA-3, + the SKA-45 phone nit).** *(R8 note: the
+"SKA-45 phone nit" was a drafting slip — SKA-45 lists no phone item; the intended deliverable is the
+parenthesized-US-phone sub-item, which the SKA-3 entry itself carries and R8 shipped. Nothing in
+SKA-45 was in R8's scope.)*
 Scope: `tools/redaction.ts` entry normalization (or widened separator classes) for both `run` and
 `scanRedactionCandidates`; `\(ddd\)` branch. New Unicode fixture family. No extractor-version coupling
 (redaction has its own path). Acceptance: NBSP/U+2011/parenthesized forms mask; counts match; existing
