@@ -39,6 +39,11 @@
       "type": "integer",
       "description": "1-based page of the statement the row appears on (provenance for quoting).",
       "minimum": 1
+    },
+    "category": {
+      "type": "string",
+      "description": "Persisted category name assigned by a categorize run (a label, not a figure). Never produced by the extractor.",
+      "minLength": 1
     }
   }
 }

@@ -21,6 +21,7 @@ import {
   buildStatementJson,
   categorizeRow,
   reconcileBalances,
+  rowsCarryCategories,
   summarizeCashflow,
   transactionsToCsv,
   type CashflowSummary,
@@ -387,13 +388,25 @@ const MAX_LISTED_TRANSACTIONS = 10
  * cashflow summary + the printed balances; CSV reuses the export serializer (transaction ROWS ONLY — the
  * summary/balances aren't in CSV), and the CSV intro says so (§3.6 honesty precedent).
  */
-export function buildFormatAnswer(tr: Tr, format: OutputFormat, snap: StatementSnapshot): string {
+export function buildFormatAnswer(
+  tr: Tr,
+  format: OutputFormat,
+  snap: StatementSnapshot,
+  /** Set when the rows carry categories (a category-shaped format ask, D63): selects the honest
+   *  model-assisted vs rule-based note appended under the fenced block — a category is a LABEL,
+   *  never a parser figure, and the serialized output must say which kind it got. */
+  categoryNote?: { modelAssisted: boolean }
+): string {
   const content = format === 'json' ? buildStatementJson(snap) : transactionsToCsv(snap.rows)
   const intro =
     format === 'csv'
       ? tr('skills.bankAnalysis.formatIntroCsv')
       : tr('skills.bankAnalysis.formatIntro', { format: format.toUpperCase() })
-  return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\``
+  const note =
+    categoryNote && rowsCarryCategories(snap.rows)
+      ? `\n\n${tr(categoryNote.modelAssisted ? 'skills.bankAnalysis.categoryAssisted' : 'skills.bankAnalysis.categoryRuleBased')}`
+      : ''
+  return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\`${note}`
 }
 
 /** The transaction cap for the grounded-data block (W4 §8.1 4096-ctx guard, mirror of the invoice
@@ -798,43 +811,26 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       const coverage = computeCoverage(db, target.id)
       const balances = loadStatementBalances(db, statementId)
 
-      // A machine-FORMAT request ("als JSON"/"as CSV") is answered by SERIALIZING the already-extracted
-      // statement (W4, audit §3.3 — the bank half of the invoice format mode) — deterministic, 0 model
-      // calls, no reconciliation needed (mirror of the invoice format path, which likewise returns before
-      // the validate seam). Guarded to a non-empty statement so a zero-row extraction still gets the honest
-      // prose fallback below (never an empty JSON husk dressed up as an answer). JSON carries rows +
-      // cashflow summary + balances; CSV reuses the export serializer (rows only) — computed purely here.
-      // SKA-10 (W7, audit §3.3): a WHY/how-come format question ("Warum fehlt im JSON die MwSt?") is an
-      // EXPLANATION, not a serialization request — re-serving the byte-identical dump is the repeat-loop
-      // class W3/W4 killed elsewhere. Guard the format short-circuit with EXPLANATORY_RE so it reaches
-      // grounded-data (which can explain) instead. The serializer is deterministic; it cannot say WHY.
-      const format = EXPLANATORY_RE.test(ctx.question.toLowerCase()) ? null : detectFormat(ctx.question)
-      if (format && rows.length > 0) {
-        const snap: StatementSnapshot = { rows, summary: summarizeCashflow(rows), ...balances }
-        return { answer: buildFormatAnswer(ctx.tr, format, snap), citations, coverage }
-      }
-
-      const loaded = toLoadedTransactions(paired)
-      const summaryResult = await runCashflowSummary(db, args, deps, loaded)
-      const validateResult = await runBalanceValidation(db, args, deps, loaded)
-      const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
-      const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
-
       // Per-category breakdown (only for a category-shaped question). It reads the PERSISTED categories
       // (the LLM categorizer doctask, or a prior rule pass) — `categorize` is the ONLY model call and it
       // happens in the doctask lane, NEVER here (this handler stays 0-model-calls). When nothing has been
       // categorized yet, run the DETERMINISTIC rule pass once (0 model calls) so a breakdown still shows;
       // model-assigned categories (if present) are never overwritten by it. `modelAssisted` (a persisted
       // category outside the deterministic set) drives the honest "model-assisted" note.
+      // HOISTED ABOVE the format short-circuit (result-tables plan §3, D63): "Kategorisiere … und
+      // exportiere als CSV" used to hit the format return FIRST and never categorize — the categorize
+      // half of the ask was silently dropped. Categorizing before serializing lets the format answer
+      // carry each row's category (presence-gated column, D62). Guarded to a non-empty statement — the
+      // categorize seam has nothing to persist on zero rows.
       const categoryShaped = isCategoryShaped(ctx.question)
       let categories: CategoryTotal[] | null = null
       let modelAssisted = false
-      if (categoryShaped) {
+      if (categoryShaped && rows.length > 0) {
         if (!paired.some((p) => p.category != null)) {
           // Deterministic seed when nothing is categorized yet — reuse the single load (audit P-1); the
           // reload afterwards is the one extra `bank_transactions` read the category path needs (to pick
           // up the freshly persisted `category_id`).
-          await runCategorization(db, args, deps, loaded)
+          await runCategorization(db, args, deps, toLoadedTransactions(paired))
           paired = loadStatementRowsWithCategories(db, statementId)
         }
         categories = categoryTotals(paired)
@@ -843,6 +839,38 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
           paired.map((p) => p.category)
         )
       }
+
+      // A machine-FORMAT request ("als JSON"/"as CSV") is answered by SERIALIZING the already-extracted
+      // statement (W4, audit §3.3 — the bank half of the invoice format mode) — deterministic, 0 model
+      // calls, no reconciliation needed (mirror of the invoice format path, which likewise returns before
+      // the validate seam). Guarded to a non-empty statement so a zero-row extraction still gets the honest
+      // prose fallback below (never an empty JSON husk dressed up as an answer). JSON carries rows +
+      // cashflow summary + balances; CSV reuses the export serializer (rows only) — computed purely here.
+      // On a CATEGORY-shaped format ask (D63) the serialized rows carry their categories (persisted, or
+      // the on-the-fly rule fallback for a stray unassigned row) and the honest assisted/rule-based note
+      // rides under the fenced block; a plain format ask keeps the byte-identical category-less shape.
+      // SKA-10 (W7, audit §3.3): a WHY/how-come format question ("Warum fehlt im JSON die MwSt?") is an
+      // EXPLANATION, not a serialization request — re-serving the byte-identical dump is the repeat-loop
+      // class W3/W4 killed elsewhere. Guard the format short-circuit with EXPLANATORY_RE so it reaches
+      // grounded-data (which can explain) instead. The serializer is deterministic; it cannot say WHY.
+      const format = EXPLANATORY_RE.test(ctx.question.toLowerCase()) ? null : detectFormat(ctx.question)
+      if (format && rows.length > 0) {
+        const snapRows = categoryShaped
+          ? paired.map((p) => ({ ...p.row, category: p.category ?? categorizeRow(p.row) }))
+          : rows
+        const snap: StatementSnapshot = { rows: snapRows, summary: summarizeCashflow(rows), ...balances }
+        return {
+          answer: buildFormatAnswer(ctx.tr, format, snap, categoryShaped ? { modelAssisted } : undefined),
+          citations,
+          coverage
+        }
+      }
+
+      const loaded = toLoadedTransactions(paired)
+      const summaryResult = await runCashflowSummary(db, args, deps, loaded)
+      const validateResult = await runBalanceValidation(db, args, deps, loaded)
+      const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
+      const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
 
       // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's
       // printed opening + Σamounts == closing. Classify into one of three outcomes — `complete` (proven),

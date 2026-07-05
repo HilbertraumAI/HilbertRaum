@@ -714,6 +714,39 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     expect(res.answer).toContain('Grocery')
     // The CSV intro states honestly that CSV omits the summary + balances (§3.6-low precedent).
     expect(res.answer).toContain(tr('skills.bankAnalysis.formatIntroCsv'))
+    // A plain (non-category) format ask keeps the byte-identical category-less shape (D62 gate).
+    expect(res.answer).not.toContain(',category')
+  })
+
+  it('categorize + export combined: "Kategorisiere … als CSV" categorizes FIRST, then serializes with the category column (result-tables Phase 1, D63)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const ctx = ctxFor(db, { documentIds: [id] }, 'Kategorisiere alle Transaktionen und gib sie als CSV aus')
+    const res = await bankStatementAnalysisHandler.run!(ctx)
+    // The format short-circuit no longer swallows the categorize half: the categorize seam RAN
+    // (persisting category_id + its skill_runs lifecycle), and the CSV carries each row's category.
+    expect(ctx.events.map((e) => e.meta?.toolName)).toContain('categorize_transactions')
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).toContain('date,valueDate,description,amount,currency,balanceAfter,sourcePage,category')
+    expect(res.answer).toMatch(/Grocery,-45\.90,EUR,1954\.10,\d*,Spending/) // rule pass: negative, no keyword
+    expect(res.answer).toMatch(/Salary,2500\.00,EUR,4454\.10,\d*,Income/)
+    // A category is a LABEL, not a parser figure — the honest rule-based note rides the answer (D63).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryRuleBased'))
+    // Still the deterministic 0-model short-circuit; export_transactions_csv is still never auto-run.
+    expect(res.mode).toBeUndefined()
+    expect(ctx.events.map((e) => e.meta?.toolName)).not.toContain('export_transactions_csv')
+  })
+
+  it('format path (JSON) with a category ask carries per-row categories under the same gate', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'nach Kategorie als JSON bitte')
+    )
+    const fence = res.answer.match(/```json\n([\s\S]*?)\n```/)
+    expect(fence).not.toBeNull()
+    const parsed = JSON.parse(fence![1])
+    expect(parsed.transactions.map((t: { category: string | null }) => t.category)).toEqual(['Spending', 'Income'])
   })
 
   it('follow-up regression: a repeat "warum stimmen die Summen nicht?" is NOT the byte-identical template', async () => {

@@ -1353,6 +1353,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   streams. Categories are grouped on a **canonical English identifier** (stable across UI locale — the
   enum and the model-assisted detection key on it), but the breakdown **display labels are localized**
   (EN + DE); a future user-defined category with no catalog entry falls back to its raw name.
+- **A "categorize … as CSV/JSON" chat turn now serializes WITH the category column, but chat still
+  cannot write the file, and the columns are fixed (result-tables plan, Phase 1 — 2026-07-05).** The
+  bank format answer categorizes FIRST (persisting, with the honest model-assisted / rule-based note
+  under the fenced block — D63) and both CSV surfaces (the inline answer and the confirm-gated export
+  button) emit each row's category through one generic table serializer (D60); the column is
+  **presence-gated** (D62) — a never-categorized statement keeps its prior 7-column shape rather than
+  implying an all-blank categorization. Remaining limits: (a) the actual **file write stays a
+  confirm-gated UI action** — a chat "export" produces the copyable inline CSV, never a file (a
+  message-level export affordance is the plan's Phase 2); (b) the column set is the fixed transaction
+  shape + category — **arbitrary derived columns** ("subcategory", "counterparty") are the plan's
+  Phase 3 (grammar-constrained TableRequest + per-row enrichment); (c) **without the skill active** a
+  tabular ask still routes to top-k relevance, not whole-document (also Phase 3).
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
