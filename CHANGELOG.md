@@ -8,7 +8,7 @@ from its first public `1.0.0` release onward.
 
 > **No public release yet.** HilbertRaum is a pre-1.0 MVP. Internal development
 > checkpoints were tagged `v0.1.0` … `v0.1.34` (2026-06-10 → 2026-06-22, mirrored
-> by the `version` field in `package.json`, currently `0.1.36`); these are rapid
+> by the `version` field in `package.json`, currently `0.1.39`); these are rapid
 > per-phase development checkpoints, **not** published releases, and have no
 > per-tag notes. **Per-tag/`version` checkpointing was paused `v0.1.34` → 2026-06-30**
 > (the audit-remediation rounds were tracked in `BUILD_STATE.md`, not version bumps), then
