@@ -461,6 +461,16 @@ describe('parseTaxonomyFileRef', () => {
     expect(parseTaxonomyFileRef('fasse taxonomie.csv zusammen')).toBeNull() // no categorize stem
     expect(parseTaxonomyFileRef('Kategorisiere alle Transaktionen als CSV')).toBeNull() // "als CSV" ≠ a filename
   })
+
+  it('reduces a FULL PATH to its basename (Unix, Windows, quoted) — the library stores titles, not paths', () => {
+    expect(
+      parseTaxonomyFileRef('Kategorisiere nach /home/vldmr/Dokumente/HVB/taxonomie.csv bitte')
+    ).toBe('taxonomie.csv')
+    expect(parseTaxonomyFileRef("Kategorisiere nach '/home/vldmr/Dokumente/HVB/taxonomie.csv'")).toBe(
+      'taxonomie.csv'
+    )
+    expect(parseTaxonomyFileRef('categorize using C:\\Users\\v\\Dokumente\\buckets.csv')).toBe('buckets.csv')
+  })
 })
 
 describe('parseTaxonomyCsv', () => {
@@ -489,6 +499,14 @@ describe('parseTaxonomyCsv', () => {
 
   it('dedupes labels case-insensitively keeping the first', () => {
     expect(parseTaxonomyCsv('Miete\nmiete\nKinder')).toEqual([{ name: 'Miete' }, { name: 'Kinder' }])
+  })
+
+  it('accepts real-world label shapes in a FILE (slash, ampersand, plus, dot) — wider than inline', () => {
+    expect(parseTaxonomyCsv('Kfz/Auto\nEssen & Trinken\nVers. + Vorsorge')).toEqual([
+      { name: 'Kfz/Auto' },
+      { name: 'Essen & Trinken' },
+      { name: 'Vers. + Vorsorge' }
+    ])
   })
 })
 

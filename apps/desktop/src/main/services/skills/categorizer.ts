@@ -452,18 +452,29 @@ const TAXONOMY_GLOSS_MAX_CHARS = 120
 /** Header cells that mark a first line as a HEADER row (skipped), lowercase. */
 const TAXONOMY_HEADER_CELLS = new Set(['kategorie', 'kategorien', 'category', 'categories', 'name', 'label'])
 
+/** A plausible FILE-taxonomy label. Wider than the inline `LABEL_RE`: a file is explicit, so
+ *  common real-world label shapes like `Kfz/Auto`, `Essen & Trinken` or `Vers. + Vorsorge` are
+ *  accepted (`/`, `+`, `.` allowed); the inline prompt parse stays strict — there those characters
+ *  signal a swallowed clause, not a label. */
+const TAXONOMY_LABEL_RE = /^[\p{L}][\p{L}\p{N}&+\-/. ]{0,39}$/u
+
 /**
  * Detect a taxonomy-FILE reference in a categorize-shaped question ("Kategorisiere nach den
  * Kategorien in taxonomie.csv", 'categorize using "my taxonomy.csv"'). Requires the categorize stem
  * (same gate as the inline parse) and a `.csv` token — quoted first (spaces allowed inside quotes),
- * else the bare non-space token. Returns the referenced name or null.
+ * else the bare non-space token. A FULL PATH (`/home/…/HVB/taxonomie.csv`, `C:\…\taxonomie.csv`) is
+ * reduced to its BASENAME: the library lookup matches document titles (imported files carry no
+ * path), and echoing a user's directory structure back in an answer would be needless content.
+ * Returns the referenced name or null.
  */
 export function parseTaxonomyFileRef(question: string): string | null {
   if (!/\b(?:kategorisier\w*|categori[sz]e\w*|categori[sz]ation)\b/i.test(question)) return null
-  const quoted = /["'„“«]([^"'„“«»\n]{1,80}?\.csv)["'“«»]/i.exec(question)
-  if (quoted) return quoted[1].trim()
-  const bare = /(?:^|\s)([^\s"'„“«»]{1,80}\.csv)\b/i.exec(question)
-  return bare ? bare[1].replace(/^[([{]+/, '').trim() : null
+  const quoted = /["'„“«]([^"'„“«»\n]{1,160}?\.csv)["'“«»]/i.exec(question)
+  const bare = quoted ? null : /(?:^|\s)([^\s"'„“«»]{1,160}\.csv)\b/i.exec(question)
+  const raw = (quoted ?? bare)?.[1]
+  if (!raw) return null
+  const basename = raw.replace(/^[([{]+/, '').trim().split(/[\\/]/).pop() ?? ''
+  return basename.length > 0 ? basename : null
 }
 
 /**
@@ -492,7 +503,7 @@ export function parseTaxonomyCsv(text: string): CustomCategory[] | null {
   for (const line of lines.slice(start)) {
     const parts = cells(line)
     const name = parts[0] ?? ''
-    if (!LABEL_RE.test(name) || name.split(/\s+/).length > 4) return null // one bad label ⇒ reject the file
+    if (!TAXONOMY_LABEL_RE.test(name) || name.split(/\s+/).length > 4) return null // one bad label ⇒ reject the file
     const lower = name.toLowerCase()
     if (seen.has(lower)) continue
     seen.add(lower)

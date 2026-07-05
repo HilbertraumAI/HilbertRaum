@@ -106,10 +106,15 @@ gloss from the remaining cells, **all-or-nothing** like D65 — one bad label re
 labels). Missing file / unparseable list → honest refusals NAMING the file
 (`customTaxonomyNotFound` / `customTaxonomyUnparseable`, EN+DE). The parsed set rides the existing
 Phase-1.5 path (covered-check, no-runtime refusal, inline categorize, `persistCategorization`).
-Known caveats: with NO explicit scope, the chat layer’s filename auto-scope may narrow the turn to
-the taxonomy file itself (the handler then falls through to relevance — the feature wants the
-statement selected/in scope); filenames with spaces need quotes; a taxonomy split across chunk
-boundaries is only a risk for files > one chunk (~500 tokens ≈ far beyond 40 labels).
+A FULL-PATH reference (`/home/…/taxonomie.csv`, `C:\…\buckets.csv`) is reduced to its basename
+before the lookup (the library stores titles, not paths — and the app deliberately cannot READ an
+arbitrary disk path: the file must be IMPORTED first). File labels accept the real-world shapes
+`Kfz/Auto`, `Essen & Trinken`, `Vers. + Vorsorge` (wider than the inline parse, where those
+characters signal a swallowed clause). Known caveats: with NO explicit scope, the chat layer’s
+filename auto-scope may narrow the turn to the taxonomy file itself (the handler then falls through
+to relevance — the feature wants the statement selected/in scope); filenames with spaces need
+quotes; a taxonomy split across chunk boundaries is only a risk for files > one chunk (~500 tokens
+≈ far beyond 40 labels).
 
 ## 4. Phase 2 — result-table artifact + message-level export (OPEN)
 
