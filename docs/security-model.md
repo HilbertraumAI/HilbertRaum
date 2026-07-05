@@ -430,10 +430,25 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   **and clears the job map**, so no source/translation text survives the vault re-encrypt; the
   renderer store calls `clearTranslateSession()` on lock in lockstep. The map is bounded
   (`TRANSLATE_MAX_JOB_HISTORY`).
-- **No respawn past a lock:** `translate:start` is `requireUnlocked`-gated — a locked start could
-  otherwise lazily respawn the just-suspended ~10 GB TranslateGemma sidecar with the source text
-  while the vault re-encrypts. Aborting the in-flight job before `translator.suspend()` closes the
-  same window for a multi-window job's next window (the doc-task TG-3 fix, reused).
+- **No respawn past a lock (common case):** `translate:start` is `requireUnlocked`-gated — a start
+  attempted once the vault is locked is refused, so it cannot lazily respawn the just-suspended
+  ~10 GB TranslateGemma sidecar with the source text. Aborting the in-flight job before
+  `translator.suspend()` closes the window for a multi-window job's *next* window (the doc-task TG-3
+  fix, reused).
+- **Accepted residual — the lock-handler window (systemic, shared with vision; TG-4 review).**
+  `isUnlocked()` is `this._db !== null`, and `_db` is nulled only at `workspace.lock()` — the LAST
+  step of the lock handler. Between `translator.suspend()` (which nulls the server + clears its
+  `tearingDown`) and that final `lock()`, the handler yields at `awaitInFlightStreamsSettled()`
+  while `isUnlocked()` still reads `true`. A `translate:start` dispatched in that narrow window
+  passes `requireUnlocked()` and can spawn a fresh sidecar that outlives the lock, holding the
+  source prompt in its KV cache until the 120 s idle teardown (or the next lock/quit). This is a
+  **pre-existing systemic gap**, not a TG-4 regression: `VisionService.analyze` has the identical
+  `requireUnlocked`/`isUnlocked` window via `ctx.vision.stop()`. Low severity (narrow timing — it
+  needs an in-flight stream still settling after the sidecar kills complete) and bounded by the
+  idle teardown. The robust fix is cross-cutting — a workspace "locking-in-progress" latch that
+  every spawn-capable `requireUnlocked` guard observes for the whole duration of the lock, not just
+  after `_db` flips — so it is deferred out of the TG-4 UI phase and tracked as a systemic
+  hardening item (BUILD_STATE TG-4 watch item).
 - **No confused-deputy surface:** unlike vision's picker/readBytes, the Translate view takes only
   the text the user typed — no file paths, no byte reads — so there is nothing to harden there.
 
