@@ -17,6 +17,13 @@
 appId: space.hilbertraum.app
 productName: HilbertRaum
 
+# electron-builder 26 cannot auto-detect the Electron version in this npm workspace: `electron`
+# is pinned as a RANGE (^37 in devDependencies) and is HOISTED to the repo-root node_modules,
+# which eb — running from apps/desktop — does not resolve, so it errors on the range. Pin the
+# exact installed version here. Keep in sync with the `electron` devDependency (currently ^37 →
+# 37.10.3); bump when the installed Electron major/minor changes.
+electronVersion: 37.10.3
+
 directories:
   # buildResources holds icons etc. (optional; defaults are used if absent).
   buildResources: build
@@ -39,7 +46,12 @@ files:
   # the pure-JS / cross-OS portable posture (a Windows .node on a macOS/Linux drive).
   # Exclude every platform variant. tests/integration/packaging.test.ts asserts this stays.
   - '!**/node_modules/@napi-rs/canvas*/**'
-includeSubNodeModules: true
+# NOTE: `includeSubNodeModules: true` was REMOVED in electron-builder 26 (it now errors as an
+# unknown property). v26's reworked dependency collector already follows hoisted/nested
+# node_modules trees by default, so mammoth's transitive deps still come along. If a hoisted
+# externalized dep ever goes missing from app.asar, build from apps/desktop or disable hoisting
+# (see docs/packaging.md "Portable build"). ALWAYS smoke-test a PDF/DOCX/CSV import + encrypted
+# workspace from the produced .exe — a missing dep surfaces only at runtime.
 # No native addons (node:sqlite is built into Electron; parsers are pure-JS) → skip rebuild.
 npmRebuild: false
 
