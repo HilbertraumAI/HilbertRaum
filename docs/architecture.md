@@ -1677,9 +1677,15 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
   co-residency measured ≈13.2 GiB (translation ≈9.2 + a 4B chat + embedder); a 12B chat pushes the
   pair past a 16 GB machine, so two large models decoding at once is infeasible. **min-RAM (D10):**
   `recommended_min_ram_gb` reset to 17 (the §4 peak+3-headroom rule applied to the measured 13.24 GiB
-  co-residency floor, which excludes the Electron shell). **Pre-ship gap:** the CPU
-  safety-net smoke leg is still unrun — no `runtime/llama.cpp/<os>/cpu/` on the Vulkan-only drive; run
-  it on a drive that ships the CPU build before release.
+  co-residency floor, which excludes the Electron shell). **Pre-ship gap — CPU safety-net binary:**
+  the pinned pure-CPU b9849 build was fetched + **SHA-256-confirmed** against the runtime-sources pin
+  (`fa7d9d93…4352`, exact) at TG-6, but the RUN is still pending: on the dev box Windows Defender
+  quarantines the freshly-downloaded, unsigned `llama-server.exe` on execution (only that exe was
+  removed; every sibling exe survived), and adding an AV exclusion needs admin. The substantive CPU
+  DECODE path is already fully exercised — every TG measurement runs `--device none` (pure CPU) on the
+  b9849 server, and the CPU-only binary shares identical server/template/tokenizer code (differs only
+  in omitting the Vulkan backend). Run the `cpu-safety-net` leg on a drive/CI where the CPU build ships
+  AV-allowlisted before release.
 
 ### §-anchor legend (historical plan citations)
 

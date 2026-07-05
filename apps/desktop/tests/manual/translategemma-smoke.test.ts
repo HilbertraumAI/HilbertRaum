@@ -474,4 +474,86 @@ describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real 
       await Promise.allSettled([translation.stop(), embedder.stop(), chat.stop()])
     }
   })
+
+  // (11) TG-6 multi-window END-TO-END on the real model — the doc-task's core loop (the path the
+  // recalibrated planner constants actually change). A ~1,000-word German document is planned with
+  // the SHIPPING `planTranslationWindows` (new 2.5/3.0 weights ⇒ ~690-word windows), each window is
+  // translated on the real sidecar, and the stitched output is checked for the TG-6 safety property:
+  // ≥2 windows are produced AND no window's real output hits its `windowMaxTokens` cap (over-chunk,
+  // never truncate). Front-and-back reference codes must survive so nothing is silently dropped
+  // across the window seams. This is the multi-window path the single-sentence legs above + the
+  // scripted-translator integration tests don't exercise on the REAL model.
+  it.skipIf(!enabled)('multi-window document: ≥2 windows plan + translate on the real model with no output-cap truncation', { timeout: 1_800_000 }, async () => {
+    expect(modelPath, 'a TranslateGemma GGUF under models/translation').toBeTruthy()
+    expect(defaultBin, 'llama-server binary on the drive').toBeTruthy()
+
+    // ~1,000 words of varied German office prose as ordered SEGMENTS (the doc-task feeds the
+    // parser's segments). Each carries a unique verbatim reference code `REF-40NN` so coverage
+    // across windows is checkable.
+    const SENTENCES = [
+      'bestätigen wir den Eingang Ihrer Bestellung und danken für Ihr Vertrauen in unsere Produkte.',
+      'teilen wir mit, dass die Lieferung fristgerecht und vollständig innerhalb der vereinbarten Frist erfolgt.',
+      'weisen wir darauf hin, dass sich die Preise gegenüber dem Vorjahr nicht verändert haben.',
+      'informieren wir Sie über die neuen Öffnungszeiten unseres Kundenservice ab dem kommenden Monat.',
+      'erläutern wir die geänderten Bedingungen für Rücksendungen und Erstattungen im Detail.'
+    ]
+    // ~70 segments (~1,100 words) comfortably exceeds the ~690-word TG-6 window budget → ≥2 windows.
+    const segments = Array.from({ length: 70 }, (_, i) =>
+      `Zu Referenz REF-40${String(i + 1).padStart(2, '0')} ${SENTENCES[i % SENTENCES.length]}`
+    )
+    const totalWords = segments.join(' ').split(/\s+/).filter(Boolean).length
+    const plan = planTranslationWindows(segments, CTX)
+    console.log(`\n[multi-window] ${totalWords} source words → ${plan.windows.length} windows, windowMaxTokens ${plan.windowMaxTokens}`)
+    expect(plan.windows.length, 'a ~1,000-word document must plan into MULTIPLE windows at the TG-6 sizing').toBeGreaterThanOrEqual(2)
+
+    const server = new LlamaServer({
+      binPath: defaultBin!,
+      modelPath: modelPath!,
+      contextTokens: CTX,
+      extraArgs: [...TRANSLATION_SERVER_ARGS],
+      healthTimeoutMs: PATIENT_MS
+    })
+    await server.start()
+    try {
+      const parts: string[] = []
+      for (let i = 0; i < plan.windows.length; i++) {
+        const prompt = buildTranslationPrompt({ sourceLang: 'de', targetLang: 'en', text: plan.windows[i] })
+        // STREAM (not stream:false) — a full window is ~2,000 tokens ≈ 10 min on CPU, past undici's
+        // 300 s headers timeout for a silent non-streaming wait; streaming keeps the connection live.
+        let final: CompletionFinal | undefined
+        let out = ''
+        const res = await server.fetch('/completion', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            stream: true,
+            temperature: 0,
+            stop: [TRANSLATION_STOP_TOKEN],
+            n_predict: plan.windowMaxTokens,
+            cache_prompt: true
+          })
+        })
+        expect(res.ok, `window ${i}: /completion HTTP ${res.status}`).toBe(true)
+        expect(res.body, `window ${i}: empty body`).toBeTruthy()
+        for await (const delta of readCompletionSSE(res.body!, undefined, (f) => (final = f))) out += delta
+        out = out.trim()
+        const outTokens = await tokenizeCount(server, out)
+        console.log(`  window ${i + 1}/${plan.windows.length}: ${outTokens} out-tokens (cap ${plan.windowMaxTokens}), ${final?.timings?.predicted_per_second?.toFixed(1) ?? '?'} tok/s, stop="${final?.stoppingWord ?? ''}"`)
+        expect(out.length, `window ${i}: empty output`).toBeGreaterThan(0)
+        expect(out.includes(TRANSLATION_STOP_TOKEN), `window ${i}: <end_of_turn> leaked`).toBe(false)
+        // THE TG-6 SAFETY PROPERTY: the real output finished BEFORE the cap — not truncated.
+        expect(outTokens, `window ${i}: output tokens ${outTokens} reached the cap ${plan.windowMaxTokens} (TRUNCATED)`).toBeLessThan(plan.windowMaxTokens)
+        parts.push(out)
+      }
+      const stitched = parts.join('\n\n')
+      // Front-and-back coverage: the first and last reference codes both survived across the seams.
+      for (const ref of ['REF-4001', `REF-40${segments.length}`]) {
+        console.log(`  reference "${ref}": ${stitched.includes(ref) ? 'KEPT' : 'MISSING'}`)
+        expect(stitched.includes(ref), `reference ${ref} must survive the multi-window stitch`).toBe(true)
+      }
+    } finally {
+      await server.stop()
+    }
+  })
 })

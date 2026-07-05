@@ -37,8 +37,11 @@
 # old b9585 build. The sha256 values below are the OFFICIAL release-asset digests from
 # the ggml-org/llama.cpp GitHub Releases API (the `digest` field, one per asset), the
 # same five-asset product topology as b9585 (win vulkan + win cpu, mac arm64 metal,
-# linux vulkan + linux cpu). They are NOT yet confirmed against a local re-download on
-# this machine — that is the REQUIRED manual smoke (BUILD_STATE "Qwen3.5 Unsloth wave"):
+# linux vulkan + linux cpu). The win-vulkan asset is confirmed by every TG smoke (it is the
+# D:\ pin). The **win-cpu** asset was confirmed against a LOCAL RE-DOWNLOAD 2026-07-05
+# (TG-6 CPU-safety-net attempt: fetched + SHA-256 == fa7d9d93…4352, exact). The mac/linux
+# assets are NOT yet confirmed against a local re-download on this machine — that is the
+# remaining REQUIRED manual smoke (BUILD_STATE "Qwen3.5 Unsloth wave"):
 # fetch-runtime re-SHA-256-verifies each archive BEFORE extracting, so a wrong/changed
 # digest deletes the archive and fails the run — a bad binary can never silently install.
 # To bump again: pick a new tag from https://github.com/ggml-org/llama.cpp/releases,
