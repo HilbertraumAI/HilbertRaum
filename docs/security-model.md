@@ -435,6 +435,19 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   ~10 GB TranslateGemma sidecar with the source text. Aborting the in-flight job before
   `translator.suspend()` closes the window for a multi-window job's *next* window (the doc-task TG-3
   fix, reused).
+- **Dropped/picked documents (TG-5) inherit the doc-task posture — nothing new logged.** A file
+  dropped or chosen in the Translate view does NOT flow through `TranslateJobService`; per plan D7
+  it rides the EXISTING translation **doc-task** (`importDocuments {destination:{kind:'temporary'}}`
+  → `startDocTask('translation', …)` → materialize). So it inherits, unchanged, the doc-task's
+  content-free audit (ids/kinds only, verified by the unchanged `audit-ipc` sweep) and the encrypted
+  workspace posture: in an encrypted workspace the temporary import's stored copy AND the
+  materialized translation are written through the same `DocumentCipher` as any other document. The
+  dropped path is resolved in the preload (`getDroppedFilePath`) and **hardened in main**
+  (canonicalize + reject symlinks — an OS drop carries no picker token, `registerDocsIpc`), the same
+  drag-drop seam DocumentsScreen/Chat use; the picker path carries the one-time `pickerToken` (D1).
+  The renderer store (`lib/fileTranslateSession.ts`) holds only the materialized preview — a
+  Generated document that already lives in the workspace — and drops it on lock (`clearFileTranslate`).
+  No new IPC, no new audit surface.
 - **Accepted residual — the lock-handler window (systemic, shared with vision; TG-4 review).**
   `isUnlocked()` is `this._db !== null`, and `_db` is nulled only at `workspace.lock()` — the LAST
   step of the lock handler. Between `translator.suspend()` (which nulls the server + clears its

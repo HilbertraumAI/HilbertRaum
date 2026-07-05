@@ -1945,5 +1945,26 @@ export const de: Record<keyof typeof en, string> = {
   'translate.err.docTaskBusy': 'Eine Dokumentaufgabe läuft. Warte, bis sie fertig ist, und übersetze dann.',
   'translate.err.runtimeFailed': 'Das Übersetzungsmodell konnte nicht fertigstellen. Versuche es erneut oder mit kürzerem Text.',
   'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
-  'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.'
+  'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.',
+
+  // ---- Dokument per Drag-and-drop übersetzen (TG-5, Plan §2 D7) ----
+  'translate.drop.title': 'Oder ein Dokument zum Übersetzen ablegen',
+  'translate.drop.choose': 'oder ein Dokument auswählen',
+  'translate.drop.types': 'PDF, Word, Markdown oder Text — übersetzt in die gewählte Sprache.',
+  'translate.file.importing': 'Dokument wird gelesen…',
+  'translate.file.progress': 'Übersetzen… ({done}/{total})',
+  'translate.file.working': 'Dokument wird übersetzt…',
+  'translate.file.truncated':
+    'Es wird der Anfang der Übersetzung angezeigt — exportiere es oder öffne es unter Dokumente für das ganze Dokument.',
+  'translate.file.export': 'Exportieren…',
+  'translate.file.exported': 'Dokument exportiert',
+  'translate.file.show': 'Unter Dokumente anzeigen',
+  'translate.file.reset': 'Weiteres Dokument übersetzen',
+  'translate.file.err.multiDrop': 'Lege jeweils nur ein Dokument ab.',
+  'translate.file.err.noPath':
+    'Dieses Element hat keine Datei auf dem Datenträger. Ziehe ein Dokument aus einem Ordner oder nutze „ein Dokument auswählen".',
+  'translate.file.err.unsupported':
+    'Dieser Dateityp kann nicht übersetzt werden. Versuche eine PDF-, Word-, Markdown- oder Textdatei.',
+  'translate.file.err.importFailed': 'Das Dokument konnte nicht gelesen werden. Versuche es erneut.',
+  'translate.file.err.runtimeFailed': 'Das Dokument konnte nicht übersetzt werden. Versuche es erneut.'
 }

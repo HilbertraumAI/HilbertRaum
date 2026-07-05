@@ -1,0 +1,401 @@
+import type { TranslationSourceLang, TranslationTargetLang } from '@shared/types'
+import { getActiveDocTask, isDocTaskTerminal } from './doctasks'
+import { friendlyIpcError } from './errors'
+import { clearTranslateSession, getTranslateSession, setLastTranslateChoice } from './translateSession'
+
+// Renderer-side store for the SINGLE active DOCUMENT translation in the Translate view (TG-5,
+// plan §2 D7). A dropped or picked document rides the EXISTING translation doc-task — it is NOT
+// the live TEXT job (that is `translateSession.ts`). The flow is:
+//
+//   getDroppedFilePath / pickDocuments → importDocuments(paths, {destination:{kind:'temporary'}})
+//   → poll getImportJob until ingested → startDocTask('translation', docId, {sourceLang,targetLang})
+//   → poll getDocTask until terminal → load the materialized doc's Markdown (previewDocument)
+//   into the SAME output panel + offer Export / "Show in Documents".
+//
+// No new parsing / IPC path: provenance, audit and encryption invariants ride the doc-task for
+// free (security-model.md). The imported source is a TEMPORARY document (never the Library); the
+// materialized translation is a Generated document, findable under Documents. We do NOT bespoke-
+// delete the temporary source — it rides the existing Temporary-lifecycle retention (owner-gated).
+//
+// Module-level (NOT inside the screen), like `translateSession`/`doctasks`, so a running document
+// translation survives navigating away and back. Privacy: the only content this store holds is the
+// materialized translation preview (a Generated document that already lives in the workspace);
+// `clear()` drops it on workspace LOCK in lockstep with main.
+//
+// DELIBERATE DEVIATION from plan §4 TG-5's "poll (lib/doctasks.ts store)": we run our OWN
+// import + doc-task polling here rather than routing through the GLOBAL `doctasks` store's
+// `startTask`. Reason: this store also owns the import step and the result load, and the global
+// store is shared with DocumentsScreen/ChatScreen (which acknowledge terminal tasks) — coupling the
+// two would race the result load against a foreign `acknowledgeDocTask`. The backend still enforces
+// one-task-at-a-time (a real `ctx.docTasks` task), so the D9 lane holds either way; we READ the
+// global store only to pre-block a start while a foreign doc task runs.
+
+export type FileTranslateErrorCode =
+  | 'multiDrop'
+  | 'noPath'
+  | 'unsupported'
+  | 'importFailed'
+  | 'docTaskBusy'
+  | 'runtimeFailed'
+
+/** `started` once the pipeline is underway (or a code surfaces), `busy` when one is already
+ *  running (text or file), `noop` when there is nothing to translate (empty selection). */
+export type FileTranslateOutcome = 'started' | 'busy' | 'noop'
+
+export interface FileTranslateSnapshot {
+  state: 'idle' | 'importing' | 'translating' | 'done' | 'failed' | 'cancelled'
+  /** Basename of the source document (display only). */
+  fileName: string | null
+  /** Coarse window progress from the doc-task (`Translating… (3/12)`). */
+  windowsDone: number
+  windowsTotal: number
+  /** The materialized translation preview, on done. */
+  output: string
+  /** True when `output` is only the START of a long translation (see Export / Documents). */
+  truncated: boolean
+  /** The materialized document's id — drives Export + "Show in Documents". */
+  resultDocumentId: string | null
+  /** A CODE the screen maps to friendly copy. */
+  error: FileTranslateErrorCode | null
+  /** A backend-provided friendly failure message (already localized), shown verbatim when present. */
+  errorMessage: string | null
+  /** importing || translating — the file path's contribution to the screen's single busy state. */
+  busy: boolean
+}
+
+const EMPTY: FileTranslateSnapshot = {
+  state: 'idle',
+  fileName: null,
+  windowsDone: 0,
+  windowsTotal: 0,
+  output: '',
+  truncated: false,
+  resultDocumentId: null,
+  error: null,
+  errorMessage: null,
+  busy: false
+}
+
+const POLL_MS = 400
+
+let snapshot: FileTranslateSnapshot = EMPTY
+const listeners = new Set<() => void>()
+/** The single active poll timer (import THEN doc-task — never both at once). */
+let timer: ReturnType<typeof setInterval> | null = null
+/**
+ * Reentrancy latch for the poll callbacks. `setInterval` fires every POLL_MS regardless of whether
+ * the previous async callback resolved, so a round-trip slower than POLL_MS would let two callbacks
+ * both observe the same terminal status and double-fire the (non-idempotent) transition — the
+ * second `startTranslationTask`/`loadResult` would kill the just-installed next-phase timer and
+ * surface a spurious failure. The latch skips a tick while the prior one is still in flight.
+ */
+let pollInFlight = false
+/**
+ * Generation guard (the `translateSession` F8 pattern): a superseding action (a new start, a
+ * clear/lock) bumps this so a slower import/start round-trip that resolves after the user moved on
+ * detects it is stale and bails instead of wiring a zombie poll over the newer session.
+ */
+let gen = 0
+
+function notify(): void {
+  for (const fn of listeners) fn()
+}
+
+function set(next: Partial<FileTranslateSnapshot>): void {
+  snapshot = { ...snapshot, ...next }
+  notify()
+}
+
+function stopPolling(): void {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+  pollInFlight = false
+}
+
+function fail(code: FileTranslateErrorCode): void {
+  stopPolling()
+  set({ state: 'failed', error: code, errorMessage: null, busy: false })
+}
+
+function failWith(message: string): void {
+  stopPolling()
+  set({ state: 'failed', error: null, errorMessage: message, busy: false })
+}
+
+/** Basename of an absolute path for a friendly label (cross-platform separators). */
+function baseName(path: string): string {
+  const parts = path.split(/[/\\]/)
+  return parts[parts.length - 1] || path
+}
+
+export function subscribeFileTranslate(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => listeners.delete(fn)
+}
+
+/** Snapshot for useSyncExternalStore — a fresh object per change, stable between. */
+export function getFileTranslate(): FileTranslateSnapshot {
+  return snapshot
+}
+
+type Choice = { sourceLang: TranslationSourceLang; targetLang: TranslationTargetLang }
+
+/** Shared start guard: refuse while this store is busy, a live TEXT translation streams, or a
+ *  foreign doc task holds the lane (D9). The screen's `busy` prop already disables the triggers;
+ *  this defends the one-at-a-time invariant at the store level too (a text stream lives in
+ *  `translateSession`, not the global doc-task store, so it is checked explicitly). */
+function guardStart(): FileTranslateOutcome | null {
+  if (snapshot.busy || getTranslateSession().translating) return 'busy'
+  // A foreign doc task blocks us ONLY while it is actually RUNNING — the global store keeps a
+  // TERMINAL task visible until a screen acknowledges it, and that lingering done/failed task must
+  // not spuriously refuse a translation (the backend `hasActiveTask()` ignores terminal tasks too).
+  const foreign = getActiveDocTask()
+  if (foreign && !isDocTaskTerminal(foreign.status)) {
+    fail('docTaskBusy')
+    return 'started'
+  }
+  return null
+}
+
+/**
+ * Translate a DROPPED document. Rejects a multi-drop and resolves the single file's on-disk path
+ * via the preload `getDroppedFilePath` bridge (a browser-origin drag with no path resolves to '').
+ */
+export async function translateDroppedFiles(files: File[], choice: Choice): Promise<FileTranslateOutcome> {
+  const blocked = guardStart()
+  if (blocked) return blocked
+  if (files.length === 0) return 'noop'
+  if (files.length > 1) {
+    fail('multiDrop')
+    return 'started'
+  }
+  const path = window.api?.getDroppedFilePath?.(files[0]) ?? ''
+  if (typeof path !== 'string' || path.length === 0) {
+    fail('noPath')
+    return 'started'
+  }
+  return runImport([path], undefined, choice)
+}
+
+/**
+ * Translate a PICKED document (the WCAG 2.5.7 non-drag path). `pickDocuments` returns a one-time
+ * capability token main resolves to the exact picked paths (D1) — passed back as `pickerToken`.
+ */
+export async function translatePickedFile(choice: Choice): Promise<FileTranslateOutcome> {
+  const blocked = guardStart()
+  if (blocked) return blocked
+  let picked
+  try {
+    picked = await window.api?.pickDocuments?.('files')
+  } catch {
+    fail('importFailed')
+    return 'started'
+  }
+  if (!picked || picked.paths.length === 0) return 'noop' // user cancelled the dialog
+  if (picked.paths.length > 1) {
+    fail('multiDrop')
+    return 'started'
+  }
+  return runImport(picked.paths, picked.token, choice)
+}
+
+/**
+ * Import the source as a TEMPORARY document, then (on ingestion) start the translation doc-task.
+ * A drop has no picker token (main hardens the raw paths); a pick passes its token.
+ */
+async function runImport(paths: string[], token: string | undefined, choice: Choice): Promise<FileTranslateOutcome> {
+  const myGen = ++gen
+  stopPolling()
+  setLastTranslateChoice(choice.sourceLang, choice.targetLang) // shared last-choice memory (text + file)
+  // A file translation is actually STARTING now (past every reject guard) — take the panel from
+  // any lingering text result. Done HERE, not in the screen's drop handler, so a REJECTED drop
+  // (multi-file, no path, foreign task busy) leaves the text result intact behind the error banner.
+  clearTranslateSession()
+  set({
+    ...EMPTY,
+    state: 'importing',
+    busy: true,
+    fileName: baseName(paths[0])
+  })
+
+  let job
+  try {
+    job = await window.api.importDocuments(
+      paths,
+      token ? { destination: { kind: 'temporary' }, pickerToken: token } : { destination: { kind: 'temporary' } }
+    )
+  } catch (e) {
+    if (myGen === gen) failWith(friendlyIpcError(e))
+    return 'started'
+  }
+  if (myGen !== gen) return 'started' // superseded while the import round-trip was in flight
+  // Nothing supported was imported — the DocumentsScreen "no supported documents" precedent.
+  if (!job || job.documentIds.length === 0) {
+    fail('unsupported')
+    return 'started'
+  }
+
+  const docId = job.documentIds[0]
+  const importJobId = job.jobId
+  // Poll ingestion; only once the file is fully indexed can the doc-task run over it.
+  timer = setInterval(() => {
+    if (pollInFlight) return // a slower-than-POLL_MS round-trip is still resolving; skip this tick
+    pollInFlight = true
+    void (async () => {
+      try {
+        if (myGen !== gen) {
+          stopPolling()
+          return
+        }
+        const status = await window.api.getImportJob(importJobId)
+        if (myGen !== gen) return
+        if (status.done) {
+          stopPolling()
+          if (status.completed === 0) {
+            // Imported but ingestion failed (e.g. an unreadable/encrypted PDF) — no doc to translate.
+            fail('unsupported')
+            return
+          }
+          void startTranslationTask(docId, choice, myGen)
+        }
+      } catch (e) {
+        if (myGen !== gen) return
+        failWith(friendlyIpcError(e))
+      } finally {
+        pollInFlight = false
+      }
+    })()
+  }, POLL_MS)
+  return 'started'
+}
+
+/** Start the translation doc-task over the ingested temporary document, then poll it to completion. */
+async function startTranslationTask(docId: string, choice: Choice, myGen: number): Promise<void> {
+  if (myGen !== gen) return
+  let started
+  try {
+    started = await window.api.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: choice.sourceLang, targetLang: choice.targetLang }
+    })
+  } catch (e) {
+    // Backend refusals (a doc task already runs, the model vanished) arrive as friendly messages.
+    if (myGen === gen) failWith(friendlyIpcError(e))
+    return
+  }
+  // Superseded WHILE the start round-trip was in flight (Stop / lock / a new start landed during the
+  // `importing`→`translating` window): the backend task is now RUNNING but this session is gone.
+  // Cancel it so it does not linger as a zombie holding the one-at-a-time lane and materialize an
+  // unexpected document (the translateSession supersede-cancel, applied to the doc-task lane).
+  if (myGen !== gen) {
+    void window.api?.cancelDocTask?.()?.catch?.(() => {})
+    return
+  }
+  set({ state: 'translating' })
+  const taskJobId = started.jobId
+  timer = setInterval(() => {
+    if (pollInFlight) return // reentrancy latch — see the import poll above
+    pollInFlight = true
+    void (async () => {
+      try {
+        if (myGen !== gen) {
+          stopPolling()
+          return
+        }
+        const status = await window.api.getDocTask(taskJobId)
+        if (myGen !== gen) return
+        set({ windowsDone: status.progress.stepsDone, windowsTotal: status.progress.stepsTotal })
+        if (status.state === 'done') {
+          stopPolling()
+          void loadResult(status.resultRef?.documentId ?? null, myGen)
+        } else if (status.state === 'failed') {
+          stopPolling()
+          status.error ? failWith(status.error) : fail('runtimeFailed')
+        } else if (status.state === 'cancelled') {
+          stopPolling()
+          set({ state: 'cancelled', busy: false })
+        }
+      } catch (e) {
+        if (myGen !== gen) return
+        failWith(friendlyIpcError(e))
+      } finally {
+        pollInFlight = false
+      }
+    })()
+  }, POLL_MS)
+}
+
+/** Load the materialized translation's Markdown into the output panel (the bounded first page —
+ *  a long document shows its start here, with the whole document one Export / "Show in Documents"
+ *  away). */
+async function loadResult(documentId: string | null, myGen: number): Promise<void> {
+  if (myGen !== gen) return
+  if (!documentId) {
+    // The task finished without a result reference — treat as a runtime failure rather than a
+    // silent empty panel.
+    if (myGen === gen) fail('runtimeFailed')
+    return
+  }
+  try {
+    const preview = await window.api.previewDocument(documentId)
+    if (myGen !== gen) return
+    const text = preview.segments.map((s) => s.text).join('\n\n').trim()
+    set({
+      state: 'done',
+      busy: false,
+      output: text,
+      truncated: typeof preview.nextOffset === 'number',
+      resultDocumentId: documentId,
+      error: null,
+      errorMessage: null
+    })
+  } catch (e) {
+    if (myGen === gen) failWith(friendlyIpcError(e))
+  }
+}
+
+/** Cancel an in-flight document translation (the Stop button). Cancels the doc-task main-side (a
+ *  no-op if we are still importing — there is no task yet — but we still supersede + reset). */
+export function cancelFileTranslation(): void {
+  if (snapshot.state === 'translating') {
+    void window.api?.cancelDocTask?.()?.catch?.(() => {})
+  }
+  gen += 1 // supersede any import/start round-trip still in flight
+  stopPolling()
+  set({ state: 'cancelled', busy: false })
+}
+
+/**
+ * Dismiss a terminal result/error and return the panel to idle (the "Translate another document"
+ * affordance + the dismissed-banner-must-not-reappear parity with `translateSession`). Keeps the
+ * language choice. No-op while busy.
+ */
+export function resetFileTranslation(): void {
+  if (snapshot.busy) return
+  gen += 1
+  stopPolling()
+  snapshot = { ...EMPTY }
+  notify()
+}
+
+/**
+ * Drop ALL resident state for workspace LOCK — main has aborted the doc-task and re-encrypted the
+ * vault, so the materialized preview held here must not linger.
+ */
+export function clearFileTranslate(): void {
+  gen += 1
+  stopPolling()
+  snapshot = { ...EMPTY }
+  notify()
+}
+
+/** Test-only: drop module-level state between renderer tests. */
+export function resetFileTranslateSessionForTests(): void {
+  stopPolling()
+  snapshot = EMPTY
+  gen = 0
+  listeners.clear()
+}

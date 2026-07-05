@@ -516,11 +516,23 @@ a file saved back into your library.
    to put the finished text on your clipboard. Long text is translated in order, a section at a
    time, into one continuous result.
 
-Everything stays on the drive — your text and its translation are **never uploaded** and, unlike
-the document action, **nothing is saved**: leave the screen (or lock the workspace) and the text is
-gone. If the translation model isn't installed, the screen shows a short note with a **Go to AI
-Model** button to download it (see the download note in §6); machine translations can contain
-errors. While a document task is running, translating here waits until it finishes.
+**Translate a whole document, right here.** Below the text box you can **drop a document** — a PDF,
+Word file, Markdown, or plain text — or click **choose a document**. Pick the **From** and **To**
+languages first, just like text. The document is read, translated a section at a time (you'll see
+**Translating… (3/12)** counting the sections), and the translated **Markdown** appears in the
+panel. From there, **Export…** saves it as a file, **Show in Documents** opens it in your library,
+or **Copy** puts it on the clipboard. For a long document the panel shows the **start** of the
+translation — export it or open it in Documents to read the whole thing. Drop **one document at a
+time**; a file type that can't be read shows a short, friendly note. (This is the same job as the
+**⋯ → Translate** action under Documents, §7 — the translated copy is saved either way; the
+original you dropped is kept as a **temporary** document.)
+
+Everything stays on the drive — your text and its translation are **never uploaded**. Typed text is
+transient: leave the screen (or lock the workspace) and it is gone. A translated **document**,
+though, is saved (that's the point) — you'll find it under **Documents**. If the translation model
+isn't installed, the screen shows a short note with a **Go to AI Model** button to download it (see
+the download note in §6); machine translations can contain errors. While a document task is running,
+translating here waits until it finishes.
 
 ---
 

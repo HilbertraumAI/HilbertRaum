@@ -1,21 +1,25 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { resetTranslateSessionForTests } from '../../src/renderer/lib/translateSession'
+import { resetFileTranslateSessionForTests } from '../../src/renderer/lib/fileTranslateSession'
+import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
 import { t } from '../../src/shared/i18n'
-import type { AppStatus, TranslateJob } from '../../src/shared/types'
+import type { AppStatus, DocTaskStatus, TranslateJob } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Renderer test (jsdom + RTL) for the Translate screen state machine (TranslateGemma plan §2 D6,
-// TG-4). Streaming is driven by capturing the onTranslate* subscriber callbacks and invoking them,
-// mirroring the ImagesScreen / Chat lifecycle. The active translation lives in a module-level store
-// (survives navigation), so it is reset between tests.
+// Renderer test (jsdom + RTL) for the Translate screen state machine (TranslateGemma plan §2 D6/D7,
+// TG-4/5). The TEXT path is driven by capturing the onTranslate* subscriber callbacks and invoking
+// them; the DOCUMENT path drives the import → doc-task → materialize polling with stubbed IPC.
+// Both active translations live in module-level stores (survive navigation), reset between tests.
 
 afterEach(() => {
   cleanup()
   resetTranslateSessionForTests()
+  resetFileTranslateSessionForTests()
+  resetDocTaskStoreForTests()
 })
 
 function appStatus(over: Partial<AppStatus> = {}): AppStatus {
@@ -192,4 +196,225 @@ describe('TranslateScreen — language selects', () => {
     expect(screen.getByText(t('en', 'translate.err.sameLang'))).toBeInTheDocument()
     expect(s.translateStart).not.toHaveBeenCalled()
   })
+})
+
+// ---- TG-5: document drag-and-drop + file translation ----
+
+function docTask(over: Partial<DocTaskStatus> = {}): DocTaskStatus {
+  return {
+    jobId: 'task1',
+    kind: 'translation',
+    documentIds: ['d1'],
+    state: 'running',
+    progress: { stepsDone: 0, stepsTotal: 0 },
+    ...over
+  }
+}
+
+/** Stubs the full drop → import → doc-task → materialize pipeline. `getDocTask` returns `running`
+ *  once, then the supplied `done`/`failed` status on every later poll. */
+function fileStubs(opts: {
+  documentIds?: string[]
+  terminal?: DocTaskStatus
+  preview?: { segments: { text: string }[]; nextOffset?: number | null }
+} = {}) {
+  const importDocuments = vi.fn(async () => ({
+    jobId: 'imp1',
+    documentIds: opts.documentIds ?? ['d1']
+  }))
+  const getImportJob = vi.fn(async () => ({
+    jobId: 'imp1',
+    total: 1,
+    completed: 1,
+    failed: 0,
+    done: true
+  }))
+  const startDocTask = vi.fn(async () => ({ jobId: 'task1' }))
+  let taskPolls = 0
+  const terminal =
+    opts.terminal ??
+    docTask({ state: 'done', progress: { stepsDone: 3, stepsTotal: 3 }, resultRef: { documentId: 'gen1' } })
+  const getDocTask = vi.fn(async () => {
+    taskPolls += 1
+    return taskPolls === 1 ? docTask({ progress: { stepsDone: 1, stepsTotal: 3 } }) : terminal
+  })
+  const previewDocument = vi.fn(async () => ({
+    id: 'gen1',
+    title: 'a (English)',
+    mimeType: 'text/markdown',
+    segments: (opts.preview?.segments ?? [{ text: 'Hello world.' }]).map((s) => ({
+      text: s.text,
+      pageNumber: null,
+      sectionLabel: null
+    })),
+    nextOffset: opts.preview?.nextOffset
+  }))
+  const exportDocument = vi.fn(async () => 'C:\\out\\a (English).md')
+  const pickDocuments = vi.fn(async () => ({ token: 'tok1', paths: ['C:\\docs\\a.pdf'] }))
+  const getDroppedFilePath = vi.fn(() => 'C:\\docs\\a.pdf')
+  return {
+    importDocuments,
+    getImportJob,
+    startDocTask,
+    getDocTask,
+    previewDocument,
+    exportDocument,
+    pickDocuments,
+    getDroppedFilePath,
+    api: {
+      getAppStatus: vi.fn(async () => appStatus()),
+      getActiveTranslateJob: vi.fn(async () => null),
+      copyToClipboard: vi.fn(async () => true),
+      importDocuments,
+      getImportJob,
+      startDocTask,
+      getDocTask,
+      previewDocument,
+      exportDocument,
+      pickDocuments,
+      getDroppedFilePath
+    }
+  }
+}
+
+function dropOnZone(files: File[]): void {
+  const zone = screen.getByRole('button', { name: t('en', 'translate.drop.title') })
+  fireEvent.drop(zone, { dataTransfer: { files } })
+}
+
+describe('TranslateScreen — document translation (TG-5)', () => {
+  it('drops a document → imports as temporary → runs the doc-task → shows the materialized text', async () => {
+    const f = fileStubs()
+    stubApi(f.api as never)
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    const pdf = new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })
+    act(() => dropOnZone([pdf]))
+
+    // The dropped file is imported into the Temporary destination (no picker token).
+    await waitFor(() => expect(f.importDocuments).toHaveBeenCalled())
+    expect(f.importDocuments).toHaveBeenCalledWith(['C:\\docs\\a.pdf'], {
+      destination: { kind: 'temporary' }
+    })
+    // Then the translation doc-task runs over the ingested document with the chosen languages.
+    await waitFor(() => expect(f.startDocTask).toHaveBeenCalled())
+    expect(f.startDocTask).toHaveBeenCalledWith({
+      kind: 'translation',
+      documentIds: ['d1'],
+      params: { sourceLang: 'de', targetLang: 'en' }
+    })
+    // The materialized Markdown lands in the output panel.
+    const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
+    expect(await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })).toBeInTheDocument()
+  }, 10000)
+
+  it('translates a document via the choose-a-document picker path', async () => {
+    const f = fileStubs()
+    stubApi(f.api as never)
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.drop.choose') }))
+    await waitFor(() => expect(f.pickDocuments).toHaveBeenCalledWith('files'))
+    // A picked import carries the one-time capability token back to main (D1).
+    await waitFor(() =>
+      expect(f.importDocuments).toHaveBeenCalledWith(['C:\\docs\\a.pdf'], {
+        destination: { kind: 'temporary' },
+        pickerToken: 'tok1'
+      })
+    )
+    const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
+    expect(await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })).toBeInTheDocument()
+  }, 10000)
+
+  it('rejects a multi-file drop with a friendly banner (no import)', async () => {
+    const f = fileStubs()
+    stubApi(f.api as never)
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() =>
+      dropOnZone([
+        new File(['a'], 'a.pdf', { type: 'application/pdf' }),
+        new File(['b'], 'b.pdf', { type: 'application/pdf' })
+      ])
+    )
+    expect(await screen.findByText(t('en', 'translate.file.err.multiDrop'))).toBeInTheDocument()
+    expect(f.importDocuments).not.toHaveBeenCalled()
+  })
+
+  it('a rejected multi-drop keeps the existing text result (restored when the banner is dismissed)', async () => {
+    // Combine the text stubs (for a text translation) with the file stubs' getDroppedFilePath.
+    const s = streamStubs()
+    const f = fileStubs()
+    stubApi({ ...s.api, ...f.api } as never)
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+
+    // First: a completed TEXT translation showing in the panel.
+    await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
+    await waitFor(() => expect(s.done.fn).toBeDefined())
+    act(() => s.done.fn!({ jobId: 'j1', state: 'done', text: 'Hello world.' }))
+    const outPanel = screen.getByLabelText(t('en', 'translate.output.label'))
+    await within(outPanel).findByText('Hello world.')
+
+    // A fat-fingered multi-file drop is REJECTED. The text result must NOT be destroyed.
+    act(() =>
+      dropOnZone([
+        new File(['a'], 'a.pdf', { type: 'application/pdf' }),
+        new File(['b'], 'b.pdf', { type: 'application/pdf' })
+      ])
+    )
+    expect(await screen.findByText(t('en', 'translate.file.err.multiDrop'))).toBeInTheDocument()
+    expect(f.importDocuments).not.toHaveBeenCalled()
+
+    // Dismissing the error restores the text translation (it was never cleared).
+    await user.click(screen.getByRole('button', { name: t('en', 'common.dismiss') }))
+    expect(await within(outPanel).findByText('Hello world.')).toBeInTheDocument()
+  })
+
+  it('shows a friendly error when the dropped file type is unsupported (nothing imported)', async () => {
+    const f = fileStubs({ documentIds: [] }) // main imported nothing supported
+    stubApi(f.api as never)
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() => dropOnZone([new File(['x'], 'a.xyz', { type: '' })]))
+    expect(await screen.findByText(t('en', 'translate.file.err.unsupported'))).toBeInTheDocument()
+    expect(f.startDocTask).not.toHaveBeenCalled()
+  }, 10000)
+
+  it('exports the materialized document and can show it in Documents', async () => {
+    const f = fileStubs()
+    stubApi(f.api as never)
+    const onNavigate = vi.fn()
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={onNavigate} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
+    const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
+    await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })
+
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.file.export') }))
+    expect(f.exportDocument).toHaveBeenCalledWith('gen1')
+
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.file.show') }))
+    expect(onNavigate).toHaveBeenCalledWith('documents')
+  }, 10000)
+
+  it('surfaces a truncated hint when only the start of a long translation is shown', async () => {
+    const f = fileStubs({ preview: { segments: [{ text: 'Beginning…' }], nextOffset: 40 } })
+    stubApi(f.api as never)
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await screen.findByLabelText(t('en', 'translate.input.label'))
+
+    act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
+    expect(
+      await screen.findByText(t('en', 'translate.file.truncated'), {}, { timeout: 8000 })
+    ).toBeInTheDocument()
+  }, 10000)
 })

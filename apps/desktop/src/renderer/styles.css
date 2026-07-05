@@ -1524,6 +1524,21 @@ code, pre, kbd { font-family: var(--font-mono); }
    only parsed on completion, so half-written syntax never flickers). */
 .translate-output-live { white-space: pre-wrap; }
 
+/* Document drag-and-drop zone (TG-5) — a compact dashed target under the input textarea, the
+   ImageDropZone visual language at a smaller footprint (the text path is primary). */
+.translate-dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  min-height: 96px; padding: 16px;
+  border: 2px dashed var(--border-strong); border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text-muted); cursor: pointer; text-align: center;
+}
+.translate-dropzone:hover { background: var(--surface-hover); }
+.translate-dropzone.drag-over { border-color: var(--focus); background: var(--surface-hover); color: var(--text); }
+.translate-dropzone[aria-disabled='true'] { opacity: 0.6; cursor: default; }
+.translate-dropzone-title { font-weight: 600; color: var(--text); margin: 0; }
+.translate-dropzone-types { margin: 0; }
+.translate-file-name { margin: 0; font-style: italic; }
+
 @media (max-width: 760px) {
   .translate-panes { grid-template-columns: 1fr; }
 }

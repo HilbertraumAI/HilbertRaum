@@ -1902,5 +1902,30 @@ export const en = {
   'translate.err.docTaskBusy': 'A document task is running. Wait for it to finish, then translate.',
   'translate.err.runtimeFailed': "The translation model couldn't finish. Try again, or a shorter text.",
   'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
-  'translate.err.sameLang': 'Pick two different languages.'
+  'translate.err.sameLang': 'Pick two different languages.',
+
+  // ---- Document drag-and-drop translation (TG-5, plan §2 D7) ----
+  // A dropped/picked document is imported as a Temporary doc, translated on the existing
+  // translation doc-task, and the materialized Markdown is shown here (Export / Show in Documents).
+  'translate.drop.title': 'Or drop a document to translate',
+  'translate.drop.choose': 'or choose a document',
+  'translate.drop.types': 'PDF, Word, Markdown, or text — translated into the chosen language.',
+  // Progress + result.
+  'translate.file.importing': 'Reading the document…',
+  'translate.file.progress': 'Translating… ({done}/{total})',
+  'translate.file.working': 'Translating the document…',
+  'translate.file.truncated':
+    'Showing the start of the translation — export it or open it in Documents for the whole document.',
+  'translate.file.export': 'Export…',
+  'translate.file.exported': 'Document exported',
+  'translate.file.show': 'Show in Documents',
+  'translate.file.reset': 'Translate another document',
+  // Friendly file-path errors — a CODE is mapped here; a backend friendly message shows verbatim.
+  'translate.file.err.multiDrop': 'Drop one document at a time.',
+  'translate.file.err.noPath':
+    'That item has no file on disk. Drag a document from a folder, or use “choose a document”.',
+  'translate.file.err.unsupported':
+    "That file type can't be translated. Try a PDF, Word, Markdown, or text file.",
+  'translate.file.err.importFailed': "The document couldn't be read. Try again.",
+  'translate.file.err.runtimeFailed': "The document couldn't be translated. Try again."
 } as const

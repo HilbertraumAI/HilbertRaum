@@ -39,6 +39,8 @@ import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
 import {
   addToCollection,
   createCollection,
+  documentIdsInCollection,
+  fileDocumentByDestination,
   getBuiltinCollection
 } from '../../src/main/services/collections'
 import type { AuditEventType, GeneratedProvenance } from '../../src/shared/types'
@@ -277,6 +279,39 @@ describe('validation (kind + params, the widened 10-language set)', () => {
         params: { sourceLang: 'en', targetLang: 'de' }
       })
     ).toThrow('Pick exactly one document to translate.')
+  })
+})
+
+describe('TG-5: translating a document imported into Temporary (plan §2 D7)', () => {
+  it('materializes a Generated translation and leaves the temporary source in Temporary', async () => {
+    // The Translate view's drop/pick path imports the source with `destination: {kind:'temporary'}`
+    // (fileDocumentByDestination is exactly what the IPC layer runs), then runs THIS same doc-task.
+    const docId = await importDoc(40, 'dropped.txt')
+    fileDocumentByDestination(db, docId, { kind: 'temporary' })
+    expect(getDocument(db, docId)?.lifecycle).toBe('temporary')
+
+    const translator = scriptedTranslator()
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'de', targetLang: 'en' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+
+    // The materialized translation is a Generated document (provenance stamped, source recorded).
+    const newId = status.resultRef?.documentId as string
+    const origin = getDocumentOrigin(db, newId) as GeneratedProvenance
+    expect(origin.kind).toBe('translation')
+    expect(origin.sourceDocumentIds).toEqual([docId])
+
+    // The temporary source is untouched by the translation — it stays in Temporary (its own
+    // retention lifecycle governs cleanup, TG-5 D7). The Generated output carries NO membership.
+    expect(getDocument(db, docId)?.lifecycle).toBe('temporary')
+    const tempId = getBuiltinCollection(db, 'temporary')!.id
+    expect(documentIdsInCollection(db, tempId)).toContain(docId)
+    expect(documentIdsInCollection(db, tempId)).not.toContain(newId)
   })
 })
 

@@ -11,6 +11,17 @@ import {
   subscribeTranslateSession,
   translate as runTranslate
 } from '../lib/translateSession'
+import {
+  cancelFileTranslation,
+  clearFileTranslate,
+  getFileTranslate,
+  resetFileTranslation,
+  subscribeFileTranslate,
+  translateDroppedFiles,
+  translatePickedFile,
+  type FileTranslateErrorCode
+} from '../lib/fileTranslateSession'
+import { TranslateDropZone } from '../translate/TranslateDropZone'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
 import {
@@ -21,14 +32,21 @@ import {
   type TranslationTargetLang
 } from '@shared/types'
 
-// Translate screen (TranslateGemma wave, plan §2 D6, TG-4). Type text, pick source + target
-// languages, and get a streamed translation from the local TranslateGemma sidecar — the TEXT path
-// (drag-and-drop document translation is TG-5). Everything stays local; nothing is persisted.
+// Translate screen (TranslateGemma wave, plan §2 D6/D7). Type text OR drop/choose a document, pick
+// source + target languages, and get a local TranslateGemma translation into ONE output panel with
+// ONE busy state. Everything stays local; the live text is transient (nothing persisted).
 //
-// The running translation lives in the module-level `lib/translateSession` store (the vision /
-// doc-task precedent), NOT in this component — so it SURVIVES navigating away and back, still
-// streaming. Screen-only concerns (availability, the input draft, the language choice, transient
-// errors) stay in local state and are re-read on mount.
+// Two paths, reconciled here:
+//  - TEXT (TG-4): a streamed live translation on the `translateSession` module store — survives
+//    navigation, per-token render, no numeric progress.
+//  - DOCUMENT (TG-5, plan §2 D7): a dropped/picked file rides the EXISTING translation doc-task via
+//    the `fileTranslateSession` store (import as Temporary → doc-task → materialized Markdown), with
+//    coarse window-count progress and Export / "Show in Documents" actions.
+//
+// The two are one-at-a-time (D9 lane): the SCREEN's single `busy` disables BOTH triggers while
+// either runs, and each path resets the other on start, so at most one session is non-idle. Panel
+// OWNERSHIP therefore reduces to "file if the file session is non-idle, else text" — remount-safe
+// (no component-local flag) because the module stores hold the state.
 
 // A UI-only "same language" guard joins the backend error codes the banner can show.
 type ClientTranslateError = TranslateErrorCode | 'sameLang'
@@ -43,6 +61,16 @@ const ERR_KEY: Partial<Record<ClientTranslateError, MessageKey>> = {
   runtimeFailed: 'translate.err.runtimeFailed',
   empty: 'translate.err.empty',
   sameLang: 'translate.err.sameLang'
+}
+
+// File-path error CODES → friendly copy (a backend-provided friendly MESSAGE shows verbatim instead).
+const FILE_ERR_KEY: Record<FileTranslateErrorCode, MessageKey> = {
+  multiDrop: 'translate.file.err.multiDrop',
+  noPath: 'translate.file.err.noPath',
+  unsupported: 'translate.file.err.unsupported',
+  importFailed: 'translate.file.err.importFailed',
+  docTaskBusy: 'translate.err.docTaskBusy',
+  runtimeFailed: 'translate.file.err.runtimeFailed'
 }
 
 export function TranslateScreen({
@@ -70,12 +98,20 @@ export function TranslateScreen({
   )
   const [screenError, setScreenError] = useState<ClientTranslateError | null>(null)
 
-  // The active translation (streamed output) lives in the module-level store so it survives
+  // The active TEXT translation (streamed output) lives in the module store so it survives
   // navigating away and back (it keeps streaming there).
   const { output, state, error, translating } = useSyncExternalStore(
     subscribeTranslateSession,
     getTranslateSession
   )
+  // The active DOCUMENT translation (import → doc-task → materialized Markdown) lives in its own
+  // module store, likewise navigation-surviving.
+  const fileTx = useSyncExternalStore(subscribeFileTranslate, getFileTranslate)
+
+  // The file session owns the panel whenever it is non-idle; otherwise the text session does.
+  const fileActive = fileTx.state !== 'idle'
+  // ONE busy state across both paths (drives the Stop button + disables BOTH triggers).
+  const busy = translating || fileTx.busy
 
   const checkStatus = useCallback(async (): Promise<void> => {
     try {
@@ -101,16 +137,19 @@ export function TranslateScreen({
     return () => window.removeEventListener('focus', onFocus)
   }, [checkStatus])
 
-  // Remount recovery after a full renderer reload: re-adopt a still-running job from main. A no-op
-  // when the store already holds one (navigate-away kept it alive) or nothing is running.
+  // Remount recovery after a full renderer reload: re-adopt a still-running TEXT job from main. A
+  // no-op when the store already holds one (navigate-away kept it alive) or nothing is running.
   useEffect(() => {
     void adoptActiveJob()
   }, [])
 
-  // Workspace LOCK: main has aborted the job + purged its map + re-encrypted the vault, so drop the
-  // resident source/translation content here in lockstep (privacy parity with main).
+  // Workspace LOCK: main has aborted the job(s) + purged its map + re-encrypted the vault, so drop
+  // the resident source/translation content here in lockstep with main (privacy parity).
   useEffect(() => {
-    if (locked) clearTranslateSession()
+    if (locked) {
+      clearTranslateSession()
+      clearFileTranslate()
+    }
   }, [locked])
 
   const sameLang = choice.sourceLang === choice.targetLang
@@ -121,16 +160,35 @@ export function TranslateScreen({
       setScreenError('sameLang')
       return
     }
+    // Starting a text translation takes the panel from any lingering file result.
+    resetFileTranslation()
     void runTranslate({
       sourceLang: choice.sourceLang,
       targetLang: choice.targetLang,
       text: input
     }).then((outcome) => {
       // A second translate while one is in flight is busy-rejected. The trigger is already disabled
-      // while `translating`, but surface the friendly banner if a click still reaches here so the
-      // action is never silently swallowed.
+      // while busy, but surface the friendly banner if a click still reaches here so the action is
+      // never silently swallowed.
       if (outcome === 'busy') setScreenError('busy')
     })
+  }
+
+  function onDropFiles(files: File[]): void {
+    setScreenError(null)
+    // The store clears any lingering text result only when the file translation actually STARTS
+    // (past its reject guards), so a rejected drop keeps the text result behind the error banner.
+    void translateDroppedFiles(files, choice)
+  }
+
+  function onChooseFile(): void {
+    setScreenError(null)
+    void translatePickedFile(choice)
+  }
+
+  function onStop(): void {
+    if (translating) stopActive()
+    else if (fileTx.busy) cancelFileTranslation()
   }
 
   function onSwap(): void {
@@ -140,12 +198,108 @@ export function TranslateScreen({
     setScreenError(null)
   }
 
-  function onCopy(): void {
+  function onCopy(textToCopy: string): void {
     // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter is denied in
     // the file://-loaded renderer. Mirrors ImagesScreen.onCopy / ChatScreen.onCopyMessage.
-    void window.api?.copyToClipboard?.(output)?.then?.((ok) => {
+    void window.api?.copyToClipboard?.(textToCopy)?.then?.((ok) => {
       if (ok) showToast(t('translate.copied'))
     })
+  }
+
+  async function onExport(): Promise<void> {
+    if (!fileTx.resultDocumentId) return
+    try {
+      const path = await window.api?.exportDocument?.(fileTx.resultDocumentId)
+      if (path) showToast(t('translate.file.exported'))
+    } catch {
+      // A cancelled/failed export is not an error worth a banner — the document stays in Documents.
+    }
+  }
+
+  function renderFileProgress(): JSX.Element {
+    if (fileTx.state === 'importing') {
+      return <p className="hint">{t('translate.file.importing')}</p>
+    }
+    // Translating: show the coarse window count once the doc-task reports a plan, else a plain hint.
+    return (
+      <p className="hint">
+        {fileTx.windowsTotal > 0
+          ? t('translate.file.progress', { done: fileTx.windowsDone, total: fileTx.windowsTotal })
+          : t('translate.file.working')}
+      </p>
+    )
+  }
+
+  function renderOutputPane(): JSX.Element {
+    if (fileActive) {
+      // ---- DOCUMENT path (TG-5) ----
+      const done = fileTx.state === 'done'
+      return (
+        <div className="translate-pane">
+          <div className="translate-output" aria-label={t('translate.output.label')}>
+            {done ? (
+              <AssistantMarkdown text={fileTx.output} />
+            ) : fileTx.state === 'importing' || fileTx.state === 'translating' ? (
+              renderFileProgress()
+            ) : (
+              // failed / cancelled: the banner carries the reason; keep the panel calm.
+              <p className="hint">{t('translate.output.empty')}</p>
+            )}
+          </div>
+          {done && fileTx.truncated && <p className="hint">{t('translate.file.truncated')}</p>}
+          <div className="actions">
+            {(fileTx.state === 'importing' || fileTx.state === 'translating') && (
+              <Button onClick={onStop}>{t('translate.stop')}</Button>
+            )}
+            {done && (
+              <>
+                <Button size="sm" variant="primary" onClick={() => void onExport()}>
+                  {t('translate.file.export')}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onNavigate('documents')}>
+                  {t('translate.file.show')}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onCopy(fileTx.output)}>
+                  {t('translate.copy')}
+                </Button>
+              </>
+            )}
+            {(done || fileTx.state === 'failed' || fileTx.state === 'cancelled') && (
+              <Button size="sm" variant="ghost" onClick={resetFileTranslation}>
+                {t('translate.file.reset')}
+              </Button>
+            )}
+          </div>
+        </div>
+      )
+    }
+
+    // ---- TEXT path (TG-4) ----
+    return (
+      <div className="translate-pane">
+        <div className="translate-output" aria-label={t('translate.output.label')}>
+          {output === '' && !translating ? (
+            <p className="hint">{t('translate.output.empty')}</p>
+          ) : state === 'done' ? (
+            <AssistantMarkdown text={output} />
+          ) : (
+            // Plain-text live buffer while streaming (Markdown is only parsed once complete, so
+            // half-written syntax never flickers) — the ChatScreen live-render precedent.
+            <div className="translate-output-live">{output}</div>
+          )}
+        </div>
+        {/* a11y: a separate visually-hidden, sentence-throttled live region for AT (§ChatScreen). */}
+        <StreamAnnouncer text={output} />
+        <div className="actions">
+          {output !== '' && !translating && (
+            <Button size="sm" variant="ghost" onClick={() => onCopy(output)}>
+              {t('translate.copy')}
+            </Button>
+          )}
+          {translating && <p className="hint">{t('translate.working')}</p>}
+        </div>
+      </div>
+    )
   }
 
   function renderBody(): JSX.Element | null {
@@ -233,64 +387,51 @@ export function TranslateScreen({
             <div className="actions">
               <Button
                 variant="primary"
-                disabled={translating || input.trim() === '' || sameLang}
+                disabled={busy || input.trim() === '' || sameLang}
                 onClick={onTranslate}
               >
                 {t('translate.action')}
               </Button>
-              {translating && <Button onClick={stopActive}>{t('translate.stop')}</Button>}
+              {translating && <Button onClick={onStop}>{t('translate.stop')}</Button>}
             </div>
+            {/* Document drag-and-drop / choose (TG-5). Disabled (with the text triggers) while any
+                translation runs, keeping ONE busy state. The current file name shows as a caption. */}
+            <TranslateDropZone onDropFiles={onDropFiles} onChoose={onChooseFile} busy={busy} />
+            {fileTx.fileName && (
+              <p className="hint translate-file-name">{fileTx.fileName}</p>
+            )}
           </div>
 
-          <div className="translate-pane">
-            <div className="translate-output" aria-label={t('translate.output.label')}>
-              {output === '' && !translating ? (
-                <p className="hint">{t('translate.output.empty')}</p>
-              ) : state === 'done' ? (
-                <AssistantMarkdown text={output} />
-              ) : (
-                // Plain-text live buffer while streaming (Markdown is only parsed once complete, so
-                // half-written syntax never flickers) — the ChatScreen live-render precedent.
-                <div className="translate-output-live">{output}</div>
-              )}
-            </div>
-            {/* a11y: a separate visually-hidden, sentence-throttled live region for AT (§ChatScreen). */}
-            <StreamAnnouncer text={output} />
-            <div className="actions">
-              {output !== '' && !translating && (
-                <Button size="sm" variant="ghost" onClick={onCopy}>
-                  {t('translate.copy')}
-                </Button>
-              )}
-              {translating && <p className="hint">{t('translate.working')}</p>}
-            </div>
-          </div>
+          {renderOutputPane()}
         </div>
       </div>
     )
   }
 
-  // The store carries a terminal error CODE on a failed run; the client `sameLang`/`busy` guards
-  // set `screenError`. Show whichever is present (the store error only when the run actually failed).
-  const shownError: ClientTranslateError | null =
-    screenError ?? (state === 'failed' ? error : null)
+  // Banner reconciliation (priority: client guard → text-job failure → file-path failure). At most
+  // one path is non-idle at a time, so these never collide in practice; the priority is a tie-break.
+  let bannerText: string | null = null
+  let dismissBanner: () => void = () => {}
+  if (screenError) {
+    bannerText = t(ERR_KEY[screenError] ?? 'translate.err.runtimeFailed')
+    dismissBanner = () => setScreenError(null)
+  } else if (state === 'failed' && error) {
+    bannerText = t(ERR_KEY[error] ?? 'translate.err.runtimeFailed')
+    // Clear the store's terminal failed state too, so the banner doesn't reappear on remount (the
+    // failed state is persistent; a component-local dismiss flag would reset).
+    dismissBanner = () => acknowledgeError()
+  } else if (fileTx.state === 'failed') {
+    bannerText = fileTx.errorMessage ?? t(fileTx.error ? FILE_ERR_KEY[fileTx.error] : 'translate.file.err.runtimeFailed')
+    dismissBanner = () => resetFileTranslation()
+  }
 
   return (
     <div className="screen translate-screen">
       <h1>{t('translate.title')}</h1>
       <p className="lead">{t('translate.lead')}</p>
-      {shownError && (
-        <Banner
-          tone="error"
-          onDismiss={() => {
-            setScreenError(null)
-            // Clear the store's terminal failed state too, so the banner doesn't reappear on remount
-            // (the failed state is persistent; a component-local dismiss flag would reset).
-            acknowledgeError()
-          }}
-          t={t}
-        >
-          {t(ERR_KEY[shownError] ?? 'translate.err.runtimeFailed')}
+      {bannerText && (
+        <Banner tone="error" onDismiss={dismissBanner} t={t}>
+          {bannerText}
         </Banner>
       )}
       {renderBody()}

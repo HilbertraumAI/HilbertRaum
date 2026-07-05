@@ -1433,6 +1433,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
 - **Export covers text documents only.** The Export action saves the STORED text
   (materialized translations are Markdown, so it is exact); PDFs/DOCX stored copies are
   original binaries and are not exported through this path.
+- **Dropping a document in the Translate view leaves a Temporary source behind (TG-5).**
+  A file dropped or chosen in the **Translate** screen is imported as a **Temporary**
+  document (never the Library) and then translated on this same doc-task; the translated
+  copy is a **Generated** document you can find under Documents. The temporary original is
+  NOT auto-deleted — it rides the existing Temporary-lifecycle retention (owner-gated,
+  Phase E.2), so a user who translates many files this way accumulates temporary sources
+  until that retention ships or they delete them by hand. Deliberate: bespoke deletion here
+  would risk the source of a translation the user may still want re-run. The same
+  ~2K-window cross-window terminology drift above applies to dropped documents.
+- **The Translate view shows only the START of a long translated document.** To bound
+  renderer memory the output panel loads the materialized doc's bounded first page; a long
+  translation shows a "showing the start" hint. Use **Export…** or **Show in Documents**
+  for the whole document (the exported/stored copy is complete and exact).
 
 ## Document comparison (Phase 35, wave-3 plan §8)
 

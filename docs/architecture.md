@@ -1537,10 +1537,39 @@ sentinel-tested), zero native deps.
 
 ## Translation sidecar — design record (TG wave; STUB, folded in full at TG-6)
 
-_Working stub added at TG-2, extended at TG-3 (the doc-task reroute) and TG-4 (the Translate
-view). The complete record — sidecar + Translate view + the doc-task reroute, with stable
-§-anchors — is folded in when the wave closes (TG-6, per the CLAUDE.md doc-lifecycle rule). The
-live plan is `docs/translategemma-translation-plan.md`._
+_Working stub added at TG-2, extended at TG-3 (the doc-task reroute), TG-4 (the Translate view
+text path) and TG-5 (document drag-and-drop in the view). The complete record — sidecar + Translate
+view + the doc-task reroute, with stable §-anchors — is folded in when the wave closes (TG-6, per
+the CLAUDE.md doc-lifecycle rule). The live plan is `docs/translategemma-translation-plan.md`._
+
+- **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
+  (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
+  state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A
+  dropped/picked file does NOT go through the live TEXT job; per D7 it rides the EXISTING
+  translation **doc-task**: `getDroppedFilePath` (or `pickDocuments`) → `importDocuments(paths,
+  {destination:{kind:'temporary'}})` → poll `getImportJob` → `startDocTask('translation', docId,
+  {sourceLang,targetLang})` → poll `getDocTask` → on done load the materialized doc's Markdown
+  (bounded `previewDocument`) into the SAME output panel + Export (`exportDocument`) / "Show in
+  Documents" (`onNavigate('documents')`). NO new parsing/IPC path — provenance, audit and
+  encryption invariants ride the doc-task for free. Orchestrated by a second renderer store
+  `lib/fileTranslateSession.ts` (the translateSession template — module-level, survives navigation)
+  that owns import + doc-task polling + the result load. **One output panel + one busy state
+  (recorded):** the screen shows the live text stream OR the file result — ownership is "file if
+  the file session is non-idle, else text" (each path resets the other on start, so at most one is
+  non-idle → remount-safe with no component flag); the screen's single `busy = textTranslating ||
+  fileBusy` disables BOTH triggers, so the file path naturally takes the D9 lane (a real
+  `ctx.docTasks` task, so the text path's `hasActiveDocTask()` guard blocks it too). The file path
+  shows numeric window progress (`Translating… (3/12)` from `stepsDone/stepsTotal`); the text path
+  deliberately shows none. **Deliberate deviation from the plan's "poll (lib/doctasks.ts store)":**
+  the new store runs its OWN import + doc-task polling rather than the GLOBAL `doctasks` store's
+  `startTask`, so the result load never races a foreign `acknowledgeDocTask` from
+  DocumentsScreen/ChatScreen; the backend still enforces one-task-at-a-time, so the D9 lane holds.
+  **Temporary-source lifecycle:** the source is imported as a **Temporary** document (never the
+  Library); the materialized translation is a **Generated** document (zero membership, findable
+  under Documents). We do NOT bespoke-delete the temporary source — it rides the existing
+  Temporary-lifecycle retention (owner-gated, Phase E.2). Audit stays content-free (the doc-task
+  path already logs ids/kinds only — security-model.md).
+
 
 - **TG-4 — the Translate view (text path, plan §2 D6).** A new **7th primary** rail destination
   (`ScreenId 'translate'`, between Documents and Images — design-guidelines §2 now "7 primary +
