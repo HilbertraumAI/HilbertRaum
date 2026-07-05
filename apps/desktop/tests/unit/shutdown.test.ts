@@ -27,12 +27,16 @@ function fakeCtx(order: string[]): AppContext {
   }
   return {
     docTasks: { abortActiveBuild: () => order.push('abort-build') },
+    // TG-4: the Translate-view job service is aborted on quit too (before the sidecar stop below),
+    // so its next window can't respawn the server being killed.
+    translateJobs: { stop: stop('translateJobs.stop') },
     runtime: { stop: stop('runtime.stop') },
     embedder: { stop: stop('embedder.stop') },
     reranker: { stop: stop('reranker.stop') },
     transcriber: { stop: stop('transcriber.stop') },
     ocrEngine: { stop: stop('ocr.stop') },
     vision: { stop: stop('vision.stop') },
+    translator: { stop: stop('translator.stop') },
     workspace: { lock: () => order.push('lock') }
   } as unknown as AppContext
 }
@@ -59,6 +63,10 @@ describe('performShutdown ordering (REL-4)', () => {
     expect(i('abort-stream')).toBeGreaterThanOrEqual(0)
     expect(i('abort-stream')).toBeLessThan(i('runtime.stop'))
     expect(i('abort-build')).toBeLessThan(i('runtime.stop'))
+    // TG-4: the Translate-view job is aborted BEFORE the translator sidecar is stopped, so a queued
+    // next window can't lazily respawn the server being killed.
+    expect(i('translateJobs.stop')).toBeGreaterThanOrEqual(0)
+    expect(i('translateJobs.stop')).toBeLessThan(i('translator.stop'))
     // Sidecars stopped before the log detaches and the vault re-encrypts; lock() is last of all.
     expect(i('runtime.stop')).toBeLessThan(i('detach'))
     expect(i('detach')).toBeLessThan(i('lock'))

@@ -14,6 +14,7 @@ export type IconName =
   | 'home'
   | 'chat'
   | 'file'
+  | 'translate'
   | 'image'
   | 'brain'
   | 'settings'
@@ -79,6 +80,21 @@ const GLYPHS: Record<IconName, Glyph> = {
         <path d="M8.75 12.5h6.5" />
         <path d="M8.75 16h4.75" />
       </g>
+    )
+  },
+
+  // Translate (Lucide "languages" idiom): an underlined "A文"-style pair — a Latin stroke set
+  // over a source line, crossed by a taller glyph — the universal translate mark, distinct from
+  // `file`/`chat`. 24-grid, 1.65 stroke like the set; tracks currentColor.
+  translate: {
+    body: (
+      <>
+        <path d="M4 5h7" />
+        <path d="M7 4c0 4.5-2 7.5-5 9" />
+        <path d="M5.5 9c0 2 2.5 4.5 5 5.5" />
+        <path d="m13 20 4.5-9 4.5 9" />
+        <path d="M14.5 17h6" />
+      </>
     )
   },
 

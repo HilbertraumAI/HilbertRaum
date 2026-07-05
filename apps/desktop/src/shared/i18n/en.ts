@@ -15,6 +15,7 @@ export const en = {
   // Soft hyphen (U+00AD) gives the narrow nav rail a clean break point ("Docu-/ments")
   // since Electron has no auto-hyphenation; invisible when the word fits or in the tooltip.
   'nav.documents': 'Documents',
+  'nav.translate': 'Translate',
   'nav.images': 'Images',
   'nav.models': 'AI Model',
   'nav.skills': 'Skills',
@@ -1863,5 +1864,43 @@ export const en = {
   'images.history.delete.title': 'Delete this image?',
   'images.history.delete.confirm': 'Delete',
   'images.history.delete.body':
-    '“{title}” and its answers will be permanently removed from this drive.'
+    '“{title}” and its answers will be permanently removed from this drive.',
+
+  // ---- Translate screen (TranslateGemma wave, plan §2 D6, TG-4) ----
+  // Live TEXT translation on the local TranslateGemma sidecar. Everything stays local; nothing is
+  // persisted. (Document drag-and-drop translation is TG-5.)
+  'translate.title': 'Translate text',
+  'translate.lead':
+    'Type or paste text, pick the languages, and translate it locally. Nothing leaves this drive.',
+  // Brief placeholder while the first availability read resolves.
+  'translate.starting': 'Getting the translation model ready…',
+  // Locked posture: the app shell normally gates the whole app behind unlock, so this is a calm fallback.
+  'translate.locked': 'Unlock your workspace to translate text.',
+  // Availability EmptyState (the O2 install path) — a friendly refusal + a deep link to AI Model.
+  'translate.avail.noModel': 'Translation needs the translation model on this drive.',
+  'translate.avail.hint': 'Download it once on the AI Model screen — then translation works fully offline.',
+  'translate.avail.cta': 'Go to AI Model',
+  // Language bar.
+  'translate.from': 'From',
+  'translate.to': 'To',
+  'translate.swap': 'Swap languages',
+  // Input pane.
+  'translate.input.label': 'Text to translate',
+  'translate.input.placeholder': 'Type or paste the text to translate…',
+  'translate.action': 'Translate',
+  'translate.stop': 'Stop',
+  // Output pane.
+  'translate.output.label': 'Translation',
+  'translate.output.empty': 'The translation will appear here.',
+  'translate.working': 'Translating…',
+  'translate.copy': 'Copy',
+  'translate.copied': 'Copied',
+  // Friendly error rows — a CODE is mapped here; raw model/runtime text never shows.
+  'translate.err.noModel': 'The translation model is no longer available. Open the AI Model screen to install it.',
+  'translate.err.badRequest': 'Pick a source and target language and enter some text to translate.',
+  'translate.err.busy': 'A translation is already running. Wait for it to finish, then try again.',
+  'translate.err.docTaskBusy': 'A document task is running. Wait for it to finish, then translate.',
+  'translate.err.runtimeFailed': "The translation model couldn't finish. Try again, or a shorter text.",
+  'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
+  'translate.err.sameLang': 'Pick two different languages.'
 } as const

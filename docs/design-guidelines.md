@@ -38,16 +38,25 @@ Audience: non-technical professionals (lawyers, doctors, accountants, consultant
 
 ## 2. Information architecture
 
-Collapse the nav destinations into 6 primary + 1 utility:
+Collapse the nav destinations into 7 primary + 1 utility:
 
 - **Top group (everyday):** Home (genuine status hub: ready? model running? doc count? one
-  big "Start chatting") · Chat · Documents · **Images** (visual understanding of one local
-  image via a local vision model — a first-class task surface parallel to Documents/Chat,
-  distinct from OCR and from any image generation; image-understanding §6) · **AI Model**
-  (reframed from "Models" — singular mental model; checksums/quantization behind a "Technical
-  details" disclosure) · **Skills** (the user's capability library — manage, import, enable;
-  a first-class destination, *not* a Settings tab, since it is a thing the user builds up over
-  time, not a knob).
+  big "Start chatting") · Chat · Documents · **Translate** (live text translation on the
+  dedicated TranslateGemma sidecar — a first-class task surface parallel to Documents/Chat,
+  distinct from the document-translation doc-task under Documents; TranslateGemma plan §2 D6)
+  · **Images** (visual understanding of one local image via a local vision model — a
+  first-class task surface, distinct from OCR and from any image generation;
+  image-understanding §6) · **AI Model** (reframed from "Models" — singular mental model;
+  checksums/quantization behind a "Technical details" disclosure) · **Skills** (the user's
+  capability library — manage, import, enable; a first-class destination, *not* a Settings
+  tab, since it is a thing the user builds up over time, not a knob).
+  - _Why Translate is a primary destination, not a sub-mode (7th deliberate IA change):_
+    translating pasted text is a distinct, complete task — text in, translation out — that
+    stands parallel to Chat/Documents/Images, runs on its own model (TranslateGemma, not the
+    chat model), and is how a non-technical user reaches translation without first importing a
+    document. It shares the window planner + sidecar with the Documents translate action, but
+    the surfaces are separate tasks. The single-word labels ("Translate"/"Übersetzen") fit the
+    existing slim rail (sized for the longer "Einstellungen"), so the 7th item adds no reflow.
 - **Bottom group (utility):** **Settings**, with **Privacy and Diagnostics folded in as
   sub-pages/tabs** ("Privacy & data", "Diagnostics (advanced)"). Privacy is a posture
   expressed everywhere, not a destination; Diagnostics is a support surface.

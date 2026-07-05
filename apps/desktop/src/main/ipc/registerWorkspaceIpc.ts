@@ -234,6 +234,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // instead of failing against the stopped chat runtime. Still-queued tasks fail friendly
     // at dequeue (`getDb()` throws while locked).
     ctx.docTasks?.cancelDocTask()
+    // And the active TRANSLATE-VIEW job (TG-4): abort it BEFORE the translator suspend below —
+    // left running, its next window would call translate() and lazily RESPAWN the just-suspended
+    // ~10 GB sidecar with the source text while the vault re-encrypts. stop() also purges the job
+    // map so the transient source/translation text does not linger past the lock (vision parity).
+    void ctx.translateJobs?.stop()
     // `suspend()` (not `stop()`): the sidecars must come back lazily
     // after unlock — `stop()` latches permanently for the will-quit path and used to
     // leave every post-lock/unlock embed failing with "Embedder is stopped".

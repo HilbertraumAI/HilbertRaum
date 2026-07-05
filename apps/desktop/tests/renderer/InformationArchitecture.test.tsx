@@ -26,9 +26,11 @@ beforeAll(() => {
 })
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
-  it('maps the seven real destinations to themselves', () => {
+  it('maps the eight real destinations to themselves', () => {
     expect(resolveNavTarget('home')).toEqual({ screen: 'home' })
     expect(resolveNavTarget('documents')).toEqual({ screen: 'documents' })
+    // Translate is a primary destination between Documents and Images (TranslateGemma plan §2 D6).
+    expect(resolveNavTarget('translate')).toEqual({ screen: 'translate' })
     expect(resolveNavTarget('images')).toEqual({ screen: 'images' })
     expect(resolveNavTarget('models')).toEqual({ screen: 'models' })
     expect(resolveNavTarget('skills')).toEqual({ screen: 'skills' })
@@ -127,8 +129,8 @@ function stubAppShell(): void {
   } as never)
 }
 
-describe('App shell — 6-item nav (image-understanding adds Images)', () => {
-  it('renders exactly Home · Chat · Documents · Images · AI Model · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
+describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
+  it('renders exactly Home · Chat · Documents · Translate · Images · AI Model · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
     stubAppShell()
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -142,6 +144,7 @@ describe('App shell — 6-item nav (image-understanding adds Images)', () => {
       'Home',
       'Chat',
       'Documents',
+      'Translate',
       'Images',
       'AI Model',
       'Skills',

@@ -12,6 +12,7 @@ import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
 import type { SkillRegistry } from './skills/registry'
 import type { VisionService } from './vision'
+import type { TranslateJobService } from './translation/jobs'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -95,4 +96,12 @@ export interface AppContext {
    * in-memory image/prompt context never outlives a lock and no child orphans on quit.
    */
   vision?: VisionService
+  /**
+   * Translate-view job orchestrator (TG-4, plan §2 D6): the Translate screen's live TEXT
+   * translation, streamed on the SHARED `translator` sidecar (a per-job service, NOT a second
+   * model). Optional so partial test contexts stay valid. Owns only transient job state; the
+   * lock/quit handlers call `stop()` so an in-flight job is aborted before the sidecar is
+   * suspended (its next window would otherwise lazily respawn the just-killed server).
+   */
+  translateJobs?: TranslateJobService
 }

@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
+import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
@@ -220,6 +221,24 @@ describe('German render smokes (Phase 40)', () => {
     // The composer footer's source affordance uses the German "Using all documents".
     expect(
       await screen.findByRole('button', { name: new RegExp(t('de', 'chat.scope.usingAll'), 'i') })
+    ).toBeInTheDocument()
+  })
+
+  it('TranslateScreen renders German (title + language bar + action)', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () => appStatus({ translationAvailable: true })),
+      getActiveTranslateJob: vi.fn(async () => null)
+    })
+    render(german(<TranslateScreen onNavigate={() => {}} />))
+
+    expect(
+      await screen.findByRole('heading', { name: t('de', 'translate.title') })
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: t('de', 'translate.action') })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText(t('de', 'translate.input.placeholder'))
     ).toBeInTheDocument()
   })
 

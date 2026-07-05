@@ -9,7 +9,7 @@ import { t, type MessageKey } from '../../src/shared/i18n'
 // (`hyphens: none`) while the `.app-shell` grid column is widened so the longest single-word
 // label in either locale fits on one line at the 12px text floor.
 
-const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.images', 'nav.models', 'nav.skills', 'nav.settings']
+const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.translate', 'nav.images', 'nav.models', 'nav.skills', 'nav.settings']
 const STYLES = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8')
 
 describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
@@ -38,6 +38,15 @@ describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
     expect(t('de', 'nav.images')).toBe('Bilder')
     expect(t('en', 'nav.images').length).toBeLessThan('Einstellungen'.length)
     expect(t('de', 'nav.images').length).toBeLessThan('Einstellungen'.length)
+  })
+
+  it('the new Translate rail label is a single word that fits within the sized width', () => {
+    // TranslateGemma plan §2 D6: "Translate"/"Übersetzen" are single words shorter than
+    // "Einstellungen" (what the rail width is sized for), so the 7th primary fits with no reflow.
+    expect(t('en', 'nav.translate')).toBe('Translate')
+    expect(t('de', 'nav.translate')).toBe('Übersetzen')
+    expect(t('en', 'nav.translate').length).toBeLessThan('Einstellungen'.length)
+    expect(t('de', 'nav.translate').length).toBeLessThan('Einstellungen'.length)
   })
 })
 

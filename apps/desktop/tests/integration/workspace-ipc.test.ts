@@ -202,11 +202,13 @@ describe('registerWorkspaceIpc', () => {
     expect(stopVision).toHaveBeenCalledTimes(1)
   })
 
-  it('lockWorkspace suspends the translator AND cancels the active doc task (TG-3)', async () => {
+  it('lockWorkspace suspends the translator, cancels the active doc task (TG-3) AND aborts the Translate-view job (TG-4)', async () => {
     // A running TRANSLATION no longer dies with the chat runtime: left uncancelled, its
     // next window would lazily RESPAWN the suspended TranslateGemma sidecar with document
     // plaintext while the vault re-encrypts. The lock handler must cancel the active task
-    // (any non-yielding kind) and suspend — not permanently stop — the translator.
+    // (any non-yielding kind) and suspend — not permanently stop — the translator. TG-4: a
+    // running Translate-VIEW job (`ctx.translateJobs`) shares the same sidecar, so it must be
+    // aborted here too (its next window would likewise respawn the just-suspended server).
     const vp = freshVault()
     createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
@@ -216,15 +218,20 @@ describe('registerWorkspaceIpc', () => {
     const stopTranslator = vi.fn(async () => {})
     const cancelDocTask = vi.fn()
     const abortActiveBuild = vi.fn()
+    const stopTranslateJobs = vi.fn(async () => {})
     const base = ctxWith(ctrl) as unknown as Record<string, unknown>
     base.translator = { suspend: suspendTranslator, stop: stopTranslator }
     base.docTasks = { cancelDocTask, abortActiveBuild }
+    base.translateJobs = { stop: stopTranslateJobs }
     registerWorkspaceIpc(base as unknown as AppContext)
 
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(abortActiveBuild).toHaveBeenCalledTimes(1)
     expect(cancelDocTask).toHaveBeenCalledTimes(1)
+    // TG-4: the view job is aborted, and BEFORE the translator suspend (its abort loop is
+    // synchronous, so a queued next window can't reach translate() after the sidecar dies).
+    expect(stopTranslateJobs).toHaveBeenCalledTimes(1)
     expect(suspendTranslator).toHaveBeenCalledTimes(1)
     expect(stopTranslator).not.toHaveBeenCalled() // stop() latches permanently — lock must not
   })

@@ -30,6 +30,8 @@ import {
   getVisionStatus,
   VisionService
 } from './services/vision'
+import { registerTranslateIpc } from './ipc/registerTranslateIpc'
+import { TranslateJobService } from './services/translation/jobs'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
@@ -307,6 +309,14 @@ function initBackend(): void {
     getStatus: () => getVisionStatus(ctx as AppContext),
     createRuntime: (status) => createVisionRuntimeFromContext(ctx as AppContext, status)
   })
+  // The Translate-view job orchestrator (TG-4). Built here — not inside registerTranslateIpc — so
+  // the lock/quit teardown paths can reach it via `ctx.translateJobs` and abort an in-flight text
+  // translation before `translator.suspend()`/`stop()` kills the shared sidecar. Reads the composed
+  // `translator` (null ⇒ friendly no-model refusal) and the doc-task lane state (D9) live.
+  ctx.translateJobs = new TranslateJobService({
+    getTranslator: () => (ctx as AppContext).translator ?? null,
+    hasActiveDocTask: () => (ctx as AppContext).docTasks?.hasActiveTask() ?? false
+  })
   // Best-effort first reconcile (skills plan §8). In plaintext_dev the DB is already open; in
   // encrypted mode `requireDb()` throws while locked, so swallow it — a later phase reconciles on
   // unlock, and S3 ships no surface that reads skills yet.
@@ -345,6 +355,7 @@ function initBackend(): void {
   registerDocTasksIpc(ctx)
   registerDictationIpc(ctx)
   registerImagesIpc(ctx, ctx.vision)
+  registerTranslateIpc(ctx, ctx.translateJobs)
   registerDownloadIpc(ctx)
   registerEngineIpc(ctx)
   registerRagIpc(ctx)

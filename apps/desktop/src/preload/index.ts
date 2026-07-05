@@ -49,6 +49,8 @@ import type {
   SkillRunState,
   SkillSuggestion,
   StartDocTaskRequest,
+  TranslateJob,
+  TranslateRequest,
   StartSkillRunRequest,
   StartSkillRunResult,
   WorkspaceActionResult,
@@ -183,6 +185,41 @@ const api = {
   /** Delete one history entry: shred the stored image + cascade-remove its turns. */
   deleteImageSession: (id: string): Promise<void> =>
     ipcRenderer.invoke(IPC.imageDeleteSession, id),
+
+  // ---- Translate view (TG-4) ----
+  /** Start a one-at-a-time text translation on the TranslateGemma sidecar; resolves with the
+   *  initial job (a second one while one runs returns busy; a document task holds the lane
+   *  returns docTaskBusy; no model installed returns noModel). Tokens stream via onTranslateToken. */
+  translateStart: (req: TranslateRequest): Promise<TranslateJob> =>
+    ipcRenderer.invoke(IPC.translateStart, req),
+  /** Cancel an in-flight text translation. */
+  translateCancel: (jobId: string): Promise<TranslateJob> =>
+    ipcRenderer.invoke(IPC.translateCancel, jobId),
+  /** The active view-translation job (accumulated text + progress), or null — remount recovery
+   *  after a full renderer reload (the module store died with it). */
+  getActiveTranslateJob: (): Promise<TranslateJob | null> =>
+    ipcRenderer.invoke(IPC.translateGetActive),
+  /** Subscribe to streamed translation-delta tokens for a job; returns an unsubscribe fn. */
+  onTranslateToken: (jobId: string, cb: (token: string) => void): (() => void) => {
+    const ch = STREAM.trToken(jobId)
+    const handler = (_e: unknown, token: string) => cb(token)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to translation completion; the terminal TranslateJob (with the full `text`). */
+  onTranslateDone: (jobId: string, cb: (job: TranslateJob) => void): (() => void) => {
+    const ch = STREAM.trDone(jobId)
+    const handler = (_e: unknown, job: TranslateJob) => cb(job)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to translation failure; the failed TranslateJob (a code, never content). */
+  onTranslateError: (jobId: string, cb: (job: TranslateJob) => void): (() => void) => {
+    const ch = STREAM.trError(jobId)
+    const handler = (_e: unknown, job: TranslateJob) => cb(job)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
 
   // ---- Hardware benchmark ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */

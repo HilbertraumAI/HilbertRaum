@@ -113,6 +113,8 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerDocsIpc: 'docs-ipc.test.ts ("M6" locked-vault rejection)',
   registerDocTasksIpc: 'doctasks-ipc.test.ts (locked-vault rejection)',
   registerImagesIpc: 'images-ipc.test.ts (locked-vault rejection)',
+  registerTranslateIpc:
+    'translate-ipc.test.ts (locked-vault rejection of translateStart — a start lazily respawns the suspended sidecar; cancel/getActive are safe non-DB reads, intentionally ungated)',
   registerSkillsIpc: 'skills-ipc.test.ts (locked-vault rejection; DB-touching, requireUnlocked-gated)',
   registerWorkspaceIpc:
     'workspace-ipc.test.ts — IS the lock/unlock/create/rekey gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design)',

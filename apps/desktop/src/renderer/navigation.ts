@@ -1,6 +1,7 @@
-// Central navigation resolution (design-guidelines §2). The app has 7 real
-// destinations (Images added as the 6th primary, before AI Model — image-understanding
-// §6); everything else screens may ask for is a VIRTUAL target resolved here:
+// Central navigation resolution (design-guidelines §2). The app has 8 real destinations
+// (Translate added as a primary between Documents and Images — TranslateGemma plan §2 D6,
+// making the rail "7 primary + 1 utility"; Images is image-understanding §6); everything else
+// screens may ask for is a VIRTUAL target resolved here:
 //   - 'ask-documents'          → Chat screen opened in documents mode
 //   - 'settings:privacy'       → Settings, "Privacy & data" tab
 //   - 'settings:diagnostics'   → Settings, "Diagnostics (advanced)" tab
@@ -11,7 +12,15 @@
 //     must keep working through them.
 // Pure function so the alias table is unit-testable without rendering the app shell.
 
-export type ScreenId = 'home' | 'chat' | 'documents' | 'images' | 'models' | 'skills' | 'settings'
+export type ScreenId =
+  | 'home'
+  | 'chat'
+  | 'documents'
+  | 'translate'
+  | 'images'
+  | 'models'
+  | 'skills'
+  | 'settings'
 
 export type SettingsTab = 'general' | 'privacy' | 'diagnostics'
 
@@ -41,6 +50,7 @@ export function resolveNavTarget(target: string): NavResolution {
       return { screen: 'skills' }
     case 'home':
     case 'documents':
+    case 'translate':
     case 'images':
     case 'models':
     case 'skills':

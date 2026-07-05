@@ -417,6 +417,26 @@ sidecar and writes no temp; only the history copy lands on disk).
   image/prompt/answer content — asserted by `tests/integration/vision-security.test.ts` (whose former
   "writes nothing to disk" check now asserts the stored copy is **encrypted**, no plaintext leak).
 
+### Translate view (TG-4) — transient text, content-free logs
+The **Translate** screen's live text translation (`translate:start/cancel`, `STREAM.tr*`,
+`services/translation/jobs.ts`) is even lighter than vision on the privacy surface: it persists
+**nothing**. The source text and its translation live only in the `TranslateJobService`'s
+per-process job map for the life of the job and in renderer memory (`lib/translateSession.ts`).
+- **Zero audit, content-free logs:** the handlers never call `ctx.audit`, and the service logs
+  **ids + the language pair only** (`{ jobId, source, target }`) — never the text. The renderer
+  gets an error **code**, never raw model/runtime text (the `friendlyIpcError` posture).
+- **In-memory residue at lock:** `TranslateJobService.stop()` (wired to workspace lock **and**
+  quit, alongside `ctx.vision.stop()` / `ctx.docTasks.cancelDocTask()`) aborts the in-flight job
+  **and clears the job map**, so no source/translation text survives the vault re-encrypt; the
+  renderer store calls `clearTranslateSession()` on lock in lockstep. The map is bounded
+  (`TRANSLATE_MAX_JOB_HISTORY`).
+- **No respawn past a lock:** `translate:start` is `requireUnlocked`-gated — a locked start could
+  otherwise lazily respawn the just-suspended ~10 GB TranslateGemma sidecar with the source text
+  while the vault re-encrypts. Aborting the in-flight job before `translator.suspend()` closes the
+  same window for a multi-window job's next window (the doc-task TG-3 fix, reused).
+- **No confused-deputy surface:** unlike vision's picker/readBytes, the Translate view takes only
+  the text the user typed — no file paths, no byte reads — so there is nothing to harden there.
+
 ### Vault descriptor (the only pre-unlock artifact)
 Settings — including `workspaceMode` — live **inside** the encrypted DB, so the app cannot read them
 before unlocking. A small **unencrypted** descriptor at **`config/workspace.json`** is the only thing

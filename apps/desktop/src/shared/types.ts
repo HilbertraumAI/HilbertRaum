@@ -858,6 +858,54 @@ export type TranslationTargetLang = TranslationLangCode
  */
 export type TranslationSourceLang = TranslationLangCode
 
+// ---- Translate view job (TG-4) ------------------------------------------------------
+// The Translate screen's live TEXT translation runs as a per-job streaming IPC on the
+// SAME TranslateGemma sidecar the doc-task uses (plan §2 D6), keyed by jobId and mirroring
+// the vision image-job contract (STREAM.trToken/trDone/trError). A single window is the
+// fast path; longer text is planned with `planTranslationWindows` and streamed window by
+// window into ONE output. NOTHING content-bearing (the source text or the translation) is
+// logged or audited — only ids/kinds (security-model.md).
+
+/** Lifecycle of a Translate-view job. Terminal: `done | failed | cancelled`. */
+export type TranslateJobState = 'queued' | 'translating' | 'done' | 'failed' | 'cancelled'
+
+/**
+ * A small enum the renderer maps to friendly localized copy (the vision `VisionErrorCode`
+ * precedent) — the technical reason stays in the local log only. `noModel`: no translation
+ * model installed (the O2 install path). `badRequest`: bad/unknown/same source+target or
+ * empty text (a backstop — the UI already guards). `busy`: a second view translate while one
+ * runs (busy-REJECT, never queued). `docTaskBusy`: a document task holds the one-at-a-time
+ * lane (D9). `empty`: the model returned nothing. `cancelled`: the user pressed Stop / a lock.
+ */
+export type TranslateErrorCode =
+  | 'noModel'
+  | 'badRequest'
+  | 'busy'
+  | 'docTaskBusy'
+  | 'runtimeFailed'
+  | 'empty'
+  | 'cancelled'
+
+/** What the renderer sends to start a view translation (validated server-side). */
+export interface TranslateRequest {
+  sourceLang: TranslationSourceLang
+  targetLang: TranslationTargetLang
+  /** The source text to translate — transient; never persisted, logged, or audited. */
+  text: string
+}
+
+export interface TranslateJob {
+  jobId: string
+  state: TranslateJobState
+  /** The translation so far (accumulated as tokens stream; complete on `done`). */
+  text?: string
+  /** A CODE, never raw model/runtime text (mapped to friendly copy). */
+  error?: TranslateErrorCode | null
+  /** Coarse window progress for a long paste (`Translating… (3/12)`); 1 for the fast path. */
+  windowsTotal?: number
+  windowsDone?: number
+}
+
 /**
  * Provenance of a document the app GENERATED from other documents (translation,
  * comparison). Persisted in the additive `documents.origin_json` column. Provenance,

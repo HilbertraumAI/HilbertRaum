@@ -168,6 +168,16 @@ export const IPC = {
   imageGetSession: 'images:getSession',
   /** Delete one history entry: shred the stored image + cascade-remove its turns. */
   imageDeleteSession: 'images:deleteSession',
+  // Translate view (TG-4) — the Translate screen's live TEXT translation on the TranslateGemma
+  // sidecar. Async-with-streaming (the STREAM.tr* channels below), keyed by jobId, mirroring the
+  // image job contract. No source/translation CONTENT is logged or audited (ids/kinds only).
+  /** Start a one-at-a-time text translation (validates langs + source≠target + a model present);
+   *  a second one while one runs is busy, a document task holds the lane returns docTaskBusy. */
+  translateStart: 'translate:start',
+  /** Cancel an in-flight text translation (AbortController). */
+  translateCancel: 'translate:cancel',
+  /** The active view-translation job (accumulated text + progress) for remount recovery, or null. */
+  translateGetActive: 'translate:getActive',
   // Benchmark
   runBenchmark: 'benchmark:run',
   /**
@@ -284,7 +294,14 @@ export const STREAM = {
   // imgDone carries the terminal ImageJob; imgError the failed ImageJob (a code, never content).
   imgToken: (jobId: string) => `images:token:${jobId}`,
   imgDone: (jobId: string) => `images:done:${jobId}`,
-  imgError: (jobId: string) => `images:error:${jobId}`
+  imgError: (jobId: string) => `images:error:${jobId}`,
+  // Translate view (TG-4) per-job streaming. Same token/done/error contract as chat/vision,
+  // keyed by the translate jobId: trToken carries one translation-delta string; trDone the
+  // terminal TranslateJob (with the COMPLETE `text`, so a mid-stream dropped token self-heals on
+  // completion); trError the failed TranslateJob (a code, never source/translation content).
+  trToken: (jobId: string) => `translate:token:${jobId}`,
+  trDone: (jobId: string) => `translate:done:${jobId}`,
+  trError: (jobId: string) => `translate:error:${jobId}`
 } as const
 
 /** Payload of the `scope` channel — the filenames retrieval was auto-restricted to. */

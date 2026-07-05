@@ -53,6 +53,9 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   // down. Leaves the tree resumable (reconcileStuckTrees on relaunch).
   try {
     ctx?.docTasks?.abortActiveBuild()
+    // Abort an in-flight Translate-view job (TG-4) too, before the sidecar stop below — its next
+    // window would otherwise call translate() and race a lazy respawn of the server being killed.
+    void ctx?.translateJobs?.stop()
   } catch {
     /* best-effort */
   }

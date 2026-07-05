@@ -1537,10 +1537,38 @@ sentinel-tested), zero native deps.
 
 ## Translation sidecar — design record (TG wave; STUB, folded in full at TG-6)
 
-_Working stub added at TG-2, extended at TG-3 (the doc-task reroute). The complete record —
-sidecar + Translate view + the doc-task reroute, with stable §-anchors — is folded in when the
-wave closes (TG-6, per the CLAUDE.md doc-lifecycle rule). The live plan is
-`docs/translategemma-translation-plan.md`._
+_Working stub added at TG-2, extended at TG-3 (the doc-task reroute) and TG-4 (the Translate
+view). The complete record — sidecar + Translate view + the doc-task reroute, with stable
+§-anchors — is folded in when the wave closes (TG-6, per the CLAUDE.md doc-lifecycle rule). The
+live plan is `docs/translategemma-translation-plan.md`._
+
+- **TG-4 — the Translate view (text path, plan §2 D6).** A new **7th primary** rail destination
+  (`ScreenId 'translate'`, between Documents and Images — design-guidelines §2 now "7 primary +
+  1 utility") for live TEXT translation on the SAME `ctx.translator` sidecar the doc-task uses (no
+  second model). A per-job streaming service `TranslateJobService` (`services/translation/jobs.ts`,
+  the vision image-job template) behind new IPC — `translate:start` → `{jobId}` (validates
+  `isTranslationLangCode` + source ≠ target + non-empty + a model present; busy-REJECTs a second
+  job; refuses while a doc task holds the lane), `translate:cancel`, `translate:getActive` for
+  remount recovery, and `STREAM.trToken/trDone/trError(jobId)` (additive, the image-channel shape).
+  Single window = fast path; longer text plans with the SHARED `planTranslationWindows`
+  (`Translator.contextWindow()` + the D4 clamp — imported, not duplicated) and streams
+  window-by-window (blank-line joins) into ONE output. The renderer store
+  `lib/translateSession.ts` (visionSession template) keeps a running job alive across navigation;
+  a full reload re-adopts via `translate:getActive`. **D9 busy-gating decision (recorded):** the
+  view job takes the SAME one-at-a-time lane as doc tasks — it refuses to start while
+  `docTasks.hasActiveTask()` (RAM co-residency: 12B translate + a resident chat model + embedder),
+  surfaced honestly as "a document task is running". It does NOT block chat (different sidecar;
+  chat-during-translate relaxation stays TG-6). The doc-task manager is unchanged (D9 "all other
+  kinds unchanged"); the shared `--parallel 1` sidecar serializes the rare reverse race at the
+  server. Teardown: `TranslateJobService.stop()` aborts the in-flight job + purges the map, wired
+  to lock (`registerWorkspaceIpc`, before `translator.suspend()`) AND quit (`shutdown.ts`) — its
+  next window would otherwise lazily respawn the just-suspended sidecar (the TG-3 fix, reused).
+  Audit stays content-free (ids/langs only — security-model.md). **END-TO-END VERIFIED** live
+  against the real b9849 sidecar (CDP-driven, 2026-07-05): „Guten Morgen. Wie geht es dir?"
+  streamed „Good morning. How are you?" (content-free log); the model-missing EmptyState deep-linked
+  to AI Model. Two review-workflow bugs were fixed first — a persistent-store error banner that
+  reappeared on remount (new store `acknowledgeError()`), and a multi-window paste that flattened
+  paragraph structure (split on blank lines into segments before the shared planner).
 
 - **TG-3 — the doc-task reroute (BREAKING, plan O2/D3/D4/D5).** `kind:'translation'` consumes
   `ctx.translator` via `DocTaskDeps.getTranslator` — the chat runtime no longer participates

@@ -2,7 +2,7 @@
 // each piece is renderer-only and theme-agnostic (role tokens via CSS).
 
 export { ConversationList, groupConversations, type ConversationGroup } from './ConversationList'
-export { Transcript, AssistantMarkdown } from './Transcript'
+export { Transcript, AssistantMarkdown, StreamAnnouncer } from './Transcript'
 export { MessageActions } from './MessageActions'
 export { Composer } from './Composer'
 export { DictationButton } from './DictationButton'

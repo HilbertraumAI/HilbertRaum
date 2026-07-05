@@ -32,6 +32,7 @@ export const de: Record<keyof typeof en, string> = {
   // "Einstel-/lungen") — Electron ships no auto-hyphenation; invisible when the word fits
   // and in the button tooltip. "KI-Modell" already breaks at its real hyphen.
   'nav.documents': 'Dokumente',
+  'nav.translate': 'Übersetzen',
   'nav.images': 'Bilder',
   'nav.models': 'KI-Modell',
   'nav.skills': 'Skills',
@@ -1915,5 +1916,34 @@ export const de: Record<keyof typeof en, string> = {
   'images.history.delete.title': 'Dieses Bild löschen?',
   'images.history.delete.confirm': 'Löschen',
   'images.history.delete.body':
-    '„{title}“ und die zugehörigen Antworten werden dauerhaft von diesem Laufwerk entfernt.'
+    '„{title}“ und die zugehörigen Antworten werden dauerhaft von diesem Laufwerk entfernt.',
+
+  // ---- Übersetzen-Bildschirm (TranslateGemma-Welle, Plan §2 D6, TG-4) ----
+  'translate.title': 'Text übersetzen',
+  'translate.lead':
+    'Tippe oder füge Text ein, wähle die Sprachen und übersetze lokal. Nichts verlässt dieses Laufwerk.',
+  'translate.starting': 'Übersetzungsmodell wird vorbereitet…',
+  'translate.locked': 'Entsperre deinen Arbeitsbereich, um Text zu übersetzen.',
+  'translate.avail.noModel': 'Zum Übersetzen wird das Übersetzungsmodell auf diesem Laufwerk benötigt.',
+  'translate.avail.hint': 'Lade es einmalig im KI-Modell-Bildschirm — dann funktioniert das Übersetzen vollständig offline.',
+  'translate.avail.cta': 'Zum KI-Modell',
+  'translate.from': 'Von',
+  'translate.to': 'Nach',
+  'translate.swap': 'Sprachen tauschen',
+  'translate.input.label': 'Zu übersetzender Text',
+  'translate.input.placeholder': 'Tippe oder füge den zu übersetzenden Text ein…',
+  'translate.action': 'Übersetzen',
+  'translate.stop': 'Stopp',
+  'translate.output.label': 'Übersetzung',
+  'translate.output.empty': 'Die Übersetzung erscheint hier.',
+  'translate.working': 'Übersetzen…',
+  'translate.copy': 'Kopieren',
+  'translate.copied': 'Kopiert',
+  'translate.err.noModel': 'Das Übersetzungsmodell ist nicht mehr verfügbar. Öffne den KI-Modell-Bildschirm, um es zu installieren.',
+  'translate.err.badRequest': 'Wähle eine Ausgangs- und Zielsprache und gib einen Text zum Übersetzen ein.',
+  'translate.err.busy': 'Es läuft bereits eine Übersetzung. Warte, bis sie fertig ist, und versuche es dann erneut.',
+  'translate.err.docTaskBusy': 'Eine Dokumentaufgabe läuft. Warte, bis sie fertig ist, und übersetze dann.',
+  'translate.err.runtimeFailed': 'Das Übersetzungsmodell konnte nicht fertigstellen. Versuche es erneut oder mit kürzerem Text.',
+  'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
+  'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.'
 }

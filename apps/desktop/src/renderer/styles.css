@@ -1497,6 +1497,37 @@ code, pre, kbd { font-family: var(--font-mono); }
   .image-pane-left { position: static; }
 }
 
+/* ---- Translate screen (TranslateGemma wave, plan §2 D6, TG-4) ---- */
+.translate-screen { max-width: 1100px; }
+.translate-workspace { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
+/* Language bar: source select · swap · target select, centered on one calm row. */
+.translate-langbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.translate-langbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.translate-swap { padding: 6px; }
+/* Two equal panes: input left, output right (stacks on a narrow width). */
+.translate-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.translate-pane { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.translate-input {
+  width: 100%; min-height: 320px; resize: vertical; padding: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text);
+  font-family: inherit; font-size: var(--text-md); line-height: var(--line-md);
+}
+.translate-input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-ring, rgba(80, 130, 255, 0.25)); }
+/* Output panel: same footprint as the input so the panes read as a pair. */
+.translate-output {
+  min-height: 320px; padding: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text); overflow-wrap: anywhere;
+}
+/* The plain-text live buffer preserves the model's line breaks while streaming (Markdown is
+   only parsed on completion, so half-written syntax never flickers). */
+.translate-output-live { white-space: pre-wrap; }
+
+@media (max-width: 760px) {
+  .translate-panes { grid-template-columns: 1fr; }
+}
+
 /* Documents screen — compact list rows (§6 lists/tables; §11.6). Each row: checkbox ·
    file-type icon · filename + muted meta · [trailing cluster: chips · status badges ·
    inline Preview · "⋯"]. Rows are ≥40px (target ~56px for the two-line name+meta) so ~3×

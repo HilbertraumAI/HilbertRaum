@@ -81,9 +81,9 @@ enter your password on a single unlock screen.
 
 ## 4. Finding your way around
 
-The sidebar has six everyday destinations — **Home**, **Chat**, **Documents**, **Images**,
-**AI Model**, and **Skills** — plus **Settings** at the bottom. Settings has three tabs: **General**,
-**Privacy & data**, and **Diagnostics (advanced)** (see §10).
+The sidebar has seven everyday destinations — **Home**, **Chat**, **Documents**, **Translate**,
+**Images**, **AI Model**, and **Skills** — plus **Settings** at the bottom. Settings has three tabs:
+**General**, **Privacy & data**, and **Diagnostics (advanced)** (see §10).
 
 A quiet **🔒 Local · Offline** status sits in the chat header. Hover it for the short version — *"Everything stays on this drive. No internet
 connection is used."* — or click it to open the full privacy details. If you have enabled
@@ -498,6 +498,32 @@ network, and the activity log records only counts and ids — never your project
 
 ---
 
+## 7a. Translate text
+
+The **Translate** screen turns typed or pasted text into another language, **on this drive**. It
+uses the dedicated **TranslateGemma** translation model (the same one the **⋯ → Translate** action
+under Documents uses for whole files, §7). The two are separate tasks: use **Translate** for a
+quick block of text you have on hand; use the document action when you want a translated *copy* of
+a file saved back into your library.
+
+1. Open **Translate** from the sidebar (between **Documents** and **Images**).
+2. Pick the languages: **From** (the language your text is in) and **To** (the language you want).
+   The model needs to be told the source language — it does not guess — so choose both. The
+   **swap** button (↺ between the two) flips them. The ten supported languages are German, English,
+   French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, and Ukrainian.
+3. Type or paste your text on the left and press **Translate**.
+4. The translation streams into the panel on the right. Press **Stop** to cancel it; press **Copy**
+   to put the finished text on your clipboard. Long text is translated in order, a section at a
+   time, into one continuous result.
+
+Everything stays on the drive — your text and its translation are **never uploaded** and, unlike
+the document action, **nothing is saved**: leave the screen (or lock the workspace) and the text is
+gone. If the translation model isn't installed, the screen shows a short note with a **Go to AI
+Model** button to download it (see the download note in §6); machine translations can contain
+errors. While a document task is running, translating here waits until it finishes.
+
+---
+
 ## 8. Ask about an image
 
 The **Images** screen lets you ask a question about **one picture** — a screenshot, a chart, a
@@ -505,7 +531,7 @@ form, a receipt, or a photo of a page — and get an answer written **on this dr
 different tool from reading scanned documents (that's **Make searchable (OCR)** under Documents,
 §7) and it never creates or edits pictures — it only *looks at* the one you give it.
 
-1. Open **Images** from the sidebar (between **Documents** and **AI Model**).
+1. Open **Images** from the sidebar (between **Translate** and **AI Model**).
 2. **Drop an image** onto the screen, or click **choose an image** — **PNG or JPEG**. A preview
    appears with its name, size, and dimensions; **Remove / Replace** swaps it.
 3. Type a question, or tap one of the **suggestion chips** (*Summarize this image*, *Extract
