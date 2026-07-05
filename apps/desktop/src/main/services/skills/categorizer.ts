@@ -487,12 +487,48 @@ export function parseTaxonomyFileRef(question: string): string | null {
  * rejects the whole file — never a silent partial taxonomy. Labels are deduped case-insensitively.
  */
 export function parseTaxonomyCsv(text: string): CustomCategory[] | null {
-  const lines = text
+  let lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0 && !l.startsWith('#'))
   if (lines.length === 0) return null
-  const delimiter = text.includes(';') ? ';' : text.includes('\t') ? '\t' : ','
+
+  // The app's CSV IMPORTER does not store the raw file: a header-ful CSV is linearized into
+  // "Header: value; Header2: value2" lines (ingestion/parsers/csv.ts — good for retrieval, but it
+  // is what we read here). Detect that shape — every line opens with the SAME "<first header>: "
+  // key — and reconstruct the original rows: the constant keys are the header row (re-emitted
+  // first, so the header-skip below applies), each line's VALUES re-join into a `;`-delimited row.
+  // A German semicolon-CSV comma-imported (the importer pins `.csv` to ',') collapses its cells
+  // into the first value ("Kategorie;Stichworte: Miete;Hausverwaltung") — the `;`-rejoin puts the
+  // label/gloss split back together for that shape too. `colN` overflow keys are importer
+  // artefacts, dropped from the reconstructed header. A raw list (the unit-test path / a pasted
+  // plain file) has no ": " pairs and passes through untouched.
+  const pairKey = (p: string): string => p.slice(0, p.indexOf(': '))
+  const pairValue = (p: string): string => {
+    const i = p.indexOf(': ')
+    return (i >= 0 ? p.slice(i + 2) : p).trim()
+  }
+  const PAIR_RE = /^[^:]{1,80}: /
+  if (lines.every((l) => PAIR_RE.test(l))) {
+    const firstKey = pairKey(lines[0].split('; ')[0])
+    if (firstKey.length > 0 && lines.every((l) => pairKey(l.split('; ')[0]) === firstKey)) {
+      const headerKeys = lines[0]
+        .split('; ')
+        .map(pairKey)
+        .filter((k) => k.length > 0 && !/^col\d+$/.test(k))
+      const reconstructed = lines.map((l) =>
+        l
+          .split('; ')
+          .map(pairValue)
+          .filter((v) => v.length > 0)
+          .join(';')
+      )
+      lines = [headerKeys.join(';'), ...reconstructed].filter((l) => l.length > 0)
+    }
+  }
+
+  const joined = lines.join('\n')
+  const delimiter = joined.includes(';') ? ';' : joined.includes('\t') ? '\t' : ','
   const cells = (line: string): string[] =>
     line.split(delimiter).map((c) => c.replace(/^["'„“]+|["'“”]+$/g, '').trim())
   let start = 0

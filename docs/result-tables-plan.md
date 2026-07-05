@@ -106,6 +106,12 @@ gloss from the remaining cells, **all-or-nothing** like D65 — one bad label re
 labels). Missing file / unparseable list → honest refusals NAMING the file
 (`customTaxonomyNotFound` / `customTaxonomyUnparseable`, EN+DE). The parsed set rides the existing
 Phase-1.5 path (covered-check, no-runtime refusal, inline categorize, `persistCategorization`).
+`parseTaxonomyCsv` understands BOTH text shapes it can be handed: the raw file, and the app CSV
+importer’s LINEARIZED form (`ingestion/parsers/csv.ts` stores a header-ful CSV as
+`Header: value; Header2: value2` lines, with a German semicolon-CSV additionally mangled by the
+comma-pinned import — cells collapsed into the first value, `colN` overflow keys). The linearized
+shape is detected by its constant first key and reconstructed (keys → the header row, values →
+`;`-rejoined rows) before the normal label/gloss split.
 A FULL-PATH reference (`/home/…/taxonomie.csv`, `C:\…\buckets.csv`) is reduced to its basename
 before the lookup (the library stores titles, not paths — and the app deliberately cannot READ an
 arbitrary disk path: the file must be IMPORTED first). File labels accept the real-world shapes

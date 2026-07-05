@@ -501,6 +501,40 @@ describe('parseTaxonomyCsv', () => {
     expect(parseTaxonomyCsv('Miete\nmiete\nKinder')).toEqual([{ name: 'Miete' }, { name: 'Kinder' }])
   })
 
+  it('parses the INGESTED comma-CSV shape ("Header: value; Header2: value2" lines)', () => {
+    // What ingestion/parsers/csv.ts actually stores for a header-ful comma CSV — the shape the
+    // handler reads through the segments/chunks, NOT the raw file (the user's bug report).
+    expect(
+      parseTaxonomyCsv(
+        'Kategorie: Lebensmittel; Stichworte: REWE, Supermarkt\nKategorie: Miete; Stichworte: Hausverwaltung'
+      )
+    ).toEqual([
+      { name: 'Lebensmittel', gloss: 'REWE, Supermarkt' },
+      { name: 'Miete', gloss: 'Hausverwaltung' }
+    ])
+  })
+
+  it('parses a German SEMICOLON-CSV that the comma-pinned importer mangled (cells collapsed + colN overflow)', () => {
+    // "Lebensmittel;REWE, Supermarkt" comma-splits into 2 cells → the second becomes "col2: …";
+    // "Miete;Hausverwaltung" (no comma) collapses whole into the first value. Both reconstruct.
+    expect(
+      parseTaxonomyCsv(
+        'Kategorie;Stichworte: Lebensmittel;REWE; col2: Supermarkt\nKategorie;Stichworte: Miete;Hausverwaltung'
+      )
+    ).toEqual([
+      { name: 'Lebensmittel', gloss: 'REWE, Supermarkt' },
+      { name: 'Miete', gloss: 'Hausverwaltung' }
+    ])
+  })
+
+  it('recovers the first row when a HEADERLESS file was imported (importer ate row 1 as the header)', () => {
+    expect(parseTaxonomyCsv('Miete;Wohnung: Reisen;Urlaub\nMiete;Wohnung: Kinder;Kita')).toEqual([
+      { name: 'Miete', gloss: 'Wohnung' },
+      { name: 'Reisen', gloss: 'Urlaub' },
+      { name: 'Kinder', gloss: 'Kita' }
+    ])
+  })
+
   it('accepts real-world label shapes in a FILE (slash, ampersand, plus, dot) — wider than inline', () => {
     expect(parseTaxonomyCsv('Kfz/Auto\nEssen & Trinken\nVers. + Vorsorge')).toEqual([
       { name: 'Kfz/Auto' },
