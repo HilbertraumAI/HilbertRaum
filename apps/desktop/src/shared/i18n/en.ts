@@ -268,6 +268,9 @@ export const en = {
   'chat.actions.copy': 'Copy',
   'chat.actions.save': 'Save',
   'chat.actions.saveTitle': 'Save this conversation as a file (stays local)',
+  // Result-tables §4 (Phase 2): shown only on answers carrying a structured result table.
+  'chat.actions.exportCsv': 'Export CSV',
+  'chat.actions.exportCsvTitle': 'Save this answer’s table as a CSV file (stays local)',
 
   // ---- Chat: context compaction (context-compaction plan §5.1–§5.3) ----
   // The one-shot "summarizing…" status above the streaming bubble (§5.2).
@@ -1262,6 +1265,7 @@ export const en = {
   'diag.audit.summary_exported': 'Summary exported',
   'diag.audit.conversation_deleted': 'Conversation deleted',
   'diag.audit.conversation_exported': 'Conversation exported',
+  'diag.audit.message_table_exported': 'Answer table exported',
   'diag.audit.workspace_created': 'Workspace created',
   'diag.audit.workspace_unlocked': 'Workspace unlocked',
   'diag.audit.workspace_locked': 'Workspace locked',
@@ -1635,6 +1639,7 @@ export const en = {
   'main.dialog.exportDocument': 'Export document',
   'main.dialog.exportSummary': 'Export summary',
   'main.dialog.exportChat': 'Export chat transcript',
+  'main.dialog.exportTableCsv': 'Export table as CSV',
   'main.dialog.exportAudit': 'Export activity log',
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',

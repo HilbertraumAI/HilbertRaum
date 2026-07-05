@@ -200,6 +200,9 @@ interface MessageRow {
   coverage_json: string | null
   /** 1 when this assistant reply was cut off at the context ceiling (finish_reason 'length'); else NULL/0. */
   truncated: number | null
+  /** Derived by listMessages (EXISTS over `result_tables`): 1 when a result table is attached
+   *  (result-tables plan §4, Phase 2). Absent on other query paths — coalesced to undefined. */
+  has_result_table?: number | null
 }
 
 /**
@@ -297,7 +300,10 @@ function rowToMessage(r: MessageRow): Message {
     coverage,
     // Only surface truncation as a positive flag (undefined on complete replies / user turns), so a
     // pre-migration NULL row and a normal reply both read exactly as before.
-    truncated: r.truncated === 1 ? true : undefined
+    truncated: r.truncated === 1 ? true : undefined,
+    // Positive-flag convention (Phase 2 result tables): 1 → true, anything else (incl. query paths
+    // that don't compute the EXISTS) → undefined, so older rows and other readers are byte-identical.
+    hasResultTable: r.has_result_table === 1 ? true : undefined
   }
 }
 
@@ -444,7 +450,8 @@ export function getConversation(db: Db, conversationId: string): Conversation | 
 export function listMessages(db: Db, conversationId: string): Message[] {
   const rows = prepareCached(
     db,
-    `SELECT m.*, s.title AS skill_title
+    `SELECT m.*, s.title AS skill_title,
+            EXISTS(SELECT 1 FROM result_tables rt WHERE rt.message_id = m.id) AS has_result_table
        FROM messages m LEFT JOIN skills s ON s.install_id = m.skill_id
        WHERE m.conversation_id = ? AND m.kind IS NOT 'compaction'
        ORDER BY m.created_at ASC, m.rowid ASC`

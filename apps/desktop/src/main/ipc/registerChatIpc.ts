@@ -39,6 +39,8 @@ import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
 import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
 import { saveTextExport } from './save-export'
+import { tableToCsv } from '../services/tables'
+import { loadResultTable } from '../services/tables/store'
 
 // IPC for conversation CRUD + streaming chat (spec §9.1, §7.6).
 //
@@ -358,6 +360,35 @@ export function registerChatIpc(ctx: AppContext): void {
     // from the conversation TITLE, which is chat content.
     ctx.audit?.('conversation_exported', 'Conversation transcript exported to a file', {
       conversationId
+    })
+    return filePath
+  })
+
+  // Export the RESULT TABLE attached to one assistant message (result-tables plan §4, Phase 2) as
+  // CSV to a user-chosen file — the chat-side closure of the "categorize … and export as CSV"
+  // chaining gap. No skill tool runs; the persisted table is re-serialized through the ONE audited
+  // CSV path (tableToCsv, incl. formula-injection neutralization) and the save dialog is the
+  // consent, exactly like the transcript export above. Returns the saved path, or null when the
+  // user cancelled or the message carries no (readable) table.
+  ipcMain.handle(IPC.exportMessageTable, async (_e, messageId: string): Promise<string | null> => {
+    requireUnlocked()
+    if (typeof messageId !== 'string' || messageId.length === 0) return null
+    const table = loadResultTable(ctx.db, messageId)
+    if (!table) return null
+    const filePath = await saveTextExport(
+      {
+        title: tMain('main.dialog.exportTableCsv'),
+        defaultPath: 'table.csv',
+        filters: [{ name: 'CSV', extensions: ['csv'] }]
+      },
+      tableToCsv(table)
+    )
+    if (!filePath) return null
+    log.info('Message table exported', { messageId })
+    // Audit privacy rule: id + row count only — the table's columns/rows and the path are content.
+    ctx.audit?.('message_table_exported', 'A message result table was exported to a file', {
+      messageId,
+      rows: table.rows.length
     })
     return filePath
   })

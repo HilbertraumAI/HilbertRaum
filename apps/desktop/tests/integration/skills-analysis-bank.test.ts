@@ -736,6 +736,12 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     // Still the deterministic 0-model short-circuit; export_transactions_csv is still never auto-run.
     expect(res.mode).toBeUndefined()
     expect(ctx.events.map((e) => e.meta?.toolName)).not.toContain('export_transactions_csv')
+    // Phase 2 (result-tables §4): the structured rows ride the result so the chat path can persist
+    // them with the message and light the message-level "Export CSV" affordance.
+    expect(res.table?.columns.map((c) => c.key)).toEqual([
+      'date', 'valueDate', 'description', 'amount', 'currency', 'balanceAfter', 'sourcePage', 'category'
+    ])
+    expect(res.table?.rows).toHaveLength(2)
   })
 
   it('custom category set (Phase 1.5): refused with friendly copy when no model is running', async () => {

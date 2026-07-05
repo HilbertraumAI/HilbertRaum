@@ -25,7 +25,7 @@ import {
   type DateAnchor,
   type DateOrder
 } from './money'
-import { tableToCsv, type TableColumn } from '../../tables'
+import { tableToCsv, type TableColumn, type TableSpec } from '../../tables'
 
 // The deterministic money/date/CSV parsing primitives are shared with the invoice tools (one parser
 // per locale rule, §8). Re-exported here so existing import sites (`tools/bank-statement`) and the
@@ -1105,12 +1105,12 @@ export function rowsCarryCategories(rows: readonly TransactionInput[]): boolean 
 }
 
 /**
- * Serialize the rows to CSV text (pure — no FS) via the generic `TableSpec` path (result-tables
- * plan §3, D60): the columns are data, not code, so both CSV surfaces (the inline format answer
- * and the confirm-gated file export) emit whatever columns the rows actually carry. The
- * `category` column is presence-gated (D62).
+ * The statement rows as a generic `TableSpec` (result-tables plan §3/§4): the SINGLE column
+ * definition every tabular surface shares — the inline format answer, the confirm-gated file
+ * export, and the persisted per-message result table. The `category` column is presence-gated
+ * (D62).
  */
-export function transactionsToCsv(rows: TransactionInput[]): string {
+export function transactionsTableSpec(rows: TransactionInput[]): TableSpec<TransactionInput> {
   const columns: TableColumn[] = [
     { key: 'date', label: 'date' },
     { key: 'valueDate', label: 'valueDate' },
@@ -1122,7 +1122,16 @@ export function transactionsToCsv(rows: TransactionInput[]): string {
     { key: 'sourcePage', label: 'sourcePage', kind: 'integer' }
   ]
   if (rowsCarryCategories(rows)) columns.push({ key: 'category', label: 'category' })
-  return tableToCsv({ columns, rows })
+  return { columns, rows }
+}
+
+/**
+ * Serialize the rows to CSV text (pure — no FS) via the generic `TableSpec` path (result-tables
+ * plan §3, D60): the columns are data, not code, so both CSV surfaces (the inline format answer
+ * and the confirm-gated file export) emit whatever columns the rows actually carry.
+ */
+export function transactionsToCsv(rows: TransactionInput[]): string {
+  return tableToCsv(transactionsTableSpec(rows))
 }
 
 const CSV_OUTPUT_SCHEMA: JsonSchema = {

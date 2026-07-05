@@ -285,6 +285,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.actions.copy': 'Kopieren',
   'chat.actions.save': 'Speichern',
   'chat.actions.saveTitle': 'Diese Unterhaltung als Datei speichern (bleibt lokal)',
+  // Result-Tables §4 (Phase 2): nur bei Antworten mit angehängter Ergebnistabelle sichtbar.
+  'chat.actions.exportCsv': 'Als CSV exportieren',
+  'chat.actions.exportCsvTitle': 'Die Tabelle dieser Antwort als CSV-Datei speichern (bleibt lokal)',
 
   // ---- Chat: Kontext-Komprimierung (context-compaction plan §5.1–§5.3) ----
   'chat.compaction.inProgress': 'Frühere Nachrichten werden zusammengefasst, um Platz zu schaffen…',
@@ -1278,6 +1281,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.summary_exported': 'Zusammenfassung exportiert',
   'diag.audit.conversation_deleted': 'Unterhaltung gelöscht',
   'diag.audit.conversation_exported': 'Unterhaltung exportiert',
+  'diag.audit.message_table_exported': 'Antwort-Tabelle exportiert',
   'diag.audit.workspace_created': 'Arbeitsbereich erstellt',
   'diag.audit.workspace_unlocked': 'Arbeitsbereich entsperrt',
   'diag.audit.workspace_locked': 'Arbeitsbereich gesperrt',
@@ -1700,6 +1704,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportDocument': 'Dokument exportieren',
   'main.dialog.exportSummary': 'Zusammenfassung exportieren',
   'main.dialog.exportChat': 'Chat-Verlauf exportieren',
+  'main.dialog.exportTableCsv': 'Tabelle als CSV exportieren',
   'main.dialog.exportAudit': 'Aktivitätslog exportieren',
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',

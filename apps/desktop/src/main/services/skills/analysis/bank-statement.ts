@@ -33,6 +33,7 @@ import {
   reconcileBalances,
   rowsCarryCategories,
   summarizeCashflow,
+  transactionsTableSpec,
   transactionsToCsv,
   type CashflowSummary,
   type CompletenessStatus,
@@ -981,7 +982,10 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         return {
           answer: buildFormatAnswer(ctx.tr, format, snap, categoryShaped ? { modelAssisted } : undefined),
           citations,
-          coverage
+          coverage,
+          // Phase 2 (result-tables §4): the structured rows behind this answer, persisted with the
+          // message so the message-level "Export CSV" can re-serialize them to a file on demand.
+          table: transactionsTableSpec(snapRows)
         }
       }
 

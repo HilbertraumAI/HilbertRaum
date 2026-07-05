@@ -199,3 +199,52 @@ describe('Transcript auto-fire undo (S13c/D3)', () => {
     expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
   })
 })
+
+describe('message-level Export CSV action (result-tables §4, Phase 2)', () => {
+  const msg = (over: Partial<Message>): Message => ({
+    id: over.id ?? 'm1',
+    conversationId: 'c1',
+    role: 'assistant',
+    content: 'answer',
+    createdAt: '2026-07-05T12:00:00.000Z',
+    tokenCount: null,
+    ...over
+  })
+
+  function renderTranscript(messages: Message[], onExportTable?: (id: string) => void): void {
+    render(
+      <I18nProvider>
+        <Transcript
+          messages={messages}
+          streamingHere={false}
+          streamText=""
+          streamThinking=""
+          thinkingOpen={false}
+          onThinkingOpenChange={noop}
+          emptyState={null}
+          onCopy={noop}
+          onSave={noop}
+          onExportTable={onExportTable}
+          actionsDisabled={false}
+        />
+      </I18nProvider>
+    )
+  }
+
+  it('shows the button ONLY on answers carrying a result table, wired to that message id', () => {
+    const seen: string[] = []
+    renderTranscript(
+      [msg({ id: 'with-table', hasResultTable: true }), msg({ id: 'plain' })],
+      (id) => seen.push(id)
+    )
+    const buttons = screen.getAllByRole('button', { name: 'Export CSV' })
+    expect(buttons).toHaveLength(1) // the plain answer renders no export action
+    fireEvent.click(buttons[0])
+    expect(seen).toEqual(['with-table'])
+  })
+
+  it('renders no export button at all when the handler prop is absent', () => {
+    renderTranscript([msg({ id: 'with-table', hasResultTable: true })])
+    expect(screen.queryByRole('button', { name: 'Export CSV' })).toBeNull()
+  })
+})

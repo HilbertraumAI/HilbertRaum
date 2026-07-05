@@ -8,6 +8,7 @@ import type {
 } from '../../../../shared/types'
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
 import type { ModelRuntime } from '../../runtime'
+import type { TableSpec } from '../../tables'
 
 // The per-skill analysis-handler seam (full-doc-skills plan §3.1, Phase 2). This is the bridge a
 // chat turn will (in Phase 3) call instead of top-k RAG, so a `kind:tool` skill's exhaustive,
@@ -103,6 +104,14 @@ export interface SkillAnalysisResult {
   /** The deterministic figure echo appended VERBATIM under the model answer (net/tax/gross as parsed) so a
    *  model misquote is visibly contradicted (§8.1). Empty ⇒ nothing to echo. Only used with grounded-data. */
   postscript?: string
+  /**
+   * The generic RESULT TABLE behind this answer (result-tables plan §4, Phase 2): the structured
+   * rows the answer serialized (e.g. the bank format path's transactions+categories). The chat path
+   * persists it into `result_tables` keyed by the appended message, which lights the message-level
+   * confirm-free "Export CSV" action (the save dialog is the consent — same as conversation export).
+   * Content: rows/columns live only in the DB row and the user-chosen file, never in a log/audit.
+   */
+  table?: TableSpec<object>
 }
 
 export interface SkillAnalysisHandler {

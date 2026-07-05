@@ -1359,9 +1359,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   under the fenced block — D63) and both CSV surfaces (the inline answer and the confirm-gated export
   button) emit each row's category through one generic table serializer (D60); the column is
   **presence-gated** (D62) — a never-categorized statement keeps its prior 7-column shape rather than
-  implying an all-blank categorization. Remaining limits: (a) the actual **file write stays a
-  confirm-gated UI action** — a chat "export" produces the copyable inline CSV, never a file (a
-  message-level export affordance is the plan's Phase 2); (b) the column set is the fixed transaction
+  implying an all-blank categorization. Remaining limits: (a) ~~the file write stays a UI-lane
+  action~~ — **closed by Phase 2 (same day)**: a bank format answer now persists its structured
+  table (`result_tables`, purged with its message) and carries a message-level **"Export CSV"**
+  action that writes it via the standard save dialog — though only answers produced AFTER Phase 2
+  carry a table (no backfill), and only the bank format path emits one so far (invoice port
+  pending); (b) the column set is the fixed transaction
   shape + category — **arbitrary derived columns** ("subcategory", "counterparty") are the plan's
   Phase 3 (grammar-constrained TableRequest + per-row enrichment); (c) **without the skill active** a
   tabular ask still routes to top-k relevance, not whole-document (also Phase 3).

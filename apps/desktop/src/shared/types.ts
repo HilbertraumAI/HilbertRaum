@@ -730,6 +730,14 @@ export interface Message {
    * document-answer path is out of scope for this signal.
    */
   truncated?: boolean
+  /**
+   * True when a generic RESULT TABLE is attached to this assistant answer (result-tables plan §4,
+   * Phase 2) — the structured rows behind e.g. a bank "as CSV" answer, persisted in `result_tables`
+   * keyed by this message. Drives the message-level "Export CSV" action; the table CONTENT itself is
+   * loaded on demand by the export IPC, never carried on the message. Undefined on user turns and
+   * answers without a table (pre-migration rows read as before).
+   */
+  hasResultTable?: boolean
 }
 
 /**
@@ -1872,6 +1880,10 @@ export type AuditEventType =
   | 'summary_exported'
   | 'conversation_deleted'
   | 'conversation_exported'
+  // A message's attached result table exported as CSV (result-tables plan §4, Phase 2). Same
+  // privacy rule as conversation_exported: metadata = { messageId, rows } only — the table's
+  // columns/rows and the chosen path are content.
+  | 'message_table_exported'
   // Document-organization (plan §17): collection/membership/lifecycle changes. Metadata is
   // id + type + COUNT ONLY — never the collection/project NAME (a project name like
   // "Divorce" is content — exactly like a document title/filename, which S1 now withholds too).

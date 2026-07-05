@@ -259,6 +259,27 @@ CREATE TABLE IF NOT EXISTS extraction_records (
 CREATE INDEX IF NOT EXISTS idx_extract_doc_type ON extraction_records(document_id, record_type, normalized_value);
 CREATE INDEX IF NOT EXISTS idx_extract_chunk ON extraction_records(chunk_id);
 
+-- Result tables (result-tables plan §4, Phase 2): ONE generic tabular artifact attached to an
+-- assistant message — the structured table behind an answer (e.g. the bank format path's
+-- rows+categories), re-serializable on demand by the message-level "Export CSV" affordance.
+-- Kept OUT of the messages row so a large table never rides every listMessages load (messages
+-- carry only a derived hasResultTable flag). columns_json/rows_json are CONTENT — never
+-- logged/audited; source is a content-free discriminator ('bank-statement'). The message FK
+-- CASCADEs, so the regenerate delete and the conversation delete (which removes messages first,
+-- in one transaction) both drop the table automatically under PRAGMA foreign_keys = ON.
+CREATE TABLE IF NOT EXISTS result_tables (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  columns_json TEXT NOT NULL,         -- JSON TableColumn[] (key/label/kind)
+  rows_json TEXT NOT NULL,            -- JSON row objects (content)
+  row_count INTEGER NOT NULL,
+  source TEXT,                        -- content-free origin discriminator
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_result_tables_message ON result_tables(message_id);
+
 -- Skills registry (architecture.md "Skills — design record" §3/§10, revised §0 — plaintext plain-folder model). A
 -- pure DERIVED INDEX + state cache over the on-disk skill folders (app-skills/ + user-skills/):
 -- disk is the source of truth (DS1), so a DB rebuild simply re-reads the folders and re-derives

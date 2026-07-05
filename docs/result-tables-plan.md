@@ -1,6 +1,6 @@
 # Generic result tables — plan (result-tables wave)
 
-_Status: **WORKING PAPER — Phases 1 + 1.5 + 1.6 implemented (2026-07-05); Phases 2–3 open.**
+_Status: **WORKING PAPER — Phases 1 + 1.5 + 1.6 + 2 implemented (2026-07-05); Phase 3 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into a design record folded into
 `docs/architecture.md` ("Skills — design record") + `docs/rag-design.md` and delete this file.
@@ -122,17 +122,34 @@ to relevance — the feature wants the statement selected/in scope); filenames w
 quotes; a taxonomy split across chunk boundaries is only a risk for files > one chunk (~500 tokens
 ≈ far beyond 40 labels).
 
-## 4. Phase 2 — result-table artifact + message-level export (OPEN)
+## 4. Phase 2 — result-table artifact + message-level export (IMPLEMENTED, same day)
 
-- Persist a generic `result_tables` row (columns + rows + provenance + coverage verdict) attached
-  to the answer message whenever a handler produces a `TableSpec` — the generalization of
-  `extraction_records`.
-- Renderer: a message-level “Export CSV” affordance on any message carrying a table, dispatching
-  into the EXISTING confirm-gated `saveTextFile` boundary with the table’s own columns. “Export”
-  in chat becomes an operation on the previous result — the chaining gap (§1 item 4) closes
-  without the handler ever writing a file.
-- Retention/teardown: tables purge with their conversation/document (mirror
-  `purgeSkillDataForDocument`).
+As built:
+- **`result_tables`** (db.ts SCHEMA, next to `extraction_records`): one generic tabular artifact
+  per assistant message — columns/rows as JSON (CONTENT — never logged/audited), `row_count`, a
+  content-free `source` discriminator, and a `message_id` FK **ON DELETE CASCADE**, so the
+  regenerate delete and the conversation delete (messages first, one txn) purge automatically.
+  Store seam: `services/tables/store.ts` (`saveResultTable` — best-effort, empty/over-cap
+  (`MAX_RESULT_TABLE_ROWS` 10 000)/unserializable persists NOTHING and never blocks the answer;
+  `loadResultTable` — tolerant like `parseCoverage`).
+- **`SkillAnalysisResult.table?: TableSpec`** — the bank format path (CSV *and* JSON asks) emits
+  `transactionsTableSpec(rows)` (the ONE column definition all tabular surfaces now share);
+  `registerRagIpc` persists it right after the plain-answer `appendMessage` and lights
+  `Message.hasResultTable` on the returned object (no reload needed). `listMessages` derives the
+  flag via an EXISTS subselect — the table content never rides message loading.
+- **`chat:exportMessageTable` IPC** (registerChatIpc, the `exportConversation` template):
+  `requireUnlocked` → `loadResultTable` → `tableToCsv` (the one audited CSV path, incl.
+  formula-injection neutralization) → `saveTextExport` (save dialog = consent, no confirm modal —
+  same posture as the transcript export; no BOM on .csv). Audit: `message_table_exported`,
+  metadata `{ messageId, rows }` only.
+- **Renderer**: an “Export CSV” action in `MessageActions`, rendered only on answers with
+  `hasResultTable`, wired through Transcript → ChatScreen → `window.api.exportMessageTable`;
+  success shows the existing “saved to …” toast. i18n: `chat.actions.exportCsv(+Title)`,
+  `main.dialog.exportTableCsv`, `diag.audit.message_table_exported` (EN+DE).
+
+Notes/residuals: only the bank format path emits a table so far (invoice port pending — §6);
+answers produced BEFORE Phase 2 carry no table (no backfill — by design, the table is the
+answer’s artifact); tables key off messages, so no document-purge hook is needed.
 
 ## 5. Phase 3 — TableRequest parse + derived-column enrichment (OPEN)
 
