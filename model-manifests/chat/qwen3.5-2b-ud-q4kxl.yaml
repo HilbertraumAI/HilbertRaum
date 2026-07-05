@@ -1,0 +1,60 @@
+id: qwen3.5-2b-ud-q4kxl
+display_name: Qwen3.5 2B (UD-Q4_K_XL)
+family: qwen3.5
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 1.3
+# RAM lines DELIBERATELY tier-aligned with the qwen3.5-4b entry (min 8 / rec 16), NOT the
+# honest tiny-model values: recommendModelIdByRam prefers the largest comfortable fit and the
+# smallest runnable min REGARDLESS of recommendation_rank, so honest values on a rank-0,
+# not-yet-evaled model would hijack the 8 GB recommendation from the Phase-29-benchmarked 4B
+# (exactly what the earlier local drafts did to benchmark.test.ts). The honest small-RAM story
+# ships WITH the quality eval + a real rank.
+recommended_min_ram_gb: 8
+recommended_ram_gb: 16
+# Default 0: NOT auto-recommended yet — same gate as the sibling qwen3.5-4b-ud-q4kxl entry:
+# it has a local llama-bench SPEED result (see the benchmark note below) but not the Phase-29
+# QUALITY eval (tests/manual/model-eval.test.ts) and not the b9849 in-app load smoke. Promote
+# with a real recommendation_rank only after both. Candidate role: the CPU-only speed tier the
+# 4B is too slow for (the ~2x-fewer-parameters decode win), with the grammar-constrained call
+# sites (categorizer/enricher/extract) expected to hold up better than free-prose surfaces.
+recommendation_rank: 0
+recommended_context_tokens: 4096
+# Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat
+# template honours `enable_thinking` → the Deep answer mode applies (like the 4B entry).
+supports_thinking_mode: true
+supports_tools: true
+local_path: models/chat/qwen3.5-2b-ud-q4kxl.gguf
+# Real hash captured 2026-07-05 by fetching the upstream weight and computing SHA-256
+# (file bytes matched download.size_bytes exactly: 1,339,752,704).
+sha256: 0af96165ea615bea39a04118d63f0b6d35908aea850ee4a51aa6151d851b8b35
+# Quantization choice mirrors the family decision on the 4B (user decision 2026-06-18): unsloth
+# "Dynamic 2.0" UD-Q4_K_XL — at 2B the bit depth bites even harder than at 4B, so the richer Q4
+# is worth the +0.06 GB over plain Q4_K_M (1.34 vs 1.28 GB). The Qwen org publishes no official
+# GGUF for the 3.5 refresh → established-quantizer fallback (unsloth), same posture as the 4B.
+download:
+  url: https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-UD-Q4_K_XL.gguf?download=true
+  sha256: 0af96165ea615bea39a04118d63f0b6d35908aea850ee4a51aa6151d851b8b35
+  size_bytes: 1339752704
+  license_url: https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# LOCAL SPEED BENCHMARK 2026-07-05 (llama-bench b9490, CPU-pinned `-dev none -ngl 0`, developer
+# machine: 20-core desktop CPU — absolute numbers overstate a laptop, the RATIOS transfer):
+#   8 threads (laptop-representative):  pp512 130.5 t/s | tg128 28.0 t/s
+#   vs qwen3.5-4b-ud-q4kxl same run:    pp512  56.5 t/s | tg128 14.7 t/s  → the 2B decodes ~1.9x
+#   faster and processes prompts ~2.3x faster than the 4B; the local 0.8B Q6_K measured 47.7 tg
+#   (~3.2x) as the ceiling of the size ladder. SPEED ONLY — the Phase-29 quality eval
+#   (tests/manual/model-eval.test.ts) has not run for this model and gates any promotion.
+# ⚠️ Same b9849 promotion gate as the 4B entry: the app runtime was bumped to llama.cpp b9849
+# (2026-06-30) as the Qwen3.5 compatibility gate; the family is CONFIRMED to load and stream on
+# the developer's local b9490 build (the llama-bench run below), which predates b9849 — so the
+# in-app smoke is expected to pass but is still REQUIRED before promotion. Upstream is a VISION
+# model; this .gguf runs TEXT-ONLY (no mmproj projector shipped), which is all the chat pipeline uses.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card verification)"
+  reviewed_at: "2026-07-05"
+  notes: "APPROVED 2026-07-05: base model Qwen/Qwen3.5-2B is apache-2.0 (per the unsloth GGUF repo card, license tag apache-2.0; LICENSE blob expected at download.license_url). QUANTIZATION PROVENANCE: the Qwen org publishes no official GGUF for the 3.5 refresh, so this manifest pins the established quantizer unsloth (https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) — a third-party requant of apache-2.0 weights, NOT a vendor GGUF; same posture as the qwen3.5-4b-ud-q4kxl entry. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive. NOT bundled and NOT yet promoted (rank 0): local llama-bench speed measured 2026-07-05 (see comment), Phase-29 quality eval + b9849 in-app smoke pending."
