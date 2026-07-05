@@ -1,0 +1,54 @@
+id: qwen3.5-0.8b-q6
+display_name: Qwen3.5 0.8B Q6_K
+family: qwen3.5
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 0.7
+# RAM lines DELIBERATELY tier-aligned with the qwen3.5-4b entry (min 8 / rec 16), NOT the
+# honest tiny-model values: recommendModelIdByRam prefers the largest comfortable fit and the
+# smallest runnable min REGARDLESS of recommendation_rank, so honest values on a rank-0,
+# not-yet-evaled model would hijack the 8 GB recommendation from the Phase-29-benchmarked 4B
+# (exactly what the earlier local drafts did to benchmark.test.ts). The honest small-RAM story
+# ships WITH the quality eval + a real rank.
+recommended_min_ram_gb: 8
+recommended_ram_gb: 16
+# Default 0: NOT auto-recommended — the fast-tier CANDIDATE for CPU-only machines where even the
+# 4B is too slow (local llama-bench 2026-07-05 on THIS pinned file, CPU-pinned `-dev none -ngl 0`,
+# 8 threads: pp512 247.6 t/s, tg128 54.1 t/s vs the 4B's 56.5/14.7 — ~3.7x decode). SPEED ONLY: at 0.8B the free-prose surfaces (summaries, grounded-data
+# narration, map-reduce) are expected to degrade visibly; the grammar-constrained call sites
+# (categorizer/enricher/extract) should hold up. The Phase-29 quality eval
+# (tests/manual/model-eval.test.ts) + the b9849 in-app load smoke gate any promotion (D39).
+recommendation_rank: 0
+recommended_context_tokens: 4096
+# Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat
+# template honours `enable_thinking` → the Deep answer mode applies (like the 4B entry).
+supports_thinking_mode: true
+supports_tools: true
+local_path: models/chat/qwen3.5-0.8b-q6.gguf
+# Real hash = the upstream LFS SHA-256 published by the Hugging Face API for the unsloth repo,
+# CONFIRMED 2026-07-05 by fetching the weight and re-computing locally (639,029,504 bytes).
+# NOTE: this REPLACES the earlier local-unverified draft of this manifest — the previously
+# hand-added local file (658,066,848 bytes, sha256 5762c720…) was a DIFFERENT quant provenance
+# and does not match; re-fetch via fetch-models / `llama get` from the pinned URL below.
+sha256: 8408c5c222111cec253682b49eece2a02ed641ded68490001ec4ee160e71098e
+# Quantization choice: Q6_K, NOT the family's UD-Q4_K_XL — at 0.8B quantization error bites
+# hardest of the whole ladder, and the Q6 file is still only ~0.64 GB (speed is RAM-bandwidth
+# bound; the +bits cost ~nothing at this size). Established-quantizer provenance (unsloth), same
+# posture as the qwen3.5-2b/4b entries — the Qwen org publishes no official GGUF for 3.5.
+download:
+  url: https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q6_K.gguf?download=true
+  sha256: 8408c5c222111cec253682b49eece2a02ed641ded68490001ec4ee160e71098e
+  size_bytes: 639029504
+  license_url: https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# Same b9849 promotion gate as the 2B/4B entries: the family is confirmed to load and stream on
+# the developer's local b9490 build; the in-app smoke on the pinned b9849 is still required
+# before promotion. Upstream is a VISION model; this .gguf runs TEXT-ONLY (no mmproj shipped).
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card verification)"
+  reviewed_at: "2026-07-05"
+  notes: "APPROVED 2026-07-05: base model Qwen/Qwen3.5-0.8B is apache-2.0 (per the unsloth GGUF repo card, license tag apache-2.0; LICENSE blob expected at download.license_url). QUANTIZATION PROVENANCE: the Qwen org publishes no official GGUF for the 3.5 refresh, so this manifest pins the established quantizer unsloth (https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) — same posture as the qwen3.5-2b/4b entries. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive. Supersedes the 2026-06-22 local-unverified draft (hand-added file of different provenance). NOT bundled, NOT promoted (rank 0): speed benchmarked locally; Phase-29 quality eval + b9849 smoke pending."
