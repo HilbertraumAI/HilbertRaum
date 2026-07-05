@@ -15,7 +15,14 @@ import {
   type BankExtractionDeps,
   type LoadedTransaction
 } from '../run'
-import { CATEGORIZER_CATEGORIES, categorizeTransactions, parseRequestedCategories } from '../categorizer'
+import {
+  CATEGORIZER_CATEGORIES,
+  categorizeTransactions,
+  parseRequestedCategories,
+  parseTaxonomyCsv,
+  parseTaxonomyFileRef,
+  type CustomCategoryInput
+} from '../categorizer'
 import { withDocumentLock } from '../doc-lock'
 import {
   BUILTIN_CATEGORIES,
@@ -299,6 +306,44 @@ function loadDroppedRowCount(db: Db, statementId: string): number {
     .prepare('SELECT dropped_row_count AS n FROM bank_statements WHERE id = ?')
     .get(statementId) as { n: number | null } | undefined
   return row?.n ?? 0
+}
+
+/**
+ * Find the taxonomy document a question referenced by NAME (Phase 1.6): a case-insensitive title
+ * match across the indexed library (extension-stripped stems match too — "taxonomie.csv" finds a
+ * doc titled "Taxonomie"), EXCLUDING the statement itself. Ties break to the most recently updated
+ * (the user's latest version). This is a LOOKUP only — the retrieval scope is never widened, and the
+ * statement stays the handler's single in-scope document.
+ */
+function findDocumentByName(db: Db, ref: string, excludeId: string): { id: string; title: string } | null {
+  const norm = (s: string): string =>
+    s
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim()
+  const stem = (s: string): string => s.replace(/\.[a-z0-9]{1,8}$/i, '')
+  const wanted = new Set([norm(ref), norm(stem(ref))].filter((s) => s.length > 0))
+  if (wanted.size === 0) return null
+  const docs = db
+    .prepare(`SELECT id, title FROM documents WHERE status = 'indexed' AND id != ? ORDER BY updated_at DESC`)
+    .all(excludeId) as Array<{ id: string; title: string }>
+  for (const d of docs) {
+    if (wanted.has(norm(d.title)) || wanted.has(norm(stem(d.title)))) return d
+  }
+  return null
+}
+
+/** A referenced document's plain text: the faithful parser segments when the IPC injected the
+ *  reader, else the chunks table (the unit-test path). A taxonomy file is small — read whole. */
+async function readDocumentPlainText(ctx: SkillAnalysisContext, documentId: string): Promise<string> {
+  if (ctx.readDocumentSegments) {
+    const segments = await ctx.readDocumentSegments(documentId)
+    return segments.map((s) => s.text).join('\n')
+  }
+  const rows = ctx.db
+    .prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+    .all(documentId) as Array<{ text: string }>
+  return rows.map((r) => r.text).join('\n')
 }
 
 const MAX_CITATIONS = 12
@@ -846,18 +891,47 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         // slot grounded-data streams in). With no runtime the ask is REFUSED with friendly copy: the
         // deterministic rules cannot know the user's labels, and a silent fixed-taxonomy fallback
         // would answer a different question than the one asked.
-        const requested = parseRequestedCategories(ctx.question)
+        // A taxonomy FILE reference wins over an inline list (Phase 1.6): "Kategorisiere nach den
+        // Kategorien in taxonomie.csv" loads the referenced document from the library BY NAME (a
+        // lookup only — retrieval scope is never widened; the statement stays the single in-scope
+        // doc), parses one label per line (optional keyword GLOSS after the delimiter, fed to the
+        // model prompt), and rides the same custom-set path below. A missing file or an unparseable
+        // list is an honest refusal NAMING the file — never a silent fixed-taxonomy fallback.
+        let requested: CustomCategoryInput | null = null
+        const taxonomyRef = parseTaxonomyFileRef(ctx.question)
+        if (taxonomyRef) {
+          const taxonomyDoc = findDocumentByName(db, taxonomyRef, target.id)
+          if (!taxonomyDoc) {
+            return {
+              answer: ctx.tr('skills.bankAnalysis.customTaxonomyNotFound', { name: taxonomyRef }),
+              citations,
+              coverage
+            }
+          }
+          const parsed = parseTaxonomyCsv(await readDocumentPlainText(ctx, taxonomyDoc.id))
+          if (!parsed) {
+            return {
+              answer: ctx.tr('skills.bankAnalysis.customTaxonomyUnparseable', { name: taxonomyDoc.title }),
+              citations,
+              coverage
+            }
+          }
+          requested = parsed
+        } else {
+          requested = parseRequestedCategories(ctx.question)
+        }
         if (requested) {
+          const requestedNames = requested.map((c) => (typeof c === 'string' ? c : c.name))
           const persisted = new Set(
             paired.map((p) => p.category).filter((c): c is string => c != null && c !== UNCATEGORIZED)
           )
-          const requestedSet = new Set(requested)
+          const requestedSet = new Set(requestedNames)
           const covered = persisted.size > 0 && [...persisted].every((c) => requestedSet.has(c))
           if (!covered) {
             if (!ctx.runtime) {
               return {
                 answer: ctx.tr('skills.bankAnalysis.customCategoriesNeedModel', {
-                  categories: requested.join(', ')
+                  categories: requestedNames.join(', ')
                 }),
                 citations,
                 coverage

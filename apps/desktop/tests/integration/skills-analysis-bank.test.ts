@@ -36,20 +36,21 @@ function freshDb(): Db {
 function seedDoc(
   db: Db,
   text: string,
-  opts: { fullyChunked?: boolean } = {}
+  opts: { fullyChunked?: boolean; title?: string } = {}
 ): string {
   const now = new Date().toISOString()
   const docId = randomUUID()
+  const title = opts.title ?? 'Statement'
   db.prepare(
     `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
-     VALUES (?, 'Statement', 'indexed', 'application/pdf', ?, ?, ?)`
-  ).run(docId, opts.fullyChunked ? now : null, now, now)
+     VALUES (?, ?, 'indexed', 'application/pdf', ?, ?, ?)`
+  ).run(docId, title, opts.fullyChunked ? now : null, now, now)
   // One chunk per line so citations resolve against real source rows (page-addressable).
   text.split('\n').forEach((line, i) => {
     db.prepare(
       `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, 'Statement', 1, ?)`
-    ).run(randomUUID(), docId, i, line, now)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`
+    ).run(randomUUID(), docId, i, line, title, now)
   })
   return docId
 }
@@ -791,6 +792,65 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     )
     expect(calls.length).toBe(before)
     expect(again.answer).toContain('Lebensmittel')
+  })
+
+  it('taxonomy CSV (Phase 1.6): categorizes with the labels + glosses from a referenced library file', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // The taxonomy lives in the LIBRARY (not in scope) — a semicolon CSV with a header + glosses.
+    seedDoc(db, 'Kategorie;Stichworte\nLebensmittel;REWE, Supermarkt, Grocery\nSonstiges;alles andere', {
+      title: 'taxonomie.csv'
+    })
+    const calls: Array<{ messages: { role: string; content: string }[] }> = []
+    const runtime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(messages: { role: string; content: string }[]) {
+        calls.push({ messages })
+        const user = messages[1].content
+        const assignments = user
+          .split('\n')
+          .filter((l) => /^\d+\t/.test(l))
+          .map((l) => {
+            const [idx, , ...rest] = l.split('\t')
+            return { index: Number(idx), category: rest.join('\t').includes('Grocery') ? 'Lebensmittel' : 'Sonstiges' }
+          })
+        yield JSON.stringify({ assignments })
+      }
+    } as never
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'Kategorisiere nach den Kategorien in taxonomie.csv und gib alles als CSV aus'),
+      runtime
+    }
+    const res = await bankStatementAnalysisHandler.run!(ctx)
+    expect(calls.length).toBeGreaterThan(0)
+    // The taxonomy's keyword GLOSS reached the model prompt (the accuracy lever the file buys).
+    expect(calls[0].messages[0].content).toContain('- Lebensmittel (REWE, Supermarkt, Grocery)')
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).toMatch(/Grocery,-45\.90,EUR,1954\.10,\d*,Lebensmittel/)
+    expect(res.answer).toMatch(/Salary,2500\.00,EUR,4454\.10,\d*,Sonstiges/)
+  })
+
+  it('taxonomy CSV (Phase 1.6): a missing file and an unparseable file each get an honest refusal naming it', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const missing = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Kategorisiere nach den Kategorien in fehlt.csv')
+    )
+    expect(missing.answer).toBe(tr('skills.bankAnalysis.customTaxonomyNotFound', { name: 'fehlt.csv' }))
+
+    // A prose document is NOT a category list — the whole parse rejects (never a garbage taxonomy).
+    seedDoc(db, 'Dies ist ein ganz normaler Fließtext ohne jede Listenstruktur und mit langen Sätzen.', {
+      title: 'notizen.csv'
+    })
+    const unparseable = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Kategorisiere nach notizen.csv')
+    )
+    expect(unparseable.answer).toBe(
+      tr('skills.bankAnalysis.customTaxonomyUnparseable', { name: 'notizen.csv' })
+    )
   })
 
   it('format path (JSON) with a category ask carries per-row categories under the same gate', async () => {

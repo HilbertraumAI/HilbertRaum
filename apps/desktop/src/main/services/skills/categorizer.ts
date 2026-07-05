@@ -70,14 +70,37 @@ const CATEGORY_GLOSS: Record<string, string> = {
 const CATEGORY_SET: ReadonlySet<string> = new Set(CATEGORIZER_CATEGORIES)
 
 /**
- * The ACTIVE category list for one run: the fixed taxonomy, or a USER-SUPPLIED custom set
- * (result-tables plan, Phase 1.5 — "Kategorisiere in Miete, Lebensmittel, Kinder …"). A custom set
- * always gets `Uncategorized` appended: the honest drop target must exist in every enum, so an
- * unsure/unparseable row can never be forced into one of the user's labels.
+ * One USER-DEFINED category (result-tables plan, Phase 1.5/1.6): the persisted label plus an
+ * optional GLOSS shown to the model in the prompt (never persisted, never an enum value) — a
+ * taxonomy CSV's keyword column ("Kinder;Schule, Kita, Taschengeld") rides here, the single
+ * biggest accuracy lever for custom labels on a small model (the fixed taxonomy's DE glosses
+ * play the same role).
  */
-function activeCategories(custom?: readonly string[]): readonly string[] {
-  if (!custom || custom.length === 0) return CATEGORIZER_CATEGORIES
-  return custom.includes(UNCATEGORIZED) ? custom : [...custom, UNCATEGORIZED]
+export interface CustomCategory {
+  name: string
+  gloss?: string
+}
+
+/** The custom-category input shape: bare labels (the inline prompt parse) or label+gloss objects
+ *  (a taxonomy CSV). Normalized internally via `normalizeCustom`. */
+export type CustomCategoryInput = readonly (string | CustomCategory)[]
+
+/**
+ * Normalize a USER-SUPPLIED custom set (result-tables plan, Phase 1.5): bare strings become
+ * gloss-less entries, and `Uncategorized` is always appended — the honest drop target must exist
+ * in every enum, so an unsure/unparseable row can never be forced into one of the user's labels.
+ * Returns undefined for an absent/empty input (→ the fixed taxonomy).
+ */
+function normalizeCustom(custom?: CustomCategoryInput): CustomCategory[] | undefined {
+  if (!custom || custom.length === 0) return undefined
+  const list = custom.map((c) => (typeof c === 'string' ? { name: c } : c))
+  return list.some((c) => c.name === UNCATEGORIZED) ? list : [...list, { name: UNCATEGORIZED }]
+}
+
+/** The ACTIVE category NAMES for one run: the fixed taxonomy, or the normalized custom set. */
+function activeCategories(custom?: CustomCategoryInput): readonly string[] {
+  const normalized = normalizeCustom(custom)
+  return normalized ? normalized.map((c) => c.name) : CATEGORIZER_CATEGORIES
 }
 
 /** Rows per model call — bounded so one statement stays a handful of small, fast completions. */
@@ -112,7 +135,7 @@ const BATCH_OUTPUT_CHAR_CAP_PER_TOKEN = 8
  * index. With no argument this is the fixed taxonomy (byte-identical to before Phase 1.5); with a
  * custom list the enum is the user's labels + `Uncategorized`.
  */
-export function batchOutputSchema(categories?: readonly string[]): JsonSchema {
+export function batchOutputSchema(categories?: CustomCategoryInput): JsonSchema {
   return {
     type: 'object',
     additionalProperties: false,
@@ -135,12 +158,15 @@ export function batchOutputSchema(categories?: readonly string[]): JsonSchema {
 }
 
 /** The per-run system prompt. The fixed taxonomy carries its DE glosses; a custom set lists the
- *  user's labels verbatim (their own words need no gloss) — the drop-to-Uncategorized rule and the
- *  never-invent rule are identical on both paths. */
-function buildSystemPrompt(categories?: readonly string[]): string {
-  const cats = activeCategories(categories)
-  const line = (c: string): string =>
-    categories && c !== UNCATEGORIZED ? `- ${c}` : `- ${c} (${CATEGORY_GLOSS[c] ?? ''})`
+ *  user's labels verbatim, each with its OWN gloss when the taxonomy supplied one (Phase 1.6) —
+ *  the drop-to-Uncategorized rule and the never-invent rule are identical on both paths. */
+function buildSystemPrompt(categories?: CustomCategoryInput): string {
+  const custom = normalizeCustom(categories)
+  const cats = custom ?? CATEGORIZER_CATEGORIES.map((name) => ({ name }) as CustomCategory)
+  const line = (c: CustomCategory): string => {
+    if (custom && c.name !== UNCATEGORIZED) return c.gloss ? `- ${c.name} (${c.gloss})` : `- ${c.name}`
+    return `- ${c.name} (${CATEGORY_GLOSS[c.name] ?? ''})`
+  }
   // The fixed-taxonomy rules line names the actual Income/Transfer categories (kept byte-identical to
   // the Phase-33 prompt); a custom set gets the generic phrasing — its labels are the user's.
   const signHint = categories
@@ -209,7 +235,7 @@ async function streamBatchReply(
   runtime: ModelRuntime,
   signal: AbortSignal,
   maxTokens: number,
-  categories?: readonly string[]
+  categories?: CustomCategoryInput
 ): Promise<string | null> {
   let text = ''
   const charCap = maxTokens * BATCH_OUTPUT_CHAR_CAP_PER_TOKEN
@@ -270,7 +296,7 @@ async function categorizeBatch(
   rows: TransactionInput[],
   runtime: ModelRuntime,
   signal: AbortSignal,
-  categories?: readonly string[]
+  categories?: CustomCategoryInput
 ): Promise<Map<number, string>> {
   const messages: ChatMessage[] = [
     { role: 'system', content: buildSystemPrompt(categories) },
@@ -313,7 +339,7 @@ export async function categorizeTransactions(
     runtime: ModelRuntime | null
     signal: AbortSignal
     onProgress?: (done: number, total: number) => void
-    categories?: readonly string[]
+    categories?: CustomCategoryInput
   }
 ): Promise<CategorizeResult> {
   const { runtime, signal, onProgress, categories } = deps
@@ -411,5 +437,68 @@ export function parseRequestedCategories(question: string): string[] | null {
     }
   }
   if (out.length < CUSTOM_CATEGORIES_MIN || out.length > CUSTOM_CATEGORIES_MAX) return null
+  return out
+}
+
+// ---- Taxonomy CSV referenced from the prompt (result-tables plan, Phase 1.6) ----
+
+/** Label ceiling for a taxonomy FILE — higher than the inline prompt bound (a file is explicit and
+ *  unambiguous), still small enough that the grammar enum + the prompt list stay cheap. */
+export const TAXONOMY_CATEGORIES_MAX = 40
+
+/** Gloss ceiling per label — a keyword hint, not a paragraph (the prompt stays bounded). */
+const TAXONOMY_GLOSS_MAX_CHARS = 120
+
+/** Header cells that mark a first line as a HEADER row (skipped), lowercase. */
+const TAXONOMY_HEADER_CELLS = new Set(['kategorie', 'kategorien', 'category', 'categories', 'name', 'label'])
+
+/**
+ * Detect a taxonomy-FILE reference in a categorize-shaped question ("Kategorisiere nach den
+ * Kategorien in taxonomie.csv", 'categorize using "my taxonomy.csv"'). Requires the categorize stem
+ * (same gate as the inline parse) and a `.csv` token — quoted first (spaces allowed inside quotes),
+ * else the bare non-space token. Returns the referenced name or null.
+ */
+export function parseTaxonomyFileRef(question: string): string | null {
+  if (!/\b(?:kategorisier\w*|categori[sz]e\w*|categori[sz]ation)\b/i.test(question)) return null
+  const quoted = /["'„“«]([^"'„“«»\n]{1,80}?\.csv)["'“«»]/i.exec(question)
+  if (quoted) return quoted[1].trim()
+  const bare = /(?:^|\s)([^\s"'„“«»]{1,80}\.csv)\b/i.exec(question)
+  return bare ? bare[1].replace(/^[([{]+/, '').trim() : null
+}
+
+/**
+ * Parse a taxonomy CSV's text into labels + optional glosses, or null when it is not a plausible
+ * category list. One category per line: the FIRST cell is the label, the remaining cells join into
+ * the gloss shown to the model ("Kinder;Schule, Kita, Taschengeld"). The delimiter is the first of
+ * `;` / tab / `,` that appears in the file (a DE CSV is usually `;`); a gloss-less plain list (one
+ * word per line) needs no delimiter at all. A leading header row ("Kategorie;Stichworte") and
+ * `#`-comment lines are skipped. All-or-nothing like the inline parse (D65): ONE invalid label
+ * rejects the whole file — never a silent partial taxonomy. Labels are deduped case-insensitively.
+ */
+export function parseTaxonomyCsv(text: string): CustomCategory[] | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith('#'))
+  if (lines.length === 0) return null
+  const delimiter = text.includes(';') ? ';' : text.includes('\t') ? '\t' : ','
+  const cells = (line: string): string[] =>
+    line.split(delimiter).map((c) => c.replace(/^["'„“]+|["'“”]+$/g, '').trim())
+  let start = 0
+  const first = cells(lines[0])
+  if (first.length > 0 && TAXONOMY_HEADER_CELLS.has(first[0].toLowerCase())) start = 1
+  const out: CustomCategory[] = []
+  const seen = new Set<string>()
+  for (const line of lines.slice(start)) {
+    const parts = cells(line)
+    const name = parts[0] ?? ''
+    if (!LABEL_RE.test(name) || name.split(/\s+/).length > 4) return null // one bad label ⇒ reject the file
+    const lower = name.toLowerCase()
+    if (seen.has(lower)) continue
+    seen.add(lower)
+    const gloss = parts.slice(1).filter((p) => p.length > 0).join(', ').slice(0, TAXONOMY_GLOSS_MAX_CHARS)
+    out.push(gloss ? { name, gloss } : { name })
+  }
+  if (out.length < CUSTOM_CATEGORIES_MIN || out.length > TAXONOMY_CATEGORIES_MAX) return null
   return out
 }

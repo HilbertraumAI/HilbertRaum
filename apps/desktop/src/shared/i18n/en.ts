@@ -653,6 +653,13 @@ export const en = {
   'skills.bankAnalysis.customCategoriesNeedModel':
     'To sort the transactions into your own categories ({categories}) I need a local model running — ' +
     'the built-in quick rules only know their fixed set. Start a model, then ask again.',
+  // Phase 1.6: a taxonomy CSV referenced by name — honest refusals naming the file, never a silent
+  // fixed-taxonomy fallback.
+  'skills.bankAnalysis.customTaxonomyNotFound':
+    'I couldn’t find “{name}” among your documents. Import the file first (Documents → Import), then ask again.',
+  'skills.bankAnalysis.customTaxonomyUnparseable':
+    'I read “{name}” but couldn’t use it as a category list. Expected one category per line — a label, ' +
+    'optionally followed by keywords after a semicolon (for example “Kinder;Schule, Kita, Taschengeld”).',
 
   // ---- Invoice analysis answer (full-doc-skills plan §3.1, Phase 4 / D49) ----
   // The deterministic, whole-document answer the invoice analysis handler synthesises from the

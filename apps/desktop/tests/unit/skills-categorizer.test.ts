@@ -7,6 +7,8 @@ import {
   batchOutputSchema,
   categorizeTransactions,
   parseRequestedCategories,
+  parseTaxonomyCsv,
+  parseTaxonomyFileRef,
   prefilterCategory
 } from '../../src/main/services/skills/categorizer'
 import { categorizeRow, type TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
@@ -438,5 +440,78 @@ describe('categorizeTransactions — custom category set (Phase 1.5)', () => {
     })
     expect(modelAssisted).toBe(false)
     expect(assignments).toEqual([{ index: 0, category: 'Uncategorized' }]) // NOT 'Income'
+  })
+})
+
+// ---- Taxonomy CSV referenced from the prompt (result-tables plan, Phase 1.6) ----
+
+describe('parseTaxonomyFileRef', () => {
+  it('finds a bare .csv token after a categorize stem (DE + EN)', () => {
+    expect(parseTaxonomyFileRef('Kategorisiere nach den Kategorien in taxonomie.csv als CSV')).toBe('taxonomie.csv')
+    expect(parseTaxonomyFileRef('categorize the transactions using my-buckets.csv')).toBe('my-buckets.csv')
+  })
+
+  it('prefers a quoted name (spaces allowed inside quotes)', () => {
+    expect(parseTaxonomyFileRef('Kategorisiere nach „meine Kategorien 2026.csv“ bitte')).toBe(
+      'meine Kategorien 2026.csv'
+    )
+  })
+
+  it('returns null without a categorize stem or without a .csv token', () => {
+    expect(parseTaxonomyFileRef('fasse taxonomie.csv zusammen')).toBeNull() // no categorize stem
+    expect(parseTaxonomyFileRef('Kategorisiere alle Transaktionen als CSV')).toBeNull() // "als CSV" ≠ a filename
+  })
+})
+
+describe('parseTaxonomyCsv', () => {
+  it('parses labels + keyword glosses (DE semicolon CSV), skipping the header row', () => {
+    expect(
+      parseTaxonomyCsv('Kategorie;Stichworte\nLebensmittel;REWE, Supermarkt\nKinder;Schule, Kita\nSonstiges')
+    ).toEqual([
+      { name: 'Lebensmittel', gloss: 'REWE, Supermarkt' },
+      { name: 'Kinder', gloss: 'Schule, Kita' },
+      { name: 'Sonstiges' }
+    ])
+  })
+
+  it('parses a plain one-label-per-line list (no delimiter, no header) and skips # comments', () => {
+    expect(parseTaxonomyCsv('# meine Kategorien\nMiete\nReisen\n\nSonstiges')).toEqual([
+      { name: 'Miete' },
+      { name: 'Reisen' },
+      { name: 'Sonstiges' }
+    ])
+  })
+
+  it('rejects the WHOLE file on one invalid label, and rejects a single-label list', () => {
+    expect(parseTaxonomyCsv('Miete\nDies ist keine Kategorie sondern ein ganzer Satz mit vielen Wörtern')).toBeNull()
+    expect(parseTaxonomyCsv('Kategorie;Stichworte\nMiete;Wohnung')).toBeNull() // one label after the header
+  })
+
+  it('dedupes labels case-insensitively keeping the first', () => {
+    expect(parseTaxonomyCsv('Miete\nmiete\nKinder')).toEqual([{ name: 'Miete' }, { name: 'Kinder' }])
+  })
+})
+
+describe('categorizeTransactions — taxonomy glosses reach the model prompt (Phase 1.6)', () => {
+  it('lists each custom label with its gloss; the enum stays names-only', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(validReplyFor(() => 'Kinder'), calls)
+    await categorizeTransactions([row('KITA Beitrag', -120)], {
+      runtime,
+      signal: new AbortController().signal,
+      categories: [
+        { name: 'Kinder', gloss: 'Schule, Kita, Taschengeld' },
+        { name: 'Sonstiges' }
+      ]
+    })
+    const system = calls[0].messages[0].content
+    expect(system).toContain('- Kinder (Schule, Kita, Taschengeld)')
+    expect(system).toContain('- Sonstiges')
+    const schema = calls[0].options?.responseSchema as any
+    expect(schema.properties.assignments.items.properties.category.enum).toEqual([
+      'Kinder',
+      'Sonstiges',
+      'Uncategorized'
+    ])
   })
 })

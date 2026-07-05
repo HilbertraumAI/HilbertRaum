@@ -1,11 +1,11 @@
 # Generic result tables — plan (result-tables wave)
 
-_Status: **WORKING PAPER — Phases 1 + 1.5 implemented (2026-07-05); Phases 2–3 open.**
+_Status: **WORKING PAPER — Phases 1 + 1.5 + 1.6 implemented (2026-07-05); Phases 2–3 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into a design record folded into
 `docs/architecture.md` ("Skills — design record") + `docs/rag-design.md` and delete this file.
 Decision numbering continues the repo series after the invoice-hardening/whole-doc waves'
-D44–D58 (**this plan: D59–D65**)._
+D44–D58 (**this plan: D59–D67**)._
 
 ---
 
@@ -89,6 +89,27 @@ for the CSV again is free), and `categoryLabel` no longer probes the i18n catalo
 name (the catalog logs unknown keys — a custom category name is content and must not reach the
 diagnostics log). `SkillAnalysisContext.runtime` is the one sanctioned model hook, threaded from
 `registerRagIpc`.
+
+## 3b. Phase 1.6 — taxonomy CSV referenced from the prompt (IMPLEMENTED, same day)
+
+“Kategorisiere nach den Kategorien in `taxonomie.csv` …” — the taxonomy lives in an imported CSV
+instead of the prompt line.
+
+| # | Decision | Lean | Why |
+|---|---|---|---|
+| D66 | The referenced file is found by **name across the indexed library** — never by widening scope | `findDocumentByName`: case-insensitive title match (extension-stripped stems too), statement excluded, ties → most recently updated | The bank handler requires exactly ONE in-scope document (the statement); requiring the taxonomy in scope would break `applies()`. Lookup-only keeps the scope contract intact |
+| D67 | The CSV’s second column is a per-label **GLOSS fed to the model prompt** (never persisted, never an enum value) | `Kinder;Schule, Kita, Taschengeld` → `- Kinder (Schule, Kita, Taschengeld)` in the system prompt | The fixed taxonomy’s accuracy on German statements rests on exactly this mechanism (its DE glosses); a keyword column is the single biggest quality lever for custom labels on a small model — and impossible to express in a one-line prompt |
+
+As built: `parseTaxonomyFileRef` (categorize stem + a quoted-or-bare `.csv` token) and
+`parseTaxonomyCsv` (one label per line, first-of-`;`/tab/`,` delimiter, header + `#`-comment skip,
+gloss from the remaining cells, **all-or-nothing** like D65 — one bad label rejects the file; 2–40
+labels). Missing file / unparseable list → honest refusals NAMING the file
+(`customTaxonomyNotFound` / `customTaxonomyUnparseable`, EN+DE). The parsed set rides the existing
+Phase-1.5 path (covered-check, no-runtime refusal, inline categorize, `persistCategorization`).
+Known caveats: with NO explicit scope, the chat layer’s filename auto-scope may narrow the turn to
+the taxonomy file itself (the handler then falls through to relevance — the feature wants the
+statement selected/in scope); filenames with spaces need quotes; a taxonomy split across chunk
+boundaries is only a risk for files > one chunk (~500 tokens ≈ far beyond 40 labels).
 
 ## 4. Phase 2 — result-table artifact + message-level export (OPEN)
 

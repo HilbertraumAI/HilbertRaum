@@ -1377,6 +1377,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   statement pays the per-batch model latency inside the chat turn (the ephemeral "reading…" notice
   covers the gap, but there is no per-batch progress meter in chat — the "Categorize" button lane
   has one).
+  **Phase 1.6 (same day): the taxonomy can live in an imported CSV** — "Kategorisiere nach den
+  Kategorien in `taxonomie.csv`" finds the file BY NAME across the indexed library (never by widening
+  scope), parses one label per line (2–40; an optional keyword column becomes the model-prompt gloss —
+  the accuracy lever), and refuses honestly, naming the file, when it is missing or not parseable as a
+  list. Caveats: with NO explicit scope the chat layer's filename auto-scope can narrow the turn to the
+  taxonomy file itself and the handler falls through to relevance — select the statement (or keep it in
+  scope) when referencing a taxonomy file; a filename with spaces must be quoted; the file's labels are
+  otherwise subject to the same model requirement and honesty notes as an inline custom set.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
