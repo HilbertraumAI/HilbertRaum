@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { t } from '../../../../shared/i18n'
 import { log } from '../../logging'
+import { ensureDomMatrixPolyfill } from './dommatrix-polyfill'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
 import { reconstructPage, type LayoutWord } from './pdf-layout'
 
@@ -68,6 +69,11 @@ export const PdfParser: DocumentParser = {
   extensions: ['.pdf'],
   mimeType: 'application/pdf',
   async parse(filePath: string, ctx?: ParseContext): Promise<ParsedDocument> {
+    // pdfjs-dist v6's legacy build evaluates `new DOMMatrix()` at import time and, in Node,
+    // only sources it from `@napi-rs/canvas` — which we exclude from the package. Install a
+    // pure-JS DOMMatrix first (idempotent; a no-op where a real one exists) so the import
+    // succeeds in the packaged main process. See dommatrix-polyfill.ts.
+    ensureDomMatrixPolyfill()
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const data = new Uint8Array(await readFile(filePath))
     // `verbosity: 0` (VerbosityLevel.ERRORS) silences pdf.js's font-program WARNINGS — e.g. the
