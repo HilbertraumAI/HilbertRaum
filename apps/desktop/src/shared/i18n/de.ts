@@ -839,6 +839,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.hint.reranker': 'Verbessert, welche Dokumentpassagen für Antworten verwendet werden.',
   'models.hint.transcriber':
     'Wandelt Audioaufnahmen in durchsuchbaren Text um — und schaltet die 🎤 Spracheingabe im Chat frei.',
+  'models.hint.translation': 'Übersetzt deine Dokumente und Texte zwischen Sprachen — vollständig offline.',
   'models.hint.small': 'Klein und flott — schnelle Antworten auf fast jedem Gerät.',
   'models.hint.balanced': 'Ausgewogen — läuft gut auf den meisten Laptops.',
   'models.hint.large': 'Groß — stärkste Antworten; braucht einen leistungsstarken Rechner.',
@@ -898,6 +899,10 @@ export const de: Record<keyof typeof en, string> = {
     'Installiert — bereit im Tab „Bilder". Hier gibt es nichts zu starten.',
   'models.vision.notInstalled':
     'Nach der Installation im Tab „Bilder" verfügbar — keine Einrichtung nötig.',
+  'models.translation.installed':
+    'Installiert — wird automatisch zum Übersetzen verwendet. Hier gibt es nichts zu starten.',
+  'models.translation.notInstalled':
+    'Wird nach der Installation automatisch zum Übersetzen verwendet — keine Einrichtung nötig.',
   'models.selected': 'Ausgewählt',
   'models.select': 'Auswählen',
   'models.stopRuntime': 'Modell stoppen',

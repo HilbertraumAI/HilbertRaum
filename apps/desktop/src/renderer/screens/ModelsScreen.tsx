@@ -61,6 +61,7 @@ function plainHintKey(m: ModelInfo): MessageKey {
   if (m.role === 'embeddings') return 'models.hint.embeddings'
   if (m.role === 'reranker') return 'models.hint.reranker'
   if (m.role === 'transcriber') return 'models.hint.transcriber'
+  if (m.role === 'translation') return 'models.hint.translation'
   if (m.sizeOnDiskGb <= 1.5) return 'models.hint.small'
   if (m.sizeOnDiskGb <= 6) return 'models.hint.balanced'
   return 'models.hint.large'
@@ -442,7 +443,8 @@ export function ModelsScreen(): JSX.Element {
       m.role === 'embeddings' ||
       m.role === 'reranker' ||
       m.role === 'transcriber' ||
-      m.role === 'vision'
+      m.role === 'vision' ||
+      m.role === 'translation'
     const active = !automatic && isActive(m)
     // Zero-weights first run: the MAIN process computes whether this (missing, chat)
     // model may start the built-in mock (developer + policy gates).
@@ -497,9 +499,13 @@ export function ModelsScreen(): JSX.Element {
               ? installed
                 ? t('models.vision.installed')
                 : t('models.vision.notInstalled')
-              : installed
-                ? t('models.automatic.installed')
-                : t('models.automatic.notInstalled')}
+              : m.role === 'translation'
+                ? installed
+                  ? t('models.translation.installed')
+                  : t('models.translation.notInstalled')
+                : installed
+                  ? t('models.automatic.installed')
+                  : t('models.automatic.notInstalled')}
           </p>
         ) : (
           // A "Not downloaded" card shows ONE clear action — Download (rendered below) —

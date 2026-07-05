@@ -211,6 +211,7 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 | BGE Reranker v2 M3 (F16) | Reranker | Higher-quality retrieval ordering | 6 GB | Apache-2.0 |
 | Whisper Small (multilingual) | Transcriber | Audio-file transcription + dictation | 4 GB | MIT |
 | Qwen2.5-VL 3B Instruct Q4 | Vision | Image understanding (opt-in; in-app download) | 12 GB | Apache-2.0 |
+| TranslateGemma 12B (Q4_K_M) | Translation | Document & text translation (opt-in; in-app download behind a license prompt) | 14 GB | Gemma Terms |
 
 Document Q&A needs the **embeddings** model; chat needs **one** of the chat models. Bigger **dense**
 models are smarter but slower on CPU — pick by your RAM. Benchmark methodology and measured numbers

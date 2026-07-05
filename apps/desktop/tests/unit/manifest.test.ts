@@ -312,6 +312,53 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
   })
 })
 
+// TG-1: the `translation` role (TranslateGemma). Unlike vision it is a single-file GGUF (no
+// mmproj), so the only role-specific fact is that the role string is accepted; everything else
+// rides the shared manifest schema. An older build that predates the role treats such a manifest
+// as `unsupported` (validator rejects an unknown role) — the same forward-compatible rollout as
+// vision/transcriber.
+describe('validateManifest — translation role (TranslateGemma, TG-1)', () => {
+  const translationRaw = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+    rawManifest({
+      id: 'translategemma-12b-it-q4',
+      role: 'translation',
+      family: 'translategemma',
+      local_path: 'models/translation/translategemma-12b-it.Q4_K_M.gguf',
+      ...overrides
+    })
+
+  it('accepts the translation role (single-file GGUF, no mmproj required)', () => {
+    const res = validateManifest(translationRaw())
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.role).toBe('translation')
+    expect(res.manifest?.mmproj).toBeUndefined()
+  })
+
+  it('accepts a translation manifest with a download block + pending license review', () => {
+    const res = validateManifest(
+      translationRaw({
+        license: 'gemma',
+        license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: 'Gemma Terms' },
+        download: {
+          url: 'https://huggingface.co/mradermacher/translategemma-12b-it-GGUF/resolve/main/translategemma-12b-it.Q4_K_M.gguf?download=true',
+          sha256: 'b7aac4b4be7ab0c49b6556c29c4467e74313df7f1e95d9f9676bb2adf0afa528',
+          size_bytes: 7300794112,
+          license_url: 'https://ai.google.dev/gemma/terms'
+        }
+      })
+    )
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.licenseReview.status).toBe('pending')
+    expect(res.manifest?.download?.sizeBytes).toBe(7300794112)
+  })
+
+  it('still rejects an unknown role (the pre-role build behaviour)', () => {
+    const res = validateManifest(translationRaw({ role: 'translater' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('role'))).toBe(true)
+  })
+})
+
 describe('isRealSha256', () => {
   it('accepts a 64-char lower-case hex string', () => {
     expect(isRealSha256('a'.repeat(64))).toBe(true)

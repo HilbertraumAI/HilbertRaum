@@ -822,6 +822,7 @@ export const en = {
   'models.hint.reranker': 'Improves which document passages are used for answers.',
   'models.hint.transcriber':
     'Turns audio recordings into searchable text — and unlocks the 🎤 voice-dictation button in chat.',
+  'models.hint.translation': 'Translates your documents and text between languages, entirely offline.',
   'models.hint.small': 'Small and quick — fast answers on nearly any machine.',
   'models.hint.balanced': 'Balanced — works well on most laptops.',
   'models.hint.large': 'Large — strongest answers; needs a powerful machine.',
@@ -876,6 +877,8 @@ export const en = {
   'models.automatic.notInstalled': 'Used automatically once installed — no setup needed.',
   'models.vision.installed': 'Installed — ready in the Images tab. Nothing to start here.',
   'models.vision.notInstalled': 'Available in the Images tab once installed — no setup needed.',
+  'models.translation.installed': 'Installed — used automatically for translation. Nothing to start here.',
+  'models.translation.notInstalled': 'Used automatically for translation once installed — no setup needed.',
   'models.selected': 'Selected',
   'models.select': 'Select',
   'models.stopRuntime': 'Stop runtime',

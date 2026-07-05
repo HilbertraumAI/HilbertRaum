@@ -160,6 +160,11 @@ screen tells you why: either the Settings toggle is off, or this drive's policy 
 disabled (common on preconfigured commercial drives — use the drive's update path instead).
 Nothing about you or your documents is ever sent; the app only fetches the file.
 
+Some optional models carry a **license you accept before downloading** — the confirmation shows
+a link to the license and a tick-box you must check first. The **TranslateGemma** translation
+model is one of these: it is downloaded on demand (never bundled), used automatically for
+translation once installed, and — like the vision model — needs no starting or selecting.
+
 ### Speed: graphics-card acceleration (automatic)
 
 If your computer has a graphics card (NVIDIA, AMD, or Intel), the app uses it automatically to

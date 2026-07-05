@@ -434,3 +434,73 @@ reranker GGUF entries). No new license class enters the product. Live-loaded on 
 during the V1 gate (it read a real German invoice correctly); the runtime-arg resolution + the SSE
 reuse are in the architecture design record §3. The reference mechanics-proof artifact **SmolVLM-256M**
 (ggml-org, Apache-2.0) is recorded in BUILD_STATE V1 but is **not** a product candidate.
+
+## The translation role + TranslateGemma (TG wave, opened 2026-07-05)
+
+The `translation` role powers HilbertRaum's **dedicated translation model**,
+**`google/translategemma-12b-it`** served (from TG-2) by its **own `llama-server` sidecar** — the
+same availability-driven, opt-in posture as vision/reranker/transcriber, not a chat slot. TG-1 (this
+record's opening phase) adds only the role, the manifest, and the Models-screen surfaces — the model
+is **discoverable, downloadable, and hash-verifiable but nothing consumes it yet** (the sidecar,
+doc-task rerouting, and the Translate view land in TG-2…TG-5). Full design record folds into
+[`architecture.md`](architecture.md) at TG-6; the live plan is `docs/translategemma-translation-plan.md`.
+
+The schema addition is minimal — `translation` is a **single-file GGUF** (`shared/manifest.ts`
+`ModelRole` + `ROLES`), no `mmproj`:
+
+```yaml
+role: translation
+input_modalities: [text]               # TEXT-ONLY: the model is image-text→text and the repo ships
+                                       #   mmproj projectors, but we deliberately reference only the GGUF
+local_path: models/translation/translategemma-12b-it.Q4_K_M.gguf
+sha256: b7aac4b4be7ab0c49b6556c29c4467e74313df7f1e95d9f9676bb2adf0afa528
+recommended_context_tokens: 4096       # the sidecar's --ctx-size (2K input budget + output), NOT a chat window
+download:
+  url: https://huggingface.co/mradermacher/translategemma-12b-it-GGUF/resolve/main/translategemma-12b-it.Q4_K_M.gguf?download=true
+  sha256: b7aac4b4be7ab0c49b6556c29c4467e74313df7f1e95d9f9676bb2adf0afa528
+  size_bytes: 7300794112
+  license_url: https://ai.google.dev/gemma/terms
+```
+
+Everything else rides the existing schema. Install state (`services/models.ts`) is role-agnostic
+(present + SHA-256-verified ⇒ `installed`); `selectModel` **refuses** it ("used automatically") — it
+activates by **presence** via `resolveModelByRole('translation')` once the weight is verified, exactly
+like reranker/vision. An older build that predates the role treats the manifest as `unsupported`
+(forward-compatible, the same rollout as vision/transcriber). On the Models screen it renders as an
+automatic-role card (no Select/Start), downloadable behind the license-acknowledgement gate below.
+
+**Architecture facts this rests on (verified 2026-07-05).** TranslateGemma is **plain Gemma 3**
+(`Gemma3ForConditionalGeneration`, `model_type: gemma3`) — no new architecture string, so the pinned
+**b9849** runtime (which has loaded `gemma3` since 2025) loads it with **no pin bump**. The model card
+states a **2K-token input budget** (the fine-tune's trained window, though the arch supports 128K) →
+document translation must chunk to ≤~2K tokens (enforced structurally at TG-3). The GGUF is from
+**`mradermacher/translategemma-12b-it-GGUF`** — the de-facto standard community quant (no Google QAT
+or Apache-2.0 variant exists; unsloth/bartowski/ggml-org/lmstudio-community/QuantFactory published
+nothing, verified via author-scoped HF API queries). The `Q4_K_M` file is **7,300,794,112 bytes**;
+its **git-LFS OID = the file SHA-256** (`b7aac4b4…a528`), cross-checked against the resolve endpoint's
+`X-Linked-ETag` + `X-Linked-Size`, and the repo is **public** (tree API + resolve both readable
+unauthenticated, though Google's base repo is gated).
+
+**Research note — the `--jinja` regression (why the sidecar is prompt-in-app, not template-driven).**
+llama.cpp's dedicated TranslateGemma support (request-level `chat_template_kwargs`) merged 2026-01-24,
+inside the pin — but a later chat-parsing rework (**PR #19419**) **regressed the `--jinja`
+embedded-template path** for this template ("Unable to generate parser … std::bad_alloc", issue
+**#20305**; fix **PR #20956 still open as of 2026-07-05**). **Therefore the translation sidecar must
+NOT use `--jinja`**: it formats the trained single-turn prompt in app code and calls the raw
+**`/completion`** endpoint (the endorsed workaround). This also rules out running TranslateGemma as a
+`role: chat` model (the chat sidecar hard-codes `--jinja`). The design is captured in the sidecar work
+(TG-2, plan §2 D2); the no-jinja choice is simpler and deterministic and stands even if a future pin
+lands the #20305 fix.
+
+**License-review record — TranslateGemma 12B (status: `pending`, TG wave O1).** The base model
+`google/translategemma-{4b,12b,27b}-it` is under the **Gemma Terms of Use**
+(`https://ai.google.dev/gemma/terms`) — a **non-permissive** license, the same class that kept **Gemma
+3 parked** (only Gemma 4 moved to Apache-2.0; see "Disqualified / parked candidates" above). Posture:
+**in-app download is allowed behind the explicit license-acknowledgement checkbox** (`downloads.ts`
+license gate, unchanged); the model is **not bundled** and **not auto-recommended** (rank 0, profiles
+`[]`). **Commercial-drive redistribution is a separate, later explicit review** that must satisfy the
+Gemma Terms **flow-down obligations** (pass the Gemma Terms + Prohibited Use Policy through to end
+users, retain the "Gemma" attribution/notices, no prohibited-purpose use). **Third-party quantizer
+provenance:** the GGUF is a community requant (mradermacher) inheriting the Gemma license — the same
+established-quantizer posture as the unsloth entries; the hash is pinned via the LFS OID and
+re-verified with `verify-models --generate` after the first fetch.

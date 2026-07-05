@@ -78,8 +78,10 @@ DIRS=(
   models/reranker
   models/transcriber
   models/vision
+  models/translation
   model-manifests
   model-manifests/vision
+  model-manifests/translation
   runtime/llama.cpp/win
   runtime/llama.cpp/mac
   runtime/llama.cpp/linux

@@ -51,10 +51,15 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   // Vision (image-understanding) weights: the language GGUF + its mmproj projector
   // (image-understanding plan §8.4). Git-ignored like all weights; opt-in download.
   'models/vision',
+  // Translation weights: the TranslateGemma GGUF served by its own sidecar (TranslateGemma
+  // plan §2 D1). Git-ignored like all weights; opt-in download behind the license-ack gate.
+  'models/translation',
   'model-manifests',
   // Committed vision manifests are discovered recursively under model-manifests/; the
   // sub-dir keeps the role's YAML tidy (resolveManifestsDir walks recursively, no code change).
   'model-manifests/vision',
+  // Translation manifests (TranslateGemma role, TG-1) — same recursive discovery, tidy sub-dir.
+  'model-manifests/translation',
   ...DRIVE_OS_DIRS.map((os) => `runtime/llama.cpp/${os}`),
   // Second sidecar family: the whisper.cpp transcriber CLI. Upstream ships
   // a prebuilt Windows build only; the mac/linux dirs exist for the documented

@@ -331,7 +331,7 @@ export interface ModelInfo {
   id: string
   displayName: string
   family: string
-  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision'
+  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision' | 'translation'
   format: string
   runtime: string
   license: string

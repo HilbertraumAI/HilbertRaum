@@ -450,6 +450,8 @@ export const ENGINE_DOWNLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
 const MODEL_WEIGHT_MAX_BYTES: Record<ModelRole, number> = {
   chat: 40 * 1024 * 1024 * 1024,
   vision: 40 * 1024 * 1024 * 1024,
+  // Translation (TranslateGemma) is a 12B generative GGUF (~7.3 GB at Q4); generous like chat/vision.
+  translation: 40 * 1024 * 1024 * 1024,
   transcriber: 8 * 1024 * 1024 * 1024,
   embeddings: 4 * 1024 * 1024 * 1024,
   reranker: 4 * 1024 * 1024 * 1024

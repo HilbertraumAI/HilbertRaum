@@ -255,6 +255,50 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
     expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
   })
 
+  it('offers Download for a missing translation model — never Select/Start (TG-1)', async () => {
+    stub({
+      models: [
+        model({
+          id: 'translategemma-12b-it-q4',
+          displayName: 'TranslateGemma 12B (Q4_K_M)',
+          role: 'translation',
+          license: 'gemma',
+          sizeOnDiskGb: 7.3,
+          state: 'missing'
+        })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('TranslateGemma 12B (Q4_K_M)')
+    expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument()
+    expect(screen.getByText(/used automatically for translation once installed/i)).toBeInTheDocument()
+    // Availability-driven role (like reranker/vision): no chat-slot Select/Start.
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
+  })
+
+  it('an installed translation model says it is used automatically — never Select/Start (TG-1)', async () => {
+    stub({
+      models: [
+        model({
+          id: 'translategemma-12b-it-q4',
+          displayName: 'TranslateGemma 12B (Q4_K_M)',
+          role: 'translation',
+          license: 'gemma',
+          sizeOnDiskGb: 7.3,
+          state: 'installed',
+          download: undefined
+        })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('TranslateGemma 12B (Q4_K_M)')
+    expect(screen.getByText('Installed')).toBeInTheDocument()
+    expect(screen.getByText(/used automatically for translation/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
+  })
+
   it('the reranker card gets the same automatic treatment', async () => {
     stub({
       models: [

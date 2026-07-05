@@ -373,6 +373,37 @@ describe('computeInstallState — vision (both files verified)', () => {
   })
 })
 
+// TG-1: the `translation` role is a plain single-file GGUF (llama_cpp), so install-state is
+// role-agnostic — present + verified ⇒ installed, exactly like a chat weight. Guards the claim
+// that discovery/install-state need no per-role code for the new role.
+describe('computeInstallState — translation role (TG-1)', () => {
+  function translationManifest(overrides: Record<string, unknown> = {}): ModelManifest {
+    return asManifest({
+      id: 'translategemma-12b-it-q4',
+      role: 'translation',
+      family: 'translategemma',
+      license: 'gemma',
+      local_path: 'models/translation/tg.gguf',
+      ...overrides
+    })
+  }
+
+  it('is missing when the weight is absent', async () => {
+    const root = tempDir('hilbertraum-tg-')
+    expect(await computeInstallState(translationManifest(), root, { developerMode: false })).toBe('missing')
+  })
+
+  it('is installed when the weight is present and its hash matches', async () => {
+    const root = tempDir('hilbertraum-tg-')
+    mkdirSync(join(root, 'models', 'translation'), { recursive: true })
+    writeFileSync(join(root, 'models', 'translation', 'tg.gguf'), 'tg-weights')
+    const hash = createHash('sha256').update('tg-weights').digest('hex')
+    expect(
+      await computeInstallState(translationManifest({ sha256: hash }), root, { developerMode: false })
+    ).toBe('installed')
+  })
+})
+
 describe('recommendModelId', () => {
   const tiny = asManifest({ id: 'tiny', recommended_profiles: ['TINY', 'UNKNOWN'] })
   const lite = asManifest({ id: 'lite', recommended_profiles: ['LITE'] })
@@ -823,6 +854,29 @@ describe('selectModel', () => {
     expect(() => selectModel(db, manifestsDir, 'whisper-small-multilingual')).toThrow(
       /used automatically/
     )
+    expect(getSettings(db).activeModelId).toBe(null)
+    expect(getSettings(db).activeEmbeddingModelId).toBe(null)
+  })
+
+  // TG-1: the translation role is availability-driven too (like reranker/transcriber/vision) —
+  // it has no settings slot, so selectModel must refuse it and leave both slots untouched.
+  it('refuses a translation selection and leaves both slots untouched', () => {
+    const { dbPath, manifestsDir } = setup()
+    writeFileSync(
+      join(manifestsDir, 'translation.yaml'),
+      stringify(
+        manifestObj({
+          id: 'translategemma-12b-it-q4',
+          role: 'translation',
+          family: 'translategemma',
+          license: 'gemma',
+          local_path: 'models/translation/translategemma-12b-it.Q4_K_M.gguf'
+        })
+      )
+    )
+    const db = openDatabase(dbPath)
+    seedSettings(db)
+    expect(() => selectModel(db, manifestsDir, 'translategemma-12b-it-q4')).toThrow(/used automatically/)
     expect(getSettings(db).activeModelId).toBe(null)
     expect(getSettings(db).activeEmbeddingModelId).toBe(null)
   })
