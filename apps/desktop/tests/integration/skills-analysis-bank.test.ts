@@ -859,6 +859,81 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     )
   })
 
+  it('derived columns (Phase 3): "as CSV with a payee column" parses the request, enriches every row, and notes the model fill', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const calls: Array<{ name?: string }> = []
+    // One scripted runtime serving BOTH grammar surfaces, keyed by responseSchemaName.
+    const runtime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(
+        messages: { role: string; content: string }[],
+        options?: { responseSchemaName?: string }
+      ) {
+        calls.push({ name: options?.responseSchemaName })
+        if (options?.responseSchemaName === 'table_request') {
+          yield JSON.stringify({ derivedColumns: [{ name: 'Payee', description: 'who received the money' }] })
+          return
+        }
+        const assignments = messages[1].content
+          .split('\n')
+          .filter((l) => /^\d+\t/.test(l))
+          .map((l) => {
+            const [idx, , ...rest] = l.split('\t')
+            return {
+              index: Number(idx),
+              values: { Payee: rest.join('\t').includes('Grocery') ? 'REWE' : 'unknown' }
+            }
+          })
+        yield JSON.stringify({ assignments })
+      }
+    } as never
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'show me the statement as CSV with a payee column'),
+      runtime
+    }
+    const res = await bankStatementAnalysisHandler.run!(ctx)
+    expect(calls.map((c) => c.name)).toEqual(['table_request', 'table_enrichment'])
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).toContain('date,valueDate,description,amount,currency,balanceAfter,sourcePage,Payee')
+    expect(res.answer).toMatch(/Grocery,-45\.90,EUR,1954\.10,\d*,REWE/)
+    expect(res.answer).toMatch(/Salary,2500\.00,EUR,4454\.10,\d*,$/m) // unknown → honest blank cell
+    // The honesty note names the model-filled column(s); the result table carries them too.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.derivedColumnsNote', { columns: 'Payee' }))
+    expect(res.table?.columns.map((c) => c.key)).toContain('Payee')
+  })
+
+  it('derived columns (Phase 3): the pre-gate keeps a PLAIN format ask 0-model, and no runtime falls back to the plain table', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const calls: unknown[] = []
+    const runtime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream() {
+        calls.push(1)
+        yield '{}'
+      }
+    } as never
+    // Plain "as CSV" with a runtime present: the pre-gate must not pay ANY model call.
+    const plain = await bankStatementAnalysisHandler.run!(
+      { ...ctxFor(db, { documentIds: [id] }, 'show me the statement as CSV'), runtime }
+    )
+    expect(calls).toHaveLength(0)
+    expect(plain.answer).toContain('date,valueDate,description,amount,currency,balanceAfter,sourcePage')
+    // A column-shaped ask WITHOUT a runtime: the plain 7-column table, no crash, no derived note.
+    const offline = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'show me the statement as CSV with a payee column')
+    )
+    expect(offline.answer).toContain('date,valueDate,description,amount,currency,balanceAfter,sourcePage')
+    expect(offline.answer).not.toContain('Payee')
+  })
+
   it('format path (JSON) with a category ask carries per-row categories under the same gate', async () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)

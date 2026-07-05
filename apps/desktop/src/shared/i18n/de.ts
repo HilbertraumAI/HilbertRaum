@@ -678,6 +678,12 @@ export const de: Record<keyof typeof en, string> = {
     'Ich habe „{name}“ gelesen, konnte es aber nicht als Kategorienliste verwenden. Erwartet wird eine ' +
     'Kategorie pro Zeile — ein Label, optional gefolgt von Stichworten nach einem Semikolon (z. B. ' +
     '„Kinder;Schule, Kita, Taschengeld“).',
+  // Result-Tables §5 (Phase 3): Ehrlichkeitshinweis unter einer Antwort mit modellbefüllten
+  // ZUSATZSPALTEN — ein abgeleiteter Wert ist ein Label, nie eine Parser-Zahl.
+  'skills.bankAnalysis.derivedColumnsNote':
+    '_Die Spalte(n) {columns} wurden vom lokalen Modell aus der Beschreibung der jeweiligen Buchung ' +
+    'befüllt — leer, wo es sich nicht sicher war. Alle Beträge stammen aus dem deterministischen Parser ' +
+    'und bleiben unverändert._',
 
   // ---- Rechnungsauswertung (full-doc-skills Plan §3.1, Phase 4 / D49) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der

@@ -1364,10 +1364,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   table (`result_tables`, purged with its message) and carries a message-level **"Export CSV"**
   action that writes it via the standard save dialog — though only answers produced AFTER Phase 2
   carry a table (no backfill), and only the bank format path emits one so far (invoice port
-  pending); (b) the column set is the fixed transaction
-  shape + category — **arbitrary derived columns** ("subcategory", "counterparty") are the plan's
-  Phase 3 (grammar-constrained TableRequest + per-row enrichment); (c) **without the skill active** a
-  tabular ask still routes to top-k relevance, not whole-document (also Phase 3).
+  pending); (b) ~~the column set is fixed~~ — **closed by Phase 3 v1 (same day)**: "… als CSV mit
+  einer Spalte Empfänger" pays ONE grammar-constrained parse + a batched per-row fill over the
+  whole statement; derived cells are model-filled labels (honesty note under the fence), blank
+  where the model was unsure, and ride the persisted result table + message export. Limits: needs
+  a running model (offline → the plain table); CSV asks only; ≤ 4 columns; values are not
+  persisted on the transactions themselves (re-asking re-pays the fill; the result table persists
+  per answer); a plain "als CSV" stays 0-model via the deterministic pre-gate — extra columns must
+  be signalled with a column-shaped phrasing (Spalte/column/subcategory/payee …); (c) **without
+  the skill active** a tabular ask still routes to top-k relevance, not whole-document — routing
+  it through extract-then-enrich needs a generic row extractor that does not exist yet (deferred,
+  plan §5).
   **Phase 1.5 (same day) added USER-DEFINED category sets from the prompt** ("Kategorisiere in Miete,
   Lebensmittel, Kinder und Sonstiges … als CSV"): the enum-constrained categorizer runs INLINE in the
   chat slot with the user's labels (+ the `Uncategorized` drop target), persists them as non-builtin

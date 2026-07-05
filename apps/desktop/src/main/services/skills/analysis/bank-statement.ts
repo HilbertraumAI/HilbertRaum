@@ -23,6 +23,8 @@ import {
   parseTaxonomyFileRef,
   type CustomCategoryInput
 } from '../categorizer'
+import { enrichRows, parseTableRequest, wantsExtraColumns } from '../enricher'
+import { tableToCsv, type TableSpec } from '../../tables'
 import { withDocumentLock } from '../doc-lock'
 import {
   BUILTIN_CATEGORIES,
@@ -978,6 +980,39 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         const snapRows = categoryShaped
           ? paired.map((p) => ({ ...p.row, category: p.category ?? categorizeRow(p.row) }))
           : rows
+
+        // Phase 3 (result-tables §5): user-requested DERIVED columns ("… als CSV mit einer Spalte
+        // Empfänger"). The cheap deterministic pre-gate keeps a plain format ask 0-model; only a
+        // column-shaped ask pays the ONE grammar-constrained TableRequest parse, and only a
+        // non-empty validated request pays the per-row enrichment (the WHOLE extracted statement,
+        // batched, blank cells where the model was unsure — never a guess). Any parse/enrich fault
+        // falls through to the plain table below — never a half-enriched answer. A derived value is
+        // a MODEL-FILLED label, never a parser figure — the note under the fence says so.
+        if (format === 'csv' && ctx.runtime && wantsExtraColumns(ctx.question)) {
+          const signal = ctx.signal ?? new AbortController().signal
+          const derived = await parseTableRequest(ctx.question, { runtime: ctx.runtime, signal })
+          if (derived && derived.length > 0) {
+            const filled = await enrichRows(snapRows, derived, { runtime: ctx.runtime, signal })
+            const base = transactionsTableSpec(snapRows)
+            const table: TableSpec<object> = {
+              columns: [...base.columns, ...derived.map((c) => ({ key: c.name, label: c.name }))],
+              rows: snapRows.map((r, i) => ({ ...r, ...filled[i] }))
+            }
+            const notes = [
+              ctx.tr('skills.bankAnalysis.derivedColumnsNote', {
+                columns: derived.map((c) => c.name).join(', ')
+              })
+            ]
+            if (categoryShaped && rowsCarryCategories(snapRows)) {
+              notes.push(
+                ctx.tr(modelAssisted ? 'skills.bankAnalysis.categoryAssisted' : 'skills.bankAnalysis.categoryRuleBased')
+              )
+            }
+            const answer = `${ctx.tr('skills.bankAnalysis.formatIntroCsv')}\n\n\`\`\`csv\n${tableToCsv(table)}\n\`\`\`\n\n${notes.join('\n')}`
+            return { answer, citations, coverage, table }
+          }
+        }
+
         const snap: StatementSnapshot = { rows: snapRows, summary: summarizeCashflow(rows), ...balances }
         return {
           answer: buildFormatAnswer(ctx.tr, format, snap, categoryShaped ? { modelAssisted } : undefined),

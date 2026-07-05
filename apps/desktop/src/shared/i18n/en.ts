@@ -663,6 +663,11 @@ export const en = {
   'skills.bankAnalysis.customTaxonomyUnparseable':
     'I read “{name}” but couldn’t use it as a category list. Expected one category per line — a label, ' +
     'optionally followed by keywords after a semicolon (for example “Kinder;Schule, Kita, Taschengeld”).',
+  // Result-tables §5 (Phase 3): the honesty note under an answer whose table carries model-filled
+  // DERIVED columns — a derived value is a label, never a parser figure.
+  'skills.bankAnalysis.derivedColumnsNote':
+    '_The column(s) {columns} were filled in by the local model from each transaction’s description — ' +
+    'left blank where it wasn’t sure. All figures come from the deterministic parser and are unchanged._',
 
   // ---- Invoice analysis answer (full-doc-skills plan §3.1, Phase 4 / D49) ----
   // The deterministic, whole-document answer the invoice analysis handler synthesises from the
