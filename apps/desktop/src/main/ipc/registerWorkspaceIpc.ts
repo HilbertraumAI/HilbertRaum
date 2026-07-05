@@ -242,7 +242,12 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // so it too must die before the vault re-encrypts. `stop()` aborts any in-flight analyze
       // and kills the child; the orchestrator rebuilds a fresh runtime (cold start) on the next
       // analyze, so this needs no `suspend()`/latch distinction (the runtime instance is discarded).
-      ctx.vision?.stop() ?? Promise.resolve()
+      ctx.vision?.stop() ?? Promise.resolve(),
+      // The TranslateGemma sidecar (TG wave) keeps recent source/translation text in its KV cache,
+      // so it too must die before the vault re-encrypts. `suspend()` (not `stop()`): the runtime
+      // instance is held on ctx for the session (unlike vision's rebuilt-per-analyze runtime), so
+      // it must come back lazily on the next translate() after unlock — stop() latches permanently.
+      ctx.translator?.suspend?.() ?? ctx.translator?.stop?.() ?? Promise.resolve()
     ])
     // R1 (full-audit-2026-06-30, Phase C) — deterministically await each aborted stream's
     // SETTLE (its partial-reply persistence) before the DB closes. The aborts above unwind each

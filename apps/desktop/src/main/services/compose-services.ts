@@ -2,12 +2,14 @@ import { createSelectedEmbedder } from './embeddings/factory'
 import { createSelectedReranker } from './reranker'
 import { createSelectedTranscriber } from './transcriber'
 import { createSelectedOcrEngine } from './ocr'
+import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
 import { log } from './logging'
 import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
 import type { Transcriber } from './transcriber'
 import type { OcrEngine } from './ocr'
+import type { Translator } from './translation'
 
 // M-A3 (audit-2026-06-13): the four availability-driven service selectors (embedder,
 // reranker, transcriber, OCR) were ~30 lines of near-identical "resolve the role's model,
@@ -22,6 +24,12 @@ export interface AvailabilityServices {
   reranker: Reranker | null
   transcriber: Transcriber | null
   ocrEngine: OcrEngine | null
+  /**
+   * The TranslateGemma translation sidecar (TG wave, plan §2 D1), selected only when its binary +
+   * GGUF are present (null otherwise — translation refuses with a friendly install path at TG-3;
+   * no mock, which would invent a translation). Availability-driven via `resolveModelByRole`.
+   */
+  translator: Translator | null
 }
 
 export interface ComposeServicesDeps {
@@ -81,6 +89,15 @@ export function composeServices({
     rootPath,
     onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
   })
+  // The TranslateGemma sidecar (TG wave). Selected only when the llama-server binary + the
+  // translation GGUF are present (null otherwise — no mock; translation refuses with the friendly
+  // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.
+  const translator = createSelectedTranslator({
+    rootPath,
+    isDev,
+    model: resolveModelByRole(manifestsDir, rootPath, 'translation'),
+    onSelect: (kind, reason) => log.info('Translation backend selected', { kind, reason })
+  })
 
-  return { embedder, reranker, transcriber, ocrEngine }
+  return { embedder, reranker, transcriber, ocrEngine, translator }
 }

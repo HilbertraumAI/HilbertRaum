@@ -485,12 +485,14 @@ unauthenticated, though Google's base repo is gated).
 llama.cpp's dedicated TranslateGemma support (request-level `chat_template_kwargs`) merged 2026-01-24,
 inside the pin — but a later chat-parsing rework (**PR #19419**) **regressed the `--jinja`
 embedded-template path** for this template ("Unable to generate parser … std::bad_alloc", issue
-**#20305**; fix **PR #20956 still open as of 2026-07-05**). **Therefore the translation sidecar must
-NOT use `--jinja`**: it formats the trained single-turn prompt in app code and calls the raw
-**`/completion`** endpoint (the endorsed workaround). This also rules out running TranslateGemma as a
-`role: chat` model (the chat sidecar hard-codes `--jinja`). The design is captured in the sidecar work
-(TG-2, plan §2 D2); the no-jinja choice is simpler and deterministic and stands even if a future pin
-lands the #20305 fix.
+**#20305**; fix **PR #20956 re-verified STILL OPEN at TG-2, 2026-07-05** — the PR adds a
+`--skip-chat-parsing` flag + extra content-part fields, but a commenter reported it did not resolve
+the user-role template error, so it stands unmerged). **Therefore the translation sidecar must NOT
+use `--jinja`**: it formats the trained single-turn prompt in app code (`services/translation/prompt.ts`)
+and calls the raw **`/completion`** endpoint (the endorsed workaround, `services/translation/completion.ts`).
+This also rules out running TranslateGemma as a `role: chat` model (the chat sidecar hard-codes
+`--jinja`). The design is built at TG-2 (plan §2 D2); the no-jinja choice is simpler and deterministic
+and stands even if a future pin lands the #20305 fix (V5 re-checks this on each pin bump).
 
 **License-review record — TranslateGemma 12B (status: `pending`, TG wave O1).** The base model
 `google/translategemma-{4b,12b,27b}-it` is under the **Gemma Terms of Use**

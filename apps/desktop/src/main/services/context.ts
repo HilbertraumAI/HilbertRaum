@@ -6,6 +6,7 @@ import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
 import type { Transcriber } from './transcriber'
 import type { OcrEngine } from './ocr'
+import type { Translator } from './translation'
 import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
@@ -46,6 +47,14 @@ export interface AppContext {
    * (graceful-fallback rule — there is deliberately no mock OCR engine).
    */
   ocrEngine?: OcrEngine | null
+  /**
+   * TranslateGemma translation sidecar (TG wave, plan §2 D1): a SEPARATE lazy llama-server serving
+   * the raw `/completion` endpoint (no `--jinja` — the #20305 regression). Selected only when the
+   * binary + GGUF are present; null/absent = translation refuses with a friendly install path
+   * (TG-3, O2 — deliberately no mock translator). Held for the session: `stop()` on quit,
+   * `suspend()` on lock (it lazily restarts on the next translate), plus its own idle teardown.
+   */
+  translator?: Translator | null
   /** Directory holding model-manifests, or null if it could not be located. */
   manifestsDir: string | null
   /**

@@ -223,7 +223,7 @@ function initBackend(): void {
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
-  const { embedder, reranker, transcriber, ocrEngine } = composeServices({
+  const { embedder, reranker, transcriber, ocrEngine, translator } = composeServices({
     rootPath: paths.rootPath,
     manifestsDir,
     // M-5: dev-only binary env overrides are honoured only in a dev build.
@@ -285,6 +285,10 @@ function initBackend(): void {
     reranker,
     transcriber,
     ocrEngine,
+    // The TranslateGemma sidecar (TG wave). Held on ctx so the lock/quit teardowns reach it
+    // (suspend/stop below); nothing consumes it until the doc-task reroute at TG-3. Lazy —
+    // it spawns nothing until the first translate() of an available model.
+    translator,
     manifestsDir,
     probeGpu: gpuProbe,
     isDev,

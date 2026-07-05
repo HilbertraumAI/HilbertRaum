@@ -57,6 +57,9 @@ a future move to Tauri/Rust is a localized swap.
 - `VisionAnalyzer` — the lazy vision sidecar (`services/vision/`) **or** absent: with no vision
   model the Images screen shows a calm unavailable state. A dedicated multimodal `llama-server`
   (own `LlamaServer`, NOT the chat `RuntimeManager`) — see "Image understanding — design record".
+- `Translator` — the lazy TranslateGemma sidecar (`services/translation/`) **or null**, chosen by
+  availability (TG wave). Deliberately no mock (a mock would invent a translation). See "Translation
+  sidecar — design record" below.
 
 ## Storage
 `node:sqlite` — built into the Node bundled by **Electron ^37** (Node 22.x). It is loaded via
@@ -1510,6 +1513,46 @@ sentinel-tested), zero native deps.
   from <original>" provenance line (row + preview); a done comparison opens the new
   report's preview with its "Comparison of <A> and <B>" line. Both materialized kinds
   offer Export.
+
+## Translation sidecar — design record (TG wave; STUB, folded in full at TG-6)
+
+_Working stub added at TG-2. The complete record — sidecar + Translate view + the doc-task reroute,
+with stable §-anchors — is folded in when the wave closes (TG-6, per the CLAUDE.md doc-lifecycle
+rule). The live plan is `docs/translategemma-translation-plan.md`._
+
+- **Why a dedicated sidecar (`services/translation/`).** TranslateGemma is served by its OWN lazy
+  `llama-server` (the FIFTH `LlamaServer` composition after chat, E5, reranker, vision) — NOT the
+  chat `RuntimeManager`. Forced: a chat-parsing rework (llama.cpp PR #19419) regressed the `--jinja`
+  embedded-template path for this model (issue #20305, fix PR #20956 still open — see
+  `model-policy.md` "The translation role"), so the sidecar launches **without `--jinja`** and
+  cannot ride the chat slot (which hard-codes `CHAT_SERVER_ARGS = ['--jinja', …]`). Desirable
+  anyway: chat stays usable, and ctx/prompt/sampling are model-specific (plan §2 D1/D2).
+- **Launch args (`runtime.ts`).** `--ctx-size 4096` (the model card's 2K input budget + output
+  headroom, plan §2 D4) `--parallel 1` (`TRANSLATION_SLOT_ARGS` — strictly sequential windows;
+  contains the #25142 Windows-Vulkan parallel-translation hang) `--device none`
+  (`TRANSLATION_DEVICE_ARGS` — CPU-pinned for TG-2 per D8: the chat GPU ladder in `runtime/factory.ts`
+  yields a `chatStream` `ModelRuntime`, whose seams don't fit a raw-`/completion` sidecar, so TG-2
+  ships CPU and the smoke's tokens/sec decides at TG-6 whether to pull GPU work forward). NO
+  `--jinja`, NOT `CHAT_SERVER_ARGS`.
+- **Prompt in app code (`prompt.ts`), raw `/completion` (`completion.ts`).** The trained
+  single-user-turn prompt is formatted in `buildTranslationPrompt` (our own `code → English name`
+  map — the template's dictionary is unusable without jinja) and POSTed to the native `/completion`
+  endpoint with `temperature 0` (greedy MT) + `stop: ["<end_of_turn>"]`; `readCompletionSSE` parses
+  the bare-object stream (NOT `readChatSSE`'s `choices[].delta` shape). Source text inside `{TEXT}`
+  is translated, never obeyed (no "part n of m" scaffolding, D2). VERBATIM template reconciliation
+  (plan §7 V1) is done by the `translategemma-smoke` harness against the server's `/props`.
+- **Lifecycle — a hybrid.** The vision RUNTIME-4 SOFT idle-teardown interlock (120 s default,
+  `HILBERTRAUM_TRANSLATION_IDLE_MS`; re-armed only when the last in-flight window settles) bounds
+  the ~10 GB co-residency window (plan §2 D9); the reranker `stop()` (permanent, quit) vs
+  `suspend()` (soft, workspace lock → lazy restart) split + `tearingDown`/bind-race-forgiving
+  `startFailed` latches keep the session-held instance safe across lock/unlock. Availability-driven:
+  `resolveModelByRole('translation')` → `resolveSidecarSelection` → `createSelectedTranslator`
+  (null when binary/weights absent; no mock — plan O2). Composed in `compose-services.ts`, carried
+  on `AppContext.translator`, stopped on quit (`shutdown.ts`) + suspended on lock
+  (`registerWorkspaceIpc`).
+- **TG-2 status.** Sidecar + wiring + tests are built and inert (nothing consumes `ctx.translator`
+  until the doc-task reroute at TG-3). The go/no-go gate is the `translategemma-smoke` harness on
+  the real pin (`packaging.md` harness matrix); until it passes, the wave does not proceed to TG-3.
 
 ## Functionality wave 3 — design record (Phases 31–38, decisions D23–D37 + research gates)
 
