@@ -1535,12 +1535,16 @@ sentinel-tested), zero native deps.
   report's preview with its "Comparison of <A> and <B>" line. Both materialized kinds
   offer Export.
 
-## Translation sidecar — design record (TG wave; STUB, folded in full at TG-6)
+## Translation sidecar — design record (TG wave)
 
-_Working stub added at TG-2, extended at TG-3 (the doc-task reroute), TG-4 (the Translate view
-text path) and TG-5 (document drag-and-drop in the view). The complete record — sidecar + Translate
-view + the doc-task reroute, with stable §-anchors — is folded in when the wave closes (TG-6, per
-the CLAUDE.md doc-lifecycle rule). The live plan is `docs/translategemma-translation-plan.md`._
+_The TranslateGemma translation wave (TG-1…TG-6, 2026-07-05) as built: the `translation` manifest
+role + dedicated `llama-server` sidecar, the doc-task reroute, and the Translate view (text +
+document drag-and-drop). This is the COMPLETE record — the plan
+(`docs/translategemma-translation-plan.md`) was folded here + into `model-policy.md` (role +
+license/research) + `model-benchmarks.md` §11 (measurements + promotion bar) and DELETED at TG-6 per
+the CLAUDE.md doc-lifecycle rule; the full original is in git history. In-code comments still cite
+the plan's `§N` / `DN` / `ON` / `VN` anchors — the **§-anchor legend** at the end of this record
+keeps them resolvable (the "Functionality wave 3" precedent)._
 
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
   (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
@@ -1608,7 +1612,8 @@ the CLAUDE.md doc-lifecycle rule). The live plan is `docs/translategemma-transla
   canonical `TRANSLATION_LANGUAGE_CODES`; the sidecar's prompt maps key off it — one source of
   truth). Window planning moved to `Translator.contextWindow()` + the D4
   `TRANSLATION_MAX_INPUT_TOKENS = 1800` clamp; the Qwen-measured 1.3/2.0 tokens-per-word
-  constants stay as conservative defaults until the TG-6 Gemma-tokenizer re-measurement.
+  constants were carried as conservative defaults here and REPLACED at TG-6 with the
+  Gemma-measured 2.5/3.0 (see the TG-6 bullet above).
   `AppStatus.translationAvailable` (from `ctx.translator`, the `ocrAvailable` twin) gates the
   Documents UI. V6 re-verified: `resolveModelByRole('translation')` carries the manifest's
   `recommendedContextTokens` (4096) into the sidecar launch exactly as vision/reranker do.
@@ -1646,12 +1651,73 @@ the CLAUDE.md doc-lifecycle rule). The live plan is `docs/translategemma-transla
   (null when binary/weights absent; no mock — plan O2). Composed in `compose-services.ts`, carried
   on `AppContext.translator`, stopped on quit (`shutdown.ts`) + suspended on lock
   (`registerWorkspaceIpc`).
-- **TG-2 status — GATE PASSED.** Sidecar + wiring + tests are built and inert (nothing consumes
-  `ctx.translator` until the doc-task reroute at TG-3). The `translategemma-smoke` harness RAN on the
-  real b9849 Vulkan pin (2026-07-05) and PASSED: clean DE↔EN translation, injection-resistant, no
-  stop-token leak, ~3.7–4.0 tok/s CPU decode, ~9.5 GiB peak RSS. Its load-bearing finding is the
-  `--chat-template gemma` startup fix above (without it b9849 can't start on this model). CPU
-  safety-net leg still to run on a drive that ships `runtime/llama.cpp/<os>/cpu/`.
+- **TG-2 gate — PASSED.** The `translategemma-smoke` harness RAN on the real b9849 Vulkan pin
+  (2026-07-05) and PASSED: clean DE↔EN translation, injection-resistant, no stop-token leak,
+  ~3.7–4.0 tok/s CPU decode, ~9.5 GiB peak RSS. Its load-bearing finding is the `--chat-template
+  gemma` startup fix above (without it b9849 can't start on this model).
+- **TG-6 — calibration + closure (the measurements the design rests on).** The manual smoke +
+  `llama-tokenize` re-measured the REAL Gemma tokenizer + runtime on the pin (full table in
+  `model-benchmarks.md` §11). The load-bearing finding: the Qwen3-4B-measured planner constants
+  (`1.3` input / `2.0` output tokens-per-word, carried as "conservative defaults" through TG-3) were
+  **unsafe** on the Gemma tokenizer — real input runs to **2.26 tok/word** (Czech; en 1.11 … cs 2.26
+  on realistic prose, ~2.8 on token-dense invoice lines) and output to **1.96 tok/source-word**
+  (word-sparse German → dense Slavic/Cyrillic; dense short samples ~3.06). At the old constants a
+  full ~1,150-word window would have been ~3,200+ input tokens alone, overflowing BOTH the 2K trained
+  input and the launched 4096 context (silent truncation). Fix (`doctasks/translation.ts`): a
+  translation-specific **`TRANSLATION_INPUT_TOKENS_PER_WORD = 2.5`** (NOT the shared
+  `SUMMARY_TOKENS_PER_WORD`, which is the chat model's summary factor for a different tokenizer) +
+  **`TRANSLATION_OUTPUT_TOKENS_PER_WORD = 3.0`**, both conservative ceilings over the measured maxima
+  so a window can only OVER-chunk, never overflow (the D4 clamp still binds: at 2.5 tok/word a
+  clamp-word window's input stays under 2K). Windows shrink to **~690 words** (`windowMaxTokens`
+  ≈2,071) — the honest cost of the heavy tokenizer. **D8 (GPU):** KEEP CPU-pinned for v1 (~3–4 tok/s
+  is tolerable for a background doc-task with progress + cancel; a GPU flip needs its own GPU-decode
+  re-smoke where #25142 is contained; `TRANSLATION_DEVICE_ARGS` stays the one-line flip). The
+  per-window timeout was recalibrated to 45 min (a ~2,070-token full window at the observed-worst
+  ~1.1 tok/s is ~30 min). **D9 (chat-during-translation relaxation):** KEEP serialization —
+  co-residency measured ≈13.2 GiB (translation ≈9.2 + a 4B chat + embedder); a 12B chat pushes the
+  pair past a 16 GB machine, so two large models decoding at once is infeasible. **min-RAM (D10):**
+  `recommended_min_ram_gb` reset to 17 (the §4 peak+3-headroom rule applied to the measured 13.24 GiB
+  co-residency floor, which excludes the Electron shell). **Pre-ship gap:** the CPU
+  safety-net smoke leg is still unrun — no `runtime/llama.cpp/<os>/cpu/` on the Vulkan-only drive; run
+  it on a drive that ships the CPU build before release.
+
+### §-anchor legend (historical plan citations)
+
+The retired `translategemma-translation-plan.md` was folded — its decisions into this record + the
+docs below, its facts/license into `model-policy.md`, its measurements into `model-benchmarks.md`
+§11. In-code comments and the kept docs still cite `plan §N`, `DN`, `ON`, `VN`, `TG-N` — the numbers
+were never renumbered, so this legend keeps them **resolvable** (the doc-lifecycle "stable anchors"
+intent, the "Functionality wave 3" precedent) without churning ~40 comments. Read a historical
+anchor as:
+
+| Plan anchor | Meaning | Now lives in |
+|---|---|---|
+| **O1** | License: Gemma Terms `pending`; download behind the ack gate; not bundled | `model-policy.md` "The translation role" license-review record |
+| **O2** | Require the model (no chat fallback) | D3 below + `known-limitations.md` "Document translation" |
+| **O3** | 12B only; 4B/27B manifest-only follow-ups | D-table below + `model-benchmarks.md` §11 (promotion bar) |
+| **O4** | Curated 10 languages | D5 below + `shared/types.ts` (`TRANSLATION_LANGUAGE_CODES` guard) |
+| **§1 / §1.1** | Verified facts (gemma3 arch, 2K input, GGUF source, `--jinja`/#20305) | `model-policy.md` "The translation role" (architecture facts + research note) |
+| **§2 D1–D10** | Design decisions | the **decision table** below (and the bullets above) |
+| **§3** | Data-contract changes (`translation` role, widened langs, `translate:*` IPC) | as-built in `shared/manifest.ts` / `shared/types.ts` / `shared/ipc.ts` |
+| **§4 (TG-1…TG-6)** | The six phases | the per-wave `BUILD_STATE.md` log |
+| **§5** | Risks (#20305, #22908, #25142, Gemma Terms, RAM co-residency, drift) | the bullets above + `known-limitations.md` |
+| **§6** | Non-goals (image translation, 4B/27B, auto-detect, chat-during-translate) | this record + `model-benchmarks.md` §11 |
+| **§7 V1–V6** | Re-verify-at-implementation items (all resolved) | V1 prompt reconciled (smoke `/props`); V2–V4 URL/filename/sha256 (`model-policy.md` + manifest); V5 #20305 still open (`model-policy.md`); V6 `recommendedContextTokens` (the launch) |
+
+**Decision table (D1–D10, as resolved):**
+
+| # | Decision | As built |
+|---|---|---|
+| D1 | New `translation` role + dedicated lazy sidecar | `services/translation/runtime.ts` — own `LlamaServer`, `--parallel 1`, 120 s soft idle teardown, availability-driven via `resolveModelByRole('translation')` |
+| D2 | No `--jinja`; app-side prompt + raw `/completion` | `prompt.ts` (trained single-turn format, own code→English-name map) + `completion.ts` (bare-object SSE); `--chat-template gemma` avoids the #20305 STARTUP crash |
+| D3 | Hard model requirement (O2) | enqueue+dequeue require a non-null `Translator`; friendly `main.translation.noModel` + deep link; chat may be absent |
+| D4 | 2K input budget, structurally enforced | `--ctx-size 4096` + `TRANSLATION_MAX_INPUT_TOKENS = 1800` clamp in `planTranslationWindows`; TG-6 sized the tokens-per-word constants so the clamp binds in REAL tokens |
+| D5 | Curated 10 languages, source+target | `TRANSLATION_LANGUAGE_CODES` (shared) + native-name selects; no auto-detect |
+| D6 | Translate view = 7th primary destination | `TranslateScreen` + `TranslateJobService` (`translate:*` IPC, `trToken/trDone/trError`) |
+| D7 | Dropped/picked documents ride the doc-task | `TranslateDropZone` → import `{kind:'temporary'}` → `startDocTask('translation')` → materialized Markdown |
+| D8 | GPU posture | CPU-pinned (`--device none`) shipped; TG-6 KEEPS it (~3–4 tok/s tolerable; GPU deferred behind a GPU-drive re-smoke) — `TRANSLATION_DEVICE_ARGS` is the one-line flip |
+| D9 | Concurrency guards stay | doc-task FIFO + chat↔task exclusion + view-job `docTaskBusy`; TG-6 KEEPS them (co-residency ≈13.2 GiB rules out two large models decoding at once) |
+| D10 | Manifest discipline | rank 0, profiles `[]`, not bundled, `license_review: pending`; `recommended_min_ram_gb` set to 17 (§4 rule on the TG-6 co-residency floor 13.24 GiB) |
 
 ## Functionality wave 3 — design record (Phases 31–38, decisions D23–D37 + research gates)
 

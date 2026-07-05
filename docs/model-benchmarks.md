@@ -579,3 +579,108 @@ echo rides under the model answer; whole-doc coverage is capped + not truncated;
 present) — **never prose / wording**. This is the autonomous stand-in for the manual GUI smoke of the three
 complaint flows (bank statement, invoice, minutes). Overrides: `HILBERTRAUM_LLAMA_BIN`, `SKILLS_SMOKE_ROOT`
 (defaults target `D:\`).
+
+---
+
+## 11. Translation model (TranslateGemma 12B) — TG-6 measurements + the promotion bar
+
+The `translation` role (design record in [`architecture.md`](architecture.md) "Translation sidecar
+— design record") is a THIRD benchmark axis, separate from the chat catalog (§1–§7) and the vision
+sidecar (§8): a different role (`translation`), served by its OWN lazy `llama-server` on the raw
+`/completion` endpoint (NO `--jinja`, `--chat-template gemma`, `--device none`, `--parallel 1`,
+`--ctx-size 4096`), CPU-bound generative decode. The only shipped model is
+**`translategemma-12b-it` (mradermacher Q4_K_M, 7.30 GB, sha256 `b7aac4b4…a528`)**. Numbers below
+are the **real b9849 Vulkan-pin measurements** captured by the TG-6 run of the manual smoke +
+`llama-tokenize` (drive root junctioned to `D:\`, 2026-07-05).
+
+### 11.1 The manual smoke harness (`HILBERTRAUM_TRANSLATEGEMMA_SMOKE`)
+
+[`tests/manual/translategemma-smoke.test.ts`](../apps/desktop/tests/manual/translategemma-smoke.test.ts),
+the same env-gated pattern as vision/gpu/rerank/skills (§8.1, §10.2) — SKIPPED in CI (zero
+model/binary/network). It composes `LlamaServer` with the SHIPPING `TRANSLATION_SERVER_ARGS` and
+drives the SHIPPING prompt builder + `/completion` reader, so it proves model + prompt + endpoint
+fidelity on the real pin AND records the calibration numbers:
+
+```powershell
+$env:HILBERTRAUM_TRANSLATEGEMMA_SMOKE = "<root with runtime/llama.cpp/<os>/llama-server + models/{translation,embeddings,chat}/*.gguf>"
+cd apps\desktop
+npx vitest run tests/manual/translategemma-smoke.test.ts
+```
+
+Legs: (1) load on the pin (#22908 risk); (2) `/props` chat_template = `gemma` (V1 reconcile); (3–6)
+DE↔EN sanity + verbatim identifiers + injection-resistance + no `<end_of_turn>` leak; (7) sidecar
+peak RSS; (8) per-language round-trip for the curated 10; (9) Gemma tokens-per-word (input via
+`/tokenize` per source lang; output per source word into the heavy targets); (10) co-residency peak
+RSS (translation + E5 + a resident chat). GATE: if the pin can't load or `/completion` breaks
+(#20305-adjacent), STOP — do not ship. (Tokens-per-word amortized over realistic-length prose is
+measured with `llama-tokenize` directly — the per-window planner operates on hundreds of words, so
+the short in-smoke sentences over-state the ratio; §11.2 uses the amortized numbers.)
+
+### 11.2 Measured (real b9849 Vulkan pin, CPU decode)
+
+| Datum | Value | Note |
+|---|---|---|
+| Weight | `translategemma-12b-it.Q4_K_M.gguf` — 7.30 GB | Gemma license; downloadable behind the license-ack gate; NOT bundled |
+| **Peak RSS (sidecar alone)** | **≈ 9.3 GiB** | `--device none`, ctx 4096 (`PeakWorkingSetSize`; TG-2 saw ≈9.5) |
+| **Peak RSS (co-resident)** | **≈ 13.2 GiB** | translation ≈9.2 + E5 embedder ≈0.14 + a 4B chat ≈3.9, all warm at once — the doc-task materialize shape (D9) |
+| Cold load | ≈ 26–37 s | warm OS cache ~26 s; cold-from-USB ~37 s (TG-2) |
+| **CPU decode** | **≈ 3–4 tok/s** (nominal) | ranged 1.1–4.4 across the TG-6 run under machine load; TG-2 clean run 3.7–4.0 |
+| **Input tok/word (Gemma, prose)** | en 1.11 · de 1.43 · nl 1.65 · uk 2.13 · pl 2.19 · **cs 2.26** | `llama-tokenize` over realistic office prose; a token-dense 20-word invoice line peaks ~2.8 |
+| **Output tok/source-word (prose)** | en→de 1.39 · de→pl 1.79 · de→uk 1.90 · **de→cs 1.96** | word-sparse German source → token-dense target, the worst case; dense short samples reach ~3.06 |
+| Fidelity (curated 10) | round-trip OK for all ten; invoice no. + model code verbatim; numbers LOCALIZED; injection resisted; no stop-token leak | the recorded evidence the widened `TranslationLangCode` cites |
+
+**The load-bearing TG-6 finding — the Qwen-era planner constants were unsafe on the Gemma
+tokenizer.** The chat path's `1.3` input / `2.0` output tokens-per-word (measured on Qwen3-4B,
+carried as "conservative defaults" through TG-3) are ~HALF the real Gemma weight (up to 2.26 input /
+1.96 output on realistic prose, higher on dense content). Left unfixed, a full ~1,150-word window
+(what the chat estimate implied) would have been ~3,200+ input tokens ALONE — blowing past both the
+2K trained input AND the launched 4096 context (silent input/output truncation). TG-6 replaced them
+with measured-then-rounded-UP ceilings (`TRANSLATION_INPUT_TOKENS_PER_WORD = 2.5`,
+`TRANSLATION_OUTPUT_TOKENS_PER_WORD = 3.0`, `doctasks/translation.ts` — a translation-specific input
+constant, NOT the shared chat-model `SUMMARY_TOKENS_PER_WORD`) so a window can only ever OVER-chunk
+(harmless), never overflow. Consequence: **~690-word windows** at ctx 4096 (more, smaller than the
+old estimate; `windowMaxTokens` ≈ 2,071), the honest cost of the heavy tokenizer. Over-chunking is
+the only failure mode; the doc-task suite's "fit property" proves input estimate + output cap ≤ the
+usable context at every context size.
+
+**Decisions revisited at TG-6:**
+- **D8 (GPU) — KEEP CPU-pinned for v1.** ~3–4 tok/s CPU is tolerable for a BACKGROUND doc-task with
+  per-window progress + instant cancel, and the smoke drive is Windows Vulkan where #25142 (the
+  parallel-translation hang) is the live risk; a GPU flip needs its own GPU-decode re-smoke on a
+  paid GPU drive. `TRANSLATION_DEVICE_ARGS` stays the documented one-line flip. GPU is deferred, not
+  rejected. The per-window request timeout was recalibrated to **45 min** (`DEFAULT_REQUEST_TIMEOUT_MS`):
+  a ~2,070-token full window at the observed-worst ~1.1 tok/s is ~30 min, so 45 min never false-kills
+  a live slow decode while still bounding a true hang (user cancel stays instant).
+- **D9 (chat-during-translation relaxation) — KEEP serialization.** The co-residency measurement is
+  the reason: translation ≈9.2 GiB + a resident chat + embedder already reaches ≈13.2 GiB with a 4B
+  chat; a 12B chat (≈6.5 GiB) pushes the pair PAST a 16 GB machine. Letting chat DECODE during a
+  translation would put two large models under active compute + full RAM at once — infeasible on the
+  target hardware. The doc-task lane + the view-job `docTaskBusy` guard stay.
+- **min-RAM (D10):** `recommended_min_ram_gb` set to **17** — the §4 rule (peak + ~3 GiB headroom,
+  rounded up) applied to the measured **co-residency** floor 13.24 GiB (which itself excludes the
+  Electron shell + OS), so a 16 GiB box is correctly gated out of the translation + small-chat case.
+  A 12B resident chat wants the recommended 32 (the manifest records the reasoning).
+
+### 11.3 The promotion bar — what a future translation candidate must beat
+
+Same discipline as §9 (the Qwen3.5 wave) and §8.3 (vision): **public MT benchmark scores are NOT a
+promotion signal here.** WMT24++ MetricX/COMET (4B 5.32/80.1, 12B 3.60/83.5, 27B 3.09/84.4) is why
+the 12B was chosen over the 4B, but a NEW candidate (a TranslateGemma 4B/27B — manifest-only
+follow-ups per the plan's O3/§6 — or a successor family) earns `recommendation_rank > 0` ONLY by
+beating the shipped 12B on the LOCAL evidence:
+
+1. **The TG-6 smoke passes on the pin** — loads, `/completion` clean (no #20305/#22908), the curated
+   10 round-trip with verbatim identifier/number preservation, injection-resistant, no stop-token
+   leak.
+2. **Tokens-per-word re-measured** for its own tokenizer (the planner constants are model-specific —
+   a different tokenizer needs its own `llama-tokenize` sweep; do NOT inherit the 2.5/3.0).
+3. **Peak RSS (sidecar-alone AND co-resident)** measured → its own `recommended_min_ram_gb`.
+4. **CPU tok/s** measured → the per-window timeout + the D8 GPU decision re-run for that model.
+5. **Translation quality** judged on the SAME per-language round-trips (fidelity, localization,
+   injection-resistance) — a smaller model must not regress German/Slavic/Cyrillic fidelity, a
+   larger one must justify the RAM/latency it costs.
+
+A candidate that only looks better on paper stays `recommendation_rank: 0` (manual, never
+auto-recommended, never bundled) until the local evidence gives it a real rank. Image translation
+(the model is image-text→text; mmproj projectors exist) stays out of scope (the plan's §6): a later
+Images-screen integration, not a benchmark axis here.

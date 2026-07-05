@@ -44,6 +44,15 @@ first public release. Consciously-accepted gaps are tracked in
 - **Document tasks & skills** — summarize, translate, and compare documents;
   install reusable **skills** for structured extraction (bank statements,
   invoices, meeting minutes, contract briefs, deadlines, redaction / share-safe).
+- **Translate view + dedicated translation model (TranslateGemma)** — a top-level
+  **Translate** screen for live text translation and drag-and-drop document
+  translation across a curated ten languages (de, en, fr, es, it, pt, nl, pl, cs,
+  uk), source **and** target. Translation runs on a dedicated on-device
+  **TranslateGemma 12B** sidecar (downloaded on demand behind the license
+  acknowledgement; not bundled) — never the chat model; document translations
+  materialize as searchable, exportable local documents. Calibrated against the real
+  model (per-language round-trip evidence + measured tokenizer weights) so a window
+  can only over-chunk, never overflow.
 - **Encrypted, portable workspace** — an optional password-encrypted workspace
   (AES-256-GCM with Argon2id key derivation) covering the database, imported-document
   copies, and the diagnostics log; keep models plus the workspace on an external

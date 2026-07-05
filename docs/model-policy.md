@@ -435,15 +435,16 @@ during the V1 gate (it read a real German invoice correctly); the runtime-arg re
 reuse are in the architecture design record §3. The reference mechanics-proof artifact **SmolVLM-256M**
 (ggml-org, Apache-2.0) is recorded in BUILD_STATE V1 but is **not** a product candidate.
 
-## The translation role + TranslateGemma (TG wave, opened 2026-07-05)
+## The translation role + TranslateGemma (TG wave, 2026-07-05)
 
 The `translation` role powers HilbertRaum's **dedicated translation model**,
-**`google/translategemma-12b-it`** served (from TG-2) by its **own `llama-server` sidecar** — the
-same availability-driven, opt-in posture as vision/reranker/transcriber, not a chat slot. TG-1 (this
-record's opening phase) adds only the role, the manifest, and the Models-screen surfaces — the model
-is **discoverable, downloadable, and hash-verifiable but nothing consumes it yet** (the sidecar,
-doc-task rerouting, and the Translate view land in TG-2…TG-5). Full design record folds into
-[`architecture.md`](architecture.md) at TG-6; the live plan is `docs/translategemma-translation-plan.md`.
+**`google/translategemma-12b-it`** served by its **own `llama-server` sidecar** — the same
+availability-driven, opt-in posture as vision/reranker/transcriber, not a chat slot. This section is
+the **license + model-policy record** for the role (license-review, architecture facts, the
+`--jinja` research note); the full engineering design record — sidecar, doc-task reroute, Translate
+view, and the TG-6 measurements — lives in [`architecture.md`](architecture.md) "Translation sidecar
+— design record" and [`model-benchmarks.md`](model-benchmarks.md) §11. The TG wave plan was folded
+into those and deleted at TG-6 (git history keeps it).
 
 The schema addition is minimal — `translation` is a **single-file GGUF** (`shared/manifest.ts`
 `ModelRole` + `ROLES`), no `mmproj`:

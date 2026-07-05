@@ -154,6 +154,7 @@ import {
   translationAttributionLine,
   translationBudgetWords,
   TRANSLATION_MAX_INPUT_TOKENS,
+  TRANSLATION_INPUT_TOKENS_PER_WORD,
   TRANSLATION_OUTPUT_TOKENS_PER_WORD,
   TRANSLATION_PROMPT_RESERVE_TOKENS
 } from '../../src/main/services/doctasks'
@@ -161,26 +162,26 @@ import {
 const T_BUDGET = translationBudgetWords(CTX)
 
 describe('translationBudgetWords', () => {
-  it('splits the usable context by measured token weight: 1.3/word in, 2.0/word out (R-T2)', () => {
+  it('splits the usable context by the TG-6 Gemma token weight: 2.5/word in, 3.0/word out', () => {
     const usable = CTX - TRANSLATION_PROMPT_RESERVE_TOKENS
-    // At the sidecar's launched 4096 the context split (1150 words ≈ 1495 input tokens)
-    // already sits under the D4 clamp, so the formula is the context share.
+    // At the sidecar's launched 4096 the context split (~690 words ≈ 1725 input tokens)
+    // sits just under the D4 clamp (720 words), so the formula is the context share.
     expect(T_BUDGET).toBe(
-      Math.floor(usable / (SUMMARY_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD))
+      Math.floor(usable / (TRANSLATION_INPUT_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD))
     )
-    expect(Math.ceil(T_BUDGET * SUMMARY_TOKENS_PER_WORD)).toBeLessThanOrEqual(
+    expect(Math.ceil(T_BUDGET * TRANSLATION_INPUT_TOKENS_PER_WORD)).toBeLessThanOrEqual(
       TRANSLATION_MAX_INPUT_TOKENS
     )
   })
 
   it('D4: clamps the input to the model card 2K spec on larger contexts', () => {
-    // A 16K context would allow ~4770 words by the split formula — the fine-tune is
+    // A 16K context would allow far more words by the split formula — the fine-tune is
     // trained at ≤2K input tokens, so the clamp must win regardless of the context.
-    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / SUMMARY_TOKENS_PER_WORD)
+    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / TRANSLATION_INPUT_TOKENS_PER_WORD)
     expect(translationBudgetWords(16384)).toBe(clampWords)
     expect(translationBudgetWords(8192)).toBe(clampWords)
     // Estimated input tokens for a clamped window never exceed the spec.
-    expect(Math.ceil(clampWords * SUMMARY_TOKENS_PER_WORD)).toBeLessThanOrEqual(
+    expect(Math.ceil(clampWords * TRANSLATION_INPUT_TOKENS_PER_WORD)).toBeLessThanOrEqual(
       TRANSLATION_MAX_INPUT_TOKENS
     )
   })
@@ -229,17 +230,19 @@ describe('planTranslationWindows', () => {
       const plan = planTranslationWindows([chunkOf(5000)], ctx)
       const usable = Math.max(1024, ctx) - TRANSLATION_PROMPT_RESERVE_TOKENS
       const budget = translationBudgetWords(ctx)
-      expect(Math.ceil(budget * SUMMARY_TOKENS_PER_WORD) + plan.windowMaxTokens).toBeLessThanOrEqual(
-        Math.max(usable, Math.ceil(budget * SUMMARY_TOKENS_PER_WORD) + 256) // floor exception
+      expect(
+        Math.ceil(budget * TRANSLATION_INPUT_TOKENS_PER_WORD) + plan.windowMaxTokens
+      ).toBeLessThanOrEqual(
+        Math.max(usable, Math.ceil(budget * TRANSLATION_INPUT_TOKENS_PER_WORD) + 256) // floor exception
       )
-      // Output headroom ≥ 2.0× the input words — the R-T2-measured German token
-      // weight (a 1.3× cap truncated a near-budget window on the real model).
+      // Output headroom ≥ 1.9× the input words — comfortably over the TG-6-measured real
+      // Gemma output weight (~1.96 tok/source-word into token-dense targets on prose).
       expect(plan.windowMaxTokens).toBeGreaterThanOrEqual(Math.floor(budget * 1.9))
     }
   })
 
   it('D4: windows on a big context stay within the clamped input budget', () => {
-    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / SUMMARY_TOKENS_PER_WORD)
+    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / TRANSLATION_INPUT_TOKENS_PER_WORD)
     const plan = planTranslationWindows([chunkOf(clampWords * 3)], 16384)
     expect(plan.windows.length).toBeGreaterThanOrEqual(3)
     for (const w of plan.windows) {

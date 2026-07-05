@@ -39,6 +39,14 @@ export const TRANSLATION_SLOT_ARGS = ['--parallel', '1'] as const
  * tokens/sec (printed artifact) decides at TG-6 whether to pull GPU work forward. Keeping it a
  * single named constant makes that a one-line flip when the measurement lands. `--parallel 1`
  * contains #25142 either way.
+ *
+ * TG-6 OUTCOME (2026-07-05) — KEEP CPU-pinned for v1. The measured CPU decode (~3–4 tok/s nominal;
+ * 1.1–4.4 across the run, slowest under memory pressure) is tolerable for a BACKGROUND doc-task with
+ * per-window progress + instant cancel, and the only smoke drive is Windows Vulkan where #25142 (the
+ * parallel-translation hang) is the live risk — a GPU flip needs its own GPU-decode re-smoke on a
+ * paid GPU drive before it can ship. GPU is deferred, NOT rejected: flip this constant to `[]`
+ * (the runtime auto-offloads with `--fit`) and re-run the smoke on a GPU drive. See
+ * model-benchmarks.md §11.
  */
 export const TRANSLATION_DEVICE_ARGS = ['--device', 'none'] as const
 
@@ -79,13 +87,15 @@ const DEFAULT_TRANSLATION_CONTEXT_TOKENS = 4096
 
 /**
  * Per-window bound so a WEDGED sidecar fails the window instead of hanging the job — sized
- * for the real CPU decode (TG-3): a near-budget window at the launched 4096 ctx can carry a
- * ~2,300-token output cap, which is ~10.5 min at the TG-2-measured 3.7 tok/s before prefill.
- * 30 min never kills a live slow decode (the old 300 s did — every full window of a long
- * document timed out twice into a failed-window notice) while still bounding a true hang;
- * user cancel stays instant via the task's own abort signal. TG-6 recalibrates with tok/s.
+ * for the real CPU decode. TG-6 re-measured the Gemma tokenizer: a near-budget window at the
+ * launched 4096 ctx carries a ~2,070-token output cap (`windowMaxTokens`), and CPU decode ran
+ * 1.1–4.4 tok/s across the TG-6 run (the low end under memory pressure) — so a full window can
+ * be ~30 min at ~1.1 tok/s before prefill. 45 min never kills such a live slow decode (the old
+ * 300 s did — every full window timed out twice into a failed-window notice; the interim TG-3
+ * 30 min would clip a ~1.1 tok/s full window) while still bounding a true hang; user cancel stays
+ * instant via the task's own abort signal.
  */
-const DEFAULT_REQUEST_TIMEOUT_MS = 1_800_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 2_700_000
 
 /**
  * Idle-teardown timeout default (plan §2 D1, the vision §19.13 precedent). The window the 12B
@@ -138,7 +148,7 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
   /** Absolute path to the GGUF weight. */
   modelPath: string
   contextTokens?: number
-  /** Per-window timeout in ms (default 1 800 000 — a full window's CPU decode runs ~10+ min). */
+  /** Per-window timeout in ms (default 2 700 000 — a full window's CPU decode can run ~30+ min under load). */
   requestTimeoutMs?: number
   /** Idle-teardown timeout in ms (default `HILBERTRAUM_TRANSLATION_IDLE_MS` / 120 000). */
   idleTimeoutMs?: number

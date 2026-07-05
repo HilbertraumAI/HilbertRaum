@@ -10,11 +10,15 @@ runtime: llama_cpp
 license: gemma
 # 7,300,794,112 bytes ≈ 7.3 decimal GB (byte-verified via the HF tree API 2026-07-05).
 size_on_disk_gb: 7.3
-# PLACEHOLDER (TranslateGemma plan §2 D10): mirrors the Gemma-4-12B measured floor (~10.6 GiB
-# peak RSS → min 14). REPLACE with the TG-2-measured floor per model-benchmarks §4 discipline —
-# TranslateGemma runs in its OWN sidecar (D1) and may co-reside with a resident chat + embedder,
-# so the real peak is measured on the pinned b9849 before this is trusted.
-recommended_min_ram_gb: 14
+# MEASURED at TG-6 (2026-07-05, real b9849 pin — model-benchmarks.md §11). Unlike a chat model,
+# TranslateGemma runs in its OWN sidecar (D1) and NEVER alone: at the doc-task materialize step it
+# co-resides with the E5 embedder and (typically) a resident chat model. Measured co-residency floor
+# = 13.24 GiB (translation ≈9.22 + E5 ≈0.14 + a small 4B chat ≈3.89, all warm at once) — and that
+# excludes the Electron shell (~1 GiB) + the OS. Applying the model-benchmarks §4 rule (peak + ~3 GiB
+# headroom, rounded UP) to the co-residency floor ⇒ 13.24 + 3 = 16.24 → 17: the realistic minimum for
+# translation + a SMALL resident chat without paging. A 12B chat resident (≈6.5 GiB more) pushes the
+# pair well past 16 GiB — that wants the recommended 32 below.
+recommended_min_ram_gb: 17
 recommended_ram_gb: 32
 # The translation sidecar launches --ctx-size 4096 (plan §2 D4: the model card states a 2K input
 # budget; 4096 leaves room for input + output). This field is the sidecar's launch window, read

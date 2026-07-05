@@ -1408,9 +1408,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the type.
 - **~2K-token input windows → more, smaller windows + cross-window terminology drift.**
   The model card specifies a total INPUT of ~2K tokens (the fine-tune's trained size), so
-  the planner hard-clamps every window (~1,100 words) regardless of the launched context
-  (plan D4). Each window is translated independently: a recurring term can be rendered
-  differently in different windows on long documents. A sliding glossary/context header is
+  the planner clamps every window regardless of the launched context (plan D4). TG-6
+  re-measured the real Gemma tokenizer (much heavier than the earlier Qwen estimate — up to
+  ~2.3 tokens/word on Czech/Ukrainian prose), so windows are now **~690 words** — smaller,
+  hence more of them on a long document. Each window is translated independently: a recurring
+  term can be rendered differently in different windows. A sliding glossary/context header is
   explicitly out of scope for now (plan §5).
 - **Numbers and dates are LOCALIZED, not copied verbatim — that is correct machine
   translation.** The TG-2 smoke on the real model: *14.03.2026* → *March 14, 2026*,
@@ -1427,9 +1429,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   below it; only an all-windows failure fails the whole task. Honesty over silent gaps.
 - **Long documents take time — linearly.** There is deliberately NO window ceiling (a
   faithful translation may not cover "the beginning" only, unlike the summary), and the
-  12B sidecar decodes at ~4 tok/s on CPU (TG-2 measurement; GPU is a TG-6 decision) — a
-  100-page document is many minutes. Progress is visible per window and cancel always
-  works (a cancelled translation persists nothing).
+  12B sidecar decodes at ~3–4 tok/s on CPU (TG-6 kept it CPU-pinned for v1: GPU is deferred
+  behind a GPU-drive re-smoke where the #25142 Vulkan hang is contained — model-benchmarks
+  §11) — a 100-page document is many minutes to hours. Progress is visible per window and
+  cancel always works (a cancelled translation persists nothing).
 - **Export covers text documents only.** The Export action saves the STORED text
   (materialized translations are Markdown, so it is exact); PDFs/DOCX stored copies are
   original binaries and are not exported through this path.
