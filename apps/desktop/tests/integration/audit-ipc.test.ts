@@ -238,6 +238,15 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     ctx.docTasks = new DocTaskManager({
       getDb: () => ctx.db,
       getRuntime: () => ctx.runtime.active(),
+      // TG-3: translation runs on the sidecar seam. The echo translator plays the old
+      // echo runtime's role — its output IS the window text, so the materialized
+      // translation really carries the document sentinel for the privacy grep below.
+      getTranslator: () => ({
+        modelId: 'echo-translator',
+        contextWindow: () => 4096,
+        translate: async (o) => o.text,
+        stop: async () => {}
+      }),
       isChatStreaming: () => inFlightStreams.size > 0,
       getContextTokens: () => getSettings(ctx.db).contextTokens,
       getStoreDir: () => documentsDir(ctx.paths.workspacePath),
@@ -317,7 +326,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     const { result: trRaw } = await invoke(handlers, IPC.startDocTask, {
       kind: 'translation',
       documentIds: [documentId],
-      params: { targetLang: 'de' }
+      params: { sourceLang: 'en', targetLang: 'de' }
     })
     const tr = trRaw as { jobId: string }
     await pollUntil(async () => {

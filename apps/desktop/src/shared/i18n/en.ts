@@ -412,6 +412,11 @@ export const en = {
   'docs.summarizeTitle': 'Write a summary with the local model — nothing leaves this drive',
   'docs.translate': 'Translate',
   'docs.translateTitle': 'Translate with the local model — nothing leaves this drive',
+  // The model-missing state (TG-3, plan O2/D3): the Translate item disables and this
+  // sibling item deep-links to the AI Model screen.
+  'docs.translateNoModel': 'Get the translation model…',
+  'docs.translateNoModelTitle':
+    'Translating needs the translation model — download it on the AI Model screen',
   'docs.export': 'Export',
   'docs.exportTitle': 'Save this document as a Markdown file',
   'docs.reindex': 'Re-index',
@@ -446,8 +451,10 @@ export const en = {
     'The local model writes a translated copy as a new document — searchable and ' +
     'askable like any import, and nothing leaves this drive. Machine translations ' +
     'can contain errors.',
-  'docs.translateModal.toGerman': 'To German (Deutsch)',
-  'docs.translateModal.toEnglish': 'To English',
+  'docs.translateModal.from': 'From',
+  'docs.translateModal.to': 'To',
+  'docs.translateModal.start': 'Translate',
+  'docs.translateModal.sameLang': 'Pick two different languages.',
   'docs.previewModal.aria': 'Preview of {title}',
   'docs.previewModal.hint':
     'Read-only extracted text — this is what document search and answers are based on.',
@@ -1519,6 +1526,9 @@ export const en = {
   'main.runtime.compatibilityMode':
     'Switched to compatibility mode for stability. Everything keeps working — responses may be a bit slower.',
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
+  'main.translation.noModel':
+    'Translating needs the translation model, which is not installed on this drive. ' +
+    'You can download it on the AI Model screen.',
   'main.model.contextExceeded':
     "This is too large for the current model's context window. Try a model with a larger context, or a smaller document.",
   'main.chat.streamInFlight': 'A response is already being generated for this conversation.',
@@ -1540,7 +1550,8 @@ export const en = {
   'main.task.genericFailure':
     'The task could not be finished. Make sure the model is still running, then try again.',
   'main.task.expired': 'This task is no longer available.',
-  'main.task.translationTarget': 'Choose a translation language: German or English.',
+  'main.task.translationTarget':
+    'Choose a supported source language and a different target language for the translation.',
   'main.task.sourceUnreadable':
     'The stored copy of this document could not be read. Re-import the document, then try again.',
   'main.task.needsOcr': 'Text recognition needs the OCR files, which are not on this drive.',

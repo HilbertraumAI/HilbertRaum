@@ -30,6 +30,7 @@ function appStatus(over: Partial<AppStatus> = {}): AppStatus {
     machineRamGb: 16,
     dictationAvailable: false,
     ocrAvailable: false,
+    translationAvailable: false,
     ...over
   }
 }

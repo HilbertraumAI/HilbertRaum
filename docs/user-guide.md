@@ -363,24 +363,34 @@ A few honest notes:
 - Summary quality depends on the model: small models summarize well; very small ones may
   be terse.
 
-**Translate a document.** Every Ready document also offers **Translate** in its **⋯** menu — pick
-**German** or **English** (the two supported targets for now) and the local model writes a
-translated copy, fully on this drive. The result is a **new document** in your list, named
-like *"report (Deutsch)"*: it is searchable, answerable in *Ask my documents* (with
-citations), and you can **Export** it as a Markdown file. The new document starts with an
-honest *"Machine-translated by &lt;model&gt; — may contain errors."* line, and its row shows
-*"Translated from &lt;original&gt;"* so you always know where it came from.
+**Translate a document.** Every Ready document also offers **Translate** in its **⋯** menu.
+Translation uses the dedicated **TranslateGemma** translation model (see the download note
+above) — if it is not installed yet, the menu shows **Get the translation model…** instead,
+which takes you straight to the AI Model screen. Pick the document's language and the
+language you want (**ten** are supported: Deutsch, English, Français, Español, Italiano,
+Português, Nederlands, Polski, Čeština, Українська — the app does not guess the source
+language) and the model writes a translated copy, fully on this drive. The result is a
+**new document** in your list, named like *"report (Deutsch)"*: it is searchable, answerable
+in *Ask my documents* (with citations), and you can **Export** it as a Markdown file. The
+new document starts with an honest *"Machine-translated by &lt;model&gt; — may contain
+errors."* line, and its row shows *"Translated from &lt;original&gt;"* so you always know
+where it came from.
 
 A few honest notes about translations:
 
 - Long documents are translated part by part — you see the progress on the row and can
-  cancel anytime (a cancelled translation leaves nothing behind).
+  cancel anytime (a cancelled translation leaves nothing behind). The translation model
+  is thorough but not fast: a long document can take many minutes on a CPU laptop.
 - If a part cannot be translated even after a retry, the app **marks that part clearly in
   the result and keeps the original text there** — it never silently drops content.
 - The translation is a snapshot: if you re-import or re-index the **original**, the
   translated copy does not update — run Translate again.
-- Machine translation quality depends on the model. Number *values*, names, and dates are
-  preserved, but formats may be localized (e.g. *14.03.2026* → *March 14, 2026*).
+- Number and date *values*, names, and codes survive, and their formats are adapted to the
+  target language (e.g. *14.03.2026* → *March 14, 2026*) — that is how a professional
+  translation reads. On long documents a recurring term may occasionally be worded
+  differently in different parts.
+- If you install the translation model while the app is running, restart the app so the
+  Translate action picks it up.
 
 **Compare two documents.** Tick the checkboxes next to **exactly two** Ready documents and
 click **Compare (2)** in the selection toolbar (it stays disabled until exactly two are

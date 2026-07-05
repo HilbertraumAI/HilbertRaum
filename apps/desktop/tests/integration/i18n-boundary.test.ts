@@ -73,6 +73,7 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
     const manager = new DocTaskManager({
       getDb: () => db,
       getRuntime: () => null,
+      getTranslator: () => null,
       isChatStreaming: () => false,
       getContextTokens: () => 4096,
       getStoreDir: () => storeDir,

@@ -16,21 +16,15 @@
 // `/props` `chat_template` and reconciles this builder against it; the snapshot test in
 // `tests/unit/translation-prompt.test.ts` pins the rendered string so a drift is caught in CI.
 
-/** The curated 10-language set (plan O4 / §2 D5). TG-3 wires these to the `Translation*Lang` types. */
-export const TRANSLATION_LANGUAGE_CODES = [
-  'de',
-  'en',
-  'fr',
-  'es',
-  'it',
-  'pt',
-  'nl',
-  'pl',
-  'cs',
-  'uk'
-] as const
+import { TRANSLATION_LANGUAGE_CODES, type TranslationLangCode } from '../../../shared/types'
 
-export type TranslationLangCode = (typeof TRANSLATION_LANGUAGE_CODES)[number]
+// The curated 10-language set (plan O4 / §2 D5) is CANONICAL in `shared/types.ts`
+// (`TRANSLATION_LANGUAGE_CODES` / `TranslationLangCode` — unified at TG-3 so the shared
+// `TranslationSourceLang`/`TranslationTargetLang` doc-task contract and this builder can
+// never drift; main may import shared, not vice-versa). Re-exported here so the sidecar
+// module keeps one import surface for its consumers.
+export { TRANSLATION_LANGUAGE_CODES, TRANSLATION_NATIVE_NAMES } from '../../../shared/types'
+export type { TranslationLangCode } from '../../../shared/types'
 
 /**
  * English language names — used INSIDE the trained prompt (the model was fine-tuned on English
@@ -48,24 +42,6 @@ export const TRANSLATION_ENGLISH_NAMES: Record<TranslationLangCode, string> = {
   pl: 'Polish',
   cs: 'Czech',
   uk: 'Ukrainian'
-}
-
-/**
- * Native language names — for UI labels + generated-document titles (untranslated by design,
- * matching the Settings language-picker precedent; plan §2 D5). Exported for TG-3/TG-4; TG-2 has
- * no UI, but the map lives with the codes so the two never drift.
- */
-export const TRANSLATION_NATIVE_NAMES: Record<TranslationLangCode, string> = {
-  de: 'Deutsch',
-  en: 'English',
-  fr: 'Français',
-  es: 'Español',
-  it: 'Italiano',
-  pt: 'Português',
-  nl: 'Nederlands',
-  pl: 'Polski',
-  cs: 'Čeština',
-  uk: 'Українська'
 }
 
 /**

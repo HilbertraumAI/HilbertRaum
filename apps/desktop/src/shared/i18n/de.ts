@@ -430,6 +430,9 @@ export const de: Record<keyof typeof en, string> = {
     'Eine Zusammenfassung mit dem lokalen Modell schreiben — nichts verlässt dieses Laufwerk',
   'docs.translate': 'Übersetzen',
   'docs.translateTitle': 'Mit dem lokalen Modell übersetzen — nichts verlässt dieses Laufwerk',
+  'docs.translateNoModel': 'Übersetzungsmodell holen…',
+  'docs.translateNoModelTitle':
+    'Zum Übersetzen wird das Übersetzungsmodell benötigt — lade es im KI-Modell-Bereich herunter',
   'docs.export': 'Exportieren',
   'docs.exportTitle': 'Dieses Dokument als Markdown-Datei speichern',
   'docs.reindex': 'Neu indexieren',
@@ -462,8 +465,10 @@ export const de: Record<keyof typeof en, string> = {
     'Das lokale Modell schreibt eine übersetzte Kopie als neues Dokument — durchsuchbar ' +
     'und befragbar wie jeder Import, und nichts verlässt dieses Laufwerk. Maschinelle ' +
     'Übersetzungen können Fehler enthalten.',
-  'docs.translateModal.toGerman': 'Ins Deutsche',
-  'docs.translateModal.toEnglish': 'Ins Englische',
+  'docs.translateModal.from': 'Von',
+  'docs.translateModal.to': 'Nach',
+  'docs.translateModal.start': 'Übersetzen',
+  'docs.translateModal.sameLang': 'Wähle zwei verschiedene Sprachen.',
   'docs.previewModal.aria': 'Vorschau von {title}',
   'docs.previewModal.hint':
     'Extrahierter Text (nur Ansicht) — darauf basieren Dokumentsuche und Antworten.',
@@ -1556,6 +1561,9 @@ export const de: Record<keyof typeof en, string> = {
     'weiter — Antworten können etwas langsamer sein.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
+  'main.translation.noModel':
+    'Zum Übersetzen wird das Übersetzungsmodell benötigt, das auf diesem Laufwerk nicht ' +
+    'installiert ist. Du kannst es im KI-Modell-Bereich herunterladen.',
   'main.model.contextExceeded':
     'Das ist zu groß für das Kontextfenster des aktuellen Modells. Wähle ein Modell mit größerem Kontext oder ein kleineres Dokument.',
   'main.chat.streamInFlight': 'Für diese Unterhaltung wird bereits eine Antwort erstellt.',
@@ -1581,7 +1589,8 @@ export const de: Record<keyof typeof en, string> = {
     'Die Aufgabe konnte nicht abgeschlossen werden. Stell sicher, dass das Modell noch ' +
     'läuft, und versuch es dann noch einmal.',
   'main.task.expired': 'Diese Aufgabe ist nicht mehr verfügbar.',
-  'main.task.translationTarget': 'Wähle eine Übersetzungssprache: Deutsch oder Englisch.',
+  'main.task.translationTarget':
+    'Wähle eine unterstützte Ausgangssprache und eine andere Zielsprache für die Übersetzung.',
   'main.task.sourceUnreadable':
     'Die gespeicherte Kopie dieses Dokuments konnte nicht gelesen werden. Importiere das ' +
     'Dokument neu und versuch es dann noch einmal.',

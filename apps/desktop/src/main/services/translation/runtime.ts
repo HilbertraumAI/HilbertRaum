@@ -77,8 +77,15 @@ export const TRANSLATION_SERVER_ARGS = [
  *  (4096: the model card's 2K input budget + output headroom). Read back via `contextWindow()`. */
 const DEFAULT_TRANSLATION_CONTEXT_TOKENS = 4096
 
-/** Per-window bound so a wedged sidecar fails the window instead of hanging the job (CPU-slow). */
-const DEFAULT_REQUEST_TIMEOUT_MS = 300_000
+/**
+ * Per-window bound so a WEDGED sidecar fails the window instead of hanging the job — sized
+ * for the real CPU decode (TG-3): a near-budget window at the launched 4096 ctx can carry a
+ * ~2,300-token output cap, which is ~10.5 min at the TG-2-measured 3.7 tok/s before prefill.
+ * 30 min never kills a live slow decode (the old 300 s did — every full window of a long
+ * document timed out twice into a failed-window notice) while still bounding a true hang;
+ * user cancel stays instant via the task's own abort signal. TG-6 recalibrates with tok/s.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 1_800_000
 
 /**
  * Idle-teardown timeout default (plan §2 D1, the vision §19.13 precedent). The window the 12B
@@ -131,7 +138,7 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
   /** Absolute path to the GGUF weight. */
   modelPath: string
   contextTokens?: number
-  /** Per-window timeout in ms (default 300 000 — CPU decode of a full window is slow). */
+  /** Per-window timeout in ms (default 1 800 000 — a full window's CPU decode runs ~10+ min). */
   requestTimeoutMs?: number
   /** Idle-teardown timeout in ms (default `HILBERTRAUM_TRANSLATION_IDLE_MS` / 120 000). */
   idleTimeoutMs?: number

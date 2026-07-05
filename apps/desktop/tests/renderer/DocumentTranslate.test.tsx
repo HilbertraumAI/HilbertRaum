@@ -4,13 +4,16 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
-import type { DocTaskStatus, DocumentInfo } from '../../src/shared/types'
+import type { AppStatus, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Phase 34 renderer tests: the Translate row action with its de/en target choice, the
-// polling busy state ("Translating… (n/m)") + cancel, the new document appearing with
-// its provenance line after completion, and the Export action for materialized
-// documents.
+// Phase 34 renderer tests, reworked at TG-3 (translategemma plan D5/O2): the Translate row
+// action now opens a SOURCE + TARGET select pair over the curated 10-language set
+// (native-name labels), passes sourceLang in the startTask params, disables the primary
+// button for a same-language pair, remembers the session's last choice, and — when the
+// translation model is not installed — disables the row item and offers the install deep
+// link to the AI Model screen. The polling busy state ("Translating… (n/m)") + cancel, the
+// new document with its provenance line, and Export are unchanged.
 
 function doc(over: Partial<DocumentInfo> = {}): DocumentInfo {
   return {
@@ -52,6 +55,29 @@ function task(over: Partial<DocTaskStatus> = {}): DocTaskStatus {
   }
 }
 
+/** An AppStatus stub with the translation sidecar available unless overridden. */
+function appStatus(over: Partial<AppStatus> = {}): AppStatus {
+  return { ocrAvailable: false, translationAvailable: true, ...over } as AppStatus
+}
+
+/** Open the per-row "⋯" overflow and click Translate (the modal opens). */
+async function openTranslateModal(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+  await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
+  expect(await screen.findByText(/Translate "contract.pdf"/)).toBeInTheDocument()
+}
+
+/** Pick the pair in the modal's selects (by language CODE) and hit Translate. */
+async function chooseAndStart(
+  user: ReturnType<typeof userEvent.setup>,
+  sourceLang: string,
+  targetLang: string
+): Promise<void> {
+  await user.selectOptions(screen.getByRole('combobox', { name: 'From' }), sourceLang)
+  await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), targetLang)
+  await user.click(screen.getByRole('button', { name: /^translate$/i }))
+}
+
 beforeAll(() => {
   Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
     configurable: true,
@@ -66,14 +92,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('DocumentsScreen — Translate action (Phase 34)', () => {
-  it('offers the de/en target choice, runs the busy flow, then reveals the new document with provenance', async () => {
+describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => {
+  it('offers source+target selects, runs the busy flow, then reveals the new document with provenance', async () => {
     const user = userEvent.setup()
     let docs = [doc()]
     let status = task({ state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
     const getDocTask = vi.fn(async () => status)
     stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
       listDocuments: vi.fn(async () => docs),
       startDocTask,
       getDocTask
@@ -81,17 +108,19 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
-    // Translate now lives in the per-row "⋯" overflow (§11.6).
-    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
-    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
+    await openTranslateModal(user)
 
-    // The target choice modal: v1 targets are German and English only.
-    expect(await screen.findByText(/Translate "contract.pdf"/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /to german/i }))
+    // The selects carry NATIVE names for the widened set (untranslated by design).
+    const target = screen.getByRole('combobox', { name: 'To' })
+    for (const label of ['Deutsch', 'English', 'Français', 'Українська']) {
+      expect(target).toContainHTML(label)
+    }
+    // sourceLang rides in the params — TranslateGemma needs an explicit source.
+    await chooseAndStart(user, 'en', 'de')
     expect(startDocTask).toHaveBeenCalledWith({
       kind: 'translation',
       documentIds: ['d1'],
-      params: { targetLang: 'de' }
+      params: { sourceLang: 'en', targetLang: 'de' }
     })
 
     // Busy state with window progress + a cancel affordance.
@@ -111,30 +140,56 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     expect(screen.queryByText(/Translating…/)).not.toBeInTheDocument()
   })
 
-  it('passes targetLang "en" for the English choice', async () => {
+  it('passes any curated pair (fr → uk) through the params', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
     stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
       listDocuments: vi.fn(async () => [doc()]),
       startDocTask,
       getDocTask: vi.fn(async () => task())
     })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
-    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
-    await user.click(await screen.findByRole('button', { name: /to english/i }))
+    await openTranslateModal(user)
+    await chooseAndStart(user, 'fr', 'uk')
     expect(startDocTask).toHaveBeenCalledWith({
       kind: 'translation',
       documentIds: ['d1'],
-      params: { targetLang: 'en' }
+      params: { sourceLang: 'fr', targetLang: 'uk' }
     })
+  })
+
+  it('disables Translate for a same-language pair and remembers the last choice on reopen', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
+      listDocuments: vi.fn(async () => [doc()])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await openTranslateModal(user)
+
+    // Same language on both ends: the primary disables and the hint explains why.
+    await user.selectOptions(screen.getByRole('combobox', { name: 'From' }), 'pt')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), 'pt')
+    expect(screen.getByRole('button', { name: /^translate$/i })).toBeDisabled()
+    expect(screen.getByText('Pick two different languages.')).toBeInTheDocument()
+
+    // A distinct target re-enables; cancel + reopen keeps the chosen pair (session memory).
+    await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), 'pl')
+    expect(screen.getByRole('button', { name: /^translate$/i })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+    await openTranslateModal(user)
+    expect(screen.getByRole('combobox', { name: 'From' })).toHaveValue('pt')
+    expect(screen.getByRole('combobox', { name: 'To' })).toHaveValue('pl')
   })
 
   it('cancelling the busy translation calls cancelDocTask', async () => {
     const user = userEvent.setup()
     const cancelDocTask = vi.fn(async () => {})
     stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
       listDocuments: vi.fn(async () => [doc()]),
       startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
       getDocTask: vi.fn(async () => task({ state: 'running' })),
@@ -142,9 +197,8 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
-    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
-    await user.click(await screen.findByRole('button', { name: /to german/i }))
+    await openTranslateModal(user)
+    await chooseAndStart(user, 'de', 'en')
     await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
     expect(cancelDocTask).toHaveBeenCalled()
   })
@@ -152,6 +206,7 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
   it('surfaces the friendly failure copy (e.g. password change in progress)', async () => {
     const user = userEvent.setup()
     stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
       listDocuments: vi.fn(async () => [doc()]),
       startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
       getDocTask: vi.fn(async () =>
@@ -163,12 +218,29 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
-    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
-    await user.click(await screen.findByRole('button', { name: /to german/i }))
+    await openTranslateModal(user)
+    await chooseAndStart(user, 'de', 'en')
     expect(
       await screen.findByText(/password is being changed/i, undefined, { timeout: 3000 })
     ).toBeInTheDocument()
+  })
+
+  it('model missing: Translate disables and the install item deep-links to the AI Model screen', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    stubApi({
+      getAppStatus: vi.fn(async () => appStatus({ translationAvailable: false })),
+      listDocuments: vi.fn(async () => [doc()])
+    })
+    render(<DocumentsScreen onNavigate={onNavigate} />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    // Wait for the async availability read to settle into the menu state.
+    const translateItem = await screen.findByRole('menuitem', { name: /^translate$/i })
+    await waitFor(() => expect(translateItem).toHaveAttribute('aria-disabled', 'true'))
+    // The friendly path: a sibling item that jumps to the AI Model screen.
+    await user.click(screen.getByRole('menuitem', { name: /get the translation model/i }))
+    expect(onNavigate).toHaveBeenCalledWith('models')
   })
 
   it('shows the provenance line and Export only on materialized documents; Export saves', async () => {

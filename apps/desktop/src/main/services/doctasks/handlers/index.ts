@@ -7,24 +7,25 @@ import type { DocTaskKind } from '../../../../shared/types'
 import type { ModelTaskHandler } from '../context'
 import { runTreeBuild, runExtract } from './tree'
 import { runSummary } from './summary'
-import { runTranslation } from './translation'
 import { runCompare } from './compare'
 
 export { runOcr } from './ocr'
 export { runCategorize } from './categorize'
+export { runTranslation } from './translation'
 
 /**
- * The runtime-REQUIRING kinds (every kind except `ocr`, which uses the recognition engine, and
- * `categorize`, whose runtime is optional). The manager re-checks the runtime once at dequeue
- * time, then dispatches through this map — so the `if (!runtime) throw` guard stays centralized
- * in the orchestrator exactly as before, and each handler can assume a live runtime.
+ * The CHAT-runtime-requiring kinds — every kind except `ocr` (the recognition engine),
+ * `categorize` (runtime-optional), and `translation` (since TG-3 it runs on the TranslateGemma
+ * sidecar via `DocTaskDeps.getTranslator`, dispatched directly like `ocr`). The manager re-checks
+ * the runtime once at dequeue time, then dispatches through this map — so the `if (!runtime)
+ * throw` guard stays centralized in the orchestrator exactly as before, and each handler can
+ * assume a live runtime.
  */
 export const MODEL_TASK_HANDLERS: Record<
-  Exclude<DocTaskKind, 'ocr' | 'categorize'>,
+  Exclude<DocTaskKind, 'ocr' | 'categorize' | 'translation'>,
   ModelTaskHandler
 > = {
   summary: runSummary,
-  translation: runTranslation,
   compare: runCompare,
   tree: runTreeBuild,
   extract: runExtract

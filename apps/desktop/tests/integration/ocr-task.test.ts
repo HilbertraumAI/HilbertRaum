@@ -96,6 +96,7 @@ function makeManager(opts: ManagerOpts = {}): DocTaskManager {
   return new DocTaskManager({
     getDb: () => db,
     getRuntime: () => null, // OCR must not need the chat runtime
+    getTranslator: () => null,
     isChatStreaming: () => opts.chatStreaming ?? false,
     getContextTokens: () => 4096,
     getStoreDir: () => storeDir,

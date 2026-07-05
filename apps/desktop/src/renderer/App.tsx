@@ -293,7 +293,9 @@ function AppShell(): JSX.Element {
               initialScopeDocumentIds={chatScope}
             />
           )}
-          {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
+          {screen === 'documents' && (
+            <DocumentsScreen onAskSelected={askSelectedDocuments} onNavigate={navigate} />
+          )}
           {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
           {screen === 'models' && <ModelsScreen />}
           {screen === 'skills' && <SkillsScreen />}

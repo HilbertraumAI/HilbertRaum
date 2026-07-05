@@ -37,6 +37,13 @@ export interface AppStatus {
    * availability-driven, no settings key.
    */
   ocrAvailable: boolean
+  /**
+   * The TranslateGemma translation sidecar is available (llama-server binary + the
+   * translation-role GGUF present at startup). Gates the Documents "Translate" action —
+   * availability-driven, no settings key (the `ocrAvailable` pattern). Read from the
+   * composed `ctx.translator`, so this flag can never disagree with the doc-task guard.
+   */
+  translationAvailable: boolean
 }
 
 // ---- Privacy / offline policy (spec §6 config/policy.json + §3.5/§3.6) ----
@@ -795,11 +802,61 @@ export interface ConversationSearchResult {
 export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree' | 'extract' | 'categorize'
 
 /**
- * Translation targets, v1: the two eval-set languages only. A free-text language
- * field invites silent quality failures — widen deliberately, with evidence, never
- * by loosening this type.
+ * The curated translation language set (TranslateGemma wave, plan O4/D5) — source AND
+ * target languages for document translation. All ten sit inside TranslateGemma's 55
+ * WMT24++-evaluated languages (arXiv:2601.09012 — the shipped 12B model scores
+ * MetricX-24 3.60 / COMET22 83.5 there), and the TG-6 per-language smoke records our
+ * own round-trip evidence per code. A free-text language field invites silent quality
+ * failures — widen deliberately, with that evidence, never by loosening this list.
+ * This array is the SINGLE source of truth for the codes: the sidecar prompt builder
+ * (`main/services/translation/prompt.ts`) and its name maps key off this type.
  */
-export type TranslationTargetLang = 'de' | 'en'
+export const TRANSLATION_LANGUAGE_CODES = [
+  'de',
+  'en',
+  'fr',
+  'es',
+  'it',
+  'pt',
+  'nl',
+  'pl',
+  'cs',
+  'uk'
+] as const
+
+export type TranslationLangCode = (typeof TRANSLATION_LANGUAGE_CODES)[number]
+
+/** True when `x` is a curated translation language code (the server-side validation). */
+export function isTranslationLangCode(x: unknown): x is TranslationLangCode {
+  return typeof x === 'string' && (TRANSLATION_LANGUAGE_CODES as readonly string[]).includes(x)
+}
+
+/**
+ * Native language names for UI labels + generated-document titles — untranslated by
+ * design (the Settings language-picker precedent: a German speaker stuck on an English
+ * UI must still recognize „Deutsch“). Shared because BOTH the renderer (the translate
+ * modal's selects) and main (translated-document titles) render them.
+ */
+export const TRANSLATION_NATIVE_NAMES: Record<TranslationLangCode, string> = {
+  de: 'Deutsch',
+  en: 'English',
+  fr: 'Français',
+  es: 'Español',
+  it: 'Italiano',
+  pt: 'Português',
+  nl: 'Nederlands',
+  pl: 'Polski',
+  cs: 'Čeština',
+  uk: 'Українська'
+}
+
+/** Translation target language (the curated set above). */
+export type TranslationTargetLang = TranslationLangCode
+/**
+ * Translation source language. TranslateGemma's trained prompt REQUIRES an explicit
+ * source language (no auto-detect ships in v1), so translation asks for both ends.
+ */
+export type TranslationSourceLang = TranslationLangCode
 
 /**
  * Provenance of a document the app GENERATED from other documents (translation,
@@ -881,7 +938,7 @@ export interface DocTaskProgress {
 export interface StartDocTaskRequest {
   kind: DocTaskKind
   documentIds: string[]
-  /** Kind-specific parameters (e.g. the translation target language). */
+  /** Kind-specific parameters (e.g. the translation source + target languages). */
   params?: Record<string, unknown>
 }
 

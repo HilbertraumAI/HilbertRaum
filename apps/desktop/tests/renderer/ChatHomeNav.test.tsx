@@ -330,7 +330,8 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
         workspaceReady: true,
         machineRamGb: 16,
         dictationAvailable: false,
-        ocrAvailable: false
+        ocrAvailable: false,
+        translationAvailable: false
       })),
       getRuntimeStatus: vi.fn(async () => ({
         running: opts.running ?? false,

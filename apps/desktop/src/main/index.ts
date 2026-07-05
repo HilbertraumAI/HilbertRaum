@@ -239,6 +239,10 @@ function initBackend(): void {
   const docTasks = new DocTaskManager({
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
+    // TG-3: the translation kind runs on the TranslateGemma sidecar (the compose-services
+    // handle above) — availability-driven; null → the friendly install path, never the
+    // chat runtime.
+    getTranslator: () => translator,
     isChatStreaming: () => inFlightStreams.size > 0,
     // Doc-task window budgets follow the REAL launched context window (§L0 — the same source
     // chat/RAG assembly budgets against), not bare `settings.contextTokens`: the runtime is
@@ -286,8 +290,8 @@ function initBackend(): void {
     transcriber,
     ocrEngine,
     // The TranslateGemma sidecar (TG wave). Held on ctx so the lock/quit teardowns reach it
-    // (suspend/stop below); nothing consumes it until the doc-task reroute at TG-3. Lazy —
-    // it spawns nothing until the first translate() of an available model.
+    // (suspend/stop below); the translation doc-task consumes it via `getTranslator` above
+    // (TG-3). Lazy — it spawns nothing until the first translate() of an available model.
     translator,
     manifestsDir,
     probeGpu: gpuProbe,

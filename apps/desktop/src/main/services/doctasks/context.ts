@@ -7,8 +7,14 @@
 // existing `from '../services/doctasks'` importer is byte-for-byte unaffected.
 
 import type { Db } from '../db'
-import type { CoverageTier, DocTaskStatus, TranslationTargetLang } from '../../../shared/types'
+import type {
+  CoverageTier,
+  DocTaskStatus,
+  TranslationSourceLang,
+  TranslationTargetLang
+} from '../../../shared/types'
 import type { ModelRuntime } from '../runtime'
+import type { Translator } from '../translation'
 import type { IngestionDeps } from '../ingestion'
 import type { OcrEngine } from '../ocr'
 import type { RasterizePdf } from '../ocr/rasterizer'
@@ -21,6 +27,13 @@ export interface DocTaskDeps {
   getDb: () => Db
   /** The active chat runtime, or null when none is running. */
   getRuntime: () => ModelRuntime | null
+  /**
+   * The TranslateGemma translation sidecar, or null when its binary/weights are absent
+   * (TG-3, plan D3/O2). `kind:'translation'` requires THIS — never the chat runtime —
+   * and refuses with the friendly install path when null. Read per task, like the
+   * runtime (a suspended translator lazily restarts on the next translate()).
+   */
+  getTranslator: () => Translator | null
   /** True while any chat/RAG answer is streaming (the in-flight registry). */
   isChatStreaming: () => boolean
   /** The user's `contextTokens` setting (drives the window budget). */
@@ -52,6 +65,9 @@ export interface DocTaskDeps {
 export interface InternalTask {
   status: DocTaskStatus
   controller: AbortController
+  /** Validated translation source (kind === 'translation' only) — TranslateGemma's
+   *  trained prompt requires an explicit source language; there is no auto-detect. */
+  sourceLang?: TranslationSourceLang
   /** Validated translation target (kind === 'translation' only). */
   targetLang?: TranslationTargetLang
   /**
@@ -65,9 +81,10 @@ export interface InternalTask {
 /**
  * The orchestration handle the manager passes to every per-kind handler. It exposes ONLY the
  * shared seams a handler needs: the injected `deps`, the model-slot `arbiter` (for the yielding
- * tree/extract builds), and the manager-owned model loop (`generate` / `generateWithRetry` — the
- * retry orchestration the manager keeps). The handlers own everything kind-specific; this is the
- * single, narrow surface between them and the orchestrator.
+ * tree/extract builds), and the manager-owned model loop (`generate`). The handlers own
+ * everything kind-specific; this is the single, narrow surface between them and the
+ * orchestrator. (The former `generateWithRetry` went with the chat-model translation path at
+ * TG-3 — the sidecar-shaped retry now lives in `handlers/translation.ts`.)
  */
 export interface DocTaskCtx {
   readonly deps: DocTaskDeps
@@ -84,15 +101,6 @@ export interface DocTaskCtx {
     temperature: number,
     signal: AbortSignal
   ): Promise<string>
-  /** One window with a single retry; a second failure returns null (the caller marks it). */
-  generateWithRetry(
-    runtime: ModelRuntime,
-    systemPrompt: string,
-    prompt: string,
-    maxTokens: number,
-    temperature: number,
-    signal: AbortSignal
-  ): Promise<string | null>
 }
 
 /** The signature every runtime-requiring per-kind handler shares (keyed by the registry). */

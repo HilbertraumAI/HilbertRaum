@@ -377,9 +377,10 @@ const api = {
     ipcRenderer.invoke(IPC.exportSummary, documentId),
 
   // ---- Document tasks ----
-  /** Start a document task (summary; translation with `params.targetLang`; compare
-   *  with exactly two documentIds). Strictly one at a time; refused while a chat
-   *  answer is streaming. */
+  /** Start a document task (summary; translation with `params.sourceLang` +
+   *  `params.targetLang` — both from the curated 10, source ≠ target, TranslateGemma
+   *  required (TG-3); compare with exactly two documentIds). Strictly one at a time;
+   *  refused while a chat answer is streaming. */
   startDocTask: (req: StartDocTaskRequest): Promise<{ jobId: string }> =>
     ipcRenderer.invoke(IPC.startDocTask, req),
   /** Poll one task's state/progress (async-with-polling, like imports/downloads). */

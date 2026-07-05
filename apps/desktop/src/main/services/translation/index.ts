@@ -2,9 +2,9 @@ import type { TranslateOptions } from './runtime'
 
 // The translation sidecar family (TG wave, plan §2 D1). A SEPARATE lazy `llama-server` serving
 // TranslateGemma over the raw `/completion` endpoint — the fifth `LlamaServer` composition after
-// chat, the E5 embedder, the reranker, and vision. TG-2 ships the runtime + availability wiring
-// ONLY; the callers (the document-translation doc-task at TG-3, the Translate view at TG-4/5)
-// arrive later. Nothing consumes this yet.
+// chat, the E5 embedder, the reranker, and vision. TG-2 shipped the runtime + availability
+// wiring; since TG-3 the document-translation doc-task consumes it (`DocTaskDeps.getTranslator`
+// — the chat runtime is no longer involved in translation); the Translate view lands at TG-4/5.
 
 export { TranslationRuntime } from './runtime'
 export type { TranslateOptions } from './runtime'

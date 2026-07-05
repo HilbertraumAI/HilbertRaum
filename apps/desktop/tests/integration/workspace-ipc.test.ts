@@ -202,6 +202,33 @@ describe('registerWorkspaceIpc', () => {
     expect(stopVision).toHaveBeenCalledTimes(1)
   })
 
+  it('lockWorkspace suspends the translator AND cancels the active doc task (TG-3)', async () => {
+    // A running TRANSLATION no longer dies with the chat runtime: left uncancelled, its
+    // next window would lazily RESPAWN the suspended TranslateGemma sidecar with document
+    // plaintext while the vault re-encrypts. The lock handler must cancel the active task
+    // (any non-yielding kind) and suspend — not permanently stop — the translator.
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const suspendTranslator = vi.fn(async () => {})
+    const stopTranslator = vi.fn(async () => {})
+    const cancelDocTask = vi.fn()
+    const abortActiveBuild = vi.fn()
+    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
+    base.translator = { suspend: suspendTranslator, stop: stopTranslator }
+    base.docTasks = { cancelDocTask, abortActiveBuild }
+    registerWorkspaceIpc(base as unknown as AppContext)
+
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(abortActiveBuild).toHaveBeenCalledTimes(1)
+    expect(cancelDocTask).toHaveBeenCalledTimes(1)
+    expect(suspendTranslator).toHaveBeenCalledTimes(1)
+    expect(stopTranslator).not.toHaveBeenCalled() // stop() latches permanently — lock must not
+  })
+
   it('lockWorkspace still locks when a sidecar stop fails (allSettled)', async () => {
     const vp = freshVault()
     createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)

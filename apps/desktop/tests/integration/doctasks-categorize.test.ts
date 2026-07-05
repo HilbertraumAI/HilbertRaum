@@ -79,6 +79,7 @@ function makeManager(runtime: ModelRuntime | null): DocTaskManager {
   const deps: DocTaskDeps = {
     getDb: () => db,
     getRuntime: () => runtime,
+    getTranslator: () => null,
     isChatStreaming: () => false,
     getContextTokens: () => 4096,
     getStoreDir: () => storeDir,
@@ -284,6 +285,7 @@ describe('categorize doctask — persist rollback (T3: no partial categorization
     const deps: DocTaskDeps = {
       getDb: () => wrapped,
       getRuntime: () => runtime,
+      getTranslator: () => null,
       isChatStreaming: () => false,
       getContextTokens: () => 4096,
       getStoreDir: () => storeDir,

@@ -227,6 +227,13 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // while the vault re-encrypts (plan §4.1 M9). Aborts the build's controller AND rejects
     // any parked arbiter reacquire; the tree is left `building` for reconcileStuckTrees.
     ctx.docTasks?.abortActiveBuild()
+    // And the active NON-yielding task (TG-3): a running TRANSLATION no longer dies with the
+    // chat runtime below — left running, its next window would lazily RESPAWN the suspended
+    // TranslateGemma sidecar with document plaintext while the vault re-encrypts. Cancel it
+    // (cancel persists nothing); a running summary/compare gets a clean `cancelled` too
+    // instead of failing against the stopped chat runtime. Still-queued tasks fail friendly
+    // at dequeue (`getDb()` throws while locked).
+    ctx.docTasks?.cancelDocTask()
     // `suspend()` (not `stop()`): the sidecars must come back lazily
     // after unlock — `stop()` latches permanently for the will-quit path and used to
     // leave every post-lock/unlock embed failing with "Embedder is stopped".

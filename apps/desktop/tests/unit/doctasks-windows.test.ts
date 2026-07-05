@@ -141,7 +141,11 @@ describe('planSummaryWindows — reduce-input safety', () => {
   })
 })
 
-// ---- Phase 34: translation window math + templates (D36 + R-T2) ----------------------
+// ---- Phase 34: translation window math (D36 + R-T2), TG-3: the D4 input clamp --------
+// (The former chat-model prompt templates — translationSystemPrompt/translationWindowPrompt/
+// TRANSLATION_TEMPERATURE — were deleted at TG-3 with the chat translation path: the prompt
+// is built inside the TranslateGemma sidecar, `services/translation/prompt.ts`, and pinned
+// by `tests/unit/translation-prompt.test.ts`.)
 
 import {
   failedWindowNotice,
@@ -149,8 +153,7 @@ import {
   translatedDocumentTitle,
   translationAttributionLine,
   translationBudgetWords,
-  translationSystemPrompt,
-  translationWindowPrompt,
+  TRANSLATION_MAX_INPUT_TOKENS,
   TRANSLATION_OUTPUT_TOKENS_PER_WORD,
   TRANSLATION_PROMPT_RESERVE_TOKENS
 } from '../../src/main/services/doctasks'
@@ -160,8 +163,25 @@ const T_BUDGET = translationBudgetWords(CTX)
 describe('translationBudgetWords', () => {
   it('splits the usable context by measured token weight: 1.3/word in, 2.0/word out (R-T2)', () => {
     const usable = CTX - TRANSLATION_PROMPT_RESERVE_TOKENS
+    // At the sidecar's launched 4096 the context split (1150 words ≈ 1495 input tokens)
+    // already sits under the D4 clamp, so the formula is the context share.
     expect(T_BUDGET).toBe(
       Math.floor(usable / (SUMMARY_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD))
+    )
+    expect(Math.ceil(T_BUDGET * SUMMARY_TOKENS_PER_WORD)).toBeLessThanOrEqual(
+      TRANSLATION_MAX_INPUT_TOKENS
+    )
+  })
+
+  it('D4: clamps the input to the model card 2K spec on larger contexts', () => {
+    // A 16K context would allow ~4770 words by the split formula — the fine-tune is
+    // trained at ≤2K input tokens, so the clamp must win regardless of the context.
+    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / SUMMARY_TOKENS_PER_WORD)
+    expect(translationBudgetWords(16384)).toBe(clampWords)
+    expect(translationBudgetWords(8192)).toBe(clampWords)
+    // Estimated input tokens for a clamped window never exceed the spec.
+    expect(Math.ceil(clampWords * SUMMARY_TOKENS_PER_WORD)).toBeLessThanOrEqual(
+      TRANSLATION_MAX_INPUT_TOKENS
     )
   })
 
@@ -212,34 +232,23 @@ describe('planTranslationWindows', () => {
       expect(Math.ceil(budget * SUMMARY_TOKENS_PER_WORD) + plan.windowMaxTokens).toBeLessThanOrEqual(
         Math.max(usable, Math.ceil(budget * SUMMARY_TOKENS_PER_WORD) + 256) // floor exception
       )
-      // Output headroom ≈ 2.0× the input words — the R-T2-measured German token
+      // Output headroom ≥ 2.0× the input words — the R-T2-measured German token
       // weight (a 1.3× cap truncated a near-budget window on the real model).
       expect(plan.windowMaxTokens).toBeGreaterThanOrEqual(Math.floor(budget * 1.9))
     }
   })
+
+  it('D4: windows on a big context stay within the clamped input budget', () => {
+    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / SUMMARY_TOKENS_PER_WORD)
+    const plan = planTranslationWindows([chunkOf(clampWords * 3)], 16384)
+    expect(plan.windows.length).toBeGreaterThanOrEqual(3)
+    for (const w of plan.windows) {
+      expect(approxTokenCount(w)).toBeLessThanOrEqual(clampWords)
+    }
+  })
 })
 
-describe('translation templates (R-T2-informed)', () => {
-  it('system prompt: target language, translate-don\'t-summarize, structure, verbatim numbers', () => {
-    const de = translationSystemPrompt('de')
-    expect(de).toContain('into German')
-    expect(de).toContain('never summarize')
-    expect(de).toContain('Markdown structure')
-    expect(de).toContain('numbers, dates, names, and codes exactly as written')
-    expect(de).toContain('ONLY the translation')
-    expect(translationSystemPrompt('en')).toContain('into English')
-  })
-
-  it('window prompt carries the verbatim-numbers instruction and the part numbering', () => {
-    const p = translationWindowPrompt('de', 2, 5, 'Der Vertrag endet am 31.12.2026.')
-    expect(p).toContain('into German')
-    expect(p).toContain('part 2 of 5')
-    expect(p).toContain('keep numbers, names, and dates verbatim')
-    expect(p).toContain('Der Vertrag endet am 31.12.2026.')
-    // A single-window document does not pretend to have parts.
-    expect(translationWindowPrompt('en', 1, 1, 'x')).not.toContain('part 1 of 1')
-  })
-
+describe('translation output framing (R-T2-informed)', () => {
   it('failed-window notice is visible, friendly, and keeps the original text below', () => {
     const n = failedWindowNotice(3, 7)
     expect(n).toContain('(3 of 7)')
@@ -254,10 +263,14 @@ describe('translation templates (R-T2-informed)', () => {
     )
   })
 
-  it('translated titles keep the base name and become Markdown', () => {
+  it('translated titles keep the base name and become Markdown (native names, widened set)', () => {
     expect(translatedDocumentTitle('report.pdf', 'de')).toBe('report (Deutsch).md')
     expect(translatedDocumentTitle('Notizen.docx', 'en')).toBe('Notizen (English).md')
     expect(translatedDocumentTitle('no-extension', 'de')).toBe('no-extension (Deutsch).md')
+    // TG-3 widening: every curated target labels with its NATIVE name.
+    expect(translatedDocumentTitle('report.pdf', 'fr')).toBe('report (Français).md')
+    expect(translatedDocumentTitle('report.pdf', 'cs')).toBe('report (Čeština).md')
+    expect(translatedDocumentTitle('report.pdf', 'uk')).toBe('report (Українська).md')
   })
 })
 

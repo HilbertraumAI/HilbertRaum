@@ -101,6 +101,7 @@ function makeManager(runtime: ModelRuntime | null, contextTokens = 4096): DocTas
   return new DocTaskManager({
     getDb: () => db,
     getRuntime: () => runtime,
+    getTranslator: () => null,
     isChatStreaming: () => false,
     getContextTokens: () => contextTokens,
     getStoreDir: () => storeDir,

@@ -102,6 +102,7 @@ async function makeHarness(opts: { unlocked?: boolean } = {}): Promise<Harness> 
   ctx.docTasks = new DocTaskManager({
     getDb: () => ctx.db,
     getRuntime: () => ctx.runtime.active(),
+    getTranslator: () => null,
     isChatStreaming: () => inFlightStreams.size > 0,
     getContextTokens: () => getSettings(ctx.db).contextTokens,
     getStoreDir: () => storeDir,

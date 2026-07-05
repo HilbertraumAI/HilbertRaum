@@ -127,6 +127,7 @@ function makeManager(opts: ManagerOptions = {}): DocTaskManager {
   return new DocTaskManager({
     getDb: () => db,
     getRuntime: () => (opts.runtime === undefined ? null : opts.runtime),
+    getTranslator: () => null,
     isChatStreaming: opts.chatStreaming ?? (() => false),
     getContextTokens: () => opts.contextTokens ?? 4096,
     getStoreDir: () => storeDir,
@@ -265,6 +266,7 @@ describe('state machine guards (D26)', () => {
     const manager = new DocTaskManager({
       getDb: () => db,
       getRuntime: () => runtime,
+      getTranslator: () => null,
       isChatStreaming: () => false,
       getContextTokens: () => 4096,
       getStoreDir: () => storeDir,

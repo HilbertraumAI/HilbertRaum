@@ -146,6 +146,7 @@ function makeManager(opts: ManagerOptions = {}): DocTaskManager {
   return new DocTaskManager({
     getDb: () => db,
     getRuntime: () => (opts.runtime === undefined ? null : opts.runtime),
+    getTranslator: () => null,
     isChatStreaming: () => false,
     getContextTokens: () => opts.contextTokens ?? 4096,
     getStoreDir: () => storeDir,

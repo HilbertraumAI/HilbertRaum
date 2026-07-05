@@ -16,9 +16,16 @@ import type {
   DocumentPreview,
   DocumentSummary,
   IngestionStatus,
+  TranslationSourceLang,
   TranslationTargetLang
 } from '@shared/types'
-import { generatedStaleness, matchesSmartView, provenanceView } from '@shared/types'
+import {
+  generatedStaleness,
+  matchesSmartView,
+  provenanceView,
+  TRANSLATION_LANGUAGE_CODES,
+  TRANSLATION_NATIVE_NAMES
+} from '@shared/types'
 import {
   acknowledgeDocTask,
   cancelActiveDocTask,
@@ -71,7 +78,15 @@ const PREVIEW_PAGE_SIZE = 50
 interface Props {
   /** "Ask these documents" (spec §10.4): open Chat scoped to the selection. */
   onAskSelected?: (documentIds: string[]) => void
+  /** Deep links out of this screen (TG-3: the translate model-missing state → 'models'). */
+  onNavigate?: (target: string) => void
 }
+
+/** The translate modal's language pair, remembered session-local (deliberately not persisted). */
+let lastTranslateChoice: {
+  sourceLang: TranslationSourceLang
+  targetLang: TranslationTargetLang
+} | null = null
 
 /**
  * Whether a document belongs in the current (non-project) section (plan §12.1). Pure (off the
@@ -100,7 +115,7 @@ function inSection(d: DocumentInfo, section: DocSection): boolean {
   }
 }
 
-export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
+export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.Element {
   const { t, tCount, lang } = useT()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -117,8 +132,24 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     audioFileCount: number
     audioBytes: number
   } | null>(null)
-  // "Translate" target choice: the row button opens this small modal.
+  // "Translate" language choice: the row button opens this small modal. The source+target
+  // pair starts from the session's last choice (else a UI-language-aware default) — TG-3
+  // widened the closed de/en pair to the curated 10-language set.
   const [translateDoc, setTranslateDoc] = useState<DocumentInfo | null>(null)
+  const [translateChoice, setTranslateChoice] = useState<{
+    sourceLang: TranslationSourceLang
+    targetLang: TranslationTargetLang
+  }>(
+    () =>
+      lastTranslateChoice ??
+      (lang === 'de'
+        ? { sourceLang: 'en', targetLang: 'de' }
+        : { sourceLang: 'de', targetLang: 'en' })
+  )
+  // Translation availability (availability-driven, no settings key): the TranslateGemma
+  // sidecar resolves at app startup, so this gates "Translate" the way `ocrAvailable`
+  // gates OCR — read once with it below.
+  const [translationAvailable, setTranslationAvailable] = useState(false)
   // OCR availability (availability-driven, no settings key): gates "Make searchable
   // (OCR)" and the photo-import mention. Read once — the language files don't appear
   // mid-session.
@@ -194,9 +225,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     refresh().catch((e) => setError(friendlyIpcError(e)))
     void (async () => {
       try {
-        setOcrAvailable((await window.api.getAppStatus()).ocrAvailable)
+        const status = await window.api.getAppStatus()
+        setOcrAvailable(status.ocrAvailable)
+        setTranslationAvailable(status.translationAvailable)
       } catch {
-        // No status (partial test bridge) → keep the safe default: no OCR offer.
+        // No status (partial test bridge) → keep the safe defaults: no OCR offer, no
+        // Translate (the install hint shows instead).
       }
     })()
     return () => {
@@ -406,12 +440,17 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  async function onTranslate(d: DocumentInfo, targetLang: TranslationTargetLang): Promise<void> {
+  async function onTranslate(
+    d: DocumentInfo,
+    sourceLang: TranslationSourceLang,
+    targetLang: TranslationTargetLang
+  ): Promise<void> {
     setTranslateDoc(null)
     setError(null)
     setPreview(null)
+    lastTranslateChoice = { sourceLang, targetLang }
     try {
-      await startTask('translation', d.id, { targetLang })
+      await startTask('translation', d.id, { sourceLang, targetLang })
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -710,6 +749,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const handleKeepInLibrary = useEventCallback(onKeepInLibrary)
   const handleSetLifecycle = useEventCallback(onSetLifecycle)
   const handleRemoveFromCollection = useEventCallback(onRemoveFromCollection)
+  // The translate model-missing deep link (TG-3): the DocRow install item → AI Model screen.
+  const handleOpenModels = useEventCallback(() => onNavigate?.('models'))
 
   // One row's <DocRow> — shared by the windowed and the un-windowed (fallback) list paths (PERF-2),
   // so the props wiring stays in exactly one place. The data SOURCE is unchanged from the former
@@ -743,6 +784,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         lang={lang}
         sourcesById={sourcesById}
         ocrAvailable={ocrAvailable}
+        translationAvailable={translationAvailable}
         busy={busy}
         previewLoading={previewLoading}
         showCheckbox={Boolean(onAskSelected)}
@@ -755,6 +797,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         run={handleRun}
         onSummarize={handleSummarize}
         setTranslateDoc={setTranslateDoc}
+        onOpenModels={handleOpenModels}
         onMakeSearchable={handleMakeSearchable}
         onBuildDeepIndex={handleBuildDeepIndex}
         onExport={handleExport}
@@ -1127,12 +1170,65 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           <p className="hint" style={{ marginTop: 0 }}>
             {t('docs.translateModal.hint')}
           </p>
+          {/* Source + target selects (TG-3, plan D5): native-name labels, untranslated by
+              design (the Settings language-picker precedent). TranslateGemma needs an
+              explicit source — there is no auto-detect. */}
+          <div className="actions" style={{ alignItems: 'center' }}>
+            <label>
+              {t('docs.translateModal.from')}{' '}
+              <select
+                aria-label={t('docs.translateModal.from')}
+                value={translateChoice.sourceLang}
+                onChange={(e) =>
+                  setTranslateChoice((c) => ({
+                    ...c,
+                    sourceLang: e.target.value as TranslationSourceLang
+                  }))
+                }
+              >
+                {TRANSLATION_LANGUAGE_CODES.map((code) => (
+                  <option key={code} value={code}>
+                    {TRANSLATION_NATIVE_NAMES[code]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {t('docs.translateModal.to')}{' '}
+              <select
+                aria-label={t('docs.translateModal.to')}
+                value={translateChoice.targetLang}
+                onChange={(e) =>
+                  setTranslateChoice((c) => ({
+                    ...c,
+                    targetLang: e.target.value as TranslationTargetLang
+                  }))
+                }
+              >
+                {TRANSLATION_LANGUAGE_CODES.map((code) => (
+                  <option key={code} value={code}>
+                    {TRANSLATION_NATIVE_NAMES[code]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {translateChoice.sourceLang === translateChoice.targetLang && (
+            <p className="hint">{t('docs.translateModal.sameLang')}</p>
+          )}
           <div className="actions">
-            <Button variant="primary" onClick={() => void onTranslate(translateDoc, 'de')}>
-              {t('docs.translateModal.toGerman')}
-            </Button>
-            <Button variant="primary" onClick={() => void onTranslate(translateDoc, 'en')}>
-              {t('docs.translateModal.toEnglish')}
+            <Button
+              variant="primary"
+              disabled={translateChoice.sourceLang === translateChoice.targetLang}
+              onClick={() =>
+                void onTranslate(
+                  translateDoc,
+                  translateChoice.sourceLang,
+                  translateChoice.targetLang
+                )
+              }
+            >
+              {t('docs.translateModal.start')}
             </Button>
             <Button onClick={() => setTranslateDoc(null)}>{t('docs.cancel')}</Button>
           </div>

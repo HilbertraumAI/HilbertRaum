@@ -112,6 +112,7 @@ function makeManager(opts: {
   const deps: DocTaskDeps = {
     getDb: () => db,
     getRuntime: () => opts.runtime,
+    getTranslator: () => null,
     isChatStreaming: () => false,
     getContextTokens: () => opts.contextTokens ?? 1024,
     getStoreDir: () => storeDir,

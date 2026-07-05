@@ -46,6 +46,7 @@ export const DocRow = memo(function DocRow({
   lang,
   sourcesById,
   ocrAvailable,
+  translationAvailable,
   busy,
   previewLoading,
   showCheckbox,
@@ -58,6 +59,7 @@ export const DocRow = memo(function DocRow({
   run,
   onSummarize,
   setTranslateDoc,
+  onOpenModels,
   onMakeSearchable,
   onBuildDeepIndex,
   onExport,
@@ -83,6 +85,8 @@ export const DocRow = memo(function DocRow({
   lang: UiLanguage
   sourcesById: ReadonlyMap<string, DocumentInfo>
   ocrAvailable: boolean
+  /** The TranslateGemma sidecar resolved at startup (TG-3) — gates the Translate item. */
+  translationAvailable: boolean
   busy: string | null
   previewLoading: boolean
   /** Whether the screen offers selection (i.e. `onAskSelected` is set) — gates the checkbox. */
@@ -96,6 +100,8 @@ export const DocRow = memo(function DocRow({
   run: (key: string, fn: () => Promise<unknown>) => void
   onSummarize: (d: DocumentInfo) => void
   setTranslateDoc: (d: DocumentInfo | null) => void
+  /** Deep link for the translate model-missing state (TG-3) — opens the AI Model screen. */
+  onOpenModels: () => void
   onMakeSearchable: (d: DocumentInfo) => void
   onBuildDeepIndex: (d: DocumentInfo) => void
   onExport: (d: DocumentInfo) => void
@@ -292,9 +298,26 @@ export const DocRow = memo(function DocRow({
                       {d.summary ? t('docs.summarizeAgain') : t('docs.summarize')}
                     </DropdownMenu.Item>
                   )}
+                  {/* Translation requires the TranslateGemma model (TG-3, plan O2/D3): without
+                      it the item disables and the sibling item below deep-links to the AI Model
+                      screen — a friendly install path, never a dead end. */}
                   {canDocTasks && (
-                    <DropdownMenu.Item className="menu-item" disabled={anyTaskActive} onSelect={() => setTranslateDoc(d)}>
+                    <DropdownMenu.Item
+                      className="menu-item"
+                      disabled={anyTaskActive || !translationAvailable}
+                      title={translationAvailable ? undefined : t('docs.translateNoModelTitle')}
+                      onSelect={() => setTranslateDoc(d)}
+                    >
                       {t('docs.translate')}
+                    </DropdownMenu.Item>
+                  )}
+                  {canDocTasks && !translationAvailable && (
+                    <DropdownMenu.Item
+                      className="menu-item"
+                      title={t('docs.translateNoModelTitle')}
+                      onSelect={onOpenModels}
+                    >
+                      {t('docs.translateNoModel')}
                     </DropdownMenu.Item>
                   )}
                   {/* Contextual: make a detected scan searchable (OCR). */}

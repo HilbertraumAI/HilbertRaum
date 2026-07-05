@@ -56,7 +56,12 @@ export function registerCoreIpc(ctx: AppContext): void {
       dictationAvailable: ctx.transcriber != null,
       // OCR is availability-driven too (engine selected iff the drive's ocr/
       // language files exist) — gates "Make searchable (OCR)" + the photo hint.
-      ocrAvailable: ctx.ocrEngine != null
+      ocrAvailable: ctx.ocrEngine != null,
+      // Translation is availability-driven the same way (TG-3: the TranslateGemma
+      // sidecar is selected at startup iff llama-server + the translation GGUF exist) —
+      // gates the Documents "Translate" action. Reading the composed handle keeps this
+      // flag in lockstep with the doc-task guard.
+      translationAvailable: ctx.translator != null
     }
   })
 

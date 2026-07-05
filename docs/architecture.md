@@ -1350,17 +1350,19 @@ sentinel-tested), zero native deps.
   `doctasks/` directory, with the **manager keeping the pump and the handlers owning each kind**
   (DX-1, full-audit-2026-06-29 follow-up Phase 8 — see §38; the earlier audit-M-A4 split first
   carved the window-math siblings out of the monolith). `manager.ts` (the `DocTaskManager`)
-  keeps ONLY the queue/pump + arbiter handshake + the `generate`/`generateWithRetry` retry loop,
-  and dispatches each dequeued job via `MODEL_TASK_HANDLERS[kind](task, runtime, ctx)`. Each
+  keeps ONLY the queue/pump + arbiter handshake + the `generate` model loop,
+  and dispatches each dequeued job via `MODEL_TASK_HANDLERS[kind](task, runtime, ctx)` —
+  except `ocr`/`categorize` (no/optional runtime) and, since TG-3, `translation` (dispatched
+  directly with the `Translator`; its sidecar-shaped window retry lives in its handler). Each
   kind's actual work lives in its own `handlers/` module: `handlers/index.ts` (the
-  `MODEL_TASK_HANDLERS` registry + the `ocr`/`categorize` exports), `handlers/shared.ts` (the
+  `MODEL_TASK_HANDLERS` registry + the `ocr`/`categorize`/`translation` exports), `handlers/shared.ts` (the
   shared doc helpers `materializeDocument`/`buildProvenance`/`extractSegmentTexts`), and one file
   per kind — `tree.ts` (deep index + `extract`), `summary.ts`, `ocr.ts`, `translation.ts`,
   `compare.ts`, `categorize.ts`. The window-math/prompt siblings `summary.ts`/`translation.ts`/
   `compare.ts` at the `doctasks/` root stay (the PURE math + templates each handler calls).
   `context.ts` is the leaf vocabulary module: `DocTaskDeps` (the injected seams, re-exported from
   `manager.ts` for the barrel), `InternalTask` (the in-flight job), and `DocTaskCtx` — the narrow
-  orchestration handle (`deps` + the model-slot `arbiter` + the two model-loop fns) the manager
+  orchestration handle (`deps` + the model-slot `arbiter` + the `generate` model-loop fn) the manager
   hands each handler so a `run<Kind>` body calls the shared model loop without a `this` reference.
   A job state machine on the Phase-4/18 async-with-polling precedent:
   `startDocTask({ kind, documentIds, params }) → { jobId }`,
@@ -1371,9 +1373,10 @@ sentinel-tested), zero native deps.
   (Phase 35 — exactly TWO distinct source documents; the others take one), `ocr` (Phase 38), the
   two whole-document-analysis builds `tree` (deep index) and `extract` (structured extract), and
   `categorize` (the bank-statement LLM categorizer, D26). Deps are injected (`getDb`,
-  `getRuntime`, `isChatStreaming`, `getContextTokens`, `getStoreDir`, `getIngestionDeps`,
-  `beginDocumentWork`, `getOcrEngine`, `rasterizePdf`, `audit`), so the engine tests without
-  Electron; `main/index.ts` wires it and exposes it as `AppContext.docTasks`.
+  `getRuntime`, `getTranslator` — the TranslateGemma sidecar, TG-3 —, `isChatStreaming`,
+  `getContextTokens`, `getStoreDir`, `getIngestionDeps`, `beginDocumentWork`, `getOcrEngine`,
+  `rasterizePdf`, `audit`), so the engine tests without Electron; `main/index.ts` wires it and
+  exposes it as `AppContext.docTasks`.
 - **Concurrency (D26, RESOLVED): strict one-at-a-time, with one exception.** Tasks serialize
   among themselves (one FIFO queue, one runner). A **non-yielding** task (`summary`,
   `translation`, `compare`, `ocr`) **refuses to start while a chat answer streams** (it reads
@@ -1405,6 +1408,11 @@ sentinel-tested), zero native deps.
   a friendly "start a model first" refusal, never an auto-start (the `sendChatMessage`
   decision). Failures surface friendly §11.4 copy; the raw reason goes to the local log
   only. Cancellation never persists a partial result (chat keeps partials; tasks do not).
+  **Exception since TG-3: `translation` runs on the TranslateGemma sidecar**
+  (`DocTaskDeps.getTranslator`, see the design record below) — the chat runtime is
+  irrelevant to it; an absent translator refuses with `main.translation.noModel` (a deep
+  link to the AI Model screen in the UI). The FIFO + chat↔task exclusion apply unchanged
+  (plan D9: RAM co-residency — a ~9.5 GiB translate next to a resident chat model).
 - **Summary algorithm (D25): budget-driven two-level map-reduce over stored CHUNKS** (no
   re-parse; the ~80-token chunk overlap slightly duplicates stitched text — accepted).
   The per-call input budget is derived in WORDS (the chunker's token-estimate unit) with
@@ -1424,25 +1432,33 @@ sentinel-tested), zero native deps.
   `document_task_completed`/`document_task_failed` carry `{ kind, documentId }` only
   (plus the additive ids-only `documentIdB` for a compare) — sentinel-tested in
   `audit-ipc.test.ts`.
-- **Translation (Phase 34, D27/D36): map in document order, materialize a NEW document.**
-  `params.targetLang: 'de' | 'en'` (a closed v1 set — free-text language fields invite
-  silent quality failures). **D36 — the input is the parser's SEGMENTS, re-extracted from
-  the stored copy via `extractDocumentPreview`, NOT the stored chunks:** chunks overlap by
-  ~80 tokens for retrieval, and naive in-order chunk concatenation would duplicate text at
-  every boundary in the translated output (a summary tolerated that; a faithful
-  translation cannot). The segments are ordered, non-overlapping, and exact; the cost is
-  one re-parse — the same cost the in-app preview pays, on the same code path (encrypted
-  copies decrypt to a `.parse*` transient and are shredded). Overlap-trimming adjacent
-  chunks was rejected as heuristic where the re-parse is exact. Windows pack segments by
-  the D25 word-budget math, but split the usable context by **measured token weight**
-  (R-T2 on the real b9585 + Qwen3-4B): input claims 1.3 tokens/word, output claims 2.0
-  (German output is subword-heavy — a half/half split truncated a near-budget window).
-  **No window ceiling and no reduce** — a faithful translation may not silently truncate;
-  windows are translated in order at temperature 0.2 with a strict template (translate,
-  don't summarize; preserve Markdown; numbers/names/dates verbatim) and concatenated. A
-  window the model refuses/garbles is retried ONCE, then **marked visibly** in the output
-  with the original text kept below — never silently dropped; only an all-windows failure
-  fails the task.
+- **Translation (Phase 34, D27/D36; rerouted onto the TranslateGemma sidecar at TG-3): map
+  in document order, materialize a NEW document.** `params.sourceLang`/`params.targetLang`
+  over the curated 10-language set (`TRANSLATION_LANGUAGE_CODES`, `shared/types.ts` — the
+  canonical list the sidecar prompt builder also keys off; validated server-side, source ≠
+  target; TranslateGemma needs an explicit source — no auto-detect). **D36 — the input is
+  the parser's SEGMENTS, re-extracted from the stored copy via `extractDocumentPreview`,
+  NOT the stored chunks:** chunks overlap by ~80 tokens for retrieval, and naive in-order
+  chunk concatenation would duplicate text at every boundary in the translated output (a
+  summary tolerated that; a faithful translation cannot). The segments are ordered,
+  non-overlapping, and exact; the cost is one re-parse — the same cost the in-app preview
+  pays, on the same code path (encrypted copies decrypt to a `.parse*` transient and are
+  shredded). Overlap-trimming adjacent chunks was rejected as heuristic where the re-parse
+  is exact. Windows budget against the SIDECAR's launched `--ctx-size`
+  (`Translator.contextWindow()`, 4096 from the manifest) — not the chat window — split by
+  **measured token weight** (R-T2: input 1.3 tokens/word, output 2.0; measured on
+  Qwen3-4B, kept as conservative defaults until TG-6 re-measures on the Gemma tokenizer)
+  and hard-clamped to the model card's ~2K input spec
+  (`TRANSLATION_MAX_INPUT_TOKENS = 1800`, plan D4 — over-chunking is the failure mode,
+  never overflow). **No window ceiling and no reduce** — a faithful translation may not
+  silently truncate; windows are `translator.translate()` calls in order, strictly
+  SEQUENTIAL (plan D9 — one `--parallel 1` slot; parallel requests are the #25142
+  Windows-Vulkan hang shape); the trained prompt lives INSIDE the sidecar
+  (`services/translation/prompt.ts`, greedy temperature 0) — no app-side system/window
+  prompts remain. A window the model refuses/garbles is retried ONCE (the sidecar-shaped
+  retry lives in `handlers/translation.ts`), then **marked visibly** in the output with
+  the original text kept below — never silently dropped; only an all-windows failure fails
+  the task. Attribution + provenance stamp the TRANSLATION model's id.
 - **Compare (Phase 35, D28/D37): two documents in, one materialized report out.** The
   strategy auto-switches on token math (the D25 budget shape: `(max(1024, ctx) − 512 −
   300) / 1.3` input words per call). Both full texts fit ⇒ **mode (a)**: one
@@ -1506,8 +1522,13 @@ sentinel-tested), zero native deps.
   compare; D26 guarantees at most one task anyway). The Documents screen polls it
   (`useSyncExternalStore`), shows the per-row
   "Summarizing…/Translating…/Comparing… (n/m)" busy state + Cancel on EVERY source row;
-  "Translate" opens a small target-choice modal (German/English); "Compare (2)" appears
-  on the Phase-17 multi-select at exactly two selections. A done summary opens the
+  "Translate" opens a small modal with SOURCE + TARGET selects over the curated 10
+  (native-name labels, untranslated by design — the Settings language-picker precedent;
+  the pair is remembered session-local, source ≠ target enforced in UI and server). With
+  no translation model installed (`AppStatus.translationAvailable`, read from
+  `ctx.translator` like `ocrAvailable`) the Translate item disables and a sibling
+  "Get the translation model…" item deep-links to the AI Model screen (plan O2/D3).
+  "Compare (2)" appears on the Phase-17 multi-select at exactly two selections. A done summary opens the
   preview (collapsible section, "Generated by <model> · <date>", Regenerate); a done
   translation reveals the new document in the refreshed list with a quiet "Translated
   from <original>" provenance line (row + preview); a done comparison opens the new
@@ -1516,9 +1537,24 @@ sentinel-tested), zero native deps.
 
 ## Translation sidecar — design record (TG wave; STUB, folded in full at TG-6)
 
-_Working stub added at TG-2. The complete record — sidecar + Translate view + the doc-task reroute,
-with stable §-anchors — is folded in when the wave closes (TG-6, per the CLAUDE.md doc-lifecycle
-rule). The live plan is `docs/translategemma-translation-plan.md`._
+_Working stub added at TG-2, extended at TG-3 (the doc-task reroute). The complete record —
+sidecar + Translate view + the doc-task reroute, with stable §-anchors — is folded in when the
+wave closes (TG-6, per the CLAUDE.md doc-lifecycle rule). The live plan is
+`docs/translategemma-translation-plan.md`._
+
+- **TG-3 — the doc-task reroute (BREAKING, plan O2/D3/D4/D5).** `kind:'translation'` consumes
+  `ctx.translator` via `DocTaskDeps.getTranslator` — the chat runtime no longer participates
+  (its prompts/temperature were deleted; the manager dispatches translation directly like
+  `ocr`, outside `MODEL_TASK_HANDLERS`). Guards: enqueue AND dequeue require a non-null
+  translator (`main.translation.noModel`, friendly + deep-linked); chat may be entirely absent.
+  Languages widened to the curated 10 with a required `sourceLang` (shared/types owns the
+  canonical `TRANSLATION_LANGUAGE_CODES`; the sidecar's prompt maps key off it — one source of
+  truth). Window planning moved to `Translator.contextWindow()` + the D4
+  `TRANSLATION_MAX_INPUT_TOKENS = 1800` clamp; the Qwen-measured 1.3/2.0 tokens-per-word
+  constants stay as conservative defaults until the TG-6 Gemma-tokenizer re-measurement.
+  `AppStatus.translationAvailable` (from `ctx.translator`, the `ocrAvailable` twin) gates the
+  Documents UI. V6 re-verified: `resolveModelByRole('translation')` carries the manifest's
+  `recommendedContextTokens` (4096) into the sidecar launch exactly as vision/reranker do.
 
 - **Why a dedicated sidecar (`services/translation/`).** TranslateGemma is served by its OWN lazy
   `llama-server` (the FIFTH `LlamaServer` composition after chat, E5, reranker, vision) — NOT the

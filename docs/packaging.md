@@ -413,8 +413,8 @@ these harnesses prove the *current* pin (the drive's previous binary was b9585).
 | `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
 | `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |
 | `vision-smoke` | `HILBERTRAUM_VISION_SMOKE` | the vision sidecar (`--mmproj`) cold-starts, analyzes a fixture image, streams, reuses the prefill, idle-tears-down + cold-restarts |
-| `compare-smoke` / `translation-smoke` | `HILBERTRAUM_COMPARE_SMOKE` / `HILBERTRAUM_TRANSLATION_SMOKE` | the doc-task pipelines end-to-end |
-| `translategemma-smoke` | `HILBERTRAUM_TRANSLATEGEMMA_SMOKE` | the TranslateGemma sidecar (NO `--jinja`, raw `/completion`) LOADS on the pin (Vulkan **and** CPU safety-net), DE↔EN translates, keeps numbers/dates/codes verbatim, resists embedded-instruction injection, leaks no `<end_of_turn>`; prints tokens/sec + peak RSS. **The TG-2 go/no-go gate** — run before the doc-task reroute (TG-3) |
+| `compare-smoke` | `HILBERTRAUM_COMPARE_SMOKE` | the compare doc-task pipeline end-to-end (`translation-smoke` — the chat-model translation pipeline — was retired at TG-3 with that path; `translategemma-smoke` below covers translation) |
+| `translategemma-smoke` | `HILBERTRAUM_TRANSLATEGEMMA_SMOKE` | the TranslateGemma sidecar (NO `--jinja`, raw `/completion`) LOADS on the pin (Vulkan **and** CPU safety-net), DE↔EN translates, keeps numbers/dates/codes verbatim, resists embedded-instruction injection, leaks no `<end_of_turn>`; prints tokens/sec + peak RSS. **The TG-2 go/no-go gate** — since TG-3 the doc-task's production translation backend |
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |

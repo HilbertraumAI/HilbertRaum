@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { t, type MessageKey } from '../../../shared/i18n'
 import { tMain } from '../i18n'
-import type {
-  CoverageTier,
-  DocTaskKind,
-  DocTaskStatus,
-  StartDocTaskRequest,
-  TranslationTargetLang
+import {
+  isTranslationLangCode,
+  type CoverageTier,
+  type DocTaskKind,
+  type DocTaskStatus,
+  type StartDocTaskRequest,
+  type TranslationSourceLang,
+  type TranslationTargetLang
 } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import { isExceedContextError } from '../runtime/llama'
@@ -17,7 +19,7 @@ import { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
 import { planSummaryWindows } from './summary'
 import { log } from '../logging'
 import type { DocTaskCtx, DocTaskDeps, InternalTask } from './context'
-import { MODEL_TASK_HANDLERS, runCategorize, runOcr } from './handlers'
+import { MODEL_TASK_HANDLERS, runCategorize, runOcr, runTranslation } from './handlers'
 
 // `DocTaskDeps` lives in `./context` now (the per-kind handlers need it too); re-exported here so
 // every existing `from '../services/doctasks'` importer is byte-for-byte unaffected.
@@ -29,8 +31,9 @@ export type { DocTaskDeps } from './context'
 // templates for each pipeline live in the sibling summary/translation/compare modules (audit
 // M-A4); the per-kind WORK lives in the `handlers/` modules keyed by a registry (DX-1,
 // full-audit-2026-06-29 follow-up Phase 8). THIS file is the orchestration: queue/pump, the
-// model-slot arbiter handshake, the model loop (`generate`/`generateWithRetry` retry), and the
-// dispatch wrapper that records success/failure/cancel.
+// model-slot arbiter handshake, the model loop (`generate`), and the dispatch wrapper that
+// records success/failure/cancel. (Translation's window retry moved into its handler at TG-3 —
+// it is sidecar-shaped, not `chatStream`-shaped.)
 //
 // Concurrency (strict one-at-a-time):
 // - Tasks serialize among THEMSELVES: one FIFO queue, one running task.
@@ -44,7 +47,11 @@ export type { DocTaskDeps } from './context'
 // Runtime use: tasks call the ACTIVE chat runtime via the same `chatStream` contract
 // with EXPLICIT maxTokens/temperature — never the answer-depth modes. No runtime
 // running → a friendly "start a model first" failure, never an auto-start surprise
-// (same rule as sendChatMessage).
+// (same rule as sendChatMessage). TRANSLATION is the exception since TG-3 (plan D3/O2):
+// it runs on the TranslateGemma sidecar (`deps.getTranslator()`), so the chat runtime is
+// irrelevant to it — absent translator → a friendly "install the translation model"
+// failure with the AI-Model deep link. The FIFO + chat↔task exclusion stay unchanged
+// even so (D9: RAM co-residency — a 12B translate next to a resident chat model).
 //
 // Vault-lease note: a summary task only READS chunk rows and WRITES the
 // `documents.summary_json` column of the open DB — it never touches the `.enc`
@@ -73,6 +80,7 @@ export const TASK_DOCUMENT_NOT_READY_MESSAGE = t('en', 'main.task.documentNotRea
 export const TASK_GENERIC_FAILURE_MESSAGE = t('en', 'main.task.genericFailure')
 export const TASK_EXPIRED_MESSAGE = t('en', 'main.task.expired')
 export const TASK_TRANSLATION_TARGET_MESSAGE = t('en', 'main.task.translationTarget')
+export const TASK_TRANSLATION_NO_MODEL_MESSAGE = t('en', 'main.translation.noModel')
 export const TASK_SOURCE_UNREADABLE_MESSAGE = t('en', 'main.task.sourceUnreadable')
 export const TASK_NEEDS_OCR_MESSAGE = t('en', 'main.task.needsOcr')
 export const TASK_OCR_NOT_A_SCAN_MESSAGE = t('en', 'main.task.ocrNotAScan')
@@ -98,9 +106,7 @@ export class DocTaskManager {
       deps,
       arbiter: this.arbiter,
       generate: (runtime, systemPrompt, prompt, maxTokens, temperature, signal) =>
-        this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, signal),
-      generateWithRetry: (runtime, systemPrompt, prompt, maxTokens, temperature, signal) =>
-        this.generateWithRetry(runtime, systemPrompt, prompt, maxTokens, temperature, signal)
+        this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, signal)
     }
   }
 
@@ -212,15 +218,21 @@ export class DocTaskManager {
     ) {
       throw new Error(tMain('main.task.unknownKind'))
     }
-    // Translation targets are a closed set: de | en only — a free-text language
-    // field invites silent quality failures.
+    // Translation languages are a closed, curated set (`TRANSLATION_LANGUAGE_CODES`,
+    // shared/types — widened to 10 at TG-3 with the WMT24++ evidence recorded there).
+    // BOTH ends are validated: TranslateGemma's trained prompt requires an explicit
+    // source language (no auto-detect), and a same-language "translation" would be a
+    // multi-gigabyte no-op, so source ≠ target is enforced too.
+    let sourceLang: TranslationSourceLang | undefined
     let targetLang: TranslationTargetLang | undefined
     if (kind === 'translation') {
-      const raw = req.params?.targetLang
-      if (raw !== 'de' && raw !== 'en') {
+      const src = req.params?.sourceLang
+      const tgt = req.params?.targetLang
+      if (!isTranslationLangCode(src) || !isTranslationLangCode(tgt) || src === tgt) {
         throw new Error(tMain('main.task.translationTarget'))
       }
-      targetLang = raw
+      sourceLang = src
+      targetLang = tgt
     }
     // Coverage tier for a summary (whole-document-analysis plan §4.5). Tolerant: any value
     // other than 2 or 3 (incl. absent — the one-click summary) means Tier 1 (the default,
@@ -234,12 +246,18 @@ export class DocTaskManager {
       throw new Error(tMain('main.task.refusedChatStreaming'))
     }
     // OCR runs the local recognition engine, not the chat model — it needs the
-    // vendored language files instead of a running runtime. `categorize` (Phase 33) is the one
+    // vendored language files instead of a running runtime. TRANSLATION (TG-3, plan D3/O2)
+    // runs the TranslateGemma sidecar — it needs the installed translation model, and the
+    // chat runtime is irrelevant to it. `categorize` (Phase 33) is the one
     // model-OPTIONAL kind: with no runtime it degrades to the deterministic rule pass, so it must
     // be allowed to start regardless — the runtime is read (possibly null) at run time.
     if (kind === 'ocr') {
       if (!this.deps.getOcrEngine?.()) {
         throw new Error(tMain('main.task.needsOcr'))
+      }
+    } else if (kind === 'translation') {
+      if (!this.deps.getTranslator()) {
+        throw new Error(tMain('main.translation.noModel'))
       }
     } else if (kind !== 'categorize' && !this.deps.getRuntime()) {
       throw new Error(tMain('main.noModelRunning'))
@@ -297,6 +315,7 @@ export class DocTaskManager {
         resultRef: null
       },
       controller: new AbortController(),
+      sourceLang,
       targetLang,
       summaryTier
     }
@@ -408,6 +427,13 @@ export class DocTaskManager {
       if (kind === 'ocr') {
         // OCR uses the recognition engine, not the chat runtime.
         resultId = await runOcr(task, this.ctx)
+      } else if (kind === 'translation') {
+        // TG-3: translation runs on the TranslateGemma sidecar, not the chat runtime.
+        // Re-check at dequeue time — a quit may have stopped it while queued (a lock only
+        // SUSPENDS it; the next translate() lazily restarts the server).
+        const translator = this.deps.getTranslator()
+        if (!translator) throw new Error(tMain('main.translation.noModel'))
+        resultId = await runTranslation(task, translator, this.ctx)
       } else if (kind === 'categorize') {
         // The bank-statement LLM categorizer (Phase 33) — model-OPTIONAL: a null runtime degrades to
         // the deterministic rule pass inside runCategorize (so it never fails for "no model").
@@ -442,36 +468,6 @@ export class DocTaskManager {
       this.deps.audit?.('document_task_failed', `Document task failed: ${kind}`, auditMeta)
       log.error('Document task failed', { jobId: task.status.jobId, kind, documentId, error: raw })
     }
-  }
-
-  /**
-   * One translation window: a failed or empty generation is retried once; a second
-   * failure returns null (the caller marks the window). Aborts always propagate
-   * immediately — cancel must never look like a failed window.
-   */
-  private async generateWithRetry(
-    runtime: ModelRuntime,
-    systemPrompt: string,
-    prompt: string,
-    maxTokens: number,
-    temperature: number,
-    signal: AbortSignal
-  ): Promise<string | null> {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const out = await this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, signal)
-        if (out.length > 0) return out
-        log.warn('Translation window came back empty', { attempt })
-      } catch (err) {
-        if (isAbortError(err, signal)) throw err
-        log.warn('Translation window failed', {
-          attempt,
-          error: err instanceof Error ? err.message : String(err)
-        })
-      }
-      if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
-    }
-    return null
   }
 
   /**
@@ -527,6 +523,7 @@ function isYieldingKind(kind: DocTaskKind): boolean {
 /** Keys of the guard/validation copy that may pass through to the renderer on failure. */
 const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.noModelRunning',
+  'main.translation.noModel',
   'main.model.contextExceeded',
   'main.task.refusedChatStreaming',
   'main.task.documentNotReady',
