@@ -95,6 +95,7 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(args).toContain('--ctx-size 4096') // plan §2 D4
     expect(args).toContain('--parallel 1') // sequential windows; contains #25142 (plan §2 D8/D9)
     expect(args).toContain('--device none') // CPU-pinned for TG-2 (plan §2 D8)
+    expect(args).toContain('--chat-template gemma') // avoids the #20305 STARTUP crash (TG-2 smoke finding)
     expect(args).toContain('--host 127.0.0.1') // loopback only
     await rt.stop()
   })

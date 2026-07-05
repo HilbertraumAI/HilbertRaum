@@ -1527,13 +1527,16 @@ rule). The live plan is `docs/translategemma-translation-plan.md`._
   `model-policy.md` "The translation role"), so the sidecar launches **without `--jinja`** and
   cannot ride the chat slot (which hard-codes `CHAT_SERVER_ARGS = ['--jinja', …]`). Desirable
   anyway: chat stays usable, and ctx/prompt/sampling are model-specific (plan §2 D1/D2).
-- **Launch args (`runtime.ts`).** `--ctx-size 4096` (the model card's 2K input budget + output
-  headroom, plan §2 D4) `--parallel 1` (`TRANSLATION_SLOT_ARGS` — strictly sequential windows;
-  contains the #25142 Windows-Vulkan parallel-translation hang) `--device none`
+- **Launch args (`runtime.ts`, `TRANSLATION_SERVER_ARGS`).** `--ctx-size 4096` (the model card's 2K
+  input budget + output headroom, plan §2 D4) `--parallel 1` (`TRANSLATION_SLOT_ARGS` — strictly
+  sequential windows; contains the #25142 Windows-Vulkan parallel-translation hang) `--device none`
   (`TRANSLATION_DEVICE_ARGS` — CPU-pinned for TG-2 per D8: the chat GPU ladder in `runtime/factory.ts`
   yields a `chatStream` `ModelRuntime`, whose seams don't fit a raw-`/completion` sidecar, so TG-2
-  ships CPU and the smoke's tokens/sec decides at TG-6 whether to pull GPU work forward). NO
-  `--jinja`, NOT `CHAT_SERVER_ARGS`.
+  ships CPU and the smoke's ~4 tok/s decides at TG-6 whether to pull GPU work forward)
+  `--chat-template gemma` (`TRANSLATION_TEMPLATE_ARGS` — **REQUIRED**, TG-2 smoke finding: b9849
+  crashes at STARTUP validating TranslateGemma's embedded template — the #20305 minja crash at init,
+  even without `--jinja` — so we override it with the built-in legacy gemma template; safe because
+  `/completion` never applies the chat template). NO `--jinja`, NOT `CHAT_SERVER_ARGS`.
 - **Prompt in app code (`prompt.ts`), raw `/completion` (`completion.ts`).** The trained
   single-user-turn prompt is formatted in `buildTranslationPrompt` (our own `code → English name`
   map — the template's dictionary is unusable without jinja) and POSTed to the native `/completion`
@@ -1550,9 +1553,12 @@ rule). The live plan is `docs/translategemma-translation-plan.md`._
   (null when binary/weights absent; no mock — plan O2). Composed in `compose-services.ts`, carried
   on `AppContext.translator`, stopped on quit (`shutdown.ts`) + suspended on lock
   (`registerWorkspaceIpc`).
-- **TG-2 status.** Sidecar + wiring + tests are built and inert (nothing consumes `ctx.translator`
-  until the doc-task reroute at TG-3). The go/no-go gate is the `translategemma-smoke` harness on
-  the real pin (`packaging.md` harness matrix); until it passes, the wave does not proceed to TG-3.
+- **TG-2 status — GATE PASSED.** Sidecar + wiring + tests are built and inert (nothing consumes
+  `ctx.translator` until the doc-task reroute at TG-3). The `translategemma-smoke` harness RAN on the
+  real b9849 Vulkan pin (2026-07-05) and PASSED: clean DE↔EN translation, injection-resistant, no
+  stop-token leak, ~3.7–4.0 tok/s CPU decode, ~9.5 GiB peak RSS. Its load-bearing finding is the
+  `--chat-template gemma` startup fix above (without it b9849 can't start on this model). CPU
+  safety-net leg still to run on a drive that ships `runtime/llama.cpp/<os>/cpu/`.
 
 ## Functionality wave 3 — design record (Phases 31–38, decisions D23–D37 + research gates)
 

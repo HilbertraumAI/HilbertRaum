@@ -494,6 +494,17 @@ This also rules out running TranslateGemma as a `role: chat` model (the chat sid
 `--jinja`). The design is built at TG-2 (plan §2 D2); the no-jinja choice is simpler and deterministic
 and stands even if a future pin lands the #20305 fix (V5 re-checks this on each pin bump).
 
+**TG-2 smoke finding (2026-07-05) — #20305 crashes at STARTUP, not just per-request.** On the real
+b9849 pin the server CRASHES during init (Windows `0xC0000409`/std::bad_alloc) even with **no
+`--jinja`**: it validates the model's embedded chat template at startup, and TranslateGemma's
+template (typed `{source_lang_code,target_lang_code}` content) crashes the probe
+(`render_message_to_json: Neither string content nor typed content is supported by the template`).
+**Fix: the sidecar launches with `--chat-template gemma`** (the built-in legacy, non-jinja template)
+so the startup probe has something renderable — SAFE because the raw `/completion` path never applies
+the chat template (`/props` then reports `chat_template: "gemma"`). With that override the model
+loads + translates cleanly (DE↔EN, injection-resistant, ~4 tok/s CPU, ~9.5 GiB peak RSS). Drop the
+override if a future pin lands the #20305 fix — the smoke re-decides.
+
 **License-review record — TranslateGemma 12B (status: `pending`, TG wave O1).** The base model
 `google/translategemma-{4b,12b,27b}-it` is under the **Gemma Terms of Use**
 (`https://ai.google.dev/gemma/terms`) — a **non-permissive** license, the same class that kept **Gemma

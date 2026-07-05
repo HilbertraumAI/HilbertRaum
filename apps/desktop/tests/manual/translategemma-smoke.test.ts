@@ -9,7 +9,7 @@ import {
   type TranslationLangCode
 } from '../../src/main/services/translation/prompt'
 import { readCompletionSSE, type CompletionFinal } from '../../src/main/services/translation/completion'
-import { TRANSLATION_SLOT_ARGS, TRANSLATION_DEVICE_ARGS } from '../../src/main/services/translation/runtime'
+import { TRANSLATION_SERVER_ARGS } from '../../src/main/services/translation/runtime'
 
 // MANUAL TranslateGemma load smoke — the TG-2 go/no-go GATE (plan §4 TG-2 exit criteria) — NOT CI.
 //
@@ -121,8 +121,9 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
     binPath,
     modelPath,
     contextTokens: CTX,
-    // The EXACT production translation args (imported so they can never drift from the runtime).
-    extraArgs: [...TRANSLATION_SLOT_ARGS, ...TRANSLATION_DEVICE_ARGS],
+    // The EXACT production translation args (imported so they can never drift from the runtime) —
+    // includes `--chat-template gemma`, WITHOUT which b9849 crashes at startup (#20305, TG-2 finding).
+    extraArgs: [...TRANSLATION_SERVER_ARGS],
     healthTimeoutMs: PATIENT_MS
   })
 
@@ -174,12 +175,18 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
       return out
     }
 
-    // (3+4) DE→EN: sanity + verbatim numbers/dates/codes.
+    // (3+4) DE→EN: sanity + verbatim tokens. NOTE: locale-formatted numbers/dates are CORRECTLY
+    // LOCALIZED, not preserved byte-for-byte — proper MT renders "14.03.2026"→"March 14, 2026",
+    // "1.250"→"1,250", "39,90"→"39.90" (TG-2 smoke, 2026-07-05). So those are PRINTED (informational),
+    // and only STABLE IDENTIFIERS (an invoice number, a model code) are ASSERTED verbatim.
     const en = await translate('DE→EN office letter', 'de', 'en', DE_OFFICE)
-    for (const must of ['14.03.2026', '1.250', '39,90', '2026-0457', '30', 'RX-7b']) {
-      console.log(`  verbatim "${must}": ${en.includes(must) ? 'KEPT' : 'CHANGED/LOST'}`)
+    for (const n of ['14.03.2026', '1.250', '39,90']) {
+      console.log(`  localized-number "${n}": ${en.includes(n) ? 'kept as-is' : 'localized (expected)'}`)
     }
-    expect(en.includes('2026-0457'), 'invoice number must survive verbatim').toBe(true)
+    for (const id of ['2026-0457', 'RX-7b']) {
+      console.log(`  identifier "${id}": ${en.includes(id) ? 'KEPT' : 'CHANGED/LOST'}`)
+      expect(en.includes(id), `identifier ${id} must survive verbatim (DE→EN)`).toBe(true)
+    }
 
     // (3) EN→DE sanity.
     const de = await translate('EN→DE memo', 'en', 'de', EN_MEMO)

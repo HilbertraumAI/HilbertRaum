@@ -42,6 +42,37 @@ export const TRANSLATION_SLOT_ARGS = ['--parallel', '1'] as const
  */
 export const TRANSLATION_DEVICE_ARGS = ['--device', 'none'] as const
 
+/**
+ * Override the model's embedded chat template with the built-in `gemma` one (TG-2 smoke finding,
+ * 2026-07-05). This is NOT cosmetic — WITHOUT it the b9849 `llama-server` CRASHES AT STARTUP on
+ * TranslateGemma (Windows exit 0xC0000409 / std::bad_alloc), even with NO `--jinja`: the server
+ * VALIDATES the model's embedded chat template during init, and TranslateGemma's template requires
+ * typed `{source_lang_code,target_lang_code}` content the probe can't render
+ * ("render_message_to_json: Neither string content nor typed content is supported by the
+ * template") → the #20305 minja crash, biting at init rather than per-request. Confirmed on the
+ * real pin: with `--chat-template gemma` the server loads + serves cleanly and `/props` reports
+ * `chat_template: "gemma"`.
+ *
+ * SAFE because the translation sidecar drives the RAW `/completion` endpoint with a fully-formed
+ * prompt (`prompt.ts`) — the chat template is NEVER applied to our requests (only `/v1/chat/*` and
+ * `/apply-template` use it, which we don't call). The built-in `gemma` name selects the LEGACY
+ * (non-jinja) template path, so this stays consistent with the no-jinja design (D2): it sidesteps
+ * the very minja parser that #20305 breaks. If a future pin lands the #20305 fix (PR #20956, V5),
+ * this override can be dropped — the smoke re-decides.
+ */
+export const TRANSLATION_TEMPLATE_ARGS = ['--chat-template', 'gemma'] as const
+
+/**
+ * The full extra-arg set the translation sidecar launches with (composed from the named constants
+ * above so the runtime AND the manual smoke stay byte-identical — no drift). NO `--jinja`, NOT the
+ * chat `CHAT_SERVER_ARGS`.
+ */
+export const TRANSLATION_SERVER_ARGS = [
+  ...TRANSLATION_SLOT_ARGS,
+  ...TRANSLATION_DEVICE_ARGS,
+  ...TRANSLATION_TEMPLATE_ARGS
+] as const
+
 /** Launch context window (plan §2 D4). Overridden by the manifest's `recommendedContextTokens`
  *  (4096: the model card's 2K input budget + output headroom). Read back via `contextWindow()`. */
 const DEFAULT_TRANSLATION_CONTEXT_TOKENS = 4096
@@ -182,8 +213,9 @@ export class TranslationRuntime {
         modelPath: this.opts.modelPath,
         contextTokens: this.ctxTokens,
         // NO `--jinja` (the #20305 regression, plan §2 D2) and NOT CHAT_SERVER_ARGS. `--parallel 1`
-        // (sequential windows; #25142) + `--device none` (CPU-pinned for TG-2, plan §2 D8).
-        extraArgs: [...TRANSLATION_SLOT_ARGS, ...TRANSLATION_DEVICE_ARGS],
+        // (sequential windows; #25142) + `--device none` (CPU-pinned for TG-2, plan §2 D8) +
+        // `--chat-template gemma` (avoids the #20305 STARTUP crash — see TRANSLATION_TEMPLATE_ARGS).
+        extraArgs: [...TRANSLATION_SERVER_ARGS],
         spawn: this.opts.spawn,
         fetchImpl: this.opts.fetchImpl,
         findPort: this.opts.findPort,
