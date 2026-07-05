@@ -737,6 +737,62 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     expect(ctx.events.map((e) => e.meta?.toolName)).not.toContain('export_transactions_csv')
   })
 
+  it('custom category set (Phase 1.5): refused with friendly copy when no model is running', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Kategorisiere in Miete, Lebensmittel, Sonstiges und exportiere als CSV')
+    )
+    // No runtime in ctx → the deterministic rules cannot know the user's labels; honest refusal that
+    // ECHOES the parsed set (a mis-parsed list would be visible here).
+    expect(res.answer).toBe(
+      tr('skills.bankAnalysis.customCategoriesNeedModel', { categories: 'Miete, Lebensmittel, Sonstiges' })
+    )
+    expect(res.answer).not.toContain('```')
+  })
+
+  it('custom category set (Phase 1.5): categorizes inline with the enum-constrained model and serializes the custom labels', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // A scripted runtime replying with the USER's labels: Grocery → Lebensmittel, Salary → Sonstiges.
+    const calls: Array<{ messages: { role: string; content: string }[] }> = []
+    const runtime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(messages: { role: string; content: string }[]) {
+        calls.push({ messages })
+        const user = messages[1].content
+        const assignments = user
+          .split('\n')
+          .filter((l) => /^\d+\t/.test(l))
+          .map((l) => {
+            const [idx, , ...rest] = l.split('\t')
+            return { index: Number(idx), category: rest.join('\t').includes('Grocery') ? 'Lebensmittel' : 'Sonstiges' }
+          })
+        yield JSON.stringify({ assignments })
+      }
+    } as never
+    const ctx = { ...ctxFor(db, { documentIds: [id] }, 'Kategorisiere in Lebensmittel, Sonstiges als CSV'), runtime }
+    const res = await bankStatementAnalysisHandler.run!(ctx)
+    expect(calls.length).toBeGreaterThan(0) // the model WAS consulted (no prefilter veto on a custom set)
+    expect(res.answer).toContain('```csv')
+    expect(res.answer).toMatch(/Grocery,-45\.90,EUR,1954\.10,\d*,Lebensmittel/)
+    expect(res.answer).toMatch(/Salary,2500\.00,EUR,4454\.10,\d*,Sonstiges/)
+    // Model-assigned labels carry the honest model-assisted note (persisted flag drives it).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryAssisted'))
+
+    // REUSE: the same set again (template shape this time) — persisted labels ⊆ requested set, so
+    // NO new model call is paid, and the breakdown shows the custom labels.
+    const before = calls.length
+    const again = await bankStatementAnalysisHandler.run!(
+      { ...ctxFor(db, { documentIds: [id] }, 'Kategorisiere in Lebensmittel, Sonstiges, Reisen'), runtime }
+    )
+    expect(calls.length).toBe(before)
+    expect(again.answer).toContain('Lebensmittel')
+  })
+
   it('format path (JSON) with a category ask carries per-row categories under the same gate', async () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)

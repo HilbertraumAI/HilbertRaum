@@ -1086,6 +1086,57 @@ async function runCategorizationInner(
 }
 
 /**
+ * Persist a categorizer result (assignments + the authoritative `categorized_by_model` flag)
+ * atomically — the chat-lane twin of the categorize doctask's persist step (result-tables plan,
+ * Phase 1.5: a prompt-supplied CUSTOM category set runs inline in the chat slot). Labels outside the
+ * seeded taxonomy (the user's own categories) are inserted as NON-builtin `bank_categories` rows on
+ * first use, looked up across ALL existing rows (names carry no UNIQUE constraint — a prior custom
+ * run's row is reused, never duplicated). Rolls back on failure so no partial annotation survives.
+ * Content posture: category NAMES are content-class (they live only in the data tables, never in a
+ * log/audit — same as every other bank row).
+ */
+export function persistCategorization(
+  db: Db,
+  statementId: string,
+  loaded: readonly LoadedTransaction[],
+  assignments: readonly CategorizationRow[],
+  modelAssisted: boolean,
+  now?: () => string
+): void {
+  const at = (now ?? (() => new Date().toISOString()))()
+  db.exec('BEGIN')
+  try {
+    const byName = ensureBuiltinCategories(db, at)
+    const all = db.prepare('SELECT id, name FROM bank_categories').all() as Array<{ id: string; name: string }>
+    for (const c of all) if (!byName.has(c.name)) byName.set(c.name, c.id)
+    const insert = db.prepare('INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 0, ?)')
+    const upd = db.prepare('UPDATE bank_transactions SET category_id = ? WHERE id = ?')
+    for (const a of assignments) {
+      let catId = byName.get(a.category)
+      if (!catId) {
+        catId = randomUUID()
+        insert.run(catId, a.category, at)
+        byName.set(a.category, catId)
+      }
+      const tx = loaded[a.index]
+      if (tx) upd.run(catId, tx.id)
+    }
+    db.prepare('UPDATE bank_statements SET categorized_by_model = ? WHERE id = ?').run(
+      modelAssisted ? 1 : 0,
+      statementId
+    )
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure */
+    }
+    throw err
+  }
+}
+
+/**
  * `summarize_cashflow` — compute inflow/outflow/net totals (read-only; nothing persists). The
  * figures are content and are NOT surfaced in v1 (the busy row stays ids/counts only — a dedicated
  * view / the model-explains step is a later wave); the run proves the pipeline + reports the count.

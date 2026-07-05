@@ -474,7 +474,10 @@ export function registerRagIpc(ctx: AppContext): void {
                   signal,
                   tr: (key, params) => tMain(key, params),
                   // Faithful newline-preserving segments (not the overlap-collapsing chunks table).
-                  readDocumentSegments
+                  readDocumentSegments,
+                  // The chat slot's runtime — for the one sanctioned inline model sub-step (a
+                  // prompt-supplied custom category set, result-tables Phase 1.5); see the ctx type.
+                  runtime
                 })
                 // W2 plausibility gate (audit §4.5): the extractor found nothing on a document that doesn't
                 // look like this skill's type — answer the user's ACTUAL question via the ordinary grounded

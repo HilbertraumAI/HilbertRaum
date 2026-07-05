@@ -6,6 +6,7 @@ import { routeMatch } from '../vocabulary'
 import {
   isBankStatementStale,
   latestBankStatementId,
+  persistCategorization,
   runBalanceValidation,
   runBankExtraction,
   runCashflowSummary,
@@ -14,9 +15,11 @@ import {
   type BankExtractionDeps,
   type LoadedTransaction
 } from '../run'
+import { CATEGORIZER_CATEGORIES, categorizeTransactions, parseRequestedCategories } from '../categorizer'
 import { withDocumentLock } from '../doc-lock'
 import {
   BUILTIN_CATEGORIES,
+  UNCATEGORIZED,
   assessCompleteness,
   buildStatementJson,
   categorizeRow,
@@ -325,12 +328,20 @@ function buildBankCitations(
 
 type Tr = (key: MessageKey, params?: MessageParams) => string
 
+/** The category names that HAVE a localized display label (the fixed taxonomies). A USER-DEFINED
+ *  name (Phase 1.5 custom sets) is deliberately NOT probed against the i18n catalog: the catalog
+ *  logs unknown keys, and a custom category name is CONTENT — it must never reach the diagnostics
+ *  log (§22-M1). */
+const LOCALIZED_CATEGORY_NAMES: ReadonlySet<string> = new Set([...BUILTIN_CATEGORIES, ...CATEGORIZER_CATEGORIES])
+
 /**
  * The localized DISPLAY label for a category (Phase 33). The PERSISTED identifier stays the canonical
  * English name (the enum / model-assisted detection key on it); this only localizes the breakdown
- * display. An unknown name (e.g. a future user-defined category) falls back to its raw identifier.
+ * display. An unknown name (a user-defined category) is shown verbatim — without an i18n probe (see
+ * `LOCALIZED_CATEGORY_NAMES`).
  */
 function categoryLabel(tr: Tr, category: string): string {
+  if (!LOCALIZED_CATEGORY_NAMES.has(category)) return category
   const key = `skills.bankCategory.${category}` as MessageKey
   const label = tr(key)
   // A missing key returns the key itself (the i18n contract) — fall back to the raw identifier then.
@@ -826,7 +837,41 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       let categories: CategoryTotal[] | null = null
       let modelAssisted = false
       if (categoryShaped && rows.length > 0) {
-        if (!paired.some((p) => p.category != null)) {
+        // A USER-SUPPLIED custom category set ("Kategorisiere in Miete, Kinder, Sonstiges …" —
+        // result-tables plan, Phase 1.5). The parse is conservative (≥2 plausible labels after a
+        // categorize stem, deliverable tail cut, whole parse rejected on any bad token). When the
+        // persisted labels already live inside the requested set the prior run is REUSED (asking for
+        // the CSV again does not re-pay the model); otherwise the enum-constrained categorizer runs
+        // INLINE — sanctioned here because the chat turn holds the exclusive model slot (the same
+        // slot grounded-data streams in). With no runtime the ask is REFUSED with friendly copy: the
+        // deterministic rules cannot know the user's labels, and a silent fixed-taxonomy fallback
+        // would answer a different question than the one asked.
+        const requested = parseRequestedCategories(ctx.question)
+        if (requested) {
+          const persisted = new Set(
+            paired.map((p) => p.category).filter((c): c is string => c != null && c !== UNCATEGORIZED)
+          )
+          const requestedSet = new Set(requested)
+          const covered = persisted.size > 0 && [...persisted].every((c) => requestedSet.has(c))
+          if (!covered) {
+            if (!ctx.runtime) {
+              return {
+                answer: ctx.tr('skills.bankAnalysis.customCategoriesNeedModel', {
+                  categories: requested.join(', ')
+                }),
+                citations,
+                coverage
+              }
+            }
+            const run = await categorizeTransactions(rows, {
+              runtime: ctx.runtime,
+              signal: ctx.signal ?? new AbortController().signal,
+              categories: requested
+            })
+            persistCategorization(db, statementId, toLoadedTransactions(paired), run.assignments, run.modelAssisted, ctx.now)
+            paired = loadStatementRowsWithCategories(db, statementId)
+          }
+        } else if (!paired.some((p) => p.category != null)) {
           // Deterministic seed when nothing is categorized yet — reuse the single load (audit P-1); the
           // reload afterwards is the one extra `bank_transactions` read the category path needs (to pick
           // up the freshly persisted `category_id`).

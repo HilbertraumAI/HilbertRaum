@@ -6,6 +6,7 @@ import {
   buildBatchPrompt,
   batchOutputSchema,
   categorizeTransactions,
+  parseRequestedCategories,
   prefilterCategory
 } from '../../src/main/services/skills/categorizer'
 import { categorizeRow, type TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
@@ -347,5 +348,95 @@ describe('categorizeTransactions — no runtime', () => {
     expect(modelAssisted).toBe(false)
     expect(assignments[0]).toEqual({ index: 0, category: 'Income' }) // Gehalt rule
     expect(assignments[1]).toEqual({ index: 1, category: 'Spending' }) // negative sign fallback
+  })
+})
+
+// ---- Custom category sets from the prompt (result-tables plan, Phase 1.5) ----
+
+describe('parseRequestedCategories', () => {
+  it('parses a German list and cuts the trailing export clause', () => {
+    expect(
+      parseRequestedCategories('Kategorisiere alle Transaktionen in Miete, Lebensmittel, Kinder und Sonstiges und exportiere als CSV')
+    ).toEqual(['Miete', 'Lebensmittel', 'Kinder', 'Sonstiges'])
+  })
+
+  it('parses an English list ("categorize into … and give me a CSV")', () => {
+    expect(
+      parseRequestedCategories('categorize the transactions into rent, groceries, kids and other and give me a CSV')
+    ).toEqual(['rent', 'groceries', 'kids', 'other'])
+  })
+
+  it('cuts an "als CSV" tail without a verb ("… und Sonstiges als CSV")', () => {
+    expect(parseRequestedCategories('Kategorisiere in Miete, Kinder als CSV')).toEqual(['Miete', 'Kinder'])
+  })
+
+  it('returns null without a categorize stem, or with fewer than two labels', () => {
+    expect(parseRequestedCategories('Liste alles in Miete, Kinder auf')).toBeNull() // no stem
+    expect(parseRequestedCategories('Kategorisiere die Buchungen in diesem Auszug')).toBeNull() // 1 token
+    expect(parseRequestedCategories('Kategorisiere alle Transaktionen und gib sie als CSV aus')).toBeNull()
+  })
+
+  it('rejects the WHOLE parse on a bad token (never silently categorizes into garbage)', () => {
+    // A swallowed clause exceeds the 4-word/label-shape bound → null, not a partial list.
+    expect(
+      parseRequestedCategories('Kategorisiere in Miete, zeige mir dann bitte alle einzelnen Buchungen an')
+    ).toBeNull()
+    expect(parseRequestedCategories('categorize into csv, json')).toBeNull() // format words are not labels
+  })
+
+  it('dedupes case-insensitively keeping the first casing', () => {
+    expect(parseRequestedCategories('Kategorisiere in Miete, miete, Kinder')).toEqual(['Miete', 'Kinder'])
+  })
+})
+
+describe('categorizeTransactions — custom category set (Phase 1.5)', () => {
+  it('constrains the enum to the custom labels + Uncategorized and skips the prefilter', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(
+      validReplyFor((desc) => (desc.includes('REWE') ? 'Lebensmittel' : 'Sonstiges')),
+      calls
+    )
+    // 'Salary' would be prefiltered (Income) on the FIXED taxonomy — with a custom set it must go
+    // to the model instead (Income is not one of the user's labels).
+    const rows = [row('REWE Markt', -45.9), row('Salary', 2500)]
+    const { assignments, modelAssisted } = await categorizeTransactions(rows, {
+      runtime,
+      signal: new AbortController().signal,
+      categories: ['Lebensmittel', 'Sonstiges']
+    })
+    expect(modelAssisted).toBe(true)
+    expect(assignments).toEqual([
+      { index: 0, category: 'Lebensmittel' },
+      { index: 1, category: 'Sonstiges' }
+    ])
+    expect(calls).toHaveLength(1) // both rows in one batch — no prefilter skimmed Salary off
+    const schema = calls[0].options?.responseSchema as any
+    expect(schema.properties.assignments.items.properties.category.enum).toEqual([
+      'Lebensmittel',
+      'Sonstiges',
+      'Uncategorized'
+    ])
+    expect(calls[0].messages[0].content).toContain('- Lebensmittel')
+    expect(calls[0].messages[0].content).not.toContain('Groceries') // fixed taxonomy absent
+  })
+
+  it('drops an off-set label (even a FIXED-taxonomy one) to Uncategorized', async () => {
+    const runtime = scriptedRuntime(validReplyFor(() => 'Groceries')) // valid in the fixed set, not here
+    const { assignments } = await categorizeTransactions([row('REWE Markt', -45.9)], {
+      runtime,
+      signal: new AbortController().signal,
+      categories: ['Lebensmittel', 'Sonstiges']
+    })
+    expect(assignments).toEqual([{ index: 0, category: 'Uncategorized' }])
+  })
+
+  it('with no runtime a custom set returns every row Uncategorized (never rule labels)', async () => {
+    const { assignments, modelAssisted } = await categorizeTransactions([row('Gehalt', 2500)], {
+      runtime: null,
+      signal: new AbortController().signal,
+      categories: ['Lebensmittel', 'Sonstiges']
+    })
+    expect(modelAssisted).toBe(false)
+    expect(assignments).toEqual([{ index: 0, category: 'Uncategorized' }]) // NOT 'Income'
   })
 })

@@ -646,6 +646,13 @@ export const en = {
     'Here is the statement as CSV — the transaction rows only, built from the figures I read (nothing added ' +
     'up from prose or invented). The cashflow summary and the opening/closing balances aren’t in CSV; ask ' +
     'for it as JSON to get those too.',
+  // Result-tables Phase 1.5: a prompt-supplied CUSTOM category set needs the local model (the
+  // deterministic rules only know their fixed labels) — refuse honestly instead of silently
+  // answering with a different taxonomy than the one asked for. Echoes the parsed set so a
+  // mis-understood list is visible immediately.
+  'skills.bankAnalysis.customCategoriesNeedModel':
+    'To sort the transactions into your own categories ({categories}) I need a local model running — ' +
+    'the built-in quick rules only know their fixed set. Start a model, then ask again.',
 
   // ---- Invoice analysis answer (full-doc-skills plan §3.1, Phase 4 / D49) ----
   // The deterministic, whole-document answer the invoice analysis handler synthesises from the

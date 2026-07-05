@@ -1,11 +1,11 @@
 # Generic result tables — plan (result-tables wave)
 
-_Status: **WORKING PAPER — Phase 1 implemented (2026-07-05, this wave); Phases 2–3 open.**
+_Status: **WORKING PAPER — Phases 1 + 1.5 implemented (2026-07-05); Phases 2–3 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into a design record folded into
 `docs/architecture.md` ("Skills — design record") + `docs/rag-design.md` and delete this file.
 Decision numbering continues the repo series after the invoice-hardening/whole-doc waves'
-D44–D58 (**this plan: D59–D63**)._
+D44–D58 (**this plan: D59–D65**)._
 
 ---
 
@@ -69,6 +69,26 @@ Scope: the bank domain, both CSV surfaces, zero new model calls.
 Explicitly NOT in Phase 1: chat-triggered file export (the export stays a confirm-gated UI
 action; the chat answer’s inline CSV is copyable), the no-skill routing gap (§1 item 5), and any
 new i18n keys (the existing `formatIntroCsv` + category notes compose).
+
+## 3a. Phase 1.5 — user-defined category sets from the prompt (IMPLEMENTED, same day)
+
+The user's follow-up: the rule pass is coarse, the fixed 15-label model taxonomy may not match
+their buckets. “Kategorisiere in Miete, Lebensmittel, Kinder und Sonstiges …” now works end-to-end.
+
+| # | Decision | Lean | Why |
+|---|---|---|---|
+| D64 | A custom set runs the enum-constrained categorizer **inline in the chat slot** | Not a doctask enqueue, not a new lane | The chat turn already holds the exclusive model slot (the same slot grounded-data streams in), so one llama-server is never hit twice; the answer arrives in the SAME turn. With **no runtime the ask is REFUSED** with friendly copy echoing the parsed set — the deterministic rules cannot know the user's labels, and a silent fixed-taxonomy fallback would answer a different question |
+| D65 | The prompt parse is **conservative and all-or-nothing** | `parseRequestedCategories`: categorize stem + preposition, deliverable-tail cut (“… und exportiere als CSV”), ≥ 2 plausible labels (≤ 40 chars, ≤ 4 words), one bad token rejects the WHOLE parse | A half-understood list must never silently categorize into garbage; the refusal copy + the serialized output both echo the parsed labels so a mis-parse is immediately visible |
+
+As built: `categorizer.ts` takes an optional `categories` list (per-run enum/prompt/validation;
+prefilter skipped — its rule names are not the user's; `Uncategorized` always appended as the drop
+target), `persistCategorization` (run.ts) persists assignments + the `categorized_by_model` flag
+atomically, inserting user labels as NON-builtin `bank_categories` rows (looked up across all rows —
+no duplicates); the handler REUSES a prior run when the persisted labels ⊆ the requested set (asking
+for the CSV again is free), and `categoryLabel` no longer probes the i18n catalog with a user-defined
+name (the catalog logs unknown keys — a custom category name is content and must not reach the
+diagnostics log). `SkillAnalysisContext.runtime` is the one sanctioned model hook, threaded from
+`registerRagIpc`.
 
 ## 4. Phase 2 — result-table artifact + message-level export (OPEN)
 
