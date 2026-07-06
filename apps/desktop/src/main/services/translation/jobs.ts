@@ -139,10 +139,18 @@ export class TranslateJobService {
         }
         if (i > 0) this.emitDelta(jobId, '\n\n', emit)
         // TA-5 M7: the view must not silently drop a paragraph. A window that comes back empty,
-        // TRUNCATED (no clean stop — M6), or throwing a runtime error is retried ONCE; if it
+        // TRUNCATED (no clean stop — M6), or throwing a runtime error is a failed attempt; if it
         // still fails, fail the WHOLE job visibly (runtimeFailed) — an interactive user is better
         // served by an honest failure than by a finished translation with a missing paragraph.
         // (A user cancel aborts `signal` and is handled as `cancelled`, never a failed window.)
+        //
+        // FA-2 F-2: classify the failure before retrying. A THROW or an EMPTY reply is TRANSIENT
+        // (a server-side close, a per-request timeout, an M1 crash-recovery) — retry once. A
+        // NON-EMPTY window that did NOT stop cleanly is a deterministic temperature-0 LIMIT stop
+        // (a greedy-decode repetition loop / a token-dense clip at the cap): the sidecar decodes
+        // greedily with `cache_prompt`, so a retry reproduces the identical truncation and burns
+        // another full ~30-min decode for the same outcome. So a limit-stop skips the retry and
+        // fails the job now (`limitStop` breaks the attempt loop).
         //
         // FA-1 F-1: checkpoint the accumulated text HERE — after the '\n\n' window separator (i>0),
         // before the attempt loop. A transiently-failed attempt has ALREADY streamed its deltas
@@ -153,7 +161,8 @@ export class TranslateJobService {
         // trDone carries the full text and the renderer replaces its output with it.)
         const checkpoint = this.jobs.get(jobId)?.text ?? ''
         let clean = false
-        for (let attempt = 1; attempt <= 2 && !clean; attempt++) {
+        let limitStop = false
+        for (let attempt = 1; attempt <= 2 && !clean && !limitStop; attempt++) {
           // Roll back a prior failed attempt's streamed deltas. patch-level, so the cancelled
           // guard in patch() holds — a job cancelled mid-flight is never resurrected by the restore.
           if (attempt > 1) this.patch(jobId, { text: checkpoint })
@@ -175,14 +184,20 @@ export class TranslateJobService {
               return
             }
             clean = out.trim() !== '' && isCleanStop(final)
-            if (!clean) log.warn('Translate view window incomplete', { jobId, window: i + 1, attempt })
+            if (!clean) {
+              // F-2: a non-empty reply that did not stop cleanly is the deterministic limit-stop —
+              // do not retry it. An empty reply is the transient class → the loop retries once.
+              limitStop = out.trim() !== ''
+              log.warn('Translate view window incomplete', { jobId, window: i + 1, attempt, limitStop })
+            }
           } catch (err) {
             if (signal.aborted) {
               this.cancel(jobId)
               return
             }
             // A per-request timeout / runtime error — never a user cancel (that aborts `signal`).
-            // Log content-free and let the retry run; a second failure fails the job below.
+            // A throw is TRANSIENT (F-2): log content-free and let the retry run; a second failure
+            // fails the job below.
             log.warn('Translate view window failed', { jobId, window: i + 1, attempt, error: String(err) })
           }
         }

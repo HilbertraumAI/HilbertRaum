@@ -663,14 +663,15 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     }
   })
 
-  it('a window that stops at the output cap (no clean stop) is retried, then MARKED (M6)', async () => {
+  it('a window that stops at the output cap (no clean stop) is MARKED IMMEDIATELY — no futile retry (M6/FA-2 F-2)', async () => {
     const docId = await importDoc(600)
     const budget = translationBudgetWords(1024)
     const translator = scriptedTranslator({
       contextTokens: 1024,
       // Window 2 returns non-empty text but its final frame carries NO stopping word — a LIMIT
-      // stop (the greedy-decode repetition-loop truncation M6 describes), the same clip either
-      // attempt (greedy decode is deterministic), so the retry hits it again → marked window.
+      // stop (the greedy-decode repetition-loop truncation M6 describes). Greedy decode is
+      // DETERMINISTIC, so a retry would reproduce the identical clip; FA-2 F-2 marks it on the
+      // first attempt instead of burning a second ~30-min decode for the same outcome.
       final: (call) =>
         call.text.split(/\s+/)[0] === `word${budget}` ? {} : { stoppingWord: TRANSLATION_STOP_TOKEN }
     })
@@ -685,9 +686,9 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     expect(status.state).toBe('done')
 
     const total = Math.ceil(600 / budget)
-    // The truncated window was tried exactly twice (one retry), each still a limit stop.
+    // The truncated window was tried exactly ONCE — a deterministic limit-stop is not retried.
     const truncatedCalls = translator.calls.filter((c) => c.text.split(/\s+/)[0] === `word${budget}`)
-    expect(truncatedCalls).toHaveLength(2)
+    expect(truncatedCalls).toHaveLength(1)
 
     const newId = status.resultRef?.documentId as string
     const { text } = readStoredDocumentText(db, storeDir, newId)

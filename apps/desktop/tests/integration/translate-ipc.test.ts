@@ -185,9 +185,11 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(calls).toBe(2) // one retry, then the job fails
   })
 
-  it('retries a TRUNCATED window (no clean stop) once, then fails the job — M6 in the view', async () => {
+  it('a TRUNCATED window (no clean stop) fails the job IMMEDIATELY — no futile retry (M6/FA-2 F-2)', async () => {
     // A window that streams text but hits the output cap (no `stopping_word`/eos in the final
-    // frame) is a silent mid-sentence truncation — the view treats it as a failed window.
+    // frame) is a DETERMINISTIC temperature-0 truncation — greedy decode reproduces it identically
+    // on retry, so the view fails the window on the FIRST attempt rather than burning a second
+    // ~30-min decode for the same outcome (F-2). Contrast the empty-window test above, which retries.
     let calls = 0
     const translator: Translator = {
       modelId: 'translategemma-12b-it-q4',
@@ -207,7 +209,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     const terminal = await waitForTerminal(event, initial.jobId)
     expect(terminal.state).toBe('failed')
     expect(terminal.error).toBe('runtimeFailed')
-    expect(calls).toBe(2)
+    expect(calls).toBe(1) // limit-stop is deterministic → marked immediately, no retry
   })
 
   it('a retry after a transiently-failed attempt does NOT duplicate the streamed text (F-1)', async () => {
@@ -244,9 +246,11 @@ describe('registerTranslateIpc — translate job contract', () => {
   })
 
   it('a retry inside a multi-window job rolls back the failed attempt and keeps the \\n\\n joins (F-1)', async () => {
-    // A multi-window paste where the FIRST window's first attempt streams partial text then hits a
-    // limit stop (no clean stop → retried), and every later call is clean. The rollback must drop
-    // the failed attempt's deltas while preserving the '\n\n' window separators between windows.
+    // A multi-window paste where the FIRST window's first attempt streams partial text then THROWS
+    // transiently (a server-side close / IncompleteStreamError → retried), and every later call is
+    // clean. FA-2 F-2 note: the trigger is a THROW, not a limit stop — a limit stop no longer
+    // retries, so this keeps exercising the F-1 rollback while respecting the new retry policy.
+    // The rollback must drop the failed attempt's deltas while preserving the '\n\n' separators.
     const paras = Array.from({ length: 6 }, (_v, p) =>
       Array.from({ length: 60 }, (_w, i) => `p${p}w${i}`).join(' ')
     )
@@ -265,8 +269,7 @@ describe('registerTranslateIpc — translate job contract', () => {
         if (calls === 1) {
           o.onToken?.('DUP ')
           o.onToken?.(`TR<${o.text}>`)
-          o.onFinal?.({}) // limit stop (no clean stop) → retried once
-          return `DUP TR<${o.text}>`
+          throw new Error('IncompleteStreamError') // transient throw → retried once (F-2)
         }
         const out = `TR<${o.text}>`
         o.onToken?.(out)

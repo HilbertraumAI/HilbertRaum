@@ -64,7 +64,19 @@ user copies. Silent output corruption, the exact honesty class the TA wave was c
   text and the renderer already replaces its output with it (`translateSession.ts` done
   handler), so the final state self-heals with no new IPC.
 
-### F-2 (MEDIUM, efficiency/latency) — retrying a deterministic limit-stop is futile and doubles a ~30-minute window
+### F-2 (MEDIUM, efficiency/latency) — retrying a deterministic limit-stop is futile and doubles a ~30-minute window ✅ FIXED (FA-2)
+
+> **Fixed in FA-2.** Both retry loops now classify the failed attempt before retrying: a THROW or an
+> EMPTY reply is the TRANSIENT class (server-side close, per-request timeout, M1 crash-recovery) and
+> is retried once; a NON-EMPTY reply that did not stop cleanly (`out.length > 0 && !isCleanStop(final)`)
+> is a DETERMINISTIC temperature-0 limit-stop and fails immediately — greedy decode with `cache_prompt`
+> reproduces the identical truncation, so the second decode was pure waste (up to ~30 min per window).
+> `translateWithRetry` (doc-task) returns `null` on the limit-stop (mark now); `jobs.ts` (view) sets a
+> `limitStop` flag that breaks the attempt loop → `fail(runtimeFailed)`. The abort-propagation contract
+> is byte-identical (the limit-stop returns only after the existing `signal.aborted` re-check). Pinned by
+> flipping the two truncation tests from 2 calls to 1 (`translate-ipc.test.ts`, `doctasks-translation.test.ts`);
+> the throw/empty tests stay at 2 calls (transient class still retries). The FA-1 multi-window rollback
+> test was retargeted from a limit-stop trigger to a throw so it keeps exercising F-1 under the new policy.
 
 Both consumers: `doctasks/handlers/translation.ts` `translateWithRetry` (~L53–87) and
 `translation/jobs.ts` window loop (~L147–176).
@@ -124,7 +136,16 @@ detach was built to avoid. Functionally harmless (the closures are idempotent ca
   callback from `TranslateJobService`). Extend the existing detach test with a
   cancel-detaches case.
 
-### F-5 (LOW, hardening) — control-token sanitization covers only the two turn markers
+### F-5 (LOW, hardening) — control-token sanitization covers only the two turn markers ✅ FIXED (FA-2)
+
+> **Fixed in FA-2.** `sanitizeSourceText` now rewrites the full Gemma special-token family —
+> `<start_of_turn>`, `<end_of_turn>`, `<bos>`, `<eos>`, `<unk>`, `<pad>`, `<start_of_image>`,
+> `<end_of_image>` — to the same visually-identical non-token spelling (`⟨…⟩`, U+27E8/U+27E9). The
+> regex (`GEMMA_SPECIAL_TOKEN_RE`) is an exact-marker alternation, so ordinary `<div>`/`<b>` HTML and
+> marker-lookalike tags (`<bosch>`) stay untouched. A `TODO(smoke)` note asks the next manual
+> `translategemma-smoke` to reconfirm the family against the pinned GGUF's tokenizer config; the list
+> ships defensively from the Gemma-3 model card meanwhile (the same posture TA-4 M4 took). Pinned by a
+> per-marker sanitize unit test + the ordinary-`<…>`-untouched invariant in `translation-prompt.test.ts`.
 
 `apps/desktop/src/main/services/translation/prompt.ts` `GEMMA_TURN_MARKER_RE` /
 `sanitizeSourceText` (~L69–83).

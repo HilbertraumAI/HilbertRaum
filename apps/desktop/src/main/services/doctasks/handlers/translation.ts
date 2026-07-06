@@ -30,17 +30,23 @@ interface WindowRequest {
 }
 
 /**
- * One window on the translation sidecar with a single retry (the R-T2 policy carried over
- * from the chat path): a thrown, empty, or TRUNCATED window is retried once; a second failure
- * returns null (the caller marks it visibly). Aborts always propagate immediately — cancel must
- * never look like a failed window. `translator.translate()` THROWS on failure and takes
+ * One window on the translation sidecar with a single retry for the TRANSIENT failure classes
+ * (the R-T2 policy carried over from the chat path): a thrown or empty window is retried once; a
+ * second failure returns null (the caller marks it visibly). Aborts always propagate immediately —
+ * cancel must never look like a failed window. `translator.translate()` THROWS on failure and takes
  * sidecar-shaped options (the manager's former chat retry took system+user prompts over
  * `chatStream`), so the retry loop lives here with the handler.
  *
  * TA-5 M6: a non-empty reply is NOT sufficient — the final frame's stop reason is now load-bearing.
  * A window that ran to the output-limit cap (a greedy-decode repetition loop, or a token-dense
  * window) carries no clean stop and is a silent mid-sentence truncation; `isCleanStop(final)` is
- * false, so it is treated exactly like an empty reply — a failed attempt → retry → marked window.
+ * false, so it is a failed attempt.
+ *
+ * FA-2 F-2: distinguish the failure classes before retrying. A THROW (the class M1 crash-recovery
+ * feeds) or an EMPTY reply is TRANSIENT — retry once. A NON-EMPTY window that did not stop cleanly
+ * is a DETERMINISTIC temperature-0 limit-stop: the sidecar decodes greedily with `cache_prompt`, so
+ * a retry reproduces the identical truncation and burns another full ~30-min decode for the same
+ * marked-window outcome. So a limit-stop returns null immediately (mark now, no futile retry).
  */
 async function translateWithRetry(
   translator: Translator,
@@ -76,6 +82,10 @@ async function translateWithRetry(
         empty: out.length === 0,
         truncated: out.length > 0
       })
+      // F-2: a non-empty limit-stop is deterministic — do not burn a second decode reproducing it.
+      // (An empty reply falls through to the retry: it is the transient class.) The signal was just
+      // re-checked above, so returning here cannot swallow a pending abort.
+      if (out.length > 0) return null
     } catch (err) {
       if (isAbortError(err, req.signal)) throw err
       log.warn('Translation window failed', {

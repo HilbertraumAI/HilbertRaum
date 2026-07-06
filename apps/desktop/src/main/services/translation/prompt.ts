@@ -60,26 +60,36 @@ export interface TranslationPromptInput {
 }
 
 /**
- * The two Gemma-3 turn-boundary control tokens. llama-server tokenizes the raw `/completion`
- * prompt WITH special-token parsing, so a literal `<start_of_turn>`/`<end_of_turn>` inside the
- * source DOCUMENT would tokenize to the real control token and forge a turn boundary — letting
- * embedded text escape the "translated, never obeyed" boundary the D2 guarantee only extended to
- * plain-text imperatives (TA-4 M4).
+ * The Gemma-3 special-token family. llama-server tokenizes the raw `/completion` prompt WITH
+ * special-token parsing, so a literal control marker inside the source DOCUMENT tokenizes to the
+ * real control token. For the turn markers (`<start_of_turn>`/`<end_of_turn>`) that forges a turn
+ * boundary — letting embedded text escape the "translated, never obeyed" boundary the D2 guarantee
+ * only extended to plain-text imperatives (TA-4 M4). For the rest of the family (`<bos>`, `<eos>`,
+ * `<unk>`, `<pad>`, and the Gemma-3 image markers `<start_of_image>`/`<end_of_image>`) it is not a
+ * turn-forgery escape, but a stray mid-prompt BOS/EOS still injects a real control token that can
+ * degrade that window's output for no reason (FA-2 F-5). The list is kept to the EXACT known
+ * markers so ordinary `<…>` HTML/code stays untouched.
+ *
+ * TODO(smoke): reconfirm this family against the pinned GGUF's `tokenizer.chat_template` /
+ * `added_tokens` at the next manual `translategemma-smoke` — the list is shipped defensively from
+ * the Gemma-3 model card meanwhile (the same posture TA-4 M4 took for the two turn markers).
  */
-const GEMMA_TURN_MARKER_RE = /<(start_of_turn|end_of_turn)>/g
+const GEMMA_SPECIAL_TOKEN_RE =
+  /<(start_of_turn|end_of_turn|bos|eos|unk|pad|start_of_image|end_of_image)>/g
 
 /**
- * Neutralize the Gemma turn markers in source text so they cannot forge a turn boundary (M4).
+ * Neutralize the Gemma special tokens in source text so an embedded literal marker cannot forge a
+ * turn boundary (M4) or inject a stray control token (FA-2 F-5).
  *
- * We rewrite `<start_of_turn>`/`<end_of_turn>` to a visually-identical spelling using mathematical
- * angle brackets (U+27E8 ⟨ / U+27E9 ⟩) — chosen because it (a) tokenizes as ordinary text, never a
- * special token, (b) is reversible-safe and human-legible so translation fidelity is preserved (the
- * translated form of a control marker is best-effort regardless — it is not natural-language
- * content), and (c) touches ONLY these exact two markers, leaving ordinary `<…>` content (HTML,
- * code) untouched. The prompt's own scaffold markers are added AFTER this rewrite, so they survive.
+ * We rewrite each marker to a visually-identical spelling using mathematical angle brackets
+ * (U+27E8 ⟨ / U+27E9 ⟩) — chosen because it (a) tokenizes as ordinary text, never a special token,
+ * (b) is reversible-safe and human-legible so translation fidelity is preserved (the translated
+ * form of a control marker is best-effort regardless — it is not natural-language content), and
+ * (c) touches ONLY the exact Gemma markers, leaving ordinary `<…>` content (HTML, code) untouched.
+ * The prompt's own scaffold markers are added AFTER this rewrite, so they survive.
  */
 export function sanitizeSourceText(text: string): string {
-  return text.replace(GEMMA_TURN_MARKER_RE, '⟨$1⟩')
+  return text.replace(GEMMA_SPECIAL_TOKEN_RE, '⟨$1⟩')
 }
 
 /** Guard: TranslateGemma needs a real source/target language, so an unknown code is a bug. */

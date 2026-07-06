@@ -1483,13 +1483,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   A window that throws, comes back empty, **or runs to the output-limit cap without a clean
   stop** — the greedy-decode repetition loop that is the classic temperature-0 MT pathology, or a
   token-dense window clipping at the ~2,070-token cap — is now DETECTED via the completion's final
-  stop reason (`stopping_word`/eos) and treated as a failed attempt (TA-5). In the **document
-  task**, after one retry the output carries a visible "could not be translated" notice with the
-  ORIGINAL text kept below it; only an all-windows failure fails the whole task. In the **Translate
-  view** (interactive), such a window is retried once and, if it still fails, the whole job fails
-  VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a visible
-  failure beats a silent gap. Before TA-5 a truncated window was stitched in silently as a clean
-  translation; that honesty hole is closed.
+  stop reason (`stopping_word`/eos) and treated as a failed attempt (TA-5). **Retry is by failure
+  class (FA-2 F-2):** a THROW or an EMPTY reply is TRANSIENT (a server-side close, a per-request
+  timeout, a crash-recovery) and is retried once; a NON-EMPTY window that did not stop cleanly is a
+  DETERMINISTIC limit-stop — greedy decode with prompt caching reproduces the identical truncation,
+  so it is marked/failed on the FIRST attempt rather than burning a second full decode (up to ~30 min
+  per window) for the same outcome. In the **document task**, a failed window's output carries a
+  visible "could not be translated" notice with the ORIGINAL text kept below it; only an all-windows
+  failure fails the whole task. In the **Translate view** (interactive), a failed window fails the
+  whole job VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a
+  visible failure beats a silent gap. Before TA-5 a truncated window was stitched in silently as a
+  clean translation; that honesty hole is closed.
 - **Long documents take time — linearly.** There is deliberately NO window ceiling (a
   faithful translation may not cover "the beginning" only, unlike the summary), and the
   12B sidecar decodes at ~3–4 tok/s on CPU (TG-6 kept it CPU-pinned for v1: GPU is deferred

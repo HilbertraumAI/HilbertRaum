@@ -65,11 +65,24 @@ describe('translation prompt builder (TG-2)', () => {
     expect(prompt.match(/<end_of_turn>/g)).toHaveLength(1)
   })
 
-  it('sanitizeSourceText rewrites only the two turn markers, leaving ordinary angle brackets intact', () => {
+  it('sanitizeSourceText rewrites the full Gemma special-token family, leaving ordinary angle brackets intact (FA-2 F-5)', () => {
+    // The two turn markers (TA-4 M4)…
     expect(sanitizeSourceText('<start_of_turn>')).toBe('⟨start_of_turn⟩')
     expect(sanitizeSourceText('<end_of_turn>')).toBe('⟨end_of_turn⟩')
-    // Ordinary `<…>` content (HTML/code) is untouched — only the exact Gemma markers are rewritten.
+    // …and the rest of the family widened in FA-2 F-5 (a stray literal BOS/EOS/etc. would
+    // otherwise tokenize to a real control token and degrade that window's output).
+    expect(sanitizeSourceText('<bos>')).toBe('⟨bos⟩')
+    expect(sanitizeSourceText('<eos>')).toBe('⟨eos⟩')
+    expect(sanitizeSourceText('<unk>')).toBe('⟨unk⟩')
+    expect(sanitizeSourceText('<pad>')).toBe('⟨pad⟩')
+    expect(sanitizeSourceText('<start_of_image>')).toBe('⟨start_of_image⟩')
+    expect(sanitizeSourceText('<end_of_image>')).toBe('⟨end_of_image⟩')
+    // A mix in one string is fully rewritten, in place.
+    expect(sanitizeSourceText('a <bos> b <eos> c')).toBe('a ⟨bos⟩ b ⟨eos⟩ c')
+    // Ordinary `<…>` content (HTML/code) is untouched — only the EXACT Gemma markers are rewritten,
+    // so tags that merely resemble a marker name are left alone.
     expect(sanitizeSourceText('a <div> and <b> tag')).toBe('a <div> and <b> tag')
+    expect(sanitizeSourceText('<body> <span> <em> <bosch>')).toBe('<body> <span> <em> <bosch>')
     expect(sanitizeSourceText('no markers here')).toBe('no markers here')
   })
 
