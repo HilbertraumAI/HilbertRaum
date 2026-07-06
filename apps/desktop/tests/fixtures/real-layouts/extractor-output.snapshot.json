@@ -1,7 +1,7 @@
 {
   "$comment": "GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by extractor version. Regenerate in the SAME commit as any extractor version bump: UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts",
-  "bankExtractorVersion": 10,
-  "invoiceExtractorVersion": 12,
+  "bankExtractorVersion": 11,
+  "invoiceExtractorVersion": 13,
   "fixtures": {
     "bank-at-elba-nbsp-minus": {
       "kind": "bank",
@@ -268,7 +268,7 @@
     "invoice-ch-summe-apostrophe": {
       "kind": "invoice",
       "inputHash": "9d376f585f19abee0e7a9ee17f4a88459cacb8132a842ceb357b214bce84616a",
-      "hash": "0351758e11928659ad940843e42b1c7051dd128ad36ae326e50e38c846f47303",
+      "hash": "f3787bde0b2ca08c9eee14ec49d9f19b0ceff6079f94c9c05098a1646dc4f9ae",
       "output": {
         "header": {
           "invoiceDate": "2026-02-03",
@@ -290,7 +290,7 @@
           "grossTotal": 3000
         },
         "droppedRowCount": 0,
-        "dateOrderInferred": "evidence"
+        "dateOrderInferred": "default"
       }
     },
     "invoice-de-endbetrag-phantom": {
@@ -397,7 +397,7 @@
     "invoice-de-unreconcilable-totals": {
       "kind": "invoice",
       "inputHash": "283f101f42f7fe6c8d7e0c322c94defeb1d53e52e6f9a183a1b553b0743a4543",
-      "hash": "b514ad3665ae0a93735b3696e2ec59fb3e9c7e53de8e164a6aef5692719418ef",
+      "hash": "998bb77d49eab1e53c1f013736ddc2c056fcd6b39acff5f0c59b7576d213bccd",
       "output": {
         "header": {
           "invoiceNumber": "2026-99",
@@ -423,7 +423,7 @@
           "grossTotal": 999
         },
         "droppedRowCount": 0,
-        "dateOrderInferred": "evidence"
+        "dateOrderInferred": "default"
       }
     },
     "invoice-de-geometry-columns": {

@@ -517,16 +517,19 @@ describe('extractTransactionRows — wrapped descriptions (R6, §5.7)', () => {
 })
 
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
-  it('is at 10 — the IA-2 glued-leading-sign fix in the shared MONEY_RE (invoice-audit-2026-07-06 T-1)', () => {
+  it('is at 11 — the IA-3 shared date-order classifier change (invoice-audit-2026-07-06 T-6)', () => {
     // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
     // added the `normalizeExtractionText` pre-pass (v4); R2 extended the dual-role balance label (v5); R5
     // completes 2-digit-year / bare dates + cross-year rollover (v6); R6 appends wrapped continuations (v7);
     // U1 records `droppedRowCount` + reads a currency-adjacent round balance (v8); R7 (skills-audit-
     // 2026-07-03 SKA-1/2/13) date-blanks the row money scan, widens the date scrub to dd.mm.yy, and
     // column-gates the geometry `d.dd` classification (v9). IA-2 (v10) reads a leading `-` as a sign only
-    // when GLUED to the figure/paren, so a spaced `GUTSCHRIFT - 34,39` reads +34,39 (a credit), not −34,39
-    // — each changes persisted rows/balances, so v9 (and older) rows MUST re-extract once this reads 10.
-    expect(BANK_EXTRACTOR_VERSION).toBe(10)
+    // when GLUED to the figure/paren, so a spaced `GUTSCHRIFT - 34,39` reads +34,39 (a credit), not −34,39.
+    // IA-3 (v11) is the shared-parser twin of the invoice T-6 fix: `inferDateOrderResult` now classifies a
+    // line by the date-scrubbed `hasMoneyToken`, so a money-less period header (`Kontoauszug 01.01.2026 -
+    // 31.03.2026`) votes on its dates — which can change the inferred order (and persisted dates). Each
+    // change re-extracts older rows, so v10 (and older) rows MUST re-extract once this reads 11.
+    expect(BANK_EXTRACTOR_VERSION).toBe(11)
   })
 })
 

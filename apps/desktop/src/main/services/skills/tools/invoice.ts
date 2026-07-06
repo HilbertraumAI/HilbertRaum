@@ -2,6 +2,7 @@ import type { DocumentChunkRead, JsonSchema, SkillTool, ToolResult } from '../..
 import {
   MONEY_EPS,
   MONEY_RE,
+  blankDateTokens,
   csvField,
   detectCurrency,
   detectDocumentCurrency,
@@ -208,8 +209,22 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       sign). Changes the persisted amounts/totals on any invoice with a dash-as-separator layout, so
  *       stale v11 rows re-extract. (Bumped in IA-2 — the shared-parser fix — so IA-3's batch does not
  *       re-bump for this.)
+ *  13 — invoice-audit-2026-07-06 IA-3 (T-2/T-3/T-4/T-5/T-6/T-8/T-10): a batch of independent parser fixes.
+ *       (T-3) a percent-attached RATE (`MwSt 20,00 %`) is blanked before the totals money scan so it is no
+ *       longer read as the tax AMOUNT; (T-2) a one-line multi-label totals row (`Netto … MwSt … Brutto …`)
+ *       attributes each figure to its own nearest-preceding label instead of the last figure to the first
+ *       label; (T-4) `nettosumme` joins NET labels and `steuerbetrag`/`ust` join TAX labels, so a
+ *       line-leading `USt 20% 182,80` / `Steuerbetrag 182,80` reads as tax instead of a phantom item; (T-5)
+ *       the header DATE branches now fall through on an amount-bearing line, so `Rechnungsdatum: 03.05.2026
+ *       Betrag: 1.500,00` no longer swallows the figure; (T-6) date-order inference classifies lines by the
+ *       date-scrubbed `hasMoneyToken`, so a money-less dotted-date line votes (and the day-first caveat
+ *       fires); (T-8) a bare `(netto)` qualifier flips a gross-labelled total to the net; (T-10) a money-
+ *       less date-follower line keeps its wrapped-description continuation. Each can change the persisted
+ *       output, so stale v12 rows re-extract. (T-6 is a SHARED money.ts change → BANK_EXTRACTOR_VERSION
+ *       also bumped 10→11 in the same wave; T-7 widened `taxMatchesRate`'s tolerance but is a downstream
+ *       validation check reading no persisted field differently, so it does not itself warrant the bump.)
  */
-export const INVOICE_EXTRACTOR_VERSION = 12
+export const INVOICE_EXTRACTOR_VERSION = 13
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',
@@ -298,8 +313,17 @@ const INVOICE_DATE_LABELS = ['invoice date', 'rechnungsdatum', 'datum', 'date']
 // `steuer` must NOT swallow a "Steuerberatung Jänner 500,00" line item (audit §5.2 CRITICAL). The German
 // summary vocabulary is extended (audit §5.4): a `Summe`/`Gesamtsumme`/`Rechnungssumme`/`Endsumme`/
 // `Endbetrag` line now resolves to a total instead of falling through to `parseLineItem` as a phantom item.
-const NET_LABELS = ['net total', 'net amount', 'nettobetrag', 'netto', 'subtotal', 'zwischensumme', 'summe netto']
-const TAX_LABELS = ['vat', 'mehrwertsteuer', 'umsatzsteuer', 'mwst', 'tax total', 'tax', 'steuer']
+// T-4 (invoice-audit-2026-07-06): `nettosumme` (de-AT) joins the NET labels; `steuerbetrag` and the bare
+// `ust` abbreviation join the TAX labels — a line-leading `USt 20% 182,80` / `Steuerbetrag 182,80` now
+// resolves to `taxTotal` instead of falling through to `parseLineItem` as a phantom item. `steuerbetrag`
+// precedes the boundary-blocked `steuer`, and `ust` is longer-first vs nothing it prefixes. `USt-IdNr:
+// ATU…` still falls through (its remainder `idnr atu…` is not filler-only, so `isTotalsLine` refuses it).
+const NET_LABELS = [
+  'net total', 'net amount', 'nettobetrag', 'nettosumme', 'netto', 'subtotal', 'zwischensumme', 'summe netto'
+]
+const TAX_LABELS = [
+  'vat', 'mehrwertsteuer', 'umsatzsteuer', 'mwst', 'steuerbetrag', 'ust', 'tax total', 'tax', 'steuer'
+]
 const GROSS_LABELS = [
   'gross total', 'gross amount', 'gesamtbetrag', 'rechnungsbetrag', 'rechnungssumme', 'gesamtsumme',
   'endsumme', 'endbetrag', 'gesamt', 'brutto', 'amount due', 'zu zahlen', 'zahlbetrag', 'summe', 'total'
@@ -379,6 +403,15 @@ function isSummaryLabelLine(line: string): boolean {
 const DATE_TOKEN_RE =
   /\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4}|\b\d{1,2}[./]\d{1,2}[./]\d{2}(?!\d)(?![.,']\d)/
 const PERCENT_RE = /(\d+(?:[.,]\d+)?)\s*%/
+// A percent-ATTACHED figure — `20,00 %`, `19%`, `7,5 %` — is a RATE, never a money amount. The totals
+// readers blank it before the money scan (invoice-audit-2026-07-06 T-3) so a rate-only line
+// (`MwSt 20,00 %`) is not misread as the tax AMOUNT, and a line carrying both a rate and the real amount
+// (`MwSt 20% 65,00`) reads only the 65,00. Global. A BARE-integer rate (`20%`) is already invisible to
+// MONEY_RE, so this only bites the 2-dp form MONEY_RE would otherwise read (`20,00 %` → 20.00).
+const PERCENT_FIGURE_RE = /\d[\d.,']*\s*%/g
+/** Blank every percent-attached figure to SAME-LENGTH whitespace (byte offsets preserved for index-based
+ *  callers); use `.replace(PERCENT_FIGURE_RE, ' ')` where only the parsed value matters. */
+const blankPercentFigures = (s: string): string => s.replace(PERCENT_FIGURE_RE, (m) => ' '.repeat(m.length))
 // A bare quantity at the end of the description region: an integer/decimal, optionally with a unit
 // word (x / × / Stk / pcs / units). Captures the cleaned description, the numeric quantity, AND the unit
 // token (group 3) — the F8 split fires only when group 3 is present OR a unit-price column corroborates.
@@ -483,14 +516,19 @@ function parseDateInText(text: string, order: DateOrder = 'dmy', anchor?: DateAn
  *  first (BL-N2) so a trailing date on a totals line — `Gross total 390,00 EUR per 30.06.2026` — can't
  *  be read as the figure (it would otherwise yield `30.06.20` → 3006.20). */
 function lastMoney(line: string): number | null {
-  const matches = [...stripDateTokens(line).matchAll(MONEY_RE)]
+  // Scrub dates (BL-N2) AND percent-attached figures (T-3) before the money scan: a rate-only totals line
+  // `MwSt 20,00 %` must not read the RATE `20,00` as the tax amount, and `MwSt 20% 65,00` reads only 65,00.
+  const matches = [...blankPercentFigures(stripDateTokens(line)).matchAll(MONEY_RE)]
   if (matches.length === 0) return null
   return parseAmount(matches[matches.length - 1][0])
 }
 
-/** "excl./exkl. tax", "net of tax", "vor Steuer" — qualifiers that mark a bare "Total" line as the NET
- *  (not the gross), so an invoice printing "Total (excl. Tax)" and "Total (incl. Tax)" resolves both. */
-const EXCL_TAX_RE = /\bexcl|\bexkl|excluding|net of tax|before tax|ohne (?:steuer|ust|umsatzsteuer|mwst)|vor steuer/
+/** "excl./exkl. tax", "net of tax", "vor Steuer", or a bare `(netto)`/`(net)` qualifier — markers that a
+ *  gross-LABELLED "Total" line is actually the NET (not the gross), so an invoice printing "Total (excl.
+ *  Tax)"/"Total (incl. Tax)" or "Summe (netto)"/"Summe (brutto)" resolves both. `\bnetto\b`/`\bnet\b` (T-8)
+ *  are only consulted AFTER a GROSS label matched, so they never mis-flag a genuine gross line. */
+const EXCL_TAX_RE =
+  /\bexcl|\bexkl|excluding|net of tax|before tax|ohne (?:steuer|ust|umsatzsteuer|mwst)|vor steuer|\bnetto\b|\bnet\b/
 
 /**
  * The printed figure on a LABELED totals line. First the normal last-money token (grouped/decimal via
@@ -553,40 +591,39 @@ function applyHeader(
   order: DateOrder = 'dmy',
   anchor?: DateAnchor | null
 ): boolean {
-  // SKA-14 (skills-audit-2026-07-03): an AMOUNT-bearing line is never consumed as a vendor/number header.
-  // R2 gated only the date branches below (a date label consumes only when a date parses); the vendor/
-  // number branches consumed UNCONDITIONALLY, so `From 01.06.2026 to 30.06.2026 Hosting 49,00` ("from" is
-  // a vendor label) and `Rechnung Nr. 2026-14 vom 03.05.2026 über 1.500,00 EUR` were swallowed whole: the
-  // line item was deleted, `droppedRowCount` was NOT incremented (consumption precedes the count), the
-  // "whole invoice" claim stood, and vendor/invoiceNumber captured garbage tails. Such a line falls
-  // through to `parseLineItem` instead — a figure must never silently vanish behind a whole-invoice
-  // claim (§22-D1). The gate keys on `carriesAmountShapedMoney` (NOT bare `hasMoneyToken`) so a
-  // grouped-looking header VALUE (`Rechnung Nr. 26.001`) is still consumed as the header it is.
-  if (!carriesAmountShapedMoney(line)) {
-    const vendor = labeledValue(line, VENDOR_LABELS)
-    if (vendor !== null) {
-      if (!header.vendor) header.vendor = vendor
-      return true
-    }
-    // P3: the bill-to party — checked AFTER vendor (a 'rechnungssteller' line must never be read as a
-    // bare 'rechnung an' variant) and under the same money gate, first-wins like every header field.
-    // A value that is itself a reference noun ("Customer Reference: ABC", "Kunde Nr. 12345") is NOT a
-    // recipient name — leave the line unconsumed rather than capture a label tail as a party.
-    const recipient = labeledValue(line, RECIPIENT_LABELS)
-    if (recipient !== null && !/^(?:number|no|nr|nummer|reference|ref|id)\b/i.test(recipient)) {
-      if (!header.recipient) header.recipient = recipient
-      return true
-    }
-    const number = labeledValue(line, NUMBER_LABELS)
-    if (number !== null) {
-      if (!header.invoiceNumber) header.invoiceNumber = number
-      return true
-    }
+  // SKA-14 (skills-audit-2026-07-03) + T-5 (invoice-audit-2026-07-06): an AMOUNT-bearing line is never
+  // consumed as ANY header field — vendor/number/recipient AND the date branches. SKA-14 gated only the
+  // vendor/number/recipient branches (a date label already consumed only when a date parsed), so a combined
+  // header/summary line `Rechnungsdatum: 03.05.2026 Betrag: 1.500,00 EUR` was swallowed by the DATE branch:
+  // the 1.500,00 vanished and `droppedRowCount` was NOT incremented while the "whole invoice" claim stood
+  // (T-5, the exact SKA-14 harm on the branch it missed). Such a line now falls through to `parseLineItem`
+  // so the figure surfaces as a line item instead of silently vanishing (§22-D1) — the accepted trade-off
+  // is that the DATE on such a combined line is not captured (drop-don't-guess prefers not losing a figure).
+  // The gate keys on `carriesAmountShapedMoney` (NOT bare `hasMoneyToken`) so a grouped-looking header VALUE
+  // (`Rechnung Nr. 26.001`) is still consumed as the header it is.
+  if (carriesAmountShapedMoney(line)) return false
+  const vendor = labeledValue(line, VENDOR_LABELS)
+  if (vendor !== null) {
+    if (!header.vendor) header.vendor = vendor
+    return true
+  }
+  // P3: the bill-to party — checked AFTER vendor (a 'rechnungssteller' line must never be read as a
+  // bare 'rechnung an' variant), first-wins like every header field. A value that is itself a reference
+  // noun ("Customer Reference: ABC", "Kunde Nr. 12345") is NOT a recipient name — leave the line unconsumed.
+  const recipient = labeledValue(line, RECIPIENT_LABELS)
+  if (recipient !== null && !/^(?:number|no|nr|nummer|reference|ref|id)\b/i.test(recipient)) {
+    if (!header.recipient) header.recipient = recipient
+    return true
+  }
+  const number = labeledValue(line, NUMBER_LABELS)
+  if (number !== null) {
+    if (!header.invoiceNumber) header.invoiceNumber = number
+    return true
   }
   // A date label consumes the line ONLY when a date actually parses from its value (audit §5.2): a line
   // that merely BEGINS with a date word but carries a money-bearing description — `Due diligence review
-  // 2.000,00`, `Date storage fee 50,00` — parses no date, so it is NOT consumed here and falls through
-  // to `parseLineItem` as the line item it is (rather than being silently swallowed and dropped).
+  // 2.000,00`, `Date storage fee 50,00` — is already excluded by the amount gate above; a bare
+  // `Rechnungsdatum: 03.05.2026` (no amount) still consumes here.
   const dueRaw = labeledValue(line, DUE_LABELS)
   if (dueRaw !== null) {
     const d = parseDateInText(dueRaw, order, anchor)
@@ -618,6 +655,71 @@ function applyHeader(
 /** The three assignable totals fields — the keys `dropUncorroboratedWeakTotals` (P2) can retract. */
 type WeakTotalsKey = 'netTotal' | 'taxTotal' | 'grossTotal'
 
+// The totals label vocabulary, grouped by the field each resolves to (invoice-audit-2026-07-06 T-2). Used
+// by `readMultiLabelTotals` to attribute a figure to the label nearest BEFORE it on a one-line multi-label
+// totals row. Order (net → tax → gross) mirrors `applyTotals`' single-label precedence.
+const LABELS_BY_KEY: readonly (readonly [WeakTotalsKey, readonly string[]])[] = [
+  ['netTotal', NET_LABELS],
+  ['taxTotal', TAX_LABELS],
+  ['grossTotal', GROSS_LABELS]
+]
+
+/**
+ * Which totals field a segment of text (the run between two figures) resolves to, or null. The segment
+ * must contain a boundary-matched totals label whose surrounding text is otherwise FILLER-ONLY (a tax
+ * qualifier / currency word / connector — never a real description). Returns the field for the matched
+ * label. This is the per-figure attribution primitive for `readMultiLabelTotals`; requiring filler on
+ * BOTH sides of the label is what keeps a genuine line item (`Miete netto 1.000,00` — "miete" is not
+ * filler) from being mistaken for a labeled totals segment.
+ */
+function segmentTotalsKey(segment: string): WeakTotalsKey | null {
+  const lower = segment.toLowerCase()
+  const isWordChar = (c: string): boolean => c !== undefined && /[\p{L}\p{N}]/u.test(c)
+  for (const [key, labels] of LABELS_BY_KEY) {
+    for (const label of labels) {
+      for (let idx = lower.indexOf(label); idx >= 0; idx = lower.indexOf(label, idx + 1)) {
+        const leftOk = idx === 0 || !isWordChar(lower[idx - 1])
+        const rightOk = !isWordChar(lower[idx + label.length])
+        if (leftOk && rightOk && isFillerOnly(lower.slice(0, idx)) && isFillerOnly(lower.slice(idx + label.length))) {
+          return key
+        }
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * invoice-audit-2026-07-06 T-2 — a ONE-LINE MULTI-LABEL totals row (`Netto 1.000,00 MwSt 200,00 Brutto
+ * 1.200,00`, a 3-column totals block flattened to one segment). The single-label path (`isTotalsLine`)
+ * would match the FIRST label (`netto`) but `totalsMoney` takes the LAST figure — assigning 1.200,00 to
+ * `netTotal` and losing tax/gross. Instead, attribute EACH figure to the totals label nearest before it.
+ *
+ * Engaged conservatively (returns null → the caller falls back to the single-label path): the line must
+ * carry ≥2 money figures, EVERY figure must be immediately preceded by a filler-only run ending in a
+ * boundary-matched totals label (so a description-leading line item never engages — `Miete 1.000,00` fails
+ * because "miete" is not filler), and the figures must resolve to ≥2 DISTINCT fields. The scan runs over a
+ * SAME-LENGTH date-/percent-blanked copy so a `dd.mm` fragment or a `20% ` rate is never read as a figure,
+ * while the figure VALUE is parsed from the original bytes at the matched index. Last-wins per field.
+ */
+function readMultiLabelTotals(line: string): Map<WeakTotalsKey, number> | null {
+  const scan = blankPercentFigures(blankDateTokens(line))
+  const figures = [...scan.matchAll(MONEY_RE)]
+  if (figures.length < 2) return null
+  const out = new Map<WeakTotalsKey, number>()
+  let prevEnd = 0
+  for (const m of figures) {
+    const idx = m.index ?? 0
+    const key = segmentTotalsKey(scan.slice(prevEnd, idx))
+    if (key === null) return null // a figure with no owning label → not a clean multi-label totals row
+    const value = parseAmount(line.slice(idx, idx + m[0].length))
+    if (value === null) return null
+    out.set(key, value) // last-wins per field
+    prevEnd = idx + m[0].length
+  }
+  return out.size >= 2 ? out : null
+}
+
 function applyTotals(line: string, totals: InvoiceTotals, weakReads?: Set<WeakTotalsKey>): boolean {
   const lower = line.toLowerCase()
   const isTotalsLine = (labels: readonly string[]): boolean => {
@@ -630,6 +732,15 @@ function applyTotals(line: string, totals: InvoiceTotals, weakReads?: Set<WeakTo
     totals[key] = v.value
     if (v.weak) weakReads?.add(key)
     else weakReads?.delete(key)
+  }
+  // T-2: a one-line multi-label totals row (`Netto … MwSt … Brutto …`) attributes EACH figure to its own
+  // nearest-preceding label, rather than the single-label path taking the LAST figure for the FIRST label.
+  // Decimal-shaped figures only (MONEY_RE), so every read is STRONG (never weak). Tried first; a non-
+  // multi-label line returns null and falls through to the single-label logic unchanged.
+  const multi = readMultiLabelTotals(line)
+  if (multi) {
+    for (const [key, value] of multi) assign(key, { value, weak: false })
+    return true
   }
   // net first, then tax, then gross (the bare "total" is a gross label — so "Net Total" wins as net).
   if (isTotalsLine(NET_LABELS)) {
@@ -872,7 +983,10 @@ export function extractInvoice(
       if (
         pending &&
         pending.absorbed < MAX_PLAIN_CONTINUATION_ROWS &&
-        [...line.matchAll(MONEY_RE)].length === 0
+        // Date-SCRUBBED money test (T-10): a money-less date follower `Leistungszeitraum: 01.02.2026 bis
+        // 28.02.2026` "carries money" via its `01.02` fragment under raw MONEY_RE and lost its continuation
+        // — `hasMoneyToken` strips the date first, matching the `:885` drop-count test and the SKA-2 posture.
+        !hasMoneyToken(line)
       ) {
         pending.item.description = `${pending.item.description} ${line}`.trim()
         pending.absorbed++
@@ -1006,10 +1120,16 @@ export function validateInvoiceTotals(invoice: InvoiceInput): InvoiceTotalsResul
     record('netPlusTaxIsGross', 'unknown')
   }
 
-  // 3. tax == net * rate%.
+  // 3. tax == net * rate%. T-7 (invoice-audit-2026-07-06): tolerate sum-of-rounded vs rounded-of-sum
+  // divergence. A legally-correct invoice may print PER-LINE-rounded tax (3 items at 20% → 3×6,67 = 20,01)
+  // while `round2(net × rate)` computes 20,00; demanding exact-cent equality flagged such invoices
+  // `mismatch`. Each line contributes ≤½ cent of rounding, so the bound is ±max(1 cent, n × ½ cent) — enough
+  // to absorb genuine per-line rounding, far short of a real tax error (which is cents-to-euros off).
   if (totals.netTotal !== undefined && totals.taxRatePercent !== undefined && totals.taxTotal !== undefined) {
     const expected = round2((totals.netTotal * totals.taxRatePercent) / 100)
-    record('taxMatchesRate', agree(expected, totals.taxTotal) ? 'ok' : 'mismatch')
+    const rateTolerance = Math.max(0.01, lineItems.length * 0.005)
+    const withinRounding = Math.abs(expected - totals.taxTotal) <= rateTolerance + MONEY_EPS
+    record('taxMatchesRate', withinRounding ? 'ok' : 'mismatch')
   } else {
     record('taxMatchesRate', 'unknown')
   }

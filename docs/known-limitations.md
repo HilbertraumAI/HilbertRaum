@@ -357,11 +357,11 @@ password recovery — are documented in
   without a path and is NOT wired into CI — it is a manual pre-release / post-pin-bump gate); the corpus fed
   the PLAIN-TEXT extractor path only until invoice-hardening-2026-07-04 P4 added the first geometry INVOICE
   fixture (`invoice-de-geometry-columns`, through the real `reconstructPage`) — geometry BANK coverage was
-  already there, and the reconstruction's own unit tests remain the deep coverage; and the corpus surfaced
-  one still-open gap — the abbreviation `USt` is in the invoice
-  `TOTALS_FILLER` set but NOT in `TAX_LABELS`, so a standalone `USt … EUR` tax-total line reads as a phantom
-  line item (a spelled-out `Steuer` / `Umsatzsteuer` / `MwSt` label parses correctly) — a candidate for a
-  future R-phase, recorded here rather than fixed under a test-infrastructure phase (no extractor change).
+  already there, and the reconstruction's own unit tests remain the deep coverage. (The corpus once surfaced
+  a gap — the abbreviation `USt`/`Steuerbetrag` was not in the invoice `TAX_LABELS`, so a standalone `USt …
+  EUR` tax-total line read as a phantom line item — **closed by invoice-audit-2026-07-06 IA-3 (T-4)**: `ust`
+  and `steuerbetrag` (and `nettosumme`) are now totals labels, while `USt-IdNr: ATU…` still falls through
+  because its remainder is not filler-only.)
 - **Glyph-mangled (per-glyph) PDF text layers are DETECTED and refused, not repaired
   (invoice-hardening-2026-07-04, architecture.md "Skills — design record" §42).** A PDF whose text layer
   fragments into single-glyph runs ("1   0 % 3   Article") now stamps `textQuality: 'suspect'`, gets ONE

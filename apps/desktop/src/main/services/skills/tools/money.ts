@@ -400,7 +400,12 @@ export function inferDateOrderResult(text: string): DateOrderResult {
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim()
     if (!line) continue
-    if (line.match(MONEY_RE)) {
+    // Classify the line by the DATE-SCRUBBED money test, not raw `MONEY_RE` (invoice-audit-2026-07-06 T-6).
+    // A dotted header date `Datum: 05.03.2026` matches raw `MONEY_RE` via its `05.03` fragment, so the line
+    // was misread as a transaction row whose leading token (`Datum:`) is not a date → it never voted, and a
+    // day-first-GUESSED document silently missed the `date_order_inferred='default'` caveat. `hasMoneyToken`
+    // strips the date first, so a money-LESS date line correctly reaches the header/label branch and votes.
+    if (hasMoneyToken(line)) {
       // Transaction-style row: only the LEADING date column(s) vote — a memo date deeper in the row can't.
       const tokens = line.split(/\s+/)
       for (let i = 0; i < Math.min(2, tokens.length); i++) {

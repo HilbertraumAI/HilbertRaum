@@ -153,8 +153,16 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       path now agrees with the geometry path, which already refused a far dash as a sign). Changes the
  *       persisted amounts on any statement with such a row, so stale v9 rows re-extract. (Bumped in IA-2,
  *       the shared-parser fix.)
+ *  11 — invoice-audit-2026-07-06 IA-3 (T-6, shared money.ts): `inferDateOrderResult` classifies each line
+ *       by the date-SCRUBBED `hasMoneyToken` rather than raw `MONEY_RE`. A money-LESS dotted-date line — a
+ *       statement PERIOD header like `Kontoauszug 01.01.2026 - 31.03.2026` whose `01.01`/`31.03` fragments
+ *       used to make it look like a (voteless) transaction row — now reaches the header/label branch and
+ *       votes on its dates. This can change the inferred date ORDER (and thus persisted transaction dates)
+ *       and the `date_order_inferred` provenance on affected statements, so stale v10 rows re-extract. (The
+ *       invoice twin bumped 12→13 in the same wave; this bank bump exists solely because T-6 edits the
+ *       SHARED parser both extractors consume.)
  */
-export const BANK_EXTRACTOR_VERSION = 10
+export const BANK_EXTRACTOR_VERSION = 11
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',

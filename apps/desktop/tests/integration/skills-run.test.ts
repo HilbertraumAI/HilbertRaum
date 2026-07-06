@@ -162,10 +162,12 @@ describe('runBankExtraction (S11a)', () => {
     // cross-year rollover) moved it 5 → 6; R6 (audit §5.7, wrapped-description continuation) moved it 6 → 7;
     // U1 (audit §2.3, droppedRowCount + currency-adjacent balance read) moved it 7 → 8; R7 (skills-audit-
     // 2026-07-03 SKA-1/2/13, date-vs-money disambiguation) moved it 8 → 9; IA-2 (invoice-audit-2026-07-06
-    // T-1, the glued-leading-sign fix in the shared MONEY_RE) moves it 9 → 10, so every statement an OLDER
-    // (v9…v1 / pre-versioning NULL) parser produced must re-extract via the A9 path. A fresh extraction
-    // is stamped at the current version → never stale.
-    expect(BANK_EXTRACTOR_VERSION).toBe(10)
+    // T-1, the glued-leading-sign fix in the shared MONEY_RE) moved it 9 → 10; IA-3 (invoice-audit-2026-07-06
+    // T-6, the shared `inferDateOrderResult` now classifies lines by date-scrubbed `hasMoneyToken`, so a
+    // money-less dotted period header votes) moves it 10 → 11, so every statement an OLDER (v10…v1 /
+    // pre-versioning NULL) parser produced must re-extract via the A9 path. A fresh extraction is stamped at
+    // the current version → never stale.
+    expect(BANK_EXTRACTOR_VERSION).toBe(11)
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
     const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })

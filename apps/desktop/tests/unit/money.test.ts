@@ -8,6 +8,7 @@ import {
   hasMoneyToken,
   lastCurrencyAdjacentInteger,
   inferDateOrder,
+  inferDateOrderResult,
   normalizeExtractionText,
   parseDate,
   splitLeadingDates,
@@ -178,6 +179,18 @@ describe('money.ts — inferDateOrder / parseDate / splitLeadingDates / stripDat
     ['empty ⇒ day-first default', '', 'dmy']
   ])('inferDateOrder(%s)', (_label, input, expected) => {
     expect(inferDateOrder(input)).toBe(expected)
+  })
+
+  it('T-6: a money-less dotted header date votes ⇒ inferred = default (invoice-audit-2026-07-06)', () => {
+    // Raw MONEY_RE read `Datum: 05.03.2026` as a transaction row (its `05.03` fragment matches), whose
+    // leading token `Datum:` is not a date → it never voted, so a day-first-GUESSED document silently
+    // missed the caveat. Classifying by date-scrubbed `hasMoneyToken` sends the money-less date line to the
+    // header/label branch, where its order-ambiguous date votes and flags `'default'`.
+    expect(inferDateOrderResult('Datum: 05.03.2026').inferred).toBe('default')
+    // A money-less DOTTED period header now VOTES (the shared bank consequence — BANK_EXTRACTOR_VERSION
+    // bumped for this): before T-6 its `03.31` fragment made it a voteless transaction row (→ default dmy);
+    // now it reaches the header branch and its unambiguous 03.31 (second field 31) forces month-first.
+    expect(inferDateOrderResult('Statement period 03.31.2026 - 04.15.2026').order).toBe('mdy')
   })
 
   it('parseDate honours the order parameter and rejects 2-digit years / impossible dates', () => {

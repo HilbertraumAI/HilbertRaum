@@ -388,14 +388,101 @@ describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
 })
 
 describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
-  it('is at 12 — the IA-2 glued-leading-sign fix in the shared MONEY_RE (invoice-audit-2026-07-06 T-1)', () => {
+  it('is at 13 — the IA-3 parser batch (invoice-audit-2026-07-06 T-2/T-3/T-4/T-5/T-6/T-8/T-10)', () => {
     // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin. P2 (v10) retracts uncorroborated weak bare-integer
     // totals; P3 (v11) adds the labeled bill-to `recipient` header field and stamps
     // `textQuality: 'suspect'` on a glyph-mangled text layer; IA-2 (v12) reads a leading `-` as a sign
-    // only when GLUED to the figure/paren, so a dash-as-separator layout (`Beratung - 1.500,00`) no longer
-    // flips a figure negative. Each changes the persisted output, so an invoice an OLDER (v11…v1 /
+    // only when GLUED to the figure/paren; IA-3 (v13) blanks a percent RATE before the totals scan (T-3),
+    // splits a one-line multi-label totals row (T-2), adds de-AT `nettosumme`/`steuerbetrag`/`ust` labels
+    // (T-4), gates the header date branches on an amount (T-5), classifies date-order lines by
+    // `hasMoneyToken` (T-6), flips a `(netto)` gross to net (T-8), and keeps a money-less date follower's
+    // continuation (T-10). Each changes the persisted output, so an invoice an OLDER (v12…v1 /
     // pre-versioning NULL) parser produced must re-extract via the F5 path.
-    expect(INVOICE_EXTRACTOR_VERSION).toBe(12)
+    expect(INVOICE_EXTRACTOR_VERSION).toBe(13)
+  })
+})
+
+describe('IA-3 — parser batch (invoice-audit-2026-07-06 T-2/T-3/T-4/T-5/T-7/T-8/T-10)', () => {
+  it('T-3: a percent-attached RATE `MwSt 20,00 %` is not read as the tax amount', () => {
+    const inv = extractInvoice([chunk('MwSt 20,00 %')], 'EUR')
+    expect(inv.totals.taxTotal).toBeUndefined() // the 20,00 is a RATE, not the tax figure
+    expect(inv.totals.taxRatePercent).toBe(20)
+    // A rate sharing the line with the real amount reads only the amount.
+    const inv2 = extractInvoice([chunk('MwSt 20% 65,00 EUR')], 'EUR')
+    expect(inv2.totals.taxTotal).toBe(65)
+  })
+
+  it('T-2: a one-line multi-label totals row splits each figure to its own label', () => {
+    const inv = extractInvoice([chunk('Netto 1.000,00 MwSt 200,00 Brutto 1.200,00')], 'EUR')
+    expect(inv.totals.netTotal).toBe(1000)
+    expect(inv.totals.taxTotal).toBe(200)
+    expect(inv.totals.grossTotal).toBe(1200)
+    expect(inv.lineItems).toHaveLength(0) // the row is a total, not a line item
+    // A description-leading line item (`Miete netto …`, single figure) is NEVER hijacked by the split.
+    const item = extractInvoice([chunk('Miete netto 1.000,00 EUR')], 'EUR')
+    expect(item.lineItems).toHaveLength(1)
+    expect(item.totals.netTotal).toBeUndefined()
+  })
+
+  it('T-4: line-leading `USt` / `Steuerbetrag` read as tax, not phantom line items', () => {
+    const ust = extractInvoice([chunk('USt 20% 182,80 EUR')], 'EUR')
+    expect(ust.totals.taxTotal).toBe(182.8)
+    expect(ust.lineItems).toHaveLength(0)
+    const steuerbetrag = extractInvoice([chunk('Steuerbetrag 182,80 EUR')], 'EUR')
+    expect(steuerbetrag.totals.taxTotal).toBe(182.8)
+    expect(steuerbetrag.lineItems).toHaveLength(0)
+    // `Nettosumme` joins the NET labels too.
+    const nettosumme = extractInvoice([chunk('Nettosumme 914,00 EUR')], 'EUR')
+    expect(nettosumme.totals.netTotal).toBe(914)
+  })
+
+  it('T-4: `USt-IdNr: ATU…` still falls through (its remainder is not filler-only)', () => {
+    const inv = extractInvoice([chunk('USt-IdNr: ATU81420204')], 'EUR')
+    expect(inv.totals.taxTotal).toBeUndefined()
+    expect(inv.lineItems).toHaveLength(0)
+  })
+
+  it('T-5: a header date line carrying an amount does not swallow the figure', () => {
+    const inv = extractInvoice([chunk('Rechnungsdatum: 03.05.2026 Betrag: 1.500,00 EUR')], 'EUR')
+    // The date branch no longer consumes an amount-bearing line; the 1.500,00 surfaces as a line item.
+    expect(inv.lineItems.map((li) => li.lineTotal)).toContain(1500)
+    // The DATE on such a combined line is NOT captured (accepted trade-off — figure preservation wins).
+    expect(inv.header.invoiceDate).toBeUndefined()
+    // A bare `Rechnungsdatum:` (no amount) still consumes as a header.
+    const dateOnly = extractInvoice([chunk('Rechnungsdatum: 03.05.2026')], 'EUR')
+    expect(dateOnly.header.invoiceDate).toBe('2026-05-03')
+  })
+
+  it('T-7: a per-line-rounded VAT invoice is within rounding, not a mismatch', () => {
+    // 3 items net 33,33 each at 20%: printed per-line tax 3×6,67 = 20,01; round2(99.99×0.20)=20.00.
+    const inv: InvoiceInput = {
+      header: {},
+      lineItems: [
+        { description: 'A', lineTotal: 33.33, currency: 'EUR' },
+        { description: 'B', lineTotal: 33.33, currency: 'EUR' },
+        { description: 'C', lineTotal: 33.33, currency: 'EUR' }
+      ],
+      totals: { netTotal: 99.99, taxTotal: 20.01, taxRatePercent: 20, grossTotal: 120.0 }
+    }
+    const result = validateInvoiceTotals(inv)
+    expect(result.checks.find((c) => c.name === 'taxMatchesRate')?.status).toBe('ok')
+    expect(result.reconciled).toBe(true)
+    // A genuinely wrong tax (off by a euro) still mismatches — the tolerance is bounded.
+    const wrong = validateInvoiceTotals({ ...inv, totals: { ...inv.totals, taxTotal: 21.01, grossTotal: 121.0 } })
+    expect(wrong.checks.find((c) => c.name === 'taxMatchesRate')?.status).toBe('mismatch')
+  })
+
+  it('T-8: `Summe (netto)` lands in net, not gross', () => {
+    const inv = extractInvoice([chunk('Summe (netto) 914,00 EUR')], 'EUR')
+    expect(inv.totals.netTotal).toBe(914)
+    expect(inv.totals.grossTotal).toBeUndefined()
+  })
+
+  it('T-10: a money-less date-follower line keeps its wrapped-description continuation', () => {
+    const text = ['Beratungsleistung 1.500,00 EUR', 'Leistungszeitraum: 01.02.2026 bis 28.02.2026'].join('\n')
+    const inv = extractInvoice([chunk(text)], 'EUR')
+    expect(inv.lineItems).toHaveLength(1)
+    expect(inv.lineItems[0].description).toContain('Leistungszeitraum')
   })
 })
 
