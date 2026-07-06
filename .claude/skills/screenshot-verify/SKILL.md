@@ -9,6 +9,11 @@ Render real renderer components with the **real `tokens.css` + `styles.css`** an
 then screenshot them with the already-installed Electron (`webContents.capturePage()` — no Playwright,
 no new deps, no GUI/workspace/model). Deterministic, offline.
 
+> **POSIX-only dev tool.** The capture script relies on `xvfb-run` + `ELECTRON_DISABLE_SANDBOX`
+> (Linux; macOS works without xvfb) — it does NOT run on Windows. Acceptable for a contributor-side
+> verification tool; the app itself stays Windows-first (CLAUDE.md hard rules). On Windows, verify
+> visually via `npm run dev` instead.
+
 ## Run it
 
 The capture needs GL libraries (the nix dev shell provides them) + a virtual display, so run inside the
