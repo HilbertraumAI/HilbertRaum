@@ -37,6 +37,12 @@ interface TranscriptProps {
   onAnswerWithoutSkill?: () => void
   onCopy: (content: string) => void
   onSave: () => void
+  /**
+   * Save one answer's attached RESULT TABLE as CSV (result-tables §4, Phase 2). Rendered only on
+   * messages with `hasResultTable`; the MAIN side re-serializes the persisted table and opens the
+   * save dialog. Absent ⇒ the affordance never renders.
+   */
+  onExportTable?: (messageId: string) => void
   actionsDisabled: boolean
   /**
    * Resolve a skill's per-message glyph title in the UI language (installId → localized title),
@@ -74,6 +80,7 @@ export const Transcript = memo(function Transcript({
   onAnswerWithoutSkill,
   onCopy,
   onSave,
+  onExportTable,
   actionsDisabled,
   resolveSkillTitle,
   progressNotice,
@@ -138,6 +145,7 @@ export const Transcript = memo(function Transcript({
               onAnswerWithoutSkill={onAnswerWithoutSkill}
               onCopy={onCopy}
               onSave={onSave}
+              onExportTable={onExportTable}
               actionsDisabled={actionsDisabled}
               resolveSkillTitle={resolveSkillTitle}
             />
@@ -229,6 +237,7 @@ const MessageBlock = memo(function MessageBlock({
   onAnswerWithoutSkill,
   onCopy,
   onSave,
+  onExportTable,
   actionsDisabled,
   resolveSkillTitle
 }: {
@@ -240,6 +249,7 @@ const MessageBlock = memo(function MessageBlock({
   onAnswerWithoutSkill?: () => void
   onCopy: (content: string) => void
   onSave: () => void
+  onExportTable?: (messageId: string) => void
   actionsDisabled: boolean
   resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
 }): JSX.Element {
@@ -340,6 +350,9 @@ const MessageBlock = memo(function MessageBlock({
           onTryAgain={isLast ? onTryAgain : undefined}
           onCopy={() => onCopy(m.content)}
           onSave={onSave}
+          onExportTable={
+            m.hasResultTable && onExportTable ? () => onExportTable(m.id) : undefined
+          }
           disabled={actionsDisabled}
         />
       )}

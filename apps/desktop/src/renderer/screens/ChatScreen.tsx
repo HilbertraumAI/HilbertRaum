@@ -717,6 +717,7 @@ export function ChatScreen({
   // closure. The impl functions below are hoisted declarations, so referencing them here is fine.
   const handleCopyMessage = useEventCallback(onCopyMessage)
   const handleSaveConversation = useEventCallback(onSaveConversation)
+  const handleExportMessageTable = useEventCallback(onExportMessageTable)
   const handleTryAgain = useEventCallback(onTryAgain)
   const handleAnswerWithoutSkill = useEventCallback(onAnswerWithoutSkill)
   const handleSelectConversation = useEventCallback(onSelectConversation)
@@ -1258,6 +1259,18 @@ export function ChatScreen({
     })
   }
 
+  // Save one answer's attached RESULT TABLE as CSV (result-tables §4, Phase 2). MAIN re-serializes
+  // the persisted table and opens the save dialog (the consent — same posture as onSaveConversation);
+  // null = user cancelled or no table, a calm non-error outcome.
+  async function onExportMessageTable(messageId: string): Promise<void> {
+    try {
+      const saved = await window.api.exportMessageTable(messageId)
+      if (saved) showToast(t('chat.savedTo', { path: saved }))
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
   async function onNewChat(): Promise<void> {
     const conv = await createConversationInMode()
     await refreshConversations()
@@ -1613,6 +1626,7 @@ export function ChatScreen({
           onAnswerWithoutSkill={busyStreaming ? undefined : handleAnswerWithoutSkill}
           onCopy={handleCopyMessage}
           onSave={handleSaveConversation}
+          onExportTable={handleExportMessageTable}
           actionsDisabled={busyStreaming}
           resolveSkillTitle={resolveGlyphSkillTitle}
           progressNotice={streamConvId === activeId ? progressNotice : null}

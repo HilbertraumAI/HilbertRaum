@@ -295,6 +295,9 @@ const api = {
   /** Save a transcript to a user-chosen file; resolves with the path, or null on cancel. */
   exportConversation: (conversationId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportConversation, conversationId),
+  /** Save one message's attached result table as CSV (result-tables §4); path, or null on cancel. */
+  exportMessageTable: (messageId: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.exportMessageTable, messageId),
   /** Full-text search across all conversations. Results group hits per
    *  conversation, best match first; snippets carry SEARCH_MARK_* highlight markers. */
   searchConversations: (query: string): Promise<ConversationSearchResult[]> =>

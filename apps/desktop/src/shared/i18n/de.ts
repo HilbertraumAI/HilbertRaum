@@ -286,6 +286,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.actions.copy': 'Kopieren',
   'chat.actions.save': 'Speichern',
   'chat.actions.saveTitle': 'Diese Unterhaltung als Datei speichern (bleibt lokal)',
+  // Result-Tables §4 (Phase 2): nur bei Antworten mit angehängter Ergebnistabelle sichtbar.
+  'chat.actions.exportCsv': 'Als CSV exportieren',
+  'chat.actions.exportCsvTitle': 'Die Tabelle dieser Antwort als CSV-Datei speichern (bleibt lokal)',
 
   // ---- Chat: Kontext-Komprimierung (context-compaction plan §5.1–§5.3) ----
   'chat.compaction.inProgress': 'Frühere Nachrichten werden zusammengefasst, um Platz zu schaffen…',
@@ -681,6 +684,12 @@ export const de: Record<keyof typeof en, string> = {
     'Ich habe „{name}“ gelesen, konnte es aber nicht als Kategorienliste verwenden. Erwartet wird eine ' +
     'Kategorie pro Zeile — ein Label, optional gefolgt von Stichworten nach einem Semikolon (z. B. ' +
     '„Kinder;Schule, Kita, Taschengeld“).',
+  // Result-Tables §5 (Phase 3): Ehrlichkeitshinweis unter einer Antwort mit modellbefüllten
+  // ZUSATZSPALTEN — ein abgeleiteter Wert ist ein Label, nie eine Parser-Zahl.
+  'skills.bankAnalysis.derivedColumnsNote':
+    '_Die Spalte(n) {columns} wurden vom lokalen Modell aus der Beschreibung der jeweiligen Buchung ' +
+    'befüllt — leer, wo es sich nicht sicher war. Alle Beträge stammen aus dem deterministischen Parser ' +
+    'und bleiben unverändert._',
 
   // ---- Rechnungsauswertung (full-doc-skills Plan §3.1, Phase 4 / D49) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
@@ -1289,6 +1298,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.summary_exported': 'Zusammenfassung exportiert',
   'diag.audit.conversation_deleted': 'Unterhaltung gelöscht',
   'diag.audit.conversation_exported': 'Unterhaltung exportiert',
+  'diag.audit.message_table_exported': 'Antwort-Tabelle exportiert',
   'diag.audit.workspace_created': 'Arbeitsbereich erstellt',
   'diag.audit.workspace_unlocked': 'Arbeitsbereich entsperrt',
   'diag.audit.workspace_locked': 'Arbeitsbereich gesperrt',
@@ -1722,6 +1732,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportDocument': 'Dokument exportieren',
   'main.dialog.exportSummary': 'Zusammenfassung exportieren',
   'main.dialog.exportChat': 'Chat-Verlauf exportieren',
+  'main.dialog.exportTableCsv': 'Tabelle als CSV exportieren',
   'main.dialog.exportAudit': 'Aktivitätslog exportieren',
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',

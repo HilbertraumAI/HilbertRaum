@@ -30,6 +30,8 @@ import { getSkill } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
 import { isNeedleShaped, isSmallTalk } from '../services/skills/vocabulary'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
+import { saveResultTable } from '../services/tables/store'
+import { log } from '../services/logging'
 import { buildDocumentSegmentReader } from './documentSegments'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
 import { routeQuestion } from '../services/analysis/router'
@@ -526,7 +528,7 @@ export function registerRagIpc(ctx: AppContext): void {
                 // W2 (§2.1): when the scope was auto-narrowed to this doc, prepend the honest notice.
                 const answer = notice ? `${notice}\n\n${result.answer}` : result.answer
                 sendToken(answer)
-                return appendMessage(ctx.db, {
+                const msg = appendMessage(ctx.db, {
                   conversationId,
                   role: 'assistant',
                   content: answer,
@@ -535,6 +537,25 @@ export function registerRagIpc(ctx: AppContext): void {
                   skillId: turnSkill.installId,
                   autoFired: turnSkill.autoFired === true
                 })
+                // Phase 2 (result-tables §4): persist the answer's structured table keyed by the
+                // just-appended message and light the flag on the returned object, so the renderer's
+                // "Export CSV" action shows without a reload. Best-effort — a table that fails to
+                // persist (over-cap / serialization fault) never blocks the answer itself.
+                if (result.table) {
+                  try {
+                    if (saveResultTable(ctx.db, {
+                      messageId: msg.id,
+                      conversationId,
+                      table: result.table,
+                      source: turnSkill.installId
+                    })) {
+                      msg.hasResultTable = true
+                    }
+                  } catch {
+                    log.warn('Result-table persist failed', { messageId: msg.id })
+                  }
+                }
+                return msg
               }),
               (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
             )

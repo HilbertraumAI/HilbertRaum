@@ -56,6 +56,8 @@ export const IPC = {
   listAttachments: 'chat:listAttachments',
   /** Save a conversation transcript to a user-chosen file (spec §7.6). */
   exportConversation: 'chat:export',
+  /** Save one message's attached RESULT TABLE as CSV to a user-chosen file (result-tables §4). */
+  exportMessageTable: 'chat:exportMessageTable',
   /** Full-text search across conversations. Queries are content: never logged/audited. */
   searchConversations: 'chat:search',
   /**

@@ -1,6 +1,7 @@
 # Generic result tables — plan (result-tables wave)
 
-_Status: **WORKING PAPER — Phases 1 + 1.5 + 1.6 implemented (2026-07-05); Phases 2–3 open.**
+_Status: **WORKING PAPER — Phases 1 + 1.5 + 1.6 + 2 + 3(v1) implemented (2026-07-05); the §5
+no-skill routing item is deferred (see §5); remaining follow-ups in §6.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into a design record folded into
 `docs/architecture.md` ("Skills — design record") + `docs/rag-design.md` and delete this file.
@@ -122,29 +123,69 @@ to relevance — the feature wants the statement selected/in scope); filenames w
 quotes; a taxonomy split across chunk boundaries is only a risk for files > one chunk (~500 tokens
 ≈ far beyond 40 labels).
 
-## 4. Phase 2 — result-table artifact + message-level export (OPEN)
+## 4. Phase 2 — result-table artifact + message-level export (IMPLEMENTED, same day)
 
-- Persist a generic `result_tables` row (columns + rows + provenance + coverage verdict) attached
-  to the answer message whenever a handler produces a `TableSpec` — the generalization of
-  `extraction_records`.
-- Renderer: a message-level “Export CSV” affordance on any message carrying a table, dispatching
-  into the EXISTING confirm-gated `saveTextFile` boundary with the table’s own columns. “Export”
-  in chat becomes an operation on the previous result — the chaining gap (§1 item 4) closes
-  without the handler ever writing a file.
-- Retention/teardown: tables purge with their conversation/document (mirror
-  `purgeSkillDataForDocument`).
+As built:
+- **`result_tables`** (db.ts SCHEMA, next to `extraction_records`): one generic tabular artifact
+  per assistant message — columns/rows as JSON (CONTENT — never logged/audited), `row_count`, a
+  content-free `source` discriminator, and a `message_id` FK **ON DELETE CASCADE**, so the
+  regenerate delete and the conversation delete (messages first, one txn) purge automatically.
+  Store seam: `services/tables/store.ts` (`saveResultTable` — best-effort, empty/over-cap
+  (`MAX_RESULT_TABLE_ROWS` 10 000)/unserializable persists NOTHING and never blocks the answer;
+  `loadResultTable` — tolerant like `parseCoverage`).
+- **`SkillAnalysisResult.table?: TableSpec`** — the bank format path (CSV *and* JSON asks) emits
+  `transactionsTableSpec(rows)` (the ONE column definition all tabular surfaces now share);
+  `registerRagIpc` persists it right after the plain-answer `appendMessage` and lights
+  `Message.hasResultTable` on the returned object (no reload needed). `listMessages` derives the
+  flag via an EXISTS subselect — the table content never rides message loading.
+- **`chat:exportMessageTable` IPC** (registerChatIpc, the `exportConversation` template):
+  `requireUnlocked` → `loadResultTable` → `tableToCsv` (the one audited CSV path, incl.
+  formula-injection neutralization) → `saveTextExport` (save dialog = consent, no confirm modal —
+  same posture as the transcript export; no BOM on .csv). Audit: `message_table_exported`,
+  metadata `{ messageId, rows }` only.
+- **Renderer**: an “Export CSV” action in `MessageActions`, rendered only on answers with
+  `hasResultTable`, wired through Transcript → ChatScreen → `window.api.exportMessageTable`;
+  success shows the existing “saved to …” toast. i18n: `chat.actions.exportCsv(+Title)`,
+  `main.dialog.exportTableCsv`, `diag.audit.message_table_exported` (EN+DE).
 
-## 5. Phase 3 — TableRequest parse + derived-column enrichment (OPEN)
+Notes/residuals: only the bank format path emits a table so far (invoice port pending — §6);
+answers produced BEFORE Phase 2 carry no table (no backfill — by design, the table is the
+answer’s artifact); tables key off messages, so no document-purge hook is needed.
 
-- One grammar-constrained call (D55) parses the turn into
-  `TableRequest { derivedColumns: [{name, description, enumValues?}], filter?, deliverable }`,
-  replacing the format regexes as the LAST pipeline stage (the regex path stays as the offline /
-  no-model fallback).
-- Derived columns (subcategory, counterparty, …) fill via batched, schema-constrained per-row
-  calls over the WHOLE extracted row set (whole-document by construction); enum-constrained where
-  a taxonomy exists; a cell the model cannot determine is an explicit `unknown` — never guessed.
-- Route no-skill tabular asks through extract-then-enrich instead of top-k relevance (§1 item 5).
-- Latency posture mirrors the whole-doc map-reduce wave: progress notice + honest batch counts.
+## 5. Phase 3 — TableRequest parse + derived-column enrichment (v1 IMPLEMENTED, same day)
+
+As built (`services/skills/enricher.ts`):
+- **`wantsExtraColumns`** — a cheap deterministic PRE-GATE (spalte/column/subcategory/payee/… stems):
+  a plain "als CSV" turn stays the Phase-1 **0-model** short-circuit; only a column-shaped ask pays
+  the parse call. (Pinned by a zero-calls integration test.)
+- **`parseTableRequest`** — ONE grammar-constrained call (D55) turning the ask into
+  `DerivedColumn { name, description?, enumValues? }[]` (≤ 4). Validation is ALL-OR-NOTHING (the
+  D65 posture): an invalid name or one shadowing a fixed column (`Betrag`, `category`, …) rejects
+  the whole request and the turn falls back to the plain table — never a half-understood one. An
+  empty list is a valid "no extra columns" outcome.
+- **`enrichRows`** — batched (12 rows/call) per-row fill of EVERY requested column over the WHOLE
+  extracted row set (whole-statement by construction), one call filling all columns per batch.
+  Enum columns are grammar-enum-constrained (+ the `unknown` drop target); free text is
+  length-capped (60). `unknown`/invalid/dropped cells serialize as **blank** — absent, never
+  invented. Unparseable batch → one retry → blanks (the categorizer's L-1/L-2 posture, incl. the
+  runaway-output char cap).
+- **Handler wiring** (bank CSV format path): enriched turns emit an EXTENDED `TableSpec`
+  (fixed columns + category presence-gated + the derived columns) through the same fenced answer,
+  the persisted result table, and thus the message-level export; the honest
+  `derivedColumnsNote` (EN+DE) rides under the fence naming the model-filled columns. Any
+  parse/enrich fault falls back to the plain table.
+
+**DEFERRED from the original §5 scope** (consciously, tracked here):
+- **No-skill tabular routing** (§1 item 5): routing a tabular ask over an arbitrary document
+  through extract-then-enrich needs a GENERIC row extractor, which does not exist — the bank/
+  invoice extractors are domain-specific, and the A4 class-match inversion already routes most
+  statement questions to the handler in practice. Revisit when a second tabular domain lands.
+- The TableRequest parse GATES on the deterministic pre-gate rather than replacing the format
+  regexes wholesale — the regex path is not just the offline fallback but the default; the model
+  parse runs only when extra-column intent is signalled. Cheaper, and honest to D55's cost.
+- `filter`/`groupBy`/`deliverable` fields of the original TableRequest sketch: not yet parsed
+  (deliverable stays the format regex; filters stay grounded-data territory).
+- JSON-format asks are not enriched (CSV only in v1).
 
 ## 6. Risks / open questions
 
