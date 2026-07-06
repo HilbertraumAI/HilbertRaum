@@ -1,6 +1,6 @@
 # Privacy Notice — HilbertRaum
 
-_Last updated: 2026-06-20 (Image understanding — local vision analysis + encrypted, deletable history)_
+_Last updated: 2026-07-06 (Translation — on-device text + document translation by a local model)_
 
 HilbertRaum runs AI models **locally** on your laptop. This document explains, in plain
 language, what the app does and does not do with your data.
@@ -30,6 +30,9 @@ This app does not send your data to cloud AI providers.
 - **No image upload.** When you ask questions about a picture (the **Images** screen), the image is
   analyzed **on this device** by a local vision model — the bytes are never sent off-device, and no
   cloud image service is ever involved.
+- **No translation upload.** When you translate text or a whole document (the **Translate** screen),
+  the translation is produced **on this device** by a local translation model — your text and
+  documents are never sent off-device, and no cloud translation service is ever involved.
 - **No embedding upload.** Vector indexes stay local.
 - **No automatic model downloads** unless you explicitly opt in.
 
@@ -45,6 +48,8 @@ folder):
 - Chat history (conversations and messages)
 - Image-analysis history (each picture you analyze on the **Images** screen, plus its questions and
   answers, is saved so you can revisit it — stored in `workspace/images/`; deletable at any time)
+- Translated documents (a document you translate on the **Translate** screen is saved into your
+  workspace like any other document, in `workspace/documents/`)
 - Generated outputs
 - Local debug/audit logs
 - App settings
@@ -74,7 +79,8 @@ to reach a remote host while offline; local-only connections (`127.0.0.1`/`local
 The **only** thing the app can use the internet for is fetching a model file you ask for, from the
 **Models** screen. Three things must all be true before a single byte moves:
 
-1. The drive's policy permits model downloads (prepared commercial drives ship with this **off**).
+1. The drive's policy permits model downloads (drives — including prepared commercial drives —
+   ship with this **permitted** so you can add models; a drive `policy` can turn it off entirely).
 2. You left the Settings checkbox above on (it is **on** by default for a fresh install, unless the
    drive's policy disables it) — or turned it back on if you had switched it off.
 3. You confirmed that specific download in a dialog showing its size, license, and source address —
@@ -116,7 +122,8 @@ password-wrapped data key — it must be readable before you unlock, and holds n
 plaintext data).
 While the workspace is **unlocked**, a decrypted working copy of the
 database exists on disk (and a transient decrypted copy of a document or image exists briefly during
-re-indexing or when you open an image-analysis entry); these are shredded on lock/quit, and any
+re-indexing, when you open an image-analysis entry, or while a document is being translated); these
+are shredded on lock/quit, and any
 crash leftovers under `workspace/documents/` and `workspace/images/` are shredded at next startup.
 Documents imported **before** encryption support existed (or into a plaintext workspace) remain
 plaintext until re-indexed. See [`docs/security-model.md`](docs/security-model.md).
