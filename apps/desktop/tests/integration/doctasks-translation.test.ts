@@ -673,6 +673,68 @@ describe('cancellation persists nothing', () => {
   })
 })
 
+describe('lifecycle flush (TA-1: lock/quit cancel the running task AND the queue)', () => {
+  it('cancelAllDocTasks flushes the running task AND every queued task; a queued task never runs', async () => {
+    const a = await importDoc(600, 'a.txt')
+    const b = await importDoc(60, 'b.txt')
+    // Slow token delay so A is still mid-window (running) and B still queued when we flush.
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+    const first = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [a],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const second = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [b],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+
+    // Wait until A is actually running and B is still queued behind it.
+    const start = Date.now()
+    while (manager.getDocTask(first.jobId).state !== 'running' || translator.calls.length === 0) {
+      if (Date.now() - start > 5000) throw new Error('task A never started')
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(manager.getDocTask(second.jobId).state).toBe('queued')
+
+    manager.cancelAllDocTasks()
+    // B is dequeued to terminal `cancelled` SYNCHRONOUSLY — it never transitioned to `running`,
+    // so its handler (and its plaintext-decrypting translate call) never ran. This is exactly
+    // the queued-translation-into-the-lock-window respawn the flush closes.
+    expect(manager.getDocTask(second.jobId).state).toBe('cancelled')
+
+    expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
+    expect((await waitTerminal(manager, second.jobId)).state).toBe('cancelled')
+
+    // No permanent latch — the manager is fully usable again after the flush (post-unlock parity).
+    const c = await importDoc(40, 'c.txt')
+    const third = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [c],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    expect((await waitTerminal(manager, third.jobId)).state).toBe('done')
+  })
+
+  it('awaitActiveTaskSettled resolves after the running task settles, and immediately when idle', async () => {
+    const manager = makeManager({ translator: scriptedTranslator() })
+    // Idle → resolves immediately (nothing running).
+    await expect(manager.awaitActiveTaskSettled()).resolves.toBeUndefined()
+
+    const docId = await importDoc(60)
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    // The settle resolves only once the running task has reached a terminal state.
+    await manager.awaitActiveTaskSettled()
+    expect(['done', 'failed', 'cancelled']).toContain(manager.getDocTask(jobId).state)
+  })
+})
+
 describe('the Phase-32 lease (held around exactly the materialize step)', () => {
   it('acquires the lease AFTER the last window, releases it after import', async () => {
     const docId = await importDoc(600)

@@ -94,6 +94,12 @@ export class DocTaskManager {
   private queue: string[] = []
   private runningId: string | null = null
   /**
+   * The in-flight `run(task)` dispatch promise (settles when the running task reaches a
+   * terminal state), or null while idle. `awaitActiveTaskSettled()` reads it so the
+   * lock/quit lifecycle can await the running task's abort-unwind before the DB closes.
+   */
+  private runningPromise: Promise<void> | null = null
+  /**
    * The single model-slot owner for a YIELDING tree build (plan §4.1, H9/H10). Only a
    * running `tree` build registers with it; chat uses it to pause+hand-off, never to race.
    */
@@ -366,6 +372,36 @@ export class DocTaskManager {
     if (isYieldingKind(task.status.kind)) this.arbiter.abort()
   }
 
+  /**
+   * Flush the WHOLE pipeline — cancel the running task AND every queued task (TA-1 H2). The
+   * workspace-LOCK / quit paths call this instead of `cancelDocTask()`: cancelling only the
+   * ACTIVE task lets `pump()` dequeue the next queued task the moment the active one settles,
+   * and the DB is still OPEN while the lock/quit handler awaits the sidecar suspends — so a
+   * queued translation would dequeue INTO the lock window, decrypt document text to a `.parse`
+   * transient, and its retry could cold-start a fresh ~10 GB sidecar that outlives the lock.
+   * Flushing the queue closes that window. No permanent latch: `pump` is driven per
+   * `startDocTask`, so the manager is fully usable again after unlock.
+   */
+  cancelAllDocTasks(): void {
+    // Snapshot the ids first — `cancelDocTask` mutates `this.queue` as it dequeues each one.
+    const ids = [...(this.runningId ? [this.runningId] : []), ...this.queue]
+    for (const id of ids) this.cancelDocTask(id)
+  }
+
+  /**
+   * Resolve when the CURRENTLY running task's dispatch settles (immediately if idle). The
+   * lock/quit paths await this — BOUNDED by the caller — after `cancelAllDocTasks()`, so the
+   * aborted task's abort-unwind (which materializes/shreds its transient synchronously) finishes
+   * while `ctx.db` is still open, before `lock()` re-encrypts. Mirrors the in-flight-stream
+   * settle await. `run()` never rejects (it records failure/cancel internally), so a plain await
+   * is safe; the `.catch` is belt-and-braces.
+   */
+  async awaitActiveTaskSettled(): Promise<void> {
+    const p = this.runningPromise
+    if (!p) return
+    await p.catch(() => undefined)
+  }
+
   /** True while a task is running or queued — the chat-side busy guard reads this. */
   hasActiveTask(): boolean {
     return this.runningId !== null || this.queue.length > 0
@@ -399,8 +435,11 @@ export class DocTaskManager {
       return
     }
     this.runningId = next
-    void this.run(task).finally(() => {
+    // Track the dispatch promise so `awaitActiveTaskSettled()` (the lock/quit lifecycle) can
+    // wait for this task's abort-unwind before the DB closes. `run()` never rejects.
+    this.runningPromise = this.run(task).finally(() => {
       this.runningId = null
+      this.runningPromise = null
       this.pump()
     })
   }

@@ -202,13 +202,15 @@ describe('registerWorkspaceIpc', () => {
     expect(stopVision).toHaveBeenCalledTimes(1)
   })
 
-  it('lockWorkspace suspends the translator, cancels the active doc task (TG-3) AND aborts the Translate-view job (TG-4)', async () => {
+  it('lockWorkspace suspends the translator, FLUSHES the doc-task queue (TA-1 H2) AND aborts the Translate-view job (TG-4)', async () => {
     // A running TRANSLATION no longer dies with the chat runtime: left uncancelled, its
     // next window would lazily RESPAWN the suspended TranslateGemma sidecar with document
-    // plaintext while the vault re-encrypts. The lock handler must cancel the active task
-    // (any non-yielding kind) and suspend — not permanently stop — the translator. TG-4: a
-    // running Translate-VIEW job (`ctx.translateJobs`) shares the same sidecar, so it must be
-    // aborted here too (its next window would likewise respawn the just-suspended server).
+    // plaintext while the vault re-encrypts. TA-1 H2: the handler must flush the WHOLE
+    // pipeline — `cancelAllDocTasks()` (running + queued), NOT `cancelDocTask()` (active only)
+    // — because a queued translation would otherwise dequeue into the still-open lock window.
+    // It must suspend — not permanently stop — the translator, and await the running task's
+    // settle. TG-4: a running Translate-VIEW job (`ctx.translateJobs`) shares the same sidecar,
+    // so it is aborted here too (its next window would likewise respawn the suspended server).
     const vp = freshVault()
     createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
@@ -216,24 +218,71 @@ describe('registerWorkspaceIpc', () => {
     ctrl.unlock('right-password')
     const suspendTranslator = vi.fn(async () => {})
     const stopTranslator = vi.fn(async () => {})
-    const cancelDocTask = vi.fn()
+    const cancelAllDocTasks = vi.fn()
+    const awaitActiveTaskSettled = vi.fn(async () => {})
     const abortActiveBuild = vi.fn()
     const stopTranslateJobs = vi.fn(async () => {})
     const base = ctxWith(ctrl) as unknown as Record<string, unknown>
     base.translator = { suspend: suspendTranslator, stop: stopTranslator }
-    base.docTasks = { cancelDocTask, abortActiveBuild }
+    base.docTasks = { cancelAllDocTasks, awaitActiveTaskSettled, abortActiveBuild }
     base.translateJobs = { stop: stopTranslateJobs }
     registerWorkspaceIpc(base as unknown as AppContext)
 
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(abortActiveBuild).toHaveBeenCalledTimes(1)
-    expect(cancelDocTask).toHaveBeenCalledTimes(1)
+    // TA-1 H2: the whole pipeline is flushed (running + queued), and the running task's
+    // abort-unwind settle is awaited before the vault re-encrypts.
+    expect(cancelAllDocTasks).toHaveBeenCalledTimes(1)
+    expect(awaitActiveTaskSettled).toHaveBeenCalledTimes(1)
     // TG-4: the view job is aborted, and BEFORE the translator suspend (its abort loop is
     // synchronous, so a queued next window can't reach translate() after the sidecar dies).
     expect(stopTranslateJobs).toHaveBeenCalledTimes(1)
     expect(suspendTranslator).toHaveBeenCalledTimes(1)
     expect(stopTranslator).not.toHaveBeenCalled() // stop() latches permanently — lock must not
+  })
+
+  // TA-1 H2: the lock handler awaits the flushed running task's abort-unwind SETTLE (its
+  // materialize/shred runs synchronously while ctx.db is open) BEFORE the vault re-encrypts —
+  // mirroring the in-flight-stream settle. A deferred settle must block lock() until it resolves.
+  it('lockWorkspace awaits the cancelled doc-task settle before re-encrypting (TA-1 H2)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    expect(ctrl.isUnlocked()).toBe(true)
+
+    let unwind!: () => void
+    const settled = { done: false }
+    const cancelAllDocTasks = vi.fn()
+    const awaitActiveTaskSettled = vi.fn(
+      () =>
+        new Promise<void>((r) => {
+          unwind = () => {
+            settled.done = true
+            r()
+          }
+        })
+    )
+    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
+    base.docTasks = { cancelAllDocTasks, awaitActiveTaskSettled, abortActiveBuild: vi.fn() }
+    registerWorkspaceIpc(base as unknown as AppContext)
+
+    const lockP = invoke(handlers, IPC.lockWorkspace)
+    const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+    await tick()
+    await tick()
+    await tick()
+    // The task was flushed, but the DB is STILL OPEN — lock is blocked on the pending settle.
+    expect(cancelAllDocTasks).toHaveBeenCalledTimes(1)
+    expect(settled.done).toBe(false)
+    expect(ctrl.isUnlocked()).toBe(true) // reds if the settle-await is removed (DB already closed)
+
+    unwind() // the aborted task finished materializing/shredding → settle resolves
+    const { result } = await lockP
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(ctrl.isUnlocked()).toBe(false) // re-encrypted only AFTER the settle
   })
 
   it('lockWorkspace still locks when a sidecar stop fails (allSettled)', async () => {

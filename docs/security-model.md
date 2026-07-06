@@ -426,7 +426,7 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   **ids + the language pair only** (`{ jobId, source, target }`) — never the text. The renderer
   gets an error **code**, never raw model/runtime text (the `friendlyIpcError` posture).
 - **In-memory residue at lock:** `TranslateJobService.stop()` (wired to workspace lock **and**
-  quit, alongside `ctx.vision.stop()` / `ctx.docTasks.cancelDocTask()`) aborts the in-flight job
+  quit, alongside `ctx.vision.stop()` / `ctx.docTasks.cancelAllDocTasks()`) aborts the in-flight job
   **and clears the job map**, so no source/translation text survives the vault re-encrypt; the
   renderer store calls `clearTranslateSession()` on lock in lockstep. The map is bounded
   (`TRANSLATE_MAX_JOB_HISTORY`).
@@ -540,6 +540,17 @@ in-flight generations and stops BOTH sidecars (chat runtime + E5 embedder; a lla
 recent prompts in its in-memory KV cache), then locks. Unlock restarts the chat runtime in the
 background (the active-model auto-start); the embedder restarts lazily on the next embed.
 `will-quit` likewise locks (re-encrypt + shred) alongside stopping the sidecars.
+- **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
+  `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
+  not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so
+  cancelling only the running task would let the manager's `pump()` dequeue the next queued
+  translation **into the lock window**: it would decrypt document text to a `.parse` transient and
+  cold-start a fresh ~10 GB TranslateGemma sidecar that outlives the lock. (The earlier "still-queued
+  tasks fail friendly at dequeue because `getDb()` throws while locked" reasoning was false *during*
+  the handler — the DB is not yet closed.) The handler then awaits the running task's abort-unwind
+  **settle** (bounded ~5 s) before `lock()` re-encrypts, so its materialize/shred of any `.parse`
+  transient completes while the DB is still open — mirroring the in-flight-stream settle await.
+  `cancelAllDocTasks()` holds no permanent latch: the manager is fully usable again after unlock.
 
 ### Threat notes / known limitations
 - **A decrypted working copy exists on disk while unlocked.** `node:sqlite` needs a real file, so the

@@ -1546,6 +1546,31 @@ the CLAUDE.md doc-lifecycle rule; the full original is in git history. In-code c
 the plan's `§N` / `DN` / `ON` / `VN` anchors — the **§-anchor legend** at the end of this record
 keeps them resolvable (the "Functionality wave 3" precedent)._
 
+- **TA-1 — main-process lifecycle seams: quit + lock flush the whole doc-task pipeline (translation
+  audit fix wave, 2026-07-06; findings H1/H2).** Both lifecycle paths now cancel the running
+  doc-task **and the queue**, then await the running task's abort-unwind before the DB closes.
+  - **H1 (quit).** `performShutdown` (`shutdown.ts`) aborted the deep-index build + the Translate-view
+    job but never the doc-task, so on quit mid-translation `translator.stop()` killed the in-flight
+    window, retries failed fast against the `stopped` latch, and a task with an already-succeeded
+    window proceeded to `materializeDocument` **during teardown** — a half-translated plaintext
+    `.parse` transient racing the DB close. Fix: it now calls `ctx.docTasks.cancelAllDocTasks()` in
+    the same best-effort block that aborts the build (before the sidecars stop), and awaits
+    `awaitActiveTaskSettled()` (bounded ~5 s) next to the in-flight-stream settle, so the abort-unwind's
+    materialize/shred finishes while `ctx.db` is open.
+  - **H2 (lock).** `registerWorkspaceIpc` called `ctx.docTasks.cancelDocTask()` (active task only). The
+    DB stays open while the lock handler awaits the sidecar suspends, so when the cancelled task
+    settled `manager.pump()` dequeued the **next queued** translation into the lock window — decrypting
+    document text to a `.parse` transient and cold-starting a fresh ~10 GB sidecar that outlived the
+    lock (the old comment's "still-queued tasks fail friendly at dequeue" was false *during* the
+    handler). Fix: it now calls `cancelAllDocTasks()` (running + queued) and awaits
+    `awaitActiveTaskSettled()` before purge/lock, mirroring the stream-settle treatment.
+  - **New manager seams.** `DocTaskManager.cancelAllDocTasks()` walks the running id + a queue snapshot
+    and reuses the per-id `cancelDocTask` (each queued task → terminal `cancelled`, dequeued
+    synchronously — a queued task never reaches `running`), holding **no permanent latch** (`pump` is
+    driven per `startDocTask`, so the manager is usable again after unlock). `awaitActiveTaskSettled()`
+    exposes the tracked `run(task)` dispatch promise (resolves immediately when idle); the callers bound
+    it with a ~5 s `Promise.race` timeout so a wedged handler can never hang quit/lock.
+
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
   (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
   state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A

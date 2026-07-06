@@ -50,6 +50,35 @@ function attachLogKey(ctx: AppContext): void {
   }
 }
 
+/** Upper bound on how long the lock handler waits for a cancelled doc-task to unwind (TA-1). */
+const LOCK_TASK_SETTLE_TIMEOUT_MS = 5_000
+
+/**
+ * Await the currently-running doc-task's abort-unwind, bounded by a timeout so a wedged handler
+ * cannot hang "Lock now" (TA-1 H2). The manager persists/shreds its transient synchronously
+ * during the unwind while `ctx.db` is open, so this runs before the DB closes. Best-effort.
+ */
+async function awaitActiveDocTaskSettled(ctx: AppContext): Promise<void> {
+  let settle: Promise<void> | undefined
+  try {
+    settle = ctx.docTasks?.awaitActiveTaskSettled?.()
+  } catch (err) {
+    log.error('Error awaiting doc-task settle on lock', String(err))
+    return
+  }
+  if (!settle) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, LOCK_TASK_SETTLE_TIMEOUT_MS)
+    timer.unref()
+  })
+  try {
+    await Promise.race([settle.catch(() => undefined), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
 
@@ -227,13 +256,19 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // while the vault re-encrypts (plan §4.1 M9). Aborts the build's controller AND rejects
     // any parked arbiter reacquire; the tree is left `building` for reconcileStuckTrees.
     ctx.docTasks?.abortActiveBuild()
-    // And the active NON-yielding task (TG-3): a running TRANSLATION no longer dies with the
-    // chat runtime below — left running, its next window would lazily RESPAWN the suspended
-    // TranslateGemma sidecar with document plaintext while the vault re-encrypts. Cancel it
-    // (cancel persists nothing); a running summary/compare gets a clean `cancelled` too
-    // instead of failing against the stopped chat runtime. Still-queued tasks fail friendly
-    // at dequeue (`getDb()` throws while locked).
-    ctx.docTasks?.cancelDocTask()
+    // And ALL doc tasks (TG-3 → TA-1 H2): a running TRANSLATION no longer dies with the chat
+    // runtime below — left running, its next window would lazily RESPAWN the suspended
+    // TranslateGemma sidecar with document plaintext while the vault re-encrypts. Cancel the
+    // running task (cancel persists nothing; a running summary/compare gets a clean `cancelled`
+    // too instead of failing against the stopped chat runtime) AND flush the QUEUE. The old
+    // `cancelDocTask()` cancelled only the ACTIVE task, and the safety claim that "still-queued
+    // tasks fail friendly at dequeue (`getDb()` throws while locked)" was FALSE during THIS
+    // handler: the DB stays OPEN while we await the sidecar suspends below, so when the cancelled
+    // task settled `pump()` would dequeue the next queued translation INTO the lock window —
+    // decrypting document text to a `.parse` transient and cold-starting a fresh ~10 GB sidecar
+    // that outlives the lock. `cancelAllDocTasks()` closes that window; no permanent latch (the
+    // manager is usable again after unlock).
+    ctx.docTasks?.cancelAllDocTasks()
     // And the active TRANSLATE-VIEW job (TG-4): abort it BEFORE the translator suspend below —
     // left running, its next window would call translate() and lazily RESPAWN the just-suspended
     // ~10 GB sidecar with the source text while the vault re-encrypts. stop() also purges the job
@@ -272,6 +307,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // the sidecar stop so a generation that ignores its abort signal is still unwound by the
     // dead sidecar (no teardown stall). Best-effort (`allSettled`).
     await awaitInFlightStreamsSettled()
+    // TA-1 H2: also await the cancelled doc-task's abort-unwind (its materialize/shred runs
+    // synchronously while ctx.db is open) before purge/lock close the DB — bounded so a wedged
+    // handler can't hang the lock. Mirrors the in-flight-stream settle await above.
+    await awaitActiveDocTaskSettled(ctx)
     // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
     // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text
     // they must not linger after the vault re-encrypts. The staleness signature does NOT cover
