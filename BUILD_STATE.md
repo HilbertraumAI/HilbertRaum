@@ -20,7 +20,16 @@ streamed in yet is completed to closed `$$…$$` by a custom **remend handler** 
 runs per flush, streaming mode only). Its **priority 10 is load-bearing**: remend's built-in links completion
 (priority 20) treats a dangling `\[ …` tail as an incomplete LINK and EARLY-RETURNS the pipeline — any
 later-priority handler never runs. Persisted turns render static (no remend), so a prose `\[` that never
-closes self-heals to literal. +5 tests (streaming display/inline tails, fence-guard, static-literal)._
+closes self-heals to literal. +5 tests (streaming display/inline tails, fence-guard, static-literal).
+**Follow-up 2: partial TeX is completed + KaTeX-VALIDATED before typesetting.** A mid-group partial (field
+report: the chudnovsky series cut inside `\frac{…`) is not valid TeX — naive completion made rehype-katex
+fall back to raw error text. `completePartialTex` cuts a half-streamed macro/dangling `^`/`_`, closes
+unbalanced brace groups, tries an appended `{}` (a `\frac{X}` awaiting its denominator renders X over an
+empty box, progressively), then validates with `katex.renderToString({throwOnError:true})` — only TeX that
+parses is emitted; an unsalvageable partial (e.g. `\left(` before `\right`) is HELD BACK that flush.
+Research'd first: remend's own katex built-in just counts `$$` pairs and appends (no balancing/validation —
+same flaw upstream for native `$$`); no npm module does partial-TeX completion, so KaTeX itself is the
+validator (already in the bundle via rehype-katex; direct import adds no weight). +2 tests._
 
 _2026-07-06 — **PR review round: rebase onto master + both blockers fixed + scope split (branch `mkg2`).**
 The Streamdown/Retry-all/deep-index PR was rebased onto current master (post-#15/#16/#17/#18 + the TA/FA

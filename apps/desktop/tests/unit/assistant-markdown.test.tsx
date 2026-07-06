@@ -125,6 +125,33 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.querySelector('.katex')).toBeNull()
   })
 
+  it('STREAMING: a tail with an UNCLOSED BRACE GROUP still typesets (balanced + validated)', () => {
+    // Field report (chudnovsky series mid-stream): the partial ends inside \frac{…'s first
+    // group, so naive completion hands KaTeX invalid TeX → raw error text. The handler now
+    // balances braces, appends a pending empty group where needed, and validates with KaTeX
+    // before emitting $$.
+    const { container } = render(
+      <AssistantMarkdown
+        text={'\\[ \\frac{1}{\\pi} = 12 \\sum_{k=0}^{\\infty} \\frac{(-1)^k (6k)! (13591409 + 5451401'}
+        streaming
+      />
+    )
+    expect(container.querySelector('.katex-display'), 'balanced partial should typeset').not.toBeNull()
+    expect(container.querySelector('.katex-error'), 'must not render as a KaTeX error').toBeNull()
+  })
+
+  it('STREAMING: an unsalvageable partial is HIDDEN, not shown as raw TeX or an error', () => {
+    // \left( with no \right cannot be balanced by brace-closing — hold the math back this
+    // flush instead of flashing raw TeX; it appears once enough streams in to parse.
+    const { container } = render(
+      <AssistantMarkdown text={'so:\n\n\\[ \\left( x + 1'} streaming />
+    )
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.querySelector('.katex-error')).toBeNull()
+    expect(container.textContent).not.toContain('\\left')
+    expect(container.textContent).toContain('so:')
+  })
+
   it('STATIC: an unclosed \\[ stays literal (no remend on persisted turns — self-healing)', () => {
     // A prose bracket that never closes would render as math only while streaming; the
     // persisted re-render (static mode, no remend) shows it literally again.

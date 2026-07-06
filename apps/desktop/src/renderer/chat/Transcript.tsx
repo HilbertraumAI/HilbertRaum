@@ -1,6 +1,9 @@
 import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Streamdown, defaultRehypePlugins } from 'streamdown'
 import { math } from '@streamdown/math'
+// katex is already in the bundle via @streamdown/math → rehype-katex; imported directly only
+// to VALIDATE partially-streamed TeX before typesetting it (completePartialTex below).
+import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import type { ConversationSummaryMarker, Message } from '@shared/types'
 import { MessageActions } from './MessageActions'
@@ -538,13 +541,49 @@ function normalizeMathDelimiters(text: string): string {
   return parts.join('')
 }
 
+// A partially-streamed TeX expression usually is NOT valid TeX (a `\frac{…` cut mid-group
+// throws, and rehype-katex then falls back to raw error text — worse than showing nothing).
+// Complete it: cut a half-streamed macro name / dangling `^`/`_`, close unbalanced brace
+// groups, and if the result still lacks a pending argument group (e.g. `\frac{X}` awaiting
+// its denominator) try an appended `{}` — then VALIDATE with KaTeX itself (already in the
+// bundle via rehype-katex) and only emit TeX that actually parses. Returns null when the
+// partial is unsalvageable this flush (e.g. `\left(` before its `\right` arrives) — the
+// caller then hides the math tail instead of flashing raw TeX; it appears once parseable.
+function completePartialTex(tex: string): string | null {
+  let t = tex
+    .replace(/\\[a-zA-Z]*$/, '') // half-streamed macro name (`\fra`) or lone trailing `\`
+    .replace(/[\^_]\s*$/, '') // trailing sub/superscript operator awaiting its argument
+    .trimEnd()
+  let depth = 0
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (c === '\\') {
+      i++ // skip the escaped char — `\{` is not a group open
+    } else if (c === '{') {
+      depth++
+    } else if (c === '}' && depth > 0) {
+      depth--
+    }
+  }
+  t += '}'.repeat(depth)
+  if (t.trim() === '') return null
+  for (const candidate of [t, `${t}{}`]) {
+    try {
+      katex.renderToString(candidate, { throwOnError: true })
+      return candidate
+    } catch {
+      // try the next candidate / fall through to null
+    }
+  }
+  return null
+}
+
 // Streaming companion to `normalizeMathDelimiters`: mid-stream, a trailing `\[ …` / `\( …`
 // whose CLOSING delimiter hasn't arrived yet can't be claimed by the whole-text pass, so the
-// raw TeX would flash until the close streams in. Streamdown's `remend` hook runs custom
+// raw TeX would flash until the close streamed in. Streamdown's `remend` hook runs custom
 // handlers over the buffer on every flush (streaming mode only, before block-splitting) —
-// complete the dangling opener to a CLOSED `$$…$$` there, so KaTeX typesets the formula
-// progressively (an invalid partial expression renders as muted raw TeX via rehype-katex's
-// errorColor — the same behavior remend's built-in katex handler gives an unclosed `$$`).
+// complete the dangling opener to a CLOSED `$$…$$` there (via `completePartialTex`, so only
+// TeX that actually parses is typeset; an unsalvageable partial is held back this flush).
 // A prose `\[` that never closes shows as math only WHILE streaming; the persisted turn
 // re-renders static (no remend) through the whole-text pass and is literal again.
 function completeTrailingBracketMath(text: string): string {
@@ -563,9 +602,15 @@ function completeTrailingBracketMath(text: string): string {
   if (tail.indexOf(isBlock ? '\\]' : '\\)', open) !== -1) return text // actually closed
   const inner = tail.slice(open + 2)
   if (inner.trim() === '') return text // just the opener so far — nothing to typeset yet
+  const fixed = completePartialTex(inner)
+  // Not (yet) parseable even after completion → hide the math tail this flush rather than
+  // flash raw TeX / a KaTeX error box; a later flush with more tokens will pick it up.
+  if (fixed === null) {
+    parts[last] = tail.slice(0, open)
+    return parts.join('')
+  }
   const blockShaped = isBlock && /(^|\n)[ \t]*$/.test(tail.slice(0, open))
-  parts[last] =
-    tail.slice(0, open) + (blockShaped ? `$$\n${inner.trim()}\n$$` : `$$${inner}$$`)
+  parts[last] = tail.slice(0, open) + (blockShaped ? `$$\n${fixed}\n$$` : `$$${fixed}$$`)
   return parts.join('')
 }
 
