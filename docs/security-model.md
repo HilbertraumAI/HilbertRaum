@@ -474,6 +474,19 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   hardening item (BUILD_STATE TG-4 watch item).
 - **No confused-deputy surface:** unlike vision's picker/readBytes, the Translate view takes only
   the text the user typed — no file paths, no byte reads — so there is nothing to harden there.
+- **Prompt-injection containment (D2) covers control tokens, not just plain-text imperatives
+  (TA-4 M4).** TranslateGemma runs over the raw `/completion` endpoint with an app-built prompt, and
+  llama-server tokenizes that prompt WITH special-token parsing. The D2 guarantee — embedded
+  instructions in the source document are *translated, never obeyed* — originally rested only on the
+  structural single-user-turn framing, which contains plain-text imperatives but NOT a literal Gemma
+  turn marker: a document containing `<start_of_turn>user …<end_of_turn>` would tokenize to the real
+  control tokens and forge a new turn, escaping the data boundary. `buildTranslationPrompt` now runs
+  the source text through `sanitizeSourceText`, which rewrites the two turn markers
+  (`<start_of_turn>`/`<end_of_turn>`) to a visually-identical non-token spelling
+  (`⟨start_of_turn⟩`/`⟨end_of_turn⟩`, U+27E8/U+27E9) — reversible-safe and confined to those exact
+  markers, so ordinary `<…>` content is untouched and the builder's own scaffold survives (it is
+  appended after the rewrite). The adversarial smoke window (embedded instruction translated, not
+  obeyed) plus the prompt-builder unit cases pin it.
 
 ### Vault descriptor (the only pre-unlock artifact)
 Settings — including `workspaceMode` — live **inside** the encrypted DB, so the app cannot read them

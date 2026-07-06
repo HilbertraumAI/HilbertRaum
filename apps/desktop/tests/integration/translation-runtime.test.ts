@@ -220,6 +220,18 @@ describe('TranslationRuntime — launch + translate', () => {
     await expect(rt.translate(translateOpts)).rejects.toThrow(/Translation request failed: context size exceeded/)
     await rt.stop()
   })
+
+  it('rejects retryably when the /completion stream ends without the terminal stop frame (TA-4 M2)', async () => {
+    const { spawn } = fakeSpawn()
+    // Content frames but NO `stop:true` terminal — a server-side close mid-decode. Pre-TA-4 this
+    // resolved the partial as a truncated "success"; now the reader throws so both consumers retry/fail.
+    const truncated =
+      'data: {"content":"Good ","stop":false}\n\n' + 'data: {"content":"day.","stop":false}\n\n'
+    const { fetchImpl } = translationFetch(truncated)
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    await expect(rt.translate(translateOpts)).rejects.toThrow(/stream ended before the terminal stop frame/)
+    await rt.stop()
+  })
 })
 
 // The idle-teardown interlock (vision RUNTIME-4 pattern) + the reranker stop()/suspend() split.

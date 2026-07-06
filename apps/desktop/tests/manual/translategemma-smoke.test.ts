@@ -59,6 +59,13 @@ import {
 //
 // EXIT: if the pin fails (#20305-adjacent /completion breakage, or #22908-style silent no-output),
 // STOP and re-plan — do NOT proceed to TG-3 (plan §5).
+//
+// TA-4 TODO (next smoke run, needs drive access — NOT blocking TA-4): confirm the pin's ACTUAL
+// mid-stream error framing on `/completion`. `parseCompletionLine` now handles BOTH a `data:` frame
+// with an `error` object AND a bare `error:` SSE field line (M3, added defensively without the pin
+// to observe). Force an error (e.g. an over-context request) against the running b9849 server, dump
+// the raw stream bytes, and pin which shape it actually emits so the reader's error path is
+// pin-verified rather than defensive.
 
 const ROOT = process.env.HILBERTRAUM_TRANSLATEGEMMA_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)

@@ -59,6 +59,29 @@ export interface TranslationPromptInput {
   text: string
 }
 
+/**
+ * The two Gemma-3 turn-boundary control tokens. llama-server tokenizes the raw `/completion`
+ * prompt WITH special-token parsing, so a literal `<start_of_turn>`/`<end_of_turn>` inside the
+ * source DOCUMENT would tokenize to the real control token and forge a turn boundary — letting
+ * embedded text escape the "translated, never obeyed" boundary the D2 guarantee only extended to
+ * plain-text imperatives (TA-4 M4).
+ */
+const GEMMA_TURN_MARKER_RE = /<(start_of_turn|end_of_turn)>/g
+
+/**
+ * Neutralize the Gemma turn markers in source text so they cannot forge a turn boundary (M4).
+ *
+ * We rewrite `<start_of_turn>`/`<end_of_turn>` to a visually-identical spelling using mathematical
+ * angle brackets (U+27E8 ⟨ / U+27E9 ⟩) — chosen because it (a) tokenizes as ordinary text, never a
+ * special token, (b) is reversible-safe and human-legible so translation fidelity is preserved (the
+ * translated form of a control marker is best-effort regardless — it is not natural-language
+ * content), and (c) touches ONLY these exact two markers, leaving ordinary `<…>` content (HTML,
+ * code) untouched. The prompt's own scaffold markers are added AFTER this rewrite, so they survive.
+ */
+export function sanitizeSourceText(text: string): string {
+  return text.replace(GEMMA_TURN_MARKER_RE, '⟨$1⟩')
+}
+
 /** Guard: TranslateGemma needs a real source/target language, so an unknown code is a bug. */
 function langName(code: TranslationLangCode): string {
   const name = TRANSLATION_ENGLISH_NAMES[code]
@@ -82,16 +105,19 @@ function langName(code: TranslationLangCode): string {
  * The source text is interpolated as DATA. Any imperative sentences inside `{TEXT}` are part of the
  * document to translate, NOT instructions to the model — so there is deliberately no "part n of m"
  * scaffolding (plan §2 D2); the adversarial smoke window asserts embedded instructions are
- * translated, not obeyed.
+ * translated, not obeyed. The text is first run through `sanitizeSourceText` so an embedded literal
+ * Gemma turn marker cannot forge a turn boundary (TA-4 M4) — plain-text imperatives were already
+ * safe, this closes the control-token escape.
  */
 export function buildTranslationPrompt({ sourceLang, targetLang, text }: TranslationPromptInput): string {
   const src = langName(sourceLang)
   const tgt = langName(targetLang)
+  const safeText = sanitizeSourceText(text)
   const instruction =
     `You are a professional ${src} (${sourceLang}) to ${tgt} (${targetLang}) translator. ` +
     `Your goal is to accurately convey the meaning and nuances of the original ${src} text ` +
     `while adhering to ${tgt} grammar, vocabulary, and cultural sensitivities. ` +
     `Produce only the ${tgt} translation, without any additional explanations or commentary. ` +
     `Please translate the following ${src} text into ${tgt}:`
-  return `<start_of_turn>user\n${instruction}\n\n\n${text}<end_of_turn>\n<start_of_turn>model\n`
+  return `<start_of_turn>user\n${instruction}\n\n\n${safeText}<end_of_turn>\n<start_of_turn>model\n`
 }

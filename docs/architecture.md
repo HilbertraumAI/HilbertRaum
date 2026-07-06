@@ -1594,6 +1594,41 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
   that returned after unlock stuck `translating` (main's `jobs.stop()` emits no `trError`, and
   `adoptActiveJob` early-returned on the still-set `activeJobId`) is now reset by the purge.
 
+- **TA-4 — SSE reader terminal-frame + error-field handling, control-token sanitization (translation
+  audit fix wave, 2026-07-06; findings M2/M3/M4/L1/L4).** The raw `/completion` reader
+  (`services/translation/completion.ts`) + prompt builder (`prompt.ts`) were hardened against silent
+  truncation and control-token forgery.
+  - **M2 (sawFinal).** `readCompletionSSE` treated reader `done` with no terminal `stop:true` frame
+    as normal termination, so a server-side close mid-decode resolved the accumulated partial as a
+    truncated "success" (the view emitted `trDone` with cut text; the doc-task materialized a
+    truncated document). It now tracks `sawFinal` and, if the stream ends without it **and the caller
+    did not abort**, throws `IncompleteStreamError` (a `CompletionError` subtype — deliberately NOT an
+    `AbortError`, so both consumers hit their existing retry/fail paths: the view job → `runtimeFailed`,
+    the doc-task `translateWithRetry` → retry-then-fail).
+  - **M3 (error-field).** `parseCompletionLine` handled only `data:` lines; llama.cpp can emit a
+    mid-stream failure as a bare `error: {…}` SSE **field** line (compounding M2's silent-truncation
+    shape). It now recognizes `error:`-prefixed lines (nested `{error:{…}}` or a bare payload) and maps
+    them to `CompletionError`; even an unparseable error field is surfaced, never swallowed. The real
+    pin's error framing is a manual-smoke TODO (needs drive access — not gating).
+  - **M4 (control-token sanitization).** `buildTranslationPrompt` interpolated source text raw, and
+    llama-server tokenizes `/completion` prompts WITH special-token parsing — a document containing a
+    literal `<start_of_turn>`/`<end_of_turn>` forged a turn boundary (the D2 "translated, never obeyed"
+    guarantee only covered plain-text imperatives). `sanitizeSourceText` now rewrites the two Gemma turn
+    markers to a visually-identical, non-token spelling using mathematical angle brackets
+    (`⟨start_of_turn⟩`/`⟨end_of_turn⟩` — U+27E8/U+27E9): reversible-safe, human-legible, and confined to
+    those exact markers so ordinary `<…>` content is untouched. The builder's own scaffold markers are
+    appended AFTER the rewrite, so they survive.
+  - **L1 (abort throws).** An abort between token deliveries used to end the generator cleanly, letting
+    `translate()` resolve partial output (violating the "resolves with the full text" contract; latent
+    because both consumers re-check the signal). The reader now throws the abort reason instead of
+    returning, matching what an in-`read()` abort already throws.
+  - **L4 (garbled-frame counter).** The reader's parse-failure branch only ever swallows a genuinely
+    garbled COMPLETE frame (the `\n`-splitter feeds whole lines, so it is never a partial). It now counts
+    such frames and logs a single content-free `log.warn('translation SSE: dropped unparseable frame',
+    { count })` per stream (the count only, never the frame text — privacy rule). New
+    `tests/unit/translation-completion.test.ts` drives the reader directly (scripted `ReadableStream`:
+    mid-line splits, CRLF, no-trailing-newline flush, terminal→`onFinal`, both error shapes, M2/L1/L4).
+
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
   (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
   state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A
