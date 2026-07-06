@@ -117,10 +117,15 @@ npm run package:win    # build + a Windows portable .exe specifically
 Key config points:
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
   (`electron` is pinned `^37`). A downgraded/stripped runtime would lose it — do not downgrade.
+  Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
+  electron-builder 26 cannot auto-detect it from `apps/desktop` — so `electron-builder.yml` pins
+  **`electronVersion`** explicitly (keep it in sync with the `electron` devDependency when bumping).
 - **Production `dependencies` ship inside `app.asar`** (`pdfjs-dist` / `mammoth` / `papaparse` /
   `yaml` / `@noble/hashes`), so the `require()`s in the parsers, manifest loader, and the vault KDF
-  resolve at runtime. `electron-builder.yml` sets `includeSubNodeModules: true` (so hoisted/nested
-  trees — e.g. mammoth's transitive deps — are collected) and `npmRebuild: false` (no native addons).
+  resolve at runtime. electron-builder 26's collector follows **hoisted/nested** `node_modules` trees
+  (e.g. mammoth's transitive deps) **by default** — the old `includeSubNodeModules: true` option was
+  removed in eb 26 (it now errors as an unknown property) and is no longer needed. `npmRebuild: false`
+  (no native addons).
   **These are externalized, so a missing one only fails at RUNTIME, not in the green gate — after
   packaging, smoke-test importing a PDF, a DOCX, and a CSV, AND creating/unlocking an encrypted
   workspace (exercises `@noble/hashes` argon2id), from the produced `.exe`.**
