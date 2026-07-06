@@ -46,6 +46,51 @@ files:
   # the pure-JS / cross-OS portable posture (a Windows .node on a macOS/Linux drive).
   # Exclude every platform variant. tests/integration/packaging.test.ts asserts this stays.
   - '!**/node_modules/@napi-rs/canvas*/**'
+  # streamdown hard-depends on mermaid (~136 MB unpacked with its cytoscape/d3/dagre/roughjs
+  # chain), but the @streamdown/mermaid plugin is NOT installed, so none of it is ever imported —
+  # Vite keeps it out of the renderer bundle, yet electron-builder would fold the whole chain into
+  # app.asar (production deps). Dead weight on a runs-from-a-USB-drive artifact. Every negation
+  # below is a package reachable in the apps/desktop production dependency graph ONLY via mermaid;
+  # tests/integration/packaging.test.ts recomputes that from package-lock.json and fails if a
+  # future dep starts needing one of these (remove that negation then) or if mermaid stops being
+  # excluded. If the mermaid plugin is ever adopted, delete this block and its test.
+  - '!**/node_modules/mermaid/**'
+  - '!**/node_modules/@mermaid-js/**'
+  - '!**/node_modules/cytoscape*/**'
+  - '!**/node_modules/cose-base/**'
+  - '!**/node_modules/layout-base/**'
+  - '!**/node_modules/d3/**'
+  - '!**/node_modules/d3-*/**'
+  - '!**/node_modules/@types/d3*/**'
+  - '!**/node_modules/@types/geojson/**'
+  - '!**/node_modules/@types/trusted-types/**'
+  - '!**/node_modules/delaunator/**'
+  - '!**/node_modules/robust-predicates/**'
+  - '!**/node_modules/internmap/**'
+  - '!**/node_modules/dagre-d3-es/**'
+  - '!**/node_modules/roughjs/**'
+  - '!**/node_modules/hachure-fill/**'
+  - '!**/node_modules/path-data-parser/**'
+  - '!**/node_modules/points-on-curve/**'
+  - '!**/node_modules/points-on-path/**'
+  - '!**/node_modules/khroma/**'
+  - '!**/node_modules/dompurify/**'
+  - '!**/node_modules/es-toolkit/**'
+  - '!**/node_modules/dayjs/**'
+  - '!**/node_modules/lodash-es/**'
+  - '!**/node_modules/uuid/**'
+  - '!**/node_modules/stylis/**'
+  - '!**/node_modules/ts-dedent/**'
+  - '!**/node_modules/rw/**'
+  - '!**/node_modules/iconv-lite/**'
+  - '!**/node_modules/safer-buffer/**'
+  - '!**/node_modules/import-meta-resolve/**'
+  - '!**/node_modules/package-manager-detector/**'
+  - '!**/node_modules/@braintree/**'
+  - '!**/node_modules/@iconify/**'
+  - '!**/node_modules/@antfu/**'
+  - '!**/node_modules/@chevrotain/**'
+  - '!**/node_modules/@upsetjs/**'
 # NOTE: `includeSubNodeModules: true` was REMOVED in electron-builder 26 (it now errors as an
 # unknown property). v26's reworked dependency collector already follows hoisted/nested
 # node_modules trees by default, so mammoth's transitive deps still come along. If a hoisted
