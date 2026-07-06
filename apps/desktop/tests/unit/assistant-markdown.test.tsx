@@ -104,6 +104,34 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.textContent).toContain('$5 and $10')
   })
 
+  it('STREAMING: an unclosed trailing \\[ … typesets progressively (remend handler)', () => {
+    // Mid-stream the closing \] has not arrived yet, so the whole-text normalization cannot
+    // claim it — the custom remend handler completes the tail to closed $$ each flush.
+    const { container } = render(
+      <AssistantMarkdown text={'The series:\n\n\\[ \\pi = 4 \\sum_{k=0}^{\\infty}'} streaming />
+    )
+    expect(container.querySelector('.katex'), 'unclosed \\[ tail should typeset').not.toBeNull()
+    expect(container.querySelector('.katex-display'), 'own-line \\[ tail is DISPLAY math').not.toBeNull()
+  })
+
+  it('STREAMING: an unclosed trailing \\( … typesets inline', () => {
+    const { container } = render(<AssistantMarkdown text={'Einstein: \\( E = mc^2'} streaming />)
+    expect(container.querySelector('.katex')).not.toBeNull()
+    expect(container.querySelector('.katex-display')).toBeNull()
+  })
+
+  it('STREAMING: an unclosed \\[ inside a code fence stays verbatim', () => {
+    const { container } = render(<AssistantMarkdown text={'```\n\\[ \\pi'} streaming />)
+    expect(container.querySelector('.katex')).toBeNull()
+  })
+
+  it('STATIC: an unclosed \\[ stays literal (no remend on persisted turns — self-healing)', () => {
+    // A prose bracket that never closes would render as math only while streaming; the
+    // persisted re-render (static mode, no remend) shows it literally again.
+    const { container } = render(<AssistantMarkdown text={'see \\[ this never closes'} />)
+    expect(container.querySelector('.katex')).toBeNull()
+  })
+
   it('the installed katex package is a single, deduped version', async () => {
     // Filesystem walk mirroring node resolution (@streamdown/math and rehype-katex are
     // ESM-only, so require.resolve cannot chain through them). The CSS/fonts come from the

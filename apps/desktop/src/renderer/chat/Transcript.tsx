@@ -515,10 +515,14 @@ const mdPlugins = { math }
 // unclosed `\[ …` mid-stream stays literal until its `\]` arrives, then converts on that flush.
 // ponytail: regex-over-segments, not a markdown AST walk — revisit only if a real transcript
 // shows a false positive (e.g. prose containing a literal backslash-bracket pair).
+// Capturing split: even indices are prose, odd indices are code (fences first, then spans).
+// An UNCLOSED trailing fence swallows to end-of-text as a code part, so a streaming buffer
+// that currently ends inside a fence lands on an odd index and is left alone.
+const CODE_SPLIT_RE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/
+
 function normalizeMathDelimiters(text: string): string {
   if (!text.includes('\\[') && !text.includes('\\(')) return text
-  // Capturing split: even indices are prose, odd indices are code (fences first, then spans).
-  const parts = text.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/)
+  const parts = text.split(CODE_SPLIT_RE)
   for (let i = 0; i < parts.length; i += 2) {
     parts[i] = parts[i]!
       // Line-anchored \[ … \] first: micromark's DISPLAY (flow) math needs `$$` on its own
@@ -532,6 +536,46 @@ function normalizeMathDelimiters(text: string): string {
       .replace(/\\\(([\s\S]+?)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
   }
   return parts.join('')
+}
+
+// Streaming companion to `normalizeMathDelimiters`: mid-stream, a trailing `\[ …` / `\( …`
+// whose CLOSING delimiter hasn't arrived yet can't be claimed by the whole-text pass, so the
+// raw TeX would flash until the close streams in. Streamdown's `remend` hook runs custom
+// handlers over the buffer on every flush (streaming mode only, before block-splitting) —
+// complete the dangling opener to a CLOSED `$$…$$` there, so KaTeX typesets the formula
+// progressively (an invalid partial expression renders as muted raw TeX via rehype-katex's
+// errorColor — the same behavior remend's built-in katex handler gives an unclosed `$$`).
+// A prose `\[` that never closes shows as math only WHILE streaming; the persisted turn
+// re-renders static (no remend) through the whole-text pass and is literal again.
+function completeTrailingBracketMath(text: string): string {
+  if (!text.includes('\\[') && !text.includes('\\(')) return text
+  const parts = text.split(CODE_SPLIT_RE)
+  const last = parts.length - 1
+  if (last % 2 === 1) return text // the buffer currently ends inside code — leave it alone
+  const tail = parts[last]!
+  // The LAST opener in the trailing prose segment; a closed pair was already converted to $$
+  // by normalizeMathDelimiters, so anything still bracket-form here is the dangling tail.
+  const b = tail.lastIndexOf('\\[')
+  const p = tail.lastIndexOf('\\(')
+  const open = Math.max(b, p)
+  if (open === -1) return text
+  const isBlock = open === b
+  if (tail.indexOf(isBlock ? '\\]' : '\\)', open) !== -1) return text // actually closed
+  const inner = tail.slice(open + 2)
+  if (inner.trim() === '') return text // just the opener so far — nothing to typeset yet
+  const blockShaped = isBlock && /(^|\n)[ \t]*$/.test(tail.slice(0, open))
+  parts[last] =
+    tail.slice(0, open) + (blockShaped ? `$$\n${inner.trim()}\n$$` : `$$${inner}$$`)
+  return parts.join('')
+}
+
+// Module-level (stable reference for Streamdown's memoization). Priority 10 puts the handler
+// BEFORE remend's built-in links completion (20) — that handler treats a dangling `\[ …` tail
+// as an incomplete LINK, completes it to `](streamdown:incomplete-link)`, and EARLY-RETURNS
+// the whole pipeline, so at any later priority we would never run. Converting first also means
+// links sees no unclosed `[` and the katex built-in (70) sees our `$$` already balanced.
+const mdRemend = {
+  handlers: [{ name: 'latex-bracket-math', priority: 10, handle: completeTrailingBracketMath }]
 }
 
 // Pare Streamdown's default rehype chain (raw → sanitize → harden) down to just `sanitize`:
@@ -591,6 +635,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
     <Streamdown
       mode={streaming ? 'streaming' : 'static'}
       parseIncompleteMarkdown={streaming}
+      remend={mdRemend}
       plugins={mdPlugins}
       rehypePlugins={mdRehypePlugins}
       controls={false}
