@@ -8,8 +8,11 @@ import {
   type AppStatus,
   type DownloadJob,
   type ModelInfo,
-  type PolicyStatus
+  type PolicyStatus,
+  type RuntimeStatus
 } from '../../src/shared/types'
+import { t } from '../../src/shared/i18n'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { stubApi } from '../helpers/renderer'
 
 // Phase 18 — the Models screen download surface: the gate states (why downloads are
@@ -331,11 +334,14 @@ describe('ModelsScreen — de-jargoned + tidy per-card buttons (§3/§7)', () =>
     expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument()
   })
 
-  it('shows "Select" once the model is downloaded (installed)', async () => {
+  it('shows the merged "Use this model" action once the model is downloaded (installed)', async () => {
+    // Beta #27 (D70): Select + Start runtime collapsed into ONE primary action.
     stub({ models: [model({ state: 'installed' })] })
     render(<ModelsScreen />)
     await screen.findByText('Qwen3 4B Instruct')
-    expect(screen.getByRole('button', { name: /^select$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('en', 'models.use') })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start runtime/i })).not.toBeInTheDocument()
   })
 
   it('labels the demo affordance "Try in demo mode" — no "mock runtime" jargon', async () => {
@@ -346,6 +352,98 @@ describe('ModelsScreen — de-jargoned + tidy per-card buttons (§3/§7)', () =>
     await screen.findByText('Qwen3 4B Instruct')
     expect(screen.getByRole('button', { name: 'Try in demo mode' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /mock runtime/i })).not.toBeInTheDocument()
+  })
+})
+
+// Beta #27 (D70): a first-time user faced a "Select" AND a "Start runtime" button per installed
+// chat model and couldn't tell which led to chatting. They collapse into ONE primary "Use this
+// model" action (select + start via the useModel IPC). Stop / Starting… / the demo card stay.
+describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)', () => {
+  function startingStatus(modelId: string): RuntimeStatus {
+    return { running: false, modelId: null, startingModelId: modelId, port: null, healthy: false, message: '' }
+  }
+
+  it('shows exactly ONE primary "Use this model" action per installed card — no Select / Start runtime', async () => {
+    stub({ models: [model({ state: 'installed' })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.getByRole('button', { name: t('en', 'models.use') })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start runtime/i })).not.toBeInTheDocument()
+  })
+
+  it('the action calls window.api.useModel (select + start in one) and is enabled for an installed model', async () => {
+    const useModel = vi.fn(async () => ({ running: true }) as RuntimeStatus)
+    stub({ models: [model({ state: 'installed' })] })
+    ;(window.api as unknown as { useModel: typeof useModel }).useModel = useModel
+    const user = userEvent.setup()
+    render(<ModelsScreen />)
+    const btn = await screen.findByRole('button', { name: t('en', 'models.use') })
+    expect(btn).toBeEnabled()
+    await user.click(btn)
+    expect(useModel).toHaveBeenCalledWith('qwen3-4b-instruct-q4')
+  })
+
+  it('disables the action while this machine has too little RAM', async () => {
+    stub({ models: [model({ state: 'installed', insufficientRam: true })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.getByRole('button', { name: t('en', 'models.use') })).toBeDisabled()
+  })
+
+  it('shows the disabled Starting… spinner for the in-flight model instead of the action', async () => {
+    stub({ models: [model({ state: 'installed' })] })
+    ;(window.api as unknown as { getRuntimeStatus: () => Promise<RuntimeStatus> }).getRuntimeStatus =
+      vi.fn(async () => startingStatus('qwen3-4b-instruct-q4'))
+    render(<ModelsScreen />)
+    expect(await screen.findByText(t('en', 'models.starting'))).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'models.use') })).not.toBeInTheDocument()
+  })
+
+  it('disables the action on OTHER cards while some model is starting (anyStarting)', async () => {
+    stub({
+      models: [
+        model({ id: 'other-installed', displayName: 'Other Installed', state: 'installed' }),
+        model({ id: 'loading', displayName: 'Loading Model', state: 'installed' })
+      ]
+    })
+    ;(window.api as unknown as { getRuntimeStatus: () => Promise<RuntimeStatus> }).getRuntimeStatus =
+      vi.fn(async () => startingStatus('loading'))
+    render(<ModelsScreen />)
+    await screen.findByText('Other Installed')
+    // The one not starting still shows "Use this model", but it is disabled while another loads.
+    expect(screen.getByRole('button', { name: t('en', 'models.use') })).toBeDisabled()
+  })
+
+  it('shows Stop (not the Use action) when the model is running', async () => {
+    stub({ models: [model({ state: 'running' })], activeModelId: 'qwen3-4b-instruct-q4' })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.getByRole('button', { name: t('en', 'models.stopRuntime') })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'models.use') })).not.toBeInTheDocument()
+  })
+
+  it('still offers the demo-mode button on the zero-weights developer card (no Use action)', async () => {
+    stub({ models: [model({ state: 'missing', startableAsMock: true })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.getByRole('button', { name: t('en', 'models.startMock') })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'models.use') })).not.toBeInTheDocument()
+  })
+
+  it('renders the German label for the collapsed action (D-L8: asserted from the catalog)', async () => {
+    stub({ models: [model({ state: 'installed' })] })
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    try {
+      render(
+        <I18nProvider>
+          <ModelsScreen />
+        </I18nProvider>
+      )
+      expect(await screen.findByRole('button', { name: t('de', 'models.use') })).toBeInTheDocument()
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
   })
 })
 

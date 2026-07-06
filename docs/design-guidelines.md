@@ -682,9 +682,10 @@ each citing this section as **§11.7**._
    action there). **Per-card buttons tidied:** the disabled **"Select"** is **hidden until the
    model is downloaded** (it's noise before the weights exist), and the not-installed-no-mock card
    drops its disabled "Start runtime" too — so a "Not downloaded" card's one clear action is
-   **Download** (+ "Try in demo mode" on the dev path). Once downloaded, Select + Start runtime
-   return. "Technical details" stays the disclosure. A `copy-tone` guard now bans the stale
-   "Start mock runtime" / „Demo-Runtime" literals.
+   **Download** (+ "Try in demo mode" on the dev path). Once downloaded, the card's action returns
+   (**as of 2026-07-07 this is the single "Use this model" button — see §11.10**, superseding the
+   original Select + Start runtime pair). "Technical details" stays the disclosure. A `copy-tone`
+   guard now bans the stale "Start mock runtime" / „Demo-Runtime" literals.
 
 **As built:** `renderer/screens/HomeScreen.tsx` (adaptive hero), `renderer/App.tsx` (rail-foot
 indicator; drop the ChatScreen `offline` prop pass), `renderer/screens/ChatScreen.tsx` (remove the
@@ -740,6 +741,31 @@ and the 0.85 compaction trigger are unchanged — only the reading changed. Cove
 answer-anchored statement and is deliberately NOT folded into this widget. Pinned by
 `tests/renderer/ContextMeter.test.tsx` (meter-not-progressbar, visible EN/DE label, amber/near-full
 copy, null-window guard) + the updated `ChatCompaction.test.tsx`.
+
+### 11.10 One action on the model card — "Use this model" (IMPLEMENTED 2026-07-07, beta-feedback #27 / D70)
+
+A first-time user (issue #27) faced a **"Select"** AND a **"Start runtime"** button on every installed
+chat card and couldn't tell which led to chatting. **Rule this records:** when two adjacent controls are
+almost always used together to reach one goal, collapse them into **one primary action named for the
+goal**, not the mechanism. The card now shows a single primary **"Use this model" / „Dieses Modell
+verwenden"** (`models.use`) that BOTH makes the model the active selection AND starts its runtime. The
+old `models.select` / `models.startRuntime` / `models.startTitle` labels are retired (superseding the
+§11.7 note's "Once downloaded, Select + Start runtime return").
+
+**Why it must start, not just select:** selected models already auto-start at launch, so Select≠Start
+only bit *mid-session*; and chat-send never auto-starts a runtime (the `registerChatIpc` contract), so a
+select-only action would leave the user at a dead "no model running" chat. **As built:** a new
+`useModel(modelId)` IPC (`registerModelIpc.ts`) does select-then-start MAIN-side — the §7.4 install gate
++ the RAM gate run once, the audit trail is one chain (`model_selected` then `runtime_started`), and a
+non-chat role is rejected before any persist. A start failure leaves the fresh selection standing (auto-
+start + a retry cover it — the same posture the old Select button had, which always persisted). The
+renderer button is **not** disabled on `active` (an active-but-stopped model still needs it to start;
+select is idempotent) — only the RAM gate / another button busy / another model mid-start disable it.
+Stop, the disabled Starting… spinner, the Active/Running/state badges, the demo-mode developer button,
+and the automatic non-chat roles (which show neither action nor Active badge) are all unchanged. Pinned
+by `tests/renderer/ModelsScreen.test.tsx` (one action per installed card, disabled while RAM-gated /
+busy / anyStarting, Starting… spinner, Stop when running, demo card, DE label) + the `useModel`
+integration tests in `tests/integration/core-model-ipc.test.ts`.
 
 ---
 

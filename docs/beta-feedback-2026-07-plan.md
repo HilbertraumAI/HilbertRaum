@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) DONE; Phases 3–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) DONE; Phases 4–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -157,9 +157,24 @@ Folded into `design-guidelines.md` §11.9; a `context-meter`/`-de` preview case 
 **Done =** suite green, `screenshot-verify` eyeball of the composer footer, docs
 (`design-guidelines.md`) + BUILD_STATE updated, commit references #25.
 
-## 6. Phase 3 — one action on the model screen (#27)
+## 6. Phase 3 — one action on the model screen (#27) ✅ DONE
 
 **Goal:** a first-time user needs exactly one obvious action to chat (D70).
+
+**Shipped (2026-07-07 — COLLAPSE, not the veto):** installed chat cards now show ONE primary
+**"Use this model" / „Dieses Modell verwenden"** button (`models.use`) that selects the model AND
+starts its runtime via a new MAIN-side `useModel(modelId)` IPC (`registerModelIpc.ts`) — the §7.4
+install gate + RAM gate run once, one audit chain (`model_selected` then `runtime_started`), a
+non-chat role rejected before any persist, no rollback on a start failure (the fresh selection
+stands; auto-start + retry cover it). The button is NOT disabled on `active` (an active-but-stopped
+model still needs it to start). Retired `models.select` / `models.startRuntime` / `models.startTitle`;
+reworded `chat.noModel.hint*` to "Use this model". Kept: Stop, Starting… spinner, Active/Running
+badges, RAM gate, demo-mode developer card, automatic non-chat roles. Tests: `useModel` integration
+(persists + starts; install/RAM gates refuse & don't start; non-chat rejected; deep-index abort) +
+renderer (one action per installed card, disabled while RAM-gated/busy/anyStarting, Starting…, Stop,
+demo, DE label). Preview cases `models` / `models-de` added (PNG capture deferred to CI/POSIX). Folded
+into `design-guidelines.md` §11.10; `user-guide.md` model step reworded. Suite green, typecheck +
+build clean.
 
 - `apps/desktop/src/renderer/screens/ModelsScreen.tsx:517-560`: replace the Select + Start
   pair with one primary **"Use this model" / "Dieses Modell verwenden"** button →

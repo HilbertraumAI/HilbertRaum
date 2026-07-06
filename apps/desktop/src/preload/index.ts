@@ -106,6 +106,9 @@ const api = {
     ipcRenderer.invoke(IPC.verifyModel, modelId),
   startRuntime: (modelId: string): Promise<RuntimeStatus> =>
     ipcRenderer.invoke(IPC.startRuntime, modelId),
+  /** Beta #27 (D70): select this model AND start its runtime in one MAIN-side action. */
+  useModel: (modelId: string): Promise<RuntimeStatus> =>
+    ipcRenderer.invoke(IPC.useModel, modelId),
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
   /** Read-only runtime health/state (Diagnostics, spec §7.11). */
   getRuntimeStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke(IPC.getRuntimeStatus),

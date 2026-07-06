@@ -16,6 +16,14 @@ export const IPC = {
    */
   verifyModel: 'models:verify',
   startRuntime: 'runtime:start',
+  /**
+   * The Models screen's one primary action per installed chat card (beta #27, D70): make a
+   * model the active selection AND start its runtime, MAIN-side, so the install/RAM gates run
+   * once and the audit trail is one event chain (`model_selected` then `runtime_started`). A
+   * non-chat role is rejected before anything is persisted; a start failure leaves the fresh
+   * selection standing (auto-start + a retry cover it — same posture as the old Select button).
+   */
+  useModel: 'runtime:use',
   stopRuntime: 'runtime:stop',
   /** Read-only runtime health/state for Diagnostics (spec §7.11). */
   getRuntimeStatus: 'runtime:status',

@@ -212,6 +212,42 @@ export function registerModelIpc(ctx: AppContext): void {
     return startModelRuntime(ctx, modelId)
   })
 
+  // The Models screen's one primary action per installed chat card (beta #27, D70): select the
+  // model (persist the active chat slot + emit `model_selected`) AND start its runtime, both here
+  // so the §7.4 install gate + RAM gate run once and the audit trail is a single event chain. A
+  // first-time user had a "Select" AND a "Start runtime" button and couldn't tell which led to
+  // chatting; collapsing them removes the ambiguity. Selected models already auto-start at launch,
+  // and chat-send never auto-starts (registerChatIpc contract), so the merged action MUST start the
+  // runtime — a select alone would still leave the runtime down mid-session.
+  ipcMain.handle(IPC.useModel, async (_e, modelId: string): Promise<RuntimeStatus> => {
+    requireUnlocked()
+    if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
+    // Reject a non-chat role BEFORE any persist (mirrors startModelRuntime's guard): an automatic
+    // role (embeddings/reranker/transcriber/vision/translation) has no chat slot to claim, and
+    // selecting an embeddings model here would silently touch its separate slot. The UI never
+    // reaches this for those roles, but the handler stays honest for non-UI callers.
+    const { manifests } = discoverManifests(ctx.manifestsDir)
+    const found = manifests.find((m) => m.manifest.id === modelId)
+    if (!found) throw new Error(`Unknown model id: ${modelId}`)
+    if (found.manifest.role !== 'chat') {
+      throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
+    }
+    // Select first so a refresh mid-load reflects the choice on the Active badge; selectModel
+    // persists the active slot + emits its own `model_selected` audit event.
+    log.info('Use model (select + start)', { modelId })
+    selectModel(ctx.db, ctx.manifestsDir, modelId)
+    ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
+    // Mirror startRuntime: free the runtime slot from any yielding deep-index build before the
+    // start tears down / replaces llama-server.
+    ctx.docTasks?.abortActiveBuild()
+    // No rollback on a start failure: selecting persisted (matching the old Select button, which
+    // always persisted regardless of a later Start), and the freshly-selected model auto-starts at
+    // the next launch + can be retried — so a transient start failure keeps the user's choice
+    // rather than silently reverting it. The install/RAM gates inside startModelRuntime still throw
+    // and DON'T start (the UI already disables the button for those, so this is the non-UI guard).
+    return startModelRuntime(ctx, modelId)
+  })
+
   ipcMain.handle(IPC.stopRuntime, async (): Promise<void> => {
     log.info('Stop runtime')
     const modelId = ctx.runtime.activeModelId()

@@ -5,12 +5,13 @@
 // Add a case: extend CASES below with a label + an element. Keep the mock data inline so a case is
 // self-describing. This file is dev-only (never bundled into the shipped app).
 import { createRoot } from 'react-dom/client'
-import type { Collection, Conversation, DocumentInfo } from '@shared/types'
+import { DEFAULT_SETTINGS, type Collection, type Conversation, type DocumentInfo, type ModelInfo } from '@shared/types'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../i18n'
 import { ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
+import { ModelsScreen } from '../screens/ModelsScreen'
 import '../tokens.css'
 import '../styles.css'
 
@@ -71,13 +72,65 @@ function docRow(id: string, title: string): DocumentInfo {
 }
 const DOCUMENTS: DocumentInfo[] = [docRow('d1', 'return-2025.pdf'), docRow('d2', 'receipts.csv')]
 
+// ---- Mock chat models for the ModelsScreen case (beta #27/D70 — the collapsed action) ----------
+function modelRow(over: Partial<ModelInfo>): ModelInfo {
+  return {
+    id: 'model',
+    displayName: 'Model',
+    family: 'qwen3',
+    role: 'chat',
+    format: 'gguf',
+    runtime: 'llama_cpp',
+    license: 'apache-2.0',
+    sizeOnDiskGb: 2.7,
+    recommendedMinRamGb: 8,
+    recommendedRamGb: 16,
+    recommendedContextTokens: 4096,
+    localPath: 'models/chat/model.gguf',
+    state: 'installed',
+    recommended: false,
+    download: undefined,
+    ...over
+  } as ModelInfo
+}
+// The card states the merged "Use this model" action must present cleanly: the active+running
+// model (leads, shows Stop + Active badge), an installed idle model (the primary "Use this model"
+// action, enabled), a RAM-gated model (action disabled + the memory notice), and the developer
+// demo card. No model is mid-start here so the primary button reads enabled; the Starting… spinner
+// state is exercised by the renderer tests.
+const PREVIEW_MODELS: ModelInfo[] = [
+  modelRow({ id: 'active-running', displayName: 'Qwen3 4B Instruct', state: 'running', recommended: true }),
+  modelRow({ id: 'installed-idle', displayName: 'Qwen3 8B Instruct', sizeOnDiskGb: 5.2 }),
+  modelRow({
+    id: 'ram-gated',
+    displayName: 'Qwen3 27B Instruct',
+    sizeOnDiskGb: 17,
+    recommendedMinRamGb: 64,
+    insufficientRam: true
+  }),
+  modelRow({ id: 'demo-model', displayName: 'Qwen3 0.6B (demo)', state: 'missing', startableAsMock: true })
+]
+
 // ---- Mock window.api: a Proxy so any unlisted method resolves to a harmless default ------------
 const overrides: Record<string, unknown> = {
   listCollections: async () => COLLECTIONS,
   listDocuments: async () => DOCUMENTS,
   searchConversations: async () => [],
-  getAppStatus: async () => ({ ready: true }),
-  getImportJob: async () => null
+  getAppStatus: async () => ({ ready: true, machineRamGb: 32 }),
+  getImportJob: async () => null,
+  // ModelsScreen data (only the `models*` cases render it; other cases never call these).
+  listModels: async () => PREVIEW_MODELS,
+  getSettings: async () => ({ ...DEFAULT_SETTINGS, activeModelId: 'active-running' }),
+  getPolicy: async () => null,
+  getEngineStatus: async () => null,
+  getRuntimeStatus: async () => ({
+    running: true,
+    modelId: 'active-running',
+    startingModelId: null,
+    port: 1234,
+    healthy: true,
+    message: 'ok'
+  })
 }
 ;(window as unknown as { api: unknown }).api = new Proxy(
   {},
@@ -148,9 +201,22 @@ const CASES: Record<string, { label: string; node: JSX.Element }> = {
         ))}
       </div>
     )
+  },
+  // Beta-feedback Phase 3 (#27/D70): the AI Model screen with the collapsed action. Each installed
+  // chat card offers ONE primary "Use this model" button (select + start) instead of a Select AND a
+  // Start runtime pair. The active model leads with Stop; the RAM-gated card disables the action.
+  // The `-de` case renders in German ("Dieses Modell verwenden"). PNG capture deferred to CI/POSIX.
+  models: {
+    label: 'AI Model screen — one "Use this model" action per installed card',
+    node: (
+      <div style={{ width: 760 }}>
+        <ModelsScreen />
+      </div>
+    )
   }
 }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
+CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
 
 const params = new URLSearchParams(location.search)
 const caseId = params.get('case') ?? 'documents'

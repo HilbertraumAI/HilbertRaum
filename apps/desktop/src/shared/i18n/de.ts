@@ -103,8 +103,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.noModel.title': 'Es läuft gerade kein Modell',
   'chat.noModel.hintBefore':
     'Chat und Dokument-Fragen brauchen ein geladenes Modell. Öffne den KI-Modell-Bereich, ' +
-    'wähle ein Modell und wähle dann ',
-  'chat.noModel.hintAction': 'Modell starten',
+    'wähle ein heruntergeladenes Modell und wähle dann ',
+  'chat.noModel.hintAction': 'Dieses Modell verwenden',
   'chat.noModel.hintAfter':
     '. Alles bleibt lokal — nichts wird heruntergeladen oder irgendwohin gesendet.',
   'chat.noModel.stillLoading':
@@ -952,13 +952,16 @@ export const de: Record<keyof typeof en, string> = {
   'models.translation.notInstalled':
     'Wird nach der Installation automatisch zum Übersetzen verwendet — keine Einrichtung nötig.',
   'models.selected': 'Ausgewählt',
-  'models.select': 'Auswählen',
+  // Beta #27 (D70): „Auswählen“ + „Modell starten“ zu EINER primären Aktion pro Karte
+  // zusammengefasst — sie macht dies zum aktiven Modell UND startet es, damit ein neuer Nutzer
+  // genau einen klaren Weg zum Chatten hat. Die alten Schlüssel models.select / models.startRuntime
+  // / models.startTitle wurden zurückgezogen.
+  'models.use': 'Dieses Modell verwenden',
+  'models.useTitle': 'Als dein Modell festlegen und starten, damit du chatten kannst',
   'models.stopRuntime': 'Modell stoppen',
-  'models.startRuntime': 'Modell starten',
   'models.startMock': 'Im Demo-Modus testen',
   'models.starting': 'Wird gestartet…',
   'models.startingTitle': 'Dieses Modell wird geladen — bei großen Modellen kann das etwas dauern',
-  'models.startTitle': 'Dieses Modell auf diesem Gerät starten',
   'models.startMockTitle':
     'Noch keine Modell-Datei — teste die App im Demo-Modus, mit sichtbar simulierten Antworten',
   'models.notPresentTitle': 'Modell-Datei nicht vorhanden',

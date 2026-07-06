@@ -88,11 +88,11 @@ export const en = {
   // ---- Chat (ChatScreen.tsx) ----
   'chat.title': 'Chat',
   'chat.noModel.title': 'No model is running',
-  // Split around the inline <b>Start runtime</b>.
+  // Split around the inline <b>Use this model</b>.
   'chat.noModel.hintBefore':
-    'Chat and document Q&A need a model loaded into the runtime. Open the AI Model screen, ' +
-    'pick a model, then choose ',
-  'chat.noModel.hintAction': 'Start runtime',
+    'Chat and document Q&A need a model loaded. Open the AI Model screen, pick a downloaded ' +
+    'model, and choose ',
+  'chat.noModel.hintAction': 'Use this model',
   'chat.noModel.hintAfter': '. Everything stays local — nothing is downloaded or sent anywhere.',
   'chat.noModel.stillLoading':
     'If you just opened the app, your selected model may still be loading — this screen ' +
@@ -933,13 +933,16 @@ export const en = {
   'models.translation.installed': 'Installed — used automatically for translation. Nothing to start here.',
   'models.translation.notInstalled': 'Used automatically for translation once installed — no setup needed.',
   'models.selected': 'Selected',
-  'models.select': 'Select',
+  // Beta #27 (D70): the Select + Start pair collapsed into ONE primary action per installed chat
+  // card — it makes this the active model AND starts its runtime, so a first-time user has a single
+  // obvious way to get to chatting (selected models still auto-start at launch; only mid-session did
+  // Select≠Start bite). The old models.select / models.startRuntime / models.startTitle labels retired.
+  'models.use': 'Use this model',
+  'models.useTitle': 'Make this your model and start it so you can chat',
   'models.stopRuntime': 'Stop runtime',
-  'models.startRuntime': 'Start runtime',
   'models.startMock': 'Try in demo mode',
   'models.starting': 'Starting…',
   'models.startingTitle': 'This model is loading — it can take a little while for large models',
-  'models.startTitle': 'Start the local runtime for this model',
   'models.startMockTitle':
     'No model file yet — try the app in demo mode, with visibly simulated answers',
   'models.notPresentTitle': 'Model file not present',

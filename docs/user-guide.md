@@ -121,8 +121,9 @@ blocks you.
      can't be selected or started here. Pick a smaller model — quality stays great.
    - **Can't verify** — the file is present but its checksum didn't match; re-download it.
    - **Unsupported** — this model can't run on this computer/build.
-3. Click a model, then **Select** and **Start runtime**. The first start of a model can take a
-   little while as it loads into memory.
+3. Click a downloaded model, then **Use this model** — this makes it your model *and* starts it, so
+   you can go straight to chatting. The first start of a model can take a little while as it loads
+   into memory.
 
 Once a model is **selected**, the app loads it again automatically every time you start the
 app (after unlocking, on encrypted drives) — you don't have to come back to this screen. You

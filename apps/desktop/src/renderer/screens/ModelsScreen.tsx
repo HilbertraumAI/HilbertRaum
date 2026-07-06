@@ -512,20 +512,11 @@ export function ModelsScreen(): JSX.Element {
           // plus, in demo-capable developer mode, "Try in demo mode". The disabled
           // "Select" / "Start runtime" buttons are noise before the weights exist, so they
           // are hidden until the model is downloaded (§3/§7 hide the machinery). Once
-          // installed, Select + Start runtime return.
+          // installed, ONE primary "Use this model" action selects it and starts its runtime
+          // (beta #27, D70) — a first-time user no longer has to guess whether Select or Start
+          // leads to chatting. Stop / Starting… / the Active badge carry the runtime state.
           (installed || canMockStart || thisStarting || m.state === 'running') && (
             <div className="model-actions">
-              {installed && (
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={active || ramTooLow || busy !== null}
-                  title={ramHint}
-                  onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
-                >
-                  {active ? t('models.selected') : t('models.select')}
-                </Button>
-              )}
               {m.state === 'running' ? (
                 <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
                   {t('models.stopRuntime')}
@@ -537,13 +528,18 @@ export function ModelsScreen(): JSX.Element {
                   <Spinner /> {t('models.starting')}
                 </Button>
               ) : installed ? (
+                // The merged action (select + start, MAIN-side via useModel). NOT disabled on
+                // `active`: an already-active model that isn't running still needs this to start
+                // (select is idempotent, the start actually loads it). Disabled only by the RAM
+                // gate / another button busy / another model starting.
                 <Button
                   size="sm"
+                  variant="primary"
                   disabled={ramTooLow || busy !== null || anyStarting}
-                  onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
-                  title={ramTooLow ? ramHint : t('models.startTitle')}
+                  onClick={() => run(`use-${m.id}`, () => window.api.useModel(m.id))}
+                  title={ramTooLow ? ramHint : t('models.useTitle')}
                 >
-                  {t('models.startRuntime')}
+                  {t('models.use')}
                 </Button>
               ) : (
                 // Not installed but demo-capable (developer + policy gated in MAIN via

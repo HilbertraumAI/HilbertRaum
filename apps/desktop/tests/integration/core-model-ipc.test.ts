@@ -31,7 +31,7 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings, updateSettings } from '../../src/main/services/settings'
+import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
@@ -383,6 +383,133 @@ describe('registerModelIpc', () => {
     const { result } = await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
     expect(result).toBe('missing') // no weights on disk in this fixture
     await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+  })
+
+  // Beta #27 (D70): the Models screen's collapsed "Use this model" action = select + start in one
+  // MAIN-side handler. It must BOTH persist the active chat slot AND start the runtime, while the
+  // §7.4 install gate + the RAM gate still refuse and a non-chat role is rejected before any persist.
+  describe('useModel — collapse select + start (beta #27, D70)', () => {
+    it('persists the active selection AND starts the runtime', async () => {
+      let started = false
+      const db = seededDb()
+      const audited: string[] = []
+      const ctx = {
+        db,
+        manifestsDir: REPO_MANIFESTS,
+        paths: noWeightPaths(),
+        isDev: true, // dev leniency → the missing-weights chat model mock-starts
+        audit: (kind: string) => audited.push(kind),
+        runtime: {
+          start: async () => {
+            started = true
+            return { running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }
+          },
+          activeModelId: () => null
+        }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')
+      // BOTH halves happened: the runtime started AND the choice is persisted as the active model.
+      expect(started).toBe(true)
+      expect(getSettings(db).activeModelId).toBe('qwen3-4b-instruct-q4')
+      // One event chain: model_selected then runtime_started (the start emits its own).
+      expect(audited).toEqual(['model_selected', 'runtime_started'])
+    })
+
+    it('aborts a yielding deep-index build before starting (mirrors startRuntime)', async () => {
+      let aborted = false
+      const ctx = {
+        db: seededDb(),
+        manifestsDir: REPO_MANIFESTS,
+        paths: noWeightPaths(),
+        isDev: true,
+        docTasks: { abortActiveBuild: () => { aborted = true } },
+        runtime: {
+          start: async () => ({ running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }),
+          activeModelId: () => null
+        }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')
+      expect(aborted).toBe(true)
+    })
+
+    it('the install gate still refuses a not-installed model for a non-developer (does not start)', async () => {
+      let started = false
+      const ctx = {
+        db: seededDb(), // developerMode defaults to false → no mock fallback
+        manifestsDir: REPO_MANIFESTS,
+        paths: noWeightPaths(),
+        isDev: false,
+        runtime: { start: async () => { started = true; return {} }, activeModelId: () => null }
+      } as unknown as AppContext
+      reg(ctx)
+      await expect(invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')).rejects.toThrow(
+        /can't be started/
+      )
+      expect(started).toBe(false)
+    })
+
+    it('the RAM gate still refuses installed weights that need more RAM (does not start)', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'hilbertraum-usemodel-ram-'))
+      const manifestsDir = join(root, 'model-manifests')
+      mkdirSync(manifestsDir, { recursive: true })
+      writeFileSync(
+        join(manifestsDir, 'huge.yaml'),
+        stringify({
+          id: 'huge-model',
+          display_name: 'Huge Model',
+          family: 'qwen3',
+          role: 'chat',
+          format: 'gguf',
+          runtime: 'llama_cpp',
+          license: 'apache-2.0',
+          size_on_disk_gb: 999,
+          recommended_min_ram_gb: 9999, // no real machine passes
+          recommended_ram_gb: 9999,
+          recommended_context_tokens: 4096,
+          local_path: 'models/chat/huge.gguf',
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          recommended_profiles: ['PRO'],
+          license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
+        })
+      )
+      mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+      writeFileSync(join(root, 'models', 'chat', 'huge.gguf'), 'weights') // present → installed (dev leniency)
+      let started = false
+      const ctx = {
+        db: seededDb(),
+        manifestsDir,
+        paths: { rootPath: root, configPath: bogusConfigDir() },
+        isDev: true,
+        runtime: { start: async () => { started = true; return {} }, activeModelId: () => null }
+      } as unknown as AppContext
+      reg(ctx)
+      await expect(invoke(handlers, IPC.useModel, 'huge-model')).rejects.toThrow(
+        /needs at least 9999 GB RAM/
+      )
+      expect(started).toBe(false)
+    })
+
+    it('rejects a non-chat role BEFORE persisting any selection', async () => {
+      let started = false
+      const db = seededDb()
+      const ctx = {
+        db,
+        manifestsDir: REPO_MANIFESTS,
+        paths: noWeightPaths(),
+        isDev: true,
+        runtime: { start: async () => { started = true; return {} }, activeModelId: () => null }
+      } as unknown as AppContext
+      reg(ctx)
+      await expect(invoke(handlers, IPC.useModel, 'multilingual-e5-small-q8')).rejects.toThrow(
+        /not a chat model/
+      )
+      expect(started).toBe(false)
+      // The upfront role guard runs before selectModel — the chat slot is untouched (no embeddings
+      // slot side effect either).
+      expect(getSettings(db).activeModelId).toBeNull()
+    })
   })
 })
 
