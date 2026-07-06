@@ -27,7 +27,7 @@ import type { TransactionInput } from '../../src/main/services/skills/tools/bank
 //
 // All transactions are SYNTHETIC (D57 — never real statement data). CI stays
 // zero-network/zero-model/zero-binary; skipped unless HILBERTRAUM_CATEGORIZER_SMOKE points at a
-// provisioned drive root (the HILBERTRAUM_TRANSLATION_SMOKE shape — dev box: F:\paid-gpu-smoke-drive):
+// provisioned drive root (the HILBERTRAUM_TRANSLATEGEMMA_SMOKE shape — dev box: F:\paid-gpu-smoke-drive):
 //
 //   HILBERTRAUM_CATEGORIZER_SMOKE=<root> npx vitest run tests/manual/categorizer-smoke.test.ts
 //

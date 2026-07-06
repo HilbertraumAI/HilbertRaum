@@ -43,7 +43,8 @@ import {
 //      other tags),
 //   2. V1 reconciliation: prints the server's /props `chat_template` next to our rendered prompt,
 //   3. DE→EN + EN→DE sanity (a real translation, not chatter/refusal),
-//   4. verbatim numbers/dates/codes preserved,
+//   4. stable identifiers (invoice numbers, model codes) preserved verbatim, while
+//      numbers/dates are LOCALIZED (see the body — only identifiers are asserted verbatim),
 //   5. an embedded-instruction adversarial window is TRANSLATED, not obeyed (plan §2 D2),
 //   6. NO `<end_of_turn>` leakage,
 //   7. PRINTS tokens/sec (from the /completion timings) + best-effort peak RSS.

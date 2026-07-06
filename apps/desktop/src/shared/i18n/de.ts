@@ -1565,6 +1565,13 @@ export const de: Record<keyof typeof en, string> = {
   'main.translation.noModel':
     'Zum Übersetzen wird das Übersetzungsmodell benötigt, das auf diesem Laufwerk nicht ' +
     'installiert ist. Du kannst es im KI-Modell-Bereich herunterladen.',
+  // In das erzeugte Übersetzungsdokument GESCHRIEBEN (L12) — zur Materialisierungszeit lokalisiert,
+  // kein kanonisch-englischer DB-String. Der `> `-Zitatpräfix von `failedWindowNotice` bleibt.
+  'main.translation.failedWindowNotice':
+    '> ⚠ Dieser Teil ({part} von {total}) konnte nicht übersetzt werden — ' +
+    'der Originaltext bleibt unten unverändert erhalten.',
+  'main.translation.attributionLine':
+    'Maschinell übersetzt von {modelId} — kann Fehler enthalten.',
   'main.model.contextExceeded':
     'Das ist zu groß für das Kontextfenster des aktuellen Modells. Wähle ein Modell mit größerem Kontext oder ein kleineres Dokument.',
   'main.chat.streamInFlight': 'Für diese Unterhaltung wird bereits eine Antwort erstellt.',

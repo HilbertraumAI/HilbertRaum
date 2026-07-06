@@ -89,8 +89,28 @@ export const TASK_OCR_FAILED_MESSAGE = t('en', 'main.task.ocrFailed')
 
 const TERMINAL: ReadonlySet<DocTaskStatus['state']> = new Set(['done', 'failed', 'cancelled'])
 
+/**
+ * Cap on retained TERMINAL tasks in the `tasks` map (L11). Without a bound the map grew for
+ * the whole session (one entry per summary/translation/… ever run). Running and queued tasks
+ * are NEVER evicted; only completed ones past this many are dropped (oldest first). Mirrors the
+ * `TRANSLATE_MAX_JOB_HISTORY` bound the view-job store already applies.
+ */
+export const DOC_TASK_MAX_TERMINAL_HISTORY = 16
+/**
+ * Cap on the retained jobId→kind recovery map (L11). Kept LARGER than the task cap so a
+ * poll landing after its task was evicted still gets the REAL kind (never a mislabelled
+ * `summary`), for at least this many recent jobs.
+ */
+const DOC_TASK_MAX_KIND_HISTORY = 64
+
 export class DocTaskManager {
   private readonly tasks = new Map<string, InternalTask>()
+  /**
+   * jobId → kind for every task issued this session (bounded, L11). Survives eviction of the
+   * task itself so `getDocTask` can echo the real kind of an evicted-but-recently-polled task
+   * instead of the old hardcoded `summary` fallback.
+   */
+  private readonly kindHistory = new Map<string, DocTaskKind>()
   private queue: string[] = []
   private runningId: string | null = null
   /**
@@ -326,6 +346,7 @@ export class DocTaskManager {
       summaryTier
     }
     this.tasks.set(jobId, task)
+    this.recordKind(jobId, kind)
     this.queue.push(jobId)
     log.info('Document task queued', { jobId, kind, documentId: documentIds[0] })
     this.pump()
@@ -339,9 +360,12 @@ export class DocTaskManager {
       // Return a copy — the renderer must not share mutable state with the engine.
       return { ...task.status, progress: { ...task.status.progress } }
     }
+    // The task is gone — evicted past the terminal-history cap, or a never-issued id (L11).
+    // Echo its REAL kind if we still remember it (never mislabel an evicted translation as a
+    // summary); otherwise a neutral default. Pollers key off the terminal `state`, not `kind`.
     return {
       jobId,
-      kind: 'summary',
+      kind: this.kindHistory.get(jobId) ?? 'summary',
       documentIds: [],
       state: 'failed',
       progress: { stepsDone: 0, stepsTotal: 0 },
@@ -440,8 +464,35 @@ export class DocTaskManager {
     this.runningPromise = this.run(task).finally(() => {
       this.runningId = null
       this.runningPromise = null
+      this.evictTerminalTasks()
       this.pump()
     })
+  }
+
+  /** Record a task's kind in the bounded recovery map (L11), dropping the oldest past the cap. */
+  private recordKind(jobId: string, kind: DocTaskKind): void {
+    this.kindHistory.set(jobId, kind)
+    while (this.kindHistory.size > DOC_TASK_MAX_KIND_HISTORY) {
+      const oldest = this.kindHistory.keys().next().value
+      if (oldest === undefined) break
+      this.kindHistory.delete(oldest)
+    }
+  }
+
+  /**
+   * Bound the `tasks` map (L11): drop the oldest TERMINAL tasks past the history cap. The
+   * running task and every queued task are retained (they are still live); the dropped tasks'
+   * kinds survive in `kindHistory`, so a late poll still resolves the right kind. Called after
+   * each task settles.
+   */
+  private evictTerminalTasks(): void {
+    if (this.tasks.size <= DOC_TASK_MAX_TERMINAL_HISTORY) return
+    for (const [id, task] of this.tasks) {
+      if (this.tasks.size <= DOC_TASK_MAX_TERMINAL_HISTORY) break
+      if (id === this.runningId) continue
+      if (!TERMINAL.has(task.status.state)) continue // queued tasks are still live
+      this.tasks.delete(id)
+    }
   }
 
   /**

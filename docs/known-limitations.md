@@ -1414,6 +1414,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   hence more of them on a long document. Each window is translated independently: a recurring
   term can be rendered differently in different windows. A sliding glossary/context header is
   explicitly out of scope for now (plan §5).
+- **Window sizing is "over-chunk, never overflow" for realistic prose — not an absolute
+  guarantee on adversarial emoji/astral input (audit L10, accepted).** The planner sizes
+  windows with the shared word-count estimator `approxTokenCount`, whose per-word token
+  ceilings are conservative over the TG-6-measured Gemma tokenizer, so a normal document can
+  only ever over-chunk (harmless). The estimator UNDER-charges a *pathological* glued run of
+  emoji or astral-plane codepoints (each such codepoint can tokenize to several tokens while
+  counting as a fraction of a "word"), so a window built from such input can carry more real
+  tokens than budgeted and hit the model's context/output cap. This was **deliberately not
+  fixed in the translation-audit (TA) wave**: touching the shared chunker for a pathological
+  input is not worth the blast radius across summary/compare/retrieval, and the failure mode
+  is benign — the over-long window simply comes back without a clean stop and is surfaced as
+  an honest "could not be translated" failed-window notice (see below), never a silent bad
+  translation. A real fix belongs in a separate chunker-owned change.
 - **Numbers and dates are LOCALIZED, not copied verbatim — that is correct machine
   translation.** The TG-2 smoke on the real model: *14.03.2026* → *March 14, 2026*,
   *1.250* → *1,250* — formats adapt to the target language, while stable identifiers

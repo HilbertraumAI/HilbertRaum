@@ -15,6 +15,7 @@ import {
 } from '../../src/main/services/ingestion'
 import {
   DocTaskManager,
+  DOC_TASK_MAX_TERMINAL_HISTORY,
   TASK_DOCUMENT_NOT_READY_MESSAGE,
   TASK_EXPIRED_MESSAGE,
   TASK_NEEDS_RUNTIME_MESSAGE,
@@ -438,5 +439,60 @@ describe('summary persistence lifecycle (D25)', () => {
     db.prepare('UPDATE documents SET summary_json = ? WHERE id = ?').run('{not json', docId)
     expect(getDocumentSummary(db, docId)).toBeNull()
     expect(listDocuments(db).find((d) => d.id === docId)?.summary ?? null).toBeNull()
+  })
+})
+
+// L11 — the tasks map is bounded (no session-long growth), and an evicted task's poll echoes
+// the REAL kind (never the old hardcoded `summary` fallback).
+describe('terminal-task eviction + kind recovery (L11)', () => {
+  it('evicts the oldest terminal tasks past the history cap and keeps recent ones', async () => {
+    const docId = await importDoc(100)
+    const manager = makeManager({ runtime: scriptedRuntime() })
+
+    const jobIds: string[] = []
+    // Run one more task than the cap allows, serially (await each to terminal).
+    for (let i = 0; i < DOC_TASK_MAX_TERMINAL_HISTORY + 1; i++) {
+      const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [docId] })
+      await waitTerminal(manager, jobId)
+      jobIds.push(jobId)
+    }
+
+    // The very first task has been evicted → its poll reports the terminal expired fallback…
+    const first = manager.getDocTask(jobIds[0])
+    expect(first.state).toBe('failed')
+    expect(first.error).toBe(TASK_EXPIRED_MESSAGE)
+    // …but its kind is RECOVERED (a summary here — not a lie either way), and the most recent
+    // task is still fully tracked with its real terminal state.
+    expect(first.kind).toBe('summary')
+    expect(manager.getDocTask(jobIds[jobIds.length - 1]).state).toBe('done')
+
+    // The manager stays fully usable after eviction.
+    const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [docId] })
+    expect((await waitTerminal(manager, jobId)).state).toBe('done')
+  })
+
+  it('an evicted NON-summary task keeps its real kind on a late poll (not a false summary)', async () => {
+    const docId = await importDoc(100)
+    const manager = makeManager({ runtime: scriptedRuntime() })
+
+    // A running summary keeps the categorize task QUEUED; cancelling it while queued lands a
+    // terminal `cancelled` of kind `categorize` WITHOUT running the handler — deterministic.
+    const running = manager.startDocTask({ kind: 'summary', documentIds: [docId] })
+    const categorize = manager.startDocTask({ kind: 'categorize', documentIds: [docId] })
+    manager.cancelDocTask(categorize.jobId)
+    expect(manager.getDocTask(categorize.jobId).state).toBe('cancelled')
+    expect(manager.getDocTask(categorize.jobId).kind).toBe('categorize')
+    await waitTerminal(manager, running.jobId)
+
+    // Push the categorize task out of the (bounded) tasks map.
+    for (let i = 0; i < DOC_TASK_MAX_TERMINAL_HISTORY; i++) {
+      const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [docId] })
+      await waitTerminal(manager, jobId)
+    }
+
+    const evicted = manager.getDocTask(categorize.jobId)
+    expect(evicted.state).toBe('failed') // the expired fallback
+    expect(evicted.error).toBe(TASK_EXPIRED_MESSAGE)
+    expect(evicted.kind).toBe('categorize') // recovered — NOT the old hardcoded 'summary'
   })
 })

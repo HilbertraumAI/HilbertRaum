@@ -1530,6 +1530,12 @@ export const en = {
   'main.translation.noModel':
     'Translating needs the translation model, which is not installed on this drive. ' +
     'You can download it on the AI Model screen.',
+  // Persisted INTO the generated translation (L12) — localized at materialization time, not a
+  // canonical-English DB string. `failedWindowNotice` keeps its `> ` blockquote prefix.
+  'main.translation.failedWindowNotice':
+    '> ⚠ This part ({part} of {total}) could not be translated — ' +
+    'the original text is kept below unchanged.',
+  'main.translation.attributionLine': 'Machine-translated by {modelId} — may contain errors.',
   'main.model.contextExceeded':
     "This is too large for the current model's context window. Try a model with a larger context, or a smaller document.",
   'main.chat.streamInFlight': 'A response is already being generated for this conversation.',

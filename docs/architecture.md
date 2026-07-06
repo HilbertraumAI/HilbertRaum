@@ -1698,6 +1698,62 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     overlapping-suspend `tearingDown` hold, translate-awaits-idle-teardown (no double spawn);
     `translate-ipc.test.ts` destroyed-sender cancel + listener-detach.
 
+- **TA-7 — low sweep, doc drift, wave close-out (translation audit fix wave, 2026-07-06;
+  findings L9/L11/L12, decision L10, doc-drift D1–D5).**
+  - **L9 (window-budget backstop direction).** `translationUsableTokens` clamped `contextTokens`
+    **up** to 1024 — the wrong direction: a future manifest with a smaller real context would then
+    budget every window against a larger context than the model has, overflowing all of them. It now
+    uses the REAL context and only falls back to `TRANSLATION_FALLBACK_CONTEXT_TOKENS` (1024) for a
+    **junk/≤0** read (no real context to respect); `translationBudgetWords` clamps the budget DOWN to
+    what the real context holds rather than inflating past it. Unit case at ctx 512
+    (`doctasks-windows.test.ts`).
+  - **L11 (unbounded `tasks` map + wrong expired-kind).** The manager's `tasks` map grew for the whole
+    session and the expired-id `getDocTask` fallback hardcoded `kind:'summary'`. Terminal tasks are now
+    evicted past `DOC_TASK_MAX_TERMINAL_HISTORY` (16; running/queued never evicted), and a bounded
+    `kindHistory` lets an evicted task's late poll echo its REAL kind (never mislabel an evicted
+    translation as a summary). Manager eviction + kind-recovery unit tests (`doctasks.test.ts`).
+  - **L12 (persisted English strings).** `failedWindowNotice` + `translationAttributionLine` are
+    written INTO the generated document, yet were hardcoded English. They now route through `tMain`
+    (new en+de keys `main.translation.failedWindowNotice` / `.attributionLine`, parity compile-enforced)
+    so the materialized document is in the app language at materialization time — the one deliberate
+    persisted-string exception to the canonical-English-in-DB rule. Integration `de`-materialization
+    assertion (`doctasks-translation.test.ts`).
+  - **L10 (ACCEPTED, no code).** `approxTokenCount` under-charges a pathological glued emoji/astral run,
+    so "over-chunk, never overflow" is not an absolute guarantee. Deliberately NOT fixed in this wave
+    (touching the shared chunker for a pathological input is not worth the cross-pipeline blast radius;
+    the failure mode is an honest failed-window notice). Documented in `known-limitations.md`
+    (translation) + the `doctasks/translation.ts` header; a real fix belongs in a separate chunker-owned
+    change.
+  - **Doc drift D1–D5.** Smoke row / header wording aligned to what the tests assert (identifiers
+    verbatim, numbers/dates localize — `packaging.md`, `translategemma-smoke.test.ts`); the
+    `doctasks/translation.ts` prompt-reserve comment made past-tense; `security-model.md` log
+    enumeration extended with the content-free `error: String(err)` failure log; three stale
+    `HILBERTRAUM_TRANSLATION_SMOKE` → `HILBERTRAUM_TRANSLATEGEMMA_SMOKE` smoke comments corrected.
+
+**Translation audit (TA wave) — outcomes.** A four-lens adversarial audit of the shipped TranslateGemma
+wave (`docs/translation-audit-2026-07-06.md`, 4 High / 8 Medium / 12 Low + 5 doc-drift) was fixed across
+TA-1…TA-7, all on `master`, 2026-07-06 — then the audit report AND the fix plan
+(`docs/translation-audit-fix-plan.md`) were folded here and DELETED per the doc-lifecycle rule (git
+history keeps both). Per phase: **TA-1** quit+lock flush the whole doc-task pipeline (H1/H2); **TA-2**
+renderer session-store purge moved to the real App-level lock seam (H3); **TA-3** renderer store
+hardening — per-timer poll latch, post-picker guard, stop/error edges (H4/M8/L5–L8); **TA-4** SSE
+terminal-frame + `error:`-field handling + Gemma control-token sanitization (M2/M3/M4/L1/L4); **TA-5**
+limit-stop detection + view-job empty-window retry (M6/M7); **TA-6** sidecar crash recovery,
+single-flight teardown, sender-destroy cancel (M1/M5/L2/L3); **TA-7** low sweep + doc drift + this
+close-out (L9/L11/L12, L10-accept, D1–D5). One decision of record: **L10 accepted as-is** (above).
+
+**Deferred backlog (audited in the TA wave, deliberately NOT scheduled — recorded for a later wave).**
+- Full emitter **rebind** on `getActive` adoption across windows (L3 shipped as cancel-on-destroy only —
+  a destroyed sender cancels its job; a live handoff to another window is not built).
+- Paste-size cap for the Translate view (multi-hour multi-window pastes).
+- `GeneratedProvenance` lacks the translation language pair (a data-contract addition).
+- Doc-task dedup on a double-clicked Translate (`hasPendingKind` generalization).
+- `extractSegmentTexts` abort signal (cancel during a long encrypted-PDF re-parse).
+- Mid-segment split's spurious paragraph break in doc-task output (the view path already avoids it).
+- `resolveSidecarSelection` dead `makeReal` param on the translator factory.
+- Drop-zone `onDragLeave` child-element flicker; duplicate tab stops.
+- File-pane live region (a11y) + partial-output indication after cancel/error.
+
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
   (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
   state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A

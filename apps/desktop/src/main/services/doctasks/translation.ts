@@ -1,5 +1,6 @@
 import { extname } from 'node:path'
 import { TRANSLATION_NATIVE_NAMES, type TranslationTargetLang } from '../../../shared/types'
+import { tMain } from '../i18n'
 import { packIntoWindows } from './summary'
 
 // Translation window math + output framing (split out of the former monolithic doctasks.ts —
@@ -35,8 +36,13 @@ import { packIntoWindows } from './summary'
 // MEASURED-then-rounded-UP weights: input claims `TRANSLATION_INPUT_TOKENS_PER_WORD`,
 // output claims `TRANSLATION_OUTPUT_TOKENS_PER_WORD` — a window's input budget is
 // usable/(input+output) words and the rest is output headroom. Both are conservative
-// CEILINGS over the measured maxima, so a window can only ever OVER-chunk (harmless),
-// never overflow the launched context or the output cap. On top of that sits the D4
+// CEILINGS over the measured maxima, so on realistic prose a window can only ever
+// OVER-chunk (harmless), effectively never overflowing the launched context or the output
+// cap. (This is not a hard mathematical guarantee: the shared word estimator
+// `approxTokenCount` UNDER-charges a pathological glued run of emoji/astral codepoints —
+// audit L10, ACCEPTED as-is in the TA wave — so such an input can under-count its real
+// tokens; the failure mode is then an honest failed-window notice, not a silent bad
+// translation. See `docs/known-limitations.md` — translation.) On top of that sits the D4
 // clamp: TranslateGemma's model card specifies a TOTAL INPUT of ~2K tokens (the gemma3
 // architecture supports far more, but the fine-tune is trained/evaluated at ≤2K), so the
 // per-window input is HARD-capped at `TRANSLATION_MAX_INPUT_TOKENS` regardless of the
@@ -49,7 +55,7 @@ import { packIntoWindows } from './summary'
 /**
  * Reserved for the sidecar's prompt scaffold (`buildTranslationPrompt`'s instruction +
  * turn markers — well under 150 tokens for every language pair), in model tokens.
- * Kept at the chat-era 300 as conservative headroom until TG-6 re-measures.
+ * TG-6 re-measured the real scaffold and kept the chat-era 300 as conservative headroom.
  */
 export const TRANSLATION_PROMPT_RESERVE_TOKENS = 300
 /**
@@ -89,11 +95,24 @@ export const TRANSLATION_MAX_INPUT_TOKENS = 1800
 const TRANSLATION_MIN_OUTPUT_TOKENS = 256
 /** Floor for the per-window input budget, in words. */
 const TRANSLATION_MIN_BUDGET_WORDS = 120
+/**
+ * Last-resort context assumed ONLY when `contextTokens` is junk (NaN / ≤ 0 — a broken
+ * manifest read), where there is no real context to respect. A REAL, positive context is
+ * always used as-is (L9): never inflated up to this value, since a window budgeted against
+ * a larger context than the model actually has would overflow every call.
+ */
+const TRANSLATION_FALLBACK_CONTEXT_TOKENS = 1024
 
-/** Usable model tokens for a translation call after the prompt reserve. */
+/**
+ * Usable model tokens for a translation call after the prompt reserve. L9: uses the REAL
+ * launched context — a smaller manifest context is NEVER clamped UP (that was the wrong
+ * backstop direction: it would overflow every window). Only a junk/non-positive value falls
+ * back to `TRANSLATION_FALLBACK_CONTEXT_TOKENS` so planning still yields windows.
+ */
 function translationUsableTokens(contextTokens: number): number {
-  const ctx = Math.max(1024, Math.floor(contextTokens) || 0)
-  return ctx - TRANSLATION_PROMPT_RESERVE_TOKENS
+  const ctx = Math.floor(contextTokens)
+  const real = Number.isFinite(ctx) && ctx > 0 ? ctx : TRANSLATION_FALLBACK_CONTEXT_TOKENS
+  return real - TRANSLATION_PROMPT_RESERVE_TOKENS
 }
 
 /**
@@ -109,7 +128,12 @@ export function translationBudgetWords(contextTokens: number): number {
       (TRANSLATION_INPUT_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD)
   )
   const byInputSpec = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / TRANSLATION_INPUT_TOKENS_PER_WORD)
-  return Math.max(TRANSLATION_MIN_BUDGET_WORDS, Math.min(byContext, byInputSpec))
+  const fitted = Math.min(byContext, byInputSpec)
+  // The MIN floor keeps windows useful — but it must NEVER budget more words than the REAL
+  // context holds (L9): on a small manifest context, clamp the budget DOWN below the floor
+  // rather than inflate past `byContext` (which would overflow every window). `Math.max(1, …)`
+  // keeps a degenerate sub-viable context from producing a zero/negative budget.
+  return Math.max(1, Math.min(Math.max(TRANSLATION_MIN_BUDGET_WORDS, fitted), byContext))
 }
 
 export interface TranslationPlan {
@@ -146,18 +170,20 @@ export function planTranslationWindows(
 
 /**
  * Visible marker for a window the model refused/garbled after a retry: the output
- * keeps the ORIGINAL text under the notice — never a silent gap.
+ * keeps the ORIGINAL text under the notice — never a silent gap. L12: this text is
+ * PERSISTED into the generated document, so it localizes to the app language at
+ * materialization time (`tMain`), unlike the canonical-English DB strings.
  */
 export function failedWindowNotice(part: number, total: number): string {
-  return (
-    `> ⚠ This part (${part} of ${total}) could not be translated — ` +
-    'the original text is kept below unchanged.'
-  )
+  return tMain('main.translation.failedWindowNotice', { part, total })
 }
 
-/** The honesty attribution prepended to every materialized translation. */
+/**
+ * The honesty attribution prepended to every materialized translation. L12: persisted into
+ * the generated document, so it localizes to the app language at materialization time.
+ */
 export function translationAttributionLine(modelId: string): string {
-  return `Machine-translated by ${modelId} — may contain errors.`
+  return tMain('main.translation.attributionLine', { modelId })
 }
 
 /**

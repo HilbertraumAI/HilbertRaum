@@ -37,7 +37,7 @@ import type { ChatMessage } from '../../src/main/services/runtime'
 //      translation smoke caught exactly this class of bug).
 //
 // CI stays zero-network/zero-model/zero-binary; skipped unless HILBERTRAUM_COMPARE_SMOKE
-// points at a provisioned drive root (the HILBERTRAUM_TRANSLATION_SMOKE shape — dev box: D:\):
+// points at a provisioned drive root (the HILBERTRAUM_TRANSLATEGEMMA_SMOKE shape — dev box: D:\):
 //
 //   HILBERTRAUM_COMPARE_SMOKE=<root> npx vitest run tests/manual/compare-smoke.test.ts
 

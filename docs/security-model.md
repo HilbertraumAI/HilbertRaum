@@ -423,8 +423,11 @@ The **Translate** screen's live text translation (`translate:start/cancel`, `STR
 **nothing**. The source text and its translation live only in the `TranslateJobService`'s
 per-process job map for the life of the job and in renderer memory (`lib/translateSession.ts`).
 - **Zero audit, content-free logs:** the handlers never call `ctx.audit`, and the service logs
-  **ids + the language pair only** (`{ jobId, source, target }`) — never the text. The renderer
-  gets an error **code**, never raw model/runtime text (the `friendlyIpcError` posture).
+  **ids + the language pair only** (`{ jobId, source, target }`) — never the text. A failed
+  window/job logs only a content-free **`error: String(err)`** (the error's own message — a
+  runtime/HTTP/abort string, never the source or translation text; the SSE reader likewise logs a
+  dropped-frame **count**, never the frame). The renderer gets an error **code**, never raw
+  model/runtime text (the `friendlyIpcError` posture).
 - **In-memory residue at lock:** `TranslateJobService.stop()` (wired to workspace lock **and**
   quit, alongside `ctx.vision.stop()` / `ctx.docTasks.cancelAllDocTasks()`) aborts the in-flight job
   **and clears the job map**, so no source/translation text survives the vault re-encrypt. The

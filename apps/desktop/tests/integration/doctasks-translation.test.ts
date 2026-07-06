@@ -47,6 +47,8 @@ import {
 import type { AuditEventType, GeneratedProvenance } from '../../src/shared/types'
 import type { Embedder } from '../../src/main/services/embeddings'
 import type { ModelRuntime } from '../../src/main/services/runtime'
+import { applyUiLanguageSetting } from '../../src/main/services/i18n'
+import { t } from '../../src/shared/i18n'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
 // TG-3 (translategemma plan §2 D3/D9): translation runs on the TranslateGemma SIDECAR (a
@@ -622,6 +624,43 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     // The window's ORIGINAL text is kept below the notice (window 2 starts where
     // window 1's budget ended).
     expect(text).toContain(`word${budget}`)
+  })
+
+  // L12: the attribution line + failed-window notice are PERSISTED into the generated document,
+  // so they localize to the app language at materialization time (via tMain), not the
+  // canonical-English DB strings. With German selected, the materialized Markdown is German.
+  it('L12: persists the attribution + failed-window notice in the app language (de)', async () => {
+    const docId = await importDoc(600)
+    const budget = translationBudgetWords(1024)
+    const translator = scriptedTranslator({
+      contextTokens: 1024,
+      reply: (call) => {
+        if (call.text.split(/\s+/)[0] === `word${budget}`) throw new Error('boom: model refused')
+        return call.text
+      }
+    })
+    const manager = makeManager({ translator })
+    applyUiLanguageSetting('de')
+    try {
+      const { jobId } = manager.startDocTask({
+        kind: 'translation',
+        documentIds: [docId],
+        params: { sourceLang: 'en', targetLang: 'de' }
+      })
+      const status = await waitTerminal(manager, jobId)
+      expect(status.state).toBe('done')
+
+      const total = Math.ceil(600 / budget)
+      const newId = status.resultRef?.documentId as string
+      const { text } = readStoredDocumentText(db, storeDir, newId)
+      // The German catalog strings are present…
+      expect(text).toContain(t('de', 'main.translation.attributionLine', { modelId: 'scripted-translator' }))
+      expect(text).toContain(t('de', 'main.translation.failedWindowNotice', { part: 2, total }))
+      // …and the canonical English forms are NOT.
+      expect(text).not.toContain(t('en', 'main.translation.attributionLine', { modelId: 'scripted-translator' }))
+    } finally {
+      applyUiLanguageSetting('en') // restore for the rest of the suite
+    }
   })
 
   it('a window that stops at the output cap (no clean stop) is retried, then MARKED (M6)', async () => {

@@ -190,6 +190,24 @@ describe('translationBudgetWords', () => {
     expect(translationBudgetWords(0)).toBeGreaterThanOrEqual(120)
     expect(translationBudgetWords(Number.NaN)).toBeGreaterThanOrEqual(120)
   })
+
+  it('L9: a REAL small context (512) is respected, never clamped UP to 1024', () => {
+    // The pre-L9 code clamped ctx UP to 1024, so ctx 512 and 1024 produced the SAME budget.
+    // A real 512-token context must now yield a SMALLER budget than 1024 — never inflated
+    // past the context the model actually has (which would overflow every window).
+    const small = translationBudgetWords(512)
+    expect(small).toBeLessThan(translationBudgetWords(1024))
+    // The window's estimated INPUT plus the prompt reserve fits inside the REAL 512 context.
+    expect(
+      Math.ceil(small * TRANSLATION_INPUT_TOKENS_PER_WORD) + TRANSLATION_PROMPT_RESERVE_TOKENS
+    ).toBeLessThanOrEqual(512)
+    // A plan over the small context still packs into in-budget windows (no overflow).
+    const plan = planTranslationWindows([chunkOf(2000)], 512)
+    expect(plan.windows.length).toBeGreaterThan(1)
+    for (const w of plan.windows) {
+      expect(approxTokenCount(w)).toBeLessThanOrEqual(small)
+    }
+  })
 })
 
 describe('planTranslationWindows', () => {

@@ -13,7 +13,7 @@ import { packTranscriptSegments } from '../../src/main/services/ingestion/parser
 //
 // CI stays zero-network/zero-model/zero-binary/zero-audio, so this file is skipped
 // unless HILBERTRAUM_WHISPER_SMOKE points at a provisioned drive root (the gpu/rerank/
-// translation-smoke shape):
+// translategemma-smoke shape):
 //
 //   HILBERTRAUM_WHISPER_SMOKE=<root with runtime/whisper.cpp/<os>/whisper-cli + models/transcriber/ggml-*.bin>
 //   HILBERTRAUM_WHISPER_AUDIO=<dir with local German audio fixtures — NEVER committed; the repo ships no audio>
