@@ -772,6 +772,19 @@ export function buildBankAnswer(
   return lines.join('\n')
 }
 
+/**
+ * P-3 (invoice-audit IA-4): the abort a Stop during the analysis auto-run throws so `withChatStream`
+ * (`ipc/chat-stream.ts`) maps it to the CALM cancel — an empty assistant message, nothing persisted —
+ * instead of the handler returning a `couldNotRead` refusal (or a full recomputed answer) that then
+ * sails past the calm-cancel and is committed as a durable assistant turn. The twin of the invoice
+ * handler's `invoiceAnalysisCancelled`. The run seams are the authority on cancel-vs-failure (B2): we
+ * convert to this abort ONLY on a seam-reported `cancelled` (or a late `ctx.signal.aborted` before the
+ * final return), so a genuine transient/reader failure still returns `couldNotRead`.
+ */
+function bankAnalysisCancelled(): DOMException {
+  return new DOMException('Bank statement analysis cancelled', 'AbortError')
+}
+
 export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
   mode: 'exhaustive',
   // The doc-count-agnostic intent (W2, audit §2.1): an analysis-shaped bank question, regardless of how
@@ -838,6 +851,10 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       let statementId = latestBankStatementId(db, target.id)
       if (!statementId || isBankStatementStale(db, statementId)) {
         const extraction = await runBankExtraction(db, args, { ...deps, replaceExisting: true })
+        // P-3 (IA-4): a Stop landing in the extraction is a CALM cancel — not the misleading "could not
+        // read" refusal, which would be committed as a durable assistant turn after cancel. A genuine
+        // (non-cancel) failure still falls through to `couldNotRead` below.
+        if (extraction.cancelled) throw bankAnalysisCancelled()
         if (!extraction.ok || !extraction.statementId) {
           return { answer: ctx.tr('skills.bankAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
         }
@@ -1027,6 +1044,12 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       const loaded = toLoadedTransactions(paired)
       const summaryResult = await runCashflowSummary(db, args, deps, loaded)
       const validateResult = await runBalanceValidation(db, args, deps, loaded)
+      // P-3 (IA-4): a Stop landing in either read-back seam yields `output: undefined`; without this the
+      // pure-recompute fallbacks below would stream/persist a FULL answer after cancel. Convert a
+      // seam-reported cancel (or a late abort no seam flagged) into the calm cancel. A genuine
+      // (non-cancel) seam failure keeps `cancelled` false → the recompute fallbacks still run (their
+      // designed behaviour), so a transient error never becomes a silent empty message.
+      if (summaryResult.cancelled || validateResult.cancelled || ctx.signal?.aborted) throw bankAnalysisCancelled()
       const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
       const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
 

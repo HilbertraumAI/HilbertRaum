@@ -802,10 +802,12 @@ describe('invoice P3 glyph-soup gate + geometry retry + missing-field fall-throu
     expect(reads.length).toBe(readsAfterFirst) // the confirmed flag reuses the rows — no new reads
   })
 
-  // P-2 (invoice-audit IA-1): the `suspect-confirmed` promotion is spent ONLY when the geometry retry
-  // actually COMPLETED. A retry cancelled by a Stop ran zero geometry passes — burning the one retry
-  // there would strand the document at the refusal forever, so the flag must stay `suspect`.
-  it('a CANCELLED geometry retry leaves text_quality suspect — the one retry is NOT burned (P-2)', async () => {
+  // P-2 (invoice-audit IA-1) + P-3 (IA-4): the `suspect-confirmed` promotion is spent ONLY when the
+  // geometry retry actually COMPLETED. A retry cancelled by a Stop ran zero geometry passes — burning the
+  // one retry there would strand the document at the refusal forever, so the flag must stay `suspect`
+  // (IA-1). IA-4 ADDS that the landed cancel now propagates as a calm AbortError (never a committed
+  // answer off the half-done state) — so `run()` rejects, and the retry-burn guard STILL holds.
+  it('a CANCELLED geometry retry rejects (calm cancel) AND leaves text_quality suspect — retry NOT burned (P-2/P-3)', async () => {
     const db = freshDb()
     const id = seedDoc(db, SOUP)
     const controller = new AbortController()
@@ -822,7 +824,8 @@ describe('invoice P3 glyph-soup gate + geometry retry + missing-field fall-throu
         return toSegments(SOUP) // the first (reading-order) extraction still reads soup → 'suspect'
       }
     }
-    await invoiceAnalysisHandler.run!(ctx)
+    // IA-4: the cancel is now converted to the calm-cancel abort instead of answering off soup.
+    await expect(invoiceAnalysisHandler.run!(ctx)).rejects.toMatchObject({ name: 'AbortError' })
     const row = db.prepare('SELECT text_quality AS q FROM invoices').get() as { q: string | null }
     expect(row.q).toBe('suspect') // NOT promoted to 'suspect-confirmed' — a later turn can still retry
   })
@@ -868,6 +871,61 @@ describe('invoice P3 glyph-soup gate + geometry retry + missing-field fall-throu
     const id = seedDoc(db, ['Bill to: Example Corp', ...CLEAN.split('\n')].join('\n'))
     const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'))
     expect(res.answer).toContain(tr('skills.invoiceAnalysis.detailRecipient', { recipient: 'Example Corp' }))
+  })
+})
+
+// P-3 (invoice-audit IA-4): a Stop during the analysis auto-run is a CALM cancel — `run()` rejects with an
+// AbortError that `withChatStream` maps to an empty message (nothing persisted), NEVER a committed
+// `couldNotRead` refusal or a full answer streamed after cancel. A genuine (non-cancel) failure STILL
+// returns `couldNotRead` — the cancel-vs-failure distinction is preserved (the geometry-retry cancel is
+// pinned by the P-2/P-3 test in the block above).
+describe('invoice analysis — Stop mid-run is a calm cancel, not a swallowed answer (P-3 / IA-4)', () => {
+  it('a Stop during the FRESH extraction rejects (AbortError) — no couldNotRead, nothing persisted', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const controller = new AbortController()
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'),
+      signal: controller.signal,
+      readDocumentSegments: async (_id: string) => {
+        // Stop pressed mid-extraction: abort, then the reader throws → run.ts reads signal.aborted
+        // → {ok:false, cancelled:true}.
+        controller.abort()
+        throw new Error('aborted mid-extraction')
+      }
+    }
+    await expect(invoiceAnalysisHandler.run!(ctx)).rejects.toMatchObject({ name: 'AbortError' })
+    // The refusal was NOT returned, and no invoice row was committed off the cancelled read.
+    const invoices = db.prepare('SELECT COUNT(*) AS n FROM invoices').get() as { n: number }
+    expect(invoices.n).toBe(0)
+  })
+
+  it('a Stop during the VALIDATE seam rejects (AbortError) — no full answer recomputed after cancel', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    // First turn (no signal): extract + answer normally, persisting a FRESH invoice to reuse.
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'))
+    // Second turn with an already-aborted signal: extraction is skipped (fresh reuse), so the run reaches
+    // the validate seam whose tool run sees signal.aborted → {cancelled:true}. Without IA-4 the pure
+    // recompute fallback would stream a full answer after cancel.
+    const controller = new AbortController()
+    controller.abort()
+    const ctx = { ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'), signal: controller.signal }
+    await expect(invoiceAnalysisHandler.run!(ctx)).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('a GENUINE (non-cancel) extraction failure still returns couldNotRead (not a silent cancel)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'),
+      // No signal ⇒ never aborted ⇒ the throw classifies as a transient FAILURE, not a cancel.
+      readDocumentSegments: async (_id: string) => {
+        throw new Error('reader blew up')
+      }
+    }
+    const res = await invoiceAnalysisHandler.run!(ctx)
+    expect(res.answer).toBe(tr('skills.invoiceAnalysis.couldNotRead'))
   })
 })
 

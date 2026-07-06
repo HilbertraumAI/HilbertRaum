@@ -177,7 +177,7 @@ Order rationale: IA-1 dissolves the worst user journey (permanent refusal); IA-2
 | IA-1 | P-1, P-2 (+ D-1, D-2 doc/comment halves) | **DONE** | `fix(invoice-audit): IA-1` (see git log / BUILD_STATE) |
 | IA-2 | T-1, T-11 | **DONE** | `fix(invoice-audit): IA-2` (see git log / BUILD_STATE) — bumped `INVOICE_EXTRACTOR_VERSION` 11→12 + `BANK_EXTRACTOR_VERSION` 9→10 |
 | IA-3 | T-2, T-3, T-4, T-5, T-6, T-7, T-8, T-10 | **DONE** | `fix(invoice-audit): IA-3` (see git log / BUILD_STATE) — bumped `INVOICE_EXTRACTOR_VERSION` 12→13 + `BANK_EXTRACTOR_VERSION` 10→11 (T-6 shared) |
-| IA-4 | P-3 | open | — |
+| IA-4 | P-3 | **DONE** | `fix(invoice-audit): IA-4` (see git log / BUILD_STATE) — NO version bump (answer-layer only) |
 | IA-5 | P-4 | open | — |
 | IA-6 | T-9, P-5, P-6, P-7, P-8 | open | — |
 | IA-7 | D-3, D-4, D-5 + close-out | open | — |
@@ -281,6 +281,40 @@ Work through the findings in file order, each with its pinning test (shapes are 
 4. **Tests:** abort `ctx.signal` mid-run (fresh extraction, geometry retry, and validation seam) and assert NO assistant message appended + no `couldNotRead` returned, invoice and bank; a genuine (non-cancel) failure still returns `couldNotRead`.
 
 **Done when:** a Stop at any point in the analysis run leaves no durable trace; ritual complete.
+
+**Disposition (SHIPPED):**
+- **P-3 — FIXED (invoice + bank twin).** A Stop landing anywhere in the analysis auto-run is now converted
+  into a thrown `DOMException(…, 'AbortError')`, which `withChatStream` (`ipc/chat-stream.ts:213-226`) maps
+  to the CALM cancel (an empty assistant message, nothing persisted) — the seam mapping was re-verified:
+  `run()` is invoked *inside* the `withChatStream` runFn at `ipc/registerRagIpc.ts:467` (through
+  `withRegenerateGuard`, which re-throws an abort at `:125-126`), and the outer `withDocumentLock` /
+  `runInvoiceTotalsValidation` propagate the throw unchanged. Before IA-4 the handler *returned*
+  `{answer: couldNotRead}` (or recomputed a full answer via the `?? validateInvoiceTotals` /
+  `?? summarizeCashflow`/`?? reconcileBalances` fallbacks), which sailed past the calm-cancel and was
+  committed as a durable turn.
+- **Seam points converted** (`analysis/invoice.ts`): (1) fresh extraction `extraction.cancelled`; (2) geometry
+  retry `retry.cancelled` (IA-4 completes IA-1 — IA-1 only stopped *burning* the retry / stamping the flag off
+  the half-done state; IA-4 converts the landed cancel into the calm cancel); (3) validate seam
+  `validateResult.cancelled || ctx.signal?.aborted` before the pure-recompute fallback. `analysis/bank-statement.ts`
+  mirrors it: extraction `extraction.cancelled`; the two read-back seams
+  `summaryResult.cancelled || validateResult.cancelled || ctx.signal?.aborted` before the recompute fallbacks
+  (bank has no glyph-soup geometry retry, so only the one extraction point).
+- **Seam-contract discipline (verified).** The run seams reliably distinguish cancel from failure on every
+  path: `runDomainExtractionInner` (`run.ts:369-372`) and `prepareDomainRun` (`:500-503`) set
+  `cancelled = signal.aborted` ONLY on a tool `!ok`, and `runSkillTool` returns `!ok` for an aborted signal
+  (`tool-registry.ts:314`); a persist/unexpected failure returns `cancelled` UNDEFINED with
+  `errorCode:'persistFailed'`. So a genuine transient/reader failure keeps `cancelled` false → the invoice
+  handler still returns `couldNotRead` and the bank recompute fallbacks still run (their designed behaviour) —
+  a non-cancel failure NEVER becomes a silent empty message (pinned by a mirror test in each suite).
+- **NO version bump.** IA-4 is answer-layer handler logic — it changes no persisted extraction output — so
+  `INVOICE_EXTRACTOR_VERSION` (13) and `BANK_EXTRACTOR_VERSION` (11) are UNCHANGED and the extractor snapshot
+  was not regenerated.
+- **Tests.** `skills-analysis-invoice.test.ts`: the IA-1 cancelled-retry test was UPDATED (the retry-burn
+  invariant `text_quality` stays `'suspect'` still holds, and `run()` now `rejects` with `AbortError`) + a new
+  P-3/IA-4 describe (+3): fresh-extraction cancel rejects & persists nothing; validate-seam cancel rejects (no
+  recomputed answer); a genuine non-cancel failure still returns `couldNotRead`. `skills-analysis-bank.test.ts`:
+  new twin describe (+3, same three shapes). The failed-retry (non-cancel) IA-1 test stays green unchanged.
+  **Full suite 3610/47** (was 3604; +6), typecheck green.
 
 ### IA-5 — Lazy invoice downstream reader (P-4)
 

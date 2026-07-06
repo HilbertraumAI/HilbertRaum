@@ -578,6 +578,19 @@ export function buildInvoiceAnswer(
   return lines.join('\n')
 }
 
+/**
+ * P-3 (invoice-audit IA-4): the abort a Stop during the analysis auto-run throws so `withChatStream`
+ * (`ipc/chat-stream.ts`) maps it to the CALM cancel — an empty assistant message, nothing persisted —
+ * instead of the handler returning a `couldNotRead` refusal (or a full recomputed answer) that then
+ * sails past the calm-cancel and is committed as a durable assistant turn. The run seams are the
+ * authority on cancel-vs-failure (B2): we convert to this abort ONLY on a seam-reported `cancelled`
+ * (or a late `ctx.signal.aborted` before the final return), so a genuine transient/reader failure
+ * still returns `couldNotRead` — never a silently-swallowed empty message.
+ */
+function invoiceAnalysisCancelled(): DOMException {
+  return new DOMException('Invoice analysis cancelled', 'AbortError')
+}
+
 export const invoiceAnalysisHandler: SkillAnalysisHandler = {
   mode: 'exhaustive',
   // The doc-count-agnostic intent (W2, audit §2.1): an analysis-shaped invoice question, regardless of
@@ -640,6 +653,10 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       let invoiceId = latestInvoiceId(db, target.id)
       if (!invoiceId || isInvoiceStale(db, invoiceId)) {
         const extraction = await runInvoiceExtraction(db, args, { ...deps, replaceExisting: true })
+        // P-3 (IA-4): a Stop landing in the fresh extraction is a CALM cancel — not the misleading
+        // "could not read" refusal, which would be committed as a durable assistant turn after cancel.
+        // A genuine (non-cancel) failure still falls through to `couldNotRead` below.
+        if (extraction.cancelled) throw invoiceAnalysisCancelled()
         if (!extraction.ok || !extraction.invoiceId) {
           return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
         }
@@ -664,6 +681,11 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
           readDocumentSegments: (id) => ctx.readDocumentSegments!(id, { layout: true }),
           replaceExisting: true
         })
+        // P-3 (IA-4): a Stop landing in the geometry retry is a CALM cancel. IA-1 already refuses to
+        // BURN the retry (the promotion below stays inside `retry.ok`); IA-4 completes it by converting
+        // the landed cancel into the empty-message calm cancel instead of answering off the half-done
+        // (still-'suspect') state. A transient (non-cancel) retry failure still falls through unchanged.
+        if (retry.cancelled) throw invoiceAnalysisCancelled()
         // P-2 (invoice-audit IA-1): the one-and-final `suspect-confirmed` promotion is spent ONLY when
         // the geometry retry actually COMPLETED (`retry.ok`) and still read soup. A cancelled (user
         // pressed Stop) or transiently-failed retry ran ZERO geometry passes — burning the retry there
@@ -753,6 +775,12 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       }
 
       const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
+      // P-3 (IA-4): a Stop landing in the validate seam yields `output: undefined`; without this the
+      // pure-recompute fallback below would stream/persist a FULL answer after cancel. Convert the
+      // seam-reported cancel (or a late abort that no seam flagged) into the calm cancel. A genuine
+      // (non-cancel) seam failure keeps `cancelled` false → the recompute fallback still runs (its
+      // designed behaviour), so a transient validate error never becomes a silent empty message.
+      if (validateResult.cancelled || ctx.signal?.aborted) throw invoiceAnalysisCancelled()
       const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 
       // Citations + coverage are the SAME for the template and grounded-data shapes (both read the whole

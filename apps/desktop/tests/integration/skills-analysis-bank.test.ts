@@ -985,6 +985,59 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
   })
 })
 
+// P-3 (invoice-audit IA-4): a Stop during the bank analysis auto-run is a CALM cancel — `run()` rejects
+// with an AbortError that `withChatStream` maps to an empty message (nothing persisted), NEVER a committed
+// `couldNotRead` refusal or a full answer recomputed after cancel. A genuine (non-cancel) failure STILL
+// returns `couldNotRead`. Twin of the invoice P-3 tests.
+describe('bank analysis — Stop mid-run is a calm cancel, not a swallowed answer (P-3 / IA-4)', () => {
+  it('a Stop during the extraction rejects (AbortError) — no couldNotRead, nothing persisted', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const controller = new AbortController()
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'),
+      signal: controller.signal,
+      readDocumentSegments: async (_id: string, _opts?: { layout?: boolean }) => {
+        // Stop pressed mid-extraction: abort, then the reader throws → run.ts reads signal.aborted
+        // → {ok:false, cancelled:true}.
+        controller.abort()
+        throw new Error('aborted mid-extraction')
+      }
+    }
+    await expect(bankStatementAnalysisHandler.run!(ctx)).rejects.toMatchObject({ name: 'AbortError' })
+    const statements = db.prepare('SELECT COUNT(*) AS n FROM bank_statements').get() as { n: number }
+    expect(statements.n).toBe(0)
+  })
+
+  it('a Stop during the read-back seams rejects (AbortError) — no full answer recomputed after cancel', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // First turn (no signal): extract + answer normally, persisting a FRESH statement to reuse.
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    // Second turn with an already-aborted signal: extraction is skipped (fresh reuse), so the run reaches
+    // the summarize/validate seams whose tool runs see signal.aborted → {cancelled:true}. Without IA-4 the
+    // pure recompute fallbacks would stream a full answer after cancel.
+    const controller = new AbortController()
+    controller.abort()
+    const ctx = { ...ctxFor(db, { documentIds: [id] }, 'total?'), signal: controller.signal }
+    await expect(bankStatementAnalysisHandler.run!(ctx)).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('a GENUINE (non-cancel) extraction failure still returns couldNotRead (not a silent cancel)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'),
+      // No signal ⇒ never aborted ⇒ the throw classifies as a transient FAILURE, not a cancel.
+      readDocumentSegments: async (_id: string, _opts?: { layout?: boolean }) => {
+        throw new Error('reader blew up')
+      }
+    }
+    const res = await bankStatementAnalysisHandler.run!(ctx)
+    expect(res.answer).toBe(tr('skills.bankAnalysis.couldNotRead'))
+  })
+})
+
 // W6 (audit §3.1, SKA-4/SKA-5) — the grounded-data honesty COMPOSITION: the mode's postscript + data
 // block now honour the D56 completeness gate and the U1 droppedRowCount, end-to-end through run(). A
 // non-summary question ("what was my largest transaction?") routes to grounded-data over each fixture.
