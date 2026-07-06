@@ -6,6 +6,33 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-06 — **PR review round: rebase onto master + both blockers fixed + scope split (branch `mkg2`).**
+The Streamdown/Retry-all/deep-index PR was rebased onto current master (post-#15/#16/#17/#18 + the TA/FA
+translation waves). The one real conflict — `Transcript.tsx`'s streaming block — resolved as
+`<AssistantMarkdown text={localizedStream} streaming />`: master's memoized `localizedStream` (perf F2)
+survives; the pre-rebase inline `localizeServerCopy(t, streamText)` would have re-scanned the buffer twice
+per flush. **Blocker 1 (dead weight):** `streamdown` hard-depends on `mermaid` (~136 MB unpacked with its
+cytoscape/d3/dagre/roughjs chain) but the `@streamdown/mermaid` plugin isn't installed — never imported, yet
+electron-builder would fold it into `app.asar`. Fixed with `files` negations in `electron-builder.yml`
+(@napi-rs/canvas precedent), kept honest by `packaging.test.ts` recomputing the "reachable only via mermaid"
+set from `package-lock.json` (a future dep needing an excluded package turns the gate red). **Verified with
+a real `--dir` build asar listing: 0 mermaid-chain entries, app.asar 68 MB (~204 MB without).** **Blocker 2
+(KaTeX skew):** direct dep was `katex@^0.17.0` (CSS+fonts) while rehype-katex rendered with its nested
+0.16.47 — KaTeX requires matched JS/CSS. Pinned `~0.16.47` (all installed copies now 0.16.47); guarded by a
+"math actually renders" smoke test + a version-parity probe; fonts re-verified in
+`out/renderer/assets/KaTeX_*`. **Review test asks:** raw-HTML-stays-LITERAL assertion (pins the dropped-
+rehype-raw posture the old `<script>` test couldn't distinguish); bulk re-index mid-loop rejection pin (a
+deleted doc fails only itself, the rest still process) + a completion summary toast (`docs.reindexAllDone`
+/ `docs.reindexAllPartial`, en+de) so a partial batch no longer looks like full success. **Scope split (per
+review):** the Nix dev-shell flake → branch `nix-dev-shell`; the screenshot-verify skill + preview harness →
+branch `screenshot-verify`; this PR keeps Streamdown, Retry-all (+ main-owned bulk job + cancel), the
+deep-index fire-and-forget fix, and the embeddings/HTTP-400/coverage/force-reindex work. **Divergence notes**
+added at the two master sites still on plain-text-while-streaming (Translate view, Images answer thread) citing
+the revised §FE-1. Suite **3606 pass / 44 skip**, typecheck + build green — the single `vision-status`
+no-runtime failure is an ENVIRONMENT artifact of this dev shell (a real `llama-server` on the env; fails
+identically on clean master here; fine on CI). **Open (manual):** one visual eyeball of a long, KaTeX-heavy
+streamed reply in the real app — the bench is jsdom (parse cost, not layout/paint)._
+
 _2026-06-30 — **`HR_FORCE_REINDEX` dev env var — force every document outdated.** Companion to the chunk-coverage work:
 when `HR_FORCE_REINDEX=1`, `listDocuments` (`ingestion/index.ts`, via `forceReindexEnabled()`, read at call time) reports
 EVERY indexed+chunked document as `staleEmbeddings: true` regardless of which embedder produced its vectors — so the
