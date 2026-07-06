@@ -278,6 +278,38 @@ describe('registerDocsIpc', () => {
     expect(job.completed).toBeLessThan(job.total) // stopped before finishing all six
   })
 
+  it('a mid-loop rejection (deleted doc) fails only that document — the rest still re-index', async () => {
+    // PR review: the batch must continue past a document whose re-index rejects (here: deleted
+    // between listing and the loop reaching it), not abort the remainder with one generic error.
+    // The settled counts still add up to total so the renderer's summary toast is honest.
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const paths: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const f = join(workspacePath, `m${i}.txt`)
+      writeFileSync(f, `doc ${i} alpha beta gamma delta`)
+      paths.push(f)
+    }
+    const { documentIds } = await runImport(paths)
+    expect(documentIds).toHaveLength(3)
+    // Delete the MIDDLE document so the loop hits the rejection with work still remaining.
+    await invoke(handlers, IPC.deleteDocument, documentIds[1])
+
+    const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    let job = started
+    for (let i = 0; i < 200 && !job.done; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    }
+    expect(job.done).toBe(true)
+    expect(job.cancelled).toBe(false)
+    expect(job.completed).toBe(2) // the docs AFTER the rejection were still processed
+    expect(job.failed).toBe(1)
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === documentIds[0])?.status).toBe('indexed')
+    expect(listed.find((d) => d.id === documentIds[2])?.status).toBe('indexed')
+  })
+
   it('imports a chat attachment: Temporary + a conversation_documents link (C3)', async () => {
     const { db, workspacePath } = freshWorkspace()
     registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))

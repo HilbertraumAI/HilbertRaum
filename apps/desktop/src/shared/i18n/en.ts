@@ -392,6 +392,8 @@ export const en = {
   'docs.reindexAllProgress': 'Re-indexing {done} of {total}…',
   'docs.reindexAllCancel': 'Cancel',
   'docs.reindexAllCancelled': 'Re-indexing stopped — {done} of {total} done.',
+  'docs.reindexAllDone': 'Re-indexed {done} documents.',
+  'docs.reindexAllPartial': 'Re-indexed {done} of {total} — {failed} failed. Failed documents stay on the Failed imports tab.',
   'docs.supported.base':
     'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +
     'which are transcribed on this drive',

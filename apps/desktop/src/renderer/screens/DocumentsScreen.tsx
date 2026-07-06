@@ -314,9 +314,22 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
             setBusy(null)
             setReindexProgress(null)
             // Cancelled ends the same way as completed (bar clears, list refreshed) — a toast tells
-            // the user it STOPPED early rather than finished, with what got through.
+            // the user it STOPPED early rather than finished, with what got through. A completed
+            // batch gets a summary toast too (PR review): the loop continues past per-document
+            // failures (locked/deleted/crashed docs), so without a summary a partial outcome
+            // looked identical to a full success until you noticed the Failed imports tab.
             if (job.cancelled) {
               showToast(t('docs.reindexAllCancelled', { done: job.completed, total: job.total }))
+            } else if (job.failed > 0) {
+              showToast(
+                t('docs.reindexAllPartial', {
+                  done: job.completed,
+                  total: job.total,
+                  failed: job.failed
+                })
+              )
+            } else if (job.total > 0) {
+              showToast(t('docs.reindexAllDone', { done: job.completed }))
             }
           }
         }
