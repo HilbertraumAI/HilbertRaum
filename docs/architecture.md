@@ -4394,6 +4394,12 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
 - **D58 — Layout mode is bank-statement ONLY.** The invoice skill is label/line-scan based, so
   column-reconstructed text could shift its line composition — adopt layout there (if ever) only behind
   its own measurement. Redaction/preview/translate/compare/ingest never set `layout`.
+  **Amended by §42 P3 (invoice-hardening-2026-07-04):** the invoice *analysis* handler now DOES
+  re-extract once via `readDocumentSegments(id, { layout: true })` on a glyph-soup verdict
+  (`text_quality:'suspect'`) — D58's own escape clause ("adopt layout there only behind its own
+  measurement") was satisfied by the `invoice-de-geometry-columns` fixture. The scope of "bank-only"
+  is now precisely: the **run-bar / IPC extract** path and every non-analysis skill never set `layout`;
+  the one invoice geometry read is the analysis path's suspect retry.
 
 **Design as built (deterministic, offline, ZERO model calls).**
 - **`ingestion/parsers/pdf-layout.ts`** — pure geometry reconstruction. `clusterRows` groups

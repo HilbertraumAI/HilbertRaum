@@ -776,6 +776,15 @@ export async function prepareDocument(
         prev?.extract_status ? 'stale' : null,
         documentId
       )
+      // P-1 (invoice-audit IA-1): the re-index / OCR-re-ingest / materialize teardown replaces the
+      // document's TEXT, so any persisted bank/invoice extraction rows were parsed from the OLD text —
+      // reusing them (their staleness gate is extractor-VERSION-only, not content-aware) keeps serving
+      // figures read from content that no longer exists, and a glyph-soup `suspect-confirmed` refusal
+      // survives the very OCR the app told the user to run. Purge them here so the next analysis
+      // question re-extracts from the fresh text. `purgeSkillDataForDocument` covers both twins
+      // (bank_statements + invoices and their children); a first-time import has no rows → no-op.
+      // Same transaction as the chunk/embedding/tree deletes so a rollback leaves the rows intact.
+      purgeSkillDataForDocument(db, documentId)
 
       const insert = db.prepare(
         `INSERT INTO chunks

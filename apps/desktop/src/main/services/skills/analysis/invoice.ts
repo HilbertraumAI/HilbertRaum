@@ -664,14 +664,21 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
           readDocumentSegments: (id) => ctx.readDocumentSegments!(id, { layout: true }),
           replaceExisting: true
         })
+        // P-2 (invoice-audit IA-1): the one-and-final `suspect-confirmed` promotion is spent ONLY when
+        // the geometry retry actually COMPLETED (`retry.ok`) and still read soup. A cancelled (user
+        // pressed Stop) or transiently-failed retry ran ZERO geometry passes — burning the retry there
+        // would strand the document at the refusal forever (a later turn could never retry), and it is
+        // durable work committed in direct response to a Stop. So a non-ok retry leaves `text_quality =
+        // 'suspect'` intact for a future turn. (Full abort→calm-cancel propagation is IA-4; here we only
+        // refuse to stamp the flag off a half-done retry.)
         if (retry.ok && retry.invoiceId) {
           invoiceId = retry.invoiceId
           invoice = loadInvoice(db, invoiceId)
           textQuality = loadTextQuality(db, invoiceId)
-        }
-        if (textQuality === 'suspect') {
-          db.prepare(`UPDATE invoices SET text_quality = 'suspect-confirmed' WHERE id = ?`).run(invoiceId)
-          textQuality = 'suspect-confirmed'
+          if (textQuality === 'suspect') {
+            db.prepare(`UPDATE invoices SET text_quality = 'suspect-confirmed' WHERE id = ?`).run(invoiceId)
+            textQuality = 'suspect-confirmed'
+          }
         }
       }
       const lowTextQuality = textQuality !== null

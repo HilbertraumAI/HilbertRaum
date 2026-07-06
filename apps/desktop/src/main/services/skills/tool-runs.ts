@@ -359,8 +359,9 @@ export function buildToolRunner(
           // Parity with the bank extract button + the invoice analysis path (`analysis/invoice.ts`,
           // which re-extracts with `replaceExisting`): an explicit re-extract REPLACES the document's
           // prior invoice rather than accumulating duplicate `invoices` rows that `latestInvoiceId`
-          // would then pick between. (Invoices are never geometry-reconstructed — layout is bank-only,
-          // D58 — so no layout flag here.)
+          // would then pick between. (No layout flag on THIS run-bar path: the one invoice geometry
+          // read is the analysis handler's P3 suspect retry, §42 — the run-bar extract stays
+          // reading-order, D58 as amended.)
           replaceExisting: true
         })
         return {
@@ -374,7 +375,8 @@ export function buildToolRunner(
     case 'validate_invoice_totals':
       return async ({ signal, onProgress }) => {
         // Segment reader forwarded so a STALE invoice re-extracts from faithful segments (R3 / §5.6).
-        // No `layout` flag — invoices are never geometry-reconstructed (layout is bank-only, D58).
+        // No `layout` flag on this run-bar path — the one invoice geometry read is the analysis
+        // handler's P3 suspect retry (§42); the run-bar extract stays reading-order (D58 as amended).
         const res = await runInvoiceTotalsValidation(db, seamArgs, {
           audit,
           signal,

@@ -992,7 +992,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the PDF in a **layout mode** that rebuilds visual rows from pdf.js word coordinates and emits clean,
   year-resolved `DD.MM.YYYY` rows — **deterministic, offline, zero model calls** (`parsers/pdf-layout.ts`).
   Enabled for **bank-statement only** (D58 — invoice/redaction/preview keep byte-unchanged reading-order
-  text); `parseDate` is untouched (the year is resolved during reconstruction, §3.2). A **booking-date
+  text). **Amended by §42 P3:** the invoice *analysis* path is the one exception — it re-extracts once
+  through layout mode on a glyph-soup (`text_quality:'suspect'`) verdict; the run-bar invoice extract
+  stays reading-order. `parseDate` is untouched (the year is resolved during reconstruction, §3.2). A **booking-date
   column model** (`detectDatumColumn`) keeps a row from being mis-read as a transaction unless its LEAD
   date sits in the statement's leftmost, densest date column — so a value-date (Valuta) column printed
   on a second baseline, with a foreign-currency reference amount hidden in its description, is no longer

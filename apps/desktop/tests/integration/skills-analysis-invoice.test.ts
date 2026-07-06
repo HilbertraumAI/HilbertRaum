@@ -802,6 +802,47 @@ describe('invoice P3 glyph-soup gate + geometry retry + missing-field fall-throu
     expect(reads.length).toBe(readsAfterFirst) // the confirmed flag reuses the rows — no new reads
   })
 
+  // P-2 (invoice-audit IA-1): the `suspect-confirmed` promotion is spent ONLY when the geometry retry
+  // actually COMPLETED. A retry cancelled by a Stop ran zero geometry passes — burning the one retry
+  // there would strand the document at the refusal forever, so the flag must stay `suspect`.
+  it('a CANCELLED geometry retry leaves text_quality suspect — the one retry is NOT burned (P-2)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, SOUP)
+    const controller = new AbortController()
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'),
+      signal: controller.signal,
+      readDocumentSegments: async (_id: string, opts?: { layout?: boolean }) => {
+        if (opts?.layout) {
+          // Stop pressed mid-retry: abort, then the reader throws. `resolveDocumentReader` defers the
+          // throw into the tool, and run.ts reads `signal.aborted` → {ok:false, cancelled:true}.
+          controller.abort()
+          throw new Error('aborted mid-retry')
+        }
+        return toSegments(SOUP) // the first (reading-order) extraction still reads soup → 'suspect'
+      }
+    }
+    await invoiceAnalysisHandler.run!(ctx)
+    const row = db.prepare('SELECT text_quality AS q FROM invoices').get() as { q: string | null }
+    expect(row.q).toBe('suspect') // NOT promoted to 'suspect-confirmed' — a later turn can still retry
+  })
+
+  it('a transiently-FAILED geometry retry also leaves text_quality suspect (P-2)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, SOUP)
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'),
+      // No signal ⇒ never aborted ⇒ the throw classifies as a transient FAILURE (cancelled:false).
+      readDocumentSegments: async (_id: string, opts?: { layout?: boolean }) => {
+        if (opts?.layout) throw new Error('layout reader blew up')
+        return toSegments(SOUP)
+      }
+    }
+    await invoiceAnalysisHandler.run!(ctx)
+    const row = db.prepare('SELECT text_quality AS q FROM invoices').get() as { q: string | null }
+    expect(row.q).toBe('suspect') // a failed retry is not "spent" either
+  })
+
   it('a question naming a MISSING header field falls through to the relevance path (Empfänger)', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN) // no recipient line
