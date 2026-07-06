@@ -1442,6 +1442,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   to the AI Model screen; a task started anyway refuses with the same friendly copy. The
   sidecar resolves at app START (the `ocrAvailable` pattern) — after installing the model
   mid-session, restart the app so translation picks it up.
+- **A failed translation-model START disables translation until the app restarts — and now says
+  so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the first translate. If that start
+  fails it is LATCHED for the session (the reranker precedent — a permanent load fault must not
+  re-spawn and re-await the full health timeout on every window). The most likely cause is not a
+  corrupt model but **transient memory pressure** from the co-resident chat model, so the failure
+  now surfaces actionable copy — *"The translation model couldn't start — the device may be low on
+  memory. Close other apps or restart HilbertRaum, then try again."* — instead of a bare "couldn't
+  finish". Freeing memory and restarting the app clears the latch. We deliberately do NOT
+  auto-retry the latched start: no reliable transient/OOM signature exists across OSes to tell
+  memory pressure from a genuinely permanent fault (on Windows the OOM exit code collides with the
+  known template-validation crash; a Linux OOM-kill is indistinguishable from our own shutdown), so
+  un-latching would re-pay the full spawn + health-timeout cost on every window for a permanent
+  fault. A transient port-bind race is the one non-latching start class and still retries silently.
 - **Languages are a curated set of TEN — source AND target** (`de, en, fr, es, it, pt, nl,
   pl, cs, uk`), validated server-side. TranslateGemma's trained prompt needs an explicit
   source language; there is **no auto-detect** (plan §6). All ten sit inside the model's

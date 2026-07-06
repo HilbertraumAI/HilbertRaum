@@ -140,6 +140,24 @@ function failWith(message: string): void {
   set({ state: 'failed', error: null, errorMessage: message, busy: false })
 }
 
+/**
+ * Map the doc-task's raw progress to the WINDOW counts the Translate view labels
+ * ("Translating… (3/12)"). The translation doc-task's `stepsTotal` counts the model windows PLUS
+ * the final materialize step (`planTranslationWindows`: `windows + 1`), so a 12-window document
+ * would otherwise read "(3/13)". The materialize step is subtracted for DISPLAY (F-8) and
+ * `windowsDone` is clamped to the window total — the materialize tick that pushes `stepsDone` to
+ * `windows + 1` lands exactly as the task goes `done`, when the result panel (not this label) shows.
+ * Display-only: the doc-task's real progress contract is untouched. Shared by the fresh-start poll
+ * and the post-reload adopt so both show the corrected count.
+ */
+function windowProgress(p: { stepsDone: number; stepsTotal: number }): {
+  windowsDone: number
+  windowsTotal: number
+} {
+  const windowsTotal = Math.max(0, p.stepsTotal - 1)
+  return { windowsDone: Math.min(p.stepsDone, windowsTotal), windowsTotal }
+}
+
 /** Basename of an absolute path for a friendly label (cross-platform separators). */
 function baseName(path: string): string {
   const parts = path.split(/[/\\]/)
@@ -346,7 +364,7 @@ function pollDocTask(taskJobId: string, myGen: number): void {
         }
         const status = await window.api.getDocTask(taskJobId)
         if (myGen !== gen) return
-        set({ windowsDone: status.progress.stepsDone, windowsTotal: status.progress.stepsTotal })
+        set(windowProgress(status.progress)) // F-8: subtract the materialize step for display
         if (status.state === 'done') {
           stopPolling()
           void loadResult(status.resultRef?.documentId ?? null, myGen)
@@ -445,8 +463,7 @@ export async function adoptActiveFileTranslation(): Promise<void> {
     state: 'translating',
     busy: true,
     fileName: null, // unavailable after a reload — main tracks ids only
-    windowsDone: task.progress.stepsDone,
-    windowsTotal: task.progress.stepsTotal
+    ...windowProgress(task.progress) // F-8: subtract the materialize step for display
   })
   pollDocTask(task.jobId, myGen)
 }

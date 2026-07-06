@@ -6,7 +6,12 @@ import type { TranslateOptions } from './runtime'
 // wiring; since TG-3 the document-translation doc-task consumes it (`DocTaskDeps.getTranslator`
 // — the chat runtime is no longer involved in translation); the Translate view lands at TG-4/5.
 
-export { TranslationRuntime } from './runtime'
+export {
+  TranslationRuntime,
+  TranslationStartError,
+  isTranslationStartError,
+  TRANSLATION_START_FAILED_CODE
+} from './runtime'
 export type { TranslateOptions } from './runtime'
 export { isCleanStop } from './completion'
 export type { CompletionFinal } from './completion'

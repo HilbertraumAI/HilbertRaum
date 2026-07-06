@@ -58,6 +58,7 @@ const ERR_KEY: Partial<Record<ClientTranslateError, MessageKey>> = {
   busy: 'translate.err.busy',
   docTaskBusy: 'translate.err.docTaskBusy',
   runtimeFailed: 'translate.err.runtimeFailed',
+  startFailed: 'translate.err.startFailed',
   empty: 'translate.err.empty',
   sameLang: 'translate.err.sameLang'
 }

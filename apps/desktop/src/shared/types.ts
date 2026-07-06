@@ -884,6 +884,9 @@ export type TranslateJobState = 'queued' | 'translating' | 'done' | 'failed' | '
  * empty text (a backstop — the UI already guards). `busy`: a second view translate while one
  * runs (busy-REJECT, never queued). `docTaskBusy`: a document task holds the one-at-a-time
  * lane (D9). `empty`: the model returned nothing. `cancelled`: the user pressed Stop / a lock.
+ * `startFailed`: the translation sidecar could not start (a latched start fault — most likely
+ * transient memory pressure from the co-resident chat model; the UI asks the user to restart the
+ * app or free memory — F-7 / FA-4 option c).
  */
 export type TranslateErrorCode =
   | 'noModel'
@@ -891,6 +894,7 @@ export type TranslateErrorCode =
   | 'busy'
   | 'docTaskBusy'
   | 'runtimeFailed'
+  | 'startFailed'
   | 'empty'
   | 'cancelled'
 

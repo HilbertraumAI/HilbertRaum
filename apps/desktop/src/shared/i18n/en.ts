@@ -1553,6 +1553,12 @@ export const en = {
   'main.translation.noModel':
     'Translating needs the translation model, which is not installed on this drive. ' +
     'You can download it on the AI Model screen.',
+  // F-7 (FA-4, option c): the translation sidecar could not start — most likely transient memory
+  // pressure from the co-resident chat model. The latch keeps it down until restart, so the copy is
+  // actionable rather than a bare failure. Content-free (no path, no runtime detail).
+  'main.translation.startFailed':
+    "The translation model couldn't start — the device may be low on memory. " +
+    'Close other apps or restart HilbertRaum, then try again.',
   // Persisted INTO the generated translation (L12) — localized at materialization time, not a
   // canonical-English DB string. `failedWindowNotice` keeps its `> ` blockquote prefix.
   'main.translation.failedWindowNotice':
@@ -1931,6 +1937,8 @@ export const en = {
   'translate.err.busy': 'A translation is already running. Wait for it to finish, then try again.',
   'translate.err.docTaskBusy': 'A document task is running. Wait for it to finish, then translate.',
   'translate.err.runtimeFailed': "The translation model couldn't finish. Try again, or a shorter text.",
+  'translate.err.startFailed':
+    "The translation model couldn't start — the device may be low on memory. Close other apps or restart HilbertRaum, then try again.",
   'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
   'translate.err.sameLang': 'Pick two different languages.',
 

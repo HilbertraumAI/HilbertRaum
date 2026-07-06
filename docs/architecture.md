@@ -1742,6 +1742,58 @@ limit-stop detection + view-job empty-window retry (M6/M7); **TA-6** sidecar cra
 single-flight teardown, sender-destroy cancel (M1/M5/L2/L3); **TA-7** low sweep + doc drift + this
 close-out (L9/L11/L12, L10-accept, D1–D5). One decision of record: **L10 accepted as-is** (above).
 
+**Follow-up audit (FA wave) — outcomes.** A second, full-surface pass over the as-built TranslateGemma
+feature the same day the TA wave closed (`docs/translation-audit-2026-07-06-followup.md`, 8 new findings
+F-1…F-8) was fixed across FA-1…FA-4, all on `master`, 2026-07-06 — then the working paper was folded here
+and DELETED per the doc-lifecycle rule (git history keeps it). The `F-N` / `FA-N` anchors that code
+comments cite resolve against the **per-finding disposition** below. Per phase: **FA-1** (F-1, F-4);
+**FA-2** (F-2, F-5); **FA-3** (F-6, F-3); **FA-4** (F-7, F-8 + this close-out). Suite **3584 / 47** at
+close (baseline 3580, +4 FA-4 pins). One decision of record: **F-7 shipped as option (c)**, with option
+(a) rejected-with-reason (below).
+
+Per-finding disposition (F-1…F-8):
+- **F-1 (HIGH/MED, correctness) — FIXED (FA-1).** View-job retry duplicated already-streamed text into
+  the terminal `done`. `jobs.ts` `run()` now checkpoints `job.text` after the `'\n\n'` window separator
+  and restores it via `patch()` (cancelled-guarded) before each retry attempt, so a transiently-failed
+  attempt's deltas are rolled back and the window lands once. No new IPC (`trDone` carries the full text).
+- **F-2 (MED, latency) — FIXED (FA-2).** Both retry loops now classify the failed attempt: a THROW or
+  EMPTY reply is TRANSIENT (retry once); a NON-EMPTY non-clean-stop is a deterministic temperature-0
+  limit-stop and fails immediately (greedy + `cache_prompt` reproduces the identical truncation — the
+  second ~30-min decode was pure waste). Abort contract byte-identical.
+- **F-3 (MED, UX) — FIXED (FA-3).** `adoptActiveFileTranslation()` mirrors the text path's `adoptActiveJob`:
+  on Translate-screen mount it reads main's active doc-task over the new `getActiveDocTask` IPC and, for a
+  running `translation` task, re-seeds `translating` + window progress (null-tolerant `fileName`) and
+  resumes the poll under a fresh generation (`pollDocTask` extracted + shared with the fresh start).
+- **F-4 (LOW, leak) — FIXED (FA-1).** `registerTranslateIpc` keeps a `jobId → detach` map; the
+  `destroyed` listener is now detached on the cancel terminals (which emit neither done nor error) too.
+- **F-5 (LOW, hardening) — FIXED (FA-2).** `sanitizeSourceText` rewrites the full Gemma special-token
+  family (`<bos>`/`<eos>`/`<unk>`/`<pad>`/`<start_of_image>`/`<end_of_image>` + the two turn markers) to
+  the visually-identical `⟨…⟩` non-token spelling; exact-marker alternation leaves ordinary `<…>` HTML
+  untouched. `TODO(smoke)` reconfirms the family against the pinned GGUF tokenizer.
+- **F-6 (LOW, correctness edge) — FIXED (FA-3, ahead of F-3).** `cancelDocTask(jobId?)` routes a present
+  id to `cancelActiveDocTask(id)`, which cancels ONLY when the id IS the active task (else no-op); the
+  file store threads its held `docTaskJobId` through both cancel paths, so a stale/superseding Stop can
+  never kill a foreign task that took the lane. Absent id keeps the active-task fallback for old callers.
+- **F-7 (LOW, availability) — FIXED (FA-4), option (c).** A latched start failure could permanently
+  disable translation for the session with only "runtime failed" to show. **Decision:** keep the latch
+  (correct for the permanent case — the reranker precedent) but tag its error with a distinct code
+  (`TRANSLATION_START_FAILED_CODE`) so both consumers surface actionable "restart the app / free memory"
+  copy (new `translate.err.startFailed` + `main.translation.startFailed`, en+de, parity-compile-enforced;
+  content-free — no cause message crosses to the renderer, so security-model logging is untouched).
+  **Option (a) "classify OOM-shaped failures as non-latching like bind races" — REJECTED:** no reliable
+  transient/OOM signature exists across OSes. Verified against `LlamaServer`'s start surface — the only
+  machine-readable signal is the exit code, and on Windows the OOM / `std::bad_alloc` exit `0xC0000409`
+  COLLIDES with the PERMANENT #20305 minja template crash, while a Linux OOM-kill `SIGKILL` is
+  indistinguishable from our own `stop()`. Un-latching on that signature would also un-latch a genuinely
+  permanent fault → every window re-spawns + re-awaits the full health timeout (the exact cost the latch
+  prevents). Option (b) time-bounding the latch shares that reliance and re-pays the cost on a timer —
+  not chosen. The bind-race exemption is unchanged (a bind race still propagates raw, non-latching).
+- **F-8 (NIT, cosmetic) — FIXED (FA-4).** The file progress label counted the materialize step
+  (`stepsTotal = windows + 1`), so a 12-window doc read "(3/13)". A display-only `windowProgress()`
+  helper in `fileTranslateSession.ts` subtracts the materialize step and clamps `windowsDone`, applied on
+  BOTH the fresh-start poll and the FA-3 adopt seed; the doc-task's real progress contract is untouched.
+  (The DocumentsScreen inline-translate label is a separate surface, out of scope, left as-is.)
+
 **Deferred backlog (audited in the TA wave, deliberately NOT scheduled — recorded for a later wave).**
 - Full emitter **rebind** on `getActive` adoption across windows (L3 shipped as cancel-on-destroy only —
   a destroyed sender cancels its job; a live handoff to another window is not built).
@@ -1771,8 +1823,9 @@ close-out (L9/L11/L12, L10-accept, D1–D5). One decision of record: **L10 accep
   non-idle → remount-safe with no component flag); the screen's single `busy = textTranslating ||
   fileBusy` disables BOTH triggers, so the file path naturally takes the D9 lane (a real
   `ctx.docTasks` task, so the text path's `hasActiveDocTask()` guard blocks it too). The file path
-  shows numeric window progress (`Translating… (3/12)` from `stepsDone/stepsTotal`); the text path
-  deliberately shows none. **Deliberate deviation from the plan's "poll (lib/doctasks.ts store)":**
+  shows numeric window progress (`Translating… (3/12)`) driven by `stepsDone/stepsTotal` with the
+  materialize step subtracted for display (FA-4 F-8 — `windowProgress()`); the text path deliberately
+  shows none. **Deliberate deviation from the plan's "poll (lib/doctasks.ts store)":**
   the new store runs its OWN import + doc-task polling rather than the GLOBAL `doctasks` store's
   `startTask`, so the result load never races a foreign `acknowledgeDocTask` from
   DocumentsScreen/ChatScreen; the backend still enforces one-task-at-a-time, so the D9 lane holds.

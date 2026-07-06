@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { TranslationRuntime, type TranslateOptions } from '../../src/main/services/translation/runtime'
+import {
+  TranslationRuntime,
+  isTranslationStartError,
+  TRANSLATION_START_FAILED_CODE,
+  type TranslateOptions
+} from '../../src/main/services/translation/runtime'
 import { createSelectedTranslator } from '../../src/main/services/translation/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
@@ -158,7 +163,7 @@ describe('TranslationRuntime — launch + translate', () => {
     await rt.stop()
   })
 
-  it('latches a failed start (fail fast, ONE spawn) instead of re-awaiting the health timeout', async () => {
+  it('latches a failed start with the distinct startFailed code (fail fast, ONE spawn) — F-7', async () => {
     const calls: Array<{ args: string[] }> = []
     const spawn = (_c: string, args: string[]): ChildProcessLike => {
       calls.push({ args })
@@ -173,9 +178,44 @@ describe('TranslationRuntime — launch + translate', () => {
         throw new Error('connection refused')
       }) as unknown as typeof fetch
     })
-    await expect(rt.translate(translateOpts)).rejects.toThrow()
-    await expect(rt.translate(translateOpts)).rejects.toThrow()
+    // F-7 / FA-4 option c: a non-bind start fault latches AND carries the distinct code, so the UI
+    // can say "restart / free memory" instead of a bare "runtime failed".
+    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err)).toBe(true)
+    expect((err as { code?: string }).code).toBe(TRANSLATION_START_FAILED_CODE)
+    await expect(rt.translate(translateOpts)).rejects.toThrow() // still latched
     expect(calls.length).toBe(1) // the latch prevented a second spawn + health-timeout stall
+    await rt.stop()
+  })
+
+  it('does NOT latch a transient port-bind race — a later start retries (reranker F7 parity, F-7)', async () => {
+    // A bind race is the ONE non-latching start class (`ensureStarted` propagates it RAW, not a
+    // TranslationStartError). It stays retryable across the session, so a second translate() still
+    // attempts to start — contrast the permanent-fault latch above, which spawns once total.
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => {
+        stderr.emit('data', 'bind: address already in use') // the isBindRaceError signature
+        child.emit('exit', 1, null)
+      })
+      return child
+    }
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: (async () => {
+        throw new Error('connection refused')
+      }) as unknown as typeof fetch
+    })
+    const err1 = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err1)).toBe(false) // a bind race is NOT the latched class
+    const spawnsAfterFirst = calls.length
+    await rt.translate(translateOpts).catch(() => undefined)
+    expect(calls.length).toBeGreaterThan(spawnsAfterFirst) // not latched → it tried to start again
     await rt.stop()
   })
 

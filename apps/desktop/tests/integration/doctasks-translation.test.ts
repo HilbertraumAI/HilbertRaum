@@ -27,7 +27,7 @@ import {
 } from '../../src/main/services/doctasks'
 import type { Translator } from '../../src/main/services/translation'
 import type { TranslateOptions, CompletionFinal } from '../../src/main/services/translation'
-import { TRANSLATION_STOP_TOKEN } from '../../src/main/services/translation'
+import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
 import {
   VaultBusyError,
   decryptFile,
@@ -725,6 +725,36 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     expect(status.state).toBe('failed')
     expect(status.error).toBe(TASK_GENERIC_FAILURE_MESSAGE)
     expect(calls).toBe(2) // retried once, then the window (and the task) failed
+  })
+
+  it('a LATCHED sidecar start failure fails the task with the distinct restart/free-memory copy — no per-window retry (F-7)', async () => {
+    // A start fault (memory pressure on the ~10 GB model co-resident with chat) latches inside the
+    // runtime and reaches the handler as a TranslationStartError. It fails the WHOLE task with the
+    // friendly localized copy the file view shows verbatim — NOT the generic failure and NOT N
+    // marked windows — and the window is attempted only ONCE (a retry re-throws the latch identically).
+    const docId = await importDoc(60)
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'scripted-translator',
+      contextWindow: () => 4096,
+      stop: async () => {},
+      async translate() {
+        calls += 1
+        throw new TranslationStartError(
+          new Error('llama-server exited before becoming healthy (code 3221226505)')
+        )
+      }
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(t('en', 'main.translation.startFailed')) // distinct, friendly, content-free
+    expect(calls).toBe(1) // start failure fails the task immediately — no futile per-window retry
   })
 
   it('an empty reply counts as a failure: one retry, then the marked window', async () => {

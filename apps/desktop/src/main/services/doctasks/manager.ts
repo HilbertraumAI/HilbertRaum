@@ -647,6 +647,7 @@ function isYieldingKind(kind: DocTaskKind): boolean {
 const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.noModelRunning',
   'main.translation.noModel',
+  'main.translation.startFailed',
   'main.model.contextExceeded',
   'main.task.refusedChatStreaming',
   'main.task.documentNotReady',

@@ -9,7 +9,7 @@ import { tMain } from '../../i18n'
 import { getDocument } from '../../ingestion'
 import { isAbortError } from '../../chat'
 import { log } from '../../logging'
-import { isCleanStop } from '../../translation'
+import { isCleanStop, isTranslationStartError } from '../../translation'
 import type { CompletionFinal, Translator } from '../../translation'
 import type { TranslationSourceLang, TranslationTargetLang } from '../../../../shared/types'
 import {
@@ -88,6 +88,16 @@ async function translateWithRetry(
       if (out.length > 0) return null
     } catch (err) {
       if (isAbortError(err, req.signal)) throw err
+      // A LATCHED sidecar start failure (F-7 / FA-4) fails the WHOLE task, not just this window —
+      // every window would fail identically, and a retry is futile (the latch re-throws). Log the
+      // runtime/stderr string content-free for local diagnosis, then rethrow as the localized
+      // "restart / free memory" copy (a FRIENDLY task error the manager passes through verbatim) so
+      // the file view shows the actionable message rather than the generic failure or N marked
+      // windows. No cause message crosses to the renderer.
+      if (isTranslationStartError(err)) {
+        log.warn('Translation sidecar start failed', { error: err.message })
+        throw new Error(tMain('main.translation.startFailed'))
+      }
       log.warn('Translation window failed', {
         attempt,
         error: err instanceof Error ? err.message : String(err)

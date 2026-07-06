@@ -11,6 +11,7 @@ import { planTranslationWindows } from '../doctasks/translation'
 import { log } from '../logging'
 import { isCleanStop } from './completion'
 import type { CompletionFinal } from './completion'
+import { isTranslationStartError } from './runtime'
 import type { Translator } from './index'
 
 // Translate-view job orchestration (TG wave, plan §2 D6). The Translate screen's live TEXT
@@ -162,7 +163,8 @@ export class TranslateJobService {
         const checkpoint = this.jobs.get(jobId)?.text ?? ''
         let clean = false
         let limitStop = false
-        for (let attempt = 1; attempt <= 2 && !clean && !limitStop; attempt++) {
+        let startFailed = false
+        for (let attempt = 1; attempt <= 2 && !clean && !limitStop && !startFailed; attempt++) {
           // Roll back a prior failed attempt's streamed deltas. patch-level, so the cancelled
           // guard in patch() holds — a job cancelled mid-flight is never resurrected by the restore.
           if (attempt > 1) this.patch(jobId, { text: checkpoint })
@@ -195,11 +197,25 @@ export class TranslateJobService {
               this.cancel(jobId)
               return
             }
+            // A LATCHED sidecar start failure (F-7 / FA-4): the latch re-throws, so a retry is
+            // futile, and the user needs the actionable "restart / free memory" copy rather than
+            // "runtime failed" — surface the DISTINCT code and stop the attempt loop. Log
+            // content-free (the runtime/stderr string, never source/translation text — §Translate
+            // view content-free logs).
+            if (isTranslationStartError(err)) {
+              log.warn('Translate view start failed', { jobId, window: i + 1, error: String(err) })
+              startFailed = true
+              break
+            }
             // A per-request timeout / runtime error — never a user cancel (that aborts `signal`).
             // A throw is TRANSIENT (F-2): log content-free and let the retry run; a second failure
             // fails the job below.
             log.warn('Translate view window failed', { jobId, window: i + 1, attempt, error: String(err) })
           }
+        }
+        if (startFailed) {
+          this.fail(jobId, 'startFailed', emit)
+          return
         }
         if (!clean) {
           this.fail(jobId, 'runtimeFailed', emit)

@@ -171,6 +171,48 @@ export interface TranslateOptions {
   onFinal?: (info: CompletionFinal) => void
 }
 
+/**
+ * The distinct code the latched start failure carries (F-7 / FA-4, option c). The UI turns it into
+ * the actionable "restart the app / free memory" copy instead of a bare "runtime failed".
+ *
+ * WHY a code and not a smarter latch: for a ~10 GB model the likeliest start failure is transient
+ * memory pressure from the co-resident chat model — which currently latches translation off for the
+ * whole session. Option (a) "classify OOM-shaped failures as non-latching like bind races" was
+ * REJECTED: no reliable transient/OOM signature exists across OSes. Verified against `LlamaServer`'s
+ * real start surface — a start fault throws `llama-server exited before becoming healthy (code N)` /
+ * `… failed to launch` / `… did not become healthy within Nms`, and the *exit code* is the only
+ * machine-readable signal. On Windows the OOM / `std::bad_alloc` exit `0xC0000409` COLLIDES with the
+ * PERMANENT #20305 minja template crash (see `TRANSLATION_TEMPLATE_ARGS`), and on Linux an OOM-kill
+ * is `SIGKILL` — indistinguishable from our own `stop()`; `bad_alloc` is `SIGABRT`, not
+ * memory-specific. Un-latching on that signature would therefore ALSO un-latch a genuinely permanent
+ * fault sharing it → every subsequent window re-spawns and re-awaits the full health timeout, the
+ * exact cost the latch exists to prevent (the reranker precedent). Option (b) time-bounding the
+ * latch has the same reliance on the fault being transient and re-pays that cost on a timer. So the
+ * latch STAYS (correct for the permanent case) and only its *presentation* improves: a distinct,
+ * content-free code (never the underlying cause message — the security-model logging invariants are
+ * untouched).
+ */
+export const TRANSLATION_START_FAILED_CODE = 'translationStartFailed'
+
+/**
+ * The latched translation start failure (F-7 option c). Its `code` lets the view job and the
+ * document doc-task each surface the distinct "restart / free memory" copy instead of the generic
+ * runtime-failure copy. The underlying cause message rides `message` for the LOCAL log only — it is
+ * never forwarded to the renderer (both consumers map by `code`/predicate, never by message).
+ */
+export class TranslationStartError extends Error {
+  readonly code = TRANSLATION_START_FAILED_CODE
+  constructor(cause: Error) {
+    super(cause.message)
+    this.name = 'TranslationStartError'
+  }
+}
+
+/** True for the latched start failure — the two consumers map it to distinct friendly copy (F-7). */
+export function isTranslationStartError(err: unknown): err is TranslationStartError {
+  return err instanceof TranslationStartError
+}
+
 /** Owns one lazily-started TranslateGemma `llama-server` and translates one window over loopback. */
 export class TranslationRuntime {
   readonly modelId: string
@@ -191,7 +233,9 @@ export class TranslationRuntime {
    * Failed-start latch (the reranker/embedder pattern): a permanent load fault (e.g. an
    * incompatible GGUF) must not re-spawn + re-await the full health timeout on every window. A
    * TRANSIENT port-bind race does NOT arm it (see `ensureStarted`'s `.catch`) — the latch SURVIVES
-   * `suspend()`, so latching a race would silently disable translation for the whole session.
+   * `suspend()`, so latching a race would silently disable translation for the whole session. When
+   * it IS armed it holds a `TranslationStartError` (carrying `TRANSLATION_START_FAILED_CODE`) so the
+   * consumers can surface the distinct "restart / free memory" copy (F-7 / FA-4 option c).
    */
   private startFailed: Error | null = null
   /** Number of translate() calls currently using the sidecar. Guards the idle teardown. */
@@ -281,8 +325,17 @@ export class TranslationRuntime {
           const error = err instanceof Error ? err : new Error(String(err))
           // A TRANSIENT port-bind race must NOT arm the latch (the reranker F7 fix): the latch
           // survives suspend(), so latching a race would kill translation for the whole session.
-          if (!isBindRaceError(error.message)) this.startFailed = error
-          throw error
+          // It propagates RAW (not a TranslationStartError), so `startWithBindRetry`'s one retry and
+          // the consumers' transient-retry paths still treat it as the retryable class it is.
+          if (isBindRaceError(error.message)) throw error
+          // Every other start failure DOES latch (the reranker precedent — a permanent load fault
+          // must not re-spawn + re-await the full health timeout per window). No reliable
+          // transient/OOM signature exists to safely un-latch memory pressure (see
+          // TRANSLATION_START_FAILED_CODE), so we keep the latch and tag it with the distinct code
+          // that lets the UI say "restart the app / free memory" (F-7 / FA-4 option c).
+          const startError = new TranslationStartError(error)
+          this.startFailed = startError
+          throw startError
         })
         .finally(() => {
           this.starting = null

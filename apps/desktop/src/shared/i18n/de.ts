@@ -1590,6 +1590,12 @@ export const de: Record<keyof typeof en, string> = {
   'main.translation.noModel':
     'Zum Übersetzen wird das Übersetzungsmodell benötigt, das auf diesem Laufwerk nicht ' +
     'installiert ist. Du kannst es im KI-Modell-Bereich herunterladen.',
+  // F-7 (FA-4, Option c): Das Übersetzungsmodell konnte nicht starten — meist zu wenig
+  // Arbeitsspeicher wegen des gleichzeitig geladenen Chat-Modells. Inhaltsfrei (kein Pfad, keine
+  // Laufzeitdetails).
+  'main.translation.startFailed':
+    'Das Übersetzungsmodell konnte nicht starten — möglicherweise ist zu wenig Arbeitsspeicher ' +
+    'frei. Schließe andere Programme oder starte HilbertRaum neu und versuche es dann erneut.',
   // In das erzeugte Übersetzungsdokument GESCHRIEBEN (L12) — zur Materialisierungszeit lokalisiert,
   // kein kanonisch-englischer DB-String. Der `> `-Zitatpräfix von `failedWindowNotice` bleibt.
   'main.translation.failedWindowNotice':
@@ -1977,6 +1983,8 @@ export const de: Record<keyof typeof en, string> = {
   'translate.err.busy': 'Es läuft bereits eine Übersetzung. Warte, bis sie fertig ist, und versuche es dann erneut.',
   'translate.err.docTaskBusy': 'Eine Dokumentaufgabe läuft. Warte, bis sie fertig ist, und übersetze dann.',
   'translate.err.runtimeFailed': 'Das Übersetzungsmodell konnte nicht fertigstellen. Versuche es erneut oder mit kürzerem Text.',
+  'translate.err.startFailed':
+    'Das Übersetzungsmodell konnte nicht starten — möglicherweise ist zu wenig Arbeitsspeicher frei. Schließe andere Programme oder starte HilbertRaum neu und versuche es dann erneut.',
   'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
   'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.',
 

@@ -18,7 +18,7 @@ vi.mock('electron', () => ({
 import { registerTranslateIpc } from '../../src/main/ipc/registerTranslateIpc'
 import { TranslateJobService } from '../../src/main/services/translation/jobs'
 import type { Translator } from '../../src/main/services/translation'
-import { TRANSLATION_STOP_TOKEN } from '../../src/main/services/translation'
+import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
 import { planTranslationWindows } from '../../src/main/services/doctasks/translation'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
@@ -210,6 +210,33 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(terminal.state).toBe('failed')
     expect(terminal.error).toBe('runtimeFailed')
     expect(calls).toBe(1) // limit-stop is deterministic → marked immediately, no retry
+  })
+
+  it('a LATCHED sidecar start failure surfaces the distinct startFailed code — no futile retry (F-7)', async () => {
+    // translate() rejects with a TranslationStartError (the runtime's latched start fault — most
+    // likely transient memory pressure from the co-resident chat model). The view must surface the
+    // DISTINCT `startFailed` code (the UI then shows "restart / free memory"), NOT `runtimeFailed`,
+    // and must not burn a second decode — the latch would re-throw the same error identically.
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate() {
+        calls += 1
+        throw new TranslationStartError(
+          new Error('llama-server exited before becoming healthy (code 3221226505)')
+        )
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('startFailed')
+    expect(calls).toBe(1) // start failure → distinct code immediately, no retry
   })
 
   it('a retry after a transiently-failed attempt does NOT duplicate the streamed text (F-1)', async () => {

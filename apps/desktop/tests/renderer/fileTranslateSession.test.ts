@@ -108,6 +108,23 @@ describe('fileTranslateSession — happy path', () => {
       pickerToken: 'tok1'
     })
   }, 8000)
+
+  it('the window label EXCLUDES the materialize step on a fresh start (a 2-window doc shows 1/2, not 1/3) — F-8', async () => {
+    // The doc-task's stepsTotal counts the model windows PLUS the final materialize step
+    // (`planTranslationWindows`: windows + 1). The Translate view speaks in WINDOWS, so a 2-window
+    // document (stepsTotal 3) at window 1 must read "(1/2)", never "(1/3)". Display-only.
+    const api = {
+      ...happyApi(),
+      getDocTask: vi.fn(async () => docTask({ state: 'running', progress: { stepsDone: 1, stepsTotal: 3 } }))
+    }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().windowsTotal).toBe(2), { timeout: 5000 })
+    const snap = getFileTranslate()
+    expect(snap.state).toBe('translating')
+    expect(snap.windowsDone).toBe(1) // window 1 of 2 — the materialize step is not counted
+    expect(snap.windowsTotal).toBe(2)
+  }, 8000)
 })
 
 describe('fileTranslateSession — reject + guard paths', () => {
@@ -445,8 +462,10 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     expect(seeded.state).toBe('translating')
     expect(seeded.busy).toBe(true)
     expect(seeded.fileName).toBe(null)
+    // F-8: the doc-task's stepsTotal (5) counts the windows PLUS the materialize step; the label
+    // speaks in WINDOWS, so the materialize step is subtracted for display (→ 4) on the adopt path too.
     expect(seeded.windowsDone).toBe(2)
-    expect(seeded.windowsTotal).toBe(5)
+    expect(seeded.windowsTotal).toBe(4)
 
     await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
     const snap = getFileTranslate()
