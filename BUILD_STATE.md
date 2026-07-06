@@ -14,7 +14,13 @@ the backslashes, leaving literal "[ … ]". `normalizeMathDelimiters` in `Transc
 inline), skipping fenced blocks + inline code spans. Single-`$` stays off ("$5 and $10" prose is safe —
 test-pinned). One O(n) pass per flush, same class as `parseIncompleteMarkdown`; unclosed `\[ …` stays literal
 until its `\]` streams in. The wrong "default delimiters include `\(…\)`" comment on `mdPlugins` corrected.
-+4 tests in `assistant-markdown.test.tsx` (display, inline, code-stays-verbatim, dollar-prose)._
++4 tests in `assistant-markdown.test.tsx` (display, inline, code-stays-verbatim, dollar-prose).
+**Follow-up (same day): the UNCLOSED streaming tail now typesets too.** A dangling `\[ …` whose `\]` hasn't
+streamed in yet is completed to closed `$$…$$` by a custom **remend handler** (Streamdown's `remend` prop;
+runs per flush, streaming mode only). Its **priority 10 is load-bearing**: remend's built-in links completion
+(priority 20) treats a dangling `\[ …` tail as an incomplete LINK and EARLY-RETURNS the pipeline — any
+later-priority handler never runs. Persisted turns render static (no remend), so a prose `\[` that never
+closes self-heals to literal. +5 tests (streaming display/inline tails, fence-guard, static-literal)._
 
 _2026-07-06 — **PR review round: rebase onto master + both blockers fixed + scope split (branch `mkg2`).**
 The Streamdown/Retry-all/deep-index PR was rebased onto current master (post-#15/#16/#17/#18 + the TA/FA
