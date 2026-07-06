@@ -848,6 +848,97 @@ describe('lifecycle flush (TA-1: lock/quit cancel the running task AND the queue
   })
 })
 
+describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload adoption)', () => {
+  /** Spin until `jobId` is actually running (the scripted translator has started a window). */
+  async function waitRunning(manager: DocTaskManager, jobId: string, translator: ScriptedTranslator): Promise<void> {
+    const start = Date.now()
+    const before = translator.calls.length
+    while (manager.getDocTask(jobId).state !== 'running' || translator.calls.length === before) {
+      if (Date.now() - start > 5000) throw new Error(`task ${jobId} never started running`)
+      await new Promise((r) => setTimeout(r, 5))
+    }
+  }
+
+  it('cancelActiveDocTask with a STALE jobId never kills the newer active task (the F-6 race pin)', async () => {
+    const a = await importDoc(600, 'a.txt')
+    const b = await importDoc(40, 'b.txt')
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+
+    // Task A runs, then we cancel it — the "our own task went terminal" half of the race.
+    const first = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [a],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, first.jobId, translator)
+    manager.cancelDocTask(first.jobId)
+    expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
+
+    // A NEW task B takes the lane. A stale Stop still carrying A's OLD jobId must NOT kill B.
+    const second = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [b],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, second.jobId, translator)
+    manager.cancelActiveDocTask(first.jobId) // stale/foreign id → no-op
+    // B is untouched and reaches its OWN terminal state (done), not cancelled by the stale id.
+    expect((await waitTerminal(manager, second.jobId)).state).toBe('done')
+  })
+
+  it('cancelActiveDocTask cancels when the id IS the active task; the no-arg fallback still hits it (old-caller parity)', async () => {
+    const a = await importDoc(600, 'a.txt')
+    const b = await importDoc(600, 'b.txt')
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+
+    // A matching-id targeted cancel DOES cancel the active task.
+    const first = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [a],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, first.jobId, translator)
+    manager.cancelActiveDocTask(first.jobId)
+    expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
+
+    // Absent-id parity: the no-arg cancelDocTask() still cancels whatever is active.
+    const second = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [b],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, second.jobId, translator)
+    manager.cancelDocTask()
+    expect((await waitTerminal(manager, second.jobId)).state).toBe('cancelled')
+  })
+
+  it('getActiveDocTask returns the running translation task (a copy), null when idle', async () => {
+    const docId = await importDoc(600)
+    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
+    const manager = makeManager({ translator })
+
+    expect(manager.getActiveDocTask()).toBeNull() // idle
+
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    await waitRunning(manager, jobId, translator)
+    const active = manager.getActiveDocTask()
+    expect(active).not.toBeNull()
+    expect(active?.jobId).toBe(jobId)
+    expect(active?.kind).toBe('translation')
+    expect(active?.state).toBe('running')
+
+    manager.cancelDocTask(jobId)
+    await waitTerminal(manager, jobId)
+    expect(manager.getActiveDocTask()).toBeNull() // back to idle once terminal
+  })
+})
+
 describe('the Phase-32 lease (held around exactly the materialize step)', () => {
   it('acquires the lease AFTER the last window, releases it after import', async () => {
     const docId = await importDoc(600)

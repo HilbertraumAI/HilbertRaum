@@ -5,6 +5,7 @@ import {
   translateDroppedFiles,
   translatePickedFile,
   cancelFileTranslation,
+  adoptActiveFileTranslation,
   resetFileTranslation,
   clearFileTranslate,
   resetFileTranslateSessionForTests
@@ -405,4 +406,94 @@ describe('fileTranslateSession — doc-task terminal + failure edges', () => {
     await vi.waitFor(() => expect(getFileTranslate().error).toBe('unsupported'), { timeout: 5000 })
     expect(api.startDocTask).not.toHaveBeenCalled()
   }, 8000)
+})
+
+// ---- FA-3 / F-3: reload adoption of a still-running document translation ----
+
+describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)', () => {
+  it('adopts a RUNNING translation doc-task, seeds progress with a null fileName, polls to done + loads the result', async () => {
+    let polls = 0
+    const api = {
+      // A full reload lost the module store; main still has a running translation doc-task.
+      getActiveDocTask: vi.fn(async () =>
+        docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } })
+      ),
+      getDocTask: vi.fn(async () => {
+        polls += 1
+        return polls === 1
+          ? docTask({ jobId: 'task1', progress: { stepsDone: 3, stepsTotal: 5 } })
+          : docTask({
+              jobId: 'task1',
+              state: 'done',
+              progress: { stepsDone: 5, stepsTotal: 5 },
+              resultRef: { documentId: 'gen1' }
+            })
+      }),
+      previewDocument: vi.fn(async () => ({
+        id: 'gen1',
+        title: 'a (English)',
+        mimeType: 'text/markdown',
+        segments: [{ text: 'Adopted translation.', pageNumber: null, sectionLabel: null }],
+        nextOffset: null
+      }))
+    }
+    stubApi(api as never)
+
+    await adoptActiveFileTranslation()
+    // Seeds immediately from the doc-task status: translating, its progress, fileName tolerated null.
+    const seeded = getFileTranslate()
+    expect(seeded.state).toBe('translating')
+    expect(seeded.busy).toBe(true)
+    expect(seeded.fileName).toBe(null)
+    expect(seeded.windowsDone).toBe(2)
+    expect(seeded.windowsTotal).toBe(5)
+
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    const snap = getFileTranslate()
+    expect(snap.output).toBe('Adopted translation.')
+    expect(snap.resultDocumentId).toBe('gen1')
+    expect(snap.busy).toBe(false)
+  }, 8000)
+
+  it('is a no-op when NO doc-task is active', async () => {
+    const api = { getActiveDocTask: vi.fn(async () => null), getDocTask: vi.fn(async () => docTask()) }
+    stubApi(api as never)
+    await adoptActiveFileTranslation()
+    expect(getFileTranslate().state).toBe('idle')
+    expect(api.getDocTask).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op when the active doc-task is NOT a translation (e.g. a summary)', async () => {
+    const api = {
+      getActiveDocTask: vi.fn(async () => docTask({ kind: 'summary', state: 'running' })),
+      getDocTask: vi.fn(async () => docTask())
+    }
+    stubApi(api as never)
+    await adoptActiveFileTranslation()
+    expect(getFileTranslate().state).toBe('idle')
+    expect(api.getDocTask).not.toHaveBeenCalled()
+  })
+
+  it('yields to a live TEXT job (precedence — the two adopts never both claim the panel)', async () => {
+    // A text job is streaming (translateSession busy); the file adopt must not seed even if main
+    // reported a running doc-task (it cannot in practice — the D9 lane — but precedence is enforced).
+    const textApi = {
+      translateStart: vi.fn(async () => ({ jobId: 't1', state: 'queued', text: '' })),
+      onTranslateToken: vi.fn(() => () => {}),
+      onTranslateDone: vi.fn(() => () => {}),
+      onTranslateError: vi.fn(() => () => {})
+    }
+    stubApi(textApi as never)
+    await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
+    expect(getTranslateSession().translating).toBe(true)
+
+    const fileApi = {
+      getActiveDocTask: vi.fn(async () => docTask({ jobId: 'task1', state: 'running' })),
+      getDocTask: vi.fn(async () => docTask())
+    }
+    stubApi(fileApi as never)
+    await adoptActiveFileTranslation()
+    expect(getFileTranslate().state).toBe('idle')
+    expect(fileApi.getActiveDocTask).not.toHaveBeenCalled()
+  })
 })

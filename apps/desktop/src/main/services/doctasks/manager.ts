@@ -397,6 +397,23 @@ export class DocTaskManager {
   }
 
   /**
+   * TARGETED cancel for a caller that holds a specific jobId (FA-3 / F-6): cancel ONLY when the
+   * given id is currently the ACTIVE task (running, else next-queued — the same "active" the
+   * no-arg `cancelDocTask()` fallback uses). A stale/foreign id — one whose task already went
+   * terminal and whose lane a NEWER task then took — is a NO-OP, so a Stop landing after the
+   * caller's own task settled can never kill the task that took the lane after it. This differs
+   * from `cancelDocTask(id)` (which cancels that exact task, running OR queued — the internal
+   * `cancelAllDocTasks`/skill-tool-run callers rely on that): here the id must MATCH the active
+   * task or nothing happens. The no-arg active-task fallback stays on `cancelDocTask(null)`.
+   */
+  cancelActiveDocTask(jobId: string): void {
+    if (typeof jobId !== 'string' || jobId.length === 0) return
+    const activeId = this.runningId ?? this.queue[0] ?? null
+    if (activeId === null || activeId !== jobId) return
+    this.cancelDocTask(activeId)
+  }
+
+  /**
    * Flush the WHOLE pipeline — cancel the running task AND every queued task (TA-1 H2). The
    * workspace-LOCK / quit paths call this instead of `cancelDocTask()`: cancelling only the
    * ACTIVE task lets `pump()` dequeue the next queued task the moment the active one settles,
@@ -429,6 +446,22 @@ export class DocTaskManager {
   /** True while a task is running or queued — the chat-side busy guard reads this. */
   hasActiveTask(): boolean {
     return this.runningId !== null || this.queue.length > 0
+  }
+
+  /**
+   * The currently RUNNING task's status (a copy), or null when idle — the file/document
+   * translation RELOAD-adoption read (FA-3 / F-3), the doc-task mirror of the view job's
+   * `getActiveJob()`. A full renderer reload kills `fileTranslateSession`'s module store + its
+   * poll timers while the doc-task keeps running in main; this lets a freshly-mounted Translate
+   * screen re-attach to it. Only the RUNNING task is adoptable (a queued task has produced no
+   * progress yet, and the D9 one-at-a-time lane means at most one task exists anyway). The caller
+   * filters by `kind === 'translation'`.
+   */
+  getActiveDocTask(): DocTaskStatus | null {
+    if (!this.runningId) return null
+    const task = this.tasks.get(this.runningId)
+    if (!task) return null
+    return { ...task.status, progress: { ...task.status.progress } }
   }
 
   /** True when an active (running/queued) task targets `documentId` — guards re-index/delete. */

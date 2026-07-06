@@ -47,8 +47,18 @@ export function registerDocTasksIpc(ctx: AppContext): void {
     requireTasks().getDocTask(typeof jobId === 'string' ? jobId : '')
   )
 
+  // Reload adoption for the file/document translation path (FA-3 / F-3): the running task's
+  // status (a copy) or null. A safe read — never starts anything.
+  ipcMain.handle(IPC.getActiveDocTask, (): DocTaskStatus | null => requireTasks().getActiveDocTask())
+
   ipcMain.handle(IPC.cancelDocTask, (_e, jobId?: string | null): void => {
-    requireTasks().cancelDocTask(typeof jobId === 'string' && jobId.length > 0 ? jobId : null)
+    const manager = requireTasks()
+    const id = typeof jobId === 'string' && jobId.length > 0 ? jobId : null
+    // A PRESENT id is a TARGETED cancel (FA-3 / F-6): cancel ONLY when it is the active task, so a
+    // stale Stop carrying a since-superseded jobId can never kill the task that took the lane after
+    // it. An ABSENT id keeps the active-task fallback (the chat busy banner) — old callers unchanged.
+    if (id) manager.cancelActiveDocTask(id)
+    else manager.cancelDocTask(null)
   })
 
   // Read-only coverage + provenance of a document's CURRENT summary (whole-document-analysis

@@ -426,7 +426,13 @@ const api = {
   /** Poll one task's state/progress (async-with-polling, like imports/downloads). */
   getDocTask: (jobId: string): Promise<DocTaskStatus> =>
     ipcRenderer.invoke(IPC.getDocTask, jobId),
-  /** Cancel a task; with no jobId, cancels the currently active one. */
+  /** The currently running document task's status (a copy), or null when idle — reload adoption
+   *  for the file/document translation path (the `getActiveTranslateJob` precedent for text). */
+  getActiveDocTask: (): Promise<DocTaskStatus | null> =>
+    ipcRenderer.invoke(IPC.getActiveDocTask),
+  /** Cancel a task. With no jobId, cancels the currently active one; with a jobId it is a TARGETED
+   *  cancel — it cancels ONLY when that id is the active task (FA-3 / F-6), so a stale Stop can
+   *  never kill a task that took the lane after the caller's own task settled. */
   cancelDocTask: (jobId?: string): Promise<void> =>
     ipcRenderer.invoke(IPC.cancelDocTask, jobId),
   /** Read-only coverage + source provenance of a document's current summary (whole-document

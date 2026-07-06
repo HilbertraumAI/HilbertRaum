@@ -11,6 +11,7 @@ import {
   translate as runTranslate
 } from '../lib/translateSession'
 import {
+  adoptActiveFileTranslation,
   cancelFileTranslation,
   getFileTranslate,
   resetFileTranslation,
@@ -131,10 +132,15 @@ export function TranslateScreen({
     return () => window.removeEventListener('focus', onFocus)
   }, [checkStatus])
 
-  // Remount recovery after a full renderer reload: re-adopt a still-running TEXT job from main. A
-  // no-op when the store already holds one (navigate-away kept it alive) or nothing is running.
+  // Remount recovery after a full renderer reload: re-adopt a still-running job from main — the
+  // TEXT view job AND (FA-3 / F-3) the DOCUMENT translation doc-task, which previously came back
+  // idle (no progress/Stop/result) while the task ran on invisibly. Each is a no-op when the store
+  // already holds one (navigate-away kept it alive) or nothing of its kind is running; the D9 lane
+  // means at most one is ever live, and the file adopt yields to a live text job, so they can't
+  // both claim the panel.
   useEffect(() => {
     void adoptActiveJob()
+    void adoptActiveFileTranslation()
   }, [])
 
   // NB: there is deliberately NO lock-purge effect here. Workspace lock unmounts this screen (the

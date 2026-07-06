@@ -94,7 +94,21 @@ for a clean non-empty limit-stop it should skip straight to the failure path.
 - **Note:** keep the one retry for the doc-task's *thrown* windows unchanged (that is the
   transient class M1's crash recovery feeds).
 
-### F-3 (MEDIUM, robustness/UX) — the document path has no reload recovery; the text path does
+### F-3 (MEDIUM, robustness/UX) — the document path has no reload recovery; the text path does ✅ FIXED (FA-3)
+
+> **Fixed in FA-3.** A new `adoptActiveFileTranslation()` in `fileTranslateSession.ts` mirrors the
+> text path's `adoptActiveJob`: the Translate screen's mount effect calls it ALONGSIDE
+> `adoptActiveJob`. It reads main's active doc-task over a new `getActiveDocTask` IPC (the manager's
+> `getActiveDocTask()` returns the RUNNING task's status copy, or null) and, when it is a running
+> `translation` task, seeds `state:'translating'` + its window progress with a null-tolerant
+> `fileName` (main tracks ids only after a reload) and resumes the doc-task poll under a FRESH
+> generation (the poll loop was extracted into a shared `pollDocTask` so start + adopt share it).
+> Precedence with the text adopt: the file adopt no-ops when a live text job owns the panel or the
+> active task is not a running translation, and the text adopt already no-ops when its store holds a
+> job — so with the D9 one-at-a-time lane the two can never both claim the panel. Pinned by renderer
+> tests (running task adopted → polls to done → result loads; no active task → no-op; a
+> non-`translation` active task → no-op; text-job precedence no-op) + a manager `getActiveDocTask`
+> integration case (running translation copy / null when idle).
 
 `apps/desktop/src/renderer/lib/fileTranslateSession.ts` (whole store) vs
 `translateSession.ts` `adoptActiveJob()` (~L253–270).
@@ -160,7 +174,21 @@ window's output for no reason.
   `⟨…⟩` non-token spelling). Keep it to the exact known markers so ordinary `<…>` HTML/code
   stays untouched; extend the prompt snapshot/sanitize unit tests.
 
-### F-6 (LOW, correctness edge) — untargeted `cancelDocTask()` can cancel a foreign task
+### F-6 (LOW, correctness edge) — untargeted `cancelDocTask()` can cancel a foreign task ✅ FIXED (FA-3)
+
+> **Fixed in FA-3** (done first — it is a dependency of a clean F-3 adoption, which must cancel only
+> its OWN task). The `cancelDocTask(jobId?)` IPC now routes a PRESENT id to a new manager
+> `cancelActiveDocTask(id)` that cancels ONLY when the id IS the active task (running, else
+> next-queued — the same "active" the no-arg fallback uses); a stale/foreign id is a NO-OP. An ABSENT
+> id keeps the active-task fallback, so existing callers (the chat busy banner) are unchanged. The
+> internal `cancelDocTask(id)` (which cancels an exact running-OR-queued task — `cancelAllDocTasks`
+> and the skill-tool-run rely on it) is untouched. `fileTranslateSession` now holds the started
+> doc-task's jobId (`docTaskJobId`) and threads it through BOTH cancel paths — the supersede-cancel
+> (passes `started.jobId`) and `cancelFileTranslation` (passes the held id) — so a Stop landing after
+> our task went terminal, or a supersede after Stop + an immediate new start, can never kill the task
+> that took the lane. Pinned by a manager integration case (a stale jobId cancel does NOT kill the
+> newer active task, which runs to its own `done`; a matching-id targeted cancel + the no-arg
+> fallback still cancel the active task).
 
 `apps/desktop/src/renderer/lib/fileTranslateSession.ts` supersede-cancel (~L311) and
 `cancelFileTranslation` (~L381–383).

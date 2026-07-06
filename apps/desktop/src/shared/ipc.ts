@@ -111,7 +111,14 @@ export const IPC = {
   startDocTask: 'doctasks:start',
   /** Poll one task's state/progress. */
   getDocTask: 'doctasks:get',
-  /** Cancel a task; with no jobId, cancels the currently active one. */
+  /** The currently RUNNING task's status (a copy), or null when idle — reload adoption for the
+   *  file/document translation path (the `translateGetActive` precedent for the text path). */
+  getActiveDocTask: 'doctasks:getActive',
+  /**
+   * Cancel a task. With NO jobId, cancels the currently active one (the chat busy banner). With a
+   * PRESENT jobId it is a TARGETED cancel (FA-3 / F-6): it cancels ONLY when that id is the active
+   * task, so a stale Stop carrying a since-superseded jobId never kills the task that took the lane.
+   */
   cancelDocTask: 'doctasks:cancel',
   /**
    * Read-only coverage + provenance of a document's current summary (whole-document-analysis

@@ -1516,6 +1516,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   renderer memory the output panel loads the materialized doc's bounded first page; a long
   translation shows a "showing the start" hint. Use **Export…** or **Show in Documents**
   for the whole document (the exported/stored copy is complete and exact).
+- **A running translation survives navigation AND a full renderer reload — for BOTH the text
+  and the document path (FA-3 F-3).** Both Translate stores are module-level, so navigating
+  away and back keeps a live translation streaming. A full renderer RELOAD drops the module
+  stores, but each is re-adopted on the Translate screen's next mount: the live TEXT job via
+  `adoptActiveJob` (long-standing), and the running DOCUMENT translation doc-task via
+  `adoptActiveFileTranslation` — it re-seeds `translating` + window progress and resumes the
+  poll, so progress, Stop and the eventual result come back instead of the screen returning
+  idle while the task ran on invisibly (and a fresh attempt being refused as busy until it
+  finished). The file/document path previously had NO reload recovery while the text path did;
+  that asymmetry is closed. One tolerated cosmetic edge: the source **fileName is unavailable
+  after a reload** (main tracks document ids only), so an adopted document translation shows
+  progress + result without the original filename label until it completes. At most one of the
+  two is ever live (the D9 one-at-a-time lane), so the two adopts never both claim the panel.
 
 ## Document comparison (Phase 35, wave-3 plan §8)
 

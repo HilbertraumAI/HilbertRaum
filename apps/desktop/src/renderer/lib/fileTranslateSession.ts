@@ -103,6 +103,14 @@ let timer: ReturnType<typeof setInterval> | null = null
  * detects it is stale and bails instead of wiring a zombie poll over the newer session.
  */
 let gen = 0
+/**
+ * The active translation doc-task's jobId, held so the two cancel paths (supersede + Stop) can
+ * issue a jobId-TARGETED cancel (FA-3 / F-6): the backend cancels only when this id IS the active
+ * task, so a Stop landing after our task went terminal — with another screen's task now on the
+ * lane — can never kill that foreign task. Set when the doc-task starts (or is adopted after a
+ * reload); the reset/clear paths drop it. Only ever consulted while `state === 'translating'`.
+ */
+let docTaskJobId: string | null = null
 
 function notify(): void {
   for (const fn of listeners) fn()
@@ -308,11 +316,24 @@ async function startTranslationTask(docId: string, choice: Choice, myGen: number
   // Cancel it so it does not linger as a zombie holding the one-at-a-time lane and materialize an
   // unexpected document (the translateSession supersede-cancel, applied to the doc-task lane).
   if (myGen !== gen) {
-    void window.api?.cancelDocTask?.()?.catch?.(() => {})
+    // TARGETED supersede-cancel (FA-3 / F-6): pass OUR just-started task's id so that if the lane
+    // was already taken by a newer task (Stop + an immediate new start), the backend no-ops instead
+    // of killing that foreign task.
+    void window.api?.cancelDocTask?.(started.jobId)?.catch?.(() => {})
     return
   }
+  docTaskJobId = started.jobId
   set({ state: 'translating' })
-  const taskJobId = started.jobId
+  pollDocTask(started.jobId, myGen)
+}
+
+/**
+ * Poll a running translation doc-task to its terminal state and drive the panel (progress → result
+ * load / failure / cancel). Extracted so both a fresh start (`startTranslationTask`) and a
+ * post-reload adoption (`adoptActiveFileTranslation`) resume the SAME loop under their own
+ * generation. Installs the single `timer`; the reentrancy latch is LOCAL to this closure (TA-3 / H4).
+ */
+function pollDocTask(taskJobId: string, myGen: number): void {
   let inFlight = false // per-timer reentrancy latch (TA-3 / H4) — see the import poll above.
   timer = setInterval(() => {
     if (inFlight) return // reentrancy latch — see the import poll above
@@ -378,12 +399,56 @@ async function loadResult(documentId: string | null, myGen: number): Promise<voi
 /** Cancel an in-flight document translation (the Stop button). Cancels the doc-task main-side (a
  *  no-op if we are still importing — there is no task yet — but we still supersede + reset). */
 export function cancelFileTranslation(): void {
-  if (snapshot.state === 'translating') {
-    void window.api?.cancelDocTask?.()?.catch?.(() => {})
+  if (snapshot.state === 'translating' && docTaskJobId) {
+    // TARGETED cancel (FA-3 / F-6): pass the held jobId so a Stop landing after our task already
+    // went terminal — with another screen's task now on the lane — no-ops instead of killing that
+    // foreign task. (Still importing → no task yet → no cancel; we just supersede + reset below.)
+    void window.api?.cancelDocTask?.(docTaskJobId)?.catch?.(() => {})
   }
   gen += 1 // supersede any import/start round-trip still in flight
   stopPolling()
   set({ state: 'cancelled', busy: false })
+}
+
+/**
+ * Remount recovery after a full renderer RELOAD (this module store + its poll timers died with it)
+ * for the DOCUMENT/file translation path — the mirror of `translateSession`'s `adoptActiveJob`
+ * (FA-3 / F-3). Without it a reloaded Translate screen comes back IDLE while the translation
+ * doc-task keeps running in main (no progress, no Stop, no result load), and a fresh attempt is
+ * refused with `docTaskBusy` until the invisible task finishes. Called from the screen's mount
+ * effect ALONGSIDE `adoptActiveJob`: if main still has a RUNNING translation doc-task, re-seed
+ * `translating` + its window progress and resume the poll under a FRESH generation. The source
+ * `fileName` is unavailable after a reload (main tracks ids only) — tolerated as null (the panel
+ * still shows progress + Stop + result without it).
+ *
+ * Precedence with the TEXT-path adopt (D9 one-at-a-time lane — a text job and a doc-task can never
+ * be active at once): this no-ops when a live TEXT job already owns the panel, when this store
+ * already holds a live/terminal session (navigate-away kept it), or when the active task is not a
+ * running translation — so the two adopts can never both claim the panel.
+ */
+export async function adoptActiveFileTranslation(): Promise<void> {
+  if (snapshot.busy) return // this store already holds a live session
+  if (getTranslateSession().translating) return // the text path owns the panel (precedence)
+  let task
+  try {
+    task = await window.api?.getActiveDocTask?.()
+  } catch {
+    return
+  }
+  if (!task || task.kind !== 'translation' || task.state !== 'running') return
+  if (snapshot.busy || getTranslateSession().translating) return // a session started while we awaited
+  const myGen = ++gen
+  stopPolling()
+  docTaskJobId = task.jobId
+  set({
+    ...EMPTY,
+    state: 'translating',
+    busy: true,
+    fileName: null, // unavailable after a reload — main tracks ids only
+    windowsDone: task.progress.stepsDone,
+    windowsTotal: task.progress.stepsTotal
+  })
+  pollDocTask(task.jobId, myGen)
 }
 
 /**
@@ -394,6 +459,7 @@ export function cancelFileTranslation(): void {
 export function resetFileTranslation(): void {
   if (snapshot.busy) return
   gen += 1
+  docTaskJobId = null
   stopPolling()
   snapshot = { ...EMPTY }
   notify()
@@ -405,6 +471,7 @@ export function resetFileTranslation(): void {
  */
 export function clearFileTranslate(): void {
   gen += 1
+  docTaskJobId = null
   stopPolling()
   snapshot = { ...EMPTY }
   notify()
@@ -415,5 +482,6 @@ export function resetFileTranslateSessionForTests(): void {
   stopPolling()
   snapshot = EMPTY
   gen = 0
+  docTaskJobId = null
   listeners.clear()
 }
