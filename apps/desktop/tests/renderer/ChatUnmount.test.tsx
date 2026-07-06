@@ -32,7 +32,10 @@ function docConv(): Conversation {
     mode: 'documents',
     scopeDocumentIds: null,
     collectionId: null,
-    scope: null
+    // An explicit (docs-only) scope so attaching here does NOT raise the D71 narrow/widen dialog —
+    // this test exercises the unmount guards, not the scope prompt (which a whole-library default,
+    // scope:null, would trigger and whose modal would aria-hide the composer under test).
+    scope: { collectionIds: [], documentIds: [] }
   }
 }
 

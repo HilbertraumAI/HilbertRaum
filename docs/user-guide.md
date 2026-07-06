@@ -291,20 +291,26 @@ your files.
    page/section and the exact passage each citation came from. If the documents don't
    contain the answer, the app says so rather than guessing.
 
-**Ask only chosen documents.** Under the message box, a **📄** source button shows what answers
-come from — **Using all documents** when the whole library is in scope, **Using N documents** when
-you have narrowed it, or **No documents yet · Add documents** when there are none. Click it to open
-the source picker: tick your whole **Library**, any **projects**, and/or specific documents (the
-scope is the union of everything ticked). You can also start from the **Documents** screen: tick the
-checkboxes next to the files you care about and click **Ask these documents**. Files you drag
-straight into the chat are always included too, shown separately as **Files in this chat**.
+**Ask only chosen documents.** Under the message box, a **📄 Answering from:** chip always shows
+what answers come from — the document's name when one file is in scope, **your whole library — N
+documents** when the whole library is, or **No documents yet · Add documents** when there are none.
+Click it to open the source picker: tick your whole **Library**, any **projects**, and/or specific
+documents (the scope is the union of everything ticked). You can also start from the **Documents**
+screen: tick the checkboxes next to the files you care about and click **Ask these documents**.
+
+**Attach a file to ask about just that file.** Drag a file straight into the chat (or use the
+attach button): a chat started this way answers from **that file only** by default, so you don't
+have to touch the scope picker. If you drop a file into a chat that was answering from your whole
+library, the app asks once whether to narrow to **just this file** or keep using the **whole
+library** — your choice sticks for that conversation. Attached files are always included and shown
+separately as **Files in this chat**.
 
 **Naming a file in your question works too.** If you haven't chosen documents and your
 question names one of your files — *"summarize the key dates in contract.pdf"* — the answer
 comes from **that file only**, and a small note says so: *"Answering from contract.pdf
 only."* It only ever narrows (never adds files), and any documents you chose explicitly
 always win. If the note guesses wrong, just rephrase the question or pick the documents
-yourself with **📄 Using N documents**.
+yourself with the **📄 Answering from:** chip.
 
 **Chat vs. Ask my documents.** Plain **Chat** does *not* read your files — it is a general
 assistant. The switch at the top of the chat keeps the two modes one click apart, so you

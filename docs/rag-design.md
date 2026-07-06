@@ -599,6 +599,45 @@ naming a file as "use only that file", so other files showing up as sources read
   `STREAM.scope` notice (`api.onScopeNotice`) and Chat shows an *"Answering from contract.pdf
   only"* toast, so a wrong guess is obvious and the user can rephrase or set scope manually.
 
+### Single-document scope by default + always-visible scope (beta #26, D71)
+
+The beta lawyer wanted to "ask about exactly this one document", but every conversation
+defaulted its retrieval scope to the whole Library, so single-doc questions pulled in the
+whole corpus. D71 fixes this **at creation and in the display**, without touching retrieval
+semantics (`buildScopeFilter` and the retrieval path are unchanged):
+
+- **Creation-time docs-only default.** A conversation born from an **attachment** or from the
+  Documents screen's **"Ask selected"** persists a docs-only `scope_v2` at creation, so
+  retrieval is narrowed to exactly those documents without the user touching the picker;
+  Library becomes the explicit *widen*.
+  - **"Ask selected"** already flowed the picked ids through `pendingScope` →
+    `createConversation({scope})` (persisted `scope_v2 = {collectionIds:[], documentIds:[picked]}`).
+  - **Attachment path** (`ChatScreen.createDocsConversationForAttach`, the D71 change): when
+    the user set no explicit scope, it now persists an **empty EXPLICIT** scope
+    `{collectionIds:[], documentIds:[]}` instead of `null`. `resolveScope` reads a present-but-
+    empty `scope_v2` as its v2 branch (no collections) and **unions the chat attachments in**,
+    so retrieval is exactly the attached file(s) — *not* Library ∪ attachment (the friction).
+    Empty-explicit (rather than putting the attachment ids into `documentIds`) keeps
+    `hasExplicitDocSelection` false, so an attachment never masquerades as a hand-pick (N2) and
+    filename auto-scope still applies.
+  - **Seam choice: renderer-side.** The default is applied where the create originates, because
+    at `createConversation` time the `conversation_documents` link does not yet exist (the import
+    runs after) — a main-side "default when a link exists" rule cannot see it. Plain
+    (no-attachment) conversations are untouched: `createConversationInMode` still creates with a
+    `null` scope → `resolveScope`'s **Library fallback stays byte-identical**. Existing persisted
+    conversations are not migrated (new conversations only).
+  - **Attach-to-existing.** Dropping a file into an existing chat still on the whole-library
+    default (`conv.scope == null`, no legacy docs, no project anchor) raises a one-time
+    narrow/widen choice (`ScopeNarrowDialog`): *"Just this file"* narrows to an empty-explicit
+    scope (`setConversationScope`), *"Whole library"* keeps the default. Sticky per conversation
+    (a session asked-set; narrowing self-heals since the scope becomes explicit).
+- **Always-visible scope.** The scope popover's trigger is now an *"Answering from: {source}"* /
+  *"Antwortet aus: {source}"* chip (`scopeChipLabel` over the shared `scopeSources`), so the
+  active scope is legible before asking and one click still opens the same picker: a single
+  document/attachment is named directly; the whole-library case reads *"your whole library — N
+  documents"* (corpus size, not the bare word "Library"). The one-shot filename auto-scope toast
+  (`chat.scopeNotice`) is kept — it complements, does not replace.
+
 ### Plain-chat document awareness
 
 While ≥ 1 indexed document exists, plain Chat shows a dismissible per-conversation notice

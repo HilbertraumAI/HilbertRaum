@@ -1891,6 +1891,17 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.filesInChatLine': 'Dateien in diesem Chat',
   'chat.scope.noProjects': 'Noch keine Projekte',
   'chat.scope.archivedFallback': 'Dieses Projekt wurde archiviert — Antwort aus deiner Bibliothek.',
+  // Beta-Feedback Phase 4 (#26/D71): der immer sichtbare „Antwortet aus:“-Chip am Eingabefeld.
+  'chat.scope.answeringFrom': 'Antwortet aus: {source}',
+  'chat.scope.wholeLibrary.one': 'deine gesamte Bibliothek — {count} Dokument',
+  'chat.scope.wholeLibrary.other': 'deine gesamte Bibliothek — {count} Dokumente',
+  // Eine Datei an einen bestehenden Bibliotheks-Dokument-Chat anhängen bietet einmalig die Wahl
+  // zwischen Einschränken und ganzer Bibliothek (#26/D71), pro Gespräch dauerhaft nach der Antwort.
+  'chat.scope.narrowTitle': 'Nur aus dieser Datei antworten?',
+  'chat.scope.narrowBody':
+    'Du hast {name} hinzugefügt. Nur diese Datei fragen oder weiterhin aus deiner gesamten Bibliothek antworten?',
+  'chat.scope.narrowJust': 'Nur diese Datei',
+  'chat.scope.narrowWhole': 'Gesamte Bibliothek',
 
   // ---- Chat — Datei an einen Chat anhängen / hineinziehen (Plan §11.2/§13.5, Phase C) ----
   // D-L7-Review erledigt (2026-06-14).

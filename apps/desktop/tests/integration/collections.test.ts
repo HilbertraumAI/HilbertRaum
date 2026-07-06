@@ -275,6 +275,52 @@ describe('resolveScope', () => {
     const scope = resolveScope(db, conv.id)
     expect(scope.collectionIds).toEqual([lib.id])
   })
+
+  // ---- D71 (#26): creation-time docs-only default scope for attachment / "Ask selected" chats ----
+  // A conversation born from an attachment persists an EMPTY EXPLICIT scope at creation
+  // (createDocsConversationForAttach); "Ask selected" persists the picked documentIds. Both must
+  // resolve to exactly those documents, while a plain conversation stays on the Library default.
+  it('an attachment-default conversation (empty explicit scope) resolves to just its attachments, not the whole Library (D71)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    // The attach path persists an empty EXPLICIT scope at creation.
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [] }
+    })
+    seedDoc(db, 'attach-1')
+    db.prepare(
+      `INSERT INTO conversation_documents (conversation_id, document_id, added_at) VALUES (?, ?, ?)`
+    ).run(conv.id, 'attach-1', new Date().toISOString())
+    const scope = resolveScope(db, conv.id)
+    // The Library collection is NOT in scope — retrieval is exactly the attached file (via the union).
+    expect(scope.collectionIds).toBeNull()
+    expect(scope.documentIds).toEqual(['attach-1'])
+    expect(scope.hasExplicitDocSelection).toBe(false) // an attachment is not a hand-pick (N2)
+
+    // Contrast (fallback byte-identical): a NULL-scope plain conversation with the SAME attachment
+    // still keeps the whole Library alongside it — the #26 friction this phase leaves untouched for
+    // plain chats. Only the creation-persisted scope changes for attachment/"Ask selected" chats.
+    const plain = createConversation(db, { mode: 'documents' })
+    db.prepare(
+      `INSERT INTO conversation_documents (conversation_id, document_id, added_at) VALUES (?, ?, ?)`
+    ).run(plain.id, 'attach-1', new Date().toISOString())
+    const plainScope = resolveScope(db, plain.id)
+    expect(plainScope.collectionIds).toEqual([lib.id])
+    expect(plainScope.documentIds).toEqual(['attach-1'])
+  })
+
+  it('an "Ask selected" conversation (scope_v2 documentIds) resolves to exactly those documents (D71)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: ['sel-1', 'sel-2'] }
+    })
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toBeNull()
+    expect(scope.documentIds).toEqual(['sel-1', 'sel-2'])
+    expect(scope.hasExplicitDocSelection).toBe(true)
+  })
 })
 
 // ---- Conversation scope/collection data contract (plan §8.3, Phase B) --------------

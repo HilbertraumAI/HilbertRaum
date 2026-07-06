@@ -218,9 +218,13 @@ describe('German render smokes (Phase 40)', () => {
       getAppStatus: vi.fn(async () => appStatus())
     })
     render(german(<ChatScreen onNavigate={() => {}} initialMode="documents" />))
-    // The composer footer's source affordance uses the German "Using all documents".
+    // The composer footer's "Answering from:" scope chip (D71) reads in German, and the whole-library
+    // case names the corpus size (one indexed document here).
+    const source = t('de', 'chat.scope.wholeLibrary.one', { count: 1 })
     expect(
-      await screen.findByRole('button', { name: new RegExp(t('de', 'chat.scope.usingAll'), 'i') })
+      await screen.findByRole('button', {
+        name: new RegExp(t('de', 'chat.scope.answeringFrom', { source }), 'i')
+      })
     ).toBeInTheDocument()
   })
 

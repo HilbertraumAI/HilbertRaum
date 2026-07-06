@@ -1830,6 +1830,20 @@ export const en = {
   'chat.scope.filesInChatLine': 'Files in this chat',
   'chat.scope.noProjects': 'No projects yet',
   'chat.scope.archivedFallback': 'This project was archived — answering from your Library.',
+  // Beta-feedback Phase 4 (#26/D71): the always-visible "Answering from:" chip near the composer.
+  // Reframes the scope popover's trigger so the active retrieval scope is legible BEFORE asking —
+  // one click still opens the same picker. The whole-library case names the corpus size instead of
+  // the bare word "Library" so "answer from everything" reads as a deliberate breadth, not a default.
+  'chat.scope.answeringFrom': 'Answering from: {source}',
+  'chat.scope.wholeLibrary.one': 'your whole library — {count} document',
+  'chat.scope.wholeLibrary.other': 'your whole library — {count} documents',
+  // Attaching a file to an EXISTING whole-library documents chat offers a one-time narrow choice
+  // (#26/D71), sticky per conversation once answered.
+  'chat.scope.narrowTitle': 'Answer from just this file?',
+  'chat.scope.narrowBody':
+    'You added {name}. Ask only this file, or keep answering from your whole library?',
+  'chat.scope.narrowJust': 'Just this file',
+  'chat.scope.narrowWhole': 'Whole library',
 
   // ---- Chat — attach / drag-drop a file into a chat (plan §11.2/§13.5, Phase C) ----
   // German copy reviewed in the D-L7 pass (2026-06-14).

@@ -216,7 +216,7 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
     render(<ChatScreen onNavigate={() => {}} />)
 
     await user.click(await screen.findByText('Doc Q&A'))
-    await user.click(await screen.findByRole('button', { name: /using 2 documents/i }))
+    await user.click(await screen.findByRole('button', { name: /answering from: 2 documents/i }))
     // The two specific docs render as removable chips.
     expect(await screen.findByText('contract.pdf')).toBeInTheDocument()
     expect(screen.getByText('terms.docx')).toBeInTheDocument()
@@ -225,8 +225,9 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
     await waitFor(() =>
       expect(setConversationScope).toHaveBeenCalledWith('c9', { collectionIds: [], documentIds: ['d2'] })
     )
+    // A single remaining document is named directly by the "Answering from:" chip (D71).
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /using 1 document/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /answering from: terms\.docx/i })).toBeInTheDocument()
     )
   })
 
@@ -249,14 +250,14 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
     render(<ChatScreen onNavigate={() => {}} />)
 
     await user.click(await screen.findByText('Doc Q&A'))
-    await user.click(await screen.findByRole('button', { name: /using 1 document/i }))
+    await user.click(await screen.findByRole('button', { name: /answering from: contract\.pdf/i }))
     // Reveal the doc picker, then add an out-of-scope document as a "+ add" chip.
     await user.click(await screen.findByRole('button', { name: /specific documents/i }))
     await user.click(await screen.findByRole('button', { name: /\+ terms.docx/i }))
     await waitFor(() =>
       expect(setConversationScope).toHaveBeenCalledWith('c9', { collectionIds: [], documentIds: ['d1', 'd2'] })
     )
-    expect(await screen.findByRole('button', { name: /using 2 documents/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /answering from: 2 documents/i })).toBeInTheDocument()
 
     // The reset taps to the explicit empty "All documents" scope.
     await user.click(screen.getByRole('button', { name: 'All documents' }))
@@ -281,7 +282,7 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
     )
 
     // The handoff shows in the footer affordance before any conversation exists…
-    expect(await screen.findByRole('button', { name: /using 1 document/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /answering from: contract\.pdf/i })).toBeInTheDocument()
     // …and the next conversation is created WITH the composite scope (plan D1).
     await user.click(screen.getByRole('button', { name: /new document q&a/i }))
     await waitFor(() =>
@@ -300,8 +301,11 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
       listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')])
     })
     render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
-    // Truthful "all" copy never shows a count (it can't be "all 0 documents").
-    expect(await screen.findByRole('button', { name: /using all documents/i })).toBeInTheDocument()
+    // The whole-library case names the corpus size (D71) so "answer from everything" reads as a
+    // deliberate breadth. (The chip never shows 0 — an empty corpus falls to the "Add documents" CTA.)
+    expect(
+      await screen.findByRole('button', { name: /answering from: your whole library — 2 documents/i })
+    ).toBeInTheDocument()
   })
 })
 

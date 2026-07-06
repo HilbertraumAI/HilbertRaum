@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) DONE; Phases 4–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) DONE; Phases 5–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -199,10 +199,35 @@ labels ("Als Standard wählen" / "Jetzt laden"). If vetoed, this phase shrinks t
 **Done =** suite green, `screenshot-verify` of the model card states, docs (`user-guide.md`,
 `architecture.md` model-screen note) + BUILD_STATE updated, commit references #27.
 
-## 7. Phase 4 — single-document scope by default + visible scope (#26)
+## 7. Phase 4 — single-document scope by default + visible scope (#26) ✅ DONE
 
 **Goal:** "ask about exactly this one document" needs zero scope fiddling, and the active
 scope is always visible before asking (D71).
+
+**Shipped (2026-07-07):** creation-time docs-only default + an always-visible "Answering from:"
+chip, with retrieval semantics (`buildScopeFilter`) untouched. **Seam = renderer-side:**
+`ChatScreen.createDocsConversationForAttach` now persists an **empty EXPLICIT** scope
+(`{collectionIds:[], documentIds:[]}`) when the user set none, instead of `null` — `resolveScope`
+reads that as its v2 branch (no collections) and unions the chat attachments in, so an
+attachment-born chat answers from **just its attachment(s)**, not Library ∪ attachment. (Main-side
+was rejected: the `conversation_documents` link doesn't exist yet at create time.) `pendingScope` /
+"Ask selected" already persisted docs-only, so that path was already correct. Plain conversations
+untouched — `createConversationInMode` still creates with `null` → `resolveScope`'s **Library
+fallback is byte-identical**; no migration of existing chats. Empty-explicit (not attachment ids in
+`documentIds`) keeps `hasExplicitDocSelection=false` (N2). **Attach-to-existing** whole-library chats
+raise a one-time `ScopeNarrowDialog` (Just this file → narrow / Whole library → keep), sticky per
+conversation. **Display:** the scope popover trigger became the *"Answering from: {source}"* /
+*"Antwortet aus: {source}"* chip (`scopeChipLabel` over the extracted `scopeSources`, single-sourced
+with `scopeFooterLabel`); single doc/attachment named directly; whole-library reads *"your whole
+library — N documents"*. `chat.scopeNotice` one-shot toast kept. New keys: `chat.scope.answeringFrom`,
+`chat.scope.wholeLibrary.one/.other`, `chat.scope.narrow{Title,Body,Just,Whole}` (EN+DE, placeholder
+parity). Tests: `collections.test.ts` (+2 main: empty-explicit + attachment resolves to just the
+attachment / plain stays Library / "Ask selected" resolves to those docs), `ScopePopover.test.tsx`
+(chip states + DE + picker-opens), `ScopeNarrowDialog.test.tsx` (+4 narrow/widen round-trip + DE);
+stale ChatAttach/ChatHomeNav/ChatUnmount/GermanSmoke footer-copy assertions rewritten in place. Suite
+3688/47, typecheck + build + preview:build green. Preview cases `scope-chip` / `-de` added (PNG
+deferred to CI/POSIX). Folded into `rag-design.md` §10 scope section; `user-guide.md` scope step
+reworded.
 
 - **Creation-time default:** in the conversation-creation paths that carry documents
   (`ChatScreen.tsx` `createConversationInMode` attachment path; the Documents screen

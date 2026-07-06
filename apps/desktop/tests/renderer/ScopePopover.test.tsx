@@ -3,8 +3,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
-import { I18nProvider } from '../../src/renderer/i18n'
-import type { DocumentInfo } from '../../src/shared/types'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
+import { t } from '../../src/shared/i18n'
+import type { Collection, DocumentInfo } from '../../src/shared/types'
 
 function indexedDoc(over: Partial<DocumentInfo> = {}): DocumentInfo {
   return {
@@ -27,7 +28,24 @@ function indexedDoc(over: Partial<DocumentInfo> = {}): DocumentInfo {
 // uniqueness: a name-ONLY key (the regression a literal reading of FE-6 invites) collides on
 // duplicate base names and trips React's duplicate-key warning.
 
-afterEach(cleanup)
+function libraryCollection(): Collection {
+  return {
+    id: 'lib',
+    name: 'Library',
+    type: 'library',
+    description: null,
+    builtin: true,
+    color: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    archivedAt: null
+  } as Collection
+}
+
+afterEach(() => {
+  cleanup()
+  window.localStorage.clear()
+})
 
 describe('ScopePopover — pending attachment chips (FE-6)', () => {
   it('renders a chip per pending attachment', async () => {
@@ -75,12 +93,10 @@ describe('ScopePopover — pending attachment chips (FE-6)', () => {
   })
 })
 
-describe('ScopePopover — footer label reflects chat attachments (empty composed scope)', () => {
-  // Regression: unchecking the Library (→ an empty composed scope) with a file attached to the chat
-  // still showed "Using all documents", making it look like the narrowing had no effect. But main-side
-  // `resolveScope` unions chat attachments in, so the query IS scoped to those files. The footer must
-  // say so, not claim the whole corpus.
-  it('shows the chat file(s) as the scope, NOT "using all documents", when the composed scope is empty', () => {
+describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
+  // The always-visible chip near the composer reframes the scope popover's trigger so the active
+  // retrieval scope is legible BEFORE asking. It IS the popover trigger — one click opens the picker.
+  it('names the single attached file when the composed scope is empty (scoped to that file, NOT the whole corpus)', () => {
     render(
       <I18nProvider>
         <ScopePopover
@@ -93,21 +109,90 @@ describe('ScopePopover — footer label reflects chat attachments (empty compose
       </I18nProvider>
     )
     const trigger = screen.getByRole('button')
-    expect(trigger.textContent).toContain('1 file in this chat')
+    expect(trigger.textContent).toContain(t('en', 'chat.scope.answeringFrom', { source: 'statement.pdf' }))
     expect(trigger.textContent).not.toMatch(/using all documents/i)
   })
 
-  it('still says "using all documents" for an empty scope with NO chat attachments', () => {
+  it('shows the doc name for a single-document scope (the #26 "ask exactly this one document" case)', () => {
     render(
       <I18nProvider>
         <ScopePopover
-          docs={[indexedDoc()]}
+          docs={[indexedDoc({ id: 'd1', title: 'contract.pdf' })]}
+          collections={[]}
+          scope={{ collectionIds: [], documentIds: ['d1'] }}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    expect(screen.getByRole('button').textContent).toContain(
+      t('en', 'chat.scope.answeringFrom', { source: 'contract.pdf' })
+    )
+  })
+
+  it('shows "your whole library — N documents" for an empty scope with no attachments', () => {
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[indexedDoc({ id: 'a' }), indexedDoc({ id: 'b' })]}
           collections={[]}
           scope={{ collectionIds: [], documentIds: [] }}
           onChangeScope={() => {}}
         />
       </I18nProvider>
     )
-    expect(screen.getByRole('button').textContent).toMatch(/using all documents/i)
+    const source = t('en', 'chat.scope.wholeLibrary.other', { count: 2 })
+    expect(screen.getByRole('button').textContent).toContain(
+      t('en', 'chat.scope.answeringFrom', { source })
+    )
+  })
+
+  it('treats a Library-only scope as the whole library, naming the corpus size (not the bare word "Library")', () => {
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[indexedDoc({ id: 'a' })]}
+          collections={[libraryCollection()]}
+          scope={{ collectionIds: ['lib'], documentIds: [] }}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    const source = t('en', 'chat.scope.wholeLibrary.one', { count: 1 })
+    expect(screen.getByRole('button').textContent).toContain(
+      t('en', 'chat.scope.answeringFrom', { source })
+    )
+  })
+
+  it('one click on the chip opens the source picker', async () => {
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[indexedDoc({ id: 'd1', title: 'contract.pdf' })]}
+          collections={[]}
+          scope={{ collectionIds: [], documentIds: ['d1'] }}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    expect(await screen.findByText(t('en', 'chat.scope.sourcesTitle'))).toBeInTheDocument()
+  })
+
+  it('renders the German chip label (forced via the localStorage mirror, D-L8)', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[indexedDoc({ id: 'd1', title: 'Vollmacht.docx' })]}
+          collections={[]}
+          scope={{ collectionIds: [], documentIds: ['d1'] }}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    expect(screen.getByRole('button').textContent).toContain(
+      t('de', 'chat.scope.answeringFrom', { source: 'Vollmacht.docx' })
+    )
   })
 })

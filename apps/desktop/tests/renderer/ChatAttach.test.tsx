@@ -166,11 +166,12 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     dropFile('invoice.pdf', '/tmp/invoice.pdf')
 
     // A documents conversation is created and committed BEFORE the import references it (N3).
-    // With no pending narrowing the scope handoff passes null (the Library default is preserved).
+    // D71 (#26): with no pending narrowing the attach path now persists an EMPTY EXPLICIT scope so
+    // the chat answers from just its attachment(s), not the whole Library.
     await waitFor(() =>
       expect(createConversation).toHaveBeenCalledWith({
         mode: 'documents',
-        scope: null,
+        scope: { collectionIds: [], documentIds: [] },
         collectionId: undefined
       })
     )
@@ -185,7 +186,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     // The non-removable pending chip is visible while processing (N4); the same status is
     // mirrored to a polite aria-live region for keyboard/screen-reader users (UX-3), so the
     // text legitimately appears twice — the visible chip AND the sr-only announcer.
-    await userEvent.click(await screen.findByRole('button', { name: /files? in this chat/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /answering from/i }))
     const processing = await screen.findAllByText(/processing invoice\.pdf/i)
     expect(processing.length).toBeGreaterThanOrEqual(2)
   })
@@ -310,7 +311,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     await waitFor(() =>
       expect(createConversation).toHaveBeenCalledWith({
         mode: 'documents',
-        scope: null,
+        scope: { collectionIds: [], documentIds: [] },
         collectionId: undefined
       })
     )
@@ -381,8 +382,8 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     render(<ChatScreen onNavigate={() => {}} />)
     await user.click(await screen.findByText('Doc Q&A'))
 
-    // The footer counts the chat's files; opening it reveals the read-only attachment.
-    await user.click(await screen.findByRole('button', { name: /files? in this chat/i }))
+    // The "Answering from:" chip names the chat's file (D71); opening it reveals the read-only attachment.
+    await user.click(await screen.findByRole('button', { name: /answering from/i }))
     expect(await screen.findByText('Files in this chat')).toBeInTheDocument()
     expect(screen.getAllByText('invoice.pdf').length).toBeGreaterThan(0)
   })

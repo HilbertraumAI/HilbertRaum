@@ -42,16 +42,20 @@ export function collectionLabel(c: Collection, t: I18n['t']): string {
   return c.name
 }
 
-/** Compose the footer label from a resolved scope (plan §13.1). Exported for tests. */
-export function scopeFooterLabel(
+/**
+ * The composed sources phrase for a resolved scope — e.g. "Library + 2 documents" — or null
+ * when the scope is empty (= the whole corpus). The single source of truth for both the footer
+ * label and the "Answering from:" chip (D71), so they never drift.
+ */
+export function scopeSources(
   scope: DocumentScope | null,
   collections: Collection[],
   t: I18n['t'],
   tCount: I18n['tCount']
-): string {
+): string | null {
   const collIds = scope?.collectionIds ?? []
   const docIds = scope?.documentIds ?? []
-  if (collIds.length === 0 && docIds.length === 0) return t('chat.scope.usingAll')
+  if (collIds.length === 0 && docIds.length === 0) return null
 
   const parts: string[] = []
   const picked = collIds
@@ -64,8 +68,18 @@ export function scopeFooterLabel(
   else if (projects.length > 1) parts.push(tCount('chat.scope.projectCount', projects.length))
   if (docIds.length > 0) parts.push(tCount('chat.scope.docCount', docIds.length))
 
-  if (parts.length === 0) return t('chat.scope.usingAll')
-  return t('chat.scope.using', { sources: parts.join(' + ') })
+  return parts.length === 0 ? null : parts.join(' + ')
+}
+
+/** Compose the footer label from a resolved scope (plan §13.1). Exported for tests. */
+export function scopeFooterLabel(
+  scope: DocumentScope | null,
+  collections: Collection[],
+  t: I18n['t'],
+  tCount: I18n['tCount']
+): string {
+  const sources = scopeSources(scope, collections, t, tCount)
+  return sources ? t('chat.scope.using', { sources }) : t('chat.scope.usingAll')
 }
 
 export function ScopePopover({
@@ -113,19 +127,32 @@ export function ScopePopover({
   }
 
   const addableDocs = indexed.filter((d) => !docIds.includes(d.id))
-  // When the composed scope is empty (Library unchecked, no projects/docs picked) but the chat HAS
-  // attachments, retrieval is actually scoped to THOSE files — main-side `resolveScope` unions the chat
-  // attachments in, so the query never touches the whole corpus. The footer must therefore NOT say
-  // "Nutzt alle Dokumente" (which made unchecking the Library look like a no-op); show the files as the
-  // scope instead. Only a truly empty scope with NO attachments is the whole-corpus "all documents".
+  // The active retrieval scope, framed as an always-visible "Answering from: {source}" chip (D71).
+  // The chip IS the popover trigger, so it stays visible before asking and one click opens the picker.
   const composedEmpty = collIds.length === 0 && docIds.length === 0
-  const label =
-    composedEmpty && fileCount > 0
-      ? tCount('chat.scope.filesInChat', fileCount)
-      : scopeFooterLabel(scope, collections, t, tCount)
+  const source = ((): string => {
+    // Empty composed scope + attachments: main-side `resolveScope` unions the chat attachments in, so
+    // retrieval is scoped to THOSE files — never the whole corpus. Name the single file, else count them
+    // (this is the single-document workflow #26 targets, so the file name is the honest answer).
+    if (composedEmpty && fileCount > 0) {
+      const names = [...attachments.map((d) => d.title), ...pendingAttachmentNames]
+      return names.length === 1 ? names[0] : tCount('chat.scope.filesInChat', fileCount)
+    }
+    // A single specific document → name it (the #26 "ask exactly this one document" case).
+    if (collIds.length === 0 && docIds.length === 1) return title(docIds[0])
+    // Whole library: the explicit "All documents" (empty) OR the Library-only default — both answer
+    // from everything, so state the corpus size instead of the bare word "Library".
+    const pickedTypes = collIds.map((id) => collections.find((c) => c.id === id)?.type)
+    if (docIds.length === 0 && (composedEmpty || pickedTypes.every((tp) => tp === 'library'))) {
+      return tCount('chat.scope.wholeLibrary', indexed.length)
+    }
+    // Projects / multi-doc / mixed → the composed sources phrase (single-sourced with the footer).
+    return scopeSources(scope, collections, t, tCount) ?? tCount('chat.scope.wholeLibrary', indexed.length)
+  })()
+  const label = t('chat.scope.answeringFrom', { source })
   // Chat attachments (live + pending) are always included; surfaced as a quiet count alongside the
   // composed sources (plan §13.1), never as removable selection chips. Not appended in the
-  // empty-composed-scope case above, where the file count is already the primary label (no double count).
+  // empty-composed-scope case above, where the file(s) already ARE the named scope (no double count).
   const filesSuffix = fileCount > 0 && !composedEmpty ? ` · ${tCount('chat.scope.filesInChat', fileCount)}` : ''
 
   return (

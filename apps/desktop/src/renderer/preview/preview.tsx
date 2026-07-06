@@ -10,6 +10,7 @@ import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../i18n'
 import { ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
+import { ScopePopover } from '../chat/ScopePopover'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen } from '../screens/ModelsScreen'
 import '../tokens.css'
@@ -213,10 +214,36 @@ const CASES: Record<string, { label: string; node: JSX.Element }> = {
         <ModelsScreen />
       </div>
     )
+  },
+  // Beta-feedback Phase 4 (#26/D71): the always-visible "Answering from:" scope chip near the
+  // composer, shown in its two headline states — scoped to one document (the single-doc workflow),
+  // and the whole-library case that names the corpus size. The chip IS the picker trigger. The `-de`
+  // case renders in German ("Antwortet aus:"). PNG capture deferred to CI/POSIX (Windows dev box).
+  'scope-chip': {
+    label: 'Composer footer — "Answering from:" scope chip (one doc / whole library)',
+    node: (
+      <div style={{ width: 480 }}>
+        {[
+          { key: 'doc', scope: { collectionIds: [], documentIds: ['d1'] } },
+          { key: 'library', scope: { collectionIds: ['lib'], documentIds: [] } }
+        ].map(({ key, scope }) => (
+          <div
+            key={key}
+            className="composer-footer"
+            style={{ display: 'flex', padding: '8px 12px', borderTop: '1px solid var(--border)' }}
+          >
+            <span className="scope-footer-wrap">
+              <ScopePopover docs={DOCUMENTS} collections={COLLECTIONS} scope={scope} onChangeScope={noop} />
+            </span>
+          </div>
+        ))}
+      </div>
+    )
   }
 }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
+CASES['scope-chip-de'] = { ...CASES['scope-chip'], label: `${CASES['scope-chip'].label} — DE` }
 
 const params = new URLSearchParams(location.search)
 const caseId = params.get('case') ?? 'documents'

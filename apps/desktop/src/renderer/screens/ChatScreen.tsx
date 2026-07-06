@@ -33,7 +33,7 @@ import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
+import { Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -234,6 +234,12 @@ export function ChatScreen({
   const [attachStatus, setAttachStatus] = useState('')
   // Drag-over highlight for the chat-surface drop target (plan §11.2 net-new intake).
   const [dragOver, setDragOver] = useState(false)
+  // D71 (#26): the one-time narrow/widen choice offered when a file is attached to an EXISTING
+  // whole-library documents chat. `scopeChoice` drives the dialog; the asked-set makes the choice
+  // sticky per conversation — a "Whole library" answer keeps the default but must not re-prompt on
+  // the next attach (a "Just this file" answer narrows the scope, so it self-heals against re-asking).
+  const [scopeChoice, setScopeChoice] = useState<{ convId: string; fileName: string } | null>(null)
+  const scopeChoiceAskedRef = useRef<Set<string>>(new Set())
   const attachPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Conversation-list collapse, remembered across sessions (localStorage — a UI
   // preference, NOT user data, so it may live outside the encrypted workspace).
@@ -625,13 +631,20 @@ export function ChatScreen({
   // conversation owns its scope), exactly like `createConversationInMode`. A single-project pending
   // scope also becomes the creation anchor (plan §13.3/§13.4).
   async function createDocsConversationForAttach(): Promise<Conversation> {
-    const scope = pendingScope
+    // D71 (#26): a chat born from an attachment defaults to a DOCS-ONLY scope so the question is
+    // answered from just the attached file(s), not the whole Library. When the user set no explicit
+    // scope on the 'new' composer, persist an EMPTY EXPLICIT scope: `resolveScope` reads that as "no
+    // collections" and unions the chat attachments in, narrowing to exactly them — while keeping
+    // `hasExplicitDocSelection` false, so an attachment never masquerades as a hand-pick (N2). (A NULL
+    // scope, the old default, would fall through to the Library — the #26 friction.) An explicit
+    // `pendingScope` — e.g. the user re-checked Library to ask the whole corpus — is honored as-is.
+    const scope: DocumentScope = pendingScope ?? { collectionIds: [], documentIds: [] }
     const collectionId =
-      scope && scope.collectionIds.length === 1 && scope.documentIds.length === 0
+      scope.collectionIds.length === 1 && scope.documentIds.length === 0
         ? scope.collectionIds[0]
         : undefined
     const conv = await window.api.createConversation({ mode: 'documents', scope, collectionId })
-    if (scope) setPendingScope(null)
+    setPendingScope(null)
     return conv
   }
 
@@ -1411,6 +1424,12 @@ export function ChatScreen({
     setError(null)
     const fileNames = paths.map(fileBaseName)
     const active = activeId ? conversations.find((c) => c.id === activeId) : undefined
+    // D71 (#26): attaching to an EXISTING documents chat that is still on the whole-library default
+    // offers a one-time "just this file / whole library" narrow choice. A fresh chat created below is
+    // already docs-scoped by `createDocsConversationForAttach`, so it never prompts. Captured BEFORE
+    // any conversation switch so the decision reflects the chat that received the file.
+    const promptExistingNarrow =
+      isWholeLibraryDefault(active) && !scopeChoiceAskedRef.current.has(active!.id)
     // The skill the user currently sees selected — captured BEFORE we switch conversations so a docs
     // conversation created here inherits it instead of resetting to none (attach-flow reset bug). Its
     // "kept" state rides along so a per-turn pick stays per-turn on the new conversation (U3).
@@ -1446,9 +1465,36 @@ export function ChatScreen({
       setPendingImport({ jobId: job.jobId, convId, documentIds: job.documentIds, fileNames })
       setAttachStatus(t('chat.attach.processing', { name: fileNames.join(', ') }))
       watchAttachJob(job.jobId, convId, job.documentIds, fileNames)
+      // Offer the narrow/widen choice for an existing whole-library chat (D71). Only reachable on
+      // the `convId === active.id` branch above; a freshly created docs chat is already narrowed.
+      if (promptExistingNarrow && convId === active!.id) {
+        setScopeChoice({ convId, fileName: fileNames[0] })
+      }
     } catch (e) {
       setError(friendlyIpcError(e))
     }
+  }
+
+  // D71: "Just this file" — narrow an existing whole-library chat to its attachment(s) by persisting
+  // an empty explicit scope (resolveScope then unions the attachments in; whole Library drops out).
+  async function onScopeChoiceNarrow(): Promise<void> {
+    const choice = scopeChoice
+    setScopeChoice(null)
+    if (!choice) return
+    scopeChoiceAskedRef.current.add(choice.convId)
+    try {
+      await window.api.setConversationScope(choice.convId, { collectionIds: [], documentIds: [] })
+      await refreshConversations()
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // D71: "Whole library" — keep the corpus-wide default, but remember the choice so the next attach
+  // to this conversation does not re-prompt (sticky per conversation).
+  function onScopeChoiceWhole(): void {
+    if (scopeChoice) scopeChoiceAskedRef.current.add(scopeChoice.convId)
+    setScopeChoice(null)
   }
 
   // Keyboard-reachable picker fallback for the drag/drop target.
@@ -1755,6 +1801,14 @@ export function ChatScreen({
             </>
           }
         />
+        {/* D71 (#26): the one-time narrow/widen choice when a file is attached to an existing
+            whole-library documents chat. Portal-based (Radix) — placement in the tree is cosmetic. */}
+        <ScopeNarrowDialog
+          open={scopeChoice != null}
+          fileName={scopeChoice?.fileName ?? ''}
+          onNarrow={() => void onScopeChoiceNarrow()}
+          onWhole={onScopeChoiceWhole}
+        />
       </section>
     </div>
   )
@@ -1783,6 +1837,22 @@ function deriveScope(
   }
   if (conv.collectionId && !dangling) return { collectionIds: [conv.collectionId], documentIds: [] }
   return libraryDefault
+}
+
+/**
+ * True when a documents conversation is still on the whole-library default — no explicit composite
+ * scope, no legacy specific-doc selection, no project anchor (D71). Only these get the narrow/widen
+ * prompt on attach; a conversation the user already scoped (incl. an empty-explicit docs-only scope
+ * from a prior attach) is left alone.
+ */
+function isWholeLibraryDefault(conv: Conversation | undefined): conv is Conversation {
+  return (
+    conv != null &&
+    conv.mode === 'documents' &&
+    conv.scope == null &&
+    !(conv.scopeDocumentIds && conv.scopeDocumentIds.length > 0) &&
+    conv.collectionId == null
+  )
 }
 
 /** Basename of an absolute path for a friendly chip label (cross-platform separators). */
