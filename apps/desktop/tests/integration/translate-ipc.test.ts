@@ -210,6 +210,82 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(calls).toBe(2)
   })
 
+  it('a retry after a transiently-failed attempt does NOT duplicate the streamed text (F-1)', async () => {
+    // Attempt 1 streams a partial delta then THROWS (a server-side close / IncompleteStreamError);
+    // attempt 2 succeeds. The failed attempt's deltas were already appended to job.text AND
+    // forwarded to the renderer — without the FA-1 checkpoint/rollback they would survive into the
+    // terminal `done` text (silent output corruption). The terminal text must carry the window ONCE.
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        if (calls === 1) {
+          o.onToken?.('PARTIAL-DUP ') // streamed into job.text, then a transient failure
+          throw new Error('IncompleteStreamError')
+        }
+        const out = `TR<${o.text}>`
+        o.onToken?.(out)
+        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+        return out
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const done = await waitForTerminal(event, initial.jobId)
+    expect(done.state).toBe('done')
+    expect(calls).toBe(2) // one retry (unchanged retry policy)
+    // The failed attempt's 'PARTIAL-DUP ' delta was rolled back; the window appears exactly once.
+    expect(done.text).toBe('TR<Hallo Welt.>')
+  })
+
+  it('a retry inside a multi-window job rolls back the failed attempt and keeps the \\n\\n joins (F-1)', async () => {
+    // A multi-window paste where the FIRST window's first attempt streams partial text then hits a
+    // limit stop (no clean stop → retried), and every later call is clean. The rollback must drop
+    // the failed attempt's deltas while preserving the '\n\n' window separators between windows.
+    const paras = Array.from({ length: 6 }, (_v, p) =>
+      Array.from({ length: 60 }, (_w, i) => `p${p}w${i}`).join(' ')
+    )
+    const long = paras.join('\n\n')
+    const segments = long.split(/\n\s*\n+/).map((s) => s.trim()).filter((s) => s.length > 0)
+    const plan = planTranslationWindows(segments, 1024)
+    expect(plan.windows.length).toBeGreaterThan(1)
+    const expected = plan.windows.map((w) => `TR<${w}>`).join('\n\n')
+
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 1024,
+      async translate(o) {
+        calls += 1
+        if (calls === 1) {
+          o.onToken?.('DUP ')
+          o.onToken?.(`TR<${o.text}>`)
+          o.onFinal?.({}) // limit stop (no clean stop) → retried once
+          return `DUP TR<${o.text}>`
+        }
+        const out = `TR<${o.text}>`
+        o.onToken?.(out)
+        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+        return out
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq({ text: long }))) as TranslateJob
+    const done = await waitForTerminal(event, initial.jobId)
+    expect(done.state).toBe('done')
+    expect(calls).toBe(plan.windows.length + 1) // one retry on the first window only
+    // No 'DUP' residue and every '\n\n' join intact — the rollback restored post-separator text.
+    expect(done.text).toBe(expected)
+  })
+
   it('busy-REJECTS a second start while one is in flight (never queued)', async () => {
     const gated = gatedTranslator()
     registerTranslateIpc(ctxFor(), service({ translator: gated.translator }))
@@ -309,6 +385,22 @@ describe('registerTranslateIpc — translate job contract', () => {
     // was detached on `done`). getJob still reports the terminal `done`, unchanged by the destroy.
     event.sender.destroy()
     expect(svc.getJob(initial.jobId).state).toBe('done')
+  })
+
+  it('a cancelled job detaches its destroyed listener too (F-4, parity with done-detach)', async () => {
+    // A cancelled job emits neither done nor error, so the destroyed listener wired at start would
+    // leak without the FA-1 cancel-terminal detach. The translateCancel handler must detach it —
+    // even though cancel is invoked with a fresh event, the jobId→detach map reaches the original.
+    const gated = gatedTranslator()
+    const svc = service({ translator: gated.translator })
+    registerTranslateIpc(ctxFor(), svc)
+    const event = makeEvent()
+    const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1)) // in flight
+    expect(event.sender.listenerCount('destroyed')).toBe(1) // wired at start
+    const cancelled = (await invoke(handlers, IPC.translateCancel, job.jobId)).result as TranslateJob
+    expect(cancelled.state).toBe('cancelled')
+    expect(event.sender.listenerCount('destroyed')).toBe(0) // detached on the cancel terminal
   })
 
   it('translateStart refuses a locked workspace (never respawns the suspended sidecar)', async () => {

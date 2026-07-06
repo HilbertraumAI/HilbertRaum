@@ -143,8 +143,20 @@ export class TranslateJobService {
         // still fails, fail the WHOLE job visibly (runtimeFailed) — an interactive user is better
         // served by an honest failure than by a finished translation with a missing paragraph.
         // (A user cancel aborts `signal` and is handled as `cancelled`, never a failed window.)
+        //
+        // FA-1 F-1: checkpoint the accumulated text HERE — after the '\n\n' window separator (i>0),
+        // before the attempt loop. A transiently-failed attempt has ALREADY streamed its deltas
+        // through emitDelta into job.text; without rollback the retry appends the window a SECOND
+        // time and that duplication survives into the terminal `done` text (the silent-output-
+        // corruption class the TA wave closed). Restoring the checkpoint before each retry attempt
+        // drops the failed attempt's deltas. (The live view may briefly flash the duplicate, but
+        // trDone carries the full text and the renderer replaces its output with it.)
+        const checkpoint = this.jobs.get(jobId)?.text ?? ''
         let clean = false
         for (let attempt = 1; attempt <= 2 && !clean; attempt++) {
+          // Roll back a prior failed attempt's streamed deltas. patch-level, so the cancelled
+          // guard in patch() holds — a job cancelled mid-flight is never resurrected by the restore.
+          if (attempt > 1) this.patch(jobId, { text: checkpoint })
           let final: CompletionFinal | undefined
           try {
             const out = await translator.translate({

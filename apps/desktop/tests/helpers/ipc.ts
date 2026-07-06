@@ -20,6 +20,8 @@ export interface FakeIpcEvent {
     isDestroyed: () => boolean
     once: (event: string, listener: (...args: unknown[]) => void) => void
     removeListener: (event: string, listener: (...args: unknown[]) => void) => void
+    /** Test-only: how many listeners are wired for an event — asserts the L3/F-4 detach. */
+    listenerCount: (event: string) => number
     /** Test-only: simulate the window being destroyed — flips isDestroyed + fires `'destroyed'`. */
     destroy: () => void
   }
@@ -37,6 +39,7 @@ export function makeEvent(): FakeIpcEvent {
     removeListener: (event: string, listener: (...args: unknown[]) => void): void => {
       emitter.removeListener(event, listener)
     },
+    listenerCount: (event: string): number => emitter.listenerCount(event),
     destroy: (): void => {
       destroyed = true
       emitter.emit('destroyed')

@@ -30,6 +30,13 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
     if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.docs.locked'))
   }
 
+  // FA-1 F-4: the `destroyed` listener wired at start is detached on the job's terminal state so a
+  // long-lived window running many translations does not pile up one listener per call (Node's
+  // MaxListenersExceededWarning at 11). `emit.done`/`emit.error` detach inline, but a CANCELLED job
+  // emits neither — so the detach for each queued job is also registered here by jobId and invoked
+  // from the two cancel terminals (the translateCancel handler and the destroyed-cancel path).
+  const detachers = new Map<string, () => void>()
+
   // Per-renderer streaming emitter, isDestroyed-guarded (the chat-stream / vision precedent).
   const emitterFor = (event: {
     sender: { send: (ch: string, p: unknown) => void; isDestroyed: () => boolean }
@@ -57,10 +64,15 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
     // one listener per call (Node's MaxListenersExceededWarning).
     const base = emitterFor(event)
     let onDestroyed: (() => void) | null = null
+    let boundJobId: string | null = null
     const detach = (): void => {
       if (onDestroyed) {
         event.sender.removeListener('destroyed', onDestroyed)
         onDestroyed = null
+      }
+      if (boundJobId) {
+        detachers.delete(boundJobId)
+        boundJobId = null
       }
     }
     const emit: TranslateStreamEmitter = {
@@ -80,15 +92,26 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
     const job = jobs.start(req, emit)
     if (job.state === 'queued') {
       const { jobId } = job
-      onDestroyed = () => void jobs.cancel(jobId)
+      boundJobId = jobId
+      // Detach on the destroyed-cancel terminal too (F-4): the aborted run emits neither done nor
+      // error, so without this the listener + map entry would leak on a window-destroy cancel.
+      onDestroyed = () => {
+        jobs.cancel(jobId)
+        detach()
+      }
       event.sender.once('destroyed', onDestroyed)
+      detachers.set(jobId, detach)
     }
     return job
   })
 
-  ipcMain.handle(IPC.translateCancel, (_e, jobId: unknown): TranslateJob =>
-    jobs.cancel(typeof jobId === 'string' ? jobId : '')
-  )
+  ipcMain.handle(IPC.translateCancel, (_e, jobId: unknown): TranslateJob => {
+    const id = typeof jobId === 'string' ? jobId : ''
+    const result = jobs.cancel(id)
+    // The cancel terminal emits nothing, so detach the destroyed listener here (F-4).
+    detachers.get(id)?.()
+    return result
+  })
 
   // Remount recovery (the chat `getActiveStream` precedent): a Translate screen that mounts fresh
   // after a full renderer reload has lost its module store — this returns the still-running job
