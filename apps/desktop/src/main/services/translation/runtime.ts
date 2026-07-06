@@ -200,6 +200,15 @@ export class TranslationRuntime {
   private idleHandle: IdleTimerHandle | null = null
   /** An in-flight SOFT idle teardown, tracked so `stop()` can await it (no orphan on quit). */
   private idleTeardownPromise: Promise<void> | null = null
+  /**
+   * The in-flight HARD teardown (`suspend()`/`stop()`), held so overlapping calls SHARE one pass
+   * (M5). Without it a second, overlapping teardown sees `this.server` already nulled by the first,
+   * runs a no-op body, and its `finally` clears `tearingDown` while the first is STILL inside
+   * `server.stop()`'s SIGTERM→2 s→SIGKILL window — a racing `translate()` then cold-starts during the
+   * vault re-encrypt, and a quit can exit with the escalation pending (orphan on POSIX). `tearingDown`
+   * clears — together with this promise — only when the shared pass has fully settled.
+   */
+  private teardownPromise: Promise<void> | null = null
   private readonly idleTimeoutMs: number
   private readonly idleClock: IdleClock
 
@@ -224,6 +233,17 @@ export class TranslationRuntime {
     if (this.tearingDown) throw new Error('Translation runtime is suspending (workspace is locking)')
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
+    // A SOFT idle teardown may be mid-kill: `idleTeardown` nulled `this.server` SYNCHRONOUSLY and is
+    // now awaiting the child's exit. Wait it out before cold-starting so a translate racing the soft
+    // teardown never briefly holds TWO ~10 GB sidecars co-resident (the double-load — M5 improvement).
+    // Re-check the latches after the await: a lock/quit may have begun, or another caller may have
+    // already restarted the sidecar, while we waited.
+    if (this.idleTeardownPromise) {
+      await this.idleTeardownPromise.catch(() => undefined)
+      if (this.stopped) throw new Error('Translation runtime is stopped (app is shutting down)')
+      if (this.tearingDown) throw new Error('Translation runtime is suspending (workspace is locking)')
+      if (this.server) return this.server
+    }
     if (!this.starting) {
       const server = new LlamaServer({
         binPath: this.opts.binPath,
@@ -239,7 +259,18 @@ export class TranslationRuntime {
         threads: this.opts.threads,
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host
+        host: this.opts.host,
+        // M1: a mid-session sidecar crash (the child dies on its own AFTER becoming healthy — driver
+        // crash, VRAM/RAM exhaustion) otherwise leaves `this.server` pointing at a dead handle: every
+        // subsequent `translate()` fails with a connection error, and each failed attempt re-arms the
+        // idle clock, so the outage persists as long as attempts arrive < the idle window apart. Drop
+        // the dead handle here so the NEXT `translate()` cold-starts (the doc-task's one retry then
+        // gets a fresh spawn). Identity-compared so a late crash notification can never clobber a
+        // NEWER instance that a soft teardown + restart already installed. `LlamaServer` fires this
+        // only for a healthy child dying outside `stop()`, so a lock/quit kill never trips it.
+        onUnexpectedExit: () => {
+          if (this.server === server) this.server = null
+        }
       })
       this.starting = server
         .start()
@@ -356,24 +387,37 @@ export class TranslationRuntime {
     await this.teardown()
   }
 
-  private async teardown(): Promise<void> {
+  private teardown(): Promise<void> {
+    // Single-flight (M5): an overlapping teardown — two suspends racing, or a quit `stop()` arriving
+    // while a suspend's kill is still in its SIGTERM→SIGKILL window — SHARES this pass rather than
+    // starting a second one. A second pass would see `this.server` already nulled, run a no-op body,
+    // and its `finally` would clear `tearingDown` prematurely (see the field comment). `tearingDown`
+    // + `teardownPromise` therefore clear together, only when the shared promise settles below.
+    if (this.teardownPromise) return this.teardownPromise
     // Bar a racing ensureStarted from spawning a sidecar that would outlive this teardown (and
     // survive a lock). `stop()` also arms the permanent `stopped` latch before calling this.
     this.tearingDown = true
     this.cancelIdleTimer()
-    try {
-      // A lazy start may be in flight (first translate() racing quit/lock) — wait it out so the
-      // spawned child can't outlive the app as an orphan. Likewise an in-flight soft idle teardown.
-      if (this.starting) await this.starting.catch(() => undefined)
-      if (this.idleTeardownPromise) await this.idleTeardownPromise.catch(() => undefined)
-      const server = this.server
-      this.server = null
-      if (server) await server.stop()
-    } finally {
+    // The `.finally` runs on a microtask, never synchronously — so the `this.teardownPromise = run`
+    // assignment below always wins the race even when `doTeardown()` completes without awaiting.
+    const run = this.doTeardown().finally(() => {
       // Cleared so a post-suspend translate() can lazily restart (suspend permits a fresh start;
       // only stop()'s separate, permanent `stopped` latch blocks that).
       this.tearingDown = false
-    }
+      this.teardownPromise = null
+    })
+    this.teardownPromise = run
+    return run
+  }
+
+  private async doTeardown(): Promise<void> {
+    // A lazy start may be in flight (first translate() racing quit/lock) — wait it out so the
+    // spawned child can't outlive the app as an orphan. Likewise an in-flight soft idle teardown.
+    if (this.starting) await this.starting.catch(() => undefined)
+    if (this.idleTeardownPromise) await this.idleTeardownPromise.catch(() => undefined)
+    const server = this.server
+    this.server = null
+    if (server) await server.stop()
   }
 
   // ---- Idle-teardown interlock (the vision RUNTIME-4 pattern) --------------------------

@@ -1,4 +1,5 @@
 import { vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 
 // Lightweight harness for testing the `register*Ipc` handlers in a node-env vitest run.
 //
@@ -11,16 +12,37 @@ import { vi } from 'vitest'
 export type IpcHandler = (event: FakeIpcEvent, ...args: unknown[]) => unknown
 export type IpcHandlers = Map<string, IpcHandler>
 
-/** A fake `IpcMainInvokeEvent`: records what the handler streams back to the renderer. */
+/** A fake `IpcMainInvokeEvent`: records what the handler streams back to the renderer. The sender
+ *  is EventEmitter-backed so handlers can wire the WebContents `'destroyed'` lifecycle (L3). */
 export interface FakeIpcEvent {
   sender: {
     send: ReturnType<typeof vi.fn>
     isDestroyed: () => boolean
+    once: (event: string, listener: (...args: unknown[]) => void) => void
+    removeListener: (event: string, listener: (...args: unknown[]) => void) => void
+    /** Test-only: simulate the window being destroyed — flips isDestroyed + fires `'destroyed'`. */
+    destroy: () => void
   }
 }
 
 export function makeEvent(): FakeIpcEvent {
-  return { sender: { send: vi.fn(), isDestroyed: () => false } }
+  const emitter = new EventEmitter()
+  let destroyed = false
+  const sender = {
+    send: vi.fn(),
+    isDestroyed: () => destroyed,
+    once: (event: string, listener: (...args: unknown[]) => void): void => {
+      emitter.once(event, listener)
+    },
+    removeListener: (event: string, listener: (...args: unknown[]) => void): void => {
+      emitter.removeListener(event, listener)
+    },
+    destroy: (): void => {
+      destroyed = true
+      emitter.emit('destroyed')
+    }
+  }
+  return { sender }
 }
 
 /** Build the fake `ipcMain` whose `handle` records handlers into `handlers`. */

@@ -46,10 +46,44 @@ export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobServ
 
   ipcMain.handle(IPC.translateStart, (event, req: TranslateRequest): TranslateJob => {
     requireUnlocked()
+    // L3: the stream events (trToken/trDone/trError) are bound to THIS sender for the job's life.
+    // The app is multi-window: if the starting window is destroyed, those events would drop
+    // silently while the job keeps decoding up to the 45-min per-request timeout, holding the
+    // one-at-a-time busy lane (and another window adopting via getActive would see a frozen
+    // snapshot). Bind the job's lifetime to the sender: cancel it when the window is destroyed —
+    // parity with the lock/quit purge. (A full emitter-REBIND onto another window via getActive is
+    // deliberately deferred — see the TA-wave deferred backlog.) The 'destroyed' listener is
+    // detached on terminal state so a long-lived window running many translations does not pile up
+    // one listener per call (Node's MaxListenersExceededWarning).
+    const base = emitterFor(event)
+    let onDestroyed: (() => void) | null = null
+    const detach = (): void => {
+      if (onDestroyed) {
+        event.sender.removeListener('destroyed', onDestroyed)
+        onDestroyed = null
+      }
+    }
+    const emit: TranslateStreamEmitter = {
+      token: base.token,
+      done: (jobId, job) => {
+        detach()
+        base.done(jobId, job)
+      },
+      error: (jobId, job) => {
+        detach()
+        base.error(jobId, job)
+      }
+    }
     // The service validates (model present, curated langs, source ≠ target, non-empty), enforces
     // the one-at-a-time lane + doc-task/busy reject, and returns the initial job immediately;
     // tokens stream via the emitter, terminal state via trDone/trError.
-    return jobs.start(req, emitterFor(event))
+    const job = jobs.start(req, emit)
+    if (job.state === 'queued') {
+      const { jobId } = job
+      onDestroyed = () => void jobs.cancel(jobId)
+      event.sender.once('destroyed', onDestroyed)
+    }
+    return job
   })
 
   ipcMain.handle(IPC.translateCancel, (_e, jobId: unknown): TranslateJob =>

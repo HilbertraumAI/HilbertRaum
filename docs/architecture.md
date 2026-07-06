@@ -1658,6 +1658,46 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     plus `isCleanStop`/`stopped_eos` unit coverage. The manual smoke's header notes `stopping_word` is
     now load-bearing (no behavior change expected — a real within-budget window ends on `<end_of_turn>`).
 
+- **TA-6 — sidecar runtime robustness (translation audit fix wave, 2026-07-06; findings M1/M5/L2/L3).**
+  Crash recovery, single-flight teardown, and sender-lifetime binding for the TranslateGemma sidecar
+  (`services/translation/runtime.ts`, `jobs.ts`, `ipc/registerTranslateIpc.ts`).
+  - **M1 (crash recovery).** `TranslationRuntime` never observed the child dying on its own, so a
+    mid-session crash left `this.server` pointing at a dead handle: every `translate()` failed with a
+    connection error, and each failed attempt re-armed the idle clock, so the outage persisted as long
+    as attempts arrived < the 120 s idle window apart. `ensureStarted` now wires `LlamaServer`'s
+    existing `onUnexpectedExit` hook (fired only for a healthy child dying outside `stop()`) to null
+    `this.server` — **identity-compared** (`if (this.server === server)`) so a late crash notice can
+    never clobber a NEWER instance a soft teardown + restart already installed. The next `translate()`
+    then cold-starts (the doc-task's one retry gets a fresh spawn). The connection-error catch-path
+    fallback (option b) was unnecessary — the sidecar offers the exit callback (option a).
+  - **M5 (single-flight teardown).** `teardown()` was not single-flighted: a quit `stop()` arriving
+    while a suspend's kill was in its SIGTERM→2 s→SIGKILL window saw `this.server` already nulled and
+    resolved immediately (app could exit with the escalation pending → orphan on POSIX), and two
+    overlapping suspends let the second's `finally` clear `tearingDown` while the first was still
+    killing (a racing `translate()` then cold-started during the vault re-encrypt). A shared
+    `teardownPromise` now holds the in-flight pass (mirroring `idleTeardownPromise`): an overlapping
+    teardown returns/awaits it instead of starting a second pass, and `tearingDown` + `teardownPromise`
+    clear together — via a `.finally` on the shared promise (which runs on a microtask, so the
+    assignment always wins even when the body completes without awaiting) — only once it settles. While
+    here, a cold start now **awaits a live `idleTeardownPromise` first**, so a translate racing a soft
+    idle teardown no longer briefly double-loads ~10 GB (it waits for the dying child, then spawns one).
+  - **L2 (dead latch removed).** `TranslateJobService.tearingDown` was dead code — `stop()` has no
+    `await` (TA-5 left it synchronous), so the flag set and cleared within one synchronous block and no
+    continuation could observe it. The latch (and its defense-claiming comment) were removed; the real
+    defense — `stop()` aborts every controller's signal before the vault re-encrypts, so a `run()`
+    scheduled just before then sees `signal.aborted` — is now what the `run()` guard checks and the
+    comment states.
+  - **L3 (cancel-on-destroy; full rebind deferred).** `trToken`/`trDone`/`trError` are bound to the
+    starting `webContents` for the job's life; in the multi-window app a destroyed window dropped those
+    events silently while the job decoded to the 45-min timeout holding the busy lane. `translateStart`
+    now binds the job's lifetime to the sender: a `'destroyed'` listener cancels the job (parity with
+    the lock/quit purge), detached on terminal state so a long-lived window running many translations
+    does not accumulate one listener per call. A full emitter-**rebind** onto another window via
+    `getActive` is deliberately **deferred** (recorded in the TA-wave deferred backlog). Tests: runtime
+    crash-recovery + identity-guard, concurrent `stop()`+`suspend()` awaiting the shared teardown,
+    overlapping-suspend `tearingDown` hold, translate-awaits-idle-teardown (no double spawn);
+    `translate-ipc.test.ts` destroyed-sender cancel + listener-detach.
+
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
   (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
   state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A

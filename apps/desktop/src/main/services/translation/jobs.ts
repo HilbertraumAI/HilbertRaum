@@ -61,13 +61,6 @@ export class TranslateJobService {
   private readonly controllers = new Map<string, AbortController>()
   /** The single in-flight job (the view's own one-at-a-time serialization). Null when idle. */
   private activeJobId: string | null = null
-  /**
-   * Set WHILE `stop()` (workspace LOCK / quit) purges the jobs, cleared in its `finally` — the
-   * vision `tearingDown` analogue. A `run()` scheduled by a `start()` that interleaves the
-   * teardown refuses to touch the (suspended) sidecar. The IPC `requireUnlocked` guard already
-   * bars a fresh start during lock; this is defense-in-depth for an in-flight scheduling race.
-   */
-  private tearingDown = false
 
   constructor(private readonly deps: TranslateJobServiceDeps) {}
 
@@ -112,7 +105,11 @@ export class TranslateJobService {
     emit: TranslateStreamEmitter
   ): Promise<void> {
     try {
-      if (this.tearingDown || signal.aborted) {
+      // The real defense against a start that interleaves a lock/quit teardown is `signal.aborted`:
+      // `stop()` aborts every controller BEFORE the vault re-encrypts, so a run() scheduled just
+      // before then sees its signal already aborted and bails without touching the suspended sidecar.
+      // (The IPC `requireUnlocked` guard bars a fresh start during lock; this covers the in-flight race.)
+      if (signal.aborted) {
         this.cancel(jobId)
         return
       }
@@ -262,17 +259,12 @@ export class TranslateJobService {
    * ~10 GB server. A safe no-op when idle.
    */
   async stop(): Promise<void> {
-    this.tearingDown = true
-    try {
-      for (const controller of this.controllers.values()) {
-        if (!controller.signal.aborted) controller.abort()
-      }
-      this.jobs.clear()
-      this.controllers.clear()
-      this.activeJobId = null
-    } finally {
-      this.tearingDown = false
+    for (const controller of this.controllers.values()) {
+      if (!controller.signal.aborted) controller.abort()
     }
+    this.jobs.clear()
+    this.controllers.clear()
+    this.activeJobId = null
   }
 
   /** Append a streamed delta to the job's accumulated text AND forward it to the renderer.

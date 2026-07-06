@@ -312,19 +312,117 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
     await rt.stop()
   })
 
-  it('a soft idle teardown lets the next translate cold-start a fresh child', async () => {
+  it('a translate racing a soft idle teardown AWAITS it, then cold-starts ONE fresh child (M5: no double-load)', async () => {
     const { spawn, calls, children } = gatedSpawn()
     const { fetchImpl } = translationFetch()
     const { clock, state } = fakeClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
     children[0].hold = true // hold child0's exit so the soft teardown stays IN FLIGHT
-    state.fire!() // nulls this.server synchronously, kills child0 (gated)
+    state.fire!() // nulls this.server synchronously, kills child0 (gated, still alive)
     expect(children[0].killed).toBe(true)
-    const out = await rt.translate(translateOpts) // server===null → cold-start a NEW child
+    let resolved = false
+    const p = rt.translate(translateOpts).then((out) => {
+      resolved = true
+      return out
+    })
+    await tick()
+    await tick()
+    // Parked on the in-flight soft teardown — NO second spawn yet, so the ~10 GB sidecars never
+    // co-exist (the double-load the M5 improvement closes).
+    expect(resolved).toBe(false)
+    expect(calls.length).toBe(1)
+    children[0].release() // child0 finally exits → the parked translate now cold-starts
+    const out = await p
+    expect(out).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2) // exactly one fresh child, spawned only AFTER the old one died
+    await rt.stop()
+  })
+
+  it('recovers from a mid-session sidecar CRASH: the next translate cold-starts a fresh child (M1)', async () => {
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = translationFetch()
+    const { clock } = fakeClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.translate(translateOpts)
+    expect(calls.length).toBe(1)
+    // The child dies on its OWN (driver crash / OOM) after having been healthy, outside stop() —
+    // a real 'exit'. LlamaServer fires onUnexpectedExit, and the runtime drops the dead handle so
+    // the next translate cold-starts instead of failing forever against a stale server.
+    children[0].emit('exit', 134, null)
+    await tick()
+    const out = await rt.translate(translateOpts)
+    expect(out).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2) // cold-started a fresh child rather than reusing the dead one
+    await rt.stop()
+  })
+
+  it('a healthy crash does NOT clobber a newer instance (identity-compared)', async () => {
+    // The exit callback captures the child that crashed; if a soft teardown + restart has already
+    // installed a NEWER server by the time a late crash notification lands, nulling must be a no-op.
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = translationFetch()
+    const { clock, state } = fakeClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.translate(translateOpts) // child0
+    state.fire!() // soft teardown of child0 (not held → exits)
+    await tick()
+    await rt.translate(translateOpts) // cold-starts child1 (the NEWER instance)
+    expect(calls.length).toBe(2)
+    children[0].emit('exit', 134, null) // a LATE crash notice from the already-dead child0
+    await tick()
+    // child1 is untouched — the next translate reuses it, no third spawn.
+    const out = await rt.translate(translateOpts)
     expect(out).toBe(COMPLETION_TEXT)
     expect(calls.length).toBe(2)
+    await rt.stop()
+  })
+
+  it('concurrent stop() + suspend() both resolve only AFTER the child is dead (single-flight teardown, M5)', async () => {
+    const { spawn, children } = gatedSpawn()
+    const { fetchImpl } = translationFetch()
+    const { clock } = fakeClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.translate(translateOpts)
+    children[0].hold = true // child0 won't exit until released — the SIGTERM→SIGKILL window
+    let suspendDone = false
+    let stopDone = false
+    const suspendP = rt.suspend().then(() => (suspendDone = true))
+    const stopP = rt.stop().then(() => (stopDone = true))
+    await tick()
+    await tick()
+    expect(children[0].killed).toBe(true) // the kill signal was sent
+    expect(suspendDone).toBe(false) // both await the ONE shared teardown, not a resolved no-op
+    expect(stopDone).toBe(false)
+    expect(children.length).toBe(1) // single-flight: no second teardown pass, no extra child
+    children[0].release() // the child finally exits
+    await Promise.all([suspendP, stopP])
+    expect(suspendDone).toBe(true)
+    expect(stopDone).toBe(true)
+    await expect(rt.translate(translateOpts)).rejects.toThrow(/stopped/) // stop() stayed permanent
+  })
+
+  it('overlapping suspends stay single-flight: a racing translate is refused until the SHARED teardown settles (M5)', async () => {
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = translationFetch()
+    const { clock } = fakeClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.translate(translateOpts)
+    children[0].hold = true
+    const s1 = rt.suspend()
+    const s2 = rt.suspend() // overlapping — must JOIN s1, never start a second pass
+    await tick()
+    await tick()
+    // While the shared teardown is still killing, `tearingDown` is HELD → a racing translate is
+    // refused (pre-fix, s2's finally cleared the flag early and this would cold-start instead).
+    await expect(rt.translate(translateOpts)).rejects.toThrow(/suspending/)
+    expect(children.length).toBe(1)
     children[0].release()
+    await Promise.all([s1, s2])
+    // Only now that the shared teardown settled is `tearingDown` cleared → translate restarts.
+    const out = await rt.translate(translateOpts)
+    expect(out).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2)
     await rt.stop()
   })
 

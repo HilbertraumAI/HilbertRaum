@@ -287,6 +287,30 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(svc.getJob(job.jobId).state).toBe('failed')
   })
 
+  it('cancels the active job when the starting window is destroyed (L3, multi-window safety)', async () => {
+    const gated = gatedTranslator()
+    const svc = service({ translator: gated.translator })
+    registerTranslateIpc(ctxFor(), svc)
+    const event = makeEvent()
+    const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1)) // in flight
+    event.sender.destroy() // the window goes away mid-decode
+    expect(gated.sawSignal()?.aborted).toBe(true) // the sidecar fetch was aborted
+    expect(svc.getJob(job.jobId).state).toBe('cancelled') // the busy lane is freed
+  })
+
+  it('a completed job detaches its destroyed listener (no per-translate listener pile-up, L3)', async () => {
+    const svc = service({ translator: scriptedTranslator() })
+    registerTranslateIpc(ctxFor(), svc)
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    await waitForTerminal(event, initial.jobId)
+    // The job finished; a later window-destroy must NOT try to cancel a long-gone job (the listener
+    // was detached on `done`). getJob still reports the terminal `done`, unchanged by the destroy.
+    event.sender.destroy()
+    expect(svc.getJob(initial.jobId).state).toBe('done')
+  })
+
   it('translateStart refuses a locked workspace (never respawns the suspended sidecar)', async () => {
     registerTranslateIpc(ctxFor(false), service({ translator: scriptedTranslator() }))
     await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow()
