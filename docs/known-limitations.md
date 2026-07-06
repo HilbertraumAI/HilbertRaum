@@ -1353,6 +1353,38 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   streams. Categories are grouped on a **canonical English identifier** (stable across UI locale — the
   enum and the model-assisted detection key on it), but the breakdown **display labels are localized**
   (EN + DE); a future user-defined category with no catalog entry falls back to its raw name.
+- **A "categorize … as CSV/JSON" chat turn now serializes WITH the category column, but chat still
+  cannot write the file, and the columns are fixed (result-tables plan, Phase 1 — 2026-07-05).** The
+  bank format answer categorizes FIRST (persisting, with the honest model-assisted / rule-based note
+  under the fenced block — D63) and both CSV surfaces (the inline answer and the confirm-gated export
+  button) emit each row's category through one generic table serializer (D60); the column is
+  **presence-gated** (D62) — a never-categorized statement keeps its prior 7-column shape rather than
+  implying an all-blank categorization. Remaining limits: (a) the actual **file write stays a
+  confirm-gated UI action** — a chat "export" produces the copyable inline CSV, never a file (a
+  message-level export affordance is the plan's Phase 2); (b) the column set is the fixed transaction
+  shape + category — **arbitrary derived columns** ("subcategory", "counterparty") are the plan's
+  Phase 3 (grammar-constrained TableRequest + per-row enrichment); (c) **without the skill active** a
+  tabular ask still routes to top-k relevance, not whole-document (also Phase 3).
+  **Phase 1.5 (same day) added USER-DEFINED category sets from the prompt** ("Kategorisiere in Miete,
+  Lebensmittel, Kinder und Sonstiges … als CSV"): the enum-constrained categorizer runs INLINE in the
+  chat slot with the user's labels (+ the `Uncategorized` drop target), persists them as non-builtin
+  categories, and reuses a prior run when the persisted labels fit the requested set. Limits: it
+  **requires a running model** (with none the ask is refused with friendly copy echoing the parsed
+  set — the deterministic rules cannot know the user's labels); the parse is deliberately
+  conservative (a categorize stem + ≥ 2 plausible labels; one malformed token rejects the whole list
+  rather than categorizing into garbage); a custom label is a MODEL-ASSIGNED label (the honest
+  model-assisted note rides every answer; totals and the D56 gate are untouched); and a large
+  statement pays the per-batch model latency inside the chat turn (the ephemeral "reading…" notice
+  covers the gap, but there is no per-batch progress meter in chat — the "Categorize" button lane
+  has one).
+  **Phase 1.6 (same day): the taxonomy can live in an imported CSV** — "Kategorisiere nach den
+  Kategorien in `taxonomie.csv`" finds the file BY NAME across the indexed library (never by widening
+  scope), parses one label per line (2–40; an optional keyword column becomes the model-prompt gloss —
+  the accuracy lever), and refuses honestly, naming the file, when it is missing or not parseable as a
+  list. Caveats: with NO explicit scope the chat layer's filename auto-scope can narrow the turn to the
+  taxonomy file itself and the handler falls through to relevance — select the statement (or keep it in
+  scope) when referencing a taxonomy file; a filename with spaces must be quoted; the file's labels are
+  otherwise subject to the same model requirement and honesty notes as an inline custom set.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

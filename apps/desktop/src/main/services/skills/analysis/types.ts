@@ -7,6 +7,7 @@ import type {
   SkillToolAudit
 } from '../../../../shared/types'
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
+import type { ModelRuntime } from '../../runtime'
 
 // The per-skill analysis-handler seam (full-doc-skills plan §3.1, Phase 2). This is the bridge a
 // chat turn will (in Phase 3) call instead of top-k RAG, so a `kind:tool` skill's exhaustive,
@@ -54,6 +55,16 @@ export interface SkillAnalysisContext {
    * asks for geometry-aware row/column reconstruction — set ONLY by the bank-statement handler.
    */
   readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
+  /**
+   * The loaded chat runtime, or null/absent when none runs (result-tables plan, Phase 1.5). Present
+   * for ONE sanctioned model-assisted sub-step only: a USER-SUPPLIED custom category set
+   * ("Kategorisiere in Miete, Kinder, …") runs the enum-constrained categorizer INLINE — safe because
+   * the chat turn already holds the exclusive model slot (the same slot grounded-data answers stream
+   * in), so no second lane can hit the one llama-server. Everything else in an exhaustive handler
+   * stays deterministic; with no runtime a custom-category ask is REFUSED with friendly copy (the
+   * deterministic rules cannot know the user's labels — never a silent wrong-taxonomy fallback).
+   */
+  runtime?: ModelRuntime | null
 }
 
 /** The grounded result a handler returns (plan §3.1): synthesised answer + real citations + coverage. */

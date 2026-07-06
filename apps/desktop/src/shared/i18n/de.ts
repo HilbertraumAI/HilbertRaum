@@ -666,6 +666,21 @@ export const de: Record<keyof typeof en, string> = {
     'Hier ist der Auszug als CSV — nur die Buchungszeilen, aus den gelesenen Beträgen erstellt (nichts aus ' +
     'Fließtext zusammengerechnet oder erfunden). Die Geldfluss-Zusammenfassung und die Anfangs-/Endsalden ' +
     'sind nicht im CSV enthalten; frag nach dem Auszug als JSON, um auch die zu bekommen.',
+  // Result-tables Phase 1.5: ein eigenes Kategorien-Set aus dem Prompt braucht das lokale Modell
+  // (die deterministischen Regeln kennen nur ihren festen Satz) — ehrlich ablehnen statt still mit
+  // einer anderen Taxonomie zu antworten. Das erkannte Set wird zurückgespiegelt.
+  'skills.bankAnalysis.customCategoriesNeedModel':
+    'Um die Buchungen in deine eigenen Kategorien ({categories}) einzuordnen, brauche ich ein laufendes ' +
+    'lokales Modell — die eingebauten Schnellregeln kennen nur ihren festen Satz. Starte ein Modell und ' +
+    'frag dann erneut.',
+  // Phase 1.6: eine per Name referenzierte Taxonomie-CSV — ehrliche Ablehnung mit Dateiname, nie ein
+  // stiller Rückfall auf die feste Taxonomie.
+  'skills.bankAnalysis.customTaxonomyNotFound':
+    'Ich konnte „{name}“ nicht in deinen Dokumenten finden. Importiere die Datei zuerst (Dokumente → Import) und frag dann erneut.',
+  'skills.bankAnalysis.customTaxonomyUnparseable':
+    'Ich habe „{name}“ gelesen, konnte es aber nicht als Kategorienliste verwenden. Erwartet wird eine ' +
+    'Kategorie pro Zeile — ein Label, optional gefolgt von Stichworten nach einem Semikolon (z. B. ' +
+    '„Kinder;Schule, Kita, Taschengeld“).',
 
   // ---- Rechnungsauswertung (full-doc-skills Plan §3.1, Phase 4 / D49) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der

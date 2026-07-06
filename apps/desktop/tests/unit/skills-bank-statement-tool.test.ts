@@ -14,6 +14,7 @@ import {
   categorizeRows,
   summarizeCashflow,
   transactionsToCsv,
+  buildStatementJson,
   validateStatementBalancesTool,
   categorizeTransactionsTool,
   summarizeCashflowTool,
@@ -936,6 +937,34 @@ describe('export_transactions_csv (S11c)', () => {
     expect(lines[0]).toBe('date,valueDate,description,amount,currency,balanceAfter,sourcePage')
     expect(lines[1]).toBe('2026-01-02,,"Café, Vienna",-4.50,EUR,100.00,') // comma field quoted; nulls blank
     expect(lines[2]).toBe('2026-01-03,2026-01-03,Salary,2500.00,EUR,,2')
+  })
+
+  it('emits the category column ONLY when a row carries one (presence gate, result-tables D62)', () => {
+    // No row categorized → the byte-identical 7-column shape (pinned above). One categorized row →
+    // the column appears for ALL rows, blank where unassigned (absent, never invented).
+    const withCategories = transactionsToCsv([
+      tx({ date: '2026-01-02', description: 'Grocery', amount: -45.9, category: 'Groceries' }),
+      tx({ date: '2026-01-03', description: 'Mystery', amount: -1 })
+    ])
+    const lines = withCategories.trimEnd().split('\r\n')
+    expect(lines[0]).toBe('date,valueDate,description,amount,currency,balanceAfter,sourcePage,category')
+    expect(lines[1]).toBe('2026-01-02,,Grocery,-45.90,EUR,,,Groceries')
+    expect(lines[2]).toBe('2026-01-03,,Mystery,-1.00,EUR,,,')
+  })
+
+  it('neutralizes a formula-shaped category label (the CSV boundary is one audited path, D60)', () => {
+    const csv = transactionsToCsv([tx({ description: 'x', amount: -1, category: '=SUM(A1)' })])
+    const lines = csv.trimEnd().split('\r\n')
+    expect(lines[1]).toBe("2026-01-02,,x,-1.00,EUR,,,'=SUM(A1)")
+  })
+
+  it('buildStatementJson carries per-row categories under the same presence gate (D62)', () => {
+    const rows = [tx({ category: 'Groceries' }), tx({ description: 'Other' })]
+    const withCats = JSON.parse(buildStatementJson({ rows, summary: summarizeCashflow(rows) }))
+    expect(withCats.transactions[0].category).toBe('Groceries')
+    expect(withCats.transactions[1].category).toBeNull() // unassigned → explicit null, never invented
+    const plain = JSON.parse(buildStatementJson({ rows: [tx()], summary: summarizeCashflow([tx()]) }))
+    expect('category' in plain.transactions[0]).toBe(false) // never-categorized → stable prior shape
   })
 
   it('neutralizes spreadsheet formula injection in text fields (S12 audit F4)', () => {

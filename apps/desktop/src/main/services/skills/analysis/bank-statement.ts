@@ -6,6 +6,7 @@ import { routeMatch } from '../vocabulary'
 import {
   isBankStatementStale,
   latestBankStatementId,
+  persistCategorization,
   runBalanceValidation,
   runBankExtraction,
   runCashflowSummary,
@@ -14,13 +15,23 @@ import {
   type BankExtractionDeps,
   type LoadedTransaction
 } from '../run'
+import {
+  CATEGORIZER_CATEGORIES,
+  categorizeTransactions,
+  parseRequestedCategories,
+  parseTaxonomyCsv,
+  parseTaxonomyFileRef,
+  type CustomCategoryInput
+} from '../categorizer'
 import { withDocumentLock } from '../doc-lock'
 import {
   BUILTIN_CATEGORIES,
+  UNCATEGORIZED,
   assessCompleteness,
   buildStatementJson,
   categorizeRow,
   reconcileBalances,
+  rowsCarryCategories,
   summarizeCashflow,
   transactionsToCsv,
   type CashflowSummary,
@@ -297,6 +308,44 @@ function loadDroppedRowCount(db: Db, statementId: string): number {
   return row?.n ?? 0
 }
 
+/**
+ * Find the taxonomy document a question referenced by NAME (Phase 1.6): a case-insensitive title
+ * match across the indexed library (extension-stripped stems match too — "taxonomie.csv" finds a
+ * doc titled "Taxonomie"), EXCLUDING the statement itself. Ties break to the most recently updated
+ * (the user's latest version). This is a LOOKUP only — the retrieval scope is never widened, and the
+ * statement stays the handler's single in-scope document.
+ */
+function findDocumentByName(db: Db, ref: string, excludeId: string): { id: string; title: string } | null {
+  const norm = (s: string): string =>
+    s
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim()
+  const stem = (s: string): string => s.replace(/\.[a-z0-9]{1,8}$/i, '')
+  const wanted = new Set([norm(ref), norm(stem(ref))].filter((s) => s.length > 0))
+  if (wanted.size === 0) return null
+  const docs = db
+    .prepare(`SELECT id, title FROM documents WHERE status = 'indexed' AND id != ? ORDER BY updated_at DESC`)
+    .all(excludeId) as Array<{ id: string; title: string }>
+  for (const d of docs) {
+    if (wanted.has(norm(d.title)) || wanted.has(norm(stem(d.title)))) return d
+  }
+  return null
+}
+
+/** A referenced document's plain text: the faithful parser segments when the IPC injected the
+ *  reader, else the chunks table (the unit-test path). A taxonomy file is small — read whole. */
+async function readDocumentPlainText(ctx: SkillAnalysisContext, documentId: string): Promise<string> {
+  if (ctx.readDocumentSegments) {
+    const segments = await ctx.readDocumentSegments(documentId)
+    return segments.map((s) => s.text).join('\n')
+  }
+  const rows = ctx.db
+    .prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+    .all(documentId) as Array<{ text: string }>
+  return rows.map((r) => r.text).join('\n')
+}
+
 const MAX_CITATIONS = 12
 
 /**
@@ -324,12 +373,20 @@ function buildBankCitations(
 
 type Tr = (key: MessageKey, params?: MessageParams) => string
 
+/** The category names that HAVE a localized display label (the fixed taxonomies). A USER-DEFINED
+ *  name (Phase 1.5 custom sets) is deliberately NOT probed against the i18n catalog: the catalog
+ *  logs unknown keys, and a custom category name is CONTENT — it must never reach the diagnostics
+ *  log (§22-M1). */
+const LOCALIZED_CATEGORY_NAMES: ReadonlySet<string> = new Set([...BUILTIN_CATEGORIES, ...CATEGORIZER_CATEGORIES])
+
 /**
  * The localized DISPLAY label for a category (Phase 33). The PERSISTED identifier stays the canonical
  * English name (the enum / model-assisted detection key on it); this only localizes the breakdown
- * display. An unknown name (e.g. a future user-defined category) falls back to its raw identifier.
+ * display. An unknown name (a user-defined category) is shown verbatim — without an i18n probe (see
+ * `LOCALIZED_CATEGORY_NAMES`).
  */
 function categoryLabel(tr: Tr, category: string): string {
+  if (!LOCALIZED_CATEGORY_NAMES.has(category)) return category
   const key = `skills.bankCategory.${category}` as MessageKey
   const label = tr(key)
   // A missing key returns the key itself (the i18n contract) — fall back to the raw identifier then.
@@ -387,13 +444,25 @@ const MAX_LISTED_TRANSACTIONS = 10
  * cashflow summary + the printed balances; CSV reuses the export serializer (transaction ROWS ONLY — the
  * summary/balances aren't in CSV), and the CSV intro says so (§3.6 honesty precedent).
  */
-export function buildFormatAnswer(tr: Tr, format: OutputFormat, snap: StatementSnapshot): string {
+export function buildFormatAnswer(
+  tr: Tr,
+  format: OutputFormat,
+  snap: StatementSnapshot,
+  /** Set when the rows carry categories (a category-shaped format ask, D63): selects the honest
+   *  model-assisted vs rule-based note appended under the fenced block — a category is a LABEL,
+   *  never a parser figure, and the serialized output must say which kind it got. */
+  categoryNote?: { modelAssisted: boolean }
+): string {
   const content = format === 'json' ? buildStatementJson(snap) : transactionsToCsv(snap.rows)
   const intro =
     format === 'csv'
       ? tr('skills.bankAnalysis.formatIntroCsv')
       : tr('skills.bankAnalysis.formatIntro', { format: format.toUpperCase() })
-  return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\``
+  const note =
+    categoryNote && rowsCarryCategories(snap.rows)
+      ? `\n\n${tr(categoryNote.modelAssisted ? 'skills.bankAnalysis.categoryAssisted' : 'skills.bankAnalysis.categoryRuleBased')}`
+      : ''
+  return `${intro}\n\n\`\`\`${format}\n${content}\n\`\`\`${note}`
 }
 
 /** The transaction cap for the grounded-data block (W4 §8.1 4096-ctx guard, mirror of the invoice
@@ -798,43 +867,89 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       const coverage = computeCoverage(db, target.id)
       const balances = loadStatementBalances(db, statementId)
 
-      // A machine-FORMAT request ("als JSON"/"as CSV") is answered by SERIALIZING the already-extracted
-      // statement (W4, audit §3.3 — the bank half of the invoice format mode) — deterministic, 0 model
-      // calls, no reconciliation needed (mirror of the invoice format path, which likewise returns before
-      // the validate seam). Guarded to a non-empty statement so a zero-row extraction still gets the honest
-      // prose fallback below (never an empty JSON husk dressed up as an answer). JSON carries rows +
-      // cashflow summary + balances; CSV reuses the export serializer (rows only) — computed purely here.
-      // SKA-10 (W7, audit §3.3): a WHY/how-come format question ("Warum fehlt im JSON die MwSt?") is an
-      // EXPLANATION, not a serialization request — re-serving the byte-identical dump is the repeat-loop
-      // class W3/W4 killed elsewhere. Guard the format short-circuit with EXPLANATORY_RE so it reaches
-      // grounded-data (which can explain) instead. The serializer is deterministic; it cannot say WHY.
-      const format = EXPLANATORY_RE.test(ctx.question.toLowerCase()) ? null : detectFormat(ctx.question)
-      if (format && rows.length > 0) {
-        const snap: StatementSnapshot = { rows, summary: summarizeCashflow(rows), ...balances }
-        return { answer: buildFormatAnswer(ctx.tr, format, snap), citations, coverage }
-      }
-
-      const loaded = toLoadedTransactions(paired)
-      const summaryResult = await runCashflowSummary(db, args, deps, loaded)
-      const validateResult = await runBalanceValidation(db, args, deps, loaded)
-      const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
-      const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
-
       // Per-category breakdown (only for a category-shaped question). It reads the PERSISTED categories
       // (the LLM categorizer doctask, or a prior rule pass) — `categorize` is the ONLY model call and it
       // happens in the doctask lane, NEVER here (this handler stays 0-model-calls). When nothing has been
       // categorized yet, run the DETERMINISTIC rule pass once (0 model calls) so a breakdown still shows;
       // model-assigned categories (if present) are never overwritten by it. `modelAssisted` (a persisted
       // category outside the deterministic set) drives the honest "model-assisted" note.
+      // HOISTED ABOVE the format short-circuit (result-tables plan §3, D63): "Kategorisiere … und
+      // exportiere als CSV" used to hit the format return FIRST and never categorize — the categorize
+      // half of the ask was silently dropped. Categorizing before serializing lets the format answer
+      // carry each row's category (presence-gated column, D62). Guarded to a non-empty statement — the
+      // categorize seam has nothing to persist on zero rows.
       const categoryShaped = isCategoryShaped(ctx.question)
       let categories: CategoryTotal[] | null = null
       let modelAssisted = false
-      if (categoryShaped) {
-        if (!paired.some((p) => p.category != null)) {
+      if (categoryShaped && rows.length > 0) {
+        // A USER-SUPPLIED custom category set ("Kategorisiere in Miete, Kinder, Sonstiges …" —
+        // result-tables plan, Phase 1.5). The parse is conservative (≥2 plausible labels after a
+        // categorize stem, deliverable tail cut, whole parse rejected on any bad token). When the
+        // persisted labels already live inside the requested set the prior run is REUSED (asking for
+        // the CSV again does not re-pay the model); otherwise the enum-constrained categorizer runs
+        // INLINE — sanctioned here because the chat turn holds the exclusive model slot (the same
+        // slot grounded-data streams in). With no runtime the ask is REFUSED with friendly copy: the
+        // deterministic rules cannot know the user's labels, and a silent fixed-taxonomy fallback
+        // would answer a different question than the one asked.
+        // A taxonomy FILE reference wins over an inline list (Phase 1.6): "Kategorisiere nach den
+        // Kategorien in taxonomie.csv" loads the referenced document from the library BY NAME (a
+        // lookup only — retrieval scope is never widened; the statement stays the single in-scope
+        // doc), parses one label per line (optional keyword GLOSS after the delimiter, fed to the
+        // model prompt), and rides the same custom-set path below. A missing file or an unparseable
+        // list is an honest refusal NAMING the file — never a silent fixed-taxonomy fallback.
+        let requested: CustomCategoryInput | null = null
+        const taxonomyRef = parseTaxonomyFileRef(ctx.question)
+        if (taxonomyRef) {
+          const taxonomyDoc = findDocumentByName(db, taxonomyRef, target.id)
+          if (!taxonomyDoc) {
+            return {
+              answer: ctx.tr('skills.bankAnalysis.customTaxonomyNotFound', { name: taxonomyRef }),
+              citations,
+              coverage
+            }
+          }
+          const parsed = parseTaxonomyCsv(await readDocumentPlainText(ctx, taxonomyDoc.id))
+          if (!parsed) {
+            return {
+              answer: ctx.tr('skills.bankAnalysis.customTaxonomyUnparseable', { name: taxonomyDoc.title }),
+              citations,
+              coverage
+            }
+          }
+          requested = parsed
+        } else {
+          requested = parseRequestedCategories(ctx.question)
+        }
+        if (requested) {
+          const requestedNames = requested.map((c) => (typeof c === 'string' ? c : c.name))
+          const persisted = new Set(
+            paired.map((p) => p.category).filter((c): c is string => c != null && c !== UNCATEGORIZED)
+          )
+          const requestedSet = new Set(requestedNames)
+          const covered = persisted.size > 0 && [...persisted].every((c) => requestedSet.has(c))
+          if (!covered) {
+            if (!ctx.runtime) {
+              return {
+                answer: ctx.tr('skills.bankAnalysis.customCategoriesNeedModel', {
+                  categories: requestedNames.join(', ')
+                }),
+                citations,
+                coverage
+              }
+            }
+            const run = await categorizeTransactions(rows, {
+              runtime: ctx.runtime,
+              signal: ctx.signal ?? new AbortController().signal,
+              categories: requested
+            })
+            persistCategorization(db, statementId, toLoadedTransactions(paired), run.assignments, run.modelAssisted, ctx.now)
+            paired = loadStatementRowsWithCategories(db, statementId)
+          }
+        } else if (!paired.some((p) => p.category != null)) {
           // Deterministic seed when nothing is categorized yet — reuse the single load (audit P-1); the
           // reload afterwards is the one extra `bank_transactions` read the category path needs (to pick
           // up the freshly persisted `category_id`).
-          await runCategorization(db, args, deps, loaded)
+          await runCategorization(db, args, deps, toLoadedTransactions(paired))
           paired = loadStatementRowsWithCategories(db, statementId)
         }
         categories = categoryTotals(paired)
@@ -843,6 +958,38 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
           paired.map((p) => p.category)
         )
       }
+
+      // A machine-FORMAT request ("als JSON"/"as CSV") is answered by SERIALIZING the already-extracted
+      // statement (W4, audit §3.3 — the bank half of the invoice format mode) — deterministic, 0 model
+      // calls, no reconciliation needed (mirror of the invoice format path, which likewise returns before
+      // the validate seam). Guarded to a non-empty statement so a zero-row extraction still gets the honest
+      // prose fallback below (never an empty JSON husk dressed up as an answer). JSON carries rows +
+      // cashflow summary + balances; CSV reuses the export serializer (rows only) — computed purely here.
+      // On a CATEGORY-shaped format ask (D63) the serialized rows carry their categories (persisted, or
+      // the on-the-fly rule fallback for a stray unassigned row) and the honest assisted/rule-based note
+      // rides under the fenced block; a plain format ask keeps the byte-identical category-less shape.
+      // SKA-10 (W7, audit §3.3): a WHY/how-come format question ("Warum fehlt im JSON die MwSt?") is an
+      // EXPLANATION, not a serialization request — re-serving the byte-identical dump is the repeat-loop
+      // class W3/W4 killed elsewhere. Guard the format short-circuit with EXPLANATORY_RE so it reaches
+      // grounded-data (which can explain) instead. The serializer is deterministic; it cannot say WHY.
+      const format = EXPLANATORY_RE.test(ctx.question.toLowerCase()) ? null : detectFormat(ctx.question)
+      if (format && rows.length > 0) {
+        const snapRows = categoryShaped
+          ? paired.map((p) => ({ ...p.row, category: p.category ?? categorizeRow(p.row) }))
+          : rows
+        const snap: StatementSnapshot = { rows: snapRows, summary: summarizeCashflow(rows), ...balances }
+        return {
+          answer: buildFormatAnswer(ctx.tr, format, snap, categoryShaped ? { modelAssisted } : undefined),
+          citations,
+          coverage
+        }
+      }
+
+      const loaded = toLoadedTransactions(paired)
+      const summaryResult = await runCashflowSummary(db, args, deps, loaded)
+      const validateResult = await runBalanceValidation(db, args, deps, loaded)
+      const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
+      const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
 
       // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's
       // printed opening + Σamounts == closing. Classify into one of three outcomes — `complete` (proven),

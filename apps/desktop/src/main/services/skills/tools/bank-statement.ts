@@ -25,6 +25,7 @@ import {
   type DateAnchor,
   type DateOrder
 } from './money'
+import { tableToCsv, type TableColumn } from '../../tables'
 
 // The deterministic money/date/CSV parsing primitives are shared with the invoice tools (one parser
 // per locale rule, §8). Re-exported here so existing import sites (`tools/bank-statement`) and the
@@ -57,7 +58,9 @@ const TRANSACTION_ROW_SCHEMA: JsonSchema = {
     amount: { type: 'number' },
     currency: { type: 'string', pattern: '^[A-Z]{3}$' },
     balanceAfter: { type: 'number' },
-    sourcePage: { type: 'integer', minimum: 1 }
+    sourcePage: { type: 'integer', minimum: 1 },
+    // Optional persisted category name (D61) — rides the row through the downstream tools/export.
+    category: { type: 'string', minLength: 1 }
   }
 }
 
@@ -733,6 +736,13 @@ export interface TransactionInput {
   currency: string
   balanceAfter?: number
   sourcePage?: number
+  /**
+   * The row's PERSISTED category name, when a categorize run assigned one (result-tables plan §3,
+   * D61). Travels WITH the row so the CSV/JSON serializers can emit it without an index-matched
+   * parallel array crossing a seam. OPTIONAL and never produced by the extractor — a category is a
+   * label, not a figure; tools that don't read it are unaffected.
+   */
+  category?: string
 }
 
 /** The shared input contract for the downstream tools — the seam passes the loaded rows verbatim. */
@@ -1087,26 +1097,32 @@ export const summarizeCashflowTool: SkillTool = {
 // `csvField` (the formula-injection neutralization) lives in `./money` — the export boundary is the
 // same for the bank and invoice CSVs, so the neutralization is one shared, audited function (S12 F4).
 
-/** Serialize the rows to CSV text (pure — no FS). Header + one line per row, stable column order. */
+/** Whether ANY row carries a persisted category — the presence gate (D62) both serializers share:
+ *  a never-categorized statement keeps its byte-identical 7-column shape (an always-empty
+ *  `category` column would imply "categorized, all blank" — dishonest). */
+export function rowsCarryCategories(rows: readonly TransactionInput[]): boolean {
+  return rows.some((r) => r.category !== undefined)
+}
+
+/**
+ * Serialize the rows to CSV text (pure — no FS) via the generic `TableSpec` path (result-tables
+ * plan §3, D60): the columns are data, not code, so both CSV surfaces (the inline format answer
+ * and the confirm-gated file export) emit whatever columns the rows actually carry. The
+ * `category` column is presence-gated (D62).
+ */
 export function transactionsToCsv(rows: TransactionInput[]): string {
-  const header = ['date', 'valueDate', 'description', 'amount', 'currency', 'balanceAfter', 'sourcePage']
-  const lines = [header.join(',')]
-  for (const row of rows) {
-    lines.push(
-      [
-        csvField(row.date),
-        csvField(row.valueDate ?? ''),
-        csvField(row.description),
-        // Fixed 2-dp decimal with a dot — a stable, locale-free CSV number (not a re-printed figure).
-        row.amount.toFixed(2),
-        csvField(row.currency),
-        row.balanceAfter === undefined ? '' : row.balanceAfter.toFixed(2),
-        row.sourcePage === undefined ? '' : String(row.sourcePage)
-      ].join(',')
-    )
-  }
-  // Trailing newline so the file ends cleanly; \r\n for spreadsheet friendliness.
-  return lines.join('\r\n') + '\r\n'
+  const columns: TableColumn[] = [
+    { key: 'date', label: 'date' },
+    { key: 'valueDate', label: 'valueDate' },
+    { key: 'description', label: 'description' },
+    // Fixed 2-dp decimal with a dot — a stable, locale-free CSV number (not a re-printed figure).
+    { key: 'amount', label: 'amount', kind: 'money' },
+    { key: 'currency', label: 'currency' },
+    { key: 'balanceAfter', label: 'balanceAfter', kind: 'money' },
+    { key: 'sourcePage', label: 'sourcePage', kind: 'integer' }
+  ]
+  if (rowsCarryCategories(rows)) columns.push({ key: 'category', label: 'category' })
+  return tableToCsv({ columns, rows })
 }
 
 const CSV_OUTPUT_SCHEMA: JsonSchema = {
@@ -1168,15 +1184,21 @@ function statementToPlainObject(snap: StatementSnapshot): Record<string, unknown
       count: summary.count,
       currency: summary.currency ?? null
     },
-    transactions: rows.map((r) => ({
-      date: r.date,
-      valueDate: r.valueDate ?? null,
-      description: r.description,
-      amount: r.amount,
-      currency: r.currency,
-      balanceAfter: r.balanceAfter ?? null,
-      sourcePage: r.sourcePage ?? null
-    }))
+    transactions: rows.map((r) => {
+      const tx: Record<string, unknown> = {
+        date: r.date,
+        valueDate: r.valueDate ?? null,
+        description: r.description,
+        amount: r.amount,
+        currency: r.currency,
+        balanceAfter: r.balanceAfter ?? null,
+        sourcePage: r.sourcePage ?? null
+      }
+      // Same presence gate as the CSV (D62): the field appears only when the statement actually
+      // carries categories, so a never-categorized statement keeps its stable prior shape.
+      if (rowsCarryCategories(rows)) tx.category = r.category ?? null
+      return tx
+    })
   }
 }
 

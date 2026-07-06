@@ -6,6 +6,9 @@ import {
   buildBatchPrompt,
   batchOutputSchema,
   categorizeTransactions,
+  parseRequestedCategories,
+  parseTaxonomyCsv,
+  parseTaxonomyFileRef,
   prefilterCategory
 } from '../../src/main/services/skills/categorizer'
 import { categorizeRow, type TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
@@ -347,5 +350,220 @@ describe('categorizeTransactions — no runtime', () => {
     expect(modelAssisted).toBe(false)
     expect(assignments[0]).toEqual({ index: 0, category: 'Income' }) // Gehalt rule
     expect(assignments[1]).toEqual({ index: 1, category: 'Spending' }) // negative sign fallback
+  })
+})
+
+// ---- Custom category sets from the prompt (result-tables plan, Phase 1.5) ----
+
+describe('parseRequestedCategories', () => {
+  it('parses a German list and cuts the trailing export clause', () => {
+    expect(
+      parseRequestedCategories('Kategorisiere alle Transaktionen in Miete, Lebensmittel, Kinder und Sonstiges und exportiere als CSV')
+    ).toEqual(['Miete', 'Lebensmittel', 'Kinder', 'Sonstiges'])
+  })
+
+  it('parses an English list ("categorize into … and give me a CSV")', () => {
+    expect(
+      parseRequestedCategories('categorize the transactions into rent, groceries, kids and other and give me a CSV')
+    ).toEqual(['rent', 'groceries', 'kids', 'other'])
+  })
+
+  it('cuts an "als CSV" tail without a verb ("… und Sonstiges als CSV")', () => {
+    expect(parseRequestedCategories('Kategorisiere in Miete, Kinder als CSV')).toEqual(['Miete', 'Kinder'])
+  })
+
+  it('returns null without a categorize stem, or with fewer than two labels', () => {
+    expect(parseRequestedCategories('Liste alles in Miete, Kinder auf')).toBeNull() // no stem
+    expect(parseRequestedCategories('Kategorisiere die Buchungen in diesem Auszug')).toBeNull() // 1 token
+    expect(parseRequestedCategories('Kategorisiere alle Transaktionen und gib sie als CSV aus')).toBeNull()
+  })
+
+  it('rejects the WHOLE parse on a bad token (never silently categorizes into garbage)', () => {
+    // A swallowed clause exceeds the 4-word/label-shape bound → null, not a partial list.
+    expect(
+      parseRequestedCategories('Kategorisiere in Miete, zeige mir dann bitte alle einzelnen Buchungen an')
+    ).toBeNull()
+    expect(parseRequestedCategories('categorize into csv, json')).toBeNull() // format words are not labels
+  })
+
+  it('dedupes case-insensitively keeping the first casing', () => {
+    expect(parseRequestedCategories('Kategorisiere in Miete, miete, Kinder')).toEqual(['Miete', 'Kinder'])
+  })
+})
+
+describe('categorizeTransactions — custom category set (Phase 1.5)', () => {
+  it('constrains the enum to the custom labels + Uncategorized and skips the prefilter', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(
+      validReplyFor((desc) => (desc.includes('REWE') ? 'Lebensmittel' : 'Sonstiges')),
+      calls
+    )
+    // 'Salary' would be prefiltered (Income) on the FIXED taxonomy — with a custom set it must go
+    // to the model instead (Income is not one of the user's labels).
+    const rows = [row('REWE Markt', -45.9), row('Salary', 2500)]
+    const { assignments, modelAssisted } = await categorizeTransactions(rows, {
+      runtime,
+      signal: new AbortController().signal,
+      categories: ['Lebensmittel', 'Sonstiges']
+    })
+    expect(modelAssisted).toBe(true)
+    expect(assignments).toEqual([
+      { index: 0, category: 'Lebensmittel' },
+      { index: 1, category: 'Sonstiges' }
+    ])
+    expect(calls).toHaveLength(1) // both rows in one batch — no prefilter skimmed Salary off
+    const schema = calls[0].options?.responseSchema as any
+    expect(schema.properties.assignments.items.properties.category.enum).toEqual([
+      'Lebensmittel',
+      'Sonstiges',
+      'Uncategorized'
+    ])
+    expect(calls[0].messages[0].content).toContain('- Lebensmittel')
+    expect(calls[0].messages[0].content).not.toContain('Groceries') // fixed taxonomy absent
+  })
+
+  it('drops an off-set label (even a FIXED-taxonomy one) to Uncategorized', async () => {
+    const runtime = scriptedRuntime(validReplyFor(() => 'Groceries')) // valid in the fixed set, not here
+    const { assignments } = await categorizeTransactions([row('REWE Markt', -45.9)], {
+      runtime,
+      signal: new AbortController().signal,
+      categories: ['Lebensmittel', 'Sonstiges']
+    })
+    expect(assignments).toEqual([{ index: 0, category: 'Uncategorized' }])
+  })
+
+  it('with no runtime a custom set returns every row Uncategorized (never rule labels)', async () => {
+    const { assignments, modelAssisted } = await categorizeTransactions([row('Gehalt', 2500)], {
+      runtime: null,
+      signal: new AbortController().signal,
+      categories: ['Lebensmittel', 'Sonstiges']
+    })
+    expect(modelAssisted).toBe(false)
+    expect(assignments).toEqual([{ index: 0, category: 'Uncategorized' }]) // NOT 'Income'
+  })
+})
+
+// ---- Taxonomy CSV referenced from the prompt (result-tables plan, Phase 1.6) ----
+
+describe('parseTaxonomyFileRef', () => {
+  it('finds a bare .csv token after a categorize stem (DE + EN)', () => {
+    expect(parseTaxonomyFileRef('Kategorisiere nach den Kategorien in taxonomie.csv als CSV')).toBe('taxonomie.csv')
+    expect(parseTaxonomyFileRef('categorize the transactions using my-buckets.csv')).toBe('my-buckets.csv')
+  })
+
+  it('prefers a quoted name (spaces allowed inside quotes)', () => {
+    expect(parseTaxonomyFileRef('Kategorisiere nach „meine Kategorien 2026.csv“ bitte')).toBe(
+      'meine Kategorien 2026.csv'
+    )
+  })
+
+  it('returns null without a categorize stem or without a .csv token', () => {
+    expect(parseTaxonomyFileRef('fasse taxonomie.csv zusammen')).toBeNull() // no categorize stem
+    expect(parseTaxonomyFileRef('Kategorisiere alle Transaktionen als CSV')).toBeNull() // "als CSV" ≠ a filename
+  })
+
+  it('reduces a FULL PATH to its basename (Unix, Windows, quoted) — the library stores titles, not paths', () => {
+    expect(
+      parseTaxonomyFileRef('Kategorisiere nach /home/vldmr/Dokumente/HVB/taxonomie.csv bitte')
+    ).toBe('taxonomie.csv')
+    expect(parseTaxonomyFileRef("Kategorisiere nach '/home/vldmr/Dokumente/HVB/taxonomie.csv'")).toBe(
+      'taxonomie.csv'
+    )
+    expect(parseTaxonomyFileRef('categorize using C:\\Users\\v\\Dokumente\\buckets.csv')).toBe('buckets.csv')
+  })
+})
+
+describe('parseTaxonomyCsv', () => {
+  it('parses labels + keyword glosses (DE semicolon CSV), skipping the header row', () => {
+    expect(
+      parseTaxonomyCsv('Kategorie;Stichworte\nLebensmittel;REWE, Supermarkt\nKinder;Schule, Kita\nSonstiges')
+    ).toEqual([
+      { name: 'Lebensmittel', gloss: 'REWE, Supermarkt' },
+      { name: 'Kinder', gloss: 'Schule, Kita' },
+      { name: 'Sonstiges' }
+    ])
+  })
+
+  it('parses a plain one-label-per-line list (no delimiter, no header) and skips # comments', () => {
+    expect(parseTaxonomyCsv('# meine Kategorien\nMiete\nReisen\n\nSonstiges')).toEqual([
+      { name: 'Miete' },
+      { name: 'Reisen' },
+      { name: 'Sonstiges' }
+    ])
+  })
+
+  it('rejects the WHOLE file on one invalid label, and rejects a single-label list', () => {
+    expect(parseTaxonomyCsv('Miete\nDies ist keine Kategorie sondern ein ganzer Satz mit vielen Wörtern')).toBeNull()
+    expect(parseTaxonomyCsv('Kategorie;Stichworte\nMiete;Wohnung')).toBeNull() // one label after the header
+  })
+
+  it('dedupes labels case-insensitively keeping the first', () => {
+    expect(parseTaxonomyCsv('Miete\nmiete\nKinder')).toEqual([{ name: 'Miete' }, { name: 'Kinder' }])
+  })
+
+  it('parses the INGESTED comma-CSV shape ("Header: value; Header2: value2" lines)', () => {
+    // What ingestion/parsers/csv.ts actually stores for a header-ful comma CSV — the shape the
+    // handler reads through the segments/chunks, NOT the raw file (the user's bug report).
+    expect(
+      parseTaxonomyCsv(
+        'Kategorie: Lebensmittel; Stichworte: REWE, Supermarkt\nKategorie: Miete; Stichworte: Hausverwaltung'
+      )
+    ).toEqual([
+      { name: 'Lebensmittel', gloss: 'REWE, Supermarkt' },
+      { name: 'Miete', gloss: 'Hausverwaltung' }
+    ])
+  })
+
+  it('parses a German SEMICOLON-CSV that the comma-pinned importer mangled (cells collapsed + colN overflow)', () => {
+    // "Lebensmittel;REWE, Supermarkt" comma-splits into 2 cells → the second becomes "col2: …";
+    // "Miete;Hausverwaltung" (no comma) collapses whole into the first value. Both reconstruct.
+    expect(
+      parseTaxonomyCsv(
+        'Kategorie;Stichworte: Lebensmittel;REWE; col2: Supermarkt\nKategorie;Stichworte: Miete;Hausverwaltung'
+      )
+    ).toEqual([
+      { name: 'Lebensmittel', gloss: 'REWE, Supermarkt' },
+      { name: 'Miete', gloss: 'Hausverwaltung' }
+    ])
+  })
+
+  it('recovers the first row when a HEADERLESS file was imported (importer ate row 1 as the header)', () => {
+    expect(parseTaxonomyCsv('Miete;Wohnung: Reisen;Urlaub\nMiete;Wohnung: Kinder;Kita')).toEqual([
+      { name: 'Miete', gloss: 'Wohnung' },
+      { name: 'Reisen', gloss: 'Urlaub' },
+      { name: 'Kinder', gloss: 'Kita' }
+    ])
+  })
+
+  it('accepts real-world label shapes in a FILE (slash, ampersand, plus, dot) — wider than inline', () => {
+    expect(parseTaxonomyCsv('Kfz/Auto\nEssen & Trinken\nVers. + Vorsorge')).toEqual([
+      { name: 'Kfz/Auto' },
+      { name: 'Essen & Trinken' },
+      { name: 'Vers. + Vorsorge' }
+    ])
+  })
+})
+
+describe('categorizeTransactions — taxonomy glosses reach the model prompt (Phase 1.6)', () => {
+  it('lists each custom label with its gloss; the enum stays names-only', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(validReplyFor(() => 'Kinder'), calls)
+    await categorizeTransactions([row('KITA Beitrag', -120)], {
+      runtime,
+      signal: new AbortController().signal,
+      categories: [
+        { name: 'Kinder', gloss: 'Schule, Kita, Taschengeld' },
+        { name: 'Sonstiges' }
+      ]
+    })
+    const system = calls[0].messages[0].content
+    expect(system).toContain('- Kinder (Schule, Kita, Taschengeld)')
+    expect(system).toContain('- Sonstiges')
+    const schema = calls[0].options?.responseSchema as any
+    expect(schema.properties.assignments.items.properties.category.enum).toEqual([
+      'Kinder',
+      'Sonstiges',
+      'Uncategorized'
+    ])
   })
 })

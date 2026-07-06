@@ -69,6 +69,40 @@ const CATEGORY_GLOSS: Record<string, string> = {
 
 const CATEGORY_SET: ReadonlySet<string> = new Set(CATEGORIZER_CATEGORIES)
 
+/**
+ * One USER-DEFINED category (result-tables plan, Phase 1.5/1.6): the persisted label plus an
+ * optional GLOSS shown to the model in the prompt (never persisted, never an enum value) — a
+ * taxonomy CSV's keyword column ("Kinder;Schule, Kita, Taschengeld") rides here, the single
+ * biggest accuracy lever for custom labels on a small model (the fixed taxonomy's DE glosses
+ * play the same role).
+ */
+export interface CustomCategory {
+  name: string
+  gloss?: string
+}
+
+/** The custom-category input shape: bare labels (the inline prompt parse) or label+gloss objects
+ *  (a taxonomy CSV). Normalized internally via `normalizeCustom`. */
+export type CustomCategoryInput = readonly (string | CustomCategory)[]
+
+/**
+ * Normalize a USER-SUPPLIED custom set (result-tables plan, Phase 1.5): bare strings become
+ * gloss-less entries, and `Uncategorized` is always appended — the honest drop target must exist
+ * in every enum, so an unsure/unparseable row can never be forced into one of the user's labels.
+ * Returns undefined for an absent/empty input (→ the fixed taxonomy).
+ */
+function normalizeCustom(custom?: CustomCategoryInput): CustomCategory[] | undefined {
+  if (!custom || custom.length === 0) return undefined
+  const list = custom.map((c) => (typeof c === 'string' ? { name: c } : c))
+  return list.some((c) => c.name === UNCATEGORIZED) ? list : [...list, { name: UNCATEGORIZED }]
+}
+
+/** The ACTIVE category NAMES for one run: the fixed taxonomy, or the normalized custom set. */
+function activeCategories(custom?: CustomCategoryInput): readonly string[] {
+  const normalized = normalizeCustom(custom)
+  return normalized ? normalized.map((c) => c.name) : CATEGORIZER_CATEGORIES
+}
+
 /** Rows per model call — bounded so one statement stays a handful of small, fast completions. */
 export const CATEGORIZER_BATCH_SIZE = 20
 
@@ -97,9 +131,11 @@ const BATCH_OUTPUT_CHAR_CAP_PER_TOKEN = 8
 
 /**
  * The grammar contract for ONE batch: an array of `{index, category}` where `category` is an ENUM of
- * the fixed set (so the model cannot emit an off-list label) and `index` is the batch-local row index.
+ * the active set (so the model cannot emit an off-list label) and `index` is the batch-local row
+ * index. With no argument this is the fixed taxonomy (byte-identical to before Phase 1.5); with a
+ * custom list the enum is the user's labels + `Uncategorized`.
  */
-export function batchOutputSchema(): JsonSchema {
+export function batchOutputSchema(categories?: CustomCategoryInput): JsonSchema {
   return {
     type: 'object',
     additionalProperties: false,
@@ -113,7 +149,7 @@ export function batchOutputSchema(): JsonSchema {
           required: ['index', 'category'],
           properties: {
             index: { type: 'integer', minimum: 0 },
-            category: { type: 'string', enum: [...CATEGORIZER_CATEGORIES] }
+            category: { type: 'string', enum: [...activeCategories(categories)] }
           }
         }
       }
@@ -121,15 +157,33 @@ export function batchOutputSchema(): JsonSchema {
   }
 }
 
-const SYSTEM_PROMPT = [
-  'You categorize bank-statement transactions. For each transaction pick EXACTLY ONE category',
-  'from this fixed list (use the English name exactly as written):',
-  CATEGORIZER_CATEGORIES.map((c) => `- ${c} (${CATEGORY_GLOSS[c] ?? ''})`).join('\n'),
-  '',
-  'Rules: choose the single best fit from the signed amount and the description (a positive amount is',
-  'usually Income or a Transfer in; a negative amount is a payment). If you are unsure, use',
-  `"${UNCATEGORIZED}". Never invent a category outside the list. Reply with JSON only.`
-].join('\n')
+/** The per-run system prompt. The fixed taxonomy carries its DE glosses; a custom set lists the
+ *  user's labels verbatim, each with its OWN gloss when the taxonomy supplied one (Phase 1.6) —
+ *  the drop-to-Uncategorized rule and the never-invent rule are identical on both paths. */
+function buildSystemPrompt(categories?: CustomCategoryInput): string {
+  const custom = normalizeCustom(categories)
+  const cats = custom ?? CATEGORIZER_CATEGORIES.map((name) => ({ name }) as CustomCategory)
+  const line = (c: CustomCategory): string => {
+    if (custom && c.name !== UNCATEGORIZED) return c.gloss ? `- ${c.name} (${c.gloss})` : `- ${c.name}`
+    return `- ${c.name} (${CATEGORY_GLOSS[c.name] ?? ''})`
+  }
+  // The fixed-taxonomy rules line names the actual Income/Transfer categories (kept byte-identical to
+  // the Phase-33 prompt); a custom set gets the generic phrasing — its labels are the user's.
+  const signHint = categories
+    ? 'usually an income-like category; a negative amount is a payment'
+    : 'usually Income or a Transfer in; a negative amount is a payment'
+  return [
+    'You categorize bank-statement transactions. For each transaction pick EXACTLY ONE category',
+    categories
+      ? 'from this fixed list (use the name exactly as written):'
+      : 'from this fixed list (use the English name exactly as written):',
+    cats.map(line).join('\n'),
+    '',
+    'Rules: choose the single best fit from the signed amount and the description (a positive amount is',
+    `${signHint}). If you are unsure, use`,
+    `"${UNCATEGORIZED}". Never invent a category outside the list. Reply with JSON only.`
+  ].join('\n')
+}
 
 /** Render one batch's rows for the prompt: a batch-local index, the signed amount, and the description. */
 export function buildBatchPrompt(rows: TransactionInput[]): string {
@@ -180,7 +234,8 @@ async function streamBatchReply(
   messages: ChatMessage[],
   runtime: ModelRuntime,
   signal: AbortSignal,
-  maxTokens: number
+  maxTokens: number,
+  categories?: CustomCategoryInput
 ): Promise<string | null> {
   let text = ''
   const charCap = maxTokens * BATCH_OUTPUT_CHAR_CAP_PER_TOKEN
@@ -188,7 +243,7 @@ async function streamBatchReply(
     signal,
     maxTokens,
     temperature: 0,
-    responseSchema: batchOutputSchema(),
+    responseSchema: batchOutputSchema(categories),
     responseSchemaName: 'transaction_categories'
   })
   for await (const token of stream) {
@@ -205,7 +260,11 @@ async function streamBatchReply(
  * (truncated / prose) — distinct from a parsed-but-empty result (every assignment off-list/out-of-range),
  * which returns an empty map. The `null` signals the caller to RETRY once before dropping (audit L-1).
  */
-function parseBatchAssignments(text: string, rowCount: number): Map<number, string> | null {
+function parseBatchAssignments(
+  text: string,
+  rowCount: number,
+  categorySet: ReadonlySet<string> = CATEGORY_SET
+): Map<number, string> | null {
   try {
     const parsed = JSON.parse(stripThinkBlocks(text).trim()) as {
       assignments?: Array<{ index?: unknown; category?: unknown }>
@@ -215,7 +274,7 @@ function parseBatchAssignments(text: string, rowCount: number): Map<number, stri
     for (const a of assignments) {
       const idx = typeof a.index === 'number' ? a.index : NaN
       const cat = typeof a.category === 'string' ? a.category : ''
-      if (Number.isInteger(idx) && idx >= 0 && idx < rowCount && CATEGORY_SET.has(cat) && !out.has(idx)) {
+      if (Number.isInteger(idx) && idx >= 0 && idx < rowCount && categorySet.has(cat) && !out.has(idx)) {
         out.set(idx, cat)
       }
     }
@@ -236,18 +295,20 @@ function parseBatchAssignments(text: string, rowCount: number): Map<number, stri
 async function categorizeBatch(
   rows: TransactionInput[],
   runtime: ModelRuntime,
-  signal: AbortSignal
+  signal: AbortSignal,
+  categories?: CustomCategoryInput
 ): Promise<Map<number, string>> {
   const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: buildSystemPrompt(categories) },
     { role: 'user', content: buildBatchPrompt(rows) }
   ]
+  const categorySet = new Set(activeCategories(categories))
   const maxTokens = batchMaxTokens(rows)
   const MAX_ATTEMPTS = 2 // one initial try + a single retry on an unparseable (e.g. truncated) reply
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const text = await streamBatchReply(messages, runtime, signal, maxTokens)
+    const text = await streamBatchReply(messages, runtime, signal, maxTokens, categories)
     if (text === null) break // L-2 cap blown — drop the batch (no retry on a runaway reply)
-    const parsed = parseBatchAssignments(text, rows.length)
+    const parsed = parseBatchAssignments(text, rows.length, categorySet)
     if (parsed) return parsed // parsed OK (possibly empty after validation) — accept, do not retry
     // Unparseable — retry once, then fall through to the empty-map drop.
   }
@@ -265,23 +326,39 @@ export interface CategorizeResult {
  * `modelAssisted:false`). With a runtime → confident rule matches are kept as a pre-filter and the rest
  * are sent to the model in batches; anything the model omits / returns invalid drops to `Uncategorized`.
  * Progress is reported as rows resolved (pre-filtered + each completed batch). Aborts propagate.
+ *
+ * `categories` (result-tables Phase 1.5) switches the run to a USER-SUPPLIED category set: the enum,
+ * prompt, and validation all use the custom labels (+ the appended `Uncategorized` drop target), and
+ * the deterministic PRE-FILTER is SKIPPED — its rule names live in the fixed taxonomy, not the user's.
+ * A custom set with no runtime returns every row `Uncategorized` (the rules cannot know the user's
+ * labels; the CALLER should refuse with friendly copy before it gets here).
  */
 export async function categorizeTransactions(
   rows: TransactionInput[],
-  deps: { runtime: ModelRuntime | null; signal: AbortSignal; onProgress?: (done: number, total: number) => void }
+  deps: {
+    runtime: ModelRuntime | null
+    signal: AbortSignal
+    onProgress?: (done: number, total: number) => void
+    categories?: CustomCategoryInput
+  }
 ): Promise<CategorizeResult> {
-  const { runtime, signal, onProgress } = deps
+  const { runtime, signal, onProgress, categories } = deps
   if (rows.length === 0) return { assignments: [], modelAssisted: false }
   if (!runtime) {
     onProgress?.(rows.length, rows.length)
-    return { assignments: categorizeRows(rows), modelAssisted: false }
+    return {
+      assignments: categories
+        ? rows.map((_, index) => ({ index, category: UNCATEGORIZED })) // rules can't know custom labels
+        : categorizeRows(rows),
+      modelAssisted: false
+    }
   }
 
   const total = rows.length
   const result: string[] = new Array<string>(total).fill(UNCATEGORIZED)
   const toModel: number[] = []
   for (let i = 0; i < rows.length; i++) {
-    const pre = prefilterCategory(rows[i])
+    const pre = categories ? null : prefilterCategory(rows[i]) // no prefilter on a custom set
     if (pre) result[i] = pre
     else toModel.push(i)
   }
@@ -291,7 +368,7 @@ export async function categorizeTransactions(
   for (let start = 0; start < toModel.length; start += CATEGORIZER_BATCH_SIZE) {
     const batchIdx = toModel.slice(start, start + CATEGORIZER_BATCH_SIZE)
     const batchRows = batchIdx.map((i) => rows[i])
-    const assigned = await categorizeBatch(batchRows, runtime, signal)
+    const assigned = await categorizeBatch(batchRows, runtime, signal, categories)
     batchIdx.forEach((globalIdx, localIdx) => {
       const cat = assigned.get(localIdx)
       if (cat) result[globalIdx] = cat // else stays UNCATEGORIZED (dropped)
@@ -304,4 +381,171 @@ export async function categorizeTransactions(
     assignments: result.map((category, index) => ({ index, category })),
     modelAssisted: true
   }
+}
+
+// ---- Prompt-supplied custom category sets (result-tables plan, Phase 1.5) ----
+
+/** Bounds for a parsed custom set: at least 2 labels (a single "category" is almost always a false
+ *  parse — "in diesem Auszug"), at most 24 (a grammar enum, a prompt list, and a breakdown all stay
+ *  readable), each ≤ 40 chars and ≤ 4 words (a longer token is a swallowed clause, not a label). */
+export const CUSTOM_CATEGORIES_MIN = 2
+export const CUSTOM_CATEGORIES_MAX = 24
+
+// "Kategorisiere (die Transaktionen) in Miete, Lebensmittel und Kinder …" / "categorize into rent,
+// groceries and kids …". Requires a categorize STEM before the preposition (so a bare "in X, Y" never
+// fires) and captures up to the sentence end; longer preposition phrases are tried first. The stems
+// deliberately ⊂ the handler's CATEGORY_KEYWORDS ('kategor'/'categor'), so a parsed custom list is
+// always category-shaped for the routing above it.
+const CUSTOM_LIST_RE =
+  /\b(?:kategorisier\w*|categori[sz]e\w*|categori[sz]ation)\b[^.:!?\n]*?\b(?:in die kategorien|in folgende kategorien|into (?:the )?categories|using (?:the )?categories|with (?:the )?categories|nach den kategorien|mit den kategorien|into|nach|in)\b:?\s+([^.!?\n]+)/i
+
+// Cut the captured list at a trailing DELIVERABLE clause ("… und exportiere als CSV", "… and give me
+// a CSV", "… als JSON") so the export half of a combined ask never becomes a "category".
+const LIST_TAIL_CUT_RE =
+  /\s*(?:,|;)?\s*\b(?:und|and|dann|then)\b\s+(?:gib|exportier\w*|zeig\w*|erstell\w*|mach\w*|speicher\w*|give|export\w*|show|output|create|save)[\s\S]*$|\s*\b(?:als|as)\s+(?:csv|json)\b[\s\S]*$/i
+
+/** One plausible LABEL: starts with a letter, then letters/digits/space/&/-, ≤ 40 chars, ≤ 4 words. */
+const LABEL_RE = /^[\p{L}][\p{L}\p{N}&\- ]{0,39}$/u
+
+/**
+ * Parse a USER-SUPPLIED category list out of a chat question, or null when the question carries none.
+ * Deliberately conservative: it requires a categorize stem + a list of ≥ 2 plausible labels, cuts a
+ * trailing deliverable clause, and REJECTS the whole parse when any remaining token fails the label
+ * shape (a half-understood list must not silently categorize into garbage — the caller falls back to
+ * the fixed taxonomy then). Deduped case-insensitively, first casing kept; `csv`/`json` and
+ * `Uncategorized` are never accepted as labels.
+ */
+export function parseRequestedCategories(question: string): string[] | null {
+  const m = CUSTOM_LIST_RE.exec(question)
+  if (!m) return null
+  const list = m[1].replace(LIST_TAIL_CUT_RE, '').trim()
+  if (!list) return null
+  const tokens = list
+    .split(/,|;|\/|\bund\b|\band\b|\boder\b|\bor\b/i)
+    .map((t) => t.replace(/^["'„“]+|["'„“]+$/g, '').trim())
+    .filter((t) => t.length > 0)
+  if (tokens.length < CUSTOM_CATEGORIES_MIN) return null
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const t of tokens) {
+    const lower = t.toLowerCase()
+    if (lower === 'csv' || lower === 'json' || lower === UNCATEGORIZED.toLowerCase()) return null
+    if (!LABEL_RE.test(t) || t.split(/\s+/).length > 4) return null // one bad token ⇒ reject the parse
+    if (!seen.has(lower)) {
+      seen.add(lower)
+      out.push(t)
+    }
+  }
+  if (out.length < CUSTOM_CATEGORIES_MIN || out.length > CUSTOM_CATEGORIES_MAX) return null
+  return out
+}
+
+// ---- Taxonomy CSV referenced from the prompt (result-tables plan, Phase 1.6) ----
+
+/** Label ceiling for a taxonomy FILE — higher than the inline prompt bound (a file is explicit and
+ *  unambiguous), still small enough that the grammar enum + the prompt list stay cheap. */
+export const TAXONOMY_CATEGORIES_MAX = 40
+
+/** Gloss ceiling per label — a keyword hint, not a paragraph (the prompt stays bounded). */
+const TAXONOMY_GLOSS_MAX_CHARS = 120
+
+/** Header cells that mark a first line as a HEADER row (skipped), lowercase. */
+const TAXONOMY_HEADER_CELLS = new Set(['kategorie', 'kategorien', 'category', 'categories', 'name', 'label'])
+
+/** A plausible FILE-taxonomy label. Wider than the inline `LABEL_RE`: a file is explicit, so
+ *  common real-world label shapes like `Kfz/Auto`, `Essen & Trinken` or `Vers. + Vorsorge` are
+ *  accepted (`/`, `+`, `.` allowed); the inline prompt parse stays strict — there those characters
+ *  signal a swallowed clause, not a label. */
+const TAXONOMY_LABEL_RE = /^[\p{L}][\p{L}\p{N}&+\-/. ]{0,39}$/u
+
+/**
+ * Detect a taxonomy-FILE reference in a categorize-shaped question ("Kategorisiere nach den
+ * Kategorien in taxonomie.csv", 'categorize using "my taxonomy.csv"'). Requires the categorize stem
+ * (same gate as the inline parse) and a `.csv` token — quoted first (spaces allowed inside quotes),
+ * else the bare non-space token. A FULL PATH (`/home/…/HVB/taxonomie.csv`, `C:\…\taxonomie.csv`) is
+ * reduced to its BASENAME: the library lookup matches document titles (imported files carry no
+ * path), and echoing a user's directory structure back in an answer would be needless content.
+ * Returns the referenced name or null.
+ */
+export function parseTaxonomyFileRef(question: string): string | null {
+  if (!/\b(?:kategorisier\w*|categori[sz]e\w*|categori[sz]ation)\b/i.test(question)) return null
+  const quoted = /["'„“«]([^"'„“«»\n]{1,160}?\.csv)["'“«»]/i.exec(question)
+  const bare = quoted ? null : /(?:^|\s)([^\s"'„“«»]{1,160}\.csv)\b/i.exec(question)
+  const raw = (quoted ?? bare)?.[1]
+  if (!raw) return null
+  const basename = raw.replace(/^[([{]+/, '').trim().split(/[\\/]/).pop() ?? ''
+  return basename.length > 0 ? basename : null
+}
+
+/**
+ * Parse a taxonomy CSV's text into labels + optional glosses, or null when it is not a plausible
+ * category list. One category per line: the FIRST cell is the label, the remaining cells join into
+ * the gloss shown to the model ("Kinder;Schule, Kita, Taschengeld"). The delimiter is the first of
+ * `;` / tab / `,` that appears in the file (a DE CSV is usually `;`); a gloss-less plain list (one
+ * word per line) needs no delimiter at all. A leading header row ("Kategorie;Stichworte") and
+ * `#`-comment lines are skipped. All-or-nothing like the inline parse (D65): ONE invalid label
+ * rejects the whole file — never a silent partial taxonomy. Labels are deduped case-insensitively.
+ */
+export function parseTaxonomyCsv(text: string): CustomCategory[] | null {
+  let lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith('#'))
+  if (lines.length === 0) return null
+
+  // The app's CSV IMPORTER does not store the raw file: a header-ful CSV is linearized into
+  // "Header: value; Header2: value2" lines (ingestion/parsers/csv.ts — good for retrieval, but it
+  // is what we read here). Detect that shape — every line opens with the SAME "<first header>: "
+  // key — and reconstruct the original rows: the constant keys are the header row (re-emitted
+  // first, so the header-skip below applies), each line's VALUES re-join into a `;`-delimited row.
+  // A German semicolon-CSV comma-imported (the importer pins `.csv` to ',') collapses its cells
+  // into the first value ("Kategorie;Stichworte: Miete;Hausverwaltung") — the `;`-rejoin puts the
+  // label/gloss split back together for that shape too. `colN` overflow keys are importer
+  // artefacts, dropped from the reconstructed header. A raw list (the unit-test path / a pasted
+  // plain file) has no ": " pairs and passes through untouched.
+  const pairKey = (p: string): string => p.slice(0, p.indexOf(': '))
+  const pairValue = (p: string): string => {
+    const i = p.indexOf(': ')
+    return (i >= 0 ? p.slice(i + 2) : p).trim()
+  }
+  const PAIR_RE = /^[^:]{1,80}: /
+  if (lines.every((l) => PAIR_RE.test(l))) {
+    const firstKey = pairKey(lines[0].split('; ')[0])
+    if (firstKey.length > 0 && lines.every((l) => pairKey(l.split('; ')[0]) === firstKey)) {
+      const headerKeys = lines[0]
+        .split('; ')
+        .map(pairKey)
+        .filter((k) => k.length > 0 && !/^col\d+$/.test(k))
+      const reconstructed = lines.map((l) =>
+        l
+          .split('; ')
+          .map(pairValue)
+          .filter((v) => v.length > 0)
+          .join(';')
+      )
+      lines = [headerKeys.join(';'), ...reconstructed].filter((l) => l.length > 0)
+    }
+  }
+
+  const joined = lines.join('\n')
+  const delimiter = joined.includes(';') ? ';' : joined.includes('\t') ? '\t' : ','
+  const cells = (line: string): string[] =>
+    line.split(delimiter).map((c) => c.replace(/^["'„“]+|["'“”]+$/g, '').trim())
+  let start = 0
+  const first = cells(lines[0])
+  if (first.length > 0 && TAXONOMY_HEADER_CELLS.has(first[0].toLowerCase())) start = 1
+  const out: CustomCategory[] = []
+  const seen = new Set<string>()
+  for (const line of lines.slice(start)) {
+    const parts = cells(line)
+    const name = parts[0] ?? ''
+    if (!TAXONOMY_LABEL_RE.test(name) || name.split(/\s+/).length > 4) return null // one bad label ⇒ reject the file
+    const lower = name.toLowerCase()
+    if (seen.has(lower)) continue
+    seen.add(lower)
+    const gloss = parts.slice(1).filter((p) => p.length > 0).join(', ').slice(0, TAXONOMY_GLOSS_MAX_CHARS)
+    out.push(gloss ? { name, gloss } : { name })
+  }
+  if (out.length < CUSTOM_CATEGORIES_MIN || out.length > TAXONOMY_CATEGORIES_MAX) return null
+  return out
 }

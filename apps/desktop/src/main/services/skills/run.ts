@@ -880,13 +880,20 @@ export function purgeSkillDataForDocument(db: Db, documentId: string): void {
   deleteInvoicesForDocument(db, documentId)
 }
 
-/** Load a statement's transactions in stable row order (null columns omitted, not passed as null). */
+/** Load a statement's transactions in stable row order (null columns omitted, not passed as null).
+ *  Carries each row's PERSISTED category name when a categorize run assigned one (result-tables plan
+ *  §3, D61) — the confirm-gated CSV export serializes whatever the rows carry, so a categorized
+ *  statement exports its category column and a never-categorized one keeps the prior 7-column shape
+ *  (presence gate, D62). The downstream tools that don't read `category` are unaffected. */
 function loadTransactions(db: Db, statementId: string): LoadedTransaction[] {
   const rows = db
     .prepare(
-      `SELECT id, row_index AS rowIndex, date, value_date AS valueDate, description, amount, currency,
-              balance_after AS balanceAfter, source_page AS sourcePage
-       FROM bank_transactions WHERE statement_id = ? ORDER BY row_index`
+      `SELECT t.id AS id, t.row_index AS rowIndex, t.date, t.value_date AS valueDate, t.description,
+              t.amount, t.currency, t.balance_after AS balanceAfter, t.source_page AS sourcePage,
+              c.name AS category
+       FROM bank_transactions t
+       LEFT JOIN bank_categories c ON c.id = t.category_id
+       WHERE t.statement_id = ? ORDER BY t.row_index`
     )
     .all(statementId) as Array<{
     id: string
@@ -898,6 +905,7 @@ function loadTransactions(db: Db, statementId: string): LoadedTransaction[] {
     currency: string
     balanceAfter: number | null
     sourcePage: number | null
+    category: string | null
   }>
   return rows.map((r) => {
     const t: LoadedTransaction = {
@@ -911,6 +919,7 @@ function loadTransactions(db: Db, statementId: string): LoadedTransaction[] {
     if (r.valueDate != null) t.valueDate = r.valueDate
     if (r.balanceAfter != null) t.balanceAfter = r.balanceAfter
     if (r.sourcePage != null) t.sourcePage = r.sourcePage
+    if (r.category != null) t.category = r.category
     return t
   })
 }
@@ -1074,6 +1083,57 @@ async function runCategorizationInner(
     return domainPersistFailure(db, runId, now, '[skills] statement tool failed to persist')
   }
   return { ok: true, runId, count: categories.length }
+}
+
+/**
+ * Persist a categorizer result (assignments + the authoritative `categorized_by_model` flag)
+ * atomically — the chat-lane twin of the categorize doctask's persist step (result-tables plan,
+ * Phase 1.5: a prompt-supplied CUSTOM category set runs inline in the chat slot). Labels outside the
+ * seeded taxonomy (the user's own categories) are inserted as NON-builtin `bank_categories` rows on
+ * first use, looked up across ALL existing rows (names carry no UNIQUE constraint — a prior custom
+ * run's row is reused, never duplicated). Rolls back on failure so no partial annotation survives.
+ * Content posture: category NAMES are content-class (they live only in the data tables, never in a
+ * log/audit — same as every other bank row).
+ */
+export function persistCategorization(
+  db: Db,
+  statementId: string,
+  loaded: readonly LoadedTransaction[],
+  assignments: readonly CategorizationRow[],
+  modelAssisted: boolean,
+  now?: () => string
+): void {
+  const at = (now ?? (() => new Date().toISOString()))()
+  db.exec('BEGIN')
+  try {
+    const byName = ensureBuiltinCategories(db, at)
+    const all = db.prepare('SELECT id, name FROM bank_categories').all() as Array<{ id: string; name: string }>
+    for (const c of all) if (!byName.has(c.name)) byName.set(c.name, c.id)
+    const insert = db.prepare('INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 0, ?)')
+    const upd = db.prepare('UPDATE bank_transactions SET category_id = ? WHERE id = ?')
+    for (const a of assignments) {
+      let catId = byName.get(a.category)
+      if (!catId) {
+        catId = randomUUID()
+        insert.run(catId, a.category, at)
+        byName.set(a.category, catId)
+      }
+      const tx = loaded[a.index]
+      if (tx) upd.run(catId, tx.id)
+    }
+    db.prepare('UPDATE bank_statements SET categorized_by_model = ? WHERE id = ?').run(
+      modelAssisted ? 1 : 0,
+      statementId
+    )
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure */
+    }
+    throw err
+  }
 }
 
 /**
