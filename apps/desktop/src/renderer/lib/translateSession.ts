@@ -4,6 +4,8 @@ import type {
   TranslationSourceLang,
   TranslationTargetLang
 } from '@shared/types'
+import { getActiveDocTask, isDocTaskTerminal } from './doctasks'
+import { getFileTranslate } from './fileTranslateSession'
 
 // Renderer-side store for the SINGLE active view translation (TG-4, plan §2 D6 — the
 // `visionSession.ts` / `doctasks.ts` precedent). Module-level — NOT inside the Translate screen —
@@ -150,7 +152,17 @@ function wireStream(jobId: string): void {
  */
 export async function translate(req: TranslateRequest): Promise<TranslateOutcome> {
   if (req.text.trim() === '') return 'noop'
-  if (snapshot.activeJobId) return 'busy'
+  // Cross-session start guard (TA-3 / L6a — parity with fileTranslateSession's `guardStart`): refuse
+  // while THIS store is mid-flight (`activeJobId` set OR `translating` during the start round-trip,
+  // before `activeJobId` lands), while a file document translation is busy, or while a foreign doc
+  // task actually holds the one-at-a-time lane. The old guard checked only `activeJobId`, so a second
+  // click during the start round-trip (translating, no id yet) or while the file path ran slipped
+  // through and started a second job. The screen's `busy` prop disables the trigger; this defends the
+  // invariant at the store level too.
+  if (snapshot.activeJobId || snapshot.translating) return 'busy'
+  if (getFileTranslate().busy) return 'busy'
+  const foreign = getActiveDocTask()
+  if (foreign && !isDocTaskTerminal(foreign.status)) return 'busy'
 
   const myGen = ++startGen
   // Fresh output panel for this run; remember the language choice for the next session mount.
@@ -165,21 +177,30 @@ export async function translate(req: TranslateRequest): Promise<TranslateOutcome
     return 'started'
   }
 
-  // Superseded while the create round-trip was in flight (a new translate / clear / lock) — bail
-  // and cancel this now-orphan job so a stale done/error can't tear down over the newer one.
+  // Superseded while the create round-trip was in flight (a new translate / clear / lock / Stop) —
+  // bail and cancel this now-orphan job so a stale done/error can't tear down over the newer one (and
+  // so a Stop during the start round-trip, which bumps startGen, actually cancels the job — L5).
   if (myGen !== startGen) {
     if (job?.jobId) void window.api?.translateCancel?.(job.jobId)?.catch?.(() => {})
     return 'started'
   }
 
-  if (job.error || job.state === 'failed' || job.state === 'cancelled') {
-    set({ state: 'failed', error: job.error ?? 'runtimeFailed', translating: false })
+  // Handle the resolve DEFENSIVELY (TA-3 / L6b): `job.error` was dereferenced outside any try, so a
+  // malformed/undefined bridge resolve threw OUT of `translate()` — and TranslateScreen's `.then`
+  // chain has no `.catch`, so the store wedged stuck `translating` with a dead Stop. Guard `job` and
+  // treat any bad shape as a runtime failure; every path here resets `translating`.
+  try {
+    if (!job || job.error || job.state === 'failed' || job.state === 'cancelled') {
+      set({ state: 'failed', error: job?.error ?? 'runtimeFailed', translating: false })
+      return 'started'
+    }
+    set({ activeJobId: job.jobId, output: job.text ?? '' })
+    wireStream(job.jobId)
+    return 'started'
+  } catch {
+    set({ state: 'failed', error: 'runtimeFailed', translating: false })
     return 'started'
   }
-
-  set({ activeJobId: job.jobId, output: job.text ?? '' })
-  wireStream(job.jobId)
-  return 'started'
 }
 
 /**
@@ -195,7 +216,18 @@ export function acknowledgeError(): void {
 
 /** Stop the in-flight translation (the Stop button): cancel main-side, keep the partial output. */
 export function stopActive(): void {
-  if (!snapshot.activeJobId) return
+  if (!snapshot.activeJobId) {
+    // Stop is shown as soon as `translating` is true — BEFORE `translateStart` resolves and sets
+    // `activeJobId` (TA-3 / L5). In that window there is no job to cancel yet, but the in-flight
+    // start must be SUPERSEDED so its post-await branch cancels the just-started job (the same
+    // supersede-cancel `clear`/`cancel` already use). Otherwise Stop is silently swallowed here and
+    // the job runs on to completion.
+    if (snapshot.translating) {
+      startGen += 1
+      set({ state: 'cancelled', translating: false })
+    }
+    return
+  }
   void window.api?.translateCancel?.(snapshot.activeJobId)?.catch?.(() => {})
   startGen += 1 // invalidate any translate still inside its start round-trip
   teardownStream()

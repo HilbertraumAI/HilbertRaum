@@ -32,7 +32,7 @@ and **deletes both this plan and the audit report** per the CLAUDE.md doc-lifecy
 **Phase status:**
 - [x] TA-1 — Main-process lifecycle seams: quit + lock (H1, H2)
 - [x] TA-2 — Renderer lock purge (H3, incl. ImagesScreen)
-- [ ] TA-3 — Renderer store hardening (H4, M8, L5–L8)
+- [x] TA-3 — Renderer store hardening (H4, M8, L5–L8)
 - [ ] TA-4 — SSE reader + prompt hardening (M2, M3, M4, L1, L4)
 - [ ] TA-5 — Stop-reason surfacing + window-failure policy (M6, M7) — depends on TA-4
 - [ ] TA-6 — Sidecar runtime robustness (M1, M5, L2, L3)

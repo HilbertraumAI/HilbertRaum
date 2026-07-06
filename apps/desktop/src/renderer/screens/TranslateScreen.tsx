@@ -190,9 +190,15 @@ export function TranslateScreen({
   function onCopy(textToCopy: string): void {
     // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter is denied in
     // the file://-loaded renderer. Mirrors ImagesScreen.onCopy / ChatScreen.onCopyMessage.
-    void window.api?.copyToClipboard?.(textToCopy)?.then?.((ok) => {
-      if (ok) showToast(t('translate.copied'))
-    })
+    void window.api
+      ?.copyToClipboard?.(textToCopy)
+      ?.then?.((ok) => {
+        if (ok) showToast(t('translate.copied'))
+      })
+      ?.catch?.(() => {
+        // A failed clipboard write is not worth a banner (L7 — match onExport's swallow); the text
+        // stays in the panel so the user can retry. An unhandled rejection here would be noise.
+      })
   }
 
   async function onExport(): Promise<void> {

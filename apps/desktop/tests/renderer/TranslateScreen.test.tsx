@@ -279,7 +279,8 @@ function fileStubs(opts: {
 
 function dropOnZone(files: File[]): void {
   const zone = screen.getByRole('button', { name: t('en', 'translate.drop.title') })
-  fireEvent.drop(zone, { dataTransfer: { files } })
+  // A real file drag reports the 'Files' type — the zone gates on it (L8).
+  fireEvent.drop(zone, { dataTransfer: { files, types: ['Files'] } })
 }
 
 describe('TranslateScreen — document translation (TG-5)', () => {

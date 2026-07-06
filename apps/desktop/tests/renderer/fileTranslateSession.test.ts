@@ -15,6 +15,11 @@ import {
   isDocTaskTerminal,
   resetDocTaskStoreForTests
 } from '../../src/renderer/lib/doctasks'
+import {
+  translate,
+  getTranslateSession,
+  resetTranslateSessionForTests
+} from '../../src/renderer/lib/translateSession'
 import type { DocTaskStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -24,6 +29,7 @@ import { stubApi } from '../helpers/renderer'
 
 afterEach(() => {
   resetFileTranslateSessionForTests()
+  resetTranslateSessionForTests()
   resetDocTaskStoreForTests()
   vi.restoreAllMocks()
 })
@@ -219,5 +225,184 @@ describe('fileTranslateSession — lifecycle', () => {
     expect(snap.state).toBe('idle')
     expect(snap.output).toBe('')
     expect(snap.resultDocumentId).toBe(null)
+  }, 8000)
+})
+
+// ---- TA-3 hardening: H4 poll latch, M8 post-picker guard, doc-task terminal + failure edges ----
+
+describe('fileTranslateSession — H4 per-timer poll latch', () => {
+  it('does not double-fire startDocTask when a stale generation callback releases the poll latch', async () => {
+    // Regression for H4: with a MODULE-level latch reset by stopPolling(), a stale generation's slow
+    // import round-trip resolving after Stop + re-drop would free the NEW generation's in-flight
+    // latch (its `finally { pollInFlight = false }` runs on the stale early-return), letting two
+    // ticks fire concurrently → a double startDocTask (a zombie backend task on the one-at-a-time
+    // lane). The per-timer latch keeps each generation's reentrancy guard private. Fake timers drive
+    // the poll; deferred getImportJob calls model the slow round-trips.
+    vi.useFakeTimers()
+    try {
+      const makeDeferred = (): { promise: Promise<unknown>; resolve: (v: unknown) => void } => {
+        let resolve: (v: unknown) => void = () => {}
+        const promise = new Promise<unknown>((r) => (resolve = r))
+        return { promise, resolve }
+      }
+      const importCalls: Array<{ promise: Promise<unknown>; resolve: (v: unknown) => void }> = []
+      const DONE = { jobId: 'imp1', total: 1, completed: 1, failed: 0, done: true }
+      const api = {
+        getDroppedFilePath: vi.fn(() => 'C:\\docs\\a.pdf'),
+        importDocuments: vi.fn(async () => ({ jobId: 'imp1', documentIds: ['d1'] })),
+        getImportJob: vi.fn(() => {
+          const d = makeDeferred()
+          importCalls.push(d)
+          return d.promise
+        }),
+        startDocTask: vi.fn(async () => ({ jobId: 'task1' })),
+        getDocTask: vi.fn(async () => docTask({ progress: { stepsDone: 0, stepsTotal: 1 } })),
+        cancelDocTask: vi.fn(async () => {})
+      }
+      stubApi(api as never)
+
+      // gen A: drop → import resolves → import poll timer installed.
+      await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+      // gen A's first import tick fires and awaits a SLOW getImportJob (call #0, unresolved).
+      await vi.advanceTimersByTimeAsync(400)
+      expect(importCalls).toHaveLength(1)
+
+      // Stop supersedes gen A (clears its timer; its tick's IPC is still in flight). A new drop
+      // starts gen B with its OWN import timer.
+      cancelFileTranslation()
+      await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+      // gen B's first import tick fires and awaits its own SLOW getImportJob (call #1, unresolved).
+      await vi.advanceTimersByTimeAsync(400)
+      expect(importCalls).toHaveLength(2)
+
+      // The STALE gen-A round-trip resolves. With a shared latch its `finally` would free gen B's
+      // in-flight latch; the per-timer latch keeps gen B's tick reentrancy-guarded.
+      importCalls[0].resolve(DONE)
+      await Promise.resolve()
+      await Promise.resolve()
+      // A further tick would, under the bug, fire a SECOND concurrent gen-B import round-trip.
+      await vi.advanceTimersByTimeAsync(400)
+
+      // Resolve every outstanding import round-trip as done; under the bug BOTH gen-B ticks reach
+      // startTranslationTask (two startDocTask calls). With the fix exactly one does.
+      for (const d of importCalls) d.resolve(DONE)
+      await vi.advanceTimersByTimeAsync(400)
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(api.startDocTask).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('fileTranslateSession — M8 post-picker guard', () => {
+  it('re-checks the start guard after the picker await; a text job that starts meanwhile makes it bail busy without touching the text session', async () => {
+    let resolvePick: (v: { token: string; paths: string[] }) => void = () => {}
+    const pickP = new Promise<{ token: string; paths: string[] }>((r) => (resolvePick = r))
+    const api = {
+      ...happyApi(),
+      pickDocuments: vi.fn(() => pickP),
+      translateStart: vi.fn(async () => ({ jobId: 't1', state: 'queued', text: '' })),
+      translateCancel: vi.fn(async () => ({})),
+      onTranslateToken: vi.fn(() => () => {}),
+      onTranslateDone: vi.fn(() => () => {}),
+      onTranslateError: vi.fn(() => () => {})
+    }
+    stubApi(api as never)
+
+    // Start the picker path — guardStart passes (nothing busy), then it awaits the OS dialog.
+    const pickPromise = translatePickedFile(CHOICE)
+    // While the dialog is open, a TEXT translation starts (the non-modal-dialog race).
+    await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
+    expect(getTranslateSession().translating).toBe(true)
+    expect(getTranslateSession().activeJobId).toBe('t1')
+
+    // The dialog now returns a file. The re-check must see the text job and bail busy.
+    resolvePick({ token: 'tok1', paths: ['C:\\docs\\a.pdf'] })
+    const outcome = await pickPromise
+    expect(outcome).toBe('busy')
+    // The text session is UNTOUCHED (never cleared): it still holds its job, still translating.
+    expect(getTranslateSession().activeJobId).toBe('t1')
+    expect(getTranslateSession().translating).toBe(true)
+    expect(api.importDocuments).not.toHaveBeenCalled()
+  })
+})
+
+describe('fileTranslateSession — doc-task terminal + failure edges', () => {
+  it('surfaces a failed doc-task with the backend error message (failWith)', async () => {
+    const api = { ...happyApi(), getDocTask: vi.fn(async () => docTask({ state: 'failed', error: 'Kaputt' })) }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    expect(getFileTranslate().errorMessage).toBe('Kaputt')
+    expect(getFileTranslate().busy).toBe(false)
+  }, 8000)
+
+  it('a failed doc-task with no error message falls back to the runtimeFailed code', async () => {
+    const api = { ...happyApi(), getDocTask: vi.fn(async () => docTask({ state: 'failed' })) }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    expect(getFileTranslate().error).toBe('runtimeFailed')
+  }, 8000)
+
+  it('a cancelled doc-task settles the panel to cancelled', async () => {
+    const api = { ...happyApi(), getDocTask: vi.fn(async () => docTask({ state: 'cancelled' })) }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('cancelled'), { timeout: 5000 })
+    expect(getFileTranslate().busy).toBe(false)
+  }, 8000)
+
+  it('an import-poll rejection fails with a friendly message', async () => {
+    const api = {
+      ...happyApi(),
+      getImportJob: vi.fn(async () => {
+        throw new Error('import boom')
+      })
+    }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    expect(getFileTranslate().errorMessage).toBeTruthy()
+    expect(api.startDocTask).not.toHaveBeenCalled()
+  }, 8000)
+
+  it('a doc-task-poll rejection fails with a friendly message', async () => {
+    const api = {
+      ...happyApi(),
+      getDocTask: vi.fn(async () => {
+        throw new Error('task boom')
+      })
+    }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    expect(getFileTranslate().errorMessage).toBeTruthy()
+  }, 8000)
+
+  it('a previewDocument failure surfaces as a friendly error (not a blank done panel)', async () => {
+    const api = {
+      ...happyApi(),
+      previewDocument: vi.fn(async () => {
+        throw new Error('locked')
+      })
+    }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    expect(getFileTranslate().errorMessage).toBeTruthy()
+  }, 8000)
+
+  it('an import that ingests nothing (completed === 0) is unsupported', async () => {
+    const api = {
+      ...happyApi(),
+      getImportJob: vi.fn(async () => ({ jobId: 'imp1', total: 1, completed: 0, failed: 1, done: true }))
+    }
+    stubApi(api as never)
+    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
+    await vi.waitFor(() => expect(getFileTranslate().error).toBe('unsupported'), { timeout: 5000 })
+    expect(api.startDocTask).not.toHaveBeenCalled()
   }, 8000)
 })

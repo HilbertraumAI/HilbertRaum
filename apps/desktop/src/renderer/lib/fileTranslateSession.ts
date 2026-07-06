@@ -84,14 +84,19 @@ let snapshot: FileTranslateSnapshot = EMPTY
 const listeners = new Set<() => void>()
 /** The single active poll timer (import THEN doc-task — never both at once). */
 let timer: ReturnType<typeof setInterval> | null = null
-/**
- * Reentrancy latch for the poll callbacks. `setInterval` fires every POLL_MS regardless of whether
- * the previous async callback resolved, so a round-trip slower than POLL_MS would let two callbacks
- * both observe the same terminal status and double-fire the (non-idempotent) transition — the
- * second `startTranslationTask`/`loadResult` would kill the just-installed next-phase timer and
- * surface a spurious failure. The latch skips a tick while the prior one is still in flight.
- */
-let pollInFlight = false
+// Reentrancy latch for the poll callbacks: `setInterval` fires every POLL_MS regardless of whether
+// the previous async callback resolved, so a round-trip slower than POLL_MS would let two callbacks
+// both observe the same terminal status and double-fire the (non-idempotent) transition — the
+// second `startTranslationTask`/`loadResult` would kill the just-installed next-phase timer and
+// surface a spurious failure. The latch skips a tick while the prior one is still in flight.
+//
+// The latch is LOCAL to each `setInterval` closure (a `let inFlight` captured per timer), NOT
+// module-level (TA-3 / H4). A shared latch reset by `stopPolling()` could be freed by a STALE
+// generation's callback whose slow IPC round-trip resolved after a Stop + re-drop — its
+// `finally { inFlight = false }` runs even on the stale-generation early-return, releasing a latch
+// owned by the NEW generation's in-flight tick and letting two ticks fire concurrently (→ a double
+// `startDocTask`, a zombie backend task on the one-at-a-time lane). A per-timer latch means a stale
+// callback only ever frees its own (already-dead) timer's latch.
 /**
  * Generation guard (the `translateSession` F8 pattern): a superseding action (a new start, a
  * clear/lock) bumps this so a slower import/start round-trip that resolves after the user moved on
@@ -113,7 +118,8 @@ function stopPolling(): void {
     clearInterval(timer)
     timer = null
   }
-  pollInFlight = false
+  // No latch reset here (TA-3 / H4): the latch is per-timer, so a cleared timer's latch is already
+  // dead and nothing shared could be freed out from under a newer generation's in-flight tick.
 }
 
 function fail(code: FileTranslateErrorCode): void {
@@ -200,6 +206,14 @@ export async function translatePickedFile(choice: Choice): Promise<FileTranslate
     fail('multiDrop')
     return 'started'
   }
+  // Re-check the start guard AFTER the picker await resolved with a path (TA-3 / M8): a text
+  // translation (or another file translation) can start while the OS dialog is open (a non-modal
+  // dialog: no focused BrowserWindow, or Linux WM behavior). Without this second check `runImport`
+  // would call `clearTranslateSession()` and drop that text job's store WITHOUT cancelling the
+  // main-side job (an orphan holding the one-at-a-time lane). On refusal, bail with the outcome and
+  // leave the text session untouched — mirroring how a rejected drop keeps the text result.
+  const blockedAfter = guardStart()
+  if (blockedAfter) return blockedAfter
   return runImport(picked.paths, picked.token, choice)
 }
 
@@ -242,9 +256,10 @@ async function runImport(paths: string[], token: string | undefined, choice: Cho
   const docId = job.documentIds[0]
   const importJobId = job.jobId
   // Poll ingestion; only once the file is fully indexed can the doc-task run over it.
+  let inFlight = false // per-timer reentrancy latch (TA-3 / H4) — see the note by `timer` above.
   timer = setInterval(() => {
-    if (pollInFlight) return // a slower-than-POLL_MS round-trip is still resolving; skip this tick
-    pollInFlight = true
+    if (inFlight) return // a slower-than-POLL_MS round-trip is still resolving; skip this tick
+    inFlight = true
     void (async () => {
       try {
         if (myGen !== gen) {
@@ -266,7 +281,7 @@ async function runImport(paths: string[], token: string | undefined, choice: Cho
         if (myGen !== gen) return
         failWith(friendlyIpcError(e))
       } finally {
-        pollInFlight = false
+        inFlight = false
       }
     })()
   }, POLL_MS)
@@ -298,9 +313,10 @@ async function startTranslationTask(docId: string, choice: Choice, myGen: number
   }
   set({ state: 'translating' })
   const taskJobId = started.jobId
+  let inFlight = false // per-timer reentrancy latch (TA-3 / H4) — see the import poll above.
   timer = setInterval(() => {
-    if (pollInFlight) return // reentrancy latch — see the import poll above
-    pollInFlight = true
+    if (inFlight) return // reentrancy latch — see the import poll above
+    inFlight = true
     void (async () => {
       try {
         if (myGen !== gen) {
@@ -324,7 +340,7 @@ async function startTranslationTask(docId: string, choice: Choice, myGen: number
         if (myGen !== gen) return
         failWith(friendlyIpcError(e))
       } finally {
-        pollInFlight = false
+        inFlight = false
       }
     })()
   }, POLL_MS)
