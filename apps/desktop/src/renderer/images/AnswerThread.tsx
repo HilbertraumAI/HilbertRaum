@@ -36,6 +36,9 @@ const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
 // completion — mirroring the chat-transcript FE-1 split — so a long answer isn't re-parsed on every
 // stream flush. `memo` also keeps settled turns from re-rendering while a sibling streams (it bites
 // when the parent passes referentially-stable handlers; the plain-text win holds regardless).
+// DIVERGENCE NOTE: chat has since revised FE-1 to streaming Markdown via Streamdown
+// (architecture.md §FE-1 revisited); this site deliberately keeps the plain-text-while-streaming
+// split until it gets the same treatment.
 const TurnRow = memo(function TurnRow({
   turn,
   t,
