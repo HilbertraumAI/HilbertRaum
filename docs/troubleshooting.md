@@ -234,6 +234,13 @@ nothing rather than guessing. A few things to check:
 - **Unusual layouts read conservatively.** Bank/invoice formats vary a lot; the tools quote only the
   rows and totals they can parse cleanly and skip the rest. That's deliberate honesty, not a failure —
   a partial result is better than a wrong one.
+- **A garbled-text invoice is refused, not guessed.** If an invoice's text comes through as jumbled
+  glyphs — usually a scanned or oddly-encoded PDF — the *Invoice* tool automatically tries a second,
+  layout-aware reading pass; if that still can't be read cleanly it tells you the layout couldn't be
+  read rather than quoting figures it may have misread. Use the document's **Make searchable (OCR)**
+  action, or re-import the original (a text-based PDF or the source file). Running OCR re-reads the
+  document from scratch, so the next question you ask re-extracts from the corrected text — you don't
+  need to delete and start over.
 
 ---
 

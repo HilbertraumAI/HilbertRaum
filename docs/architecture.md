@@ -3183,7 +3183,7 @@ domain still resolve, the geometry specifics live in §21).
 
 **The invoice skill is the SECOND Tier-2 reference** (`app-skills/invoice/`, `id:'invoice'`), proving the
 gate generalizes to a second content-class domain with strong EN+DE coverage. It covers the same
-three-tool shape as bank-statement: three tools in `services/skills/tools/invoice.ts` — `extract_invoice` (read-only; the
+five-tool shape as bank-statement: five tools in `services/skills/tools/invoice.ts` — the three core `extract_invoice` (read-only; the
 same `readDocumentChunks` reach over the frozen scope), `validate_invoice_totals` (read-only; deterministic
 checks within a half-cent epsilon — line items → net, net + tax → gross, tax vs. rate — each
 `ok`/`mismatch`/`unknown`, an honest `reconciled` verdict + a `resultKind` discriminator like
@@ -3216,7 +3216,7 @@ categorizes while the C-1 guards hold (see the 2026-06-29 Phase 1 note below). T
 `services/skills/invoice-run.ts`: same `skill_runs` lifecycle, same no-partial-persist
 (BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
 (no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
-three names; the controller / IPC / renderer stay domain-free (the renderer adds only the three tool labels
+five names; the controller / IPC / renderer stay domain-free (the renderer adds only the five tool labels
 + the invoice `resultKind` copy). Content-class isolation holds: the new `invoices` / `invoice_line_items`
 tables + `skill_runs` never appear in any log/audit/export (audit stays `{skillId, toolName, documentCount}`).
 
@@ -6105,6 +6105,61 @@ meaningless when the print itself was misread; the geometry retry is once-per-do
 (`suspect-confirmed`), never per-turn. i18n keys added (en+de): `totalsHeadingUnverified`,
 `unreconciledCaveat`, `figureEchoSuppressed`, `detailRecipient`, `unreadableLayout`,
 `textQualityCaveat`.
+
+
+### §43 Invoice skills & tools audit (invoice-skills-audit-2026-07-06) — remediation ledger + close-out
+
+A fresh three-pass audit of the invoice skill/tool surface (tool/parser code · analysis pipeline &
+run lifecycle · docs-vs-code consistency), run **after** the §42 incident wave and cross-checked
+against the prior ledgers (§8/§24/§26/§27/§29/§34/§40/§42) so already-fixed / explicitly-deferred
+items were not re-reported. It found **2 HIGH · 10 MEDIUM · 12 LOW** (findings numbered **T-** =
+tool/parser, **P-** = pipeline/lifecycle, **D-** = docs). Both HIGH landed first. Remediated across a
+seven-phase wave **IA-1…IA-7**, all on `master` (unpushed): `IA-1` d26cc13, `IA-2` a8c4fdc, `IA-3`
+129afbb, `IA-4` 13e9a69, `IA-5` 9d7c4cb, `IA-6` 6f8b90b, `IA-7` (this close-out). The worst user
+journey (soup invoice → refusal telling the user to OCR → same refusal forever) is dissolved (P-1+P-2),
+the shared-parser sign-flip is closed (T-1), and every finding is fixed — **none deferred**. Extractor
+versions moved `INVOICE_EXTRACTOR_VERSION` **11 → 13** (IA-2 T-1 = 12; IA-3 batch = 13) and
+`BANK_EXTRACTOR_VERSION` **9 → 11** (IA-2 T-1 = 10; IA-3 T-6 shared date-order = 11); IA-4/IA-5/IA-6
+are answer-layer / reader-construction / lifecycle changes with **no** version bump. Final suite
+**3616/47**, typecheck clean (before this docs-only close-out).
+
+Per-finding disposition (fixed-in-phase@commit / decision taken):
+
+| # | Sev | Phase | Disposition (decision / mechanism) |
+|---|---|---|---|
+| **P-1** | HIGH | IA-1 `d26cc13` | **fixed** — staleness gate was extractor-VERSION-only; the re-index/OCR-re-ingest teardown deleted chunks/embeddings/trees but NOT the extraction rows → a `suspect-confirmed` refusal survived the very OCR the app instructed, and a changed text layer kept answering from old content. `purgeSkillDataForDocument(db, id)` now runs inside the re-index teardown transaction (`services/ingestion/index.ts` `prepareDocument`). **Decision — simple purge over a content-fingerprint column** (no reason to escalate emerged); covers the **bank twin** automatically. |
+| **T-1** | HIGH | IA-2 `a8c4fdc` | **fixed** — `MONEY_RE`'s leading class signed a `-` even with ≤4 spaces before the figure → dash-as-separator layouts flipped sign (`Beratung – 1.500,00` → −1500; bank `GUTSCHRIFT - 34,39` → −34,39), and the plain path disagreed with the geometry path. Leading `-`/`+` now signs ONLY when GLUED to the magnitude/paren (mirror of the trailing-side BL-1 fix); `lastCurrencyAdjacentInteger` got the same rule. Bumped INVOICE 11→12 + BANK 9→10 (stale rows re-extract). |
+| **T-2** | MED | IA-3 `129afbb` | **fixed — SPLIT, not refuse.** A one-line multi-label totals row (`Netto … MwSt … Brutto …`) assigned the LAST figure to the FIRST label; `readMultiLabelTotals` now attributes each figure (found on a date-/percent-blanked copy) to its own nearest-preceding boundary-matched label under a strict engage guard (≥2 figures, every figure preceded by a filler-only totals-label run, ≥2 distinct fields — else falls through unchanged, so `Miete netto 1.000,00` is never hijacked). |
+| **T-3** | MED | IA-3 `129afbb` | **fixed** — a 2-dp tax RATE (`MwSt 20,00 %`) read as the tax AMOUNT; `lastMoney` now scans `blankPercentFigures(stripDateTokens(line))` (new `PERCENT_FIGURE_RE`) so a percent-attached figure is never read as currency. |
+| **T-4** | MED | IA-3 `129afbb` | **fixed** — de-AT `USt` / `Steuerbetrag` / `Nettosumme` became phantom line items; added `ust`/`steuerbetrag` to `TAX_LABELS`, `nettosumme` to `NET_LABELS` (`USt-IdNr: ATU…` still falls through). known-limitations `USt` residual note rewritten as closed. |
+| **T-5** | MED | IA-3 `129afbb` | **fixed — GATE, not count** (SKA-14 precedent). `applyHeader`'s date branches swallowed a figure on a flattened header/summary line; all header branches now early-return on `carriesAmountShapedMoney`, so `Rechnungsdatum: … Betrag: 1.500,00` surfaces the figure as a line item (accepted trade-off: the date on such a combined line is not captured — drop-don't-guess). |
+| **T-6** | MED | IA-3 `129afbb` | **fixed** — dotted `dd.mm` header dates matched raw `MONEY_RE`, suppressing the `'default'` date-order honesty caveat; `inferDateOrderResult` classifies lines by date-scrubbed `hasMoneyToken`. SHARED `money.ts` → drove the **BANK 10→11** bump on the correctness/staleness principle (no bank corpus fixture moved; two invoice fixtures flipped `dateOrderInferred 'evidence'→'default'`, correctly). |
+| **T-7** | MED | IA-3 `129afbb` | **fixed — WIDEN tolerance, not a new status.** `taxMatchesRate` demanded exact-cent equality, flagging legally-correct per-line-rounded VAT (3×6,67=20,01 vs round2(sum)=20,00) as `mismatch`; tolerance widened to `±max(1 cent, n×½ cent)` (a new "within rounding" status would ripple through the answer layer + i18n; a euro-off tax still mismatches). Downstream check only → did not itself warrant a bump. |
+| **P-2** | MED | IA-1 `d26cc13` | **fixed** — a cancelled/transiently-failed geometry retry permanently burned the one retry; the `'suspect-confirmed'` promotion + UPDATE now live INSIDE the `retry.ok && retry.invoiceId` branch, so a non-ok retry leaves `text_quality='suspect'` for a later turn. (Full abort→calm-cancel propagation completed in IA-4.) |
+| **P-3** | MED | IA-4 `13e9a69` | **fixed — invoice + bank twin, no version bump.** A Stop during the analysis auto-run was swallowed (handler RETURNED `couldNotRead` / a recomputed answer, sailing past `withChatStream`'s throw-only calm-cancel); on a seam `cancelled` (or late `ctx.signal?.aborted`) the handler now throws `DOMException(…, 'AbortError')` → empty message, nothing persisted. Seam contract verified: a genuine non-cancel failure still returns `couldNotRead`. |
+| **P-4** | MED | IA-5 `9d7c4cb` | **fixed — bank-mirror lazy reader.** Every non-format invoice question eagerly re-parsed the whole document from disk (decrypt+PDF+OCR) under the per-document lock and discarded it; `INVOICE_RUN_CONFIG.buildDownstreamReader` now binds the bank's lazy `buildReadDocumentChunks(db, new Set([id]))` (closing the A1 "left to a follow-up"). Extraction path stays on `resolveDocumentReader`; every downstream tool takes structured input and reads no chunk. |
+| **D-1** | MED | IA-1 `d26cc13` | **fixed** — live decision D58 ("layout mode is bank-statement ONLY") contradicted the shipped invoice geometry retry; D58 (§21) + known-limitations amended with the §42-P3 superseding note (the invoice ANALYSIS path re-extracts once via layout on a `suspect` verdict; the run-bar extract stays reading-order). |
+| **T-8** | LOW | IA-3 `129afbb` | **fixed** — bare `(netto)` qualifier on a GROSS label mis-landed net in `grossTotal`; `\bnetto\b`/`\bnet\b` added to `EXCL_TAX_RE` (consulted only after a GROSS label matched). |
+| **T-9** | LOW | IA-6 `6f8b90b` | **fixed** — `validateNode` used prototype-chain `in` against `properties`/required; both checks now `Object.prototype.hasOwnProperty.call(...)` so an own key named `constructor`/`toString`/… is not waved through `additionalProperties:false` (defence-in-depth; nothing downstream dereferenced the extra keys). |
+| **T-10** | LOW | IA-3 `129afbb` | **fixed** — wrapped-description continuation gate used raw `MONEY_RE` (same root cause as T-6); switched to `!hasMoneyToken(line)`, so a money-less date follower keeps its continuation. Theme-1 sweep of the remaining raw-`MONEY_RE` sites explicitly cleared (all date-scrubbed or conservative). |
+| **T-11** | LOW | IA-2 `a8c4fdc` | **fixed** — `lastCurrencyAdjacentInteger` did O(n²) slices + per-match `new RegExp`; replaced by an index walk + hoisted `CURRENCY_SYMBOL_SET`/`ISO_CODES.has`. **Deviation (recorded):** symbol regexes REPLACED by Set membership, not merely hoisted (subsumes the hoist, kills the O(n²)). |
+| **P-5** | LOW | IA-6 `6f8b90b` | **fixed** — four single-row `invoices` reads per question collapse to one `loadInvoiceMeta` projection (`date_order_inferred`/`dropped_row_count`/`text_quality`), read once up front + re-read once only when the retry replaces the row (3/4 → 1/2; answers byte-identical). |
+| **P-6** | LOW | IA-6 `6f8b90b` | **fixed — SQL `substr`, not a row `LIMIT`.** `loadCitationChunks` (SHARED by invoice+bank builders) selected the whole `text` column to keep ≤12 citations; now selects `substr(text,1,281)` (bank narrows by arbitrary `page_number`, invoice needs head+tail → a row cap would break a caller; snippet cut to 280 → 281 is byte-identical). |
+| **P-7** | LOW | IA-6 `6f8b90b` | **fixed** — a hard crash stranded `skill_runs` rows at `'started'` forever; new `reconcileStuckSkillRuns(db, beforeIso)` (`registerDocsIpc.ts`, idle-gated). **Watermark decision:** `skill_runs` bumps no `updated_at`, so it uses a module-load `PROCESS_START_ISO` watermark (not `now`) — only previous-session rows are reconciled, a live run is never clobbered. |
+| **P-8** | LOW | IA-6 `6f8b90b` | **fixed** — `domainPersistFailure` + the `prepareDomainRun` catch called `finishRun` unguarded (a doomed terminal UPDATE could throw out, strand the row, and reject the seam raw); new `finishRunGuarded` (SKA-27 `finishTail` pattern generalized — one retry, content-free log, envelope stands) backs both exits. |
+| **D-2** | LOW | IA-1 `d26cc13` | **fixed** — the two `tool-runs.ts` comments asserting "invoices are never geometry-reconstructed" rescoped to the run-bar path (the one geometry read is the analysis handler's P3 suspect retry). |
+| **D-3** | LOW | IA-7 (this) | **fixed** — §8 said "three" invoice tools/labels in two sentences; corrected to "five" (three core + the JSON/XML format exports, documented in the same §). |
+| **D-4** | LOW | IA-7 (this) | **fixed** — `app-skills/invoice/SKILL.md` body described only the CSV export; the closing sentence now covers the JSON/XML exports its `allowedTools` frontmatter grants (whole invoice — header, line items, totals). No parity-test text pin on that sentence (the parity test pins only the honesty bullets in `paragraphs[0]`). |
+| **D-5** | LOW | IA-7 (this) | **fixed** — `troubleshooting.md` "skill tool found nothing" section gained a glyph-soup refusal bullet: what `unreadableLayout` means, the automatic once-per-document layout retry, the OCR/original guidance, and (post-IA-1) that running OCR re-reads the document so the next question re-extracts — no delete-and-restart needed. |
+
+**§-anchor legend (keeps the code-comment citations resolvable after the report was retired).** In-code
+comments cite this audit as `invoice-audit-2026-07-06 <T-n|P-n>`, `IA-<n>`, `IA-<n> <P-n>`, or the bare
+`audit P-n` (the shared bank/invoice `P-1`/`P-2` provenance labels predate this wave — see §19/§29 for
+those). All resolve here: the `T-*`/`P-*`/`D-*` finding ids and the `IA-1…IA-7` phase labels are the
+rows above; `INVOICE_EXTRACTOR_VERSION` history entries 12 (IA-2) and 13 (IA-3) and
+`BANK_EXTRACTOR_VERSION` 10 (IA-2) and 11 (IA-3) carry the same tags in their in-file version logs.
+Report retired: `git rm docs/audits/invoice-skills-audit-2026-07-06.md` (recoverable in git history; the
+full finding bodies + the IA-1…IA-6 SHIPPED dispositions live there).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

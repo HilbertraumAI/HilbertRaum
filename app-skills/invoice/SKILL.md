@@ -62,5 +62,5 @@ to fit the context:
 
 Use this skill when the user shares an invoice (PDF, CSV, or pasted text) or asks billing-style
 questions about one. It comes with approved local tools the user can run on an invoice they choose:
-extract the header, line items, and totals; check that the printed totals add up; and export the
-line items to CSV.
+extract the header, line items, and totals; check that the printed totals add up; export the line
+items to CSV; and export the whole invoice — header, line items, and totals — to JSON or XML.
