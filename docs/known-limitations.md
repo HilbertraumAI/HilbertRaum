@@ -1424,9 +1424,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the SOURCE does not update an existing translation; the user re-runs Translate. If the
   source is later deleted, the provenance line says so ("a removed document") but the
   translation keeps working.
-- **A window the model refuses/garbles is marked, never dropped.** After one retry the
-  output carries a visible "could not be translated" notice with the ORIGINAL text kept
-  below it; only an all-windows failure fails the whole task. Honesty over silent gaps.
+- **A window the model refuses/garbles/TRUNCATES is marked or fails, never silently dropped.**
+  A window that throws, comes back empty, **or runs to the output-limit cap without a clean
+  stop** — the greedy-decode repetition loop that is the classic temperature-0 MT pathology, or a
+  token-dense window clipping at the ~2,070-token cap — is now DETECTED via the completion's final
+  stop reason (`stopping_word`/eos) and treated as a failed attempt (TA-5). In the **document
+  task**, after one retry the output carries a visible "could not be translated" notice with the
+  ORIGINAL text kept below it; only an all-windows failure fails the whole task. In the **Translate
+  view** (interactive), such a window is retried once and, if it still fails, the whole job fails
+  VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a visible
+  failure beats a silent gap. Before TA-5 a truncated window was stitched in silently as a clean
+  translation; that honesty hole is closed.
 - **Long documents take time — linearly.** There is deliberately NO window ceiling (a
   faithful translation may not cover "the beginning" only, unlike the summary), and the
   12B sidecar decodes at ~3–4 tok/s on CPU (TG-6 kept it CPU-pinned for v1: GPU is deferred

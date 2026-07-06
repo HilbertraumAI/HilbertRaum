@@ -24,17 +24,39 @@ export interface CompletionTimings {
   prompt_n?: number
 }
 
-/** What the final frame reports — surfaced to the smoke via `onFinal` (never needed by callers). */
+/** What the final frame reports — surfaced to callers via `onFinal` (TA-5 M6 makes it load-bearing). */
 export interface CompletionFinal {
   timings?: CompletionTimings
   /** The stop string that ended generation (`<end_of_turn>` for a clean turn boundary). */
   stoppingWord?: string
+  /**
+   * The generation ended on the model's end-of-turn / EOS token — a CLEAN stop, as opposed to
+   * running into the token/context cap (a LIMIT stop → truncation). llama-server reports this as
+   * `stopped_eos`. TA-5 M6: `isCleanStop` accepts a frame carrying EITHER a `stoppingWord` or this.
+   */
+  stoppedEos?: boolean
+}
+
+/**
+ * Did the window stop CLEANLY (the model chose to end the turn) rather than being truncated at the
+ * output-limit cap? TA-5 M6: a clean stop carries the turn-boundary stop string (`stopping_word`,
+ * e.g. `<end_of_turn>`) or the EOS flag; a LIMIT stop (a greedy-decode repetition loop, or a
+ * token-dense window running to the ~2,070-token cap) carries NEITHER. Both translation consumers
+ * (the doc-task `translateWithRetry` and the view job loop) treat a non-clean stop as a FAILED
+ * window — retry-then-mark / retry-then-fail — so a mid-sentence truncation is never persisted or
+ * shown as a finished translation. A missing `final` (no terminal frame at all) is already an
+ * `IncompleteStreamError` thrown by `readCompletionSSE`, so callers only reach here with a real frame.
+ */
+export function isCleanStop(final: CompletionFinal | undefined): boolean {
+  if (!final) return false
+  return (typeof final.stoppingWord === 'string' && final.stoppingWord.length > 0) || final.stoppedEos === true
 }
 
 interface CompletionFrame {
   content?: string
   stop?: boolean
   stopping_word?: string
+  stopped_eos?: boolean
   timings?: CompletionTimings
   error?: { message?: string; type?: string }
 }
@@ -107,7 +129,11 @@ function parseCompletionLine(line: string): {
     const out: { delta?: string; final?: CompletionFinal } = {}
     if (typeof frame.content === 'string' && frame.content.length > 0) out.delta = frame.content
     if (frame.stop === true) {
-      out.final = { timings: frame.timings, stoppingWord: frame.stopping_word }
+      out.final = {
+        timings: frame.timings,
+        stoppingWord: frame.stopping_word,
+        stoppedEos: frame.stopped_eos
+      }
     }
     return out
   } catch {

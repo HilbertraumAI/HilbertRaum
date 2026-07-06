@@ -9,7 +9,8 @@ import { tMain } from '../../i18n'
 import { getDocument } from '../../ingestion'
 import { isAbortError } from '../../chat'
 import { log } from '../../logging'
-import type { Translator } from '../../translation'
+import { isCleanStop } from '../../translation'
+import type { CompletionFinal, Translator } from '../../translation'
 import type { TranslationSourceLang, TranslationTargetLang } from '../../../../shared/types'
 import {
   planTranslationWindows,
@@ -30,11 +31,16 @@ interface WindowRequest {
 
 /**
  * One window on the translation sidecar with a single retry (the R-T2 policy carried over
- * from the chat path): a thrown or empty window is retried once; a second failure returns
- * null (the caller marks it visibly). Aborts always propagate immediately — cancel must
+ * from the chat path): a thrown, empty, or TRUNCATED window is retried once; a second failure
+ * returns null (the caller marks it visibly). Aborts always propagate immediately — cancel must
  * never look like a failed window. `translator.translate()` THROWS on failure and takes
  * sidecar-shaped options (the manager's former chat retry took system+user prompts over
  * `chatStream`), so the retry loop lives here with the handler.
+ *
+ * TA-5 M6: a non-empty reply is NOT sufficient — the final frame's stop reason is now load-bearing.
+ * A window that ran to the output-limit cap (a greedy-decode repetition loop, or a token-dense
+ * window) carries no clean stop and is a silent mid-sentence truncation; `isCleanStop(final)` is
+ * false, so it is treated exactly like an empty reply — a failed attempt → retry → marked window.
  */
 async function translateWithRetry(
   translator: Translator,
@@ -45,6 +51,7 @@ async function translateWithRetry(
   // a workspace-lock suspend that would RESPAWN the just-killed ~10 GB server for nothing.
   if (req.signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
   for (let attempt = 1; attempt <= 2; attempt++) {
+    let final: CompletionFinal | undefined
     try {
       const out = (
         await translator.translate({
@@ -52,14 +59,23 @@ async function translateWithRetry(
           targetLang: req.targetLang,
           text: req.text,
           maxTokens: req.maxTokens,
-          signal: req.signal
+          signal: req.signal,
+          onFinal: (info) => {
+            final = info
+          }
         })
       ).trim()
       // A fake/suspended backend may resolve cleanly on abort; normalize to the throw the
       // orchestrator maps to `cancelled` (the chat path's mock-runtime rule).
       if (req.signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
-      if (out.length > 0) return out
-      log.warn('Translation window came back empty', { attempt })
+      // M6: accept only a non-empty window that ALSO stopped cleanly — a limit-stop truncation
+      // (no `stoppingWord`/eos in the final frame) is a failed attempt, never a clean window.
+      if (out.length > 0 && isCleanStop(final)) return out
+      log.warn('Translation window came back empty or truncated', {
+        attempt,
+        empty: out.length === 0,
+        truncated: out.length > 0
+      })
     } catch (err) {
       if (isAbortError(err, req.signal)) throw err
       log.warn('Translation window failed', {

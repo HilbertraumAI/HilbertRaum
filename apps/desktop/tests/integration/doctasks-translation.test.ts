@@ -26,7 +26,8 @@ import {
   type DocTaskDeps
 } from '../../src/main/services/doctasks'
 import type { Translator } from '../../src/main/services/translation'
-import type { TranslateOptions } from '../../src/main/services/translation'
+import type { TranslateOptions, CompletionFinal } from '../../src/main/services/translation'
+import { TRANSLATION_STOP_TOKEN } from '../../src/main/services/translation'
 import {
   VaultBusyError,
   decryptFile,
@@ -92,6 +93,12 @@ interface ScriptedTranslatorOptions {
   contextTokens?: number
   /** Delay (ms) before each streamed token — lets cancel land mid-window. */
   tokenDelayMs?: number
+  /**
+   * The final frame each (non-throwing) call reports via `onFinal` (TA-5 M6 — now load-bearing).
+   * Default: a CLEAN stop (`stopping_word: <end_of_turn>`). Return `{}` to model a LIMIT stop
+   * (truncation) — a non-empty window that the handler must treat as a failed attempt.
+   */
+  final?: (call: TranslateOptions, index: number) => CompletionFinal
 }
 
 interface ScriptedTranslator extends Translator {
@@ -131,6 +138,9 @@ function scriptedTranslator(opts: ScriptedTranslatorOptions = {}): ScriptedTrans
           call.onToken?.(token)
         }
       }
+      // A normal resolve ALWAYS carries a terminal frame (the runtime throws IncompleteStreamError
+      // otherwise) — model it so `isCleanStop(final)` can tell a clean stop from a limit stop (M6).
+      call.onFinal?.(opts.final ? opts.final(call, index) : { stoppingWord: TRANSLATION_STOP_TOKEN })
       return text
     }
   }
@@ -612,6 +622,69 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     // The window's ORIGINAL text is kept below the notice (window 2 starts where
     // window 1's budget ended).
     expect(text).toContain(`word${budget}`)
+  })
+
+  it('a window that stops at the output cap (no clean stop) is retried, then MARKED (M6)', async () => {
+    const docId = await importDoc(600)
+    const budget = translationBudgetWords(1024)
+    const translator = scriptedTranslator({
+      contextTokens: 1024,
+      // Window 2 returns non-empty text but its final frame carries NO stopping word — a LIMIT
+      // stop (the greedy-decode repetition-loop truncation M6 describes), the same clip either
+      // attempt (greedy decode is deterministic), so the retry hits it again → marked window.
+      final: (call) =>
+        call.text.split(/\s+/)[0] === `word${budget}` ? {} : { stoppingWord: TRANSLATION_STOP_TOKEN }
+    })
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    // The task still completes — one truncated window must not lose the document.
+    expect(status.state).toBe('done')
+
+    const total = Math.ceil(600 / budget)
+    // The truncated window was tried exactly twice (one retry), each still a limit stop.
+    const truncatedCalls = translator.calls.filter((c) => c.text.split(/\s+/)[0] === `word${budget}`)
+    expect(truncatedCalls).toHaveLength(2)
+
+    const newId = status.resultRef?.documentId as string
+    const { text } = readStoredDocumentText(db, storeDir, newId)
+    // Window 2 is marked with its original text kept; the other (clean) windows are intact.
+    expect(text).toContain(failedWindowNotice(2, total))
+    expect(text).toContain(`word${budget}`)
+    expect(text).toContain('word0')
+  })
+
+  it('a per-request TimeoutError is a FAILED window (retry → notice), NOT a task cancel', async () => {
+    // Pins audit test-gap #4: the combined per-request signal times out with a `TimeoutError`
+    // whose name is NOT 'AbortError', while the task's OWN signal stays unaborted — so
+    // `isAbortError(err, taskSignal)` is false and the window is retried-then-failed, never
+    // mistaken for a user cancel. A single window: two timeouts → all windows failed → the task
+    // fails friendly (never `cancelled`).
+    const docId = await importDoc(60)
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'scripted-translator',
+      contextWindow: () => 4096,
+      stop: async () => {},
+      async translate() {
+        calls += 1
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      }
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(TASK_GENERIC_FAILURE_MESSAGE)
+    expect(calls).toBe(2) // retried once, then the window (and the task) failed
   })
 
   it('an empty reply counts as a failure: one retry, then the marked window', async () => {

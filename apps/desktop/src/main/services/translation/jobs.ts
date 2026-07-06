@@ -9,6 +9,8 @@ import type {
 import { isTranslationLangCode } from '../../../shared/types'
 import { planTranslationWindows } from '../doctasks/translation'
 import { log } from '../logging'
+import { isCleanStop } from './completion'
+import type { CompletionFinal } from './completion'
 import type { Translator } from './index'
 
 // Translate-view job orchestration (TG wave, plan §2 D6). The Translate screen's live TEXT
@@ -139,14 +141,46 @@ export class TranslateJobService {
           return
         }
         if (i > 0) this.emitDelta(jobId, '\n\n', emit)
-        await translator.translate({
-          sourceLang: req.sourceLang,
-          targetLang: req.targetLang,
-          text: plan.windows[i],
-          maxTokens: plan.windowMaxTokens,
-          signal,
-          onToken: (delta) => this.emitDelta(jobId, delta, emit)
-        })
+        // TA-5 M7: the view must not silently drop a paragraph. A window that comes back empty,
+        // TRUNCATED (no clean stop — M6), or throwing a runtime error is retried ONCE; if it
+        // still fails, fail the WHOLE job visibly (runtimeFailed) — an interactive user is better
+        // served by an honest failure than by a finished translation with a missing paragraph.
+        // (A user cancel aborts `signal` and is handled as `cancelled`, never a failed window.)
+        let clean = false
+        for (let attempt = 1; attempt <= 2 && !clean; attempt++) {
+          let final: CompletionFinal | undefined
+          try {
+            const out = await translator.translate({
+              sourceLang: req.sourceLang,
+              targetLang: req.targetLang,
+              text: plan.windows[i],
+              maxTokens: plan.windowMaxTokens,
+              signal,
+              onToken: (delta) => this.emitDelta(jobId, delta, emit),
+              onFinal: (info) => {
+                final = info
+              }
+            })
+            if (signal.aborted) {
+              this.cancel(jobId)
+              return
+            }
+            clean = out.trim() !== '' && isCleanStop(final)
+            if (!clean) log.warn('Translate view window incomplete', { jobId, window: i + 1, attempt })
+          } catch (err) {
+            if (signal.aborted) {
+              this.cancel(jobId)
+              return
+            }
+            // A per-request timeout / runtime error — never a user cancel (that aborts `signal`).
+            // Log content-free and let the retry run; a second failure fails the job below.
+            log.warn('Translate view window failed', { jobId, window: i + 1, attempt, error: String(err) })
+          }
+        }
+        if (!clean) {
+          this.fail(jobId, 'runtimeFailed', emit)
+          return
+        }
         this.patch(jobId, { windowsDone: i + 1 })
       }
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   readCompletionSSE,
+  isCleanStop,
   CompletionError,
   IncompleteStreamError,
   type CompletionFinal
@@ -156,6 +157,34 @@ describe('readCompletionSSE — L1 abort', () => {
     expect(first.value).toBe('Hello ')
     controller.abort(new DOMException('user stop', 'AbortError'))
     await expect(gen.next()).rejects.toThrow(/user stop/)
+  })
+})
+
+describe('isCleanStop — TA-5 M6 limit-stop detection', () => {
+  it('a stopping word (turn boundary) is a clean stop', () => {
+    expect(isCleanStop({ stoppingWord: '<end_of_turn>' })).toBe(true)
+  })
+
+  it('the EOS flag is a clean stop even with no stopping word', () => {
+    expect(isCleanStop({ stoppingWord: '', stoppedEos: true })).toBe(true)
+  })
+
+  it('a limit stop (neither a stopping word nor eos) is NOT clean', () => {
+    expect(isCleanStop({})).toBe(false)
+    expect(isCleanStop({ stoppingWord: '' })).toBe(false)
+    expect(isCleanStop({ timings: { predicted_per_second: 1 } })).toBe(false)
+  })
+
+  it('a missing final frame is NOT clean', () => {
+    expect(isCleanStop(undefined)).toBe(false)
+  })
+
+  it('surfaces stopped_eos from the terminal frame', async () => {
+    const stream = streamOf(['data: {"content":"x","stop":true,"stopped_eos":true,"stopping_word":""}\n'])
+    let final: CompletionFinal | undefined
+    await collect(readCompletionSSE(stream, undefined, (f) => (final = f)))
+    expect(final?.stoppedEos).toBe(true)
+    expect(isCleanStop(final)).toBe(true)
   })
 })
 

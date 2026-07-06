@@ -34,7 +34,7 @@ and **deletes both this plan and the audit report** per the CLAUDE.md doc-lifecy
 - [x] TA-2 — Renderer lock purge (H3, incl. ImagesScreen)
 - [x] TA-3 — Renderer store hardening (H4, M8, L5–L8)
 - [x] TA-4 — SSE reader + prompt hardening (M2, M3, M4, L1, L4)
-- [ ] TA-5 — Stop-reason surfacing + window-failure policy (M6, M7) — depends on TA-4
+- [x] TA-5 — Stop-reason surfacing + window-failure policy (M6, M7) — depends on TA-4
 - [ ] TA-6 — Sidecar runtime robustness (M1, M5, L2, L3)
 - [ ] TA-7 — Low sweep, doc drift, close-out (L9, L11, L12, L10-decision, D1–D5)
 

@@ -244,7 +244,11 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       getTranslator: () => ({
         modelId: 'echo-translator',
         contextWindow: () => 4096,
-        translate: async (o) => o.text,
+        // TA-5 M6: report a CLEAN stop — the handler now rejects a non-clean (limit) window.
+        translate: async (o) => {
+          o.onFinal?.({ stoppingWord: '<end_of_turn>' })
+          return o.text
+        },
         stop: async () => {}
       }),
       isChatStreaming: () => inFlightStreams.size > 0,

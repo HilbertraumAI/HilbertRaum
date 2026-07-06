@@ -18,6 +18,7 @@ vi.mock('electron', () => ({
 import { registerTranslateIpc } from '../../src/main/ipc/registerTranslateIpc'
 import { TranslateJobService } from '../../src/main/services/translation/jobs'
 import type { Translator } from '../../src/main/services/translation'
+import { TRANSLATION_STOP_TOKEN } from '../../src/main/services/translation'
 import { planTranslationWindows } from '../../src/main/services/doctasks/translation'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
@@ -37,7 +38,8 @@ const goodReq = (over: Partial<TranslateRequest> = {}): TranslateRequest => ({
   ...over
 })
 
-/** A scripted translator: streams `reply(text)` as ONE token and resolves with it, honoring abort. */
+/** A scripted translator: streams `reply(text)` as ONE token and resolves with it, honoring abort.
+ *  Reports a CLEAN stop via `onFinal` (TA-5 M6 — the view now requires it to accept the window). */
 function scriptedTranslator(opts: { ctx?: number; reply?: (text: string) => string } = {}): Translator {
   const reply = opts.reply ?? ((t: string) => `TR<${t}>`)
   return {
@@ -47,6 +49,7 @@ function scriptedTranslator(opts: { ctx?: number; reply?: (text: string) => stri
       if (o.signal?.aborted) throw new DOMException('aborted', 'AbortError')
       const out = reply(o.text)
       o.onToken?.(out)
+      o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
       return out
     },
     async stop() {},
@@ -74,6 +77,7 @@ function gatedTranslator(): { translator: Translator; release: () => void; sawSi
             o.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
           )
         ])
+        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
         return 'partial done'
       },
       async stop() {},
@@ -155,6 +159,55 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(done.text).toBe(expected)
     // The '\n\n' window separator was streamed live too (so the live panel matches the final text).
     expect(event.sender.send).toHaveBeenCalledWith(STREAM.trToken(initial.jobId), '\n\n')
+  })
+
+  it('retries an empty window once, then fails the job runtimeFailed (M7)', async () => {
+    // A window that stops CLEANLY but produces no text — a transiently empty window. The view
+    // must not complete "done" with a missing paragraph: retry once, then fail visibly.
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+        return ''
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('runtimeFailed')
+    expect(calls).toBe(2) // one retry, then the job fails
+  })
+
+  it('retries a TRUNCATED window (no clean stop) once, then fails the job — M6 in the view', async () => {
+    // A window that streams text but hits the output cap (no `stopping_word`/eos in the final
+    // frame) is a silent mid-sentence truncation — the view treats it as a failed window.
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        o.onToken?.('partial cut off')
+        o.onFinal?.({}) // LIMIT stop — neither a stopping word nor eos
+        return 'partial cut off'
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('runtimeFailed')
+    expect(calls).toBe(2)
   })
 
   it('busy-REJECTS a second start while one is in flight (never queued)', async () => {

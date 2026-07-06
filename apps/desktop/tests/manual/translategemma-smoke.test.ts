@@ -66,6 +66,13 @@ import {
 // to observe). Force an error (e.g. an over-context request) against the running b9849 server, dump
 // the raw stream bytes, and pin which shape it actually emits so the reader's error path is
 // pin-verified rather than defensive.
+//
+// TA-5 NOTE: the final frame's stop reason (`stopping_word` / `stopped_eos`) is now LOAD-BEARING —
+// both consumers reject a window whose final frame carries neither (a limit-stop truncation) as a
+// FAILED window (`isCleanStop`). No behavior change is expected here: a real translation of a
+// within-budget window ends on `<end_of_turn>`, so this smoke's windows should all print a non-empty
+// stop=. A window that instead prints stop="" (ran to the ~2,070-token cap) is exactly the
+// repetition-loop pathology TA-5 now catches — flag it if the calibration leg ever surfaces one.
 
 const ROOT = process.env.HILBERTRAUM_TRANSLATEGEMMA_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)

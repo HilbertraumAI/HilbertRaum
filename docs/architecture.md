@@ -1629,6 +1629,35 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     `tests/unit/translation-completion.test.ts` drives the reader directly (scripted `ReadableStream`:
     mid-line splits, CRLF, no-trailing-newline flush, terminal→`onFinal`, both error shapes, M2/L1/L4).
 
+- **TA-5 — limit-stop detection + view-job empty-window retry (translation audit fix wave,
+  2026-07-06; findings M6/M7 + test-gap #4).** The final frame's stop reason is now LOAD-BEARING for
+  both translation consumers, so an output-limit truncation can no longer masquerade as a clean window.
+  - **M6 (limit-stop detection).** The final frame's stop reason was surfaced only as `stoppingWord`
+    via `onFinal`, and NEITHER real consumer passed `onFinal` — any non-empty reply counted as a clean
+    window, so a greedy-decode repetition loop (the classic temperature-0 MT pathology) or a token-dense
+    window running to the ~2,070-token cap was stitched mid-sentence into the persisted document
+    silently. `CompletionFinal` gained `stoppedEos` and a shared `isCleanStop(final)` helper (both next
+    to it in `completion.ts`): a window is clean iff its final frame carries a non-empty `stopping_word`
+    OR the eos flag. Both consumers now thread `onFinal` and reject a non-clean (limit) window as a
+    FAILED attempt — the doc-task `translateWithRetry` folds it into the existing retry-then-mark path
+    (empty OR truncated → marked window), so `onFinal` threading (the smaller diff, keeps the smoke's
+    runtime-layer consumer working) was preferred over resolving `{text, final}`.
+  - **M7 (view-job empty/truncated-window retry).** The doc-task's retry-then-mark policy lived only in
+    the doc-task handler; the view loop (`jobs.ts`) accepted whatever each `translate()` resolved, so one
+    transiently empty (or, post-M6, truncated) window in a multi-window paste completed "done" with a
+    silently missing/cut paragraph. The view loop now retries such a window ONCE and, if it still fails,
+    fails the whole job with the existing `runtimeFailed` shape — the interactive view surfaces a visible
+    failure rather than inventing a partial-result UI. The genuinely-empty-INPUT fast path is unchanged
+    (rejected `badRequest` at start).
+  - **Test-gap #4 (timeout ≠ cancel).** A per-request timeout aborts the COMBINED signal with a
+    `TimeoutError` while the task's own signal stays unaborted, so `isAbortError(err, taskSignal)` is
+    false and the window is retried-then-failed (never mistaken for a user cancel). This hung on the
+    abort reason's *name* and was unpinned; `doctasks-translation.test.ts` now pins it (a `TimeoutError`
+    single-window run → 2 calls → task fails friendly, not `cancelled`). Also added: the M6 marked-window
+    case (doc-task) and empty/truncated-window `runtimeFailed` cases (`translate-ipc.test.ts`, the view),
+    plus `isCleanStop`/`stopped_eos` unit coverage. The manual smoke's header notes `stopping_word` is
+    now load-bearing (no behavior change expected — a real within-budget window ends on `<end_of_turn>`).
+
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
   (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
   state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A

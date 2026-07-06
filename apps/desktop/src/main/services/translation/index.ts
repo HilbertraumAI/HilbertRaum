@@ -8,6 +8,8 @@ import type { TranslateOptions } from './runtime'
 
 export { TranslationRuntime } from './runtime'
 export type { TranslateOptions } from './runtime'
+export { isCleanStop } from './completion'
+export type { CompletionFinal } from './completion'
 export { createSelectedTranslator } from './factory'
 export type { TranslationModelInfo, TranslatorSelectionDeps } from './factory'
 export {
