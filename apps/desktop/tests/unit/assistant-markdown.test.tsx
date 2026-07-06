@@ -66,6 +66,44 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.querySelector('.katex .frac-line')).not.toBeNull()
   })
 
+  it('renders LaTeX-style \\[ … \\] display math (the form local models actually emit)', () => {
+    // Regression: remark-math only parses $/$$ delimiters, so model-emitted \[ … \] silently
+    // degraded to literal "[ … ]" (commonmark ate the backslashes). AssistantMarkdown normalizes
+    // bracket delimiters to $$ before Streamdown.
+    const { container } = render(
+      <AssistantMarkdown
+        text={'The series:\n\n\\[ \\pi = 4 \\sum_{k=0}^{\\infty} \\frac{(-1)^k}{2k+1} \\]\n\nconverges.'}
+      />
+    )
+    expect(container.querySelector('.katex'), 'expected \\[ … \\] to typeset').not.toBeNull()
+    expect(
+      container.querySelector('.katex-display'),
+      'own-line \\[ … \\] should be DISPLAY math'
+    ).not.toBeNull()
+  })
+
+  it('renders LaTeX-style \\( … \\) inline math', () => {
+    const { container } = render(
+      <AssistantMarkdown text={'Einstein: \\( E = mc^2 \\) obviously.'} />
+    )
+    expect(container.querySelector('.katex'), 'expected \\( … \\) to typeset').not.toBeNull()
+    expect(container.querySelector('.katex-display')).toBeNull() // inline, not display
+  })
+
+  it('does NOT convert bracket delimiters inside code', () => {
+    const { container } = render(
+      <AssistantMarkdown text={'```\n\\[ \\pi \\]\n```\n\nand inline `\\( x \\)` too'} />
+    )
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.querySelector('code')?.textContent).toContain('\\[ \\pi \\]')
+  })
+
+  it('leaves dollar prose alone (single $ is not math)', () => {
+    const { container } = render(<AssistantMarkdown text={'costs $5 and $10 respectively'} />)
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('$5 and $10')
+  })
+
   it('the installed katex package is a single, deduped version', async () => {
     // Filesystem walk mirroring node resolution (@streamdown/math and rehype-katex are
     // ESM-only, so require.resolve cannot chain through them). The CSS/fonts come from the

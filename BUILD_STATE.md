@@ -6,6 +6,16 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-07-06 — **KaTeX fix: LaTeX-style `\[ … \]` / `\( … \)` delimiters now render (branch `mkg2`).**
+Field report: math didn't render in regular chat — the local model emits LaTeX bracket delimiters, but
+remark-math (via `@streamdown/math`, `singleDollarTextMath: false`) parses ONLY `$$…$$`; commonmark then ate
+the backslashes, leaving literal "[ … ]". `normalizeMathDelimiters` in `Transcript.tsx` now converts brackets
+→ `$$` before Streamdown (line-anchored `\[…\]` → fenced `$$\n…\n$$` = display; mid-sentence / `\(…\)` →
+inline), skipping fenced blocks + inline code spans. Single-`$` stays off ("$5 and $10" prose is safe —
+test-pinned). One O(n) pass per flush, same class as `parseIncompleteMarkdown`; unclosed `\[ …` stays literal
+until its `\]` streams in. The wrong "default delimiters include `\(…\)`" comment on `mdPlugins` corrected.
++4 tests in `assistant-markdown.test.tsx` (display, inline, code-stays-verbatim, dollar-prose)._
+
 _2026-07-06 — **PR review round: rebase onto master + both blockers fixed + scope split (branch `mkg2`).**
 The Streamdown/Retry-all/deep-index PR was rebased onto current master (post-#15/#16/#17/#18 + the TA/FA
 translation waves). The one real conflict — `Transcript.tsx`'s streaming block — resolved as

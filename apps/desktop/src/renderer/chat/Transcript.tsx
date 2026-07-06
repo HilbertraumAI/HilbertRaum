@@ -499,9 +499,40 @@ function stripMarkdown(s: string): string {
 }
 
 // The math plugin (KaTeX) is module-level so its reference is stable across renders — a fresh
-// object each render would defeat Streamdown's block memoization. Default delimiters: $$…$$ block
-// and \(…\)/\[…\] — NOT single `$` (avoids mangling prose like "$5 and $10" as math).
+// object each render would defeat Streamdown's block memoization. remark-math parses ONLY
+// $$…$$ — NOT single `$` (deliberately off: it mangles prose like "$5 and $10" as math) and NOT
+// the LaTeX-style \(…\)/\[…\] delimiters; those are normalized to $$ by
+// `normalizeMathDelimiters` below before the text reaches Streamdown.
 const mdPlugins = { math }
+
+// Local models emit LaTeX-style `\[ … \]` / `\( … \)` math at least as often as the `$$` form,
+// but remark-math parses only `$`-delimiters — bracket math silently degraded to literal
+// "[ … ]" text (commonmark eats the backslashes as escapes). Normalize brackets → `$$…$$`
+// before Streamdown, SKIPPING fenced blocks and inline code spans so a code sample mentioning
+// `\[x\]` stays verbatim. `\[ … \]` on its own lines becomes flow math (display); `\( … \)`
+// becomes `$$…$$` inline math text (single-`$` stays off, so dollar prose is still safe).
+// One O(n) pass per text change — the same whole-buffer class as parseIncompleteMarkdown; an
+// unclosed `\[ …` mid-stream stays literal until its `\]` arrives, then converts on that flush.
+// ponytail: regex-over-segments, not a markdown AST walk — revisit only if a real transcript
+// shows a false positive (e.g. prose containing a literal backslash-bracket pair).
+function normalizeMathDelimiters(text: string): string {
+  if (!text.includes('\\[') && !text.includes('\\(')) return text
+  // Capturing split: even indices are prose, odd indices are code (fences first, then spans).
+  const parts = text.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/)
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i]!
+      // Line-anchored \[ … \] first: micromark's DISPLAY (flow) math needs `$$` on its own
+      // lines, so a block-shaped bracket pair becomes the fence form…
+      .replace(
+        /^[ \t]*\\\[([\s\S]+?)\\\][ \t]*$/gm,
+        (_m, inner: string) => `$$\n${inner.trim()}\n$$`
+      )
+      // …and anything left (mid-sentence brackets, \( … \)) becomes inline math text.
+      .replace(/\\\[([\s\S]+?)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
+      .replace(/\\\(([\s\S]+?)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
+  }
+  return parts.join('')
+}
 
 // Pare Streamdown's default rehype chain (raw → sanitize → harden) down to just `sanitize`:
 //  • drop `rehype-raw` so model-emitted HTML is NEVER parsed into live elements — it renders as
@@ -566,7 +597,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
       linkSafety={{ enabled: false }}
       components={mdComponents}
     >
-      {text}
+      {normalizeMathDelimiters(text)}
     </Streamdown>
   )
 })
