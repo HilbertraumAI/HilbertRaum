@@ -178,7 +178,7 @@ Order rationale: IA-1 dissolves the worst user journey (permanent refusal); IA-2
 | IA-2 | T-1, T-11 | **DONE** | `fix(invoice-audit): IA-2` (see git log / BUILD_STATE) — bumped `INVOICE_EXTRACTOR_VERSION` 11→12 + `BANK_EXTRACTOR_VERSION` 9→10 |
 | IA-3 | T-2, T-3, T-4, T-5, T-6, T-7, T-8, T-10 | **DONE** | `fix(invoice-audit): IA-3` (see git log / BUILD_STATE) — bumped `INVOICE_EXTRACTOR_VERSION` 12→13 + `BANK_EXTRACTOR_VERSION` 10→11 (T-6 shared) |
 | IA-4 | P-3 | **DONE** | `fix(invoice-audit): IA-4` (see git log / BUILD_STATE) — NO version bump (answer-layer only) |
-| IA-5 | P-4 | open | — |
+| IA-5 | P-4 | **DONE** | `fix(invoice-audit): IA-5` (see git log / BUILD_STATE) — NO version bump (reader-construction/perf only) |
 | IA-6 | T-9, P-5, P-6, P-7, P-8 | open | — |
 | IA-7 | D-3, D-4, D-5 + close-out | open | — |
 
@@ -326,6 +326,42 @@ Work through the findings in file order, each with its pinning test (shapes are 
 4. Sanity-check lock hold time: the point of the fix is the per-document lock is no longer held across a full re-parse.
 
 **Done when:** zero segment-reader calls on non-format questions, pinned by test; ritual complete.
+
+**Disposition (SHIPPED):**
+- **P-4 — FIXED (bank-mirror option, not a thunk).** `INVOICE_RUN_CONFIG.buildDownstreamReader`
+  (`invoice-run.ts`) now binds the bank's lazy `buildReadDocumentChunks(db, new Set([documentId]))` —
+  the FIRST option in the finding. **Decision — mirror-bank over lazy-thunk:** the two domains now share
+  one binding (the A1 "incidental difference … left to a follow-up" is closed, not merely worked around),
+  and because every invoice downstream tool takes structured rows and reads NO chunk, the reader is inert
+  either way — the sync chunk-table reader is strictly simpler than a memoized thunk and matches the
+  proven bank path. The eager `await resolveDocumentReader(...)` (a full decrypt + PDF-parse + OCR-page
+  materialize via the injected `readDocumentSegments`, whose result was discarded) is gone from the
+  downstream path. The `resolveDocumentReader` import in `invoice-run.ts` was dropped (now unused there).
+- **EXTRACTION path untouched (faithfulness preserved).** `resolveDocumentReader` still backs the two
+  paths that legitimately read segments — `runDomainExtractionInner` (`run.ts:357`) and the staleness
+  re-extract (`reExtract` → `runInvoiceExtraction`, `run.ts:1300`). IA-5 changes ONLY the downstream
+  reader consumed at `run.ts:488`. Verified by the R3 stale-re-extract tests staying green (a stale
+  invoice still re-extracts from faithful segments; a collapsed chunk still can't fabricate 2 line items).
+- **Downstream tools verified non-reading.** The only `ctx.readDocumentChunks` call in `tools/invoice.ts`
+  is inside `extract_invoice` (`:1035`) — an EXTRACTION tool, not downstream. `validate_invoice_totals`
+  (`:1169`) and all three exporters — `export_invoice_csv` (`:1213`), `export_invoice_json` (`:1329`),
+  `export_invoice_xml` (`:1343`) — take structured input and never touch the reader, so the lazy chunk
+  reader satisfies every downstream tool.
+- **A1 record updated.** The `buildDownstreamReader` config-field doc comment (`run.ts:306-314`) was
+  rewritten: both domains now bind the same lazy reader; the note records that IA-5 closed the A1
+  follow-up and that the EXTRACTION path stays on `resolveDocumentReader`.
+- **NO version bump.** IA-5 is reader-construction/perf — it changes no persisted extraction output — so
+  `INVOICE_EXTRACTOR_VERSION` (13) and `BANK_EXTRACTOR_VERSION` (11) are UNCHANGED and the extractor
+  snapshot was not regenerated.
+- **Lock-hold sanity.** The per-document lock (held by the analysis handler / `prepareInvoiceRun`) no
+  longer wraps a full re-parse on the deterministic answer path — the downstream reader is now sync,
+  no-I/O, so a queued run on the same document is not blocked behind a discarded decrypt+parse.
+- **Tests:** `skills-invoice.test.ts` +2 (new `IA-5 — the invoice downstream reader does no eager
+  segment read` describe): extract a FRESH invoice at the current version (legit one read), then a second
+  deterministic template question (Validate) and a JSON export, each with a COUNTING `readDocumentSegments`
+  injected — both assert **0** downstream segment reads (red before the fix = 1 eager discarded read via
+  `resolveDocumentReader`; green after). The audit-P-1 `countPrepares` row-read test and the R3
+  stale/fresh/preloaded lifecycle tests stay green. **Full suite 3612/47** (was 3610; +2), typecheck green.
 
 ### IA-6 — LOW hardening batch (T-9, P-5, P-6, P-7, P-8)
 

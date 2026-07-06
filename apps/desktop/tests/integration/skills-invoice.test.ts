@@ -613,3 +613,71 @@ describe('R3 — downstream invoice runs re-extract a STALE invoice before servi
     expect(items).toBe(2) // faithful segments — the collapsed chunk fallback would give 0
   })
 })
+
+// IA-5 (audit P-4) — the invoice DOWNSTREAM reader is lazy: a deterministic template/grounded-data
+// question on a FRESH invoice re-parses NOTHING. The four downstream tools (`validate_invoice_totals`
+// + the three exporters) take structured rows and never read a chunk, so `buildDownstreamReader` must
+// bind the sync chunk-table reader — NOT the eager `resolveDocumentReader`, which awaited a full
+// decrypt + PDF-parse + OCR-page materialize (via the injected `readDocumentSegments`) and threw the
+// result away, all under the per-document lock. A counting segment reader pins that waste at ZERO.
+describe('IA-5 — the invoice downstream reader does no eager segment read (audit P-4)', () => {
+  const skillInstallId = 'app:invoice'
+  const SEGMENTS: DocumentChunkRead[] = [{ text: INVOICE_TEXT, page: 1, index: 0 }]
+
+  /** Extract a FRESH invoice (this legitimately reads segments once), then hand back a fresh reader. */
+  async function seedFreshInvoice(db: Db, docId: string, reader: () => Promise<DocumentChunkRead[]>): Promise<void> {
+    const res = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: reader })
+    expect(res.ok).toBe(true)
+    expect(res.lineItemCount).toBe(2)
+    // Fresh at the current version — the downstream run must NOT re-extract (staleness path stays honest).
+    expect(isInvoiceStale(db, res.invoiceId!)).toBe(false)
+  }
+
+  it('Validate on a fresh invoice makes ZERO downstream segment reads', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT.replace(/\n/g, ' '))
+    let segmentReads = 0
+    const countingReader = async (): Promise<DocumentChunkRead[]> => {
+      segmentReads++
+      return SEGMENTS
+    }
+    await seedFreshInvoice(db, docId, countingReader)
+
+    // The deterministic template/grounded-data question: fresh invoice → no re-extract; the structured-
+    // input validate tool reads no chunk. Red before IA-5 (1 eager, discarded downstream segment read
+    // via `resolveDocumentReader`); green after (the lazy chunk reader never touches the segment reader).
+    segmentReads = 0
+    const { audit } = capturingAudit()
+    const res = await runInvoiceTotalsValidation(db, { skillInstallId, documentId: docId }, { audit, readDocumentSegments: countingReader })
+    expect(res.ok).toBe(true)
+    expect(segmentReads).toBe(0)
+  })
+
+  it('JSON export on a fresh invoice makes ZERO downstream segment reads (exporters read rows, not chunks)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT.replace(/\n/g, ' '))
+    let segmentReads = 0
+    const countingReader = async (): Promise<DocumentChunkRead[]> => {
+      segmentReads++
+      return SEGMENTS
+    }
+    await seedFreshInvoice(db, docId, countingReader)
+
+    segmentReads = 0
+    const { audit } = capturingAudit()
+    const res = await runInvoiceFileExport(
+      db,
+      { skillInstallId, documentId: docId },
+      {
+        audit,
+        confirmed: true,
+        readDocumentSegments: countingReader,
+        saveTextFile: async () => true
+      },
+      { toolName: 'export_invoice_json', defaultFileName: 'invoice.json' }
+    )
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(2)
+    expect(segmentReads).toBe(0)
+  })
+})

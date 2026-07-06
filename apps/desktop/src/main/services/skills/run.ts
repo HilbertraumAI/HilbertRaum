@@ -305,11 +305,13 @@ export interface DomainRunConfig<TOutput, TLoaded> {
   toToolInput(loaded: TLoaded): unknown
   /**
    * Build the DOWNSTREAM-run ctx reader. The downstream tools take structured rows and never read
-   * chunks, so this reader is inert — but the two domains construct it differently (bank binds the sync
-   * chunk-table reader; invoice awaits the segment-preferring `resolveDocumentReader`, doing an eager,
-   * discarded segment read on the real IPC path). A1 PRESERVES that incidental difference EXACTLY rather
-   * than fixing it inside a refactor (the query/call-count is pinned by tests); unifying the two is a
-   * behavior change left to a follow-up. See BUILD_STATE A1.
+   * chunks, so this reader is inert. Both domains now bind the SAME lazy `buildReadDocumentChunks`
+   * (sync, no I/O). A1 originally preserved an incidental difference here — invoice awaited the
+   * segment-preferring `resolveDocumentReader`, doing an eager, discarded decrypt+parse read on the real
+   * IPC path — and left unifying it "to a follow-up"; IA-5 (audit P-4) closed that follow-up, because
+   * the eager read dominated the deterministic answer path and held the per-document lock across a full
+   * re-parse. The EXTRACTION path (`resolveDocumentReader` at :357 / the staleness re-extract) is
+   * unchanged: those legitimately read segments.
    */
   buildDownstreamReader(db: Db, documentId: string, deps: DomainRunDeps): Promise<SkillToolContext['readDocumentChunks']>
   messages: DomainRunMessages

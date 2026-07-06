@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto'
 import type { Db } from '../db'
 import type { DocumentChunkRead, SkillToolAudit } from '../../../shared/types'
 import {
+  buildReadDocumentChunks,
   deleteInvoicesForDocument,
   domainPersistFailure,
   prepareDomainRun,
-  resolveDocumentReader,
   runDomainExtractionInner,
   runDomainFileExport,
   type DomainRunConfig,
@@ -282,10 +282,15 @@ const INVOICE_RUN_CONFIG: DomainRunConfig<ExtractInvoiceOutput, InvoiceInput> = 
   load: loadInvoice,
   // The invoice is already the strict tool-input shape (`InvoiceInput`) — hand it to the tool unchanged.
   toToolInput: (invoice) => invoice,
-  // Invoice downstream prefix builds the segment-preferring `resolveDocumentReader` (an EAGER, discarded
-  // segment read on the real IPC path — inert for structured-input tools). PRESERVED as-is by A1 (this
-  // is the one incidental construction difference vs bank's lazy chunk reader; see BUILD_STATE A1).
-  buildDownstreamReader: (db, documentId, deps) => resolveDocumentReader(db, documentId, deps),
+  // Invoice downstream prefix binds the SYNC chunk-table reader (lazy, no I/O — inert for the
+  // structured-input downstream tools: `validate_invoice_totals` + the three exporters all take rows and
+  // never read a chunk). IA-5 (audit P-4) unified this with the bank binding: it USED to await the
+  // segment-preferring `resolveDocumentReader`, an EAGER decrypt + PDF-parse + OCR-page materialize on the
+  // real IPC path whose result was discarded — a full re-parse held under the per-document lock on every
+  // deterministic answer question. The EXTRACTION path (run.ts:357) and the staleness re-extract keep
+  // `resolveDocumentReader` untouched; only this downstream reader is now lazy. (Formerly the A1 "left to
+  // a follow-up" incidental difference; now closed.)
+  buildDownstreamReader: async (db, documentId) => buildReadDocumentChunks(db, new Set([documentId])),
   messages: {
     persistFailed: 'This invoice could not be saved. Nothing was changed.',
     needsExtraction: 'Read the invoice first, then run this tool.',
