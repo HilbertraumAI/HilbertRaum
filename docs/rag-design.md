@@ -1256,6 +1256,24 @@ keeping the full provenance persisted avoids a persisted-data semantics change (
 to the PreviewModal and future features). FE-D in the same pass wired `aria-controls`/`role="region"` onto
 this disclosure (and the live Thinking + SummaryMarker disclosures); see design-guidelines §11.3.
 
+**Coverage fraction on the relevance path — AS BUILT (beta-feedback-2026-07 Phase 5, #24, D72).** A beta
+user couldn't tell, after an ordinary "ask my documents" answer, how much of the document it drew on — the
+relevance path stamped **no** `CoverageInfo`, so the meter showed only the flat honesty label *"Based on the
+most relevant passages — not the whole document."* The relevance branch of `generateGroundedAnswer`
+([rag/index.ts](../apps/desktop/src/main/services/rag/index.ts)) now stamps a **real `relevance` coverage**
+computed at the stamp site: `chunksCovered` = the **distinct cited chunks**, `chunksTotal` = **Σ
+`documentChunkCount` over the DISTINCT documents the retrieved chunks came from** (a single-doc scope → that
+one doc's section count; a multi-doc scope **sums** across the docs actually drawn on), `fullyChunked` = true
+iff every such doc is `fully_chunked`. `CoverageMeter`'s relevance branch renders the fraction
+(`coverage.relevance.counted` — EN *"Based on {covered} of {total} sections"* / DE *"Basiert auf {covered} von
+{total} Abschnitten"*) **only when `chunksTotal > 0`**; a NULL-coverage legacy turn (the `chunksCovered:0,
+chunksTotal:0` fallback [Transcript](../apps/desktop/src/renderer/chat/Transcript.tsx) passes) keeps the flat
+`coverage.relevance` label **byte-identical**. **`mode` stays `relevance`** — the multi-doc case is kept honest
+by **wording, not math** (never "whole document" from this path); the §14.5 wording gate and the
+tree/capped/extract meters are untouched. **Sections (chunks) stays the denominator** — page numbers keep
+riding on the citations/source cards. An empty retrieval (`NO_DOCUMENT_CONTEXT`/`REINDEX_NEEDED`) returns before
+the persist, so it still records **no** coverage.
+
 ### 14.5 Structured extract-then-aggregate + the task router (plan §4.2/§3.3/§4.4, H7/H1/M3/M7)
 
 `list every X / how many` moves **off** top-k relevance onto a precomputed, provenance-backed SQL

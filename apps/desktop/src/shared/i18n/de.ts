@@ -531,6 +531,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.deepIndex.readyTitle':
     'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen können alles abdecken',
   'coverage.relevance': 'Basiert auf den relevantesten Passagen — nicht auf dem ganzen Dokument',
+  'coverage.relevance.counted': 'Basiert auf {covered} von {total} Abschnitten',
   'coverage.capped.whole': 'Deckt das ganze Dokument ab',
   'coverage.capped.beginning': 'Deckt den Anfang des Dokuments ab',
   'coverage.tree.whole': 'Deckt das ganze Dokument ab (tief indexiert)',

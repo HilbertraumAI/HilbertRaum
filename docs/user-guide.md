@@ -290,6 +290,9 @@ your files.
 4. Each answer carries **▸ Sources (N)** — click it to see the cited files, with
    page/section and the exact passage each citation came from. If the documents don't
    contain the answer, the app says so rather than guessing.
+   A short honesty line under the answer says how much it drew on — e.g. *"Based on 3 of
+   12 sections"* — so you can tell an answer rested on a few passages, not the whole
+   document. (For full-document coverage, build a deep index — see *Summaries* below.)
 
 **Ask only chosen documents.** Under the message box, a **📄 Answering from:** chip always shows
 what answers come from — the document's name when one file is in scope, **your whole library — N

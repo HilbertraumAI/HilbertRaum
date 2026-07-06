@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) DONE; Phases 5–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) DONE; Phases 6–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -251,9 +251,32 @@ reworded.
 **Done =** suite green, docs (`rag-design.md` scope section) + BUILD_STATE updated, commit
 references #26.
 
-## 8. Phase 5 — coverage statement on every grounded answer (#24)
+## 8. Phase 5 — coverage statement on every grounded answer (#24) ✅ DONE
 
 **Goal:** after a document-grounded answer the user can see what was actually consumed (D72).
+
+**Shipped (2026-07-07):** the relevance branch of `generateGroundedAnswer`
+([rag/index.ts](../apps/desktop/src/main/services/rag/index.ts)) now stamps a real `relevance`
+`CoverageInfo` (was `undefined` ⇒ persisted NULL) computed at the stamp site: `chunksCovered` = the
+**distinct cited chunks**, `chunksTotal` = **Σ `documentChunkCount` over the DISTINCT documents the
+retrieved chunks came from** (single-doc → that doc's total; multi-doc **sums** across the cited docs),
+`fullyChunked` = true iff every such doc is `fully_chunked` (new local `documentIsFullyChunked`
+helper). `CoverageMeter.breadthOf()`'s relevance branch renders the fraction (new key
+`coverage.relevance.counted` — EN **`Based on {covered} of {total} sections`** / DE **`Basiert auf
+{covered} von {total} Abschnitten`**, `{covered}/{total}` parity) **only when `chunksTotal > 0`**; a
+NULL/legacy turn (the `chunksCovered:0, chunksTotal:0` fallback `Transcript.tsx` passes) keeps the flat
+`coverage.relevance` label **byte-identical**. `mode` stays `relevance` (multi-doc honest via wording,
+never "whole document"); the whole-document/tree/capped/extract stamps + honesty gates are untouched; an
+empty retrieval still persists no coverage. Two `rag-skill-analysis.test.ts` assertions that pinned the
+old relevance⇒undefined behavior updated to `mode==='relevance'` (still proving no analysis handler
+fired). Tests: new `rag-relevance-coverage.test.ts` (+5: single-doc counts; `fullyChunked` false for a
+legacy doc; multi-doc SUMS over the DISTINCT cited docs only — a decoy doc's sections excluded;
+empty-retrieval persists no coverage; whole-document still stamps `capped`); `Coverage.test.tsx` (+3:
+counted fraction renders EN, NULL/legacy keeps the flat label, DE fraction forced via
+`UI_LANGUAGE_STORAGE_KEY` + asserted from the de catalog). Preview cases `coverage-line`/`-de` added
+(counted fraction + flat fallback; PNG deferred to CI/POSIX). Suite 3696/47, typecheck + build +
+preview:build green. Folded into `rag-design.md` §14.4 (D72 note); `user-guide.md` chat step gains the
+honesty-line note.
 
 - **Stamp:** in `generateGroundedAnswer`'s relevance branch (`rag/index.ts:1525-1542` →
   persist at `:1683-1691`), build `CoverageInfo{ mode:'relevance', chunksCovered: distinct

@@ -37,6 +37,18 @@ interface Breadth {
 function breadthOf(coverage: CoverageInfo): Breadth {
   const { mode, treeStatus, chunksCovered, chunksTotal } = coverage
   if (mode === 'relevance') {
+    // D72 (#24): a relevance answer now stamps real section counts, so show the fraction
+    // ("based on N of M sections"). A NULL-coverage legacy turn passes the `chunksCovered:0,
+    // chunksTotal:0` fallback (Transcript.tsx) → chunksTotal === 0 → keep the flat honesty
+    // label byte-identically. Multi-doc scopes stay honest via wording (never "whole document").
+    if (chunksTotal > 0) {
+      return {
+        tone: 'neutral',
+        icon: '◐',
+        textKey: 'coverage.relevance.counted',
+        params: { covered: chunksCovered, total: chunksTotal }
+      }
+    }
     return { tone: 'neutral', icon: '◐', textKey: 'coverage.relevance' }
   }
   if (mode === 'capped') {

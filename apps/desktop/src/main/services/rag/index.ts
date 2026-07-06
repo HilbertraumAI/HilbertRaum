@@ -80,6 +80,16 @@ export { buildGroundedDataPrompt, GROUNDED_DATA_RULES } from './grounded-data'
 // truncates excerpts. Same factor doctasks uses (SUMMARY_TOKENS_PER_WORD).
 const TOKENS_PER_WORD = 1.3
 
+/** True when the document is fully chunked (the whole document was indexed, no silent
+ *  truncation). NULL `fully_chunked` (legacy/truncated) → false. Mirrors `computeCoverage`
+ *  (skills/analysis/common.ts); used to keep the D72 relevance coverage fraction honest. */
+function documentIsFullyChunked(db: Db, documentId: string): boolean {
+  const row = db
+    .prepare('SELECT fully_chunked FROM documents WHERE id = ?')
+    .get(documentId) as { fully_chunked: string | null } | undefined
+  return row?.fully_chunked != null
+}
+
 /** Retrieval knobs, resolved from `AppSettings` (spec §7.8 defaults). */
 export interface RagRetrievalSettings {
   topKInitial: number
@@ -1539,6 +1549,25 @@ export async function generateGroundedAnswer(
     const r = await retrieve(db, embedder, question, fitted, scopeArg, opts.reranker, opts.signal)
     chunks = r.chunks
     citations = r.citations
+    // D72 (#24): stamp a real `relevance` CoverageInfo so every grounded answer can show a
+    // coverage fraction ("based on N of M sections") — the relevance path used to leave this
+    // undefined ⇒ persisted NULL ⇒ only the flat honesty label. `chunksCovered` = the distinct
+    // chunks we actually cited; `chunksTotal` = the section count of the DISTINCT documents those
+    // chunks came from (single-doc scope → that doc's total; a multi-doc scope SUMS across the
+    // docs actually drawn on — kept honest by wording, not math: `mode` stays 'relevance', never
+    // "whole document"). `fullyChunked` reflects those docs so the fraction never overclaims. An
+    // empty retrieval (chunks.length === 0) returns the NO_DOCUMENT_CONTEXT/REINDEX answer below
+    // WITHOUT persisting coverage, so we skip the compute on that path.
+    if (chunks.length > 0) {
+      const docIds = [...new Set(chunks.map((c) => c.documentId))]
+      const distinctCitedChunks = new Set(chunks.map((c) => c.chunkId)).size
+      coverage = {
+        mode: 'relevance',
+        chunksCovered: distinctCitedChunks,
+        chunksTotal: docIds.reduce((sum, id) => sum + documentChunkCount(db, id), 0),
+        fullyChunked: docIds.every((id) => documentIsFullyChunked(db, id))
+      }
+    }
   }
 
   if (chunks.length === 0) {
@@ -1686,7 +1715,10 @@ export async function generateGroundedAnswer(
     content,
     citations,
     // Whole-document answers stamp honest `capped` coverage (covers the whole document / the
-    // beginning when truncated); the relevance path leaves it undefined ⇒ NULL ⇒ relevance badge.
+    // beginning when truncated); the relevance path stamps a real `relevance` coverage with the
+    // cited/total section counts (D72, #24) so the badge shows a fraction. It is undefined ⇒ NULL
+    // only when no branch set it (never on a persisted grounded turn — an empty retrieval returns
+    // above), and Transcript.tsx renders a NULL turn with the flat relevance label (legacy fallback).
     coverage,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     // Auto-fire provenance rides with the stamp (S13c) — only when the fence was placed (§22-A5).

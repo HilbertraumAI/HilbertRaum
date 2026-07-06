@@ -522,6 +522,7 @@ export const en = {
   'docs.deepIndex.readyTitle':
     'A whole-document deep index is ready — summaries can cover everything',
   'coverage.relevance': 'Based on the most relevant passages — not the whole document',
+  'coverage.relevance.counted': 'Based on {covered} of {total} sections',
   'coverage.capped.whole': 'Covers the whole document',
   'coverage.capped.beginning': 'Covers the beginning of the document',
   'coverage.tree.whole': 'Covers the whole document (deeply indexed)',

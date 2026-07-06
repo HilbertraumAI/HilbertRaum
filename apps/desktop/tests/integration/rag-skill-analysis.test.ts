@@ -251,8 +251,9 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     )
     const msg = result as Message
 
-    // The analysis handler did NOT fire: no extract coverage, no bank figures — the normal path ran.
-    expect(msg.coverage).toBeUndefined()
+    // The analysis handler did NOT fire: the relevance path ran (D72 stamps `relevance` coverage —
+    // NOT the extract/whole-document breadth an analysis handler would stamp), and no bank figures.
+    expect(msg.coverage?.mode).toBe('relevance')
     expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
     // And no whole-document tool was auto-run.
     const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
@@ -959,7 +960,9 @@ describe('askDocuments — SEC-1 end-to-end (user kind:tool skill never reaches 
     expect(h.runtime.calls).toBe(1)
     expect(msg.content).toContain('Model answer.')
     expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
-    expect(msg.coverage).toBeUndefined() // no extract/whole-document breadth claim
+    // The relevance path stamps `relevance` coverage (D72) — never the extract/whole-document breadth
+    // an analysis handler would claim.
+    expect(msg.coverage?.mode).toBe('relevance')
     const lastTurn = h.runtime.lastMessages[h.runtime.lastMessages.length - 1]
     expect(lastTurn.content).not.toContain('Bank statement (JSON):')
 

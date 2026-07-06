@@ -10,6 +10,7 @@ import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../i18n'
 import { ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
+import { CoverageMeter } from '../components'
 import { ScopePopover } from '../chat/ScopePopover'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen } from '../screens/ModelsScreen'
@@ -239,11 +240,25 @@ const CASES: Record<string, { label: string; node: JSX.Element }> = {
         ))}
       </div>
     )
+  },
+  // Beta-feedback Phase 5 (#24/D72): the coverage line under a grounded answer. A relevance answer
+  // now stamps real section counts, so it reads "Based on N of M sections" (top); a NULL-coverage
+  // legacy turn keeps the flat honesty label byte-identically (bottom). The `-de` case renders in
+  // German ("Basiert auf N von M Abschnitten"). PNG capture deferred to CI/POSIX (Windows dev box).
+  'coverage-line': {
+    label: 'Answer footer — coverage line (counted relevance fraction + flat legacy fallback)',
+    node: (
+      <div style={{ width: 480, display: 'flex', flexDirection: 'column', gap: 12, padding: 12 }}>
+        <CoverageMeter coverage={{ mode: 'relevance', chunksCovered: 3, chunksTotal: 12, fullyChunked: true }} />
+        <CoverageMeter coverage={{ mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }} />
+      </div>
+    )
   }
 }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
 CASES['scope-chip-de'] = { ...CASES['scope-chip'], label: `${CASES['scope-chip'].label} — DE` }
+CASES['coverage-line-de'] = { ...CASES['coverage-line'], label: `${CASES['coverage-line'].label} — DE` }
 
 const params = new URLSearchParams(location.search)
 const caseId = params.get('case') ?? 'documents'
