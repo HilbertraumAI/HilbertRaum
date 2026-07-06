@@ -244,6 +244,19 @@ Spec §7.7 chunk metadata maps onto the `chunks` table (spec §8) like so:
 The `[S1] [S2] …` retrieval labels are **not** stored here — they are assigned per query at
 retrieval time.
 
+> **Display-time citation label (beta-feedback plan Phase 1, issue #28, D68).** The `S{n}` marker
+> is a **machine contract**: it is baked into `GROUNDING_RULES` (the model is told to emit `[S1]`
+> inline), assigned at the label sites in `rag/index.ts` (and `analysis/coverage.ts`), and
+> persisted in a message's `citations_json` (`Citation.label`). None of that is ever localized. But
+> "S" reads as "S." = *Seite* (page) to a German user when it actually indexes a *source* (Quelle),
+> so the marker is **relabelled at render only**: a German UI shows `Q{n}`, an English UI keeps
+> `S{n}` (the rewrite is the identity). Two renderer sites do it, both off the `chat.sources.marker`
+> i18n key: `SourcesDisclosure` (source-card label, via `formatCitationLabel`) and
+> `displayMap.localizeServerCopy` (inline body markers `[S(\d+)] → [Q$1]`, skipping fenced/inline
+> code so a literal `[S1]` in quoted code stays verbatim), which `Transcript.tsx` calls for both
+> streaming and persisted turns. Persisted data and the prompt contract are untouched — switching
+> language re-renders old turns' markers with zero migration.
+
 ---
 
 ## 4. IPC surface (Phase 4)

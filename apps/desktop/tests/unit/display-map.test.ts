@@ -3,10 +3,15 @@ import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import {
   DISPLAY_MAP_KEYS,
   INTERPOLATED_MAP_KEYS,
+  formatCitationLabel,
   localizeServerCopy,
   unsupportedTypeExt
 } from '../../src/renderer/lib/displayMap'
-import { NO_DOCUMENT_CONTEXT_ANSWER, REINDEX_NEEDED_ANSWER } from '../../src/main/services/rag'
+import {
+  GROUNDED_SYSTEM_PROMPT,
+  NO_DOCUMENT_CONTEXT_ANSWER,
+  REINDEX_NEEDED_ANSWER
+} from '../../src/main/services/rag'
 import { DOC_TASK_BUSY_MESSAGE } from '../../src/shared/types'
 
 // Phase 41 — the D-L4 display map: persisted main-process strings are canonical
@@ -112,6 +117,56 @@ describe('localizeServerCopy (D-L4)', () => {
     for (const key of persistCanonical) {
       expect(localizeServerCopy(tDe, t('en', key)), key).toBe(t('de', key))
     }
+  })
+
+  // ---- Citation markers (#28 / beta-feedback plan Phase 1, D68) ----
+  // The inline `[S{n}]` marker is a machine contract (baked into the prompt, persisted in
+  // citations_json). It is relabelled at DISPLAY time only: DE shows [Q{n}] ("Quelle"), EN keeps
+  // [S{n}] byte-identically. A literal marker inside code stays verbatim (mirrors the math guard).
+
+  it('rewrites inline [S{n}] body markers to [Q{n}] in a German UI', () => {
+    expect(localizeServerCopy(tDe, 'See [S1] and [S2] for the clause.')).toBe(
+      'See [Q1] and [Q2] for the clause.'
+    )
+  })
+
+  it('leaves inline citation markers byte-identical in an English UI', () => {
+    const raw = 'See [S1] and [S2] for the clause.'
+    expect(localizeServerCopy(tEn, raw)).toBe(raw)
+  })
+
+  it('keeps a literal [S1] inside an inline code span verbatim in a German UI', () => {
+    // The code span is not prose — its `[S1]` is a literal, not a citation, so it must not move.
+    const raw = 'Prose cites [S1], but the token `[S1]` in code stays literal.'
+    expect(localizeServerCopy(tDe, raw)).toBe(
+      'Prose cites [Q1], but the token `[S1]` in code stays literal.'
+    )
+  })
+
+  it('keeps a literal [S1] inside a fenced code block verbatim in a German UI', () => {
+    const raw = 'Real cite [S2].\n```\nlog[S1] = value\n```\nAfter [S3].'
+    expect(localizeServerCopy(tDe, raw)).toBe('Real cite [Q2].\n```\nlog[S1] = value\n```\nAfter [Q3].')
+  })
+
+  it('does not touch bracketed prose that is not an S-marker (needs digits)', () => {
+    expect(localizeServerCopy(tDe, 'The [START] tag and [Section] head.')).toBe(
+      'The [START] tag and [Section] head.'
+    )
+  })
+
+  it('formatCitationLabel maps the stored S{n} label per language; identity in EN', () => {
+    expect(formatCitationLabel(tDe, 'S1')).toBe('Q1')
+    expect(formatCitationLabel(tDe, 'S12')).toBe('Q12')
+    expect(formatCitationLabel(tEn, 'S1')).toBe('S1')
+    // A non-standard label passes through unchanged (defensive).
+    expect(formatCitationLabel(tDe, 'weird')).toBe('weird')
+  })
+
+  it('D68 machine contract: the grounded system prompt still instructs the model to emit [S1]', () => {
+    // The display rename must NOT leak into the prompt — the model still emits the S-marker, and
+    // the renderer relabels it. This pins that GROUNDING_RULES is untouched by Phase 1.
+    expect(GROUNDED_SYSTEM_PROMPT).toContain('[S1]')
+    expect(GROUNDED_SYSTEM_PROMPT).not.toContain('[Q1]')
   })
 
   it('covers the interpolated persist-canonical set (handled by regex, not exact match)', () => {

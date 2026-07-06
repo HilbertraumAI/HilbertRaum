@@ -321,6 +321,10 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Chat: sources ----
   'chat.sources.toggle': 'Quellen ({count})',
+  // Zitatmarker, NUR zur Anzeige (#28 / Beta-Feedback-Plan Phase 1, D68): intern bleibt der Index
+  // stabil `S{n}` (im Prompt-Vertrag und in citations_json); „S“ läse sich aber als „Seite“, daher
+  // zeigt die DE-Oberfläche „Q{n}“ (Quelle).
+  'chat.sources.marker': 'Q{n}',
   'chat.sources.page': 'Seite {page}',
   // Ganz-Dokument-Provenienz (Phase 5, FE-B / F11): die „Quellen“ einer Baum-/Kapp-/
   // Extrakt-Antwort sind die genutzten Dokument-Abschnitte (Herkunft), keine 1:1 zitierten

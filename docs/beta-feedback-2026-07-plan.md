@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — no phase implemented yet.**
+_Status: **WORKING PAPER — Phase 1 (#28, DE citation labels) DONE; Phases 2–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -94,10 +94,20 @@ locate pass.
 
 ---
 
-## 4. Phase 1 — German citation labels (#28)
+## 4. Phase 1 — German citation labels (#28) ✅ DONE
 
 **Goal:** DE users see `Q1/Q2` ("Quelle"), EN keeps `S1` — with zero change to persisted data
 or the model contract (D68).
+
+**Shipped:** new `chat.sources.marker` i18n key (EN `S{n}` / DE `Q{n}`); `formatCitationLabel`
+(displayMap) relabels the `SourcesDisclosure` source-card label; `localizeServerCopy` rewrites
+inline `[S(\d+)] → [Q$1]` in prose only (fenced/inline-code guard mirroring
+`normalizeMathDelimiters`), applied to both streaming and persisted turns via `Transcript.tsx`.
+Machine contract untouched (label sites, `GROUNDING_RULES`, `citations_json`). Tests:
+`display-map.test.ts` (+12: DE rewrite, EN identity, code-span/fence guards, `formatCitationLabel`,
+a pin that `GROUNDED_SYSTEM_PROMPT` still emits `[S1]`), `CitationMarkers.test.tsx` (+5: persisted +
+streaming turn, card + body, DE/EN, code-span guard). Folded into `rag-design.md` §3 citation-label
+note. Suite 3658/47, typecheck + build green.
 
 - `apps/desktop/src/renderer/chat/SourcesDisclosure.tsx:76` — the card label `[{c.label}]`:
   render via a localized formatter (new i18n key, e.g. `chat.sources.marker` = `'S{n}'` EN /

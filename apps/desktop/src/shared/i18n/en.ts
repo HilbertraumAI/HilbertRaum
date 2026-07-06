@@ -309,6 +309,12 @@ export const en = {
 
   // ---- Chat: sources (SourcesDisclosure.tsx) ----
   'chat.sources.toggle': 'Sources ({count})',
+  // The inline citation marker, DISPLAY-TIME only (#28 / beta-feedback plan Phase 1, D68). The
+  // machine-stable index is always `S{n}` — baked into GROUNDING_RULES, emitted by the model, and
+  // persisted in citations_json (never localized). We only relabel it at render: EN keeps 'S{n}';
+  // DE shows 'Q{n}' ("Quelle") because "S" reads as "Seite" (page number) to a German user. Used
+  // by SourcesDisclosure's card label and displayMap's inline-body rewrite.
+  'chat.sources.marker': 'S{n}',
   'chat.sources.page': 'Page {page}',
   // Whole-document PROVENANCE (full-audit-2026-06-29 follow-up Phase 5, FE-B / F11 renderer
   // half): a tree/capped/extract answer's "citations" are the document SECTIONS it drew on

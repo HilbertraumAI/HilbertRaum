@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
 import type { Citation, CoverageMode } from '@shared/types'
 import { useT } from '../i18n'
+import { formatCitationLabel } from '../lib/displayMap'
 
 // "▸ Sources (N)" (guidelines §3): citations stay attached to the answer as an inline
 // disclosure, collapsed by default, with `aria-controls` wiring the toggle to the expanded
@@ -72,8 +73,11 @@ export function SourcesDisclosure({
               <div className="source-card-head">
                 {/* A relevance card's [Sn] is an inline citation the model emitted; a provenance
                     card is a SECTION the answer drew on, so it shows no [Sn] (would misread as a
-                    1:1 citation). */}
-                {!isProvenance && <span className="cite-label">[{c.label}]</span>}
+                    1:1 citation). The marker is display-localized (EN [S1] / DE [Q1], D68); the
+                    stored `c.label` stays the machine-stable `S{n}`. */}
+                {!isProvenance && (
+                  <span className="cite-label">[{formatCitationLabel(t, c.label)}]</span>
+                )}
                 <span className="source-card-title">{c.sourceTitle}</span>
                 {c.pageNumber != null ? (
                   <span className="source-card-where">

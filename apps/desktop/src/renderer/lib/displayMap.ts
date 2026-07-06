@@ -81,12 +81,49 @@ export function unsupportedTypeExt(raw: string): string | null {
   return m ? m[1] : null
 }
 
+// ---- Citation markers (#28 / beta-feedback plan Phase 1, D68) ---------------------------
+// The grounded RAG prompt bakes the machine-stable inline markers `[S1] [S2] …` into the model
+// output (GROUNDING_RULES in rag/index.ts) and persists them in `citations_json` — those NEVER
+// change. But "S" reads as "S." = "Seite" (page) to a German user, when it actually indexes a
+// SOURCE (Quelle). So at DISPLAY time only, the inline marker is relabelled per the UI language:
+// EN keeps `S{n}` (the rewrite is the identity), DE shows `Q{n}`. `formatCitationLabel` does the
+// same for SourcesDisclosure's source-card label from the stored `S{n}` string.
+//
+// Code guard: a literal `[S1]` inside a fenced block or an inline code span must stay verbatim, so
+// the rewrite runs only over the PROSE segments — mirrors `normalizeMathDelimiters` in
+// Transcript.tsx (even split indices are prose, odd are code; an unclosed trailing fence swallows
+// to end-of-text and lands on an odd index, so a mid-stream buffer inside a fence is left alone).
+const CITE_CODE_SPLIT_RE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/
+const CITE_MARKER_RE = /\[S(\d+)\]/g
+
+/** Rewrite inline `[S{n}]` body markers to the localized marker (DE `[Q{n}]`), skipping code. */
+function localizeCitationMarkers(t: BoundT, raw: string): string {
+  if (!raw.includes('[S')) return raw
+  const parts = raw.split(CITE_CODE_SPLIT_RE)
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i]!.replace(CITE_MARKER_RE, (_m, n: string) => `[${t('chat.sources.marker', { n })}]`)
+  }
+  return parts.join('')
+}
+
+/**
+ * Localize a stored `S{n}` citation label for the source-card display (EN `S{n}` / DE `Q{n}`,
+ * D68). A non-standard label (defensive) passes through unchanged. The stored value is untouched.
+ */
+export function formatCitationLabel(t: BoundT, label: string): string {
+  const m = /^S(\d+)$/.exec(label)
+  return m ? t('chat.sources.marker', { n: m[1] }) : label
+}
+
 /**
  * Translate a server-origin string for display: exact-match against the known
  * persisted English constants, else pass through unchanged. DOC_TASK_BUSY_MESSAGE is
  * additionally matched as a substring — the chat banner recognizes it via
  * `error.includes` (transport prefixes may survive), so its display mapping must
  * tolerate the same embedding.
+ *
+ * The persisted-constant branches carry no citation markers; a real model answer (the only text
+ * that carries `[S{n}]`) falls through to the final return, where the marker is localized (D68).
  */
 export function localizeServerCopy(t: BoundT, raw: string): string {
   const key = KEY_BY_ENGLISH.get(raw)
@@ -95,5 +132,5 @@ export function localizeServerCopy(t: BoundT, raw: string): string {
   if (ext != null) return t('main.ingest.unsupportedType', { ext })
   const busy = en['main.chat.docTaskBusy']
   if (raw.includes(busy)) return raw.replace(busy, t('main.chat.docTaskBusy'))
-  return raw
+  return localizeCitationMarkers(t, raw)
 }
