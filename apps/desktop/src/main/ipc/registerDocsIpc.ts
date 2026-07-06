@@ -45,9 +45,16 @@ import {
   setDocumentsLifecycle
 } from '../services/collections'
 import { supportedExtensions } from '../services/ingestion/parsers'
+import { reconcileStuckSkillRuns } from '../services/skills/run'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { saveTextExport } from './save-export'
+
+// Process-start watermark (captured once at module load ≈ app boot). `skill_runs` rows created before
+// this belong to a PREVIOUS, killed session; current-session rows are protected regardless of status.
+// Used by the `reconcileStuckSkillRuns` sweep below — unlike `documents`, `skill_runs` bumps no
+// `updated_at`, so a live-run's protection is the watermark, not an activity timestamp (IA-6 P-7).
+const PROCESS_START_ISO = new Date().toISOString()
 
 // IPC for document import + ingestion status (spec §9.1, §7.7).
 //
@@ -444,6 +451,11 @@ export function registerDocsIpc(ctx: AppContext): void {
     if (!importActive && processing.size === 0) {
       const n = reconcileStuckDocuments(ctx.db, new Date().toISOString())
       if (n > 0) log.warn('Reconciled interrupted document ingestions', { count: n })
+      // Same treatment for skill runs stranded at 'started' by a killed session (IA-6 P-7). Gated on the
+      // process-start watermark (NOT `now`): `skill_runs` bumps no timestamp, so a live in-session run is
+      // protected only by its current-session `created_at`, never by this idle-poll firing mid-run.
+      const nr = reconcileStuckSkillRuns(ctx.db, PROCESS_START_ISO)
+      if (nr > 0) log.warn('Reconciled interrupted skill runs', { count: nr })
       // Reset deep-index builds left `building` by a killed/locked session to `pending`
       // (resumable) — but only when no doc task is live (a running build legitimately holds
       // `building`); the `updated_at < now` clause additionally protects a live build.

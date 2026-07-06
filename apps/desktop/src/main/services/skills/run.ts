@@ -158,6 +158,53 @@ export function finishRun(
   ).run(status, completedAt, resultRef, error, runId)
 }
 
+/**
+ * A terminal `finishRun` that CANNOT throw out of a FAILURE exit (audit IA-6 P-8, the SKA-27 `finishTail`
+ * pattern generalized). The situations that produce a persist failure — workspace locked mid-run, DB gone
+ * — are exactly the ones that also fail the terminal `skill_runs` UPDATE; an unguarded write on a failure
+ * path both strands the row at 'started' AND lets the raw exception escape, so the seam rejects with a
+ * technical error instead of returning the content-free failure envelope its caller expects. One retry
+ * for a transient lock, then log (content-free) and let the envelope stand — the DB is genuinely
+ * unwritable and the row cannot be reached, but the seam still resolves calmly. */
+function finishRunGuarded(
+  db: Db,
+  runId: string,
+  status: 'done' | 'failed' | 'cancelled',
+  completedAt: string,
+  error: string | null,
+  log: string
+): void {
+  try {
+    finishRun(db, runId, status, completedAt, null, error)
+  } catch {
+    console.error(log)
+    try {
+      finishRun(db, runId, status, completedAt, null, error)
+    } catch {
+      /* the DB is genuinely unwritable — the failure envelope stands (SKA-27/P-8) */
+    }
+  }
+}
+
+/**
+ * Reset skill runs left `'started'` by a PREVIOUS session (the app was killed mid-run, before the run
+ * seam's in-process B4 guard could stamp a terminal status) to `'failed'` (audit IA-6 P-7) — so a future
+ * run-history UI never shows an eternal "started" with no live job. Mirror of `reconcileStuckDocuments`
+ * (ingestion): only rows CREATED before `beforeIso` (pass the process-start watermark) are touched, so a
+ * live in-session run — which always carries a current-session `created_at` and finishes fast — is never
+ * clobbered. `skill_runs` has no `updated_at` to bump, so the watermark IS the protection. Content-free
+ * (ids/status only; `error` is a fixed English string, never document/chat text). Returns the number reset. */
+export function reconcileStuckSkillRuns(db: Db, beforeIso: string): number {
+  const res = db
+    .prepare(
+      `UPDATE skill_runs SET status = 'failed', completed_at = ?, error = ?
+       WHERE status = 'started' AND created_at < ?`
+    )
+    // Persist-canonical English (i18n §3.3) — content-free, display-mapped if a history UI ever surfaces it.
+    .run(new Date().toISOString(), 'The app closed before this run finished.', beforeIso)
+  return Number(res.changes ?? 0)
+}
+
 // =====================================================================================
 // The generic domain-run ENGINE (A1, audit §6.1 + §6.4 plumbing bullet). `invoice-run.ts` used to be a
 // ~500-line layer-for-layer COPY of the bank seam below (the class that caused the "45 vs 22" incident:
@@ -510,7 +557,9 @@ export async function prepareDomainRun<TOutput, TLoaded>(
   } catch {
     console.error(config.messages.prepareUnexpectedLog)
     const msg = 'This could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
+    // P-8 (IA-6): a DB error in the try (latestId/load/re-extract) is exactly when the terminal UPDATE
+    // is also likely to fail — guard it so the friendly envelope is always returned, never a raw throw.
+    finishRunGuarded(db, runId, 'failed', now(), msg, '[skills] prepare-failure run bookkeeping failed')
     return { failed: { ok: false, runId, errorCode: 'persistFailed', error: msg } }
   }
 }
@@ -525,7 +574,10 @@ export function domainPersistFailure(db: Db, runId: string, now: () => string, l
   }
   console.error(log)
   const msg = 'This could not be saved. Nothing was changed.'
-  finishRun(db, runId, 'failed', now(), null, msg)
+  // P-8 (IA-6): the persist just failed (workspace locked / DB gone) — the very state that also fails
+  // this terminal write. Guard it so a doomed UPDATE can't strand the row at 'started' AND turn the
+  // content-free `persistFailed` envelope into an escaping raw exception.
+  finishRunGuarded(db, runId, 'failed', now(), msg, '[skills] persist-failure run bookkeeping failed')
   return { ok: false, runId, errorCode: 'persistFailed', error: msg }
 }
 

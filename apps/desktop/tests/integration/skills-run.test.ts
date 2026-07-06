@@ -14,6 +14,8 @@ import {
   runCsvExport,
   isBankStatementStale,
   latestBankStatementId,
+  reconcileStuckSkillRuns,
+  domainPersistFailure,
   type LoadedTransaction
 } from '../../src/main/services/skills/run'
 import { activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
@@ -822,5 +824,106 @@ describe('R3 — downstream runs re-extract a STALE statement before serving row
     expect(isBankStatementStale(db, staleId)).toBe(true)
     const count = (db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(docId) as { n: number }).n
     expect(count).toBe(1) // no duplicate spawned
+  })
+})
+
+describe('reconcileStuckSkillRuns — startup sweep (IA-6 P-7)', () => {
+  const ins = (db: Db, id: string, status: string, createdAt: string) =>
+    db
+      .prepare(
+        `INSERT INTO skill_runs (id, skill_install_id, document_ids_json, status, created_at)
+         VALUES (?, 'mock:bank', '[]', ?, ?)`
+      )
+      .run(id, status, createdAt)
+
+  it("resets previous-session 'started' rows to failed, protecting current-session and terminal rows", () => {
+    const db = freshDb()
+    const watermark = '2026-07-06T12:00:00.000Z' // the process-start watermark
+    ins(db, 'stranded', 'started', '2026-07-06T11:59:00.000Z') // before → a killed previous session
+    ins(db, 'live', 'started', '2026-07-06T12:01:00.000Z') // after → a live current-session run
+    ins(db, 'done', 'done', '2026-07-06T11:59:00.000Z') // already terminal → untouched
+
+    const n = reconcileStuckSkillRuns(db, watermark)
+    expect(n).toBe(1) // only the stranded previous-session row
+    const status = (id: string) =>
+      (db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(id) as { status: string }).status
+    expect(status('stranded')).toBe('failed')
+    expect(status('live')).toBe('started') // protected by the watermark — skill_runs bumps no updated_at
+    expect(status('done')).toBe('done')
+    // A content-free reason + completion time are stamped on the reconciled row.
+    const row = db
+      .prepare('SELECT error, completed_at FROM skill_runs WHERE id = ?')
+      .get('stranded') as { error: string; completed_at: string }
+    expect(row.error).toBeTruthy()
+    expect(row.completed_at).toBeTruthy()
+  })
+})
+
+describe('domainPersistFailure — guarded terminal write (IA-6 P-8)', () => {
+  const seedStarted = (db: Db, runId: string) =>
+    db
+      .prepare(
+        `INSERT INTO skill_runs (id, skill_install_id, document_ids_json, status, created_at)
+         VALUES (?, 'mock:bank', '[]', 'started', ?)`
+      )
+      .run(runId, new Date().toISOString())
+
+  // Patch db.prepare so `UPDATE skill_runs` writes throw `failFirstN` times (workspace-locked / DB-gone),
+  // returning a count of how many terminal UPDATEs were attempted. Restores via the returned cleanup.
+  const failTerminalWrites = (db: Db, failFirstN: number): { attempts: () => number; restore: () => void } => {
+    const real = db.prepare.bind(db)
+    const target = db as unknown as { prepare: Db['prepare'] }
+    let attempts = 0
+    target.prepare = ((sql: string) => {
+      if (/UPDATE\s+skill_runs/i.test(sql)) {
+        attempts++
+        if (attempts <= failFirstN) {
+          return { run: () => { throw new Error('database is locked') } } as unknown as ReturnType<Db['prepare']>
+        }
+      }
+      return real(sql)
+    }) as Db['prepare']
+    return { attempts: () => attempts, restore: () => { target.prepare = real } }
+  }
+
+  it('returns the friendly envelope (never throws) when BOTH the persist and every terminal UPDATE fail', () => {
+    const db = freshDb()
+    const runId = randomUUID()
+    seedStarted(db, runId)
+    const patch = failTerminalWrites(db, Infinity) // both the write and its one retry fail
+
+    let res: ReturnType<typeof domainPersistFailure> | undefined
+    expect(() => {
+      res = domainPersistFailure(db, runId, () => new Date().toISOString(), '[test] persist failed')
+    }).not.toThrow()
+    patch.restore()
+
+    // The seam RESOLVED with the content-free envelope instead of rejecting with a raw error — the P-8
+    // guarantee. Before IA-6 the unguarded `finishRun` UPDATE threw straight out of the function.
+    expect(res).toEqual({
+      ok: false,
+      runId,
+      errorCode: 'persistFailed',
+      error: 'This could not be saved. Nothing was changed.'
+    })
+    expect(patch.attempts()).toBe(2) // the write + exactly one retry, both swallowed
+    // The DB was genuinely unwritable, so the row could not be reached — it stays 'started' (SKA-27).
+    const row = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(runId) as { status: string }
+    expect(row.status).toBe('started')
+  })
+
+  it('the one retry lands a transient failure, so the row still reaches failed', () => {
+    const db = freshDb()
+    const runId = randomUUID()
+    seedStarted(db, runId)
+    const patch = failTerminalWrites(db, 1) // fail once, the retry succeeds
+
+    const res = domainPersistFailure(db, runId, () => new Date().toISOString(), '[test] persist failed')
+    patch.restore()
+
+    expect(res.errorCode).toBe('persistFailed')
+    expect(patch.attempts()).toBe(2)
+    const row = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(runId) as { status: string }
+    expect(row.status).toBe('failed') // the retry landed the terminal status
   })
 })

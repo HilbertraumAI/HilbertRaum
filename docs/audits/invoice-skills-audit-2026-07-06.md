@@ -179,7 +179,7 @@ Order rationale: IA-1 dissolves the worst user journey (permanent refusal); IA-2
 | IA-3 | T-2, T-3, T-4, T-5, T-6, T-7, T-8, T-10 | **DONE** | `fix(invoice-audit): IA-3` (see git log / BUILD_STATE) — bumped `INVOICE_EXTRACTOR_VERSION` 12→13 + `BANK_EXTRACTOR_VERSION` 10→11 (T-6 shared) |
 | IA-4 | P-3 | **DONE** | `fix(invoice-audit): IA-4` (see git log / BUILD_STATE) — NO version bump (answer-layer only) |
 | IA-5 | P-4 | **DONE** | `fix(invoice-audit): IA-5` (see git log / BUILD_STATE) — NO version bump (reader-construction/perf only) |
-| IA-6 | T-9, P-5, P-6, P-7, P-8 | open | — |
+| IA-6 | T-9, P-5, P-6, P-7, P-8 | **DONE** | `fix(invoice-audit): IA-6` (see git log / BUILD_STATE) — NO version bump (validation/lifecycle/perf hardening) |
 | IA-7 | D-3, D-4, D-5 + close-out | open | — |
 
 ### IA-1 — Staleness on content change + retry-burn guard (P-1, P-2; D-1, D-2)
@@ -373,6 +373,57 @@ Independent small fixes; land as one commit or split freely:
 5. **P-8:** wrap the `finishRun` calls in `domainPersistFailure` + the two `prepareDomainRun` catch blocks (`run.ts:508-528`) in the SKA-27 `finishTail` try/retry/log pattern, always returning the friendly failure envelope; test: DB that fails both the persist and the first terminal UPDATE.
 
 **Done when:** all five landed with tests where behavioral; ritual complete.
+
+**Disposition (SHIPPED):**
+- **T-9 — FIXED.** Both `in`-against-the-prototype-chain tests in `validateNode` (`tool-registry.ts`) are now
+  `Object.prototype.hasOwnProperty.call(...)` — mirroring the registry lookup that already did this: the
+  required-key check (`hasOwnProperty.call(value, key)`) and the `additionalProperties: false` check
+  (`hasOwnProperty.call(props, key)`). An own input key named `constructor`/`toString`/… is no longer waved
+  through by inheriting from `Object.prototype`, and a `required` key is no longer satisfied by the prototype.
+  Defence-in-depth only (nothing downstream dereferences the extra keys). **Test:** `skills-tool-registry.test.ts`
+  +1 — own `constructor`/`toString` keys under `additionalProperties:false` are flagged; a `required:['constructor']`
+  against `{}` fails while `{constructor:3}` passes.
+- **P-5 — FIXED (one projection, no behaviour change).** The three single-row provenance helpers in
+  `analysis/invoice.ts` (`loadDateOrderInferred`/`loadDroppedRowCount`/`loadTextQuality`) collapse to one
+  `loadInvoiceMeta` projection (`date_order_inferred`, `dropped_row_count`, `text_quality` in one `SELECT`).
+  The handler reads meta ONCE up front (its `textQuality` gates the geometry retry) and re-reads it ONCE only
+  when the retry actually REPLACES the row; the post-retry `dateOrderInferred`/`droppedRowCount` come from that
+  same `meta` object. Per-question `invoices` reads drop from **3 (no-retry) / 4 (retry)** to **1 / 2**, and the
+  double `loadTextQuality` is gone. Answers are byte-identical (values still come from the final `invoiceId`),
+  pinned by the existing `skills-analysis-invoice.test.ts` staying green (no new test — perf/query-count only).
+- **P-6 — FIXED (SQL `substr`, NOT a row `LIMIT`).** `loadCitationChunks` (`analysis/common.ts`) now selects
+  `substr(text, 1, 281)` instead of the whole `text` column, so a per-question citation build no longer
+  materialises the entire document's text into the JS heap (also on the refusal path). **Decision — `substr`
+  over head/tail `LIMIT`:** the function is SHARED by both citation builders and their selection strategies
+  are incompatible with a row cap — the **bank** builder narrows by arbitrary `page_number` (a transaction can
+  sit on any page, so it needs every row) and the **invoice** builder needs `head + tail` (needs `all.length`
+  and the last rows); only the per-row `text` is oversized. `chunksToCitations` cuts the snippet to 280 with an
+  ellipsis when longer, so 281 chars (280 + one sentinel to trigger the `>280` branch) is byte-identical to the
+  full column. No new test — the existing invoice/bank citation-snippet assertions pin the byte-identical output.
+- **P-7 — FIXED.** New `reconcileStuckSkillRuns(db, beforeIso)` in `run.ts` (`UPDATE skill_runs SET
+  status='failed', completed_at=…, error=… WHERE status='started' AND created_at < ?`), wired in
+  `registerDocsIpc.ts` alongside `reconcileStuckDocuments`/`Trees`/`Extracts` under the same
+  `!importActive && processing.size === 0` idle gate. **Watermark decision:** `skill_runs` has no `updated_at`
+  to bump, so — unlike the document sweep which passes `now` and relies on live jobs bumping their timestamp —
+  this passes a module-load `PROCESS_START_ISO` watermark; only PREVIOUS-session rows (`created_at` before app
+  boot) are reconciled, so a live current-session run (always a current `created_at`, and fast) is never
+  clobbered. Content-free (fixed English `error`, no document/chat text). **Test:** `skills-run.test.ts` +1 —
+  a before-watermark `'started'` row → `'failed'`; an after-watermark `'started'` row and a `'done'` row are
+  untouched; a content-free reason + `completed_at` are stamped.
+- **P-8 — FIXED.** New `finishRunGuarded` helper (the SKA-27 `finishTail` try/retry/log pattern generalized:
+  one retry, then a content-free log, envelope stands) now backs the two failure exits where a persist-class
+  failure is exactly the state that also fails the terminal write: `domainPersistFailure` (post-ROLLBACK) and
+  the `prepareDomainRun` catch block (post-DB-error). Both always return their `persistFailed` envelope instead
+  of letting a doomed terminal `UPDATE skill_runs` throw out (which stranded the row at `'started'` AND rejected
+  the seam with a raw error). The other `finishRun` calls in `prepareDomainRun` sit INSIDE its `try`, so a throw
+  there is already backstopped by the same catch — no extra guard needed. **Test:** `skills-run.test.ts` +2 —
+  a DB whose terminal `UPDATE skill_runs` always throws → `domainPersistFailure` returns the envelope without
+  throwing (row stays `'started'`, exactly 2 attempts = write + one retry); a transient DB that fails once →
+  the retry lands `'failed'`.
+- **NO version bump (verified).** IA-6 is all validation-correctness / lifecycle / perf hardening — it changes
+  no persisted extraction OUTPUT — so `INVOICE_EXTRACTOR_VERSION` (13) and `BANK_EXTRACTOR_VERSION` (11) are
+  UNCHANGED and the extractor snapshot was not regenerated.
+- **Suite:** **3616/47** (was 3612; +4: T-9 +1, P-7 +1, P-8 +2). typecheck green.
 
 ### IA-7 — Docs + close-out (D-3, D-4, D-5)
 

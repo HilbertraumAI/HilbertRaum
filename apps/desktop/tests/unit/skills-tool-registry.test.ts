@@ -105,6 +105,20 @@ describe('validateJsonSchema (subset)', () => {
     expect(errors.length).toBeGreaterThan(0)
     expect(errors.join(' ')).not.toContain(SENTINEL)
   })
+
+  it('flags an own key named after an Object.prototype member under additionalProperties:false (T-9)', () => {
+    // Before IA-6 `'constructor' in props` was true via the prototype chain, so an own `constructor`
+    // key sailed through the additionalProperties:false gate unflagged. The check is now an
+    // own-property test, so a prototype-member name is treated like any other unexpected key.
+    const schema = { type: 'object' as const, additionalProperties: false, properties: { n: { type: 'integer' as const } } }
+    expect(validateJsonSchema(schema, { n: 1, constructor: 1 }).length).toBeGreaterThan(0)
+    expect(validateJsonSchema(schema, { n: 1, toString: 'x' }).length).toBeGreaterThan(0)
+    // And a REQUIRED key must not be satisfied by the prototype: an object missing its own
+    // `constructor` still fails (previously `'constructor' in value` was true via the prototype).
+    const req = { type: 'object' as const, required: ['constructor'], properties: { constructor: { type: 'integer' as const } } }
+    expect(validateJsonSchema(req, {}).length).toBeGreaterThan(0)
+    expect(validateJsonSchema(req, { constructor: 3 })).toEqual([])
+  })
 })
 
 describe('registry + resolveWiredTools', () => {

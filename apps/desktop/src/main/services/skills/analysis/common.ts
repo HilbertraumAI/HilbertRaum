@@ -101,11 +101,19 @@ export interface ChunkRow {
 }
 
 /** The document's `chunks` in document order — the shared source both citation builders SELECT before
- *  applying their own (page-narrowed head / head+tail) selection strategy. */
+ *  applying their own (page-narrowed head / head+tail) selection strategy.
+ *
+ *  P-6 (audit IA-6): `text` is capped to the first 281 chars IN SQL rather than materialising every
+ *  chunk's full text into the JS heap per question (a whole document, also on the refusal path) only to
+ *  keep a ≤280-char snippet. `chunksToCitations` cuts to 280 with an ellipsis when longer, so pulling 281
+ *  chars (280 + one sentinel char to trigger the ">280" branch) is byte-identical to pulling the whole
+ *  column. Bounded via `substr` (not a row `LIMIT`): the bank builder narrows by arbitrary `page_number`
+ *  and the invoice builder needs `head + tail`, so BOTH callers require every row — only the per-row text
+ *  is oversized, and that is what this caps. */
 export function loadCitationChunks(db: Db, documentId: string): ChunkRow[] {
   return db
     .prepare(
-      `SELECT chunk_index, text, source_label, page_number, section_label
+      `SELECT chunk_index, substr(text, 1, 281) AS text, source_label, page_number, section_label
        FROM chunks WHERE document_id = ? ORDER BY chunk_index`
     )
     .all(documentId) as unknown as ChunkRow[]

@@ -81,12 +81,16 @@ function validateNode(schema: JsonSchema, value: unknown, path: string, errors: 
       }
       const props = schema.properties ?? {}
       for (const key of schema.required ?? []) {
-        if (!(key in value)) errors.push(`${path}.${key} is required`)
+        // Own-property test (mirror the registry lookup at ~:253): an input object whose own key is
+        // `constructor`/`toString`/… would otherwise satisfy `key in value` via Object.prototype.
+        if (!Object.prototype.hasOwnProperty.call(value, key)) errors.push(`${path}.${key} is required`)
       }
       if (schema.additionalProperties === false) {
         for (const key of Object.keys(value)) {
           // Do NOT echo the offending key — it originates in the input and could carry content.
-          if (!(key in props)) {
+          // Own-property test so an own key named `constructor`/`toString`/… is not waved through by
+          // inheriting from Object.prototype (defence-in-depth: nothing downstream dereferences it).
+          if (!Object.prototype.hasOwnProperty.call(props, key)) {
             errors.push(`${path} has an unexpected property`)
             break
           }

@@ -165,31 +165,32 @@ function isSummaryShaped(question: string): boolean {
 // `singleInScopeDocument` + `shouldFallThroughOnEmpty` are the shared `analysis/common.ts` helpers (A1).
 // `loadInvoice` is the ONE authoritative loader exported from the run seam (`invoice-run.ts`).
 
-/** The persisted date-order provenance flag (R5, audit §5.7) — drives the one honest date caveat, or null. */
-function loadDateOrderInferred(db: Db, invoiceId: string): 'evidence' | 'default' | null {
-  const row = db
-    .prepare('SELECT date_order_inferred AS flag FROM invoices WHERE id = ?')
-    .get(invoiceId) as { flag: string | null } | undefined
-  return row?.flag === 'default' ? 'default' : row?.flag === 'evidence' ? 'evidence' : null
+/**
+ * The three persisted provenance columns a question consults per turn, read in ONE projection (audit
+ * IA-6 P-5 — previously three single-row `SELECT`s on the same `invoices` row, the last read twice on
+ * the retry path). Fields:
+ *  - `dateOrderInferred` (R5, audit §5.7): 'default'/'evidence'/null — drives the one honest date caveat.
+ *  - `droppedRowCount` (U1, audit §2.3): count of money-bearing lines the extractor could NOT parse;
+ *    gates the "whole invoice" claim. 0 when nothing was dropped (also for a pre-U1 NULL row → no gate).
+ *  - `textQuality` (invoice-hardening-2026-07-04 P3): null = normal text layer; 'suspect' = soup on the
+ *    plain read (geometry retry pending); 'suspect-confirmed' = the geometry retry also read soup (final).
+ */
+interface InvoiceMeta {
+  dateOrderInferred: 'evidence' | 'default' | null
+  droppedRowCount: number
+  textQuality: 'suspect' | 'suspect-confirmed' | null
 }
-
-/** The persisted count of money-bearing lines the extractor could NOT parse (U1, audit §2.3) — gates the
- *  "whole invoice" answer claim. 0 (or NULL, a pre-U1 row → treated as "no gate") when nothing was dropped. */
-function loadDroppedRowCount(db: Db, invoiceId: string): number {
+function loadInvoiceMeta(db: Db, invoiceId: string): InvoiceMeta {
   const row = db
-    .prepare('SELECT dropped_row_count AS n FROM invoices WHERE id = ?')
-    .get(invoiceId) as { n: number | null } | undefined
-  return row?.n ?? 0
-}
-
-/** The persisted glyph-soup verdict (invoice-hardening-2026-07-04 P3): null = normal text layer;
- *  'suspect' = soup on the plain read (retry via geometry pending); 'suspect-confirmed' = the geometry
- *  retry also read soup (final). */
-function loadTextQuality(db: Db, invoiceId: string): 'suspect' | 'suspect-confirmed' | null {
-  const row = db
-    .prepare('SELECT text_quality AS q FROM invoices WHERE id = ?')
-    .get(invoiceId) as { q: string | null } | undefined
-  return row?.q === 'suspect' ? 'suspect' : row?.q === 'suspect-confirmed' ? 'suspect-confirmed' : null
+    .prepare(
+      'SELECT date_order_inferred AS flag, dropped_row_count AS n, text_quality AS q FROM invoices WHERE id = ?'
+    )
+    .get(invoiceId) as { flag: string | null; n: number | null; q: string | null } | undefined
+  return {
+    dateOrderInferred: row?.flag === 'default' ? 'default' : row?.flag === 'evidence' ? 'evidence' : null,
+    droppedRowCount: row?.n ?? 0,
+    textQuality: row?.q === 'suspect' ? 'suspect' : row?.q === 'suspect-confirmed' ? 'suspect-confirmed' : null
+  }
 }
 
 /**
@@ -674,7 +675,10 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // rebuilds rows/columns from glyph positions and often recovers exactly what per-glyph text loses.
       // Whatever the retry reads becomes the persisted invoice; if its text was STILL soup, the flag is
       // promoted to 'suspect-confirmed' so no later turn retries again (one geometry pass is final).
-      let textQuality = loadTextQuality(db, invoiceId)
+      // ONE projection for the three provenance columns (P-5); re-read only when the geometry retry
+      // REPLACES the row below. `dateOrderInferred`/`droppedRowCount` are consumed after the retry settles.
+      let meta = loadInvoiceMeta(db, invoiceId)
+      let textQuality = meta.textQuality
       if (textQuality === 'suspect' && ctx.readDocumentSegments) {
         const retry = await runInvoiceExtraction(db, args, {
           ...deps,
@@ -696,7 +700,8 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         if (retry.ok && retry.invoiceId) {
           invoiceId = retry.invoiceId
           invoice = loadInvoice(db, invoiceId)
-          textQuality = loadTextQuality(db, invoiceId)
+          meta = loadInvoiceMeta(db, invoiceId)
+          textQuality = meta.textQuality
           if (textQuality === 'suspect') {
             db.prepare(`UPDATE invoices SET text_quality = 'suspect-confirmed' WHERE id = ?`).run(invoiceId)
             textQuality = 'suspect-confirmed'
@@ -796,8 +801,8 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // An EMPTY extraction that reached here (a real invoice with no readable rows/totals — not a
       // fall-through non-invoice) also stays on the template: it owns the honest "couldn't find anything"
       // answer, and there is no verified data to hand a model.
-      const dateOrderInferred = loadDateOrderInferred(db, invoiceId)
-      const droppedRowCount = loadDroppedRowCount(db, invoiceId)
+      const dateOrderInferred = meta.dateOrderInferred
+      const droppedRowCount = meta.droppedRowCount
       if (isSummaryShaped(ctx.question) || !hasContent) {
         const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation, dateOrderInferred, droppedRowCount })
         return {
