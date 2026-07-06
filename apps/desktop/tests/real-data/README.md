@@ -3,9 +3,9 @@
 Manual, **gated** harnesses that measure deterministic behaviour against **real user data**.
 They never run in `npm test`, make **zero model/network calls**, and print **aggregate metrics
 only**. The data they read is gitignored and **must never be committed** (CLAUDE.md "never commit
-user data" / PDF-plan **D57**).
+user data" / `docs/architecture.md` §21 "Geometry-aware PDF bank-statement extraction", **D57**).
 
-## `pdf-goldset.realdata.test.ts` — Stage-1 bank-statement gold set (Phase 31, plan §3.4/§6, gate D52)
+## `pdf-goldset.realdata.test.ts` — Stage-1 bank-statement gold set (PDF-geometry Phase 31; `docs/architecture.md` §21, gate D52)
 
 Runs real German bank statements through the **actual Stage-1 path**
 (`PdfParser.parse({ layout:true, maxPages })` → `bankStatementAnalysisHandler`) and reports the

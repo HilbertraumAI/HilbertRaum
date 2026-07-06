@@ -10468,6 +10468,13 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    `build-commercial-drive` drive moved between machines ①↔④ (flags/probe re-evaluate per machine;
    encrypted workspace continuity). The fake-spawn unit tests cover the *logic*; this matrix covers
    the *drivers*. Both are required before the release checkbox ticks.
+1c. **Publish a concrete security + CoC contact before the first public release (docs-audit DOC-009).**
+   `SECURITY.md` ("Reporting a vulnerability") and `CODE_OF_CONDUCT.md` (Enforcement) both defer to "a
+   dedicated contact … published before any public release" with no actionable channel today.
+   Resolve by either publishing a real address in both docs **or** enabling **GitHub private
+   vulnerability reporting** and linking it from `SECURITY.md`. Confirmed NOT enabled as of 2026-07-06
+   (`GET /repos/comilionas/AI_Drive/private-vulnerability-reporting` → 404), so the placeholder wording
+   is currently accurate — this is a release blocker, not a doc bug.
 2. **Small live-UI leftovers:** the Diagnostics **Activity-panel eyeball** on a real drive
    (events appear; export saves — the last wave-1 live-UI item); an icon/`buildResources` for
    electron-builder; the **optional** Phase-29 dev-box speed sweep (completeness only — QA +

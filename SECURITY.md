@@ -1,14 +1,17 @@
 # Security Policy — HilbertRaum
 
-_Last updated: 2026-06-29. Security-relevant changes since the Phase 9 baseline: the audit log
-(Phase 19), the deny-by-default renderer permission handler (Phase 31), the v2 vault envelope with
-O(1) password change (Phase 32), encrypted-at-rest diagnostics log, malicious-document resource caps,
-the fail-closed packaged-build policy, on-device scanned-PDF/photo OCR (Phase 38), and image
-understanding (local vision analysis with encrypted, deletable history)._
+_Last updated: 2026-07-06. Security-relevant changes since the Phase 9 baseline: the audit log
+(Phase 19; document titles/filenames later removed as content, 2026-06-30), the deny-by-default
+renderer permission handler (Phase 31), the v2 vault envelope with O(1) password change (Phase 32),
+encrypted-at-rest diagnostics log, malicious-document resource caps, the fail-closed packaged-build
+policy, on-device scanned-PDF/photo OCR (Phase 38), image understanding (local vision analysis with
+encrypted, deletable history), engine-binary re-hash-before-spawn verification, user drop-in skill
+packs (size-gated, sandboxed), and the local translation sidecar (a second on-device `llama-server`
+for text + whole-document translation)._
 
 ## Supported versions
 
-This project is a pre-1.0 MVP. Security fixes target the `main` branch only until a stable release
+This project is a pre-1.0 MVP. Security fixes target the `master` branch only until a stable release
 is tagged.
 
 ## Reporting a vulnerability
@@ -36,6 +39,13 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **Deny-by-default renderer permissions** (Phase 31) — geolocation, notifications, camera, and
   screen capture are refused; the single exception is microphone access for voice dictation.
 - **No model weights or user data in version control.**
+- **Engine binaries re-hashed before every spawn** — each bundled `llama-server` (chat + translation
+  sidecars), whisper, and GPU-probe binary is verified against its recorded install hash immediately
+  before it is executed. A packaged build refuses to spawn a tampered binary and falls back; dev
+  builds are inert. Downloaded model files are separately checksum-verified before first use.
+- **User skill packs are treated as untrusted input** — a drop-in `SKILL.md` pack is third-party
+  content, so it is size-gated on import (over-cap packs are rejected) and its tools run through the
+  same audited bridge with a **frozen document scope they cannot widen**.
 - **Encrypted workspace** (implemented, Phase 9; v2 envelope Phase 32) — a password-derived key
   (**Argon2id** KDF for new vaults; scrypt remains supported for vaults created under the earlier
   default) encrypts the whole database file with AES-256-GCM at rest, **and each stored
@@ -46,12 +56,16 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   not re-encrypted) are kept in an unencrypted `config/workspace.json` descriptor. The DB is decrypted
   to a working file on unlock and re-encrypted + shredded on lock/quit. See
   [`docs/security-model.md`](docs/security-model.md) for the full design.
-- **Tamper-evident audit log** (Phase 19) — records only ids, model ids, filenames, and counts;
-  never chat content, document text, or passwords.
+- **Tamper-evident audit log** (Phase 19) — records only ids, model ids, statuses, and counts;
+  never chat content, document text, document titles/filenames, or passwords. (User-chosen document
+  titles/filenames were removed as content in a 2026-06-30 hardening — a `documentId`, not its name,
+  goes on record, since the whole log is exportable as plaintext; model ids are not user content.)
 - **Malicious-document resource caps** — parse timeout, byte ceiling, PDF page cap, and a
   DOCX-decompression-bomb check bound the cost of a hostile import.
-- **Fail-closed packaged policy** — a packaged commercial build enforces its `policy.json` strictly
-  (e.g. downloads disabled) regardless of the user setting.
+- **Fail-closed packaged policy** — a packaged commercial build enforces its `policy.json` strictly,
+  regardless of the user setting. A policy can only *restrict*: e.g. it may disable model downloads
+  entirely (drives ship with downloads permitted by default, so this is an available restriction, not
+  the shipped default).
 
 ## Known limitations
 - Offline enforcement in the MVP is by **design + policy/UX**, not a hard OS-level firewall.
@@ -60,11 +74,13 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **A decrypted working copy of the database exists on disk while the app is unlocked.**
   `node:sqlite` requires a real file, so the encrypted workspace is decrypted to `hilbertraum.sqlite` on the
   drive while running and re-encrypted (and the plaintext shredded) on lock/quit. Re-indexing an
-  encrypted document likewise decrypts it to a **transient** working file that is shredded when
-  parsing finishes. A hard crash or power loss can leave such plaintext files behind; the app shreds
-  any stray plaintext DB (incl. its WAL/SHM and `.tmp` write-temps) **and** stray transient document
-  copies on the next startup before re-unlocking, and attempts a best-effort lock on an uncaught
-  fatal error. (Secure erase is still best-effort on SSDs — see below.)
+  encrypted document, **translating a whole document**, or opening an image-analysis entry likewise
+  decrypts it to a **transient** working file (`*.parse*`/`*.tmp`) that is shredded when the operation
+  finishes. A hard crash or power loss can leave such plaintext files behind; the app shreds any stray
+  plaintext DB (incl. its WAL/SHM and `.tmp` write-temps) **and** stray transient document/image
+  copies under `workspace/documents/` and `workspace/images/` on the next startup before re-unlocking,
+  and attempts a best-effort lock on an uncaught fatal error. (Secure erase is still best-effort on
+  SSDs — see below.)
 - **Documents imported before document-cache encryption existed** (or into a plaintext workspace)
   remain plaintext under `workspace/documents/` until re-indexed; re-indexing in an encrypted
   workspace upgrades the stored copy to `.enc` in place. The diagnostics log is **encrypted at rest**

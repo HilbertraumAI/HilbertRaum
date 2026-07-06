@@ -40,8 +40,10 @@ npx vitest run tests/unit/some-file.test.ts   # one file
 npx vitest -t "a test-name substring"          # one test (by name filter)
 npm run test:watch                              # watch mode (re-runs affected tests on save)
 ```
-The same `typecheck`/`build`/`test` chain runs in CI on every push/PR (`.github/workflows/ci.yml`);
-the env-gated `HILBERTRAUM_*` manual smoke matrix stays a separate human gate (see
+The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
+(`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the
+PR is the gate, so open a **draft PR** to run CI on a work-in-progress branch. The env-gated
+`HILBERTRAUM_*` manual smoke matrix stays a separate human gate (see
 [`docs/packaging.md`](docs/packaging.md)).
 
 **Don't put `node_modules` on an NTFS volume mounted on Linux.** `npm install` downloads
@@ -65,3 +67,11 @@ unit-tested source lives in `apps/desktop/src/main/services/` (`drive.ts`, `asse
 `commercial-drive.ts`, `launcher.ts`). **When you change one side, change the other in the same
 PR.** Script↔TS drift in safety-critical paths (hash verification, the commercial ship gate) was
 the root cause of both Critical findings in the post-MVP audits — treat any divergence as a bug.
+
+## Security issues
+Report suspected vulnerabilities **privately** per [`SECURITY.md`](SECURITY.md) — do **not** open a
+public issue or PR for an undisclosed vulnerability.
+
+## License
+HilbertRaum is licensed **GPL-3.0-or-later** (see [`LICENSE`](LICENSE)). By contributing you agree
+that your contributions are provided under the same terms (inbound = outbound).
