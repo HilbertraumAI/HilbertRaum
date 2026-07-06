@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
 import type { CompactionNotice } from '../../src/shared/ipc'
+import { t } from '../../src/shared/i18n'
 import { stubApi } from '../helpers/renderer'
 
 // Phase 2 UX (context-compaction plan §5.1–§5.3): the composer context-usage meter, the transcript
@@ -60,12 +61,18 @@ describe('ChatScreen — context-usage meter (§5.1)', () => {
     render(<ChatScreen onNavigate={() => {}} />)
     await user.click(await screen.findByText('Compaction chat'))
 
-    const meter = await screen.findByRole('progressbar')
+    // #25/D69: a conversation-MEMORY gauge (role="meter" + a visible "Memory" label), not a
+    // progress bar. The tooltip teaches the fill (pct) with the approximate token figures and,
+    // at the amber band, the auto-summarize heads-up.
+    const meter = await screen.findByRole('meter')
     expect(meter).toHaveAttribute('aria-valuenow', '80')
+    expect(meter.querySelector('.context-meter-label')?.textContent).toBe(
+      t('en', 'chat.context.label')
+    )
     const tip = meter.getAttribute('title') ?? ''
-    expect(tip).toMatch(/6\.4k \/ 8k tokens/)
-    expect(tip).toMatch(/approximate/i)
-    expect(tip).toMatch(/will be summarized/i)
+    expect(tip).toMatch(/80% full/)
+    expect(tip).toMatch(/about 6\.4k of 8k tokens/)
+    expect(tip).toMatch(/summarized automatically/i)
   })
 })
 

@@ -282,9 +282,14 @@ export const en = {
   // The transcript summary marker (§5.3, D-b) — a subtle divider, expandable to read the summary.
   'chat.compaction.markerLabel': 'Earlier messages summarized',
   'chat.compaction.viewSummary': 'Show the summary of earlier messages',
-  // The context-usage meter tooltip (§5.1). {used}/{window} are compact token counts ("6.4k").
-  'chat.context.usageTooltip': 'Context: {used} / {window} tokens (approximate)',
-  'chat.context.willSummarize': 'Older messages will be summarized to make room.',
+  // The conversation-memory meter (§5.1, beta-feedback #25/D69). A short visible label so the
+  // gauge reads as "how full THIS conversation's memory is", never as task/answer progress.
+  // "context"/"Kontext" stays OUT of the visible label (design-guidelines no-jargon rule).
+  'chat.context.label': 'Memory',
+  // Tooltip teaches the fill mental model. {pct} is the visible %; {used}/{window} keep the
+  // approximate-token honesty ("about" = the estimate is an over-count).
+  'chat.context.usageTooltip': 'Memory for this conversation: {pct}% full (about {used} of {window} tokens).',
+  'chat.context.willSummarize': 'When it fills up, older messages are summarized automatically to make room.',
   // Honest-signal truncation notice (§L0): shown on an assistant reply the model cut off at the
   // context ceiling (finish_reason 'length'). Label is the visible line; hint is the tooltip.
   'chat.truncated.label': 'Reply cut off — reached the model’s context limit',

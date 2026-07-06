@@ -297,8 +297,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.analysis.inProgress': 'Das ganze Dokument wird gelesen…',
   'chat.compaction.markerLabel': 'Frühere Nachrichten zusammengefasst',
   'chat.compaction.viewSummary': 'Zusammenfassung der früheren Nachrichten anzeigen',
-  'chat.context.usageTooltip': 'Kontext: {used} / {window} Tokens (ungefähr)',
-  'chat.context.willSummarize': 'Ältere Nachrichten werden zusammengefasst, um Platz zu schaffen.',
+  'chat.context.label': 'Speicher',
+  'chat.context.usageTooltip': 'Speicher für dieses Gespräch: {pct} % belegt (etwa {used} von {window} Tokens).',
+  'chat.context.willSummarize': 'Bei vollem Speicher werden ältere Nachrichten automatisch zusammengefasst, um Platz zu schaffen.',
   // Ehrliches Signal (§L0): erscheint bei einer Antwort, die das Modell am Kontextlimit abgeschnitten hat.
   'chat.truncated.label': 'Antwort abgeschnitten – Kontextlimit des Modells erreicht',
   'chat.truncated.hint':

@@ -1107,14 +1107,21 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Push the context-window meter to the right edge of the footer (context-compaction §5.1). */
 .composer-footer-spacer { margin-left: auto; display: inline-flex; align-items: center; }
 
-/* Context-window usage meter (context-compaction §5.1): a thin, quiet bar. Tone is the only
-   signal that changes (calm → amber → near-full); calm stays neutral so it never reads as a
-   warning at normal fullness. */
+/* Conversation-memory meter (context-compaction §5.1; #25/D69): a short LABEL + a thin quiet bar
+   + a % readout. The label is what differentiates it from a progress bar (the #25 misreading) —
+   it names the gauge as memory fullness, not task progress. Tone is the only signal that changes
+   (calm → amber → near-full); calm stays neutral so it never reads as a warning at normal fullness. */
 .context-meter {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: default;
+}
+/* Visible short name ("Memory"/"Speicher") beside the bar. Quiet + dim like the % readout. */
+.context-meter-label {
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-dim);
 }
 .context-meter-track {
   position: relative;

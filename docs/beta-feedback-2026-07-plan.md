@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phase 1 (#28, DE citation labels) DONE; Phases 2–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) DONE; Phases 3–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -126,9 +126,20 @@ note. Suite 3658/47, typecheck + build green.
 **Done =** suite green, DE transcript shows Q-markers end-to-end, docs (`rag-design.md`
 citation note) + BUILD_STATE updated, commit references #28.
 
-## 5. Phase 2 — context meter is not a progress bar (#25)
+## 5. Phase 2 — context meter is not a progress bar (#25) ✅ DONE
 
 **Goal:** the indicator reads unambiguously as "how full this conversation's memory is" (D69).
+
+**Shipped (2026-07-07):** `ContextMeter` now renders a visible label (`chat.context.label` — EN
+**"Memory"** / DE **"Speicher"**; "context"/"Kontext" kept out of the visible label per the no-jargon
+rule) beside the bar + `%`, switched `role="progressbar"` → **`role="meter"`** (keeps
+`aria-valuemin/max/now` + `aria-valuetext`; `aria-label` = the label). Tooltip reworded to the fill/
+auto-summarize mental model with `{pct}` + the approximate `{used}/{window}` token figures for honesty
+(EN *"Memory for this conversation: {pct}% full (about {used} of {window} tokens)."* + amber heads-up
+*"When it fills up, older messages are summarized automatically to make room."*; DE mirror — placeholder
+parity holds). Tone bands + 0.85 trigger unchanged; coverage (#24) kept separate. Tests: new
+`ContextMeter.test.tsx` (+7) + updated `ChatCompaction.test.tsx`; suite 3665/47, typecheck + build green.
+Folded into `design-guidelines.md` §11.9; a `context-meter`/`-de` preview case added for the eyeball.
 
 - `apps/desktop/src/renderer/chat/ContextMeter.tsx`: add a visible short label (new keys, e.g.
   `chat.context.label` = EN `'Memory'` / DE `'Speicher'` — final copy per

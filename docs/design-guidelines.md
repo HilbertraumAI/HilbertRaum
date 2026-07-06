@@ -719,6 +719,28 @@ rendered region id when expanded). The **Sources** disclosure was also relabelle
 whole-document answers (provenance, not inline citations) — that honesty record lives in
 [`rag-design.md`](rag-design.md) §14.4 (FE-B / F11).
 
+### 11.9 Conversation-memory meter — label a gauge, don't leave it a bare % (IMPLEMENTED 2026-07-07, beta-feedback #25 / D69)
+
+A beta user (issue #25) read the composer-footer indicator — a bare `45%` with `role="progressbar"`
+and no visible name — as **task/answer progress**. It actually shows how full *this conversation's
+memory* is. A percentage attached to nothing, with the progressbar role, invites exactly that
+misreading. **Rule this records:** a gauge of a *current level* (memory fullness, disk, battery) is a
+**meter**, not a progress bar, and it must carry a **visible short name** — a number needs a noun. Only
+a determinate *task* (import 12 of 30, a download) is a progress bar (§ "Progress / streaming").
+
+**As built** (`renderer/chat/ContextMeter.tsx` + `styles.css` `.context-meter*`): a visible short label
+(`chat.context.label` — EN **"Memory"** / DE **"Speicher"**) renders beside the bar + `%`; the role is
+**`role="meter"`** (keeps `aria-valuemin/max/now` + `aria-valuetext`; `aria-label` is the label, the
+token reading rides `aria-valuetext`/`title`). The tooltip teaches the mental model — EN *"Memory for
+this conversation: {pct}% full (about {used} of {window} tokens)."* + the amber-band heads-up *"When it
+fills up, older messages are summarized automatically to make room."* (DE mirror) — keeping the
+approximate-token honesty. **No-jargon rule (§ "Words"):** the word *context*/*Kontext* stays OUT of the
+visible label (it named the machinery, not the user's mental model). The calm/amber/near-full tone bands
+and the 0.85 compaction trigger are unchanged — only the reading changed. Coverage (#24) is a separate,
+answer-anchored statement and is deliberately NOT folded into this widget. Pinned by
+`tests/renderer/ContextMeter.test.tsx` (meter-not-progressbar, visible EN/DE label, amber/near-full
+copy, null-window guard) + the updated `ChatCompaction.test.tsx`.
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)
