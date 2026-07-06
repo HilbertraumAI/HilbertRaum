@@ -1,7 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
 // Top-level render-error containment (audit FE-1). React unmounts the WHOLE tree when a
-// render throws (e.g. react-markdown on malformed model output, a Radix portal edge) — in
+// render throws (e.g. Streamdown on malformed model output, a Radix portal edge) — in
 // an offline desktop app that means a blank white window with no recovery. This boundary
 // catches the throw, renders a localized fallback instead, and keeps the rest of the shell
 // (the nav rail) alive so the user is never trapped.

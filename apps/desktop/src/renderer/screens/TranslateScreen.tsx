@@ -287,6 +287,9 @@ export function TranslateScreen({
           ) : (
             // Plain-text live buffer while streaming (Markdown is only parsed once complete, so
             // half-written syntax never flickers) — the ChatScreen live-render precedent.
+            // DIVERGENCE NOTE: chat has since revised that precedent to streaming Markdown via
+            // Streamdown (architecture.md §FE-1 revisited); this site deliberately keeps the
+            // plain-text-while-streaming pattern until it gets the same treatment.
             <div className="translate-output-live">{output}</div>
           )}
         </div>

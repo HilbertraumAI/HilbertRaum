@@ -24,6 +24,174 @@ _Scope: the shared `tools/money.ts` money parser (feeds BOTH the bank-statement 
 
 _2026-07-06 — **Invoice skills audit (IA wave) — IA-1: staleness-on-content-change + retry-burn guard (P-1, P-2; D-1, D-2) — on `master`.** (Report + phase plan: [`docs/audits/invoice-skills-audit-2026-07-06.md`](docs/audits/invoice-skills-audit-2026-07-06.md) — IA-1 of 7; the report stays OPEN, retired at IA-7.)_
 _Scope: the worst user journey the audit found — soup invoice → refusal telling the user to OCR → OCR → the SAME refusal forever — plus its silent twin (a changed text layer keeps answering from the OLD content). **P-1 (staleness gate was extractor-VERSION-only):** the re-index/OCR-re-ingest teardown deleted chunks/embeddings/tree_nodes but NOT the persisted bank/invoice extraction rows, so `isInvoiceStale`/`isBankStatementStale` (version match) kept serving figures parsed from text that no longer exists — and a glyph-soup `suspect-confirmed` refusal survived the very OCR the app instructed. **Fix (simple option):** `purgeSkillDataForDocument(db, documentId)` now runs inside the re-index teardown transaction in `services/ingestion/index.ts` `prepareDocument` (after the chunk/embedding/tree deletes, before the fresh insert), so the next analysis question re-extracts. Verified the SINGLE funnel: re-index, OCR re-ingest, and materialize all go through `processDocument`→`prepareDocument`, and the import loop calls `prepareDocument` directly (a grep confirmed the only production `DELETE FROM chunks WHERE document_id` sites are this teardown + the already-purged delete path). Covers the **bank twin** automatically (the purge deletes bank_statements + invoices + children); a first import has no rows → no-op. The fingerprint-column escalation was not needed. **P-2 (a cancelled/failed geometry retry permanently burned the one retry):** the `'suspect-confirmed'` promotion sat OUTSIDE the `retry.ok` branch, so a Stop (or a transient reader failure) mid-retry stamped the flag though ZERO geometry passes completed — compounding P-1 into a permanent stuck refusal AND committing durable work in response to a Stop. **Fix:** the promotion + its `UPDATE` now live INSIDE `if (retry.ok && retry.invoiceId)`, so a non-ok retry leaves `text_quality='suspect'` for a later turn. (Full abort→calm-cancel propagation stays IA-4; this phase only stops the flag-burn.) **D-1/D-2:** D58 (`architecture.md` §21) + `known-limitations.md` carry the §42-P3 superseding note (the invoice ANALYSIS path re-extracts once via layout on a `suspect` verdict; the run-bar extract stays reading-order); the two `tool-runs.ts` comments are rescoped to the run-bar path. **Tests:** `skills-analysis-invoice.test.ts` +2 (cancelled retry / failed retry both leave `'suspect'`; the completed-retry finality pin stays green); NEW `invoice-audit-ia1.test.ts` +4 over the REAL ingestion pipeline (soup→refusal→re-index-clean→real answer; invoice silent-content-change re-extracts new figures not stale; bank silent-content-change re-extracts; re-index purges BOTH twins' rows). **Suite 3590/47** (was 3584; +6). `npm run typecheck` clean. **Next action: IA-2** (T-1 leading-sign space gate in the shared money parser + T-11). Unpushed on `master`._
+_2026-07-06 — **KaTeX fix: LaTeX-style `\[ … \]` / `\( … \)` delimiters now render (branch `mkg2`).**
+Field report: math didn't render in regular chat — the local model emits LaTeX bracket delimiters, but
+remark-math (via `@streamdown/math`, `singleDollarTextMath: false`) parses ONLY `$$…$$`; commonmark then ate
+the backslashes, leaving literal "[ … ]". `normalizeMathDelimiters` in `Transcript.tsx` now converts brackets
+→ `$$` before Streamdown (line-anchored `\[…\]` → fenced `$$\n…\n$$` = display; mid-sentence / `\(…\)` →
+inline), skipping fenced blocks + inline code spans. Single-`$` stays off ("$5 and $10" prose is safe —
+test-pinned). One O(n) pass per flush, same class as `parseIncompleteMarkdown`; unclosed `\[ …` stays literal
+until its `\]` streams in. The wrong "default delimiters include `\(…\)`" comment on `mdPlugins` corrected.
++4 tests in `assistant-markdown.test.tsx` (display, inline, code-stays-verbatim, dollar-prose).
+**Follow-up (same day): the UNCLOSED streaming tail now typesets too.** A dangling `\[ …` whose `\]` hasn't
+streamed in yet is completed to closed `$$…$$` by a custom **remend handler** (Streamdown's `remend` prop;
+runs per flush, streaming mode only). Its **priority 10 is load-bearing**: remend's built-in links completion
+(priority 20) treats a dangling `\[ …` tail as an incomplete LINK and EARLY-RETURNS the pipeline — any
+later-priority handler never runs. Persisted turns render static (no remend), so a prose `\[` that never
+closes self-heals to literal. +5 tests (streaming display/inline tails, fence-guard, static-literal).
+**Follow-up 2: partial TeX is completed + KaTeX-VALIDATED before typesetting.** A mid-group partial (field
+report: the chudnovsky series cut inside `\frac{…`) is not valid TeX — naive completion made rehype-katex
+fall back to raw error text. `completePartialTex` cuts a half-streamed macro/dangling `^`/`_`, closes
+unbalanced brace groups, tries an appended `{}` (a `\frac{X}` awaiting its denominator renders X over an
+empty box, progressively), then validates with `katex.renderToString({throwOnError:true})` — only TeX that
+parses is emitted; an unsalvageable partial (e.g. `\left(` before `\right`) is HELD BACK that flush.
+Research'd first: remend's own katex built-in just counts `$$` pairs and appends (no balancing/validation —
+same flaw upstream for native `$$`); no npm module does partial-TeX completion, so KaTeX itself is the
+validator (already in the bundle via rehype-katex; direct import adds no weight). +2 tests._
+
+_2026-07-06 — **PR review round: rebase onto master + both blockers fixed + scope split (branch `mkg2`).**
+The Streamdown/Retry-all/deep-index PR was rebased onto current master (post-#15/#16/#17/#18 + the TA/FA
+translation waves). The one real conflict — `Transcript.tsx`'s streaming block — resolved as
+`<AssistantMarkdown text={localizedStream} streaming />`: master's memoized `localizedStream` (perf F2)
+survives; the pre-rebase inline `localizeServerCopy(t, streamText)` would have re-scanned the buffer twice
+per flush. **Blocker 1 (dead weight):** `streamdown` hard-depends on `mermaid` (~136 MB unpacked with its
+cytoscape/d3/dagre/roughjs chain) but the `@streamdown/mermaid` plugin isn't installed — never imported, yet
+electron-builder would fold it into `app.asar`. Fixed with `files` negations in `electron-builder.yml`
+(@napi-rs/canvas precedent), kept honest by `packaging.test.ts` recomputing the "reachable only via mermaid"
+set from `package-lock.json` (a future dep needing an excluded package turns the gate red). **Verified with
+a real `--dir` build asar listing: 0 mermaid-chain entries, app.asar 68 MB (~204 MB without).** **Blocker 2
+(KaTeX skew):** direct dep was `katex@^0.17.0` (CSS+fonts) while rehype-katex rendered with its nested
+0.16.47 — KaTeX requires matched JS/CSS. Pinned `~0.16.47` (all installed copies now 0.16.47); guarded by a
+"math actually renders" smoke test + a version-parity probe; fonts re-verified in
+`out/renderer/assets/KaTeX_*`. **Review test asks:** raw-HTML-stays-LITERAL assertion (pins the dropped-
+rehype-raw posture the old `<script>` test couldn't distinguish); bulk re-index mid-loop rejection pin (a
+deleted doc fails only itself, the rest still process) + a completion summary toast (`docs.reindexAllDone`
+/ `docs.reindexAllPartial`, en+de) so a partial batch no longer looks like full success. **Scope split (per
+review):** the Nix dev-shell flake → branch `nix-dev-shell`; the screenshot-verify skill + preview harness →
+branch `screenshot-verify`; this PR keeps Streamdown, Retry-all (+ main-owned bulk job + cancel), the
+deep-index fire-and-forget fix, and the embeddings/HTTP-400/coverage/force-reindex work. **Divergence notes**
+added at the two master sites still on plain-text-while-streaming (Translate view, Images answer thread) citing
+the revised §FE-1. Suite **3606 pass / 44 skip**, typecheck + build green — the single `vision-status`
+no-runtime failure is an ENVIRONMENT artifact of this dev shell (a real `llama-server` on the env; fails
+identically on clean master here; fine on CI). **Open (manual):** one visual eyeball of a long, KaTeX-heavy
+streamed reply in the real app — the bench is jsdom (parse cost, not layout/paint)._
+
+_2026-06-30 — **`HR_FORCE_REINDEX` dev env var — force every document outdated.** Companion to the chunk-coverage work:
+when `HR_FORCE_REINDEX=1`, `listDocuments` (`ingestion/index.ts`, via `forceReindexEnabled()`, read at call time) reports
+EVERY indexed+chunked document as `staleEmbeddings: true` regardless of which embedder produced its vectors — so the
+"needs re-index" smart view + the "Re-index all" toolbar button cover the whole corpus. Since `reindexDocument` re-reads
+the stored file and re-chunks + re-embeds, this is the lever to re-index everything after a chunk-size or embedding-model
+change (e.g. once the coverage measurement picks a new `chunkSizeTokens`). `registerDocsIpc` logs a one-time
+`HR_FORCE_REINDEX active …` warning at startup so it's obvious why everything reads outdated. Zero effect when unset.
+Test in `ingestion.test.ts`: forced stale even when the active model matches / with no active-model context, and normal
+again once cleared. Full suite green except the 3 pre-existing platform failures._
+
+_2026-06-30 — **Chunk-coverage measurement tool (opt-in, dev).** To decide whether to size chunks upstream (the
+`chunkSizeTokens=500` approx vs the embedder's ~232-approx / 512-real budget mismatch), `embeddings/e5.ts` gained a
+gated measurement (set `HR_EMBED_COVERAGE=1`): during `embed()` it tokenizes each chunk's FULL text and the truncated
+text it actually sends via the sidecar's `/tokenize`, accumulates across a re-index, and logs a cumulative
+`[embed-coverage]` summary — chunk real-token percentiles (p50/p90/p99/max/mean), `overflowPct` (chunks whose full text
+exceeds n_ctx), and `vectorCoverage` (sent/full ratio percentiles). Zero cost when the flag is unset (read at call time).
+**To run:** `HR_EMBED_COVERAGE=1 npm run dev`, trigger a Re-index all, read the last `[embed-coverage]` line in
+`/tmp/hilbertraum.log`. The corpus-wide numbers there pick the upstream chunk size. Verified by a fake-`/tokenize` test
+(tokenizes full + sent per input). NOTE: this is a measurement aid — remove or keep as a dev tool once the size is set._
+
+_2026-06-30 — **Embedding 400 follow-up: clean error message + context-overflow retry.** Building on the body-surfacing
+below (which revealed the real reason: `input (623 tokens) is larger than the max context size (512 tokens)` — E5's hard
+512-token cap, the 2.2× truncation factor undershooting a 2.7×-dense chunk). (1) Errors now extract just `error.message`
+from llama.cpp's JSON envelope (`parseLlamaError` in `embeddings/e5.ts`) instead of dumping the raw JSON at the user.
+(2) On a context-overflow 400 (`exceed_context_size_error`), the embedder HALVES that batch's truncation budget and retries
+(down to a 64-token floor, ≤5×) so the chunk's HEAD still embeds rather than failing the document — only the overflowing
+batch pays. New `e5-embedder.test.ts` cases: message extraction (no JSON envelope leaked); overflow→re-truncate→retry
+succeeds with a shorter input. **KNOWN/OPEN (raised by user, not yet acted on):** `CHUNK_DEFAULTS.chunkSizeTokens` is 500
+approx tokens but the embedder can only embed ~232 approx (= `maxInputApproxTokens(512)`) — so a chunk's VECTOR covers only
+its first ~46% and the tail is under-retrievable (the stored/retrieved chunk text is full-size — the retry/truncation shrinks
+only the vector, never the chunk). The architecturally cleaner fix is to size chunks to the embedder's real-token budget
+upstream; deferred as a behavior change requiring re-index. Full suite green except the 3 pre-existing platform failures._
+
+_2026-06-30 — **Fixed "Embedding request failed: HTTP 400" + made it debuggable.** Two real bugs in the E5 embedder
+(`embeddings/e5.ts`): (1) empty/whitespace inputs were POSTed to llama.cpp's `/v1/embeddings`, which **rejects an empty
+input with HTTP 400** — inconsistent with the mock embedder's documented contract (`embeddings.test.ts:68`: empty text →
+all-zero vector). The bulk re-index of 30 docs hit it as soon as one chunk was empty/whitespace. Now empties are NEVER sent:
+they take a zero vector (cosine 0, never a false match) and only the non-empty inputs are batched, placed back by original
+index. (2) the thrown error discarded the server's response BODY — the bare `HTTP 400` hid the reason. Now the body is read
+and appended (e.g. `HTTP 400 — input is too large to process. increase the physical batch size` / `input is empty`), so any
+remaining 4xx is diagnosable from the log/UI. New `e5-embedder.test.ts` cases: empties are zero-vectored without reaching the
+server (only non-empty inputs sent, order preserved); a non-OK response surfaces its body. Full suite green except the 3
+pre-existing platform failures; build + typecheck clean. NOTE: if a 400 recurs after this, the message now names the cause —
+an "input is too large" reason would point at the truncation safety factor (`runtime/context-budget.ts`, 2.2×) vs n_ctx._
+
+_2026-06-30 — **Cancel for the in-flight bulk re-index.** Follow-up to the main-owned reindex job below: a **Cancel**
+button next to the progress bar (`IPC.cancelReindexAll`, an `AbortController` in `registerDocsIpc`) stops a running
+"Re-index all"/"Retry all". The current document finishes and the rest are skipped — abort is checked at each iteration
+boundary, the same granularity as the existing workspace-lock break. `ReindexJobStatus` gained `cancelled: boolean` (set
+from `signal.aborted` in the loop's finally); the renderer toasts "Re-indexing stopped — N of M done" (new i18n
+`docs.reindexAllCancel`/`docs.reindexAllCancelled`, en + de) instead of silently clearing the bar. New tests: main
+(`docs-ipc.test.ts`) starts 6 docs, cancels, polls to done, asserts `cancelled:true` + `completed < total`; renderer
+recovers a running job on mount and asserts the Cancel button calls `cancelReindexAll`. Full suite green except the 3
+pre-existing platform failures; build + typecheck clean. Docs: rag-design.md §"Re-index all"._
+
+_2026-06-30 — **Bulk re-index progress now survives navigation (main-owned job).** The "Re-index all" / "Retry all"
+progress bar used to vanish when leaving the Documents screen because the loop ran in the RENDERER and its progress was
+component `useState` (discarded on unmount) — while the work kept running invisibly in main. Moved the loop into MAIN as a
+tracked job, mirroring the import job: new `ReindexJobStatus`, `IPC.startReindexAll(documentIds)` + parameterless
+`IPC.getReindexAllJob()`, a single in-flight `reindexJob` aggregate (one run at a time; a start while running is
+idempotent), holding one `beginDocumentWork` lease and skipping docs that are `processing`/task-busy. Factored a shared
+`reindexOne()` core used by both the single `reindexDocument` handler and the batch. Renderer: `onReindexAll` now calls
+`startReindexAll` + polls via a new `watchReindex()` (separate interval ref), and a mount effect re-attaches the bar from
+`getReindexAllJob()` — so it persists across navigation AND a renderer reload. Transient only: nothing persisted to disk
+(a saved counter would lie post-restart; the live main job is the source of truth, recovered by polling — same as imports).
+Renderer tests now assert delegation to `startReindexAll(ids)`; a new `docs-ipc.test.ts` case drives the real main loop to
+completion + proves parameterless recovery + start idempotency. Full suite green except the 3 pre-existing platform
+failures; build + typecheck clean. Docs: rag-design.md §"Re-index all"._
+
+_2026-06-30 — **Deep-index offer is now truly fire-and-forget (import/reindex hardening).** A reported runtime crash —
+`ctx.docTasks?.maybeEnqueueTreeBuild is not a function` logged as "Document ingestion crashed" — exposed a latent bug:
+both call sites (import loop + `reindexDocument`) ran the OPTIONAL deep-index offer INSIDE the success path's try, so any
+throw from it (a stale running build whose `DocTaskManager` lacks the method, a DB hiccup) was miscounted as a FAILED
+import / rejected a SUCCESSFUL reindex — contradicting the method's own "never throws into the import/reindex path"
+contract. The `?.` only guarded a missing manager, not a throwing call. Wrapped both calls in one `offerDeepIndex(id)`
+helper (registerDocsIpc.ts) that logs and swallows, so a successfully-indexed doc is never marked failed for a
+side-effect. New `docs-ipc.test.ts` case injects a throwing `maybeEnqueueTreeBuild` (a Proxy) and asserts the import
+reports `failed:0`/doc `indexed` and reindex resolves to `indexed`. NOTE: the source + a fresh build already contain the
+method correctly (it has existed since 2026-06-15) — the original crash was a STALE RUNNING BUILD; rebuild/restart clears
+it, and this fix makes the failure mode graceful regardless. Full suite green except the 3 pre-existing platform failures._
+
+_2026-06-30 — **"Retry all" on the Failed imports tab.** The Documents screen's existing confirm-gated
+"Re-index all" (stale embeddings, M-U6) now has a sibling on the Failed tab: when `section.kind === 'failed'`
+and more than one document has `status === 'failed'`, a **Retry all ({count})** button re-indexes every failed
+import sequentially. Both buttons share one runner — `onReindexAllStale()` was generalised to `onReindexAll(targets)`
+and the `confirmReindexAll` boolean became `{ kind: 'stale' | 'failed'; docs }` so the confirm dialog's title/body/
+button copy match whichever set opened it (new i18n keys `docs.retryAllFailed*` / `docs.retryAllConfirm.*`, en + de).
+New test in `DocumentsScreen.test.tsx` mirrors the stale-reindex test (navigates to Failed via the "More" disclosure,
+confirms, asserts both failed docs re-index); it clears localStorage first because `VIEWS_MORE_KEY` leaks across the
+file's tests. Full suite green except the 3 pre-existing platform failures; build clean. Docs: rag-design.md §"Re-index all"._
+
+_2026-06-30 — **Assistant Markdown renderer switched to Streamdown (streaming-aware) + KaTeX math** (ported from
+branch `mkg` commit `c5a1e86` onto `mkg-public`, which had diverged at 0.1.34 and never carried it). Replaced
+`react-markdown` + `remark-gfm` with **Streamdown** (`@streamdown/math` + `katex`) in `Transcript.tsx`'s shared
+`AssistantMarkdown`. **Reverses the FE-1 "live answer is PLAIN TEXT" decision** (architecture.md §FE-1): the live bubble
+now streams Markdown — Streamdown block-memoizes (a flush re-parses only the final block) and `parseIncompleteMarkdown`
+closes dangling `**bold**`/fences/links so partial syntax formats cleanly. The bubble became `.msg-content.md`; the `▋`
+caret stays a sibling. **Improvement over the original commit:** the `components` object is hoisted to module scope
+alongside the plugin objects, so the live bubble's per-flush props references are stable — an inline `components` would
+have defeated block memoization. **Config:** rehype pared to `rehype-sanitize` only (`rehype-raw` dropped → model HTML
+stays LITERAL TEXT; `rehype-harden` dropped as redundant under the CSP + the http(s) `a` gate); `**bold**` mapped back to
+`<strong>` (no Tailwind); KaTeX via `plugins={{ math }}` (block `$$…$$`/`\(…\)`, NOT single `$`), fonts bundled as local
+assets (offline, `font-src 'self'`). **KaTeX is a deliberate win for tax/finance/accounting users** — typeset effective
+rates, depreciation and apportionment formulae instead of raw `\frac{…}{…}` noise. **Measured** (`scripts/bench-markdown-flush.mjs`):
+naive full re-parse per flush is O(n²) (6.8× per-block growth, 14.4 s @ 80 KaTeX blocks); block memoization ALONE is flat
+O(n) (0.8×, 67 ms); the shipped config (memo + `parseIncompleteMarkdown`) is super-linear (3.0×, 346 ms) — ~40× faster than
+naive, ~4 ms/flush, interactive. Residual = the whole-buffer `parseIncompleteMarkdown` scan; upgrade path documented in
+§FE-1 (gate `streaming` off past N blocks) — not needed at current sizes. **As built (re-verified on the 2026-07-06 rebase onto
+master):** typecheck clean; production build clean **and KaTeX fonts ship locally** (`out/renderer/assets/KaTeX_*`); full
+suite green. (An earlier revision of this entry noted "3 pre-existing platform failures" — the Ubuntu path one was fixed
+on master by `280cb39` on 2026-07-01 and none reproduce on the rebased tree.) `TranscriptMemo.test.tsx` rewritten to mock Streamdown (live answer now PARSED, persisted turn
+still parses once across flushes); new `tests/unit/assistant-markdown.test.tsx` pins the security invariants (http(s) anchor,
+inert `javascript:`, no `<script>`) against the real Streamdown. New RENDERER deps: `streamdown`, `@streamdown/math`,
+`katex`; `react-markdown` + `remark-gfm` removed. The screenshot-verify harness
+(`preview.tsx` + skill) and the Nix dev-shell flake moved to their own branches (`screenshot-verify`, `nix-dev-shell`) —
+different review bar, split out per PR review 2026-07-06._
 
 _2026-07-06 — **Translation FOLLOW-UP audit (FA wave) — FA-4: start-latch decision + progress-label nit + CLOSE-OUT (F-7, F-8) — on `master`. THE FA WAVE IS COMPLETE (4 of 4).** The working paper is folded into `docs/architecture.md` "Translation sidecar — design record" (a "Follow-up audit (FA wave) — outcomes" paragraph + per-finding disposition F-1…F-8 that keeps the `F-N`/`FA-N` code-comment anchors resolvable) and DELETED (`git rm docs/translation-audit-2026-07-06-followup.md`; git history keeps it) per the doc-lifecycle rule._
 _**F-7 (a transient start failure permanently disables translation for the session) — SHIPPED as option (c); option (a) rejected-with-reason.** The ~10 GB sidecar's lazy start arms the permanent `startFailed` latch on any non-bind-race failure (the reranker precedent); for this model the likeliest cause is transient memory pressure from the co-resident chat model, latching translation off until restart with only "runtime failed" to show. **DECISION — verified against `LlamaServer`'s real start surface first:** no reliable transient/OOM signature exists across OSes to safely un-latch — the only machine-readable signal is the exit code, and on Windows the OOM/`std::bad_alloc` exit `0xC0000409` COLLIDES with the PERMANENT #20305 minja template crash (documented in `TRANSLATION_TEMPLATE_ARGS`), while a Linux OOM-kill `SIGKILL` is indistinguishable from our own `stop()`. So **option (a) "classify OOM-shaped failures as non-latching like bind races" is REJECTED** (it would also un-latch a genuinely permanent fault sharing the signature → every window re-spawns + re-awaits the full health timeout, the exact cost the latch exists to prevent); option (b) time-bounding shares that reliance — not chosen. **Shipped (c):** keep the latch (correct for the permanent case) but tag its error with a distinct code — a new `TranslationStartError`/`TRANSLATION_START_FAILED_CODE` in `runtime.ts` (the bind-race exemption UNCHANGED: a bind race still propagates raw, non-latching). The two consumers map it to actionable "restart the app / free memory" copy: the view path (`jobs.ts`) surfaces a new `TranslateErrorCode` `startFailed` → `translate.err.startFailed`; the doc-task path (`handlers/translation.ts`) rethrows it as `main.translation.startFailed` (added to the manager's `FRIENDLY_TASK_ERROR_KEYS` so it passes through to `status.error`, shown verbatim by the file view). Both new keys are en+de, parity-compile-enforced. Content-free: only the code/localized copy cross to the renderer (no cause message); the added local `log.warn`s log the runtime/stderr string, the same content-free class `security-model.md` §"Translate view content-free logs" already permits — so **`security-model.md` is unchanged (confirmed)**. Both consumers also SKIP the futile retry (the latch re-throws identically). **F-8 (file progress label counted the materialize step — `stepsTotal = windows + 1`, so a 12-window doc read "(3/13)") — FIXED, display-only.** A `windowProgress()` helper in `fileTranslateSession.ts` subtracts the materialize step and clamps `windowsDone`, applied on BOTH the fresh-start poll and the FA-3 adopt seed; the doc-task's real progress contract is untouched. (The DocumentsScreen inline-translate label is a separate surface, out of scope, left as-is.) **Tests (+4):** `translation-runtime.test.ts` — a non-bind start fault latches AND carries the distinct code (one spawn), a bind race does NOT latch and is not a `TranslationStartError` (retries); `translate-ipc.test.ts` — a start failure surfaces the `startFailed` code, no retry; `doctasks-translation.test.ts` — a start failure fails the task with `main.translation.startFailed`, no per-window retry; `fileTranslateSession.test.ts` — a fresh 2-window doc shows "(1/2)" not "(1/3)"; the existing FA-3 adopt pin retargeted to the F-8-corrected total. **Suite 3584/47** (was 3580; +4). typecheck + build green. **Docs:** architecture.md FA-wave record (above) + TG-5 label note; `known-limitations.md` gains the F-7 start-failure bullet; working paper deleted. **The FA wave (F-1…F-8) is fully closed — every finding fixed or decided-with-record.** Unpushed on `master`._

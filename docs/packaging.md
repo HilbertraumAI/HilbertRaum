@@ -129,6 +129,15 @@ Key config points:
   **These are externalized, so a missing one only fails at RUNTIME, not in the green gate — after
   packaging, smoke-test importing a PDF, a DOCX, and a CSV, AND creating/unlocking an encrypted
   workspace (exercises `@noble/hashes` argon2id), from the produced `.exe`.**
+- **The never-imported mermaid chain is excluded from `app.asar`** via `files` negations in
+  `electron-builder.yml`: `streamdown` (the chat Markdown renderer) hard-depends on `mermaid`
+  (~136 MB unpacked incl. cytoscape / the d3 suite / dagre-d3-es / roughjs), but the
+  `@streamdown/mermaid` plugin is not installed, so none of it is ever imported — Vite keeps it out
+  of the renderer bundle and the negations keep it out of the asar (app.asar ≈ 68 MB vs ≈ 204 MB
+  without). `tests/integration/packaging.test.ts` recomputes the "reachable only via mermaid" set
+  from `package-lock.json`, so a future dep that genuinely needs an excluded package turns the green
+  gate red (remove that negation then). If the mermaid plugin is ever adopted, delete the negation
+  block and its test.
 - **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed** (Phase 38): the OCR engine spawns
   its Node worker via `worker_threads`, which loads the worker script (and the WASM core it
   requires) through real filesystem reads that cannot see inside the asar archive. The engine

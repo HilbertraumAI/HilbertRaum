@@ -96,6 +96,15 @@ export const IPC = {
   setDocumentLifecycle: 'docs:setLifecycle',
   deleteDocument: 'docs:delete',
   reindexDocument: 'docs:reindex',
+  /** Start a bulk re-index ("Re-index all" stale / "Retry all" failed). Main owns the job so its
+   *  progress survives navigation; returns the initial ReindexJobStatus. Idempotent while running. */
+  startReindexAll: 'docs:startReindexAll',
+  /** Current bulk re-index job (or null) — parameterless so the renderer recovers the progress
+   *  bar on mount without holding the job id across an unmount. */
+  getReindexAllJob: 'docs:getReindexAllJob',
+  /** Stop the in-flight bulk re-index. The current document finishes; the rest are skipped and the
+   *  job ends with `cancelled: true`. No-op when nothing is running. */
+  cancelReindexAll: 'docs:cancelReindexAll',
   /** Read-only in-app preview: re-extract the stored copy's text (FE-6: the BOUNDED first page). */
   previewDocument: 'docs:preview',
   /** FE-6: a subsequent bounded page of a document preview (offset/limit + cursor). */

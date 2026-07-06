@@ -186,15 +186,30 @@ noted below.
 - **FE-1 — streaming no longer re-parses the whole transcript.** Each persisted turn is a memoized
   `MessageBlock` (React.memo, keyed by message id) and `AssistantMarkdown` is itself `React.memo`'d
   (keyed by its text), so a ~40 ms `streamText` flush never re-parses a prior, unchanged message's
-  Markdown. **DECISION — the live answer streams as PLAIN TEXT** (`.msg-content`, `white-space:
-  pre-wrap`), not Markdown: re-parsing the growing buffer every flush was O(n²) over the reply
-  length. The full Markdown parse runs **once on completion**, when the turn re-renders from
-  `messages` as a `MessageBlock`. The only visible effect is that raw `**markers**` show literally
-  during the stream and snap to formatted on completion — accepted (audit-sanctioned). The visible
-  text stays non-live (audit L7); `StreamAnnouncer` still announces sentence-by-sentence.
-  `lastAssistantId` is `useMemo`'d (was a per-flush `[...messages].reverse().find`), and the
-  scroll-to-bottom effect is gated on an `atBottomRef` so a flush only forces layout + scroll while
-  the user is pinned to the bottom (also addresses the FE-5 scroll-thrash note).
+  Markdown. **DECISION (revised) — the live answer streams as Markdown via Streamdown.** The original
+  O(n²)-per-flush worry that kept the live bubble as PLAIN TEXT is gone: Streamdown splits the buffer
+  into blocks and memoizes each, so a flush re-parses only the final block, and `parseIncompleteMarkdown`
+  closes dangling `**bold**`/`` `code` ``/fences/links mid-stream so partial syntax formats cleanly
+  instead of flashing raw markers. The live bubble is now `.msg-content.md` (same prose CSS as a
+  persisted turn) with the stream caret a sibling of the block. The visible text stays non-live
+  (audit L7); `StreamAnnouncer` still announces sentence-by-sentence. `lastAssistantId` is `useMemo`'d
+  (was a per-flush `[...messages].reverse().find`), and the scroll-to-bottom effect is gated on an
+  `atBottomRef` so a flush only forces layout + scroll while the user is pinned to the bottom (also
+  addresses the FE-5 scroll-thrash note).
+  - **Measured (`scripts/bench-markdown-flush.mjs`, jsdom client render, total stream time as the
+    reply grows 10→80 rich KaTeX blocks):** naive full re-parse each flush (memo defeated) is
+    **O(n²)** — 263ms→14,358ms, 6.8× per-block growth, confirming the original worry was real.
+    Block memoization alone (no `parseIncompleteMarkdown`) is **flat O(n)** — 10.5ms→67ms, 0.8×
+    per-block — so closed blocks are genuinely not re-parsed, and the module-level `components`/plugin
+    references in `Transcript.tsx` are what keeps that memoization intact (an inline `components`
+    object would put the live bubble back on the O(n²) curve). The **shipped config**
+    (memoization **+** `parseIncompleteMarkdown`) lands in between — 14.4ms→346ms, 3.0× per-block,
+    super-linear: `parseIncompleteMarkdown` re-scans the whole growing buffer each flush. Net: ~40×
+    faster than naive at 80 blocks and ~4 ms/flush, comfortably interactive for realistic replies
+    (flushes are rAF/40 ms-throttled and replies are rarely that long). **Ceiling + upgrade path:**
+    the residual is the whole-buffer `parseIncompleteMarkdown` scan; if very long single replies ever
+    feel sluggish, gate `streaming` off past N blocks (a long buffer has few dangling tokens to close,
+    so the anti-flicker benefit is only at the trailing edge) — not done now (YAGNI at current sizes).
 - **FE-3 — chat children memoized; stable handler identities.** `Transcript` and `ConversationList`
   are `React.memo`'d. ChatScreen re-renders on every keystroke (input state) + every flush; a
   `useEventCallback` (latest-ref) wrapper gives the handlers passed to those children
@@ -235,7 +250,7 @@ behavior. The labels below are the audit's **FE-1…FE-9** (full-audit-2026-06-2
 Wave-P2 perf FE-* record above).
 
 **Error boundary (FE-1 — the one High).** Before Phase 3 there was **no** error boundary anywhere, so
-any screen render throw (e.g. `react-markdown` on malformed model output, a Radix portal edge)
+any screen render throw (e.g. `Streamdown` on malformed model output, a Radix portal edge)
 unmounted the whole tree → a blank window with no recovery, in an offline app the user must
 force-quit. The contract now:
 - **Component:** `renderer/components/ErrorBoundary.tsx` — a class component with
@@ -1079,12 +1094,26 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
 - **Markdown rendering (post-MVP).** Assistant replies (persisted and streaming) render as
-  GitHub-flavored Markdown via `react-markdown` + `remark-gfm` — local models emit Markdown, and
-  raw `**asterisks**` read as broken output. react-markdown builds React elements (no
-  `innerHTML`); raw HTML in model output renders as literal text, so the strict CSP /
-  no-injection posture is unchanged. Links get `target="_blank"` so the main process's
-  window-open handler routes http(s) to the OS browser and denies everything else. **User turns
-  stay plain text** — they are not Markdown and must not be reinterpreted.
+  GitHub-flavored Markdown + KaTeX math via **Streamdown** (`@streamdown/math`), a streaming-aware
+  drop-in for react-markdown — local models emit Markdown, and raw `**asterisks**` read as broken
+  output. Streamdown builds React elements (no `innerHTML`). Its rehype chain is pared to
+  `rehype-sanitize` only (we drop `rehype-raw` so model HTML renders as literal text — the no-injection
+  posture is unchanged — and drop `rehype-harden` as redundant under the CSP + the link gate below).
+  The app ships no Tailwind, so Streamdown's one non-semantic element — `**bold**` as a styled
+  `<span>` — is mapped back to `<strong>`; every other element is already semantic and styled by the
+  existing `.md` CSS. The `components`/plugin objects are **module-level** in `Transcript.tsx` so their
+  references stay stable across the ~40 ms flush — an inline object would defeat Streamdown's block
+  memoization (see FE-1, measured). Links are whitelisted to http(s) and get `target="_blank"` so the
+  main process's window-open handler routes them to the OS browser and denies everything else. **User
+  turns stay plain text** — they are not Markdown and must not be reinterpreted.
+  - **KaTeX math — a deliberate win for tax / finance / accounting users.** The whole point of an
+    offline local-LLM workspace for a tax professional is to reason over numbers: effective rates,
+    depreciation schedules, apportionment, `$$r = \frac{tax}{base}$$`-style formulae. Before this,
+    a model that emitted LaTeX math showed raw `\frac{…}{…}` noise; KaTeX now renders it as typeset
+    math inline in the answer, persisted and live. Fonts bundle as **local assets**
+    (`out/renderer/assets/KaTeX_*.woff2/ttf`) so it stays fully offline under `font-src 'self'` — no
+    CDN, consistent with the no-cloud rule. Delimiters are block `$$…$$` / `\(…\)` / `\[…\]`, **not**
+    single `$`, so prose like "owes $5 and $10" is never mangled into math.
 - **Runtime requirement (decision).** `sendChatMessage` does **not** auto-start a runtime: a chat
   needs a started model (`RuntimeManager.start()`). With no active runtime the handler throws and
   the Chat screen shows a "start a model" empty state that links to Models (and polls
@@ -6900,7 +6929,7 @@ anchor as:
 The V1–V5 "ephemeral, nothing persists" posture was **intentionally lifted**: analyzed images are now
 saved to a local **history** (the user asked for parity with the documents/chat history), encrypted at
 rest exactly like the document cache. Markdown rendering of the answer was fixed in the same change
-(the `AnswerThread` answer now uses the shared `AssistantMarkdown` — `react-markdown` + `remark-gfm` —
+(the `AnswerThread` answer now uses the shared `AssistantMarkdown` — Streamdown (GFM + KaTeX) —
 instead of plain `pre-wrap` text).
 
 - **Data model** (`db.ts`): `image_sessions` (one per analyzed image — `title`, `stored_name`,

@@ -1481,14 +1481,28 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
       embeddedCounts.set(e.documentId, e.n)
     }
   }
+  const force = forceReindexEnabled()
   return rows.map((r) => {
     const chunkCount = chunkCounts.get(r.id) ?? 0
     let stale: boolean | undefined
-    if (activeEmbeddingModelId && r.status === 'indexed' && chunkCount > 0) {
-      stale = (embeddedCounts.get(r.id) ?? 0) === 0
+    if (r.status === 'indexed' && chunkCount > 0) {
+      // HR_FORCE_REINDEX (dev): report every indexed document as outdated regardless of which
+      // embedder produced its vectors, so the "needs re-index" view + "Re-index all" cover the whole
+      // corpus — the lever for re-embedding everything after a chunk-size/embedder change.
+      if (force) stale = true
+      else if (activeEmbeddingModelId) stale = (embeddedCounts.get(r.id) ?? 0) === 0
     }
     return { ...rowToInfo(r, chunkCount, stale), collections: memberships.get(r.id) ?? [] }
   })
+}
+
+/**
+ * Dev escape hatch: when `HR_FORCE_REINDEX=1`, `listDocuments` flags EVERY indexed document
+ * `staleEmbeddings` so the UI offers a full-corpus re-index (re-chunk + re-embed). Read at call time
+ * so it can be toggled per run. Use after changing the chunk size or swapping the embedding model.
+ */
+export function forceReindexEnabled(): boolean {
+  return process.env.HR_FORCE_REINDEX === '1'
 }
 
 export function getDocument(db: Db, id: string): DocumentInfo | null {

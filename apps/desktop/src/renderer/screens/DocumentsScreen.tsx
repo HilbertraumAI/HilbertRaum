@@ -117,6 +117,7 @@ function inSection(d: DocumentInfo, section: DocSection): boolean {
 
 export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.Element {
   const { t, tCount, lang } = useT()
+  const showToast = useToast()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -176,7 +177,12 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const [addToProjectFor, setAddToProjectFor] = useState<string[] | null>(null)
   // M-U6: re-index-all is multi-minute CPU work — gate it behind a ConfirmDialog and
   // show a determinate Progress bar ("Re-indexing 3 of 12…") instead of a button spinner.
-  const [confirmReindexAll, setConfirmReindexAll] = useState(false)
+  // The pending target carries WHICH set is being re-indexed (stale embeddings vs failed
+  // imports) so the confirm copy and snapshot match the button that opened it; null = closed.
+  const [confirmReindexAll, setConfirmReindexAll] = useState<{
+    kind: 'stale' | 'failed'
+    docs: DocumentInfo[]
+  } | null>(null)
   const [reindexProgress, setReindexProgress] = useState<{ done: number; total: number } | null>(
     null
   )
@@ -186,6 +192,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // chat ConversationList pattern). Holds the open row id, or null.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Separate interval for the bulk re-index poll so it never clobbers the import poll above.
+  const reindexPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Mounted flag (audit FE-4): the import poll's in-flight `getImportJob`/`refresh` can resolve
   // AFTER the interval is cleared on unmount; clearing the interval doesn't abort that tick's
   // promise, so guard every setState behind this flag.
@@ -274,6 +282,87 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     },
     [refresh]
   )
+
+  // Poll the MAIN-owned bulk re-index job until it settles. Mirrors `watchJob`: a 400 ms tick reads
+  // the small `getReindexAllJob` status, refreshes the full list on a count transition + at the end,
+  // and drives the determinate progress bar. Because the job lives in main, this re-attaches cleanly
+  // after navigating away and back (the mount effect below restarts it) — the bar no longer vanishes.
+  const watchReindex = useCallback((): void => {
+    if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+    let lastSettled = -1
+    reindexPollRef.current = setInterval(async () => {
+      try {
+        const job = await window.api.getReindexAllJob?.()
+        if (!mountedRef.current) return
+        if (!job) {
+          // No job (cleared/expired) — stop and reset the UI.
+          if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+          reindexPollRef.current = null
+          setBusy(null)
+          setReindexProgress(null)
+          return
+        }
+        setReindexProgress({ done: job.completed + job.failed, total: job.total })
+        const settled = job.completed + job.failed
+        const transitioned = settled !== lastSettled
+        lastSettled = settled
+        if (transitioned || job.done) await refresh()
+        if (job.done) {
+          if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+          reindexPollRef.current = null
+          if (mountedRef.current) {
+            setBusy(null)
+            setReindexProgress(null)
+            // Cancelled ends the same way as completed (bar clears, list refreshed) — a toast tells
+            // the user it STOPPED early rather than finished, with what got through. A completed
+            // batch gets a summary toast too (PR review): the loop continues past per-document
+            // failures (locked/deleted/crashed docs), so without a summary a partial outcome
+            // looked identical to a full success until you noticed the Failed imports tab.
+            if (job.cancelled) {
+              showToast(t('docs.reindexAllCancelled', { done: job.completed, total: job.total }))
+            } else if (job.failed > 0) {
+              showToast(
+                t('docs.reindexAllPartial', {
+                  done: job.completed,
+                  total: job.total,
+                  failed: job.failed
+                })
+              )
+            } else if (job.total > 0) {
+              showToast(t('docs.reindexAllDone', { done: job.completed }))
+            }
+          }
+        }
+      } catch (e) {
+        if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+        reindexPollRef.current = null
+        if (!mountedRef.current) return
+        setBusy(null)
+        setReindexProgress(null)
+        setError(friendlyIpcError(e))
+      }
+    }, 400)
+  }, [refresh, showToast, t])
+
+  // Recover a bulk re-index already running in main when the screen (re)mounts: this is what keeps
+  // the progress bar alive across navigation. Also clears the poll on unmount.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const job = await window.api.getReindexAllJob?.()
+        if (job && !job.done && mountedRef.current) {
+          setBusy('reindex-all')
+          setReindexProgress({ done: job.completed + job.failed, total: job.total })
+          watchReindex()
+        }
+      } catch {
+        // No bridge / locked — nothing to recover.
+      }
+    })()
+    return () => {
+      if (reindexPollRef.current) clearInterval(reindexPollRef.current)
+    }
+  }, [watchReindex])
 
   // `token` (D1) is the picker capability from `pickDocuments`; main imports exactly what was
   // picked and ignores the `paths` we pass (kept only so an old test/caller still type-checks).
@@ -485,6 +574,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // time (FE-2). Keyed only on the inputs each derivation actually reads.
   const anyActive = useMemo(() => docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false, [docs])
   const staleDocs = useMemo(() => docs?.filter((d) => d.staleEmbeddings) ?? [], [docs])
+  // The 'failed' smart view (status === 'failed'): drives the "Retry all" action shown on that tab.
+  const failedDocs = useMemo(() => docs?.filter((d) => d.status === 'failed') ?? [], [docs])
   const empty = docs != null && docs.length === 0
 
   // ---- Document-organization: section rail filtering + collection/project actions ----
@@ -708,28 +799,25 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     })
   }
 
-  // Re-index every stale document sequentially: same per-document call as
-  // the row button, one at a time — multi-document re-embedding contends on the embedder.
-  // Confirmed first (M-U6) because it is multi-minute CPU work; a determinate Progress
-  // bar reports "Re-indexing N of M…" rather than a bare button spinner.
-  async function onReindexAllStale(): Promise<void> {
-    const targets = staleDocs // snapshot — refresh() mutates staleDocs as docs clear
+  // Re-index a set of documents — the loop runs in MAIN (startReindexAll) so its determinate
+  // progress survives navigating away from this screen; here we just start it and poll via
+  // watchReindex. Confirmed first (M-U6) because it is multi-minute CPU work. Used by both
+  // "Re-index all" (stale embeddings) and the failed-tab "Retry all".
+  function onReindexAll(targets: DocumentInfo[]): void {
     setBusy('reindex-all')
     setError(null)
     setReindexProgress({ done: 0, total: targets.length })
-    try {
-      for (let i = 0; i < targets.length; i++) {
-        await window.api.reindexDocument(targets[i].id)
-        setReindexProgress({ done: i + 1, total: targets.length })
-        await refresh()
+    void (async () => {
+      try {
+        // Main owns the loop now (it survives navigation); we just kick it off and poll.
+        await window.api.startReindexAll(targets.map((d) => d.id))
+        watchReindex()
+      } catch (e) {
+        setBusy(null)
+        setReindexProgress(null)
+        setError(friendlyIpcError(e))
       }
-    } catch (e) {
-      setError(friendlyIpcError(e))
-    } finally {
-      setBusy(null)
-      setReindexProgress(null)
-      await refresh().catch(() => undefined)
-    }
+    })()
   }
 
   // Stable row-handler identities for the memoized DocRow (perf audit PERF-5). The latest-ref
@@ -876,11 +964,25 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
               size="sm"
               disabled={busy !== null || anyActive}
               title={t('docs.reindexAllTitle')}
-              onClick={() => setConfirmReindexAll(true)}
+              onClick={() => setConfirmReindexAll({ kind: 'stale', docs: staleDocs })}
             >
               {busy === 'reindex-all'
                 ? t('docs.reindexBusy')
                 : t('docs.reindexAll', { count: staleDocs.length })}
+            </Button>
+          )}
+          {/* Retry every failed import in one go, shown only on the Failed tab. Each row still
+              has its own re-index, but on a tab full of failures one click beats N. */}
+          {section.kind === 'failed' && failedDocs.length > 1 && (
+            <Button
+              size="sm"
+              disabled={busy !== null || anyActive}
+              title={t('docs.retryAllFailedTitle')}
+              onClick={() => setConfirmReindexAll({ kind: 'failed', docs: failedDocs })}
+            >
+              {busy === 'reindex-all'
+                ? t('docs.reindexBusy')
+                : t('docs.retryAllFailed', { count: failedDocs.length })}
             </Button>
           )}
         </div>
@@ -942,14 +1044,21 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       )}
 
       {reindexProgress && (
-        <Progress
-          label={t('docs.reindexAllProgress', {
-            done: reindexProgress.done,
-            total: reindexProgress.total
-          })}
-          value={reindexProgress.done}
-          max={reindexProgress.total}
-        />
+        <div className="docs-reindex-progress">
+          <Progress
+            label={t('docs.reindexAllProgress', {
+              done: reindexProgress.done,
+              total: reindexProgress.total
+            })}
+            value={reindexProgress.done}
+            max={reindexProgress.total}
+          />
+          {/* Stop the in-flight bulk re-index. The current document finishes; the rest are skipped
+              (main aborts at the next iteration boundary). The poll then clears this bar + toasts. */}
+          <Button size="sm" onClick={() => void window.api.cancelReindexAll?.()}>
+            {t('docs.reindexAllCancel')}
+          </Button>
+        </div>
       )}
 
       <p className="hint" style={{ marginTop: 10 }}>
@@ -1146,17 +1255,30 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       </ConfirmDialog>
 
       <ConfirmDialog
-        open={confirmReindexAll}
-        title={t('docs.reindexAllConfirm.title', { count: staleDocs.length })}
-        confirmLabel={t('docs.reindexAllConfirm.confirm')}
+        open={confirmReindexAll !== null}
+        title={
+          confirmReindexAll?.kind === 'failed'
+            ? t('docs.retryAllConfirm.title', { count: confirmReindexAll.docs.length })
+            : t('docs.reindexAllConfirm.title', { count: confirmReindexAll?.docs.length ?? 0 })
+        }
+        confirmLabel={
+          confirmReindexAll?.kind === 'failed'
+            ? t('docs.retryAllConfirm.confirm')
+            : t('docs.reindexAllConfirm.confirm')
+        }
         t={t}
         onConfirm={() => {
-          setConfirmReindexAll(false)
-          void onReindexAllStale()
+          const target = confirmReindexAll?.docs ?? []
+          setConfirmReindexAll(null)
+          void onReindexAll(target)
         }}
-        onCancel={() => setConfirmReindexAll(false)}
+        onCancel={() => setConfirmReindexAll(null)}
       >
-        <p className="hint">{t('docs.reindexAllConfirm.body')}</p>
+        <p className="hint">
+          {confirmReindexAll?.kind === 'failed'
+            ? t('docs.retryAllConfirm.body')
+            : t('docs.reindexAllConfirm.body')}
+        </p>
       </ConfirmDialog>
 
       {translateDoc && (

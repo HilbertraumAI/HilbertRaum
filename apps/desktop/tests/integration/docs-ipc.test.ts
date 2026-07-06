@@ -41,7 +41,8 @@ import type {
   DocumentOrigin,
   ImportJob,
   ImportJobStatus,
-  ImportOptions
+  ImportOptions,
+  ReindexJobStatus
 } from '../../src/shared/types'
 import { LARGE_FILE_BYTES } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
@@ -54,7 +55,13 @@ function freshWorkspace(): { db: Db; workspacePath: string } {
   return { db: openDatabase(join(root, 'hilbertraum.sqlite')), workspacePath: root }
 }
 
-function ctxWith(db: Db, workspacePath: string, embedder: Embedder, unlocked: boolean): AppContext {
+function ctxWith(
+  db: Db,
+  workspacePath: string,
+  embedder: Embedder,
+  unlocked: boolean,
+  docTasks?: unknown
+): AppContext {
   return {
     db,
     paths: { workspacePath },
@@ -64,7 +71,10 @@ function ctxWith(db: Db, workspacePath: string, embedder: Embedder, unlocked: bo
       isUnlocked: () => unlocked,
       beginDocumentWork: () => () => {},
       documentCipher: () => null
-    }
+    },
+    // Optional: a fake DocTaskManager (e.g. one whose maybeEnqueueTreeBuild throws) to prove the
+    // deep-index offer is fire-and-forget and never fails a (re)index.
+    docTasks
   } as unknown as AppContext
 }
 
@@ -162,6 +172,142 @@ describe('registerDocsIpc', () => {
     const lib = getBuiltinCollection(db, 'library')!
     expect(documentIdsInCollection(db, temp.id)).toContain(id)
     expect(documentIdsInCollection(db, lib.id)).not.toContain(id) // stays out of Library
+  })
+
+  it('a throwing maybeEnqueueTreeBuild never fails the import or reindex (fire-and-forget)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    // A stale/odd DocTaskManager whose deep-index offer throws — the exact runtime shape behind
+    // "ctx.docTasks?.maybeEnqueueTreeBuild is not a function". The document still indexes fine; the
+    // optional deep-index offer must be swallowed, not counted as a failed import / a rejected reindex.
+    const docTasks = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'maybeEnqueueTreeBuild') {
+            return () => {
+              throw new Error('maybeEnqueueTreeBuild is not a function')
+            }
+          }
+          // Every other guard the docs IPC consults (isDocumentBusy/hasActiveTask/…): a benign
+          // falsy no-op, so only the deep-index offer is the thing that throws.
+          return () => false
+        }
+      }
+    )
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, docTasks))
+    const file = join(workspacePath, 'report.txt')
+    writeFileSync(file, 'quarterly report alpha beta gamma delta epsilon')
+
+    // Import path: the job completes with the doc INDEXED and ZERO failures despite the throw.
+    const { result: imp } = await invoke(handlers, IPC.importDocuments, [file])
+    const jobId = (imp as ImportJob).jobId
+    let status: ImportJobStatus | undefined
+    for (let i = 0; i < 200; i++) {
+      status = (await invoke(handlers, IPC.getImportJob, jobId)).result as ImportJobStatus
+      if (status.done) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(status?.failed).toBe(0)
+    expect(status?.completed).toBe(1)
+    const id = (imp as ImportJob).documentIds[0]
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === id)!.status).toBe('indexed')
+
+    // Reindex path: resolves to `indexed` instead of rejecting on the same throw.
+    const info = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
+    expect(info.status).toBe('indexed')
+  })
+
+  it('startReindexAll runs the bulk loop in main, recoverable via parameterless getReindexAllJob', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const a = join(workspacePath, 'a.txt')
+    const b = join(workspacePath, 'b.txt')
+    writeFileSync(a, 'alpha beta gamma delta')
+    writeFileSync(b, 'epsilon zeta eta theta')
+    const { documentIds } = await runImport([a, b])
+    expect(documentIds).toHaveLength(2)
+
+    // Start the bulk re-index; the loop lives in MAIN, so the renderer can poll without the jobId.
+    const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    expect(started.total).toBe(2)
+    expect(started.done).toBe(false)
+    // Recovery: the parameterless getter returns the SAME in-flight job (this is what survives a
+    // navigation/remount), and a second start while running is idempotent (same jobId, no relaunch).
+    const recovered = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    expect(recovered.jobId).toBe(started.jobId)
+    const again = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    expect(again.jobId).toBe(started.jobId)
+
+    // Poll to completion, exactly as the renderer does.
+    let job = recovered
+    for (let i = 0; i < 200 && !job.done; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    }
+    expect(job.done).toBe(true)
+    expect(job.completed).toBe(2)
+    expect(job.failed).toBe(0)
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(documentIds.every((id) => listed.find((d) => d.id === id)?.status === 'indexed')).toBe(true)
+  })
+
+  it('cancelReindexAll stops the in-flight bulk loop (cancelled, not all completed)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const paths: string[] = []
+    for (let i = 0; i < 6; i++) {
+      const f = join(workspacePath, `f${i}.txt`)
+      writeFileSync(f, `doc ${i} alpha beta gamma delta`)
+      paths.push(f)
+    }
+    const { documentIds } = await runImport(paths)
+    expect(documentIds).toHaveLength(6)
+
+    const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    expect(started.done).toBe(false)
+    // Cancel right away: the in-flight document finishes, the rest are skipped at the next boundary.
+    await invoke(handlers, IPC.cancelReindexAll)
+    let job = started
+    for (let i = 0; i < 200 && !job.done; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    }
+    expect(job.done).toBe(true)
+    expect(job.cancelled).toBe(true)
+    expect(job.completed).toBeLessThan(job.total) // stopped before finishing all six
+  })
+
+  it('a mid-loop rejection (deleted doc) fails only that document — the rest still re-index', async () => {
+    // PR review: the batch must continue past a document whose re-index rejects (here: deleted
+    // between listing and the loop reaching it), not abort the remainder with one generic error.
+    // The settled counts still add up to total so the renderer's summary toast is honest.
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const paths: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const f = join(workspacePath, `m${i}.txt`)
+      writeFileSync(f, `doc ${i} alpha beta gamma delta`)
+      paths.push(f)
+    }
+    const { documentIds } = await runImport(paths)
+    expect(documentIds).toHaveLength(3)
+    // Delete the MIDDLE document so the loop hits the rejection with work still remaining.
+    await invoke(handlers, IPC.deleteDocument, documentIds[1])
+
+    const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
+    let job = started
+    for (let i = 0; i < 200 && !job.done; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
+    }
+    expect(job.done).toBe(true)
+    expect(job.cancelled).toBe(false)
+    expect(job.completed).toBe(2) // the docs AFTER the rejection were still processed
+    expect(job.failed).toBe(1)
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === documentIds[0])?.status).toBe('indexed')
+    expect(listed.find((d) => d.id === documentIds[2])?.status).toBe('indexed')
   })
 
   it('imports a chat attachment: Temporary + a conversation_documents link (C3)', async () => {

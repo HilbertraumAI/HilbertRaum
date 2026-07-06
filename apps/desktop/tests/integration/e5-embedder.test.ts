@@ -283,6 +283,143 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // Empty/whitespace inputs are NOT sent to the sidecar (llama.cpp 400s on an empty input). They
+  // get an all-zero vector and the request carries only the non-empty inputs, placed back in order.
+  it('zero-vectors empty/whitespace inputs without sending them to the server', async () => {
+    const { spawn } = fakeSpawn()
+    const sentInputs: string[][] = []
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        const body = JSON.parse(String(init?.body)) as { input: string[] }
+        sentInputs.push(body.input)
+        const data = body.input.map((_t, i) => ({ embedding: [1, 0], index: i }))
+        return { ok: true, status: 200, json: async () => ({ data }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const out = await embedder.embed(['hello', '   ', '', 'world'])
+    expect(out).toHaveLength(4)
+    // Only the two non-empty inputs reached the sidecar, in order.
+    expect(sentInputs).toEqual([['hello', 'world']])
+    // The empty slots are all-zero vectors (cosine 0); the non-empty ones are normalized.
+    expect(Array.from(out[1])).toEqual([0, 0])
+    expect(Array.from(out[2])).toEqual([0, 0])
+    expect(Array.from(out[0])).toEqual([1, 0])
+    expect(Array.from(out[3])).toEqual([1, 0])
+    await embedder.stop()
+  })
+
+  // A 4xx must carry the sidecar's REASON, not the JSON envelope — that message is what makes the
+  // "Embedding request failed: HTTP 400" the user reported debuggable.
+  it('extracts the error message (not the JSON envelope) from a non-OK body', async () => {
+    const { spawn } = fakeSpawn()
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        return {
+          ok: false,
+          status: 400,
+          // llama.cpp's OpenAI-shaped error envelope.
+          text: async () =>
+            JSON.stringify({ error: { code: 400, message: 'input is empty', type: 'invalid_request_error' } })
+        } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const err = await embedder.embed(['x']).then(
+      () => null,
+      (e: unknown) => e as Error
+    )
+    expect(err?.message).toMatch(/HTTP 400 — input is empty/)
+    expect(err?.message).not.toContain('{') // no raw JSON dumped at the user
+    expect(err?.message).not.toContain('"error"')
+    await embedder.stop()
+  })
+
+  // A context overflow (the chunk still tokenizes over E5's hard 512 after truncation) is recovered
+  // by halving this batch's budget and retrying — the chunk's head embeds instead of failing the doc.
+  it('re-truncates and retries on a context-overflow 400, then succeeds', async () => {
+    const { spawn } = fakeSpawn()
+    const sent: string[] = []
+    let attempts = 0
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/v1/embeddings')) {
+        const body = JSON.parse(String(init?.body)) as { input: string[] }
+        sent.push(body.input[0])
+        attempts += 1
+        if (attempts === 1) {
+          return {
+            ok: false,
+            status: 400,
+            text: async () =>
+              JSON.stringify({
+                error: {
+                  code: 400,
+                  message: 'input (623 tokens) is larger than the max context size (512 tokens). skipping',
+                  type: 'exceed_context_size_error',
+                  n_prompt_tokens: 623,
+                  n_ctx: 512
+                }
+              })
+          } as Response
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: body.input.map((_t, i) => ({ embedding: [1, 0], index: i })) })
+        } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const longText = 'lorem ipsum dolor sit amet '.repeat(200)
+    const [v] = await embedder.embed([longText])
+    expect(Array.from(v)).toEqual([1, 0]) // succeeded after the retry
+    expect(attempts).toBe(2)
+    expect(sent[1].length).toBeLessThan(sent[0].length) // retry sent a harder-truncated input
+    await embedder.stop()
+  })
+
+  // Dev coverage measurement (HR_EMBED_COVERAGE=1): the embedder tokenizes the FULL chunk AND the
+  // truncated text it actually sends, via the sidecar's /tokenize, to size the upstream chunker.
+  it('tokenizes full vs sent text via /tokenize when coverage measurement is enabled', async () => {
+    const { spawn } = fakeSpawn()
+    const tokenizeContents: string[] = []
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/tokenize')) {
+        const body = JSON.parse(String(init?.body)) as { content: string }
+        tokenizeContents.push(body.content)
+        // Fake tokenizer: 1 token per whitespace word — enough to exercise the measurement path.
+        return { ok: true, status: 200, json: async () => ({ tokens: body.content.split(/\s+/) }) } as Response
+      }
+      if (u.endsWith('/v1/embeddings')) {
+        const body = JSON.parse(String(init?.body)) as { input: string[] }
+        return { ok: true, status: 200, json: async () => ({ data: body.input.map((_t, i) => ({ embedding: [1, 0], index: i })) }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    process.env.HR_EMBED_COVERAGE = '1'
+    try {
+      const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+      await embedder.embed(['alpha beta', 'gamma'])
+      // Two inputs × (full + sent) = four /tokenize calls; the chunk text is among them.
+      expect(tokenizeContents).toContain('alpha beta')
+      expect(tokenizeContents.length).toBe(4)
+      await embedder.stop()
+    } finally {
+      delete process.env.HR_EMBED_COVERAGE
+    }
+  })
+
   // H3 (audit round 4): `this.server` is only assigned after the lazy start resolves,
   // so a stop() racing the first embed() used to see `server == null`, return, and let
   // the just-spawned sidecar outlive the app as an orphan. stop() must await the

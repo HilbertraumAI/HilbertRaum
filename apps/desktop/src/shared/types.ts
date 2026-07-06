@@ -1328,6 +1328,24 @@ export interface ImportJobStatus {
   done: boolean
 }
 
+/**
+ * Progress of a bulk "Re-index all" / "Retry all" run. Owned by the MAIN process (like
+ * `ImportJobStatus`) so the determinate progress bar survives navigating away from the Documents
+ * screen and back: the renderer recovers it with a parameterless `getReindexAllJob()` on mount and
+ * polls until `done`. Only ONE reindex-all runs at a time (a start while one is in flight returns
+ * the running job). `completed`/`failed` count documents that reached `indexed` / failed-or-skipped.
+ */
+export interface ReindexJobStatus {
+  jobId: string
+  total: number
+  completed: number
+  failed: number
+  done: boolean
+  /** True when the run was stopped by the user mid-batch (Cancel). The in-flight document finishes;
+   *  the remaining documents are left untouched. Lets the renderer say "stopped" rather than "done". */
+  cancelled: boolean
+}
+
 // ---- Document organization (architecture.md "Document organization — design record";
 //      retrieval/scope half in rag-design.md §13) ----
 //

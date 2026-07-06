@@ -578,7 +578,7 @@ describe('DocumentsScreen', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('"Re-index all" confirms first, then re-indexes every stale document (M-U6)', async () => {
+  it('"Re-index all" confirms first, then starts the main-owned bulk job with every stale id (M-U6)', async () => {
     const user = userEvent.setup()
     const stale = [
       doc({ id: 'd1', staleEmbeddings: true }),
@@ -588,23 +588,58 @@ describe('DocumentsScreen', () => {
       .fn<() => Promise<DocumentInfo[]>>()
       .mockResolvedValueOnce(stale)
       .mockResolvedValue(stale.map((d) => ({ ...d, staleEmbeddings: false })))
-    const reindexDocument = vi.fn(async (id: string) => doc({ id, staleEmbeddings: false }))
-    stubApi({ listDocuments, reindexDocument })
+    // The per-document loop now lives in MAIN (tested in docs-ipc.test.ts). The renderer just
+    // delegates to startReindexAll and polls getReindexAllJob; a `done` job clears the bar.
+    const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true, cancelled: false }
+    const startReindexAll = vi.fn(async () => finished)
+    const getReindexAllJob = vi.fn(async () => finished)
+    stubApi({ listDocuments, startReindexAll, getReindexAllJob })
     render(<DocumentsScreen />)
 
     // The toolbar button opens a ConfirmDialog — nothing runs until it is confirmed (M-U6).
     await user.click(await screen.findByRole('button', { name: /re-index all \(2\)/i }))
     const dialog = within(await screen.findByRole('dialog'))
     expect(dialog.getByText(/re-index 2 documents\?/i)).toBeInTheDocument()
-    expect(reindexDocument).not.toHaveBeenCalled()
+    expect(startReindexAll).not.toHaveBeenCalled()
 
     await user.click(dialog.getByRole('button', { name: /^re-index all$/i }))
-    await waitFor(() => expect(reindexDocument).toHaveBeenCalledTimes(2))
-    expect(reindexDocument).toHaveBeenCalledWith('d1')
-    expect(reindexDocument).toHaveBeenCalledWith('d2')
+    await waitFor(() => expect(startReindexAll).toHaveBeenCalledWith(['d1', 'd2']))
+    // The bar clears once the polled job reports done and the list refreshes (no more stale docs).
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /re-index all/i })).not.toBeInTheDocument()
     )
+  })
+
+  it('"Retry all" on the Failed tab confirms first, then starts the bulk job with every failed id', async () => {
+    const user = userEvent.setup()
+    // The Views "More" disclosure is remembered in localStorage (VIEWS_MORE_KEY) and leaks across
+    // tests in this file — start from the default (closed) so the "More" toggle reliably OPENS it.
+    window.localStorage.clear()
+    const failed = [
+      doc({ id: 'd1', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 }),
+      doc({ id: 'd2', title: 'corrupt.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 })
+    ]
+    const listDocuments = vi.fn<() => Promise<DocumentInfo[]>>().mockResolvedValue(failed)
+    const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true, cancelled: false }
+    const startReindexAll = vi.fn(async () => finished)
+    const getReindexAllJob = vi.fn(async () => finished)
+    stubApi({ listDocuments, startReindexAll, getReindexAllJob })
+    render(<DocumentsScreen />)
+
+    // The "Retry all" button lives ONLY on the Failed tab (a rare view behind "More").
+    await screen.findByRole('button', { name: 'Library' })
+    expect(screen.queryByRole('button', { name: /retry all/i })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More' }))
+    await user.click(await screen.findByRole('button', { name: 'Failed imports' }))
+
+    // Opens a ConfirmDialog — nothing runs until confirmed (M-U6).
+    await user.click(await screen.findByRole('button', { name: /retry all \(2\)/i }))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.getByText(/retry 2 failed documents\?/i)).toBeInTheDocument()
+    expect(startReindexAll).not.toHaveBeenCalled()
+
+    await user.click(dialog.getByRole('button', { name: /^retry all$/i }))
+    await waitFor(() => expect(startReindexAll).toHaveBeenCalledWith(['d1', 'd2']))
   })
 
   // ---- FE-7: poll job status only during import; refresh the list on a transition -------
@@ -723,14 +758,29 @@ describe('DocumentsScreen', () => {
       doc({ id: 'd1', staleEmbeddings: true }),
       doc({ id: 'd2', title: 'terms.docx', staleEmbeddings: true })
     ]
-    const reindexDocument = vi.fn(async (id: string) => doc({ id, staleEmbeddings: false }))
-    stubApi({ listDocuments: vi.fn(async () => stale), reindexDocument })
+    const startReindexAll = vi.fn(async () => ({ jobId: 'r1', total: 2, completed: 0, failed: 0, done: false, cancelled: false }))
+    stubApi({ listDocuments: vi.fn(async () => stale), startReindexAll })
     render(<DocumentsScreen />)
 
     await user.click(await screen.findByRole('button', { name: /re-index all \(2\)/i }))
     const dialog = within(await screen.findByRole('dialog'))
     await user.click(dialog.getByRole('button', { name: /cancel/i }))
-    expect(reindexDocument).not.toHaveBeenCalled()
+    expect(startReindexAll).not.toHaveBeenCalled()
+  })
+
+  it('recovers an in-flight bulk re-index on mount and its Cancel button calls cancelReindexAll', async () => {
+    const user = userEvent.setup()
+    // A job already running in MAIN — the mount effect re-attaches the determinate bar + Cancel
+    // (this is the navigation-survival path). Clicking Cancel asks main to stop.
+    const running = { jobId: 'r1', total: 5, completed: 1, failed: 0, done: false, cancelled: false }
+    const getReindexAllJob = vi.fn(async () => running)
+    const cancelReindexAll = vi.fn(async () => undefined)
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob, cancelReindexAll })
+    render(<DocumentsScreen />)
+
+    const cancelBtn = await screen.findByRole('button', { name: 'Cancel' })
+    await user.click(cancelBtn)
+    expect(cancelReindexAll).toHaveBeenCalled()
   })
 })
 
