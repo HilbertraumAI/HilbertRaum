@@ -20,7 +20,9 @@ import { clearTranslateSession, getTranslateSession, setLastTranslateChoice } fr
 // Module-level (NOT inside the screen), like `translateSession`/`doctasks`, so a running document
 // translation survives navigating away and back. Privacy: the only content this store holds is the
 // materialized translation preview (a Generated document that already lives in the workspace);
-// `clear()` drops it on workspace LOCK in lockstep with main.
+// on workspace LOCK `App.lockNow` calls `clearFileTranslate()` (via `lib/lockPurge`'s
+// `purgeSessionStores`) to drop it in lockstep with main. It is NOT a screen effect: lock unmounts
+// the screen before any effect could observe it (TA-2 / H3 — the old screen-gated purge was dead).
 //
 // DELIBERATE DEVIATION from plan §4 TG-5's "poll (lib/doctasks.ts store)": we run our OWN
 // import + doc-task polling here rather than routing through the GLOBAL `doctasks` store's

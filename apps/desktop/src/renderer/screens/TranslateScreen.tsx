@@ -4,7 +4,6 @@ import { AssistantMarkdown, StreamAnnouncer } from '../chat'
 import {
   acknowledgeError,
   adoptActiveJob,
-  clearTranslateSession,
   getLastTranslateChoice,
   getTranslateSession,
   stopActive,
@@ -13,7 +12,6 @@ import {
 } from '../lib/translateSession'
 import {
   cancelFileTranslation,
-  clearFileTranslate,
   getFileTranslate,
   resetFileTranslation,
   subscribeFileTranslate,
@@ -82,7 +80,6 @@ export function TranslateScreen({
   const showToast = useToast()
   // null while the first availability read is in flight (a calm placeholder, never a spinner).
   const [available, setAvailable] = useState<boolean | null>(null)
-  const [locked, setLocked] = useState(false)
   const [input, setInput] = useState('')
   // Source+target start from the session's last choice (else a UI-language-aware default), the
   // DocumentsScreen translate-modal precedent. TranslateGemma needs an explicit source — no auto-detect.
@@ -116,10 +113,7 @@ export function TranslateScreen({
   const checkStatus = useCallback(async (): Promise<void> => {
     try {
       const st = await window.api?.getAppStatus?.()
-      if (st) {
-        setAvailable(st.translationAvailable)
-        setLocked(st.workspaceReady === false)
-      }
+      if (st) setAvailable(st.translationAvailable)
     } catch {
       // No status (partial bridge) → calm unavailable, never a crash.
       setAvailable(false)
@@ -143,14 +137,9 @@ export function TranslateScreen({
     void adoptActiveJob()
   }, [])
 
-  // Workspace LOCK: main has aborted the job(s) + purged its map + re-encrypted the vault, so drop
-  // the resident source/translation content here in lockstep with main (privacy parity).
-  useEffect(() => {
-    if (locked) {
-      clearTranslateSession()
-      clearFileTranslate()
-    }
-  }, [locked])
+  // NB: there is deliberately NO lock-purge effect here. Workspace lock unmounts this screen (the
+  // shell swaps to WorkspaceGate) the moment it happens, so a screen effect could never observe it
+  // — the purge of the module stores runs at the real seam, App.lockNow → purgeSessionStores (TA-2).
 
   const sameLang = choice.sourceLang === choice.targetLang
 
@@ -303,9 +292,6 @@ export function TranslateScreen({
   }
 
   function renderBody(): JSX.Element | null {
-    if (locked) {
-      return <EmptyState title={t('translate.locked')} />
-    }
     if (available === null) {
       return <p className="hint">{t('translate.starting')}</p>
     }

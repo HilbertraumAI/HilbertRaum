@@ -19,8 +19,10 @@ import type {
 // and re-subscribing. A tiny seed↔subscribe gap self-heals because `trDone` carries the full text.
 //
 // Privacy: the source text and its translation live in renderer memory only (nothing persisted).
-// On workspace LOCK the screen calls `clearTranslateSession()` so this resident content is dropped
-// in lockstep with main aborting the job + purging its map + re-encrypting the vault.
+// On workspace LOCK `App.lockNow` calls `clearTranslateSession()` (via `lib/lockPurge`'s
+// `purgeSessionStores`) so this resident content is dropped in lockstep with main aborting the job
+// + purging its map + re-encrypting the vault. It is NOT a screen effect: lock unmounts the screen
+// before any effect could observe it (TA-2 / H3 — the old screen-gated purge was dead code).
 
 /**
  * Result of a `translate()` call: `started` once a job is created (the output streams into it, or

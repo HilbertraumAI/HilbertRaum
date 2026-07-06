@@ -13,9 +13,10 @@ import type { DecodedImage, ImageTurn } from '../images'
 // component. Keeping the stream listeners alive here too makes recovery LOSSLESS — no token is
 // missed while the screen is gone, so no main-side snapshot/poll is needed.
 //
-// Privacy: the image/prompt/answer live in renderer memory only. On workspace LOCK the screen
-// calls `clearVisionSession()` so this resident content is dropped in lockstep with main purging
-// the vision job map and re-encrypting the vault.
+// Privacy: the image/prompt/answer live in renderer memory only. On workspace LOCK `App.lockNow`
+// calls `clearVisionSession()` (via `lib/lockPurge`'s `purgeSessionStores`) so this resident
+// content is dropped in lockstep with main purging the vision job map and re-encrypting the vault.
+// It is NOT a screen effect: lock unmounts the screen before any effect could observe it (TA-2/H3).
 
 /**
  * Result of an `analyze()` call: `started` once a turn is created (the answer streams into it, or

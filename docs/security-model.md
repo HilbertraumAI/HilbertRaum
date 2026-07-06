@@ -427,9 +427,18 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   gets an error **code**, never raw model/runtime text (the `friendlyIpcError` posture).
 - **In-memory residue at lock:** `TranslateJobService.stop()` (wired to workspace lock **and**
   quit, alongside `ctx.vision.stop()` / `ctx.docTasks.cancelAllDocTasks()`) aborts the in-flight job
-  **and clears the job map**, so no source/translation text survives the vault re-encrypt; the
-  renderer store calls `clearTranslateSession()` on lock in lockstep. The map is bounded
-  (`TRANSLATE_MAX_JOB_HISTORY`).
+  **and clears the job map**, so no source/translation text survives the vault re-encrypt. The
+  renderer's module-level session stores are purged in lockstep at the **App-level lock seam**:
+  `App.lockNow`, right after `lockWorkspace()` resolves, calls `purgeSessionStores()`
+  (`renderer/lib/lockPurge.ts`) → `clearTranslateSession()` + `clearFileTranslate()` +
+  `clearVisionSession()`, so the resident source text, streamed translation, document preview, and
+  image/answer are all dropped. **(TA-2 correction, 2026-07-06):** this purge used to be a per-screen
+  effect gated on a component `locked` flag — dead code, because lock unmounts every screen (the
+  shell swaps to `WorkspaceGate`) the instant `lockWorkspace` resolves, so the effect could never
+  observe `locked === true` and the content stayed resident the whole locked period. It now runs at
+  the one seam where the lock actually happens (a single helper every lock initiator calls; today
+  `App.lockNow` is the only initiator — no auto-lock timer or main-pushed lock event exists in the
+  renderer). The main-side job map is bounded (`TRANSLATE_MAX_JOB_HISTORY`).
 - **No respawn past a lock (common case):** `translate:start` is `requireUnlocked`-gated — a start
   attempted once the vault is locked is refused, so it cannot lazily respawn the just-suspended
   ~10 GB TranslateGemma sidecar with the source text. Aborting the in-flight job before
@@ -446,8 +455,9 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   (canonicalize + reject symlinks — an OS drop carries no picker token, `registerDocsIpc`), the same
   drag-drop seam DocumentsScreen/Chat use; the picker path carries the one-time `pickerToken` (D1).
   The renderer store (`lib/fileTranslateSession.ts`) holds only the materialized preview — a
-  Generated document that already lives in the workspace — and drops it on lock (`clearFileTranslate`).
-  No new IPC, no new audit surface.
+  Generated document that already lives in the workspace — and drops it on lock via the same
+  App-level `purgeSessionStores()` seam described above (`clearFileTranslate`; TA-2). No new IPC,
+  no new audit surface.
 - **Accepted residual — the lock-handler window (systemic, shared with vision; TG-4 review).**
   `isUnlocked()` is `this._db !== null`, and `_db` is nulled only at `workspace.lock()` — the LAST
   step of the lock handler. Between `translator.suspend()` (which nulls the server + clears its

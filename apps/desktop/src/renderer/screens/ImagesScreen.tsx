@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { Banner, Button, EmptyState, useToast } from '../components'
+import { Banner, Button, useToast } from '../components'
 import {
   AnswerThread,
   ImageDropZone,
@@ -18,7 +18,6 @@ import {
 } from '../images'
 import {
   analyze as analyzeImage,
-  clearVisionSession,
   getVisionSession,
   loadSession as loadVisionSession,
   removeImage as removeVisionImage,
@@ -75,7 +74,6 @@ export function ImagesScreen({
   const { t } = useT()
   const showToast = useToast()
   const [status, setStatus] = useState<VisionStatus | null>(null)
-  const [locked, setLocked] = useState(false)
   const [composer, setComposer] = useState('')
   const [decoding, setDecoding] = useState(false)
   const [screenError, setScreenError] = useState<ClientImageError | null>(null)
@@ -97,12 +95,6 @@ export function ImagesScreen({
     } catch {
       // No status (missing backend / partial bridge) → calm unavailable, never a crash.
       setStatus({ available: false, reason: 'no-model' })
-    }
-    try {
-      const st = await window.api?.getAppStatus?.()
-      if (st) setLocked(st.workspaceReady === false)
-    } catch {
-      // Keep the default (unlocked): the app shell already gates the whole app on lock.
     }
   }, [])
 
@@ -126,20 +118,18 @@ export function ImagesScreen({
     return () => window.removeEventListener('focus', onFocus)
   }, [checkStatus])
 
-  // Load (and reload on unlock) the history list.
+  // Load the history list on mount (the screen only ever mounts while the workspace is unlocked).
   useEffect(() => {
-    if (!locked) void loadSessions()
-  }, [locked, loadSessions])
+    void loadSessions()
+  }, [loadSessions])
 
   // A completed turn persists a session in main — refresh the list (works even when the analysis
   // finished while this screen was unmounted: the store fires on the next mount's subscription).
   useEffect(() => subscribeVisionPersisted(() => void loadSessions()), [loadSessions])
 
-  // Workspace LOCK: main has aborted the vision job and re-encrypted the vault, so drop the
-  // resident image/answer content here in lockstep (privacy parity with main's job-map purge).
-  useEffect(() => {
-    if (locked) clearVisionSession()
-  }, [locked])
+  // NB: there is deliberately NO lock-purge effect here. Workspace lock unmounts this screen (the
+  // shell swaps to WorkspaceGate) the moment it happens, so a screen effect could never observe it
+  // — the vision store is purged at the real seam, App.lockNow → purgeSessionStores (TA-2).
 
   // Select a freshly decoded image. A new image mid-analysis cancels the old job and resets the
   // thread (§5.6); the store starts a NEW history session on its first analyze. A fresh image
@@ -333,9 +323,6 @@ export function ImagesScreen({
   }))
 
   function renderBody(): JSX.Element | null {
-    if (locked) {
-      return <EmptyState title={t('images.locked')} />
-    }
     if (status === null) {
       // Brief: status resolves on mount. A calm placeholder, never a spinner-of-doom.
       return <p className="hint">{t('images.answer.starting')}</p>

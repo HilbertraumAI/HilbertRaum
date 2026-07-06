@@ -1571,6 +1571,29 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     exposes the tracked `run(task)` dispatch promise (resolves immediately when idle); the callers bound
     it with a ~5 s `Promise.race` timeout so a wedged handler can never hang quit/lock.
 
+- **TA-2 — renderer session-store purge moved to the real lock seam (translation audit fix wave,
+  2026-07-06; finding H3).** The purge of the three module-level renderer stores (the live TEXT
+  translation `lib/translateSession.ts`, the DOCUMENT translation `lib/fileTranslateSession.ts`, and
+  the vision session `lib/visionSession.ts`) was **dead code**: it lived in per-screen `useEffect`s
+  gated on a component-state `locked` flag read from `getAppStatus().workspaceReady`. But screens
+  render one-at-a-time and `App.lockNow` swaps the whole shell to `WorkspaceGate` (unmounting every
+  screen) the instant `lockWorkspace` resolves, so the effect could never observe `locked === true`.
+  The module stores survive the unmount by design (a running job keeps streaming across navigation),
+  so the source text, streamed translation, materialized preview, and image/answer stayed resident
+  in renderer memory for the whole locked period — contradicting each store's "dropped on lock"
+  contract and security-model.md. Fix: a single **`purgeSessionStores()`** helper
+  (`renderer/lib/lockPurge.ts`) that calls all three `clear*` functions, invoked from `App.lockNow`
+  right after `lockWorkspace()` resolves (next to `setWorkspace`) — the one seam where the lock
+  actually happens. A renderer grep confirmed `App.lockNow` is the **only** lock initiator (no
+  auto-lock timer, no main-pushed lock event, no workspace-state polling), so the single call
+  covers every path; the helper is the extension point if another initiator is ever added. The dead
+  `locked` purge effects — and the confirmed-dead `locked` EmptyState branches (their gate,
+  `workspaceReady === isUnlocked()`, is the same signal the shell gates the whole screen on, so it
+  can never be observed while mounted) — were removed from `TranslateScreen`/`ImagesScreen` rather
+  than left as a defense-claiming no-op. Also fixes the stuck-busy shape: a mid-stream text session
+  that returned after unlock stuck `translating` (main's `jobs.stop()` emits no `trError`, and
+  `adoptActiveJob` early-returned on the still-set `activeJobId`) is now reset by the purge.
+
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
   (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
   state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A

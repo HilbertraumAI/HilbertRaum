@@ -19,6 +19,7 @@ import {
   type IconName
 } from './components'
 import { setThemeSetting } from './theme'
+import { purgeSessionStores } from './lib/lockPurge'
 import { I18nProvider, useT, type I18n } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
 import type { MessageKey } from '@shared/i18n'
@@ -156,6 +157,11 @@ function AppShell(): JSX.Element {
 
   async function lockNow(): Promise<void> {
     const next = await window.api.lockWorkspace()
+    // The real lock seam (TA-2 / H3): main has now aborted the jobs + re-encrypted the vault, so
+    // drop the resident source/translation/image content from the module-level session stores in
+    // lockstep. Screens can't do this themselves — lock unmounts every screen (the shell swaps to
+    // WorkspaceGate below), so a screen-effect purge would never observe the lock.
+    purgeSessionStores()
     setWorkspace(next)
     setScreen('home')
     // The locked gate cannot read settings — back to following the OS theme.
