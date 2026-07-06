@@ -200,8 +200,16 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       `textQuality: 'suspect'` when the document's text layer looks glyph-mangled (`looksLikeGlyphSoup`)
  *       so the answer layer can retry via geometry and refuse confident figures over soup. Both change
  *       the persisted output, so stale v10 rows re-extract.
+ *  12 — invoice-audit-2026-07-06 IA-2 (T-1): the shared `MONEY_RE` reads a leading `-`/`+` sign ONLY when
+ *       it is GLUED to the magnitude or an open paren (`-1.500,00`, `-(45,00)`); a dash separated from the
+ *       figure by whitespace — `Beratung - 1.500,00 EUR`, or the `lastCurrencyAdjacentInteger` fallback's
+ *       `Gesamtbetrag - 914 EUR` — is now TEXT, not a sign, so it no longer flips a positive figure
+ *       negative (the plain path now agrees with the geometry path, which already refused a far dash as a
+ *       sign). Changes the persisted amounts/totals on any invoice with a dash-as-separator layout, so
+ *       stale v11 rows re-extract. (Bumped in IA-2 — the shared-parser fix — so IA-3's batch does not
+ *       re-bump for this.)
  */
-export const INVOICE_EXTRACTOR_VERSION = 11
+export const INVOICE_EXTRACTOR_VERSION = 12
 
 const HEADER_SCHEMA: JsonSchema = {
   type: 'object',

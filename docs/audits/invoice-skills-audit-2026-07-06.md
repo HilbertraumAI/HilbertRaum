@@ -175,7 +175,7 @@ Order rationale: IA-1 dissolves the worst user journey (permanent refusal); IA-2
 | Phase | Findings | Status | Commit |
 |---|---|---|---|
 | IA-1 | P-1, P-2 (+ D-1, D-2 doc/comment halves) | **DONE** | `fix(invoice-audit): IA-1` (see git log / BUILD_STATE) |
-| IA-2 | T-1, T-11 | open | — |
+| IA-2 | T-1, T-11 | **DONE** | `fix(invoice-audit): IA-2` (see git log / BUILD_STATE) — bumped `INVOICE_EXTRACTOR_VERSION` 11→12 + `BANK_EXTRACTOR_VERSION` 9→10 |
 | IA-3 | T-2, T-3, T-4, T-5, T-6, T-7, T-8, T-10 | open | — |
 | IA-4 | P-3 | open | — |
 | IA-5 | P-4 | open | — |
@@ -210,6 +210,41 @@ Order rationale: IA-1 dissolves the worst user journey (permanent refusal); IA-2
 5. Extractor-version note: `MONEY_RE` feeds both extractors — check whether the bank/invoice extractor versions must bump for this (they should: persisted rows parsed under the old sign rule are now wrong-by-fixed-bug). If yes and IA-3 hasn't run, bump `INVOICE_EXTRACTOR_VERSION` (and the bank twin) here and note it in the ledger so IA-3 doesn't double-bump needlessly.
 
 **Done when:** spaced-dash layouts parse positive on both paths; no bank regressions; ritual complete.
+
+**Disposition (SHIPPED):**
+- **T-1 — FIXED.** `MONEY_RE`'s leading class is now `(?:[-+](?=[\d(]))?(?:\(\s{0,4})?` — a leading `-`/`+`
+  is consumed as a sign ONLY when GLUED to the magnitude or an open paren; the `\s{0,4}` gap survives only
+  after `(` (the parens-negative `( 914,00 )` form). A dash separated from the figure by whitespace is now
+  text: `Beratung – 1.500,00 EUR` (Word en-dash → `-` via the R1 pre-pass) reads **+1500**, `GUTSCHRIFT -
+  34,39` reads **+34,39**, and the plain path now AGREES with the geometry path on `LASTSCHRIFT - 3,99`
+  (both positive). `lastCurrencyAdjacentInteger`'s sign rebuild applies the same glued-leading rule
+  (`Gesamt - 914 EUR` → +914; glued `Gesamt -914 EUR` still −914). The ReDoS/leading-sign doc comment and
+  the `MONEY_RE` "Leading sign — GLUED-only" paragraph were updated. **`parseAmount` audit:** every caller
+  feeds either a `MONEY_RE`/`scanMoneyWithBlankedDates` token or the controlled `signed` rebuild — none
+  feed raw spaced-dash text, so `parseAmount`'s own `/^[-]/` negative rule needs no change.
+- **T-11 — FIXED.** The two per-match `new RegExp('[€$£¥]…')` compilations and the per-match
+  `text.slice(0, start)` / `text.slice(end)` copies (O(n²) on a hostile `9 € 9 € …` line) are gone.
+  Adjacency is now an index walk to the nearest non-whitespace neighbour on each side + a hoisted
+  `CURRENCY_SYMBOL_SET` membership test and bounded index checks for the ISO code (`ISO_CODES.has`), all
+  O(n) total. **Deviation (recorded):** the two symbol regexes were *replaced* by Set membership rather
+  than merely hoisted — this subsumes the hoist (zero per-match compilation) and is what actually kills the
+  O(n²); the code/lead/trail regex *literals* (already compiled once) became index arithmetic to eliminate
+  the slices. Behaviour is byte-preserving except the T-1 leading-glue change (verified: bank/invoice/
+  pdf-layout unit suites green with no output moves).
+- **Shared-parser discipline.** `MONEY_RE` feeds the bank extractor too; the full bank suite (incl. the R1
+  glued-sign tests at `skills-bank-statement-tool.test.ts` ~:1639, all trailing/glued) stays green. The
+  extractor-realworld snapshot regenerated with **only the two version fields changed** — no corpus fixture
+  carries a spaced-leading-dash, so no persisted-output moved.
+- **Extractor-version decision (bumped in IA-2).** Persisted rows parsed under the old sign rule are
+  wrong-by-fixed-bug (a `- 1.500,00` layout stored −1500), so **both** twins bumped here:
+  `INVOICE_EXTRACTOR_VERSION` **11 → 12**, `BANK_EXTRACTOR_VERSION` **9 → 10** — stale rows re-extract via
+  `isInvoiceStale`/`isBankStatementStale`. **IA-3 must NOT re-bump for this fix** (its batch bump still
+  happens once for the IA-3 parser changes; it starts from 12/10, not 11/9).
+- **Tests:** `money.test.ts` +5 (a new `MONEY_RE leading-sign glue gate (T-1)` describe): spaced ASCII/en-
+  dash → positive; glued dash → negative; `( 914,00 )` parens-negative unchanged; the integer-fallback
+  mirror (`Gesamt - 914 EUR` +914 / glued −914 / `$914-` −914); the plain-vs-geometry agreement on
+  `LASTSCHRIFT - 3,99`. Version-pin tests moved (invoice 11→12, bank 9→10 in two files). **Full suite
+  3595/47**, typecheck green. Docs: known-limitations.md BL-1 entry extended with the leading-side rule.
 
 ### IA-3 — Parser/vocabulary batch, one extractor-version bump (T-2..T-8, T-10)
 

@@ -6,6 +6,7 @@ import {
   detectCurrency,
   detectDocumentCurrency,
   hasMoneyToken,
+  lastCurrencyAdjacentInteger,
   inferDateOrder,
   normalizeExtractionText,
   parseDate,
@@ -104,6 +105,49 @@ describe('money.ts — MONEY_RE (token boundary cells)', () => {
   it('does not start a token in the MIDDLE of a longer digit run (the continuation anchor)', () => {
     // `778899 300,00`: the space-grouped form must not fuse the 3-digit tail `899` with `300,00`.
     expect(tokens('Auftrag 778899 300,00')).toEqual(['300,00'])
+  })
+})
+
+// T-1 (invoice-skills-audit-2026-07-06, IA-2) — the LEADING sign is read ONLY when GLUED to the figure/
+// paren, the mirror of the trailing-side BL-1 fix. A dash separated from the amount by whitespace (a
+// dash-as-separator layout, or a Word en-dash the R1 pre-pass mapped to `-`) is TEXT, not a sign — so it
+// no longer flips a positive figure negative on the plain path, and the plain path now agrees with the
+// geometry path (which already refused a far dash as a sign). MONEY_RE is SHARED with the bank extractor.
+describe('money.ts — MONEY_RE leading-sign glue gate (T-1)', () => {
+  // The signed value of the FIRST money token on a (R1-normalized) line, or null.
+  const firstMoney = (s: string): number | null => {
+    const m = normalizeExtractionText(s).match(MONEY_RE)
+    return m ? parseAmount(m[0]) : null
+  }
+
+  it('a SPACED leading dash is a separator, not a sign ⇒ POSITIVE (plain path)', () => {
+    expect(firstMoney('Beratung – 1.500,00 EUR')).toBe(1500) // Word en-dash → '-' via the R1 pre-pass
+    expect(firstMoney('GUTSCHRIFT - 34,39')).toBe(34.39) // an ASCII dash-separated credit reads +34,39
+  })
+
+  it('a GLUED leading dash is still the negative sign', () => {
+    expect(firstMoney('-1.500,00')).toBe(-1500)
+    expect(firstMoney('Saldo -45,90')).toBe(-45.9)
+  })
+
+  it('the parens-negative form is unchanged (an open paren keeps its \\s{0,4} gap)', () => {
+    expect(firstMoney('( 914,00 )')).toBe(-914)
+    expect(firstMoney('(914,00)')).toBe(-914)
+  })
+
+  it('the integer fallback mirrors the gate: a spaced dash is text (+914), a glued dash signs (−914)', () => {
+    // `lastCurrencyAdjacentInteger` is the bare-integer path (a round total printed with no decimal).
+    // (The parens-negative form rides the MONEY_RE decimal path — `( 914,00 )` above; a bare `( 914 )`
+    // has no currency ADJACENT to the integer, so the fallback correctly never reads it, old and new.)
+    expect(lastCurrencyAdjacentInteger('Gesamt - 914 EUR')).toBe(914) // spaced dash → positive (was −914)
+    expect(lastCurrencyAdjacentInteger('Gesamt -914 EUR')).toBe(-914) // glued → still negative
+    expect(lastCurrencyAdjacentInteger('Gesamtbetrag €914')).toBe(914) // symbol-adjacent, positive
+    expect(lastCurrencyAdjacentInteger('Betrag $914-')).toBe(-914) // symbol + trailing glued minus signs
+  })
+
+  it('plain path AGREES with the geometry path on `LASTSCHRIFT - 3,99` (both positive — the far dash is not a sign)', () => {
+    // Mirror of pdf-layout.test.ts (`14.01.2025 LASTSCHRIFT - 3,99` stays positive on the geometry path).
+    expect(firstMoney('LASTSCHRIFT - 3,99')).toBe(3.99)
   })
 })
 

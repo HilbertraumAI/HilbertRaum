@@ -146,8 +146,15 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
  *       is no longer eaten as a date (balance-as-amount / silent row loss) while dotless Valuta dates and
  *       apostrophe/comma-decimal rows keep their safe legacy reads. Each changes persisted rows/balances
  *       on affected statements, so stale v8 rows re-extract.
+ *  10 — invoice-audit-2026-07-06 IA-2 (T-1): the shared `MONEY_RE` reads a leading `-`/`+` sign ONLY when
+ *       GLUED to the magnitude or an open paren; a dash separated from the figure by whitespace — a
+ *       dash-as-separator layout, or a Word en-dash the R1 pre-pass mapped to `-` — is now TEXT, not a
+ *       sign, so `GUTSCHRIFT - 34,39` reads a credit as +34,39 instead of the old −34,39 (and the plain
+ *       path now agrees with the geometry path, which already refused a far dash as a sign). Changes the
+ *       persisted amounts on any statement with such a row, so stale v9 rows re-extract. (Bumped in IA-2,
+ *       the shared-parser fix.)
  */
-export const BANK_EXTRACTOR_VERSION = 9
+export const BANK_EXTRACTOR_VERSION = 10
 
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',

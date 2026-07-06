@@ -110,7 +110,8 @@ export function looksLikeGlyphSoup(texts: readonly string[]): boolean {
 // A money token is either a figure ending in a 2-digit minor unit (",56" / ".56") OR a bare GROUPED
 // integer (a thousands-grouped figure with no decimal tail, e.g. de-AT "1.000" = 1000). A plain
 // UNGROUPED integer ("2026", "100") is never a money token, so an account/reference number embedded in
-// a description is not mistaken for an amount. Optional leading sign / paren and trailing minus.
+// a description is not mistaken for an amount. A leading sign / paren and a trailing minus are optional;
+// the leading sign is read ONLY when GLUED to the magnitude/paren (see "Leading sign" below).
 //
 // THREE alternatives, tried in order (full-audit-2026-06-28 DECISION 2 / TEST-N2 — grouping support):
 //   (A) space-grouped:  `\d{1,3}( \d{3})+` with an optional ",dd"/".dd" decimal → "1 234 567,89", "1 234"
@@ -127,6 +128,17 @@ export function looksLikeGlyphSoup(texts: readonly string[]): boolean {
 // (`ref123 456,78` → "123 456,78" → 123456.78, a reference column abutting the amount). `parseAmount`
 // then normalises any of these (it already strips spaces/apostrophes and applies the 3-trailing-digit
 // thousands rule), so the parse side is unchanged.
+//
+// Leading sign — GLUED-only, the mirror of the trailing-side BL-1 fix (invoice-audit-2026-07-06 T-1). A
+// leading `-`/`+` is a sign ONLY when it sits IMMEDIATELY before the magnitude or an open paren
+// (`-1.500,00`, `-(45,00)`); the `[-+](?=[\d(])` lookahead consumes it only in that glued case. A dash
+// SEPARATED from the figure by whitespace is text, not a sign: `Beratung - 1.500,00 EUR` (a dash-as-
+// separator layout, or a Word `–` autocorrect the R1 pre-pass mapped to `-`) reads +1500, and the shared
+// bank path reads a `GUTSCHRIFT - 34,39` credit as +34,39 — no longer the old spaced-dash sign theft that
+// flipped a positive figure negative. This matches the GEOMETRY path, which already refuses a dash far
+// from the amount column as a sign (`pdf-layout.ts`; `14.01.2025 LASTSCHRIFT - 3,99` stays positive), so
+// the plain and geometry extractors now agree on the same text. Only an OPEN PAREN keeps a leading gap
+// (`( 914,00 )` — the `\s{0,4}` after `(`), the parens-negative form.
 //
 // Trailing sign/paren — the de-AT negative conventions, SPACE-DISAMBIGUATED (full-audit-2026-06-29 BL-1).
 // The trailing region matches ONE of three mutually-exclusive shapes after the magnitude:
@@ -150,7 +162,8 @@ export function looksLikeGlyphSoup(texts: readonly string[]): boolean {
 // quadratically (O(N²)) on a long digit/separator run lacking a valid decimal tail — a hostile chunk on
 // one giant line could freeze the main process. (B)'s grouping run is bounded to 30 chars (a 30-digit
 // figure is ~10²³, far beyond any real amount); (A) and (C) repeat a group PINNED by its separator +
-// exactly three digits, so the `+` cannot backtrack ambiguously; the leading gap is bounded to 4 spaces.
+// exactly three digits, so the `+` cannot backtrack ambiguously; the sole leading gap (the `\s{0,4}`
+// after an open paren) is bounded to 4 spaces, and the leading sign is a zero-width lookahead.
 // The trailing region runs ONLY after a magnitude match (which consumes input, so matches are
 // non-overlapping); its `\s*`/`\s+` runs are UNAMBIGUOUS (each is followed by a disjoint atom — `)`,`-`,
 // or `[-+(]\d` — so the whitespace class cannot overlap what follows) and the lookahead is zero-width, so
@@ -158,7 +171,7 @@ export function looksLikeGlyphSoup(texts: readonly string[]): boolean {
 // ReDoS regression tests pin this on 200k-char adversarial lines). The accepted token set is unchanged
 // for every realistic 2-dp figure; only the cross-column sign theft is removed.
 export const MONEY_RE =
-  /(?<!\d)[-+(]?\s{0,4}(?:(?<![A-Za-z0-9])\d{1,3}(?: \d{3})+(?:[.,]\d{2})?|\d[\d.,']{0,30}[.,]\d{2}|\d{1,3}(?:[.,']\d{3})+)(?!\d)(?:-|\s*\)|\s+-(?!\s*[-+(]?\d))?/g
+  /(?<!\d)(?:[-+](?=[\d(]))?(?:\(\s{0,4})?(?:(?<![A-Za-z0-9])\d{1,3}(?: \d{3})+(?:[.,]\d{2})?|\d[\d.,']{0,30}[.,]\d{2}|\d{1,3}(?:[.,']\d{3})+)(?!\d)(?:-|\s*\)|\s+-(?!\s*[-+(]?\d))?/g
 
 /** Money equality within half a cent (printed figures carry 2 minor digits). */
 export const MONEY_EPS = 0.005
@@ -627,6 +640,15 @@ export function scanMoneyWithBlankedDates(rest: string): { scanRest: string; mat
 // "Opening balance 914 $" lost its completeness figure because `lastMoneyOnLine` used MONEY_RE only).
 const CURRENCY_SYMBOLS = '€$£¥'
 const BARE_INTEGER_RE = /(?<![\d.,'])\d{1,9}(?![\d.,'])/g
+// The currency-symbol adjacency test as a SET membership on the nearest non-whitespace neighbour
+// (invoice-audit-2026-07-06 T-11). This replaces the two per-match `new RegExp('[${CURRENCY_SYMBOLS}]…')`
+// compilations — which, together with the per-match `text.slice(0, start)` / `text.slice(end)` copies, made
+// a hostile `9 € 9 € …` line O(n²). Membership + an index walk to the neighbour is O(n) total.
+const CURRENCY_SYMBOL_SET: ReadonlySet<string> = new Set([...CURRENCY_SYMBOLS])
+const isAsciiUpper = (c: string): boolean => c >= 'A' && c <= 'Z'
+// ASCII `\w` neighbour test for the ISO-code word boundary (`\b[A-Z]{3}` / `[A-Z]{3}\b`); '' (a string
+// edge) is a boundary, so it reads false.
+const isWordChar = (c: string): boolean => /[A-Za-z0-9_]/.test(c)
 
 /**
  * The LAST bare integer on a (date-scrubbed) line that TOUCHES a currency marker — a symbol glued or
@@ -635,31 +657,54 @@ const BARE_INTEGER_RE = /(?<![\d.,'])\d{1,9}(?![\d.,'])/g
  * the currency-anchored fallback the totals/balance readers use AFTER the normal `MONEY_RE` last-token
  * scan fails. Currency-adjacency is the safety anchor: a stray reference/registration integer that does
  * NOT touch a currency marker is never read as the amount (the §22-D1 honesty posture). SIGN-aware (R1):
- * a credit-note `-914`/`(914)`/`914-` keeps its sign via `parseAmount`. Dates are scrubbed first so a
- * `dd.mm.yyyy` token's digits are never mistaken for a currency-adjacent integer.
+ * a credit-note keeps its sign via `parseAmount` — a leading `-` only when GLUED to the integer (`€-914`),
+ * a `(` (parens-negative, whitespace tolerated), or a trailing `-`/`)` (invoice-audit-2026-07-06 T-1: a
+ * SPACED leading dash `Gesamt - 914 EUR` is text → +914, mirroring MONEY_RE's leading gate). Dates are
+ * scrubbed first so a `dd.mm.yyyy` token's digits are never mistaken for a currency-adjacent integer.
  */
 export function lastCurrencyAdjacentInteger(line: string): number | null {
   const text = stripDateTokens(line)
   let last: number | null = null
   for (const m of text.matchAll(BARE_INTEGER_RE)) {
     const start = m.index ?? 0
-    const before = text.slice(0, start)
-    const after = text.slice(start + m[0].length)
+    const end = start + m[0].length
+    // T-11: locate the nearest NON-whitespace neighbour on each side by an index walk, rather than copying
+    // `text.slice(0, start)` / `text.slice(end)` per match (the O(n²) driver). Each adjacency/sign test
+    // below is then a bounded look at those neighbour positions; the walks amortize to O(n) across matches.
+    let before = start - 1
+    while (before >= 0 && /\s/.test(text[before])) before--
+    let after = end
+    while (after < text.length && /\s/.test(text[after])) after++
+    // A currency SYMBOL is adjacent when it is the nearest non-ws char on either side (`€ 914`, `914 $`,
+    // glued `€914`/`914€`) — the exact set the old `[€$£¥]\s*$` / `^\s*[€$£¥]` regexes matched.
     const symbolAdjacent =
-      new RegExp(`[${CURRENCY_SYMBOLS}]\\s*$`).test(before) ||
-      new RegExp(`^\\s*[${CURRENCY_SYMBOLS}]`).test(after)
-    const codeAfter = /^\s+([A-Z]{3})\b/.exec(after)
-    const codeBefore = /\b([A-Z]{3})\s+$/.exec(before)
-    const codeAdjacent =
-      (codeAfter !== null && detectCurrency(codeAfter[1]) !== null) ||
-      (codeBefore !== null && detectCurrency(codeBefore[1]) !== null)
-    if (symbolAdjacent || codeAdjacent) {
-      // Keep the SIGN (R1): rebuild the token with a leading `-`/`(` at the end of `before` (a symbol may
-      // sit further left, `€-914`) or a trailing `)`/`-` at the start of `after` and reuse parseAmount.
-      const lead = /[-(]\s*$/.exec(before)
-      const trail = /^\s*[-)]/.exec(after)
-      const signed = `${lead ? lead[0].trim() : ''}${m[0]}${trail ? trail[0].trim() : ''}`
-      const n = parseAmount(signed)
+      (before >= 0 && CURRENCY_SYMBOL_SET.has(text[before])) ||
+      (after < text.length && CURRENCY_SYMBOL_SET.has(text[after]))
+    // A SPACED ISO code: `914 EUR` (≥1 space then 3 uppercase then a word boundary) or `EUR 914`.
+    const codeAfter =
+      after > end &&
+      isAsciiUpper(text[after] ?? '') &&
+      isAsciiUpper(text[after + 1] ?? '') &&
+      isAsciiUpper(text[after + 2] ?? '') &&
+      !isWordChar(text[after + 3] ?? '') &&
+      ISO_CODES.has(text.slice(after, after + 3))
+    const codeBefore =
+      before < start - 1 && // ≥1 whitespace between the code and the integer (the old `\s+`)
+      isAsciiUpper(text[before] ?? '') &&
+      isAsciiUpper(text[before - 1] ?? '') &&
+      isAsciiUpper(text[before - 2] ?? '') &&
+      !isWordChar(text[before - 3] ?? '') &&
+      ISO_CODES.has(text.slice(before - 2, before + 1))
+    if (symbolAdjacent || codeAfter || codeBefore) {
+      // Keep the SIGN (R1), GLUED-only on the leading side (T-1): a leading `-` signs only when it sits
+      // IMMEDIATELY before the integer (`€-914`); a `(` (parens-negative) tolerates whitespace after it
+      // (`( 914 )`); a trailing `)`/`-` signs from the right. A dash separated by whitespace (`Gesamt -
+      // 914 EUR`) is text → +914. Then reuse parseAmount on the rebuilt token.
+      const leadGlued = start > 0 && text[start - 1] === '-'
+      const leadParen = before >= 0 && text[before] === '('
+      const trailChar = after < text.length && (text[after] === ')' || text[after] === '-') ? text[after] : ''
+      const lead = leadGlued ? '-' : leadParen ? '(' : ''
+      const n = parseAmount(`${lead}${m[0]}${trailChar}`)
       if (n !== null) last = n
     }
   }

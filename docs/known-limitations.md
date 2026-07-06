@@ -1212,12 +1212,21 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     234,56 (a 1000× error). The Swiss U+2019 apostrophe becomes `'`, so `1’234.56` reads 1234.56. The
     pre-pass is a **no-op for ASCII** (existing fixtures byte-identical) and **idempotent**. Extractor
     versions bumped (`BANK_EXTRACTOR_VERSION` → 4, `INVOICE_EXTRACTOR_VERSION` → 4) so stale rows re-extract.
-  - **A figure's sign is read by the SPACE around a minus (full-audit-2026-06-29 BL-1).** A **glued**
+  - **A figure's sign is read by the SPACE around a minus (full-audit-2026-06-29 BL-1; leading side closed
+    by invoice-audit-2026-07-06 T-1).** A **glued**
     trailing minus is a de-AT debit (`45,90-` → −45,90, even with a running balance after it); a `-<digit>`
     after a space is the next figure's **leading** sign (`2.500,00 -500,00` → +2500 then −500). This
     replaced an earlier trailing `-?` that reached across the column gap and stole the next figure's leading
     minus, flipping both signs while the running chain still tied out (a confidently-wrong total `ok`-rated
-    by reconciliation). **Residual:** the genuinely-ambiguous **spaced** trailing minus immediately before a
+    by reconciliation). The **leading** side is now symmetric: a leading `-`/`+` is a sign ONLY when **glued**
+    to the magnitude or an open paren (`-1.500,00`, `-(45,00)`); a dash separated from the figure by
+    whitespace is **text**, so `Beratung - 1.500,00 EUR` reads **+1500** and the shared bank path reads a
+    `GUTSCHRIFT - 34,39` credit as **+34,39** — no longer the old spaced-dash sign theft that flipped a
+    positive figure negative (`MONEY_RE` and `lastCurrencyAdjacentInteger`). This makes the plain path
+    **agree with the geometry path**, which already refuses a dash far from the amount column as a sign
+    (`14.01.2025 LASTSCHRIFT - 3,99` stays positive on both). `BANK_EXTRACTOR_VERSION` → 10,
+    `INVOICE_EXTRACTOR_VERSION` → 12 (stale rows re-extract). **Residual:** the genuinely-ambiguous
+    **spaced** trailing minus immediately before a
     balance figure (`45,90 - 1.908,20`) reads as a *positive* amount — no parser can distinguish it from
     subtraction; the glued de-AT convention (`45,90-`) is the unambiguous one and is read correctly.
   - **Per-row currency is detected only in the FIGURE REGION (full-audit-2026-06-29 BL-2; extended to the

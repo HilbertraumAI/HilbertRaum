@@ -388,12 +388,14 @@ describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
 })
 
 describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
-  it('is at 11 — the P3 recipient field + glyph-soup verdict (invoice-hardening-2026-07-04)', () => {
+  it('is at 12 — the IA-2 glued-leading-sign fix in the shared MONEY_RE (invoice-audit-2026-07-06 T-1)', () => {
     // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin. P2 (v10) retracts uncorroborated weak bare-integer
     // totals; P3 (v11) adds the labeled bill-to `recipient` header field and stamps
-    // `textQuality: 'suspect'` on a glyph-mangled text layer. Each changes the persisted output, so an
-    // invoice an OLDER (v10…v1 / pre-versioning NULL) parser produced must re-extract via the F5 path.
-    expect(INVOICE_EXTRACTOR_VERSION).toBe(11)
+    // `textQuality: 'suspect'` on a glyph-mangled text layer; IA-2 (v12) reads a leading `-` as a sign
+    // only when GLUED to the figure/paren, so a dash-as-separator layout (`Beratung - 1.500,00`) no longer
+    // flips a figure negative. Each changes the persisted output, so an invoice an OLDER (v11…v1 /
+    // pre-versioning NULL) parser produced must re-extract via the F5 path.
+    expect(INVOICE_EXTRACTOR_VERSION).toBe(12)
   })
 })
 
