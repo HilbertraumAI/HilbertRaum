@@ -49,14 +49,18 @@ patch_eb_build_tools() {
 stage_linux_win() {
   # AI_Drive's electron-builder.yml carries `includeSubNodeModules`, which electron-builder 26
   # (the version it pins) removed — it now bundles the hoisted production deps by default. Strip
-  # the key so the config validates, without touching the submodule. cwd stays $DESKTOP so the
-  # config's relative paths (extraResources ../../model-manifests, buildResources) still resolve.
+  # the key so the config validates, without touching the submodule. We also strip any committed
+  # `electronVersion:` here and re-add the resolved one below — leaving both would give the YAML a
+  # duplicate mapping key (electron-builder aborts). cwd stays $DESKTOP so the config's relative
+  # paths (extraResources ../../model-manifests, buildResources) still resolve.
   local cfg="$DIST_DIR/eb-$TARGET.yml"; mkdir -p "$DIST_DIR"
-  grep -v '^includeSubNodeModules:' "$DESKTOP/electron-builder.yml" > "$cfg"
+  grep -vE '^(includeSubNodeModules|electronVersion):' "$DESKTOP/electron-builder.yml" > "$cfg"
   # electron-builder can't auto-detect the Electron version from an npm WORKSPACE: electron is
   # hoisted to the workspace root (app/node_modules), not beside the app (app/apps/desktop), so
   # it falls back to the devDep RANGE ("^37.0.0") and errors. Pin the exact installed version so
   # electron-builder fetches + bundles it (build-only network; the packaged app stays offline).
+  # This is the single source of truth for the staged build (the committed pin, stripped above,
+  # is only for a direct `npm run package`).
   local ev; ev="$(jq -r '.version' "$APP/node_modules/electron/package.json" 2>/dev/null || true)"
   [ -n "$ev" ] && [ "$ev" != "null" ] && printf '\nelectronVersion: %s\n' "$ev" >> "$cfg"
   # Pin the linux/win executable name so the launcher resolves it deterministically. Without
