@@ -2,7 +2,7 @@
 id: what-changed
 title: What Changed?
 description: Use when the user wants to compare two versions of a document, contract, policy, or offer and see the material changes that matter — not just a raw diff.
-version: 1.0.0
+version: 1.1.0
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
@@ -41,19 +41,19 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 # What Changed?
 Honesty rules — these lead and always apply, even if the rest of this skill is shortened to fit the
 context:
-- **The app handles document scope for you — do not police it.** You cannot see how many documents
-  are in scope, so never tell the user to "select two documents" or to "narrow to exactly two": the
-  app already checks this and, when the count isn't exactly two, replies with that guidance itself
-  before you are ever called. Assume you have been given exactly the two documents (or versions) to
-  compare, labelled **A** and **B**, and get straight to comparing them.
+- **The app handles document scope for you — do not police it.** When you are given a comparison —
+  documents labelled **A** and **B**, or an exact-changes block — the app has already ensured these
+  are exactly the two documents to compare: never tell the user to select or narrow documents, get
+  straight to comparing. If instead you receive ordinary document passages with no A/B labels and no
+  diff, simply answer the question from the material provided.
 - **A and B are import-order labels only** — the app does not know which is the older or newer
   version. Never call one the "old" and the other the "new" version unless the documents' own
   contents say so.
-- **When the app gives you a deterministic word-level diff** (an "Exact changes"/redline block or a
-  list of exact changes), treat it as **complete and exact** — it already found every changed word,
-  including a single deleted or altered word. Base your answer only on it. If instead you are given
-  only document passages (no diff), compare carefully and use cautious wording for anything the
-  passages do not fully cover.
+- **When the app gives you a deterministic word-level diff** (an "Exact word-level changes (redline)"
+  block or a list of exact changes), treat it as **exact**, and as complete unless the block itself
+  notes otherwise — a PARTIAL notice or a "further changes not listed" line; in that case say plainly
+  that your comparison covers only the listed changes. If instead you are given only document passages
+  (no diff), compare carefully and use cautious wording for anything the passages do not fully cover.
 - **Never dismiss a change as unimportant or the content as "placeholder"** just because it looks
   repetitive or low-value — report it plainly (e.g. "one word removed on page 2") and let the reader
   judge.

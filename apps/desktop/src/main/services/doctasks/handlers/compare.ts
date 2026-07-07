@@ -37,7 +37,7 @@ import {
   COMPARE_DIFF_CONTEXT_WORDS,
   COMPARE_DIFF_MAX_CHANGED_RATIO
 } from '../compare'
-import { wordDiff, renderRedline, renderChangesForModel, isPreciseDiffUseful } from '../../diff'
+import { wordDiff, renderRedline, renderChangesForModel, isPreciseDiffUseful, DIFF_RENDER_MAX } from '../../diff'
 import type { DocTaskCtx, InternalTask } from '../context'
 import { buildProvenance, extractSegmentTexts, materializeDocument } from './shared'
 
@@ -168,7 +168,7 @@ async function runCompareByDiff(
 
   // The model sees the deterministic change list, never the whole documents — so it cannot miss a
   // one-word change. Bail to the thematic modes if the list itself overflows the per-call budget.
-  const forModel = renderChangesForModel(diff.changes)
+  const forModel = renderChangesForModel(diff.changes, { max: DIFF_RENDER_MAX })
   if (approxTokenCount(forModel.text) > compareBudgetWords(ctx.deps.getContextTokens())) return null
 
   task.status.progress.stepsTotal = 2 // interpret + materialize
@@ -183,8 +183,15 @@ async function runCompareByDiff(
   if (interpretation.length === 0) throw new Error(tMain('main.task.genericFailure'))
   task.status.progress.stepsDone += 1
   // The deterministic redline sits ABOVE the interpretation, so the exact wording is always shown.
-  const redline = renderRedline(diff.changes)
-  return { report: `${compareRedlineHeading()}\n${redline.text}\n\n${interpretation}` }
+  const redline = renderRedline(diff.changes, { max: DIFF_RENDER_MAX })
+  // Past DIFF_RENDER_MAX both renderers drop the LATER changes (each appends its own in-band "further
+  // change(s) not listed" line). Surface that partiality explicitly under the heading so a reader of the
+  // materialized report can't take "no change listed for X" as "X is unchanged" (audit SK-2 — same bug
+  // class as the chat compare path, different surface).
+  const partialNote = redline.truncated
+    ? '\n\n> **This change list is PARTIAL** — the comparison found more changes than are shown here, so treat any section without a listed change as *not confirmed unchanged*.'
+    : ''
+  return { report: `${compareRedlineHeading()}${partialNote}\n${redline.text}\n\n${interpretation}` }
 }
 
 /**

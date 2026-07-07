@@ -42,7 +42,18 @@ phase lists. Do NOT re-read the whole audit report, the architecture record, or 
   dem Eingabefeld"); `docx-rewrite.ts` comment aligned. Routing tests read the catalog via `tr()` (no
   literal pins); no doc drift (user-guide/known-limitations already correct; design-guidelines §11.9/§11.10
   unrelated). typecheck clean, suite 3794/47 (baseline, no skips).
-- [ ] **Phase 2** — what-changed: diff completeness + fence coherence (SK-2, SK-15, SK-3)
+- [x] **Phase 2** — what-changed: diff completeness + fence coherence (SK-2, SK-15, SK-3).
+  DONE 2026-07-07: SK-2 (HIGH) as a design fix — `DIFF_RENDER_MAX=200` exported from `services/diff` as
+  the single source of truth, passed explicitly to both renderers at both consumers; `retrieveCompareDiff`
+  ORs `changes.length > DIFF_RENDER_MAX` into `truncated` (cap+flag can't drift); PARTIAL prompt wording
+  generalized so it's true for BOTH truncation causes (budget + render cap drop LATER changes). Second
+  consumer `doctasks/handlers/compare.ts` fixed too — explicit PARTIAL note under `## Exact changes` when
+  the cap fires. SK-15+SK-3a: both what-changed honesty rules reworded inside paragraph 0 (rule 1 now
+  discriminates on visible A/B-labels-or-diff vs plain passages; rule 3 names the real "Exact word-level
+  changes (redline)" label and defers to the block's own PARTIAL/further-changes markers); version→1.1.0.
+  SK-3b/D-P2a fence-suppression DECLINED, recorded in known-limitations.md. New teeth-checked unit file
+  `tests/unit/rag-compare-diff-truncation.test.ts` (+2). rag.test.ts:227 assertion re-pinned to new wording.
+  Docs: rag-design.md §14.6 render-cap invariant, known-limitations.md D-P2a. typecheck clean, suite 3796/47.
 - [ ] **Phase 3** — instruction/tool text batch: deadline-finder, share-safe, invoice (SK-4, SK-7, SK-10, SK-14 part)
 - [ ] **Phase 4** — bank-statement aux files + schema parity pin (SK-5, SK-6, SK-14 part)
 - [ ] **Phase 5** — close-out: conventions, INFO records, retire report + plan (SK-12, SK-16/17/18, SK-3b record)

@@ -1326,6 +1326,15 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   [`rag/index.ts`](../apps/desktop/src/main/services/rag/index.ts): it reads both docs whole (no cap →
   honest whole-document coverage, no page-2 truncation), feeds the changes+redline via
   `buildCompareDiffPrompt`, and cites the chunks where the changes are.
+  **Render-cap-sets-`truncated` invariant (skills-audit-2026-07-07 SK-2):** the model-facing renderers
+  cap at `DIFF_RENDER_MAX` (200, the single source of truth exported from `services/diff`) and drop the
+  LATER changes. Both consumers pass that constant explicitly and OR `changes.length > DIFF_RENDER_MAX`
+  into their `truncated` flag, so the cap and the flag cannot drift: a >200-change pair that still fits
+  the token budget is reported `truncated: true` and the prompt's completeness line is the PARTIAL
+  wording — true for BOTH truncation causes (budget *and* render cap drop later changes, never whole
+  later sections). The doctask surface (`doctasks/handlers/compare.ts`) adds an explicit PARTIAL note
+  under the `## Exact changes` heading of the materialized report when the same cap fires. Pinned by
+  [`tests/unit/rag-compare-diff-truncation.test.ts`](../apps/desktop/tests/unit/rag-compare-diff-truncation.test.ts).
 - **(a)** both full texts fit one pass — the existing single call over both, already symmetric.
 - **(c) symmetric both-trees** — when BOTH docs have a `ready` tree under the same active embedder AND
   the smaller doc has ≤ `SYMMETRIC_COMPARE_CALL_CEILING` (24) level-1 sections. Align each tree's

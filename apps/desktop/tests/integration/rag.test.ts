@@ -224,7 +224,7 @@ describe('buildCompareDiffPrompt — completeness claim is honest when the chang
     expect(p).not.toContain('complete and exact')
     expect(p).toContain('PARTIAL')
     // And the model is told not to infer "unchanged" from an absent change (audit §2.2 honesty).
-    expect(p).toMatch(/do NOT say a section is\s+unchanged/i)
+    expect(p).toMatch(/do NOT describe anything as unchanged/i)
   })
 })
 

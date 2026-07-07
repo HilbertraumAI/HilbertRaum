@@ -275,6 +275,15 @@ function words(ws: string[]): string {
 }
 
 /**
+ * How many changes the model-facing renderers show before capping. Exported as the single source of
+ * truth so call sites (rag/index.ts, doctasks compare handler) pass the SAME value they compare
+ * against when they set their `truncated` flag — cap and flag cannot drift (audit SK-2). A change
+ * count over this cap drops the LATER changes (both renderers slice `[0, max]`), so a caller that
+ * ignores the returned `truncated` would silently assert a partial list is complete.
+ */
+export const DIFF_RENDER_MAX = 200
+
+/**
  * Render the changes as a human-readable Markdown redline: one numbered line per change with its
  * context, deletions struck through and insertions bold. `max` caps how many changes are shown
  * (the rest are summarized) so a very long diff can't blow up the output; `truncated` reports it.
@@ -283,7 +292,7 @@ export function renderRedline(
   changes: DiffChange[],
   opts: { max?: number } = {}
 ): { text: string; truncated: boolean } {
-  const max = opts.max ?? 200
+  const max = opts.max ?? DIFF_RENDER_MAX
   const shown = changes.slice(0, max)
   const lines = shown.map((c, i) => {
     const before = c.before.length ? `…${words(c.before)} ` : ''
@@ -308,7 +317,7 @@ export function renderChangesForModel(
   changes: DiffChange[],
   opts: { max?: number } = {}
 ): { text: string; truncated: boolean } {
-  const max = opts.max ?? 200
+  const max = opts.max ?? DIFF_RENDER_MAX
   const shown = changes.slice(0, max)
   const lines = shown.map((c, i) => {
     const ctx = [c.before.length ? `…${words(c.before)}` : '', c.after.length ? `${words(c.after)}…` : '']

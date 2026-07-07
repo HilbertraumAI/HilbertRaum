@@ -21,6 +21,7 @@ import {
   isPreciseDiffUseful,
   renderRedline,
   renderChangesForModel,
+  DIFF_RENDER_MAX,
   tokenizeForDiff,
   type DiffChange,
   type DiffResult
@@ -897,17 +898,22 @@ export function retrieveCompareDiff(
     }
   }
 
+  // The renderers cap at DIFF_RENDER_MAX and drop the LATER changes; that cap fires INDEPENDENTLY of
+  // the token budget below (a pair with >200 changes can still fit the budget). Track it explicitly so
+  // it can be OR'd into `truncated` — otherwise the prompt asserts "complete and exact" over a capped
+  // list (audit SK-2). Pass DIFF_RENDER_MAX to both renderers so the cap and the flag share one source.
+  const renderCapped = !diff.identical && diff.changes.length > DIFF_RENDER_MAX
   const changesText = diff.identical
     ? '(No differences — a word-level comparison found the two documents to be textually identical.)'
-    : renderChangesForModel(diff.changes).text
+    : renderChangesForModel(diff.changes, { max: DIFF_RENDER_MAX }).text
   // Cap the change list to the budget; if even capped it overflows, fall back (docs too different).
   if (approxTokenCount(changesText) * TOKENS_PER_WORD > budgetTokens) {
     const fitted = fitChangesToBudget(diff.changes, budgetWords)
     if (!fitted) return null
     return buildDiffResult(diff, fitted.changesText, fitted.redlineText, fitted.truncated, cited, chunksTotal, labelA, labelB)
   }
-  const redlineText = diff.identical ? '' : renderRedline(diff.changes).text
-  return buildDiffResult(diff, changesText, redlineText, false, cited, chunksTotal, labelA, labelB)
+  const redlineText = diff.identical ? '' : renderRedline(diff.changes, { max: DIFF_RENDER_MAX }).text
+  return buildDiffResult(diff, changesText, redlineText, renderCapped, cited, chunksTotal, labelA, labelB)
 }
 
 /** Cap the change list to a word budget (best-first) so a very-many-changes pair still answers. */
@@ -915,7 +921,7 @@ function fitChangesToBudget(
   changes: DiffChange[],
   budgetWords: number
 ): { changesText: string; redlineText: string; truncated: boolean } | null {
-  for (let max = Math.min(changes.length, 200); max >= 1; max = Math.floor(max / 2)) {
+  for (let max = Math.min(changes.length, DIFF_RENDER_MAX); max >= 1; max = Math.floor(max / 2)) {
     const forModel = renderChangesForModel(changes, { max })
     if (approxTokenCount(forModel.text) <= budgetWords) {
       return {
@@ -1166,13 +1172,13 @@ export function buildCompareDiffPrompt(
 ): string {
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
   const redlineBlock = redlineText ? `Exact word-level changes (redline):\n${redlineText}\n\n` : ''
-  // The change list can be capped to the (W1-tightened) budget. When it was, the model must NOT be
-  // told it is "complete and exact" (audit §2.2 honesty): it is the most significant changes only, and
-  // "no change listed for X" no longer implies X is unchanged.
+  // The change list can be capped for TWO independent reasons: the (W1-tightened) token budget, or the
+  // DIFF_RENDER_MAX render cap (audit SK-2) — both drop the LATER changes, never whole later sections.
+  // When either fired the model must NOT be told the list is "complete and exact" (§2.2 honesty): some
+  // changes are simply absent, so "no change listed for X" no longer implies X is unchanged.
   const completeness = truncated
-    ? 'Base your answer ONLY on these changes. This list is PARTIAL — the most significant changes are\n' +
-      'shown but some further changes did not fit and are NOT listed, so do NOT say a section is\n' +
-      'unchanged just because no change for it appears here.'
+    ? 'Base your answer ONLY on these changes. This list is PARTIAL — further changes exist that are\n' +
+      'not listed, so do NOT describe anything as unchanged just because no change for it appears here.'
     : 'Base your answer ONLY on these changes — they are complete and exact.'
   return `Question:
 ${question}

@@ -1027,6 +1027,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
   can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
   needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
+  **The what-changed (compare) fence rides SKA-8 fall-through turns by design (skills-audit-2026-07-07
+  SK-3b, decision D-P2a — declined runtime change).** When the user has explicitly selected the
+  what-changed skill and asks a NON-compare question at a 1- or 3-doc scope, `intends()` is false so the
+  turn falls through to the ordinary top-k relevance path — but the user-chosen skill fence stays
+  attached (the per-message glyph shows the skill as applied). Suppressing the fence on that path was
+  **declined**: it would silently drop instructions the user deliberately selected, and the reworded
+  honesty rule 1 (`what-changed/SKILL.md` v1.1.0) is coherent on BOTH paths — it now discriminates on
+  what the model can actually see (A/B labels or an exact-changes block ⇒ compare; ordinary passages with
+  no diff ⇒ just answer), so a fence riding a non-compare turn no longer tells the model to invent a
+  comparison. Revisit only if the gold set later shows comparison-framed answers on non-compare
+  fall-through turns.
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented
