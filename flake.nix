@@ -134,9 +134,19 @@
         nixosFhs-arm64 = mkNixosFhs "aarch64-linux";
 
         # Packaging dev environment (nix/dev-env.nix): node + electron-builder + squashfs +
-        # the FAT32 image tooling. Plus the local-LLM engines so the app's own `npm run dev`
-        # still works from this shell.
+        # the FAT32 image tooling. Consumed by the `.#loader` packaging shell + the docker image.
         devEnv = import ./loader/nix/dev-env.nix { inherit pkgs lib; };
+
+        # Shared libs the npm-installed Electron binary needs at runtime on Linux, so the DEFAULT
+        # dev shell can `npm run dev` (launch Electron directly) on NixOS. macOS Electron ships
+        # self-contained, so this is Linux-only.
+        electronLibs = with pkgs; [
+          glib nss nspr atk at-spi2-atk at-spi2-core cups dbus gtk3
+          pango cairo gdk-pixbuf expat libxkbcommon mesa libgbm libdrm
+          libglvnd alsa-lib systemd
+          libx11 libxcomposite libxdamage libxext libxfixes libxrandr
+          libxcb libxcursor libxi libxrender libxtst libxscrnsaver
+        ];
         projectShellHook = ''
           export HILBERTRAUM_LLAMA_BIN="${pkgs.llama-cpp}/bin/llama-server"
           export HILBERTRAUM_WHISPER_BIN="${pkgs.whisper-cpp}/bin/whisper-cli"
@@ -171,10 +181,40 @@
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
         };
-        devShells.default = loaderLib.mkDevShell {
-          packages = devEnv.packages ++ [ pkgs.llama-cpp pkgs.whisper-cpp ];
-          env = devEnv.env;
-          shellHook = projectShellHook;
+        devShells = {
+          # The everyday app dev shell — `nix develop`. node + the local-LLM engines on env +
+          # the shared libs the npm-installed Electron needs at runtime on Linux + the hr-*
+          # aliases, so `npm run dev` launches the app directly (this is NOT the packaging shell).
+          default = pkgs.mkShell {
+            packages = [ pkgs.nodejs_22 pkgs.llama-cpp pkgs.whisper-cpp ]
+              ++ lib.optionals pkgs.stdenv.isLinux electronLibs;
+            shellHook = ''
+              export HILBERTRAUM_LLAMA_BIN="${pkgs.llama-cpp}/bin/llama-server"
+              export HILBERTRAUM_WHISPER_BIN="${pkgs.whisper-cpp}/bin/whisper-cli"
+              ${lib.optionalString pkgs.stdenv.isLinux ''
+                export LD_LIBRARY_PATH="${lib.makeLibraryPath electronLibs}:$LD_LIBRARY_PATH"
+              ''}
+              alias hr-install='npm install'
+              alias hr-dev='npm run dev | tee /tmp/hilbertraum.log'
+              alias hr-build='npm run build'
+              alias hr-test='npm test'
+              alias hr-check='npm run typecheck'
+              alias hr-package='npm run package'
+              echo "HilbertRaum dev shell — node $(node -v 2>/dev/null)"
+              echo "engines: $(command -v llama-server) | $(command -v whisper-cli)"
+              echo "aliases: hr-install hr-dev hr-build hr-test hr-check hr-package"
+              echo "packaging shell: nix develop .#loader   (then: make -C loader image)"
+            '';
+          };
+
+          # The loader PACKAGING devshell — `nix develop .#loader`. electron-builder + squashfs +
+          # exFAT image tooling + the cross toolchain, HILBERTRAUM_DEVSHELL=1 for the Makefile
+          # guard. Build drive images:  nix develop .#loader --command make -C loader image
+          loader = loaderLib.mkDevShell {
+            packages = devEnv.packages ++ [ pkgs.llama-cpp pkgs.whisper-cpp ];
+            env = devEnv.env;
+            shellHook = projectShellHook;
+          };
         };
       });
 }
