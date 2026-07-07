@@ -7,6 +7,7 @@ import { DocumentsScreen } from './screens/DocumentsScreen'
 import { TranslateScreen } from './screens/TranslateScreen'
 import { ImagesScreen } from './screens/ImagesScreen'
 import { SkillsScreen } from './screens/SkillsScreen'
+import { UpdatesScreen } from './screens/UpdatesScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
 import {
   Banner,
@@ -52,7 +53,12 @@ const NAV_TOP: NavItem[] = [
   { id: 'skills', labelKey: 'nav.skills', icon: 'puzzle' }
 ]
 
-const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: 'settings' }]
+// Updates and Settings are the two bottom utilities — device/system surfaces, not everyday
+// task destinations. Updates sits above Settings.
+const NAV_BOTTOM: NavItem[] = [
+  { id: 'updates', labelKey: 'nav.updates', icon: 'refresh' },
+  { id: 'settings', labelKey: 'nav.settings', icon: 'settings' }
+]
 
 export function App(): JSX.Element {
   // The language provider wraps EVERYTHING, including the pre-unlock gate (which
@@ -310,6 +316,7 @@ function AppShell(): JSX.Element {
           {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
           {screen === 'models' && <ModelsScreen />}
           {screen === 'skills' && <SkillsScreen />}
+          {screen === 'updates' && <UpdatesScreen />}
           {screen === 'settings' && (
             <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />
           )}

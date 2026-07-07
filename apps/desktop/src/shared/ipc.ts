@@ -6,6 +6,10 @@ export const IPC = {
   updateSettings: 'settings:update',
   // Privacy/offline policy
   getPolicy: 'policy:get',
+  // Self-updater control API (the loader launcher's localhost control server; mocked in dev)
+  getUpdateStatus: 'update:getStatus',
+  checkForUpdate: 'update:check',
+  applyUpdate: 'update:apply',
   // Models + runtime
   listModels: 'models:list',
   selectModel: 'models:select',

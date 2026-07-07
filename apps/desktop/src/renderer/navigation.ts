@@ -20,6 +20,7 @@ export type ScreenId =
   | 'images'
   | 'models'
   | 'skills'
+  | 'updates'
   | 'settings'
 
 export type SettingsTab = 'general' | 'privacy' | 'diagnostics'
@@ -54,6 +55,7 @@ export function resolveNavTarget(target: string): NavResolution {
     case 'images':
     case 'models':
     case 'skills':
+    case 'updates':
       return { screen: target }
     default:
       // Unknown target: land somewhere sensible rather than rendering nothing.
