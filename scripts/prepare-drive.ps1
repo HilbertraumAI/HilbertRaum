@@ -45,6 +45,12 @@
   reranker + transcriber) instead of the small default set. Slower; for building a fully
   provisioned drive. The sidecar runtimes are fetched either way.
 
+.PARAMETER NoRuntimes
+  Skip the sidecar-runtime fetch (llama.cpp + whisper.cpp) while still fetching models under
+  -WithAssets. Use it when the runtimes are delivered another way -- the loader ships them as
+  llamacpp / whispercli components (its native launcher exports HILBERTRAUM_LLAMACPP_DIR /
+  HILBERTRAUM_WHISPERCLI_DIR), so an image-built drive does NOT embed them here.
+
 .PARAMETER AcceptLicense
   Forwarded to fetch-models.ps1 (accept the model licenses) when -WithAssets is used.
 
@@ -61,6 +67,7 @@ param(
   [switch] $Dev,
   [switch] $WithAssets,
   [switch] $AllModels,
+  [switch] $NoRuntimes,
   [switch] $AcceptLicense
 )
 
@@ -265,21 +272,27 @@ if ($WithAssets) {
     if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-models failed.'; exit 1 }
   }
 
-  # llama.cpp sidecar (the chat + embeddings engine) -- always.
-  $runtimeArgs = @{ Target = $Target }
-  if ($DryRun) { $runtimeArgs.DryRun = $true }
-  & $fetchRuntime @runtimeArgs
-  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime (llama.cpp) failed.'; exit 1 }
+  # Sidecar runtimes (llama.cpp + whisper.cpp). Skipped with -NoRuntimes: the loader delivers
+  # them as a mounted `runtime` component instead of embedding them on the drive.
+  if ($NoRuntimes) {
+    Write-Host '  (-NoRuntimes: skipping the llama.cpp + whisper.cpp sidecar fetch -- delivered as a loader runtime component)' -ForegroundColor DarkGray
+  } else {
+    # llama.cpp sidecar (the chat + embeddings engine).
+    $runtimeArgs = @{ Target = $Target }
+    if ($DryRun) { $runtimeArgs.DryRun = $true }
+    & $fetchRuntime @runtimeArgs
+    if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime (llama.cpp) failed.'; exit 1 }
 
-  # whisper.cpp sidecar (the transcriber engine) -- always, to match the bundled Whisper
-  # model. Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a
-  # mac/linux build host there is no build to fetch -- a miss is a warning, not a failure
-  # (those drives build whisper.cpp from source; see docs/packaging.md).
-  $whisperArgs = @{ Target = $Target; Family = 'whisper_cpp' }
-  if ($DryRun) { $whisperArgs.DryRun = $true }
-  & $fetchRuntime @whisperArgs
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host '  note: whisper.cpp runtime not provisioned (no prebuilt build for this host -- build from source on mac/linux).' -ForegroundColor Yellow
+    # whisper.cpp sidecar (the transcriber engine) -- to match the bundled Whisper model.
+    # Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a mac/linux
+    # build host there is no build to fetch -- a miss is a warning, not a failure (those
+    # drives build whisper.cpp from source; see docs/packaging.md).
+    $whisperArgs = @{ Target = $Target; Family = 'whisper_cpp' }
+    if ($DryRun) { $whisperArgs.DryRun = $true }
+    & $fetchRuntime @whisperArgs
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host '  note: whisper.cpp runtime not provisioned (no prebuilt build for this host -- build from source on mac/linux).' -ForegroundColor Yellow
+    }
   }
   Write-Host ''
   Write-Host "Now capture real hashes: scripts\verify-models.ps1 -Target '$Target' -Generate" -ForegroundColor Cyan

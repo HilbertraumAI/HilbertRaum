@@ -1617,6 +1617,42 @@ Six independent fixes; one is a **product policy decision** (owner-approved duri
   `scripts\build-commercial-drive` to confirm a downloads-enabled + vision-bundled drive passes the (relaxed) sell
   gate. Provide the #7 repro (did scope/attachments change between the analysis answer and the button; >1 doc in scope?).**_
 
+_2026-07-01 — **Sidecar engines shipped as loader `llamacpp`/`whispercli` components — branch
+`loader-integration` (rebased onto `origin/master` @ `280cb39`; UNMERGED).** The image build no longer
+embeds the llama.cpp/whisper.cpp engines on the drive; they ship as two per-target loader components and the
+launcher mounts them. **This supersedes an earlier hand-rolled version of the same feature** (preserved on
+the `loader-integration-handrolled` branch): after discovering the canonical implementation on
+`git.plan.ai:plan-ai/hilbertraum` `trunk` (a divergent fresh-history superproject, app = `planailabs/AI_Drive`
+submodule @ `45d1f18`), we ported ITS approach into our vendored layout. Offline / no telemetry / no new egress.
+- **App (`services/runtime/sidecar.ts`, `transcriber/cli.ts`):** `resolveLlamaServerPath` /
+  `resolveWhisperCliPath` prefer the PACKAGED component dir (`HILBERTRAUM_LLAMACPP_DIR` /
+  `HILBERTRAUM_WHISPERCLI_DIR`, binary at the dir root), else the drive's `runtime/<family>/<os>/`. New
+  `sidecarSpawnEnv(binPath)` prepends the component's `lib/` to `LD_LIBRARY_PATH` on linux (shipped
+  libssl), wired into the `LlamaServer` + `WhisperCli` spawns. `resolveCpuFallbackServerPath` unchanged.
+  Data contract: the two DIR env vars point at the mounted component whose ROOT holds the exe. Tests updated.
+- **prepare-drive.{sh,ps1}:** `--no-runtimes`/`-NoRuntimes` opt-out (kept from the hand-rolled pass).
+- **Loader (`loader/loader/`):** two `builder=nix` components `llamacpp` (4 targets) + `whispercli`
+  (3 targets, no mac) in `loader.toml`; `nix/builds.nix` fetches upstream prebuilt archives PURELY
+  (`nix/runtime-pins.json`, `pkgs.fetchurl` by sha256), symlinks the exe at the component root, ships
+  linux `lib/` (openssl) + windows MSVC redist DLLs (vendored `nix/msvc-runtime.nix`);
+  `scripts/update-runtime-pins.sh` refreshes pins (gh+jq). `bundle.sh` copies whichever sidecars built into
+  the pool + a `runtime[]` manifest. My earlier `stage-runtime.sh` + import-build `runtime` component were
+  removed. `[layout].prepare_cmd` = `./scripts/prepare-drive.sh --no-runtimes`. Pins: llama b9690 / whisper
+  v1.9.0 (NOTE: differs from `model-manifests/runtime-sources.yaml`'s b9849 — the loader components and the
+  in-app/DIY `fetch-runtime` pin are independent; owner may reconcile via `update-runtime-pins.sh`).
+- **Launcher (`launcher/src/project.rs`):** mounts `llamacpp-<os>` + `whispercli-<os>` when present and
+  exports the two DIR env vars (host + FHS-child); best-effort, missing sidecar logs + falls back.
+- **Engine:** NOT bumped — trunk's engine `ebac4b0` diverged from our `16f5c39` (which has the
+  subdir-flakeref feature our vendored layout needs). Only `msvc-runtime.nix` was vendored from `ebac4b0`.
+- **Validation:** all 7 runtime derivations `nix-instantiate` cleanly (incl. the win MSVC path);
+  `xtask gen-ninja` wires llamacpp×4 + whispercli×3 component edges; `npm test` = 2695 passed +
+  `typecheck` + launcher `cargo test` green (the devshell's `HILBERTRAUM_LLAMA_BIN` leak still makes
+  `vision-status.test.ts` fail locally — passes with it unset; env artifact). NOT run: the full
+  `make components`/`make image` (network fetch + nix builds).
+- **NEXT ACTION (owner):** `make components`/`make image` with network once; decide whether to reconcile the
+  b9690 vs b9849 pins; review + merge `loader-integration`. Do NOT auto-merge/push. Design record:
+  `docs/packaging.md` "Sidecar engines as loader components"._
+
 
 _2026-07-01 — **Qwen3.5 Unsloth wave + llama.cpp runtime bump b9585 → b9849 — branch
 `model-catalog-qwen3.5-wave-b9849` (UNMERGED; do NOT auto-merge/push).** Manifest/docs/test-only —

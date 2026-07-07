@@ -17,9 +17,17 @@
 # (larger chat models) from inside the app. Pass --all-models to fetch every model instead
 # (the sidecar runtimes are fetched either way).
 #
+# --no-runtimes skips the sidecar-runtime fetch (llama.cpp + whisper.cpp) while still fetching
+# models under --with-assets. Use it when the runtimes are delivered another way — the loader
+# ships them as `llamacpp` / `whispercli` COMPONENTS (loader/loader.toml + the native launcher,
+# which exports HILBERTRAUM_LLAMACPP_DIR / HILBERTRAUM_WHISPERCLI_DIR), so an image-built drive
+# does NOT embed them here. The app resolves the component dir first and only falls back to an
+# on-drive runtime/ tree (see apps/desktop/src/main/services/runtime/sidecar.ts
+# resolveLlamaServerPath and transcriber/cli.ts resolveWhisperCliPath).
+#
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE [--dry-run] [--force] \
-#       [--dev] [--with-assets] [--all-models] [--accept-license]
+#       [--dev] [--with-assets] [--all-models] [--no-runtimes] [--accept-license]
 set -euo pipefail
 
 # The models --with-assets provisions by default (fast setup): the default chat model plus
@@ -43,6 +51,7 @@ FORCE=0
 DEV=0
 WITH_ASSETS=0
 ALL_MODELS=0
+NO_RUNTIMES=0
 ACCEPT_LICENSE=0
 
 while [[ $# -gt 0 ]]; do
@@ -54,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     --dev) DEV=1; shift ;;
     --with-assets) WITH_ASSETS=1; shift ;;
     --all-models) ALL_MODELS=1; shift ;;
+    --no-runtimes) NO_RUNTIMES=1; shift ;;
     --accept-license) ACCEPT_LICENSE=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -225,17 +235,23 @@ if [[ $WITH_ASSETS -eq 1 ]]; then
     done
   fi
 
-  # llama.cpp sidecar (the chat + embeddings engine) — always.
-  RUNTIME_ARGS=(--target "$TARGET")
-  [[ $DRY_RUN -eq 1 ]] && RUNTIME_ARGS+=(--dry-run)
-  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}"
+  # Sidecar runtimes (llama.cpp + whisper.cpp). Skipped with --no-runtimes: the loader delivers
+  # them as a mounted `runtime` component instead of embedding them on the drive (see the header).
+  if [[ $NO_RUNTIMES -eq 1 ]]; then
+    echo "  (--no-runtimes: skipping the llama.cpp + whisper.cpp sidecar fetch — delivered as a loader runtime component)"
+  else
+    # llama.cpp sidecar (the chat + embeddings engine).
+    RUNTIME_ARGS=(--target "$TARGET")
+    [[ $DRY_RUN -eq 1 ]] && RUNTIME_ARGS+=(--dry-run)
+    bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}"
 
-  # whisper.cpp sidecar (the transcriber engine) — always, to match the bundled Whisper
-  # model. Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a
-  # mac/linux build host there is no build to fetch — a miss is a warning, not a failure
-  # (those drives build whisper.cpp from source; see docs/packaging.md).
-  if ! bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" --family whisper_cpp; then
-    echo "  note: whisper.cpp runtime not provisioned (no prebuilt build for this host — build from source on mac/linux)."
+    # whisper.cpp sidecar (the transcriber engine) — to match the bundled Whisper model.
+    # Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a mac/linux
+    # build host there is no build to fetch — a miss is a warning, not a failure (those
+    # drives build whisper.cpp from source; see docs/packaging.md).
+    if ! bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" --family whisper_cpp; then
+      echo "  note: whisper.cpp runtime not provisioned (no prebuilt build for this host — build from source on mac/linux)."
+    fi
   fi
   echo
   echo "Now capture real hashes: scripts/verify-models.sh --target \"$TARGET\" --generate"

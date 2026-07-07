@@ -8,8 +8,15 @@ import { buildPolicyStatus } from '../services/policy'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
+import { getUpdaterClient } from '../services/updater'
 import { saveTextExport } from './save-export'
-import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
+import type {
+  AppSettings,
+  AppStatus,
+  PolicyStatus,
+  PreflightResult,
+  UpdaterStatus
+} from '../../shared/types'
 
 // IPC for app/drive status + settings, the privacy policy surface (`getPolicy`),
 // and the policy-aware `offlineMode` (spec §9.1, §3.6).
@@ -79,6 +86,13 @@ export function registerCoreIpc(ctx: AppContext): void {
       isDev: ctx.isDev
     })
   )
+
+  // Self-updater bridge (the loader launcher's localhost control API; mocked when the launcher
+  // env is absent). Workspace-agnostic — updates are a drive/device concern, usable while locked.
+  const updater = getUpdaterClient()
+  ipcMain.handle(IPC.getUpdateStatus, (): Promise<UpdaterStatus> => updater.getStatus())
+  ipcMain.handle(IPC.checkForUpdate, (): Promise<void> => updater.check())
+  ipcMain.handle(IPC.applyUpdate, (): Promise<void> => updater.apply())
 
   // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.
   ipcMain.handle(IPC.getLogTail, (): string[] => readLogTail())

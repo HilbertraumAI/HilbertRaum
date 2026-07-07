@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { llamaOsDir, defaultThreadCount, type ResolveBinOptions } from '../runtime/sidecar'
+import { llamaOsDir, defaultThreadCount, sidecarSpawnEnv, type ResolveBinOptions } from '../runtime/sidecar'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
@@ -45,6 +45,13 @@ export function resolveWhisperCliPath(
   if (override) {
     if (opts.isDev) return existsSync(override) ? override : null
     log.warn('Ignoring HILBERTRAUM_WHISPER_BIN in a packaged build (dev-only override)')
+  }
+  // Prefer the loader-PACKAGED component (mounted beside the app; launcher exports its dir),
+  // else the drive's `runtime/whisper.cpp/<os>/` layout.
+  const packaged = env.HILBERTRAUM_WHISPERCLI_DIR?.trim()
+  if (packaged) {
+    const p = join(packaged, whisperCliBinaryName(platform))
+    if (existsSync(p)) return p
   }
   const candidate = join(whisperCliDir(rootPath, platform), whisperCliBinaryName(platform))
   return existsSync(candidate) ? candidate : null
@@ -238,7 +245,10 @@ export class WhisperCliTranscriber implements Transcriber {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
     return new Promise((resolve, reject) => {
-      const child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = this.spawnImpl(this.binPath, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: sidecarSpawnEnv(this.binPath)
+      })
       onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup
       let stderrTail = ''
       const scanProgress = (text: string): void => {

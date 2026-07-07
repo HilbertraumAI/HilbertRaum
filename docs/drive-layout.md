@@ -197,6 +197,15 @@ Since Phase 14 (see the [`architecture.md`](architecture.md) GPU record §6) `ru
 Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
 exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).
 
+> **Loader-built drives: the engines ship as components, not on the drive.** The image build
+> (`loader/loader/`) delivers the llama.cpp + whisper.cpp binaries as two mounted **loader
+> components** (`llamacpp` / `whispercli`, packed purely in nix from hash-pinned upstream
+> archives), and the launcher exports `HILBERTRAUM_LLAMACPP_DIR` / `HILBERTRAUM_WHISPERCLI_DIR`
+> (binary at the dir root). The resolvers above prefer those components and use this on-drive
+> `runtime/` tree only as a **fallback**. So a loader image is built with
+> `prepare-drive --no-runtimes` (the `runtime/` dirs are still scaffolded, just left empty). See
+> [`packaging.md`](packaging.md) "Sidecar engines as loader components".
+
 ### Second sidecar family: the whisper.cpp transcriber (Phase 36)
 
 Audio transcription uses a separate, pinned **whisper.cpp** CLI under

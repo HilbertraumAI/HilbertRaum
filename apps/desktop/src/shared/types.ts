@@ -98,6 +98,43 @@ export interface PolicyStatus {
   telemetryAllowed: boolean
 }
 
+// ---- Self-updater (the loader launcher's localhost control API) ----
+
+/**
+ * The auto-updater's state, mirroring the launcher's `UpdateState` (loader-manifest, snake_case
+ * over the wire). `idle` = nothing in flight; `ready` = a verified delta is staged and applying
+ * it will relaunch; `failed` carries a `message`.
+ */
+export type UpdateState = 'idle' | 'checking' | 'downloading' | 'ready' | 'applying' | 'failed'
+
+/** The auto-updater's status, mirroring the launcher's `UpdateStatus` (`GET /api/update`). */
+export interface UpdateStatus {
+  state: UpdateState
+  /** Files done / total (the progress-bar unit). */
+  done: number
+  total: number
+  /** Bytes done / total + current throughput (bytes/sec); set during download + apply, else 0. */
+  done_bytes: number
+  total_bytes: number
+  rate_bps: number
+  /** Target version + short commit of the pending/last update (empty when unknown). */
+  version: string
+  commit: string
+  /** Human-readable detail, primarily for the `failed` state. */
+  message: string | null
+}
+
+/**
+ * What the renderer's Updates screen receives. `available` is false when there is no updater at
+ * all; `mock` is true when the launcher control API is absent (dev / not launched from the drive)
+ * and an in-memory mock is driving the state machine — the UI shows a warning in that case.
+ */
+export interface UpdaterStatus {
+  available: boolean
+  mock: boolean
+  status: UpdateStatus
+}
+
 // ---- Workspace vault / encryption (spec §3.5/§7.9) ----
 
 /** Lifecycle state of the workspace as seen by the app shell / unlock gate. */

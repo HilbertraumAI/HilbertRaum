@@ -1,0 +1,28 @@
+[package]
+name = "hilbertraum"
+version = "0.1.0"
+edition = "2021"
+description = "HilbertRaum native launcher: mount the bundled Electron app component and run it (loader-based, mac-mgmt-free)."
+
+[[bin]]
+name = "hilbertraum"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+# The project-agnostic loader runtime: the FHS-entry / component-mount / pool-discovery /
+# splash / cache+lock substrate, the crash-safe self-updater, and the run lifecycle state
+# machine + Project trait. Vendored as a git submodule (third_party/loader) so the launcher
+# builds with plain `cargo build` outside the flake; the flake includes it via self.submodules.
+loader-core = { path = "../third_party/loader/crates/loader-core" }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "macros"] }
+# The basic localhost control-API HTTP server (health/info + Electron ready hook + update
+# check/apply). rustls/reqwest for the actual update downloads live in loader-core.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

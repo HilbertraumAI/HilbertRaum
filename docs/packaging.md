@@ -172,6 +172,39 @@ off `config/drive.json`). The app then reads `models/`, `workspace/`, `config/`,
 > build from `apps/desktop` or temporarily disable hoisting. None of this affects `npm test` /
 > `typecheck` / `npm run build` (the green gate), which do not invoke electron-builder.
 
+### Sidecar engines as loader components (loader-integration)
+
+The image build (`loader/loader/`) no longer embeds the sidecar engine binaries on the drive.
+Instead they ship as **two per-target loader components** — `llamacpp` (the chat/embeddings
+server) and `whispercli` (the audio transcriber) — declared in `loader.toml` with
+`builder = "nix"` and packed **purely in nix** (`nix/builds.nix`) straight from **upstream
+prebuilt release archives** pinned by hash in `nix/runtime-pins.json`. No impure download step:
+`pkgs.fetchurl` fetches each archive under its pinned sha256 and the derivation extracts it,
+symlinking the executable at the component **root** (so the app resolves `<dir>/llama-server`).
+Refresh the pins with `scripts/update-runtime-pins.sh` (a `gh` + `jq` one-shot; network only).
+
+Per-OS specifics baked into the nix derivations:
+- **linux** — the portable Ubuntu builds need a couple of libs the FHS sandbox / a minimal host
+  may lack (`libssl`/`libcrypto`); those ship in a `lib/` subdir beside the binary.
+- **windows** — the MSVC-linked exes import `VCRUNTIME140.dll` / `MSVCP140.dll`; those redist DLLs
+  are dropped beside the `.exe` (from the vendored `nix/msvc-runtime.nix`) so a fresh Windows
+  doesn't die with `STATUS_DLL_NOT_FOUND`.
+- **mac** — llama.cpp only; upstream ships no whisper-cli mac archive (xcframework), so mac bundles
+  carry no `whispercli` component and the app falls back to no transcriber there.
+
+The native launcher **mounts** each present sidecar beside the app and exports
+**`HILBERTRAUM_LLAMACPP_DIR`** / **`HILBERTRAUM_WHISPERCLI_DIR`** (on both the host and the NixOS
+FHS-child path, since the FHS child spawns Electron). The app prefers the packaged component
+(`services/runtime/sidecar.ts` `resolveLlamaServerPath` / `transcriber/cli.ts`
+`resolveWhisperCliPath`), falling back to the drive's `runtime/<family>/<os>/` layout when a
+component is absent. When spawning a packaged linux binary, `sidecarSpawnEnv()` prepends the
+component's `lib/` to `LD_LIBRARY_PATH` (no-op on win/mac and for a drive binary).
+
+Because the loader now delivers the engines, the image's drive-population hook runs
+`prepare-drive.sh --no-runtimes` (`loader.toml [layout].prepare_cmd`), so the burned drive is not
+double-provisioned. Use `--no-runtimes` / `-NoRuntimes` directly whenever the engines come from
+the components rather than the drive.
+
 ## Preparing a drive — scripts (Phase 11)
 
 `scripts/` provisions and verifies a drive. The scripts are **self-contained** (a drive can be laid
@@ -180,7 +213,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). **`-NoRuntimes`/`--no-runtimes`** skips the sidecar-runtime fetch (used by the image build, which delivers the runtimes as a mounted `runtime` component — see *Sidecar runtimes as a loader component*). |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |

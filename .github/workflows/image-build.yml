@@ -1,0 +1,79 @@
+# Full USB-image build gate — the real packaging path, not the unit suite (that is ci.yml).
+#
+# Builds the complete ready-to-burn HilbertRaum drive image for EVERY platform (linux-x64,
+# linux-arm64, win-x64, mac-arm64 — the loader.toml [targets].known set) via the loader:
+# `nix develop .#loader` enters the PACKAGING devshell (node + electron-builder + squashfs + the
+# exFAT image tooling, HILBERTRAUM_DEVSHELL=1 so the Makefile guard passes), then `make -C loader
+# image` runs the whole artifact graph (per-platform Electron app components, native launchers +
+# splash, the NixOS FHS helper, prebuilt llama.cpp/whisper.cpp sidecars — all cross-built from
+# Linux by nix) and packs them into a single universal drive: dist/hilbertraum-usb.img.
+#
+# Nix does the heavy lifting; the Determinate magic cache keeps rebuilds cheap. exFAT (loader.toml
+# [layout].image_fs) needs a loop-mount, so the pack step uses sudo — available on ubuntu-latest
+# and, when run locally under `act`, requires `--privileged` (see the header of the run step).
+#
+# This is dev infrastructure: no telemetry, no user data; the only egress is the npm registry,
+# nixpkgs, and the pinned upstream sidecar release archives.
+name: Image build
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: build-image (all platforms)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      # submodules: recursive — the loader build engine lives in loader/third_party/loader
+      # (git.plan.ai), and the flake's self.submodules brings its tree into the flake source.
+      # fetch-depth: 0 — a full (non-shallow) clone: Nix refuses to evaluate a flake from a
+      # shallow git repo ("shallow repositories are only allowed when `shallow = true`").
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # `nix develop .#loader` (the packaging shell); `make -C loader` runs from the packaging dir
+      # so xtask's REPO_ROOT = loader/ and the discovered flake ref (..) points back here. No
+      # TARGET ⇒ the full [targets].known set. exFAT packing loop-mounts as root → passwordless
+      # sudo on the runner; under `act` pass `--container-options --privileged` (kernel needs exfat).
+      - name: Build full USB image (all platforms)
+        run: nix develop .#loader --command make -C loader image
+
+      - name: Inspect the image
+        run: |
+          img=loader/dist/hilbertraum-usb.img
+          test -f "$img" || { echo "::error::image not produced at $img"; ls -la loader/dist || true; exit 1; }
+          ls -la "$img"
+          file "$img"
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hilbertraum-usb
+          path: loader/dist/hilbertraum-usb.img
+          if-no-files-found: error
+          retention-days: 7

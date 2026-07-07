@@ -54,6 +54,7 @@ import type {
   TranslateRequest,
   StartSkillRunRequest,
   StartSkillRunResult,
+  UpdaterStatus,
   WorkspaceActionResult,
   WorkspaceMode,
   WorkspaceStateInfo
@@ -71,6 +72,14 @@ const api = {
   // ---- Privacy / offline policy ----
   /** Effective privacy policy + derived network flags (policy ∧ setting). */
   getPolicy: (): Promise<PolicyStatus> => ipcRenderer.invoke(IPC.getPolicy),
+
+  // ---- Self-updater (loader launcher control API; mocked in dev) ----
+  /** Current updater status + whether it is the real launcher API or the dev mock. */
+  getUpdateStatus: (): Promise<UpdaterStatus> => ipcRenderer.invoke(IPC.getUpdateStatus),
+  /** Kick off a check + predownload; poll getUpdateStatus for progress. */
+  checkForUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.checkForUpdate),
+  /** Apply a staged update. With the real launcher this relaunches the app. */
+  applyUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.applyUpdate),
 
   // ---- Encrypted workspace lifecycle ----
   /** Current workspace state (uninitialized | locked | unlocked) for the unlock gate. */

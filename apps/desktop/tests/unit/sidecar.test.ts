@@ -9,6 +9,7 @@ import net from 'node:net'
 import {
   resolveLlamaServerPath,
   resolveCpuFallbackServerPath,
+  sidecarSpawnEnv,
   llamaServerBinaryName,
   llamaServerDir,
   llamaOsDir,
@@ -131,6 +132,51 @@ describe('resolveCpuFallbackServerPath (Phase 15, ladder rung 3)', () => {
   it('returns null when the drive ships no safety net (e.g. mac)', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-cpubin-'))
     expect(resolveCpuFallbackServerPath(root, 'darwin')).toBeNull()
+  })
+})
+
+// The native launcher mounts the llama.cpp sidecar as a loader COMPONENT and exports
+// HILBERTRAUM_LLAMACPP_DIR (binary at the dir root); the app must prefer that over an embedded
+// drive runtime, falling back to the drive's runtime/llama.cpp/<os>/ when the component is
+// absent or lacks the binary.
+describe('resolveLlamaServerPath — packaged component (HILBERTRAUM_LLAMACPP_DIR)', () => {
+  it('prefers the component binary (at the dir root) over the drive binary', () => {
+    const drive = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-drive-'))
+    const component = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-comp-'))
+    const driveDir = llamaServerDir(drive, 'linux')
+    mkdirSync(driveDir, { recursive: true })
+    writeFileSync(join(driveDir, llamaServerBinaryName('linux')), 'x')
+    const compBin = join(component, llamaServerBinaryName('linux'))
+    writeFileSync(compBin, 'x')
+    expect(resolveLlamaServerPath(drive, 'linux', { HILBERTRAUM_LLAMACPP_DIR: component })).toBe(compBin)
+  })
+
+  it('falls back to the drive when the component dir lacks the binary', () => {
+    const drive = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-drive-'))
+    const component = mkdtempSync(join(tmpdir(), 'hilbertraum-rt-comp-')) // empty component
+    const driveDir = llamaServerDir(drive, 'linux')
+    mkdirSync(driveDir, { recursive: true })
+    const driveBin = join(driveDir, llamaServerBinaryName('linux'))
+    writeFileSync(driveBin, 'x')
+    expect(resolveLlamaServerPath(drive, 'linux', { HILBERTRAUM_LLAMACPP_DIR: component })).toBe(driveBin)
+  })
+})
+
+describe('sidecarSpawnEnv (packaged linux libs on LD_LIBRARY_PATH)', () => {
+  it('prepends the binary sibling lib/ dir on linux', () => {
+    const env = sidecarSpawnEnv('/mnt/llamacpp/llama-server', 'linux', {})
+    expect(env.LD_LIBRARY_PATH).toBe(join('/mnt/llamacpp', 'lib'))
+  })
+
+  it('keeps an existing LD_LIBRARY_PATH after the lib/ dir', () => {
+    const env = sidecarSpawnEnv('/mnt/llamacpp/llama-server', 'linux', { LD_LIBRARY_PATH: '/usr/lib' })
+    expect(env.LD_LIBRARY_PATH).toBe(`${join('/mnt/llamacpp', 'lib')}:/usr/lib`)
+  })
+
+  it('is a no-op on win/mac (returns the env unchanged)', () => {
+    const base = { LD_LIBRARY_PATH: '/usr/lib' }
+    expect(sidecarSpawnEnv('C:/llamacpp/llama-server.exe', 'win32', base)).toBe(base)
+    expect(sidecarSpawnEnv('/mnt/llamacpp/llama-server', 'darwin', base)).toBe(base)
   })
 })
 

@@ -65,3 +65,12 @@ signing.env
 .DS_Store
 Thumbs.db
 apps/desktop/screenshots/
+
+# Rust
+target
+# Nix
+result
+.ninja_log
+.ninja_lock
+.nix-gcroots/
+build.ninja
