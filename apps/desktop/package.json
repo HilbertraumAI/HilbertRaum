@@ -4,7 +4,10 @@
   "private": true,
   "description": "HilbertRaum desktop app (Electron).",
   "author": "HilbertRaum contributors",
-  "main": "out/main/index.js",
+  "main": "out/main/index.mjs",
+  "sideEffects": [
+    "*.css"
+  ],
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

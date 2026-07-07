@@ -38,8 +38,11 @@ a future move to Tauri/Rust is a localized swap.
 ## Process model & security
 - **Renderer**: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. Talks only to
   the preload bridge.
-- **Preload**: exposes a single typed `window.api` object (see `src/preload/index.ts`).
-- **Main**: owns all file I/O, the database, the model runtime, and the llama.cpp sidecars.
+- **Preload**: exposes a single typed `window.api` object (see `src/preload/index.ts`). Stays
+  **CommonJS** even though main ships ESM — Electron only allows ESM preload with `sandbox: false`,
+  which we never do. See packaging.md "Module format & renderer bundle — design record".
+- **Main**: owns all file I/O, the database, the model runtime, and the llama.cpp sidecars. Bundled
+  as **ESM** (`out/main/index.mjs`).
 - **CSP**: same-origin only; no remote origins. Applied as both an `index.html` meta tag and a
   response header (`session.webRequest.onHeadersReceived`) — strict in production, HMR-compatible in
   dev. See [`security-model.md`](security-model.md).

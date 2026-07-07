@@ -18,7 +18,12 @@ export default defineConfig({
   resolve: {
     alias: {
       '@shared': resolve(__dirname, 'src/shared'),
-      '@renderer': resolve(__dirname, 'src/renderer')
+      '@renderer': resolve(__dirname, 'src/renderer'),
+      // AssistantMarkdown ships lazy in prod (renderer code-split: streamdown/katex load as a
+      // separate chunk via ./AssistantMarkdownLazy's React.lazy). In tests, resolve that wrapper
+      // to the real synchronous component so render assertions don't have to await Suspense/chunk
+      // load. Both the chat barrel and Transcript import the exact specifier './AssistantMarkdownLazy'.
+      './AssistantMarkdownLazy': resolve(__dirname, 'src/renderer/chat/AssistantMarkdown.tsx')
     }
   },
   test: {
