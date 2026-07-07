@@ -63,7 +63,19 @@ phase lists. Do NOT re-read the whole audit report, the architecture record, or 
   "add up (including the stated tax rate)"; SK-14 autoFire clause added to invoice + meeting-protocol. Versions:
   deadline-finder/share-safe/invoice → 1.1.0 (body), meeting-protocol → 1.1.1 (comment-only patch). No test/doc drift
   (grep found no pinned copies in tests; user-guide:612/618 are paraphrase not quotes). typecheck clean, suite 3796/47.
-- [ ] **Phase 4** — bank-statement aux files + schema parity pin (SK-5, SK-6, SK-14 part)
+- [x] **Phase 4** — bank-statement aux files + schema parity pin (SK-5, SK-6, SK-14 part).
+  DONE 2026-07-07: SK-5 rewrote `examples/reading-a-statement.md` around the stable honesty posture (kept
+  the three-question structure — closing balance / "how much did I spend?" now a computed+labelled total /
+  truncated row — dropped "What this version does not do" for "Where the numbers come from": extracted table
+  + printed figures, never sentence-mining; added "exports always ask before saving"); schema JSON
+  `description` rewritten to reality (produced by `extract_transactions`, mirrors + pinned to the TS export).
+  SK-6: `TRANSACTION_ROW_SCHEMA` exported from `tools/bank-statement.ts` (test-motivated comment) + new
+  `tests/unit/skills-transaction-schema-parity.test.ts` (+4) — structural compare (property-name set,
+  per-property type/pattern/minimum/minLength, `required`, `additionalProperties`), `category` delta
+  encoded by name (present in both, input/persist-only). Teeth-checked (JSON `^[A-Z]{3}$`→`{4}$` → RED,
+  restored). SK-14 autoFire clause added to bank-statement frontmatter. Version → 1.0.1 (aux + comment only,
+  body untouched). Docs: arch §8 pin note. BUILD_STATE dated logs left intact (historically accurate — the
+  false claims lived only in the two aux files). typecheck clean, suite 3800/47 (+4).
 - [ ] **Phase 5** — close-out: conventions, INFO records, retire report + plan (SK-12, SK-16/17/18, SK-3b record)
 
 Phases 1–4 are independent of each other (no shared files) and can land in any order;

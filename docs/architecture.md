@@ -3209,6 +3209,12 @@ statements (Phase 31, D50–D58) + the opening/closing-balance completeness gate
 (the `pdf-layout.ts` layout mode + `extractStatementBalances`/`isStatementComplete` extend these same
 bank tools; in-code comments here citing `architecture.md "Skills — design record" §8` for the bank
 domain still resolve, the geometry specifics live in §21).
+The packaged `schemas/transaction.schema.json` (the machine-readable row contract that ships inside every
+bank-statement export) is **test-pinned** to the live `TRANSACTION_ROW_SCHEMA` in `tools/bank-statement.ts`
+by `tests/unit/skills-transaction-schema-parity.test.ts` — a structural compare (property set, per-property
+`type`/`pattern`/`minimum`/`minLength`, `required`) that kills the "hand-maintained mirror" drift risk
+(skills-audit-2026-07-07 SK-6); the two are field-for-field identical today, `category` included (an optional
+persisted label a categorize run attaches, never emitted by the extractor).
 
 **The invoice skill is the SECOND Tier-2 reference** (`app-skills/invoice/`, `id:'invoice'`), proving the
 gate generalizes to a second content-class domain with strong EN+DE coverage. It covers the same

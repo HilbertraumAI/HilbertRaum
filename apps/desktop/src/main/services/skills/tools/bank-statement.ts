@@ -46,8 +46,13 @@ export { detectCurrency, parseAmount, parseDate } from './money'
 
 // ---- The output contract (the `JsonSchema` subset, mirroring the committed transaction.schema.json) ----
 
-/** One extracted transaction row — the shape of `app-skills/bank-statement/schemas/transaction.schema.json`. */
-const TRANSACTION_ROW_SCHEMA: JsonSchema = {
+/**
+ * One extracted transaction row — the shape of `app-skills/bank-statement/schemas/transaction.schema.json`.
+ * EXPORTED for the parity test (`tests/unit/skills-transaction-schema-parity.test.ts`): the packaged JSON
+ * ships inside the skill export and is the only machine-readable row contract a recipient sees, so it is
+ * pinned structurally to this TS source of truth — otherwise the two could silently drift (audit SK-6).
+ */
+export const TRANSACTION_ROW_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['date', 'description', 'amount', 'currency'],

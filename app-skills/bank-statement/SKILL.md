@@ -2,7 +2,7 @@
 id: bank-statement
 title: Bank Statement Analysis
 description: Use when the user wants to extract, categorize, reconcile, or summarize transactions from a bank statement.
-version: 1.0.0
+version: 1.0.1
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
@@ -24,7 +24,9 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - export_transactions_csv
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10)
   autoFire: true               # U4/§2.4 D6 opt-in: eligible for auto-fire (still gated by the user opt-in
-                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar — a
+                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar
+                               #   (auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory
+                               #   keyword hit) — a
                                #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). The
                                #   applies() gate is already single-doc + intent-shaped; W5's expanded
                                #   corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.

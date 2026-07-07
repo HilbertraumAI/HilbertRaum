@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://hilbertraum.local/skills/bank-statement/transaction.schema.json",
   "title": "Bank statement transaction row",
-  "description": "Tier-2 I/O contract for one transaction extracted from a bank statement. Present early as a reference contract; NO tool reads or produces it in this instruction-only v1 (skills plan §13).",
+  "description": "Tier-2 I/O contract for one transaction row produced by the extract_transactions tool. Mirrors TRANSACTION_ROW_SCHEMA in apps/desktop/src/main/services/skills/tools/bank-statement.ts and is pinned to it by tests/unit/skills-transaction-schema-parity.test.ts, so this packaged copy cannot drift from the shipped shape.",
   "type": "object",
   "additionalProperties": false,
   "required": ["date", "description", "amount", "currency"],
