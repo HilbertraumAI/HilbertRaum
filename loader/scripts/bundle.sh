@@ -61,7 +61,7 @@ rm -rf "$CDST"; rm -f "$OUT/$LAUNCHER_NAME"; mkdir -p "$CDST"
 # 1. The Electron app component (built by `make components` → dist/components/app-<t>.<ext>).
 APP_COMP="$COMP_SRC/app-$TARGET.$FMT"
 [ -e "$APP_COMP" ] || die "missing app component $APP_COMP — run: make components (TARGET=$TARGET)"
-cp -u "$APP_COMP" "$CDST/" || die "copy app component failed"
+cp "$APP_COMP" "$CDST/" || die "copy app component failed"
 log "app component -> $CDST/app-$TARGET.$FMT"
 
 # 1b. Sidecar runtime components: the llama.cpp chat server + whisper.cpp transcriber the
@@ -72,7 +72,7 @@ RUNTIME_COMPS=""
 for rc in llamacpp whispercli; do
   f="$COMP_SRC/$rc-$TARGET.$FMT"
   if [ -e "$f" ]; then
-    cp -u "$f" "$CDST/" && { RUNTIME_COMPS="$RUNTIME_COMPS $rc-$TARGET"; log "$rc component -> $CDST/$rc-$TARGET.$FMT"; }
+    cp "$f" "$CDST/" && { RUNTIME_COMPS="$RUNTIME_COMPS $rc-$TARGET"; log "$rc component -> $CDST/$rc-$TARGET.$FMT"; }
   else
     log "no $rc component for $TARGET (none built) — app falls back"
   fi

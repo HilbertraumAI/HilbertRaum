@@ -19,10 +19,11 @@
 #
 # --no-runtimes skips the sidecar-runtime fetch (llama.cpp + whisper.cpp) while still fetching
 # models under --with-assets. Use it when the runtimes are delivered another way — the loader
-# ships them as a mounted `runtime` COMPONENT (loader/loader/loader.toml + the native launcher,
-# which exports HILBERTRAUM_RUNTIME_ROOT), so an image-built drive does NOT embed them here.
-# The app resolves the component runtime first and only falls back to an on-drive runtime/ tree
-# (see apps/desktop/src/main/services/runtime/sidecar.ts runtimeRoots).
+# ships them as `llamacpp` / `whispercli` COMPONENTS (loader/loader.toml + the native launcher,
+# which exports HILBERTRAUM_LLAMACPP_DIR / HILBERTRAUM_WHISPERCLI_DIR), so an image-built drive
+# does NOT embed them here. The app resolves the component dir first and only falls back to an
+# on-drive runtime/ tree (see apps/desktop/src/main/services/runtime/sidecar.ts
+# resolveLlamaServerPath and transcriber/cli.ts resolveWhisperCliPath).
 #
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE [--dry-run] [--force] \

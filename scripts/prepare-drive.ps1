@@ -47,9 +47,9 @@
 
 .PARAMETER NoRuntimes
   Skip the sidecar-runtime fetch (llama.cpp + whisper.cpp) while still fetching models under
-  -WithAssets. Use it when the runtimes are delivered another way -- the loader ships them as a
-  mounted `runtime` component (its native launcher exports HILBERTRAUM_RUNTIME_ROOT), so an
-  image-built drive does NOT embed them here.
+  -WithAssets. Use it when the runtimes are delivered another way -- the loader ships them as
+  llamacpp / whispercli components (its native launcher exports HILBERTRAUM_LLAMACPP_DIR /
+  HILBERTRAUM_WHISPERCLI_DIR), so an image-built drive does NOT embed them here.
 
 .PARAMETER AcceptLicense
   Forwarded to fetch-models.ps1 (accept the model licenses) when -WithAssets is used.
