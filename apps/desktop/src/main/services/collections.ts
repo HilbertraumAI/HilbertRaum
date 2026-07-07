@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { type Db, prepareCached } from './db'
+import { log } from './logging'
 import type {
   Collection,
   CollectionType,
@@ -321,9 +322,35 @@ export function fileDocumentByDestination(
     case 'library':
       fileIntoLibraryIfUnfiled(db, documentId)
       break
-    case 'collection':
-      addToCollection(db, [documentId], destination.collectionId, 'source')
+    case 'collection': {
+      // FK-guarded like the conversation branch (N3, DB-1): the destination collection may have
+      // been deleted between queue time and this indexing-success filing — or never existed (a
+      // code-exec'd renderer can pass any id). `foreign_keys` is ON and `document_collections`
+      // has an enforced FK, so a RAW `addToCollection` INSERT throws `FOREIGN KEY constraint
+      // failed` (its `ON CONFLICT DO NOTHING` catches only the PK). Thrown here it would miscount
+      // the import `failed`, skip the audit event, and — worst — leave `pending_destination_json`
+      // set so EVERY future re-index of the doc rethrows forever. Existence-check + try/catch the
+      // check-then-insert race, and degrade to the Library default on a miss so filing is TOTAL
+      // (never throws for the FK reason) and the pending-clear below always runs.
+      const exists = db
+        .prepare('SELECT 1 FROM collections WHERE id = ?')
+        .get(destination.collectionId) as unknown as { 1: number } | undefined
+      if (exists) {
+        try {
+          addToCollection(db, [documentId], destination.collectionId, 'source')
+          break
+        } catch {
+          // Deleted between the existence check and the insert — fall through to Library.
+        }
+      }
+      // Ids only — a collection name/document title is CONTENT and never enters the log (S1).
+      log.warn('Import destination collection missing; filed into Library instead', {
+        documentId,
+        collectionId: destination.collectionId
+      })
+      fileIntoLibraryIfUnfiled(db, documentId)
       break
+    }
     case 'temporary':
       fileIntoTemporary(db, documentId)
       break
@@ -354,13 +381,21 @@ export function fileFromPendingDestination(db: Db, documentId: string): void {
   // helper safe as the single indexing-success entry point on EVERY driver-to-`indexed`.
   if (row?.origin_json != null) return
   const destination = parsePendingDestination(row?.pending_destination_json)
-  if (!destination) {
-    // No recorded intent (a pre-Phase-C import, or an options-less call) ⇒ Library default.
-    fileIntoLibraryIfUnfiled(db, documentId)
-    return
+  // Belt-and-suspenders (DB-1): clear the pending intent in a `finally` so that even a future
+  // unforeseen throw from filing cannot leave the doc wedged (its `pending_destination_json`
+  // set ⇒ every subsequent re-index rethrows). `fileDocumentByDestination` is now TOTAL, so
+  // this normally runs after a clean file; the generated-doc early-return above still fires
+  // first and never clears (those rows carry no destination — D3/N1).
+  try {
+    if (!destination) {
+      // No recorded intent (a pre-Phase-C import, or an options-less call) ⇒ Library default.
+      fileIntoLibraryIfUnfiled(db, documentId)
+      return
+    }
+    fileDocumentByDestination(db, documentId, destination)
+  } finally {
+    db.prepare('UPDATE documents SET pending_destination_json = NULL WHERE id = ?').run(documentId)
   }
-  fileDocumentByDestination(db, documentId, destination)
-  db.prepare('UPDATE documents SET pending_destination_json = NULL WHERE id = ?').run(documentId)
 }
 
 /** A conversation's temporary-attachment document ids (plan C3 — `conversation_documents`). */

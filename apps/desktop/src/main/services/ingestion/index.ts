@@ -1036,7 +1036,13 @@ export async function extractDocumentPreview(
     if (row.stored_path && existsSync(row.stored_path)) {
       if (cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
         const ext = extname(row.title).toLowerCase()
-        parseSource = join(storeDir, `${documentId}.parse-preview${ext}`)
+        // Unique per call (DB-2): a deterministic `${documentId}.parse-preview${ext}` is shared by
+        // the preview IPC, `buildDocumentSegmentReader`, and `extractSegmentTexts`, so two
+        // concurrent same-doc reads decrypt into and `shredFile` the SAME path — each shredding the
+        // other's parse. The `randomUUID()` infix makes it collision-free; the `.parse` infix keeps
+        // the startup crash sweep (`workspace-vault.ts` matches `name.includes('.parse')`) covering
+        // a leak. Every caller uses the returned `parseSource` local, so nothing depends on the name.
+        parseSource = join(storeDir, `${documentId}.parse-preview-${randomUUID()}${ext}`)
         await cipher.decryptFileAsync(row.stored_path, parseSource) // PERF-1: yields between chunks
         transients.push(parseSource)
       } else if (!cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
@@ -1346,7 +1352,10 @@ export function readStoredDocumentText(
         if (!cipher) {
           throw new Error(tMain('main.docs.exportEncrypted'))
         }
-        source = join(storeDir, `${documentId}.parse-export${ext}`)
+        // Unique per call (DB-2): same shared-transient hazard as the preview path — a concurrent
+        // same-doc export/read must not decrypt into and shred a shared path. `.parse` infix keeps
+        // the crash sweep covering it.
+        source = join(storeDir, `${documentId}.parse-export-${randomUUID()}${ext}`)
         cipher.decryptFile(row.stored_path, source)
         transients.push(source)
       } else {
@@ -1390,7 +1399,8 @@ export function readStoredDocumentBytes(
     if (row.stored_path && existsSync(row.stored_path)) {
       if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
         if (!cipher) throw new Error(tMain('main.docs.exportEncrypted'))
-        source = join(storeDir, `${documentId}.parse-export-bin${ext}`)
+        // Unique per call (DB-2): as above — collision-free transient, `.parse` infix for the sweep.
+        source = join(storeDir, `${documentId}.parse-export-bin-${randomUUID()}${ext}`)
         cipher.decryptFile(row.stored_path, source)
         transients.push(source)
       } else {

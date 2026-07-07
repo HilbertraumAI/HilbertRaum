@@ -1175,9 +1175,14 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   rather than reading `chunks` because chunks OVERLAP (~80 tokens) — concatenation would duplicate
   text at every boundary. (Exception: AUDIO documents read from stored chunks instead — exact by
   construction and avoids a minutes-long re-transcription; see "Audio transcription" below.) In an encrypted workspace the `.enc` copy is decrypted to a transient
-  `.parse-preview` working file and shredded on the way out (covered by the startup `.parse*` crash
-  sweep); the original bytes are never handed to an external viewer, which is why this is an in-app
-  TEXT preview and not a `shell.openPath`.
+  `.parse-preview-<uuid>` working file and shredded on the way out (covered by the startup `.parse*`
+  crash sweep); the original bytes are never handed to an external viewer, which is why this is an
+  in-app TEXT preview and not a `shell.openPath`. **The transient name carries a per-call `randomUUID()`
+  infix (DB-2, Chat & Documents audit 2026-07-07):** the same helper is shared by the preview IPC,
+  `buildDocumentSegmentReader`, and `extractSegmentTexts`, so a deterministic `<id>.parse-preview` path
+  let two concurrent same-doc reads decrypt into and `shredFile` the SAME file — each shredding the
+  other's parse. The uniqueness closes that race; the `.parse` infix keeps the crash sweep covering a
+  leak. The two export readers (`.parse-export-<uuid>`, `.parse-export-bin-<uuid>`) got the same fix.
 - **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
   `listDocuments`, `deleteDocument`, `reindexDocument`, `importPreflight` (Phase 36 — the
   size-aware audio confirm); plus the document-organization channels `previewDocument`,
@@ -2950,7 +2955,31 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   ⇒ no membership, D3/N1), so re-indexing a translation never sweeps it into Library.
   `linkConversationDocument` is **FK-guarded (N3)**:
   verifies the conversation still exists + try/catch the race; if gone, keep the doc in Temporary, drop
-  only the link. `resolveScope` is documented in rag-design §13.
+  only the link. The **collection case of `fileDocumentByDestination` is now FK-guarded the same way
+  (DB-1, Chat & Documents audit 2026-07-07):** `foreign_keys` is ON and the membership FK is enforced,
+  so a raw `addToCollection` against a deleted/unknown collection id threw `FOREIGN KEY constraint
+  failed` (its `ON CONFLICT DO NOTHING` catches only the PK). Thrown inside the import loop's try it
+  miscounted the doc `failed`, skipped its `document_imported` audit event, and — the permanent harm —
+  left `pending_destination_json` set so every FUTURE re-index rethrew forever. The fix existence-checks
+  the collection + try/catch the race and **degrades to the Library default** on a miss (ids-only
+  `log.warn`), making `fileDocumentByDestination` TOTAL. The pending-clear `UPDATE` moved into a
+  `finally` in `fileFromPendingDestination` as belt-and-suspenders (the generated-doc `origin_json`
+  early-return still fires first and never clears — those rows carry no destination). `resolveScope`
+  is documented in rag-design §13.
+- **`listDocuments` stuck-row reconcile — task gate (DB-3, Chat & Documents audit 2026-07-07).** The
+  `registerDocsIpc` list poll reconciles rows left non-terminal by a killed/lock-interrupted run to
+  `failed` (so the UI offers Re-index instead of a perpetual "in progress"). It fires only when nothing
+  this module tracks is running (`!importActive && processing.size === 0`) — but doc-task ingestions
+  (translation-materialize, OCR re-ingest) drive `documents` rows OUTSIDE that `processing` set, so a
+  poll during their long chunk/embed window would flip a live row to `failed`. The sweep is now also
+  gated on `!ctx.docTasks?.hasActiveTask()` (matching the sibling tree/extract sweeps). **The `now`
+  watermark is kept deliberately — NOT swapped for `PROCESS_START_ISO`:** a mid-session lock→unlock
+  strands an import whose `updated_at` is AFTER process start, and only a `now` watermark ever
+  reconciles it (a `PROCESS_START_ISO` watermark would wedge it forever — the exact regression the
+  audit's first-pass suggestion would have introduced). The task gate closes the live-flip hole; the
+  `now` watermark keeps mid-session recovery working. The skill-run sweep still uses `PROCESS_START_ISO`
+  (its table bumps no timestamp, so `now` would be wrong there — the two watermarks are not
+  interchangeable).
 - **Filing-suggestion engine (`filing-suggestions.ts`, Phase F) — REMOVED 2026-06-15.** The
   auto "suggested project" feature (the rule engine, the read-only `docs:filingSuggestions`
   IPC, the per-row suggestion chip, and the `dismissedFilingSuggestions` setting) was removed

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -25,14 +25,17 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
   processDocument,
+  extractDocumentPreview,
   documentsDir
 } from '../../src/main/services/ingestion'
 import {
   conversationAttachmentIds,
   createCollection,
+  deleteCollection,
   documentIdsInCollection,
   getBuiltinCollection
 } from '../../src/main/services/collections'
+import type { DocumentCipher } from '../../src/main/services/workspace-vault'
 import { createConversation } from '../../src/main/services/chat'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
@@ -79,10 +82,7 @@ function ctxWith(
 }
 
 /** Drive the background import loop to completion by polling the in-memory job aggregate. */
-async function runImport(
-  paths: string[],
-  options?: ImportOptions
-): Promise<{ documentIds: string[] }> {
+async function runImport(paths: string[], options?: ImportOptions): Promise<ImportJob> {
   const { result } = await invoke(handlers, IPC.importDocuments, paths, options)
   const job = result as ImportJob
   for (let i = 0; i < 200; i++) {
@@ -577,6 +577,160 @@ describe('registerDocsIpc', () => {
     expect(vectorCount(idA)).toBeGreaterThan(0)
     expect(vectorCount(idC)).toBeGreaterThan(0)
     expect(vectorCount(idB)).toBe(0)
+  })
+})
+
+// Session 1 (DB-1/DB-2/DB-3) — Documents backend data integrity. Each test is teeth-checked:
+// reverting its fix reddens the marked assertion.
+describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => {
+  // DB-1 #1: filing to a collection id that never existed must degrade to Library rather than
+  // FK-throw. Pre-fix the raw `addToCollection` throws inside the import loop's try → the doc is
+  // counted `failed`, the `document_imported` audit is skipped, `pending_destination_json` is
+  // never cleared, and every FUTURE re-index rethrows forever.
+  it('DB-1: import to a GHOST collection degrades to Library — indexed, audited, re-indexable', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const audit = vi.fn()
+    registerDocsIpc({
+      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
+      audit
+    } as unknown as AppContext)
+    const file = join(workspacePath, 'doc.txt')
+    writeFileSync(file, 'a document filed into a collection id that does not exist any more here')
+
+    const job = await runImport([file], {
+      destination: { kind: 'collection', collectionId: 'ghost-id' }
+    })
+    const id = job.documentIds[0]
+
+    // TEETH: filing no longer throws → the doc completes, not `failed`.
+    const status = (await invoke(handlers, IPC.getImportJob, job.jobId)).result as ImportJobStatus
+    expect(status.failed).toBe(0)
+    expect(status.completed).toBe(1)
+
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === id)!.status).toBe('indexed')
+    // Degraded into Library (the default), not the ghost.
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).toContain(id)
+    // TEETH: the audit event fired (skipped on the pre-fix failed path).
+    expect(audit).toHaveBeenCalledWith(
+      'document_imported',
+      expect.anything(),
+      expect.objectContaining({ documentId: id, status: 'indexed' })
+    )
+    // TEETH: pending intent cleared (never cleared on the pre-fix throw).
+    const row = db
+      .prepare('SELECT pending_destination_json FROM documents WHERE id = ?')
+      .get(id) as { pending_destination_json: string | null }
+    expect(row.pending_destination_json).toBeNull()
+    // TEETH: a follow-up single re-index RESOLVES `indexed` (pre-fix it rejects forever).
+    const info = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
+    expect(info.status).toBe('indexed')
+  })
+
+  // DB-1 #2: the crash-resume re-index path (M1) must survive the destination collection being
+  // deleted between queue time and re-index — the exact "delete the project while its import is
+  // interrupted" scenario. Mirrors the M1 test but deletes the collection before reconcile+reindex.
+  it('DB-1/M1: crash-resume re-index into a DELETED collection degrades to Library, pending cleared', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const project = createCollection(db, 'Doomed')
+    const lib = getBuiltinCollection(db, 'library')!
+    const file = join(workspacePath, 'brief.txt')
+    writeFileSync(file, 'a legal brief queued for a project that is about to be deleted right here')
+    const doc = createQueuedDocument(db, file, {
+      destination: { kind: 'collection', collectionId: project.id }
+    })
+    db.prepare(
+      "UPDATE documents SET status = 'queued', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+    ).run(doc.id)
+
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+
+    // First list reconciles the prior-run stuck row → failed (filed nowhere yet).
+    const before = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(before.find((d) => d.id === doc.id)!.status).toBe('failed')
+
+    // The destination project is deleted before the user clicks Re-index.
+    deleteCollection(db, project.id)
+
+    // TEETH: re-index RESOLVES `indexed` instead of rejecting with a raw FK error forever.
+    const info = (await invoke(handlers, IPC.reindexDocument, doc.id)).result as DocumentInfo
+    expect(info.status).toBe('indexed')
+    // Degraded into Library; pending cleared so it never wedges again.
+    expect(documentIdsInCollection(db, lib.id)).toContain(doc.id)
+    const row = db
+      .prepare('SELECT pending_destination_json FROM documents WHERE id = ?')
+      .get(doc.id) as { pending_destination_json: string | null }
+    expect(row.pending_destination_json).toBeNull()
+  })
+
+  // DB-2: two concurrent same-doc reads must not decrypt into and shred a SHARED transient path.
+  // The fake cipher forces an interleave (`setTimeout(0)` before the copy) and records the
+  // destination path of every decrypt.
+  it('DB-2: concurrent same-doc previews use unique transients and never shred each other', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const embedder = createMockEmbedder()
+    const storeDir = documentsDir(workspacePath)
+    const decryptDests: string[] = []
+    const copy = (src: string, dest: string): void => writeFileSync(dest, readFileSync(src))
+    const cipher: DocumentCipher = {
+      encryptFile: copy,
+      decryptFile: copy,
+      encryptFileAsync: async (src, dest) => {
+        copy(src, dest)
+      },
+      decryptFileAsync: async (src, dest) => {
+        decryptDests.push(dest)
+        await new Promise((r) => setTimeout(r, 0)) // force the two reads to interleave
+        copy(src, dest)
+      }
+    }
+    const file = join(workspacePath, 'secret.txt')
+    writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi')
+    const doc = createQueuedDocument(db, file)
+    // Encrypt into the workspace (`stored_path` becomes the `.enc` copy) via the fake cipher.
+    await processDocument(db, storeDir, doc.id, { embedder, embeddingModelId: embedder.id, cipher })
+
+    const [a, b] = await Promise.all([
+      extractDocumentPreview(db, storeDir, doc.id, { cipher }),
+      extractDocumentPreview(db, storeDir, doc.id, { cipher })
+    ])
+    // Both reads succeed with equal, non-empty content — no cross-shred corruption / ENOENT.
+    const textOf = (p: { segments: Array<{ text: string }> }): string =>
+      p.segments.map((s) => s.text).join('')
+    expect(textOf(a).length).toBeGreaterThan(0)
+    expect(textOf(b)).toEqual(textOf(a))
+    // TEETH: the two concurrent reads decrypted into DISTINCT transient paths. Revert the
+    // `randomUUID()` infix → both reconstruct `${id}.parse-preview.txt` → the Set collapses to 1.
+    expect(new Set(decryptDests).size).toBe(2)
+  })
+
+  // DB-3: a live doc-task ingestion (translation-materialize / OCR re-ingest) drives `documents`
+  // rows OUTSIDE this module's `processing` set. A `listDocuments` poll during its embed window
+  // must NOT flip the row to `failed`; once the task ends, a genuinely-stuck row still reconciles.
+  it('DB-3: a live doc-task ingestion is not flipped to failed; reconciles once the task ends', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const file = join(workspacePath, 'src.txt')
+    writeFileSync(file, 'alpha beta gamma delta epsilon zeta')
+    const doc = createQueuedDocument(db, file)
+    // Mid-embed with an OLD updated_at — the `now` watermark alone would wrongly reconcile this.
+    db.prepare(
+      "UPDATE documents SET status = 'embedding', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+    ).run(doc.id)
+
+    let taskActive = true
+    const docTasks = { hasActiveTask: () => taskActive, isDocumentBusy: () => false }
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, docTasks))
+
+    // TEETH: while a doc task is live the sweep is gated off → the row stays `embedding`.
+    // Remove the `!taskActive` gate on `reconcileStuckDocuments` → this first list flips it.
+    const busy = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(busy.find((d) => d.id === doc.id)!.status).toBe('embedding')
+
+    // Task ends → the next poll reconciles the genuinely-stuck row to `failed` (the `now`
+    // watermark still works — it is NOT swapped for PROCESS_START_ISO).
+    taskActive = false
+    const idle = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(idle.find((d) => d.id === doc.id)!.status).toBe('failed')
   })
 })
 

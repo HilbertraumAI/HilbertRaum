@@ -89,9 +89,11 @@ function safeIdArray(value: unknown): string[] {
 /**
  * Untrusted-boundary guard for an `ImportDestination` (the renderer is untrusted). An
  * unknown/malformed shape falls back to the Library default — never throws, never trusts a
- * non-string id. (Whether the referenced collection/conversation actually exists is the
- * filing step's concern — `linkConversationDocument` is FK-guarded; an unknown collection id
- * simply yields a dangling membership row, harmless and ignored.)
+ * non-string id. (Whether the referenced collection/conversation actually EXISTS is the
+ * filing step's concern: both `linkConversationDocument` and the collection case of
+ * `fileDocumentByDestination` are FK-guarded — an unknown/deleted id degrades to the Library
+ * default rather than throwing a `FOREIGN KEY constraint failed` (DB-1). `foreign_keys` is ON,
+ * so a raw membership INSERT against a missing collection would NOT be "harmless and ignored".)
  */
 function sanitizeDestination(value: unknown): ImportDestination {
   if (value && typeof value === 'object') {
@@ -475,9 +477,21 @@ export function registerDocsIpc(ctx: AppContext): void {
     // instead of a perpetual, button-disabling "in progress". The previous one-shot flag
     // never re-ran after a mid-session lock → unlock, wedging those documents.
     const importActive = [...jobs.values()].some((j) => !j.done)
+    // DB-3: doc-task ingestions (translation-materialize, OCR re-ingest) drive `documents` rows
+    // OUTSIDE this module's `processing` set, so a `listDocuments` poll during their long
+    // chunk/embed window would flip a live row to `failed` (the `now` watermark can't protect it —
+    // `updated_at` is bumped only at phase transitions, so it is strictly `< now` mid-phase). Gate
+    // the docs sweep on `hasActiveTask()` too, matching the tree/extract sweeps below. We keep the
+    // `now` watermark deliberately (NOT `PROCESS_START_ISO`): a mid-session lock→unlock strands an
+    // import whose `updated_at` is AFTER process start, and only a `now` watermark reconciles it —
+    // a `PROCESS_START_ISO` watermark would wedge it forever. The task gate closes the live-flip
+    // hole; the `now` watermark keeps recovery working.
+    const taskActive = ctx.docTasks?.hasActiveTask() ?? false
     if (!importActive && processing.size === 0) {
-      const n = reconcileStuckDocuments(ctx.db, new Date().toISOString())
-      if (n > 0) log.warn('Reconciled interrupted document ingestions', { count: n })
+      if (!taskActive) {
+        const n = reconcileStuckDocuments(ctx.db, new Date().toISOString())
+        if (n > 0) log.warn('Reconciled interrupted document ingestions', { count: n })
+      }
       // Same treatment for skill runs stranded at 'started' by a killed session (IA-6 P-7). Gated on the
       // process-start watermark (NOT `now`): `skill_runs` bumps no timestamp, so a live in-session run is
       // protected only by its current-session `created_at`, never by this idle-poll firing mid-run.
@@ -486,7 +500,7 @@ export function registerDocsIpc(ctx: AppContext): void {
       // Reset deep-index builds left `building` by a killed/locked session to `pending`
       // (resumable) — but only when no doc task is live (a running build legitimately holds
       // `building`); the `updated_at < now` clause additionally protects a live build.
-      if (!ctx.docTasks?.hasActiveTask()) {
+      if (!taskActive) {
         const nt = reconcileStuckTrees(ctx.db, new Date().toISOString())
         if (nt > 0) log.warn('Reconciled interrupted deep-index builds', { count: nt })
         // Same treatment for structured-extract passes left `extracting` (Phase 3, resumable).
