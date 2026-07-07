@@ -19,7 +19,7 @@ let
     patchelf  # repoint electron-builder's prebuilt helpers at the nix loader
     # cross-target packaging from NixOS
     rcodesign                 # Apple code signing from Linux (mac target)
-    wineWowPackages.stable    # electron-builder's win step runs a 32-bit rcedit
+    wineWow64Packages.stable    # electron-builder's win step runs a 32-bit rcedit
     osslsigncode              # Authenticode signing for the windows .exe
     nsis                      # windows installer
     # build graph: ninja runs every step with dependency tracking (xtask emits build.ninja)
