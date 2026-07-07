@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) + 6 (#22 pt.1, span-transform engine) DONE; Phases 7–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) + 6 (#22 pt.1, span-transform engine) + 7 (#22 pt.2, LLM-located redaction) DONE; Phases 8–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -345,10 +345,34 @@ No renderer surface changed → no preview case. Suite 3717/47, typecheck + buil
 
 **Done =** suite green (all existing redaction pins), engine unit-tested, BUILD_STATE updated.
 
-## 10. Phase 7 — LLM-located redaction: names, addresses, steerable scope (#22 part 2)
+## 10. Phase 7 — LLM-located redaction: names, addresses, steerable scope (#22 part 2) ✅ DONE
 
 **Goal:** "replace all names and addresses, keep the city" works — model locates, app
 replaces (D73, D75, D78).
+
+**Shipped (2026-07-07):** the local model ONLY LOCATES spans (grammar-constrained JSON, D55, temp 0,
+overlapping line-numbered windows); the app VERIFIES each proposed string verbatim (`locateOccurrences`)
+and SWEEPS every occurrence (`applySpans`) — the model NEVER generates output text (D73), so hallucination
+is structurally impossible and misses shrink via judgement + the sweep. New `skills/tools/redaction-locate.ts`
+(the runtime-touching locate pass); `redaction.ts` gains `verifyAndSweepEntities` + `redactWithEntities`
+(runtime-free verify/sweep + the regex floor); the locate pass runs MAIN-side in `runDocumentRedaction`
+via `deps.runtime` (the IPC injects `ctx.runtime.active()`), handing verified-shape proposals to the pure
+`redact_document` tool as structured input (which `runSkillTool` never logs — the content boundary holds).
+The **written file flipped to per-char `█`** (D74/D75; the `[EMAIL]`/`[IBAN]` written-content pins moved to
+`█`). Steerability: `deps.instruction` rides into the locate prompt as the scope directive (category set
+fixed; the app never interprets prose). Model-unavailable / model-failure DEGRADES to the deterministic
+floor with an honest note (`redactedFloor`/`cleanFloor` → "offline rule-based detection only"), never a
+silent partial; a user cancel mid-locate is a calm cancel. SKILL.md honesty block rewritten to "AI-assisted
+best-effort with a deterministic floor — still not a guarantee"; keywords/routing unchanged. Tests:
+`skills-redaction-locate.test.ts` (+18), `skills-redaction.test.ts` (+5 Phase-7 seam + pins moved),
+`skills-privacy-guard.test.ts` (+1 located-value privacy + perChar flip), `skills-tool-run-ipc.test.ts`
+(perChar + `redactedFloor`). Suite 3739/47, typecheck + build + preview:build green. Folded into
+`architecture.md` "Skills — design record" **§21**; `known-limitations.md` redaction bullet rewritten;
+`user-guide.md` redaction note reworded. **Deferrals recorded:** the run-bar button collects no free-text
+instruction yet (the pipeline supports it end-to-end; a future text field wires in); the redaction locate
+call runs outside the D26 chat arbiter (accepted per plan — doctask-lane routing is the follow-up if it
+bites); no run-bar preview case (the surface has never had one — the copy is a text-only addition validated
+by the i18n parity + descriptor branching tests).
 
 - **New locate pass** (main-side, e.g. `skills/tools/redaction-locate.ts`): feed the document
   text in line-numbered windows to the active local model with a grammar-constrained JSON

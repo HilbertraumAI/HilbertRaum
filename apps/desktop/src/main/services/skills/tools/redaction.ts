@@ -7,10 +7,12 @@ import type {
 import { parseDate, type DateAnchor } from './money'
 import {
   applySpans,
+  locateOccurrences,
   replacementText,
   type ReplacementStrategy,
   type TransformSpan
 } from './span-transform'
+import type { LocateCategory, LocatedEntity } from './redaction-locate'
 
 // Re-exported so callers migrating to the shared strategy vocabulary import it from one place.
 export type { ReplacementStrategy } from './span-transform'
@@ -65,6 +67,13 @@ export interface RedactDocumentOutput {
   redactedText: string
   /** How many matches were masked per category (counts only — never the masked values). */
   counts: RedactionCounts
+  /** Per-category counts of the CONFIRMED LLM-located entities (names/addresses/orgs/other) — Phase 7,
+   *  D75. Zeroed when the seam passed no entities (the floor-only / model-unavailable path). */
+  entityCounts: EntityCounts
+  /** Located-entity OCCURRENCES masked (≥ Σ entityCounts when a name/address repeats and is swept). */
+  entityMaskCount: number
+  /** Proposed entities dropped as unverifiable (not present verbatim / too short) — surfaced honestly. */
+  droppedEntities: number
   /** The sum across categories — the single content-free count the seam/renderer surfaces. */
   totalRedactions: number
 }
@@ -461,12 +470,131 @@ export function scanRedactionCandidates(text: string): RedactionCounts {
   return redactText(text).counts
 }
 
+// ---- LLM-located entities: verify + sweep (Phase 7, D73/D75) ----
+//
+// The deterministic verify+sweep half of redaction v2 — kept HERE (runtime-free) so the model call
+// lives only in `redaction-locate.ts`. The model proposes entity strings (names/addresses/orgs it
+// judged sensitive); this code CONFIRMS each verbatim in the source and masks EVERY occurrence:
+//   - VERIFY (D75): a proposed string that is not present in the source verbatim is DROPPED (and
+//     counted). Hallucination is impossible — a span that isn't literally in the text can't be masked.
+//   - SWEEP (D75): a CONFIRMED string is masked at ALL its occurrences (the model may report only one),
+//     so one judgement gives document-wide coverage.
+// Masking is mechanical (span-transform's `applySpans`), so the output stays byte-identical outside the
+// masked spans (D58). The regex floor runs too — see `redactWithEntities`.
+
+/** Per-category count of CONFIRMED distinct entities (how many names/addresses/… were masked — the
+ *  report figures, D78). Counts distinct confirmed strings, not occurrences (the occurrence total is
+ *  `entityMaskCount`). All counts, never the masked values (§6 content boundary). */
+export interface EntityCounts {
+  name: number
+  address: number
+  org: number
+  other: number
+}
+
+/** Guard against a degenerate proposal masking half the document: a span must be at least this many
+ *  trimmed characters and contain a letter, so a model that proposes "St" / "1" can't sweep it
+ *  everywhere. A real name/address/org clears this trivially; the cost is missing a 1–2 char token,
+ *  the documented miss-over-eating posture. */
+export const MIN_ENTITY_CHARS = 3
+
+/** The fixed token each located category masks to under `token` strategy (the `perChar` strategy uses
+ *  `█` regardless — see replacementText). Like the regex tokens they carry no digit/@/scheme, so the
+ *  regex floor never re-matches inside a masked span (idempotent). */
+export const MASK_ENTITY_TOKENS: Record<LocateCategory, string> = {
+  name: '[NAME]',
+  address: '[ADDRESS]',
+  org: '[ORG]',
+  other: '[REDACTED]'
+}
+
+/**
+ * Verify each proposed entity verbatim (D75) and build the mask spans for ALL its occurrences. A
+ * proposal is confirmed only when its exact string is present in `text` (`locateOccurrences`, no fuzzy
+ * match); an unconfirmed / too-short / letter-less / duplicate proposal is dropped. `dropped` counts
+ * proposals rejected as unverifiable (a duplicate of an already-swept string is NOT a drop — it is
+ * already covered). Spans may overlap between two proposals (e.g. "Main Street" and "Street"); the
+ * caller's `applySpans` resolves that deterministically (leftmost-longest wins, the rest skipped).
+ */
+export function verifyAndSweepEntities(
+  text: string,
+  entities: readonly LocatedEntity[],
+  strategy: ReplacementStrategy
+): { spans: TransformSpan[]; counts: EntityCounts; dropped: number } {
+  const counts: EntityCounts = { name: 0, address: 0, org: 0, other: 0 }
+  const spans: TransformSpan[] = []
+  const swept = new Set<string>()
+  let dropped = 0
+  for (const e of entities) {
+    const needle = e.text
+    if (needle.trim().length < MIN_ENTITY_CHARS || !/\p{L}/u.test(needle)) {
+      dropped++
+      continue
+    }
+    if (swept.has(needle)) continue // this exact string is already masked everywhere — not a new drop
+    const occurrences = locateOccurrences(text, needle) // verbatim, global, non-overlapping
+    if (occurrences.length === 0) {
+      dropped++ // proposed but not present verbatim ⇒ a hallucination / paraphrase — drop it (D75)
+      continue
+    }
+    swept.add(needle)
+    counts[e.category] += 1
+    const token = MASK_ENTITY_TOKENS[e.category]
+    for (const o of occurrences) {
+      spans.push({ start: o.start, length: o.length, replacement: replacementText(strategy, token, o.length) })
+    }
+  }
+  return { spans, counts, dropped }
+}
+
+export interface RedactWithEntitiesResult {
+  text: string
+  /** The deterministic regex-floor counts (email/url/iban/card/date/phone). */
+  counts: RedactionCounts
+  /** Per-category counts of the CONFIRMED located entities (names/addresses/orgs/other). */
+  entityCounts: EntityCounts
+  /** Total located-entity OCCURRENCES masked (≥ the sum of entityCounts when strings repeat). */
+  entityMaskCount: number
+  /** Proposed entities dropped as unverifiable (not present verbatim / too short) — surfaced honestly. */
+  droppedEntities: number
+  /** Items hidden overall = regex matches + located-entity occurrences masked (the content-free total). */
+  totalRedactions: number
+}
+
+/**
+ * Redaction v2 (Phase 7): mask the LLM-located ENTITIES (verified + swept) AND run the deterministic
+ * regex floor. Entities are masked FIRST — verified against the pristine `input` (so the verify sees
+ * exactly what the model saw), applied via the shared engine — then the six regex detectors run over
+ * the entity-masked text, so the floor still covers every email/IBAN/… not already inside an entity.
+ * Byte-identity outside the union of masked spans holds (both passes are mechanical splices, D58).
+ * `entities` empty ⇒ this is exactly the floor (`redactText`) plus zeroed entity fields, so the seam
+ * degrades to the floor by simply passing no entities.
+ */
+export function redactWithEntities(
+  input: string,
+  entities: readonly LocatedEntity[],
+  strategy: ReplacementStrategy = 'perChar'
+): RedactWithEntitiesResult {
+  const { spans, counts: entityCounts, dropped } = verifyAndSweepEntities(input, entities, strategy)
+  const swept = applySpans(input, spans)
+  const entityMaskCount = swept.applied.length
+  const floor = redactText(swept.text, strategy)
+  return {
+    text: floor.text,
+    counts: floor.counts,
+    entityCounts,
+    entityMaskCount,
+    droppedEntities: dropped,
+    totalRedactions: floor.totalRedactions + entityMaskCount
+  }
+}
+
 // ---- The output contract (the `JsonSchema` subset) ----
 
 const REDACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['redactedText', 'counts', 'totalRedactions'],
+  required: ['redactedText', 'counts', 'entityCounts', 'entityMaskCount', 'droppedEntities', 'totalRedactions'],
   properties: {
     redactedText: { type: 'string' },
     counts: {
@@ -482,6 +610,19 @@ const REDACT_OUTPUT_SCHEMA: JsonSchema = {
         url: { type: 'integer', minimum: 0 }
       }
     },
+    entityCounts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'address', 'org', 'other'],
+      properties: {
+        name: { type: 'integer', minimum: 0 },
+        address: { type: 'integer', minimum: 0 },
+        org: { type: 'integer', minimum: 0 },
+        other: { type: 'integer', minimum: 0 }
+      }
+    },
+    entityMaskCount: { type: 'integer', minimum: 0 },
+    droppedEntities: { type: 'integer', minimum: 0 },
     totalRedactions: { type: 'integer', minimum: 0 }
   }
 }
@@ -505,18 +646,38 @@ export const redactDocumentTool: SkillTool = {
     additionalProperties: false,
     required: ['documentId'],
     // `strategy` (Phase 6, D74) is optional: the replacement style for the produced text. Omitted ⇒
-    // 'token' (the fixed [EMAIL]-style masks, the byte-for-byte current output). Phase 7's user-visible
-    // wave flips the WRITTEN-FILE default to 'perChar' (length-preserving █); the engine supports both
-    // now so that flip is a one-line caller change, not an engine change.
+    // 'token' (the fixed [EMAIL]-style masks). Phase 7's run seam passes 'perChar' for the WRITTEN FILE
+    // (length-preserving █ so line layout survives, D74/D75). `entities` (Phase 7, D73/D75) are the
+    // LLM-LOCATED spans the seam's locate pass proposed — the tool VERIFIES each verbatim and sweeps all
+    // occurrences (`redactWithEntities`); the model never generates output text. Omitted / empty ⇒ the
+    // deterministic regex floor only (the model-unavailable degrade path).
     properties: {
       documentId: { type: 'string', minLength: 1 },
-      strategy: { type: 'string', enum: ['token', 'perChar'] }
+      strategy: { type: 'string', enum: ['token', 'perChar'] },
+      entities: {
+        type: 'array',
+        maxItems: 4096,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['text', 'category', 'line'],
+          properties: {
+            text: { type: 'string', minLength: 1, maxLength: 160 },
+            category: { type: 'string', enum: ['name', 'address', 'org', 'other'] },
+            line: { type: 'integer', minimum: 1 }
+          }
+        }
+      }
     }
   },
   outputSchema: REDACT_OUTPUT_SCHEMA,
   async run(input, ctx): Promise<ToolResult> {
     if (ctx.signal.aborted) return { ok: false, error: 'This action was cancelled.' }
-    const { documentId, strategy } = input as { documentId: string; strategy?: ReplacementStrategy }
+    const { documentId, strategy, entities } = input as {
+      documentId: string
+      strategy?: ReplacementStrategy
+      entities?: LocatedEntity[]
+    }
     let chunks: DocumentChunkRead[]
     try {
       chunks = ctx.readDocumentChunks(documentId)
@@ -525,12 +686,20 @@ export const redactDocumentTool: SkillTool = {
       return { ok: false, error: 'This document could not be read.' }
     }
     const joined = chunks.map((c) => c.text).join('\n')
-    // Default 'token' (Phase 6, D74): the produced text is byte-for-byte the current output unless the
-    // caller opts into per-char masks. The run seam does not yet pass a strategy, so the written file
-    // stays token this phase (the visible switch lands with Phase 7).
-    const { text, counts, totalRedactions } = redactText(joined, strategy ?? 'token')
+    // Phase 7 (D73/D75): mask the seam-located ENTITIES (verified verbatim + swept) AND run the
+    // deterministic regex floor, all mechanically (`redactWithEntities`). `entities` empty / absent ⇒
+    // exactly the floor (the model-unavailable degrade). Default 'token' keeps the exported per-detector
+    // API + other callers byte-for-byte; the run seam passes 'perChar' for the written file.
+    const result = redactWithEntities(joined, entities ?? [], strategy ?? 'token')
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
-    const output: RedactDocumentOutput = { redactedText: text, counts, totalRedactions }
+    const output: RedactDocumentOutput = {
+      redactedText: result.text,
+      counts: result.counts,
+      entityCounts: result.entityCounts,
+      entityMaskCount: result.entityMaskCount,
+      droppedEntities: result.droppedEntities,
+      totalRedactions: result.totalRedactions
+    }
     return { ok: true, output }
   }
 }

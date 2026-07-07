@@ -638,9 +638,11 @@ copy") always asks you to **confirm first** and lets you choose where the file g
 **Cancel** at any point. Everything a tool sees is just the one document you picked — it can't reach
 anything else on the drive.
 
-> Redaction is **best-effort**, not a guarantee: it hides the patterns it recognises (e-mails, phone
-> numbers, IBANs, and the like) but can miss anything without a clear pattern. Always review the
-> redacted copy before you share it.
+> Redaction is **AI-assisted best-effort**, not a guarantee. It always hides the clearly-shaped data
+> (e-mails, phone numbers, IBANs, card numbers, dates, links); when a model is running it also hides the
+> **names, addresses, and organisation names** it finds — the model only points at what to hide, it never
+> rewrites your document. It can still miss things, and if no model is running only the rule-based part
+> applies (the run tells you so). Always review the redacted copy before you share it.
 
 ### Manage skills (open **Skills** in the sidebar)
 

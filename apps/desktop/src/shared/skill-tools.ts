@@ -55,10 +55,14 @@ export interface ReconcileDoneKeys {
   unreconciled: CountMessageKey
 }
 
-/** The redaction-shape done copy: nothing-found vs N-items-hidden. */
+/** The redaction-shape done copy: nothing-found vs N-items-hidden, each in a normal (LLM-assisted) and
+ *  a DEGRADED (rule-based floor only — the model was unavailable) variant (Phase 7, D78 honesty). */
 export interface RedactionDoneKeys {
   clean: MessageKey
   redacted: CountMessageKey
+  /** DEGRADED variants (no runtime / locate failed): the copy says "rule-based detection only". */
+  cleanFloor: MessageKey
+  redactedFloor: CountMessageKey
 }
 
 /** The self-describing wiring of one Tier-2 tool — the single source the other layers derive from. */
@@ -213,7 +217,9 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
     resultShape: 'redaction',
     redactionKeys: {
       clean: 'chat.skill.run.done.redactedClean',
-      redacted: 'chat.skill.run.done.redacted'
+      redacted: 'chat.skill.run.done.redacted',
+      cleanFloor: 'chat.skill.run.done.redactedCleanFloor',
+      redactedFloor: 'chat.skill.run.done.redactedFloor'
     },
     dialog: DIALOG_REDACTED
   }

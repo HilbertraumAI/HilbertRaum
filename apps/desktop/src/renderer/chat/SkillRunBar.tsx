@@ -198,8 +198,12 @@ export function SkillRunBar({
       return tCount(d.reconcileKeys.unreconciled, count)
     }
     if (d?.resultShape === 'redaction' && d.redactionKeys) {
-      // 'clean' = nothing detected (a copy was still saved); 'redacted' = N items hidden.
+      // 'clean' = nothing detected (a copy was still saved); 'redacted' = N items hidden. The *Floor
+      // variants (Phase 7, D78) are the DEGRADED run — the model was unavailable, so only rule-based
+      // detection ran; the copy says so honestly.
       if (state.resultKind === 'clean') return t(d.redactionKeys.clean)
+      if (state.resultKind === 'cleanFloor') return t(d.redactionKeys.cleanFloor)
+      if (state.resultKind === 'redactedFloor') return tCount(d.redactionKeys.redactedFloor, count)
       return tCount(d.redactionKeys.redacted, count)
     }
     return tCount(d?.doneKey ?? 'chat.skill.run.done', count)

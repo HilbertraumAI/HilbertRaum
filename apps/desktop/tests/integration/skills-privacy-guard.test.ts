@@ -307,9 +307,9 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
       expect(res.redactionCount).toBeGreaterThanOrEqual(2)
     })
 
-    // The deliverable was written WITHOUT the secrets — they were masked (the privacy point).
-    expect(saved).toContain('[EMAIL]')
-    expect(saved).toContain('[IBAN]')
+    // The deliverable was written WITHOUT the secrets — they were masked (the privacy point). Phase 7
+    // flips the written file to per-char █ masks (D74/D75); no runtime here ⇒ the deterministic floor.
+    expect(saved).toContain('█')
     expect(saved).not.toContain(SECRET_EMAIL)
     expect(saved).not.toContain(SECRET_IBAN)
     // And the secrets never reach the audit stream, any skill_runs row, or any console stream.
@@ -320,6 +320,52 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     expect(JSON.stringify(runs)).not.toContain(SECRET_IBAN)
     expect(logged).not.toContain(SECRET_EMAIL)
     expect(logged).not.toContain(SECRET_IBAN)
+  })
+
+  it('redaction locate pass: a LOCATED entity value (content) is masked out and never touches a sink', async () => {
+    // Phase 7 (D73): the LLM locate pass proposes entity strings (personal names — CONTENT). They ride
+    // as structured tool INPUT (which `runSkillTool` never logs/audits) and are masked out of the
+    // deliverable. Drive a secret name through a scripted runtime and assert it reaches NO sink.
+    const db = freshDb()
+    const skillInstallId = 'app:document-redaction'
+    const SECRET_NAME = 'Wilhelmina Featherstonehaugh'
+    const docId = seedDocWithChunks(db, [{ text: `Prepared by ${SECRET_NAME} for the committee.`, page: 1 }])
+    const { audit, events } = capturingAudit()
+    let saved = ''
+    // The runtime reports the secret name as a located entity — the app verifies + sweeps it.
+    const runtime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream() {
+        for (const tok of JSON.stringify({ entities: [{ text: SECRET_NAME, category: 'name', line: 1 }] }).match(/\S+\s*/g) ?? []) {
+          yield tok
+        }
+      }
+    } as unknown as Parameters<typeof runDocumentRedaction>[2]['runtime']
+
+    const logged = await captureConsole(async () => {
+      const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        runtime,
+        saveTextFile: async (_name, content) => {
+          saved = content
+          return true
+        }
+      })
+      expect(res.ok).toBe(true)
+      expect(res.resultKind).toBe('redacted') // the model ran
+    })
+
+    // The located name was masked out of the deliverable and leaked into NO sink.
+    expect(saved).not.toContain(SECRET_NAME)
+    expect(saved).toContain('█')
+    expect(JSON.stringify(events)).not.toContain(SECRET_NAME)
+    const runs = db.prepare('SELECT * FROM skill_runs').all()
+    expect(JSON.stringify(runs)).not.toContain(SECRET_NAME)
+    expect(logged).not.toContain(SECRET_NAME)
   })
 
   it('IPC SkillRunState: the polled run snapshot is ids/counts only — never the secret', async () => {

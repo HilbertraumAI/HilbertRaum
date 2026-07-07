@@ -23,6 +23,7 @@ import {
 } from './invoice-run'
 import type { ToolRunner, ToolRunOutcome } from './run-controller'
 import type { DocTaskManager } from '../doctasks/manager'
+import type { ModelRuntime } from '../runtime'
 
 // The app-orchestrated tool-run DISPATCH (skills plan §6/§12.2, Phase S11b). This is the ONE place
 // that maps a registry tool name to its persistence seam (`run.ts`) and so is allowed to know bank
@@ -180,6 +181,12 @@ export interface ToolRunDeps {
    * the doctask's progress/cancel into the run bar. Absent (tests/headless) ⇒ the deterministic seam.
    */
   docTasks?: DocTaskManager
+  /**
+   * The active chat runtime for the redaction LLM LOCATE pass (Phase 7, D73), or null when none runs.
+   * Only `redact_document` uses it; a null runtime degrades the redaction to its deterministic floor
+   * with an honest note. The IPC injects `ctx.runtime.active()`; tests omit it to exercise the floor.
+   */
+  runtime?: ModelRuntime | null
 }
 
 /**
@@ -441,7 +448,10 @@ export function buildToolRunner(
           // §6.2: the redacted copy gets its own "Save redacted copy" dialog + a .txt filter (from the
           // descriptor), instead of the "Export transactions" / .csv dialog that fought the saved filename.
           saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
-          readDocumentSegments: deps.readDocumentSegments
+          readDocumentSegments: deps.readDocumentSegments,
+          // Phase 7 (D73): the LLM locate pass runs main-side in the seam via this runtime. Null ⇒ the
+          // run degrades to the deterministic floor with an honest note (never a silent partial).
+          runtime: deps.runtime ?? null
         })
         return {
           ok: res.ok,

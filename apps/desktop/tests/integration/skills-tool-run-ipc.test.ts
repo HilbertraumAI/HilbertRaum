@@ -1030,12 +1030,15 @@ describe('skills redact_document IPC (S11d)', () => {
     dialogState.saveResult = { canceled: false, filePath: out }
     const final = await runTool(skillInstallId, conversationId, 'redact_document', true)
     expect(final.state).toBe('done')
-    expect(final.resultKind).toBe('redacted')
+    // Phase 7 (D78): no model runs in this IPC harness (`ctx.runtime` is absent), so the redaction
+    // DEGRADES to the deterministic regex floor and says so honestly (`redactedFloor`).
+    expect(final.resultKind).toBe('redactedFloor')
     expect(final.transactionCount).toBeGreaterThanOrEqual(3)
     // The redacted copy really landed on disk WITH the personal data masked out (the privacy point).
+    // Phase 7 flips the written file to per-char █ masks (D74/D75).
     expect(existsSync(out)).toBe(true)
     const redacted = readFileSync(out, 'utf8')
-    expect(redacted).toContain('[EMAIL]')
+    expect(redacted).toContain('█')
     expect(redacted).not.toContain(SECRET_EMAIL)
     // …and the polled run state is ids/counts only — no figures/paths/secret.
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)

@@ -253,11 +253,18 @@ export const de: Record<keyof typeof en, string> = {
     '{count} Beträge stimmen nicht überein – prüfe sie, bevor du dich darauf verlässt.',
   'chat.skill.run.done.invoiceUnchecked': 'Es waren keine Beträge zum Abgleichen abgedruckt.',
   'chat.skill.run.done.redacted.one':
-    'Geschwärzte Kopie gespeichert – {count} Eintrag verborgen. Prüfe sie, bevor du sie weitergibst.',
+    'Geschwärzte Kopie gespeichert – {count} Eintrag verborgen. Nach bestem Bemühen, keine Garantie – prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.redacted.other':
-    'Geschwärzte Kopie gespeichert – {count} Einträge verborgen. Prüfe sie, bevor du sie weitergibst.',
+    'Geschwärzte Kopie gespeichert – {count} Einträge verborgen. Nach bestem Bemühen, keine Garantie – prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.redactedClean':
-    'Keine personenbezogenen Daten erkannt; Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
+    'Keine personenbezogenen Daten erkannt; Kopie gespeichert. Nach bestem Bemühen, keine Garantie – prüfe sie, bevor du sie weitergibst.',
+  // Phase 7 (D78): der eingeschränkte Lauf – kein Modell aktiv, daher nur die regelbasierte Offline-Erkennung.
+  'chat.skill.run.done.redactedFloor.one':
+    'Geschwärzte Kopie gespeichert – {count} Eintrag verborgen (nur regelbasierte Offline-Erkennung, kein Modell aktiv). Prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.redactedFloor.other':
+    'Geschwärzte Kopie gespeichert – {count} Einträge verborgen (nur regelbasierte Offline-Erkennung, kein Modell aktiv). Prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.redactedCleanFloor':
+    'Keine personenbezogenen Daten erkannt (nur regelbasierte Offline-Erkennung, kein Modell aktiv); Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
   'chat.skill.run.error.unavailable': 'Dieses Werkzeug ist nicht verfügbar.',
   'chat.skill.run.error.needsExtraction': 'Lies das Dokument zuerst mit der Schaltfläche „{button}“ ein, dann führe dieses Werkzeug aus.',

@@ -2983,7 +2983,7 @@ seeds a project-name + a folder-label (suggestion-reason) sentinel and proves ne
 (2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
 
 
-## Skills — design record (Phases S2–S13, §1–§20)
+## Skills — design record (Phases S2–S13, §1–§21)
 
 A **Skill** is a self-contained, local task package (instructions + optional examples/schemas) the
 user selects to shape one turn. Two tiers shipped: **Tier 1 — instruction-only** (the body is injected
@@ -6252,6 +6252,77 @@ a locate→splice composition) and `skills-redaction-tool.test.ts` (+3: the `per
 through the gate to `█` masks with unchanged counts, the no-strategy default is byte-for-byte the token
 output, the gate refuses an unknown strategy). All prior redaction pins stay green under the token
 default. Suite 3717/47 (was 3696; +21).
+
+
+### §21 LLM-located redaction — locate → verify → sweep (beta-feedback-2026-07 Phase 7, D73/D75/D78)
+
+Redaction v2 (#22 part 2): "replace all names and addresses, keep the city" works because the local model
+ONLY LOCATES spans — it **never generates the output text** (D73). The output is source bytes everywhere
+outside a verified span, so **hallucination is structurally impossible**; misses shrink because the model
+adds judgement (names/addresses the regex floor cannot detect) and the sweep turns one confirmation into
+document-wide coverage (D75). The deterministic regex floor (§20 / §8) stays as the baseline under the
+model pass. Builds directly on the §20 span-transform engine.
+
+- **Locate pass** (`services/skills/tools/redaction-locate.ts`, runtime-touching): the seam feeds the
+  document as **overlapping, globally line-numbered windows** (40 lines, 8-line overlap so an entity
+  straddling a window edge is seen whole) to `deps.runtime` under a **grammar-constrained JSON schema**
+  (D55) — `{ entities: [{ text, category: name|address|org|other, line }] }` — at **temperature 0**. The
+  mock runtime ignores the schema, so `parseLocateReply` re-validates every field. A window's malformed
+  reply is skipped (that window contributes nothing; the floor still covers it — never a hard fail); an
+  abort throws `AbortError` (the seam maps it to a calm cancel). This is LOCATE-ONLY — the returned
+  strings are UNVERIFIED proposals.
+- **Verify + sweep** (`redaction.ts` `verifyAndSweepEntities`, runtime-free so it unit-tests without a
+  model): each proposed string is confirmed only when it is present **verbatim** in the source
+  (`locateOccurrences`, no fuzzy match); an unconfirmed / too-short (`< MIN_ENTITY_CHARS`) / letter-less
+  proposal is **dropped and counted** (D78 honesty). A confirmed string is masked at **every** occurrence
+  (the model may report one). Duplicate proposals of the same string are swept once, not re-dropped.
+- **Combined redaction** (`redactWithEntities`): entities are masked FIRST — verified against the pristine
+  input, spliced via `applySpans` — then the six regex detectors run over the entity-masked text, so the
+  floor still covers every email/IBAN/… not already inside an entity. Both passes are mechanical splices,
+  so **byte-identity outside the union of masked spans holds** (D58). `entities` empty ⇒ exactly the floor,
+  which is how the seam degrades. The **written file flips to `perChar` `█`** here (D74/D75), so line
+  layout survives (the §20-recorded Phase-7 flip; the `skills-redaction.test.ts` / privacy-guard /
+  IPC written-content pins moved from `[EMAIL]`/`[IBAN]` to `█`).
+- **Where the model call lives.** Tools hold no runtime handle (§14 ceiling), so the locate pass runs in
+  the SEAM (`runDocumentRedaction`) via `deps.runtime` (the IPC injects `ctx.runtime.active()`), like the
+  bank categorizer/enricher model surfaces. The seam reads the joined text once (the reader is a cheap
+  in-memory closure after resolve), locates, then hands the VERIFIED-shape entity proposals to the pure
+  `redact_document` tool as structured **input** — which `runSkillTool` audits/logs ids/counts only, never
+  the input, so the proposed strings (CONTENT) stay inside the §6 content boundary. The tool does the
+  deterministic verify+sweep+floor and returns per-category counts + the dropped count.
+- **Steerability (D73).** The user's instruction (`deps.instruction`) rides into the locate system prompt
+  as the scoping directive ("names and street addresses; keep city names"); the schema's category set is
+  FIXED, so the instruction only widens/narrows what the model PROPOSES — the app never interprets prose.
+  Absent ⇒ the default directive (names + addresses + orgs). (The run-bar button collects no free text yet,
+  so the IPC passes no instruction today; the pipeline supports it end-to-end — a future text field wires
+  straight in.)
+- **Degrade, never a silent partial (D78).** No runtime — or a model failure that is NOT a user cancel —
+  degrades to the deterministic floor with an honest note. The seam's `resultKind` carries BOTH whether
+  anything was masked AND whether the model ran: `redacted`/`clean` (model ran) vs `redactedFloor`/
+  `cleanFloor` (rule-based only); the run-bar copy says "offline rule-based detection only, no model
+  running." The completion line keeps the "best-effort, not a guarantee — review before sharing" reminder
+  and never claims "fully anonymized" (SKILL.md honesty block rewritten to "AI-assisted best-effort with a
+  deterministic floor").
+- **Flow & gates unchanged.** Still user-initiated + confirm-gated (`export-file`); `skill_runs` stays
+  content-free (entity VALUES never logged/audited — a privacy-guard test drives a secret name through the
+  locate pass and asserts it reaches no sink). The `saveTextFile` boundary's trust model is untouched.
+
+**Concurrency note (carried forward).** Unlike the enricher (which runs inside the chat turn, holding the
+chat lane) the redaction run-bar seam does not hold the D26 chat↔task arbiter, so its locate call could in
+principle run concurrently with a chat stream on the one llama-server. Accepted for this best-effort pass
+per the plan (deps.runtime in the seam); routing redaction through the doctask lane like `categorize` is
+the follow-up if it bites.
+
+**Tests:** `skills-redaction-locate.test.ts` (+18: schema shape; window empty/overlap/global-numbering;
+`parseLocateReply` keep-valid/drop-off-enum/malformed; `locateEntities` per-window temp-0 schema call +
+abort; `verifyAndSweepEntities` verify/sweep-all/drop-unverifiable/drop-short/dedup; `redactWithEntities`
+entities+floor/perChar-length/byte-identity/empty=floor/dropped-count), `skills-redaction.test.ts` (+5
+Phase-7 seam: locate→sweep-all-occurrences+floor with steering & temp-0 schema, drop-hallucinated,
+cancel-mid-locate, model-missing degrade leaves the name, model-failure degrade still saves; existing
+pins moved to `█` + the degraded `redactedFloor`/`cleanFloor` discriminators), `skills-privacy-guard.test.ts`
+(+1: a located name value is masked out and never touches audit/log/skill_runs) + the perChar flip on the
+existing redaction case, `skills-tool-run-ipc.test.ts` (the end-to-end redaction moved to `█` + the
+no-model `redactedFloor` discriminator). Suite 3739/47 (was 3717; +22).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)

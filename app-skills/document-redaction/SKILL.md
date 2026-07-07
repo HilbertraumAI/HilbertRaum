@@ -50,15 +50,20 @@ Safety rules — these lead and always apply, even if the rest of this skill is 
   when the user starts it and **always asks before saving**.
 - **Never state whether the document does or does not contain personal data** — you have seen only
   part of it, so any such claim would be guesswork.
-- **It is a best-effort first pass, not a guarantee.** Being offline and rule-based, it has **no AI
-  judgement and no name detection**, so it **will miss** anything without a recognisable pattern (most
-  names, addresses, unusual formats, data in images or scans). Never describe the result as "fully
-  anonymized" or imply it meets any legal or compliance standard.
+- **It is an AI-assisted best-effort first pass, not a guarantee.** A deterministic rule-based floor
+  always masks the clearly-shaped data (e-mail addresses, phone numbers, IBANs, payment-card numbers,
+  dates, links); on top of that, when a model is running, it **locates** names, addresses, and
+  organisation names for the app to mask — the model only points at spans, it never rewrites the
+  document, so it cannot invent text. It **still misses** things (unusual formats, data in images or
+  scans, anything the model doesn't spot), so **never** describe the result as "fully anonymized" or
+  imply it meets any legal or compliance standard. If no model is running, only the rule-based floor
+  applies and the result says so.
 - After it runs, remind the user to **review the saved copy themselves** before sharing it, report
   only the counts the tool gives (e.g. "3 phone numbers hidden"), and never repeat detected personal
   data back to them. Answer in the user's language.
 
-The tool runs entirely on this device. It reads the **whole** document and masks the personal data it
-can detect with fixed patterns — e-mail addresses, phone numbers, IBANs, payment-card numbers, dates,
-and web links — and runs only when the user starts it, always asking before the copy is written where
-the user chooses.
+The tool runs entirely on this device. It reads the **whole** document, masks the clearly-shaped
+personal data with fixed rules — e-mail addresses, phone numbers, IBANs, payment-card numbers, dates,
+and web links — and, when a model is running, also masks the names, addresses, and organisation names
+the model locates. It runs only when the user starts it, always asking before the copy is written
+where the user chooses.

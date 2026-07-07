@@ -386,7 +386,9 @@ export function registerSkillsIpc(ctx: AppContext): void {
       { skillInstallId, conversationId, documentId: targetId, confirmed: req?.confirmed },
       runAudit,
       // `docTasks` routes `categorize_transactions` into the doctask lane (D26 exclusion, Phase 33).
-      { saveTextFile, readDocumentSegments, docTasks: ctx.docTasks }
+      // `runtime` (Phase 7, D73) is the active chat model for redaction's LLM locate pass — null when
+      // none runs, which degrades the redaction to its deterministic floor with an honest note.
+      { saveTextFile, readDocumentSegments, docTasks: ctx.docTasks, runtime: ctx.runtime?.active() ?? null }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
     try {

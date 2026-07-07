@@ -16,6 +16,28 @@ import { recordToInfo } from '../../src/main/services/skills/installer'
 import { runDocumentRedaction } from '../../src/main/services/skills/run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import type { AuditEventType, RunnableTool } from '../../src/shared/types'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+
+/** A scripted runtime whose `chatStream` replies with `reply(call)` token-by-token — the locate pass
+ *  sees fixture entities (the MockRuntime ignores `responseSchema`, so this mirrors it for the seam). */
+function scriptedRuntime(
+  reply: (call: { messages: ChatMessage[]; options?: RuntimeChatOptions }) => string,
+  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+): ModelRuntime {
+  return {
+    modelId: 'mock',
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: 'ok', port: null }),
+    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+      calls.push({ messages, options })
+      for (const tok of reply({ messages, options }).match(/\S+\s*/g) ?? []) {
+        if (options?.signal?.aborted) return
+        yield tok
+      }
+    }
+  }
+}
 
 // architecture.md "Skills — design record" §8 — the THIRD bundled Tier-2 skill: document-redaction.
 // It exercises the read-transform-export shape (no content-class data table — the deliverable is a
@@ -168,11 +190,13 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     })
     expect(res.ok).toBe(true)
     expect(res.redactionCount).toBe(5)
-    expect(res.resultKind).toBe('redacted')
+    // No runtime injected ⇒ the run DEGRADES to the deterministic floor and says so (Phase 7, D78).
+    expect(res.resultKind).toBe('redactedFloor')
     // The redacted copy was written (default file name) with the personal data masked, not present.
+    // Phase 7 flips the WRITTEN FILE to per-char █ masks (D74/D75), so line layout survives.
     expect(written!.name).toBe('redacted.txt')
-    expect(written!.content).toContain('[EMAIL]')
-    expect(written!.content).toContain('[IBAN]')
+    expect(written!.content).toContain('█')
+    expect(written!.content).not.toContain('[EMAIL]')
     expect(written!.content).not.toContain('jane.doe@example.com')
     expect(written!.content).not.toContain('AT61 1904 3002 3457 3201')
     // The run row is recorded done with NO result_ref (no DB artifact) — counts only.
@@ -239,9 +263,10 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     expect(res.ok).toBe(true)
     expect(res.redactionCount).toBe(5)
     // The saved copy keeps the three lines (verbatim segments joined by newline), masked — not the
-    // single-line collapsed chunk text the seam would otherwise have read.
+    // single-line collapsed chunk text the seam would otherwise have read. Per-char █ masks preserve
+    // both the line count and each line's length (D74/D75).
     expect(written!.content.split('\n')).toHaveLength(3)
-    expect(written!.content).toContain('[EMAIL]')
+    expect(written!.content).toContain('█')
     expect(written!.content).not.toContain('jane.doe@example.com')
   })
 
@@ -260,7 +285,8 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     })
     expect(res.ok).toBe(true)
     expect(res.redactionCount).toBe(0)
-    expect(res.resultKind).toBe('clean')
+    // No runtime ⇒ the floor-only clean discriminator (Phase 7, D78).
+    expect(res.resultKind).toBe('cleanFloor')
     expect(saved).toBe(true)
   })
 
@@ -313,5 +339,148 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     expect(res.errorCode).toBe('exportWriteFailed')
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('failed')
+  })
+})
+
+describe('document-redaction — Phase 7 LLM locate pass (D73/D75/D78)', () => {
+  const skillInstallId = 'app:document-redaction'
+  // A name the deterministic floor CANNOT detect, appearing twice, plus a regex-shaped e-mail.
+  const NAME_DOC = ['Dear Jane Doe, your appointment is confirmed.', 'Reply to Jane Doe at jane.doe@example.com.'].join('\n')
+
+  it('locates a name, verifies it, and sweeps ALL occurrences + runs the regex floor', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, NAME_DOC)
+    const { audit } = capturingAudit()
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    // The model reports the name ONCE (on line 1) — the app's sweep masks BOTH occurrences (D75).
+    const runtime = scriptedRuntime(() => JSON.stringify({ entities: [{ text: 'Jane Doe', category: 'name', line: 1 }] }), calls)
+    let written = ''
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      instruction: 'names and street addresses; keep city names',
+      saveTextFile: async (_name, content) => {
+        written = content
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    // Two "Jane Doe" occurrences masked + one e-mail (the floor) = 3 items hidden.
+    expect(res.redactionCount).toBe(3)
+    expect(res.resultKind).toBe('redacted') // the model ran ⇒ NOT the degraded floor discriminator
+    expect(written).not.toContain('Jane Doe') // both occurrences swept, not just the reported one
+    expect(written).not.toContain('jane.doe@example.com')
+    expect(written).toContain('█')
+    // Steerability (D73): the user's instruction rides into the locate system prompt.
+    expect(calls[0].messages[0].content).toContain('names and street addresses; keep city names')
+    // Grammar-constrained (D55): the locate call carries the response schema at temperature 0.
+    expect(calls[0].options?.responseSchema).toBeTruthy()
+    expect(calls[0].options?.temperature).toBe(0)
+  })
+
+  it('drops an unverifiable (hallucinated) proposed span and never masks it', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'Dear Jane Doe, welcome aboard.')
+    const { audit } = capturingAudit()
+    // The model proposes a name that is NOT in the document verbatim — it must be dropped (D75), and a
+    // real one that IS present is masked. Hallucination cannot reach the output.
+    const runtime = scriptedRuntime(() =>
+      JSON.stringify({ entities: [{ text: 'John Smith', category: 'name', line: 1 }, { text: 'Jane Doe', category: 'name', line: 1 }] })
+    )
+    let written = ''
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      saveTextFile: async (_name, content) => {
+        written = content
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.redactionCount).toBe(1) // only the verifiable 'Jane Doe' masked; 'John Smith' dropped
+    expect(written).not.toContain('Jane Doe')
+    expect(written).not.toContain('John Smith') // was never in the source — nothing to leak either way
+  })
+
+  it('a cancel during the locate pass writes nothing and reports it calmly (cancelled, not failed)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, NAME_DOC)
+    const { audit } = capturingAudit()
+    const controller = new AbortController()
+    let saveCalled = false
+    // The runtime aborts mid-window; the locate pass throws AbortError → the seam's calm-cancel path.
+    const runtime = scriptedRuntime(() => {
+      controller.abort()
+      return JSON.stringify({ entities: [] })
+    })
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      signal: controller.signal,
+      runtime,
+      saveTextFile: async () => {
+        saveCalled = true
+        return true
+      }
+    })
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(true)
+    expect(saveCalled).toBe(false)
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('cancelled')
+  })
+
+  it('model-missing degrades to the deterministic floor with an honest note — the name is NOT masked', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, NAME_DOC)
+    const { audit } = capturingAudit()
+    let written = ''
+    // No runtime injected: the run masks only what the regex floor can (the e-mail) and says so.
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      saveTextFile: async (_name, content) => {
+        written = content
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.resultKind).toBe('redactedFloor') // DEGRADED — rule-based only
+    expect(res.redactionCount).toBe(1) // just the e-mail
+    expect(written).not.toContain('jane.doe@example.com')
+    expect(written).toContain('Jane Doe') // the name survives — the floor cannot detect it, honestly
+  })
+
+  it('a model failure mid-locate degrades to the floor (still saves), never fails the whole run', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, NAME_DOC)
+    const { audit } = capturingAudit()
+    // A runtime whose stream THROWS (not an abort) — the seam degrades, it does not fail the redaction.
+    const runtime: ModelRuntime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      // eslint-disable-next-line require-yield
+      async *chatStream() {
+        throw new Error('model crashed')
+      }
+    }
+    let written = ''
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      saveTextFile: async (_name, content) => {
+        written = content
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.resultKind).toBe('redactedFloor') // degraded, but the copy WAS saved
+    expect(written).toContain('Jane Doe') // the failed locate contributed nothing; the floor still ran
+    expect(written).not.toContain('jane.doe@example.com')
   })
 })

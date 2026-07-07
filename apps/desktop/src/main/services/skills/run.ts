@@ -15,6 +15,8 @@ import {
 import { CATEGORIZER_CATEGORIES } from './categorizer'
 import { withDocumentLock } from './doc-lock'
 import type { RedactDocumentOutput } from './tools/redaction'
+import { locateEntities, type LocatedEntity } from './tools/redaction-locate'
+import type { ModelRuntime } from '../runtime'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
 // function S11b's IPC/UI will call: it is invoked by the APP from a user action (DS4), never by the
@@ -1300,6 +1302,19 @@ export interface RedactionDeps extends BankExtractionDeps {
   saveTextFile: (defaultFileName: string, content: string) => Promise<boolean>
   /** True once the user accepted the write/export confirm modal (the gate also enforces it). */
   confirmed?: boolean
+  /**
+   * The loaded chat runtime for the Phase 7 LLM LOCATE pass (D73), or null/absent when none runs. The
+   * model ONLY locates spans (names/addresses/orgs) via grammar-constrained JSON; the app verifies +
+   * sweeps them mechanically. Absent/null ⇒ the run DEGRADES to the deterministic regex floor with an
+   * honest note (offline rule-based mode) — never a silent partial. The IPC injects `ctx.runtime.active()`.
+   */
+  runtime?: ModelRuntime | null
+  /**
+   * The user's scoping instruction for the locate pass (D73 steerability — "names and addresses; keep
+   * city names"). It rides into the locate prompt as the directive; the schema's category set is fixed,
+   * so it only widens/narrows what the model PROPOSES. Absent/empty ⇒ the default directive.
+   */
+  instruction?: string
 }
 
 export interface RedactionResult {
@@ -1308,7 +1323,13 @@ export interface RedactionResult {
   runId: string
   /** The number of personal-data items masked (a content-free count the renderer surfaces). */
   redactionCount?: number
-  /** A content-free outcome discriminator: 'redacted' when something was masked, else 'clean'. */
+  /**
+   * A content-free outcome discriminator the renderer maps to copy:
+   *   'redacted'      — the LLM locate pass ran, items were masked;
+   *   'clean'         — the LLM locate pass ran, nothing was masked;
+   *   'redactedFloor' — DEGRADED (no runtime / locate failed): only the regex floor ran, items masked;
+   *   'cleanFloor'    — DEGRADED: only the regex floor ran, nothing masked.
+   */
   resultKind?: string
   /** True when the run ended because it was CANCELLED (vs a genuine failure) — the seam is authority (B2). */
   cancelled?: boolean
@@ -1349,17 +1370,58 @@ export async function runDocumentRedaction(
     }
 
     const signal = deps.signal ?? new AbortController().signal
+    const reader = await resolveDocumentReader(db, args.documentId, deps)
     const ctx: SkillToolContext = {
       documentIds,
-      readDocumentChunks: await resolveDocumentReader(db, args.documentId, deps),
+      readDocumentChunks: reader,
       signal,
       onProgress: deps.onProgress,
       audit: deps.audit
     }
 
+    // Phase 7 LOCATE pass (D73/D75): the model proposes name/address/org spans over the SAME text the
+    // tool will verify against; the tool then confirms each verbatim and sweeps all occurrences. The
+    // model NEVER generates the output text. Read the joined text here (the reader is a cheap in-memory
+    // closure after resolve, so the tool re-reading it costs nothing). With no runtime — or a locate
+    // failure that is NOT a user cancel — the run DEGRADES to the deterministic floor with an honest
+    // note (`degraded`), never a silent partial. A user cancel throws AbortError → the calm cancel below.
+    let entities: LocatedEntity[] = []
+    let degraded = deps.runtime == null
+    if (deps.runtime != null) {
+      let joined = ''
+      try {
+        joined = reader(args.documentId).map((c) => c.text).join('\n')
+      } catch {
+        joined = '' // an unreadable document surfaces through the tool's own read below; skip locate
+      }
+      if (joined.length > 0) {
+        try {
+          entities = await locateEntities(joined, deps.instruction ?? '', {
+            runtime: deps.runtime,
+            signal,
+            onProgress: (done, total) => deps.onProgress?.({ done, total })
+          })
+        } catch (e) {
+          if (e instanceof DOMException && e.name === 'AbortError') {
+            // A user cancel mid-locate — calm cancel (B2): nothing written, recorded 'cancelled'.
+            finishRun(db, runId, 'cancelled', now(), null, null)
+            return { ok: false, runId, cancelled: true, error: 'Redaction cancelled. Nothing was saved.' }
+          }
+          // A genuine model failure (runtime present but errored) — degrade to the floor, don't fail the
+          // whole redaction. Content-free local log only (§22-M1); the entity strings never reach it.
+          console.error('[skills] redaction locate pass failed — degrading to the rule-based floor')
+          entities = []
+          degraded = true
+        }
+      }
+    }
+
     const result = await runSkillTool(tool, {
       skillId: args.skillInstallId,
-      input: { documentId: args.documentId },
+      // 'perChar' (D74/D75): the written file masks are length-preserving █ runs so line layout
+      // survives. `entities` (content) are handed as structured input — `runSkillTool` audits/logs
+      // ids/counts only, never the input, so this stays inside the content boundary (§22-M1).
+      input: { documentId: args.documentId, strategy: 'perChar', entities },
       ctx,
       confirmed: deps.confirmed
     })
@@ -1370,7 +1432,11 @@ export async function runDocumentRedaction(
     }
 
     const output = result.output as RedactDocumentOutput
-    const resultKind = output.totalRedactions > 0 ? 'redacted' : 'clean'
+    // The resultKind carries BOTH whether anything was masked AND whether the LLM pass ran (D78 honesty:
+    // a degraded run says so). The renderer maps the four discriminators to copy.
+    const resultKind = output.totalRedactions > 0
+      ? degraded ? 'redactedFloor' : 'redacted'
+      : degraded ? 'cleanFloor' : 'clean'
 
     // Cancelled after the tool produced the text but before the write — don't open the save dialog,
     // and report it as cancelled (not failed), so nothing is written under a cancel (B2).

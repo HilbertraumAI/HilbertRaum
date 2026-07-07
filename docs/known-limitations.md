@@ -379,21 +379,29 @@ password recovery — are documented in
   `recipient` header field reads LABELED lines only ("Bill to:", "Rechnungsempfänger:", "Kunde:" …) — an
   address-block recipient with no label stays unextracted, and the recipient-shaped question then falls
   through to the relevance path over the document text (by design, never a fabricated party).
-- **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
-  `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
-  offline regexes only** — e-mail addresses, phone numbers, IBANs, **payment-card numbers**, dates, and
-  web links. There is **no
-  ML and no name detection**, so it deliberately **misses** anything without a recognisable pattern:
-  most names, postal addresses, unusual number formats, and any text inside images/scans (it sees only
-  the extracted chunk text). The detectors are intentionally conservative — they prefer a **false
-  negative** (leaving a borderline value) over corrupting ordinary text by over-matching. The redacted
-  copy is therefore a **starting point that still needs a human review** before it is shared; the
-  SKILL.md body and the run's "done" copy both say so, and the app never describes the output as "fully
-  anonymized" or as meeting any legal/GDPR-DSGVO standard. Privacy posture is otherwise the strongest
-  of the Tier-2 skills: the redacted text is written **only** to the user-chosen file, the detected
-  values never reach any log/audit/`skill_runs` row, and only per-category **counts** are surfaced
-  (architecture.md "Skills — design record" §8). A higher-recall redactor (NER, address/name lexicons)
-  is a deferred wave.
+- **Document redaction is AI-assisted best-effort, not a privacy/compliance guarantee (Skills S11d;
+  Phase 7 D73/D75/D78).** The `document-redaction` skill's `redact_document` tool has two layers. (1) A
+  **deterministic, offline regex floor** always masks the clearly-shaped data — e-mail addresses, phone
+  numbers, IBANs, **payment-card numbers**, dates, and web links. (2) When a chat model is running, an
+  **LLM locate pass** additionally masks **names, postal/street addresses, and organisation names**: the
+  model only *locates* spans (grammar-constrained JSON, temperature 0), and the app **verifies each
+  proposed string verbatim** in the source and **sweeps every occurrence** — the model **never generates
+  the output text**, so it cannot invent or leak anything (the output is source bytes everywhere outside a
+  verified mask). A proposal not present verbatim, too short, or letter-less is **dropped and counted**.
+  The written file uses **per-character `█` masks** (Phase 7 flip, D74/D75), so line layout survives.
+  It **still misses** things (unusual formats, text inside images/scans — it sees only the extracted text,
+  and anything the model doesn't spot); the regex floor stays conservative (a **false negative** over
+  corrupting text). **If no model is running, only the rule-based floor applies** and the run says so
+  honestly (`redactedFloor`/`cleanFloor` → "offline rule-based detection only, no model running"). The
+  redacted copy is a **starting point that still needs a human review** before sharing; the SKILL.md body
+  and the run's "done" copy both say so, and the app never describes the output as "fully anonymized" or
+  as meeting any legal/GDPR-DSGVO standard. Privacy posture is otherwise the strongest of the Tier-2
+  skills: the redacted text is written **only** to the user-chosen file, the detected values AND the
+  model-located entity strings never reach any log/audit/`skill_runs` row (the located strings ride as
+  tool input, which the gate never logs), and only per-category **counts** + a **dropped-unverifiable
+  count** are surfaced (architecture.md "Skills — design record" §21). Locate quality on a small local
+  model is the accepted risk — mitigated by the deterministic floor, the verify-verbatim + all-occurrences
+  sweep, and window overlap.
   - **Date masking now accepts EITHER field order and a 2-digit year — the BL-N6 leak is closed (U2,
     audit §5.7).** For *redaction* (unlike extraction, which stays day-first) a candidate is masked when it
     parses in **day-first OR month-first** order, so a **US-ordered** `mm/dd/yyyy` value like `12/31/2026`
