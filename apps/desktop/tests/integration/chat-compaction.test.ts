@@ -11,8 +11,10 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 const { DatabaseSync } = createRequire(process.execPath)('node:sqlite') as typeof import('node:sqlite')
 import {
   appendMessage,
+  BASE_SYSTEM_PROMPT,
   buildChatMessages,
   buildSystemPrompt,
+  CHAT_RESPONSE_RESERVE_TOKENS,
   COMPACTION_SUMMARY_ACK,
   COMPACTION_SUMMARY_INTRO,
   compactionSummaryPair,
@@ -21,6 +23,7 @@ import {
   getLatestCheckpoint,
   listConversationTurns,
   listMessages,
+  messageTokens,
   searchMessages,
   writeCheckpoint
 } from '../../src/main/services/chat'
@@ -28,6 +31,7 @@ import {
   COMPACT_THRESHOLD,
   ensureCompacted,
   KEEP_RECENT_TURNS,
+  MIN_COMPACTABLE_TURNS,
   selfSummaryPrompt
 } from '../../src/main/services/chat/compaction'
 import { buildGroundedChatMessages, GROUNDED_SYSTEM_PROMPT } from '../../src/main/services/rag'
@@ -123,6 +127,145 @@ describe('ensureCompacted — trigger boundaries (no needless model call)', () =
     await ensureCompacted(db, rt, conv.id, 2000, {})
     expect(rt.summaryCalls).toHaveLength(0)
     expect(getLatestCheckpoint(db, conv.id)).toBeNull()
+  })
+})
+
+// CB-3: the compaction trigger used to be a flat 0.85·window, which on a small window fires AFTER
+// L1 (window − reserve) has already started silently dropping the oldest turns. The fix caps the
+// trigger at the L1 floor and folds the previously-omitted fixed prompt costs into the estimate.
+describe('ensureCompacted — CB-3 threshold cap + estimate fold-in', () => {
+  const perTurn = (W: number): number => messageTokens({ role: 'user', content: words(W) })
+  const sysTokens = (): number => messageTokens({ role: 'system', content: BASE_SYSTEM_PROMPT })
+
+  it('a small window (4096) compacts in the band L1 would have silently dropped (old trigger would not fire)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    // 14 turns × 113 words ⇒ Σ turnTokens ≈ 3206, which sits in the (window−1024=3072, 0.85·window=3482)
+    // band: the OLD trigger (3482) never fires here so L1 begins dropping the oldest turns with no
+    // checkpoint; CB-3 caps the trigger at the L1 floor (3072) so compaction fires FIRST.
+    appendTurns(db, conv.id, 14, 113)
+    const sum = 14 * perTurn(113)
+    expect(sum).toBeGreaterThanOrEqual(4096 - CHAT_RESPONSE_RESERVE_TOKENS) // ≥ 3072 (the new, capped trigger)
+    expect(sum).toBeLessThan(COMPACT_THRESHOLD * 4096) // < 3482 (the old flat trigger) — old code would NOT fire
+    const rt = scriptedRuntime({ window: 4096 })
+    await ensureCompacted(db, rt, conv.id, 4096, {})
+    expect(rt.summaryCalls).toHaveLength(1)
+    expect(getLatestCheckpoint(db, conv.id)).not.toBeNull()
+  })
+
+  it('a large window (8192-class) keeps the exact 0.85·window trigger — the L1-floor cap is NOT the min', async () => {
+    // For window ≥ 6827, 0.85·window ≤ window−1024, so min() selects 0.85·window BYTE-IDENTICAL to
+    // pre-CB-3. Pin it with a ±1 window sweep across the fire boundary on the 0.85·window branch.
+    const build = (): { db: Db; convId: string } => {
+      const db = freshDb()
+      const conv = createConversation(db, { modelId: 'm' })
+      appendTurns(db, conv.id, 20, 200)
+      return { db, convId: conv.id }
+    }
+    const estimated = sysTokens() + 20 * perTurn(200) // matches the code's no-checkpoint, no-fence estimate
+    const fireWindow = Math.floor(estimated / COMPACT_THRESHOLD) // 0.85·window ≤ estimated ⇒ fires
+    const noFireWindow = fireWindow + 1 // 0.85·window > estimated ⇒ returns
+    expect(fireWindow).toBeGreaterThanOrEqual(6827) // the 0.85·window branch is the min at this scale
+
+    const a = build()
+    await ensureCompacted(a.db, scriptedRuntime({ window: fireWindow }), a.convId, fireWindow, {})
+    expect(getLatestCheckpoint(a.db, a.convId)).not.toBeNull() // estimated ≥ 0.85·window ⇒ compacts
+
+    const b = build()
+    const rtB = scriptedRuntime({ window: noFireWindow })
+    await ensureCompacted(b.db, rtB, b.convId, noFireWindow, {})
+    expect(rtB.summaryCalls).toHaveLength(0) // estimated < 0.85·window ⇒ no compaction
+    expect(getLatestCheckpoint(b.db, b.convId)).toBeNull()
+  })
+
+  it('the estimate fold-in (real summary pair + system prompt) fires a turn sooner than the bare old estimate', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    // A prior checkpoint over the first few turns, then a run of post-checkpoint turns.
+    appendTurns(db, conv.id, 4, 5)
+    const preTurns = listConversationTurns(db, conv.id)
+    const summary = words(50)
+    writeCheckpoint(db, {
+      conversationId: conv.id,
+      summary,
+      coversThroughRowid: preTurns[preTurns.length - 1].rowid
+    })
+    appendTurns(db, conv.id, 14, 90) // 14 post-checkpoint turns (region 8 ≥ MIN)
+    const postSum = 14 * perTurn(90)
+
+    // OLD pre-pass counted a BARE summary + '' ack and no system prompt; CB-3 counts the real
+    // compactionSummaryPair text (intro + ack) + the base system prompt → a larger, honest estimate.
+    const oldPair =
+      messageTokens({ role: 'user', content: summary }) +
+      messageTokens({ role: 'assistant', content: '' })
+    const newPair = compactionSummaryPair(summary).reduce((s, m) => s + messageTokens(m), 0)
+    const oldEstimate = oldPair + postSum
+    const newEstimate = newPair + sysTokens() + postSum
+    expect(newEstimate).toBeGreaterThan(oldEstimate) // the fold-in is strictly larger
+
+    // A small window whose L1-floor trigger sits EXACTLY at the NEW estimate: the new code fires
+    // (estimated === threshold), the old bare estimate (< threshold) would not have.
+    const window = newEstimate + CHAT_RESPONSE_RESERVE_TOKENS
+    expect(window).toBeLessThan(6827) // floor branch active ⇒ threshold = window − reserve = newEstimate
+    expect(oldEstimate).toBeLessThan(window - CHAT_RESPONSE_RESERVE_TOKENS) // old estimate is below threshold
+
+    const rt = scriptedRuntime({ window })
+    await ensureCompacted(db, rt, conv.id, window, {})
+    expect(rt.summaryCalls).toHaveLength(1)
+    const cp = getLatestCheckpoint(db, conv.id)
+    expect(cp?.coversThroughRowid).toBeGreaterThan(preTurns[preTurns.length - 1].rowid) // a new, rolling checkpoint
+  })
+})
+
+// T-5 — the compaction boundaries were only asserted "by construction" before. These pin the two
+// equality edges so an off-by-one (`<`↔`<=`, threshold ±1) reddens.
+describe('T-5 — compaction boundaries (teeth on the equality edges)', () => {
+  const perTurn = (W: number): number => messageTokens({ role: 'user', content: words(W) })
+
+  it('Boundary-2: region.length === MIN_COMPACTABLE_TURNS proceeds; MIN−1 returns (teeth: flip <→<=)', async () => {
+    const bigWords = 400 // huge turns so the SIZE trigger is never the reason for a no-op
+
+    // A large region overflows the summarizer's own window (map/reduce ⇒ several summary calls), so
+    // assert on the CHECKPOINT — written iff compaction proceeded — rather than the call count.
+    const proceed = freshDb()
+    const c1 = createConversation(proceed, { modelId: 'm' })
+    appendTurns(proceed, c1.id, KEEP_RECENT_TURNS + MIN_COMPACTABLE_TURNS, bigWords) // region === MIN
+    const rt1 = scriptedRuntime({ window: 2000 })
+    await ensureCompacted(proceed, rt1, c1.id, 2000, {})
+    expect(getLatestCheckpoint(proceed, c1.id)).not.toBeNull() // region === MIN ⇒ compacts
+
+    const ret = freshDb()
+    const c2 = createConversation(ret, { modelId: 'm' })
+    appendTurns(ret, c2.id, KEEP_RECENT_TURNS + MIN_COMPACTABLE_TURNS - 1, bigWords) // region === MIN−1
+    const rt2 = scriptedRuntime({ window: 2000 })
+    await ensureCompacted(ret, rt2, c2.id, 2000, {})
+    expect(getLatestCheckpoint(ret, c2.id)).toBeNull() // region === MIN−1 ⇒ no-op
+  })
+
+  it('Boundary-1: estimated === threshold proceeds; threshold−1 returns — min(0.85·window, window−reserve) (CB-3)', async () => {
+    // Same conversation twice; sweep the window by 1 so the L1-floor threshold (window−reserve) lands
+    // exactly at, then one above, the estimate. Ties CB-3's threshold expression to a hard equality.
+    const build = (): { db: Db; convId: string } => {
+      const db = freshDb()
+      const conv = createConversation(db, { modelId: 'm' })
+      appendTurns(db, conv.id, 14, 90)
+      return { db, convId: conv.id }
+    }
+    const estimated = messageTokens({ role: 'system', content: BASE_SYSTEM_PROMPT }) + 14 * perTurn(90)
+    const atWindow = estimated + CHAT_RESPONSE_RESERVE_TOKENS // threshold = window − reserve === estimated
+    const belowWindow = atWindow + 1 // threshold = estimated + 1 > estimated
+    expect(atWindow).toBeLessThan(6827) // floor branch (window−reserve) is the min for these windows
+    expect(COMPACT_THRESHOLD * atWindow).toBeGreaterThan(estimated) // min() picks the floor, not 0.85·window
+
+    const a = build()
+    const rtA = scriptedRuntime({ window: atWindow })
+    await ensureCompacted(a.db, rtA, a.convId, atWindow, {})
+    expect(rtA.summaryCalls).toHaveLength(1) // estimated === threshold ⇒ NOT (estimated < threshold) ⇒ proceeds
+
+    const b = build()
+    const rtB = scriptedRuntime({ window: belowWindow })
+    await ensureCompacted(b.db, rtB, b.convId, belowWindow, {})
+    expect(rtB.summaryCalls).toHaveLength(0) // estimated === threshold−1 ⇒ estimated < threshold ⇒ returns
   })
 })
 

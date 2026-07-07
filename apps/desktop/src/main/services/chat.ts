@@ -122,6 +122,26 @@ export function isAbortError(err: unknown, signal?: AbortSignal): boolean {
   return err instanceof Error && err.name === 'AbortError'
 }
 
+/**
+ * CB-4 — a completed (non-aborted) stream that produced ZERO answer tokens. Distinct from the
+ * benign silent-empty cases (a stop before the first token, or an all-`<think>`/fence-echo reply
+ * that stripped to empty) which still persist nothing without erroring: those arrived or were
+ * aborted, this is a genuine empty completion. `generateAssistantMessage` throws it; `withChatStream`
+ * maps it to the friendly `main.chat.emptyCompletion` copy so the user gets a retry signal instead of
+ * a silently unanswered question. Rethrow-friendly (like the context-overflow mapping).
+ */
+export class EmptyCompletionError extends Error {
+  constructor() {
+    super('The model returned an empty completion.')
+    this.name = 'EmptyCompletionError'
+  }
+}
+
+/** True when `err` is an {@link EmptyCompletionError} (the completed-but-empty completion, CB-4). */
+export function isEmptyCompletionError(err: unknown): boolean {
+  return err instanceof EmptyCompletionError
+}
+
 interface ConversationRow {
   id: string
   title: string
@@ -1282,16 +1302,20 @@ export async function generateAssistantMessage(
   // no user-visible error. Runs on the already-claimed chat slot as part of this turn (R4), honouring
   // the turn's AbortSignal, BEFORE assembly so buildChatMessages picks up any fresh checkpoint. Gated
   // by the §5.4 toggle: when off, no checkpoint is created and assembly ignores any existing one.
-  if (compactionOn) {
-    await ensureCompacted(db, runtime, conversationId, contextTokens, {
-      signal: opts.signal,
-      onStart: opts.onCompactionStart
-    })
-  }
   // Pre-size the skill fence (§11.3/A6) BEFORE it goes in the system message so it can never
   // starve the base preamble or the final user turn — fitMessagesToContext only drops older
   // history. Stamp the assistant row only when the fence actually fit (skill shaped the answer).
+  // CB-3: build it BEFORE `ensureCompacted` (free — `buildTurnFence` reads only the final turn and
+  // has no checkpoint dependency) so its token cost can be handed to the compaction pre-pass as
+  // `reservedTokens`, letting a fence-heavy turn cross the compaction threshold at the right point.
   const fence = buildTurnFence(db, conversationId, opts.skill, contextTokens)
+  if (compactionOn) {
+    await ensureCompacted(db, runtime, conversationId, contextTokens, {
+      signal: opts.signal,
+      onStart: opts.onCompactionStart,
+      reservedTokens: fence ? approxPromptTokens(fence) : 0
+    })
+  }
   const messages = buildChatMessages(db, conversationId, contextTokens, fence, compactionOn)
   // Meter honesty: report what the model actually receives (fitted history + system/fence),
   // in the same estimate currency the budget uses, so the live meter never under-reads a turn.
@@ -1314,6 +1338,7 @@ export async function generateAssistantMessage(
     },
     ...opts.runtimeOptions
   })
+  let caughtAbort = false
   try {
     for await (const token of stream) {
       content += token
@@ -1323,7 +1348,12 @@ export async function generateAssistantMessage(
     // A user Stop aborts the stream; persist the partial text and return normally.
     // Any other error is a real failure and propagates to the IPC layer.
     if (!isAbortError(err, opts.signal)) throw err
+    caughtAbort = true
   }
+  // CB-4: capture whether the model actually emitted anything BEFORE the strip passes below. A
+  // reply that arrived and then stripped to empty (all-`<think>`/fence-echo) is a benign silent-empty
+  // — distinct from a completed stream that produced no token at all.
+  const receivedAnyToken = content !== ''
   // 'length' = the reply hit a ceiling and is cut off — but llama-server reports the SAME reason
   // for two very different ceilings: the model's context window AND a per-request `max_tokens`
   // cap (Fast mode caps at FAST_MAX_TOKENS). The badge claims "reached the model's context
@@ -1338,11 +1368,19 @@ export async function generateAssistantMessage(
   content = stripThinkBlocks(content)
   // Drop any skill-fence framing the model echoed back (e.g. a trailing "--- END LOCAL SKILL ---").
   content = stripSkillFenceEcho(content)
-  // Persist whatever was produced — on a stop, that is the partial text so far. A stop
-  // BEFORE the first token produced nothing: persist nothing (a permanent empty
-  // assistant bubble in the transcript otherwise) and return an unpersisted, empty
-  // message to keep the resolve contract.
-  if (content === '') return emptyAssistantMessage(conversationId)
+  // Persist whatever was produced — on a stop, that is the partial text so far. Nothing to persist:
+  //  - a stop (abort) that produced nothing, OR a reply that arrived but stripped to empty
+  //    (all-`<think>`/fence-echo) → the benign silent-empty: persist nothing (a permanent empty
+  //    assistant bubble in the transcript otherwise) and return an unpersisted, empty message to
+  //    keep the resolve contract.
+  //  - CB-4: a COMPLETED, non-aborted stream that produced zero tokens is a genuine empty
+  //    completion — throw so the IPC layer surfaces a friendly, retryable error instead of a
+  //    silently unanswered user question.
+  if (content === '') {
+    const wasAborted = caughtAbort || opts.signal?.aborted === true
+    if (wasAborted || receivedAnyToken) return emptyAssistantMessage(conversationId)
+    throw new EmptyCompletionError()
+  }
   try {
     // Stamp the skill only when its fence was actually placed (DS16/§22-A5) — an omitted-for-budget
     // skill did not shape this answer, so it gets no glyph.

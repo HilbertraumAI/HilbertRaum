@@ -476,7 +476,8 @@ architecture.md "Chat & streaming" / the skills design.
 (base preamble + grounding rules), prior conversation history, and the **last user turn replaced by
 the grounded prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
 grounded form. The history is then **trimmed to the model context** via `fitMessagesToContext`
-(chat.ts; passed `getSettings(db).contextTokens`) — the grounded turn is the final message and
+(chat.ts; passed `effectiveContextWindow(runtime, getSettings(db))` — the launched `--ctx-size` (§L0),
+settings only as the fallback; D-2, chat-docs audit 2026-07-07) — the grounded turn is the final message and
 is always kept, while older turns are dropped oldest-first. `maxContextTokens` bounds only the
 **retrieved-chunk block**; the context-window budget bounds the **whole prompt** (chunks +
 history + system), which is what prevents the multi-turn `HTTP 400 exceed_context_size_error`

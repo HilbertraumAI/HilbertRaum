@@ -1668,6 +1668,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.model.contextExceeded':
     'Das ist zu groß für das Kontextfenster des aktuellen Modells. Wähle ein Modell mit größerem Kontext oder ein kleineres Dokument.',
   'main.chat.streamInFlight': 'Für diese Unterhaltung wird bereits eine Antwort erstellt.',
+  'main.chat.emptyCompletion':
+    'Das Modell hat eine leere Antwort zurückgegeben. Versuche es erneut oder formuliere deine Nachricht um.',
+  'main.chat.runtimeUnresponsive':
+    'Das KI-Modell antwortet nicht mehr. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
   'main.chat.emptyMessage': 'Eine leere Nachricht kann nicht gesendet werden.',
   'main.chat.emptyQuestion': 'Eine leere Frage kann nicht gesendet werden.',

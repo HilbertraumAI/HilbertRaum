@@ -1,6 +1,9 @@
 import type { Db } from '../db'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import {
+  BASE_SYSTEM_PROMPT,
+  CHAT_RESPONSE_RESERVE_TOKENS,
+  compactionSummaryPair,
   getLatestCheckpoint,
   isAbortError,
   listConversationTurns,
@@ -74,6 +77,13 @@ export interface CompactionOptions {
   signal?: AbortSignal
   /** Fired exactly once, just before the model call, when a summary is actually started. */
   onStart?: () => void
+  /**
+   * Extra fixed prompt tokens the caller already committed for THIS turn that the pre-pass estimate
+   * would otherwise miss — currently the pre-sized skill fence (CB-3 fold-in). Folded into the
+   * assembled-size estimate so a fence-heavy turn crosses the compaction threshold at the right point
+   * instead of a turn or two late. Defaults to 0 (no fence / no reservation).
+   */
+  reservedTokens?: number
 }
 
 /**
@@ -101,13 +111,25 @@ export async function ensureCompacted(
   // Estimate the ASSEMBLED-history size (what the prompt would actually carry): the summary pair
   // for the existing checkpoint, if any, plus the post-checkpoint turns. This is what makes a fresh
   // checkpoint drop the next turn below threshold, so we summarize once until NEW turns re-cross it.
+  //
+  // CB-3 fold-in: count the REAL fixed prompt costs the old estimate ignored — the actual
+  // `compactionSummaryPair` intro/ack text (not a bare `summary` + `''`), the base system prompt,
+  // and the caller-supplied `reservedTokens` (the pre-sized skill fence). Undercounting these made
+  // the estimate optimistic (a few dozen–hundred tokens low), so compaction fired a turn late.
   const summaryPairTokens = checkpoint
-    ? messageTokens({ role: 'user', content: checkpoint.summary }) +
-      messageTokens({ role: 'assistant', content: '' })
+    ? compactionSummaryPair(checkpoint.summary).reduce((sum, m) => sum + messageTokens(m), 0)
     : 0
+  const fixedTokens =
+    messageTokens({ role: 'system', content: BASE_SYSTEM_PROMPT }) + (opts.reservedTokens ?? 0)
   const estimated =
-    summaryPairTokens + compactable.reduce((sum, t) => sum + turnTokens(t), 0)
-  if (estimated < COMPACT_THRESHOLD * window) return
+    fixedTokens + summaryPairTokens + compactable.reduce((sum, t) => sum + turnTokens(t), 0)
+  // CB-3: cap the trigger at L1's OWN floor (window − reserve) so a small window compacts BEFORE the
+  // L1 `fitMessagesToContext` trim starts silently dropping the oldest turns. Crossover: 0.85·window
+  // ≤ window − 1024 ⟺ window ≥ 6827, so windows ≥ 6827 (8k/16k/32k) select 0.85·window BYTE-IDENTICAL
+  // to before; only the small windows (2048/4096) take the lower L1-aligned trigger — the fix.
+  const l1Budget = Math.max(256, window - CHAT_RESPONSE_RESERVE_TOKENS)
+  const threshold = Math.min(COMPACT_THRESHOLD * window, l1Budget)
+  if (estimated < threshold) return
 
   // Protect the recent tail verbatim; summarize the region before it. Too few ⇒ no-op.
   const region = compactable.slice(0, Math.max(0, compactable.length - KEEP_RECENT_TURNS))

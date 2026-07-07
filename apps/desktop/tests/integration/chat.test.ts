@@ -12,9 +12,11 @@ import {
   createConversation,
   deleteLastAssistantMessage,
   effectiveContextWindow,
+  EmptyCompletionError,
   fitMessagesToContext,
   generateAssistantMessage,
   getLatestMessage,
+  isEmptyCompletionError,
   hasRegenerableAssistantReply,
   listConversations,
   listMessages,
@@ -783,6 +785,50 @@ describe('answer-depth threading + persistence hygiene (Phase 20)', () => {
     const msg = await generateAssistantMessage(db, r, conv.id, {})
     expect(msg.content).toBe('')
     expect(listMessages(db, conv.id)).toHaveLength(1) // only the user turn
+  })
+
+  // CB-4 — the `content === ''` early return also fired on a COMPLETED, non-aborted stream that
+  // produced no answer token at all (a genuinely empty completion). That looked identical to a
+  // silently-answered question after reload. Now such a completion surfaces a friendly, retryable
+  // error (EmptyCompletionError → main.chat.emptyCompletion) instead of persisting a blank.
+  it('a completed stream that produced ZERO tokens throws EmptyCompletionError (CB-4); only the user turn persists', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+
+    const { runtime: r } = capturingRuntime([]) // completes cleanly with no delta
+    const err = await generateAssistantMessage(db, r, conv.id, {}).catch((e: unknown) => e)
+    expect(isEmptyCompletionError(err)).toBe(true)
+    expect(err).toBeInstanceOf(EmptyCompletionError)
+    expect(listMessages(db, conv.id)).toHaveLength(1) // only the user turn — nothing blank persisted
+  })
+
+  // The narrowing pin (CB-4): a reply that ARRIVED then stripped to empty (all-`<think>`/fence-echo)
+  // stays the benign silent-empty — it must NOT throw, distinguishing "produced nothing" from
+  // "produced only reasoning". (The all-think case above already exercises the no-throw path.)
+  it('an all-think completion returns empty WITHOUT throwing — receivedAnyToken narrows the throw', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+
+    const { runtime: r } = capturingRuntime(['<think>only thinking, no answer</think>'])
+    // Resolves (does not reject): tokens arrived, they just stripped away.
+    const msg = await generateAssistantMessage(db, r, conv.id, {})
+    expect(msg.content).toBe('')
+    expect(listMessages(db, conv.id)).toHaveLength(1)
+  })
+
+  // CB-4 + the abort path: a Stop BEFORE the first token still resolves with an empty message (never
+  // throws) — the abort branch is the other half of the narrowing.
+  it('a stop before the first token still resolves empty (no EmptyCompletionError on abort)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const ac = new AbortController()
+    ac.abort()
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, { signal: ac.signal })
+    expect(msg.content).toBe('')
+    expect(listMessages(db, conv.id)).toHaveLength(1)
   })
 
   it('buildChatMessages scrubs think blocks from replayed assistant turns only', () => {

@@ -138,6 +138,103 @@ function parseSseLine(line: string): {
 }
 
 /**
+ * CB-5 — the only cancellation source on the completion stream used to be the user's AbortSignal, so
+ * a sidecar that *hangs* (GPU driver stall, deadlocked slot) left `readChatSSE` awaiting the next SSE
+ * read forever: the conversation stayed wedged in `inFlightStreams` and every new send bounced. This
+ * distinct error is raised by the idle watchdog when no chunk arrives within the budget; the chat IPC
+ * maps it to the friendly `main.chat.runtimeUnresponsive` copy. Non-abort, so a regenerate turn's
+ * prior reply is restored (it is NOT a user Stop) rather than lost.
+ */
+export class RuntimeUnresponsiveError extends Error {
+  constructor(idleMs: number) {
+    super(`The model stopped responding (no output for ${idleMs}ms).`)
+    this.name = 'RuntimeUnresponsiveError'
+  }
+}
+
+/** True when `err` is a {@link RuntimeUnresponsiveError} (the hung-sidecar idle timeout, CB-5). */
+export function isRuntimeUnresponsiveError(err: unknown): boolean {
+  return err instanceof RuntimeUnresponsiveError
+}
+
+/**
+ * Two-phase idle budget for the completion watchdog (CB-5). The PREFILL budget covers the wait for
+ * the FIRST chunk — legitimately slow on a near-window regenerate (the sidecar re-reads a long prompt
+ * before emitting a token) — after which inter-chunk gaps are milliseconds, so a much tighter STREAM
+ * budget means "wedged". Reasoning deltas count as chunks, so a long "thinking" phase is safe.
+ */
+export interface IdleWatchdog {
+  /** Max wait for the first chunk (token or reasoning delta). */
+  prefillMs: number
+  /** Max wait between chunks once streaming has started. */
+  streamMs: number
+}
+const PREFILL_IDLE_MS = 120_000
+const STREAM_IDLE_MS = 30_000
+const DEFAULT_IDLE: IdleWatchdog = { prefillMs: PREFILL_IDLE_MS, streamMs: STREAM_IDLE_MS }
+
+/** An `AbortError`-named error so `isAbortError` treats a signal-driven read cancel as a clean stop. */
+function abortReadError(): Error {
+  const err = new Error('The stream read was aborted.')
+  err.name = 'AbortError'
+  return err
+}
+
+/**
+ * Race one `reader.read()` against an idle timer (CB-5). Resolves with the read result, rejects with
+ * `RuntimeUnresponsiveError` if the budget elapses first (cancelling the reader), or rejects with the
+ * read's own error. A user Stop wins first: an aborted `signal` rejects with an `AbortError` so the
+ * partial persists exactly as today — a hang is NEVER converted to an abort or vice-versa. A `settled`
+ * guard makes the first outcome authoritative (no double-settle).
+ */
+function readWithIdleTimeout<T>(
+  reader: ReadableStreamDefaultReader<T>,
+  budgetMs: number,
+  signal?: AbortSignal
+): ReturnType<ReadableStreamDefaultReader<T>['read']> {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      cleanup()
+      // A wedged sidecar: cancel the reader so undici releases the socket, then surface the timeout.
+      void reader.cancel().catch(() => {})
+      reject(new RuntimeUnresponsiveError(budgetMs))
+    }, budgetMs)
+    const onAbort = (): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(abortReadError())
+    }
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    reader.read().then(
+      (result) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(result)
+      },
+      (err) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(err)
+      }
+    )
+  })
+}
+
+/**
  * Parse a Server-Sent-Events stream of OpenAI chat-completion chunks, yielding each
  * answer-text delta. Reasoning deltas (`delta.reasoning_content`, Deep mode) are
  * reported through `onReasoning` and are NEVER yielded — the yielded stream stays
@@ -147,20 +244,32 @@ function parseSseLine(line: string): {
  * of the yielded content. Handles partial lines across reads, ignores keep-alive/comment
  * lines, and stops on the `[DONE]` sentinel. Honours `signal` so an aborted request stops
  * promptly and cancels the underlying reader.
+ *
+ * CB-5: each read is raced against a two-phase idle watchdog (`idle`, injectable for tests; the
+ * production default keeps behaviour byte-identical on any live stream) so a HUNG sidecar rejects with
+ * `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop still wins first.
  */
 export async function* readChatSSE(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
   onReasoning?: (delta: string) => void,
-  onFinish?: (finishReason: string) => void
+  onFinish?: (finishReason: string) => void,
+  idle: IdleWatchdog = DEFAULT_IDLE
 ): AsyncGenerator<string, void, unknown> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  // The FIRST chunk gets the generous prefill budget; once any chunk (token OR reasoning delta) has
+  // landed, later reads get the tighter stream budget. Re-armed per read, so a steady stream resets it.
+  let sawChunk = false
   try {
     for (;;) {
       if (signal?.aborted) return
-      const { done, value } = await reader.read()
+      const { done, value } = await readWithIdleTimeout(
+        reader,
+        sawChunk ? idle.streamMs : idle.prefillMs,
+        signal
+      )
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       let nl: number
@@ -172,8 +281,16 @@ export async function* readChatSSE(
         // surface it before honouring the sentinel so a 'length' stop is never dropped.
         if (r.finishReason) onFinish?.(r.finishReason)
         if (r.done) return
-        if (r.reasoning) onReasoning?.(r.reasoning)
-        if (r.delta) yield r.delta
+        // A reasoning delta counts as a live chunk (a long "thinking" phase must not trip the
+        // watchdog); switch to the tighter inter-chunk budget once anything has streamed.
+        if (r.reasoning) {
+          sawChunk = true
+          onReasoning?.(r.reasoning)
+        }
+        if (r.delta) {
+          sawChunk = true
+          yield r.delta
+        }
       }
     }
     // Flush any final line the server sent without a trailing newline before closing.

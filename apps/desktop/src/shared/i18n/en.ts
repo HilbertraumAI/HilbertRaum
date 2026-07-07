@@ -1630,6 +1630,10 @@ export const en = {
   'main.model.contextExceeded':
     "This is too large for the current model's context window. Try a model with a larger context, or a smaller document.",
   'main.chat.streamInFlight': 'A response is already being generated for this conversation.',
+  'main.chat.emptyCompletion':
+    'The model returned an empty response. Try again, or rephrase your message.',
+  'main.chat.runtimeUnresponsive':
+    'The AI model stopped responding. Try again — if it keeps happening, restart the model on the AI Model screen.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
   'main.chat.emptyMessage': 'Cannot send an empty message.',
   'main.chat.emptyQuestion': 'Cannot send an empty question.',

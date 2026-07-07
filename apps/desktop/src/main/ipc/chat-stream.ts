@@ -11,12 +11,14 @@ import {
   deleteLastAssistantMessage,
   emptyAssistantMessage,
   getConversation,
+  getLatestMessage,
   isAbortError,
+  isEmptyCompletionError,
   restoreMessage
 } from '../services/chat'
 import type { Db } from '../services/db'
 import type { ModelRuntime } from '../services/runtime'
-import { isExceedContextError } from '../services/runtime/llama'
+import { isExceedContextError, isRuntimeUnresponsiveError } from '../services/runtime/llama'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers, streamSettled } from './inflight'
@@ -119,7 +121,19 @@ export function withRegenerateGuard(
   return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage) => {
     const deleted = deleteLastAssistantMessage(db, conversationId)
     try {
-      return await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage)
+      const result = await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage)
+      // CB-2: a Stop BEFORE the first token RESOLVES (it does not throw) with an unpersisted empty
+      // message (`content === ''`, the sole empty-return path of `generateAssistantMessage`). Without
+      // this the destructive regenerate delete would stand with NOTHING in its place — two clicks
+      // (Regenerate, Stop) silently erase the answer. Restore the prior reply byte-faithfully (the
+      // snapshot re-inserts the original id/created_at → no duplicate) and return it so `chat:done`
+      // carries the answer to re-show. A real partial (`content !== ''`) keeps the delete, unchanged.
+      // (A completed-but-empty stream now THROWS via CB-4 → handled in the catch below; composes.)
+      if (deleted && result.content === '') {
+        restoreMessage(db, deleted)
+        return getLatestMessage(db, conversationId) ?? result
+      }
+      return result
     } catch (err) {
       // Restore the prior reply only on a real failure; a user Stop (abort) keeps the delete.
       if (deleted && !isAbortError(err, signal)) restoreMessage(db, deleted)
@@ -225,11 +239,20 @@ export async function withChatStream(
       return assistant
     }
     const raw = err instanceof Error ? err.message : String(err)
-    // A grounded/chat answer whose prompt overflows the model is an HTTP 400; show the
-    // actionable "too large for this model" copy to the user (the raw reason still goes to
-    // the local log).
+    // Friendly-mapping chain (CB-4/CB-5), most-specific first: a HUNG sidecar (runtimeUnresponsive) →
+    // a genuine EMPTY completion (emptyCompletion) → a prompt-OVERFLOW HTTP 400 (contextExceeded) →
+    // else the raw reason. Each mapped case shows actionable copy to the user (the raw reason still
+    // goes to the local log).
+    const unresponsive = isRuntimeUnresponsiveError(err)
+    const emptyCompletion = isEmptyCompletionError(err)
     const overflow = isExceedContextError(err)
-    const message = overflow ? tMain('main.model.contextExceeded') : raw
+    const message = unresponsive
+      ? tMain('main.chat.runtimeUnresponsive')
+      : emptyCompletion
+        ? tMain('main.chat.emptyCompletion')
+        : overflow
+          ? tMain('main.model.contextExceeded')
+          : raw
     log.error(logLabel, { conversationId, message: raw })
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.error(conversationId), message)
@@ -239,7 +262,7 @@ export async function withChatStream(
     // here is what leaked the unmapped "ChatRequestError: HTTP 400 …" string to users. For
     // any other failure (incl. aborts) rethrow the original error untouched so its type and
     // message are preserved upstream.
-    throw overflow ? new Error(message) : err
+    throw unresponsive || emptyCompletion || overflow ? new Error(message) : err
   } finally {
     // Resume any paused deep-index build first (idempotent; no-op when none was paused).
     releaseSlot()

@@ -966,8 +966,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   the no-trim identity path stays byte-identical (real chats + the compaction pair are user-first, so it
   pops nothing). A `CHAT_RESPONSE_RESERVE_TOKENS` (1024) headroom leaves
   room to generate. `buildChatMessages`/`buildGroundedChatMessages` take an optional
-  `contextTokens` (the production callers pass `getSettings(db).contextTokens`; omitted = the
-  pure, untrimmed builder used by unit tests). **Per-turn read hygiene (CB-6, 2026-07-07):**
+  `contextTokens` (the production callers pass `effectiveContextWindow(runtime, getSettings(db))` —
+  the LAUNCHED `--ctx-size` the runtime reports (§L0), settings only as the fallback; omitted = the
+  pure, untrimmed builder used by unit tests) (D-1, chat-docs audit 2026-07-07). **Per-turn read hygiene (CB-6, 2026-07-07):**
   `buildTurnFence` sizes the skill fence against just the final turn via a `LIMIT 1` `getLatestMessage`
   (a byte-identical twin of `listMessages(...).at(-1)`) instead of paging the whole history, and
   `generateAssistantMessage` reads `getSettings` **once** per turn, threading the launched window and the
@@ -991,7 +992,13 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `kind='compaction'` checkpoint row and assembly thereafter replays a synthetic `user→assistant` summary
   pair + only the post-checkpoint turns — instead of silently dropping the oldest. `fitMessagesToContext`
   still runs after and still guarantees fit; below threshold (or with the `chatCompactionEnabled` setting
-  off) behaviour is byte-identical to drop-oldest. Every new path fails safe (any summarizer failure ⇒ no
+  off) behaviour is byte-identical to drop-oldest. **CB-3 (chat-docs audit 2026-07-07):** the trigger is
+  capped at L1's own floor — `min(COMPACT_THRESHOLD·window, window − CHAT_RESPONSE_RESERVE_TOKENS)` — so a
+  SMALL window (2048/4096) compacts BEFORE L1 silently drops the oldest turns (the crossover is window
+  ≈ 6827: windows ≥ that keep the exact `0.85·window` trigger, byte-identical). The pre-pass estimate also
+  folds in the previously-omitted fixed costs — the real `compactionSummaryPair` intro/ack text, the base
+  system prompt, and the pre-sized skill fence (passed as `reservedTokens`; `generateAssistantMessage`
+  builds the fence BEFORE `ensureCompacted`, free since `buildTurnFence` has no checkpoint dependency). Every new path fails safe (any summarizer failure ⇒ no
   checkpoint, turn proceeds). UX: a composer context-usage meter (now with an **always-visible %** that
   updates **live** as the answer streams — `ChatScreen` `liveUsage` = resting read + in-flight user turn +
   streaming-answer estimate, reconciled to the main-process resting read when the turn settles; since
@@ -1077,10 +1084,48 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `temperature` always win over mode-derived values. Deep is offered only when the RUNNING
   model's manifest sets `supports_thinking_mode` (via `RuntimeStatus` — the Chat screen
   already polls it; see `model-policy.md`).
-- **Cancellation.** Each in-flight send holds an `AbortController` in a per-conversation map in
-  `ipc/registerChatIpc.ts`; `stopGeneration(conversationId)` aborts it. The runtime's
+- **Cancellation.** Each in-flight send holds an `AbortController` in the per-conversation
+  `inFlightStreams` map in **`ipc/inflight.ts`** (shared by the chat AND RAG channels, not
+  `registerChatIpc.ts`); `stopGeneration(conversationId)` aborts it. The runtime's
   `chatStream` honours `options.signal` and stops emitting; whatever streamed so far is persisted
-  as the (partial) assistant message and a normal `done` is emitted.
+  as the (partial) assistant message and a normal `done` is emitted (D-3, chat-docs audit 2026-07-07).
+- **Chat backend robustness (CB-2…CB-5, CB-7 — chat-docs audit 2026-07-07).** A backend sweep of the
+  streaming/cancellation path (companion to `chat-docs-audit-2026-07-07.md`; §-anchor `CB-n`):
+  - **Deterministic teardown (R1).** `withChatStream` publishes a per-stream `streamSettled` promise
+    (in `ipc/inflight.ts`) that **resolves — never rejects** — in its `finally`, AFTER `runFn` (and thus
+    its abort-driven `appendMessage`) has fully unwound. A lock/quit teardown MUST therefore `abort()`
+    every in-flight controller FIRST, then `await` all settles (`awaitInFlightStreamsSettled`), then
+    close the DB — so a partial reply persists before `ctx.db` closes (never rejected, so `allSettled`
+    can't hang teardown). Covered by `tests/integration/lock-stream-persistence.test.ts`.
+  - **CB-2 — regenerate never loses the prior answer on a produced-nothing run.** `withRegenerateGuard`
+    deletes the prior reply INSIDE the stream (F2). A user Stop BEFORE the first token *resolves* (does
+    not throw) with an unpersisted empty message (`content === ''`), so besides restoring on a non-abort
+    throw the guard now also restores on that empty resolve — `restoreMessage` re-inserts the original
+    id/timestamp (no duplicate) and `getLatestMessage` returns it so `chat:done` re-shows the answer.
+    Two clicks (Regenerate, Stop) no longer silently erase a reply.
+  - **CB-4 — a completed-but-empty completion surfaces an error, not a silent blank.** The
+    `content === ''` early return is narrowed: a stop-before-first-token OR an all-`<think>`/fence-echo
+    reply that stripped to empty (tokens arrived — `receivedAnyToken`) stays the benign silent-empty;
+    only a COMPLETED, non-aborted stream that produced zero tokens throws `EmptyCompletionError`.
+  - **CB-5 — a hung sidecar aborts with a distinct error instead of wedging.** `readChatSSE` races each
+    `reader.read()` against a two-phase idle watchdog (`PREFILL_IDLE_MS` 120 s until the first chunk —
+    a near-window regenerate prefill is legitimately slow — then `STREAM_IDLE_MS` 30 s between chunks;
+    reasoning deltas count as chunks; `idle` is injectable, the production default keeps live streams
+    byte-identical). A timeout cancels the reader and rejects `RuntimeUnresponsiveError`; a user Stop
+    (signal abort) still wins first, so a hang is never converted to an abort (the partial persists as
+    today) or vice-versa. **Scope:** post-response streaming only — a hang in the initial `server.fetch`
+    is a separate seam, deferred.
+  - **Friendly-error chain** in `withChatStream` (rethrow-friendly, mapped copy on BOTH the `chat:error`
+    event and the invoke rejection): `RuntimeUnresponsiveError` → `main.chat.runtimeUnresponsive`,
+    `EmptyCompletionError` → `main.chat.emptyCompletion`, overflow → `main.model.contextExceeded`, else
+    raw. Composition: CB-2+CB-4 (a regenerate that produces nothing never loses the prior answer, whether
+    it stops or completes empty); CB-3+CB-6 (the fence reorder supplies the compaction pre-pass's
+    `reservedTokens`).
+  - **CB-7 (per-token IPC batching) — DEFERRED.** The renderer already coalesces re-renders (the
+    `ChatScreen` flush timer); the only residual cost is a structured-clone of a short string, and
+    batching would add a lifecycle seam to the most safety-sensitive path (`streamSettled` teardown) for
+    a negligible, unmeasured gain. Revisit only if profiling shows contextBridge volume is a real
+    bottleneck.
 - **Stream recovery across navigation.** The Chat screen is unmounted when the user switches
   screens, which destroyed its `streaming` state + token listeners while the main-process
   generation kept running — on return the fresh screen looked idle yet a new message was rejected

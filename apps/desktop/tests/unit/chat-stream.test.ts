@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { withChatStream } from '../../src/main/ipc/chat-stream'
-import { ChatRequestError } from '../../src/main/services/runtime/llama'
+import { ChatRequestError, RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
+import { EmptyCompletionError } from '../../src/main/services/chat'
 import { inFlightStreams, streamBuffers, streamSettled } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
 import { type Message } from '../../src/shared/types'
@@ -102,6 +103,34 @@ describe('withChatStream (M-A2)', () => {
     expect(rejection).toBe(friendly)
     expect(rejection).not.toMatch(/HTTP 400|9600/)
     // The stream channel carries the same friendly text.
+    expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
+    expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  // CB-4: a genuine empty completion (EmptyCompletionError) maps to the friendly retry copy on BOTH
+  // the error event and the invoke rejection — same rethrow-friendly posture as the overflow mapping.
+  it('maps EmptyCompletionError to the friendly emptyCompletion copy on the error event AND the rejection', async () => {
+    const { event, sent } = fakeEvent()
+    const friendly = t('en', 'main.chat.emptyCompletion')
+    const rejection = await withChatStream(event, 'c1', 'label', async () => {
+      throw new EmptyCompletionError()
+    }).catch((e: Error) => e.message)
+    expect(rejection).toBe(friendly)
+    expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
+    expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  // CB-5: a hung sidecar (RuntimeUnresponsiveError) maps to the friendly "stopped responding" copy on
+  // both channels — the most-specific link in the runtimeUnresponsive → emptyCompletion → overflow
+  // → raw chain.
+  it('maps RuntimeUnresponsiveError to the friendly runtimeUnresponsive copy on the error event AND the rejection', async () => {
+    const { event, sent } = fakeEvent()
+    const friendly = t('en', 'main.chat.runtimeUnresponsive')
+    const rejection = await withChatStream(event, 'c1', 'label', async () => {
+      throw new RuntimeUnresponsiveError(30_000)
+    }).catch((e: Error) => e.message)
+    expect(rejection).toBe(friendly)
+    expect(rejection).not.toMatch(/30000|responding \(/) // the raw diagnostic never reaches the user
     expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
     expect(inFlightStreams.has('c1')).toBe(false)
   })
