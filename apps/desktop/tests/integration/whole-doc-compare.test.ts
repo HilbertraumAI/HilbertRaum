@@ -149,7 +149,7 @@ async function runCompare(
   const { jobId } = manager.startDocTask({ kind: 'compare', documentIds: [a, b] })
   const state = await waitTerminal(manager, jobId)
   const docId = manager.getDocTask(jobId).resultRef?.documentId ?? null
-  const text = docId ? readStoredDocumentText(db, storeDir, docId).text : ''
+  const text = docId ? (await readStoredDocumentText(db, storeDir, docId)).text : ''
   return { state, docId, text }
 }
 

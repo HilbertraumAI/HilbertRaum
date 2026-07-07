@@ -124,7 +124,10 @@ batching — no behavior change.
 - **DB-3/ING-2 — `listDocuments` de-N+1'd.** The per-row chunk COUNT + per-indexed-row stale-embeddings
   COUNT+JOIN (up to 1+2N queries, polled at 400 ms during import) are now two grouped queries loaded
   into Maps (`GROUP BY document_id`), mirroring the memberships join beside them. Benefits from
-  `idx_embeddings_model`.
+  `idx_embeddings_model` and the covering `idx_chunks_document`. **Chat & Documents audit 2026-07-07
+  DB-5** adds an embedded-count early-out: on a mid-import poll where no row is `indexed` the whole
+  embeddings⋈chunks scan is skipped (no indexed row can be stale) — see the Session-6 record in the
+  doc-organization reliability/perf notes (the `document_id` count-map cache was declined there).
 - **Data-layer hardening (full audit 2026-06-28, Phase 5).** Atomicity + a trigger guard + two pinned
   invariants, all additive (no schema-shape change; indexes `IF NOT EXISTS`, the FTS trigger drop/recreate
   the only non-index DDL).
@@ -1294,12 +1297,16 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   let two concurrent same-doc reads decrypt into and `shredFile` the SAME file — each shredding the
   other's parse. The uniqueness closes that race; the `.parse` infix keeps the crash sweep covering a
   leak. The two export readers (`.parse-export-<uuid>`, `.parse-export-bin-<uuid>`) got the same fix.
-- **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
-  `listDocuments`, `deleteDocument`, `reindexDocument`, `importPreflight` (Phase 36 — the
-  size-aware audio confirm); plus the document-organization channels `previewDocument`,
-  `exportDocument`, `addToCollection`/`removeFromCollection`, and `setLifecycle` (see the
-  "Document organization" §5 IPC table). Full pipeline detail lives
-  in [`rag-design.md`](rag-design.md).
+- **IPC** (`ipc/registerDocsIpc.ts`). **Single source of truth: the docs group in
+  [`shared/ipc.ts`](../apps/desktop/src/shared/ipc.ts)** — enumerate there, not here, so a new channel
+  can't leave this list stale (D-5, Chat & Documents audit 2026-07-07). The notable families:
+  **import** (`pickDocuments` → `importDocuments` → `getImportJob`, plus `importPreflight`, the
+  Phase-36 size-aware audio confirm); **listing + lifecycle** (`listDocuments`, `deleteDocument`,
+  `setDocumentLifecycle`, `addToCollection`/`removeFromCollection`); **single + bulk re-index**
+  (`reindexDocument`; `startReindexAll`/`getReindexAllJob`/`cancelReindexAll`); **bounded preview**
+  (`previewDocument`, `previewDocumentPage`); and **export** (`exportDocument`, `exportSummary`).
+  See the "Document organization" §5 IPC table; full pipeline detail lives in
+  [`rag-design.md`](rag-design.md).
 
 ## Audio transcription (Phase 36, wave-3 plan §9)
 
@@ -3091,6 +3098,56 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   `now` watermark keeps mid-session recovery working. The skill-run sweep still uses `PROCESS_START_ISO`
   (its table bumps no timestamp, so `now` would be wrong there — the two watermarks are not
   interchangeable).
+- **Documents backend performance — Session 6 (DB-4, DB-5, DB-6, DB-7; Chat & Documents audit
+  2026-07-07).** Four perf/reliability fixes on the same import/list/export hot paths, all additive
+  guards on top of the Session-1 (DB-1/2/3) correctness work.
+  - **DB-4 — the folder-import queue phase is batched.** `importDocuments` called
+    `createQueuedDocument` once per file: N single-statement auto-commit transactions + N wasted
+    `SELECT *` re-reads, all synchronous on the IPC thread over a high-latency USB DB — a multi-second
+    main-process freeze for a few-thousand-file folder before the job even started (the per-row
+    auto-commit pattern DB-1 eliminated for chunk writes). New `createQueuedDocuments(db, files)`
+    gathers the `statSync` sizes OUTSIDE the write transaction, then commits all N inserts in ONE
+    `BEGIN…COMMIT` (ROLLBACK + rethrow on a mid-batch failure → the caller's lease-release catch cleans
+    up, nothing half-queued). The shared bare INSERT is factored into `insertQueuedRow` (returns the
+    id, no re-read); **`createQueuedDocument` stays byte-identical** (still re-reads the full
+    `DocumentInfo` for its single-doc callers — materialize + ~60 tests). Batch mirrors single-doc
+    insert-regardless behaviour: an unstatable path still queues a row (null size), so the id list
+    aligns 1:1 with the input files and ING-3 in-order push is preserved. **DEFERRED — the walk stays
+    synchronous:** `importDocuments` returns `{jobId, documentIds}` synchronously and the renderer +
+    ~tests depend on the ids being present at return, so `expandPathsWithSource` (the recursive
+    `readdirSync` walk) was NOT moved off the hot handler — that would change the return contract. Left
+    for a later pass. *(Deviation from the plan's literal test wording: the direct unit passes 4 files —
+    3 real + 1 nonexistent — and asserts 4 ids in order with sizes-where-statable, rather than "3 ids";
+    faithfully matching createQueuedDocument's insert-regardless keeps single/batch consistent and the
+    import path unchanged.)*
+  - **DB-5 — `listDocuments` embedded-count early-out (the count-map cache was DECLINED).** The
+    embeddings⋈chunks `GROUP BY` exists only to flag an `indexed` doc whose vectors predate an embedder
+    switch (`staleEmbeddings`); the per-row check fires ONLY on an `indexed` row, so when no row is
+    `indexed` — the common case on a mid-import poll (rows are queued/extracting/embedding) — the whole
+    full-corpus join scan is pure waste. It is now skipped when `!force && rows.some(r => r.status ===
+    'indexed')` is false. The covering `CREATE INDEX IF NOT EXISTS idx_chunks_document ON
+    chunks(document_id)` was **already present** (`db.ts`) — not re-added. **The `document_id` count-map
+    cache was DECLINED (plan decision #4, durable — do not re-litigate):** it needs a wider invalidation
+    surface than the F12/PERF-1 resident-vector cache (it must also catch chunk writes that carry no
+    embedding, plus any out-of-band writer), and a stale map surfaces as a **user-visible wrong chunk
+    badge / false stale-embeddings flag** — poor risk/benefit for a poll-path optimization. The
+    DB-3/ING-2 two-query shape and the resident-vector delta are untouched (no new invalidation
+    coupling — the whole reason the cache is declined). The M7 stale-embedding path (an `indexed` row
+    present) still builds `embeddedCounts` unchanged.
+  - **DB-6 — the `jobs` map is bounded (`IMPORT_JOB_CAP = 16`, evict DONE-only).** Every import in a
+    long session was retained forever and the `importActive` list-poll iterated all of them. After each
+    `jobs.set` the oldest **done** jobs are evicted down to the cap, mirroring `PICKER_TOKEN_CAP` — but
+    an **in-flight job is never evicted** (the loop mutates its `status`, the renderer polls it; it can
+    also be the oldest entry on a slow import while newer ones finish). A late poll on an evicted (done)
+    id still gets the synthetic `done:true` from `getImportJob`, so pollers stop gracefully.
+  - **DB-7 — export readers decrypt asynchronously (completes the PERF-1 invariant).**
+    `readStoredDocumentText` / `readStoredDocumentBytes` are now `async` and use `decryptFileAsync` +
+    `await readFile` instead of the sync `cipher.decryptFile` + `readFileSync`, so exporting a large
+    encrypted DOCX/original no longer blocks the main process for the whole decrypt+read (every other
+    decrypt on these flows was already async under PERF-1 — this is a fix, not a break). The `finally`
+    shred still runs after the await; the §22-M1 content boundary is unchanged. The two callers
+    (`exportDocument` handler, `buildOriginalDocumentReader`) were already async and now `await`. The
+    `.parse-export-<uuid>` / `.parse-export-bin-<uuid>` transient uniqueness landed in Session 1 (DB-2).
 - **Filing-suggestion engine (`filing-suggestions.ts`, Phase F) — REMOVED 2026-06-15.** The
   auto "suggested project" feature (the rule engine, the read-only `docs:filingSuggestions`
   IPC, the per-row suggestion chip, and the `dismissedFilingSuggestions` setting) was removed

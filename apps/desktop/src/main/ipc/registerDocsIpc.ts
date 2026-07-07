@@ -136,7 +136,12 @@ export function registerDocsIpc(ctx: AppContext): void {
   if (forceReindexEnabled()) {
     log.warn('HR_FORCE_REINDEX active — every indexed document is reported outdated (re-index to re-chunk + re-embed)')
   }
-  // Ephemeral per-import aggregates, keyed by job id.
+  // Ephemeral per-import aggregates, keyed by job id. Bounded (DB-6): without a cap every import in
+  // a long session is retained forever and the `importActive` list-poll iterates all of them. Capped
+  // like `pickerTokens` (PICKER_TOKEN_CAP), but eviction removes only DONE jobs — an in-flight job is
+  // load-bearing (the loop mutates its `status`, the renderer polls it) and must never be dropped. A
+  // late poll on an evicted (done) id still gets the synthetic `done:true` from `getImportJob`.
+  const IMPORT_JOB_CAP = 16
   const jobs = new Map<string, ImportJobStatus>()
   // The single in-flight (or most recent) bulk re-index aggregate. Main-owned so the renderer can
   // recover the progress bar after navigating away and back via the parameterless getReindexAllJob.
@@ -354,6 +359,17 @@ export function registerDocsIpc(ctx: AppContext): void {
       done: documentIds.length === 0
     }
     jobs.set(jobId, status)
+    // DB-6: evict the oldest DONE jobs (insertion order) once over the cap. Never evict an
+    // in-flight job — it may be older than the cap on a slow import while newer ones finish, and the
+    // background loop + renderer still reference it. The just-set job is in-flight (or done:true only
+    // for an empty import), so it survives; a completed job survives ≥16 newer imports — ample for
+    // the renderer's final poll.
+    if (jobs.size > IMPORT_JOB_CAP) {
+      for (const [id, s] of jobs) {
+        if (jobs.size <= IMPORT_JOB_CAP) break
+        if (s.done) jobs.delete(id)
+      }
+    }
     log.info('Import started', { jobId, files: documentIds.length })
 
     // Process in the background; do not block the invoke return.
@@ -638,7 +654,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.exportDocument, async (_e, documentId: string): Promise<string | null> => {
     requireUnlocked()
     requireNotProcessing(documentId)
-    const { title, text } = readStoredDocumentText(ctx.db, storeDir, documentId, {
+    const { title, text } = await readStoredDocumentText(ctx.db, storeDir, documentId, {
       cipher: ctx.workspace.documentCipher()
     })
     const dot = title.lastIndexOf('.')

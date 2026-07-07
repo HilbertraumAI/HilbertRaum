@@ -253,7 +253,7 @@ describe('mode (a) — small-docs full compare (D37: re-extracted segments)', ()
     }
     expect(created?.origin).toEqual(expectedOrigin)
     expect(getDocumentOrigin(db, newId)).toEqual(expectedOrigin)
-    const { text } = readStoredDocumentText(db, storeDir, newId)
+    const { text } = await readStoredDocumentText(db, storeDir, newId)
     expect(text.startsWith(`> ${compareAttributionLine('scripted-model')}`)).toBe(true)
     expect(text).toContain(REPORT)
     expect(text).not.toContain('covers the beginning')
@@ -297,7 +297,7 @@ describe('mode (d) — diff-driven compare (similar version pairs, the what-chan
     expect(prompt).toContain('deterministic word-level comparison')
     expect(prompt).toContain('Removed: "tempor"') // the exact change is handed to the model
     // The materialized document leads with the deterministic redline showing the exact deletion.
-    const { text } = readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    const { text } = await readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
     expect(text).toContain(compareRedlineHeading())
     expect(text).toContain('~~tempor~~')
     expect(text).not.toContain('covers the beginning')
@@ -313,7 +313,7 @@ describe('mode (d) — diff-driven compare (similar version pairs, the what-chan
     expect(status.state).toBe('done')
     expect(rt.calls).toHaveLength(0) // the word diff is ground truth — no model needed
     expect(status.progress).toEqual({ stepsDone: 1, stepsTotal: 1 })
-    const { text } = readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    const { text } = await readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
     expect(text).toContain('textually identical')
   })
 
@@ -327,7 +327,7 @@ describe('mode (d) — diff-driven compare (similar version pairs, the what-chan
     expect(status.state).toBe('done')
     const prompt = promptOf(rt.calls[0])
     expect(prompt).toContain('Compare document A') // mode (a) fallback, not the diff prompt
-    const { text } = readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    const { text } = await readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
     expect(text).not.toContain(compareRedlineHeading())
   })
 })
@@ -427,7 +427,7 @@ describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
     expect(status.state).toBe('done')
     expect(rt.calls).toHaveLength(COMPARE_MAP_CALL_CEILING + 1) // capped maps + reduce
     expect(status.progress.stepsTotal).toBe(COMPARE_MAP_CALL_CEILING + 2)
-    const { text } = readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    const { text } = await readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
     expect(text).toContain(compareTruncationNotice('a.txt'))
   })
 

@@ -24,8 +24,11 @@ import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
+  createQueuedDocuments,
+  listDocuments,
   processDocument,
   extractDocumentPreview,
+  readStoredDocumentText,
   documentsDir
 } from '../../src/main/services/ingestion'
 import {
@@ -807,5 +810,233 @@ describe('registerDocsIpc — import path binding (D1)', () => {
     if (linked) {
       expect((await runImport([link])).documentIds).toEqual([])
     }
+  })
+})
+
+// Session 6 — Documents backend performance (DB-4, DB-5, DB-6, DB-7). Backend/perf only; sits on
+// top of Session 1's guards (shared files). Each test reddens if its fix is reverted.
+describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () => {
+  /** An embedder whose `embed` parks on a gate so an import job stays in-flight until released. */
+  function gatedEmbedder(): { embedder: Embedder; release: () => void } {
+    const base = createMockEmbedder()
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const embedder: Embedder = {
+      id: base.id,
+      dimensions: base.dimensions,
+      embed: async (texts: string[]) => {
+        await gate
+        return base.embed(texts)
+      }
+    }
+    return { embedder, release }
+  }
+
+  // DB-4 (unit): the batch inserts one row per file, in order, sizes where statable. A nonexistent
+  // path still queues a row (mirrors createQueuedDocument's insert-regardless) with a null size, so
+  // no row is silently dropped and the id list aligns 1:1 with the input files.
+  it('DB-4: createQueuedDocuments batch-inserts ids in order, sizes where statable', () => {
+    const { db } = freshWorkspace()
+    const dir = mkdtempSync(join(tmpdir(), 'hr-cqd-'))
+    const real = ['a.txt', 'b.txt', 'c.txt'].map((n) => join(dir, n))
+    real.forEach((f, i) => writeFileSync(f, 'x'.repeat((i + 1) * 10)))
+    const missing = join(dir, 'gone.txt')
+
+    const ids = createQueuedDocuments(db, [
+      { filePath: real[0] },
+      { filePath: real[1] },
+      { filePath: missing },
+      { filePath: real[2] }
+    ])
+
+    expect(ids).toHaveLength(4)
+    const rows = ids.map(
+      (id) =>
+        db
+          .prepare('SELECT id, title, size_bytes, status FROM documents WHERE id = ?')
+          .get(id) as { id: string; title: string; size_bytes: number | null; status: string }
+    )
+    // Order preserved (ING-3 in-order push), the missing file included with a null size.
+    expect(rows.map((r) => r.title)).toEqual(['a.txt', 'b.txt', 'gone.txt', 'c.txt'])
+    expect(rows.map((r) => r.status)).toEqual(['queued', 'queued', 'queued', 'queued'])
+    expect(rows.map((r) => r.size_bytes)).toEqual([10, 20, null, 30])
+  })
+
+  // DB-4 (integration): a folder import queues EVERY row synchronously before the invoke returns —
+  // the batch commits all N inserts in one BEGIN…COMMIT (the walk stays synchronous). Reverting to a
+  // lazy/async queue phase would make the count < N at return.
+  it('DB-4: a folder import queues all rows synchronously before importDocuments returns', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const dir = mkdtempSync(join(tmpdir(), 'hr-batch-'))
+    const files = Array.from({ length: 6 }, (_, i) => join(dir, `f${i}.txt`))
+    files.forEach((f, i) => writeFileSync(f, `document number ${i} alpha beta gamma delta epsilon`))
+
+    const { result } = await invoke(handlers, IPC.importDocuments, files)
+    const job = result as ImportJob
+    expect(job.documentIds).toHaveLength(6)
+    // All six rows exist the instant the invoke returns — the batch queued them synchronously.
+    const placeholders = job.documentIds.map(() => '?').join(',')
+    const count = (
+      db
+        .prepare(`SELECT COUNT(*) AS n FROM documents WHERE id IN (${placeholders})`)
+        .get(...job.documentIds) as { n: number }
+    ).n
+    expect(count).toBe(6)
+
+    // Drive to completion so the lease/loop unwind cleanly, then confirm every row indexed.
+    for (let i = 0; i < 200; i++) {
+      const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
+      if ((s as ImportJobStatus).done) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    const docs = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(docs.filter((d) => job.documentIds.includes(d.id)).every((d) => d.status === 'indexed')).toBe(true)
+  })
+
+  // DB-5: on a mid-import poll (no `indexed` row) the embeddings⋈chunks join is pure waste — no
+  // indexed row can be flagged stale. The early-out skips it; the chunk count is still correct and
+  // staleEmbeddings stays undefined. Teeth: a `db.prepare` spy proves the join SQL is never prepared.
+  it('DB-5: a mid-import list skips the embeddings join yet reports the chunk count', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const embedder = createMockEmbedder()
+    const storeDir = documentsDir(workspacePath)
+    const file = join(workspacePath, 'src.txt')
+    writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu')
+    const doc = createQueuedDocument(db, file)
+    // Fully index it (chunks + embeddings under `embedder.id`), then force it BACK to a mid-import
+    // status so the list has chunks-with-embeddings present but no `indexed` row.
+    await processDocument(db, storeDir, doc.id, { embedder, embeddingModelId: embedder.id })
+    db.prepare("UPDATE documents SET status = 'embedding' WHERE id = ?").run(doc.id)
+
+    const JOIN_SQL = 'FROM embeddings e JOIN chunks c'
+    const prepareSpy = vi.spyOn(db, 'prepare')
+    const docs = listDocuments(db, embedder.id)
+    const joinPrepared = prepareSpy.mock.calls.some(
+      ([sql]) => typeof sql === 'string' && sql.includes(JOIN_SQL)
+    )
+    prepareSpy.mockRestore()
+
+    const info = docs.find((d) => d.id === doc.id)!
+    expect(info.chunkCount).toBeGreaterThan(0) // chunkCounts is always built — badge stays correct
+    expect(info.staleEmbeddings).toBeUndefined() // no indexed row → never flagged stale
+    // TEETH: revert the `!force && rows.some(indexed)` guard → the full-corpus join runs on the poll.
+    expect(joinPrepared).toBe(false)
+  })
+
+  // DB-5 negative control: with an `indexed` row whose vectors predate an embedder switch, the join
+  // DOES run and staleEmbeddings is built (the M7 path is unaffected by the early-out).
+  it('DB-5: an indexed row still builds embeddedCounts and can be flagged stale', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const indexer = createMockEmbedder()
+    const storeDir = documentsDir(workspacePath)
+    const file = join(workspacePath, 'kept.txt')
+    writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta')
+    const doc = createQueuedDocument(db, file)
+    await processDocument(db, storeDir, doc.id, { embedder: indexer, embeddingModelId: indexer.id })
+
+    const JOIN_SQL = 'FROM embeddings e JOIN chunks c'
+    const prepareSpy = vi.spyOn(db, 'prepare')
+    // The ACTIVE embedder reports a DIFFERENT id → the indexed doc's vectors no longer match.
+    const docs = listDocuments(db, 'a-different-model')
+    const joinPrepared = prepareSpy.mock.calls.some(
+      ([sql]) => typeof sql === 'string' && sql.includes(JOIN_SQL)
+    )
+    prepareSpy.mockRestore()
+
+    expect(joinPrepared).toBe(true) // an indexed row is present → the join is NOT skipped
+    expect(docs.find((d) => d.id === doc.id)!.staleEmbeddings).toBe(true)
+  })
+
+  // DB-6: the jobs map is capped at IMPORT_JOB_CAP (16). After > 16 completed imports the oldest is
+  // evicted → getImportJob returns the synthetic done:true; the newest keeps its real counts.
+  it('DB-6: the jobs map is capped — the oldest done job is evicted, the newest survives', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const file = join(workspacePath, 'x.txt')
+    writeFileSync(file, 'one small indexable document alpha beta gamma delta epsilon zeta')
+    const jobIds: string[] = []
+    for (let i = 0; i < 18; i++) jobIds.push((await runImport([file])).jobId)
+
+    // The first job was evicted → the synthetic unknown-job status.
+    const first = (await invoke(handlers, IPC.getImportJob, jobIds[0])).result as ImportJobStatus
+    expect(first).toEqual({ jobId: jobIds[0], total: 0, completed: 0, failed: 0, done: true })
+    // TEETH: remove the cap → jobIds[0] keeps its real counts (total:1) and this reddens.
+    const last = (await invoke(handlers, IPC.getImportJob, jobIds[17])).result as ImportJobStatus
+    expect(last.total).toBe(1)
+    expect(last.completed).toBe(1)
+  })
+
+  // DB-6: an IN-FLIGHT job is never evicted, even by 16 newer jobs — the eviction predicate deletes
+  // only DONE jobs, and the in-flight job is the OLDEST (insertion order) here.
+  it('DB-6: an in-flight import job is never evicted by newer jobs', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const { embedder, release } = gatedEmbedder()
+    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
+    const file = join(workspacePath, 'slow.txt')
+    writeFileSync(file, 'a slow-to-embed document alpha beta gamma delta epsilon zeta eta theta')
+
+    // Start a real import; its embed parks on the gate, so the job stays in-flight (done:false).
+    const gated = (await invoke(handlers, IPC.importDocuments, [file])).result as ImportJob
+    await new Promise((r) => setTimeout(r, 20)) // let the loop reach the gated embed
+    // Fire 16 EMPTY imports (instantly done) to exceed IMPORT_JOB_CAP with the gated job the oldest.
+    for (let i = 0; i < 16; i++) await invoke(handlers, IPC.importDocuments, [])
+
+    // The in-flight job survived — getImportJob returns its REAL status (done:false), not the
+    // synthetic done:true an evicted/unknown id would produce.
+    const status = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
+    expect(status.done).toBe(false)
+    // TEETH: drop the `if (s.done)` guard (evict oldest regardless) → the OLDEST job is the in-flight
+    // gated one → it is evicted → getImportJob returns synthetic done:true → this reddens.
+
+    release() // let the gated embed resolve, then drain so the loop/lease unwind cleanly
+    for (let i = 0; i < 200; i++) {
+      const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
+      if (s.done) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+  })
+
+  // DB-7: the export text reader decrypts via decryptFileAsync (PERF-1), NOT the sync decryptFile;
+  // two concurrent same-doc reads both succeed (the DB-2 unique-transient sibling).
+  it('DB-7: readStoredDocumentText decrypts via decryptFileAsync, concurrent reads both succeed', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const embedder = createMockEmbedder()
+    const storeDir = documentsDir(workspacePath)
+    let syncCalled = false
+    let asyncCalls = 0
+    const copy = (src: string, dest: string): void => writeFileSync(dest, readFileSync(src))
+    const cipher: DocumentCipher = {
+      encryptFile: copy,
+      decryptFile: (src, dest) => {
+        syncCalled = true
+        copy(src, dest)
+      },
+      encryptFileAsync: async (src, dest) => {
+        copy(src, dest)
+      },
+      decryptFileAsync: async (src, dest) => {
+        asyncCalls++
+        await new Promise((r) => setTimeout(r, 0)) // force the two reads to interleave
+        copy(src, dest)
+      }
+    }
+    const file = join(workspacePath, 'note.txt')
+    writeFileSync(file, 'the quick brown fox jumps over the lazy dog again and again indeed')
+    const doc = createQueuedDocument(db, file)
+    // Encrypt into the workspace (stored_path becomes the `.enc` copy) via the fake cipher.
+    await processDocument(db, storeDir, doc.id, { embedder, embeddingModelId: embedder.id, cipher })
+
+    const [a, b] = await Promise.all([
+      readStoredDocumentText(db, storeDir, doc.id, { cipher }),
+      readStoredDocumentText(db, storeDir, doc.id, { cipher })
+    ])
+    expect(a.text).toContain('quick brown fox')
+    expect(b.text).toEqual(a.text)
+    // TEETH: revert to the sync `cipher.decryptFile` → syncCalled true, asyncCalls 0.
+    expect(syncCalled).toBe(false)
+    expect(asyncCalls).toBe(2)
   })
 })

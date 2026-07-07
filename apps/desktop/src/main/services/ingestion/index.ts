@@ -8,7 +8,7 @@ import {
   realpathSync,
   statSync
 } from 'node:fs'
-import { copyFile } from 'node:fs/promises'
+import { copyFile, readFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
@@ -472,14 +472,31 @@ export function createQueuedDocument(
   opts: string | CreateQueuedDocumentOptions = {}
 ): DocumentInfo {
   const o: CreateQueuedDocumentOptions = typeof opts === 'string' ? { displayTitle: opts } : opts
-  const now = nowIso()
-  const id = randomUUID()
   let sizeBytes: number | null = null
   try {
     sizeBytes = statSync(filePath).size
   } catch {
     sizeBytes = null
   }
+  const id = insertQueuedRow(db, filePath, o, sizeBytes, nowIso())
+  // Single-doc callers (materialize + ~60 tests) rely on the full DocumentInfo re-read; the
+  // batch path below deliberately skips it (the folder-import caller uses only `.id`, DB-4).
+  return rowToInfo(getRow(db, id) as DocumentRow, 0)
+}
+
+/**
+ * The bare `queued`-row INSERT shared by `createQueuedDocument` (single, re-reads the row) and
+ * `createQueuedDocuments` (batch, returns just the id). No `SELECT *` re-read here — the id is
+ * generated in-process, so a caller that only needs the id pays nothing extra (DB-4).
+ */
+function insertQueuedRow(
+  db: Db,
+  filePath: string,
+  o: CreateQueuedDocumentOptions,
+  sizeBytes: number | null,
+  now: string
+): string {
+  const id = randomUUID()
   const title = o.displayTitle ?? basename(filePath)
   db.prepare(
     `INSERT INTO documents
@@ -506,7 +523,55 @@ export function createQueuedDocument(
     now,
     now
   )
-  return rowToInfo(getRow(db, id) as DocumentRow, 0)
+  return id
+}
+
+/**
+ * DB-4 — batch the folder-import queue phase. `importDocuments` used to call `createQueuedDocument`
+ * once per file: N single-statement auto-commit transactions + N wasted `SELECT *` re-reads, all
+ * synchronous on the IPC thread over a high-latency USB DB — a multi-second main-process freeze for
+ * a few-thousand-file folder before the job even starts (the per-row auto-commit pattern DB-1
+ * eliminated elsewhere). Here the `statSync` sizes are gathered OUTSIDE the write transaction, then
+ * all N inserts run inside ONE `BEGIN…COMMIT`; a mid-batch failure ROLLBACKs and rethrows so nothing
+ * is half-queued — the caller's lease-release catch cleans up. Returns the ids in file order
+ * (ING-3 in-order push preserved); mirrors `createQueuedDocument`'s insert-regardless behaviour, so
+ * an unstatable path still queues a row with a null size — no row is silently dropped.
+ *
+ * DEFERRED (walk stays sync): the recursive directory walk (`expandPathsWithSource`) is still
+ * synchronous in the handler — `importDocuments` returns `{jobId, documentIds}` synchronously and
+ * tests/renderer depend on the ids being present at return. Moving the walk off the hot path would
+ * change that contract; left for a later pass.
+ */
+export function createQueuedDocuments(
+  db: Db,
+  files: Array<{ filePath: string; opts?: CreateQueuedDocumentOptions }>
+): string[] {
+  const now = nowIso()
+  // Size probes are file I/O — do them BEFORE opening the write transaction so the DB lock is held
+  // only for the pure inserts (a slow drive shouldn't stall the transaction waiting on statSync).
+  const sized = files.map((f) => {
+    let sizeBytes: number | null = null
+    try {
+      sizeBytes = statSync(f.filePath).size
+    } catch {
+      sizeBytes = null
+    }
+    return { filePath: f.filePath, opts: f.opts ?? {}, sizeBytes }
+  })
+  const ids: string[] = []
+  db.exec('BEGIN')
+  try {
+    for (const s of sized) ids.push(insertQueuedRow(db, s.filePath, s.opts, s.sizeBytes, now))
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original insert failure as the thrown error */
+    }
+    throw err
+  }
+  return ids
 }
 
 /**
@@ -1329,12 +1394,12 @@ const EXPORTABLE_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
  * shredded on the way out; the plaintext leaves the main process only as the returned
  * string, which the caller writes to the user-chosen destination.
  */
-export function readStoredDocumentText(
+export async function readStoredDocumentText(
   db: Db,
   storeDir: string,
   documentId: string,
   deps: Pick<IngestionDeps, 'cipher'> = {}
-): { title: string; text: string } {
+): Promise<{ title: string; text: string }> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   const ext = extname(row.title).toLowerCase()
@@ -1356,7 +1421,9 @@ export function readStoredDocumentText(
         // same-doc export/read must not decrypt into and shred a shared path. `.parse` infix keeps
         // the crash sweep covering it.
         source = join(storeDir, `${documentId}.parse-export-${randomUUID()}${ext}`)
-        cipher.decryptFile(row.stored_path, source)
+        // DB-7: async decrypt (PERF-1) — a large encrypted DOCX/DOC no longer blocks the main
+        // process for the whole decrypt+read; the `finally` shred still runs after the await.
+        await cipher.decryptFileAsync(row.stored_path, source)
         transients.push(source)
       } else {
         source = row.stored_path
@@ -1366,7 +1433,7 @@ export function readStoredDocumentText(
     } else {
       throw new Error(tMain('main.docs.exportGone'))
     }
-    return { title: row.title, text: readFileSync(source, 'utf8') }
+    return { title: row.title, text: await readFile(source, 'utf8') }
   } finally {
     for (const t of transients) shredFile(t)
   }
@@ -1383,12 +1450,12 @@ export function readStoredDocumentText(
  * capability ceiling is unchanged: the SEAM holds this FS/cipher reach via the IPC-injected closure; the
  * pure tool never does.
  */
-export function readStoredDocumentBytes(
+export async function readStoredDocumentBytes(
   db: Db,
   storeDir: string,
   documentId: string,
   deps: Pick<IngestionDeps, 'cipher'> = {}
-): { title: string; mimeType: string | null; bytes: Buffer } {
+): Promise<{ title: string; mimeType: string | null; bytes: Buffer }> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   const ext = extname(row.title).toLowerCase()
@@ -1401,7 +1468,9 @@ export function readStoredDocumentBytes(
         if (!cipher) throw new Error(tMain('main.docs.exportEncrypted'))
         // Unique per call (DB-2): as above — collision-free transient, `.parse` infix for the sweep.
         source = join(storeDir, `${documentId}.parse-export-bin-${randomUUID()}${ext}`)
-        cipher.decryptFile(row.stored_path, source)
+        // DB-7: async decrypt (PERF-1) — the §22-M1 content boundary is unchanged; the `finally`
+        // shred still runs after the await.
+        await cipher.decryptFileAsync(row.stored_path, source)
         transients.push(source)
       } else {
         source = row.stored_path
@@ -1411,7 +1480,7 @@ export function readStoredDocumentBytes(
     } else {
       throw new Error(tMain('main.docs.exportGone'))
     }
-    return { title: row.title, mimeType: row.mime_type, bytes: readFileSync(source) }
+    return { title: row.title, mimeType: row.mime_type, bytes: await readFile(source) }
   } finally {
     for (const t of transients) shredFile(t)
   }
@@ -1523,8 +1592,18 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
   ).all() as Array<{ documentId: string; n: number }>) {
     chunkCounts.set(c.documentId, c.n)
   }
+  const force = forceReindexEnabled()
+  // DB-5 (perf): the embeddings⋈chunks GROUP BY exists only to flag an `indexed` doc whose vectors
+  // predate an embedder switch (`staleEmbeddings`). The per-row check below fires ONLY on an
+  // `indexed` row, so when NO row is `indexed` — the common case on a mid-import poll (rows are
+  // queued/extracting/embedding) — the whole full-corpus join scan is pure waste. Skip it then. A
+  // covering index on chunks(document_id) (db.ts) keeps the join cheap when it does run. The
+  // count-map cache was DECLINED (plan decision #4): it needs a wider invalidation surface than the
+  // resident-vector cache, and a stale map would surface as a user-visible wrong chunk badge / false
+  // stale-embeddings flag — poor risk/benefit for a poll-path optimization. `force` (dev
+  // HR_FORCE_REINDEX) flags every indexed doc without consulting this map, so it doesn't need it.
   const embeddedCounts = new Map<string, number>()
-  if (activeEmbeddingModelId) {
+  if (activeEmbeddingModelId && !force && rows.some((r) => r.status === 'indexed')) {
     for (const e of prepareCached(
       db,
       `SELECT c.document_id AS documentId, COUNT(*) AS n
@@ -1535,7 +1614,6 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
       embeddedCounts.set(e.documentId, e.n)
     }
   }
-  const force = forceReindexEnabled()
   return rows.map((r) => {
     const chunkCount = chunkCounts.get(r.id) ?? 0
     let stale: boolean | undefined

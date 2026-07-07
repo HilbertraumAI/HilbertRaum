@@ -59,7 +59,7 @@ export function buildOriginalDocumentReader(ctx: AppContext): (documentId: strin
       | { title: string }
       | undefined
     if (!row || extname(row.title).toLowerCase() !== '.docx') return { format: 'other' }
-    const { bytes } = readStoredDocumentBytes(ctx.db, storeDir, documentId, {
+    const { bytes } = await readStoredDocumentBytes(ctx.db, storeDir, documentId, {
       cipher: ctx.workspace.documentCipher()
     })
     return { format: 'docx', bytes }

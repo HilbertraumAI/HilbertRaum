@@ -441,7 +441,7 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     expect([...starts].sort((x, y) => x - y)).toEqual(starts)
 
     // Stored output: attribution line (the TRANSLATION model's id) + the stitched translation.
-    const { text } = readStoredDocumentText(db, storeDir, newId)
+    const { text } = await readStoredDocumentText(db, storeDir, newId)
     expect(text.startsWith(`> ${translationAttributionLine('scripted-translator')}`)).toBe(true)
     const body = text.slice(text.indexOf('\n\n') + 2)
     const tokens = body.split(/\s+/).filter((t) => t.length > 0)
@@ -620,7 +620,7 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     expect(failingCalls).toHaveLength(2)
 
     const newId = status.resultRef?.documentId as string
-    const { text } = readStoredDocumentText(db, storeDir, newId)
+    const { text } = await readStoredDocumentText(db, storeDir, newId)
     expect(text).toContain(failedWindowNotice(2, total))
     // The window's ORIGINAL text is kept below the notice (window 2 starts where
     // window 1's budget ended).
@@ -653,7 +653,7 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
 
       const total = Math.ceil(600 / budget)
       const newId = status.resultRef?.documentId as string
-      const { text } = readStoredDocumentText(db, storeDir, newId)
+      const { text } = await readStoredDocumentText(db, storeDir, newId)
       // The German catalog strings are present…
       expect(text).toContain(t('de', 'main.translation.attributionLine', { modelId: 'scripted-translator' }))
       expect(text).toContain(t('de', 'main.translation.failedWindowNotice', { part: 2, total }))
@@ -692,7 +692,7 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     expect(truncatedCalls).toHaveLength(1)
 
     const newId = status.resultRef?.documentId as string
-    const { text } = readStoredDocumentText(db, storeDir, newId)
+    const { text } = await readStoredDocumentText(db, storeDir, newId)
     // Window 2 is marked with its original text kept; the other (clean) windows are intact.
     expect(text).toContain(failedWindowNotice(2, total))
     expect(text).toContain(`word${budget}`)
@@ -1093,12 +1093,12 @@ describe('encrypted workspace', () => {
     expect(names.every((n) => n.endsWith('.enc'))).toBe(true)
 
     // Export path: decrypts to a transient, returns the text, shreds the transient.
-    const { text } = readStoredDocumentText(db, storeDir, newId, { cipher })
+    const { text } = await readStoredDocumentText(db, storeDir, newId, { cipher })
     expect(text).toContain(translationAttributionLine('scripted-translator'))
     expect(text).toContain('word0')
     expect(readdirSync(storeDir).every((n) => n.endsWith('.enc'))).toBe(true)
 
     // Without the cipher (locked context) the export refuses, never garbles.
-    expect(() => readStoredDocumentText(db, storeDir, newId)).toThrow(/unlock the workspace/)
+    await expect(readStoredDocumentText(db, storeDir, newId)).rejects.toThrow(/unlock the workspace/)
   })
 })
