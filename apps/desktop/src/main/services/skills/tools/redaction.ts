@@ -5,6 +5,15 @@ import type {
   ToolResult
 } from '../../../../shared/types'
 import { parseDate, type DateAnchor } from './money'
+import {
+  applySpans,
+  replacementText,
+  type ReplacementStrategy,
+  type TransformSpan
+} from './span-transform'
+
+// Re-exported so callers migrating to the shared strategy vocabulary import it from one place.
+export type { ReplacementStrategy } from './span-transform'
 
 // Document-redaction Tier-2 tool (architecture.md "Skills — design record" §8, Phase S11d). Kept OUT
 // of the generic `tool-registry.ts` so redaction specifics never leak into the skills infrastructure
@@ -122,47 +131,52 @@ interface MaskState {
 }
 
 /** Run `re` over the detection SHADOW and replace each accepted match's span in the ORIGINAL text
- *  with `token` (SKA-3). `accept` sees the SHADOW match (ASCII separators) plus the ORIGINAL slice
+ *  under `strategy` (SKA-3). `accept` sees the SHADOW match (ASCII separators) plus the ORIGINAL slice
  *  (so range/math typography like an en dash can be told apart from a mapped phone hyphen), and may
- *  return a MaskSpan to narrow the mask to a valid sub-span (see MaskSpan). The shadow is same-length,
- *  so all offsets address both strings — unmasked bytes are copied through verbatim. */
+ *  return a MaskSpan to narrow the mask to a valid sub-span (see MaskSpan). The accepted spans are
+ *  spliced by the shared `applySpans` engine (span-transform.ts) — the byte-faithful splice lifted out
+ *  of this pass so the redaction and edit tools share one verified core (Phase 6, D74).
+ *
+ *  SHADOW DISCIPLINE stays a redaction concern (the engine has no shadow concept): the SAME span list
+ *  is spliced into BOTH the text and its same-length shadow. This preserves `shadow ===
+ *  detectionShadow(text)` because every replacement carries no shadow-mapped character — a `token` is
+ *  pure ASCII, and a `perChar` mask is `█` (one BMP unit, not a mapped separator, no digit/@/scheme).
+ *  The shadow is same-length, so a span's offsets/length address both strings identically. */
 function maskStep(
   state: MaskState,
   re: RegExp,
   token: string,
+  strategy: ReplacementStrategy,
   accept: (shadowMatch: string, original: string) => boolean | MaskSpan = () => true
 ): { state: MaskState; count: number } {
   const { text, shadow } = state
-  let outText = ''
-  let outShadow = ''
-  let last = 0
-  let count = 0
+  const spans: TransformSpan[] = []
   for (const m of shadow.matchAll(re)) {
     const start = m.index ?? 0
     const verdict = accept(m[0], text.slice(start, start + m[0].length))
     if (verdict === false) continue
-    const span = verdict === true ? { start: 0, length: m[0].length } : verdict
-    if (span.length <= 0 || span.start < 0 || span.start + span.length > m[0].length) continue
-    const from = start + span.start
-    outText += text.slice(last, from) + token
-    outShadow += shadow.slice(last, from) + token
-    last = from + span.length
-    count++
+    const sub = verdict === true ? { start: 0, length: m[0].length } : verdict
+    if (sub.length <= 0 || sub.start < 0 || sub.start + sub.length > m[0].length) continue
+    const from = start + sub.start
+    spans.push({ start: from, length: sub.length, replacement: replacementText(strategy, token, sub.length) })
   }
-  return {
-    state: { text: outText + text.slice(last), shadow: outShadow + shadow.slice(last) },
-    count
-  }
+  // Non-overlapping + ascending by construction (matchAll yields disjoint matches; each sub-span sits
+  // inside its own match), so applySpans applies every span — count is the number built.
+  const newText = applySpans(text, spans).text
+  const newShadow = applySpans(shadow, spans).text
+  return { state: { text: newText, shadow: newShadow }, count: spans.length }
 }
 
-/** One-shot wrapper for the exported per-detector functions: compute the shadow, run one pass. */
+/** One-shot wrapper for the exported per-detector functions: compute the shadow, run one TOKEN pass.
+ *  The exported `maskEmails`/… detectors are the fixed-token API their tests pin, so this wrapper is
+ *  always token strategy; the per-char strategy is reached through `redactText`. */
 function maskViaShadow(
   text: string,
   re: RegExp,
   token: string,
   accept?: (shadowMatch: string, original: string) => boolean | MaskSpan
 ): { text: string; count: number } {
-  const r = maskStep({ text, shadow: detectionShadow(text) }, re, token, accept)
+  const r = maskStep({ text, shadow: detectionShadow(text) }, re, token, 'token', accept)
   return { text: r.state.text, count: r.count }
 }
 
@@ -396,8 +410,16 @@ export function maskDates(text: string): { text: string; count: number } {
  * `maskViaShadow`) — so this one pipeline fixes BOTH entry points at once: the real redaction run and
  * `scanRedactionCandidates` (the U2 share-safe pre-scan / dry-run counts) cannot disagree, and the
  * unmasked remainder of the text stays byte-identical to the source (D58's verbatim posture).
+ *
+ * `strategy` (Phase 6, D74) selects the replacement: `token` (the fixed `[EMAIL]`-style tokens, the
+ * default — the dry-run counts and the current written file are byte-for-byte unchanged) or `perChar`
+ * (one `█` per masked character, so line layout survives). The COUNTS are strategy-independent (they
+ * count matches, not bytes), so `scanRedactionCandidates` is identical under either.
  */
-export function redactText(input: string): {
+export function redactText(
+  input: string,
+  strategy: ReplacementStrategy = 'token'
+): {
   text: string
   counts: RedactionCounts
   totalRedactions: number
@@ -412,7 +434,7 @@ export function redactText(input: string): {
     token: string,
     accept?: (shadowMatch: string, original: string) => boolean | MaskSpan
   ): number => {
-    const r = maskStep(state, re, token, accept)
+    const r = maskStep(state, re, token, strategy, accept)
     state = r.state
     return r.count
   }
@@ -482,12 +504,19 @@ export const redactDocumentTool: SkillTool = {
     type: 'object',
     additionalProperties: false,
     required: ['documentId'],
-    properties: { documentId: { type: 'string', minLength: 1 } }
+    // `strategy` (Phase 6, D74) is optional: the replacement style for the produced text. Omitted ⇒
+    // 'token' (the fixed [EMAIL]-style masks, the byte-for-byte current output). Phase 7's user-visible
+    // wave flips the WRITTEN-FILE default to 'perChar' (length-preserving █); the engine supports both
+    // now so that flip is a one-line caller change, not an engine change.
+    properties: {
+      documentId: { type: 'string', minLength: 1 },
+      strategy: { type: 'string', enum: ['token', 'perChar'] }
+    }
   },
   outputSchema: REDACT_OUTPUT_SCHEMA,
   async run(input, ctx): Promise<ToolResult> {
     if (ctx.signal.aborted) return { ok: false, error: 'This action was cancelled.' }
-    const { documentId } = input as { documentId: string }
+    const { documentId, strategy } = input as { documentId: string; strategy?: ReplacementStrategy }
     let chunks: DocumentChunkRead[]
     try {
       chunks = ctx.readDocumentChunks(documentId)
@@ -496,7 +525,10 @@ export const redactDocumentTool: SkillTool = {
       return { ok: false, error: 'This document could not be read.' }
     }
     const joined = chunks.map((c) => c.text).join('\n')
-    const { text, counts, totalRedactions } = redactText(joined)
+    // Default 'token' (Phase 6, D74): the produced text is byte-for-byte the current output unless the
+    // caller opts into per-char masks. The run seam does not yet pass a strategy, so the written file
+    // stays token this phase (the visible switch lands with Phase 7).
+    const { text, counts, totalRedactions } = redactText(joined, strategy ?? 'token')
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     const output: RedactDocumentOutput = { redactedText: text, counts, totalRedactions }
     return { ok: true, output }

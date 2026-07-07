@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) DONE; Phases 6–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) + 6 (#22 pt.1, span-transform engine) DONE; Phases 7–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -300,10 +300,30 @@ honesty-line note.
 **Done =** suite green, docs (`rag-design.md` §14.4 extension) + BUILD_STATE updated, commit
 references #24 (and note the #25 companion line).
 
-## 9. Phase 6 — span-transform engine groundwork (#22 part 1)
+## 9. Phase 6 — span-transform engine groundwork (#22 part 1) ✅ DONE
 
 **Goal:** generalize `redaction.ts`'s splice core into a reusable, replacement-strategy-aware
 span engine (D74, the substrate for D73/D76).
+
+**Shipped (2026-07-07):** new pure `services/skills/tools/span-transform.ts` — `applySpans(text, spans)`
+(the generalized `maskStep`: sorted single-pass splice, byte-identity outside spans by construction,
+overlap/out-of-bounds spans skipped **and reported**), the two D74 replacement strategies (`token` /
+`perChar` = `█` U+2588 per code unit, same-length + idempotent + shadow-invariant-safe), and
+`locateOccurrences(text, needle, {line?, nth?})` (verbatim, non-overlapping, line/nth-anchored,
+drop-on-mismatch — the D75/D76 verify half). `redaction.ts`'s `maskStep` refactored onto `applySpans`
+(the **shadow discipline stays a redaction concern**: the SAME span list is spliced into both the text
+and its same-length shadow, since a `token`/`█` replacement carries no shadow-mapped char);
+`redactText(input, strategy)` threads the strategy through the six fixed-order passes; the exported
+one-shot detectors stay token. The `redact_document` input schema gained an **optional `strategy` enum**
+(gate-validated). **Decision — the WRITTEN FILE stays `token` this phase (option b, lower risk):** the
+run seam passes no strategy, so `redacted.txt` is **byte-for-byte the current `[EMAIL]`-token output**;
+Phase 7's user-visible wave flips the default to `perChar` (a one-line caller change) alongside the
+SKILL.md/report/known-limitations copy — the plan explicitly allows this deferral, and it keeps every
+existing redaction pin green. No SKILL.md / routing / confirm-gate / `saveTextFile` change; no LLM pass;
+no detector/order change; D58 verbatim-outside-spans + SKA-3 shadow invariants intact. Tests:
+`skills-span-transform.test.ts` (+18), `skills-redaction-tool.test.ts` (+3 tool-level strategy plumbing).
+No renderer surface changed → no preview case. Suite 3717/47, typecheck + build green. Folded into
+`architecture.md` "Skills — design record" **§20**.
 
 - New `apps/desktop/src/main/services/skills/tools/span-transform.ts` (pure, main-side):
   - `applySpans(text, spans: Array<{start,length,replacement}>)` — non-overlapping,

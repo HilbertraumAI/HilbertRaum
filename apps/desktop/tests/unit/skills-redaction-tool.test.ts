@@ -432,6 +432,51 @@ describe('redaction U2 additions', () => {
     expect(twice.text).toBe(once.text)
   })
 
+  it('Phase 6 (D74): the perChar strategy plumbs through the gate to █ masks, counts unchanged', async () => {
+    const { ctx } = makeCtx([chunk(PII_TEXT, 1)])
+    const result = await runSkillTool(redactDocumentTool, {
+      skillId: 'app:document-redaction',
+      input: { documentId: 'd1', strategy: 'perChar' },
+      ctx,
+      confirmed: true
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const out = result.output as RedactDocumentOutput
+      // Length-preserving masks, no fixed tokens, and no leaked secret.
+      expect(out.redactedText).toContain('█')
+      expect(out.redactedText).not.toContain('[EMAIL]')
+      expect(out.redactedText).not.toContain('jane.doe@example.com')
+      // The counts are strategy-independent — the same six categories are found either way.
+      expect(out.totalRedactions).toBe(6)
+      expect(validateToolOutput(redactDocumentTool, result.output)).toEqual([])
+    }
+  })
+
+  it('Phase 6 (D74): the default (no strategy) is byte-for-byte the token output', async () => {
+    const mk = () => makeCtx([chunk(PII_TEXT, 1)]).ctx
+    const [def, tok] = await Promise.all([
+      runSkillTool(redactDocumentTool, { skillId: 'app:document-redaction', input: { documentId: 'd1' }, ctx: mk(), confirmed: true }),
+      runSkillTool(redactDocumentTool, { skillId: 'app:document-redaction', input: { documentId: 'd1', strategy: 'token' }, ctx: mk(), confirmed: true })
+    ])
+    expect(def.ok && tok.ok).toBe(true)
+    if (def.ok && tok.ok) {
+      expect((def.output as RedactDocumentOutput).redactedText).toBe((tok.output as RedactDocumentOutput).redactedText)
+      expect((def.output as RedactDocumentOutput).redactedText).toContain('[EMAIL]')
+    }
+  })
+
+  it('Phase 6 (D74): the gate refuses an unknown strategy value (enum-validated input)', async () => {
+    const { ctx } = makeCtx([chunk(PII_TEXT, 1)])
+    const refused = await runSkillTool(redactDocumentTool, {
+      skillId: 'app:document-redaction',
+      input: { documentId: 'd1', strategy: 'rot13' },
+      ctx,
+      confirmed: true
+    })
+    expect(refused.ok).toBe(false) // input validation fails before the tool runs
+  })
+
   it('the card category rides through the tool output schema', async () => {
     const { ctx } = makeCtx([chunk('Card on file 4111 1111 1111 1111.', 1)])
     const result = await runSkillTool(redactDocumentTool, {

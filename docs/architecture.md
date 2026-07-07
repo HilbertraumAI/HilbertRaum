@@ -2983,7 +2983,7 @@ seeds a project-name + a folder-label (suggestion-reason) sentinel and proves ne
 (2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
 
 
-## Skills — design record (Phases S2–S13, §1–§19)
+## Skills — design record (Phases S2–S13, §1–§20)
 
 A **Skill** is a self-contained, local task package (instructions + optional examples/schemas) the
 user selects to shape one turn. Two tiers shipped: **Tier 1 — instruction-only** (the body is injected
@@ -6189,6 +6189,69 @@ rows above; `INVOICE_EXTRACTOR_VERSION` history entries 12 (IA-2) and 13 (IA-3) 
 `BANK_EXTRACTOR_VERSION` 10 (IA-2) and 11 (IA-3) carry the same tags in their in-file version logs.
 Report retired: `git rm docs/audits/invoice-skills-audit-2026-07-06.md` (recoverable in git history; the
 full finding bodies + the IA-1…IA-6 SHIPPED dispositions live there).
+
+### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)
+
+The C-wave of the beta-feedback wave (#22 LLM-located redaction, #23 targeted edits) asks for one
+architecture: **locate spans, replace mechanically, never regenerate** — exactly the posture
+`redaction.ts` already had. Phase 6 lifts that already-correct splice core out of `redaction.ts` into a
+reusable, replacement-strategy-aware module, `services/skills/tools/span-transform.ts` — the shared
+substrate Phase 7/8 will locate spans for and splice through. **No user-visible behavior change** landed
+this phase (the redaction run is byte-for-byte the token output — see the decision below); this is
+groundwork + one new replacement strategy + occurrence-anchored find.
+
+- **`applySpans(text, spans)`** — the generalized `maskStep`. Splices `{start,length,replacement}` spans
+  in a single left-to-right pass, sorted by start (input order not assumed). A span is applied only when
+  it is in-bounds, positive-length, and does not overlap an already-applied span; otherwise it is
+  **skipped and reported** (`{text, applied, skipped}`). **Byte-identity OUTSIDE applied spans holds by
+  construction** — every non-span byte is copied through verbatim (the D58 posture, now the engine's
+  guarantee, not just redaction's). Overlap resolution is deterministic: equal-start spans keep the
+  first, skip the rest; the caller decides ordering by the list it builds.
+- **Replacement strategies (D74):** `token` (the fixed `[EMAIL]`-style labels; length changes) and
+  `perChar` (`replacementText` returns `█` — U+2588, one BMP unit — repeated to the span's UTF-16
+  length). Per-char is **same-length by construction**, so line lengths and the extracted-text layout
+  survive; `█` carries no digit/`@`/scheme and is not a shadow-mapped separator, so masking stays
+  **idempotent** AND keeps the SKA-3 same-length shadow invariant.
+- **`locateOccurrences(text, needle, {line?, nth?})`** — the deterministic verify half of the
+  locate→verify→splice discipline (D75/D76). Finds **verbatim, non-overlapping** occurrences (a single
+  wrong byte is a miss), each with its 0-based offset, length, 1-based line, and 1-based global index.
+  `line` restricts to occurrences starting on that line; `nth` (1-based, within the line-filtered set)
+  picks one; out of range / absent needle / wrong line ⇒ `[]` (the caller drops the unverifiable span).
+  No model, no fuzzy match.
+
+**Shadow discipline stays a redaction concern (recorded).** The engine has no detection-shadow concept
+(the shadow is a detector-input artifact, not a property of a transform). `redaction.ts`'s `maskStep`
+now builds its accepted-span list from the shadow matches and splices the **SAME span list into BOTH the
+text and its same-length shadow** via `applySpans` — preserving `shadow === detectionShadow(text)`
+because every replacement carries no shadow-mapped character (`token` is pure ASCII; `perChar` is `█`).
+The one-shot exported detectors (`maskEmails`/…) stay token strategy (their tests pin the fixed tokens);
+`redactText(input, strategy='token')` threads the strategy through the six fixed-order passes. Counts are
+strategy-independent, so `scanRedactionCandidates` (the dry-run / share-safe pre-scan) is identical under
+either strategy.
+
+**Token-vs-per-char decision for the WRITTEN FILE — kept token this phase (option b, the lower risk).**
+Plan §9 allowed landing the per-char default now (a) or deferring the visible switch to Phase 7 (b). We
+chose **(b)**: `redactText` and the `redact_document` input schema now carry an **optional `strategy`
+enum** (`token`|`perChar`, validated by the gate; unknown values refused), but the run seam
+(`runDocumentRedaction`) passes **no** strategy, so the tool defaults to `token` and the written
+`redacted.txt` is **byte-for-byte the current `[EMAIL]`-token output**. Rationale: Phase 6's stated goal
+is *no user-visible change* (the redaction run keeps working byte-for-byte); flipping the file to `█`
+runs now would change user-facing output while its explanatory copy (SKILL.md, the run report,
+known-limitations) does not change until Phase 7's wave — a partial visible change divorced from its
+context, and it would need the written-byte pins (`skills-redaction.test.ts`) rewritten. Deferring keeps
+every existing redaction pin green and makes the Phase-7 flip a **one-line caller change**
+(`redactText(joined, 'perChar')` / the seam passing the strategy), not an engine change. **When Phase 7
+flips it,** update the `skills-redaction.test.ts` written-content assertions (they assert `[EMAIL]`/
+`[IBAN]` in the saved bytes) and `known-limitations.md` (the file now contains `█` runs) at that time.
+
+**Tests:** `skills-span-transform.test.ts` (+18: `applySpans` byte-identity outside spans, ascending
+single-pass, out-of-bounds/zero-length/overlap skip-and-report, abutting spans; `replacementText`
+token/perChar; `redactText` perChar length + line-count + idempotent + shadow-invariant + counts-parity,
+token reproduces the current masks; `locateOccurrences` verbatim/line/nth/drop-on-mismatch/non-overlap +
+a locate→splice composition) and `skills-redaction-tool.test.ts` (+3: the `perChar` strategy plumbs
+through the gate to `█` masks with unchanged counts, the no-strategy default is byte-for-byte the token
+output, the gate refuses an unknown strategy). All prior redaction pins stay green under the token
+default. Suite 3717/47 (was 3696; +21).
 
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
