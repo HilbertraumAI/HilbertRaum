@@ -138,9 +138,9 @@ let
   # Windows: the upstream MSVC-linked binaries import VCRUNTIME140.dll / MSVCP140.dll (the VC++
   # redistributable), which the release zip does NOT ship and a fresh Windows may lack → the exe
   # dies with STATUS_DLL_NOT_FOUND before main(). Drop the redist DLLs beside the exe (Windows
-  # searches the exe's own dir). Sourced from a vendored copy of the upstream loader's shared pin
-  # (./msvc-runtime.nix — the redist DLLs extracted from the msvc-runtime wheel).
-  msvcDlls = (import ./msvc-runtime.nix { inherit pkgs; }).dlls;
+  # searches the exe's own dir). Reuses the upstream loader lib's shared pin (the redist DLLs
+  # extracted from the msvc-runtime wheel) — see third_party/loader/nix/loader/msvc-runtime.nix.
+  msvcDlls = loader.msvcDlls;
   withMsvcRuntime = name: drv:
     pkgs.runCommand name { } ''
       mkdir -p "$out"; cp -aL ${drv}/. "$out"/; chmod -R u+w "$out"
