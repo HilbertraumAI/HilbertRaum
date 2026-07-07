@@ -133,7 +133,7 @@ name = "stage-app"
 per  = "target"
 cmd  = "./scripts/stage-app.sh {target}"
 deps = ["build"]
-src  = ["./scripts/stage-app.sh", "@loader/lib.sh", "../apps/desktop/electron-builder.yml"]
+src  = ["./scripts/stage-app.sh", "./scripts/lib.sh", "@loader/lib.sh", "../apps/desktop/electron-builder.yml"]
 desc = "stage app {target}"
 
 # ── shared source-input bundles ──────────────────────────────────────────────
@@ -198,8 +198,9 @@ win   = { ext = "zip",      attr = "whispercli-{target}-dir",      desc = "whisp
 per = "target"
 cmd = "./scripts/bundle.sh {target}"
 deps = ["components"]
-src  = ["launcher/Cargo.toml", "launcher/Cargo.lock", "./scripts/bundle.sh", "@loader/lib.sh",
-        "@loader/nix-component.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]
+src  = ["launcher/Cargo.toml", "launcher/Cargo.lock", "./scripts/bundle.sh", "./scripts/lib.sh",
+        "./scripts/nix-component.sh", "@loader/lib.sh", "@loader/nix-component.sh",
+        "nix/builds.nix", "nix/stores.nix", "flake.nix"]
 src_tree = ["launcher/src"]
 desc = "bundle {target}"
 
