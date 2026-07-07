@@ -451,6 +451,14 @@ is realistically co-resident **only with a small chat model, or after the chat s
 the manifest `recommended_min_ram_gb` / RAM-best-fit gate keeps a vision model off machines that
 can't hold it. Recorded in [`known-limitations.md`](known-limitations.md).
 
+**The same PROD-1 convention governs `recommended_min_ram_gb` catalog-wide (PR #30):** the hard
+start gate is the **model-alone** floor (peak RSS + ~3 GiB headroom), never the co-residency floor.
+Vision = 12 for its ~4.6 GiB peak; TranslateGemma = 13 for its 9.22 GiB peak (§11 D10). Co-residency
+pressure lives in `recommended_ram_gb` and is absorbed at runtime by idle-teardown + the
+RAM-best-fit picker — not by refusing to load the model. Baking a co-residency floor into the hard
+min (TranslateGemma's original 17) locks the model out of machines that could run it alone, so no
+manifest should do it.
+
 ## 9. Qwen3.5 Unsloth wave — PENDING candidates + the b9849 manual smoke (2026-07-01)
 
 Four `qwen3.5`-family chat manifests are in the catalog as **pending benchmark candidates** — added
@@ -656,10 +664,23 @@ usable context at every context size.
   chat; a 12B chat (≈6.5 GiB) pushes the pair PAST a 16 GB machine. Letting chat DECODE during a
   translation would put two large models under active compute + full RAM at once — infeasible on the
   target hardware. The doc-task lane + the view-job `docTaskBusy` guard stay.
-- **min-RAM (D10):** `recommended_min_ram_gb` set to **17** — the §4 rule (peak + ~3 GiB headroom,
-  rounded up) applied to the measured **co-residency** floor 13.24 GiB (which itself excludes the
-  Electron shell + OS), so a 16 GiB box is correctly gated out of the translation + small-chat case.
-  A 12B resident chat wants the recommended 32 (the manifest records the reasoning).
+- **min-RAM (D10):** `recommended_min_ram_gb` = **13**, `recommended_ram_gb` = **24** (PR #30,
+  2026-07-07 — corrected from the TG-6 initial 17/32). `recommended_min_ram_gb` is the HARD start
+  gate (`registerModelIpc` §11.4 refuses a model whose min exceeds the machine's RAM), and the
+  catalog convention — every chat manifest and the vision role model (§4 / §8.4 PROD-1) — is that
+  this gate is the **model-alone** floor: the §4 rule (peak + ~3 GiB headroom, rounded up) applied
+  to TranslateGemma's OWN peak RSS **9.22 GiB** ⇒ 9.22 + 3 = 12.22 → **13**. That lands with the
+  rest of the catalog (ministral 8.7→12, gemma4-12b 10.6→14) and, crucially, **clears the gate on a
+  standard 16 GB machine**. The **co-residency** floor (translation ≈9.22 + E5 ≈0.14 + a small 4B
+  chat ≈3.89 = **13.24 GiB**, excluding the Electron shell + OS) belongs in `recommended_ram_gb`,
+  not the hard gate — a 12B resident chat (≈6.5 GiB more) pushes the pair toward ~24. On a 16 GB box
+  that co-residency pressure is handled exactly as for vision (§8.4): the chat sidecar's
+  idle-teardown + the RAM-best-fit picker, **not** by blocking the model from ever loading.
+  **Why the change:** the original 17 baked the co-residency floor into the hard min — the *only*
+  manifest to do so — which locked translation out of every 16 GB machine even though the model
+  alone fits with headroom. The D9 serialization decision above (chat does not decode during
+  translation) is what keeps the co-resident case safe; the hard gate does not need to. Regression
+  is guarded by `tests/integration/committed-catalog.test.ts` ("RAM start-gate invariants").
 
 ### 11.3 The promotion bar — what a future translation candidate must beat
 

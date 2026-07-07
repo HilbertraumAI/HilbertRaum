@@ -17,6 +17,12 @@ interface BuilderConfig {
   files?: string[]
   asarUnpack?: string[]
   includeSubNodeModules?: boolean
+  productName?: string
+  executableName?: string
+  win?: { executableName?: string }
+  mac?: { executableName?: string }
+  linux?: { executableName?: string }
+  portable?: { executableName?: string; artifactName?: string }
 }
 
 function loadBuilderConfig(): BuilderConfig {
@@ -174,5 +180,42 @@ describe('electron-builder packaging excludes the never-imported mermaid chain',
       wronglyExcluded,
       'these packages are needed by the production graph but excluded from app.asar — remove their negation'
     ).toEqual([])
+  })
+})
+
+// PR #30 (portable-build-cleanup): electron-builder derives the per-platform executable /
+// AppImage name from the npm package name, which in this workspace is the scoped
+// "@hilbertraum/desktop" → "@hilbertraumdesktop"; the '@' is an unsafe path char and the build
+// fails (first on the linux AppImage target, then mac/win once the package was renamed). A
+// top-level `executableName` pins a path-safe name for every platform. Guard it in the green
+// gate — the failure only surfaces when someone runs `npm run package`, never in typecheck/test.
+describe('electron-builder pins a path-safe executableName (PR #30)', () => {
+  it('sets a top-level executableName equal to productName', () => {
+    const cfg = loadBuilderConfig()
+    expect(cfg.productName, 'productName present').toBe('HilbertRaum')
+    expect(cfg.executableName, 'executableName present and matches productName').toBe(
+      cfg.productName
+    )
+  })
+
+  it('the executableName contains no path-unsafe characters (the "@" that broke the build)', () => {
+    const name = loadBuilderConfig().executableName ?? ''
+    // No '@' / '/' / '\\' / whitespace / other filename-hostile chars — a plain safe basename.
+    expect(name.length).toBeGreaterThan(0)
+    expect(name).not.toContain('@')
+    expect(name).toMatch(/^[A-Za-z0-9._-]+$/)
+  })
+
+  it('no per-platform section overrides executableName with a conflicting value', () => {
+    const cfg = loadBuilderConfig()
+    for (const section of ['win', 'mac', 'linux', 'portable'] as const) {
+      const override = cfg[section]?.executableName
+      // A platform may repeat the same name, but must never disagree with the top-level pin.
+      if (override !== undefined) {
+        expect(override, `${section}.executableName must match the top-level pin`).toBe(
+          cfg.executableName
+        )
+      }
+    }
   })
 })

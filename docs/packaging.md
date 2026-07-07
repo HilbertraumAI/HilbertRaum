@@ -115,6 +115,13 @@ npm run package:win    # build + a Windows portable .exe specifically
 ```
 
 Key config points:
+- **`executableName: HilbertRaum`** is pinned at the top level (PR #30). electron-builder derives
+  the per-platform executable / AppImage name from the **npm package name**, which in this monorepo
+  is the scoped `@hilbertraum/desktop` → `@hilbertraumdesktop`; the `@` is an unsafe path char that
+  electron-builder rejects, so the build fails (first seen on the Linux AppImage target, then mac/win
+  once the desktop package was renamed to the scoped name). The explicit `executableName` gives every
+  platform a path-safe binary name. **Keep it in sync with `productName`** (both are `HilbertRaum`);
+  `tests/integration/packaging.test.ts` asserts they match and that the name carries no `@`.
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
   (`electron` is pinned `^37`). A downgraded/stripped runtime would lose it — do not downgrade.
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
@@ -378,6 +385,38 @@ CI run says **nothing** about the real-`spawn` / real-binary / real-weights surf
 `HILBERTRAUM_*` manual harness matrix below (audit M-A5), which is env-gated and skips in CI. CI is
 the automated floor; the manual pre-ship checklist and harness matrix remain a required, human-run
 pre-release gate. The two do not substitute for each other.
+
+### Packaging workflows — `mac-build` / `win-build` (PR #30)
+
+Two **separate, opt-in** workflows actually produce artifacts (unlike `ci.yml`, which only runs the
+offline green gate and ships nothing). They exist because the portable `.exe` and the mac `.app` can
+only be built on their own OS, which the Windows dev machine can't do locally:
+
+- [`.github/workflows/win-build.yml`](../.github/workflows/win-build.yml) — `windows-latest`, runs
+  `npm run package:win`, uploads `HilbertRaum-<version>-portable.exe`. The Windows llama.cpp runtime
+  is **not** fetched (already staged on the drive under `runtime/llama.cpp/win/`, pin b9849).
+- [`.github/workflows/mac-build.yml`](../.github/workflows/mac-build.yml) — `macos-14` (Apple
+  Silicon / arm64), runs `npm run package` (the `dir` target) then **ad-hoc signs** the `.app`
+  (`codesign --force --deep --sign -`, required to launch on Apple Silicon) and **ditto-zips** it
+  (`HilbertRaum-<version>-mac-arm64.app.zip` — it must STAY zipped on exFAT, which can't hold the
+  `.app`'s framework symlinks; the drive launcher extracts to a local cache). It also fetches the
+  mac Metal runtime via `scripts/fetch-runtime.sh` and zips it with symlinks **dereferenced**
+  (`llama-runtime-mac-arm64.zip`) so it can drop straight onto exFAT under `runtime/llama.cpp/mac/`.
+
+**Both produce UNSIGNED / ad-hoc artifacts by design — no signing secrets are assumed present.** The
+mac job sets `CSC_IDENTITY_AUTO_DISCOVERY=false` (skips Developer ID lookup) and never notarizes (no
+`APPLE_*` env); the win job supplies no `WIN_CSC_*`, so SmartScreen shows "unknown publisher". The
+DIY launch flows (right-click → Open on macOS; "More info → Run anyway" on Windows) are documented in
+[`troubleshooting.md`](troubleshooting.md); supply the signing env on a build machine for a signed
+release (see "Code signing & notarization" above).
+
+**Triggers are self-contained and do not clash with `ci.yml`.** Each fires on `workflow_dispatch`
+**and** `push` to its own integration branch (`ci/mac-build` / `ci/win-build`) only — never on
+`pull_request` or `push: master`, so opening a PR or merging to `master` does **not** kick off a
+packaging build (only `ci.yml`'s green gate runs there). `workflow_dispatch` only becomes available
+once the workflow file is on the default branch; until then, pushing the integration branch is how
+you trigger a build. These run on **Node 24** (electron-builder ships its own pinned Electron
+runtime, so the newer host Node is fine) vs `ci.yml`'s Node 22.x.
 
 ## Manual pre-ship checklist (real hardware — not covered by CI)
 

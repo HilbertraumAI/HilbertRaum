@@ -107,3 +107,40 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     }
   })
 })
+
+// PR #30 (portable-build-cleanup): recommended_min_ram_gb is the HARD start gate
+// (registerModelIpc §11.4 refuses a model whose min exceeds the machine's RAM). The catalog
+// convention — every chat manifest and the vision role model (model-benchmarks.md §4 / §8.4
+// PROD-1) — is that this hard min is the MODEL-ALONE floor (peak RSS + ~3 GiB headroom);
+// co-residency pressure lives in recommended_ram_gb, NOT the hard gate. TranslateGemma was the
+// lone manifest that baked its co-residency floor (13.24 GiB → 17) into the hard min, which
+// locked it out of every 16 GB machine. These invariants keep that from regressing.
+describe('committed catalog — RAM start-gate invariants (PROD-1)', () => {
+  it('no manifest sets its hard min above its own recommended RAM (an incoherent gate)', () => {
+    for (const m of committedManifests()) {
+      expect(
+        m.recommendedMinRamGb,
+        `${m.id}: recommended_min_ram_gb (${m.recommendedMinRamGb}) must be > 0`
+      ).toBeGreaterThan(0)
+      expect(
+        m.recommendedMinRamGb,
+        `${m.id}: hard min (${m.recommendedMinRamGb}) must not exceed recommended_ram_gb (${m.recommendedRamGb})`
+      ).toBeLessThanOrEqual(m.recommendedRamGb)
+    }
+  })
+
+  it('TranslateGemma clears the §11.4 hard gate on a standard 16 GB machine', () => {
+    const tg = committedManifests().find((m) => m.id === 'translategemma-12b-it-q4')
+    expect(tg, 'translategemma manifest present').toBeDefined()
+    // 9.22 GiB peak RSS + ~3 GiB headroom (§4 rule) → 13. Pinned so a revert to the old 17
+    // (co-residency floor baked into the hard gate) fails here instead of on a user's drive.
+    expect(tg!.recommendedMinRamGb, 'TranslateGemma model-alone floor').toBe(13)
+    // The whole point of the change: a 16 GB box must not be gated out. machineRamGb() reports a
+    // hair under the nominal size, so require real headroom below 16, not merely <=16.
+    expect(tg!.recommendedMinRamGb, 'fits a 16 GB machine with headroom').toBeLessThan(16)
+    // Co-residency stays in recommended_ram_gb (translation + resident chat + E5), not the gate.
+    expect(tg!.recommendedRamGb, 'co-residency lives in recommended_ram_gb').toBeGreaterThanOrEqual(
+      tg!.recommendedMinRamGb
+    )
+  })
+})
