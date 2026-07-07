@@ -19,7 +19,8 @@ endif
 endif
 
 # Artifact builds go through ninja via the xtask orchestrator (built offline by nix).
-XTASK := nix run .\#xtask --
+FLAKE := ..
+XTASK := nix run ..\#xtask --
 
 .PHONY: all ninja makefile app build bundles bundle image update-tarball tarball-upload dev dev-electron test-nixos test-usb test-vm test-clean test-mac test-win docker-image docker-push clean help
 
@@ -78,12 +79,12 @@ test-win: ## run the win launcher on a remote windows box (set WIN_TARGET=<ssh h
 	./scripts/test-win.sh
 
 docker-image: ## build the devshell as a Docker image (result = a loadable archive)
-	nix build .#devshell-image
+	nix build $(FLAKE)\#devshell-image
 	@echo "==> loadable image at ./result — 'docker load < result' or 'make docker-push IMAGE_REPO=...'"
 
 docker-push: ## push the devshell image to $(IMAGE_REPO) via skopeo (no docker daemon)
 	@test -n "$(IMAGE_REPO)" || { echo 'set IMAGE_REPO=<registry/repo:tag>'; exit 1; }
-	img=$$(nix build .#devshell-image --no-link --print-out-paths); \
+	img=$$(nix build $(FLAKE)\#devshell-image --no-link --print-out-paths); \
 	  skopeo --insecure-policy copy docker-archive:$$img docker://$(IMAGE_REPO)
 
 clean: ## remove all build outputs (ninja graph + dist + every crate's target/)

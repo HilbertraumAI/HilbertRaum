@@ -28,7 +28,7 @@ shopt -u nullglob
 ln -s "$BUNDLE/components" "$MIRROR/components"
 [ -f "$BUNDLE/README.txt" ] && ln -s "$BUNDLE/README.txt" "$MIRROR/README.txt"
 
-( cd "$REPO_ROOT" && nix run .#xtask -- tarball "$MIRROR" "$OUT" \
+( cd "$REPO_ROOT" && nix run "$FLAKE_DIR#xtask" -- tarball "$MIRROR" "$OUT" \
     --version "$VERSION" --commit "$COMMIT" --url "$UPDATE_URL" --built-at "$BUILT_AT" )
 rm -rf "$MIRROR"
 log "update tarball -> $OUT  (url=$UPDATE_URL commit=${COMMIT:0:8})"

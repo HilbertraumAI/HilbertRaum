@@ -13,11 +13,12 @@
 let
   # git+file so the flake source is the GIT tree (tracked files only) — a bare path: flakeref
   # would copy the whole repo (incl. multi-GB gitignored dist/) into the store every build.
-  # PLANAI_FLAKEREF (exported by the loader scripts) carries the correct ref even when this
-  # loader lives in a subdirectory of its project's git repo (git+file://<root>?dir=<sub>);
-  # fall back to this directory for a loader that IS the repo root.
+  # PLANAI_FLAKEREF (exported by the loader scripts) carries the correct ref even when the
+  # flake lives elsewhere than this loader/ dir (git+file://<root>?dir=<sub>, or bare
+  # git+file://<root> when the flake IS the repo root). Fall back to the repo root — this
+  # builds.nix sits at loader/nix/, so ../.. is the git root where flake.nix lives.
   flakeref = let e = builtins.getEnv "PLANAI_FLAKEREF"; in
-    if e != "" then e else "git+file://${toString ../.}";
+    if e != "" then e else "git+file://${toString ../..}";
   flake = builtins.getFlake flakeref;
   pkgs = flake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
   lib = pkgs.lib;

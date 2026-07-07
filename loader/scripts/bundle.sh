@@ -97,7 +97,7 @@ emit_nixos_fhs() {
     *) return 0 ;;
   esac
   command -v nix >/dev/null 2>&1 || { warn "no nix — skip NixOS FHS helper"; return 0; }
-  fhs="$(cd "$REPO_ROOT" && nix build ".#$fhs_attr" --no-link --print-out-paths 2>/dev/null || true)"
+  fhs="$(cd "$REPO_ROOT" && nix build "$FLAKE_DIR#$fhs_attr" --no-link --print-out-paths 2>/dev/null || true)"
   [ -n "$fhs" ] || { warn "$fhs_attr build failed — skip FHS helper"; return 0; }
   log "packing NixOS FHS squashfs ($sqfs_attr) -> components/$GROUP/"
   "$SCRIPT_DIR/nix-component.sh" "$sqfs_attr" "$CDST/nixos-fhs.squashfs"
@@ -123,8 +123,8 @@ place_launcher() {
     log "mac launcher -> $OUT/$LAUNCHER_NAME (mount it, then double-click HilbertRaum.app)"
     return
   fi
-  local out; out="$(cd "$REPO_ROOT" && nix build ".#$LAUNCHER_ATTR" --no-link --print-out-paths)" \
-    || die "launcher build failed: .#$LAUNCHER_ATTR"
+  local out; out="$(cd "$REPO_ROOT" && nix build "$FLAKE_DIR#$LAUNCHER_ATTR" --no-link --print-out-paths)" \
+    || die "launcher build failed: $FLAKE_DIR#$LAUNCHER_ATTR"
   [ -f "$out/$LBIN" ] || die "launcher $LBIN missing in $out"
   cp -f "$out/$LBIN" "$OUT/$LAUNCHER_NAME"; chmod +x "$OUT/$LAUNCHER_NAME" 2>/dev/null || true
   case "$TARGET" in win-*) sign_windows ;; esac

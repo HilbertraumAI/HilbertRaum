@@ -15,21 +15,22 @@
     self.submodules = true;
   };
 
-  # Thin entrypoint. The project-agnostic build engine, nix lib and scripts live in the
-  # loader submodule (third_party/loader); this flake only builds the HilbertRaum-specific
-  # bits: the native launcher (+ splash spinner), the NixOS FHS helper, the Electron app
-  # component packers (nix/builds.nix), and a packaging devshell.
+  # Thin entrypoint at the repo root; the loader packaging it drives lives in loader/. The
+  # project-agnostic build engine, nix lib and scripts live in the loader submodule
+  # (loader/third_party/loader); this flake only builds the HilbertRaum-specific bits: the
+  # native launcher (+ splash spinner), the NixOS FHS helper, the Electron app component
+  # packers (loader/nix/builds.nix), and a packaging devshell.
   outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
         lib = pkgs.lib;
-        loaderToml = builtins.fromTOML (builtins.readFile ./loader.toml);
+        loaderToml = builtins.fromTOML (builtins.readFile ./loader/loader.toml);
 
         # The shared loader nix library — toolchains, the spinner cross-builder, the FHS
         # helper, component packers, devshell base, xtask, libdmg. Consumed directly from
         # the submodule (self.submodules brings its tree into the flake source).
-        loaderLib = import ./third_party/loader/nix/loader { inherit pkgs; nixpkgs = nixpkgs; };
+        loaderLib = import ./loader/third_party/loader/nix/loader { inherit pkgs; nixpkgs = nixpkgs; };
 
         # cross-target rust toolchain (win/mac/linux gnu+musl) + the Apple SDK source for
         # the mac cross leg — both owned by the loader, single source of truth.
@@ -37,11 +38,11 @@
         macosx-sdk = loaderLib.macosx-sdk;
 
         # the launcher crate (the whole dir is the source — no spa).
-        launcherSrc = ./launcher;
+        launcherSrc = ./loader/launcher;
         # registry deps for the launcher's Cargo.lock (clap, tokio, axum, loader-core's
         # reqwest/rustls/…), vendored offline.
         launcherVendor = pkgs.rustPlatform.importCargoLock {
-          lockFile = ./launcher/Cargo.lock;
+          lockFile = ./loader/launcher/Cargo.lock;
         };
 
         # The splash spinner cross-builder. The crate, its Cargo.lock, the cross toolchain,
@@ -100,9 +101,9 @@
               # the loader crates copied as siblings of src/ so Cargo's relative path dep
               # (../third_party/loader/crates/loader-core) resolves.
               mkdir -p third_party/loader/crates
-              cp -r ${./third_party/loader/crates/loader-core} third_party/loader/crates/loader-core
-              cp -r ${./third_party/loader/crates/loader-manifest} third_party/loader/crates/loader-manifest
-              cp -r ${./third_party/loader/crates/loader-splash} third_party/loader/crates/loader-splash
+              cp -r ${./loader/third_party/loader/crates/loader-core} third_party/loader/crates/loader-core
+              cp -r ${./loader/third_party/loader/crates/loader-manifest} third_party/loader/crates/loader-manifest
+              cp -r ${./loader/third_party/loader/crates/loader-splash} third_party/loader/crates/loader-splash
               chmod -R u+w third_party
               cp -r ${launcherSrc}/. src && chmod -R u+w src && cd src
               mkdir -p .cargo
@@ -135,7 +136,7 @@
         # Packaging dev environment (nix/dev-env.nix): node + electron-builder + squashfs +
         # the FAT32 image tooling. Plus the local-LLM engines so the app's own `npm run dev`
         # still works from this shell.
-        devEnv = import ./nix/dev-env.nix { inherit pkgs lib; };
+        devEnv = import ./loader/nix/dev-env.nix { inherit pkgs lib; };
         projectShellHook = ''
           export HILBERTRAUM_LLAMA_BIN="${pkgs.llama-cpp}/bin/llama-server"
           export HILBERTRAUM_WHISPER_BIN="${pkgs.whisper-cpp}/bin/whisper-cli"

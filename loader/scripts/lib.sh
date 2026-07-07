@@ -30,7 +30,7 @@ seed_drive_manifest() {
   local drive="$1" platform="$2"
   need jq
   local commit; commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo test)"
-  ( cd "$REPO_ROOT" && nix run ".#xtask" -- gen-manifest "$drive" \
+  ( cd "$REPO_ROOT" && nix run "$FLAKE_DIR#xtask" -- gen-manifest "$drive" \
       --version "0.0.0-test" --commit "$commit" --url "http://127.0.0.1:1/" \
       --out "$drive/update.json" ) || die "gen-manifest failed for $drive"
   printf '{"platforms":["%s"]}\n' "$platform" > "$drive/platforms.json"

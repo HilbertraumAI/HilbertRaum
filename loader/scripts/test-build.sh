@@ -8,7 +8,7 @@ set -euo pipefail
 need nix; need xvfb-run
 
 log "building linux-x64 bundle"
-( cd "$REPO_ROOT" && HILBERTRAUM_PLATFORMS=linux-x64 nix run .#xtask -- build bundle-linux-x64 )
+( cd "$REPO_ROOT" && HILBERTRAUM_PLATFORMS=linux-x64 nix run "$FLAKE_DIR#xtask" -- build bundle-linux-x64 )
 LAUNCHER="$DIST_DIR/bundle/hilbertraum.linux-x64.exe"
 [ -x "$LAUNCHER" ] || die "no launcher at $LAUNCHER"
 
