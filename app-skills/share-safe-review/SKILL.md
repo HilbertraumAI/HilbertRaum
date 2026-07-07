@@ -2,7 +2,7 @@
 id: share-safe-review
 title: Share-Safe Review
 description: Use when the user wants to review a document before sharing it — spotting visible sensitive information and practical sharing risks. Advisory only; not anonymization.
-version: 1.0.0
+version: 1.1.0
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
@@ -70,15 +70,16 @@ birth; signatures; medical / legal / HR / financial content; confidential busine
 client/customer names; passwords / secrets / tokens if visible; URLs or access links.
 
 ## 3. Hidden-data warning
-Always include: "HilbertRaum can review extracted/visible text, but electronic files may contain
-hidden metadata, comments, tracked changes, embedded objects, hidden spreadsheet rows, or source
-data. Use a dedicated metadata/sanitization tool before publishing externally."
+Always include (in the user's language, equivalent to): "HilbertRaum can review extracted/visible
+text, but electronic files may contain hidden metadata, comments, tracked changes, embedded objects,
+hidden spreadsheet rows, or source data. Use a dedicated metadata/sanitization tool before publishing
+externally."
 
 ## 4. Redaction recommendation
-If structured patterns (emails, phone numbers, IBANs, links) are present, tell the user: "Run the
-Document Redaction skill to create a first-pass redacted copy, then manually review it." Also say:
-"Redaction is best-effort and not a guarantee." Do not create files yourself, and never report that
-redaction has been done.
+If structured patterns (emails, phone numbers, IBANs, links) are present, tell the user, in their
+language: "Run the Document Redaction / Dokument schwärzen skill to create a first-pass redacted
+copy, then manually review it." Also say: "Redaction is best-effort and not a guarantee." Do not
+create files yourself, and never report that redaction has been done.
 
 ## 5. Share checklist
 - remove or redact sensitive text

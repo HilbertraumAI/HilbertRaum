@@ -1,14 +1,14 @@
 ---
 id: deadline-obligation-finder
 title: Deadline & Obligation Finder
-description: Use when the user wants to find deadlines, notice periods, renewal and payment dates, and the obligations in one or more documents — what to do, by when, and what happens if missed.
-version: 1.0.0
+description: Use when the user wants to find deadlines, notice periods, renewal and payment dates, and the obligations in a document — what to do, by when, and what happens if missed.
+version: 1.1.0
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Fristen & Pflichten
-    description: Verwenden, wenn Fristen, Kündigungsfristen, Verlängerungs- und Zahlungstermine sowie Pflichten in Dokumenten gefunden werden sollen – was bis wann zu tun ist und was bei Versäumnis passiert.
+    description: Verwenden, wenn Fristen, Kündigungsfristen, Verlängerungs- und Zahlungstermine sowie Pflichten in einem Dokument gefunden werden sollen – was bis wann zu tun ist und was bei Versäumnis passiert.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the
@@ -43,8 +43,10 @@ to fit the context:
 - Keep dates and wording exactly as printed, and answer in the user's language.
 
 Use this skill when the user asks "what do I need to do, by when, and what happens if I miss it?"
-across one or more selected documents. Extract deadlines, notice periods, renewal and payment dates,
-and obligations. Work only from the selected material.
+in the selected document. Extract deadlines, notice periods, renewal and payment dates,
+and obligations. Work only from the selected material. The app handles document scope — with
+several documents in scope it narrows to the matching one or asks the user to pick; do not police
+this yourself.
 
 Produce the answer in this order; omit a section only if there is genuinely nothing for it.
 

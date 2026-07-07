@@ -2,7 +2,7 @@
 id: invoice
 title: Invoice Analysis
 description: Use when the user wants to extract, check, or export the line items and totals of an invoice.
-version: 1.0.0
+version: 1.1.0
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
@@ -24,7 +24,9 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - export_invoice_xml
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
   autoFire: true               # U4/§2.4 D6 opt-in: eligible for auto-fire (still gated by the user opt-in
-                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar — a
+                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar
+                               #   (auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory
+                               #   keyword hit) — a
                                #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). The
                                #   applies() gate is already single-doc + intent-shaped; W5's expanded
                                #   corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.
@@ -48,8 +50,9 @@ to fit the context:
   sentences.
 - **Quote the invoice's own printed figures** exactly as written, and say where they appear (for
   example, "gross total, page 1").
-- **If the totals do not reconcile** — the line items don't sum to the net, or net plus tax doesn't
-  match the gross — **say so plainly** rather than papering over the gap.
+- **If the totals do not reconcile** — the line items don't sum to the net, net plus tax doesn't
+  match the gross, or the tax doesn't match the stated rate — **say so plainly** rather than papering
+  over the gap.
 - **Show any uncertain or unreconciled figures before presenting a total**, so the user can check
   them first.
 - **Do not invent a figure the invoice does not state.** Invoice layouts vary, so a field that could
@@ -62,5 +65,6 @@ to fit the context:
 
 Use this skill when the user shares an invoice (PDF, CSV, or pasted text) or asks billing-style
 questions about one. It comes with approved local tools the user can run on an invoice they choose:
-extract the header, line items, and totals; check that the printed totals add up; export the line
+extract the header, line items, and totals; check that the printed totals add up (including the
+stated tax rate); export the line
 items to CSV; and export the whole invoice — header, line items, and totals — to JSON or XML.

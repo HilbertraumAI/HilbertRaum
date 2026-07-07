@@ -54,7 +54,15 @@ phase lists. Do NOT re-read the whole audit report, the architecture record, or 
   SK-3b/D-P2a fence-suppression DECLINED, recorded in known-limitations.md. New teeth-checked unit file
   `tests/unit/rag-compare-diff-truncation.test.ts` (+2). rag.test.ts:227 assertion re-pinned to new wording.
   Docs: rag-design.md §14.6 render-cap invariant, known-limitations.md D-P2a. typecheck clean, suite 3796/47.
-- [ ] **Phase 3** — instruction/tool text batch: deadline-finder, share-safe, invoice (SK-4, SK-7, SK-10, SK-14 part)
+- [x] **Phase 3** — instruction/tool text batch: deadline-finder, share-safe, invoice (SK-4, SK-7, SK-10, SK-14 part).
+  DONE 2026-07-07: SK-4 deadline-finder → single-doc (EN+DE `description` "in a document"/"in einem Dokument",
+  body "in the selected document" + what-changed-style scope sentence "the app narrows or asks; do not police
+  this"), coverage-honesty rule kept, multi-doc sweep rejected; SK-7 share-safe §4 "Document Redaction / Dokument
+  schwärzen" + §3/§4 boilerplate reframed to license translation ("in the user's language, equivalent to:" / "tell
+  the user, in their language:"); SK-10 invoice honesty rule names the third check (`taxMatchesRate`) + closing
+  "add up (including the stated tax rate)"; SK-14 autoFire clause added to invoice + meeting-protocol. Versions:
+  deadline-finder/share-safe/invoice → 1.1.0 (body), meeting-protocol → 1.1.1 (comment-only patch). No test/doc drift
+  (grep found no pinned copies in tests; user-guide:612/618 are paraphrase not quotes). typecheck clean, suite 3796/47.
 - [ ] **Phase 4** — bank-statement aux files + schema parity pin (SK-5, SK-6, SK-14 part)
 - [ ] **Phase 5** — close-out: conventions, INFO records, retire report + plan (SK-12, SK-16/17/18, SK-3b record)
 
