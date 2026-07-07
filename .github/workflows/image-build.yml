@@ -37,10 +37,13 @@ jobs:
     steps:
       # submodules: recursive — the loader build engine lives in loader/third_party/loader
       # (git.plan.ai), and the flake's self.submodules brings its tree into the flake source.
+      # fetch-depth: 0 — a full (non-shallow) clone: Nix refuses to evaluate a flake from a
+      # shallow git repo ("shallow repositories are only allowed when `shallow = true`").
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
