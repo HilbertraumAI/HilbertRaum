@@ -1038,6 +1038,25 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   no diff ⇒ just answer), so a fence riding a non-compare turn no longer tells the model to invent a
   comparison. Revisit only if the gold set later shows comparison-framed answers on non-compare
   fall-through turns.
+- **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
+  INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
+  record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than
+  the exact runtime, and where "fixing" it would cost more than it buys.
+  - **SK-16 — `validate_statement_balances` is a per-row chain, not the whole tie.** The tool does a
+    per-row running-balance chain (`tools/bank-statement.ts:815-864`); the opening + Σamounts == closing
+    tie lives in `assessCompleteness` (:504-531) on the answer layer. The **composition** satisfies the
+    bank-statement honesty rule (no verified total without the tie — see the geometry bullet below); the
+    tool name just covers less than the body sentence implies. Left as-is: the honest posture is a property
+    of the composed pipeline, not of the single tool.
+  - **SK-17 — meeting-protocol runs over imported audio documents, not live dictation.** Its "audio
+    transcript" works via the audio-file **import** path (AudioParser → document). **Live dictation**
+    returns composer text and never becomes a document (`registerDictationIpc.ts:76-120`), so the skill
+    can't run "over" a dictation — only over the message it produced. Left as-is (a body clause is the cheap
+    fix); **watch beta** — add the clause if users hit it.
+  - **SK-18 — invoice/bank `mimeTypes` deliberately omit `text/plain`.** The bodies say "or pasted text",
+    but pasted text is not a document (no mime signal) and a lone keyword already clears the suggest bar
+    (score 2), so the omission is **consistent**, not a bug. Recorded explicitly so nobody "fixes" it into a
+    precision regression by adding `text/plain` to the `mimeTypes` gate.
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
   §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented

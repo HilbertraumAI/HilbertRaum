@@ -6196,6 +6196,70 @@ rows above; `INVOICE_EXTRACTOR_VERSION` history entries 12 (IA-2) and 13 (IA-3) 
 Report retired: `git rm docs/audits/invoice-skills-audit-2026-07-06.md` (recoverable in git history; the
 full finding bodies + the IA-1…IA-6 SHIPPED dispositions live there).
 
+### §44 Skills content-vs-runtime audit (skills-audit-2026-07-07) — remediation ledger + close-out
+
+An app-skills **content ↔ runtime truth** audit swept all 9 bundled skills (SKILL.md frontmatter +
+bodies + the two bank-statement aux files) against the runtime they describe — the tool registry/impls,
+the whole-doc/compare engines, the redaction/edit seams, the suggestion/auto-fire heuristic, the
+loader/parity plumbing, and the renderer i18n. Cross-checked against the prior skills waves (§23/§39/§41),
+the invoice audit (§43), and the beta wave (the §20–§23 beta-feedback records above) so already-fixed /
+accepted residuals were not re-reported. It found **2 HIGH · 5 MEDIUM · 8 LOW · 3 INFO** (findings
+**SK-1…SK-18**). Both HIGH landed; every actionable finding is fixed; the 3 INFO + the SK-3b runtime half
+are recorded as deliberate non-fixes ([`known-limitations.md`](known-limitations.md)). Remediated across a
+**five-phase wave** on `master` (unpushed): P1 `c08a0a9`, P2 `4f541c1`, P3 `1af932b`, P4 `8063a1e`, P5
+(this docs-only close-out). Only **SK-2** (render-cap → `truncated`) and **SK-6** (schema parity test)
+touched code; the rest are `app-skills/` body/aux + renderer-i18n text with matching version bumps (SK-12).
+Final suite **3800/47**, typecheck clean.
+
+Per-finding disposition (fixed → phase@commit / declined → rationale / info → note):
+
+| # | Sev | Phase | Disposition (decision / mechanism) |
+|---|---|---|---|
+| **SK-1** | HIGH | P1 `c08a0a9` | **fixed** — document-edit's stale "writes a plain `.txt` copy" replaced with the true output matrix (`.docx` keeps its format; PDF/plain-text/Markdown → plain-text copy). **Decision D-P1a:** the matrix is stated in BOTH document-edit and document-redaction (shared Phase-9 seam, `run.ts:1519-1523`/`:1781-1789`) — symmetry over silence on a real user question. Corrupt-DOCX→`.txt` fallback (`run.ts:1696-1699`) deliberately NOT claimed (rare degradation the save dialog already surfaces; promising it would teach the model to hedge every DOCX answer). Version → 1.1.0. |
+| **SK-2** | HIGH | P2 `4f541c1` | **fixed (design, not a patch)** — the 200-change render cap in `renderChangesForModel`/`renderRedline` fired without setting `truncated`, so >200 coalesced changes within the token budget produced a prompt asserting "complete and exact" over a capped list. `DIFF_RENDER_MAX` now exported from `services/diff` as the single source of truth and passed explicitly to both renderers at both consumers; `retrieveCompareDiff` ORs `changes.length > DIFF_RENDER_MAX` into `truncated` (cap + flag can't drift); the PARTIAL prompt wording generalized to be true for BOTH truncation causes. Second consumer `doctasks/handlers/compare.ts` emits an explicit PARTIAL note under `## Exact changes` when the cap fires. New teeth-checked `tests/unit/rag-compare-diff-truncation.test.ts`. Version → 1.1.0. |
+| **SK-3a** | MED | P2 `4f541c1` | **fixed (wording half)** — what-changed's scope rule ("the app replies … before you are ever called") was false on the `intends()`-miss fall-through and at 0 docs; rewritten inside paragraph 0 to discriminate on what the model can SEE — A/B labels or an exact-changes block ⇒ compare; ordinary passages with no diff ⇒ simply answer from the material. |
+| **SK-3b** | MED | P2 (declined) | **declined runtime change — decision D-P2a.** Suppressing the user-chosen compare fence on the relevance fall-through would silently drop instructions the user deliberately selected (the per-message glyph shows the skill applied), and the reworded rule 1 is coherent on both paths. Recorded in [`known-limitations.md`](known-limitations.md) beside the SKA-8 fall-through record. Revisit only if the gold set later shows comparison-framed answers on non-compare fall-through turns. |
+| **SK-4** | MED | P3 `1af932b` | **fixed** — deadline-obligation-finder promised "one or more documents"; the `analysis: whole-doc` engine requires exactly one in-scope doc (`whole-doc-skills.ts:99-103`), multi-doc → the W2 pre-pass narrows or asks. Description + body reworded to single-document ("in a document" / "in einem Dokument", formal register) + a what-changed-style "the app handles document scope … do not police this" sentence; the coverage-honesty rule kept. Multi-doc sweep rejected (D45 one-doc-at-a-time posture; its own plan if beta demand appears). Version → 1.1.0. |
+| **SK-5** | MED | P4 `8063a1e` | **fixed** — the two bank-statement aux files taught the instruction-only v1 (decline to sum/validate/categorize/export) — the opposite of shipped behavior. `examples/reading-a-statement.md` rewritten around the stable honesty posture (kept the three-question structure; "Where the numbers come from" replaces "What this version does not do"; exports always ask before saving); `schemas/transaction.schema.json` `description` fixed to reality (produced by `extract_transactions`, mirrors + pinned to the TS export). Files are never injected at runtime but ride skill export (`installer.ts:840-862`) — first thing a contributor reads. |
+| **SK-6** | MED | P4 `8063a1e` | **fixed** — `transaction.schema.json` was a hand-maintained mirror with no parity pin. `TRANSACTION_ROW_SCHEMA` exported from `tools/bank-statement.ts` (test-motivated, comment says so); new `tests/unit/skills-transaction-schema-parity.test.ts` structurally compares the JSON to the TS export (property-name set, per-property `type`/`pattern`/`minimum`/`minLength`, `required`, `additionalProperties`), the intentional `category` delta encoded by name. Teeth-checked (`^[A-Z]{3}$`→`{4}$` → RED). §8 carries the pin note. |
+| **SK-7** | MED | P3 `1af932b` | **fixed** — share-safe-review named the sibling skill by EN name only and quoted EN boilerplate under an "answer in the user's language" rule. §4 → "Document Redaction / Dokument schwärzen" (SKA-42 name-both precedent); §3/§4 boilerplate reframed to license translation ("in the user's language, equivalent to:" / "tell the user, in their language:") with the English kept as canonical content. Version → 1.1.0. |
+| **SK-8** | LOW | P1 `c08a0a9` | **fixed** — "just below the chat box" was spatially wrong (`SkillRunBar` renders ABOVE the composer, `ChatScreen.tsx:1721,1736`). Fixed in the same commit across both SKILL.md bodies, the EN routing copy, and the DE ("direkt über dem Eingabefeld", formal register `skill-i18n.test.ts` gates) so the model's directions and the on-screen UI agree. |
+| **SK-9** | LOW | P1 `c08a0a9` | **fixed** — redaction body enumerated only the three default locate categories; added a clause noting that when the user steers the scope, other located items are masked as `[REDACTED]` (default still the three, matching `DEFAULT_LOCATE_DIRECTIVE`). |
+| **SK-10** | LOW | P3 `1af932b` | **fixed** — invoice honesty rule listed 2 of `validateInvoiceTotals`' 3 checks; added "or the tax doesn't match the stated rate" (`taxMatchesRate`) + the closing paragraph's "add up (including the stated tax rate)". |
+| **SK-11** | LOW | P1 `c08a0a9` | **fixed** — document-edit's "never repeat document text back to them" was over-broad (find/replace terms are user-typed and already in the transcript); narrowed to allow naming the user's own terms while forbidding quoting any OTHER document text. Redaction's stricter rule kept (its sensitive strings are app-detected, not user-typed). |
+| **SK-12** | LOW | P1–P5 | **adopted as convention** (see the checklist note below) — 8/9 skills were frozen at 1.0.0 despite body changes; for app skills `version` is display-only but an exported copy re-imported as a *user* skill runs `compareSemver` upgrade decisions (`installer.ts:626,713`), so a forever-1.0.0 defeats that path. Applied across P1–P4. |
+| **SK-13** | LOW | P1 `c08a0a9` | **fixed** — DOCX "byte-for-byte identical" holds for untouched nodes/parts but a rewritten node re-escapes entities (`docx-rewrite.ts` `xmlEscape`), so unchanged characters inside it are character- but not byte-stable; prose → "identical, character for character", the `docx-rewrite.ts:130-131` comment aligned. No behavior change (an entity-preserving rewriter was rejected — real complexity for zero user-visible gain). |
+| **SK-14** | LOW | P1/P3/P4 | **fixed** — the `autoFire` "score ≥ 3 bar" comment reads as the suggestion bar; added "(auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory keyword hit)" to all four tool skills' frontmatter comments (document-redaction P1, invoice + meeting-protocol P3, bank-statement P4). Comment-only. |
+| **SK-15** | LOW | P2 `4f541c1` | **fixed** — what-changed named an "Exact changes" block it never sees; the diff rule now quotes the real runtime label ("Exact word-level changes (redline)", `rag/index.ts:1168`) and defers to the block's own PARTIAL / further-changes markers. |
+| **SK-16** | INFO | — | **note (no change)** — `validate_statement_balances` is a per-row running-balance chain (`tools/bank-statement.ts:815-864`); the opening+Σ=closing tie lives in `assessCompleteness` (:504-531) on the answer layer. The composition satisfies the SKILL.md honesty rule; the tool name just covers less than the sentence implies. Recorded in known-limitations. |
+| **SK-17** | INFO | — | **note (watch beta)** — meeting-protocol's "audio transcript" works via the audio-file **import** path (AudioParser → document); live dictation returns composer text and never becomes a document (`registerDictationIpc.ts:76-120`), so the skill runs over imported audio documents only, not over a dictation. A body clause is the cheap fix if beta users hit it. Recorded in known-limitations. |
+| **SK-18** | INFO | — | **note (do NOT "fix")** — invoice/bank `mimeTypes` deliberately omit `text/plain` while the bodies say "or pasted text"; pasted text carries no mime signal and a lone keyword (=2) already clears the suggest bar, so the two are consistent — "fixing" it would be a precision regression. Recorded in known-limitations. |
+
+**Version convention (SK-12) — part of the SKILL.md-editing checklist.** For a bundled app skill
+`version:` is display-only (upgrade `compareSemver` is gated on `existingUser`, `installer.ts:626,713`);
+but an **exported** bundled skill re-imported as a *user* skill DOES run semver upgrade/downgrade
+decisions, so a frozen 1.0.0 defeats that path. Rule going forward: **bump minor when the model-visible
+body changes, patch when only aux files / frontmatter comments change.** This wave: document-edit /
+document-redaction / what-changed / deadline-obligation-finder / share-safe-review / invoice → **1.1.0**
+(body); meeting-protocol → **1.1.1** (comment-only patch); bank-statement → **1.0.1** (aux + comment only,
+body untouched). Fold this line into every future SKILL.md-editing pass.
+
+**§-anchor legend (keeps the code/test/doc citations resolvable after the report + plan were retired).**
+In-code comments and pinned docs/tests cite this audit three ways — `audit SK-n` (terse in-code form),
+`skills-audit-2026-07-07 SK-n` (full form), and a bare `SK-n` in a test `describe`/comment. All resolve to
+the table above. Live citations at retirement:
+- **SK-2** — `services/diff/index.ts:280`, `services/doctasks/handlers/compare.ts:189`,
+  `services/rag/index.ts:904,1176` (`audit SK-2`); the `rag-design.md` render-cap invariant note +
+  `tests/unit/rag-compare-diff-truncation.test.ts` (`skills-audit-2026-07-07 SK-2` / bare `SK-2`).
+- **SK-6** — `services/skills/tools/bank-statement.ts:53` (`audit SK-6`); this record's §8 pin note +
+  `tests/unit/skills-transaction-schema-parity.test.ts` (`skills-audit-2026-07-07 SK-6`).
+- **SK-3b** — the `known-limitations.md` fall-through record (`skills-audit-2026-07-07 SK-3b, decision
+  D-P2a`).
+
+Report + plan retired: `git rm docs/skills-audit-2026-07-07.md docs/skills-remediation-plan-2026-07-07.md`
+(recoverable in git history; the full finding bodies + the P1–P4 SHIPPED dispositions live there, and in
+the BUILD_STATE dated 2026-07-07 Phase entries). This ledger is the durable index.
+
 ### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)
 
 The C-wave of the beta-feedback wave (#22 LLM-located redaction, #23 targeted edits) asks for one
