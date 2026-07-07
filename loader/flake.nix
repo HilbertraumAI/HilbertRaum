@@ -149,6 +149,16 @@
       in {
         packages = {
           inherit nixosFhs nixosFhs-arm64 macosx-sdk;
+          # The packaging devshell, bundled as a Docker image (dockerTools, nix-inside, no
+          # Dockerfile/daemon): the same build toolchain + env as `nix develop`, so a
+          # flake-orchestrated `make image` runs unchanged in-container. env carries
+          # HILBERTRAUM_DEVSHELL=1, so the Makefile's in-devshell guard passes.
+          #   nix build .#devshell-image && docker load < result   (or: make docker-image)
+          devshell-image = loaderLib.mkDevImage {
+            name = "hilbertraum-devshell";
+            packages = devEnv.packages;
+            env = devEnv.env;
+          };
           xtask = loaderLib.xtask;
           libdmg-hfsplus = loaderLib.libdmg-hfsplus;
           # pinned userspace image tooling (mtools/dosfstools/exfatprogs) for make-usb-image.sh.
