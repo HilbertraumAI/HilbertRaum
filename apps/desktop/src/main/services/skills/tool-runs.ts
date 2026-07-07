@@ -175,6 +175,22 @@ export interface ToolRunDeps {
    */
   saveTextFile?: (defaultFileName: string, content: string, dialog?: SaveFileDialogMeta) => Promise<boolean>
   /**
+   * Save BINARY content to a user-chosen path (save dialog + write, no encoding) — the same FS-write
+   * boundary as `saveTextFile` for the same-format DOCX export (Phase 9, D77). The path + bytes are NEVER
+   * logged/audited. Only the `redact_document` / `apply_document_edits` runners use it (a `.docx` source →
+   * a `.docx` copy); the IPC supplies it, tests inject a stub. Absent ⇒ the DOCX branch is unavailable.
+   */
+  saveBinaryFile?: (defaultFileName: string, content: Uint8Array, dialog?: SaveFileDialogMeta) => Promise<boolean>
+  /**
+   * Probe a document's stored SOURCE format + read its original bytes for the DOCX writer (Phase 9, D77) —
+   * returns `docx` + raw decrypted bytes only for a Word `.docx` source, `other` otherwise. The IPC supplies
+   * `buildOriginalDocumentReader`; tests inject a stub (or omit it ⇒ the `.txt` path). Content stays
+   * main-side — only the confirm-gated seam holds these bytes, never logged.
+   */
+  readOriginalDocument?: (documentId: string) => Promise<
+    { format: 'docx'; bytes: Uint8Array } | { format: 'other' }
+  >
+  /**
    * Re-extract a document's ordered, non-overlapping, newline-preserving parser SEGMENTS (the IPC
    * supplies `extractDocumentPreview`). This is the FAITHFUL content reach for the extract/redaction
    * tools — the stored `chunks` table collapses newlines and overlaps ~80 tokens, which breaks the
@@ -456,6 +472,11 @@ export function buildToolRunner(
           // §6.2: the redacted copy gets its own "Save redacted copy" dialog + a .txt filter (from the
           // descriptor), instead of the "Export transactions" / .csv dialog that fought the saved filename.
           saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
+          // Phase 9 (D77): a Word `.docx` source → a same-format `.docx` copy (its own `.docx` dialog).
+          saveBinaryFile: deps.saveBinaryFile
+            ? (name, content) => deps.saveBinaryFile!(name, content, descriptor.docxDialog)
+            : undefined,
+          readOriginalDocument: deps.readOriginalDocument,
           readDocumentSegments: deps.readDocumentSegments,
           // Phase 7 (D73): the LLM locate pass runs main-side in the seam via this runtime. Null ⇒ the
           // run degrades to the deterministic floor with an honest note (never a silent partial).
@@ -481,6 +502,11 @@ export function buildToolRunner(
           // §6.2: the edited copy gets its own "Save edited copy" dialog + a .txt filter (from the
           // descriptor), instead of the CSV/redacted dialog fighting the saved filename.
           saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
+          // Phase 9 (D77): a Word `.docx` source → a same-format `.docx` copy (its own `.docx` dialog).
+          saveBinaryFile: deps.saveBinaryFile
+            ? (name, content) => deps.saveBinaryFile!(name, content, descriptor.docxDialog)
+            : undefined,
+          readOriginalDocument: deps.readOriginalDocument,
           readDocumentSegments: deps.readDocumentSegments,
           // Phase 8 (D76): the LLM locate pass runs main-side in the seam via this runtime. Null ⇒ the run
           // refuses cleanly ("start a model") — there is no rule-based floor for edits.

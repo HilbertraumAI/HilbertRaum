@@ -413,13 +413,29 @@ password recovery — are documented in
   change whose text is not found verbatim at its anchor is **dropped and counted** (surfaced as
   `editedPartial`); if nothing matches, the run reports `none` and writes **no file**. **With no model
   running** — or no instruction — the run **refuses cleanly** (there is no rule-based fallback for edits),
-  never a silent nothing. The instruction comes from the conversation's latest user message. Output is a
-  plain **`.txt`** copy this phase; keeping the original file's format (DOCX in → DOCX out) is Phase 9.
+  never a silent nothing. The instruction comes from the conversation's latest user message. Output follows
+  the **source format** (Phase 9, D77 — see the same-format-export bullet below): a **Word `.docx`** source
+  is edited in place and stays a `.docx` (formatting preserved); every other source produces a `.txt` copy.
   Privacy matches redaction: the edited text is written **only** to the user-chosen file, and the
   find/replace values never reach any log/audit/`skill_runs` row (they ride as tool input, which the gate
   never logs) — only per-run **counts** are surfaced (architecture.md "Skills — design record" §22). The
   edited copy is a **starting point that still needs a human review** before sharing; the SKILL.md body and
   the run's "done" copy both say so.
+  - **Same-format export keeps DOCX as DOCX; other formats save as `.txt` (Skills Phase 9, #22/#23, D77;
+    architecture.md "Skills — design record" §23).** When the source is a **Word `.docx`**, redaction and
+    targeted-edit save a **same-format `.docx` copy** — styles, numbering, tables and headers survive because
+    the app changes **only the text inside `<w:t>` nodes** of `word/document.xml` and copies every other zip
+    part **byte-identical** (the diff-verifiable "unchanged outside the located spans" guarantee extends from
+    the extracted text to the real file). For a DOCX source the locate + verify pass **re-runs on the DOCX
+    text layer** (which differs from the extracted preview text), so the masks/edits land in the text that is
+    actually rewritten. **A DOCX with no readable `word/document.xml`** (corrupt / unusual package) falls back
+    to the `.txt` copy. **PDF re-export is out of scope** (writing PDFs is a separate problem): a **PDF or any
+    non-DOCX source saves as `.txt`** (segment-faithful — the newline-preserving parser segments, so PDF line
+    structure survives as well as extraction allows, and per-char `█` masks keep line length). A **scanned /
+    image PDF** has only its **OCR text layer** to work on — there is no reliable way to paint masks back onto
+    the page image, so such a document is best redacted from its `.txt` output, not in place. A **DOCX whose
+    `<w:t>` runs split a word across multiple runs** is handled (a span crossing a run boundary splits across
+    the nodes); a mask/edit is never allowed to change a paragraph break or any non-`<w:t>` markup.
   - **Date masking now accepts EITHER field order and a 2-digit year — the BL-N6 leak is closed (U2,
     audit §5.7).** For *redaction* (unlike extraction, which stays day-first) a candidate is masked when it
     parses in **day-first OR month-first** order, so a **US-ordered** `mm/dd/yyyy` value like `12/31/2026`

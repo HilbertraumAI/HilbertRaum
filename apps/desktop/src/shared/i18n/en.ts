@@ -1755,6 +1755,8 @@ export const en = {
   'main.dialog.exportRedacted': 'Save redacted copy',
   'main.dialog.exportEdited': 'Save edited copy',
   'main.dialog.filterText': 'Text file',
+  // Phase 9 (D77): same-format DOCX export — a Word source keeps its `.docx` (formatting preserved).
+  'main.dialog.filterDocx': 'Word document',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
   'main.skills.incompatible': 'This skill needs a newer version of the app. Update to use it.',

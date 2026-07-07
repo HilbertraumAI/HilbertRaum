@@ -11,7 +11,7 @@ import type {
   StartSkillRunRequest,
   StartSkillRunResult
 } from '../../shared/types'
-import { buildDocumentSegmentReader } from './documentSegments'
+import { buildDocumentSegmentReader, buildOriginalDocumentReader } from './documentSegments'
 import { getLatestUserMessage } from '../services/chat'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -89,6 +89,30 @@ export function registerSkillsIpc(ctx: AppContext): void {
     await writeFile(result.filePath, content, 'utf8')
     return true
   }
+
+  // Phase 9 (D77): the MAIN-side BINARY write for the same-format DOCX export — the `.docx` sibling of
+  // `saveTextFile` (a `.docx` source → a `.docx` copy). Identical save-dialog + privacy posture (the path +
+  // bytes are NEVER logged/audited); the only difference is `writeFile` gets a Buffer with no `'utf8'`.
+  const saveBinaryFile = async (
+    defaultFileName: string,
+    content: Uint8Array,
+    dialogMeta: SaveFileDialogMeta = SAVE_DIALOG_CSV
+  ): Promise<boolean> => {
+    const win = BrowserWindow.getFocusedWindow()
+    const options = {
+      title: tMain(dialogMeta.titleKey),
+      defaultPath: defaultFileName,
+      filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
+    }
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return false
+    await writeFile(result.filePath, content)
+    return true
+  }
+
+  // Phase 9 (D77): probe a document's stored SOURCE format + read its original bytes for the DOCX writer.
+  // The seam holds the FS/cipher reach via this injected closure (the §14 ceiling); the tool never does.
+  const readOriginalDocument = buildOriginalDocumentReader(ctx)
 
   // The FAITHFUL content reach for the extract/redaction tools — ONE reader shared with the chat
   // analysis IPC (`registerRagIpc`) so the run-bar button and the chat answer can never disagree on
@@ -393,7 +417,15 @@ export function registerSkillsIpc(ctx: AppContext): void {
       // `docTasks` routes `categorize_transactions` into the doctask lane (D26 exclusion, Phase 33).
       // `runtime` (Phase 7/8, D73/D76) is the active chat model for the redaction / document-edit LLM
       // locate pass — null when none runs (redaction degrades to its floor; the edit tool refuses cleanly).
-      { saveTextFile, readDocumentSegments, docTasks: ctx.docTasks, runtime: ctx.runtime?.active() ?? null }
+      // `saveBinaryFile` + `readOriginalDocument` (Phase 9, D77) drive the same-format DOCX export.
+      {
+        saveTextFile,
+        saveBinaryFile,
+        readOriginalDocument,
+        readDocumentSegments,
+        docTasks: ctx.docTasks,
+        runtime: ctx.runtime?.active() ?? null
+      }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
     try {

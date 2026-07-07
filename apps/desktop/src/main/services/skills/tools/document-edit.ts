@@ -37,7 +37,7 @@ export type { LocatedEdit } from './document-edit-locate'
 export function verifyAndSpliceEdits(
   text: string,
   edits: readonly LocatedEdit[]
-): { text: string; applied: number; dropped: number } {
+): { text: string; applied: number; dropped: number; spans: TransformSpan[] } {
   const spans: TransformSpan[] = []
   let unverifiable = 0
   for (const e of edits) {
@@ -51,8 +51,15 @@ export function verifyAndSpliceEdits(
   }
   const result = applySpans(text, spans)
   // A span dropped by `applySpans` (it overlapped an already-applied edit) is a drop too — the change was
-  // requested but could not be placed. `dropped` = unverifiable finds + overlap-skipped spans.
-  return { text: result.text, applied: result.applied.length, dropped: unverifiable + result.skipped.length }
+  // requested but could not be placed. `dropped` = unverifiable finds + overlap-skipped spans. `spans`
+  // returns the APPLIED spans (Phase 9 — the DOCX writer distributes these across the `<w:t>` node map
+  // instead of splicing the flat string; `applySpansToDocx(bytes, spans)` mirrors `result.text`).
+  return {
+    text: result.text,
+    applied: result.applied.length,
+    dropped: unverifiable + result.skipped.length,
+    spans: result.applied
+  }
 }
 
 export interface ApplyDocumentEditsOutput {

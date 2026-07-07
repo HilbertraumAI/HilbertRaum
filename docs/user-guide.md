@@ -649,8 +649,14 @@ anything else on the drive.
 > click **Apply text edits** and choose where to save the copy. A running model is needed: it only *finds*
 > the exact text to change, and the app splices in the replacement — it **never rewrites your document**,
 > so nothing else is touched (everything you didn't ask to change stays identical). Any requested text that
-> isn't found verbatim is left alone and reported as skipped. This step saves a plain **`.txt`** copy;
-> review it before you share it.
+> isn't found verbatim is left alone and reported as skipped. Review the copy before you share it.
+
+> **Same format in, same format out.** When your document is a **Word `.docx`**, both redaction and
+> document-edit save the copy as a **`.docx` that keeps its formatting** — styles, headings, tables and
+> page layout stay intact, because the app only changes the text that had to change and leaves everything
+> else in the file exactly as it was. **PDFs and other formats save as a `.txt`** copy that keeps the line
+> layout (writing back into a PDF isn't supported). A **scanned PDF** (an image of a page) can only be
+> worked on through the text the app recognised from it, so redact those from the `.txt` output.
 
 ### Manage skills (open **Skills** in the sidebar)
 

@@ -157,7 +157,7 @@ function maskStep(
   token: string,
   strategy: ReplacementStrategy,
   accept: (shadowMatch: string, original: string) => boolean | MaskSpan = () => true
-): { state: MaskState; count: number } {
+): { state: MaskState; count: number; spans: TransformSpan[] } {
   const { text, shadow } = state
   const spans: TransformSpan[] = []
   for (const m of shadow.matchAll(re)) {
@@ -170,10 +170,12 @@ function maskStep(
     spans.push({ start: from, length: sub.length, replacement: replacementText(strategy, token, sub.length) })
   }
   // Non-overlapping + ascending by construction (matchAll yields disjoint matches; each sub-span sits
-  // inside its own match), so applySpans applies every span — count is the number built.
+  // inside its own match), so applySpans applies every span — count is the number built. `spans` is
+  // returned too (in THIS pass's text coordinates) so `redactText` can accumulate the whole span set for
+  // the Phase-9 DOCX writer (only meaningful as a single-coordinate set under `perChar` — see redactText).
   const newText = applySpans(text, spans).text
   const newShadow = applySpans(shadow, spans).text
-  return { state: { text: newText, shadow: newShadow }, count: spans.length }
+  return { state: { text: newText, shadow: newShadow }, count: spans.length, spans }
 }
 
 /** One-shot wrapper for the exported per-detector functions: compute the shadow, run one TOKEN pass.
@@ -432,12 +434,21 @@ export function redactText(
   text: string
   counts: RedactionCounts
   totalRedactions: number
+  /**
+   * The union of every masked span across the six passes (Phase 9 — the DOCX writer applies these to the
+   * `<w:t>` node map instead of the flat string). VALID AS A SINGLE-COORDINATE splice set — all offsets
+   * addressing `input` — ONLY under `strategy: 'perChar'`, where every mask is the SAME length as what it
+   * replaces so a later pass's match offset equals its offset in `input`. Under `token` the per-pass
+   * lengths change, so these spans are per-pass and NOT a coherent set — token callers use `.text`.
+   */
+  spans: TransformSpan[]
 } {
   // The shadow is computed ONCE and threaded through the passes (maskStep preserves the
   // shadow===detectionShadow(text) invariant — see MaskState); recomputing it per detector made an
   // NBSP-dense multi-MB hostile document a >1 s synchronous main-process stall (R8 perf review).
   let state: MaskState = { text: input, shadow: detectionShadow(input) }
   const counts: RedactionCounts = { email: 0, phone: 0, iban: 0, card: 0, date: 0, url: 0 }
+  const spans: TransformSpan[] = []
   const step = (
     re: RegExp,
     token: string,
@@ -445,6 +456,7 @@ export function redactText(
   ): number => {
     const r = maskStep(state, re, token, strategy, accept)
     state = r.state
+    spans.push(...r.spans)
     return r.count
   }
 
@@ -457,7 +469,7 @@ export function redactText(
 
   const totalRedactions =
     counts.email + counts.phone + counts.iban + counts.card + counts.date + counts.url
-  return { text: state.text, counts, totalRedactions }
+  return { text: state.text, counts, totalRedactions, spans }
 }
 
 /**
@@ -559,6 +571,14 @@ export interface RedactWithEntitiesResult {
   droppedEntities: number
   /** Items hidden overall = regex matches + located-entity occurrences masked (the content-free total). */
   totalRedactions: number
+  /**
+   * The union of every masked span (confirmed-entity occurrences ∪ the regex-floor matches), for the
+   * Phase-9 DOCX writer: `applySpansToDocx(bytes, spans)` reproduces `.text` on the flat string but
+   * distributes the same masks across the `<w:t>` node map. VALID AS A SINGLE-COORDINATE splice set —
+   * all offsets addressing `input` — ONLY under `strategy: 'perChar'` (same-length masks; see redactText).
+   * The `.txt` path uses `.text`; only the DOCX branch (always perChar) reads `.spans`.
+   */
+  spans: TransformSpan[]
 }
 
 /**
@@ -585,7 +605,12 @@ export function redactWithEntities(
     entityCounts,
     entityMaskCount,
     droppedEntities: dropped,
-    totalRedactions: floor.totalRedactions + entityMaskCount
+    totalRedactions: floor.totalRedactions + entityMaskCount,
+    // The DOCX writer's span set (Phase 9): the APPLIED entity spans (verified against pristine `input`)
+    // ∪ the floor spans (matched over the entity-masked text). Under `perChar` both address `input`
+    // (same-length masks) and are mutually disjoint — the floor cannot re-match inside a █ entity mask —
+    // so `applySpans(input, spans).text === floor.text`. See RedactWithEntitiesResult.spans.
+    spans: [...swept.applied, ...floor.spans]
   }
 }
 

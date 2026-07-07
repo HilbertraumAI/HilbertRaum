@@ -13,8 +13,10 @@ import {
   skillInstallId
 } from '../../src/main/services/skills/registry'
 import { recordToInfo } from '../../src/main/services/skills/installer'
-import { runDocumentRedaction } from '../../src/main/services/skills/run'
+import { runDocumentRedaction, type OriginalDocumentBytes } from '../../src/main/services/skills/run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
+import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
+import { makeDocx, otherDocxParts } from '../helpers/docx'
 import type { AuditEventType, RunnableTool } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
@@ -482,5 +484,122 @@ describe('document-redaction — Phase 7 LLM locate pass (D73/D75/D78)', () => {
     expect(res.resultKind).toBe('redactedFloor') // degraded, but the copy WAS saved
     expect(written).toContain('Jane Doe') // the failed locate contributed nothing; the floor still ran
     expect(written).not.toContain('jane.doe@example.com')
+  })
+})
+
+describe('document-redaction — Phase 9 same-format DOCX export (D77)', () => {
+  const skillInstallId = 'app:document-redaction'
+
+  it('a DOCX source is redacted IN PLACE: a .docx copy, masked <w:t> text, every other part byte-identical', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'ignored — the DOCX branch reads the injected original bytes')
+    const original = await makeDocx(['Contact jane.doe@example.com about the Wien office.'])
+    const { audit } = capturingAudit()
+    let savedBinary: { name: string; bytes: Uint8Array } | null = null
+    let textCalled = false
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+      saveBinaryFile: async (name, bytes) => {
+        savedBinary = { name, bytes }
+        return true
+      },
+      saveTextFile: async () => {
+        textCalled = true
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    // The email is masked by the deterministic floor over the DOCX text layer (no runtime here).
+    expect(res.redactionCount).toBe(1)
+    // The output is a same-format .docx via the BINARY save (never the .txt path).
+    expect(textCalled).toBe(false)
+    expect(savedBinary!.name).toBe('redacted.docx')
+    // Re-read the saved DOCX: the email is masked (█), the surrounding text survives.
+    const layer = await readDocxTextLayer(savedBinary!.bytes)
+    expect(layer.text).not.toContain('jane.doe@example.com')
+    expect(layer.text).toContain('█')
+    expect(layer.text).toContain('Wien office')
+    // Every non-document.xml part is byte-identical — styles/formatting untouched (the D77 guarantee).
+    const before = await otherDocxParts(original)
+    const after = await otherDocxParts(savedBinary!.bytes)
+    for (const [path, b64] of before) expect(after.get(path), `${path} byte-identical`).toBe(b64)
+  })
+
+  it('a DOCX source with a running model sweeps a located name into the .docx (resultKind redacted)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'ignored')
+    const original = await makeDocx(['Prepared by Jane Doe.', 'Please thank Jane Doe again.'])
+    const { audit } = capturingAudit()
+    const runtime = scriptedRuntime(() => JSON.stringify({ entities: [{ text: 'Jane Doe', category: 'name', line: 1 }] }))
+    let savedBinary: Uint8Array | null = null
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+      saveBinaryFile: async (_name, bytes) => {
+        savedBinary = bytes
+        return true
+      },
+      saveTextFile: async () => true
+    })
+    expect(res.ok).toBe(true)
+    expect(res.resultKind).toBe('redacted') // the model ran ⇒ not the degraded floor discriminator
+    const layer = await readDocxTextLayer(savedBinary!)
+    expect(layer.text).not.toContain('Jane Doe') // BOTH occurrences swept across the paragraphs (D75)
+    expect(layer.text).toContain('█')
+  })
+
+  it('source-format branch: a non-DOCX source keeps the unchanged .txt path (no binary write)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, PII_TEXT)
+    const { audit } = capturingAudit()
+    let textWrite: string | null = null
+    let binaryCalled = false
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      // The source is a PDF/text document → the reader reports 'other', so the .txt path runs unchanged.
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'other' }),
+      saveBinaryFile: async () => {
+        binaryCalled = true
+        return true
+      },
+      saveTextFile: async (name, content) => {
+        textWrite = name
+        void content
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(binaryCalled).toBe(false)
+    expect(textWrite).toBe('redacted.txt')
+  })
+
+  it('a corrupt DOCX (unreadable text layer) falls back to the segment-faithful .txt path', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, PII_TEXT)
+    const { audit } = capturingAudit()
+    let textWrite: string | null = null
+    let binaryCalled = false
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      // Claims DOCX but the bytes are not a Word zip → readDocxTextLayer throws → .txt fallback.
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: new Uint8Array([1, 2, 3, 4]) }),
+      saveBinaryFile: async () => {
+        binaryCalled = true
+        return true
+      },
+      saveTextFile: async (name) => {
+        textWrite = name
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(binaryCalled).toBe(false)
+    expect(textWrite).toBe('redacted.txt')
   })
 })

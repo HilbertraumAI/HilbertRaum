@@ -6397,6 +6397,71 @@ find/replace value is renamed out and never touches audit/log/skill_runs), + the
 (vocabulary 8→9, skillmd-parity `ALL_APP_SKILL_IDS`, eval label space + 4 corpus true positives,
 tool-registry list). Suite 3773/47 (was 3739; +34).
 
+### §23 Same-format DOCX export — `<w:t>` node rewrite (beta-feedback-2026-07 Phase 9, #22/#23, D77)
+
+The export half of the C wave: **DOCX in → DOCX out with formatting intact.** A Word `.docx` source is
+redacted / edited IN PLACE — styles, numbering, tables, headers and every other zip part survive because
+the ONLY thing that changes is the text CONTENT inside `<w:t>` nodes of `word/document.xml`. This extends the
+D58 "byte-identity outside the located spans" guarantee from the extracted text to the real file: every
+non-`document.xml` zip part is byte-identical (decompressed), and inside `document.xml` every character
+outside a located span is byte-identical too. PDF/TXT output stays `.txt` (the segment-faithful path); **PDF
+re-export is out of scope** (D77 — writing PDFs is a separate problem; a scanned/image PDF has only an OCR
+text layer to redact). Builds on the §20 span engine, the §21 redaction locate→verify→sweep, and the §22
+edit locate→verify→splice.
+
+- **The faithful `.txt` half was already satisfied** (Phase 7/8): both seams read via `resolveDocumentReader`,
+  which prefers the newline-preserving parser SEGMENTS (`readDocumentSegments`) over the collapsed chunk
+  table, and the per-char `█` masks (D74) preserve line length — the Phase-7 test "writes a FAITHFUL copy
+  from the verbatim segments" pins it. Phase 9 adds the DOCX writer on top.
+- **The re-anchoring problem (the crux, D77).** The DOCX `<w:t>` text layer differs from the
+  mammoth-extracted chunk text the model located against in Phase 7/8 (mammoth flattens paragraph structure;
+  the `<w:t>` layer concatenates run text with a `\n` at each `</w:p>`). So spans verified against the
+  extracted text do NOT map to DOCX offsets. The flow for a DOCX source: build the `<w:t>` text layer, **RE-RUN
+  the locate pass + verify over THAT layer** (not the extracted text) — producing `TransformSpan[]` in
+  DOCX-text-layer offsets — then splice those spans across the node map. The seam reuses the existing PURE
+  halves: `redactWithEntities(...).spans` and `verifyAndSpliceEdits(...).spans` now expose the span union
+  (Phase 9 additions) so the DOCX writer takes the SPANS, not the final flat string.
+- **New module `services/export/docx-rewrite.ts`** (pure, main-side, no fs/net):
+  - `readDocxTextLayer(bytes)` → `{ text, nodes }` — loads the zip (jszip), concatenates every `<w:t>`
+    node's UNESCAPED text in document order (paragraph-newline separated) and builds a node→offset map.
+  - `applySpansToDocx(bytes, spans)` → `Buffer` — re-parses the SAME node map, rewrites only the `<w:t>`
+    nodes a span touches (a span crossing a run boundary splits across nodes; the replacement is emitted once,
+    in the node where the span starts; unchanged nodes keep their raw escaped bytes verbatim), and re-zips
+    with every other part copied through. XML is touched only inside `<w:t>` text content.
+  - `jszip` (already transitive under mammoth) is promoted to a **direct dependency** and imported lazily
+    (only loads when a `.docx` is actually rewritten).
+- **Reading the ORIGINAL stored bytes.** The seams reach content only through segments/chunks, never the raw
+  file. `readStoredDocumentBytes` (ingestion) decrypts the stored copy to raw bytes for ANY format (mirror of
+  `readStoredDocumentText` but binary); `buildOriginalDocumentReader` (IPC) probes the source format by the
+  stored TITLE extension and returns `{ format:'docx', bytes }` ONLY for a Word source (a non-DOCX source is
+  never decrypted just to be discovered non-DOCX). The §14 ceiling holds: the **seam** holds the FS/cipher
+  reach via the injected closure; the pure tool never does.
+- **Binary write + save dialog.** `saveBinaryFile` (IPC) is the `.docx` sibling of `saveTextFile` (identical
+  save-dialog + privacy posture, `writeFile` with a Buffer, no `'utf8'`). Each document-transform descriptor
+  names its own `docxDialog` (a `.docx` filter) beside its `.txt` `dialog`; the source-format branch lives in
+  the **seam** (keyed off the document's stored extension via `readOriginalDocument`): DOCX source → the DOCX
+  writer + `redacted.docx`/`edited.docx`; everything else → the unchanged `.txt` path.
+- **The seam branch (both `runDocumentRedaction` + `runDocumentEdit`).** A DOCX source with the binary save +
+  a confirmed run: build the layer, feed it to the tool as ONE chunk (so the gate/audit/counts run THROUGH the
+  tool over exactly the rewritten layer), and the seam ALSO computes the SAME span set and splices it across
+  the node map. A structural DOCX failure (corrupt zip / no `document.xml`) FALLS BACK to the segment-faithful
+  `.txt` path so the transform still ships. The `.txt` trust model (confirm gate, `saveTextFile`) is unchanged.
+- **What Phase 9 does NOT do (recorded).** No PDF writing (PDF/scan output stays `.txt`; a scanned/image PDF
+  redacts only its OCR text layer). No DOCX *builder* (docx/docxtemplater would regenerate structure and break
+  diff-verifiability) — only `<w:t>` content is rewritten. The model still LOCATES only; it never generates
+  output text. The D58 byte-identity invariant is extended to "every non-`document.xml` zip part byte-identical,
+  every non-span `<w:t>` char byte-identical".
+
+**Tests:** `docx-rewrite.test.ts` (+6: text-layer concatenation/unescape, non-document.xml parts byte-identical
+after a rewrite, only the targeted `<w:t>` text changed, a span crossing two runs splits correctly, a
+length-changing edit across runs, umlauts/UTF-8 survive), `skills-redaction.test.ts` (+4: DOCX redacted
+in place → valid `.docx` + masked layer + parts byte-equal; a located name swept across paragraphs; the
+source-format branch; corrupt-DOCX → `.txt` fallback), `skills-document-edit.test.ts` (+2: DOCX edited in
+place, occurrence-precise; source-format branch), `skills-privacy-guard.test.ts` (+2: a DOCX-redacted PII /
+DOCX-edited find-value touches no sink), `skills-tool-registry.test.ts` (+1: the two document-transform tools
+carry a `.docx` `docxDialog`; no other tool does), + the `redactText`/`redactWithEntities`/`verifyAndSpliceEdits`
+`spans` field. Suite 3788/47 (was 3773; +15).
+
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 

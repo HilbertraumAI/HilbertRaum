@@ -1364,6 +1364,50 @@ export function readStoredDocumentText(
 }
 
 /**
+ * Read a document's STORED ORIGINAL bytes for same-format export (beta-feedback-2026-07 Phase 9, D77 —
+ * DOCX in → DOCX out). Unlike `readStoredDocumentText` (which returns UTF-8 text and refuses binary
+ * formats) this returns the raw decrypted BYTES for ANY format, so the DOCX writer can splice its `<w:t>`
+ * nodes and re-zip. In an encrypted workspace the `.enc` copy is decrypted to a transient working file
+ * (`.parse` infix — covered by the startup crash sweep) that is shredded on the way out; the plaintext
+ * bytes leave the main process only as the returned buffer, which the (confirm-gated) seam rewrites and
+ * writes to the user-chosen destination — never logged/audited (the §22-M1 content boundary). The §14
+ * capability ceiling is unchanged: the SEAM holds this FS/cipher reach via the IPC-injected closure; the
+ * pure tool never does.
+ */
+export function readStoredDocumentBytes(
+  db: Db,
+  storeDir: string,
+  documentId: string,
+  deps: Pick<IngestionDeps, 'cipher'> = {}
+): { title: string; mimeType: string | null; bytes: Buffer } {
+  const row = getRow(db, documentId)
+  if (!row) throw new Error(`Unknown document: ${documentId}`)
+  const ext = extname(row.title).toLowerCase()
+  const cipher = deps.cipher ?? null
+  const transients: string[] = []
+  try {
+    let source: string
+    if (row.stored_path && existsSync(row.stored_path)) {
+      if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+        if (!cipher) throw new Error(tMain('main.docs.exportEncrypted'))
+        source = join(storeDir, `${documentId}.parse-export-bin${ext}`)
+        cipher.decryptFile(row.stored_path, source)
+        transients.push(source)
+      } else {
+        source = row.stored_path
+      }
+    } else if (row.original_path && existsSync(row.original_path)) {
+      source = row.original_path
+    } else {
+      throw new Error(tMain('main.docs.exportGone'))
+    }
+    return { title: row.title, mimeType: row.mime_type, bytes: readFileSync(source) }
+  } finally {
+    for (const t of transients) shredFile(t)
+  }
+}
+
+/**
  * Reset documents left in a non-terminal status by a previous run (the app was killed
  * mid-ingestion) to `failed`, so the UI never shows a perpetual "in progress" with no
  * running job. Only rows last touched BEFORE `beforeIso` are affected — a live in-session

@@ -14,10 +14,11 @@ import {
 } from './tools/bank-statement'
 import { CATEGORIZER_CATEGORIES } from './categorizer'
 import { withDocumentLock } from './doc-lock'
-import type { RedactDocumentOutput } from './tools/redaction'
+import { redactWithEntities, type RedactDocumentOutput } from './tools/redaction'
 import { locateEntities, type LocatedEntity } from './tools/redaction-locate'
-import type { ApplyDocumentEditsOutput } from './tools/document-edit'
+import { verifyAndSpliceEdits, type ApplyDocumentEditsOutput } from './tools/document-edit'
 import { locateDocumentEdits, type LocatedEdit } from './tools/document-edit-locate'
+import { readDocxTextLayer, applySpansToDocx } from '../export/docx-rewrite'
 import type { ModelRuntime } from '../runtime'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
@@ -1295,6 +1296,14 @@ export async function runCsvExport(
 
 const REDACT_TOOL_NAME = 'redact_document'
 
+/**
+ * The source-format probe + original bytes for same-format export (Phase 9, D77). The IPC injects
+ * `buildOriginalDocumentReader`, which returns `docx` + the raw decrypted bytes ONLY for a Word `.docx`
+ * source (a non-DOCX source is never decrypted just to be discovered non-DOCX). Absent (tests/legacy) ⇒ the
+ * seam takes the segment-faithful `.txt` path. The bytes are CONTENT — held only by the seam, never logged.
+ */
+export type OriginalDocumentBytes = { format: 'docx'; bytes: Uint8Array } | { format: 'other' }
+
 export interface RedactionDeps extends BankExtractionDeps {
   /**
    * Save the redacted text to a user-chosen path (MAIN-side: a save dialog + write). Returns true
@@ -1302,6 +1311,14 @@ export interface RedactionDeps extends BankExtractionDeps {
    * seam only learns whether the user saved (ids/counts boundary, §9.5/§22-M1).
    */
   saveTextFile: (defaultFileName: string, content: string) => Promise<boolean>
+  /**
+   * Save a same-format DOCX copy (binary) to a user-chosen path (Phase 9, D77). Used only when the source
+   * is a Word `.docx`; same privacy boundary as `saveTextFile` (path + bytes never logged). Absent ⇒ the
+   * DOCX branch is unavailable and the seam writes the `.txt` copy instead.
+   */
+  saveBinaryFile?: (defaultFileName: string, content: Uint8Array) => Promise<boolean>
+  /** Probe the stored source format + read its original bytes for the DOCX writer (Phase 9, D77). */
+  readOriginalDocument?: (documentId: string) => Promise<OriginalDocumentBytes>
   /** True once the user accepted the write/export confirm modal (the gate also enforces it). */
   confirmed?: boolean
   /**
@@ -1342,6 +1359,34 @@ export interface RedactionResult {
 }
 
 /**
+ * The shared Phase-7/9 redaction LOCATE step: run the model over `text` (the extracted `.txt` join OR the
+ * DOCX text layer) and report the proposed entities + whether the run DEGRADED to the deterministic floor.
+ * No runtime ⇒ degrade (entities empty). A non-abort model failure ⇒ degrade with a content-free log (the
+ * entity strings never reach it, §22-M1). Empty text ⇒ no locate, not degraded (the tool's own read
+ * surfaces an unreadable document). A USER CANCEL throws `AbortError` — the caller maps it to a calm cancel.
+ */
+async function runRedactionLocate(
+  text: string,
+  deps: RedactionDeps,
+  signal: AbortSignal
+): Promise<{ entities: LocatedEntity[]; degraded: boolean }> {
+  if (deps.runtime == null) return { entities: [], degraded: true }
+  if (text.length === 0) return { entities: [], degraded: false }
+  try {
+    const entities = await locateEntities(text, deps.instruction ?? '', {
+      runtime: deps.runtime,
+      signal,
+      onProgress: (done, total) => deps.onProgress?.({ done, total })
+    })
+    return { entities, degraded: false }
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e
+    console.error('[skills] redaction locate pass failed — degrading to the rule-based floor')
+    return { entities: [], degraded: true }
+  }
+}
+
+/**
  * `redact_document` — read the selected document, mask the detectable personal data (pure tool,
  * confirm-gated `export-file`), and write the redacted copy MAIN-side to a user-chosen path. The
  * redacted content + the chosen path never touch any log/audit; only "N items hidden" (a count) and a
@@ -1372,7 +1417,38 @@ export async function runDocumentRedaction(
     }
 
     const signal = deps.signal ?? new AbortController().signal
-    const reader = await resolveDocumentReader(db, args.documentId, deps)
+
+    // Phase 9 (D77) — SAME-FORMAT DOCX branch. A Word `.docx` source is redacted IN PLACE: build the
+    // `<w:t>` text layer, RE-RUN the locate pass over THAT layer (it differs from the mammoth-extracted
+    // chunk text the model saw in Phase 7 — the D77 re-anchor), and write a `.docx` copy whose `<w:t>` text
+    // is the only thing that changes (styles/numbering/tables/headers untouched, every other zip part
+    // byte-identical). The gate/audit/counts still run THROUGH the tool (fed the layer as one chunk); the
+    // seam additionally computes the SAME spans (`redactWithEntities(...).spans`) and splices them across
+    // the node map. A structural DOCX failure (corrupt zip / no document.xml) FALLS BACK to the `.txt`
+    // path so redaction still ships. Requires the binary save + a confirmed run (the IPC already gated it).
+    let docxLayer: string | null = null
+    let docxBytes: Uint8Array | null = null
+    if (deps.readOriginalDocument && deps.saveBinaryFile && deps.confirmed === true) {
+      const original = await deps.readOriginalDocument(args.documentId)
+      if (original.format === 'docx') {
+        try {
+          docxLayer = (await readDocxTextLayer(original.bytes)).text
+          docxBytes = original.bytes
+        } catch {
+          // Not a rewritable Word document (corrupt zip / no document.xml) — fall back to the .txt path.
+          console.error('[skills] redaction DOCX layer unreadable — falling back to the text copy')
+          docxLayer = null
+          docxBytes = null
+        }
+      }
+    }
+    const isDocx = docxLayer !== null && docxBytes !== null
+
+    // The reader the tool reads through: the DOCX text layer as one chunk (so the tool verifies + counts
+    // over exactly the rewritten layer), or the segment-faithful reader for the .txt path.
+    const reader: SkillToolContext['readDocumentChunks'] = isDocx
+      ? (id: string) => (id === args.documentId ? [{ text: docxLayer as string, page: null, index: 0 }] : [])
+      : await resolveDocumentReader(db, args.documentId, deps)
     const ctx: SkillToolContext = {
       documentIds,
       readDocumentChunks: reader,
@@ -1381,41 +1457,30 @@ export async function runDocumentRedaction(
       audit: deps.audit
     }
 
-    // Phase 7 LOCATE pass (D73/D75): the model proposes name/address/org spans over the SAME text the
-    // tool will verify against; the tool then confirms each verbatim and sweeps all occurrences. The
-    // model NEVER generates the output text. Read the joined text here (the reader is a cheap in-memory
-    // closure after resolve, so the tool re-reading it costs nothing). With no runtime — or a locate
-    // failure that is NOT a user cancel — the run DEGRADES to the deterministic floor with an honest
-    // note (`degraded`), never a silent partial. A user cancel throws AbortError → the calm cancel below.
+    // Phase 7 LOCATE pass (D73/D75): the model proposes name/address/org spans over the SAME text the tool
+    // verifies against (the DOCX layer or the extracted text); the tool then confirms each verbatim and
+    // sweeps all occurrences. The model NEVER generates the output text. With no runtime — or a locate
+    // failure that is NOT a user cancel — the run DEGRADES to the deterministic floor with an honest note
+    // (`degraded`), never a silent partial. A user cancel throws AbortError → the calm cancel below.
+    let joined = ''
+    try {
+      joined = reader(args.documentId).map((c) => c.text).join('\n')
+    } catch {
+      joined = '' // an unreadable document surfaces through the tool's own read below; skip locate
+    }
     let entities: LocatedEntity[] = []
-    let degraded = deps.runtime == null
-    if (deps.runtime != null) {
-      let joined = ''
-      try {
-        joined = reader(args.documentId).map((c) => c.text).join('\n')
-      } catch {
-        joined = '' // an unreadable document surfaces through the tool's own read below; skip locate
+    let degraded: boolean
+    try {
+      const located = await runRedactionLocate(joined, deps, signal)
+      entities = located.entities
+      degraded = located.degraded
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        // A user cancel mid-locate — calm cancel (B2): nothing written, recorded 'cancelled'.
+        finishRun(db, runId, 'cancelled', now(), null, null)
+        return { ok: false, runId, cancelled: true, error: 'Redaction cancelled. Nothing was saved.' }
       }
-      if (joined.length > 0) {
-        try {
-          entities = await locateEntities(joined, deps.instruction ?? '', {
-            runtime: deps.runtime,
-            signal,
-            onProgress: (done, total) => deps.onProgress?.({ done, total })
-          })
-        } catch (e) {
-          if (e instanceof DOMException && e.name === 'AbortError') {
-            // A user cancel mid-locate — calm cancel (B2): nothing written, recorded 'cancelled'.
-            finishRun(db, runId, 'cancelled', now(), null, null)
-            return { ok: false, runId, cancelled: true, error: 'Redaction cancelled. Nothing was saved.' }
-          }
-          // A genuine model failure (runtime present but errored) — degrade to the floor, don't fail the
-          // whole redaction. Content-free local log only (§22-M1); the entity strings never reach it.
-          console.error('[skills] redaction locate pass failed — degrading to the rule-based floor')
-          entities = []
-          degraded = true
-        }
-      }
+      throw e
     }
 
     const result = await runSkillTool(tool, {
@@ -1448,7 +1513,15 @@ export async function runDocumentRedaction(
     }
     let saved: boolean
     try {
-      saved = await deps.saveTextFile('redacted.txt', output.redactedText)
+      if (isDocx) {
+        // Same-format write (D77): the SAME perChar span set the tool applied (identical inputs ⇒ identical
+        // spans) spliced across the `<w:t>` node map + rezip — every other part byte-identical.
+        const spans = redactWithEntities(docxLayer as string, entities, 'perChar').spans
+        const outBytes = await applySpansToDocx(docxBytes as Uint8Array, spans)
+        saved = await deps.saveBinaryFile!('redacted.docx', outBytes)
+      } else {
+        saved = await deps.saveTextFile('redacted.txt', output.redactedText)
+      }
     } catch {
       console.error('[skills] redaction failed to write')
       const msg = 'The file could not be saved. Nothing was changed.'
@@ -1510,6 +1583,13 @@ export interface DocumentEditDeps extends BankExtractionDeps {
    * learns whether the user saved (ids/counts boundary, §9.5/§22-M1).
    */
   saveTextFile: (defaultFileName: string, content: string) => Promise<boolean>
+  /**
+   * Save a same-format DOCX copy (binary) to a user-chosen path (Phase 9, D77). Used only when the source
+   * is a Word `.docx`; same privacy boundary as `saveTextFile`. Absent ⇒ the DOCX branch is unavailable.
+   */
+  saveBinaryFile?: (defaultFileName: string, content: Uint8Array) => Promise<boolean>
+  /** Probe the stored source format + read its original bytes for the DOCX writer (Phase 9, D77). */
+  readOriginalDocument?: (documentId: string) => Promise<OriginalDocumentBytes>
   /** True once the user accepted the write/export confirm modal (the gate also enforces it). */
   confirmed?: boolean
   /**
@@ -1598,7 +1678,32 @@ export async function runDocumentEdit(
     }
 
     const signal = deps.signal ?? new AbortController().signal
-    const reader = await resolveDocumentReader(db, args.documentId, deps)
+
+    // Phase 9 (D77) — SAME-FORMAT DOCX branch (mirrors `runDocumentRedaction`): a Word `.docx` source is
+    // edited IN PLACE. Build the `<w:t>` text layer, RE-RUN the locate pass over it (the D77 re-anchor), and
+    // write a `.docx` copy whose only change is the edited `<w:t>` text. A structural DOCX failure falls
+    // back to the `.txt` path. The tool runs over the same layer (gate/audit/counts); the seam computes the
+    // SAME spans (`verifyAndSpliceEdits(...).spans`) and splices them across the node map.
+    let docxLayer: string | null = null
+    let docxBytes: Uint8Array | null = null
+    if (deps.readOriginalDocument && deps.saveBinaryFile) {
+      const original = await deps.readOriginalDocument(args.documentId)
+      if (original.format === 'docx') {
+        try {
+          docxLayer = (await readDocxTextLayer(original.bytes)).text
+          docxBytes = original.bytes
+        } catch {
+          console.error('[skills] document-edit DOCX layer unreadable — falling back to the text copy')
+          docxLayer = null
+          docxBytes = null
+        }
+      }
+    }
+    const isDocx = docxLayer !== null && docxBytes !== null
+
+    const reader: SkillToolContext['readDocumentChunks'] = isDocx
+      ? (id: string) => (id === args.documentId ? [{ text: docxLayer as string, page: null, index: 0 }] : [])
+      : await resolveDocumentReader(db, args.documentId, deps)
     const ctx: SkillToolContext = {
       documentIds,
       readDocumentChunks: reader,
@@ -1673,7 +1778,15 @@ export async function runDocumentEdit(
     }
     let saved: boolean
     try {
-      saved = await deps.saveTextFile('edited.txt', output.editedText)
+      if (isDocx) {
+        // Same-format write (D77): the SAME verified edit spans the tool applied, spliced across the `<w:t>`
+        // node map (a span crossing a run boundary splits across nodes) + rezip — every other part identical.
+        const spans = verifyAndSpliceEdits(docxLayer as string, edits).spans
+        const outBytes = await applySpansToDocx(docxBytes as Uint8Array, spans)
+        saved = await deps.saveBinaryFile!('edited.docx', outBytes)
+      } else {
+        saved = await deps.saveTextFile('edited.txt', output.editedText)
+      }
     } catch {
       console.error('[skills] document edit failed to write')
       const msg = 'The file could not be saved. Nothing was changed.'

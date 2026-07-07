@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) + 6 (#22 pt.1, span-transform engine) + 7 (#22 pt.2, LLM-located redaction) + 8 (#23, format-preserving targeted edits) DONE; Phases 9–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) + 6 (#22 pt.1, span-transform engine) + 7 (#22 pt.2, LLM-located redaction) + 8 (#23, format-preserving targeted edits) + 9 (#22/#23, same-format DOCX export) DONE; Phase 10 (wave close-out) open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -460,10 +460,38 @@ the D26 chat arbiter (same accepted posture as §21 redaction).
 **Done =** suite green, docs (new SKILL.md, `architecture.md` Skills record pointer,
 `user-guide.md`) + BUILD_STATE updated, commit references #23.
 
-## 12. Phase 9 — same-format output: DOCX rewrite + faithful text (#22/#23 export half)
+## 12. Phase 9 — same-format output: DOCX rewrite + faithful text (#22/#23 export half) ✅ DONE
 
 **Goal:** DOCX in → DOCX out with formatting intact; PDF/TXT output preserves the text layout
 we actually have (D77).
+
+**Shipped (2026-07-07):** the faithful-`.txt` half was ALREADY satisfied (Phase 7/8 read via
+`resolveDocumentReader`'s newline-preserving segments + per-char `█` masks); Phase 9 adds the DOCX writer.
+New pure `services/export/docx-rewrite.ts` — `readDocxTextLayer(bytes)` (concatenate `<w:t>` text in
+document order, paragraph-newline separated, with a node→offset map) + `applySpansToDocx(bytes, spans)`
+(splice `TransformSpan[]` across the node map — a span crossing a run boundary splits across `<w:t>` nodes —
+and rezip with every other part byte-identical; XML touched only inside `<w:t>` text content). `jszip`
+promoted transitive→**direct dep** (lazy import). **The re-anchor (the crux):** for a DOCX source both seams
+build the `<w:t>` text layer, **RE-RUN the locate pass + verify over THAT layer** (it differs from the
+mammoth-extracted chunk text), and take the SPANS from the pure halves — `redactWithEntities(...).spans` /
+`verifyAndSpliceEdits(...).spans` now expose the span union — feeding them to `applySpansToDocx`; the tool
+still runs over the same layer (gate/audit/counts). New `readStoredDocumentBytes` (ingestion, binary, any
+format) + `buildOriginalDocumentReader` (IPC — probes the stored `.docx` extension, returns bytes only for a
+Word source) threaded through `ToolRunDeps`/the seam; new `saveBinaryFile` IPC (the `.docx` sibling of
+`saveTextFile`) + per-tool `docxDialog` descriptors (`.docx` filter) + `main.dialog.filterDocx` i18n
+(EN/DE). The **source-format branch lives in the seam**: DOCX → `redacted.docx`/`edited.docx` via the DOCX
+writer; PDF/text → the unchanged `.txt` path; a corrupt DOCX (no `document.xml`) falls back to `.txt`. PDF
+re-export stays out of scope (scanned/image PDFs redact only their OCR text layer). D58 byte-identity extended
+to "every non-`document.xml` zip part byte-identical, every non-span `<w:t>` char byte-identical". No renderer
+surface changed (the save dialog is main-side) → no preview case. Tests: `docx-rewrite.test.ts` (+6),
+`skills-redaction.test.ts` (+4), `skills-document-edit.test.ts` (+2), `skills-privacy-guard.test.ts` (+2),
+`skills-tool-registry.test.ts` (+1), + the `redactText`/`redactWithEntities`/`verifyAndSpliceEdits` `spans`
+field. Suite **3788/47**, typecheck + build green. Folded into `architecture.md` "Skills — design record"
+**§23**; `known-limitations.md` (redaction/edit output-format + PDF/scan-OCR limits) + `user-guide.md`
+(same-format note) + `packaging.md` (jszip direct dep) updated. **Carried forward:** redaction's run-bar
+free-text instruction still unwired (Phase 8 wired the edit instruction only); the locate calls run outside
+the D26 chat arbiter (accepted); Phase 10 wave close-out (gold-set fixtures, real-app eyeball, fold the plan
+into the design records + delete it).
 
 - **DOCX writer** (`services/export/docx-rewrite.ts`): open the ORIGINAL stored file bytes
   with `jszip` (promote to a direct dependency — already in the tree via mammoth; dev-time

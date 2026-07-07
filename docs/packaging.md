@@ -120,9 +120,12 @@ Key config points:
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
   electron-builder 26 cannot auto-detect it from `apps/desktop` — so `electron-builder.yml` pins
   **`electronVersion`** explicitly (keep it in sync with the `electron` devDependency when bumping).
-- **Production `dependencies` ship inside `app.asar`** (`pdfjs-dist` / `mammoth` / `papaparse` /
-  `yaml` / `@noble/hashes`), so the `require()`s in the parsers, manifest loader, and the vault KDF
-  resolve at runtime. electron-builder 26's collector follows **hoisted/nested** `node_modules` trees
+- **Production `dependencies` ship inside `app.asar`** (`pdfjs-dist` / `mammoth` / `jszip` / `papaparse` /
+  `yaml` / `@noble/hashes`), so the `require()`s in the parsers, manifest loader, the vault KDF, and the
+  same-format DOCX writer resolve at runtime. **`jszip`** was already in the tree transitively under
+  `mammoth`; it is now a **direct dependency** (Phase 9, D77) because `services/export/docx-rewrite.ts`
+  imports it to rewrite `<w:t>` nodes (pure-JS, no native addon — the closure is unchanged). electron-builder
+  26's collector follows **hoisted/nested** `node_modules` trees
   (e.g. mammoth's transitive deps) **by default** — the old `includeSubNodeModules: true` option was
   removed in eb 26 (it now errors as an unknown property) and is no longer needed. `npmRebuild: false`
   (no native addons).

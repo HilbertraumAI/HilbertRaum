@@ -205,6 +205,23 @@ describe('self-describing tool registry (A2)', () => {
       if (d.resultShape === 'redaction') expect(d.redactionKeys, `${d.name} redaction keys`).toBeDefined()
     }
   })
+
+  it('the document-transform tools carry a same-format DOCX save dialog (Phase 9, D77)', () => {
+    for (const name of ['redact_document', 'apply_document_edits']) {
+      const d = SKILL_TOOL_DESCRIPTORS.find((x) => x.name === name)!
+      // The .txt fallback dialog is a text file…
+      expect(d.dialog!.extensions).toEqual(['txt'])
+      // …and the DOCX-output dialog offers a .docx (its own filter, so a Word source stays a Word doc).
+      expect(d.docxDialog, `${name} needs a docx dialog`).toBeDefined()
+      expect(d.docxDialog!.extensions).toEqual(['docx'])
+    }
+    // Only the two document-transform tools have a docxDialog; the CSV/JSON/XML exports do not.
+    for (const d of SKILL_TOOL_DESCRIPTORS) {
+      if (d.name !== 'redact_document' && d.name !== 'apply_document_edits') {
+        expect(d.docxDialog, `${d.name} must not carry a docx dialog`).toBeUndefined()
+      }
+    }
+  })
 })
 
 describe('toolRequiresConfirmation', () => {

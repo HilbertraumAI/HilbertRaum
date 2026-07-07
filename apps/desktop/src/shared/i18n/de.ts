@@ -1822,6 +1822,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportRedacted': 'Geschwärzte Kopie speichern',
   'main.dialog.exportEdited': 'Bearbeitete Kopie speichern',
   'main.dialog.filterText': 'Textdatei',
+  // Phase 9 (D77): Gleiches-Format-Export — eine Word-Quelle bleibt `.docx` (Formatierung erhalten).
+  'main.dialog.filterDocx': 'Word-Dokument',
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
   'main.skills.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Skills zu verwalten.',

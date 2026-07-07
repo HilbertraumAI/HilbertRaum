@@ -8,8 +8,10 @@ import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { reconcileSkills, getSkill, listSkills, skillInstallId } from '../../src/main/services/skills/registry'
 import { recordToInfo } from '../../src/main/services/skills/installer'
-import { runDocumentEdit } from '../../src/main/services/skills/run'
+import { runDocumentEdit, type OriginalDocumentBytes } from '../../src/main/services/skills/run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
+import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
+import { makeDocx, otherDocxParts } from '../helpers/docx'
 import type { AuditEventType, RunnableTool } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
@@ -339,5 +341,76 @@ describe('document-edit — the run seam (locate → verify → splice → write
     expect(res.cancelled).toBe(true)
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('cancelled')
+  })
+})
+
+describe('document-edit — Phase 9 same-format DOCX export (D77)', () => {
+  it('a DOCX source is edited IN PLACE: a .docx copy, spliced <w:t> text, other parts byte-identical', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'ignored — the DOCX branch reads the injected original bytes')
+    const original = await makeDocx(['Der Vertreter kennt den Fall.', 'Auch der Vertreter erscheint.'])
+    const { audit } = capturingAudit()
+    // Rename only the FIRST occurrence (D76 precision) — the second "Vertreter" stays.
+    const runtime = scriptedRuntime(() =>
+      JSON.stringify({ edits: [{ line: 1, find: 'Vertreter', occurrence: 1, replace: 'Anwalt' }] })
+    )
+    let savedBinary: { name: string; bytes: Uint8Array } | null = null
+    let textCalled = false
+    const res = await runDocumentEdit(db, { skillInstallId: skillInstall, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      instruction: 'replace the first Vertreter with Anwalt',
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+      saveBinaryFile: async (name, bytes) => {
+        savedBinary = { name, bytes }
+        return true
+      },
+      saveTextFile: async () => {
+        textCalled = true
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.editCount).toBe(1)
+    expect(res.resultKind).toBe('edited')
+    expect(textCalled).toBe(false)
+    expect(savedBinary!.name).toBe('edited.docx')
+    // Re-read the saved DOCX: paragraph 1's first "Vertreter" became "Anwalt"; the layer text is spliced.
+    const layer = await readDocxTextLayer(savedBinary!.bytes)
+    expect(layer.text).toBe('Der Anwalt kennt den Fall.\nAuch der Vertreter erscheint.\n')
+    // Non-document.xml parts byte-identical (styles/formatting untouched, D77).
+    const before = await otherDocxParts(original)
+    const after = await otherDocxParts(savedBinary!.bytes)
+    for (const [path, b64] of before) expect(after.get(path), `${path} byte-identical`).toBe(b64)
+  })
+
+  it('source-format branch: a non-DOCX source keeps the unchanged .txt path (no binary write)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'Der Vertreter kennt den Fall.')
+    const { audit } = capturingAudit()
+    const runtime = scriptedRuntime(() =>
+      JSON.stringify({ edits: [{ line: 1, find: 'Vertreter', occurrence: 1, replace: 'Anwalt' }] })
+    )
+    let textWrite: string | null = null
+    let binaryCalled = false
+    const res = await runDocumentEdit(db, { skillInstallId: skillInstall, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      instruction: 'replace Vertreter with Anwalt',
+      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'other' }),
+      saveBinaryFile: async () => {
+        binaryCalled = true
+        return true
+      },
+      saveTextFile: async (name) => {
+        textWrite = name
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(binaryCalled).toBe(false)
+    expect(textWrite).toBe('edited.txt')
   })
 })

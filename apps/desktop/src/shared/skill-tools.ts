@@ -102,6 +102,13 @@ export interface SkillToolDescriptor {
   editKeys?: EditDoneKeys
   /** The save-dialog metadata for an `export`-shape tool (title/filter/extensions). */
   dialog?: SkillToolSaveDialog
+  /**
+   * The DOCX-output save-dialog metadata for the document-transform tools (Phase 9, D77): when the SOURCE
+   * document is a Word `.docx`, the seam writes a same-format `.docx` copy and uses THIS dialog (`.docx`
+   * filter) instead of `dialog` (the `.txt` fallback for PDF/text sources). Only `redact_document` and
+   * `apply_document_edits` set it.
+   */
+  docxDialog?: SkillToolSaveDialog
 }
 
 // The four save dialogs, named once here (were four `SAVE_DIALOG_*` consts in `tool-runs.ts`).
@@ -125,12 +132,24 @@ const DIALOG_REDACTED: SkillToolSaveDialog = {
   filterNameKey: 'main.dialog.filterText',
   extensions: ['txt']
 }
-// Phase 8: the edited-copy save dialog — .txt this phase (same-format DOCX export is Phase 9). Its own
-// title/filter (not the CSV/redacted dialog) so the saved `edited.txt` filename isn't fought on Windows.
+// Phase 8: the edited-copy save dialog — .txt for a PDF/text source. Its own title/filter (not the
+// CSV/redacted dialog) so the saved `edited.txt` filename isn't fought on Windows.
 const DIALOG_EDITED: SkillToolSaveDialog = {
   titleKey: 'main.dialog.exportEdited',
   filterNameKey: 'main.dialog.filterText',
   extensions: ['txt']
+}
+// Phase 9 (D77): the same-format DOCX save dialogs — used when the SOURCE document is a Word `.docx`, so
+// the redacted / edited copy stays a `.docx` (styles/numbering/tables preserved; only `<w:t>` text changes).
+const DIALOG_REDACTED_DOCX: SkillToolSaveDialog = {
+  titleKey: 'main.dialog.exportRedacted',
+  filterNameKey: 'main.dialog.filterDocx',
+  extensions: ['docx']
+}
+const DIALOG_EDITED_DOCX: SkillToolSaveDialog = {
+  titleKey: 'main.dialog.exportEdited',
+  filterNameKey: 'main.dialog.filterDocx',
+  extensions: ['docx']
 }
 
 /**
@@ -243,7 +262,8 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
       cleanFloor: 'chat.skill.run.done.redactedCleanFloor',
       redactedFloor: 'chat.skill.run.done.redactedFloor'
     },
-    dialog: DIALOG_REDACTED
+    dialog: DIALOG_REDACTED,
+    docxDialog: DIALOG_REDACTED_DOCX
   },
   {
     name: 'apply_document_edits',
@@ -256,7 +276,8 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
       edited: 'chat.skill.run.done.edited',
       editedPartial: 'chat.skill.run.done.editedPartial'
     },
-    dialog: DIALOG_EDITED
+    dialog: DIALOG_EDITED,
+    docxDialog: DIALOG_EDITED_DOCX
   }
 ]
 

@@ -27,6 +27,9 @@ import {
   runInvoiceTotalsValidation
 } from '../../src/main/services/skills/invoice-run'
 import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
+import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
+import { makeDocx } from '../helpers/docx'
+import type { OriginalDocumentBytes } from '../../src/main/services/skills/run'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
 import { buildSkillFence, composeSystemPromptWithSkill, SKILL_GUARD_LINE } from '../../src/main/services/skills/prompt'
 import { reconcileSkills } from '../../src/main/services/skills/registry'
@@ -412,6 +415,86 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     // The secret name was renamed out of the deliverable and leaked into NO sink.
     expect(saved).not.toContain(SECRET_NAME)
     expect(saved).toContain('the appointed clerk')
+    expect(JSON.stringify(events)).not.toContain(SECRET_NAME)
+    const runs = db.prepare('SELECT * FROM skill_runs').all()
+    expect(JSON.stringify(runs)).not.toContain(SECRET_NAME)
+    expect(logged).not.toContain(SECRET_NAME)
+  })
+
+  it('DOCX redaction: the located PII is masked out of the .docx AND never touches a sink (Phase 9, D77)', async () => {
+    // The same-format DOCX writer must keep the content boundary: the secret is masked out of the saved
+    // .docx bytes and never reaches audit/log/console/skill_runs — the writer only ever splices spans, so
+    // the entity value cannot ride into any sink.
+    const db = freshDb()
+    const skillInstallId = 'app:document-redaction'
+    const SECRET_EMAIL = 'whistleblower.secret@example.com'
+    const docId = seedDocWithChunks(db, [{ text: 'ignored — DOCX branch reads the injected bytes', page: 1 }])
+    const original = await makeDocx([`Contact ${SECRET_EMAIL} about the matter.`])
+    const { audit, events } = capturingAudit()
+    let saved: Uint8Array | null = null
+
+    const logged = await captureConsole(async () => {
+      const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+        saveBinaryFile: async (_name, bytes) => {
+          saved = bytes
+          return true
+        },
+        saveTextFile: async () => true
+      })
+      expect(res.ok).toBe(true)
+    })
+
+    const layer = await readDocxTextLayer(saved!)
+    expect(layer.text).not.toContain(SECRET_EMAIL) // masked out of the deliverable
+    expect(layer.text).toContain('█')
+    expect(JSON.stringify(events)).not.toContain(SECRET_EMAIL)
+    const runs = db.prepare('SELECT * FROM skill_runs').all()
+    expect(JSON.stringify(runs)).not.toContain(SECRET_EMAIL)
+    expect(logged).not.toContain(SECRET_EMAIL)
+  })
+
+  it('DOCX document-edit: the located find/replace value is applied out of the .docx and touches no sink', async () => {
+    const db = freshDb()
+    const skillInstallId = 'app:document-edit'
+    const SECRET_NAME = 'Wilhelmina Featherstonehaugh'
+    const docId = seedDocWithChunks(db, [{ text: 'ignored — DOCX branch reads the injected bytes', page: 1 }])
+    const original = await makeDocx([`Prepared by ${SECRET_NAME} for the committee.`])
+    const { audit, events } = capturingAudit()
+    let saved: Uint8Array | null = null
+    const runtime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream() {
+        const reply = JSON.stringify({ edits: [{ line: 1, find: SECRET_NAME, occurrence: 1, replace: 'the appointed clerk' }] })
+        for (const tok of reply.match(/\S+\s*/g) ?? []) yield tok
+      }
+    } as unknown as Parameters<typeof runDocumentEdit>[2]['runtime']
+
+    const logged = await captureConsole(async () => {
+      const res = await runDocumentEdit(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        runtime,
+        instruction: `rename ${SECRET_NAME} to the appointed clerk`,
+        readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
+        saveBinaryFile: async (_name, bytes) => {
+          saved = bytes
+          return true
+        },
+        saveTextFile: async () => true
+      })
+      expect(res.ok).toBe(true)
+      expect(res.editCount).toBe(1)
+    })
+
+    const layer = await readDocxTextLayer(saved!)
+    expect(layer.text).not.toContain(SECRET_NAME)
+    expect(layer.text).toContain('the appointed clerk')
     expect(JSON.stringify(events)).not.toContain(SECRET_NAME)
     const runs = db.prepare('SELECT * FROM skill_runs').all()
     expect(JSON.stringify(runs)).not.toContain(SECRET_NAME)

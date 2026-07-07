@@ -1,6 +1,7 @@
+import { extname } from 'node:path'
 import type { DocumentChunkRead } from '../../shared/types'
 import type { AppContext } from '../services/context'
-import { documentsDir, extractDocumentPreview } from '../services/ingestion'
+import { documentsDir, extractDocumentPreview, readStoredDocumentBytes } from '../services/ingestion'
 import { resolveIngestionLimits } from '../services/ingestion/limits'
 
 // The FAITHFUL content reach shared by the two skill entry points: the chat/analysis IPC
@@ -37,5 +38,30 @@ export function buildDocumentSegmentReader(
       opts?.layout ? { layout: true, maxPages: resolveIngestionLimits().pdfMaxPages } : {}
     )
     return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
+  }
+}
+
+/**
+ * The SOURCE-FORMAT probe + original-bytes reach for the same-format DOCX export (Phase 9, D77). Returns
+ * whether the document's stored source is a Word `.docx` and, only then, its raw decrypted BYTES (so a
+ * non-DOCX source is never decrypted just to be discovered non-DOCX). The redaction / document-edit seams
+ * use it to branch: a DOCX source → the `<w:t>` rewrite + `.docx` output; everything else → the existing
+ * segment-faithful `.txt` path. Content stays main-side: only the (confirm-gated) seam ever holds these
+ * bytes; they are never logged/audited (§22-M1). The format decision keys off the stored TITLE extension
+ * (`.docx`) — the same signal `selectParser` uses — resolved with a cheap title query before any read.
+ */
+export type OriginalDocument = { format: 'docx'; bytes: Buffer } | { format: 'other' }
+
+export function buildOriginalDocumentReader(ctx: AppContext): (documentId: string) => Promise<OriginalDocument> {
+  const storeDir = documentsDir(ctx.paths.workspacePath)
+  return async (documentId): Promise<OriginalDocument> => {
+    const row = ctx.db.prepare('SELECT title FROM documents WHERE id = ?').get(documentId) as
+      | { title: string }
+      | undefined
+    if (!row || extname(row.title).toLowerCase() !== '.docx') return { format: 'other' }
+    const { bytes } = readStoredDocumentBytes(ctx.db, storeDir, documentId, {
+      cipher: ctx.workspace.documentCipher()
+    })
+    return { format: 'docx', bytes }
   }
 }

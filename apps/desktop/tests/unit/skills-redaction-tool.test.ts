@@ -357,7 +357,9 @@ describe('redaction U2 additions', () => {
       expect(redactText(prose)).toEqual({
         text: prose,
         counts: { email: 0, phone: 0, iban: 0, card: 0, date: 0, url: 0 },
-        totalRedactions: 0
+        totalRedactions: 0,
+        // Phase 9: `redactText` now also returns the union of masked spans (empty here — nothing masked).
+        spans: []
       })
     }
     // A Luhn-PASSING en-dash invoice-number range (8+8 digits concatenate to a Luhn-valid 16) must NOT
