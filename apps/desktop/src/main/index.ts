@@ -1,6 +1,7 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n } from './services/i18n'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
@@ -54,6 +55,10 @@ import type { AppContext } from './services/context'
 // HilbertRaum — Electron main process (the "backend").
 // Security posture (spec §3.5): context isolation on, node integration off,
 // sandboxed renderer, and NO network code in the core path.
+
+// The main bundle is ESM (out/main/index.mjs) — `__dirname` doesn't exist. Reconstruct it
+// from import.meta.url (the fileURLToPath idiom already used across the test suite).
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const isDev = !app.isPackaged
 

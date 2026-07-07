@@ -172,6 +172,39 @@ off `config/drive.json`). The app then reads `models/`, `workspace/`, `config/`,
 > build from `apps/desktop` or temporarily disable hoisting. None of this affects `npm test` /
 > `typecheck` / `npm run build` (the green gate), which do not invoke electron-builder.
 
+## Module format & renderer bundle — design record (ESM main + code-split)
+
+The TypeScript source is ESM throughout (`module: ESNext`, `moduleResolution: Bundler`, `noEmit`);
+only the electron-vite **output** format is a choice. As built:
+
+- **Main process ships ESM** (`out/main/index.mjs`). `electron.vite.config.ts` sets
+  `main.build.rollupOptions.output.format: 'es'`; `apps/desktop/package.json` `main` points at the
+  `.mjs`. `__dirname` doesn't exist in an ESM module, so `src/main/index.ts` and
+  `services/ocr/rasterizer.ts` reconstruct it via `dirname(fileURLToPath(import.meta.url))` (the same
+  idiom the test suite already uses). `db.ts`'s `createRequire(process.execPath)` for `node:sqlite`
+  is unaffected (createRequire is the ESM-native escape hatch).
+- **Preload STAYS CommonJS** (`out/preload/index.js`, `ocr.js`). This is not an oversight: Electron
+  only supports ESM preload scripts when `sandbox: false`, and both windows deliberately run
+  `sandbox: true` (spec §0 / "Process model & security"). So `format: 'es'` is scoped to `main`
+  only, and `"type": "module"` is **NOT** set on the package (which would force `.js` → ESM and break
+  the CJS preload). A "pure ESM" app is therefore not reachable while sandboxed — main-ESM +
+  preload-CJS is the end state. Main still references `../preload/index.js` (CJS) at runtime.
+- **Tree-shaking** keys off the ESM *input* graph, which was already ESM — so the ESM-output flip
+  buys none of it. `package.json` carries `"sideEffects": ["*.css"]` so Rollup may drop unused
+  exports from our own modules while preserving the side-effectful CSS imports.
+- **Renderer code-split (the actual bundle win).** `streamdown` + `katex` + `@streamdown/math`
+  (~2 MB) were eager in the initial renderer chunk because `AssistantMarkdown` — used on the chat,
+  translate, documents-preview, and images screens — statically imported them. `AssistantMarkdown`
+  now lives in its own module (`src/renderer/chat/AssistantMarkdown.tsx`) behind a `React.lazy`
+  wrapper (`AssistantMarkdownLazy.tsx`, re-exported as `AssistantMarkdown` from the chat barrel), so
+  that weight loads as a **separate async chunk on first answer render**. Initial `index-*.js`:
+  **3,196 kB → 1,194 kB (−63%)**. The async chunk is Vite-named `mermaid-*` after a streamdown
+  internal module but contains only streamdown+katex — no real mermaid/cytoscape/d3 (still excluded
+  from the asar, see the mermaid negation above). The fallback renders the raw text in a `.md`
+  container during the (local, offline, few-ms) load — no blank flash. Tests render markdown
+  synchronously: `vitest.config.ts` aliases `./AssistantMarkdownLazy` → the real component so render
+  assertions don't have to await Suspense.
+
 ## Preparing a drive — scripts (Phase 11)
 
 `scripts/` provisions and verifies a drive. The scripts are **self-contained** (a drive can be laid

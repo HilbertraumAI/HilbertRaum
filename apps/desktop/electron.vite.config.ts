@@ -14,7 +14,11 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'out/main',
-      lib: { entry: resolve(__dirname, 'src/main/index.ts') }
+      lib: { entry: resolve(__dirname, 'src/main/index.ts') },
+      // Emit the main bundle as ESM (out/main/index.mjs). The preload stays CJS —
+      // sandboxed preloads (webPreferences.sandbox:true) cannot be ES modules — so we
+      // scope `format: 'es'` to main only and DON'T set package "type": "module".
+      rollupOptions: { output: { format: 'es' } }
     }
   },
   preload: {

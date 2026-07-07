@@ -2,7 +2,8 @@
 import { useState } from 'react'
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
-import { AssistantMarkdown, Transcript } from '../../src/renderer/chat/Transcript'
+import { Transcript } from '../../src/renderer/chat/Transcript'
+import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
 import { I18nProvider } from '../../src/renderer/i18n'
 import type { Message } from '../../src/shared/types'
 

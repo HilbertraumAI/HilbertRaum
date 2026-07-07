@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
-import { AssistantMarkdown } from '../../src/renderer/chat/Transcript'
+import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
 
 // The security-critical invariants of the Streamdown-backed renderer (audit L1 + no-injection
 // posture). Streamdown runs rehype-sanitize and we whitelist links to http(s); these assertions

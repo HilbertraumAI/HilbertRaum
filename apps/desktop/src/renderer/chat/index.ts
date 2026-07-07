@@ -2,7 +2,10 @@
 // each piece is renderer-only and theme-agnostic (role tokens via CSS).
 
 export { ConversationList, groupConversations, type ConversationGroup } from './ConversationList'
-export { Transcript, AssistantMarkdown, StreamAnnouncer } from './Transcript'
+export { Transcript, StreamAnnouncer } from './Transcript'
+// AssistantMarkdown is the lazy wrapper (renderer code-split): the Streamdown/KaTeX weight loads
+// as a separate async chunk, so importing it here never pulls that ~2 MB into the initial bundle.
+export { AssistantMarkdown } from './AssistantMarkdownLazy'
 export { MessageActions } from './MessageActions'
 export { Composer } from './Composer'
 export { DictationButton } from './DictationButton'

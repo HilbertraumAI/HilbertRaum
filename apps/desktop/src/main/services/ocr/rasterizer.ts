@@ -1,10 +1,14 @@
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { BrowserWindow, ipcMain } from 'electron'
 import { OCR_RASTER } from '../../../shared/ipc'
 import { log } from '../logging'
 import { installNavigationGuard } from '../navigation-guard'
 import { assertPageWithinByteCap } from './page-cap'
 import { pipelinePages } from './pipeline'
+
+// ESM main bundle — `__dirname` doesn't exist; reconstruct from import.meta.url.
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // PDF → page-PNG rasterizer: rendering a PDF page
 // to pixels needs a canvas, the main process has none, node-canvas
