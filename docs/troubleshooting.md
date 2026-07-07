@@ -1,6 +1,6 @@
 # HilbertRaum — Troubleshooting
 
-_Last updated: 2026-06-20 (added Images entries: the screen needs a vision model; asking about an image is slow). Previously: Skills entries (drop-ins install disabled, import rejections, the "Needs newer app" badge, "the skill tool found nothing"); scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
+_Last updated: 2026-07-07 (added "Redaction left a name in, or an edit changed nothing" — the AI-assisted best-effort posture, the no-model-running degrade, steerable scope, verbatim-only edits, and same-format output). Previously: Images entries (the screen needs a vision model; asking about an image is slow); Skills entries (drop-ins install disabled, import rejections, the "Needs newer app" badge, "the skill tool found nothing"); scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
 
 Quick answers to common situations. Everything here is normal, local, and offline — none of
 these steps require the internet.
@@ -241,6 +241,32 @@ nothing rather than guessing. A few things to check:
   action, or re-import the original (a text-based PDF or the source file). Running OCR re-reads the
   document from scratch, so the next question you ask re-extracts from the corrected text — you don't
   need to delete and start over.
+
+---
+
+## Redaction left a name in, or an edit changed nothing
+
+**Redaction** and **Document edit** are **AI-assisted best-effort**, never a guarantee — always review
+the saved copy before you share it. If something you expected wasn't handled:
+
+- **A name or address is still there.** Redaction always hides the clearly-shaped data (e-mails, phone
+  numbers, IBANs, card numbers, dates, links) with the built-in rules; it only hides **names, addresses,
+  and organisation names** when a **chat model is running**. If no model is running, the run tells you so
+  ("offline rule-based detection only") and those are left in — start a model on **AI Model** and run it
+  again. Even with a model it can miss an unusual spelling; check the copy and, if needed, use **Document
+  edit** to remove what's left.
+- **"Keep the city" (or similar) wasn't respected.** Say the scope in your own words when you ask
+  ("remove names and street addresses, keep the city"). The app never guesses intent — it only hides what
+  the model proposes within that scope, then hides each confirmed value **everywhere** it appears.
+- **An edit reports text was skipped, or nothing changed.** The edit only changes text it finds
+  **exactly** as written — if your wording doesn't match the document verbatim, that change is left alone
+  and reported as skipped (nothing else is ever touched). Re-read the passage, copy the exact wording
+  (including endings and punctuation), and ask again. A **running model is required** for edits — with no
+  model the run asks you to start one rather than doing nothing silently.
+- **The saved copy lost its formatting.** A **Word `.docx`** saves as a `.docx` with styles/tables/layout
+  intact. **PDFs and other formats save as a `.txt`** (writing back into a PDF isn't supported), and a
+  **scanned PDF** only exposes the text the app recognised from the image — redact/edit that from the
+  `.txt` output.
 
 ---
 

@@ -6462,6 +6462,42 @@ DOCX-edited find-value touches no sink), `skills-tool-registry.test.ts` (+1: the
 carry a `.docx` `docxDialog`; no other tool does), + the `redactText`/`redactWithEntities`/`verifyAndSpliceEdits`
 `spans` field. Suite 3788/47 (was 3773; +15).
 
+### Beta feedback wave 1 (issues #22–#28, D68–D78) — close-out + §-anchor legend
+
+The wave from the first beta session (2026-07-06, lawyer, 0.1.40) is **COMPLETE — Phases 1–10, issues
+#22–#28, decisions D68–D78** (BUILD_STATE has the per-phase records). Cluster A (papercuts) + B (scope &
+coverage trust) landed in `rag-design.md` + `design-guidelines.md`; cluster C (format-preserving document
+transforms) is the §20–§23 sub-record above. Phase 10 added the CI gold set
+([`model-benchmarks.md` §12](model-benchmarks.md) — synthetic lawyer documents driven through the pipeline
+with a scripted runtime; the real-model + e2e eyeball are recorded there as `PAID_*`/owner manual harnesses),
+this legend, and the deletion of the plan.
+
+The working plan `docs/beta-feedback-2026-07-plan.md` was folded into the records below and **deleted** (full
+text in git history, per the CLAUDE.md doc-lifecycle rule). In-code comments + kept docs still cite the plan's
+`§N` / `DN` and `Phase N`; this legend keeps them **resolvable** without churning the comments. Read a
+historical citation as:
+
+| Historical anchor | Meaning | Now lives in |
+|---|---|---|
+| plan §1 / §2 | Issue clustering; the redaction-skill current-state audit | this legend; §20 (the engine the wave extended) |
+| plan §4 / Phase 1 / **D68** | DE citation labels `S{n}`→`Q{n}`, display-time only (#28) | `rag-design.md` §3 (display-time citation-label note) |
+| plan §5 / Phase 2 / **D69** | Conversation-memory meter, `role="meter"` not progressbar (#25) | `design-guidelines.md` §11.9 |
+| plan §6 / Phase 3 / **D70** | One "Use this model" action = select + start runtime (#27) | `design-guidelines.md` §11.10 |
+| plan §7 / Phase 4 / **D71** | Single-document scope by default + always-visible "Answering from:" (#26) | `rag-design.md` §10 (scope subsection) |
+| plan §8 / Phase 5 / **D72** | Coverage fraction stamped on every grounded answer (#24) | `rag-design.md` §14.4 |
+| plan §9 / Phase 6 / **D74** | Span-transform engine (`applySpans`/`locateOccurrences`, per-char `█` masks) | **§20** (this record) |
+| plan §10 / Phase 7 / **D73 · D75 · D78** | LLM-located redaction — locate → verify → sweep; the honesty posture | **§21** (this record) |
+| plan §11 / Phase 8 / **D76** | Format-preserving targeted edits — locate → verify → splice (occurrence-precise) (#23) | **§22** (this record) |
+| plan §12 / Phase 9 / **D77** | Same-format DOCX export — `<w:t>` node rewrite; PDF re-export out of scope (#22/#23) | **§23** (this record) |
+| plan §13 / Phase 10 | Gold set + close-out (fold the plan, delete it) | this legend + `model-benchmarks.md` §12 |
+| plan §14 | Offline / privacy / honesty constraints & risks | carried in each record's honesty/privacy notes |
+
+**Disambiguation:** this record contains **two** §20–§23 blocks — the earlier §20–§24 (Wave-2 analysis, PDF
+geometry, the bank categorizer, the S&T + backend audit close-outs) and the beta-feedback §20–§23 above. Each
+beta header carries its `beta-feedback-2026-07 Phase N` tag, which is the stable grep disambiguator (e.g.
+`§21 LLM-located redaction … Phase 7`). Code comments that mean the beta sections cite them by the descriptive
+title + phase tag, so the collision never mis-resolves.
+
 
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 

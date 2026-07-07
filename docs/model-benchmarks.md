@@ -684,3 +684,80 @@ A candidate that only looks better on paper stays `recommendation_rank: 0` (manu
 auto-recommended, never bundled) until the local evidence gives it a real rank. Image translation
 (the model is image-text→text; mmproj projectors exist) stays out of scope (the plan's §6): a later
 Images-screen integration, not a benchmark axis here.
+
+---
+
+## 12. Document redaction / edit locate pass — gold set + the real-model manual harness
+
+The format-preserving document transforms (redaction v2 + targeted edits — architecture.md "Skills —
+design record" §21/§22/§23, beta-feedback wave 1) rest on a LOCAL-MODEL **locate pass**: the model
+proposes spans/edits, the app VERIFIES each verbatim and splices mechanically (it never generates
+output text, D73). Two guards, the same split as §10 (skills) and §8/§11 (vision/translation): a
+deterministic CI gold set that pins the PIPELINE, and an opt-in real-model harness that measures the
+MODEL's locate quality — public NER/instruction-following scores are **not** a promotion signal here.
+
+### 12.1 The CI gold set (always on, zero model / zero network)
+
+[`tests/fixtures/gold-set/legal-corpus.ts`](../apps/desktop/tests/fixtures/gold-set/legal-corpus.ts)
+holds SYNTHETIC, lawyer-shaped German documents (a Vollmacht, a Mandantenbrief carrying
+names/addresses/IBAN/email/phone/dates — **never real user data**, same rule as the §10.1 real-layout
+corpus), each with the exact model reply a scripted (mock) runtime replays.
+[`tests/integration/skills-gold-set.test.ts`](../apps/desktop/tests/integration/skills-gold-set.test.ts)
+drives them through the FULL redaction and edit pipelines — at the pure level
+(`redactWithEntities` / `verifyAndSpliceEdits`, which expose the drop-unverifiable count + the span
+union) AND through the run seam with the scripted runtime, incl. the Phase-9 same-format DOCX
+round-trip. It pins the STRUCTURAL guarantees only: verbatim verify, every-occurrence sweep (D75),
+occurrence precision (D76), the drop-unverifiable path, per-char masks preserving line length (D74),
+and every non-`document.xml` DOCX part byte-identical (D77). It **never** asserts model judgement —
+the scripted reply IS the "model", so this proves the app around the model, not the model.
+
+### 12.2 The real-model manual harness (`PAID_*`, not CI)
+
+A human pre-promotion gate — a real chat GGUF must actually FIND the names/addresses in these
+documents before we claim the locate pass earns its keep. This is a `PAID_*` manual harness on the
+smoke drive (`F:\paid-gpu-smoke-drive` — the b9585/b9849 binary + a real chat GGUF; the D:\ root
+convention of §8/§10.2/§11.1), run offline, results recorded in BUILD_STATE. There is no committed
+`e2e-model` file yet (the pipeline is exercised end-to-end by the gold set with a scripted runtime);
+until one is added, run it by hand through the APP per the checklist below.
+
+**Acceptance bar — the locate pass, over the §12.1 gold documents through the running model:**
+- [ ] **names + street addresses located** — the Vollmacht's `Maria Huber` / `Johann Berger` /
+      `Ringstraße 12` and the letter's `Elisabeth Klein` / `Hauptstraße 5` / `Franz Gruber` are all
+      proposed (the deterministic floor cannot find these — the model must).
+- [ ] **steerability holds** — with "…, keep city names" the city (`Wien` / `Linz`) is NOT proposed;
+      widening/narrowing the instruction changes what is proposed, never what the app interprets.
+- [ ] **sweep coverage** — a name reported once is masked at EVERY occurrence in the saved file (D75).
+- [ ] **no hallucination reaches the output** — anything the model proposes that is not present
+      verbatim is dropped and counted; the saved bytes outside a mask are byte-identical to the source.
+- [ ] **the regex floor still runs** — IBAN/email/phone/date are masked whether or not the model ran;
+      model-missing DEGRADES to the floor with the honest note, never a silent partial.
+- [ ] **the edit locate pass** — "Vollmachtgeber → Vollmachtgeberin incl. the article" changes only the
+      anchored occurrences (the defined-term line stays), no whole-document regeneration (#23).
+
+### 12.3 End-to-end eyeball (owner manual harness — POSIX + a running model)
+
+The real-app "redact + edit a DOCX and a PDF and look at the result" eyeball needs a running model
+AND is POSIX-only (the `screenshot-verify` / electron-eyeball path is nix+xvfb; this is a Windows dev
+box) — so it is an **owner manual harness**, not run in CI. Through `npm run dev` with a chat model
+started on the AI-Model screen:
+
+1. Import a DOCX and a PDF that carry names + addresses + an IBAN (a copy of the §12.1 fixtures saved
+   as real `.docx` / `.pdf` works).
+2. In chat, ask to redact each ("Entferne alle Namen und Adressen, die Stadt darfst du behalten"),
+   confirm the export, save the copy.
+3. In chat, ask a targeted edit on the DOCX ("Ändere Vollmachtgeber zu Vollmachtgeberin samt Artikel"),
+   confirm, save.
+
+**Acceptance (the #22/#23 criteria):**
+- [ ] names + addresses masked; the kept city survives; IBAN/email/phone/date masked by the floor.
+- [ ] the redacted `.docx` **opens in Word** with styles/numbering/tables/headers intact; only the
+      masked text changed (a diff of the extracted text shows only the located spans changed).
+- [ ] the PDF/`.txt` output preserves line layout (per-char `█`), extraction-faithful.
+- [ ] the edit changed ONLY the requested occurrences — no rewritten paragraphs, no hallucinated prose.
+- [ ] the run bar shows the honest report (counts, dropped-unverifiable, "review before sharing").
+
+**Status (2026-07-07):** the CI gold set (§12.1) is committed and green. The real-model harness
+(§12.2) and the e2e eyeball (§12.3) are **deferred to the owner** — a real chat model + a running app
+(and, for the eyeball, a POSIX host) are required and neither can run in CI on this Windows dev box.
+The run-bar wiring itself is covered by the descriptor/i18n-parity + `SkillRunBar` renderer tests
+(architecture.md §21/§22 "Tests"); no renderer surface changed in Phase 10.
