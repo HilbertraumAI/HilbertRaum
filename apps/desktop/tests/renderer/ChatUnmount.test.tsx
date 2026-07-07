@@ -147,23 +147,36 @@ describe('ChatScreen — FE-1 setState-after-unmount guards (import poll + strea
       expect(askDocuments).toHaveBeenCalled()
       expect(tokenCb).toBeDefined()
 
-      // Deliver a token → buffers + arms the STREAM_FLUSH_MS flush timer. Do NOT advance: leave it
-      // pending so unmount is the only thing that can clear it.
+      // Deliver a token → buffers + arms the STREAM_FLUSH_MS flush timer. Confirm a flush IS
+      // scheduled (the precondition for the leak this test guards) but do NOT advance yet — leave
+      // it pending so teardown is the only thing that can retire it.
       const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
-      const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+      // T-6 (Chat & Documents audit 2026-07-07): watch for a setState-after-unmount React warning
+      // instead of spying on `clearTimeout(<the exact flush-timer id>)`. The old assertion pinned
+      // the teardown MECHANISM (a specific clearTimeout call); this asserts the observable CONTRACT
+      // (no stray flush touches the dead component), so it survives a clearTimeout→mountedRef
+      // refactor — `flushStream` already self-guards on `mountedRef`, and the unmount effect also
+      // clears the timer; either guard alone keeps the flush off the unmounted tree.
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
       act(() => tokenCb!('hello'))
-      const flushArm = setTimeoutSpy.mock.calls.findIndex((c) => c[1] === STREAM_FLUSH_MS)
-      expect(flushArm).toBeGreaterThanOrEqual(0)
-      const flushTimerId = setTimeoutSpy.mock.results[flushArm].value
+      expect(setTimeoutSpy.mock.calls.some((c) => c[1] === STREAM_FLUSH_MS)).toBe(true)
 
       const listDocsBefore = listDocuments.mock.calls.length
 
-      // Unmount mid-import AND mid-stream.
+      // Unmount mid-import AND mid-stream, then advance PAST the flush interval so a surviving
+      // flush timer would fire its callback onto the now-unmounted tree.
       unmount()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STREAM_FLUSH_MS * 2)
+      })
 
-      // (c) the pending flush timer is cleared on unmount — no stray flush survives teardown.
-      // Teeth: drop the clearTimeout(flushTimer) from the unmount effect → this id is never cleared.
-      expect(clearTimeoutSpy).toHaveBeenCalledWith(flushTimerId)
+      // (c) no setState-after-unmount warning surfaced — the pending flush is retired on teardown
+      // and the callback re-checks `mountedRef`, so nothing setStates onto the dead screen. This
+      // does not name the timer id or the specific guard, so it holds through a mechanism change.
+      const sawUnmountWarning = consoleError.mock.calls.some((c) =>
+        /unmounted component|not wrapped in act/i.test(String(c[0]))
+      )
+      expect(sawUnmountWarning).toBe(false)
 
       // (b) the parked poll tick now resolves with done=true — after unmount. The post-await
       // mountedRef guard drops it, so no document-list refresh lands on a dead component.
@@ -173,6 +186,7 @@ describe('ChatScreen — FE-1 setState-after-unmount guards (import poll + strea
         await vi.advanceTimersByTimeAsync(0)
       })
       expect(listDocuments.mock.calls.length).toBe(listDocsBefore)
+      consoleError.mockRestore()
     } finally {
       vi.useRealTimers()
     }

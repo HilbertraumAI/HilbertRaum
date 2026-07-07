@@ -10,10 +10,26 @@ import { join } from 'node:path'
 // chat service + a real temp DB run underneath.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+// T-8: the export handlers (exportConversation / exportMessageTable) reach `saveTextExport`, which
+// calls `BrowserWindow.getFocusedWindow()` + `dialog.showSaveDialog`. Fake both so we can assert
+// the sanitized default path and drive cancel/write outcomes. `getFocusedWindow → null` routes
+// saveTextExport down the single-arg `showSaveDialog(options)` branch.
+type SaveDialogOptions = { title?: string; defaultPath?: string; filters?: unknown }
+const dialogState = vi.hoisted(() => ({
+  saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
+  lastSaveOptions: undefined as SaveDialogOptions | undefined
+}))
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
+  },
+  BrowserWindow: { getFocusedWindow: () => null },
+  dialog: {
+    showSaveDialog: async (...args: unknown[]) => {
+      dialogState.lastSaveOptions = (args.length > 1 ? args[1] : args[0]) as SaveDialogOptions
+      return dialogState.saveResult
+    }
   }
 }))
 
@@ -24,6 +40,8 @@ import { IPC, STREAM } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { createConversation, listConversations, listMessages, appendMessage } from '../../src/main/services/chat'
 import { linkConversationDocument } from '../../src/main/services/collections'
+import { saveResultTable } from '../../src/main/services/tables/store'
+import type { TableSpec } from '../../src/main/services/tables'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
@@ -85,6 +103,8 @@ function freshDb(): Db {
 beforeEach(() => {
   ipcState.handlers.clear()
   inFlightStreams.clear()
+  dialogState.saveResult = { canceled: true }
+  dialogState.lastSaveOptions = undefined
 })
 
 describe('registerChatIpc', () => {
@@ -447,5 +467,83 @@ describe('locked-vault guard coverage (TEST-N8)', () => {
     await expect(invoke(handlers, IPC.runBenchmark)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
     await expect(invoke(handlers, IPC.tryGpuAgain)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
     await expect(invoke(handlers, IPC.runBenchmark)).rejects.not.toThrow(/unlock it first/i)
+  })
+})
+
+// T-8 (Chat & Documents audit 2026-07-07): the chat export handlers' user-visible behaviour was
+// untested (only the structural locked-vault enumeration touched the channels). These pin the
+// SANITIZED default filename, the null-on-cancel path (no write, no audit), and the S1 privacy
+// posture — the audit records the conversation/message id ONLY, never the title (chat content) or
+// the user-chosen path.
+describe('chat export handlers (T-8)', () => {
+  function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn> } {
+    const audit = vi.fn()
+    const ctx = {
+      db,
+      workspace: { isUnlocked: () => true },
+      runtime: { active: () => null, activeModelId: () => null },
+      audit
+    } as unknown as AppContext
+    return { ctx, audit }
+  }
+
+  it('exportConversation sanitizes the title into the default path and audits the id only', async () => {
+    const db = freshDb()
+    const { ctx, audit } = ctxWithAudit(db)
+    // A title full of filesystem-hostile characters — the sanitizer strips ':' '/' '<' '>'.
+    const conv = createConversation(db, { title: 'Report: Q1/Q2 <draft>' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
+    registerChatIpc(ctx)
+
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-export-'))
+    const outPath = join(dir, 'saved.md')
+    dialogState.saveResult = { canceled: false, filePath: outPath }
+
+    const filePath = (await invoke(handlers, IPC.exportConversation, conv.id)).result as string | null
+    expect(filePath).toBe(outPath)
+    // TEETH: the safeName regex removed ':' '/' '<' '>' and collapsed to a safe stem. Weaken the
+    // regex (e.g. stop stripping '/') → the '/'-bearing "Report Q1/Q2 draft.md" reddens this.
+    expect(dialogState.lastSaveOptions?.defaultPath).toBe('Report Q1Q2 draft.md')
+    // Audit records the id ONLY — never the title (chat content) or the chosen path (user-private).
+    expect(audit).toHaveBeenCalledWith('conversation_exported', expect.any(String), { conversationId: conv.id })
+    const meta = audit.mock.calls.find((c) => c[0] === 'conversation_exported')?.[2]
+    expect(JSON.stringify(meta)).not.toContain('Report') // no title leak
+    expect(JSON.stringify(meta)).not.toContain(outPath) // no path leak
+  })
+
+  it('exportConversation returns null on cancel — nothing written, nothing audited', async () => {
+    const db = freshDb()
+    const { ctx, audit } = ctxWithAudit(db)
+    const conv = createConversation(db, { title: 'Cancelled export' })
+    registerChatIpc(ctx)
+    dialogState.saveResult = { canceled: true } // user pressed Cancel
+
+    const filePath = (await invoke(handlers, IPC.exportConversation, conv.id)).result as string | null
+    expect(filePath).toBeNull()
+    expect(audit).not.toHaveBeenCalledWith('conversation_exported', expect.anything(), expect.anything())
+  })
+
+  it('exportMessageTable uses a static table.csv name, and returns null (no dialog) when there is no table', async () => {
+    const db = freshDb()
+    const { ctx } = ctxWithAudit(db)
+    const conv = createConversation(db, { title: 'Tables' })
+    const withTable = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'here you go' })
+    const noTable = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'just prose, no table' })
+    const table: TableSpec = { columns: [{ key: 'a', label: 'A' }], rows: [{ a: '1' }] }
+    saveResultTable(db, { messageId: withTable.id, conversationId: conv.id, table })
+    registerChatIpc(ctx)
+
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-exporttbl-'))
+    dialogState.saveResult = { canceled: false, filePath: join(dir, 'out.csv') }
+    const ok = (await invoke(handlers, IPC.exportMessageTable, withTable.id)).result as string | null
+    expect(ok).toBe(join(dir, 'out.csv'))
+    // The table's data IS content, so the suggested filename is a fixed, content-free name.
+    expect(dialogState.lastSaveOptions?.defaultPath).toBe('table.csv')
+
+    // A message with no persisted table resolves to null BEFORE opening the dialog.
+    dialogState.lastSaveOptions = undefined
+    const none = (await invoke(handlers, IPC.exportMessageTable, noTable.id)).result as string | null
+    expect(none).toBeNull()
+    expect(dialogState.lastSaveOptions).toBeUndefined() // returned before the save dialog
   })
 })

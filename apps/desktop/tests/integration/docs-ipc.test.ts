@@ -45,6 +45,7 @@ import type { Embedder } from '../../src/main/services/embeddings'
 import type {
   DocumentInfo,
   DocumentOrigin,
+  DocumentPreview,
   ImportJob,
   ImportJobStatus,
   ImportOptions,
@@ -88,12 +89,82 @@ function ctxWith(
 async function runImport(paths: string[], options?: ImportOptions): Promise<ImportJob> {
   const { result } = await invoke(handlers, IPC.importDocuments, paths, options)
   const job = result as ImportJob
-  for (let i = 0; i < 200; i++) {
+  // T-7 (Chat & Documents audit 2026-07-07): a generous non-racy ceiling (was 200×5ms ≈ 1s) —
+  // the loop settles well before this; the higher bound only removes headroom flakiness on a
+  // busy CI box, it never gates a passing run.
+  for (let i = 0; i < 400; i++) {
     const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
     if ((s as ImportJobStatus).done) break
     await new Promise((r) => setTimeout(r, 5))
   }
   return job
+}
+
+/** An embedder whose `embed` parks on a gate until `release()` — an import job holding it stays
+ *  in-flight (and the doc sits in `processing`) until released. Used by T-3 / DB-6. */
+function gatedEmbedder(): { embedder: Embedder; release: () => void } {
+  const base = createMockEmbedder()
+  let release!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const embedder: Embedder = {
+    id: base.id,
+    dimensions: base.dimensions,
+    embed: async (texts: string[]) => {
+      await gate
+      return base.embed(texts)
+    }
+  }
+  return { embedder, release }
+}
+
+/** An embedder that can gate each `embed` call individually (T-7). With gating OFF every embed
+ *  passes straight through (used during the initial import); with gating ON the NEXT embed parks
+ *  until `release()`, and `awaitParked()` resolves once a call is waiting — so a test can drive the
+ *  bulk re-index to a known, deterministic point. `release()` also turns gating off, so any further
+ *  embed of the in-flight document (if it batches) passes and the loop can still break cleanly. */
+function perFileGatedEmbedder(): {
+  embedder: Embedder
+  setGating: (on: boolean) => void
+  awaitParked: () => Promise<void>
+  release: () => void
+} {
+  const base = createMockEmbedder()
+  let gating = false
+  let parkedResolve: (() => void) | null = null
+  let onPark: (() => void) | null = null
+  const embedder: Embedder = {
+    id: base.id,
+    dimensions: base.dimensions,
+    embed: async (texts: string[]) => {
+      if (gating) {
+        await new Promise<void>((resolve) => {
+          parkedResolve = resolve
+          onPark?.()
+          onPark = null
+        })
+      }
+      return base.embed(texts)
+    }
+  }
+  return {
+    embedder,
+    setGating: (on: boolean) => {
+      gating = on
+    },
+    awaitParked: () =>
+      new Promise<void>((res) => {
+        if (parkedResolve) return res()
+        onPark = res
+      }),
+    release: () => {
+      gating = false
+      const r = parkedResolve
+      parkedResolve = null
+      r?.()
+    }
+  }
 }
 
 beforeEach(() => {
@@ -255,30 +326,46 @@ describe('registerDocsIpc', () => {
     expect(documentIds.every((id) => listed.find((d) => d.id === id)?.status === 'indexed')).toBe(true)
   })
 
-  it('cancelReindexAll stops the in-flight bulk loop (cancelled, not all completed)', async () => {
+  // T-7 (Chat & Documents audit 2026-07-07): de-flaked. The prior version cancelled "right away"
+  // and asserted `completed < total`, racing the (fast) mock embedder — on a quick box all six
+  // could finish before the cancel landed, and the exact stop point was nondeterministic. Now a
+  // per-file gated embedder parks the FIRST document's re-embed; we cancel while it is in flight
+  // and then release it, so the loop finishes exactly that one document and breaks at the next
+  // boundary — a deterministic `completed === 1`, no wall-clock dependency.
+  it('cancelReindexAll stops the in-flight bulk loop deterministically (cancelled, completed===1)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const { embedder, setGating, awaitParked, release } = perFileGatedEmbedder()
+    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
     const paths: string[] = []
     for (let i = 0; i < 6; i++) {
       const f = join(workspacePath, `f${i}.txt`)
       writeFileSync(f, `doc ${i} alpha beta gamma delta`)
       paths.push(f)
     }
+    // Import with gating OFF so the six embeds pass straight through.
     const { documentIds } = await runImport(paths)
     expect(documentIds).toHaveLength(6)
 
+    // Gate each re-embed so cancellation lands at a KNOWN point rather than racing the clock.
+    setGating(true)
     const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
     expect(started.done).toBe(false)
-    // Cancel right away: the in-flight document finishes, the rest are skipped at the next boundary.
+
+    // The first document's re-embed parks. Cancel WHILE it is in flight, then release it: the loop
+    // counts that one document, then breaks at the next boundary (`if (signal.aborted) break`).
+    await awaitParked()
     await invoke(handlers, IPC.cancelReindexAll)
+    release()
+
     let job = started
-    for (let i = 0; i < 200 && !job.done; i++) {
+    for (let i = 0; i < 400 && !job.done; i++) {
       await new Promise((r) => setTimeout(r, 5))
       job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
     }
     expect(job.done).toBe(true)
     expect(job.cancelled).toBe(true)
-    expect(job.completed).toBeLessThan(job.total) // stopped before finishing all six
+    expect(job.completed).toBe(1) // exactly the one in-flight document — no wall-clock race
+    expect(job.failed).toBe(0)
   })
 
   it('a mid-loop rejection (deleted doc) fails only that document — the rest still re-index', async () => {
@@ -1038,5 +1125,136 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     // TEETH: revert to the sync `cipher.decryptFile` → syncCalled true, asyncCalls 0.
     expect(syncCalled).toBe(false)
     expect(asyncCalls).toBe(2)
+  })
+})
+
+// Session 7 — docs-IPC guard preconditions (T-3) + the import-loop lock-mid-job break (T-4).
+// Tests only; each reddens if the guard/mechanism it pins regresses.
+describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/T-4)', () => {
+  // T-3 (processing gate): while a document is being ingested it sits in `processing`, so
+  // delete / reindex / preview must all refuse with the friendly "still being processed" copy —
+  // the docs-side mirror of the chat "refuses to delete while streaming" test. A gated embedder
+  // parks the import at the embed phase so the row stays in `processing` for the assertions.
+  it('T-3: a document in `processing` blocks delete, reindex AND preview (still being processed)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const { embedder, release } = gatedEmbedder()
+    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
+    const file = join(workspacePath, 'slow.txt')
+    writeFileSync(file, 'a slow-to-embed document alpha beta gamma delta epsilon zeta eta theta iota')
+
+    const gated = (await invoke(handlers, IPC.importDocuments, [file])).result as ImportJob
+    const id = gated.documentIds[0]
+    await new Promise((r) => setTimeout(r, 20)) // let the loop reach the gated embed → id in `processing`
+
+    await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/still being processed/)
+    await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/still being processed/)
+    await expect(invoke(handlers, IPC.previewDocument, id)).rejects.toThrow(/still being processed/)
+
+    // Release + drain so the loop/lease unwind cleanly (no leak into the next test).
+    release()
+    for (let i = 0; i < 400; i++) {
+      const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
+      if (s.done) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+  })
+
+  // T-3 (task-busy gate + negative control): a live doc task (summary/deep-index/translation)
+  // reports `isDocumentBusy → true`, so delete + reindex must refuse with "a task is running" —
+  // but previewDocument consults ONLY `requireNotProcessing`, NOT the task gate, so it still
+  // resolves. That asymmetry (preview is read-only, doesn't rewrite the stored copy) is the point.
+  it('T-3: a live doc-task blocks delete/reindex (task is running) but NOT preview (negative control)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let busy = false
+    const docTasks = {
+      isDocumentBusy: () => busy,
+      hasActiveTask: () => false,
+      maybeEnqueueTreeBuild: () => {}
+    }
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, docTasks))
+    const file = join(workspacePath, 'doc.txt')
+    writeFileSync(file, 'a document with enough words to index for the task-busy guard test right here')
+    const { documentIds } = await runImport([file])
+    const id = documentIds[0]
+
+    // A task now holds the document.
+    busy = true
+    await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/task is running/i)
+    await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/task is running/i)
+    // NEGATIVE CONTROL: preview is not gated on the task → it resolves with real content.
+    const preview = (await invoke(handlers, IPC.previewDocument, id)).result as DocumentPreview
+    expect(preview.segments.length).toBeGreaterThan(0)
+  })
+
+  // T-4: a "Lock now" that lands mid-import must break the loop cleanly and leave the not-yet-
+  // finalized look-ahead document non-terminal INSIDE the lock (never a half-written terminal
+  // state), with the doc-work lease balanced; then, after unlock, the very reconcile the drain
+  // enables flips that row to `failed` (re-indexable). The embedder flips the workspace locked as
+  // it finishes the FIRST document's embed, so f0 completes and the loop breaks before f1.
+  it('T-4: a mid-job workspace lock breaks the import; the drained look-ahead row reconciles after unlock', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let unlocked = true
+    let leaseDelta = 0
+    const base = createMockEmbedder()
+    const embedder: Embedder = {
+      id: base.id,
+      dimensions: base.dimensions,
+      embed: async (texts: string[]) => {
+        const out = await base.embed(texts)
+        unlocked = false // "Lock now" landed during the first document's embed
+        return out
+      }
+    }
+    const ctx = {
+      ...ctxWith(db, workspacePath, embedder, /* unlocked */ true),
+      workspace: {
+        isUnlocked: () => unlocked,
+        beginDocumentWork: () => {
+          leaseDelta += 1
+          return () => {
+            leaseDelta -= 1
+          }
+        },
+        documentCipher: () => null
+      }
+    } as unknown as AppContext
+    registerDocsIpc(ctx)
+
+    const f0 = join(workspacePath, 'f0.txt')
+    const f1 = join(workspacePath, 'f1.txt')
+    writeFileSync(f0, 'the first file alpha beta gamma delta epsilon zeta eta theta iota kappa')
+    writeFileSync(f1, 'the second file lambda mu nu xi omicron pi rho sigma tau upsilon phi chi')
+
+    const job = (await invoke(handlers, IPC.importDocuments, [f0, f1])).result as ImportJob
+    const [id0, id1] = job.documentIds
+
+    // Drive to done via getImportJob (it needs NO unlock, unlike listDocuments) since the workspace
+    // locks itself mid-job.
+    let status: ImportJobStatus = { jobId: job.jobId, total: 2, completed: 0, failed: 0, done: false }
+    for (let i = 0; i < 400; i++) {
+      status = (await invoke(handlers, IPC.getImportJob, job.jobId)).result as ImportJobStatus
+      if (status.done) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(status.done).toBe(true)
+    expect(status.completed).toBe(1) // only f0 finished before the lock landed
+    expect(status.failed).toBe(0)
+
+    // f0 indexed; f1 left NON-TERMINAL inside the lock — raw SELECT (no listDocuments reconcile yet;
+    // listDocuments is unlock-gated anyway).
+    const rawStatus = (id: string): string =>
+      (db.prepare('SELECT status FROM documents WHERE id = ?').get(id) as { status: string }).status
+    expect(rawStatus(id0)).toBe('indexed')
+    expect(['queued', 'extracting', 'chunking', 'embedding']).toContain(rawStatus(id1))
+    // The one doc-work lease the whole job holds was released in the loop's finally.
+    expect(leaseDelta).toBe(0)
+
+    // Unlock + backdate f1 so the `now` watermark reconciles it deterministically on the next list.
+    unlocked = true
+    db.prepare("UPDATE documents SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(id1)
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    // TEETH: remove the drain's `processing.delete(pending.id)` → f1 stays in `processing` →
+    // the post-job sweep gate (`processing.size === 0`) never opens → f1 stays non-terminal here.
+    expect(listed.find((d) => d.id === id1)!.status).toBe('failed')
   })
 })

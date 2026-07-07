@@ -1093,7 +1093,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `chatStream` honours `options.signal` and stops emitting; whatever streamed so far is persisted
   as the (partial) assistant message and a normal `done` is emitted (D-3, chat-docs audit 2026-07-07).
 - **Chat backend robustness (CB-2…CB-5, CB-7 — chat-docs audit 2026-07-07).** A backend sweep of the
-  streaming/cancellation path (companion to `chat-docs-audit-2026-07-07.md`; §-anchor `CB-n`):
+  streaming/cancellation path (ledger + `CB-n` disposition in §45; the audit/plan were retired there):
   - **Deterministic teardown (R1).** `withChatStream` publishes a per-stream `streamSettled` promise
     (in `ipc/inflight.ts`) that **resolves — never rejects** — in its `finally`, AFTER `runFn` (and thus
     its abort-driven `appendMessage`) has fully unwound. A lock/quit teardown MUST therefore `abort()`
@@ -1153,8 +1153,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   re-attaches. Guarded so it never clobbers a deliberate mid-load click and never yanks the user onto
   an old conversation when nothing is generating.
 - **FE audit 2026-07-07 — Chat renderer correctness (CR-1…CR-9).** A renderer-side sweep of
-  `ChatScreen.tsx` + `Transcript.tsx` (companion to `chat-docs-audit-2026-07-07.md`; per-finding
-  design in the remediation plan) hardened the send/switch/stop paths without adding an unstable prop
+  `ChatScreen.tsx` + `Transcript.tsx` (ledger + per-finding `CR-n` disposition in §45, where the audit
+  and plan were retired) hardened the send/switch/stop paths without adding an unstable prop
   to a memoized child on the keystroke/flush hot path. The load-bearing decisions:
   - **CR-2 (transcript scroll bleed) — `key={activeId ?? 'new'}` on the `Transcript` instance, NOT a
     reset-on-effect.** A fresh instance per conversation resets `atBottomRef` + DOM `scrollTop` and the
@@ -1185,8 +1185,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     `ChatSwitchStop.test.tsx` (T-2). **CR-10** (transcript windowing) stays the accepted PERF-2 chat
     half; **CB-\*/DB-\*** findings are other sessions of the same wave.
 - **FE audit 2026-07-07 — Documents renderer polish (DR-1…DR-9).** The Documents half of the same
-  sweep (`DocumentsScreen.tsx` + `screens/documents/{DocRow,SectionRail,format}.tsx`; companion
-  audit + remediation plan). Two of the nine *tighten* invariants rather than merely patch: **DR-4**
+  sweep (`DocumentsScreen.tsx` + `screens/documents/{DocRow,SectionRail,format}.tsx`; ledger +
+  `DR-n` disposition in §45, where the audit and plan were retired). Two of the nine *tighten*
+  invariants rather than merely patch: **DR-4**
   replaces the screen-global `previewLoading` boolean (which flipped a memo-busting prop on *every*
   windowed `DocRow` twice per preview) with a per-row `previewLoadingId === d.id` — the clicked row
   gets `true`, every other row a stable `false`, so `DocRow.memo` now *holds* on a preview open
@@ -1238,11 +1239,17 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   Models section — finishes loading). Rationale: starting the real llama.cpp sidecar mid-request is
   heavy and surprising; the startup auto-start is a deliberate, bounded exception that reuses the
   same gated start path.
-- **IPC** (`ipc/registerChatIpc.ts`): `createConversation`, `listConversations`, `listMessages`,
-  `sendChatMessage` (streaming), `stopGeneration`, `deleteConversation`, plus `getActiveStream`
-  and `listActiveStreamConversations` (stream recovery + re-selecting the in-flight conversation
-  after navigation), `searchConversations` (Phase 31 full-text), `exportConversation`
-  (save to Markdown), and the scope/anchor setters used by the composite source picker. Regenerate reuses
+- **IPC** (`ipc/registerChatIpc.ts`). **Single source of truth: the chat group in
+  [`shared/ipc.ts`](../apps/desktop/src/shared/ipc.ts)** — enumerate there, not here, so a new channel
+  can't leave this list stale (D-6, Chat & Documents audit 2026-07-07). The notable families:
+  **conversation lifecycle** (`createConversation`, `listConversations`, `listMessages`,
+  `deleteConversation`, `searchConversations` — Phase 31 full-text); **streaming** (`sendChatMessage`,
+  `stopGeneration`, `getActiveStream` + `listActiveStreamConversations` for stream recovery /
+  re-selecting the in-flight conversation after navigation); **scope / anchor** (`updateConversationScope`,
+  `setConversationScope`, `setConversationCollection`, `setConversationDefaultSkill`); **attachments /
+  context** (`listAttachments`, `getConversationContextUsage`, `getConversationSummary`); and **export**
+  (`exportConversation`, `exportMessageTable`). Note `suggestSkills` appears in this group in
+  `shared/ipc.ts` but is registered by the **skills** IPC (`registerSkillsIpc`), not here. Regenerate reuses
   `sendChatMessage` with `options.regenerate` — it deletes the last assistant message, then
   re-streams from history. `deleteConversation` removes a conversation (chat or document Q&A) and
   its messages; it refuses while a stream is in flight for that conversation (the persisted
@@ -6496,6 +6503,107 @@ the table above. Live citations at retirement:
 Report + plan retired: `git rm docs/skills-audit-2026-07-07.md docs/skills-remediation-plan-2026-07-07.md`
 (recoverable in git history; the full finding bodies + the P1–P4 SHIPPED dispositions live there, and in
 the BUILD_STATE dated 2026-07-07 Phase entries). This ledger is the durable index.
+
+### §45 Chat & Documents audit (2026-07-07) — remediation ledger + close-out
+
+A five-pass audit (chat backend, chat renderer, docs backend, docs renderer, tests + docs-accuracy)
+swept the **Chat** view (`ChatScreen` + `renderer/chat/*` + the chat service / IPC / compaction) and
+the **Documents** view (`DocumentsScreen` + `renderer/screens/documents/*` + the docs IPC / ingestion /
+collections). Overall health was good — nothing Critical, no routine-path backend data-loss — so the
+findings are one **coverage** High (renderer stream-recovery was untested) plus a long tail of Medium /
+Low correctness, UX, i18n, a11y, perf, and doc-accuracy items: **CB-1…CB-7 · CR-1…CR-10 · DB-1…DB-7 ·
+DR-1…DR-9 · D-1…D-6 · T-1…T-8**. Remediated across a **seven-session wave** on `master` (unpushed), each
+session a reviewable/bisectable unit ending with the per-phase ritual: **S1** `c3b4ffc` (docs data
+integrity), **S2** `6e89879` (chat renderer + recovery tests), **S3** `628d286` (docs renderer polish),
+**S4** `b5c46cb` (chat backend foundations), **S5** `b38f819` (chat backend robustness + D-1…D-4 + T-5),
+**S6** `76445ab` (docs backend performance + D-5), **S7** (this test/doc close-out — T-3, T-4, T-6, T-7,
+T-8, D-6). Suite grew **3813 → 3874/47**, typecheck clean, build green throughout. Four design decisions
+overrode the audit's first-pass suggestions and are recorded as durable (below): CB-7 **deferred**, CR-9
+**latent-hardened**, the DB-3 **`now`-watermark** keep, and the DB-5 **count-map cache decline** (plus the
+DB-4 walk-stays-sync deferral).
+
+Per-finding disposition (fixed → session@commit / deferred·declined·accepted → rationale). Design detail
+"as built" lives in the per-session records cited in the legend below; this table is the index.
+
+| # | Sev | Session | Disposition (decision / mechanism) |
+|---|---|---|---|
+| **CB-1** | MED | S4 `b5c46cb` | **fixed** — `fitMessagesToContext` now normalizes the kept tail user-first (trimmed branch only, `while`-pop a leading assistant, length-1 guard keeps the final user turn, before the identity check), so a strict Mistral-style template never sees an assistant-first list and the synthetic compaction pair is never replayed ack-without-intro. |
+| **CB-2** | LOW | S5 `b38f819` | **fixed** — `withRegenerateGuard` restores the prior reply on an unpersisted-empty resolve (`content === ''`, the Stop-before-first-token path), re-inserting the original id/timestamp and returning it via `getLatestMessage` so `chat:done` re-shows the answer. Composes with CB-4. |
+| **CB-3** | LOW | S5 `b38f819` | **fixed** — compaction trigger capped at `min(COMPACT_THRESHOLD·window, window − reserve)` so small (2048/4096) windows compact before L1 drops history (≥6827 keeps `0.85·window` byte-identical); pre-pass estimate folds in the real summary-pair + system-prompt + a caller-supplied `reservedTokens` (fence built before compaction). |
+| **CB-4** | LOW | S5 `b38f819` | **fixed** — completed, non-aborted, **zero-token** stream throws `EmptyCompletionError` (friendly-mapped) instead of a silent blank; abort-before-first-token and all-`<think>`/fence-echo empties stay the benign silent-empty (`receivedAnyToken`/`caughtAbort` narrowing). |
+| **CB-5** | LOW | S5 `b38f819` | **fixed** — `readChatSSE` races each read against a two-phase idle watchdog (`PREFILL_IDLE_MS` 120 s → `STREAM_IDLE_MS` 30 s; reasoning deltas reset it) → `RuntimeUnresponsiveError` on a hung sidecar; a user Stop still wins first. Post-response streaming only. |
+| **CB-6** | LOW | S4 `b5c46cb` | **fixed** — `buildTurnFence` sizes the fence via a new `LIMIT 1` `getLatestMessage` twin instead of paging the whole history; `generateAssistantMessage` reads `getSettings` once (threaded `compactionOn` default param). |
+| **CB-7** | LOW | S5 (deferred) | **DEFERRED — decision #1.** Per-token IPC batching NOT implemented: the renderer already coalesces re-renders (the flush timer), the residual is a structured-clone of a short string, and batching would add a lifecycle seam to the safety-sensitive stream teardown for an unmeasured gain. Revisit only if profiling shows contextBridge volume is a real bottleneck. Docs note in the streaming record. |
+| **CR-1** | MED | S2 `6e89879` | **fixed** — draft restored on a pre-persist send failure (`stream` returns whether the user turn persisted; `restoreDraft` = `setInput((cur) => cur === '' ? text : cur)`, newer in-flight typing wins), never on a stopped-but-persisted turn. |
+| **CR-2** | MED | S2 `6e89879` | **fixed** — `key={activeId ?? 'new'}` remounts `Transcript` per conversation (resets `atBottomRef` + `scrollTop`, mount effect re-pins); keyed on `activeId` (not `messages`) so refresh/streaming reattach keep the key stable and `React.memo` still skips on the hot path. |
+| **CR-3** | LOW-MED | S2 `6e89879` | **fixed** — a second attach is blocked while one is pending (`\|\| pendingImport != null`) + the composer paperclip withheld, so the first import's watcher is never orphaned. |
+| **CR-4** | LOW | S2 `6e89879` | **fixed** — the recovery tick's completed branch honors the stop flag (`chat.stopped` toast; ref reset makes a StrictMode double-invoke a no-op) — the recovered path has no local `stream()` finally. |
+| **CR-5** | LOW | S2 `6e89879` | **fixed** — `stream` branches on the conversation's own mode (`conversations.find(convId)?.mode ?? mode`), so a reattach whose `listConversations` failed still routes a documents send through `askDocuments`. |
+| **CR-6** | LOW | S2 `6e89879` | **fixed** — `useEffect(() => setError(null), [activeId])` placed before the history-load effect clears a stale banner on switch/delete/mode-deselect. |
+| **CR-7** | LOW | S2 `6e89879` | **fixed** — the sibling `activeIdRef.current === convId` stale-response guard added to the three switch-time loads (history, `refreshContextInfo`, `refreshAttachments`). |
+| **CR-8** | LOW | S2 `6e89879` | **fixed** — `ensureConversation` deletes `depths['new']` alongside the SKA-18 skill re-key, so a 'new'-composer depth pick doesn't become every later new chat's default. |
+| **CR-9** | LOW-MED | S2 (latent) | **LATENT-HARDENED — decision #2.** `onStop` targets `streamConvId ?? activeId` — byte-equivalent today (ConversationList `disabled={streaming && !active}` + `busyStreaming` guards ⇒ `streamConvId === activeId` wherever Stop renders). Adopted as future-proofing; the reachability argument is recorded (T-2 pins the invariant) so the disabled-row guard is not relaxed unchecked. |
+| **CR-10** | LOW | — (accepted) | **KNOWN / ACCEPTED — out of scope.** The un-virtualized transcript + full-parse-on-first-open is the deferred **chat half of PERF-2** (docs half closed, §36). Kept as Low with `content-visibility: auto` as the cheap first step if it ever bites. |
+| **DB-1** | MED | S1 `c3b4ffc` | **fixed** — the `collection` case of `fileDocumentByDestination` FK-guards (existence check + try/catch, degrade to `fileIntoLibraryIfUnfiled`), making it total so the `pending_destination_json = NULL` clear (moved to a `finally`) always runs — no more perpetual re-index wedge. |
+| **DB-2** | MED | S1 `c3b4ffc` | **fixed** — the `.parse-preview` / `.parse-export*` transients are unique per call (`…-${randomUUID()}${ext}`, `.parse` infix kept for the crash sweep), so concurrent same-doc readers never decrypt-into/shred a shared path. |
+| **DB-3** | LOW | S1 `c3b4ffc` | **fixed** — the `listDocuments` stuck-row sweep is gated on `!ctx.docTasks?.hasActiveTask()` too, so a live translation-materialize / OCR re-ingest is never flipped to `failed`. **Kept the `now` watermark (decision #3)** — a mid-session lock→unlock strands an import whose `updated_at` is after process start, and only `now` reconciles it (`PROCESS_START_ISO` would wedge it forever). |
+| **DB-4** | MED | S6 `76445ab` | **fixed** — `createQueuedDocuments` commits N queue inserts in one `BEGIN…COMMIT` (sizes `statSync`'d outside the txn; no `SELECT *` re-read), replacing N auto-commit INSERTs on the USB-latency DB; `createQueuedDocument` stays byte-identical. **Walk stays synchronous — deferred:** `importDocuments` returns ids synchronously and tests/renderer depend on them, so the directory walk was not moved off the hot handler. |
+| **DB-5** | LOW | S6 `76445ab` | **fixed** — `listDocuments` short-circuits the embeddings⋈chunks GROUP BY when no row is `indexed` (the common mid-import poll); covering index already present. **The `document_id` count-map cache was DECLINED (decision #4)** — it needs a wider invalidation surface than the resident-vector cache (chunk writes with no embedding + out-of-band writers), and a stale map surfaces as a user-visible wrong chunk badge / false stale flag. |
+| **DB-6** | LOW | S6 `76445ab` | **fixed** — `IMPORT_JOB_CAP = 16`, evicting oldest **done** jobs only (an in-flight job — possibly the oldest on a slow import — is never evicted); a late poll on an evicted id still gets the synthetic `done:true`. |
+| **DB-7** | LOW | S6 `76445ab` | **fixed** — `readStoredDocumentText`/`readStoredDocumentBytes` are `async` (`decryptFileAsync` + `await readFile`), so a large encrypted export no longer blocks the main process (completes the PERF-1 convention). |
+| **DR-1** | MED | S3 `628d286` | **fixed** — the preview "Show more" updater returns `cur` (not `next`) on id-mismatch/closed-modal, so a late page can't resurrect a closed modal or clobber a doc-task's auto-opened preview. |
+| **DR-2** | MED | S3 `628d286` | **fixed** — a monotonic `refreshSeq` choke point gates before both `setDocs` and the selected-prune (`if (seq !== refreshSeq.current) return`), so an out-of-order `listDocuments` can't clobber a newer snapshot and stick. |
+| **DR-3** | LOW | S3 `628d286` | **fixed** — the toolbar Refresh `onClick` catches the `listDocuments` rejection into the banner (`friendlyIpcError`). |
+| **DR-4** | LOW | S3 `628d286` | **fixed** — per-row `previewLoadingId === d.id` (was a screen-global boolean); this **tightens** `DocRow.memo` (a stable `false` on every other row) and shows the right row as "Opening…". |
+| **DR-5** | LOW | S3 `628d286` | **fixed** — all four Import buttons gate on `busy !== null` (label still keys on `'import'`), so a concurrent bulk re-index can't fight the shared `busy` scalar. |
+| **DR-6** | LOW | S3 `628d286` | **fixed (a11y)** — archived projects in the section rail get the `active` class + `aria-current`, mirroring active ones. |
+| **DR-7** | LOW | S3 `628d286` | **fixed (i18n)** — a failed doc-task's canonical-English error goes through `localizeServerCopy(t, status.error)`. |
+| **DR-8** | LOW | S3 `628d286` | **fixed (UX)** — a first-mount `role="status"` spinner (`docs.loading`, en+de) fills the blank-list gap while `docs == null`. |
+| **DR-9** | LOW | S3 `628d286` | **fixed** — `formatSize` gains a GB tier (locale decimals unchanged). |
+| **D-1** | MED | S5 `b38f819` | **doc fixed** — `architecture.md` context-budget wording → `effectiveContextWindow(runtime, getSettings(db))` (the launched window wins; settings only as fallback). |
+| **D-2** | MED | S5 `b38f819` | **doc fixed** — same one-phrase correction in `rag-design.md`. |
+| **D-3** | LOW | S5 `b38f819` | **doc fixed** — the in-flight `AbortController` map is `inFlightStreams` in `ipc/inflight.ts` (shared with the RAG channel), not `registerChatIpc.ts`. |
+| **D-4** | LOW-MED | S5 `b38f819` | **doc fixed** — new "Deterministic teardown (R1)" bullet: `streamSettled` / `awaitInFlightStreamsSettled` + the abort-first-then-await-then-close-DB contract, plus the CB-2/CB-4/CB-5 sentences. |
+| **D-5** | LOW | S6 `76445ab` | **doc fixed** — the docs-IPC enumeration replaced with a single-source pointer to `shared/ipc.ts` (docs group), naming the notable families. |
+| **D-6** | LOW | S7 (this) | **doc fixed** — the chat-IPC enumeration replaced with a single-source pointer to `shared/ipc.ts` (chat group), noting `suggestSkills` is registered by the **skills** IPC (`registerSkillsIpc`), not `registerChatIpc`. |
+| **T-1** | HIGH (cov) | S2 `6e89879` | **tests** — renderer stream-recovery (`ChatStreamRecovery.test.tsx`): live bubble + locked composer + refresh-on-completion (folds CR-4), fresh-mount re-select + documents-mode mirror (folds CR-5), user-click-not-yanked. |
+| **T-2** | MED | S2 `6e89879` | **tests** — mid-stream conversation switch + Stop target (`ChatSwitchStop.test.tsx`): the non-active row is `disabled`, Stop aborts the streaming conversation — the invariant that keeps CR-9 safe. |
+| **T-3** | MED | S7 (this) | **tests** — docs-IPC guard preconditions (`docs-ipc.test.ts`): a gated embedder parks a doc in `processing` → delete/reindex/preview all reject `/still being processed/`; a `docTasks.isDocumentBusy → true` variant → delete/reindex reject `/task is running/i` with a **negative control** that preview resolves (pins the asymmetry). |
+| **T-4** | MED | S7 (this) | **tests** — import-loop lock-mid-job break (`docs-ipc.test.ts`): a custom ctx whose `isUnlocked` flips false inside the first file's embed → job `done`, `completed===1`, f1 non-terminal (raw SELECT), lease balanced; then backdate + unlock → `listDocuments` reconciles f1 → `failed`. **Teeth revert-confirmed** (drop the drain's `processing.delete` → f1 stays `embedding`). |
+| **T-5** | LOW | S5 `b38f819` | **tests** — compaction boundaries (`chat-compaction.test.ts`): region `=== MIN_COMPACTABLE_TURNS` proceeds vs `MIN−1` returns; size `=== threshold` proceeds vs `threshold−1` against the CB-3 `min(0.85·window, window−reserve)`. |
+| **T-6** | LOW | S7 (this) | **tests (de-mock)** — `ChatUnmount.test.tsx` drops the `clearTimeout(<exact id>)` spy for a behavioral assertion (advance past `STREAM_FLUSH_MS`, no setState-after-unmount warning) — refactor-robust across a `clearTimeout`→`mountedRef` change; keeps the (b) `listDocuments`-count assertion. |
+| **T-7** | LOW | S7 (this) | **tests (de-flake)** — the `cancelReindexAll` test now gates the embedder per file (park the first re-embed, cancel in flight, release) for a deterministic `completed === 1` instead of racing the clock; non-racy poll ceilings bumped (`runImport` 200→400). |
+| **T-8** | LOW | S7 (this) | **tests** — chat export handlers (`chat-ipc.test.ts`, electron mock extended with `dialog`+`BrowserWindow`): `exportConversation` sanitizes the defaultPath (`Report: Q1/Q2 <draft>` → `Report Q1Q2 draft.md`), returns null-on-cancel (no audit), audits `{conversationId}` only (no title/path leak); `exportMessageTable` static `table.csv` + null-on-no-table. **Teeth revert-confirmed** (weaken `safeName` → the `/`-bearing path reddens). |
+
+**§-anchor legend (keeps the `CB-n` / `CR-n` / `DB-n` / `DR-n` / `D-n` / `T-n` code/test/doc citations
+resolvable after the report + plan were retired).** In-code comments, tests, and BUILD_STATE cite these
+findings by the bare id (sometimes qualified `Chat & Documents audit 2026-07-07 <id>`); all resolve to the
+table above. The design "as built" lives in the per-session §-records this wave added, which carry the
+same ids:
+- **Chat backend (CB-1, CB-6)** — the "History fits the context window" bullet (user-first normalization +
+  `getLatestMessage` LIMIT-1 tail read + single `getSettings`).
+- **Chat backend robustness (CB-2…CB-5, CB-7)** — the streaming/cancellation record's "Deterministic
+  teardown (R1)" bullet (CB-2 restore, CB-4 `EmptyCompletionError`, CB-5 watchdog, the
+  `runtimeUnresponsive → emptyCompletion → overflow → raw` friendly chain, the CB-7 deferral) + the
+  L2-compaction bullet's CB-3 cap/fold-in note.
+- **Chat renderer (CR-1…CR-9)** — the "Stream recovery across navigation" record's "FE audit 2026-07-07 —
+  Chat renderer correctness" bullet (CR-9 reachability + CR-2 rationale). CR-10 is the accepted PERF-2
+  chat half (§36 / Already-known).
+- **Documents renderer (DR-1…DR-9)** — the FE record's "Documents renderer polish (DR-1…DR-9)" bullet
+  (DR-4 tightens `DocRow.memo`, DR-2 reduces spurious swaps).
+- **Documents backend (DB-1…DB-7)** — the doc-organization reliability/perf record: the §4 DB-1
+  FK-guard/`finally` + DB-3 task-gate/`now`-watermark note, the `extractDocumentPreview` `.parse-preview`
+  DB-2 note, and the "Documents backend performance — Session 6 (DB-4…DB-7)" bullet (batch + walk-deferral,
+  the DB-5 decline-the-cache decision, DB-6 evict-done-only, DB-7 async decrypt).
+- **Docs (D-1…D-6)** — folded into the cited sentences: the context-budget wording (D-1/D-2), the
+  `inflight.ts` + R1 teardown bullet (D-3/D-4), and the docs-/chat-IPC single-source pointers to
+  `shared/ipc.ts` (D-5 §above / D-6 in the Chat & streaming IPC bullet).
+
+Report + plan retired: `git rm docs/chat-docs-audit-2026-07-07.md docs/chat-docs-remediation-plan-2026-07-07.md`
+(recoverable in git history; the full finding bodies + fix designs + the per-session SHIPPED dispositions
+live there, and in the seven `BUILD_STATE.md` Session entries dated 2026-07-07/08). This ledger is the
+durable index; the only open item is the owner push of the whole unpushed local-`master` wave (Sessions
+1–7).
 
 ### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)
 
