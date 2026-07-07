@@ -8,17 +8,20 @@ import {
   buildChatMessages,
   buildSystemPrompt,
   collapseToAlternating,
+  COMPACTION_SUMMARY_ACK,
   createConversation,
   deleteLastAssistantMessage,
   effectiveContextWindow,
   fitMessagesToContext,
   generateAssistantMessage,
+  getLatestMessage,
   hasRegenerableAssistantReply,
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
   restoreMessage,
-  stripThinkBlocks
+  stripThinkBlocks,
+  writeCheckpoint
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { Db } from '../../src/main/services/db'
@@ -156,6 +159,116 @@ describe('fitMessagesToContext (history budget vs the model context window)', ()
     expect(fitted[0].role).toBe('system')
     // The current question is always the last message the model sees.
     expect(fitted[fitted.length - 1]).toEqual({ role: 'user', content: 'FINAL QUESTION' })
+  })
+})
+
+// CB-1 (chat-docs audit 2026-07-07) — after a trim, the kept tail must be user-first. A contiguous
+// suffix preserves ALTERNATION but not first-role parity: an even-length kept run ends `user` and so
+// BEGINS `assistant`, which strict templates (Mistral-family) reject with HTTP 500. fitMessagesToContext
+// drops leading assistant turns in the trimmed branch only; the no-trim identity path stays byte-identical.
+describe('fitMessagesToContext — user-first normalization (CB-1)', () => {
+  const sys = { role: 'system' as const, content: words(10) }
+  // `tag` counts as one word (≤ ONE_TOKEN_WORD_CHARS) so every turn is exactly `n` approx-tokens,
+  // making the trim boundary predictable while keeping each turn uniquely identifiable.
+  const tagged = (tag: string, n: number): string => [tag, ...Array(n - 1).fill('word')].join(' ')
+
+  it('drops a leading assistant when an even-length tail would otherwise be assistant-first', () => {
+    // 5 turns; each 100 words ≈ 203 tokens, sys ≈ 28. Budget 900 (reserve 0) keeps u4,a3,u2,a1 (four
+    // turns, even) → without the fix the tail is [a1,u2,a3,u4] (assistant-first). The fix drops a1.
+    const u0 = { role: 'user' as const, content: tagged('U0', 100) }
+    const a1 = { role: 'assistant' as const, content: tagged('A1', 100) }
+    const u2 = { role: 'user' as const, content: tagged('U2', 100) }
+    const a3 = { role: 'assistant' as const, content: tagged('A3', 100) }
+    const u4 = { role: 'user' as const, content: tagged('U4', 100) }
+    const fitted = fitMessagesToContext([sys, u0, a1, u2, a3, u4], 900, 0)
+
+    expect(fitted[0]).toBe(sys)
+    expect(fitted[1].role).toBe('user') // user-first after system
+    expect(fitted.map((m) => m.content)).not.toContain(a1.content) // the leading assistant is gone
+    expect(fitted.at(-1)).toBe(u4) // the mandatory final user turn is kept
+    // Only the one leading assistant is dropped — the rest of the recent tail survives.
+    expect(fitted.slice(1)).toEqual([u2, a3, u4])
+  })
+
+  it('never replays the compaction summary ack without its intro (pair never split)', () => {
+    // The synthetic pair leads: intro(user) → ack(assistant) → final(user). A budget that keeps the
+    // ack but drops the intro would replay a bare "Understood — I'll continue…" with no summary.
+    const intro = { role: 'user' as const, content: tagged('INTRO', 100) }
+    const ack = { role: 'assistant' as const, content: COMPACTION_SUMMARY_ACK }
+    const q = { role: 'user' as const, content: tagged('QUESTION', 100) }
+    // sys 28 + q 203 = 231; +ack(≈26)=257 keeps ack; +intro(203)=460 would drop it. Budget 300.
+    const fitted = fitMessagesToContext([sys, intro, ack, q], 300, 0)
+
+    expect(fitted[1].role).toBe('user')
+    // The ack never appears leading/bare; if it survived at all its predecessor would be the intro.
+    const ackIdx = fitted.findIndex((m) => m.content === COMPACTION_SUMMARY_ACK)
+    if (ackIdx !== -1) expect(fitted[ackIdx - 1]).toBe(intro)
+    else expect(fitted.map((m) => m.content)).not.toContain(COMPACTION_SUMMARY_ACK)
+  })
+
+  it('a solo oversize final turn is preserved — the length-1 guard never empties the tail', () => {
+    const old = { role: 'assistant' as const, content: tagged('OLD', 20) }
+    const finalQ = { role: 'user' as const, content: tagged('FINAL', 5000) }
+    const fitted = fitMessagesToContext([sys, old, finalQ], 1000, 0)
+    // Only the mandatory final turn fits; it is kept even though it alone exceeds the budget.
+    expect(fitted).toEqual([sys, finalQ])
+  })
+})
+
+// CB-6 (chat-docs audit 2026-07-07) — getLatestMessage is a LIMIT-1 twin of listMessages used by
+// buildTurnFence to size a turn against just the final message instead of paging the whole history.
+// It MUST be byte-identical to listMessages(...).at(-1) or the fence content would silently change.
+describe('getLatestMessage — LIMIT-1 twin of listMessages (CB-6)', () => {
+  it('returns the tail message, byte-identical to listMessages(...).at(-1)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q1' })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a1' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'final question' })
+    expect(getLatestMessage(db, conv.id)).toEqual(listMessages(db, conv.id).at(-1))
+    expect(getLatestMessage(db, conv.id)?.content).toBe('final question')
+  })
+
+  it('excludes a compaction checkpoint row (the tail is the last real turn, not the summary)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q1' })
+    const last = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a1' })
+    // A checkpoint is written AFTER the last real turn (higher rowid) — it must not become the tail.
+    writeCheckpoint(db, { conversationId: conv.id, summary: 'SUMMARY body', coversThroughRowid: 0 })
+    const latest = getLatestMessage(db, conv.id)
+    expect(latest?.id).toBe(last.id)
+    expect(latest?.content).toBe('a1')
+    expect(latest).toEqual(listMessages(db, conv.id).at(-1))
+  })
+
+  it('returns null for an empty conversation', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    expect(getLatestMessage(db, conv.id)).toBeNull()
+  })
+})
+
+// CB-6 — buildChatMessages takes the §5.4 compaction toggle as a threaded param (default = a fresh
+// read, so every existing caller is byte-identical). generateAssistantMessage passes its single
+// per-turn getSettings read through it. Prove the threaded boolean is honored.
+describe('buildChatMessages — threaded compactionOn param (CB-6)', () => {
+  it('passing compactionOn=false ignores an existing checkpoint (replays full history)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q1' })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a1' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q2' })
+    writeCheckpoint(db, { conversationId: conv.id, summary: 'SUMMARY body', coversThroughRowid: 0 })
+
+    // Default (compaction on): the checkpoint's synthetic summary pair is injected.
+    const withPair = buildChatMessages(db, conv.id)
+    expect(withPair.some((m) => m.content.includes('SUMMARY body'))).toBe(true)
+
+    // Threaded false: the checkpoint is ignored and the full history replays (no summary pair).
+    const noPair = buildChatMessages(db, conv.id, undefined, undefined, false)
+    expect(noPair.some((m) => m.content.includes('SUMMARY body'))).toBe(false)
+    expect(noPair.filter((m) => m.role !== 'system').map((m) => m.content)).toEqual(['q1', 'a1', 'q2'])
   })
 })
 

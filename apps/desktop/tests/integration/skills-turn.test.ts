@@ -14,6 +14,7 @@ import {
   BASE_SYSTEM_PROMPT,
   createConversation,
   generateAssistantMessage,
+  getLatestMessage,
   listMessages,
   setConversationDefaultSkill
 } from '../../src/main/services/chat'
@@ -138,6 +139,26 @@ describe('resolveTurnSkill (skills plan §10.1/§10.3)', () => {
     expect(resolveTurnSkill(db, { ...dirs, appVersion: '99.0.0' }, conv.id)?.installId).toBe('user:futureskill')
     // No appVersion supplied ⇒ tolerant (treated as compatible) — the existing callers' default.
     expect(resolveTurnSkill(db, dirs, conv.id)?.installId).toBe('user:futureskill')
+  })
+})
+
+// CB-6 (chat-docs audit 2026-07-07) — buildTurnFence sizes a turn against the final message's content,
+// now read via getLatestMessage (a LIMIT-1 twin of listMessages) instead of paging the whole history.
+// The twin must be byte-identical even when the tail is a SKILL-STAMPED assistant (the skills JOIN
+// column is populated), or the fence budget — and thus stamp decisions — would silently drift.
+describe('getLatestMessage twins listMessages(...).at(-1) for fence sizing (CB-6)', () => {
+  it('matches on a skill-stamped assistant tail (JOIN column exercised)', async () => {
+    const { db, installId } = envWithSkill()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Summarize.' })
+    // Produce a skill-stamped assistant reply so the tail carries a non-null skill_id / skill_title.
+    await generateAssistantMessage(db, runtime(), conv.id, {
+      skill: { installId, title: 'Skill bank', body: 'Quote totals.' }
+    })
+    const twin = getLatestMessage(db, conv.id)
+    expect(twin).toEqual(listMessages(db, conv.id).at(-1))
+    expect(twin?.skillId).toBe(installId)
+    expect(twin?.skillTitle).toBe('Skill bank')
   })
 })
 

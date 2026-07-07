@@ -958,10 +958,21 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `contextTokens`: it always keeps the leading system message(s) and the FINAL turn (the
   current question / grounded prompt — never dropped, so an unavoidable overflow is left to the
   runtime to map), and drops older turns oldest-first, keeping a **contiguous recent tail** so
-  strict role alternation is preserved. A `CHAT_RESPONSE_RESERVE_TOKENS` (1024) headroom leaves
+  strict role alternation is preserved. **User-first normalization (CB-1, chat-docs audit 2026-07-07):**
+  a contiguous tail preserves alternation but NOT first-role parity — an even-length trim can leave an
+  assistant-first tail, which strict templates (Mistral-family) `raise_exception` on (HTTP 500) — so in
+  the trimmed branch only, `fitMessagesToContext` drops any leading assistant turns to leave the kept
+  tail user-first (this also prevents replaying the synthetic compaction pair's ack without its intro);
+  the no-trim identity path stays byte-identical (real chats + the compaction pair are user-first, so it
+  pops nothing). A `CHAT_RESPONSE_RESERVE_TOKENS` (1024) headroom leaves
   room to generate. `buildChatMessages`/`buildGroundedChatMessages` take an optional
   `contextTokens` (the production callers pass `getSettings(db).contextTokens`; omitted = the
-  pure, untrimmed builder used by unit tests). This complements the doc-task window budgets
+  pure, untrimmed builder used by unit tests). **Per-turn read hygiene (CB-6, 2026-07-07):**
+  `buildTurnFence` sizes the skill fence against just the final turn via a `LIMIT 1` `getLatestMessage`
+  (a byte-identical twin of `listMessages(...).at(-1)`) instead of paging the whole history, and
+  `generateAssistantMessage` reads `getSettings` **once** per turn, threading the launched window and the
+  `chatCompactionEnabled` toggle (new optional `compactionOn` param on `buildChatMessages`, default = a
+  fresh read so callers stay byte-identical) rather than re-reading settings three times. This complements the doc-task window budgets
   (`doctasks/summary.ts`), which already sized their inputs to `contextTokens` — the gap was
   only the conversational path. **Since 2026-07-04** the doc-task budgets follow the LAUNCHED
   window too (`DocTaskManager.getContextTokens` → `effectiveContextWindow` of the active runtime),

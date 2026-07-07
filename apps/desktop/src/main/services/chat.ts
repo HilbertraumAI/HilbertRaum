@@ -459,6 +459,25 @@ export function listMessages(db: Db, conversationId: string): Message[] {
   return rows.map(rowToMessage)
 }
 
+/**
+ * The latest message in a conversation as a full `Message`, or null when it holds no user/assistant
+ * turns. A `LIMIT 1` twin of `listMessages` (CB-6): identical skill JOIN, `result_tables` EXISTS,
+ * and `kind IS NOT 'compaction'` filter, only ordered DESC — so it is byte-identical to
+ * `listMessages(db, conversationId).at(-1)` while reading a single row instead of paging the whole
+ * history (used by `buildTurnFence` to size a turn against just the final turn's content).
+ */
+export function getLatestMessage(db: Db, conversationId: string): Message | null {
+  const row = prepareCached(
+    db,
+    `SELECT m.*, s.title AS skill_title,
+            EXISTS(SELECT 1 FROM result_tables rt WHERE rt.message_id = m.id) AS has_result_table
+       FROM messages m LEFT JOIN skills s ON s.install_id = m.skill_id
+       WHERE m.conversation_id = ? AND m.kind IS NOT 'compaction'
+       ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1`
+  ).get(conversationId) as unknown as MessageRow | undefined
+  return row ? rowToMessage(row) : null
+}
+
 /** One stored user/assistant turn with its `rowid` — the assembly/compaction unit (§4.4). */
 export interface ConversationTurn {
   rowid: number
@@ -1094,8 +1113,12 @@ export function getConversationContextUsage(
  *     user's current question (or the grounded prompt). Dropping it would answer the
  *     wrong thing; an unavoidable overflow is left to the runtime, which surfaces the
  *     friendly "too large for this model" error (chat-stream.ts).
- *   - Older turns are dropped oldest-first until the estimate fits. Keeping a contiguous
- *     tail preserves the strict user/assistant alternation the templates require.
+ *   - Older turns are dropped oldest-first until the estimate fits. A contiguous tail preserves
+ *     the strict user/assistant ALTERNATION, but NOT first-role parity — an even-length trim can
+ *     leave an assistant-first tail, which strict templates (Mistral-family) `raise_exception` on
+ *     (HTTP 500). So after the fill loop (trimmed branch only) any leading assistant turns are
+ *     dropped, normalizing the kept tail user-first (CB-1). That also prevents replaying the
+ *     synthetic compaction pair's ack without its intro — a lone kept ack IS that leading assistant.
  * `reserveTokens` holds back room for the answer (CHAT_RESPONSE_RESERVE_TOKENS default).
  */
 export function fitMessagesToContext(
@@ -1123,6 +1146,15 @@ export function fitMessagesToContext(
     used += cost
     keptReversed.push(turns[i])
   }
+  // User-first normalization (CB-1): only in the trimmed branch, drop leading assistant turns so
+  // the kept tail begins user-first — strict templates (Mistral-family) `raise_exception` on an
+  // assistant-first message list. `while` (not `if`) is defensive; the length-1 guard never drops
+  // the mandatory final user turn and never empties. In the identity (no-trim) case the oldest kept
+  // turn is the conversation's first turn — always `user` (real chats + the compaction pair are
+  // user-first) — so this pops nothing and the identity return below stays byte-identical.
+  while (keptReversed.length > 1 && keptReversed[keptReversed.length - 1].role === 'assistant') {
+    keptReversed.pop()
+  }
   // Nothing was dropped → return the original array unchanged (cheap identity for tests).
   if (keptReversed.length === turns.length) return messages
   return [...system, ...keptReversed.reverse()]
@@ -1137,7 +1169,11 @@ export function buildChatMessages(
   db: Db,
   conversationId: string,
   contextTokens?: number,
-  skillFence?: string | null
+  skillFence?: string | null,
+  // The §5.4 compaction toggle. Defaults to a fresh read so every existing caller is byte-identical;
+  // `generateAssistantMessage` threads its single per-turn `getSettings` read through here (CB-6) so
+  // the toggle is not re-read mid-turn.
+  compactionOn: boolean = compactionEnabled(db)
 ): ChatMessage[] {
   const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt(skillFence) }]
   // L2 (context compaction): when a checkpoint exists, inject its summary as a synthetic
@@ -1146,7 +1182,7 @@ export function buildChatMessages(
   // checkpoint row itself is never a turn (kind-filtered by listConversationTurns). The §5.4 toggle
   // gates the READ as well as the write (compactionEnabled): when off, any existing checkpoint is
   // ignored and the FULL history replays — byte-identical to the pre-feature L1-only app.
-  const checkpoint = compactionEnabled(db) ? getLatestCheckpoint(db, conversationId) : null
+  const checkpoint = compactionOn ? getLatestCheckpoint(db, conversationId) : null
   if (checkpoint) messages.push(...compactionSummaryPair(checkpoint.summary))
   for (const turn of listConversationTurns(db, conversationId, checkpoint?.coversThroughRowid ?? 0)) {
     // Assistant turns are scrubbed of think blocks before being replayed —
@@ -1234,14 +1270,19 @@ export async function generateAssistantMessage(
   // assembles a prompt the runtime rejects (HTTP 400 exceed_context_size_error). Budget
   // against the REAL launched window the runtime reports (§L0), not settings.contextTokens
   // (which can diverge from the model's actual --ctx-size).
-  const contextTokens = effectiveContextWindow(runtime, getSettings(db))
+  // CB-6: one settings read for the whole turn. Both the launched window and the §5.4 compaction
+  // toggle derive from it (`compactionOn` mirrors compactionEnabled), and buildChatMessages takes the
+  // toggle as a param below so it need not re-read — collapsing the former 3× per-turn getSettings.
+  const settings = getSettings(db)
+  const contextTokens = effectiveContextWindow(runtime, settings)
+  const compactionOn = settings.chatCompactionEnabled !== false
   // L2 (context compaction): when the history approaches the window, summarize the older turns into
   // a cached checkpoint so assembly replays a compact summary + recent turns instead of dropping the
   // old ones outright. A no-op below threshold; any failure/abort falls back to today's L1 trim with
   // no user-visible error. Runs on the already-claimed chat slot as part of this turn (R4), honouring
   // the turn's AbortSignal, BEFORE assembly so buildChatMessages picks up any fresh checkpoint. Gated
   // by the §5.4 toggle: when off, no checkpoint is created and assembly ignores any existing one.
-  if (compactionEnabled(db)) {
+  if (compactionOn) {
     await ensureCompacted(db, runtime, conversationId, contextTokens, {
       signal: opts.signal,
       onStart: opts.onCompactionStart
@@ -1251,7 +1292,7 @@ export async function generateAssistantMessage(
   // starve the base preamble or the final user turn — fitMessagesToContext only drops older
   // history. Stamp the assistant row only when the fence actually fit (skill shaped the answer).
   const fence = buildTurnFence(db, conversationId, opts.skill, contextTokens)
-  const messages = buildChatMessages(db, conversationId, contextTokens, fence)
+  const messages = buildChatMessages(db, conversationId, contextTokens, fence, compactionOn)
   // Meter honesty: report what the model actually receives (fitted history + system/fence),
   // in the same estimate currency the budget uses, so the live meter never under-reads a turn.
   opts.onPromptUsage?.({
@@ -1345,8 +1386,9 @@ function buildTurnFence(
   contextTokens: number
 ): string | null {
   if (!skill) return null
-  const history = listMessages(db, conversationId)
-  const finalTurn = history.length > 0 ? history[history.length - 1].content : ''
+  // CB-6: read just the final turn (a LIMIT 1 tail) instead of paging the whole history to size the
+  // fence — byte-identical content to the old `listMessages(...).at(-1)`.
+  const finalTurn = getLatestMessage(db, conversationId)?.content ?? ''
   const fixedTokens =
     approxPromptTokens(BASE_SYSTEM_PROMPT) +
     approxPromptTokens(finalTurn) +
