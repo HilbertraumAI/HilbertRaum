@@ -12,6 +12,7 @@ import type {
   StartSkillRunResult
 } from '../../shared/types'
 import { buildDocumentSegmentReader } from './documentSegments'
+import { getLatestUserMessage } from '../services/chat'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -380,14 +381,18 @@ export function registerSkillsIpc(ctx: AppContext): void {
       return { started: false, error: tMain('main.skills.run.documentOutOfScope') }
     }
     const targetId = requestedInScope ? requestedId : docIds[0]
+    // Phase 8 (D76): the targeted-edit instruction is the conversation's latest user message, resolved
+    // MAIN-side (content — used, never logged; the §6/scope posture). Only the edit tool reads it.
+    const instruction =
+      toolName === 'apply_document_edits' ? getLatestUserMessage(ctx.db, conversationId) ?? undefined : undefined
     const runner = buildToolRunner(
       ctx.db,
       toolName,
-      { skillInstallId, conversationId, documentId: targetId, confirmed: req?.confirmed },
+      { skillInstallId, conversationId, documentId: targetId, confirmed: req?.confirmed, instruction },
       runAudit,
       // `docTasks` routes `categorize_transactions` into the doctask lane (D26 exclusion, Phase 33).
-      // `runtime` (Phase 7, D73) is the active chat model for redaction's LLM locate pass — null when
-      // none runs, which degrades the redaction to its deterministic floor with an honest note.
+      // `runtime` (Phase 7/8, D73/D76) is the active chat model for the redaction / document-edit LLM
+      // locate pass — null when none runs (redaction degrades to its floor; the edit tool refuses cleanly).
       { saveTextFile, readDocumentSegments, docTasks: ctx.docTasks, runtime: ctx.runtime?.active() ?? null }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }

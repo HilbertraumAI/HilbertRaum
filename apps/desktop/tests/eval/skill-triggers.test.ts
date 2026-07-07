@@ -28,6 +28,7 @@ const LABEL_SPACE = new Set([
   'deadline-obligation-finder',
   'what-changed',
   'document-redaction',
+  'document-edit',
   'none'
 ])
 
@@ -60,12 +61,13 @@ describe('S13a corpus + candidates are well-formed', () => {
     expect(corpus.filter((c) => c.confusion).length).toBeGreaterThanOrEqual(6)
   })
 
-  it('loads exactly the eight real app skills as candidates', () => {
+  it('loads exactly the nine real app skills as candidates', () => {
     const candidates = loadSkillCandidates()
     expect(candidates.map((c) => c.installId).sort()).toEqual([
       'bank-statement',
       'contract-brief',
       'deadline-obligation-finder',
+      'document-edit',
       'document-redaction',
       'invoice',
       'meeting-protocol',

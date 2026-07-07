@@ -2,6 +2,7 @@ import { registerSkillAnalysisHandler } from './registry'
 import { BANK_STATEMENT_INSTALL_ID, bankStatementAnalysisHandler } from './bank-statement'
 import { INVOICE_INSTALL_ID, invoiceAnalysisHandler } from './invoice'
 import { DOCUMENT_REDACTION_INSTALL_ID, documentRedactionAnalysisHandler } from './redaction'
+import { DOCUMENT_EDIT_INSTALL_ID, documentEditAnalysisHandler } from './document-edit'
 import {
   CONTRACT_BRIEF_INSTALL_ID,
   DEADLINE_OBLIGATION_INSTALL_ID,
@@ -39,6 +40,7 @@ export {
 export { BANK_STATEMENT_INSTALL_ID, bankStatementAnalysisHandler, buildBankAnswer } from './bank-statement'
 export { INVOICE_INSTALL_ID, invoiceAnalysisHandler, buildInvoiceAnswer } from './invoice'
 export { DOCUMENT_REDACTION_INSTALL_ID, documentRedactionAnalysisHandler } from './redaction'
+export { DOCUMENT_EDIT_INSTALL_ID, documentEditAnalysisHandler } from './document-edit'
 export {
   CONTRACT_BRIEF_INSTALL_ID,
   DEADLINE_OBLIGATION_INSTALL_ID,
@@ -63,6 +65,10 @@ export function registerBuiltinSkillAnalysisHandlers(): void {
   // `document-redaction` registers a `routing` handler (not an exhaustive one): a redaction-shaped
   // request points the user at its run button; an off-topic question keeps the relevance path.
   registerSkillAnalysisHandler(DOCUMENT_REDACTION_INSTALL_ID, documentRedactionAnalysisHandler)
+  // `document-edit` also registers a `routing` handler (Phase 8, #23): an edit-shaped request points the
+  // user at its run button (a chat ask never silently rewrites the document); an off-topic question keeps
+  // the relevance path.
+  registerSkillAnalysisHandler(DOCUMENT_EDIT_INSTALL_ID, documentEditAnalysisHandler)
   // The Tier-1 INSTRUCTION skills register `grounded-whole-doc` handlers (skill-whole-doc engine,
   // Wave 2): an analysis-shaped request over a single in-scope doc streams a model answer over the
   // WHOLE document with the SKILL.md fence applied; an off-topic/multi-doc turn keeps the relevance

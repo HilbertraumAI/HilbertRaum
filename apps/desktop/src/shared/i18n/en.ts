@@ -202,6 +202,7 @@ export const en = {
   'chat.skill.tool.exportInvoiceJson': 'Export to JSON',
   'chat.skill.tool.exportInvoiceXml': 'Export to XML',
   'chat.skill.tool.redactDocument': 'Redact personal data',
+  'chat.skill.tool.applyDocumentEdits': 'Apply text edits',
   // The breakdown question routed into the transcript after a categorize run (Phase 33, Q3) — it must
   // be both analysis- and category-shaped so the bank analysis handler answers it (0 model calls).
   'chat.skill.categorize.breakdownQuestion': 'Break down my spending by category.',
@@ -245,11 +246,23 @@ export const en = {
   'chat.skill.run.done.redactedFloor.one': 'Saved a redacted copy — {count} item hidden (offline rule-based detection only, no model running). Review it before sharing.',
   'chat.skill.run.done.redactedFloor.other': 'Saved a redacted copy — {count} items hidden (offline rule-based detection only, no model running). Review it before sharing.',
   'chat.skill.run.done.redactedCleanFloor': 'No personal data was detected (offline rule-based detection only, no model running); saved a copy. Review it before sharing.',
+  // Phase 8 (D76/D78): targeted edits — N changes applied (all found), a partial variant when some
+  // requested text wasn’t found and was skipped, and the no-match case (nothing written). Counts only.
+  'chat.skill.run.done.edited.one': 'Applied {count} change and saved an edited copy. Review it before sharing.',
+  'chat.skill.run.done.edited.other': 'Applied {count} changes and saved an edited copy. Review it before sharing.',
+  'chat.skill.run.done.editedPartial.one': 'Applied {count} change; some requested text wasn’t found and was skipped. Saved an edited copy — review it before sharing.',
+  'chat.skill.run.done.editedPartial.other': 'Applied {count} changes; some requested text wasn’t found and was skipped. Saved an edited copy — review it before sharing.',
+  'chat.skill.run.done.editedNone': 'None of the requested text was found — nothing was changed and no copy was saved.',
   'chat.skill.run.failedGeneric': "That didn't work. Nothing was changed.",
   'chat.skill.run.error.unavailable': 'This tool isn’t available.',
   'chat.skill.run.error.needsExtraction': 'Read the document first with the “{button}” button, then run this tool.',
   'chat.skill.run.error.persistFailed': 'This couldn’t be saved. Nothing was changed.',
   'chat.skill.run.error.exportWriteFailed': 'The file couldn’t be saved. Nothing was changed.',
+  // Phase 8 (D76): the document-edit refusals — there is no rule-based floor for edits, so a missing model
+  // or instruction refuses cleanly (never a silent nothing).
+  'chat.skill.run.error.needsModel': 'Start a model first — targeted edits need a running model to find the text to change.',
+  'chat.skill.run.error.needsInstruction': 'Say what to change first (for example, “replace X with Y”), then run this again.',
+  'chat.skill.run.error.editFailed': 'The edits couldn’t be completed. Nothing was changed.',
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
   // SKA-40 (skills audit 2026-07-03, U6): the store gave up polling a run after repeated errors — a
   // labelled, dismissable row rather than a silently vanished run.
@@ -848,6 +861,23 @@ export const en = {
     'phone numbers, IBANs, payment-card numbers, dates, and links — reading the whole document. It’s ' +
     'a best-effort first pass, not a guarantee: it can’t catch names or unusual formats, so review ' +
     'the saved copy before you share it.',
+  // Edit-routing answer (Phase 8, #23): an ACTION skill points the user at its own run button instead of
+  // regenerating the prose (which hallucinates). Deterministic + content-free (no model call, no read);
+  // `{button}` is the SkillRunBar's own label so the wording matches the affordance the user sees.
+  'skills.editRouting.answer':
+    'To make these edits, click the **{button}** button just below the chat box, then choose where to ' +
+    'save the edited copy. It runs entirely on this device and applies only the exact find-and-replace ' +
+    'changes you asked for — everywhere the text is found verbatim, leaving everything else unchanged. It ' +
+    'never rewrites the document, so it can’t invent or reword anything. This phase saves a plain text ' +
+    '(.txt) copy; review it before you share it.',
+  // U-1: the same routing answer when MORE THAN ONE document is in scope. The tool edits one document at a
+  // time, so the copy is honest about that and points at the run button's own target chooser.
+  'skills.editRouting.answerMulti':
+    'To make these edits, click the **{button}** button just below the chat box and pick which document ' +
+    'to edit, then choose where to save the edited copy. It works on one document at a time, runs entirely ' +
+    'on this device, and applies only the exact find-and-replace changes you asked for — everywhere the ' +
+    'text is found verbatim, leaving everything else unchanged. It never rewrites the document. This phase ' +
+    'saves a plain text (.txt) copy; review it before you share it.',
   // U2 dry-run (audit §3.4): an INFORMATIONAL "what personal data is in here?" ask over a single document
   // gets the deterministic per-category counts (COUNTS only — never a detected value) instead of the button
   // deflection. Runs the same offline detectors the tool would; still no file write.
@@ -1723,6 +1753,7 @@ export const en = {
   'main.dialog.exportXml': 'Export as XML',
   'main.dialog.filterXml': 'XML file',
   'main.dialog.exportRedacted': 'Save redacted copy',
+  'main.dialog.exportEdited': 'Save edited copy',
   'main.dialog.filterText': 'Text file',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',

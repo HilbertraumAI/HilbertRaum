@@ -20,6 +20,7 @@ import {
   validateInvoiceTotalsTool
 } from './tools/invoice'
 import { redactDocumentTool } from './tools/redaction'
+import { applyDocumentEditsTool } from './tools/document-edit'
 import { isWiredToolName } from '../../../shared/skill-tools'
 
 // Tier-2 skill tool registry + the validate→run→validate gate (skills plan §12, Phase S10).
@@ -235,7 +236,9 @@ const countSelectedDocumentsTool: SkillTool = {
  * same shape (extract read-only; validate read-only; export confirm-gated), a separate content class.
  * REDACTION (`tools/redaction.ts`) is the read-transform-export shape: a single `redact_document`
  * tool that reads the selected document and produces a masked copy the seam writes (confirm-gated
- * `export-file`); it persists no rows (the deliverable is the file).
+ * `export-file`); it persists no rows (the deliverable is the file). DOCUMENT-EDIT
+ * (`tools/document-edit.ts`) is the same read-transform-export shape for #23: `apply_document_edits`
+ * verifies + splices the seam-located find→replace edits and produces an edited copy the seam writes.
  */
 const REGISTRY: Record<string, SkillTool> = {
   [countSelectedDocumentsTool.name]: countSelectedDocumentsTool, // test-only gate canary, not wired (X-2)
@@ -249,7 +252,8 @@ const REGISTRY: Record<string, SkillTool> = {
   [exportInvoiceCsvTool.name]: exportInvoiceCsvTool,
   [exportInvoiceJsonTool.name]: exportInvoiceJsonTool,
   [exportInvoiceXmlTool.name]: exportInvoiceXmlTool,
-  [redactDocumentTool.name]: redactDocumentTool
+  [redactDocumentTool.name]: redactDocumentTool,
+  [applyDocumentEditsTool.name]: applyDocumentEditsTool
 }
 
 /** Look up a registered tool by name (own-property only — never reaches `Object.prototype`). */

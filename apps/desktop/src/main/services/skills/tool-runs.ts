@@ -13,6 +13,7 @@ import {
   runCashflowSummary,
   runCategorization,
   runCsvExport,
+  runDocumentEdit,
   runDocumentRedaction
 } from './run'
 import {
@@ -140,6 +141,13 @@ export interface BuildRunnerArgs {
   /** The single target document (the v1 tools are single-document; plan §8). */
   documentId: string
   confirmed?: boolean
+  /**
+   * The user's edit instruction for `apply_document_edits` (Phase 8, D76 — the CORE input). Resolved
+   * MAIN-side by the IPC from the conversation's latest user message (content, resolved main-side, never
+   * logged — the same posture as scope). Only the edit tool reads it; every other tool ignores it. Absent/
+   * empty ⇒ the edit run refuses cleanly ("say what to change first").
+   */
+  instruction?: string
 }
 
 /**
@@ -456,6 +464,33 @@ export function buildToolRunner(
         return {
           ok: res.ok,
           count: res.redactionCount,
+          resultKind: res.resultKind,
+          cancelled: res.cancelled,
+          errorCode: res.errorCode,
+          error: res.error
+        }
+      }
+    case 'apply_document_edits':
+      if (!deps.saveTextFile) return null // cannot save the edited copy without the MAIN-side capability
+      return async ({ signal, onProgress }) => {
+        const res = await runDocumentEdit(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          confirmed: args.confirmed,
+          // §6.2: the edited copy gets its own "Save edited copy" dialog + a .txt filter (from the
+          // descriptor), instead of the CSV/redacted dialog fighting the saved filename.
+          saveTextFile: (name, content) => deps.saveTextFile!(name, content, descriptor.dialog),
+          readDocumentSegments: deps.readDocumentSegments,
+          // Phase 8 (D76): the LLM locate pass runs main-side in the seam via this runtime. Null ⇒ the run
+          // refuses cleanly ("start a model") — there is no rule-based floor for edits.
+          runtime: deps.runtime ?? null,
+          // The CORE input (D76): the user's edit instruction, resolved main-side from the conversation.
+          instruction: args.instruction
+        })
+        return {
+          ok: res.ok,
+          count: res.editCount,
           resultKind: res.resultKind,
           cancelled: res.cancelled,
           errorCode: res.errorCode,

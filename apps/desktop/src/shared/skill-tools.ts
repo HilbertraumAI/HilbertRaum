@@ -32,8 +32,10 @@ export type SkillToolSeamKind = 'extract' | 'downstream' | 'export'
  *   - `count`     — a plain pluralized count ("Extracted N transactions." / "Saved N rows.").
  *   - `reconcile` — a pass/fail balance verdict keyed off `resultKind` (reconciled/unchecked/…).
  *   - `redaction` — "clean" (nothing found, copy saved) vs "redacted" (N items hidden).
+ *   - `edit` — "none" (no matching text found) vs "edited"/"editedPartial" (N changes applied; the
+ *     partial variant when some requested text wasn't found — Phase 8, D76).
  */
-export type SkillToolResultShape = 'count' | 'reconcile' | 'redaction'
+export type SkillToolResultShape = 'count' | 'reconcile' | 'redaction' | 'edit'
 
 /**
  * Per-export save-dialog metadata (U5 / audit §6.2): the dialog's title, its filter label, and the
@@ -65,6 +67,17 @@ export interface RedactionDoneKeys {
   redactedFloor: CountMessageKey
 }
 
+/** The edit-shape done copy (Phase 8, D76/D78): no-match vs N-changes-applied, with a partial variant
+ *  when some requested text wasn't found and was skipped. Counts only — never the find/replace values. */
+export interface EditDoneKeys {
+  /** No matching text was found — nothing was changed. */
+  none: MessageKey
+  /** N changes applied (every requested change was found + spliced). */
+  edited: CountMessageKey
+  /** N changes applied, but some requested text wasn't found and was skipped (dropped > 0). */
+  editedPartial: CountMessageKey
+}
+
 /** The self-describing wiring of one Tier-2 tool — the single source the other layers derive from. */
 export interface SkillToolDescriptor {
   /** The registry tool name (matches the `SkillTool.name` / SKILL.md `allowedTools` entry). */
@@ -85,6 +98,8 @@ export interface SkillToolDescriptor {
   reconcileKeys?: ReconcileDoneKeys
   /** The verdict keys for a `redaction`-shaped result. */
   redactionKeys?: RedactionDoneKeys
+  /** The done keys for an `edit`-shaped result (Phase 8). */
+  editKeys?: EditDoneKeys
   /** The save-dialog metadata for an `export`-shape tool (title/filter/extensions). */
   dialog?: SkillToolSaveDialog
 }
@@ -107,6 +122,13 @@ const DIALOG_XML: SkillToolSaveDialog = {
 }
 const DIALOG_REDACTED: SkillToolSaveDialog = {
   titleKey: 'main.dialog.exportRedacted',
+  filterNameKey: 'main.dialog.filterText',
+  extensions: ['txt']
+}
+// Phase 8: the edited-copy save dialog — .txt this phase (same-format DOCX export is Phase 9). Its own
+// title/filter (not the CSV/redacted dialog) so the saved `edited.txt` filename isn't fought on Windows.
+const DIALOG_EDITED: SkillToolSaveDialog = {
+  titleKey: 'main.dialog.exportEdited',
   filterNameKey: 'main.dialog.filterText',
   extensions: ['txt']
 }
@@ -222,6 +244,19 @@ export const SKILL_TOOL_DESCRIPTORS: readonly SkillToolDescriptor[] = [
       redactedFloor: 'chat.skill.run.done.redactedFloor'
     },
     dialog: DIALOG_REDACTED
+  },
+  {
+    name: 'apply_document_edits',
+    labelKey: 'chat.skill.tool.applyDocumentEdits',
+    seamKind: 'export',
+    confirm: true,
+    resultShape: 'edit',
+    editKeys: {
+      none: 'chat.skill.run.done.editedNone',
+      edited: 'chat.skill.run.done.edited',
+      editedPartial: 'chat.skill.run.done.editedPartial'
+    },
+    dialog: DIALOG_EDITED
   }
 ]
 

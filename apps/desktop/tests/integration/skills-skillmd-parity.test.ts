@@ -59,12 +59,13 @@ describe('SKILL.md triggers.keywords ⇔ vocabulary parity (W5)', () => {
 // P2 = bullets) still decapitated the rules at a tight budget — the minimum shipped a bare heading, or
 // (as this test previously pinned at paras[1]) an intro PROMISING rules with none delivered. SKA-15
 // merges heading + intro + bullets into ONE paragraph, so the guaranteed-kept minimum IS the rules
-// block. Pinned for all 8 shipped app skills, both statically (paragraph shape) and end-to-end
+// block. Pinned for all 9 shipped app skills, both statically (paragraph shape) and end-to-end
 // (trimming the REAL body through `buildSkillFence` at a rules-only budget keeps the bullets).
 const ALL_APP_SKILL_IDS = [
   'bank-statement',
   'invoice',
   'document-redaction',
+  'document-edit',
   'contract-brief',
   'deadline-obligation-finder',
   'meeting-protocol',

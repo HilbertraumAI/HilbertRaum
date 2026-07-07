@@ -1,6 +1,6 @@
 # Beta feedback wave 1 — remediation plan (issues #22–#28)
 
-_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) + 6 (#22 pt.1, span-transform engine) + 7 (#22 pt.2, LLM-located redaction) DONE; Phases 8–10 open.**
+_Status: **WORKING PAPER — Phases 1 (#28, DE citation labels) + 2 (#25, memory meter) + 3 (#27, one model action) + 4 (#26, single-doc scope + visible scope) + 5 (#24, coverage line) + 6 (#22 pt.1, span-transform engine) + 7 (#22 pt.2, LLM-located redaction) + 8 (#23, format-preserving targeted edits) DONE; Phases 9–10 open.**
 Per the CLAUDE.md doc-lifecycle rule this stays a standalone plan while work is open; once all
 phases land (or are consciously dropped), condense into design records folded into
 `docs/architecture.md` (Skills record — redaction/transform), `docs/rag-design.md` (scope +
@@ -407,10 +407,36 @@ by the i18n parity + descriptor branching tests).
 **Done =** suite green, docs (SKILL.md, `known-limitations.md` redaction bullet,
 `architecture.md` Skills record pointer) + BUILD_STATE updated, commit references #22.
 
-## 11. Phase 8 — format-preserving targeted edits (#23)
+## 11. Phase 8 — format-preserving targeted edits (#23) ✅ DONE
 
 **Goal:** "Vollmachtgeber → Vollmachtgeberin including dependent pronouns" without touching
 anything else (D76).
+
+**Shipped (2026-07-07):** a NEW `document-edit` skill (so redaction's privacy posture stays untangled) +
+tool `apply_document_edits`. The local model ONLY LOCATES occurrence-anchored find→replace edits
+(grammar-constrained JSON, D55, temp 0, overlapping line-numbered windows —
+`skills/tools/document-edit-locate.ts`); the app VERIFIES each `find` verbatim at its `{line, occurrence}`
+anchor (`locateOccurrences`) and SPLICES the replacement for that ONE occurrence (D76 precision, `applySpans`)
+— the model NEVER regenerates the document (`document-edit.ts` `verifyAndSpliceEdits`, runtime-free). Diff-
+verifiability holds by construction (only verified spans change, byte-identity elsewhere, D58); an
+unverifiable/wrong-line/out-of-range/overlapping edit is dropped+counted (`editedPartial`); nothing matched
+⇒ `none` + no file written. **Where the instruction comes from (the central decision): the conversation's
+latest user message**, resolved MAIN-side in the IPC (`chat.ts` `getLatestUserMessage` → `BuildRunnerArgs.instruction`
+→ `runDocumentEdit`) — no new renderer input widget, content stays main-side (never logged). **No floor:**
+no runtime → `needsModel`, no instruction → `needsInstruction`, model failure → `editFailed` (refuse cleanly,
+never a silent nothing). Output `.txt` this phase (`DIALOG_EDITED`, beside `DIALOG_REDACTED`); DOCX is Phase 9.
+Routing mirrors redaction (`analysis/document-edit.ts`, `mode:'routing'` — deflect to the run button, never
+silently rewrite); `document-edit` vocabulary (EN+DE) added + pinned by the parity test; `autoFire:false`
+(a write-edit is deliberately activated, still suggested on find-and-replace phrases). Renderer: a
+descriptor-driven `edit` result shape (`edited`/`editedPartial`/`none`) — copy-only branch like Phase 7's
+redaction, so NO new preview case (the run-bar surface has never had one; validated by i18n parity + the
+descriptor tests). Tests: `skills-document-edit-locate.test.ts` (+16), `skills-document-edit.test.ts` (+13),
+`skills-privacy-guard.test.ts` (+1) + skill-count updates (vocabulary 8→9, skillmd-parity, eval label space +
+4 corpus true positives, tool-registry). Suite 3773/47, typecheck + build + preview:build green. Folded into
+`architecture.md` "Skills — design record" **§22**; `known-limitations.md` targeted-edits bullet +
+`user-guide.md` edit note added. **Carried forward:** the DOCX/segment-faithful writer (Phase 9); redaction's
+run-bar instruction still unwired (Phase 8 wired the EDIT instruction only); the edit locate call runs outside
+the D26 chat arbiter (same accepted posture as §21 redaction).
 
 - **New tool `apply_document_edits`** (same Tier-2 pattern as `redact_document`; new SKILL.md
   under `app-skills/` or an extension of an existing document skill — lean: a new

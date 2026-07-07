@@ -20,8 +20,8 @@ import {
 // handler-vocab DRIFT guard: every routing term actually routes.
 
 describe('vocabulary — structural invariants', () => {
-  it('covers exactly the eight app skills, each with a non-empty vocabulary', () => {
-    expect(APP_VOCAB_SKILL_IDS.length).toBe(8)
+  it('covers exactly the nine app skills, each with a non-empty vocabulary', () => {
+    expect(APP_VOCAB_SKILL_IDS.length).toBe(9)
     for (const id of APP_VOCAB_SKILL_IDS) {
       expect(SKILL_VOCABULARY[id]?.length ?? 0).toBeGreaterThan(0)
     }

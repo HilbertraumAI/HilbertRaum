@@ -402,6 +402,24 @@ password recovery — are documented in
   count** are surfaced (architecture.md "Skills — design record" §21). Locate quality on a small local
   model is the accepted risk — mitigated by the deterministic floor, the verify-verbatim + all-occurrences
   sweep, and window overlap.
+- **Targeted edits apply only find-and-replace changes found verbatim — never a rewrite (Skills Phase 8,
+  #23, D76).** The `document-edit` skill's `apply_document_edits` tool makes the exact find-and-replace
+  edits the user described. A **running model is required**: it only *locates* occurrence-anchored
+  find→replace edits (grammar-constrained JSON, temperature 0); the app then **verifies each `find`
+  verbatim at its `{line, occurrence}` anchor** and splices the replacement — the model **never regenerates
+  the document**, so it cannot invent, reword, or reorder anything. An edit changes **only its anchored
+  occurrence** (so an agreement like *der → die only where it refers* is precise), and everything the user
+  did not ask to change stays **byte-for-byte identical** (diff-verifiable by construction). A requested
+  change whose text is not found verbatim at its anchor is **dropped and counted** (surfaced as
+  `editedPartial`); if nothing matches, the run reports `none` and writes **no file**. **With no model
+  running** — or no instruction — the run **refuses cleanly** (there is no rule-based fallback for edits),
+  never a silent nothing. The instruction comes from the conversation's latest user message. Output is a
+  plain **`.txt`** copy this phase; keeping the original file's format (DOCX in → DOCX out) is Phase 9.
+  Privacy matches redaction: the edited text is written **only** to the user-chosen file, and the
+  find/replace values never reach any log/audit/`skill_runs` row (they ride as tool input, which the gate
+  never logs) — only per-run **counts** are surfaced (architecture.md "Skills — design record" §22). The
+  edited copy is a **starting point that still needs a human review** before sharing; the SKILL.md body and
+  the run's "done" copy both say so.
   - **Date masking now accepts EITHER field order and a 2-digit year — the BL-N6 leak is closed (U2,
     audit §5.7).** For *redaction* (unlike extraction, which stays day-first) a candidate is masked when it
     parses in **day-first OR month-first** order, so a **US-ordered** `mm/dd/yyyy` value like `12/31/2026`

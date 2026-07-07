@@ -43,7 +43,7 @@ export interface VocabEntry {
   use: VocabUse
 }
 
-/** The eight bundled app skills that carry a canonical vocabulary (the routing + suggestion label space). */
+/** The nine bundled app skills that carry a canonical vocabulary (the routing + suggestion label space). */
 export type SkillVocabId =
   | 'bank-statement'
   | 'invoice'
@@ -53,6 +53,7 @@ export type SkillVocabId =
   | 'deadline-obligation-finder'
   | 'what-changed'
   | 'document-redaction'
+  | 'document-edit'
 
 export const APP_VOCAB_SKILL_IDS: readonly SkillVocabId[] = [
   'bank-statement',
@@ -62,7 +63,8 @@ export const APP_VOCAB_SKILL_IDS: readonly SkillVocabId[] = [
   'share-safe-review',
   'deadline-obligation-finder',
   'what-changed',
-  'document-redaction'
+  'document-redaction',
+  'document-edit'
 ]
 
 /**
@@ -444,6 +446,34 @@ const DOCUMENT_REDACTION: VocabEntry[] = [
   suggest('sensible daten', 'de')
 ]
 
+const DOCUMENT_EDIT: VocabEntry[] = [
+  // The unambiguous find-and-replace phrases + strong edit verbs — both OFFER and ROUTE (word-boundary,
+  // so `rename` never trips a compound, `ersetze` never a longer word). These are Phase 8's targeted-edit
+  // intents (#23): "replace X with Y everywhere it refers", not a general "rewrite this".
+  both('find and replace', 'en'),
+  both('search and replace', 'en'),
+  both('replace all', 'en'),
+  both('replace every', 'en'),
+  both('rename', 'en'),
+  both('suchen und ersetzen', 'de'),
+  both('ersetzen', 'de'),
+  both('ersetze', 'de'),
+  both('umbenennen', 'de'),
+  // route-only — the ambiguous-but-safe edit verbs (fire once the document-edit skill is active). `replace`
+  // alone (⊂ "irreplaceable"? — word-bounded, so no), `change`/`swap` are too generic to OFFER on.
+  route('replace', 'en'),
+  route('change all', 'en'),
+  route('change every', 'en'),
+  route('substitute', 'en'),
+  route('swap', 'en'),
+  route('correct every', 'en'),
+  route('austauschen', 'de'),
+  route('ändere', 'de'),
+  route('ändern', 'de'),
+  route('durchgängig ersetzen', 'de'),
+  route('ersetze durch', 'de')
+]
+
 /** The single source of truth: skill id → its canonical bilingual vocabulary. */
 export const SKILL_VOCABULARY: Record<SkillVocabId, VocabEntry[]> = {
   'bank-statement': BANK_STATEMENT,
@@ -453,7 +483,8 @@ export const SKILL_VOCABULARY: Record<SkillVocabId, VocabEntry[]> = {
   'share-safe-review': SHARE_SAFE_REVIEW,
   'deadline-obligation-finder': DEADLINE_OBLIGATION,
   'what-changed': WHAT_CHANGED,
-  'document-redaction': DOCUMENT_REDACTION
+  'document-redaction': DOCUMENT_REDACTION,
+  'document-edit': DOCUMENT_EDIT
 }
 
 /** Does ONE vocabulary entry match an already-lower-cased question? Word entries are boundary-matched

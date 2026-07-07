@@ -42,7 +42,12 @@ export interface SkillRunTarget {
 const RUN_ERROR_KEY: Record<string, MessageKey> = {
   unavailable: 'chat.skill.run.error.unavailable',
   persistFailed: 'chat.skill.run.error.persistFailed',
-  exportWriteFailed: 'chat.skill.run.error.exportWriteFailed'
+  exportWriteFailed: 'chat.skill.run.error.exportWriteFailed',
+  // Phase 8 (D76) — the document-edit refusals (no floor for edits): no model, no instruction, or a
+  // model failure mid-locate. Each maps to a friendly, actionable line.
+  needsModel: 'chat.skill.run.error.needsModel',
+  needsInstruction: 'chat.skill.run.error.needsInstruction',
+  editFailed: 'chat.skill.run.error.editFailed'
 }
 
 export interface SkillRunBarProps {
@@ -205,6 +210,13 @@ export function SkillRunBar({
       if (state.resultKind === 'cleanFloor') return t(d.redactionKeys.cleanFloor)
       if (state.resultKind === 'redactedFloor') return tCount(d.redactionKeys.redactedFloor, count)
       return tCount(d.redactionKeys.redacted, count)
+    }
+    if (d?.resultShape === 'edit' && d.editKeys) {
+      // 'none' = nothing matched verbatim (no file written); 'editedPartial' = N applied but some
+      // requested text wasn't found and was skipped; 'edited' = N applied, all found (Phase 8, D76/D78).
+      if (state.resultKind === 'none') return t(d.editKeys.none)
+      if (state.resultKind === 'editedPartial') return tCount(d.editKeys.editedPartial, count)
+      return tCount(d.editKeys.edited, count)
     }
     return tCount(d?.doneKey ?? 'chat.skill.run.done', count)
   }

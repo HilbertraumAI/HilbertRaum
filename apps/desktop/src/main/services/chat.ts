@@ -505,6 +505,24 @@ export function listConversationTurns(
     .map((r) => ({ rowid: r.rowid, role: r.role as 'user' | 'assistant', content: r.content }))
 }
 
+/**
+ * The most recent USER message text in a conversation, or null when there is none. Used by the skill
+ * run IPC to resolve a targeted-edit instruction MAIN-side from the conversation (the user's chat request
+ * IS the edit instruction — Phase 8, D76), so no document/chat title crosses the run-state boundary and
+ * the content stays main-side (it is scored/used, NEVER logged — the §6 posture, like scope resolution).
+ * Excludes `compaction` rows (system summaries, not a user turn).
+ */
+export function getLatestUserMessage(db: Db, conversationId: string): string | null {
+  if (!conversationId) return null
+  const row = prepareCached(
+    db,
+    `SELECT content FROM messages
+       WHERE conversation_id = ? AND role = 'user' AND kind IS NOT 'compaction'
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`
+  ).get(conversationId) as { content: string } | undefined
+  return row?.content ?? null
+}
+
 /** The latest compaction checkpoint for a conversation, or null when none has been cut. */
 export function getLatestCheckpoint(db: Db, conversationId: string): Checkpoint | null {
   const row = prepareCached(

@@ -215,6 +215,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.tool.exportInvoiceJson': 'Als JSON exportieren',
   'chat.skill.tool.exportInvoiceXml': 'Als XML exportieren',
   'chat.skill.tool.redactDocument': 'Personenbezogene Daten schwärzen',
+  'chat.skill.tool.applyDocumentEdits': 'Textänderungen anwenden',
   // Die nach einem Kategorisieren-Lauf in den Verlauf eingespielte Aufschlüsselungsfrage (Phase 33, Q3).
   'chat.skill.categorize.breakdownQuestion': 'Schlüssle meine Ausgaben nach Kategorie auf.',
   // Die nach einem „Geldfluss zusammenfassen“-Lauf eingespielte Frage — analyse-, aber nicht
@@ -265,11 +266,23 @@ export const de: Record<keyof typeof en, string> = {
     'Geschwärzte Kopie gespeichert – {count} Einträge verborgen (nur regelbasierte Offline-Erkennung, kein Modell aktiv). Prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.done.redactedCleanFloor':
     'Keine personenbezogenen Daten erkannt (nur regelbasierte Offline-Erkennung, kein Modell aktiv); Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
+  // Phase 8 (D76/D78): gezielte Änderungen – N Änderungen angewendet (alle gefunden), eine Teil-Variante,
+  // wenn ein Teil des gesuchten Textes nicht gefunden und übersprungen wurde, und der Kein-Treffer-Fall.
+  'chat.skill.run.done.edited.one': '{count} Änderung angewendet und eine bearbeitete Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.edited.other': '{count} Änderungen angewendet und eine bearbeitete Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.editedPartial.one': '{count} Änderung angewendet; ein Teil des gesuchten Textes wurde nicht gefunden und übersprungen. Bearbeitete Kopie gespeichert – prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.editedPartial.other': '{count} Änderungen angewendet; ein Teil des gesuchten Textes wurde nicht gefunden und übersprungen. Bearbeitete Kopie gespeichert – prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.editedNone': 'Kein gesuchter Text wurde gefunden – es wurde nichts geändert und keine Kopie gespeichert.',
   'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
   'chat.skill.run.error.unavailable': 'Dieses Werkzeug ist nicht verfügbar.',
   'chat.skill.run.error.needsExtraction': 'Lies das Dokument zuerst mit der Schaltfläche „{button}“ ein, dann führe dieses Werkzeug aus.',
   'chat.skill.run.error.persistFailed': 'Das konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.error.exportWriteFailed': 'Die Datei konnte nicht gespeichert werden. Es wurde nichts geändert.',
+  // Phase 8 (D76): die Document-Edit-Absagen – für Änderungen gibt es keine regelbasierte Grundlage, daher
+  // lehnt ein fehlendes Modell oder eine fehlende Anweisung sauber ab (nie stillschweigend nichts).
+  'chat.skill.run.error.needsModel': 'Starte zuerst ein Modell – gezielte Änderungen brauchen ein laufendes Modell, um den zu ändernden Text zu finden.',
+  'chat.skill.run.error.needsInstruction': 'Sag zuerst, was geändert werden soll (zum Beispiel „ersetze X durch Y“), dann führe dies erneut aus.',
+  'chat.skill.run.error.editFailed': 'Die Änderungen konnten nicht abgeschlossen werden. Es wurde nichts geändert.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
   // SKA-40 (Skills-Audit 2026-07-03, U6): der Status ließ sich nach mehreren Fehlern nicht mehr prüfen –
   // eine beschriftete, schließbare Zeile statt einer still verschwundenen Ausführung.
@@ -871,6 +884,25 @@ export const de: Record<keyof typeof en, string> = {
     'oder ungewöhnliche Formate erkennt sie nicht – sieh das als Untergrenze, nicht als vollständige ' +
     'Liste. Für eine geschwärzte Kopie klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
     'wähle, wo die Kopie gespeichert werden soll.',
+  // Antwort der Bearbeitungs-Weiterleitung (Phase 8, #23): eine Aktions-Skill verweist auf ihre eigene
+  // Schaltfläche, statt den Text neu zu erzeugen (was halluziniert). Deterministisch + inhaltsfrei.
+  'skills.editRouting.answer':
+    'Um diese Änderungen vorzunehmen, klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
+    'wähle anschließend, wo die bearbeitete Kopie gespeichert werden soll. Sie läuft vollständig auf ' +
+    'diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – ' +
+    'überall dort, wo der Text wörtlich gefunden wird, und lässt alles andere unverändert. Sie schreibt ' +
+    'das Dokument nie neu, kann also nichts erfinden oder umformulieren. In dieser Phase wird eine ' +
+    'einfache Textkopie (.txt) gespeichert; prüfe sie, bevor du sie teilst.',
+  // U-1: dieselbe Antwort, wenn MEHR ALS EIN Dokument im Bereich liegt. Das Werkzeug bearbeitet jeweils
+  // ein Dokument, daher verweist die Antwort auf die Zielauswahl der Schaltfläche.
+  'skills.editRouting.answerMulti':
+    'Um diese Änderungen vorzunehmen, klicke unten beim Chat auf die Schaltfläche **{button}**, wähle ' +
+    'aus, welches Dokument bearbeitet werden soll, und lege anschließend fest, wo die bearbeitete Kopie ' +
+    'gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft vollständig auf diesem Gerät ' +
+    'und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – überall dort, ' +
+    'wo der Text wörtlich gefunden wird, und lässt alles andere unverändert. Sie schreibt das Dokument ' +
+    'nie neu. In dieser Phase wird eine einfache Textkopie (.txt) gespeichert; prüfe sie, bevor du sie ' +
+    'teilst.',
 
   // ---- Models ----
   'models.title': 'KI-Modell',
@@ -1788,6 +1820,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportXml': 'Als XML exportieren',
   'main.dialog.filterXml': 'XML-Datei',
   'main.dialog.exportRedacted': 'Geschwärzte Kopie speichern',
+  'main.dialog.exportEdited': 'Bearbeitete Kopie speichern',
   'main.dialog.filterText': 'Textdatei',
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',

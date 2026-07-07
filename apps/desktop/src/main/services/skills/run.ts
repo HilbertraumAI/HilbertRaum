@@ -16,6 +16,8 @@ import { CATEGORIZER_CATEGORIES } from './categorizer'
 import { withDocumentLock } from './doc-lock'
 import type { RedactDocumentOutput } from './tools/redaction'
 import { locateEntities, type LocatedEntity } from './tools/redaction-locate'
+import type { ApplyDocumentEditsOutput } from './tools/document-edit'
+import { locateDocumentEdits, type LocatedEdit } from './tools/document-edit-locate'
 import type { ModelRuntime } from '../runtime'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
@@ -1477,6 +1479,229 @@ export async function runDocumentRedaction(
     return { ok: true, runId, redactionCount: output.totalRedactions, resultKind }
   } catch {
     console.error('[skills] redaction failed unexpectedly')
+    const msg = 'This could not be saved. Nothing was changed.'
+    finishRun(db, runId, 'failed', now(), null, msg)
+    return { ok: false, runId, errorCode: 'persistFailed', error: msg }
+  }
+}
+
+// =====================================================================================
+// Phase 8 — format-preserving TARGETED EDITS (beta-feedback-2026-07 §11, #23, D76; architecture.md
+// "Skills — design record" §22). The read-transform-export shape (like redaction): the deliverable is a
+// FILE, no content-class data table. The seam runs the LLM LOCATE pass MAIN-side (`deps.runtime`), which
+// proposes occurrence-anchored find→replace edits (grammar-constrained JSON, D55, temp 0); it hands the
+// VERIFIED-SHAPE edits to the pure `apply_document_edits` tool as structured input (which `runSkillTool`
+// never logs — the find/replace values stay inside the §6 content boundary); the tool verifies each `find`
+// verbatim at its anchor and splices `replace` (byte-identity everywhere else, D58). The confirm-gated
+// MAIN-side write goes to a user-chosen `edited.txt`.
+//
+// NO deterministic floor (unlike redaction): an edit is a user instruction the model must interpret, so
+// with NO runtime — or NO instruction — the run REFUSES CLEANLY with a friendly note (never a silent
+// nothing). A user cancel mid-locate is a calm cancel (B2). When nothing matches verbatim, the run
+// succeeds with a "no matching text" result and writes no file (there is nothing to change).
+// =====================================================================================
+
+const EDIT_TOOL_NAME = 'apply_document_edits'
+
+export interface DocumentEditDeps extends BankExtractionDeps {
+  /**
+   * Save the edited text to a user-chosen path (MAIN-side: a save dialog + write). Returns true once
+   * written, false if the user cancelled. The path + content are NEVER logged/audited — the seam only
+   * learns whether the user saved (ids/counts boundary, §9.5/§22-M1).
+   */
+  saveTextFile: (defaultFileName: string, content: string) => Promise<boolean>
+  /** True once the user accepted the write/export confirm modal (the gate also enforces it). */
+  confirmed?: boolean
+  /**
+   * The loaded chat runtime for the LLM LOCATE pass (D76), or null/absent when none runs. The model ONLY
+   * locates occurrence-anchored find→replace edits via grammar-constrained JSON; the app verifies + splices
+   * them mechanically. Absent/null ⇒ the run REFUSES CLEANLY ("start a model") — there is no rule-based
+   * floor for edits. The IPC injects `ctx.runtime.active()`.
+   */
+  runtime?: ModelRuntime | null
+  /**
+   * The user's edit instruction (D76 — the CORE input, not optional steering like redaction). It is what
+   * the model turns into find→replace edits ("Vollmachtgeber → Vollmachtgeberin including dependent
+   * pronouns"). The IPC resolves it MAIN-side from the conversation's latest user message (like scope —
+   * content resolved main-side, never logged). Absent/empty ⇒ the run REFUSES CLEANLY ("say what to
+   * change first").
+   */
+  instruction?: string
+}
+
+export interface DocumentEditResult {
+  ok: boolean
+  /** The `skill_runs.id` (always created, even on failure, so the lifecycle is recorded). */
+  runId: string
+  /** The number of edits applied (a content-free count the renderer surfaces). */
+  editCount?: number
+  /** Proposed edits dropped as unverifiable / unplaceable (content-free; surfaced honestly, D78). */
+  droppedCount?: number
+  /**
+   * A content-free outcome discriminator the renderer maps to copy:
+   *   'edited'        — ≥1 edit applied, none dropped;
+   *   'editedPartial' — ≥1 edit applied, some requested text wasn't found and was skipped;
+   *   'none'          — nothing matched verbatim, no file written.
+   */
+  resultKind?: string
+  /** True when the run ended because it was CANCELLED (vs a genuine failure) — the seam is authority (B2). */
+  cancelled?: boolean
+  /** A content-free failure reason CODE the renderer localizes (I1) — e.g. 'needsModel'. */
+  errorCode?: string
+  /** A friendly, content-free reason on failure. */
+  error?: string
+}
+
+/**
+ * `apply_document_edits` — read the selected document, locate the user-asked find→replace edits with the
+ * local model (LOCATE only; the model never regenerates the document — D76), verify + splice them (pure
+ * tool, confirm-gated `export-file`), and write the edited copy MAIN-side to a user-chosen path. The edited
+ * content + the chosen path never touch any log/audit; only the applied/dropped COUNTS and an
+ * 'edited'/'editedPartial'/'none' discriminator are surfaced. A cancelled save persists nothing and reports
+ * it calmly. No data table, no BEGIN/COMMIT — only the `skill_runs` lifecycle row is recorded.
+ */
+export async function runDocumentEdit(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: DocumentEditDeps
+): Promise<DocumentEditResult> {
+  const now = deps.now ?? (() => new Date().toISOString())
+  const runId = randomUUID()
+  const documentIds = [args.documentId]
+
+  // Record the run as started BEFORE the gate; it always reaches a terminal status (B4).
+  db.prepare(
+    `INSERT INTO skill_runs (id, skill_install_id, conversation_id, document_ids_json, status, created_at)
+     VALUES (?, ?, ?, ?, 'started', ?)`
+  ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
+
+  try {
+    const tool = getRegisteredTool(EDIT_TOOL_NAME)
+    if (!tool) {
+      const msg = 'This tool is not available.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'unavailable', error: msg }
+    }
+
+    // No floor for edits (D76): refuse cleanly when the model or the instruction is missing — a friendly,
+    // content-free note, never a silent nothing. Checked BEFORE any read/model call.
+    if (deps.runtime == null) {
+      const msg = 'Start a model first — targeted edits need a running model to find the text to change.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'needsModel', error: msg }
+    }
+    const instruction = (deps.instruction ?? '').trim()
+    if (instruction.length === 0) {
+      const msg = 'Say what to change first, then run this again.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'needsInstruction', error: msg }
+    }
+
+    const signal = deps.signal ?? new AbortController().signal
+    const reader = await resolveDocumentReader(db, args.documentId, deps)
+    const ctx: SkillToolContext = {
+      documentIds,
+      readDocumentChunks: reader,
+      signal,
+      onProgress: deps.onProgress,
+      audit: deps.audit
+    }
+
+    // LOCATE pass (D76): the model proposes occurrence-anchored find→replace edits over the SAME text the
+    // tool verifies against; the tool then confirms each `find` verbatim at its anchor and splices `replace`.
+    // The model NEVER generates the output text. A user cancel throws AbortError → the calm cancel below; a
+    // genuine model failure (runtime present but errored) refuses cleanly (there is no floor to degrade to).
+    let joined = ''
+    try {
+      joined = reader(args.documentId).map((c) => c.text).join('\n')
+    } catch {
+      joined = '' // an unreadable document surfaces through the tool's own read below; skip locate
+    }
+    let edits: LocatedEdit[] = []
+    if (joined.length > 0) {
+      try {
+        edits = await locateDocumentEdits(joined, instruction, {
+          runtime: deps.runtime,
+          signal,
+          onProgress: (done, total) => deps.onProgress?.({ done, total })
+        })
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          // A user cancel mid-locate — calm cancel (B2): nothing written, recorded 'cancelled'.
+          finishRun(db, runId, 'cancelled', now(), null, null)
+          return { ok: false, runId, cancelled: true, error: 'Edit cancelled. Nothing was saved.' }
+        }
+        // A genuine model failure — refuse cleanly (no floor). Content-free local log only (§22-M1); the
+        // find/replace strings never reach it.
+        console.error('[skills] document-edit locate pass failed')
+        const msg = 'The edits could not be completed. Nothing was changed.'
+        finishRun(db, runId, 'failed', now(), null, msg)
+        return { ok: false, runId, errorCode: 'editFailed', error: msg }
+      }
+    }
+
+    const result = await runSkillTool(tool, {
+      skillId: args.skillInstallId,
+      // `edits` (content) are handed as structured input — `runSkillTool` audits/logs ids/counts only,
+      // never the input, so this stays inside the content boundary (§22-M1).
+      input: { documentId: args.documentId, edits },
+      ctx,
+      confirmed: deps.confirmed
+    })
+    if (!result.ok) {
+      const cancelled = signal.aborted
+      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
+      return { ok: false, runId, cancelled, error: result.error }
+    }
+
+    const output = result.output as ApplyDocumentEditsOutput
+    // Nothing matched verbatim ⇒ there is nothing to write. Report it honestly (a success with no changes),
+    // and DON'T open the save dialog for a byte-identical copy (D78 — never dress an unchanged file up as an
+    // edit). The confirm the user gave stands; there was simply nothing to change.
+    if (output.applied === 0) {
+      finishRun(db, runId, 'done', now(), null, null)
+      return { ok: true, runId, editCount: 0, droppedCount: output.dropped, resultKind: 'none' }
+    }
+
+    const resultKind = output.dropped > 0 ? 'editedPartial' : 'edited'
+
+    // Cancelled after the tool produced the text but before the write — don't open the save dialog, and
+    // report it as cancelled (not failed), so nothing is written under a cancel (B2).
+    if (signal.aborted) {
+      finishRun(db, runId, 'cancelled', now(), null, null)
+      return { ok: false, runId, cancelled: true, error: 'Edit cancelled. Nothing was saved.' }
+    }
+    let saved: boolean
+    try {
+      saved = await deps.saveTextFile('edited.txt', output.editedText)
+    } catch {
+      console.error('[skills] document edit failed to write')
+      const msg = 'The file could not be saved. Nothing was changed.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
+    }
+    if (!saved) {
+      // The user cancelled the save dialog — a calm, non-error outcome (B1).
+      finishRun(db, runId, 'cancelled', now(), null, null)
+      return { ok: false, runId, cancelled: true, error: 'Edit cancelled. Nothing was saved.' }
+    }
+    // result_ref stays NULL — the edit produces no DB artifact, and the path is never recorded. SKA-27
+    // rider: a guarded terminal 'done' so a workspace-locked-mid-dialog throw can't both strand the run at
+    // 'started' AND report "failed. Nothing was changed." after the edited copy WAS written (mirror the
+    // redaction/export seams).
+    try {
+      finishRun(db, runId, 'done', now(), null, null)
+    } catch {
+      console.error('[skills] document edit run bookkeeping failed')
+      try {
+        finishRun(db, runId, 'done', now(), null, null)
+      } catch {
+        /* the DB is genuinely unwritable — the file outcome stands */
+      }
+    }
+    return { ok: true, runId, editCount: output.applied, droppedCount: output.dropped, resultKind }
+  } catch {
+    console.error('[skills] document edit failed unexpectedly')
     const msg = 'This could not be saved. Nothing was changed.'
     finishRun(db, runId, 'failed', now(), null, msg)
     return { ok: false, runId, errorCode: 'persistFailed', error: msg }

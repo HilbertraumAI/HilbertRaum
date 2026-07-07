@@ -6325,6 +6325,79 @@ existing redaction case, `skills-tool-run-ipc.test.ts` (the end-to-end redaction
 no-model `redactedFloor` discriminator). Suite 3739/47 (was 3717; +22).
 
 
+### §22 Format-preserving targeted edits — locate → verify → splice (beta-feedback-2026-07 Phase 8, #23, D76)
+
+Targeted edits (#23): "Vollmachtgeber → Vollmachtgeberin including dependent pronouns" works without
+touching anything else. It shares the §20 span engine + the §21 locate→verify pattern, but is a NEW skill
+(`app-skills/document-edit/`, tool `apply_document_edits`) so redaction's privacy posture stays untangled.
+The local model ONLY LOCATES occurrence-anchored find→replace edits — it **never regenerates the document**
+(D73/D76). Output is source bytes everywhere outside a verified span, so **hallucination is structurally
+impossible** (the #23 failure mode) and **diff-verifiability holds by construction** (only verified spans
+change — the `applySpans` guarantee). Output is `.txt` this phase; same-format DOCX export is Phase 9.
+
+- **Locate pass** (`services/skills/tools/document-edit-locate.ts`, runtime-touching): the seam feeds the
+  document as **overlapping, globally line-numbered windows** (40 lines, 8-line overlap — identical to §21)
+  to `deps.runtime` under a **grammar-constrained JSON schema** (D55) — `{ edits: [{ line, find,
+  occurrence, replace }] }` — at **temperature 0**. The mock runtime ignores the schema, so `parseEditReply`
+  re-validates in code (empty `find` dropped; missing line/occurrence default to 1; empty `replace` = a
+  deletion). A window's malformed reply is skipped; an abort throws `AbortError` (calm cancel).
+- **Verify + splice** (`document-edit.ts` `verifyAndSpliceEdits`, runtime-free so it unit-tests without a
+  model): each proposed `find` is confirmed only when present **verbatim at its `{line, occurrence}`
+  anchor** (`locateOccurrences(text, find, {line, nth: occurrence})`, no fuzzy match); a miss / wrong-line /
+  out-of-range occurrence is **dropped and counted**. Unlike redaction (which SWEEPS all occurrences of a
+  confirmed string) an edit replaces **only its anchored occurrence** — the D76 precision that makes
+  grammatical-agreement edits (der→die only where it refers) expressible: the model emits one edit per
+  occurrence. Spans are spliced via `applySpans`; an overlapping same-occurrence duplicate drops (leftmost
+  wins), so `dropped` = unverifiable finds + overlap-skipped spans. Byte-identity outside the edited spans
+  holds (D58).
+- **The tool** (`apply_document_edits`, confirm-gated `export-file`): reads the selected document's chunks,
+  takes the seam-located `edits` as structured input, verifies+splices, returns the edited text + applied/
+  dropped/total counts. Tools hold no runtime handle (§14), so the model call stays in the seam.
+- **Run seam** (`run.ts` `runDocumentEdit`, mirroring `runDocumentRedaction`): records the `skill_runs`
+  lifecycle, runs the locate pass MAIN-side via `deps.runtime`, hands the VERIFIED-shape edits to the pure
+  tool as input (`runSkillTool` audits/logs ids/counts only — the find/replace values, CONTENT, stay inside
+  the §6 boundary), and writes the confirm-gated MAIN-side `edited.txt` via `saveTextFile`. When nothing
+  matches verbatim it reports `none` and writes **no file** (never dresses an unchanged copy up as an edit).
+- **Where the instruction comes from (the central Phase-8 decision).** Unlike redaction (where the
+  instruction is optional STEERING), the edit instruction is the CORE input. Decision: **the conversation's
+  latest user message** — the IPC resolves it MAIN-side from `conversationId` (`chat.ts`
+  `getLatestUserMessage`) and threads it through `BuildRunnerArgs.instruction` → the seam → the locate
+  prompt. This wires an end-to-end instruction with **no new renderer input widget** (the user's chat ask
+  IS the edit request); the content stays main-side, scored/used but NEVER logged (the §6/scope posture).
+  Rejected alternatives: a free-text field on the run bar (a real renderer surface, screenshot-gated, for
+  no gain over the chat message the user already typed) and a chat-routed auto-run (an edit must stay
+  user-initiated + confirm-gated). Phase 7 left `deps.instruction` plumbed-but-unwired for redaction's
+  button; Phase 8 actually collects it (for the edit tool; redaction's button steering stays a follow-up).
+- **No floor, so refuse cleanly (D78).** There is no rule-based fallback for edits (an edit is a user
+  instruction the model must interpret). With **no runtime** the run refuses with `needsModel` ("start a
+  model"); with **no instruction**, `needsInstruction` ("say what to change first"); a genuine model failure
+  mid-locate refuses with `editFailed` — never a silent nothing. A user cancel mid-locate is a calm cancel.
+- **Report + honesty.** The completion surface states the applied count + an `edited` / `editedPartial`
+  (some requested text wasn't found and was skipped) / `none` discriminator + "review before sharing". The
+  exact dropped count rides the seam result (`droppedCount`, tested); like §21's dropped-entity count it is
+  surfaced qualitatively in the run bar (applied count + the partial discriminator), not as a second numeric
+  on the ids/counts channel. Honesty posture (D78): never claim more than "the edits you asked for, where
+  they were found verbatim."
+- **Routing** (`analysis/document-edit.ts`, `mode:'routing'` — mirrors §21's redaction routing): an
+  edit-shaped ask (the `document-edit` vocabulary's `route|both` entries — find-and-replace phrases + edit
+  verbs, EN+DE, pinned by the vocabulary-parity test) over ≥1 in-scope doc DEFLECTS to the user-initiated
+  run button (a chat ask never silently rewrites — the #23 failure mode); reads no content, no
+  citations/coverage. The generic chat regeneration path is NOT removed. `autoFire:false` — a write-edit is
+  deliberately activated (still SUGGESTED on the discriminating phrases; the suggestion offer is separate
+  from auto-fire).
+
+**Tests:** `skills-document-edit-locate.test.ts` (+16: schema shape; window empty/overlap/global-numbering;
+`parseEditReply` keep-valid/drop-empty-find/malformed/default-line-occurrence; `locateDocumentEdits`
+per-window temp-0 schema + instruction + abort; `verifyAndSpliceEdits` occurrence-precision /
+German-agreement-multi-pair-byte-identity / drop-unverifiable / drop-wrong-line / drop-out-of-range /
+empty-replace-deletes / same-occurrence-duplicate-drops), `skills-document-edit.test.ts` (+13: SKILL.md
+kind:tool+autoFire-off, discovery/dispatch, seam edited/editedPartial/none, needsModel/needsInstruction
+refusals, cancel-mid-locate, confirm-gate, dismissed-save), `skills-privacy-guard.test.ts` (+1: a located
+find/replace value is renamed out and never touches audit/log/skill_runs), + the skill-count updates
+(vocabulary 8→9, skillmd-parity `ALL_APP_SKILL_IDS`, eval label space + 4 corpus true positives,
+tool-registry list). Suite 3773/47 (was 3739; +34).
+
+
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 
 The 2026-06-29 audit's testing review flagged a class of gap distinct from a bug: a **security/reliability

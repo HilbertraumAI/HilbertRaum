@@ -6,9 +6,9 @@
     "`scope` (U4/§4.4): 'narrowed' (default) = the inScopeDocs are EXPLICITLY selected (attachment / hand-pick),",
     "seen by BOTH suggestion + auto-fire; 'whole-corpus' = they merely EXIST in the Library, so the inert",
     "suggestion offer still reads them but AUTO-FIRE narrows them away (contributes no corroborating signal).",
-    "Label space = ALL EIGHT real ENABLED app skills' actual triggers (W5 widened it from 4):",
+    "Label space = ALL NINE real ENABLED app skills' actual triggers (W5 widened it from 4; Phase 8 added document-edit):",
     "bank-statement | invoice | meeting-protocol | contract-brief | share-safe-review |",
-    "deadline-obligation-finder | what-changed | document-redaction | none.",
+    "deadline-obligation-finder | what-changed | document-redaction | document-edit | none.",
     "`confusion:true` marks a CROSS-SKILL pair the SUGGESTION bar must get right (fired-wrong 0 on the set).",
     "`note` records WHY the label is what it is (the hard case it exercises); it is not scored.",
     "Questions are CONTENT: the harness scores them, never logs them (skills-s13-plan.md §6)."
@@ -206,6 +206,35 @@
       "expected": "document-redaction",
       "confusion": true,
       "note": "Confusion: a Vertrag PDF is in scope (contract filename signal) but the request is a redaction VERB — redaction's keyword must beat contract's lone doc signal."
+    },
+
+    {
+      "id": "tp-edit-en-01",
+      "question": "Find and replace 'Vollmachtgeber' with 'Vollmachtgeberin' throughout this document.",
+      "inScopeDocs": [{ "title": "deed.txt", "mimeType": "text/plain" }],
+      "expected": "document-edit",
+      "note": "True positive — 'find and replace' phrase + a plain-text doc signal (Phase 8, #23)."
+    },
+    {
+      "id": "tp-edit-en-02",
+      "question": "Rename every mention of 'Acme Corp' to 'Acme Ltd'.",
+      "inScopeDocs": [],
+      "expected": "document-edit",
+      "note": "True positive, KEYWORD-ONLY — 'rename' verb."
+    },
+    {
+      "id": "tp-edit-de-01",
+      "question": "Bitte überall 'Vollmachtgeber' durch 'Vollmachtgeberin' ersetzen.",
+      "inScopeDocs": [{ "title": "vollmacht.txt", "mimeType": "text/plain" }],
+      "expected": "document-edit",
+      "note": "True positive — de-AT 'ersetzen' + a plain-text doc signal."
+    },
+    {
+      "id": "tp-edit-de-02",
+      "question": "Kannst du das im Dokument umbenennen?",
+      "inScopeDocs": [],
+      "expected": "document-edit",
+      "note": "True positive, KEYWORD-ONLY — 'umbenennen'."
     },
 
     {

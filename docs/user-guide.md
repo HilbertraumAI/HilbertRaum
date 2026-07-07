@@ -630,9 +630,9 @@ tap it.
 
 ### Skills that run tools
 
-Some skills — like **Bank statement**, **Invoice**, and **Document redaction** — can run small,
-approved **local tools** on a document you choose: reading it, checking its figures, or producing a
-redacted copy. When one runs you'll see a calm run bar — **Running: `<tool>` on `<N>` documents…
+Some skills — like **Bank statement**, **Invoice**, **Document redaction**, and **Document edit** — can
+run small, approved **local tools** on a document you choose: reading it, checking its figures, producing a
+redacted copy, or applying targeted text edits. When one runs you'll see a calm run bar — **Running: `<tool>` on `<N>` documents…
 Cancel**. A tool that **writes or exports a file** (for example "save as CSV", or "save the redacted
 copy") always asks you to **confirm first** and lets you choose where the file goes, and you can
 **Cancel** at any point. Everything a tool sees is just the one document you picked — it can't reach
@@ -643,6 +643,14 @@ anything else on the drive.
 > **names, addresses, and organisation names** it finds — the model only points at what to hide, it never
 > rewrites your document. It can still miss things, and if no model is running only the rule-based part
 > applies (the run tells you so). Always review the redacted copy before you share it.
+
+> **Document edit** makes **targeted find-and-replace changes** — for example "replace *Vollmachtgeber*
+> with *Vollmachtgeberin* everywhere it refers to the principal". Ask for the change in the chat, then
+> click **Apply text edits** and choose where to save the copy. A running model is needed: it only *finds*
+> the exact text to change, and the app splices in the replacement — it **never rewrites your document**,
+> so nothing else is touched (everything you didn't ask to change stays identical). Any requested text that
+> isn't found verbatim is left alone and reported as skipped. This step saves a plain **`.txt`** copy;
+> review it before you share it.
 
 ### Manage skills (open **Skills** in the sidebar)
 

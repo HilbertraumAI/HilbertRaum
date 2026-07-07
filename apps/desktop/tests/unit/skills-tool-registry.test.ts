@@ -139,11 +139,14 @@ describe('registry + resolveWiredTools', () => {
       'export_invoice_json',
       'export_invoice_xml',
       // Redaction — the read-transform-export shape (confirm-gated; no content-class table).
-      'redact_document'
+      'redact_document',
+      // Document-edit — the same read-transform-export shape for targeted find→replace edits (Phase 8).
+      'apply_document_edits'
     ])
     expect(getRegisteredTool('export_transactions_csv')).toBeDefined()
     expect(getRegisteredTool('extract_invoice')).toBeDefined()
     expect(getRegisteredTool('redact_document')).toBeDefined()
+    expect(getRegisteredTool('apply_document_edits')).toBeDefined()
     expect(getRegisteredTool('__proto__')).toBeUndefined() // own-property lookup only
   })
 

@@ -18,6 +18,7 @@ import {
   runCashflowSummary,
   runCategorization,
   runCsvExport,
+  runDocumentEdit,
   runDocumentRedaction
 } from '../../src/main/services/skills/run'
 import {
@@ -362,6 +363,55 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     // The located name was masked out of the deliverable and leaked into NO sink.
     expect(saved).not.toContain(SECRET_NAME)
     expect(saved).toContain('█')
+    expect(JSON.stringify(events)).not.toContain(SECRET_NAME)
+    const runs = db.prepare('SELECT * FROM skill_runs').all()
+    expect(JSON.stringify(runs)).not.toContain(SECRET_NAME)
+    expect(logged).not.toContain(SECRET_NAME)
+  })
+
+  it('document-edit: a LOCATED find/replace value (content) is applied out and never touches a sink', async () => {
+    // Phase 8 (D76): the LLM locate pass proposes find→replace edits (CONTENT). They ride as structured
+    // tool INPUT (which `runSkillTool` never logs/audits), the source secret is REPLACED out of the
+    // deliverable, and neither the secret nor the find/replace strings reach any sink. Drive a secret name
+    // through a scripted runtime that renames it, and assert it leaks nowhere.
+    const db = freshDb()
+    const skillInstallId = 'app:document-edit'
+    const SECRET_NAME = 'Wilhelmina Featherstonehaugh'
+    const docId = seedDocWithChunks(db, [{ text: `Prepared by ${SECRET_NAME} for the committee.`, page: 1 }])
+    const { audit, events } = capturingAudit()
+    let saved = ''
+    // The runtime reports the secret name as the `find`, replaced with a placeholder — the app verifies + splices.
+    const runtime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream() {
+        const reply = JSON.stringify({
+          edits: [{ line: 1, find: SECRET_NAME, occurrence: 1, replace: 'the appointed clerk' }]
+        })
+        for (const tok of reply.match(/\S+\s*/g) ?? []) yield tok
+      }
+    } as unknown as Parameters<typeof runDocumentEdit>[2]['runtime']
+
+    const logged = await captureConsole(async () => {
+      const res = await runDocumentEdit(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        runtime,
+        instruction: `rename ${SECRET_NAME} to the appointed clerk`,
+        saveTextFile: async (_name, content) => {
+          saved = content
+          return true
+        }
+      })
+      expect(res.ok).toBe(true)
+      expect(res.editCount).toBe(1)
+    })
+
+    // The secret name was renamed out of the deliverable and leaked into NO sink.
+    expect(saved).not.toContain(SECRET_NAME)
+    expect(saved).toContain('the appointed clerk')
     expect(JSON.stringify(events)).not.toContain(SECRET_NAME)
     const runs = db.prepare('SELECT * FROM skill_runs').all()
     expect(JSON.stringify(runs)).not.toContain(SECRET_NAME)
