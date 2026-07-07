@@ -93,8 +93,22 @@ describe('translation prompt builder (TG-2)', () => {
     )
   })
 
-  it('covers exactly the curated 10 languages with English + native names', () => {
-    expect([...TRANSLATION_LANGUAGE_CODES]).toEqual(['de', 'en', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'cs', 'uk'])
+  it('covers exactly the 51-code WMT24++ production tier with English + native names (issue #31)', () => {
+    // The 55 WMT24++-evaluated locales collapsed to bare codes (regional/script variants folded);
+    // alphabetical by code. The ~105 experimental template languages stay OUT (see shared/types).
+    // prettier-ignore
+    expect([...TRANSLATION_LANGUAGE_CODES]).toEqual([
+      'ar', 'bg', 'bn', 'ca', 'cs', 'da', 'de', 'el', 'en', 'es',
+      'et', 'fa', 'fi', 'fil', 'fr', 'gu', 'he', 'hi', 'hr', 'hu',
+      'id', 'is', 'it', 'ja', 'kn', 'ko', 'lt', 'lv', 'ml', 'mr',
+      'nl', 'no', 'pa', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sr',
+      'sv', 'sw', 'ta', 'te', 'th', 'tr', 'uk', 'ur', 'vi', 'zh',
+      'zu'
+    ])
+    // The ORIGINAL curated 10 (per-language TG-6 round-trip evidence) must always stay in.
+    for (const code of ['de', 'en', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'cs', 'uk'] as const) {
+      expect(TRANSLATION_LANGUAGE_CODES).toContain(code)
+    }
     for (const code of TRANSLATION_LANGUAGE_CODES) {
       expect(TRANSLATION_ENGLISH_NAMES[code]).toBeTruthy()
       expect(TRANSLATION_NATIVE_NAMES[code]).toBeTruthy()
@@ -103,5 +117,9 @@ describe('translation prompt builder (TG-2)', () => {
     expect(TRANSLATION_NATIVE_NAMES.de).toBe('Deutsch')
     expect(TRANSLATION_NATIVE_NAMES.uk).toBe('Українська')
     expect(TRANSLATION_ENGLISH_NAMES.cs).toBe('Czech')
+    // Widened-set spellings that mirror the model's template dictionary (reconciled at the smoke).
+    expect(TRANSLATION_ENGLISH_NAMES.fa).toBe('Persian')
+    expect(TRANSLATION_ENGLISH_NAMES.zh).toBe('Chinese (Simplified)')
+    expect(TRANSLATION_NATIVE_NAMES.ja).toBe('日本語')
   })
 })

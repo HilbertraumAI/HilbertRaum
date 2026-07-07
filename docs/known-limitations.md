@@ -1538,12 +1538,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   known template-validation crash; a Linux OOM-kill is indistinguishable from our own shutdown), so
   un-latching would re-pay the full spawn + health-timeout cost on every window for a permanent
   fault. A transient port-bind race is the one non-latching start class and still retries silently.
-- **Languages are a curated set of TEN — source AND target** (`de, en, fr, es, it, pt, nl,
-  pl, cs, uk`), validated server-side. TranslateGemma's trained prompt needs an explicit
-  source language; there is **no auto-detect** (plan §6). All ten sit inside the model's
-  55 WMT24++-evaluated languages; our own per-language round-trip evidence is recorded by
-  the TG-6 smoke. Widen only with that kind of evidence per language — never by loosening
-  the type.
+- **Languages are a closed set of 51 — source AND target** (issue #31, 2026-07-07: the original
+  curated 10 widened to TranslateGemma's full PRODUCTION tier — the 55 WMT24++-evaluated locales
+  collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat
+  template lists ~160 languages, but the ~105 beyond the WMT24++ set are experimental
+  (GATITOS/SMOL-sourced, higher hallucination rates per Google) and stay OUT. TranslateGemma's
+  trained prompt needs an explicit source language; there is **no auto-detect** (plan §6).
+  Per-language round-trip evidence exists for the original 10 (the TG-6 smoke); the widened rest
+  ship on the model's own WMT24++ evaluation. Translation quality on the widened languages has NOT
+  been locally re-measured — add a `SMOKE_LANGS` sample when promoting one into the measured set.
 - **~2K-token input windows → more, smaller windows + cross-window terminology drift.**
   The model card specifies a total INPUT of ~2K tokens (the fine-tune's trained size), so
   the planner clamps every window regardless of the launched context (plan D4). TG-6

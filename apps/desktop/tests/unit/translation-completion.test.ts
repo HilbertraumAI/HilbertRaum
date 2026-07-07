@@ -188,6 +188,46 @@ describe('isCleanStop — TA-5 M6 limit-stop detection', () => {
   })
 })
 
+describe('isCleanStop — issue #31 modern `stop_type` frames (the pinned b9849 shape)', () => {
+  it('stop_type eos is a clean stop (Gemma ends the turn on <end_of_turn> as an EOS-class token)', () => {
+    expect(isCleanStop({ stopType: 'eos', stoppingWord: '' })).toBe(true)
+  })
+
+  it('stop_type word is a clean stop', () => {
+    expect(isCleanStop({ stopType: 'word', stoppingWord: '<end_of_turn>' })).toBe(true)
+  })
+
+  it('stop_type limit / none / unknown is NOT clean', () => {
+    expect(isCleanStop({ stopType: 'limit', stoppingWord: '' })).toBe(false)
+    expect(isCleanStop({ stopType: 'none', stoppingWord: '' })).toBe(false)
+    expect(isCleanStop({ stopType: 'future-value', stoppingWord: '' })).toBe(false)
+  })
+
+  it('REGRESSION #31: the real b9849 success frame (stop_type eos, EMPTY stopping_word, no stopped_eos) is clean', async () => {
+    // The exact shape the pinned server emits after a successful window — the modern server
+    // consolidated the legacy stopped_* booleans into `stop_type`, so `stopped_eos` is absent and
+    // `stopping_word` is empty. Pre-fix this was misread as a limit stop → every SUCCESSFUL
+    // translation raised the "couldn't finish" banner while the full text had already streamed.
+    const stream = streamOf([
+      'data: {"content":"Hello","stop":false}\n',
+      'data: {"content":"","stop":true,"stop_type":"eos","stopping_word":"","timings":{"predicted_per_second":3.7}}\n'
+    ])
+    let final: CompletionFinal | undefined
+    const deltas = await collect(readCompletionSSE(stream, undefined, (f) => (final = f)))
+    expect(deltas.join('')).toBe('Hello')
+    expect(final?.stopType).toBe('eos')
+    expect(isCleanStop(final)).toBe(true)
+  })
+
+  it('surfaces a real b9849 LIMIT stop (stop_type limit) as not clean', async () => {
+    const stream = streamOf(['data: {"content":"trunca","stop":true,"stop_type":"limit","stopping_word":""}\n'])
+    let final: CompletionFinal | undefined
+    await collect(readCompletionSSE(stream, undefined, (f) => (final = f)))
+    expect(final?.stopType).toBe('limit')
+    expect(isCleanStop(final)).toBe(false)
+  })
+})
+
 describe('readCompletionSSE — L4 garbled-frame counting', () => {
   it('skips a garbled complete `data:` frame, continues, and warns ONCE with a content-free count', async () => {
     const warn = vi.spyOn(log, 'warn')

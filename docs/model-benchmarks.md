@@ -637,6 +637,16 @@ the short in-smoke sentences over-state the ratio; §11.2 uses the amortized num
 | **Output tok/source-word (prose)** | en→de 1.39 · de→pl 1.79 · de→uk 1.90 · **de→cs 1.96** | word-sparse German source → token-dense target, the worst case; dense short samples reach ~3.06 |
 | Fidelity (curated 10) | round-trip OK for all ten; invoice no. + model code verbatim; numbers LOCALIZED; injection resisted; no stop-token leak | the recorded evidence the widened `TranslationLangCode` cites |
 
+_Issue #31 (2026-07-07) widened the SHIPPED language set from these curated 10 to the 51-code
+WMT24++ production tier (architecture.md "Translation sidecar" record, issue-#31 bullet). The
+fidelity row above remains the LOCAL evidence for the original 10; the widened 41 ship on the
+model's own WMT24++ evaluation (12B: MetricX-24 3.60 / COMET22 83.5). The smoke's calibration leg
+still measures the 10 (`SMOKE_LANGS`) — a 51-language sweep at ~3–4 tok/s CPU would run for hours;
+add a sample there to promote a widened language into the measured set. The tokens-per-word planner
+ceilings stay safe on the widened space-less scripts (ja/zh/th/…): `approxTokenCount` charges those
+per-character, which over-counts vs the real tokenizer — the same over-chunk-never-overflow
+direction._
+
 **The load-bearing TG-6 finding — the Qwen-era planner constants were unsafe on the Gemma
 tokenizer.** The chat path's `1.3` input / `2.0` output tokens-per-word (measured on Qwen3-4B,
 carried as "conservative defaults" through TG-3) are ~HALF the real Gemma weight (up to 2.26 input /

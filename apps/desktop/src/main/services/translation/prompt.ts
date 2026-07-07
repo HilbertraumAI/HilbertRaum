@@ -18,11 +18,11 @@
 
 import { TRANSLATION_LANGUAGE_CODES, type TranslationLangCode } from '../../../shared/types'
 
-// The curated 10-language set (plan O4 / §2 D5) is CANONICAL in `shared/types.ts`
-// (`TRANSLATION_LANGUAGE_CODES` / `TranslationLangCode` — unified at TG-3 so the shared
-// `TranslationSourceLang`/`TranslationTargetLang` doc-task contract and this builder can
-// never drift; main may import shared, not vice-versa). Re-exported here so the sidecar
-// module keeps one import surface for its consumers.
+// The language set (plan O4 / §2 D5; widened to the 51-code WMT24++ production tier at issue #31)
+// is CANONICAL in `shared/types.ts` (`TRANSLATION_LANGUAGE_CODES` / `TranslationLangCode` —
+// unified at TG-3 so the shared `TranslationSourceLang`/`TranslationTargetLang` doc-task contract
+// and this builder can never drift; main may import shared, not vice-versa). Re-exported here so
+// the sidecar module keeps one import surface for its consumers.
 export { TRANSLATION_LANGUAGE_CODES, TRANSLATION_NATIVE_NAMES } from '../../../shared/types'
 export type { TranslationLangCode } from '../../../shared/types'
 
@@ -30,18 +30,65 @@ export type { TranslationLangCode } from '../../../shared/types'
  * English language names — used INSIDE the trained prompt (the model was fine-tuned on English
  * names + BCP-47-ish codes). TranslateGemma REQUIRES an explicit source language: without one the
  * template renders the language as "English (en-GB)" (plan §1.1), so there is no auto-detect.
+ *
+ * The names mirror the template's own `code → name` dictionary as far as it is known (the GGUF's
+ * `tokenizer.chat_template` is the VERBATIM authority — plan §7 V1; the manual smoke reconciles).
+ * Notable spellings: `fa` is "Persian" and `zh` is "Chinese (Simplified)" (the template
+ * distinguishes zh/zh-Hant; bare `zh` targets Simplified). Minor name drift is tolerated by the
+ * model — the code in parentheses is the stronger signal — but reconcile at the next smoke.
  */
 export const TRANSLATION_ENGLISH_NAMES: Record<TranslationLangCode, string> = {
-  de: 'German',
-  en: 'English',
-  fr: 'French',
-  es: 'Spanish',
-  it: 'Italian',
-  pt: 'Portuguese',
-  nl: 'Dutch',
-  pl: 'Polish',
+  ar: 'Arabic',
+  bg: 'Bulgarian',
+  bn: 'Bengali',
+  ca: 'Catalan',
   cs: 'Czech',
-  uk: 'Ukrainian'
+  da: 'Danish',
+  de: 'German',
+  el: 'Greek',
+  en: 'English',
+  es: 'Spanish',
+  et: 'Estonian',
+  fa: 'Persian',
+  fi: 'Finnish',
+  fil: 'Filipino',
+  fr: 'French',
+  gu: 'Gujarati',
+  he: 'Hebrew',
+  hi: 'Hindi',
+  hr: 'Croatian',
+  hu: 'Hungarian',
+  id: 'Indonesian',
+  is: 'Icelandic',
+  it: 'Italian',
+  ja: 'Japanese',
+  kn: 'Kannada',
+  ko: 'Korean',
+  lt: 'Lithuanian',
+  lv: 'Latvian',
+  ml: 'Malayalam',
+  mr: 'Marathi',
+  nl: 'Dutch',
+  no: 'Norwegian',
+  pa: 'Punjabi',
+  pl: 'Polish',
+  pt: 'Portuguese',
+  ro: 'Romanian',
+  ru: 'Russian',
+  sk: 'Slovak',
+  sl: 'Slovenian',
+  sr: 'Serbian',
+  sv: 'Swedish',
+  sw: 'Swahili',
+  ta: 'Tamil',
+  te: 'Telugu',
+  th: 'Thai',
+  tr: 'Turkish',
+  uk: 'Ukrainian',
+  ur: 'Urdu',
+  vi: 'Vietnamese',
+  zh: 'Chinese (Simplified)',
+  zu: 'Zulu'
 }
 
 /**

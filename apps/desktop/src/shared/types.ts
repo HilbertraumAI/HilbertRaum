@@ -810,31 +810,36 @@ export interface ConversationSearchResult {
 export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree' | 'extract' | 'categorize'
 
 /**
- * The curated translation language set (TranslateGemma wave, plan O4/D5) — source AND
- * target languages for document translation. All ten sit inside TranslateGemma's 55
- * WMT24++-evaluated languages (arXiv:2601.09012 — the shipped 12B model scores
- * MetricX-24 3.60 / COMET22 83.5 there), and the TG-6 per-language smoke records our
- * own round-trip evidence per code. A free-text language field invites silent quality
- * failures — widen deliberately, with that evidence, never by loosening this list.
+ * The translation language set — source AND target languages for document translation.
+ * Issue #31 (2026-07-07, owner decision) widened the original curated 10 (TranslateGemma
+ * wave, plan O4/D5) to the FULL TranslateGemma PRODUCTION tier: the 55 WMT24++-evaluated
+ * locales (arXiv:2601.09012 — the shipped 12B scores MetricX-24 3.60 / COMET22 83.5
+ * there), collapsed to 51 bare codes (the regional/script variants ar_EG/ar_SA,
+ * fr_FR/fr_CA, pt_PT/pt_BR, sw_KE/sw_TZ, zh_CN/zh_TW fold into their base code; `zh` is
+ * Simplified Chinese). The line holds at the VERIFIED tier: the model's chat template
+ * lists ~160 languages, but Google flags the ~105 beyond the WMT24++ set as experimental
+ * (GATITOS/SMOL-sourced, higher hallucination rates) — those stay OUT. Per-language
+ * round-trip evidence exists for the original 10 (the TG-6 smoke); the widened rest ship
+ * on the model's own WMT24++ evaluation as the quality evidence. A free-text language
+ * field invites silent quality failures — this stays a CLOSED list, validated
+ * server-side. Alphabetical by code (the pickers render in array order); the de/en
+ * DEFAULTS are chosen in the screens, not by array position.
  * This array is the SINGLE source of truth for the codes: the sidecar prompt builder
  * (`main/services/translation/prompt.ts`) and its name maps key off this type.
  */
+// prettier-ignore
 export const TRANSLATION_LANGUAGE_CODES = [
-  'de',
-  'en',
-  'fr',
-  'es',
-  'it',
-  'pt',
-  'nl',
-  'pl',
-  'cs',
-  'uk'
+  'ar', 'bg', 'bn', 'ca', 'cs', 'da', 'de', 'el', 'en', 'es',
+  'et', 'fa', 'fi', 'fil', 'fr', 'gu', 'he', 'hi', 'hr', 'hu',
+  'id', 'is', 'it', 'ja', 'kn', 'ko', 'lt', 'lv', 'ml', 'mr',
+  'nl', 'no', 'pa', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sr',
+  'sv', 'sw', 'ta', 'te', 'th', 'tr', 'uk', 'ur', 'vi', 'zh',
+  'zu'
 ] as const
 
 export type TranslationLangCode = (typeof TRANSLATION_LANGUAGE_CODES)[number]
 
-/** True when `x` is a curated translation language code (the server-side validation). */
+/** True when `x` is a supported translation language code (the server-side validation). */
 export function isTranslationLangCode(x: unknown): x is TranslationLangCode {
   return typeof x === 'string' && (TRANSLATION_LANGUAGE_CODES as readonly string[]).includes(x)
 }
@@ -846,16 +851,57 @@ export function isTranslationLangCode(x: unknown): x is TranslationLangCode {
  * modal's selects) and main (translated-document titles) render them.
  */
 export const TRANSLATION_NATIVE_NAMES: Record<TranslationLangCode, string> = {
-  de: 'Deutsch',
-  en: 'English',
-  fr: 'Français',
-  es: 'Español',
-  it: 'Italiano',
-  pt: 'Português',
-  nl: 'Nederlands',
-  pl: 'Polski',
+  ar: 'العربية',
+  bg: 'Български',
+  bn: 'বাংলা',
+  ca: 'Català',
   cs: 'Čeština',
-  uk: 'Українська'
+  da: 'Dansk',
+  de: 'Deutsch',
+  el: 'Ελληνικά',
+  en: 'English',
+  es: 'Español',
+  et: 'Eesti',
+  fa: 'فارسی',
+  fi: 'Suomi',
+  fil: 'Filipino',
+  fr: 'Français',
+  gu: 'ગુજરાતી',
+  he: 'עברית',
+  hi: 'हिन्दी',
+  hr: 'Hrvatski',
+  hu: 'Magyar',
+  id: 'Bahasa Indonesia',
+  is: 'Íslenska',
+  it: 'Italiano',
+  ja: '日本語',
+  kn: 'ಕನ್ನಡ',
+  ko: '한국어',
+  lt: 'Lietuvių',
+  lv: 'Latviešu',
+  ml: 'മലയാളം',
+  mr: 'मराठी',
+  nl: 'Nederlands',
+  no: 'Norsk',
+  pa: 'ਪੰਜਾਬੀ',
+  pl: 'Polski',
+  pt: 'Português',
+  ro: 'Română',
+  ru: 'Русский',
+  sk: 'Slovenčina',
+  sl: 'Slovenščina',
+  sr: 'Српски',
+  sv: 'Svenska',
+  sw: 'Kiswahili',
+  ta: 'தமிழ்',
+  te: 'తెలుగు',
+  th: 'ไทย',
+  tr: 'Türkçe',
+  uk: 'Українська',
+  ur: 'اردو',
+  vi: 'Tiếng Việt',
+  zh: '中文（简体）',
+  zu: 'isiZulu'
 }
 
 /** Translation target language (the curated set above). */

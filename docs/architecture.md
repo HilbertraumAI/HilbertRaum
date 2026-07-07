@@ -1976,6 +1976,43 @@ Per-finding disposition (F-1…F-8):
   b9849 server, and the CPU-only binary shares identical server/template/tokenizer code (differs only
   in omitting the Vulkan backend). Run the `cpu-safety-net` leg on a drive/CI where the CPU build ships
   AV-allowlisted before release.
+- **Issue #31 (2026-07-07) — false failure banner on every successful translation + language-set
+  widening.** Two beta findings, one wave.
+  - **#31a — `isCleanStop` misread the pinned server's final frame (the "translation works but the
+    failure banner always shows" bug).** TA-5 M6 keyed the clean-stop test on `stopping_word` /
+    `stopped_eos` — the LEGACY llama-server fields. The server rework that predates the b9585/b9849
+    pins consolidated the `stopped_eos`/`stopped_word`/`stopped_limit` booleans into ONE
+    **`stop_type`** field (`'none' | 'eos' | 'limit' | 'word'`), and on Gemma a finished turn ends
+    on `<end_of_turn>` as an **EOS-class token** — so the real success frame is `stop_type: "eos"`
+    with an **empty** `stopping_word` and NO `stopped_eos`. `isCleanStop` therefore returned false
+    for every successful window; the view job classified it a deterministic limit-stop (FA-2 F-2:
+    non-empty + no clean stop ⇒ no retry) and failed the job `runtimeFailed` AFTER the full
+    translation had already streamed — the issue's always-on "Das Übersetzungsmodell konnte nicht
+    fertigstellen" banner. The doc-task path took the same misread into its retry-then-mark branch
+    (every window retried once — a full duplicate ~30-min CPU decode — then marked "could not be
+    translated" even though the text was fine). **Fix (`completion.ts`):** `CompletionFinal` gained
+    `stopType` (parsed from the frame's `stop_type`); `isCleanStop` is now `stop_type ∈
+    {eos, word}` OR the legacy signals (non-empty `stopping_word` / `stopped_eos: true`), so older
+    frame shapes and the scripted test translators stay valid, and a REAL limit stop
+    (`stop_type: "limit"`) still fails the window. Regression-pinned in
+    `translation-completion.test.ts` with the exact b9849 success- and limit-frames; the manual
+    smoke's window log now prints `stop=<stop_type>` (TA-5's "no behavior change expected" note was
+    wrong precisely because the smoke predated M6 — the smoke asserted output fidelity, never the
+    frame fields M6 later keyed on).
+  - **#31b — language set widened from the curated 10 to the 51-code WMT24++ production tier
+    (owner decision on the issue).** `TRANSLATION_LANGUAGE_CODES` now carries the 55
+    WMT24++-evaluated locales (arXiv:2601.09012) collapsed to 51 bare codes (regional/script
+    variants fold into base codes; `zh` = Simplified). The list REMAINS closed + server-side
+    validated (D5's shape survives; only its extent changed): the template's ~160 languages include
+    ~105 experimental (GATITOS/SMOL) ones Google flags for higher hallucination — those stay out.
+    Per-language round-trip evidence: the original 10 keep their TG-6 smoke record; the widened 41
+    ship on the model's own WMT24++ evaluation (MetricX-24 3.60 / COMET22 83.5 for the 12B).
+    English prompt names follow the template dictionary where known (`fa` "Persian", `zh` "Chinese
+    (Simplified)") — the GGUF `tokenizer.chat_template` stays the verbatim authority, reconciled at
+    the next manual smoke. Planner safety on the new space-less scripts (ja/zh/th/…):
+    `approxTokenCount` charges them per-character (over-counts vs the real tokenizer), so windows
+    still only ever OVER-chunk. The smoke's calibration leg deliberately keeps measuring its
+    curated-10 samples (`SMOKE_LANGS`); the pickers render all 51 native names, defaults stay de/en.
 
 ### §-anchor legend (historical plan citations)
 
@@ -2008,7 +2045,7 @@ anchor as:
 | D2 | No `--jinja`; app-side prompt + raw `/completion` | `prompt.ts` (trained single-turn format, own code→English-name map) + `completion.ts` (bare-object SSE); `--chat-template gemma` avoids the #20305 STARTUP crash |
 | D3 | Hard model requirement (O2) | enqueue+dequeue require a non-null `Translator`; friendly `main.translation.noModel` + deep link; chat may be absent |
 | D4 | 2K input budget, structurally enforced | `--ctx-size 4096` + `TRANSLATION_MAX_INPUT_TOKENS = 1800` clamp in `planTranslationWindows`; TG-6 sized the tokens-per-word constants so the clamp binds in REAL tokens |
-| D5 | Curated 10 languages, source+target | `TRANSLATION_LANGUAGE_CODES` (shared) + native-name selects; no auto-detect |
+| D5 | Curated 10 languages, source+target | `TRANSLATION_LANGUAGE_CODES` (shared) + native-name selects; no auto-detect. **Superseded in extent by issue #31 (2026-07-07):** widened to the 51-code WMT24++ production tier — still a closed, server-validated list (see the issue-#31 bullet above) |
 | D6 | Translate view = 7th primary destination | `TranslateScreen` + `TranslateJobService` (`translate:*` IPC, `trToken/trDone/trError`) |
 | D7 | Dropped/picked documents ride the doc-task | `TranslateDropZone` → import `{kind:'temporary'}` → `startDocTask('translation')` → materialized Markdown |
 | D8 | GPU posture | CPU-pinned (`--device none`) shipped; TG-6 KEEPS it (~3–4 tok/s tolerable; GPU deferred behind a GPU-drive re-smoke) — `TRANSLATION_DEVICE_ARGS` is the one-line flip |

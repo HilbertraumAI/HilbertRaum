@@ -239,11 +239,12 @@ describe('validation (kind + params, the widened 10-language set)', () => {
         params: { sourceLang: 'xx', targetLang: 'de' }
       })
     ).toThrow(TASK_TRANSLATION_TARGET_MESSAGE)
+    // 'ja' joined the supported set at issue #31 — 'xy' stays a non-code on both ends.
     expect(() =>
       manager.startDocTask({
         kind: 'translation',
         documentIds: [docId],
-        params: { sourceLang: 'de', targetLang: 'ja' }
+        params: { sourceLang: 'de', targetLang: 'xy' }
       })
     ).toThrow(TASK_TRANSLATION_TARGET_MESSAGE)
     // Same language on both ends — a multi-gigabyte no-op, refused.

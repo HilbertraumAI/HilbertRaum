@@ -31,24 +31,40 @@ export interface CompletionFinal {
   stoppingWord?: string
   /**
    * The generation ended on the model's end-of-turn / EOS token — a CLEAN stop, as opposed to
-   * running into the token/context cap (a LIMIT stop → truncation). llama-server reports this as
-   * `stopped_eos`. TA-5 M6: `isCleanStop` accepts a frame carrying EITHER a `stoppingWord` or this.
+   * running into the token/context cap (a LIMIT stop → truncation). LEGACY field: older
+   * llama-server builds reported this as a `stopped_eos` boolean; the pinned b9849 reports the
+   * consolidated `stop_type` instead (see `stopType`). Kept so an older/mocked frame still counts.
    */
   stoppedEos?: boolean
+  /**
+   * The MODERN llama-server stop reason (issue #31 fix): the server rework consolidated the old
+   * `stopped_eos`/`stopped_word`/`stopped_limit` booleans into ONE `stop_type` field —
+   * `'none' | 'eos' | 'limit' | 'word'`. On the pinned b9849 a Gemma turn ends on
+   * `<end_of_turn>` as an EOS-class token, so the final frame is `stop_type: "eos"` with an
+   * EMPTY `stopping_word` — the shape the pre-fix `isCleanStop` misread as a limit stop, flagging
+   * every SUCCESSFUL window `runtimeFailed` (the "translation works but the failure banner always
+   * shows" bug). Typed `string` (not a closed union) so an unknown future value degrades to
+   * not-clean, never a parse failure.
+   */
+  stopType?: string
 }
 
 /**
  * Did the window stop CLEANLY (the model chose to end the turn) rather than being truncated at the
- * output-limit cap? TA-5 M6: a clean stop carries the turn-boundary stop string (`stopping_word`,
- * e.g. `<end_of_turn>`) or the EOS flag; a LIMIT stop (a greedy-decode repetition loop, or a
- * token-dense window running to the ~2,070-token cap) carries NEITHER. Both translation consumers
- * (the doc-task `translateWithRetry` and the view job loop) treat a non-clean stop as a FAILED
- * window — retry-then-mark / retry-then-fail — so a mid-sentence truncation is never persisted or
- * shown as a finished translation. A missing `final` (no terminal frame at all) is already an
+ * output-limit cap? TA-5 M6, re-grounded against the REAL pin for issue #31: a clean stop is
+ * `stop_type: 'eos' | 'word'` (the pinned b9849's consolidated field — on Gemma a finished turn is
+ * `eos` with an EMPTY `stopping_word`, so the stop string alone is NOT a reliable signal), or —
+ * for older/mocked frame shapes — a non-empty `stopping_word` / the legacy `stopped_eos` flag. A
+ * LIMIT stop (`stop_type: 'limit'`: a greedy-decode repetition loop, or a token-dense window
+ * running to the ~2,070-token cap) carries none of these. Both translation consumers (the doc-task
+ * `translateWithRetry` and the view job loop) treat a non-clean stop as a FAILED window —
+ * retry-then-mark / retry-then-fail — so a mid-sentence truncation is never persisted or shown as
+ * a finished translation. A missing `final` (no terminal frame at all) is already an
  * `IncompleteStreamError` thrown by `readCompletionSSE`, so callers only reach here with a real frame.
  */
 export function isCleanStop(final: CompletionFinal | undefined): boolean {
   if (!final) return false
+  if (final.stopType === 'eos' || final.stopType === 'word') return true
   return (typeof final.stoppingWord === 'string' && final.stoppingWord.length > 0) || final.stoppedEos === true
 }
 
@@ -57,6 +73,7 @@ interface CompletionFrame {
   stop?: boolean
   stopping_word?: string
   stopped_eos?: boolean
+  stop_type?: string
   timings?: CompletionTimings
   error?: { message?: string; type?: string }
 }
@@ -132,7 +149,8 @@ function parseCompletionLine(line: string): {
       out.final = {
         timings: frame.timings,
         stoppingWord: frame.stopping_word,
-        stoppedEos: frame.stopped_eos
+        stoppedEos: frame.stopped_eos,
+        stopType: frame.stop_type
       }
     }
     return out

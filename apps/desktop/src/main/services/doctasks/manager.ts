@@ -244,8 +244,8 @@ export class DocTaskManager {
     ) {
       throw new Error(tMain('main.task.unknownKind'))
     }
-    // Translation languages are a closed, curated set (`TRANSLATION_LANGUAGE_CODES`,
-    // shared/types — widened to 10 at TG-3 with the WMT24++ evidence recorded there).
+    // Translation languages are a closed set (`TRANSLATION_LANGUAGE_CODES`, shared/types —
+    // widened at issue #31 to the 51-code WMT24++ production tier recorded there).
     // BOTH ends are validated: TranslateGemma's trained prompt requires an explicit
     // source language (no auto-detect), and a same-language "translation" would be a
     // multi-gigabyte no-op, so source ≠ target is enforced too.

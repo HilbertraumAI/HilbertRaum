@@ -112,7 +112,9 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
 
     // The selects carry NATIVE names for the widened set (untranslated by design).
     const target = screen.getByRole('combobox', { name: 'To' })
-    for (const label of ['Deutsch', 'English', 'Français', 'Українська']) {
+    // '日本語' / 'العربية' are issue-#31 widened languages — regression teeth that the pickers
+    // really offer the full 51-code set, not just the original curated 10.
+    for (const label of ['Deutsch', 'English', 'Français', 'Українська', '日本語', 'العربية']) {
       expect(target).toContainHTML(label)
     }
     // sourceLang rides in the params — TranslateGemma needs an explicit source.

@@ -68,12 +68,15 @@ import {
 // the raw stream bytes, and pin which shape it actually emits so the reader's error path is
 // pin-verified rather than defensive.
 //
-// TA-5 NOTE: the final frame's stop reason (`stopping_word` / `stopped_eos`) is now LOAD-BEARING —
-// both consumers reject a window whose final frame carries neither (a limit-stop truncation) as a
-// FAILED window (`isCleanStop`). No behavior change is expected here: a real translation of a
-// within-budget window ends on `<end_of_turn>`, so this smoke's windows should all print a non-empty
-// stop=. A window that instead prints stop="" (ran to the ~2,070-token cap) is exactly the
-// repetition-loop pathology TA-5 now catches — flag it if the calibration leg ever surfaces one.
+// TA-5 NOTE (re-grounded at issue #31): the final frame's stop reason is LOAD-BEARING — both
+// consumers reject a window whose final frame carries no clean stop (a limit-stop truncation) as a
+// FAILED window (`isCleanStop`). The pinned b9849 reports the CONSOLIDATED `stop_type` field
+// ('eos' | 'word' | 'limit' | 'none'); on Gemma a finished turn ends on `<end_of_turn>` as an
+// EOS-class token, so the expected final frame is stop_type="eos" with an EMPTY stopping_word —
+// this smoke's windows should all print stop=eos (or stop=word). The pre-#31 reader keyed on
+// `stopping_word`/`stopped_eos` only, which the b9849 shape never sets → every SUCCESSFUL window
+// was mis-flagged runtimeFailed (the issue-#31 false-failure banner). A window that instead prints
+// stop=limit ran to the ~2,070-token cap — the repetition-loop pathology TA-5 catches for real.
 
 const ROOT = process.env.HILBERTRAUM_TRANSLATEGEMMA_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
@@ -114,13 +117,25 @@ const DE_ADVERSARIAL =
   'Dieser Satz ist Teil eines Dokuments über Sicherheitsrichtlinien.'
 
 /**
+ * The ORIGINAL curated 10 — the languages this smoke has per-language samples + recorded TG-6
+ * round-trip evidence for. Issue #31 widened the SHIPPED `TRANSLATION_LANGUAGE_CODES` to the full
+ * 51-code WMT24++ production tier (quality evidence there = the model's own WMT24++ evaluation),
+ * but this calibration leg deliberately keeps measuring the 10 with local samples: at ~3–4 tok/s
+ * CPU decode a 51-language sweep would run for hours, and the tokens-per-word ceilings the planner
+ * ships were bounded on the heaviest of these (cs/uk); space-less scripts (ja/zh/th…) are charged
+ * per-character by `approxTokenCount`, which over-counts vs the real tokenizer — same safe
+ * direction. Add a sample here when promoting a widened language into the measured set.
+ */
+const SMOKE_LANGS = ['de', 'en', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'cs', 'uk'] as const
+
+/**
  * Curated-10 representative source sentences (invoice-style — each carries the verbatim identifier
  * `2026-0457` + model code `RX-7b` + a currency amount that must survive a round-trip). Used to
  * measure per-language INPUT tokens-per-word (Gemma tokenizer) and round-trip fidelity (TG-6 §4).
  * The Cyrillic (uk) and diacritic-dense (pl/cs) samples are the token-heavy stress cases the TG-3
  * review flagged (a dense window could brush the 2K trained input in REAL tokens).
  */
-const LANG_SAMPLES: Record<TranslationLangCode, string> = {
+const LANG_SAMPLES: Record<(typeof SMOKE_LANGS)[number], string> = {
   de: 'Die Rechnung Nr. 2026-0457 für das Modell RX-7b über 1.250 Einheiten zu je 39,90 Euro ist innerhalb von 30 Tagen zahlbar.',
   en: 'Invoice number 2026-0457 for model RX-7b, covering 1,250 units at 39.90 euros each, is payable within 30 days.',
   fr: 'La facture n° 2026-0457 pour le modèle RX-7b, portant sur 1 250 unités à 39,90 euros chacune, est payable sous 30 jours.',
@@ -314,7 +329,7 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
     expect(obeyed, 'embedded instruction was OBEYED, not translated (prompt-injection)').toBe(false)
 
     // ---- (8+9) TG-6 per-language calibration: tokens-per-word (Gemma tokenizer) + round-trip ----
-    console.log(`\n[${label}] ========== TG-6 per-language calibration (curated ${TRANSLATION_LANGUAGE_CODES.length}) ==========`)
+    console.log(`\n[${label}] ========== TG-6 per-language calibration (curated ${SMOKE_LANGS.length} of the shipped ${TRANSLATION_LANGUAGE_CODES.length}) ==========`)
     const rows: string[] = []
     let maxInputTpw = 0
     let maxInputLang = ''
@@ -323,7 +338,7 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
 
     // INPUT weight per SOURCE language + round-trip fidelity: tokenize the native sample (the real
     // input token cost per source word), then translate L→EN and assert the identifier survives.
-    for (const L of TRANSLATION_LANGUAGE_CODES) {
+    for (const L of SMOKE_LANGS) {
       const src = LANG_SAMPLES[L]
       const words = wordCount(src)
       const tokens = await tokenizeCount(server, src)
@@ -383,7 +398,7 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
 
     // The D4 clamp binds in REAL tokens only if the widest window's source, at its real input
     // tok/word, stays under the 2K trained input. Report the actual worst-case real input tokens.
-    const plan = planTranslationWindows([LANG_SAMPLES[maxInputLang as TranslationLangCode] ?? DE_OFFICE], CTX)
+    const plan = planTranslationWindows([LANG_SAMPLES[maxInputLang as (typeof SMOKE_LANGS)[number]] ?? DE_OFFICE], CTX)
     const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / TRANSLATION_INPUT_TOKENS_PER_WORD)
     const worstRealInputTokens = clampWords * maxInputTpw + TRANSLATION_PROMPT_RESERVE_TOKENS
     console.log(
@@ -554,7 +569,7 @@ describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real 
         for await (const delta of readCompletionSSE(res.body!, undefined, (f) => (final = f))) out += delta
         out = out.trim()
         const outTokens = await tokenizeCount(server, out)
-        console.log(`  window ${i + 1}/${plan.windows.length}: ${outTokens} out-tokens (cap ${plan.windowMaxTokens}), ${final?.timings?.predicted_per_second?.toFixed(1) ?? '?'} tok/s, stop="${final?.stoppingWord ?? ''}"`)
+        console.log(`  window ${i + 1}/${plan.windows.length}: ${outTokens} out-tokens (cap ${plan.windowMaxTokens}), ${final?.timings?.predicted_per_second?.toFixed(1) ?? '?'} tok/s, stop=${final?.stopType ?? '?'} word="${final?.stoppingWord ?? ''}"`)
         expect(out.length, `window ${i}: empty output`).toBeGreaterThan(0)
         expect(out.includes(TRANSLATION_STOP_TOKEN), `window ${i}: <end_of_turn> leaked`).toBe(false)
         // THE TG-6 SAFETY PROPERTY: the real output finished BEFORE the cap — not truncated.
