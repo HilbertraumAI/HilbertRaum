@@ -397,19 +397,31 @@ export function ChatScreen({
       setSummaryMarker(null)
       return
     }
+    // CR-7: both reads await main-side handlers; guard the setState against a stale resolve so a
+    // slow usage/summary read for A that lands after the user switched to B never stamps A's meter
+    // onto B (the sibling-effect `activeIdRef.current === convId` idiom).
     try {
       const usage = (await window.api.getConversationContextUsage?.(convId)) ?? null
-      setContextUsage(usage)
+      if (activeIdRef.current === convId) setContextUsage(usage)
     } catch {
-      setContextUsage(null)
+      if (activeIdRef.current === convId) setContextUsage(null)
     }
     try {
       const marker = (await window.api.getConversationSummary?.(convId)) ?? null
-      setSummaryMarker(marker)
+      if (activeIdRef.current === convId) setSummaryMarker(marker)
     } catch {
-      setSummaryMarker(null)
+      if (activeIdRef.current === convId) setSummaryMarker(null)
     }
   }, [])
+
+  // CR-6: clear a stale error banner when the conversation changes (select, delete, or a
+  // mode-deselect that nulls activeId). A dictation error or DOC_TASK_BUSY refusal from
+  // conversation A — including its now-contextless "Cancel the document task" action — must not
+  // linger over B. Placed BEFORE the history-load effect so the synchronous clear runs first: a
+  // switch-induced async listMessages failure (which resolves later) still surfaces its own banner.
+  useEffect(() => {
+    setError(null)
+  }, [activeId])
 
   // Load history when the active conversation changes.
   useEffect(() => {
@@ -417,11 +429,23 @@ export function ChatScreen({
       setMessages([])
       return
     }
+    // CR-7: guard the switch-time setState against a stale resolve — a slow listMessages for A that
+    // resolves after the user switched to B must not stamp A's history (or its error) onto B. Today
+    // Electron invoke to a synchronous handler is FIFO so it self-corrects; the guard makes it safe
+    // the moment a handler becomes async, and removes the transient old-conversation flash.
+    let cancelled = false
     window.api
       .listMessages(activeId)
-      .then(setMessages)
-      .catch((e) => setError(friendlyIpcError(e)))
+      .then((m) => {
+        if (!cancelled && activeIdRef.current === activeId) setMessages(m)
+      })
+      .catch((e) => {
+        if (!cancelled && activeIdRef.current === activeId) setError(friendlyIpcError(e))
+      })
     void refreshContextInfo(activeId)
+    return () => {
+      cancelled = true
+    }
   }, [activeId, refreshContextInfo])
 
   // Load the conversation's chat attachments (plan C3) when it changes. Best-effort: a
@@ -432,9 +456,12 @@ export function ChatScreen({
       return
     }
     try {
-      setAttachments((await window.api.listAttachments(convId)) ?? [])
+      // CR-7: same stale-response guard as the history load — a slow listAttachments for A that
+      // resolves after a switch to B must not overwrite B's attachments.
+      const list = (await window.api.listAttachments(convId)) ?? []
+      if (activeIdRef.current === convId) setAttachments(list)
     } catch {
-      setAttachments([])
+      if (activeIdRef.current === convId) setAttachments([])
     }
   }, [])
   useEffect(() => {
@@ -501,6 +528,13 @@ export function ChatScreen({
             setStreamConvId(null)
             setStreamText('')
             setStreamThinking('')
+            // CR-4 (M-U2 parity): a RECOVERED stream has no local stream() `finally` to consume the
+            // stop flag, so confirm a user-requested stop here — same predicate shape as that finally,
+            // and the two paths are mutually exclusive (a stream is either locally owned or recovered),
+            // so no double toast. Resetting the ref makes a StrictMode double-invocation of this
+            // updater a no-op (the second pass sees `stopped.current` already false).
+            if (stopped.current && activeIdRef.current === activeId) showToast(t('chat.stopped'))
+            stopped.current = false
           }
           return false
         })
@@ -513,7 +547,9 @@ export function ChatScreen({
       cancelled = true
       stopPolling()
     }
-  }, [activeId, streaming, refreshContextInfo])
+    // `showToast`/`t` are stable (useCallback / language-bound), so this only re-arms the poll on a
+    // rare language switch — the CR-4 recovered-stop toast (above) needs them in scope.
+  }, [activeId, streaming, refreshContextInfo, showToast, t])
 
   // On a FRESH mount (the user navigated away mid-reply and came back), the Chat screen has
   // forgotten which conversation it was streaming — `activeId` resets to null, so the recovery
@@ -674,6 +710,17 @@ export function ChatScreen({
         })
       }
     }
+    // CR-8 (SKA-18 parity): the depth picked on the 'new' composer is re-keyed onto the created
+    // conversation by onSend's `depths[convId]` write; drop the leftover 'new' key so a Thorough/Quick
+    // pick made once does not silently become the default for every LATER new chat this session. "New
+    // chat starts clean" — the depth re-key must match the skill re-key above. Unconditional (a depth
+    // can be picked with no skill), and a no-op when 'new' was never set.
+    setDepths((prev) => {
+      if (!('new' in prev)) return prev
+      const next = { ...prev }
+      delete next['new']
+      return next
+    })
     setActiveId(conv.id)
     await refreshConversations()
     return conv.id
@@ -1086,7 +1133,7 @@ export function ChatScreen({
     // U3 (audit ux-6): pin the document answer to ONE document (the routed-run relay passes the run's
     // target). Documents mode only; main re-validates it against scope. Absent ⇒ ordinary scope.
     pinnedDocumentId?: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     setError(null)
     setStreaming(true)
     setStreamConvId(convId)
@@ -1137,12 +1184,22 @@ export function ChatScreen({
     })
     // Only update the visible transcript if the user is still looking at THIS
     // conversation — replacing another conversation's view with this one's messages
-    // corrupts the visible transcript.
-    const refreshIfVisible = async (): Promise<void> => {
+    // corrupts the visible transcript. Returns the persisted list it applied (CR-1: onSend reads it
+    // to decide whether the user turn survived), or null when not visible / not fetched.
+    const refreshIfVisible = async (): Promise<Message[] | null> => {
       if (activeIdRef.current === convId) {
-        setMessages(await window.api.listMessages(convId))
+        const persisted = await window.api.listMessages(convId)
+        setMessages(persisted)
+        return persisted
       }
+      return null
     }
+    // CR-1: did the USER turn persist this send? True on success and on any error that STILL wrote the
+    // turn (a socket error after persist, a stopped partial); false only when a pre-persist guard
+    // (DOC_TASK_BUSY / no model / slot held) rejected before the turn was written. onSend uses `false`
+    // as the signal to restore the just-cleared draft. Derived from the post-failure persisted list —
+    // no new IPC. Defaults true so success and the not-visible case never restore into another chat.
+    let userTurnPersisted = true
     try {
       // Send the resolved skill choice VERBATIM (audit §4.3 per-turn semantics): `undefined` lets main
       // resolve the saved default (and may auto-fire), an explicit `null` forces a skill-free turn (no
@@ -1150,7 +1207,13 @@ export function ChatScreen({
       // skill. The caller (`onSend`/`onTryAgain`/`onAnswerWithoutSkill`/routed-run) already resolved
       // this; `stream` no longer collapses `null`→`undefined`, so an explicit decline is honoured.
       const turnSkillArg = skillInstallId
-      if (mode === 'documents') {
+      // CR-5: branch on the CONVERSATION's own mode, not the screen `mode` state. On a fresh-mount
+      // stream reattach the two can diverge (a documents conversation recovered while `listConversations`
+      // threw leaves `mode` at 'chat'), which would route a documents send through sendChatMessage. The
+      // conversation is authoritative; `?? mode` covers a brand-new conversation not yet in the list
+      // (created in the current screen mode). The reattach-site `setMode` stays as cosmetic footer sync.
+      const convMode = conversations.find((c) => c.id === convId)?.mode ?? mode
+      if (convMode === 'documents') {
         await window.api.askDocuments(convId, content, turnSkillArg, regenerate, pinnedDocumentId)
       } else {
         await window.api.sendChatMessage(convId, content, {
@@ -1165,7 +1228,14 @@ export function ChatScreen({
     } catch (e) {
       if (activeIdRef.current === convId) setError(friendlyIpcError(e))
       // Refresh so a partial (stopped) reply that was persisted still shows.
-      await refreshIfVisible().catch(() => undefined)
+      const persisted = await refreshIfVisible().catch(() => null)
+      // CR-1: a pre-persist guard reject wrote no user turn → the persisted list won't contain it →
+      // signal onSend to restore the draft. An error AFTER the turn persisted (or while we're no longer
+      // viewing this conversation) keeps `userTurnPersisted` true, so we never re-inject a question that
+      // is already in the transcript.
+      if (persisted !== null) {
+        userTurnPersisted = persisted.some((m) => m.role === 'user' && m.content === content)
+      }
       await checkRuntime().catch(() => undefined)
     } finally {
       unsubscribe()
@@ -1194,6 +1264,13 @@ export function ChatScreen({
       if (stopped.current && activeIdRef.current === convId) showToast(t('chat.stopped'))
       stopped.current = false
     }
+    return userTurnPersisted
+  }
+
+  // CR-1: put a lost draft back only when the composer is still empty — text typed during the failed
+  // send's flight wins, so a slow guard-reject never clobbers what the user is writing now.
+  function restoreDraft(text: string): void {
+    setInput((cur) => (cur === '' ? text : cur))
   }
 
   async function onSend(): Promise<void> {
@@ -1212,9 +1289,17 @@ export function ChatScreen({
       const convId = await ensureConversation()
       setDepths((prev) => ({ ...prev, [convId]: depth }))
       setMessages((prev) => [...prev, optimisticUser(convId, text)])
-      await stream(convId, text, false, depth, turnSkill)
+      // CR-1: `setInput('')` above keeps the composer responsive (the optimistic bubble shows the
+      // text), but a pre-persist failure removes that bubble via the failure refresh and leaves the
+      // composer empty — the exact moment the banner invites a retry. When the user turn did NOT
+      // persist, put the draft back so it is never silently lost.
+      const persisted = await stream(convId, text, false, depth, turnSkill)
+      if (!persisted) restoreDraft(text)
     } catch (e) {
+      // A synchronous throw (e.g. ensureConversation failing) never wrote the turn — surface the
+      // error and restore the draft too.
       setError(friendlyIpcError(e))
+      restoreDraft(text)
     }
   }
 
@@ -1245,9 +1330,17 @@ export function ChatScreen({
   }
 
   function onStop(): void {
-    if (activeId) {
+    // CR-9 (latent hardening — byte-equivalent today): target the STREAMING conversation, not merely
+    // the viewed one. These are always the same wherever the Composer's Stop renders because
+    // ConversationList disables every non-active row while streaming (`disabled={streaming && !active}`,
+    // and it receives `streaming={busyStreaming}`), so the user cannot switch away from the streaming
+    // conversation mid-stream. `streamConvId ?? activeId` keeps Stop correct if a future change ever
+    // relaxes that guard — a change that must not be made without re-checking this reachability. See the
+    // FE audit 2026-07-07 record.
+    const target = streamConvId ?? activeId
+    if (target) {
       stopped.current = true
-      void window.api.stopGeneration(activeId)
+      void window.api.stopGeneration(target)
     }
   }
 
@@ -1420,7 +1513,11 @@ export function ChatScreen({
   // `pickerToken` (D1): present for the picker path (main imports exactly what was picked,
   // ignoring `paths`); absent for drag-drop (main hardens the raw OS paths instead).
   async function attachFiles(paths: string[], pickerToken?: string): Promise<void> {
-    if (paths.length === 0 || busyStreaming) return
+    // CR-3: the UI models exactly ONE pending import (`pendingImport` + `attachPollRef` are singletons,
+    // and watchAttachJob clears the previous job's poll). Block a second attach while one is in flight so
+    // the first import's watcher is never orphaned (which would drop its per-file failure banner). Covers
+    // both the picker and drag-drop paths; the composer's paperclip is also gated below.
+    if (paths.length === 0 || busyStreaming || pendingImport != null) return
     setError(null)
     const fileNames = paths.map(fileBaseName)
     const active = activeId ? conversations.find((c) => c.id === activeId) : undefined
@@ -1658,6 +1755,13 @@ export function ChatScreen({
         </div>
 
         <Transcript
+          // CR-2: key on the conversation so a switch REMOUNTS the transcript — resetting its internal
+          // `atBottomRef` + DOM scrollTop and re-pinning the new conversation to the newest message,
+          // instead of inheriting A's scroll offset. Keying on activeId (not `messages`) is decisive: an
+          // intra-conversation refreshIfVisible or a streaming reattach keeps activeId stable → no
+          // remount → React.memo still skips the transcript on the keystroke/flush hot path; only a
+          // genuine switch (rare) pays the remount. See the FE audit 2026-07-07 record.
+          key={activeId ?? 'new'}
           messages={messages}
           streamingHere={busyStreaming && streamConvId === activeId}
           streamText={streamText}
@@ -1744,7 +1848,10 @@ export function ChatScreen({
           inputRef={composerRef}
           dictationAvailable={dictationAvailable}
           onDictationError={setError}
-          onAttach={() => void onPickAttach()}
+          // CR-3: withhold the paperclip while an import is pending (mirrors the `onTryAgain ? h :
+          // undefined` gating pattern) so the one-pending-import model is honest; the guard inside
+          // attachFiles is the correctness backstop for the drag-drop path.
+          onAttach={pendingImport != null ? undefined : () => void onPickAttach()}
           footer={
             <>
               {mode === 'documents' ? (

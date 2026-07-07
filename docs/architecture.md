@@ -1093,6 +1093,38 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   that conversation (most-recent = last key) and mirrors its mode — the existing recovery poll then
   re-attaches. Guarded so it never clobbers a deliberate mid-load click and never yanks the user onto
   an old conversation when nothing is generating.
+- **FE audit 2026-07-07 — Chat renderer correctness (CR-1…CR-9).** A renderer-side sweep of
+  `ChatScreen.tsx` + `Transcript.tsx` (companion to `chat-docs-audit-2026-07-07.md`; per-finding
+  design in the remediation plan) hardened the send/switch/stop paths without adding an unstable prop
+  to a memoized child on the keystroke/flush hot path. The load-bearing decisions:
+  - **CR-2 (transcript scroll bleed) — `key={activeId ?? 'new'}` on the `Transcript` instance, NOT a
+    reset-on-effect.** A fresh instance per conversation resets `atBottomRef` + DOM `scrollTop` and the
+    mount scroll effect re-pins to the newest message. Keying on `activeId` (not `messages`) is
+    decisive: an intra-conversation `refreshIfVisible` and a streaming reattach keep `activeId` stable
+    → the key is stable → `React.memo` still skips the transcript on the hot path; only a genuine switch
+    (rare) pays the remount. Keying on `messages` would remount on every flush and defeat the memo.
+  - **CR-9 (Stop target) — `onStop` targets `streamConvId ?? activeId`; latent hardening, byte-equivalent
+    today.** Reachability: `ConversationList` disables every non-active row while streaming
+    (`disabled={streaming && !active}`, fed `streaming={busyStreaming}`), and every `activeId`-mutating
+    path is `busyStreaming`-guarded, so the Composer's Stop only ever renders in a state where
+    `streamConvId === activeId` (local OR recovered stream). The one-line change future-proofs Stop if a
+    later change relaxes the disabled-row guard — **that guard must not be relaxed without re-checking
+    `onStop`.** `ChatSwitchStop.test.tsx` (T-2) pins the disabled-row invariant so it reddens first.
+  - **CR-1 (draft loss) — restore into a still-empty composer, only when the user turn did not persist.**
+    `stream` reports persistence from its post-failure `listMessages` (no new IPC); `onSend` restores
+    with a `cur === ''` guard (newer in-flight typing wins) so a routine pre-persist reject
+    (DOC_TASK_BUSY / no model / slot held) never eats a typed question, while a stopped-partial /
+    errored-after-persist turn does not duplicate. **CR-4** confirms a *recovered* stop in the recovery
+    tick's completed branch (no local `stream()` finally there — M-U2 parity). **CR-5** branches the send
+    on the conversation's own mode (`conversations.find(...)?.mode ?? mode`) so a reattach that failed to
+    mirror `mode` still routes a documents send through `askDocuments`. **CR-6/CR-7** clear the error
+    banner on `activeId` change (effect ordered before the history load) and add the sibling
+    `activeIdRef.current === convId` stale-response guard to the three switch-time loads. **CR-8** drops
+    `depths['new']` in `ensureConversation` (SKA-18 parity — a 'new'-composer depth pick must not become
+    every later new chat's default). Tests with teeth: `ChatStreamRecovery.test.tsx` (T-1: recovery
+    bubble + CR-4 stop + CR-5 routing + re-select guards), `ChatSendFailure.test.tsx` (CR-1 + CR-2),
+    `ChatSwitchStop.test.tsx` (T-2). **CR-10** (transcript windowing) stays the accepted PERF-2 chat
+    half; **CB-\*/DB-\*** findings are other sessions of the same wave.
 - **`MockRuntime.chatStream`** emits a deterministic reply token-by-token with a small delay so
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
