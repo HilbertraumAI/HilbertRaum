@@ -846,7 +846,7 @@ export const en = {
   // producing a top-k Q&A. Deterministic + content-free (no model call, no document read); `{button}`
   // is the SkillRunBar's own label so the wording matches the affordance the user sees.
   'skills.redactionRouting.answer':
-    'To redact this document, click the **{button}** button just below the chat box, then choose ' +
+    'To redact this document, click the **{button}** button just above the message box, then choose ' +
     'where to save the copy. It runs entirely on this device and masks clearly-formatted personal ' +
     'data — e-mail addresses, phone numbers, IBANs, dates, and links — reading the whole document. ' +
     'It’s a best-effort first pass, not a guarantee: it can’t catch names or unusual formats, so ' +
@@ -855,7 +855,7 @@ export const en = {
   // document at a time, so the copy is honest about that and points at the run button's own target
   // chooser — content-free (the count drives the wording; no document title appears here).
   'skills.redactionRouting.answerMulti':
-    'To redact a document, click the **{button}** button just below the chat box and pick which ' +
+    'To redact a document, click the **{button}** button just above the message box and pick which ' +
     'document to redact, then choose where to save the copy. It works on one document at a time, ' +
     'runs entirely on this device, and masks clearly-formatted personal data — e-mail addresses, ' +
     'phone numbers, IBANs, payment-card numbers, dates, and links — reading the whole document. It’s ' +
@@ -865,7 +865,7 @@ export const en = {
   // regenerating the prose (which hallucinates). Deterministic + content-free (no model call, no read);
   // `{button}` is the SkillRunBar's own label so the wording matches the affordance the user sees.
   'skills.editRouting.answer':
-    'To make these edits, click the **{button}** button just below the chat box, then choose where to ' +
+    'To make these edits, click the **{button}** button just above the message box, then choose where to ' +
     'save the edited copy. It runs entirely on this device and applies only the exact find-and-replace ' +
     'changes you asked for — everywhere the text is found verbatim, leaving everything else unchanged. It ' +
     'never rewrites the document, so it can’t invent or reword anything. This phase saves a plain text ' +
@@ -873,7 +873,7 @@ export const en = {
   // U-1: the same routing answer when MORE THAN ONE document is in scope. The tool edits one document at a
   // time, so the copy is honest about that and points at the run button's own target chooser.
   'skills.editRouting.answerMulti':
-    'To make these edits, click the **{button}** button just below the chat box and pick which document ' +
+    'To make these edits, click the **{button}** button just above the message box and pick which document ' +
     'to edit, then choose where to save the edited copy. It works on one document at a time, runs entirely ' +
     'on this device, and applies only the exact find-and-replace changes you asked for — everywhere the ' +
     'text is found verbatim, leaving everything else unchanged. It never rewrites the document. This phase ' +
@@ -886,7 +886,7 @@ export const en = {
     '{email}, phone numbers: {phone}, IBANs: {iban}, payment-card numbers: {card}, dates: {date}, ' +
     'links: {url}. This is a best-effort pattern scan: it can’t catch names, postal addresses, or ' +
     'unusual formats, so treat these as a floor, not a full inventory. To create a masked copy, click ' +
-    'the **{button}** button just below the chat box and choose where to save it.',
+    'the **{button}** button just above the message box and choose where to save it.',
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',

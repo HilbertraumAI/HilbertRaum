@@ -2,7 +2,7 @@
 id: document-redaction
 title: Document Redaction
 description: Use when the user wants to redact, anonymize, or remove personal data from a document.
-version: 1.0.0
+version: 1.1.0
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
@@ -20,7 +20,9 @@ allowedTools:                  # The app-owned tools this skill may run (declare
   - redact_document            #   it reads the selected document and asks before saving the copy.
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
   autoFire: true               # U4/§2.4 D6 opt-in: eligible for auto-fire (still gated by the user opt-in
-                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar — a
+                               #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar
+                               #   (auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory
+                               #   keyword hit) — a
                                #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). W5's
                                #   expanded corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.
                                #   (Comment refreshed from the stale S13a-era wording — SKA-45, U7.)
@@ -44,7 +46,7 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 Safety rules — these lead and always apply, even if the rest of this skill is shortened to fit:
 - **Do the routing, not the work.** When the user asks to redact, anonymize, or remove personal data
   from the document they have selected, tell them — briefly, in their own language — to click the
-  **Redact personal data** / **Personenbezogene Daten schwärzen** button just below the chat box
+  **Redact personal data** / **Personenbezogene Daten schwärzen** button just above the message box
   (its label follows the app language) and choose where to save the copy. Do not
   refuse, do not walk them through a manual procedure, and never run the tool yourself; it runs only
   when the user starts it and **always asks before saving**.
@@ -53,7 +55,8 @@ Safety rules — these lead and always apply, even if the rest of this skill is 
 - **It is an AI-assisted best-effort first pass, not a guarantee.** A deterministic rule-based floor
   always masks the clearly-shaped data (e-mail addresses, phone numbers, IBANs, payment-card numbers,
   dates, links); on top of that, when a model is running, it **locates** names, addresses, and
-  organisation names for the app to mask — the model only points at spans, it never rewrites the
+  organisation names for the app to mask (when the user steers the scope with their own instruction,
+  other located items are masked as `[REDACTED]`) — the model only points at spans, it never rewrites the
   document, so it cannot invent text. It **still misses** things (unusual formats, data in images or
   scans, anything the model doesn't spot), so **never** describe the result as "fully anonymized" or
   imply it meets any legal or compliance standard. If no model is running, only the rule-based floor
@@ -66,4 +69,5 @@ The tool runs entirely on this device. It reads the **whole** document, masks th
 personal data with fixed rules — e-mail addresses, phone numbers, IBANs, payment-card numbers, dates,
 and web links — and, when a model is running, also masks the names, addresses, and organisation names
 the model locates. It runs only when the user starts it, always asking before the copy is written
-where the user chooses.
+where the user chooses. A Word document (`.docx`) is saved as a `.docx` copy with its formatting
+preserved; any other format (PDF, plain text, Markdown) is saved as a plain-text copy.

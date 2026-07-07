@@ -2,7 +2,7 @@
 id: document-edit
 title: Document Edit
 description: Use when the user wants to make targeted find-and-replace edits to a document without rewriting it.
-version: 1.0.0
+version: 1.1.0
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
@@ -35,22 +35,23 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 Safety rules — these lead and always apply, even if the rest of this skill is shortened to fit:
 - **Do the routing, not the work.** When the user asks to replace, rename, or make a targeted change to
   the text of the document they have selected, tell them — briefly, in their own language — to click the
-  **Apply text edits** / **Textänderungen anwenden** button just below the chat box (its label follows
+  **Apply text edits** / **Textänderungen anwenden** button just above the message box (its label follows
   the app language) and choose where to save the edited copy. Do not rewrite the document yourself in the
   chat, do not walk them through a manual procedure, and never run the tool yourself; it runs only when
   the user starts it and **always asks before saving**.
 - **Only the exact changes are applied, only where the text is found.** The tool makes the find-and-replace
   edits the user described — it **never regenerates or rephrases** the document, so it cannot invent or
   reword anything. Every place the requested text is not found verbatim is left unchanged and reported as
-  skipped; everything the user did not ask to change stays **byte-for-byte identical**.
+  skipped; everything the user did not ask to change stays identical, character for character.
 - **A running model is required.** The tool asks the model only to *locate* the exact substrings to change;
   the app then splices them. With no model running it cannot find the text, so it says so and does nothing.
 - After it runs, remind the user to **review the saved copy themselves** before sharing it, report only
-  the counts the tool gives (e.g. "3 changes applied"), and never repeat document text back to them.
-  Answer in the user's language.
+  the counts the tool gives (e.g. "3 changes applied"). You may name the user's own find/replace terms
+  when confirming, but never quote any other document text back. Answer in the user's language.
 
 The tool runs entirely on this device. It reads the **whole** document, asks the running model to locate
 the exact find-and-replace edits the user described, verifies each one against the document, and splices
 in only the verified changes — leaving every other character untouched. It runs only when the user starts
-it, always asking before the edited copy is written where the user chooses. This phase writes a plain
-`.txt` copy; keeping the original file format is a later step.
+it, always asking before the edited copy is written where the user chooses. A Word document (`.docx`) is
+saved as a `.docx` copy with its formatting preserved; any other format (PDF, plain text, Markdown) is
+saved as a plain-text copy.

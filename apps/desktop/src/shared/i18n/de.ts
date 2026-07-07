@@ -857,7 +857,7 @@ export const de: Record<keyof typeof en, string> = {
   // statt eine Top-k-Antwort zu erzeugen. Deterministisch + inhaltsfrei (kein Modellaufruf, kein
   // Dokumentzugriff); `{button}` ist die Beschriftung aus der SkillRunBar.
   'skills.redactionRouting.answer':
-    'Um dieses Dokument zu schwärzen, klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
+    'Um dieses Dokument zu schwärzen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}** und ' +
     'wähle anschließend, wo die Kopie gespeichert werden soll. Sie läuft vollständig auf diesem ' +
     'Gerät und maskiert klar erkennbare personenbezogene Daten – E-Mail-Adressen, Telefonnummern, ' +
     'IBANs, Datumsangaben und Links – und liest dabei das ganze Dokument. Es ist ein bestmöglicher ' +
@@ -867,7 +867,7 @@ export const de: Record<keyof typeof en, string> = {
   // schwärzt jeweils ein Dokument, daher bleibt die Antwort ehrlich und verweist auf die Zielauswahl
   // der Schaltfläche – inhaltsfrei (die Anzahl steuert den Text; hier erscheint kein Dokumenttitel).
   'skills.redactionRouting.answerMulti':
-    'Um ein Dokument zu schwärzen, klicke unten beim Chat auf die Schaltfläche **{button}**, wähle ' +
+    'Um ein Dokument zu schwärzen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}**, wähle ' +
     'aus, welches Dokument geschwärzt werden soll, und lege anschließend fest, wo die Kopie ' +
     'gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft vollständig auf diesem ' +
     'Gerät und maskiert klar erkennbare personenbezogene Daten – E-Mail-Adressen, Telefonnummern, ' +
@@ -882,12 +882,12 @@ export const de: Record<keyof typeof en, string> = {
     'E-Mail-Adressen: {email}, Telefonnummern: {phone}, IBANs: {iban}, Kartennummern: {card}, ' +
     'Datumsangaben: {date}, Links: {url}. Das ist eine bestmögliche Mustererkennung: Namen, Adressen ' +
     'oder ungewöhnliche Formate erkennt sie nicht – sieh das als Untergrenze, nicht als vollständige ' +
-    'Liste. Für eine geschwärzte Kopie klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
+    'Liste. Für eine geschwärzte Kopie klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}** und ' +
     'wähle, wo die Kopie gespeichert werden soll.',
   // Antwort der Bearbeitungs-Weiterleitung (Phase 8, #23): eine Aktions-Skill verweist auf ihre eigene
   // Schaltfläche, statt den Text neu zu erzeugen (was halluziniert). Deterministisch + inhaltsfrei.
   'skills.editRouting.answer':
-    'Um diese Änderungen vorzunehmen, klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
+    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}** und ' +
     'wähle anschließend, wo die bearbeitete Kopie gespeichert werden soll. Sie läuft vollständig auf ' +
     'diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – ' +
     'überall dort, wo der Text wörtlich gefunden wird, und lässt alles andere unverändert. Sie schreibt ' +
@@ -896,7 +896,7 @@ export const de: Record<keyof typeof en, string> = {
   // U-1: dieselbe Antwort, wenn MEHR ALS EIN Dokument im Bereich liegt. Das Werkzeug bearbeitet jeweils
   // ein Dokument, daher verweist die Antwort auf die Zielauswahl der Schaltfläche.
   'skills.editRouting.answerMulti':
-    'Um diese Änderungen vorzunehmen, klicke unten beim Chat auf die Schaltfläche **{button}**, wähle ' +
+    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}**, wähle ' +
     'aus, welches Dokument bearbeitet werden soll, und lege anschließend fest, wo die bearbeitete Kopie ' +
     'gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft vollständig auf diesem Gerät ' +
     'und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – überall dort, ' +

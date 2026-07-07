@@ -127,7 +127,10 @@ function validSpan(span: TransformSpan): boolean {
  * Rewrite ONE node's unescaped text under the spans overlapping it. A span's replacement is emitted only in
  * the node where the span STARTS; a span that crosses into or out of the node has its covered characters
  * removed here (they are replaced once, at the start node). The node's non-span characters are copied
- * through verbatim, so byte-identity holds for every unchanged `<w:t>` character (D58 as extended by D77).
+ * through verbatim at the text layer, so every unchanged character survives character-for-character.
+ * Byte-identity holds for untouched nodes and every non-`document.xml` part; inside a REWRITTEN node the
+ * re-escape emits only `&amp;/&lt;/&gt;`, so an unchanged `&#233;`/`&quot;` re-emerges as its literal
+ * character — character- but not byte-stable (D58 as extended by D77).
  */
 function rewriteNodeText(node: DocxTextNode, spans: readonly TransformSpan[]): string {
   const base = node.layerText
