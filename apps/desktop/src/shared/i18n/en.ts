@@ -395,6 +395,7 @@ export const en = {
   'docs.import.files': 'Import files',
   'docs.import.folder': 'Import folder',
   'docs.refresh': 'Refresh',
+  'docs.loading': 'Loading documents…',
   'docs.askSelected': 'Ask these documents ({count})',
   'docs.askSelectedTitle': 'Open a document Q&A scoped to the selected documents',
   'docs.compareBtn': 'Compare (2)',

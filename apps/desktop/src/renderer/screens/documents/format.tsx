@@ -213,6 +213,12 @@ export function formatSize(bytes: number | null, lang: UiLanguage): string {
   if (bytes < 1024) return `${bytes} B`
   const fmt = (n: number): string =>
     n.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })
-  if (bytes < 1024 * 1024) return `${fmt(bytes / 1024)} KB`
-  return `${fmt(bytes / (1024 * 1024))} MB`
+  const MB = 1024 * 1024
+  const GB = MB * 1024
+  if (bytes < MB) return `${fmt(bytes / 1024)} KB`
+  // DR-9: the app explicitly handles large files (the "Large files" smart view, long audio); a
+  // multi-GB recording used to read "2457.6 MB". Add the GB tier — locale decimal handling
+  // (comma on `de`) is unchanged, it rides on the shared `fmt`.
+  if (bytes < GB) return `${fmt(bytes / MB)} MB`
+  return `${fmt(bytes / GB)} GB`
 }

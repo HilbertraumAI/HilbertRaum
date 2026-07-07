@@ -122,7 +122,11 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<DocumentPreview | null>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
+  // DR-4: the id of the row whose preview is currently opening — NOT a screen-global boolean. A
+  // per-row `previewLoadingId === d.id` (below) means only the clicked row reads "Opening…" /
+  // disables, and — crucially for the memo — the OTHER rows receive a stable `false`, so opening a
+  // preview no longer busts every visible DocRow's `React.memo` (a shared boolean flipped them all).
+  const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null)
   // Destructive delete goes through a ConfirmDialog (guidelines §6), not browser confirm.
   const [confirmDelete, setConfirmDelete] = useState<DocumentInfo | null>(null)
   // Large-audio import confirmation: pending paths + their preflight.
@@ -204,6 +208,12 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       mountedRef.current = false
     }
   }, [])
+  // DR-2: a monotonic request counter for `refresh`. Multiple `refresh()` calls can be in flight
+  // at once (a >400 ms poll tick straddling a manual Refresh, `run()`'s post-op refresh, the
+  // done-task effect). Each call stamps `seq` and only the LATEST stamp is allowed to commit, so
+  // an older `listDocuments` snapshot can never clobber a newer one (and stick once the poll
+  // interval has cleared). This is the single choke point covering every caller.
+  const refreshSeq = useRef(0)
   // The single active document task — module-level store so a running summary's
   // busy/progress state survives navigating away and back.
   const activeTask = useSyncExternalStore(subscribeDocTask, getActiveDocTask)
@@ -217,8 +227,13 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   }, [])
 
   const refresh = useCallback(async (): Promise<void> => {
+    const seq = ++refreshSeq.current
     const next = await window.api.listDocuments()
     if (!mountedRef.current) return // unmounted while the list was loading (FE-4)
+    // DR-2: a newer refresh has been issued since this one started — drop this stale snapshot so
+    // it can't clobber the authoritative one. Gated BEFORE both setDocs and the selected-prune so
+    // they always act on the same (latest) list.
+    if (seq !== refreshSeq.current) return
     setDocs(next)
     void refreshCollections()
     // Drop selected ids that no longer exist or are no longer indexed.
@@ -419,14 +434,14 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // viewer (in encrypted workspaces the stored copy must stay encrypted on disk).
   async function onPreview(d: DocumentInfo): Promise<void> {
     setError(null)
-    setPreviewLoading(true)
+    setPreviewLoadingId(d.id)
     try {
       // FE-6: this is the BOUNDED first page (+ cursor), not the whole document.
       setPreview(await window.api.previewDocument(d.id))
     } catch (e) {
       setError(friendlyIpcError(e))
     } finally {
-      setPreviewLoading(false)
+      setPreviewLoadingId(null)
     }
   }
 
@@ -444,7 +459,10 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       setPreview((cur) =>
         cur && cur.id === next.id
           ? { ...next, segments: [...cur.segments, ...next.segments] }
-          : next
+          : // DR-1: the modal was closed (Esc) or a done-task auto-opened a DIFFERENT document
+            // while this page was in flight — DROP the late page (return `cur`) instead of
+            // installing it, which would resurrect the closed modal or clobber the other doc.
+            cur
       )
     } catch (e) {
       setError(friendlyIpcError(e))
@@ -474,9 +492,12 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         .then(setPreview)
         .catch(() => undefined)
     } else if (status?.state === 'failed' && status.error) {
-      setError(status.error)
+      // DR-7: a failed summary/translation/OCR task's `status.error` is persist-canonical English
+      // — run it through the same display map DocRow / the chat banner use, or the de-AT UI shows
+      // a raw English constant.
+      setError(localizeServerCopy(t, status.error))
     }
-  }, [activeTask, refresh])
+  }, [activeTask, refresh, t])
 
   async function onSummarize(d: DocumentInfo): Promise<void> {
     setError(null)
@@ -874,7 +895,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         ocrAvailable={ocrAvailable}
         translationAvailable={translationAvailable}
         busy={busy}
-        previewLoading={previewLoading}
+        // DR-4: per-row — a stable `false` for every row except the one actually opening.
+        previewLoading={previewLoadingId === d.id}
         showCheckbox={Boolean(onAskSelected)}
         isProjectSection={section.kind === 'project'}
         projectSectionId={section.kind === 'project' ? section.id : null}
@@ -943,10 +965,15 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
           is empty the EmptyState carries the primary action instead. */}
       {!empty && (
         <div className="actions">
-          <Button variant="primary" disabled={busy === 'import'} onClick={() => void onImport('files')}>
+          {/* DR-5: gate Import on ANY busy op (`busy !== null`), not just `'import'` — a bulk
+              re-index (`busy === 'reindex-all'`) shares the single `busy` scalar, so an import
+              started during it would fight state. Main-side job exclusivity is the real backstop;
+              this is the honest affordance. The LABEL still keys on `'import'` so only an actual
+              import shows "Importing…". */}
+          <Button variant="primary" disabled={busy !== null} onClick={() => void onImport('files')}>
             {busy === 'import' ? t('docs.import.busy') : t('docs.import.files')}
           </Button>
-          <Button disabled={busy === 'import'} onClick={() => void onImport('folder')}>
+          <Button disabled={busy !== null} onClick={() => void onImport('folder')}>
             {t('docs.import.folder')}
           </Button>
           <button
@@ -955,7 +982,11 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
             disabled={busy !== null}
             aria-label={t('docs.refresh')}
             title={t('docs.refresh')}
-            onClick={() => void refresh()}
+            // DR-3: `refresh` lets a `listDocuments` rejection propagate; every OTHER call site
+            // catches it. Without this the toolbar click is an unhandled rejection with no banner.
+            onClick={() => {
+              void refresh().catch((e) => setError(friendlyIpcError(e)))
+            }}
           >
             <Icon name="refresh" size={18} />
           </button>
@@ -1071,16 +1102,26 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
       <ErrorBanner message={error} t={t} />
 
+      {/* DR-8: first-mount loading state. With `docs === null` (the initial `listDocuments` still
+          in flight) `empty` is false and the list area was simply blank — on a large/slow encrypted
+          workspace the screen looked broken. A `role="status"` spinner announces the wait; it is
+          gone the moment `docs` resolves (to a list) or `error` is set (the banner above shows). */}
+      {docs == null && error == null && (
+        <div role="status" className="docs-loading">
+          <Spinner /> {t('docs.loading')}
+        </div>
+      )}
+
       {empty && (
         <EmptyState
           title={t('docs.empty.title')}
           line={t('docs.empty.line')}
           action={
             <>
-              <Button variant="primary" disabled={busy === 'import'} onClick={() => void onImport('files')}>
+              <Button variant="primary" disabled={busy !== null} onClick={() => void onImport('files')}>
                 {busy === 'import' ? t('docs.import.busy') : t('docs.import.files')}
               </Button>
-              <Button disabled={busy === 'import'} onClick={() => void onImport('folder')}>
+              <Button disabled={busy !== null} onClick={() => void onImport('folder')}>
                 {t('docs.import.folder')}
               </Button>
             </>

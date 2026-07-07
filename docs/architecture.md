@@ -1125,6 +1125,29 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     bubble + CR-4 stop + CR-5 routing + re-select guards), `ChatSendFailure.test.tsx` (CR-1 + CR-2),
     `ChatSwitchStop.test.tsx` (T-2). **CR-10** (transcript windowing) stays the accepted PERF-2 chat
     half; **CB-\*/DB-\*** findings are other sessions of the same wave.
+- **FE audit 2026-07-07 — Documents renderer polish (DR-1…DR-9).** The Documents half of the same
+  sweep (`DocumentsScreen.tsx` + `screens/documents/{DocRow,SectionRail,format}.tsx`; companion
+  audit + remediation plan). Two of the nine *tighten* invariants rather than merely patch: **DR-4**
+  replaces the screen-global `previewLoading` boolean (which flipped a memo-busting prop on *every*
+  windowed `DocRow` twice per preview) with a per-row `previewLoadingId === d.id` — the clicked row
+  gets `true`, every other row a stable `false`, so `DocRow.memo` now *holds* on a preview open
+  (`DocumentsScreenPolish.test.tsx` asserts row B's render-count delta is 0; DocRow's boolean prop is
+  unchanged). **DR-2** funnels every `refresh()` caller (poll tick, toolbar, `run`, mount) through one
+  monotonic `refreshSeq` choke point — an older `listDocuments` snapshot can no longer clobber a newer
+  one and stick once the poll interval clears, *reducing* spurious full-list swaps (revert-confirmed
+  teeth). The rest: **DR-1** the preview "Show more" updater returns `cur` (not `next`) on
+  id-mismatch/closed-modal so a late page can't resurrect a closed modal or clobber a doc-task's
+  auto-opened preview (revert-confirmed); **DR-3** the toolbar Refresh `onClick` catches the rejection
+  into the banner (every other call site already did); **DR-5** Import is gated on `busy !== null`
+  (all four buttons) so a concurrent bulk re-index can't fight the single `busy` scalar — main-side
+  job exclusivity stays the correctness backstop, the label still keys on `'import'`; **DR-6** archived
+  projects get the `active` class + `aria-current` (mirroring active projects) so a selected archived
+  section is visible to the user and screen readers; **DR-7** a failed doc-task's persist-canonical
+  error runs through `localizeServerCopy` so the de-AT UI stops leaking raw English; **DR-8** a
+  first-mount `role="status"` spinner (new `docs.loading` key, both locales) fills the `docs === null`
+  gap that used to render blank; **DR-9** `formatSize` gains a GB tier (locale decimal unchanged). All
+  additive/renderer-only; the FE-4 `mountedRef` setState-after-unmount guards and the PERF-2 windowing
+  path are untouched. **CB-\*/DB-\*** are other sessions of the wave.
 - **`MockRuntime.chatStream`** emits a deterministic reply token-by-token with a small delay so
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.

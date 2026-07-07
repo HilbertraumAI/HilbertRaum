@@ -404,6 +404,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.import.files': 'Dateien importieren',
   'docs.import.folder': 'Ordner importieren',
   'docs.refresh': 'Aktualisieren',
+  'docs.loading': 'Dokumente werden geladen…',
   'docs.askSelected': 'Diese Dokumente fragen ({count})',
   'docs.askSelectedTitle': 'Ein Dokument-Q&A nur mit den ausgewählten Dokumenten öffnen',
   'docs.compareBtn': 'Vergleichen (2)',

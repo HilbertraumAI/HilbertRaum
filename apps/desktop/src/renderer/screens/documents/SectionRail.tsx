@@ -156,10 +156,14 @@ export function SectionRail({
           </div>
         ))}
         {archivedProjects.map((p) => (
-          <div key={p.id} className="docs-rail-project archived">
+          // DR-6: mirror the active-project branch's selected state — an archived project can be
+          // the current section too, so it must carry the `active` class + `aria-current` or both
+          // the user and screen readers lose track of where they are.
+          <div key={p.id} className={`docs-rail-project archived ${is({ kind: 'project', id: p.id }) ? 'active' : ''}`}>
             <button
               type="button"
               className="docs-rail-item docs-rail-project-name"
+              aria-current={is({ kind: 'project', id: p.id }) ? 'true' : undefined}
               title={t('docs.project.archivedNote')}
               onClick={() => onSelect({ kind: 'project', id: p.id })}
             >
