@@ -10,16 +10,21 @@ runtime: llama_cpp
 license: gemma
 # 7,300,794,112 bytes ≈ 7.3 decimal GB (byte-verified via the HF tree API 2026-07-05).
 size_on_disk_gb: 7.3
-# MEASURED at TG-6 (2026-07-05, real b9849 pin — model-benchmarks.md §11). Unlike a chat model,
-# TranslateGemma runs in its OWN sidecar (D1) and NEVER alone: at the doc-task materialize step it
-# co-resides with the E5 embedder and (typically) a resident chat model. Measured co-residency floor
-# = 13.24 GiB (translation ≈9.22 + E5 ≈0.14 + a small 4B chat ≈3.89, all warm at once) — and that
-# excludes the Electron shell (~1 GiB) + the OS. Applying the model-benchmarks §4 rule (peak + ~3 GiB
-# headroom, rounded UP) to the co-residency floor ⇒ 13.24 + 3 = 16.24 → 17: the realistic minimum for
-# translation + a SMALL resident chat without paging. A 12B chat resident (≈6.5 GiB more) pushes the
-# pair well past 16 GiB — that wants the recommended 32 below.
-recommended_min_ram_gb: 17
-recommended_ram_gb: 32
+# MEASURED at TG-6 (2026-07-05, real b9849 pin — model-benchmarks.md §11). recommended_min_ram_gb is
+# the MODEL-ALONE floor — the same convention as every chat manifest and the vision role model
+# (vision = 12 for its ~4.6 GiB peak; co-residency lives in recommended_ram_gb, NOT the hard min gate
+# — §8.4 PROD-1). TranslateGemma's OWN peak RSS = 9.22 GiB (its sidecar at --ctx-size 4096); the §4
+# rule (peak + ~3 GiB headroom, rounded UP) ⇒ 9.22 + 3 = 12.22 → 13. That lands exactly where the
+# catalog puts a ~9-GiB-peak model (ministral 8.7→12, gemma4-12b 10.6→14) and, crucially, FITS A
+# STANDARD 16 GB MACHINE with headroom — the min gate (registerModelIpc §11.4) no longer refuses it.
+# (Was 17: that erroneously baked the co-residency floor into the hard min — the only manifest to do
+# so — which locked translation out of every 16 GB machine.)
+recommended_min_ram_gb: 13
+# Co-residency lives here, not in the min. Translation runs in its OWN sidecar (D1) alongside E5 + a
+# resident chat: measured floor with a small 4B chat = 13.24 GiB; with a 12B chat resident (~6.5 GiB
+# more) it wants ~24. On a 16 GB machine that pressure is handled exactly as for vision — the chat
+# sidecar's idle-teardown + the RAM-best-fit picker (known-limitations.md), not by blocking the model.
+recommended_ram_gb: 24
 # The translation sidecar launches --ctx-size 4096 (plan §2 D4: the model card states a 2K input
 # budget; 4096 leaves room for input + output). This field is the sidecar's launch window, read
 # back via the sidecar's own contextWindow() at TG-2/TG-3 — NOT a chat window.

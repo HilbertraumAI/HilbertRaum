@@ -1,0 +1,80 @@
+# Build the unsigned (ad-hoc signed) macOS .app + fetch the mac Metal llama.cpp runtime.
+#
+# Produces two artifacts for the portable exFAT drive:
+#   - HilbertRaum-<version>-mac-arm64.app.zip  — ditto-zipped .app. Must STAY zipped on the
+#     drive (exFAT cannot hold the framework symlinks inside a .app bundle); the drive
+#     launcher (Start HilbertRaum.command) extracts it to a local cache and runs from there.
+#   - llama-runtime-mac-arm64.zip — llama.cpp Metal build, symlinks DEREFERENCED so the
+#     contents can be placed directly onto the exFAT drive under runtime/llama.cpp/mac/.
+#
+# No signing secrets are used: CSC_IDENTITY_AUTO_DISCOVERY=false skips Developer ID lookup
+# and notarization is not attempted (no APPLE_* env). The .app is ad-hoc signed so it runs
+# on Apple Silicon; Gatekeeper DIY flow (right-click -> Open) is documented in
+# docs/troubleshooting.md.
+name: mac-build
+
+# workflow_dispatch only works once this file is on the default branch — until
+# then the push trigger on this integration branch starts the build.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/mac-build]
+
+jobs:
+  build-mac:
+    runs-on: macos-14 # arm64 (Apple Silicon)
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Package .app (unsigned dir target)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run package
+
+      - name: Ad-hoc sign + ditto-zip the .app
+        run: |
+          set -euo pipefail
+          APP=$(ls -d apps/desktop/release/mac*/HilbertRaum.app | head -1)
+          echo "Found app bundle: $APP"
+          # Ensure a valid ad-hoc signature (required on Apple Silicon).
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --verbose=2 "$APP"
+          VERSION=$(node -p "require('./apps/desktop/package.json').version")
+          # ditto preserves symlinks, resource forks and exec bits inside the zip.
+          ditto -c -k --keepParent "$APP" "HilbertRaum-${VERSION}-mac-arm64.app.zip"
+          ls -la HilbertRaum-*.app.zip
+
+      - name: Fetch mac llama.cpp runtime (Metal, arm64)
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/drive"
+          mkdir -p "$STAGE"
+          bash scripts/fetch-runtime.sh --target "$STAGE"
+          ls -la "$STAGE/runtime/llama.cpp/mac/"
+          # Zip WITHOUT -y so symlinks are dereferenced -> safe to extract onto exFAT.
+          (cd "$STAGE/runtime/llama.cpp" && zip -r "$GITHUB_WORKSPACE/llama-runtime-mac-arm64.zip" mac)
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hilbertraum-mac-app
+          path: HilbertRaum-*-mac-arm64.app.zip
+          if-no-files-found: error
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-runtime-mac-arm64
+          path: llama-runtime-mac-arm64.zip
+          if-no-files-found: error

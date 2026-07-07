@@ -16,6 +16,12 @@
 
 appId: space.hilbertraum.app
 productName: HilbertRaum
+# electron-builder derives the per-platform executable/AppImage name from the npm package name,
+# which in this monorepo is the scoped "@hilbertraum/desktop" → "@hilbertraumdesktop"; the '@' is
+# rejected as an unsafe path char and the build fails (first seen on the linux AppImage target,
+# and it now hits mac/win too since the desktop package was renamed to a scoped name). Pin an
+# explicit, path-safe name for every platform. Keep in sync with productName.
+executableName: HilbertRaum
 
 # electron-builder 26 cannot auto-detect the Electron version in this npm workspace: `electron`
 # is pinned as a RANGE (^37 in devDependencies) and is HOISTED to the repo-root node_modules,
