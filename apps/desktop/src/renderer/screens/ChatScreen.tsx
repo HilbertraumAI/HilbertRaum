@@ -34,7 +34,8 @@ import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
+import { Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillInfoCard, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
+import { requestSkillDetail } from '../lib/skillDetailRequest'
 import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -210,6 +211,13 @@ export function ChatScreen({
    *  A renderer-only flag — `currentSkillId === null` alone can't tell an explicit "None" from a
    *  never-set default, and nothing about a declined offer crosses the IPC (it is purely UI state). */
   const [suggestionDismissed, setSuggestionDismissed] = useState(false)
+  /** #46: the declared skill ids whose first-selection info card was already shown (persisted via
+   *  `AppSettings.skillInfoSeen`). Null until the settings read resolves — the card never auto-shows
+   *  on an unknown seen-state, so a failed read degrades to "no first-time card", never a re-nag. */
+  const [skillInfoSeen, setSkillInfoSeen] = useState<string[] | null>(null)
+  /** #46: the installId whose info card is currently open (auto on first pick, or via the picker ⓘ).
+   *  Rendered only while it matches the ACTIVE pick, so changing/clearing the skill hides it. */
+  const [skillInfoFor, setSkillInfoFor] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
@@ -902,6 +910,57 @@ export function ChatScreen({
     // closed-trigger hint does not re-nag for this draft. Any real pick clears the flag (the hint
     // is gated on "no skill picked" anyway, but this keeps the next "None" an honest fresh decline).
     setSuggestionDismissed(installId == null)
+    // #46: the FIRST pick of a skill (ever, by declared id) surfaces the info card — what it does,
+    // what it needs, its key limitation — at the decisive moment. Marked seen immediately (persisted
+    // through the settings patch path) so it shows once; the picker's ⓘ re-opens it on demand. An
+    // unresolved seen-state (settings read pending/failed) shows nothing rather than risking a re-nag.
+    if (installId == null) {
+      setSkillInfoFor(null)
+    } else {
+      const picked = enabledSkills.find((s) => s.installId === installId)
+      if (picked && skillInfoSeen && !skillInfoSeen.includes(picked.id)) {
+        setSkillInfoFor(installId)
+        const nextSeen = [...skillInfoSeen, picked.id]
+        setSkillInfoSeen(nextSeen)
+        void Promise.resolve(window.api.updateSettings?.({ skillInfoSeen: nextSeen })).catch(() => undefined)
+      } else {
+        setSkillInfoFor(null)
+      }
+    }
+  }
+
+  // #46: load the once-per-skill info-card memory. Best-effort (the SkillsTab settings pattern): a
+  // failed read leaves it null, which only suppresses the first-time card — never a wrong re-nag.
+  useEffect(() => {
+    let active = true
+    void Promise.resolve(window.api.getSettings?.())
+      .then((s) => {
+        if (active && s) setSkillInfoSeen(s.skillInfoSeen ?? [])
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // #46: the picker's ⓘ — toggle the ACTIVE skill's info card (available after its one-time showing).
+  function toggleSkillInfo(): void {
+    if (!currentSkillId) return
+    setSkillInfoFor((prev) => (prev === currentSkillId ? null : currentSkillId))
+  }
+
+  // #46: the card renders only while the open request matches the ACTIVE pick — a changed/cleared
+  // skill (or a disabled one, dropped from `enabledSkills`) hides it without extra bookkeeping.
+  const skillInfoSkill =
+    skillInfoFor != null && skillInfoFor === currentSkillId
+      ? enabledSkills.find((s) => s.installId === skillInfoFor) ?? null
+      : null
+
+  // #46 "Learn more": deep-link the Skills screen's detail modal for this skill (the one-shot
+  // renderer mailbox — SkillsTab consumes it once its list loads).
+  function openSkillDetail(installId: string): void {
+    requestSkillDetail(installId)
+    onNavigate('skills')
   }
 
   // U3 (audit §4.3): the composer chip's × — clear the active skill for this conversation. Identical to
@@ -1912,6 +1971,17 @@ export function ChatScreen({
           </div>
         )}
 
+        {/* #46: the first-selection skill info card — what the picked skill does / needs / can't do,
+            shown once per skill (then via the picker's ⓘ). Gated to the ACTIVE pick so changing or
+            clearing the skill hides it. */}
+        {skillInfoSkill && (
+          <SkillInfoCard
+            skill={skillInfoSkill}
+            onClose={() => setSkillInfoFor(null)}
+            onLearnMore={() => openSkillDetail(skillInfoSkill.installId)}
+          />
+        )}
+
         {/* Tier-2 tool run (skills plan §12.2/§15, S11b): a calm offer / busy row / result, all
             content-free. Gated to THIS conversation's run (SKA-6). Hidden entirely when this
             conversation has no run active and no tool is offered. */}
@@ -1987,6 +2057,7 @@ export function ChatScreen({
                   onClear={clearSkill}
                   keptForConversation={keptForConversation}
                   onKeepChange={onKeepForConversation}
+                  onInfo={toggleSkillInfo}
                 />
               )}
               {/* Context-window usage meter (§5.1): pushed to the right of the footer's quiet

@@ -413,4 +413,147 @@ describe('SkillRunBar (S11b)', () => {
     noOffer({ state: 'failed', errorCode: 'persistFailed' }) // a failed extract offers nothing
     noOffer({ state: 'cancelled' }) // a stopped extract offers nothing
   })
+
+  // #44 — a terminal, un-dismissed run must NOT hide the OFFER: the deterministic edit-routing answer
+  // points at the "Apply text edits" button unconditionally, so the button has to exist whenever the
+  // tools are runnable. The result row renders above the restored offer until it is dismissed.
+  it('OFFER coexists with a terminal RESULT row (#44) — for done, failed and cancelled runs', () => {
+    const editTool: RunnableTool = { name: 'apply_document_edits', requiresConfirmation: true }
+    const terminal = run({ toolName: 'apply_document_edits', state: 'done', resultKind: 'edited', count: 2 })
+    const { rerender } = render(
+      withI18n(
+        <SkillRunBar run={terminal} runnableTools={[editTool]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />
+      )
+    )
+    // Both surfaces at once: the result line (with Dismiss) AND the offered run button.
+    expect(screen.getByText('Applied 2 changes and saved an edited copy. Review it before sharing.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply text edits' })).toBeInTheDocument()
+    rerender(
+      withI18n(
+        <SkillRunBar
+          run={run({ toolName: 'apply_document_edits', state: 'failed', errorCode: 'editFailed' })}
+          runnableTools={[editTool]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByRole('button', { name: 'Apply text edits' })).toBeInTheDocument()
+    rerender(
+      withI18n(
+        <SkillRunBar
+          run={run({ toolName: 'apply_document_edits', state: 'cancelled' })}
+          runnableTools={[editTool]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByRole('button', { name: 'Apply text edits' })).toBeInTheDocument()
+  })
+
+  it('OFFER stays suppressed while a run is IN FLIGHT (running / state-unknown) — #44 keeps the old guard', () => {
+    const { rerender } = render(
+      withI18n(
+        <SkillRunBar run={run()} runnableTools={[readOnly]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />
+      )
+    )
+    expect(screen.queryByRole('button', { name: 'Extract transactions' })).not.toBeInTheDocument()
+    rerender(
+      withI18n(
+        <SkillRunBar
+          run={run()}
+          stateUnknown
+          runnableTools={[readOnly]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.queryByRole('button', { name: 'Extract transactions' })).not.toBeInTheDocument()
+  })
+
+  // #45 — the pre-run confirm for the document-transform tools states the OUTPUT format up front:
+  // .docx keeps its Word format; a PDF (or any other source) saves as a plain-text .txt copy. The
+  // cliff was previously only discoverable in the save dialog / result file.
+  it('CONFIRM (#45): a PDF target warns the copy will be plain text (.txt)', async () => {
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[{ name: 'apply_document_edits', requiresConfirmation: true }]}
+          targetDocuments={[{ id: 'd1', name: 'contract.pdf' }]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    await user.click(screen.getByRole('button', { name: 'Apply text edits' }))
+    expect(
+      screen.getByText('The saved copy will be plain text (.txt) — the original layout and formatting are not kept.')
+    ).toBeInTheDocument()
+  })
+
+  it('CONFIRM (#45): a .docx target says the copy keeps its Word format', async () => {
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[{ name: 'redact_document', requiresConfirmation: true }]}
+          targetDocuments={[{ id: 'd1', name: 'Letter.DOCX' }]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    await user.click(screen.getByRole('button', { name: 'Redact personal data' }))
+    expect(screen.getByText('The saved copy keeps this document’s Word format (.docx).')).toBeInTheDocument()
+  })
+
+  it('CONFIRM (#45): with no known target name it falls back to the full output matrix', async () => {
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[{ name: 'redact_document', requiresConfirmation: true }]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    await user.click(screen.getByRole('button', { name: 'Redact personal data' }))
+    expect(
+      screen.getByText('Word documents (.docx) keep their format; PDFs and other formats save as a plain-text (.txt) copy.')
+    ).toBeInTheDocument()
+  })
+
+  it('CONFIRM (#45): a plain export tool (no document transform) shows NO output-format line', async () => {
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[{ name: 'export_transactions_csv', requiresConfirmation: true }]}
+          targetDocuments={[{ id: 'd1', name: 'statement.pdf' }]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    await user.click(screen.getByRole('button', { name: 'Export to CSV' }))
+    expect(screen.getByText('Run this tool?')).toBeInTheDocument()
+    expect(screen.queryByText(/plain text \(\.txt\)/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Word format/)).not.toBeInTheDocument()
+  })
 })

@@ -77,6 +77,19 @@ describe('settings persistence', () => {
     expect(updateSettings(db, { contextTokens: Number.NaN as number }).contextTokens).toBe(2048)
   })
 
+  it('skillInfoSeen (#46) defaults empty, round-trips ids, and sanitizes junk element-wise', () => {
+    const db = freshDb()
+    seedSettings(db)
+    expect(getSettings(db).skillInfoSeen).toEqual([])
+    expect(updateSettings(db, { skillInfoSeen: ['bank-statement', 'document-edit'] }).skillInfoSeen).toEqual([
+      'bank-statement',
+      'document-edit'
+    ])
+    // The generic string[] guard: non-string elements are dropped, a non-array is never persisted.
+    expect(updateSettings(db, { skillInfoSeen: ['ok', 42, null] as never }).skillInfoSeen).toEqual(['ok'])
+    expect(updateSettings(db, { skillInfoSeen: 'junk' as never }).skillInfoSeen).toEqual(['ok'])
+  })
+
   it('uiLanguage defaults to system, accepts the enum, and drops junk values (Phase 39)', () => {
     const db = freshDb()
     seedSettings(db)

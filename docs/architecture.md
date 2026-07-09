@@ -3430,6 +3430,31 @@ on send / conversation change) so it never re-nags; one tap selects the skill. *
 the opt-in extension of this same scorer that *does* apply a skill without a tap, behind a separate
 higher threshold + an opt-in + a per-turn undo — see **§18**.
 
+### First-selection skill info card (#46, 2026-07-10)
+
+Beta feedback: selecting a skill changed behavior in ways users only discovered afterwards (#44 the
+run button, #45 the `.txt` output) — the picker row's one-line description was the entire in-app
+explanation. Now the **first** pick of a skill (ever, by declared id) surfaces a compact
+**`SkillInfoCard`** above the composer: three one-sentence lines — **what** it does, what it **needs**
+to apply (when that's missing the skill silently routes to a plain answer), and its key honesty
+**limit** — plus the pick-lifetime footer ("applies to your questions in this chat until you change or
+clear it; *Keep for this conversation* saves it") and a **Learn more** link. The lines come from
+`shared/skill-info.ts`, a pure-data catalog keyed by manifest `id` holding `skills.info.<id>.what/
+needs/limits` i18n KEYS (EN+DE; the `skill-tools.ts` descriptor-table precedent) — **app skills only**;
+a user/unknown skill falls back to its own localized description, so the app never invents honesty
+claims about content it didn't author. Once-per-skill memory is `AppSettings.skillInfoSeen: string[]`
+(declared ids — content-free; the settings service's generic string[] element-wise sanitizer covers
+it), marked seen on first showing; afterwards a quiet **ⓘ** next to the picker chip (`SkillPicker`'s
+`onInfo` prop) re-opens the card on demand, and it hides whenever it no longer matches the ACTIVE pick.
+An unresolved seen-state (settings read pending/failed) shows nothing — a missed first card, never a
+re-nag. **Learn more** deep-links the Skills screen's existing detail modal through a one-shot
+renderer-side mailbox (`renderer/lib/skillDetailRequest.ts` — `requestSkillDetail(installId)` +
+`consumeSkillDetailRequest()` in `SkillsTab`'s list-load effect); nothing crosses the IPC. Tests:
+`SkillInfoCard.test.tsx` (catalog lines, description fallback, handlers), `SkillInfoFirstPick.test.tsx`
+(ChatScreen: first-pick shows + persists, seen skill needs the ⓘ, active-pick gating, Learn-more
+navigation), `SkillsTab.test.tsx` (deep-link opens the modal / unknown id opens nothing),
+`db-settings.test.ts` (`skillInfoSeen` round-trip + junk sanitization).
+
 ### §7 Tier-2 tool gate (S10)
 
 `services/skills/tool-registry.ts` is the **static, app-owned** map of `SkillTool`s. A skill never
@@ -3622,7 +3647,15 @@ Four generic `skills:*` IPC channels (`listRunnableTools` / `startSkillRun` / `g
 the run returning **ids/counts only** (`SkillRunState` = state/progress/counts, never the rows). The
 renderer's calm `SkillRunBar` (a `lib/skillruns.ts` polling store — no new event channel) shows the
 offer, the busy row ("Running: `<tool>` on `<N>` documents… Cancel"), and the result; write/export tools
-are gated by a `ConfirmDialog` before the run starts. The renderer derives each tool's label + done
+are gated by a `ConfirmDialog` before the run starts. **Only an IN-FLIGHT run (running / state-unknown)
+suppresses the offer (#44):** a terminal, un-dismissed result row renders ABOVE a restored offer, so
+the deterministic routing answers (which name the run button unconditionally — see the routing-handler
+record below) can never point at a button a stale result is hiding. For the two document-transform
+tools (the descriptors carrying a `docxDialog`) the confirm body also **states the output format up
+front (#45)** — derived renderer-side from the selected target's extension, the same signal main's
+`buildOriginalDocumentReader` branches on: `.docx` keeps its Word format, anything else saves as a
+plain-text `.txt` copy (`chat.skill.confirm.outputDocx`/`outputText`; unknown target name → the full
+`outputMatrix` line, never a guess). The renderer derives each tool's label + done
 copy from the shared `SkillToolDescriptor` table (A2 — no parallel renderer copy maps), rendering the
 `reconcile`/`redaction` result shapes from a content-free `resultKind` discriminator ('reconciled' |
 'unreconciled' | 'unchecked'; 'clean' | 'redacted') — the controller/IPC stay bank-free (the
@@ -4425,6 +4458,9 @@ text in git history. Coverage half cross-linked from [`rag-design.md`](rag-desig
     it returns a short, deterministic, localized answer naming the **same run button the SkillRunBar
     shows** (`chat.skill.tool.redactDocument`), with **no citations and no coverage** (the meter
     renders only for answers *with* citations — `Transcript.tsx` — so the misleading badge is gone).
+    (#44 closed the other half of this promise: the handler names the button *unconditionally* and
+    cannot see the run bar's state, so the bar itself now guarantees the button exists — a terminal,
+    un-dismissed result row no longer suppresses the offer; only an in-flight run does.)
     The chat path skips the D45 fully-chunked refusal for a `routing` handler (nothing is read). The
     SKILL.md body was rewritten so its **first paragraph** (the one the prompt builder guarantees to
     keep) is the action-routing instruction, with the honesty caveats demoted — fixing the fallback
@@ -6929,6 +6965,15 @@ edit locate→verify→splice.
   diff-verifiability) — only `<w:t>` content is rewritten. The model still LOCATES only; it never generates
   output text. The D58 byte-identity invariant is extended to "every non-`document.xml` zip part byte-identical,
   every non-span `<w:t>` char byte-identical".
+- **#45 (beta feedback 2026-07-09): the format cliff is now stated BEFORE the run.** The pre-run
+  `ConfirmDialog` for the two transform tools appends an output-format line derived from the selected
+  target's extension (the same title-extension signal `buildOriginalDocumentReader` branches on):
+  `.docx` → "keeps this document's Word format", anything else → "will be plain text (.txt)"; an unknown
+  target name falls back to the full matrix line (`chat.skill.confirm.outputDocx`/`outputText`/`outputMatrix`,
+  EN+DE). Behavior is unchanged — only the honesty moved earlier. Format-preserving **PDF output stays
+  open** (issue #45's stages 1–2): a true-redaction PDF or a regenerated, attributed PDF both need a
+  PDF-writing dependency (only `pdfjs-dist`, a reader, is in the tree) and — for regeneration — a shipped
+  embeddable font; that is an owner decision recorded in BUILD_STATE §5.
 
 **Tests:** `docx-rewrite.test.ts` (+6: text-layer concatenation/unescape, non-document.xml parts byte-identical
 after a rewrite, only the targeted `<w:t>` text changed, a span crossing two runs splits correctly, a

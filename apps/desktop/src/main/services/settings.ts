@@ -2,8 +2,8 @@ import type { Db } from './db'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
 
 /** Upper bound on any persisted string[] setting so a buggy/hostile renderer can't bloat the
- *  encrypted settings blob. (Defensive: no string[] setting ships today, but the element-wise
- *  validation below stays generic for future ones.) */
+ *  encrypted settings blob (`skillInfoSeen` is the shipping case; the element-wise validation
+ *  below stays generic for future ones). */
 const MAX_SETTINGS_ARRAY = 10_000
 
 /** Floor for `contextTokens` (HIGH_BUG vuln-scan-2026-06-21). The doc-task window budget is

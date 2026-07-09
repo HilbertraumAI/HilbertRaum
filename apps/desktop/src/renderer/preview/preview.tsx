@@ -5,11 +5,13 @@
 // Add a case: extend CASES below with a label + an element. Keep the mock data inline so a case is
 // self-describing. This file is dev-only (never bundled into the shipped app).
 import { createRoot } from 'react-dom/client'
-import { DEFAULT_SETTINGS, type Collection, type Conversation, type DocumentInfo, type ModelInfo } from '@shared/types'
+import { DEFAULT_SETTINGS, type Collection, type Conversation, type DocumentInfo, type ModelInfo, type SkillInfo } from '@shared/types'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../i18n'
 import { ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
+import { SkillInfoCard } from '../chat/SkillInfoCard'
+import { SkillRunBar } from '../chat/SkillRunBar'
 import { CoverageMeter } from '../components'
 import { ScopePopover } from '../chat/ScopePopover'
 import { Transcript } from '../chat/Transcript'
@@ -347,6 +349,64 @@ CASES['brand-home-hover'] = {
     </div>
   )
 }
+// Issues #44/#46 — the skills discoverability wave. `skill-info-card` renders the new
+// first-selection info card (document-edit: catalog what/needs/limits lines + pick-lifetime footer +
+// Learn more). `skill-run-result-offer` shows the #44 coexistence: a terminal result row rendering
+// ABOVE the restored offer (target chooser + run button) instead of hiding it. The #45 confirm
+// format line lives in a Radix modal (needs interaction) — covered by the vitest cases.
+const PREVIEW_SKILL: SkillInfo = {
+  installId: 'app:document-edit',
+  id: 'document-edit',
+  title: 'Document Edit',
+  description: 'Use when the user wants to make targeted find-and-replace edits to a document.',
+  version: '1.0.0',
+  kind: 'tool',
+  author: 'HilbertRaum',
+  language: 'en',
+  source: 'app',
+  trustedLevel: 'app',
+  enabled: true,
+  warningAck: true,
+  unavailable: false,
+  permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
+  permissionSummary: '',
+  duplicateId: false,
+  installedAt: now,
+  updatedAt: now
+}
+CASES['skill-info-card'] = {
+  label: 'Composer — first-selection skill info card (issue #46)',
+  node: (
+    <div style={{ width: 780, padding: 12 }}>
+      <SkillInfoCard skill={PREVIEW_SKILL} onClose={noop} onLearnMore={noop} />
+    </div>
+  )
+}
+CASES['skill-run-result-offer'] = {
+  label: 'Skill run bar — terminal result row above the restored offer (issue #44)',
+  node: (
+    <div style={{ width: 780, padding: 12 }}>
+      <SkillRunBar
+        run={{
+          runHandle: 'h1',
+          skillInstallId: 'app:document-edit',
+          toolName: 'apply_document_edits',
+          documentCount: 1,
+          state: 'done',
+          resultKind: 'edited',
+          count: 3,
+          progress: { done: 0, total: 0 }
+        }}
+        runnableTools={[{ name: 'apply_document_edits', requiresConfirmation: true }]}
+        targetDocuments={[{ id: 'd1', name: 'contract.pdf' }]}
+        onRun={noop}
+        onCancel={noop}
+        onDismiss={noop}
+      />
+    </div>
+  )
+}
+CASES['skill-info-card-de'] = { ...CASES['skill-info-card'], label: `${CASES['skill-info-card'].label} — DE` }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
 CASES['scope-chip-de'] = { ...CASES['scope-chip'], label: `${CASES['scope-chip'].label} — DE` }

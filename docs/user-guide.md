@@ -624,10 +624,17 @@ compliance.
 
 ### Pick a skill for an answer
 
-Under the message box there's a quiet **Skill:** picker. Choose a skill and it shapes your **next
-answer**; the app remembers it as that conversation's default until you change it (pick **None** to
-clear it). When a skill shaped an answer, that message carries a small **skill glyph** — an icon and
-the skill's name — so you can see at a glance which one was used.
+Under the message box there's a quiet **Skill:** picker. Choose a skill and it shapes your answers
+in that chat until you change or clear it (pick **None** or tap the chip's ✕); tick **Keep for this
+conversation** in the picker to save it across restarts. When a skill shaped an answer, that message
+carries a small **skill glyph** — an icon and the skill's name — so you can see at a glance which
+one was used.
+
+The **first time you pick a skill**, a small **info card** appears above the message box saying what
+it does, what it needs to apply (for example a matching document in scope), and its key limitation —
+so nothing about the next answer is a surprise. It shows once per skill; afterwards the quiet **ⓘ**
+next to the picker re-opens it any time, and **Learn more** jumps to the skill's full details on the
+Skills screen.
 
 Now and then the picker shows a **one-tap suggestion** ("Use *Bank statement*?") when your question
 or the documents in scope look like a fit. It is only ever an offer — nothing is applied until you
@@ -641,7 +648,9 @@ redacted copy, or applying targeted text edits. When one runs you'll see a calm 
 Cancel**. A tool that **writes or exports a file** (for example "save as CSV", or "save the redacted
 copy") always asks you to **confirm first** and lets you choose where the file goes, and you can
 **Cancel** at any point. Everything a tool sees is just the one document you picked — it can't reach
-anything else on the drive.
+anything else on the drive. When a run finishes, its result line stays until you **Dismiss** it —
+and the tool buttons come **straight back underneath it**, so you can run the next edit or export
+without dismissing anything first.
 
 > Redaction is **AI-assisted best-effort**, not a guarantee. It always hides the clearly-shaped data
 > (e-mails, phone numbers, IBANs, card numbers, dates, links); when a model is running it also hides the
@@ -660,8 +669,10 @@ anything else on the drive.
 > document-edit save the copy as a **`.docx` that keeps its formatting** — styles, headings, tables and
 > page layout stay intact, because the app only changes the text that had to change and leaves everything
 > else in the file exactly as it was. **PDFs and other formats save as a `.txt`** copy that keeps the line
-> layout (writing back into a PDF isn't supported). A **scanned PDF** (an image of a page) can only be
-> worked on through the text the app recognised from it, so redact those from the `.txt` output.
+> layout (writing back into a PDF isn't supported). The **confirmation dialog tells you the output
+> format before the run starts**, so the `.txt` copy of a PDF is never a surprise in the save dialog.
+> A **scanned PDF** (an image of a page) can only be worked on through the text the app recognised
+> from it, so redact those from the `.txt` output.
 
 ### Manage skills (open **Skills** in the sidebar)
 

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SkillsTab } from '../../src/renderer/screens/settings/SkillsTab'
+import { requestSkillDetail, resetSkillDetailRequestForTests } from '../../src/renderer/lib/skillDetailRequest'
 import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppSettings, type SkillInfo, type SkillPreview } from '../../src/shared/types'
@@ -65,7 +66,10 @@ function renderTab(): void {
   )
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  resetSkillDetailRequestForTests()
+})
 
 describe('SkillsTab — list + empty state', () => {
   it('shows the empty state with the import affordance when no skills are installed', async () => {
@@ -205,6 +209,25 @@ describe('SkillsTab — detail drawer', () => {
     // Generic (domain-free) active-tools note — applies to every kind:'tool' skill, not just bank.
     expect(dialog.getByText(/run approved local tools on a document you choose/i)).toBeInTheDocument()
     expect(dialog.getByText('Use approved local tools when you ask')).toBeInTheDocument()
+  })
+
+  // #46: the composer info card's "Learn more" deep-links this detail modal through the one-shot
+  // renderer mailbox — consumed once the list loads, so later refreshes never re-open it.
+  it('opens the detail modal for a pending deep-link request (#46)', async () => {
+    requestSkillDetail('user:bank-statement')
+    stubApi({ listSkills: vi.fn(async () => [skill()]) })
+    renderTab()
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.getByText('Bank statement helper')).toBeInTheDocument()
+    expect(dialog.getByText('This skill can:')).toBeInTheDocument()
+  })
+
+  it('a deep-link request for a skill that no longer exists opens nothing (#46)', async () => {
+    requestSkillDetail('user:gone')
+    stubApi({ listSkills: vi.fn(async () => [skill()]) })
+    renderTab()
+    await screen.findByText('Bank statement helper')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
 

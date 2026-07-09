@@ -894,6 +894,47 @@ code, pre, kbd { font-family: var(--font-mono); }
 .skill-run-target { max-width: 16rem; }
 .skill-run-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* #46: the first-selection skill info card — a calm bordered card above the composer stating what
+   the picked skill does / needs / can't do. Shares the 720px conversation column; quiet surface,
+   never an alarm colour. */
+.skill-info-card {
+  max-width: 720px;
+  width: 100%;
+  margin: 8px auto 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.skill-info-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.skill-info-title { font-size: var(--text-sm); }
+.skill-info-close {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+.skill-info-close:hover { color: var(--text); }
+.skill-info-line { margin: 4px 0 0; color: var(--text-muted); }
+.skill-info-label { color: var(--text); font-weight: 500; }
+.skill-info-foot { margin: 6px 0 0; }
+.skill-info-more {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  text-decoration: underline;
+}
+/* #46: the picker's quiet ⓘ next to the active chip (mirrors the chip-clear ×). */
+.footer-menu-btn.skill-info-btn { padding-inline: 6px; color: var(--text-muted); }
+.footer-menu-btn.skill-info-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
    pre-wrap (which would double every blank line) is turned off. The image-understanding
    answer (.image-turn-text.md) reuses the exact same rules — same shared renderer. */

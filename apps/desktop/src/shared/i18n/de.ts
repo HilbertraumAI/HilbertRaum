@@ -220,6 +220,16 @@ export const de: Record<keyof typeof en, string> = {
   // Vorgabe des Gesprächs zu behalten. Nichts bleibt still über Turns hinweg gesetzt.
   'chat.skill.clear': 'Skill {title} entfernen',
   'chat.skill.keep': 'Für dieses Gespräch behalten',
+  // #46 – die Info-Karte bei der ersten Auswahl: was der Skill tut / braucht / nicht kann – gesagt
+  // im Moment der Auswahl statt hinterher entdeckt. Erscheint einmal pro Skill (danach öffnet das ⓘ
+  // neben der Auswahl sie bei Bedarf erneut).
+  'chat.skill.infoButton': 'Über „{title}“',
+  'chat.skill.info.close': 'Erklärung ausblenden',
+  'chat.skill.info.needsLabel': 'Braucht:',
+  'chat.skill.info.limitsLabel': 'Zu beachten:',
+  'chat.skill.info.perTurn':
+    'Gilt für deine Fragen in diesem Chat, bis du ihn änderst oder entfernst – „Für dieses Gespräch behalten“ speichert ihn darüber hinaus.',
+  'chat.skill.info.learnMore': 'Mehr erfahren',
   // Tier-2-Tool-Lauf – die ruhige Aktion im Verlauf + Statuszeile + Bestätigungsdialog (skills plan §12.2/§15, S11b)
   'chat.skill.tool.extractTransactions': 'Transaktionen extrahieren',
   'chat.skill.tool.validateBalances': 'Salden prüfen',
@@ -313,6 +323,14 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.dismiss': 'Schließen',
   'chat.skill.confirm.title': 'Dieses Tool ausführen?',
   'chat.skill.confirm.body': 'Dabei wird aus den Dokumenten auf diesem Laufwerk eine Datei erstellt oder exportiert.',
+  // #45: Die Bestätigung der Dokument-Werkzeuge (Schwärzen/Bearbeiten) nennt das AUSGABE-Format
+  // VOR dem Lauf — vorher war die .docx-behält-Format / alles-andere-wird-.txt-Klippe erst im
+  // Speichern-Dialog sichtbar.
+  'chat.skill.confirm.outputDocx': 'Die gespeicherte Kopie behält das Word-Format (.docx) dieses Dokuments.',
+  'chat.skill.confirm.outputText':
+    'Die gespeicherte Kopie wird reiner Text (.txt) – Layout und Formatierung des Originals bleiben nicht erhalten.',
+  'chat.skill.confirm.outputMatrix':
+    'Word-Dokumente (.docx) behalten ihr Format; PDFs und andere Formate werden als Textkopie (.txt) gespeichert.',
   'chat.skill.confirm.ok': 'Ausführen',
 
   // ---- Chat: transcript + message actions ----
@@ -1182,6 +1200,58 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Skills (Rail-Ziel — SkillsScreen.tsx + settings/SkillsTab.tsx, Skills-Plan §15) ----
   'skills.title': 'Skills',
   'skills.intro': 'Skills bringen der KI bei, eine bestimmte Aufgabe zu erledigen. Sie ergänzen ihre Antworten um Hinweise – sie greifen nie auf das Internet oder andere Ordner auf deinem Computer zu.',
+  // #46 – die Was/Braucht/Grenzen-Zeilen der Info-Karte bei der ersten Skill-Auswahl
+  // (`shared/skill-info.ts`). Je EIN ruhiger Satz, destilliert aus user-guide §9 und
+  // known-limitations.md.
+  'skills.info.meeting-protocol.what':
+    'Formt die nächste Antwort zu einem sauberen Besprechungsprotokoll – Entscheidungen, Aufgaben und offene Fragen.',
+  'skills.info.meeting-protocol.needs':
+    'Das Transkript oder die Notizen im Umfang dieses Chats (Datei anhängen oder Text einfügen).',
+  'skills.info.meeting-protocol.limits':
+    'Arbeitet mit einem Dokument auf einmal und hält nur fest, was in den Notizen tatsächlich steht.',
+  'skills.info.contract-brief.what':
+    'Fasst einen Vertrag verständlich zusammen – Parteien, Termine, Pflichten, Kernpunkte und Fragen, die du stellen solltest.',
+  'skills.info.contract-brief.needs': 'Den Vertrag im Umfang dieses Chats.',
+  'skills.info.contract-brief.limits': 'Eine Lesehilfe für ein Dokument auf einmal – keine Rechtsberatung.',
+  'skills.info.deadline-obligation-finder.what':
+    'Findet Fristen, Kündigungs-, Verlängerungs- und Zahlungstermine sowie die Pflichten dahinter.',
+  'skills.info.deadline-obligation-finder.needs': 'Das Dokument im Umfang dieses Chats.',
+  'skills.info.deadline-obligation-finder.limits':
+    'Liest ein Dokument auf einmal; prüfe kritische Termine vor dem Handeln am Original.',
+  'skills.info.what-changed.what':
+    'Vergleicht zwei Fassungen eines Dokuments und nennt die Änderungen, die zählen – kein roher Zeilenvergleich.',
+  'skills.info.what-changed.needs': 'Genau zwei Dokumente (oder Fassungen) im Umfang dieses Chats.',
+  'skills.info.what-changed.limits':
+    'Mit mehr oder weniger als zwei Dokumenten im Umfang kann er nicht vergleichen und antwortet normal.',
+  'skills.info.share-safe-review.what':
+    'Prüft ein Dokument vor dem Teilen – sichtbare sensible Angaben und praktische Risiken beim Weitergeben.',
+  'skills.info.share-safe-review.needs': 'Das Dokument im Umfang dieses Chats.',
+  'skills.info.share-safe-review.limits':
+    'Nur beratend – er erklärt ein Dokument nie für anonymisiert oder sicher zur Veröffentlichung.',
+  'skills.info.invoice.what':
+    'Liest eine Rechnung mit exakter, nachprüfbarer Extraktion – Positionen und Summen, Summenprüfung, CSV/JSON/XML-Export.',
+  'skills.info.invoice.needs':
+    'Ein rechnungsartiges Dokument im Umfang; seine Aktionen erscheinen als Schaltflächen direkt über dem Eingabefeld.',
+  'skills.info.invoice.limits':
+    'Eine Rechnung auf einmal; eine nicht prüfbare Summe wird ehrlich als ungeprüft benannt.',
+  'skills.info.bank-statement.what':
+    'Liest einen Kontoauszug mit exakter, nachprüfbarer Extraktion – Transaktionen, Kategorien, Saldenprüfung, CSV-Export.',
+  'skills.info.bank-statement.needs':
+    'Ein auszugsartiges Dokument im Umfang; seine Aktionen erscheinen als Schaltflächen direkt über dem Eingabefeld.',
+  'skills.info.bank-statement.limits':
+    'Ein Auszug auf einmal; das Kategorisieren braucht ein laufendes Modell.',
+  'skills.info.document-redaction.what':
+    'Speichert eine geschwärzte Kopie eines Dokuments – regelbasierte Erkennung von E-Mails, Nummern und Daten plus vom Modell gefundene Namen und Adressen.',
+  'skills.info.document-redaction.needs':
+    'Das Dokument im Umfang; die Schaltfläche „Personenbezogene Daten schwärzen“ erscheint direkt über dem Eingabefeld.',
+  'skills.info.document-redaction.limits':
+    'Bestmöglich, nie eine Garantie – ohne laufendes Modell greift nur die regelbasierte Erkennung; Word bleibt .docx, andere Formate werden als .txt gespeichert.',
+  'skills.info.document-edit.what':
+    'Wendet exakte Suchen-und-Ersetzen-Änderungen an und speichert eine bearbeitete Kopie – dein Dokument wird nie umgeschrieben.',
+  'skills.info.document-edit.needs':
+    'Ein laufendes Modell, das Dokument im Umfang und deine Anweisung (z. B. „ersetze X durch Y“); die Schaltfläche „Textänderungen anwenden“ erscheint direkt über dem Eingabefeld.',
+  'skills.info.document-edit.limits':
+    'Nicht wörtlich gefundener Text wird übersprungen und gemeldet; Word bleibt .docx, andere Formate werden als .txt gespeichert.',
   // S13c (D4) – der globale Auto-Anwenden-Schalter, standardmäßig aus. Der Hinweis erklärt klar, was
   // das Einschalten bewirkt und dass jeder automatisch angewandte Skill sichtbar + umkehrbar bleibt.
   'skills.autoFire.title': 'Passenden Skill automatisch anwenden',

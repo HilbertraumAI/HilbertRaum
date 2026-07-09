@@ -14,6 +14,9 @@ import { Button, ConfirmDialog, Spinner } from '../components'
 //   3. RESULT — "Extracted N transactions." / friendly failure / "Stopped." + Dismiss. After a
 //      successful rows>0 extract it also offers a one-tap "Categorize transactions" follow-up (U-2):
 //      the LLM categorize is USER-initiated here, not silently auto-enqueued on extract.
+// The OFFER is suppressed only while a run is IN FLIGHT (running / state-unknown). A terminal,
+// un-dismissed RESULT row renders ABOVE a restored offer (#44): the deterministic edit-routing answer
+// names the "Apply text edits" button unconditionally, so a stale result must never hide it.
 // A write/export tool (S11c) is confirm-gated: clicking it raises the ConfirmDialog (the
 // model-download / lock-now precedent) before the run starts. Read-only tools run straight away.
 //
@@ -236,6 +239,23 @@ export function SkillRunBar({
 
   const runTool = (tool: RunnableTool): void => onRun(tool.name, false, selectedId || undefined)
 
+  // #45: the pre-run confirm for a document-transform tool (redact/edit — the two descriptors with a
+  // `docxDialog`) states the OUTPUT format up front, derived the same way MAIN decides it (the source
+  // title's extension — `buildOriginalDocumentReader`): `.docx` keeps its Word format; a PDF or any
+  // other source saves as a plain-text `.txt` copy. Previously the output-format cliff was only
+  // discoverable in the save dialog / result file. An unknown target name (legacy count label, e.g.
+  // after a remount) falls back to the full matrix line rather than guessing.
+  const confirmFormatKey: MessageKey | null =
+    confirmTool && getToolDescriptor(confirmTool.name)?.docxDialog
+      ? (() => {
+          const name = targets.find((d) => d.id === selectedId)?.name
+          if (!name) return 'chat.skill.confirm.outputMatrix' as const
+          return name.toLowerCase().endsWith('.docx')
+            ? ('chat.skill.confirm.outputDocx' as const)
+            : ('chat.skill.confirm.outputText' as const)
+        })()
+      : null
+
   const onClickTool = (tool: RunnableTool): void => {
     if (tool.requiresConfirmation) setConfirmTool(tool)
     else runTool(tool)
@@ -246,6 +266,12 @@ export function SkillRunBar({
   // OFFER renders OUTSIDE the region — a passive affordance, not a status change to announce.
   let runRow: JSX.Element | null = null
   let offerRow: JSX.Element | null = null
+
+  // #44: only an IN-FLIGHT run (running / state-unknown) suppresses the OFFER. A terminal,
+  // un-dismissed result row must NOT hide it — the deterministic edit-routing answer points the user
+  // at the "Apply text edits" button unconditionally, so the button has to exist whenever the tools
+  // are runnable. The result row simply renders above the restored offer until it is dismissed.
+  const runInFlight = run != null && (stateUnknown || run.state === 'running')
 
   if (run && stateUnknown) {
     // SKA-40: the store gave up polling after repeated IPC errors — keep a labelled, dismissable row
@@ -317,8 +343,10 @@ export function SkillRunBar({
         </Button>
       </div>
     )
-  } else if (runnableTools.length > 0) {
-    // --- OFFER ---
+  }
+
+  if (!runInFlight && runnableTools.length > 0) {
+    // --- OFFER --- (coexists with a terminal, un-dismissed RESULT row — #44)
     offerRow = (
       <div className="skill-run-bar">
         {targets.length > 0 && (
@@ -341,6 +369,7 @@ export function SkillRunBar({
           t={t}
         >
           {t('chat.skill.confirm.body')}
+          {confirmFormatKey && <p className="hint skill-confirm-format">{t(confirmFormatKey)}</p>}
         </ConfirmDialog>
       </div>
     )

@@ -30,7 +30,11 @@ const SIZES = {
   models: [840, 1500],
   'models-de': [840, 1500],
   'chat-runtime': [1180, 740],
-  'chat-runtime-compat': [1180, 740]
+  'chat-runtime-compat': [1180, 740],
+  // #44/#46: short composer-strip components — no full-screen canvas needed.
+  'skill-info-card': [820, 320],
+  'skill-info-card-de': [820, 320],
+  'skill-run-result-offer': [820, 220]
 }
 // Electron's argv includes flags + the script path; take everything AFTER the script as case ids.
 const sIdx = process.argv.findIndex((a) => a.endsWith('screenshot.mjs'))

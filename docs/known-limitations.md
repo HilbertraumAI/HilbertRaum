@@ -436,6 +436,13 @@ password recovery — are documented in
     the page image, so such a document is best redacted from its `.txt` output, not in place. A **DOCX whose
     `<w:t>` runs split a word across multiple runs** is handled (a span crossing a run boundary splits across
     the nodes); a mask/edit is never allowed to change a paragraph break or any non-`<w:t>` markup.
+    **Said up front since #45:** the pre-run **confirmation dialog states the output format** for the
+    selected document (derived from its extension, the same signal main branches on) — "keeps its Word
+    format (.docx)" vs "will be plain text (.txt) — the original layout and formatting are not kept" —
+    so the format cliff is visible **before** the run, not first in the save dialog / result file.
+    Format-preserving **PDF output remains open** (true-redaction PDF or a regenerated, attributed PDF
+    would need a PDF-writing dependency plus a shipped embeddable font — neither exists in the tree;
+    see §5 next actions in `BUILD_STATE.md`).
   - **Date masking now accepts EITHER field order and a 2-digit year — the BL-N6 leak is closed (U2,
     audit §5.7).** For *redaction* (unlike extraction, which stays day-first) a candidate is masked when it
     parses in **day-first OR month-first** order, so a **US-ordered** `mm/dd/yyyy` value like `12/31/2026`

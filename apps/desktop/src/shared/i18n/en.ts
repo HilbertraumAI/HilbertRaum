@@ -207,6 +207,16 @@ export const en = {
   // persist the pick as this conversation's default. Nothing is silently kept across turns any more.
   'chat.skill.clear': 'Clear skill {title}',
   'chat.skill.keep': 'Keep for this conversation',
+  // #46 — the first-selection info card: what the skill does / needs / can't do, said at the moment
+  // of picking instead of discovered afterwards. Shown once per skill (then the ⓘ next to the
+  // picker re-opens it on demand). The footer line states the pick's lifetime honestly.
+  'chat.skill.infoButton': 'About “{title}”',
+  'chat.skill.info.close': 'Hide this explanation',
+  'chat.skill.info.needsLabel': 'Needs:',
+  'chat.skill.info.limitsLabel': 'Keep in mind:',
+  'chat.skill.info.perTurn':
+    'Applies to your questions in this chat until you change or clear it — “Keep for this conversation” also saves it for later.',
+  'chat.skill.info.learnMore': 'Learn more',
   // Tier-2 tool run — the calm transcript affordance + busy row + confirm modal (skills plan §12.2/§15, S11b)
   'chat.skill.tool.extractTransactions': 'Extract transactions',
   'chat.skill.tool.validateBalances': 'Check balances',
@@ -293,6 +303,15 @@ export const en = {
   'chat.skill.run.dismiss': 'Dismiss',
   'chat.skill.confirm.title': 'Run this tool?',
   'chat.skill.confirm.body': 'This creates or exports a file from the documents on this drive.',
+  // #45: the document-transform confirms (redact/edit) state the OUTPUT format BEFORE the run — the
+  // .docx-keeps-format / everything-else-becomes-.txt cliff was previously only discoverable in the
+  // save dialog. Derived from the selected target's extension (mirrors main's source-format probe);
+  // the matrix line is the no-known-target fallback.
+  'chat.skill.confirm.outputDocx': 'The saved copy keeps this document’s Word format (.docx).',
+  'chat.skill.confirm.outputText':
+    'The saved copy will be plain text (.txt) — the original layout and formatting are not kept.',
+  'chat.skill.confirm.outputMatrix':
+    'Word documents (.docx) keep their format; PDFs and other formats save as a plain-text (.txt) copy.',
   'chat.skill.confirm.ok': 'Run',
 
   // ---- Chat: transcript + message actions ----
@@ -1143,6 +1162,51 @@ export const en = {
   // ---- Skills (rail destination — SkillsScreen.tsx + settings/SkillsTab.tsx, skills plan §15) ----
   'skills.title': 'Skills',
   'skills.intro': 'Skills teach the assistant how to do a specific task. They add guidance to its answers — they never reach the internet or other folders on your computer.',
+  // #46 — the per-skill what/needs/limits lines behind the composer's first-selection info card
+  // (`shared/skill-info.ts`). Each is ONE calm sentence, distilled from user-guide §9 and
+  // known-limitations.md: what picking the skill changes, what it needs to apply (when it's missing
+  // the skill silently routes to a plain answer), and the key honesty limitation.
+  'skills.info.meeting-protocol.what':
+    'Shapes the next answer into clean meeting minutes — decisions, action items, and open questions.',
+  'skills.info.meeting-protocol.needs': 'The transcript or notes in this chat’s scope (attach the file or paste the text).',
+  'skills.info.meeting-protocol.limits': 'Works on one document at a time and records only what the notes actually say.',
+  'skills.info.contract-brief.what':
+    'Summarizes a contract in plain language — parties, dates, obligations, key terms, and questions to ask.',
+  'skills.info.contract-brief.needs': 'The contract in this chat’s scope.',
+  'skills.info.contract-brief.limits': 'A reading aid for one document at a time — not legal advice.',
+  'skills.info.deadline-obligation-finder.what':
+    'Finds deadlines, notice periods, renewal and payment dates, and the obligations behind them.',
+  'skills.info.deadline-obligation-finder.needs': 'The document in this chat’s scope.',
+  'skills.info.deadline-obligation-finder.limits':
+    'Reads one document at a time; verify critical dates against the original before acting on them.',
+  'skills.info.what-changed.what': 'Compares two versions of a document and reports the changes that matter, not a raw diff.',
+  'skills.info.what-changed.needs': 'Exactly two documents (or versions) in this chat’s scope.',
+  'skills.info.what-changed.limits': 'With more or fewer than two documents in scope it can’t compare and answers normally.',
+  'skills.info.share-safe-review.what':
+    'Reviews a document before you share it — visible sensitive information and practical sharing risks.',
+  'skills.info.share-safe-review.needs': 'The document in this chat’s scope.',
+  'skills.info.share-safe-review.limits': 'Advisory only — it never claims a document is anonymized or safe to publish.',
+  'skills.info.invoice.what':
+    'Reads an invoice with exact, checkable extraction — line items and totals, a totals check, CSV/JSON/XML export.',
+  'skills.info.invoice.needs': 'An invoice-like document in scope; its actions appear as buttons just above the message box.',
+  'skills.info.invoice.limits': 'One invoice at a time; a total it can’t verify is reported as unverified, never glossed over.',
+  'skills.info.bank-statement.what':
+    'Reads a bank statement with exact, checkable extraction — transactions, categories, balance checks, CSV export.',
+  'skills.info.bank-statement.needs':
+    'A statement-like document in scope; its actions appear as buttons just above the message box.',
+  'skills.info.bank-statement.limits': 'One statement at a time; categorizing transactions needs a running model.',
+  'skills.info.document-redaction.what':
+    'Saves a redacted copy of a document — rule-based detection of emails, numbers and dates, plus model-located names and addresses.',
+  'skills.info.document-redaction.needs':
+    'The document in scope; the “Redact personal data” button appears just above the message box.',
+  'skills.info.document-redaction.limits':
+    'Best-effort, never a guarantee — without a running model only rule-based detection runs; Word keeps .docx, other formats save as .txt.',
+  'skills.info.document-edit.what':
+    'Applies exact find-and-replace edits and saves an edited copy — it never rewrites your document.',
+  'skills.info.document-edit.needs':
+    'A running model, the document in scope, and your instruction (for example, “replace X with Y”); the “Apply text edits” button appears just above the message box.',
+  'skills.info.document-edit.limits':
+    'Text not found verbatim is skipped and reported; Word keeps .docx, other formats save as .txt.',
   // S13c (D4) — the global auto-fire opt-in, off by default. The hint explains plainly what turning
   // it on does and that every auto-applied skill stays visible + reversible.
   'skills.autoFire.title': 'Apply a matching skill automatically',

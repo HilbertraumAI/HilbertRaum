@@ -12,6 +12,7 @@ import {
 } from '../../components'
 import { useT } from '../../i18n'
 import { localizedSkillDescription, localizedSkillTitle } from '../../lib/skillI18n'
+import { consumeSkillDetailRequest } from '../../lib/skillDetailRequest'
 import { IMPORT_ERROR_KEY, importErrorKeyForMessage, localizeSkillNote } from '../../lib/skillImportI18n'
 import type { MessageKey } from '@shared/i18n'
 import type { SkillKind, SkillPermissions } from '@shared/skill-manifest'
@@ -107,6 +108,17 @@ export function SkillsTab(): JSX.Element {
     if (fresh && fresh !== detail) setDetail(fresh)
     else if (!fresh) setDetail(null)
   }, [skills, detail])
+
+  // #46: consume a pending deep-link from the composer's info card ("Learn more") once the list has
+  // loaded — one-shot, so later refreshes never re-open it. An id that no longer resolves (skill
+  // removed meanwhile) simply opens nothing.
+  useEffect(() => {
+    if (!skills) return
+    const requested = consumeSkillDetailRequest()
+    if (!requested) return
+    const target = skills.find((s) => s.installId === requested)
+    if (target) setDetail(target)
+  }, [skills])
 
   async function pick(mode: 'file' | 'folder'): Promise<void> {
     // pickSkillPackage is INSIDE the try (audit FE-2): a rejecting picker now surfaces a

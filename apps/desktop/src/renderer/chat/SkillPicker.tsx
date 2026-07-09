@@ -34,6 +34,9 @@ interface SkillPickerProps {
   keptForConversation?: boolean
   /** U3: toggle whether the active pick is saved as the conversation default (explicit, not implicit). */
   onKeepChange?: (keep: boolean) => void
+  /** #46: toggle the active skill's info card (what it does / needs / limits). Rendered as a quiet ⓘ
+   *  next to the chip only while a skill is active — the card itself is ChatScreen's. */
+  onInfo?: () => void
 }
 
 export function SkillPicker({
@@ -46,7 +49,8 @@ export function SkillPicker({
   suggestionDismissed,
   onClear,
   keptForConversation,
-  onKeepChange
+  onKeepChange,
+  onInfo
 }: SkillPickerProps): JSX.Element {
   const { t, lang } = useT()
   const selected = value ? skills.find((s) => s.installId === value) ?? null : null
@@ -135,6 +139,20 @@ export function SkillPicker({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+    {/* #46: the quiet ⓘ next to the active chip — re-opens the skill's info card (what it does /
+        needs / limits) after its one-time first-selection showing. Sits before the clear × so the
+        two read "about this skill" then "remove it". */}
+    {selected && onInfo && (
+      <button
+        type="button"
+        className="footer-menu-btn skill-info-btn"
+        disabled={disabled}
+        aria-label={t('chat.skill.infoButton', { title: localizedSkillTitle(selected, lang) })}
+        onClick={onInfo}
+      >
+        <span aria-hidden="true">ⓘ</span>
+      </button>
+    )}
     {/* U3 (audit §4.3): the persistent composer chip's × — always visible while a skill is active, so
         the user can SEE which skill shapes their turns and clear it in one tap (override + saved
         default) without hunting inside the menu. */}

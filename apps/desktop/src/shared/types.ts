@@ -241,6 +241,12 @@ export interface AppSettings {
    * are candidates and only when no skill is otherwise set (D5).
    */
   skillsAutoFireEnabled: boolean
+  /**
+   * #46 — the declared skill ids (manifest `id`, not installId) whose first-selection info card has
+   * already been shown, so the what/needs/limits explanation appears ONCE per skill and never
+   * re-nags (the ⓘ next to the composer picker re-opens it on demand). Ids only — content-free.
+   */
+  skillInfoSeen: string[]
   // ---- Conversation compaction (context-compaction plan §5.4) ----
   /**
    * Whether the chat history is COMPACTED as it approaches the model's context window —
@@ -294,6 +300,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   uiLanguage: 'system',
   // Auto-fire is OPT-IN: off by default so S13b ships inert (the toggle to flip it is S13c).
   skillsAutoFireEnabled: false,
+  // #46: no skill's info card has been shown yet on a fresh install.
+  skillInfoSeen: [],
   // Compaction is ON by default (D-a): silent drop-oldest is strictly worse than a visible,
   // auditable summary, and every new path fails safe to today's L1 trim.
   chatCompactionEnabled: true
