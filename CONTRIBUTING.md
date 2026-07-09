@@ -6,7 +6,7 @@ By participating you agree to abide by our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUC
 ## License and CLA
 
 The HilbertRaum software is licensed under **[GPL-3.0-or-later](LICENSE)**, and the core will
-stay under a GPL license — see the promise in the [README](README.md#license).
+stay under GPL-3.0-or-later — see the promise in the [README](README.md#license).
 
 Before we can merge your first pull request, you need to sign our
 **[Contributor License Agreement (CLA)](.github/CLA.md)**. The CLA bot prompts you automatically
@@ -23,8 +23,8 @@ If you contribute as part of your job, your employer may need to sign the
 [Corporate CLA](.github/CLA-corporate.md) — ask us, we will sort it out quickly.
 
 **Third-party code:** do not paste in code you did not write. If a dependency or snippet is
-needed, flag it in the PR so we can check the license (GPLv3 compatibility) — see also
-CLA §7 for submissions on behalf of third parties.
+needed, flag it in the PR so we can check the license (GPL-3.0-or-later compatibility) — see
+also CLA §7 for submissions on behalf of third parties.
 
 ## Ground rules (non-negotiable)
 - No cloud dependencies, hosted AI APIs, telemetry, or analytics.
@@ -96,5 +96,6 @@ Report suspected vulnerabilities **privately** per [`SECURITY.md`](SECURITY.md) 
 public issue or PR for an undisclosed vulnerability.
 
 ## License
-HilbertRaum is licensed **GPL-3.0-or-later** (see [`LICENSE`](LICENSE)). By contributing you agree
-that your contributions are provided under the same terms (inbound = outbound).
+HilbertRaum is licensed **GPL-3.0-or-later** (see [`LICENSE`](LICENSE)). Public contributions are
+distributed under GPL-3.0-or-later; in addition, the [CLA](#license-and-cla) grants the Project
+the right to also offer the software under commercial licenses (dual licensing).

@@ -1,14 +1,18 @@
-# HilbertRaum Individual Contributor License Agreement (v1.0)
+# HilbertRaum Individual Contributor License Agreement (v1.1)
 
 Thank you for your interest in contributing to the HilbertRaum project (the
 "Project"). This Contributor License Agreement ("Agreement") documents the
 rights you grant to the Project with your contributions.
 
-The Project is currently maintained by its founders (the "Maintainers"). The
-Maintainers intend to incorporate a company under Austrian law (planned:
-HilbertRaum FlexCo), which will succeed to all rights and obligations under
-this Agreement (the "Successor Entity"). References to the "Project" include
-the Maintainers and, upon incorporation, the Successor Entity.
+The Project is currently maintained by its two founders, the natural persons
+acting under the GitHub accounts `humaniser` and `comilionas` (together the
+"Maintainers"). The licenses granted under this Agreement are received and
+held by the Maintainers. The Maintainers may assign this Agreement, including
+the licenses granted herein, to HilbertRaum FlexCo (a company under Austrian
+law, in formation) or to another legal entity that continues the Project (the
+"Successor Entity"), and You consent in advance to such assignment.
+References to the "Project" mean the Maintainers and, upon assignment, the
+Successor Entity.
 
 By signing this Agreement (including electronically via the CLA tool on
 GitHub), You accept the following terms for Your present and future
@@ -27,16 +31,19 @@ Project (each a "Work").
 
 ## 2. Grant of Copyright License
 
-You hereby grant to the Project and to recipients of software distributed by
-the Project a perpetual, worldwide, non-exclusive, no-charge, royalty-free,
-irrevocable, transferable and sublicensable copyright license to reproduce,
-prepare derivative works of, publicly display, publicly perform, distribute
-and make available Your Contributions and such derivative works.
+You hereby grant to the Project a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable, transferable and sublicensable
+copyright license to reproduce, prepare derivative works of, publicly
+display, publicly perform, distribute and make available Your Contributions
+and such derivative works.
 
-This license expressly includes the right to license and distribute Your
-Contributions and derivative works **under any license terms, including open
-source licenses (such as the GNU GPLv3) and commercial or proprietary license
-terms (dual licensing)**.
+This license to the Project expressly includes the right to license and
+distribute Your Contributions and derivative works **under any license terms,
+including open source licenses (such as GPL-3.0-or-later) and commercial or
+proprietary license terms (dual licensing)**. Recipients of software
+distributed by the Project receive Your Contributions solely under the
+license terms the Project selects for the respective distribution (for the
+public repository: GPL-3.0-or-later).
 
 ## 3. Grant of Patent License
 
