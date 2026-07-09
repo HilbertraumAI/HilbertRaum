@@ -110,9 +110,12 @@ blocks you.
 ## 5. Pick and start a model
 
 1. Open **AI Model**. Your current model (if one is selected) is shown first; the rest are
-   below as alternatives, each with a plain-language note on its size and speed. The file
-   paths, checksums, and other internals are tucked behind each card's **Technical
-   details** — you never need them for everyday use.
+   below as alternatives, each with a plain-language note on its size and speed. When a list
+   mixes both kinds, it is split into **On this drive — ready to use** and **Available to
+   download** (not-yet-downloaded cards also look quieter), so you can tell at a glance what
+   works right now and what would cost a download first. The file paths, checksums, and other
+   internals are tucked behind each card's **Technical details** — you never need them for
+   everyday use.
 2. You'll see the models on your drive with a status:
    - **Installed** — ready to use.
    - **Recommended** — the largest model that runs comfortably in this computer's memory.
@@ -173,7 +176,9 @@ make responses much faster — on a typical gaming laptop that's the difference 
 words per second" and "faster than you can read". There is nothing to install or configure:
 
 - **Settings → Diagnostics (advanced) → Acceleration** shows whether your graphics card is
-  being used.
+  being used. The Chat screen's header also carries a small grey note — e.g.
+  `qwen3-4b-instruct-q4 · GPU (RTX 3090)` or `… · CPU` — so you can see which model is
+  answering, and where it runs, without leaving the conversation.
 - If the graphics driver ever causes trouble, the app switches itself to **compatibility mode**
   (processor only — works on every machine) and tells you with a one-line note. After a driver
   update, **Try GPU again** on the same Diagnostics tab re-enables the graphics card.

@@ -274,6 +274,15 @@ export function registerModelIpc(ctx: AppContext): void {
         /* Diagnostics/Chat still get the plain status */
       }
     }
+    // #36: whether CPU is the crash-fallback latch ("compatibility mode") — the Chat header
+    // hint says so instead of a bare "CPU". Best-effort like the manifest read above.
+    if (status.running) {
+      try {
+        status.gpuAutoDisabled = getSettings(ctx.db).gpuAutoDisabled
+      } catch {
+        /* settings unreadable (e.g. just locked) — the plain status still serves */
+      }
+    }
     return status
   })
 

@@ -371,6 +371,44 @@ describe('registerModelIpc', () => {
     expect((result as { supportsThinkingMode?: boolean }).supportsThinkingMode).toBeUndefined()
   })
 
+  // #36: getRuntimeStatus enriches a RUNNING status with the settings' gpuAutoDisabled
+  // latch, so the Chat header hint can say "compatibility mode" instead of a bare CPU.
+  // A stopped runtime stays unenriched (the flag is meaningless with nothing running).
+  it('getRuntimeStatus reports the gpuAutoDisabled latch while running — absent when stopped', async () => {
+    const running = {
+      running: true,
+      modelId: 'qwen3-4b-instruct-q4',
+      port: 1234,
+      healthy: true,
+      message: 'ok',
+      backend: 'cpu' as const
+    }
+    const db = seededDb()
+    updateSettings(db, { gpuAutoDisabled: true })
+    const ctx = {
+      db,
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: { status: () => ({ ...running }), activeModelId: () => running.modelId }
+    } as unknown as AppContext
+    reg(ctx)
+    const { result } = await invoke(handlers, IPC.getRuntimeStatus)
+    expect(result).toMatchObject({ running: true, backend: 'cpu', gpuAutoDisabled: true })
+
+    const stopped = { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
+    const ctx2 = {
+      db,
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: { status: () => ({ ...stopped }), activeModelId: () => null }
+    } as unknown as AppContext
+    reg(ctx2)
+    const { result: stoppedResult } = await invoke(handlers, IPC.getRuntimeStatus)
+    expect((stoppedResult as { gpuAutoDisabled?: boolean }).gpuAutoDisabled).toBeUndefined()
+  })
+
   it('verifyModel reports the fresh install state and throws on an unknown id', async () => {
     const ctx = {
       db: seededDb(),

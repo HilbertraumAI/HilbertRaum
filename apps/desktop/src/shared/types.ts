@@ -2136,6 +2136,13 @@ export interface RuntimeStatus {
   /** The probed GPU name when backend === 'gpu' (e.g. for the Diagnostics line). */
   gpuName?: string | null
   /**
+   * True when the GPU auto-disable latch (`settings.gpuAutoDisabled` — the crash-fallback
+   * "compatibility mode") is set, so the Chat header hint can say WHY the backend is CPU
+   * (#36). Enriched by the `getRuntimeStatus` IPC handler from settings; absent when not
+   * running or when settings are unreadable (e.g. workspace just locked).
+   */
+  gpuAutoDisabled?: boolean
+  /**
    * Whether the ACTIVE model's manifest declares `supports_thinking_mode`:
    * the renderer offers the Deep answer mode only when true. Enriched by the
    * `getRuntimeStatus` IPC handler from the manifest; absent when not running.

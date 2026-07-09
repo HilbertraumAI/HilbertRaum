@@ -11,6 +11,7 @@ import {
   type DocumentScope,
   type Message,
   type RunnableTool,
+  type RuntimeStatus,
   type SkillInfo,
   type SkillSuggestion
 } from '@shared/types'
@@ -31,7 +32,7 @@ import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useEventCallback } from '../lib/useEventCallback'
-import { useT } from '../i18n'
+import { useT, type I18n } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
 import type { MessageKey } from '@shared/i18n'
@@ -170,6 +171,9 @@ export function ChatScreen({
   // fed by polling `getActiveStream` rather than the live token events it missed.
   const [recovering, setRecovering] = useState(false)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
+  // The full runtime status behind `runtimeRunning` — feeds the muted header hint (#36:
+  // which model is answering, GPU or CPU) without changing the boolean-driven gates below.
+  const [runtimeInfo, setRuntimeInfo] = useState<RuntimeStatus | null>(null)
   // True while a model is loading in the background (server `startingModelId`), so the
   // no-model state can say "your model is starting" instead of the generic loading hint.
   const [modelStarting, setModelStarting] = useState(false)
@@ -333,6 +337,7 @@ export function ChatScreen({
   const checkRuntime = useCallback(async (): Promise<void> => {
     const status = await window.api.getRuntimeStatus()
     setRuntimeRunning(status.running)
+    setRuntimeInfo(status)
     setModelStarting(status.startingModelId != null)
     setSupportsThinking(status.supportsThinkingMode === true)
   }, [])
@@ -385,6 +390,16 @@ export function ChatScreen({
     }, RUNTIME_POLL_MS)
     return () => clearInterval(timer)
   }, [runtimeRunning, checkRuntime])
+
+  // #36: keep the header hint honest across the mid-generation GPU crash fallback — the
+  // same `runtime:notice` broadcast that shows the ephemeral compatibility-mode banner
+  // re-reads the status here, so the hint flips to "CPU (compatibility mode)" and becomes
+  // that notice's persistent, low-key home. `?.` tolerates older preloads / test stubs.
+  useEffect(() => {
+    return window.api.onRuntimeNotice?.(() => {
+      void checkRuntime().catch(() => undefined)
+    })
+  }, [checkRuntime])
 
   // Context-window meter + transcript summary marker (context-compaction §5.1/§5.3). Both are
   // resting-state reads, refreshed on conversation switch and after each completed turn (live is
@@ -1727,6 +1742,23 @@ export function ChatScreen({
             disabled={busyStreaming}
           />
           <div className="chat-header-spacer" />
+          {/* #36: the muted "which model is answering, and where does it run" one-liner —
+              subtle enough for non-technical users to ignore, findable for technical ones
+              (the backend difference is dramatic: a CPU-pinned session vs. GPU). Truth
+              comes from RuntimeStatus (the Diagnostics "Acceleration" line's source); the
+              tooltip points at Settings → Diagnostics for the details / "Try GPU again". */}
+          {runtimeInfo?.running && runtimeInfo.modelId && (
+            <span
+              className="chat-runtime-hint hint"
+              title={
+                runtimeInfo.backend === 'cpu' && runtimeInfo.gpuAutoDisabled
+                  ? t('chat.runtime.compatTitle')
+                  : t('chat.runtime.title')
+              }
+            >
+              {runtimeHintLabel(runtimeInfo, t)}
+            </span>
+          )}
           {/* The ambient privacy signal now lives once, app-wide, at the foot of the nav
               rail (§12.1 #2) — no per-screen instance here. */}
           <DropdownMenu.Root>
@@ -1960,6 +1992,25 @@ function isWholeLibraryDefault(conv: Conversation | undefined): conv is Conversa
     !(conv.scopeDocumentIds && conv.scopeDocumentIds.length > 0) &&
     conv.collectionId == null
   )
+}
+
+/**
+ * The header hint's label (#36): `model · GPU (name)` / `model · CPU` / `model · demo
+ * mode`. The model id (not the display name) is deliberate — this is a technical-user
+ * affordance, and reading the id avoids a listModels round-trip (which can hash weights).
+ * CPU-because-auto-disabled reads "compatibility mode" — the friendly term the mid-session
+ * fallback notice already uses (never "GPU failed" — CPU is normal, not degraded).
+ */
+function runtimeHintLabel(rt: RuntimeStatus, t: I18n['t']): string {
+  const model = rt.modelId ?? ''
+  if (rt.backend === 'gpu') {
+    return t('chat.runtime.gpu', { model, name: rt.gpuName ?? t('diag.accel.gpuFallbackName') })
+  }
+  if (rt.backend === 'mock') return t('chat.runtime.demo', { model })
+  if (rt.backend === 'cpu') {
+    return rt.gpuAutoDisabled ? t('chat.runtime.cpuCompat', { model }) : t('chat.runtime.cpu', { model })
+  }
+  return model // backend unknown (older status shape) — still say which model answers
 }
 
 /** Basename of an absolute path for a friendly chip label (cross-platform separators). */

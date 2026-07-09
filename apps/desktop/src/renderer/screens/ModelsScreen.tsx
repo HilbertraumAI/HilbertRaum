@@ -325,7 +325,7 @@ export function ModelsScreen(): JSX.Element {
   // The active chat model leads the screen (guidelines §2); the rest are the picker.
   // Within the picker, already-installed models come first — they're usable right now,
   // whereas not-yet-downloaded ones need a download. Stable sort keeps manifest order
-  // within each group.
+  // within each group; `groupedCards` below makes the boundary VISIBLE (#35).
   const isInstalled = (m: ModelInfo): boolean =>
     m.state === 'installed' || m.state === 'running' || m.state === 'ready'
   const activeChat = chat.find(isActive) ?? null
@@ -461,7 +461,9 @@ export function ModelsScreen(): JSX.Element {
     const thisStarting = runtime?.startingModelId === m.id
     const anyStarting = runtime?.startingModelId != null
     return (
-      <div className="card model-card" key={m.id}>
+      // #35: not-yet-downloaded cards render visually quieter (`.model-card-missing`) so
+      // the models that are usable right now stand out when scanning the list.
+      <div className={`card model-card${installed ? '' : ' model-card-missing'}`} key={m.id}>
         <div className="model-head">
           <div>
             <div className="model-title">{m.displayName}</div>
@@ -608,6 +610,29 @@ export function ModelsScreen(): JSX.Element {
           </div>
         </details>
       </div>
+    )
+  }
+
+  /**
+   * A picker section's cards with the installed/needs-download boundary explicit (#35).
+   * The old implicit sort relied on the per-card state badge — scanning the list couldn't
+   * tell "usable right now" from "costs a multi-GB download first". When a section holds
+   * both groups, each gets a small labeled subheading ("On this drive" / "Available to
+   * download"); a homogeneous section renders flat — there is no boundary to mark, and
+   * the badges already say which world it is. Grouping preserves order within each group,
+   * so the sorted chat picker renders the same cards in the same order.
+   */
+  function groupedCards(list: ModelInfo[]): JSX.Element {
+    const onDrive = list.filter(isInstalled)
+    const toDownload = list.filter((m) => !isInstalled(m))
+    if (onDrive.length === 0 || toDownload.length === 0) return <>{list.map(card)}</>
+    return (
+      <>
+        <div className="model-group-title">{t('models.group.onDrive')}</div>
+        {onDrive.map(card)}
+        <div className="model-group-title">{t('models.group.toDownload')}</div>
+        {toDownload.map(card)}
+      </>
     )
   }
 
@@ -809,13 +834,13 @@ export function ModelsScreen(): JSX.Element {
           {activeChat ? t('models.section.otherModels') : t('models.section.choose')}
         </div>
       )}
-      {otherChat.map(card)}
+      {groupedCards(otherChat)}
 
       {embeddings.length > 0 && <div className="section-title">{t('models.section.docSearch')}</div>}
-      {embeddings.map(card)}
+      {groupedCards(embeddings)}
 
       {others.length > 0 && <div className="section-title">{t('models.section.other')}</div>}
-      {others.map(card)}
+      {groupedCards(others)}
 
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
       <ErrorBanner message={error} t={t} />

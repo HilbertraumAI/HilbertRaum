@@ -127,7 +127,9 @@ it, the data **cannot be recovered** — this is by design. Create a new workspa
 - **First start of a model** is always slower (it loads into memory); later prompts are faster.
 - **Graphics acceleration:** on most computers with a graphics card, responses are
   automatically accelerated — nothing to configure. The **Settings → Diagnostics (advanced)**
-  *Acceleration* line shows whether your graphics card is being used.
+  *Acceleration* line shows whether your graphics card is being used. Quicker check: the small
+  grey note in the Chat screen's header says the same — `model · GPU (…)` or `model · CPU`.
+  If it reads **CPU (compatibility mode)**, see the next section.
 
 ---
 
@@ -139,7 +141,8 @@ stability issue (often an outdated graphics driver), and automatically switched 
 Everything keeps working; responses may just be a bit slower.
 
 - You don't have to do anything. The app remembers this choice so it doesn't retry on every
-  start.
+  start. The Chat screen's header note reads **CPU (compatibility mode)** while the choice is
+  in effect, so you can always tell — even days later, when the one-line note is long gone.
 - If you update your graphics driver later, open **Settings → Diagnostics (advanced) → Try GPU
   again** to let the app use the graphics card again.
 - You can also turn acceleration off yourself under **Settings → Use GPU acceleration**

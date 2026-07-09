@@ -2692,7 +2692,12 @@ profile; a false negative only costs a too-small model recommendation. The regex
 
 **UI:** Settings toggle ("Uses your graphics card to speed up responses when available…"),
 Diagnostics Acceleration + runtime-build lines, compatibility-mode notice + "Try GPU again",
-benchmark-card GPU row. Never "GPU failed" / "your hardware is bad".
+benchmark-card GPU row. Since #36 the Chat header also carries a muted `model · GPU (name)` /
+`model · CPU` one-liner (source: the same `RuntimeStatus.backend`/`gpuName`, plus a
+`gpuAutoDisabled` enrichment in the `getRuntimeStatus` handler); when CPU comes from the
+auto-disable latch it reads `CPU (compatibility mode)` — the persistent, low-key home of the
+ephemeral fallback notice (the `runtime:notice` broadcast also re-reads the status so the
+hint flips mid-session). Never "GPU failed" / "your hardware is bad".
 
 ### GPU failure modes (all handled, none block)
 

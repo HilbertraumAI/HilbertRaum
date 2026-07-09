@@ -119,6 +119,19 @@ export const en = {
   'chat.mode.chat': 'Chat',
   'chat.mode.documents': 'Ask my documents',
   'chat.listShow': 'Show conversation list',
+  // The muted header hint (#36): which model is answering, and whether it runs on the
+  // graphics card or the processor. "Compatibility mode" is the same friendly term the
+  // mid-session fallback notice uses — CPU is normal, never "GPU failed".
+  'chat.runtime.gpu': '{model} · GPU ({name})',
+  'chat.runtime.cpu': '{model} · CPU',
+  'chat.runtime.cpuCompat': '{model} · CPU (compatibility mode)',
+  'chat.runtime.demo': '{model} · demo mode',
+  'chat.runtime.title':
+    'The AI model answering in this chat, and whether it runs on your graphics card (GPU) ' +
+    'or processor (CPU). Details: Settings → Diagnostics.',
+  'chat.runtime.compatTitle':
+    'Compatibility mode is on for stability, so answers run on the processor and may be ' +
+    'slower. You can try the graphics card again under Settings → Diagnostics.',
   'chat.convOptions': 'Conversation options',
   'chat.saveConversation': 'Save this conversation',
   'chat.savedTo': 'Saved to {path}',
@@ -1026,6 +1039,9 @@ export const en = {
   'models.section.choose': 'Choose your AI model',
   'models.section.docSearch': 'Document search',
   'models.section.other': 'Other',
+  // #35: the explicit installed/needs-download boundary inside a mixed picker section.
+  'models.group.onDrive': 'On this drive — ready to use',
+  'models.group.toDownload': 'Available to download',
 
   // ---- Settings (SettingsScreen.tsx — chrome + the General tab) ----
   'settings.title': 'Settings',

@@ -447,6 +447,94 @@ describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)'
   })
 })
 
+// Issue #35: installed models and models that still need a multi-GB download used to sit
+// in ONE flat list, distinguishable only by the small state badge — the picker's
+// installed-first sort was invisible. Mixed sections now split into two labeled groups
+// ("On this drive — ready to use" / "Available to download"), and not-yet-downloaded
+// cards render visually muted (.model-card-missing).
+describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
+  it('labels both groups and keeps installed models first when the picker is mixed', async () => {
+    stub({
+      models: [
+        model({ id: 'a-installed', displayName: 'A Installed', state: 'installed' }),
+        model({ id: 'b-missing', displayName: 'B Missing', state: 'missing' }),
+        model({ id: 'c-installed', displayName: 'C Installed', state: 'installed' })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('A Installed')
+
+    expect(screen.getByText(t('en', 'models.group.onDrive'))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'models.group.toDownload'))).toBeInTheDocument()
+    // Reading order: the on-drive label, its cards (manifest order preserved), the
+    // download label, then the not-yet-downloaded card.
+    const flow = [...document.querySelectorAll('.model-group-title, .model-title')].map(
+      (el) => el.textContent
+    )
+    expect(flow).toEqual([
+      t('en', 'models.group.onDrive'),
+      'A Installed',
+      'C Installed',
+      t('en', 'models.group.toDownload'),
+      'B Missing'
+    ])
+  })
+
+  it('renders flat — no group labels — when the section is homogeneous', async () => {
+    stub({
+      models: [
+        model({ id: 'a-installed', displayName: 'A Installed', state: 'installed' }),
+        model({ id: 'c-installed', displayName: 'C Installed', state: 'installed' })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('A Installed')
+    expect(screen.queryByText(t('en', 'models.group.onDrive'))).not.toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'models.group.toDownload'))).not.toBeInTheDocument()
+  })
+
+  it('mutes not-yet-downloaded cards (.model-card-missing) so installed ones stand out', async () => {
+    stub({
+      models: [
+        model({ id: 'a-installed', displayName: 'A Installed', state: 'installed' }),
+        model({ id: 'b-missing', displayName: 'B Missing', state: 'missing' })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('A Installed')
+    const cards = [...document.querySelectorAll('.model-card')]
+    const missingCard = cards.find((c) => c.textContent?.includes('B Missing'))
+    const installedCard = cards.find((c) => c.textContent?.includes('A Installed'))
+    expect(missingCard?.classList.contains('model-card-missing')).toBe(true)
+    expect(installedCard?.classList.contains('model-card-missing')).toBe(false)
+  })
+
+  it('groups the Document search (embeddings) section the same way', async () => {
+    stub({
+      models: [
+        model({
+          id: 'emb-installed',
+          displayName: 'Embedder Installed',
+          role: 'embeddings',
+          state: 'installed',
+          download: undefined
+        }),
+        model({
+          id: 'emb-missing',
+          displayName: 'Embedder Missing',
+          role: 'embeddings',
+          state: 'missing'
+        })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Embedder Installed')
+    expect(screen.getByText(t('en', 'models.section.docSearch'))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'models.group.onDrive'))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'models.group.toDownload'))).toBeInTheDocument()
+  })
+})
+
 describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () => {
   it('confirms size, license, and URL before starting; approved license needs no checkbox', async () => {
     const downloadModel = vi.fn(async (): Promise<DownloadJob> => ({

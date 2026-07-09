@@ -392,6 +392,12 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* AI Model screen */
 .model-card { display: flex; flex-direction: column; gap: 10px; }
+/* #35: the picker's installed/needs-download boundary is explicit — a small label per
+   group, and not-yet-downloaded cards render quieter (transparent fill + dashed border;
+   text colors untouched so contrast stays intact). */
+.model-group-title { font-size: 12px; color: var(--text-muted); margin: 18px 0 0; }
+.model-group-title + .card { margin-top: 8px; }
+.model-card-missing { background: transparent; border-style: dashed; box-shadow: none; }
 .model-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .model-title { font-size: 15px; font-weight: 600; }
 .model-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
@@ -612,6 +618,16 @@ code, pre, kbd { font-family: var(--font-mono); }
    text-expansion audit: fix with layout, never copy). */
 .chat-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .chat-header-spacer { flex: 1; }
+/* #36: the muted "model · GPU/CPU" one-liner in the header — caption-styled, no
+   icon-noise, ellipsized so a long model id never crowds the mode switcher. */
+.chat-runtime-hint {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40ch;
+  cursor: default;
+}
 .chat-overflow-btn {
   background: transparent;
   border: 1px solid var(--border);

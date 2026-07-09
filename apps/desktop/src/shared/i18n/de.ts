@@ -133,6 +133,20 @@ export const de: Record<keyof typeof en, string> = {
   'chat.mode.chat': 'Chat',
   'chat.mode.documents': 'Meine Dokumente fragen',
   'chat.listShow': 'Unterhaltungsliste einblenden',
+  // Der dezente Kopfzeilen-Hinweis (#36): welches Modell antwortet und ob es auf der
+  // Grafikkarte oder dem Prozessor läuft. „Kompatibilitätsmodus“ ist derselbe freundliche
+  // Begriff wie in der Laufzeit-Meldung — CPU ist normal, nie „GPU kaputt“.
+  'chat.runtime.gpu': '{model} · GPU ({name})',
+  'chat.runtime.cpu': '{model} · CPU',
+  'chat.runtime.cpuCompat': '{model} · CPU (Kompatibilitätsmodus)',
+  'chat.runtime.demo': '{model} · Demomodus',
+  'chat.runtime.title':
+    'Das KI-Modell, das in diesem Chat antwortet, und ob es auf der Grafikkarte (GPU) oder ' +
+    'dem Prozessor (CPU) läuft. Details: Einstellungen → Diagnose.',
+  'chat.runtime.compatTitle':
+    'Der Kompatibilitätsmodus ist aus Stabilitätsgründen aktiv – Antworten laufen auf dem ' +
+    'Prozessor und können langsamer sein. Unter Einstellungen → Diagnose kannst du die ' +
+    'Grafikkarte erneut versuchen.',
   'chat.convOptions': 'Optionen der Unterhaltung',
   'chat.saveConversation': 'Diese Unterhaltung speichern',
   'chat.savedTo': 'Gespeichert unter {path}',
@@ -1052,6 +1066,9 @@ export const de: Record<keyof typeof en, string> = {
   'models.section.choose': 'Wähle dein KI-Modell',
   'models.section.docSearch': 'Dokumentsuche',
   'models.section.other': 'Sonstiges',
+  // #35: die sichtbare Grenze installiert/herunterzuladen in einem gemischten Abschnitt.
+  'models.group.onDrive': 'Auf diesem Laufwerk – sofort nutzbar',
+  'models.group.toDownload': 'Zum Herunterladen verfügbar',
 
   // ---- Settings ----
   'settings.title': 'Einstellungen',
