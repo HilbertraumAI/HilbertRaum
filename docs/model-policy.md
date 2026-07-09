@@ -6,9 +6,9 @@ existing `qwen3.5-4b-ud-q4kxl`; runtime pin BUMPED b9585 → **b9849** as the Qw
 gate. See "Qwen3.5 Unsloth wave" below. Prior:
 2026-06-20 (image understanding V5: the `vision` role + `mmproj` projector + the
 Qwen2.5-VL-3B-Instruct license review — see "The vision role + mmproj projector" below). Prior:
-2026-06-11 (Phase 29: first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
+2026-06-11 (first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
 Granite held, min-RAM recalibrated from measured peak RSS; see
-[`model-benchmarks.md`](model-benchmarks.md) §6. Phase 28: four challenger manifests added per
+[`model-benchmarks.md`](model-benchmarks.md) §6; four challenger manifests added per
 decisions D16–D18 — design record in [`model-benchmarks.md`](model-benchmarks.md) §7; runtime
 pinned to llama.cpp b9585; all license reviews approved)_
 
@@ -37,8 +37,8 @@ pinned to llama.cpp b9585; all license reviews approved)_
 | Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~16.7 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger to Gemma 4 12B / Qwen3 14B / Qwen3 30B-A3B on 32 GB machines. Text-only, opt-in (not bundled). Pending b9849 smoke + offline eval. |
 | Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~20.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
-| Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
-| Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation (Phase 36); whisper.cpp GGML; MIT |
+| Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
+| Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation; whisper.cpp GGML; MIT |
 | Vision (optional) | Qwen2.5-VL 3B Instruct Q4 + f16 mmproj | ~3.27 GB (2 files) | 12 GB | in the `--with-assets` default set (2026-07-01); **not** auto-recommended in-app (`recommended_profiles: []`, rank 0) — availability-driven, used on demand by the Images screen | Image understanding — the Images screen (Phases V1–V5). Two files: GGUF + the `mmproj` projector. CPU-pinned; ~4.6 GB peak RSS. **Co-resident with a 12B chat ⇒ >16 GB (PROD-1)** — see "The vision role" below. Apache-2.0 |
 
 > Qwen3 **1.7B** was in the original spec §7.3 (the TINY/UNKNOWN "small" model) but was **dropped**:
@@ -111,7 +111,7 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package
-(added in Phase 2 — boring, reliable, no native deps, works fully offline). The schema and a
+(boring, reliable, no native deps, works fully offline). The schema and a
 hand-written validator live in `apps/desktop/src/shared/manifest.ts` (one source of truth shared by
 main + renderer). Validation collects **all** errors per file and is pure (no I/O) for easy testing.
 
@@ -121,7 +121,7 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
 no-RAM picker), `recommendation_rank` (integer, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
-`supports_thinking_mode` (below), a `download` block (Phase 12, below), and — for a `role: vision`
+`supports_thinking_mode` (below), a `download` block (below), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
 vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
 `bundled_on_preconfigured_drive`) are ignored by the validator.
@@ -133,8 +133,8 @@ vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools
 - **`runtime`/`format`**: the supported pairs are `llama_cpp`/`gguf` (chat, embeddings, reranker,
   vision) and `whisper_cpp`/`ggml` (the transcriber); any other runtime/format pair yields the
   `unsupported` state.
-- **`supports_thinking_mode`** (optional boolean, default `false`) is **load-bearing since
-  Phase 20**: it declares that the model's chat template implements the `enable_thinking`
+- **`supports_thinking_mode`** (optional boolean, default `false`) is **load-bearing**:
+  it declares that the model's chat template implements the `enable_thinking`
   switch (Qwen3-style native reasoning). The chat UI offers the **Deep** answer mode only for
   a running model whose manifest sets it `true` (surfaced via `RuntimeStatus.supportsThinkingMode`).
   Setting it on a model whose template ignores `enable_thinking` is harmless at the request
@@ -175,7 +175,7 @@ trap); Phi-4 (MIT but not multilingual → fails German); Mistral Large 3 (Apach
 (MIT, German unproven), Gemma 3 (custom Gemma Terms — superseded by Apache-2.0 Gemma 4).
 Full research record: [`model-benchmarks.md`](model-benchmarks.md) §7.
 
-## Optional `download` block (Phase 12 — the DIY asset loader)
+## Optional `download` block (the DIY asset loader)
 
 The schema gained an **optional** `download` block describing where the `fetch-models` scripts pull
 the weight from and what to verify it against. It is **additive** — manifests with no `download:`
@@ -224,13 +224,13 @@ printed first). The DIY path pulls from the **upstream source**, which sidesteps
 > online machine. The app itself never auto-downloads — the in-app downloader below runs only when
 > every gate passes, per explicit user click.
 
-### The in-app downloader (Phase 18 — the provisioning plan’s deferred item, revived)
+### The in-app downloader
 
 A model that is **missing** (or failed its checksum) and whose manifest carries a `download` block
 can be fetched from the **AI Model screen**. Three gates, ALL required, re-checked in the main
 process on every start (architecture.md "In-app model downloader"):
 
-1. **Policy ceiling** — `policy.network.allow_model_downloads`. Since Phase 18 the **default**
+1. **Policy ceiling** — `policy.network.allow_model_downloads`. The **default**
    (no `policy.json`) permits downloads (wave-1 decision D3, resolved (a)) so the user toggle below is the
    effective gate on DIY/developer setups; `prepare-drive` keeps writing **deny** in both its
    postures, so prepared drives stay download-disabled unless the drive builder edits
@@ -258,12 +258,12 @@ drive), no background anything.
 
 ### `runtime-sources.yaml` (the sidecar, not a model)
 `model-manifests/runtime-sources.yaml` pins one `ggml-org/llama.cpp` release and lists one prebuilt
-build per OS/arch/backend (`os`, `arch`, `backend`, `url`, `sha256`, `extract_to`). Since Phase 14
-the ordering is **vulkan-first**: the default build on win/linux is the **Vulkan full build**
+build per OS/arch/backend (`os`, `arch`, `backend`, `url`, `sha256`, `extract_to`). The
+ordering is **vulkan-first**: the default build on win/linux is the **Vulkan full build**
 (extracted to `runtime/llama.cpp/<os>/`), which is safe as a default because the upstream Vulkan
 release archives are standalone full builds carrying every CPU backend variant — on a GPU-less
 machine the same binary simply runs on its bundled CPU backends (verified against b9585; this
-supersedes the Phase-12 "a GPU build fails or runs worse on a non-GPU machine" assumption, which is
+supersedes the earlier "a GPU build fails or runs worse on a non-GPU machine" assumption, which is
 false for Vulkan-the-archive). A **pure-CPU safety net** is additionally pinned per win/linux,
 extracted to `runtime/llama.cpp/<os>/cpu/` (`--backend cpu`); mac arm64 stays Metal-only. Licensing
 is unchanged: both Vulkan archives are built from the same MIT-licensed llama.cpp source at the
@@ -298,8 +298,8 @@ binary.
 
 **License-review record — llama.cpp b9585 runtime assets (HISTORICAL — the prior pin; extends the
 original b9585 review, commit `8bdeb2e`; status: approved, reviewed 2026-06-10):** all five pinned
-assets build from the same MIT-licensed `ggml-org/llama.cpp` source at tag `b9585`. The two assets
-added by Phase 14 are explicitly part of this record:
+assets build from the same MIT-licensed `ggml-org/llama.cpp` source at tag `b9585`. The two
+later-added assets (Vulkan default + CPU safety net) are explicitly part of this record:
 
 | Asset | SHA-256 | Notes |
 |---|---|---|
@@ -326,7 +326,7 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   real SHA-256 into `sha256` as a deliberate, reviewed change. A real-hash mismatch makes
 >   `fetch-runtime` delete the archive and fail.
 
-## The whisper.cpp transcriber family (Phase 36)
+## The whisper.cpp transcriber family
 
 `runtime-sources.yaml` additionally pins the **`whisper_cpp:`** block — the audio
 transcriber CLI (`whisper-cli`), fetched with `fetch-runtime --family whisper_cpp` into
@@ -353,7 +353,7 @@ conversion — the E5/reranker provenance posture). Full notes in the manifest's
 `license_review` block. The weight rides the NORMAL manifest pipeline (`fetch-models`,
 in-app downloader, `verify-models`).
 
-## The OCR asset class (Phase 38)
+## The OCR asset class
 
 `runtime-sources.yaml` additionally pins the **`ocr:`** block — the vendored OCR
 language files, fetched with `fetch-runtime --family ocr` into `ocr/` as plain

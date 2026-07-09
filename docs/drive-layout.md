@@ -56,20 +56,20 @@ laptops (spec success criterion #10).
 
 ```
 HILBERTRAUM/
-├── Start HilbertRaum.cmd                  # Windows launcher (Phase 13) ── DOUBLE-CLICK THIS
-├── Start HilbertRaum.command              # macOS launcher (Phase 13)
-├── start-hilbertraum.sh                   # Linux launcher (Phase 13)
-├── READ ME FIRST.txt                           # friendly first-run + SmartScreen note (Phase 13)
-├── HilbertRaum-<version>-portable.exe   # the portable build (Phase 11) — signed for commercial
-├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Phase 10; Vulkan on win/linux since Phase 14)
-│   ├── .hilbertraum-runtime.json                       # install marker: { version, backend, os, arch } (Phase 14)
-│   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only, Phase 14)
-├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family (Phase 36): the whisper-cli transcriber
+├── Start HilbertRaum.cmd                  # Windows launcher ── DOUBLE-CLICK THIS
+├── Start HilbertRaum.command              # macOS launcher
+├── start-hilbertraum.sh                   # Linux launcher
+├── READ ME FIRST.txt                           # friendly first-run + SmartScreen note
+├── HilbertRaum-<version>-portable.exe   # the portable build — signed for commercial
+├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Vulkan on win/linux)
+│   ├── .hilbertraum-runtime.json                       # install marker: { version, backend, os, arch }
+│   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only)
+├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family: the whisper-cli transcriber
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
-├── ocr/                                        # OCR language files (Phase 38): {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
+├── ocr/                                        # OCR language files: {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── model-manifests/{chat,embeddings,reranker,transcriber,vision,translation}/ # committed YAML (the only model metadata in git)
-│   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12; + whisper_cpp block Phase 36; + ocr block Phase 38)
+│   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
 ├── user-skills/                                # user Skills (read-write PLAIN folders) — EMPTY on a sold drive
 ├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive
@@ -95,7 +95,7 @@ HILBERTRAUM/
 > unanchored; real integrity needs off-drive signing (a Tier-3 prerequisite). This is the same
 > accepted residual as the engine binary — see `security-model.md` / `known-limitations.md`.
 
-> **Launchers (Phase 13).** The `Start HilbertRaum.*` files sit at the drive root beside the
+> **Launchers.** The `Start HilbertRaum.*` files sit at the drive root beside the
 > portable app and set `HILBERTRAUM_DRIVE_ROOT` from **their own location** every launch — never a hardcoded
 > drive letter — so the same drive continues the same encrypted workspace on any laptop (success
 > criterion #10). The canonical resolver is `services/launcher.ts` `resolveDriveRootFromLauncher`.
@@ -105,7 +105,7 @@ HILBERTRAUM/
 > by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). See
 > [`packaging.md`](packaging.md).
 
-> **Naming reconciliation (Phase 11).** This layout reflects what the **code actually reads**,
+> **Naming reconciliation.** This layout reflects what the **code actually reads**,
 > which is the source of truth:
 > - Sidecar OS sub-dirs are **`win` / `mac` / `linux`** (resolved by `services/runtime/sidecar.ts`
 >   `llamaOsDir`), **not** the spec's prose `windows/macos/linux`.
@@ -133,7 +133,7 @@ drive is the same flow as building it, run again from a machine with the repo:
 
 The user's `workspace/` (and its encrypted data) is never modified by an update.
 
-## Preparing a drive (Phase 11 scripts)
+## Preparing a drive (scripts)
 
 The `scripts/` directory lays out and verifies a drive. The scripts are **self-contained**
 (no Node/npm needed to prepare a drive); their logic mirrors the unit-tested
@@ -143,7 +143,7 @@ The `scripts/` directory lays out and verifies a drive. The scripts are **self-c
 # Windows
 .\scripts\prepare-drive.ps1 -Target E:\ -DryRun                 # print the plan, create nothing
 .\scripts\prepare-drive.ps1 -Target E:\                         # create dirs + manifests + config
-.\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AcceptLicense  # + download & verify assets (Phase 12)
+.\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AcceptLicense  # + download & verify assets
 .\scripts\verify-models.ps1  -Target E:\ -Generate              # checksum + write config/checksums.json
 ```
 ```bash
@@ -159,7 +159,7 @@ drive, and generates `config/drive.json` (the prepared-drive marker) + `config/p
 (no-phone-home posture — model downloads permitted, update-checks + telemetry denied; `--dev`/`-Dev`
 for a plaintext developer drive).
 
-By default it does **not** download artifacts. **Phase 12** adds `--with-assets`/`-WithAssets`, which
+By default it does **not** download artifacts. `--with-assets`/`-WithAssets`
 then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar) — each download is
 **resumable** and **SHA-256-verified before it counts as installed** (mismatch → delete partial +
 exit 1; placeholder hash → *UNVERIFIED*). For a fast setup `--with-assets` fetches a small **default
@@ -172,13 +172,13 @@ SHA-256s each present weight against its manifest hash, and `--generate` capture
 `config/checksums.json`. The asset **download/verify/plan** logic mirrors the unit-tested
 `services/assets.ts`, but the **default-set model-id list** lives only in the two `prepare-drive`
 shells (`$DefaultModelIds` in `.ps1`, `DEFAULT_MODEL_IDS` in `.sh`), kept in sync with each other and
-with `model-manifests/` — *not* in `assets.ts` (DOC-N4, full audit 2026-06-28). The sidecar
+with `model-manifests/` — *not* in `assets.ts`. The sidecar
 build comes from `model-manifests/runtime-sources.yaml`. See
 [`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md) for the full flow + license gate.
 
-### Sidecar builds: Vulkan default + CPU safety net (Phase 14)
+### Sidecar builds: Vulkan default + CPU safety net
 
-Since Phase 14 (see the [`architecture.md`](architecture.md) GPU record §6) `runtime-sources.yaml` is
+`runtime-sources.yaml` (see the [`architecture.md`](architecture.md) GPU record §6) is
 **vulkan-first** on Windows/Linux:
 
 - **`runtime/llama.cpp/<os>/`** holds the **Vulkan full build** — it ships every CPU backend
@@ -197,7 +197,7 @@ Since Phase 14 (see the [`architecture.md`](architecture.md) GPU record §6) `ru
 Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
 exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).
 
-### Second sidecar family: the whisper.cpp transcriber (Phase 36)
+### Second sidecar family: the whisper.cpp transcriber
 
 Audio transcription uses a separate, pinned **whisper.cpp** CLI under
 `runtime/whisper.cpp/<os>/` (resolved by `services/transcriber/cli.ts`
@@ -220,7 +220,7 @@ distribution machinery as the llama family:
   `role: transcriber`) → `fetch-models` and the Phase-18 in-app downloader cover them
   with zero new code; they land in `models/transcriber/`.
 
-### OCR language files (Phase 38)
+### OCR language files
 
 Local OCR ("Make searchable (OCR)" for scanned PDFs; photo imports) uses
 **tesseract.js**, which ships INSIDE the app as pinned npm dependencies — the drive

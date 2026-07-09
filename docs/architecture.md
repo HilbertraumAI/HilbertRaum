@@ -1,6 +1,9 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-07-03 (**§39** folds the 2026-07-02 Skills & Tools remediation wave — 20 phases across tracks R/W/U/A/T, suite 3071 — and retires its plan + audit working papers; its §-anchor legend keeps every `audit §N.M` / phase-id citation resolvable). Prior: 2026-06-29. The §27–§34 design records carry the 2026-06-29 full and post-merge audit ledgers (final suite 2532). Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. The transcriber/dictation/OCR sections carry the backend-audit-2026-06-27 cancellation & timeout records (REL-1/2/3/6). Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
+_Last updated: 2026-07-10. This doc is both the architecture overview and the home of the
+**§-numbered design records** (with their §-anchor legends): code comments and the other docs cite
+`§N` / finding-id anchors that resolve here. The records absorb the earlier audit ledgers and
+remediation waves; the full original working papers live in git history._
 
 ## Overview
 

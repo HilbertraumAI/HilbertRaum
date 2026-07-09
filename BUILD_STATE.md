@@ -5,6 +5,13 @@
 > (see "Per-phase ritual" in [`CLAUDE.md`](CLAUDE.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
+> **Snapshot correction (2026-07-10):** the "UNPUSHED" / "UNMERGED" state notes inside earlier log
+> entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
+> with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
+> named in §5's branch analysis still carry unmerged work.
+
+_2026-07-10 — **Public-launch prep Phase 4: docs readability sweep — retired-plan/audit remarks out of the reader-facing docs; §-anchor legends and design records untouched.**_
+The sweep (owner decision 2026-07-10) worked the three-bucket rule: **(a) decorative history deleted/compressed** — README's "phased plan retired" clause; known-limitations' giant changelog header + ~35 audit-round provenance tags (`full-audit-2026-06-29-postmerge F1`-style; the surviving short ids like `D77`/`C1`/`H7` resolve via the design-record legends, said in a new History footnote); packaging/drive-layout/model-policy/benchmark's "(Phase N)"/"Since Phase N" framing and the packaging `git show`-the-retired-provisioning-plan pointer; architecture.md's changelog header → a §-record orientation note. **(b) KEPT verbatim** — every §-numbered design record + §-anchor legend (architecture/rag-design/design-guidelines), security-model.md wholesale (it IS the security ledger; code cites its finding ids), model-benchmarks' history footer, the `SKA-N`/`audit §N.M` citations in known-limitations' skills residuals (arch §44's legend example SKA-24 is cited from 6+ source files — spot-checked SKA-24/§39/rag-design §14.5 all resolve). **(c) open work de-phased into plain words** — "Phase 22" → "signed offline update bundles are not built yet; there is no update mechanism" (known-limitations); result-tables narration ("closed by Phase 2 (same day)" strikethroughs) rewritten as current behavior with the residuals pointed at the still-open `result-tables-plan.md` (that file and `big-slot-embeddings-plan.md` legitimately stay). **BUILD_STATE §2.5 fixes:** §5's embedded "current gate" 1083/25 (2026-06-13) → 3956/47 (2026-07-10); a single snapshot-correction note under the header covers the stale "UNPUSHED"/"UNMERGED" remarks in earlier entries (one-line correction, no history rewriting). user-guide/troubleshooting/CONTRIBUTING were already clean; CLAUDE.md deliberately untouched (contributor-facing lifecycle rule). Suite + typecheck green.
 
 _2026-07-10 — **Public-launch prep Phase 3: TranslateGemma O1 license review closed (in-app path APPROVED; manifest status deliberately stays `pending`).**_
 The Gemma Terms analysis (release-readiness working paper §7, owner decision 2026-07-10) closed the O1 review's in-app half: the **in-app, license-gated download path is APPROVED** — the §3.1 flow-down binds the weight's distributor (HF → the user; the app is the conduit behind the ack checkbox + `license_url`), commercial USE is allowed, outputs are unencumbered (§3.3), and the Prohibited Use Policy is incorporated by reference + updateable. **Commercial-drive preloading stays a separate OPEN review** carrying the four-point flow-down checklist (Terms copy on the drive, verbatim NOTICE line, enforceable use-restriction clause in sale terms, quantization-provenance notice), recorded in the manifest notes + model-policy.md. **Deliberate deviation from the plan's literal "status: approved":** the plan's own step-2 check ("confirm the flip doesn't accidentally authorize commercial bundling") FAILED for a plain flip — `bundled_on_preconfigured_drive` is advisory/UNUSED by the validator (known-limitations), so `license_review.status: pending` is the ONLY mechanical guard in `assertCommercialDrive` + both `build-commercial-drive` scripts (they require `approved` for EVERY manifest on the drive), and the flip would additionally remove the in-app license-acknowledgement checkbox (`ModelDownloadInfo.licenseApproved` → `needsAck`) that the §7 compliance verdict leans on. So the review CLOSURE is recorded in `reviewed_by`/`reviewed_at`/`notes` (+ a yaml comment stating the flip precondition: flow-down artifacts + a license-class ack gate) while `status: pending` keeps both gates closed. RUNTIME NOTE (no `--jinja`) kept verbatim. No code change; suite + typecheck green.
@@ -10800,12 +10807,12 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    TRUE redaction by construction); full in-place PDF text replacement (reflow/fonts/kerning) stays
    out. Needs its own short plan + the dependency sign-off before any code.
 
-**Current gate (2026-06-13, post i18n wave + FULL audit remediation — every HIGH/MEDIUM/LOW closed — on
-branch `audit-2026-06-13-high-fixes`): typecheck clean, 1083 tests pass (25 skipped — the manual
-tests behind `HILBERTRAUM_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
-eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
-`npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
-(different tests each run; each passes in isolation — see the §3 2026-06-13 entry).** Per-phase gate history (test counts, bundle sizes, per-phase test
+**Current gate (2026-07-10): typecheck clean, 3956 tests pass (47 skipped — the manual tests
+behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
+eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/real-data
+smokes — skipped in CI), `npm run build` green. Full-suite runs on a loaded machine can flake 1–2
+timeout failures (different tests each run; each passes in isolation — see the §3 2026-06-13
+entry).** Per-phase gate history (test counts, bundle sizes, per-phase test
 inventories) lives in git history.
 
 ---

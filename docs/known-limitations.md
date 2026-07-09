@@ -1,11 +1,10 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-07-03 (skills-remediation close-out — the 2026-07-02 audit + its 20-phase plan were folded into architecture.md §39 and both working papers retired; the skills/extraction residual bullets' `audit §N.M` citations now resolve via §39's §-anchor legend, and the still-open residuals — incl. the T1-surfaced `USt ∈ TOTALS_FILLER but ∉ TAX_LABELS` phantom-item gap — are kept). Prior: 2026-06-30 (full-audit-2026-06-30 Phase D — renderer lifecycle & a11y: added the pure-code-block StreamAnnouncer a11y residual (F6) to "Accessibility" and the self-healing optimistic "Try again" slice (F7) to "Engineering trade-offs"; the F1–F8 dispositions live in architecture.md "Renderer robustness" Phase D). Prior: 2026-06-29 (full-audit-2026-06-29 Phase 2 — runtime reliability: whisper SIGKILL escalation + bounded teardown (REL-2) extended the audio-transcription watchdog bullet; the REL-1 port-race retry and REL-3 abort-aware slot handoff are recorded in the architecture.md GPU/runtime + doc-task records). Prior 2026-06-29: Phase 1 — financial correctness: space-disambiguated sign reading (BL-1), figure-region per-row currency (BL-2), German closed-compound categorization (BL-3); extended the bank/invoice line-parser + categorizer bullets under "Document tasks & summaries"). Prior: 2026-06-28 (full-audit-2026-06-28 Phase 1 — financial correctness: per-document date-locale inference, trailing-date balance scrub, amount-column-by-position, grouped-figure support, and redaction phone/IBAN coverage; extended the redaction bullet + added the bank/invoice line-parser assumptions under "Document tasks & summaries" — BL-N1…N6)._
+_Last updated: 2026-07-10._
 
-The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
-found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
-BUILD_STATE §8 for the remediation summary; the full final audit report is preserved in git history
-(`docs/audit-2026-06-09-multi-persona.md`, removed after remediation). What remains below are the
+The MVP is feature-complete. A series of internal audit rounds found and fixed every Critical,
+High, and Medium finding plus the actionable Lows (their full reports and disposition ledgers live
+in git history and in the `architecture.md` design records). What remains below are the
 **consciously-accepted** product/architecture decisions and inherent limitations.
 
 ## Security & privacy
@@ -23,13 +22,13 @@ password recovery — are documented in
 - **`importDocuments` picker imports are token-bound; drag-drop trusts caller paths (accepted).**
   A PICKER import is bound to a one-time `pickDocuments` capability token (main imports exactly what
   it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file
-  (vuln-scan-2026-06-21 / `security-model.md` D1). A native OS drag-drop is delivered to the
+  (`security-model.md` D1). A native OS drag-drop is delivered to the
   *renderer*, so main can't tokenize it — that seam still accepts raw paths but rejects symlinks and
   canonicalizes them, and there is no network sink to exfiltrate read content (offline).
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
-- **A pre-Phase-32 build cannot open a v2 (envelope) vault.** New vaults — and any vault after
+- **A pre-envelope build cannot open a v2 (envelope) vault.** New vaults — and any vault after
   its first password change — use the descriptor-v2 envelope (`security-model.md`). An older
   app version derives the correct KEK and even passes the verifier, but then tries to decrypt
   the data files with it and fails the GCM tag, surfacing "Could not open the workspace".
@@ -43,7 +42,7 @@ password recovery — are documented in
   `ON DELETE CASCADE`: a direct `DELETE FROM documents` (with `PRAGMA foreign_keys = ON`)
   cascade-removes the orphan rows instead of raising a foreign-key violation. The later **skills**
   content tables (`bank_statements` / `bank_transactions` / `bank_corrections`, `invoices` /
-  `invoice_line_items`) are handled two ways (backend audit 2026-06-27, DATA-1): the current build's
+  `invoice_line_items`) are handled two ways: the current build's
   `deleteDocument` does an **explicit ordered delete** of those rows (`purgeDocumentDerivatives` →
   `purgeSkillDataForDocument`) inside one transaction *before* the `documents` delete, which keeps
   deletion safe on **existing** drives whose FKs predate the fix; and fresh schemas additionally
@@ -67,7 +66,7 @@ password recovery — are documented in
   re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
   fully.
 - **Sidecar binaries built by an OLD `fetch-runtime` carry no pre-spawn hash (accept + document).**
-  The re-hash-before-spawn control (vuln-scan B, [`security-model.md`](security-model.md) "Re-hash
+  The re-hash-before-spawn control ([`security-model.md`](security-model.md) "Re-hash
   sidecar binaries before spawn") re-verifies `llama-server` / `whisper-cli` against a SHA-256 the
   install marker now records. A drive provisioned by a `fetch-runtime.{ps1,sh}` predating that change
   has no recorded hash, so the verifier **tolerates** the binary (`skip-legacy`) rather than refusing to
@@ -114,8 +113,8 @@ password recovery — are documented in
   only on a user action (the picker) — there is **no auto-fire** (deferred to S13). The earlier-noted
   "length-bounded matcher is future hardening" **has now shipped** (architecture.md "Skills — design
   record" §13, S2): the parser caps each trigger entry's length (≤200) and count (≤64). The earlier
-  guard — a regex compiled from the glob with a cap of 10 `*` wildcards — was **replaced (vuln-scan
-  2026-06-21) by a linear, non-backtracking two-pointer matcher** (`selector.globMatches`): the old cap
+  guard — a regex compiled from the glob with a cap of 10 `*` wildcards — was **replaced by a
+  linear, non-backtracking two-pointer matcher** (`selector.globMatches`): the old cap
   counted only `*`, so a `*?*?…` pattern (≤10 stars, `?` interleaved) still compiled to a degree-10
   backtracking regex that could freeze the synchronous main-side scoring on a moderately-long document
   title. The two-pointer matcher cannot backtrack at all (and no longer refuses legitimate
@@ -380,7 +379,7 @@ password recovery — are documented in
   address-block recipient with no label stays unextracted, and the recipient-shaped question then falls
   through to the relevance path over the document text (by design, never a fabricated party).
 - **Document redaction is AI-assisted best-effort, not a privacy/compliance guarantee (Skills S11d;
-  Phase 7 D73/D75/D78).** The `document-redaction` skill's `redact_document` tool has two layers. (1) A
+  D73/D75/D78).** The `document-redaction` skill's `redact_document` tool has two layers. (1) A
   **deterministic, offline regex floor** always masks the clearly-shaped data — e-mail addresses, phone
   numbers, IBANs, **payment-card numbers**, dates, and web links. (2) When a chat model is running, an
   **LLM locate pass** additionally masks **names, postal/street addresses, and organisation names**: the
@@ -388,7 +387,7 @@ password recovery — are documented in
   proposed string verbatim** in the source and **sweeps every occurrence** — the model **never generates
   the output text**, so it cannot invent or leak anything (the output is source bytes everywhere outside a
   verified mask). A proposal not present verbatim, too short, or letter-less is **dropped and counted**.
-  The written file uses **per-character `█` masks** (Phase 7 flip, D74/D75), so line layout survives.
+  The written file uses **per-character `█` masks** (D74/D75), so line layout survives.
   It **still misses** things (unusual formats, text inside images/scans — it sees only the extracted text,
   and anything the model doesn't spot); the regex floor stays conservative (a **false negative** over
   corrupting text). **If no model is running, only the rule-based floor applies** and the run says so
@@ -402,8 +401,8 @@ password recovery — are documented in
   count** are surfaced (architecture.md "Skills — design record" §21). Locate quality on a small local
   model is the accepted risk — mitigated by the deterministic floor, the verify-verbatim + all-occurrences
   sweep, and window overlap.
-- **Targeted edits apply only find-and-replace changes found verbatim — never a rewrite (Skills Phase 8,
-  #23, D76).** The `document-edit` skill's `apply_document_edits` tool makes the exact find-and-replace
+- **Targeted edits apply only find-and-replace changes found verbatim — never a rewrite (#23,
+  D76).** The `document-edit` skill's `apply_document_edits` tool makes the exact find-and-replace
   edits the user described. A **running model is required**: it only *locates* occurrence-anchored
   find→replace edits (grammar-constrained JSON, temperature 0); the app then **verifies each `find`
   verbatim at its `{line, occurrence}` anchor** and splices the replacement — the model **never regenerates
@@ -414,14 +413,14 @@ password recovery — are documented in
   `editedPartial`); if nothing matches, the run reports `none` and writes **no file**. **With no model
   running** — or no instruction — the run **refuses cleanly** (there is no rule-based fallback for edits),
   never a silent nothing. The instruction comes from the conversation's latest user message. Output follows
-  the **source format** (Phase 9, D77 — see the same-format-export bullet below): a **Word `.docx`** source
+  the **source format** (D77 — see the same-format-export bullet below): a **Word `.docx`** source
   is edited in place and stays a `.docx` (formatting preserved); every other source produces a `.txt` copy.
   Privacy matches redaction: the edited text is written **only** to the user-chosen file, and the
   find/replace values never reach any log/audit/`skill_runs` row (they ride as tool input, which the gate
   never logs) — only per-run **counts** are surfaced (architecture.md "Skills — design record" §22). The
   edited copy is a **starting point that still needs a human review** before sharing; the SKILL.md body and
   the run's "done" copy both say so.
-  - **Same-format export keeps DOCX as DOCX; other formats save as `.txt` (Skills Phase 9, #22/#23, D77;
+  - **Same-format export keeps DOCX as DOCX; other formats save as `.txt` (#22/#23, D77;
     architecture.md "Skills — design record" §23).** When the source is a **Word `.docx`**, redaction and
     targeted-edit save a **same-format `.docx` copy** — styles, numbering, tables and headers survive because
     the app changes **only the text inside `<w:t>` nodes** of `word/document.xml` and copies every other zip
@@ -460,7 +459,7 @@ password recovery — are documented in
     number) or one that fails Luhn is left alone. Cards are masked **before** dates and phones so a PAN is
     never split by them, and **after** IBANs so an IBAN's BBAN digits are not re-read as a card. A card that
     fails Luhn (or one printed in an unusual grouping) is a documented miss — the conservative posture stands.
-  - **Phone and IBAN coverage is broader but still pattern-bound (full-audit-2026-06-28 BL-N4; U2).** Phone
+  - **Phone and IBAN coverage is broader but still pattern-bound.** Phone
     masking catches **punctuated US/national 3-3-4 numbers** (`555-123-4567`, `1-800-555-1234`,
     `555.123.4567`) on top of the `+`-country and leading-`0` forms — but punctuation is **required** (a
     bare 10-digit run is left alone to avoid masking account/ID numbers), so a space-only or run-together
@@ -503,16 +502,16 @@ password recovery — are documented in
     (privacy-favouring direction), and the review surfaced a **pre-existing** super-linear
     backtracking hazard in `IBAN_CANDIDATE_RE`'s grouped alternative on hostile uppercase runs
     (multi-second on a ~500 KB adversarial document, R7-identical, neither caused nor worsened by
-    R8) — an open R-phase candidate for the vuln-scan linearization treatment.
-  - **Informational dry-run + share-safe pre-scan (U2, audit §3.4/§3.5).** An INFORMATIONAL redaction
+    R8) — an open candidate for the same linear-matcher treatment as the trigger guard above.
+  - **Informational dry-run + share-safe pre-scan.** An INFORMATIONAL redaction
     question ("welche personenbezogenen Daten enthält das Dokument?", "what personal data is in here?")
     over a single document now gets a read-only **counts** answer (`scanRedactionCandidates` — the same
     detectors, run without writing a copy; per-category counts only, never a detected value) instead of the
     button deflection; an *action* ask keeps the deflection (the write tool stays user-initiated). The
     **share-safe-review** whole-document turn injects a deterministic whole-document PII count summary into
     the model prompt and **gates its "Likely low risk after review" verdict on non-truncated coverage** —
-    a truncated read (the model was shown only the beginning) forbids the low-risk verdict. Since the
-    whole-doc-truncation-fix Phase 1, an over-budget document with NO tree is covered whole via the **chunk
+    a truncated read (the model was shown only the beginning) forbids the low-risk verdict. An
+    over-budget document with NO tree is covered whole via the **chunk
     map-reduce**, whose reduce turn carries the pre-scan block with NO gate (whole-doc coverage legitimately
     permits the low-risk verdict) — so the pre-scan now reaches the common over-budget case. Residual: a
     share-safe review of an over-budget document rescued via the deep-index **tree** map-reduce still does
@@ -560,16 +559,15 @@ password recovery — are documented in
     and re-downloading, but does not detect the change up front — an accepted residual until
     `If-Range`/ETag revalidation lands (the `Content-Range` start is validated, which catches a
     wrong-offset 206 but not a same-offset content change).
-- **Drive updates are manual — Phase 22 (signed offline update bundles, spec §12.3) is still
-  OPEN.** There is no update mechanism yet; the `updates/` and `workspace/backups/` directories
+- **Drive updates are manual — signed offline update bundles (spec §12.3) are not built yet;
+  there is no update mechanism.** The `updates/` and `workspace/backups/` directories
   are not created. The manual procedure is documented in [`drive-layout.md`](drive-layout.md)
   ("Updating a drive"). **Blocker: the key-management design** — who holds the signing key and
   where it lives (dev-machine key vs. an offline-born production key; HSM/hardware-token class
   questions), what public key drives trust (and whether DIY drives trust a repo key or generate
   their own), offline key rotation/continuity, and rollback protection. Deliberately **not yet
-  decided** (discussed 2026-06-10, decision deferred); Phase 22 needs its own short design doc
-  (`docs/update-bundles-plan.md`, outline in
-  BUILD_STATE §5 item 3) before any code.
+  decided**; the update-bundle work needs its own short design doc
+  (outline in BUILD_STATE §5) before any code.
   One constraint already understood from that discussion: a trust anchor cannot be
   retroactively strengthened, so whatever key signs during development must never anchor
   commercial drives — the production key would be a different, offline-generated key.
@@ -577,7 +575,7 @@ password recovery — are documented in
 ## Engineering trade-offs (noted, intentionally unchanged)
 
 - **Text / Markdown / CSV imports are capped at 64 MiB, separately from the 1 GiB document ceiling
-  (PERF-4, full-audit-2026-06-29-followup; [`architecture.md`](architecture.md) §35).** Those parsers
+  ([`architecture.md`](architecture.md) §35).** Those parsers
   read the whole file into one UTF-16 JS string (CSV then derives the papaparse row array + the rebuilt
   joined text — ≈3 full copies at once), so a file near the 1 GiB `maxBytes` would exceed V8's ~512 MB
   string limit and OOM-crash the main process. The `textMaxBytes` ceiling (env `HILBERTRAUM_TEXT_MAX_BYTES`)
@@ -585,7 +583,7 @@ password recovery — are documented in
   keep the full `maxBytes` (they stream / are page-bounded). A streaming line/row parser would lift the
   cap; the byte ceiling is the safe interim win.
 - **The documents list is windowed, so the browser's find-in-page (Ctrl+F) only matches rows that are
-  currently rendered (PERF-2, full-audit-2026-06-29-followup; [`architecture.md`](architecture.md) §36).**
+  currently rendered ([`architecture.md`](architecture.md) §36).**
   To stop the list DOM (and the per-row Radix menu-root state machines) from growing linearly with library
   size, the documents list virtualizes with `@tanstack/react-virtual` — only the rows in/near the viewport
   are mounted. An inherent windowing trade-off is that Ctrl+F can't find a document whose row isn't mounted;
@@ -595,7 +593,7 @@ password recovery — are documented in
   row. The trade-off is **deliberately not** applied to the chat transcript (its scroll-to-bottom /
   find-in-page / StreamAnnouncer behavior keeps it un-windowed for now).
 - **Chat "Try again" optimistically drops the last answer before regenerating; it self-heals, never
-  data loss (full-audit-2026-06-30 F7 — accepted).** `ChatScreen.onTryAgain` slices the last
+  data loss (accepted).** `ChatScreen.onTryAgain` slices the last
   assistant turn from the view before calling `stream(...)`, so the regenerate looks immediate. If the
   regenerate IPC throws *before* the backend mutates, or the user switched conversations, that answer
   is briefly missing from the view while the DB still holds it. It is restored without any manual
@@ -624,7 +622,7 @@ password recovery — are documented in
   not code generation — see the rule in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Docs copied onto a prepared drive (user-guide, troubleshooting) contain repo-relative links that
   do not resolve when read from the drive.
-- **Audit log (Phase 19) accepted edges:** events recorded while the vault is locked are
+- **Audit log accepted edges:** events recorded while the vault is locked are
   buffered in memory only — quitting the app before the next unlock drops them (bounded buffer,
   oldest dropped past 100). The **persisted** audit log is also capped (`AUDIT_MAX_ROWS = 5000`,
   pruned on every insert), so on a very active workspace the oldest events fall off over time.
@@ -632,7 +630,7 @@ password recovery — are documented in
   not audited (only the explicit "Lock now" / stop actions are). A download that completes
   against a placeholder manifest hash records no `model_download_verified` event (checksum
   honesty — the AI Model screen shows UNVERIFIED).
-  - **Document import / re-index events no longer name the file (full-audit-2026-06-30 S1).**
+  - **Document import / re-index events no longer name the file.**
     The Activity panel rows read a plain "Document imported" / "Document re-indexed" instead of
     interpolating the title/basename, because a user-chosen filename is **content** (it can be as
     sensitive as the text it labels) and the whole log is exported verbatim by the plaintext
@@ -640,7 +638,7 @@ password recovery — are documented in
     so the row is fully resolvable from inside the app; only the human-readable name is withheld
     from the log, matching the chat (conversation title) and collections (project name) channels.
 
-## Retrieval quality (Phase 21, [`rag-design.md`](rag-design.md) §11)
+## Retrieval quality ([`rag-design.md`](rag-design.md) §11)
 
 - **The E5 embedder runs WITHOUT its `query:`/`passage:` prefixes — a retrieval-quality ceiling,
   not just a floor problem (backend-audit-2026-06-27 DOC-3; [`rag-design.md`](rag-design.md)
@@ -662,7 +660,7 @@ password recovery — are documented in
   bundled by default. The `HILBERTRAUM_RAG_QUALITY` run is the evidence it earns the cost
   (rag-design §12.3).
 - **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
-  race no longer arms it (full-audit-2026-06-29-postmerge F4/F7; arch GPU record §5.5b).** Each
+  race no longer arms it (arch GPU record §5.5b).** Each
   sidecar latches a failed start so it doesn't re-await the full health timeout on every call. That
   latch is meant for a corrupt/incompatible GGUF; it previously also armed for a transient
   port-bind race (the bind retry is bounded to ONE attempt, so a near-simultaneous chat + embedder +
@@ -678,9 +676,9 @@ password recovery — are documented in
   the 1 000-chunk/file cap; encrypted at rest with the same DB file.
 - **Keyword search is embedder-visibility-scoped by design**: a document whose vectors were
   produced by a different embedder is not keyword-searchable either, until re-indexed — that is
-  the Phase-17 honesty rule, not a gap (`REINDEX_NEEDED_ANSWER` tells the user what to do).
+  a deliberate honesty rule, not a gap (`REINDEX_NEEDED_ANSWER` tells the user what to do).
 
-## Document tasks & summaries (Phase 33, wave-3 plan §6)
+## Document tasks & summaries
 
 _The **`audit §N.M`** citations in the skills/extraction residuals below refer to the **2026-07-02 Skills
 & Tools audit**, folded (with its 20-phase remediation plan) into [`architecture.md`](architecture.md)
@@ -695,12 +693,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
 - **Summary input is the stored chunks, not a re-parse (D25).** Adjacent chunks overlap by
   ~80 tokens, so stitched windows repeat a little text (harmless for summarization).
 - **Over-cap documents are now REJECTED at index time, not silently truncated
-  (whole-document-analysis Phase 1, C1/C2/M13 — behavior change).** A document that would
+  (C1/C2/M13 — behavior change).** A document that would
   exceed `MAX_CHUNKS_PER_DOCUMENT` (1 000) fails with a friendly "too large to fully index —
   split it" message (`main.ingest.tooManyChunks`) instead of indexing only its first 1 000
   chunks. So every *indexed* document is now the WHOLE document (recorded by the
   `fully_chunked` marker), which is what lets a deep index honestly claim full coverage.
-  Consequence: a **legacy** document indexed before Phase 1 (which may have been silently
+  Consequence: a **legacy** document indexed before this change (which may have been silently
   truncated) carries no `fully_chunked` marker — it is re-indexed before any deep-index /
   100 %-coverage claim, and if it is genuinely over-cap that re-index fails **closed** (the
   doc becomes `failed`/unsearchable and must be split into parts — the cap check runs before
@@ -732,7 +730,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   audit's DATA-3) — this bounds it cheaply rather than precisely (eviction runs once per build,
   not on a timer).
 - **"List every X" answers are exhaustive over the SECTIONS SCANNED — not guaranteed complete
-  (whole-document-analysis Phase 3, H7).** When a document has been through the structured-extract
+  (H7).** When a document has been through the structured-extract
   pass (a manual, yielding background task like the deep index), a "list every / how many {X}"
   question is answered from precomputed data at **zero model calls** with per-item provenance and
   an honest coverage line ("N sections scanned (k unparsed)"). It is **not** a guaranteed-complete
@@ -777,35 +775,35 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   (read in order, not top-k) with the SKILL.md format applied, stamping honest `capped` coverage. A
   document larger than the context budget that has a **ready deep index** is answered by a skill-fenced
   **map-reduce over its tree** instead of truncating (`tree` badge — Follow-up A, §20); **without** a ready
-  tree it is now covered whole by an on-the-fly **map-reduce over its raw chunks** (whole-doc-truncation-fix
-  **Phase 1**, 2026-07-04 — `capped`/untruncated badge, "covers the whole document"), which **closes the
+  tree it is now covered whole by an on-the-fly **map-reduce over its raw chunks**
+  (`capped`/untruncated badge, "covers the whole document"), which **closes the
   "gap band"** where a document too large for a single read but too small to auto-build a tree was read from
   the beginning only. New residuals: (a) a very large document is covered whole up to a **raised** ceiling —
-  since **follow-up #2** (2026-07-05) a window count between `SUMMARY_MAP_CALL_CEILING` (~12 windows, ~50
+  a window count between `SUMMARY_MAP_CALL_CEILING` (~12 windows, ~50
   pages) and `SUMMARY_MAP_CALL_HARD_CEILING` (~24 windows, ~100 pages) is no longer dropped: every mapped
   window's notes are **condensed** down through bounded fenced intermediate reduces (a hierarchical fold, cap
   `MAX_FOLD_DEPTH`) until they fit one final reduce, so the whole document is covered (`truncated:false`).
   Only **beyond** the hard ceiling (~100 pages) does the tail stay honestly beginning-only (`truncated:true`)
   — that is deep-index **tree** territory (the tree auto-builds at ~this size and is the designed rescue; the
   fold is a bounded query-time lever, deliberately not unbounded — the dominant cost is one map call per
-  window on CPU, covered by the Phase 3 progress notice); (b) a mid-size analysis
+  window on CPU, covered by the progress notice in (b)); (b) a mid-size analysis
   now costs 2–12 model calls (map windows + reduce) of extra latency before the first streamed token —
-  since **Phase 3** (2026-07-05) that gap carries the ephemeral `'analysis'` progress notice ("Reading the
+  that gap carries the ephemeral `'analysis'` progress notice ("Reading the
   whole document…"), fired in the shared map-reduce core only when a real map loop runs (`windows.length >
   1`) and cleared on the first reduce token, so it no longer reads as a hang; (c) on a small (4 k) window a
   very long deliverable used to be **output-cut**:
-  since **Phase 2** (2026-07-04) the reduce output reserve is adaptive (`computeReduceBudget`) — it aims
+  the reduce output reserve is adaptive (`computeReduceBudget`) — it aims
   for `ANALYSIS_RESPONSE_RESERVE_TOKENS` (3072) so a brief completes in full on a ≥ ~8 k window, and on a
   4 k window it **yields the reserve toward `CHAT_RESPONSE_RESERVE_TOKENS`** (never below) so whole-document
-  coverage is *preserved* and the *deliverable* shrinks instead (notes-first — Phase 1's gap-band closure
-  survives at the default 4 k). **Since Phase 4** (2026-07-05) that output cut is closed by
+  coverage is *preserved* and the *deliverable* shrinks instead (notes-first — the gap-band closure
+  survives at the default 4 k). That output cut is closed by
   **continue-generation**: when the reduce stream ends `finishReason === 'length'` (cut at the ceiling, not a
   user Stop), the shared core re-prompts to FINISH the deliverable — re-sending the same fence + notes +
   question plus a resume anchor (the last ~200 chars, seam de-duplicated) — across at most
   `MAX_REDUCE_CONTINUATIONS` (2) extra passes, each output cap sized against the actual assembled prompt so
   `prompt + output ≤ n_ctx` still holds (no HTTP 400). Only a document whose notes cannot fit alongside even
   the floor output is notes-truncated (honestly badged `coverage.truncated` — the INPUT-coverage flag). The
-  continuation engine was **extended to the single-turn grounded path** (follow-up #1, 2026-07-05): any
+  continuation engine was **extended to the single-turn grounded path**: any
   grounded answer cut at the context ceiling — relevance top-k, the small-doc fits-budget read, or the
   whole-doc capped read — is now finished the same way (re-sending the whole grounded prompt + a resume
   anchor), so a mid-word grounded reply no longer persists as if complete. **New residual:** a deliverable
@@ -1065,7 +1063,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     (score 2), so the omission is **consistent**, not a bug. Recorded explicitly so nobody "fixes" it into a
     precision regression by adding `text/plain` to the `mimeTypes` gate.
 - **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
-  §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
+  §21, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented
   parser (the user-reported HVB "zero transactions" failure). The bank-statement skill now re-parses
   the PDF in a **layout mode** that rebuilds visual rows from pdf.js word coordinates and emits clean,
@@ -1156,8 +1154,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the Datum-band bootstrap vote counts ambiguous `d.dd` tokens as dates, so a page with MORE
   date-plausible dot-decimal figures in one band than booking dates could in principle mis-place the
   band (pre-existing lens gap; ties break leftmost, which protects every constructed real layout).
-- **The bank/invoice LINE PARSER makes deliberate locale/column assumptions (full-audit-2026-06-28
-  Phase 1, BL-N1/N2/N3 + DECISION 2).** The deterministic line parser shared by the bank and invoice tools
+- **The bank/invoice LINE PARSER makes deliberate locale/column assumptions.** The deterministic
+  line parser shared by the bank and invoice tools
   (`tools/money.ts`, distinct from the geometry pass above) carries these accepted behaviors, all pinned by
   adversarial whole-string tests:
   - **Date locale is INFERRED per document, with day-first as the default.** A document is read month-first
@@ -1173,8 +1171,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     line** ("this statement gives no sign whether the dates are day-first or month-first, so I read them
     day-first…", en + de, du-form). The **residual** is that the caveat is document-level: there is still no
     PER-ROW channel (the tool output schema is frozen), so a single ambiguous date among evidence-bearing
-    ones is read day-first without an individual flag. The vote is **scoped by line kind (full-audit-2026-06-29
-    follow-up FIN-4)**: a MONEY-bearing line (a transaction row) votes only on its **leading** date column(s),
+    ones is read day-first without an individual flag. The vote is **scoped by line kind**: a
+    MONEY-bearing line (a transaction row) votes only on its **leading** date column(s),
     so a foreign-format date in a payee MEMO can no longer flip the whole document's order (which used to
     silently day/month-swap every dotted booking date); a MONEY-less header/label line (an invoice `Invoice
     date 06/15/2026`, a statement period) still votes on any date it carries, so labeled US-invoice dates are
@@ -1256,8 +1254,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     and no balance, or a description figure that lands in the amount slot) the position heuristic can still
     pick wrong. The **geometry column model** (above) is the stronger separator where it runs; this is the
     plain-text / CSV / invoice fallback.
-  - **An UNCAPTURED amount column drops the row rather than promote the balance (full-audit-2026-06-29-
-    postmerge F1).** A whole-euro amount (`50`) or single-decimal (`12,5`) is rejected by the 2-dp money
+  - **An UNCAPTURED amount column drops the row rather than promote the balance.** A whole-euro
+    amount (`50`) or single-decimal (`12,5`) is rejected by the 2-dp money
     scan, so a `Sparen 50 1.234,56` row collapses to ONE money token — the *balance* — and the position
     heuristic above would otherwise read the running **balance as the movement amount** (off by the whole
     balance magnitude — the cardinal confidently-wrong-money harm). The fix is **statement-context-aware**:
@@ -1272,11 +1270,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     figure, so it drops a row with an uncaptured numeric column to the **RIGHT** of the line total
     (`Hosting 12,50 500` → the real total `500` lost) and a bare number to the LEFT is treated as a quantity.
     The right-side drop is scoped to a trailing token that is **itself** a money-shaped-but-rejected bare
-    amount (full-audit-2026-06-29 follow-up FIN-2): the region after the last money match must be ENTIRELY
+    amount: the region after the last money match must be ENTIRELY
     one such token, so a valid item with a trailing **annotation** (`Service 12,50 (Pos. 3)`, `Beratung
     1.234,56 19% MwSt`, `Line 50,00 EUR 2 Stk`) is **kept**, not deleted by the earlier "any trailing digit
     drops" rule.
-  - **Every parsed figure is normalised to 2 decimal places (full-audit-2026-06-29-postmerge T5).**
+  - **Every parsed figure is normalised to 2 decimal places.**
     `parseAmount` rounds each figure to the nearest cent so `Math.round(x*100)` is its EXACT integer-cent
     value — the load-bearing premise of the completeness/reconcile tie-out math and the CSV `toFixed(2)`.
     A printed figure with a 3rd decimal (only reachable via the both-separator `1.234,567` form) is read to
@@ -1291,8 +1289,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     234,56 (a 1000× error). The Swiss U+2019 apostrophe becomes `'`, so `1’234.56` reads 1234.56. The
     pre-pass is a **no-op for ASCII** (existing fixtures byte-identical) and **idempotent**. Extractor
     versions bumped (`BANK_EXTRACTOR_VERSION` → 4, `INVOICE_EXTRACTOR_VERSION` → 4) so stale rows re-extract.
-  - **A figure's sign is read by the SPACE around a minus (full-audit-2026-06-29 BL-1; leading side closed
-    by invoice-audit-2026-07-06 T-1).** A **glued**
+  - **A figure's sign is read by the SPACE around a minus.** A **glued**
     trailing minus is a de-AT debit (`45,90-` → −45,90, even with a running balance after it); a `-<digit>`
     after a space is the next figure's **leading** sign (`2.500,00 -500,00` → +2500 then −500). This
     replaced an earlier trailing `-?` that reached across the column gap and stole the next figure's leading
@@ -1308,8 +1305,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     **spaced** trailing minus immediately before a
     balance figure (`45,90 - 1.908,20`) reads as a *positive* amount — no parser can distinguish it from
     subtraction; the glued de-AT convention (`45,90-`) is the unambiguous one and is read correctly.
-  - **Per-row currency is detected only in the FIGURE REGION (full-audit-2026-06-29 BL-2; extended to the
-    invoice path by full-audit-2026-06-29-postmerge F3).** The row's currency is read from the text
+  - **Per-row currency is detected only in the FIGURE REGION.** The row's currency is read from the text
     **at/after the first money token**, not the free-text description, so a payee memo mentioning `USD`/`$`
     on a EUR statement no longer tags that row a foreign currency (which used to suppress the whole
     statement's total + reconciliation). The **invoice line parser** now matches the bank path (the BL-2 fix
@@ -1321,8 +1317,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     before** the only figure with no other adjacency (`$50,00` as a row's sole token) can be missed and
     falls back to the document currency — harmless on a single-currency document, a rare mis-tag on a truly
     mixed one. The **document-level fallback currency** (used when a bare-amount row prints no figure-adjacent
-    code — the de-AT norm) is now a **MAJORITY VOTE over figure-adjacent detections** (full-audit-2026-06-29
-    follow-up FIN-1; `money.ts detectDocumentCurrency`), not the old "first allowlisted code anywhere in the
+    code — the de-AT norm) is now a **MAJORITY VOTE over figure-adjacent detections**
+    (`money.ts detectDocumentCurrency`), not the old "first allowlisted code anywhere in the
     document wins". A money line votes only on its figure region (a code in a payee memo, LEFT of the amount,
     is excluded); a money-less header/label line (`Währung EUR`) votes on its whole text. So a stray `USD` in
     a memo can no longer stamp a whole EUR statement — and its VERIFIED total — with the wrong currency.
@@ -1341,8 +1337,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     plain-text path, never a wrong **verified** statement total (the completeness gate still requires the
     printed opening + Σ == closing to tie out). **On the geometry-less INVOICE path** (no completeness gate,
     no balance backstop) a space-grouped token **without a 2-dp decimal tail** (`Widget 10 100` → `10 100`
-    → 10100) is treated as a likely column fusion and the row is **DROPPED** (full-audit-2026-06-29-postmerge
-    F6) — a real line total almost always prints cents. A decimal-anchored space group (`1 234 567,89`) is a
+    → 10100) is treated as a likely column fusion and the row is **DROPPED** — a real line total
+    almost always prints cents. A decimal-anchored space group (`1 234 567,89`) is a
     real figure and is kept; a space group **with** a decimal (`15 799,00`) stays the accepted trade-off
     (indistinguishable from a real 15 799,00).
   - **A LABELED invoice totals line reads a ROUND total printed WITHOUT a decimal (invoice-totals-2026-07-01).**
@@ -1388,8 +1384,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     `Gesamtsumme`, `Rechnungssumme`, `Endsumme`, `Endbetrag`, `summe netto` — and a summary-line guard
     (`isSummaryLabelLine`, mirroring the bank `isBalanceLabelLine`) drops phantom "Summe" items so a
     summary line never becomes a line item while the totals stay empty. `INVOICE_EXTRACTOR_VERSION` → 5.
-  - **A trailing number is split as `quantity` only with corroboration (full-audit-2026-06-29-postmerge
-    F8, invoice path).** A product-coded description (`iPhone 15`, `Calendar 2026`) used to have its
+  - **A trailing number is split as `quantity` only with corroboration (invoice path).** A
+    product-coded description (`iPhone 15`, `Calendar 2026`) used to have its
     trailing number greedily read as a quantity. The split now requires a **unit token** (`x`/`Stk`/`pcs`/…)
     OR a **unit-price column** (a second money token) to corroborate it — so `iPhone 15 1.799,00` keeps
     "iPhone 15" as the description while the columnar `Widget A 2 12,50 25,00` still reads quantity 2. The
@@ -1402,7 +1398,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     before the money scan, so the printed figure wins for both the date-leading `Kontostand per <date>
     <figure>` and the date-trailing shape. (This is why the backend-audit §24/§10 "last-token readers were
     never affected" claim was wrong — corrected there: only the *date-first* shape was ever safe.)
-  - **A balance-less row still ADVANCES the running-balance chain (full-audit-2026-06-30 C1).**
+  - **A balance-less row still ADVANCES the running-balance chain.**
     `reconcileBalances` carries a `sinceLastPrinted` cents accumulator: a mid-statement row with a real
     amount but no printed running balance (same-day grouping — the bank prints the balance only on the
     day's last line — or an OCR-dropped balance cell) is reported `unknown` (it prints no balance of its
@@ -1416,19 +1412,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     automatically. **Residual:** because `amount` is required on every row, the chain is never "genuinely
     broken" by a missing amount, so a row whose balance was dropped AND whose amount the parser failed to
     read drops earlier (the row vanishes, a recall loss) rather than reaching reconciliation.
-  - **A `0.00` row is neither inflow nor outflow (full-audit-2026-06-30 C5).** `summarizeCashflow` totals
+  - **A `0.00` row is neither inflow nor outflow.** `summarizeCashflow` totals
     positive amounts as inflow and negative as outflow; a genuine zero counts toward neither, matching
     `categorizeRow`'s `Uncategorized` fallback for a zero amount (the two surfaces previously disagreed —
     the summary's `>= 0` test counted a zero as inflow). The reported totals are unchanged (the figure is
     zero); only the internal attribution is now consistent.
-- **Bank-statement categories are model-assisted, not verified (Phase 33).** The per-category breakdown
+- **Bank-statement categories are model-assisted, not verified.** The per-category breakdown
   is assigned by a local LLM constrained to a **fixed category set** (it can never invent a label; any
   uncertain/unparseable output drops to `Uncategorized`), so a category may be **wrong** — but a mislabel
   only shifts the breakdown, never the **verified statement total** or the **D56 completeness gate** (which
   read the signed amounts, not the labels). The breakdown is shown with an explicit "model-assisted" note.
   With **no model loaded** it degrades to the deterministic rule pass (a smaller, coarser category set).
-  The deterministic rules match German keywords **inside closed compounds** (full-audit-2026-06-29 BL-3:
-  `kontoführungsgebühr`→Fees, `gehaltszahlung`→Income) via a one-sided word boundary on the unambiguous DE
+  The deterministic rules match German keywords **inside closed compounds**
+  (`kontoführungsgebühr`→Fees, `gehaltszahlung`→Income) via a one-sided word boundary on the unambiguous DE
   keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`), while short English tokens (`fee`/`atm`) and the
   ambiguous `lohn` keep a strict two-sided boundary. **Transfer boilerplate does NOT veto the model
   (R3 / audit §5.5):** `sepa`/`überweisung` describe the payment rails, not the merchant, so most de-AT
@@ -1443,18 +1439,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   streams. Categories are grouped on a **canonical English identifier** (stable across UI locale — the
   enum and the model-assisted detection key on it), but the breakdown **display labels are localized**
   (EN + DE); a future user-defined category with no catalog entry falls back to its raw name.
-- **A "categorize … as CSV/JSON" chat turn now serializes WITH the category column, but chat still
-  cannot write the file, and the columns are fixed (result-tables plan, Phase 1 — 2026-07-05).** The
+- **A "categorize … as CSV/JSON" chat turn serializes WITH the category column
+  ([`result-tables-plan.md`](result-tables-plan.md) carries the open residuals).** The
   bank format answer categorizes FIRST (persisting, with the honest model-assisted / rule-based note
   under the fenced block — D63) and both CSV surfaces (the inline answer and the confirm-gated export
   button) emit each row's category through one generic table serializer (D60); the column is
   **presence-gated** (D62) — a never-categorized statement keeps its prior 7-column shape rather than
-  implying an all-blank categorization. Remaining limits: (a) ~~the file write stays a UI-lane
-  action~~ — **closed by Phase 2 (same day)**: a bank format answer now persists its structured
-  table (`result_tables`, purged with its message) and carries a message-level **"Export CSV"**
-  action that writes it via the standard save dialog — though only answers produced AFTER Phase 2
-  carry a table (no backfill), and only the bank format path emits one so far (invoice port
-  pending); (b) ~~the column set is fixed~~ — **closed by Phase 3 v1 (same day)**: "… als CSV mit
+  implying an all-blank categorization. Current shape: (a) a bank format answer persists its
+  structured table (`result_tables`, purged with its message) and carries a message-level
+  **"Export CSV"** action that writes it via the standard save dialog — though only answers
+  produced after this landed (2026-07-05) carry a table (no backfill), and only the bank format
+  path emits one so far (invoice port
+  pending); (b) user-named extra columns are supported: "… als CSV mit
   einer Spalte Empfänger" pays ONE grammar-constrained parse + a batched per-row fill over the
   whole statement; derived cells are model-filled labels (honesty note under the fence), blank
   where the model was unsure, and ride the persisted result table + message export. Limits: needs
@@ -1464,8 +1460,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   be signalled with a column-shaped phrasing (Spalte/column/subcategory/payee …); (c) **without
   the skill active** a tabular ask still routes to top-k relevance, not whole-document — routing
   it through extract-then-enrich needs a generic row extractor that does not exist yet (deferred,
-  plan §5).
-  **Phase 1.5 (same day) added USER-DEFINED category sets from the prompt** ("Kategorisiere in Miete,
+  `result-tables-plan.md` §5).
+  **USER-DEFINED category sets from the prompt are supported** ("Kategorisiere in Miete,
   Lebensmittel, Kinder und Sonstiges … als CSV"): the enum-constrained categorizer runs INLINE in the
   chat slot with the user's labels (+ the `Uncategorized` drop target), persists them as non-builtin
   categories, and reuses a prior run when the persisted labels fit the requested set. Limits: it
@@ -1477,7 +1473,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   statement pays the per-batch model latency inside the chat turn (the ephemeral "reading…" notice
   covers the gap, but there is no per-batch progress meter in chat — the "Categorize" button lane
   has one).
-  **Phase 1.6 (same day): the taxonomy can live in an imported CSV** — "Kategorisiere nach den
+  **The taxonomy can live in an imported CSV** — "Kategorisiere nach den
   Kategorien in `taxonomie.csv`" finds the file BY NAME across the indexed library (never by widening
   scope), parses one label per line (2–40; an optional keyword column becomes the model-prompt gloss —
   the accuracy lever), and refuses honestly, naming the file, when it is missing or not parseable as a
@@ -1523,7 +1519,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   prompt. Unavoidable overflow (a single oversize turn on a tiny-context model) now surfaces the
   friendly `main.model.contextExceeded` copy on the invoke rejection, not the raw `HTTP 400`.
 
-## Document translation (Phase 34; TranslateGemma reroute at TG-3 — translategemma plan §2)
+## Document translation ([`architecture.md`](architecture.md) "Translation sidecar — design record")
 
 - **Translation REQUIRES the TranslateGemma translation model — there is no chat-model
   fallback (plan O2/D3).** Translation runs on a dedicated local sidecar, never on the
@@ -1558,7 +1554,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat
   template lists ~160 languages, but the ~105 beyond the WMT24++ set are experimental
   (GATITOS/SMOL-sourced, higher hallucination rates per Google) and stay OUT. TranslateGemma's
-  trained prompt needs an explicit source language; there is **no auto-detect** (plan §6).
+  trained prompt needs an explicit source language; there is **no auto-detect**.
   Per-language round-trip evidence exists for the original 10 (the TG-6 smoke); the widened rest
   ship on the model's own WMT24++ evaluation. Translation quality on the widened languages has NOT
   been locally re-measured — add a `SMOKE_LANGS` sample when promoting one into the measured set.
@@ -1569,7 +1565,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   ~2.3 tokens/word on Czech/Ukrainian prose), so windows are now **~690 words** — smaller,
   hence more of them on a long document. Each window is translated independently: a recurring
   term can be rendered differently in different windows. A sliding glossary/context header is
-  explicitly out of scope for now (plan §5).
+  explicitly out of scope for now.
 - **Window sizing is "over-chunk, never overflow" for realistic prose — not an absolute
   guarantee on adversarial emoji/astral input (audit L10, accepted).** The planner sizes
   windows with the shared word-count estimator `approxTokenCount`, whose per-word token
@@ -1647,7 +1643,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   progress + result without the original filename label until it completes. At most one of the
   two is ever live (the D9 one-at-a-time lane), so the two adopts never both claim the panel.
 
-## Document comparison (Phase 35, wave-3 plan §8)
+## Document comparison
 
 - **A similar version pair is compared by a deterministic word-level diff (mode d).** When the two
   documents share most of their text — the real "what changed" case — a Myers word diff finds the
@@ -1696,11 +1692,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   duplication is accepted (visible, never wrong).
 - **Mixed-language pairs get a single-language report.** The prompt says "write in the
   language of the documents"; for a German/English pair the model picks one. Compare
-  like-language documents (or translate one first — Phase 34 exists for this).
+  like-language documents (or translate one first — the Translate view exists for this).
 - **A comparison is a snapshot, not a synced copy** — the same `origin_json` staleness
   edge as translations; re-run Compare after the sources change.
 
-## Audio transcription (Phase 36, wave-3 plan §9)
+## Audio transcription
 
 - **m4a/aac recordings are not supported.** The pinned whisper.cpp binary decodes
   WAV/MP3/FLAC/OGG only (probed with real files, R-W2); decoding m4a would require
@@ -1710,14 +1706,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   model, 4 threads, the reference CPU): a 52-minute meeting took ~35 minutes; peak memory ~1.2 GB. The
   import shows honest "Transcribing… N%" progress and the app stays usable meanwhile.
   GPU-accelerated whisper is a possible later opt-in, never a default risk.
-- **A wedged or cancelled transcription self-recovers — it cannot hang the import slot**
-  (backend audit 2026-06-27, REL-1). A whisper child that stops producing any output for
+- **A wedged or cancelled transcription self-recovers — it cannot hang the import slot.**
+  A whisper child that stops producing any output for
   15 minutes (env-tunable) is killed by an inactivity watchdog; because a healthy run emits
   `-pp` progress continuously, this only trips on a genuinely spinning/hung child, never a
   slow-but-advancing one. Cancelling the import (e.g. locking the vault mid-job) also aborts
   the in-flight child immediately. Either way the one document fails friendly and the import
   loop continues. **The watchdog/abort/suspend kills now escalate SIGTERM → SIGKILL after a
-  2 s grace (full-audit-2026-06-29, REL-2)**, so a `whisper-cli` wedged in native code that
+  2 s grace**, so a `whisper-cli` wedged in native code that
   ignores SIGTERM is still forced down and the ingestion slot freed. `suspend()`/`stop()` (vault
   lock / app quit) additionally bound their cleanup wait at 10 s: in the vanishingly-rare case a
   child ignores even SIGKILL, teardown returns anyway rather than hanging quit, and the unshredded
@@ -1740,7 +1736,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   held up well in the German probes. The transcript is searchable text, not a notarized
   record.
 
-## Voice dictation (Phase 37, wave-3 plan §10)
+## Voice dictation
 
 - **Dictation is click-to-start / click-to-stop, then transcribe — not live.** Streaming
   ASR (words appearing while you speak) is explicitly out of scope (D30); the per-file
@@ -1760,14 +1756,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   transcribes and inserts; deleting unwanted text is one Ctrl+Z / selection away
   (the insert participates in the input's normal undo history). Leaving the screen
   mid-recording discards the recording and releases the microphone.
-- **One dictation at a time, and a wedged child can't hang the mic forever** (backend
-  audit 2026-06-27, REL-3). A second mic press while a dictation is still transcribing is
+- **One dictation at a time, and a wedged child can't hang the mic forever.**
+  A second mic press while a dictation is still transcribing is
   refused with friendly copy rather than spawning a concurrent whisper child. A child that
   is still running past a 10-minute wall-clock ceiling (env-tunable; the recording is already
   capped at ~35 min of audio) is killed and the composer gets the friendly failure instead of
   a perpetual spinner.
 
-## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11)
+## Scanned-PDF / photo OCR
 
 - **OCR runs on the CPU at a couple of seconds per page** (R-O3: ~1.3 s recognition +
   ~0.4 s rendering per A4 page on the reference CPU with the shipped `best_int` data).
@@ -1802,7 +1798,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   verifying a real OCR run from the produced portable .exe is a release-acceptance
   item (the green gate never packages — the R2 posture).
 
-## Image understanding (Phases V1–V5, [`architecture.md`](architecture.md) "Image understanding — design record")
+## Image understanding ([`architecture.md`](architecture.md) "Image understanding — design record")
 
 - **The first question about a full-resolution image is SLOW on CPU.** CPU prefill of a high-res
   image is ~52 s for ~2800 image tokens off USB (~12 tok/s decode) — measured on b9585 (V1). The
@@ -1833,8 +1829,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   feature never generates/edits images (a permanent non-goal).
 - **Context is capped at 4096 tokens** (vs the model's 128 000 train context) — fine for a single
   image + a short question/thread in MVP; long multi-turn threads about one image are not a v1 promise.
-- **`imageReadBytes` takes an opaque token, not a path** (vuln-scan-2026-06-21 / `security-model.md`
-  D2). `imageChooseImage` returns a one-time token; the absolute path stays in main, so the renderer
+- **`imageReadBytes` takes an opaque token, not a path** (`security-model.md` D2).
+  `imageChooseImage` returns a one-time token; the absolute path stays in main, so the renderer
   can't make main read an arbitrary file. The byte cap is re-checked on the open fd (no TOCTOU), and
   the main-side guard also rejects decompression bombs by a decoded-pixel budget (D4).
 - **No vision model ships on a commercial drive yet, but the sell gate already verifies BOTH files
@@ -1846,17 +1842,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   half-installed vision model (GGUF already present, projector missing) fetches just the projector
   (`downloads.test.ts`). The `fetch-models.{sh,ps1}` scripts remain the offline/CLI two-file path.
 
-## Internationalization (Phases 39–42, [`architecture.md`](architecture.md) i18n record)
+## Internationalization ([`architecture.md`](architecture.md) i18n record)
 
 - **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as
-  documented).** LLM prompts are pinned English (Phase-29 benchmark comparability; models
+  documented).** LLM prompts are pinned English (benchmark comparability; models
   follow the language of the user's question naturally), so a one-click summary of a German
   document may come back in English depending on the model. Making task-output language
   explicit is a separate future feature — it belongs with the existing
   `TranslationTargetLang` machinery, not with UI i18n.
 - **Audit-log messages and the activity export stay English.** `runtime_events.message` is
   written and exported as-is (the export is a diagnostic artifact); only the friendly TYPE
-  labels in the Diagnostics Activity panel are translated. Per the Phase-19 privacy rule the
+  labels in the Diagnostics Activity panel are translated. Per the audit-log privacy rule the
   messages carry ids/filenames/counts, never content — a stable English diagnostic record was
   chosen over translated DB rows.
 - **Interpolated and library-origin error strings render as-is under German.** The D-L4
@@ -1870,7 +1866,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   and the fixed RAG answers translate (or don't) independently of the current UI language —
   accepted.
 
-## GPU acceleration (Phases 14–16, [`architecture.md`](architecture.md) GPU record)
+## GPU acceleration ([`architecture.md`](architecture.md) GPU record)
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share
   system RAM, so token generation is often near CPU speed (~1–2×); prompt processing improves
@@ -1897,9 +1893,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply
   is lost, same as today's crash handling.
 
-## Accessibility (Phase-27 WCAG 2.2 AA sweep — consciously accepted)
+## Accessibility (WCAG 2.2 AA sweep — consciously accepted)
 
-The Phase-27 sweep contrast-audited every role-token pairing in both themes (fix applied:
+The sweep contrast-audited every role-token pairing in both themes (fix applied:
 `--border-strong` → `--n-500`, the only sub-3:1 non-text boundary that was the SOLE component
 identifier), added forced-colors (Windows High Contrast) rules for the two custom-drawn
 controls (Switch, strength meter), and verified the reduced-motion kill-switch. Accepted
@@ -1920,10 +1916,17 @@ as-is, with reasons:
   are benign (pure functions). Root cause in electron-vite/rollup module ids — not chased
   in this phase.
 - **A pure-code-block streamed answer announces nothing to screen readers until completion
-  (full-audit-2026-06-30 F6 — accepted).** The streaming `StreamAnnouncer` (a visually-hidden
+  (accepted).** The streaming `StreamAnnouncer` (a visually-hidden
   `role="log"`) feeds AT only completed sentences, falling back to a word boundary once a
   terminator-less tail grows past a soft cap (so tables / lists / run-on prose now announce
   incrementally). But `stripMarkdown` collapses code/markup to spaces, so an answer that is **only**
   a fenced code block strips to ~nothing and stays quiet until the final turn re-renders — voicing
   code punctuation token-by-token is worse a11y than silence. Any surrounding prose still announces
   normally; the visible bubble shows the code in full. (architecture.md "Renderer robustness" Phase D.)
+
+---
+
+_**History.** Many bullets carry short finding ids (`D77`, `SKA-24`, `C1`, `audit §N.M`, …): they
+resolve through the design records and their §-anchor legends in
+[`architecture.md`](architecture.md) / [`rag-design.md`](rag-design.md). The underlying audit
+reports and phase plans were working papers; their full text lives in git history._

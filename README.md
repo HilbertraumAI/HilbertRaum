@@ -39,8 +39,7 @@ leave your device.
 - 🪟 **Cross-platform** — Windows-first, with macOS/Linux supported in the architecture.
 
 > The MVP is **feature-complete**, plus GPU acceleration, retrieval-quality, UI-polish, and
-> office-functionality waves. See **[`BUILD_STATE.md`](BUILD_STATE.md)** for live status; the
-> original phased plan was retired after completion and lives in git history.
+> office-functionality waves. See **[`BUILD_STATE.md`](BUILD_STATE.md)** for live status.
 
 ## Table of contents
 

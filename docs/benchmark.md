@@ -1,7 +1,7 @@
-# Hardware benchmark & model recommendation (Phase 7)
+# Hardware benchmark & model recommendation
 
-_Last updated: 2026-06-10 — Phase 7 (updated Phase 10: real tokens/sec; Phase 16 + GPU audit
-round: injected GPU probe, conservative profile bump, per-session probe refresh)._
+_Last updated: 2026-06-10 (real tokens/sec; injected GPU probe, conservative profile bump,
+per-session probe refresh)._
 
 > **Not to be confused with** [`model-benchmarks.md`](model-benchmarks.md) — that doc is the
 > offline **model-quality** protocol and measured results; this doc is the in-app **hardware**
@@ -22,7 +22,7 @@ IPC: `runBenchmark()` (`benchmark:run`) in
 1. **System** (`detectSystem`, `node:os`): `os` (platform), `arch`, `cpuModel` + `cpuCores`
    (`os.cpus()`), `ramGb` (`os.totalmem()` ÷ GiB, rounded to 0.1). Every probe is wrapped —
    a failure falls back to `''` / `0` and never throws.
-2. **GPU** (Phase 16, [`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
+2. **GPU** ([`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
    the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
    (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws) and
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful }`).
@@ -39,7 +39,7 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    returns `null` Mbps + an `error` string instead of throwing.
 4. **Tokens/sec** (`measureTokensPerSecond`): **optional**. Only runs when a runtime is
    active — it streams the prompt *"Write one sentence about privacy."* and times up to 64
-   tokens. It is `null` when no runtime is running. **Phase 10:** because `measureTokensPerSecond`
+   tokens. It is `null` when no runtime is running. Because `measureTokensPerSecond`
    drives off `runtime.chatStream`, this is now a **real** figure whenever the real `LlamaRuntime`
    is streaming (it remains a simulated figure under the mock runtime). The low-tokens/sec profile
    **downgrade** and the GPU **bump** therefore become live with real local inference.
@@ -69,7 +69,7 @@ Adjustments, in order:
 
 ## Recommendation
 
-**Since Phase 29 the primary picker is RAM-best-fit, not profile lookup.** `runBenchmark` calls
+**The primary picker is RAM-best-fit, not profile lookup.** `runBenchmark` calls
 `recommendModelIdByRam(manifests, round(ramGb), 'chat')`, which chooses the largest model that fits the
 measured RAM, breaking ties on each manifest's `recommendation_rank`. The profile-based
 `recommendModelId(manifests, profile, 'chat')` is only the **fallback** when RAM can't be detected

@@ -1,13 +1,13 @@
 # Packaging — portable build, sidecars & model weights
 
-_Last updated: 2026-06-20 (image understanding V5: the two-file vision download topology — GGUF + mmproj sharing one modelId — and the `vision-smoke` manual harness). Prior: 2026-06-12 (docs housekeeping: absorbed the Phases-12/13 distribution decision record)_
+_Last updated: 2026-07-10._
 
 This documents **how the app is packaged into a portable build**, **where the runtime binaries and
 model weights live on the drive**, and that those artifacts are **not** in the git repository.
-Phase 10 introduced the runtime-side layout; Phase 11 added the `electron-builder` portable build +
-the `prepare-drive`/`verify-models` scripts; Phase 12 adds the scripted **asset loader**
-(`fetch-models` / `fetch-runtime`) that downloads + verifies the weights and sidecar; **Phase 13**
-adds the **plug-and-play launcher, code signing/notarization, and the `build-commercial-drive`
+The pieces: the runtime-side drive layout; the `electron-builder` portable build +
+the `prepare-drive`/`verify-models` scripts; the scripted **asset loader**
+(`fetch-models` / `fetch-runtime`) that downloads + verifies the weights and sidecar; and the
+**plug-and-play launcher, code signing/notarization, and the `build-commercial-drive`
 master pipeline** that produces a finished, sellable drive (see the last section).
 
 ## Hard rules (recap)
@@ -62,7 +62,7 @@ master pipeline** that produces a finished, sellable drive (see the last section
     simply skipped by the in-app installer.
 - **Model weights** — GGUF files under `models/`, resolved from each manifest's `local_path` (relative
   to the drive root) via `weightPath(rootPath, manifest)`. They are **git-ignored**; a real drive is
-  built by Phase 11's prepare-drive scripts (and verified against the manifest `sha256`). The bundled
+  built by the prepare-drive scripts (and verified against the manifest `sha256`). The bundled
   Qwen3 + E5 manifests now carry **real pinned hashes**; a model you add yourself starts as a
   `REPLACE_WITH_REAL_HASH` placeholder until you capture it with `verify-models --generate`.
 - **Vision models are TWO files sharing one `modelId` (image understanding V1–V5).** A `role: vision`
@@ -75,7 +75,7 @@ master pipeline** that produces a finished, sellable drive (see the last section
   default; `--only <vision-id>` or `--all-models` pulls both files. See
   [`model-policy.md`](model-policy.md) "The vision role + mmproj projector".
 
-## How the app uses them at runtime (Phase 10)
+## How the app uses them at runtime
 - The **runtime factory** (`createSelectingRuntimeFactory`) and the **embedder factory**
   (`createSelectedEmbedder`) each return the **real** backend (`LlamaRuntime` / `E5Embedder`) only when
   **both** the `llama-server` binary **and** the relevant GGUF weights exist; otherwise they fall back
@@ -85,12 +85,12 @@ master pipeline** that produces a finished, sellable drive (see the last section
   (`/v1/chat/completions` streaming for chat, `/v1/embeddings` for the embedder). The processes are
   killed on `stop()` and on `will-quit` (no orphaned `llama-server`).
 
-## Acquiring the binaries / weights — scripted (Phase 12) or manual (R5)
+## Acquiring the binaries / weights — scripted or manual
 The live path needs artifacts **not in the repo**:
 - a `llama.cpp` `llama-server` build for your OS (under `runtime/llama.cpp/<os>/`), and
 - the GGUF weights named by the manifests (under `models/...`).
 
-**Phase 12 automates this** with the `fetch-*` scripts (below) — `prepare-drive --with-assets`
+**The `fetch-*` scripts automate this** (below) — `prepare-drive --with-assets`
 downloads + SHA-256-verifies the artifacts in one command. By default it fetches a small but
 complete **default set** — the default **chat** model (Ministral 3 8B), the **embeddings** model,
 the **reranker**, and the **Whisper** transcriber model — plus **both sidecar runtimes** (`llama.cpp`
@@ -102,7 +102,7 @@ whisper.cpp runtime is prebuilt for **Windows only**, so on a macOS/Linux build 
 skips it with a note (build it from source). You can still drop everything in by hand. Then start a
 chat model on the AI Model screen to get real on-device inference and real tokens/sec.
 
-## Portable build (electron-builder, Phase 11)
+## Portable build (electron-builder)
 
 The app is packaged with **electron-builder** (`apps/desktop/electron-builder.yml`). The primary
 target is a **portable Windows `.exe`** that launches from an external drive; macOS (`dir`) and
@@ -130,7 +130,7 @@ Key config points:
 - **Production `dependencies` ship inside `app.asar`** (`pdfjs-dist` / `mammoth` / `jszip` / `papaparse` /
   `yaml` / `@noble/hashes`), so the `require()`s in the parsers, manifest loader, the vault KDF, and the
   same-format DOCX writer resolve at runtime. **`jszip`** was already in the tree transitively under
-  `mammoth`; it is now a **direct dependency** (Phase 9, D77) because `services/export/docx-rewrite.ts`
+  `mammoth`; it is now a **direct dependency** (D77) because `services/export/docx-rewrite.ts`
   imports it to rewrite `<w:t>` nodes (pure-JS, no native addon — the closure is unchanged). electron-builder
   26's collector follows **hoisted/nested** `node_modules` trees
   (e.g. mammoth's transitive deps) **by default** — the old `includeSubNodeModules: true` option was
@@ -148,7 +148,7 @@ Key config points:
   from `package-lock.json`, so a future dep that genuinely needs an excluded package turns the green
   gate red (remove that negation then). If the mermaid plugin is ever adopted, delete the negation
   block and its test.
-- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed** (Phase 38): the OCR engine spawns
+- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed**: the OCR engine spawns
   its Node worker via `worker_threads`, which loads the worker script (and the WASM core it
   requires) through real filesystem reads that cannot see inside the asar archive. The engine
   rewrites `app.asar` → `app.asar.unpacked` in the resolved workerPath. **After packaging, also
@@ -205,7 +205,7 @@ only the electron-vite **output** format is a choice. As built:
   synchronously: `vitest.config.ts` aliases `./AssistantMarkdownLazy` → the real component so render
   assertions don't have to await Suspense.
 
-## Preparing a drive — scripts (Phase 11)
+## Preparing a drive — scripts
 
 `scripts/` provisions and verifies a drive. The scripts are **self-contained** (a drive can be laid
 out on a fresh machine with no Node/npm); their layout + config shapes mirror the unit-tested
@@ -213,9 +213,9 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
-| `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
-| `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
+| `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
+| `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise) + build + test smoke. |
 | `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Verifies Electron's platform binary actually extracted; force-re-extracts from the cached download when a half-extract is detected (the silent NTFS-on-Linux `extract-zip` failure), else fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Cross-platform Node (not a shell mirror). Skips via `ELECTRON_SKIP_BINARY_DOWNLOAD` / `ELECTRON_OVERRIDE_DIST_PATH` / `HILBERTRAUM_SKIP_ELECTRON_CHECK`. |
@@ -223,7 +223,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 The asset **download / verify / plan** logic is mirrored from the unit-tested
 `apps/desktop/src/main/services/assets.ts` (the canonical reference for *that* logic — keep in sync),
 exactly as `prepare-drive` mirrors `drive.ts`. **The default-set model-id list itself, however, is
-NOT in `assets.ts`** (DOC-N4, full audit 2026-06-28): it lives only in `scripts/prepare-drive.ps1`
+NOT in `assets.ts`**: it lives only in `scripts/prepare-drive.ps1`
 (`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
 **between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
 does not change which models `--with-assets` fetches (a parity test,
@@ -259,7 +259,7 @@ copy ".\apps\desktop\release\HilbertRaum-*-portable.exe" E:\                    
 > verifies, extracts (zip and tar.gz) and flattens the binaries for all three OSes from any host.
 > **A real b9849 fetch + a one-old-model / one-Qwen3.5-model load are a REQUIRED manual smoke** (it
 > cannot run in offline CI; see BUILD_STATE "Qwen3.5 Unsloth wave" and `model-benchmarks.md` §9).
-> Since **Phase 14** the win/linux default is the **Vulkan full build** (GPU acceleration with
+> The win/linux default is the **Vulkan full build** (GPU acceleration with
 > built-in CPU degradation) plus a pure-CPU safety net at `runtime/llama.cpp/<os>/cpu/` — see
 > [`drive-layout.md`](drive-layout.md) and the [`architecture.md`](architecture.md) GPU record.
 > The chat/embeddings **model** URLs are real Hugging Face links and the bundled manifests now carry
@@ -272,19 +272,18 @@ Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → d
 
 > **Build-time network ≠ runtime network.** The `fetch-*` scripts make the project's first
 > deliberate network access, but they run on the **builder's** machine at build time. The app stays
-> 100% offline by default; the in-app downloader (shipped as Phase 18 — architecture.md "In-app model downloader") is
+> 100% offline by default; the in-app downloader (architecture.md "In-app model downloader") is
 > triple-gated: policy ∧ default-off setting ∧ per-download confirmation, and hidden entirely on
 > commercial drives. This does not weaken the offline guarantee.
 
 These artifacts (weights, sidecar binaries, the workspace DB, logs, the portable `.exe`) are all
 **git-ignored** — they live on the drive, never in the repo.
 
-## Plug-and-play commercial drive (Phase 13)
+## Plug-and-play commercial drive
 
 A non-technical buyer must be able to **plug in, double-click one icon, and chat** — no Docker, no
 installer, no terminal. The chosen mechanism is the **portable bundled app + a tiny native
-launcher** — the Phase-12/13 distribution decision (folded in here from the retired
-provisioning design record; full original via `git show 4549934:docs/provisioning-and-distribution-plan.md`):
+launcher**:
 
 | Approach | Plug-and-play for a non-technical buyer? | Verdict |
 |---|---|---|
@@ -350,12 +349,12 @@ steps. Its plan + the final "is this sellable?" assertion are mirrored from the 
 prepare-drive  --force            # commercial policy (encrypted, plaintext off, no phone-home)
 fetch-models   --accept-license   # verified weights (a SOLD drive needs an approved, redistributable license — spec §13)
 fetch-runtime                     # verified llama.cpp sidecar builds: per OS the default (Vulkan/Metal)
-                                  # + the pure-CPU safety net on win/linux (Phase 14)
+                                  # + the pure-CPU safety net on win/linux
 package + sign + notarize         # MANUAL — secrets never in the repo (pass --app-artifact / --skip-package)
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json
 final check: commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied) + all weights VERIFIED
-             + runtime install markers match the pin (Phase 14) + no user data
+             + runtime install markers match the pin + no user data
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
 ```
 
@@ -502,7 +501,7 @@ these harnesses prove the *current* pin (the drive's previous binary was b9585).
 | `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
 | `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |
 | `vision-smoke` | `HILBERTRAUM_VISION_SMOKE` | the vision sidecar (`--mmproj`) cold-starts, analyzes a fixture image, streams, reuses the prefill, idle-tears-down + cold-restarts |
-| `compare-smoke` | `HILBERTRAUM_COMPARE_SMOKE` | the compare doc-task pipeline end-to-end (`translation-smoke` — the chat-model translation pipeline — was retired at TG-3 with that path; `translategemma-smoke` below covers translation) |
+| `compare-smoke` | `HILBERTRAUM_COMPARE_SMOKE` | the compare doc-task pipeline end-to-end (the earlier chat-model `translation-smoke` went away with that pipeline; `translategemma-smoke` below covers translation) |
 | `translategemma-smoke` | `HILBERTRAUM_TRANSLATEGEMMA_SMOKE` | the TranslateGemma sidecar (NO `--jinja`, raw `/completion`) LOADS on the pin (Vulkan **and** CPU safety-net), DE↔EN translates, keeps invoice numbers/model codes verbatim (numbers/dates localize), resists embedded-instruction injection, leaks no `<end_of_turn>`; prints tokens/sec + peak RSS. **The TG-2 go/no-go gate** — since TG-3 the doc-task's production translation backend. **Extended at TG-6:** per-language round-trip + verbatim-token check for the curated 10, `/tokenize` tokens-per-word (the planner-constant calibration), and a co-residency-RSS leg (translation + E5 + a resident chat, needs `models/{embeddings,chat}/*.gguf`). CPU-safety-net leg needs `runtime/llama.cpp/<os>/cpu/` |
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
@@ -510,7 +509,7 @@ these harnesses prove the *current* pin (the drive's previous binary was b9585).
 
 **Optional harness *inputs* (point a harness at a specific artifact).** Distinct from the on-switch
 env vars in the table above, several harnesses additionally read an **artifact-pointer input**,
-documented before only as inline test-file comments (DOC-N7, full audit 2026-06-28). All are
+documented before only as inline test-file comments. All are
 optional — each has a default or is only needed by its harness:
 
 | Input var | Read by | Points at |
