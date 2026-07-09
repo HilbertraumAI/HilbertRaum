@@ -6,7 +6,8 @@ format: gguf
 runtime: llama_cpp
 # Gemma Terms of Use (NON-permissive; the historical Gemma-3 parking reason). Downloadable
 # in-app behind the explicit license-acknowledgement gate; NOT bundled and NOT auto-recommended.
-# Commercial-drive redistribution is a SEPARATE, later license review (see license_review.notes).
+# The O1 in-app license review is CLOSED (approved 2026-07-10 — see license_review.notes);
+# commercial-drive redistribution remains a SEPARATE open review with a flow-down checklist.
 license: gemma
 # 7,300,794,112 bytes ≈ 7.3 decimal GB (byte-verified via the HF tree API 2026-07-05).
 size_on_disk_gb: 7.3
@@ -58,8 +59,17 @@ bundled_on_preconfigured_drive: false
 # presence via resolveModelByRole('translation') once the weight is installed + verified (TG-2+).
 recommendation_rank: 0
 recommended_profiles: []
+# The O1 review is CLOSED and the in-app path APPROVED (notes below), but `status`
+# DELIBERATELY stays `pending`: in this schema `approved` is the REDISTRIBUTION review a
+# sold drive needs — assertCommercialDrive AND the build-commercial-drive scripts require
+# `approved` for EVERY manifest on the drive, and `bundled_on_preconfigured_drive` is
+# advisory/unused, so `pending` is the only mechanical guard keeping this model off a
+# sellable drive until the flow-down checklist is implemented. Flipping to `approved`
+# would ALSO drop the in-app license-acknowledgement checkbox (ModelDownloadInfo
+# .licenseApproved → needsAck), which the compliance posture leans on. Flip only together
+# with the flow-down artifacts + a license-class acknowledgement gate.
 license_review:
   status: pending
-  reviewed_by: null
-  reviewed_at: null
-  notes: "PENDING (TranslateGemma plan O1): base model google/translategemma-12b-it is under the Gemma Terms of Use (https://ai.google.dev/gemma/terms) — a NON-permissive license, the same class that kept Gemma 3 parked (only Gemma 4 moved to Apache-2.0). In-app download is allowed behind the explicit license-acknowledgement checkbox (downloads.ts license gate); the model is NOT bundled and NOT auto-recommended. Commercial-drive redistribution is a SEPARATE explicit review that must satisfy the Gemma Terms flow-down obligations (pass the Gemma Terms + Prohibited Use Policy through to end users, retain 'Gemma' attribution/notices, no use for prohibited purposes). Third-party quantizer provenance: the GGUF is from mradermacher/translategemma-12b-it-GGUF (no Google QAT/GGUF and no Apache-2.0 variant exists) — same established-quantizer posture as the unsloth entries; community GGUFs inherit the Gemma license. Hash pinned via the LFS OID cross-checked with X-Linked-ETag (2026-07-05); re-verify with verify-models --generate after the first fetch. RUNTIME NOTE: a chat-parsing rework (llama.cpp PR #19419) regressed the --jinja embedded-template path for TranslateGemma (issue #20305, fix PR #20956 still open 2026-07-05) — the translation sidecar therefore must NOT use --jinja and formats the trained prompt in app code against the raw /completion endpoint (plan §1.1 / §2 D2)."
+  reviewed_by: comilionas (project owner)
+  reviewed_at: "2026-07-10"
+  notes: "O1 IN-APP REVIEW CLOSED — APPROVED 2026-07-10, scoped to the in-app, license-gated download path (Gemma Terms analysis, release-readiness 2026-07-10 §7). The four provisions the approval rests on: (1) distribution flow-down (Terms §3.1 — enforceable use-restriction provision, a copy of the Terms, prominent modification notices, the verbatim Gemma notice) binds the DISTRIBUTOR of the weights, which for the in-app path is Hugging Face → the user (the app is the conduit: download behind the explicit license-acknowledgement checkbox with license_url = the Gemma Terms, NOT bundled, NOT auto-recommended); (2) commercial use is allowed (no non-commercial clause — only the Prohibited Use Policy + applicable law restrict use); (3) outputs are unencumbered (Terms §3.3: Google claims no rights in outputs — a user's translated document is theirs); (4) the Prohibited Use Policy is incorporated by reference and Google may UPDATE it — re-check at each commercial refresh. COMMERCIAL-DRIVE PRELOADING REMAINS A SEPARATE OPEN ITEM: preloading IS redistribution, so before any drive bundles this model the four-point flow-down checklist must be implemented — a copy of the Gemma Terms on the drive; the verbatim NOTICE line ('Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms.'); an enforceable use-restriction clause in the drive's sale terms; the quantization-provenance notice (the GGUF is a modified derivative — stating the quantization satisfies the prominent-notice duty). Third-party quantizer provenance: the GGUF is from mradermacher/translategemma-12b-it-GGUF (no Google QAT/GGUF and no Apache-2.0 variant exists) — same established-quantizer posture as the unsloth entries; community GGUFs inherit the Gemma license as Model Derivatives. Hash pinned via the LFS OID cross-checked with X-Linked-ETag (2026-07-05); re-verify with verify-models --generate after the first fetch. RUNTIME NOTE: a chat-parsing rework (llama.cpp PR #19419) regressed the --jinja embedded-template path for TranslateGemma (issue #20305, fix PR #20956 still open 2026-07-05) — the translation sidecar therefore must NOT use --jinja and formats the trained prompt in app code against the raw /completion endpoint (plan §1.1 / §2 D2)."

@@ -506,15 +506,27 @@ the chat template (`/props` then reports `chat_template: "gemma"`). With that ov
 loads + translates cleanly (DE↔EN, injection-resistant, ~4 tok/s CPU, ~9.5 GiB peak RSS). Drop the
 override if a future pin lands the #20305 fix — the smoke re-decides.
 
-**License-review record — TranslateGemma 12B (status: `pending`, TG wave O1).** The base model
-`google/translategemma-{4b,12b,27b}-it` is under the **Gemma Terms of Use**
-(`https://ai.google.dev/gemma/terms`) — a **non-permissive** license, the same class that kept **Gemma
-3 parked** (only Gemma 4 moved to Apache-2.0; see "Disqualified / parked candidates" above). Posture:
-**in-app download is allowed behind the explicit license-acknowledgement checkbox** (`downloads.ts`
-license gate, unchanged); the model is **not bundled** and **not auto-recommended** (rank 0, profiles
-`[]`). **Commercial-drive redistribution is a separate, later explicit review** that must satisfy the
-Gemma Terms **flow-down obligations** (pass the Gemma Terms + Prohibited Use Policy through to end
-users, retain the "Gemma" attribution/notices, no prohibited-purpose use). **Third-party quantizer
-provenance:** the GGUF is a community requant (mradermacher) inheriting the Gemma license — the same
-established-quantizer posture as the unsloth entries; the hash is pinned via the LFS OID and
-re-verified with `verify-models --generate` after the first fetch.
+**License-review record — TranslateGemma 12B (O1 in-app review CLOSED — approved 2026-07-10;
+manifest `status` stays `pending`).** The base model `google/translategemma-{4b,12b,27b}-it` is
+under the **Gemma Terms of Use** (`https://ai.google.dev/gemma/terms`) — a **non-permissive**
+license, the same class that kept **Gemma 3 parked** (only Gemma 4 moved to Apache-2.0; see
+"Disqualified / parked candidates" above). The owner review of the **in-app, license-gated download
+path closed as APPROVED** on 2026-07-10, resting on four verified provisions of the Terms:
+the §3.1 distribution flow-down binds the *distributor* of the weights (for the in-app path that is
+Hugging Face → the user; the app is the conduit behind the explicit license-acknowledgement
+checkbox, `license_url` = the Gemma Terms, not bundled, not auto-recommended); commercial **use**
+is allowed; outputs are unencumbered (§3.3 — a user's translated document is theirs); and the
+Prohibited Use Policy is incorporated by reference and updateable by Google. **Commercial-drive
+preloading remains a separate open review** — preloading *is* redistribution, so it carries a
+four-point flow-down checklist before any drive bundles this model: a copy of the Gemma Terms on
+the drive, the verbatim Gemma NOTICE line, an enforceable use-restriction clause in the sale terms,
+and the quantization-provenance notice. **The manifest's `license_review.status` deliberately stays
+`pending`**: in the manifest schema `approved` expresses the *redistribution* review — the sell gate
+(`assertCommercialDrive` + the `build-commercial-drive` scripts) requires `approved` for **every**
+manifest on the drive while `bundled_on_preconfigured_drive` is advisory/unused, so the `pending`
+status is the only mechanical guard keeping the model off a sellable drive; flipping it would also
+remove the in-app acknowledgement checkbox (`ModelDownloadInfo.licenseApproved`). It flips to
+`approved` only together with the flow-down artifacts and a license-class acknowledgement gate.
+**Third-party quantizer provenance:** the GGUF is a community requant (mradermacher) inheriting the
+Gemma license — the same established-quantizer posture as the unsloth entries; the hash is pinned
+via the LFS OID and re-verified with `verify-models --generate` after the first fetch.
