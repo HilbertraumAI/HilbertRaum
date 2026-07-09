@@ -12,6 +12,7 @@ import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
 import { CoverageMeter } from '../components'
 import { ScopePopover } from '../chat/ScopePopover'
+import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen } from '../screens/ModelsScreen'
 import '../tokens.css'
@@ -120,19 +121,31 @@ const overrides: Record<string, unknown> = {
   searchConversations: async () => [],
   getAppStatus: async () => ({ ready: true, machineRamGb: 32 }),
   getImportJob: async () => null,
+  // ChatScreen data (the `chat-runtime*` cases; harmless elsewhere).
+  listConversations: async () => CONVERSATIONS,
+  listMessages: async () => [],
+  listSkills: async () => [],
   // ModelsScreen data (only the `models*` cases render it; other cases never call these).
   listModels: async () => PREVIEW_MODELS,
   getSettings: async () => ({ ...DEFAULT_SETTINGS, activeModelId: 'active-running' }),
   getPolicy: async () => null,
   getEngineStatus: async () => null,
-  getRuntimeStatus: async () => ({
-    running: true,
-    modelId: 'active-running',
-    startingModelId: null,
-    port: 1234,
-    healthy: true,
-    message: 'ok'
-  })
+  getRuntimeStatus: async () => {
+    // #36: the chat-runtime cases exercise the header hint — GPU form vs. the CPU
+    // "compatibility mode" form fed by the gpuAutoDisabled enrichment.
+    const compat = (new URLSearchParams(location.search).get('case') ?? '') === 'chat-runtime-compat'
+    return {
+      running: true,
+      modelId: 'active-running',
+      startingModelId: null,
+      port: 1234,
+      healthy: true,
+      message: 'ok',
+      backend: compat ? 'cpu' : 'gpu',
+      gpuName: compat ? null : 'NVIDIA GeForce RTX 3090',
+      gpuAutoDisabled: compat
+    }
+  }
 }
 ;(window as unknown as { api: unknown }).api = new Proxy(
   {},
@@ -254,6 +267,21 @@ const CASES: Record<string, { label: string; node: JSX.Element }> = {
       </div>
     )
   }
+}
+// Issue #36: the muted chat-header runtime hint — which model is answering and where it
+// runs. `chat-runtime` shows the GPU form; `chat-runtime-compat` (below) the CPU
+// "compatibility mode" form (the mock getRuntimeStatus flips on the case id).
+CASES['chat-runtime'] = {
+  label: 'Chat screen — header runtime hint (model · GPU / CPU compatibility mode)',
+  node: (
+    <div style={{ width: 1100, height: 700 }}>
+      <ChatScreen onNavigate={noop} />
+    </div>
+  )
+}
+CASES['chat-runtime-compat'] = {
+  ...CASES['chat-runtime'],
+  label: `${CASES['chat-runtime'].label} — compat`
 }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }

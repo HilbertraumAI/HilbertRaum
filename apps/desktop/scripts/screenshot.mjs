@@ -16,7 +16,15 @@ const here = dirname(fileURLToPath(import.meta.url))
 const previewHtml = resolve(here, '../out/preview/preview/preview.html')
 const outDir = resolve(here, '../screenshots')
 
-const SIZES = { documents: [1180, 760], 'chat-byproject': [340, 660] }
+const SIZES = {
+  documents: [1180, 760],
+  'chat-byproject': [340, 660],
+  // The AI Model screen is tall (active card + context card + grouped picker) — capture it all.
+  models: [840, 1500],
+  'models-de': [840, 1500],
+  'chat-runtime': [1180, 740],
+  'chat-runtime-compat': [1180, 740]
+}
 // Electron's argv includes flags + the script path; take everything AFTER the script as case ids.
 const sIdx = process.argv.findIndex((a) => a.endsWith('screenshot.mjs'))
 let cases = (sIdx >= 0 ? process.argv.slice(sIdx + 1) : []).filter((a) => !a.startsWith('-'))

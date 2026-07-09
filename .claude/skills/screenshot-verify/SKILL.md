@@ -9,10 +9,19 @@ Render real renderer components with the **real `tokens.css` + `styles.css`** an
 then screenshot them with the already-installed Electron (`webContents.capturePage()` — no Playwright,
 no new deps, no GUI/workspace/model). Deterministic, offline.
 
-> **POSIX-only dev tool.** The capture script relies on `xvfb-run` + `ELECTRON_DISABLE_SANDBOX`
-> (Linux; macOS works without xvfb) — it does NOT run on Windows. Acceptable for a contributor-side
-> verification tool; the app itself stays Windows-first (CLAUDE.md hard rules). On Windows, verify
-> visually via `npm run dev` instead.
+> **Headless boxes need POSIX.** On a headless Linux box the capture needs `xvfb-run` +
+> `ELECTRON_DISABLE_SANDBOX` (macOS works without xvfb). On a **Windows machine with a real
+> display session it runs natively** (verified 2026-07-09) — no xvfb, just strip the agent's
+> `ELECTRON_RUN_AS_NODE` from the environment:
+>
+> ```bash
+> cd apps/desktop && npm run preview:build && \
+>   env -u ELECTRON_RUN_AS_NODE npx electron scripts/screenshot.mjs <case…>
+> ```
+>
+> Caveat: the (hidden) window height is clamped to the physical display, so a case taller than
+> the screen gets cut — capture the rest with a one-off `executeJavaScript('window.scrollTo(…)')`
+> before `capturePage()`, or fall back to `npm run dev` eyeballing.
 
 ## Run it
 
