@@ -12,6 +12,7 @@ import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
 import { CoverageMeter } from '../components'
 import { ScopePopover } from '../chat/ScopePopover'
+import { Transcript } from '../chat/Transcript'
 import { App } from '../App'
 import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
@@ -276,6 +277,39 @@ const CASES: Record<string, { label: string; node: JSX.Element }> = {
       </div>
     )
   }
+}
+// Issue #39: the calm one-time warm-up line under the pending first answer — the state the
+// renderer reaches after WARMUP_HINT_DELAY_MS of silence on a cold runtime (Transcript is
+// rendered directly with `warmupHint` so the screenshot needs no timers). Muted, small,
+// same quiet vocabulary as the compaction notice; the blinking cursor bubble sits above it.
+CASES['chat-warmup'] = {
+  label: 'Chat transcript — first-answer warm-up hint under the pending bubble',
+  node: (
+    <div style={{ width: 760, height: 420, display: 'flex' }}>
+      <Transcript
+        messages={[
+          {
+            id: 'u1',
+            conversationId: 'c1',
+            role: 'user',
+            content: 'Summarize the payment terms across my contracts.',
+            createdAt: now,
+            tokenCount: null
+          }
+        ]}
+        streamingHere
+        streamText=""
+        streamThinking=""
+        thinkingOpen={false}
+        onThinkingOpenChange={noop}
+        warmupHint
+        emptyState={<div />}
+        onCopy={noop}
+        onSave={noop}
+        actionsDisabled
+      />
+    </div>
+  )
 }
 // Issue #36: the muted chat-header runtime hint — which model is answering and where it
 // runs. `chat-runtime` shows the GPU form; `chat-runtime-compat` (below) the CPU

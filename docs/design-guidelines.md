@@ -767,6 +767,32 @@ by `tests/renderer/ModelsScreen.test.tsx` (one action per installed card, disabl
 busy / anyStarting, Starting… spinner, Stop when running, demo card, DE label) + the `useModel`
 integration tests in `tests/integration/core-model-ipc.test.ts`.
 
+### 11.11 First-answer warm-up hint — say the one-time cost out loud (IMPLEMENTED 2026-07-09, issue #39)
+
+Beta testing (issue #39): the FIRST answer of a session is much slower than every later one — the
+sidecar prefills + caches the long system prompt once (`cache_prompt: true`), and a just-started model
+additionally pays the multi-GB load — but the UI never said so, and a new user can't tell "normal
+one-time warm-up" from "stuck". First impressions form on exactly that turn. **Rule this records:**
+when the app is *correctly* doing slow one-time work at a moment the user is likely to lose trust,
+say so — calmly, only while it is actually true, and never as persistent chrome.
+
+**As built:** a muted line under the pending answer (`.chat-warmup-hint`, `chat.warmup.hint` — EN
+*"The first answer takes a little longer — the model is warming up. Later answers will be faster."*,
+DE mirror) with three honesty gates, ALL required: (1) it appears only after `WARMUP_HINT_DELAY_MS`
+(3 s) with **nothing** streamed — a fast GPU first turn never flashes it; (2) only when the runtime
+itself reports this is its first generation since the model started — `RuntimeStatus.warmedUp ===
+false`, from a new optional `ModelRuntime.warmedUp()` that `LadderRuntime`/`MockRuntime` flip on the
+first streamed chunk of any real generation (answer token OR Deep-mode reasoning delta; a model
+switch/restart builds a fresh instance, so the flag resets, and the hint truthfully returns for the
+re-paid load). Deterministic no-model answers (routing/refusal/listing) never call `chatStream`, so
+they never fake a warm-up; an absent `warmedUp` field (bare/older runtime) fails safe — no hint.
+(3) It drops the instant anything streams and when the turn settles — `role="status"`, same quiet
+vocabulary as the compaction notice, never an alert (the model is doing the right thing). Pinned by
+`tests/renderer/ChatWarmupHint.test.tsx` (delay gate, warmed/absent-field negatives, no-flash,
+reasoning-retires-it) + the `warm-up tracking (#39)` block in `tests/unit/runtime-ladder.test.ts`.
+Related: #36 (the header `model · GPU/CPU` hint) names the *persistent* speed context; this names
+the *one-time* cost.
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

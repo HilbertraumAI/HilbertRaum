@@ -33,6 +33,10 @@ function ladderHarness(config: {
   gpuAutoDisabled?: boolean
   cpuBin?: string | null
   resolveBin?: string | null
+  /** Tokens the fake llama runtime streams per chatStream call (default none). */
+  tokens?: string[]
+  /** Reasoning delta the fake fires via options.onReasoning before any token (#39 deep mode). */
+  reasoningDelta?: string
 }) {
   const calls: LadderCall[] = []
   const failures: string[] = []
@@ -52,7 +56,10 @@ function ladderHarness(config: {
       },
       stop: async () => {},
       health: async () => ({ healthy: true, message: 'ok', port: 5000 + index }),
-      chatStream: async function* () {}
+      chatStream: async function* (_messages, options) {
+        if (config.reasoningDelta) options?.onReasoning?.(config.reasoningDelta)
+        for (const tok of config.tokens ?? []) yield tok
+      }
     }
   }
   const makeMock = (o: RuntimeStartOptions): ModelRuntime => {
@@ -284,5 +291,77 @@ describe('createGpuCrashAutoFallback (§5.3)', () => {
     // A second, later crash report is NOT suppressed — the guard reset, so restart runs again.
     expect(() => handler(opts, info)).not.toThrow()
     expect(calls).toBe(2)
+  })
+})
+
+// #39: warm-up tracking. The ladder runtime reports `warmedUp() === false` until the FIRST
+// real generation streams a chunk after start() — the Chat screen shows its calm "the first
+// answer takes a little longer" hint only in that state. A model switch builds a fresh
+// LadderRuntime, so the flag resets naturally. Deterministic no-model answers (routing/
+// refusal/listing) never call chatStream and therefore never mark the runtime warm.
+describe('warm-up tracking (#39)', () => {
+  const chat = [{ role: 'user' as const, content: 'hi' }]
+
+  it('is cold after start, flips on the first streamed token, and RuntimeManager.status() carries it', async () => {
+    const h = ladderHarness({ probe: [RTX], tokens: ['Hello', ' world'] })
+    const manager = new RuntimeManager(h.factory)
+    await manager.start(opts)
+    const runtime = manager.active()!
+    expect(runtime.warmedUp?.()).toBe(false)
+    expect(manager.status().warmedUp).toBe(false)
+
+    // Consume only the FIRST token (then early-exit): one chunk is proof the prefill is done.
+    for await (const _tok of runtime.chatStream(chat)) break
+    expect(runtime.warmedUp?.()).toBe(true)
+    expect(manager.status().warmedUp).toBe(true)
+  })
+
+  it('a Deep-mode reasoning delta (before any answer token) also marks the runtime warm', async () => {
+    // tokens: [] — the generation "streams" only reasoning, which equally proves the prefill ran.
+    const h = ladderHarness({ probe: [RTX], tokens: [], reasoningDelta: 'thinking…' })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.warmedUp?.()).toBe(false)
+
+    const seen: string[] = []
+    for await (const _tok of runtime.chatStream(chat, { onReasoning: (d) => seen.push(d) })) {
+      /* no answer tokens */
+    }
+    expect(seen).toEqual(['thinking…'])
+    expect(runtime.warmedUp?.()).toBe(true)
+  })
+
+  it('the wrapped stream still forwards reasoning deltas to the caller unchanged', async () => {
+    const h = ladderHarness({ probe: [RTX], tokens: ['a', 'b'], reasoningDelta: 'r1' })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    const reasoning: string[] = []
+    const tokens: string[] = []
+    for await (const tok of runtime.chatStream(chat, { onReasoning: (d) => reasoning.push(d) })) {
+      tokens.push(tok)
+    }
+    expect(tokens).toEqual(['a', 'b'])
+    expect(reasoning).toEqual(['r1'])
+  })
+
+  it('a model switch resets warm-up: the fresh runtime instance is cold again', async () => {
+    const h = ladderHarness({ probe: [RTX], tokens: ['x'] })
+    const manager = new RuntimeManager(h.factory)
+    await manager.start(opts)
+    for await (const _tok of manager.active()!.chatStream(chat)) break
+    expect(manager.status().warmedUp).toBe(true)
+
+    await manager.start({ ...opts, modelId: 'm2' })
+    expect(manager.status().warmedUp).toBe(false)
+  })
+
+  it('a generation that streams NOTHING leaves the runtime cold (an aborted prefill pays again)', async () => {
+    const h = ladderHarness({ probe: [RTX], tokens: [] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    for await (const _tok of runtime.chatStream(chat)) {
+      /* zero chunks */
+    }
+    expect(runtime.warmedUp?.()).toBe(false)
   })
 })

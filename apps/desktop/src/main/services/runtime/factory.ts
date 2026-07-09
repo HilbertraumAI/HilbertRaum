@@ -105,6 +105,8 @@ class LadderRuntime implements ModelRuntime {
   backend: RuntimeBackend = 'cpu'
   gpuName: string | null = null
   private inner: ModelRuntime | null = null
+  /** #39: flips on the first streamed chunk of the first real generation since start(). */
+  private served = false
 
   constructor(
     private readonly opts: RuntimeStartOptions,
@@ -203,7 +205,35 @@ class LadderRuntime implements ModelRuntime {
     options?: RuntimeChatOptions
   ): AsyncGenerator<string, void, unknown> {
     if (!this.inner) throw new Error('Runtime is not started')
-    return this.inner.chatStream(messages, options)
+    // #39: the first streamed chunk — an answer token, or in Deep mode a reasoning delta
+    // that arrives before any answer token — proves the one-time prefill is done, so the
+    // Chat warm-up hint must stop claiming the model is still warming up. Mark on either.
+    const markServed = (): void => {
+      this.served = true
+    }
+    const inner = this.inner.chatStream(
+      messages,
+      options?.onReasoning
+        ? {
+            ...options,
+            onReasoning: (delta) => {
+              markServed()
+              options.onReasoning?.(delta)
+            }
+          }
+        : options
+    )
+    return (async function* () {
+      for await (const token of inner) {
+        markServed()
+        yield token
+      }
+    })()
+  }
+
+  /** #39: true once ANY real generation has streamed since this runtime started. */
+  warmedUp(): boolean {
+    return this.served
   }
 
   /**

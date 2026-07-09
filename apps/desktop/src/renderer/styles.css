@@ -1190,6 +1190,16 @@ code, pre, kbd { font-family: var(--font-mono); }
   font-size: var(--text-sm);
 }
 
+/* #39: the calm one-time "the first answer takes a little longer — warming up" line under the
+   pending answer. Same quiet vocabulary as the compaction notice: dim, small, no icon-noise —
+   reassurance, never an alert. Appears only after a few seconds of silent prefill on the first
+   generation since model start; vanishes the instant anything streams. */
+.chat-warmup-hint {
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
 /* Transcript summary marker (context-compaction §5.3, D-b): a subtle, non-bubble divider with an
    expandable summary. Centered, low-contrast — it documents the compression without shouting. */
 .chat-summary-marker {

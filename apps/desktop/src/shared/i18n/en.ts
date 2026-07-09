@@ -137,6 +137,10 @@ export const en = {
   'chat.savedTo': 'Saved to {path}',
   'chat.copied': 'Copied',
   'chat.stopped': 'Stopped — the reply may be incomplete',
+  // #39: the calm one-time warm-up line under the pending first answer. Reassurance, not an
+  // alert: the model IS working (one-time prompt prefill + load); later answers reuse it.
+  'chat.warmup.hint':
+    'The first answer takes a little longer — the model is warming up. Later answers will be faster.',
   'chat.scopeNotice': 'Answering from {titles} only',
   'chat.cancelDocTask': 'Cancel document task',
   'chat.placeholder.documents': 'Ask about your documents…',

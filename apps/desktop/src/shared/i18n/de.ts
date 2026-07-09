@@ -152,6 +152,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.savedTo': 'Gespeichert unter {path}',
   'chat.copied': 'Kopiert',
   'chat.stopped': 'Gestoppt – die Antwort ist möglicherweise unvollständig',
+  // #39: die ruhige einmalige Aufwärm-Zeile unter der ersten ausstehenden Antwort.
+  'chat.warmup.hint':
+    'Die erste Antwort dauert etwas länger – das Modell wärmt sich auf. Spätere Antworten kommen schneller.',
   'chat.scopeNotice': 'Antwort nur aus {titles}',
   'chat.cancelDocTask': 'Dokumentaufgabe abbrechen',
   'chat.placeholder.documents': 'Frag deine Dokumente…',

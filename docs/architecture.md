@@ -1024,6 +1024,20 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   budget-filling document turn is where the ceiling actually hits — and a `'length'` that came from a
   `max_tokens` CAP (Fast mode's 1024) is **no longer flagged**: the badge claims "context limit", and a
   capped reply at single-digit meter usage wearing it was a false "context is full" signal.
+- **First-answer warm-up hint (#39, 2026-07-09).** The first generation after a model start/switch
+  pays one-time costs (weights into memory + the long system-prompt prefill that `cache_prompt: true`
+  then reuses — dramatic on CPU-pinned sessions); the sidecar already budgets for it internally
+  (`PREFILL_IDLE_MS` ≫ `STREAM_IDLE_MS`) but the user previously got no equivalent signal. Now a new
+  optional `ModelRuntime.warmedUp()` (implemented by `LadderRuntime` + `MockRuntime`, flipped on the
+  first streamed chunk of any real generation — answer token or reasoning delta) rides
+  `RuntimeManager.status()` as `RuntimeStatus.warmedUp`; the ChatScreen arms a per-turn
+  `WARMUP_HINT_DELAY_MS` (3 s) timer and, only if the turn has streamed NOTHING by then AND a fresh
+  status read says `warmedUp === false`, shows the calm `.chat-warmup-hint` line under the pending
+  bubble ("the first answer takes a little longer — the model is warming up"), dropped on the first
+  chunk / turn end. Deterministic no-model answers (routing/refusal/listing) never call `chatStream`
+  and stream instantly, so they neither mark the runtime warm nor show the hint; an absent field
+  fails safe. Design record: design-guidelines §11.11. Tests: `ChatWarmupHint.test.tsx` + the
+  `warm-up tracking (#39)` block in `runtime-ladder.test.ts`.
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`

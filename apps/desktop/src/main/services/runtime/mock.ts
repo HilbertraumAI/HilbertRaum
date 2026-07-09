@@ -34,6 +34,8 @@ export class MockRuntime implements ModelRuntime {
   readonly backend = 'mock' as const
   readonly gpuName = null
   private started = false
+  /** #39: contract fidelity with the real runtime — flips on the first streamed token. */
+  private served = false
 
   constructor(private readonly opts: RuntimeStartOptions) {
     this.modelId = opts.modelId
@@ -50,6 +52,11 @@ export class MockRuntime implements ModelRuntime {
   /** The configured context window (§L0) — the mock reports its `--ctx-size` like a real runtime. */
   contextWindow(): number {
     return this.opts.contextTokens
+  }
+
+  /** #39: true once any simulated generation has streamed (mirrors the real runtime's contract). */
+  warmedUp(): boolean {
+    return this.served
   }
 
   async health(): Promise<HealthStatus> {
@@ -75,6 +82,7 @@ export class MockRuntime implements ModelRuntime {
     const signal = options?.signal
     for (const token of this.mockTokens(messages)) {
       if (signal?.aborted) return
+      this.served = true
       yield token
       await delay(TOKEN_DELAY_MS, signal)
     }

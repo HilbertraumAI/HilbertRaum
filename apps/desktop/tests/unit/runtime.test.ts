@@ -34,6 +34,16 @@ describe('RuntimeManager + MockRuntime', () => {
     expect(runtime.contextWindow()).toBe(3210)
   })
 
+  // #39: contract parity with the real (ladder) runtime — cold after start, warm once anything
+  // has streamed, and RuntimeManager.status() carries the flag for the Chat warm-up hint.
+  it('the mock runtime reports warmedUp false until its first streamed token', async () => {
+    const mgr = new RuntimeManager(createMockRuntime)
+    await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    expect(mgr.status().warmedUp).toBe(false)
+    for await (const _t of mgr.active()!.chatStream([{ role: 'user', content: 'hi' }])) break
+    expect(mgr.status().warmedUp).toBe(true)
+  })
+
   it('switches models by restarting the runtime', async () => {
     const mgr = new RuntimeManager(createMockRuntime)
     await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })

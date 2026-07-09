@@ -95,6 +95,17 @@ export interface ModelRuntime {
    * is set at start and never changes without a restart).
    */
   contextWindow?(): number
+  /**
+   * Whether this runtime has already streamed at least one REAL model generation since it
+   * started (#39): the first generation after a model start/switch pays the one-time costs
+   * (weights into memory, the long system-prompt prefill that `cache_prompt` then reuses),
+   * so the Chat screen shows a calm "warming up" hint only while this is still false.
+   * Flips on the first streamed chunk (answer token OR reasoning delta — either proves the
+   * prefill is done). Optional: a bare test stub without it reports no `warmedUp` status
+   * and the hint simply never shows. Deterministic no-model answers (routing/refusal/
+   * listing) never call `chatStream`, so they leave this untouched.
+   */
+  warmedUp?(): boolean
 }
 
 export type RuntimeFactory = (opts: RuntimeStartOptions) => ModelRuntime
@@ -257,6 +268,10 @@ export class RuntimeManager {
       // The real launched context window (§L0) — the budget chat/RAG assembly trims
       // against. Absent for a runtime that can't report one.
       contextWindow: this.current.contextWindow?.(),
+      // #39: false until the FIRST real generation streams after this start (a model
+      // switch/restart builds a fresh runtime instance, so it resets naturally). Absent
+      // for a runtime that can't report one — the Chat warm-up hint then never shows.
+      warmedUp: this.current.warmedUp?.(),
       // A start in flight for a DIFFERENT model than the running one = a switch underway.
       startingModelId: startingModelId !== this.current.modelId ? startingModelId : null
     }

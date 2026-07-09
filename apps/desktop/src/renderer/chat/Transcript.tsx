@@ -24,6 +24,14 @@ interface TranscriptProps {
   /** Controlled expand state of the Thinking… line (auto-collapses on first token). */
   thinkingOpen: boolean
   onThinkingOpenChange: (open: boolean) => void
+  /**
+   * #39: show the calm one-time "the first answer takes a little longer — the model is
+   * warming up" line under the pending answer. The parent sets it only when the turn has
+   * streamed nothing for a few seconds AND the runtime reports this is its first generation
+   * since the model started; it drops the flag on the first streamed chunk. Ephemeral —
+   * rendered inside the live streaming bubble only, never persisted.
+   */
+  warmupHint?: boolean
   /** Rendered when there is nothing to show (the teaching empty state). */
   emptyState: ReactNode
   /** Provided only for the message that can regenerate (last assistant turn, chat mode). */
@@ -74,6 +82,7 @@ export const Transcript = memo(function Transcript({
   streamThinking,
   thinkingOpen,
   onThinkingOpenChange,
+  warmupHint,
   emptyState,
   onTryAgain,
   onAnswerWithoutSkill,
@@ -214,6 +223,15 @@ export const Transcript = memo(function Transcript({
                   ▋
                 </span>
               </div>
+              {/* #39: the calm warm-up honesty line — the app IS doing the right thing (one-time
+                  prefill that `cache_prompt` reuses), it just says so at the moment a new user
+                  would otherwise read the silence as "stuck". role="status" announces it once,
+                  politely; the parent drops it the instant anything streams. */}
+              {warmupHint && (
+                <div className="chat-warmup-hint" role="status">
+                  {t('chat.warmup.hint')}
+                </div>
+              )}
               <StreamAnnouncer text={localizedStream} />
             </div>
           </div>

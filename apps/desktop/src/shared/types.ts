@@ -2157,6 +2157,16 @@ export interface RuntimeStatus {
    * wastes capacity. Reported by `ModelRuntime.contextWindow()`; absent when not running.
    */
   contextWindow?: number
+  /**
+   * Whether the active runtime has already streamed at least one real model generation
+   * since it started (#39). `false` means the NEXT generation is the first since the model
+   * start/switch and pays the one-time warm-up (weights into memory + the long system-prompt
+   * prefill that `cache_prompt` then reuses) — the Chat screen shows its calm "the first
+   * answer takes a little longer" hint only in that state, and only once the wait actually
+   * exceeds a few seconds. Reported by `ModelRuntime.warmedUp()`; absent when not running
+   * or for a runtime that can't report one (the hint then never shows).
+   */
+  warmedUp?: boolean
 }
 
 /**

@@ -84,6 +84,11 @@ export const LIST_AUTO_COLLAPSE_PX = 1150
  *  Exported so the FE-1 unmount test can identify (and assert teardown of) the flush timer. */
 export const STREAM_FLUSH_MS = 40
 
+/** #39: how long a turn must stay chunk-less (no answer token, no reasoning delta) before the
+ *  calm "the first answer takes a little longer" hint may appear under the pending bubble —
+ *  a fast (GPU) first turn never flashes it. Exported for the renderer test's timer advance. */
+export const WARMUP_HINT_DELAY_MS = 3000
+
 /**
  * Teaching empty state (guidelines §3): example prompts that fill the composer. Two sets —
  * plain Chat has no document access, so its examples are general-purpose; the "Ask my
@@ -148,6 +153,11 @@ export function ChatScreen({
    *  Set on the STREAM.compaction notice (by its `kind`), cleared on the first answer token + in the
    *  stream's finally. Never persisted, lost on remount (R14). */
   const [progressNotice, setProgressNotice] = useState<'compaction' | 'analysis' | null>(null)
+  /** #39: the calm one-time "warming up" line under the pending answer. Shown only when the
+   *  turn has streamed NOTHING after `WARMUP_HINT_DELAY_MS` AND the runtime reports this is
+   *  its first generation since the model started (`RuntimeStatus.warmedUp === false`).
+   *  Dropped on the first streamed chunk and when the turn settles — no persistent chrome. */
+  const [warmupHint, setWarmupHint] = useState(false)
   /** Resting context-window usage for the composer meter (§5.1); null hides it. Refreshed on
    *  conversation switch + after each completed turn. During a turn the meter climbs LIVE via
    *  `liveUsage` (base + the in-flight user turn + the streaming answer estimate), then reconciles to
@@ -291,6 +301,14 @@ export function ChatScreen({
   const pendingTokens = useRef('')
   const pendingThinking = useRef('')
   const answerStarted = useRef(false)
+  // #39: true once the turn has streamed ANY chunk — an answer token OR a Deep-mode reasoning
+  // delta (either proves the one-time prefill is done). Distinct from `answerStarted`, which
+  // deliberately ignores reasoning (it drives the Thinking… auto-collapse on answer tokens).
+  const generationStarted = useRef(false)
+  // #39: identity of the in-flight turn's warm-up check. The delayed status read resolves
+  // asynchronously; a turn that settled (or a newer turn) in the meantime must not have a
+  // stale resolve re-show the hint. Compared by object identity, nulled in the stream finally.
+  const warmupTurnRef = useRef<object | null>(null)
   // M-U2: set when the user presses Stop during a stream, so the stream's finally can
   // confirm the interruption (a stopped partial reply otherwise looks like a normal turn).
   const stopped = useRef(false)
@@ -1163,7 +1181,30 @@ export function ChatScreen({
     // A stale prior turn's real-usage report must not leak into this turn's meter.
     setStreamUsage(null)
     answerStarted.current = false
+    generationStarted.current = false
+    setWarmupHint(false)
     stopped.current = false
+    // #39: the one-time warm-up honesty hint. Armed per turn; after WARMUP_HINT_DELAY_MS of
+    // NOTHING streamed it asks the main process whether this really is the runtime's first
+    // generation since the model started (`warmedUp === false`) and only then shows the calm
+    // hint — a warmed session, a fast GPU first turn, or a deterministic no-model answer
+    // (which streams instantly) never sees it. The turn-identity guard drops a stale resolve
+    // that lands after this turn settled; `mountedRef` gates the FE-1 unmount case.
+    const warmupTurn = {}
+    warmupTurnRef.current = warmupTurn
+    const warmupTimer = setTimeout(() => {
+      void (async () => {
+        if (generationStarted.current || !mountedRef.current) return
+        try {
+          const status = await window.api.getRuntimeStatus()
+          if (warmupTurnRef.current !== warmupTurn || generationStarted.current) return
+          if (!mountedRef.current) return
+          if (status.warmedUp === false) setWarmupHint(true)
+        } catch {
+          /* no status → no hint; the turn itself is unaffected */
+        }
+      })()
+    }, WARMUP_HINT_DELAY_MS)
     const unsubscribe = window.api.onToken(convId, (token) => {
       // The first answer token auto-collapses an expanded Thinking… line and clears any live
       // "working on it" notice (§5.2/U5 — the summary or extraction is done once tokens flow).
@@ -1171,6 +1212,12 @@ export function ChatScreen({
         answerStarted.current = true
         setThinkingOpen(false)
         setProgressNotice(null)
+      }
+      // #39: the first streamed chunk retires the warm-up hint for good — tokens flowing IS
+      // the "warm-up over" signal (the hint must never linger next to a streaming answer).
+      if (!generationStarted.current) {
+        generationStarted.current = true
+        setWarmupHint(false)
       }
       pendingTokens.current += token
       scheduleFlush()
@@ -1189,6 +1236,12 @@ export function ChatScreen({
     // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
     // a separate channel from answer tokens and are never part of the persisted reply.
     const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
+      // #39: a reasoning delta arrives BEFORE any answer token in Deep mode and equally proves
+      // the prefill is done — the warm-up hint must not sit next to a visibly thinking model.
+      if (!generationStarted.current) {
+        generationStarted.current = true
+        setWarmupHint(false)
+      }
       pendingThinking.current += delta
       scheduleFlush()
     })
@@ -1258,6 +1311,11 @@ export function ChatScreen({
       unsubscribeScope()
       unsubscribeCompaction?.()
       unsubscribeUsage?.()
+      // #39: retire the warm-up hint with the turn — clear the pending timer, invalidate any
+      // in-flight status check (turn identity), and drop the visible line.
+      clearTimeout(warmupTimer)
+      if (warmupTurnRef.current === warmupTurn) warmupTurnRef.current = null
+      setWarmupHint(false)
       clearStreamBuffers()
       setStreaming(false)
       setStreamConvId(null)
@@ -1798,6 +1856,9 @@ export function ChatScreen({
           streamingHere={busyStreaming && streamConvId === activeId}
           streamText={streamText}
           streamThinking={streamThinking}
+          // #39: the calm "first answer takes a little longer" line under the pending bubble.
+          // Rendered inside the streaming bubble only, so it can never outlive the turn.
+          warmupHint={warmupHint}
           thinkingOpen={thinkingOpen}
           onThinkingOpenChange={setThinkingOpen}
           emptyState={emptyState}
