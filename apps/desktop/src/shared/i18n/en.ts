@@ -543,15 +543,15 @@ export const en = {
   // "passages" (retrieved excerpts). No tree/node/chunk/vector/embedding jargon.
   'docs.deepIndex.build': 'Build deep index',
   'docs.deepIndex.buildTitle':
-    'Read the whole document into a deep index so summaries and answers can cover all of ' +
-    'it — runs on this drive, nothing leaves it',
+    'Read the whole document into a deep index — summaries, "list every …" and "sum per ' +
+    'category" answers can then cover all of it — runs on this drive, nothing leaves it',
   'docs.deepIndex.reindexFirst': 'Re-index for deep index',
   'docs.deepIndex.reindexFirstTitle':
     'This document was added before deep indexing was available — re-index it first so a ' +
     'deep index can cover the whole document',
   'docs.deepIndex.ready': 'Deeply indexed',
   'docs.deepIndex.readyTitle':
-    'A whole-document deep index is ready — summaries can cover everything',
+    'A whole-document deep index is ready — summaries and listing answers can cover everything',
   'coverage.relevance': 'Based on the most relevant passages — not the whole document',
   'coverage.relevance.counted': 'Based on {covered} of {total} sections',
   'coverage.capped.whole': 'Covers the whole document',
@@ -601,6 +601,14 @@ export const en = {
     'model can miss an item, and very similar entries may be merged).',
   'analysis.listing.refPage': 'p. {n}',
   'analysis.listing.refSection': 'section {n}',
+  // #37/#38: the router recognised a whole-document question (list / count / categorize /
+  // sum per category) but no deep index exists in scope, so the answer below comes from
+  // top-k retrieval. Say so ACTIVELY and point at the fix — the coverage fraction alone
+  // ("Based on 5 of 25 sections") is too easy to miss under a plausible-looking sum.
+  'analysis.wholeDocHint':
+    '**Heads-up:** this looks like a question about the whole document, but this answer is ' +
+    'based only on the most relevant sections. For a complete answer, open Documents, choose ' +
+    '"Build deep index" for the document, and ask again.',
 
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   // The deterministic, whole-document answer the bank-statement analysis handler synthesises

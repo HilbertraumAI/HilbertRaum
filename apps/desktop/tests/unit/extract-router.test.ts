@@ -46,6 +46,64 @@ describe('routeQuestion — coverage-extract classification', () => {
     expect(d.engine).toBe('relevance')
     expect(d.confidence).toBe('low')
   })
+
+  // Issue #37: aggregation/categorization questions are whole-document tasks by nature — no
+  // top-k short of "all chunks" yields a correct per-category sum. They must classify as
+  // coverage, EN and DE, including the exact phrasing from the incident (which carries NO
+  // list/count trigger word at all).
+  it('routes aggregation/categorization verbs to coverage-extract (#37) — EN + DE', () => {
+    for (const q of [
+      'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf', // the #37 repro, verbatim
+      'gruppiere die Ausgaben nach Monat',
+      'summiere die Beträge',
+      'schlüssle die Ausgaben nach Kategorie auf',
+      'eine Aufschlüsselung der Kosten bitte',
+      'categorize the expenses',
+      'group by vendor and total per month',
+      'give me a breakdown of the costs',
+      'sum per category please'
+    ]) {
+      const d = routeQuestion({ ...base, question: q })
+      expect(d.engine, q).toBe('coverage-extract')
+      expect(d.confidence, q).toBe('high')
+    }
+  })
+
+  it('an aggregation question WITHOUT extract data falls back marked fallback:"coverage" (#38 hint gate)', () => {
+    const d = routeQuestion({
+      ...base,
+      extractAvailable: false,
+      question: 'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf'
+    })
+    expect(d.engine).toBe('relevance')
+    expect(d.confidence).toBe('low')
+    expect(d.fallback).toBe('coverage')
+  })
+
+  it('the compare fallback is marked fallback:"compare", ordinary questions carry no fallback', () => {
+    expect(
+      routeQuestion({
+        question: 'what is the difference here',
+        documentCount: 1,
+        treeAvailable: false,
+        extractAvailable: false
+      }).fallback
+    ).toBe('compare')
+    expect(
+      routeQuestion({
+        question: 'what does the contract say about termination?',
+        documentCount: 1,
+        treeAvailable: false,
+        extractAvailable: false
+      }).fallback
+    ).toBeUndefined()
+  })
+
+  it('maps expense/income vocabulary to the amount type (EN + DE)', () => {
+    expect(mapQuestionToRecordType('categorize the expenses')).toBe('amount')
+    expect(mapQuestionToRecordType('kategorisiere die Ausgaben')).toBe('amount')
+    expect(mapQuestionToRecordType('alle Einnahmen bitte')).toBe('amount')
+  })
 })
 
 describe('routeQuestion — precedence + non-coverage', () => {

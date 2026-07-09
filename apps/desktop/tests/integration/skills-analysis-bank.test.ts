@@ -175,6 +175,20 @@ describe('bank-statement analysis handler — applies() pre-flight (R2)', () => 
     const id = seedDoc(db, CLEAN)
     expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
   })
+
+  // #37 follow-through: the gruppier/summier/group-by/sum-per aggregation phrasings are the
+  // same whole-statement ask as „kategorisiere …" — a stem miss here silently degraded them to
+  // top-k retrieval whenever the phrasing also missed the route vocabulary. Category-shaped ⟹
+  // analysis-shaped (see CATEGORY_KEYWORDS).
+  it.each([
+    'Gruppiere die Positionen nach Monat', // gruppier — no other bank term present
+    'Summiere je Monat', // summier — 'summe' (the existing stem) is NOT a substring of 'summiere'
+    'Group by month please' // group by — no other bank term present
+  ])('applies on the aggregation phrasing %j (#37)', (question) => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    expect(bankStatementAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(true)
+  })
 })
 
 describe('bank-statement analysis handler — date-order caveat (R5, §5.7)', () => {

@@ -1289,20 +1289,49 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   obligation`), strict JSON-array prompt at temp 0, tolerant `parseExtraction` + retry-once, then an
   `unparsed` marker (the chunk is **surfaced, never dropped** — H7); same arbiter/cancel/lock discipline
   + per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` (H11); per-`(chunk_id, content_hash)` resume cache = **0**
-  calls on re-run. Gated on `fully_chunked` (C4). Manual-only (not auto-enqueued at import — avoids
-  surprise CPU spend).
+  calls on re-run. Gated on `fully_chunked` (C4). **User-triggered via "Build deep index", never
+  auto-enqueued at import** (issue #38 — as designed the pass was manual-only, but no UI ever started an
+  `extract` task, so `extractAvailable` was false for every document and the coverage-extract branch was
+  dead code). The row action now enqueues the tree with `params.withExtract`; on a **successful** tree
+  build the DocTaskManager chains `kind:'extract'` best-effort (a cancelled/failed build never chains; a
+  refused chain start — chat streaming, runtime gone — is logged and dropped). The action stays visible
+  until **both** `tree_status` and `extract_status` are `'ready'` (a tree-ready doc with no extract
+  re-offers it and starts just the extract), and the "Deeply indexed" badge claims completion only when
+  both hold. The renderer doc-task store adopts the chained job at the tree's `done` poll so the busy
+  row/banner stay truthful through both passes. The import-time auto-enqueue (`maybeEnqueueTreeBuild`)
+  still starts a **plain** tree — the extract pass never runs without an explicit user action (no
+  surprise CPU spend at import).
 - **Aggregate:** `aggregateExtractions` GROUPs BY `normalized_value` through the shared
   `buildScopeFilter(scope, 'document_id')` (M3 — membership/id UNION + archived exclusion), **0** model calls;
   returns items+counts+source-chunk provenance + scanned/total/unparsed + `fullyChunked`.
 - **Router** ([`router.ts`](../apps/desktop/src/main/services/analysis/router.ts), pure): EN+DE
-  classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl), fixed
+  classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl, **plus the
+  #37 aggregation lexicon** `AGGREGATION_RE`: categorize/categorization/group(ed) by/breakdown/sum per/
+  total per/per category/itemize/tally + the DE stems kategorisier/gruppier/summier/aufschlüssel/
+  aufsummier and the phrases Summe pro/Gesamtsumme/pro Kategorie/nach Kategorie — an aggregation over a
+  document is a whole-document task by nature, so it must never silently run on top-k), fixed
   precedence **explicit-button > compare(2 docs) > coverage-extract > tree-summary > relevance** (M7),
-  closed-vocab→type synonym map; **low-confidence / no-extract-data / compare-without-2-docs → labelled
-  relevance** (never an empty "no items" or a false "complete"). The `rag:ask` wiring streams the
-  deterministic listing ([`listing-answer.ts`](../apps/desktop/src/main/services/analysis/listing-answer.ts))
+  closed-vocab→type synonym map (the `amount` synonyms include expense(s)/spending/income/revenue +
+  Ausgabe(n)/Einnahme(n)/Umsatz/Umsätze since #37); **low-confidence / no-extract-data /
+  compare-without-2-docs → labelled relevance** (never an empty "no items" or a false "complete"). The
+  `rag:ask` wiring streams the deterministic listing
+  ([`listing-answer.ts`](../apps/desktop/src/main/services/analysis/listing-answer.ts))
   for a mapped pre-extracted type; everything else falls through to the existing relevance path
   **byte-unchanged**. An unmapped/ad-hoc "{X}" falls back to labelled relevance in v1 (no live full-scan —
-  deferred), so the 0-call completeness claim is only ever made for a mapped type.
+  deferred), so the 0-call completeness claim is only ever made for a mapped type. **v1 caveat, still
+  open (#37 suggestion 3):** the listing engine groups by `normalized_value` with **counts** — a
+  user-defined categorization with per-category numeric **sums** is served exhaustively only by the
+  bank-statement skill's category engine; the no-skill coverage-extract answer for such an ask is an
+  honest whole-document *listing* of the mapped type, not the requested sums.
+- **Low-confidence fallback hint — AS BUILT (#37/#38).** `RouteDecision` carries a `fallback` reason
+  (`'coverage' | 'compare'`) alongside `confidence`; `rag:ask` (which previously **discarded**
+  `confidence` — the answer over 5 of 25 sections read like any normal answer) now leads the relevance
+  answer with the localized `analysis.wholeDocHint` (EN *"**Heads-up:** this looks like a question about
+  the whole document…"*) whenever `confidence === 'low' && fallback === 'coverage'` and ≥ 1 answerable
+  doc is in scope. The hint rides the same `answerPrefix` seam as the W2 scope notice (streamed first,
+  persisted with the content; both compose when present) and names the fix: build the deep index, ask
+  again. The compare fallback keeps its existing selectTwo routing; ordinary high-confidence relevance
+  turns are byte-unchanged.
 - **"Whole document" wording gate (RAG-1, backend audit 2026-06-27):** `buildListingAnswer` says
   *"across the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
   chunking invariant holds AND every in-scope chunk actually carries a `__scan__` marker. `fullyChunked`

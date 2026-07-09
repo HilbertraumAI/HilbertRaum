@@ -76,6 +76,15 @@ export interface InternalTask {
    * reduce; 3 = a detailed full-coverage reduce in budget batches. Ignored without a tree.
    */
   summaryTier?: CoverageTier
+  /**
+   * Chain the structured-extract pass after a SUCCESSFUL `tree` build (issue #38 — "Build deep
+   * index" is one user concept covering both yielding passes). Set only from the explicit UI
+   * action (`params.withExtract`), never by the import-time auto-enqueue — the extract pass
+   * stays out of ingestion (rag-design §14.5: no surprise CPU spend at import). Best-effort:
+   * a refused chain start (chat streaming, runtime gone) is logged and dropped; the deep-index
+   * row action stays visible until `extract_status='ready'`, so the user can finish it later.
+   */
+  withExtract?: boolean
 }
 
 /**

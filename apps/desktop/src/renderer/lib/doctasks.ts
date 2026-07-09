@@ -76,15 +76,37 @@ export async function startTask(
   const { jobId } = await window.api.startDocTask({ kind, documentIds: ids, params })
   stopPolling()
   setActive({ jobId, kind, documentIds: ids, status: null })
+  // The id this timer is watching. Reassigned when a chained follow-up task is adopted
+  // (deep-index tree → extract, #38), so the same loop keeps polling through both passes.
+  let watchedJobId = jobId
   timer = setInterval(() => {
     void (async () => {
       const current = active
-      if (!current || current.jobId !== jobId) {
+      if (!current || current.jobId !== watchedJobId) {
         stopPolling()
         return
       }
       try {
-        const status = await window.api.getDocTask(jobId)
+        const status = await window.api.getDocTask(watchedJobId)
+        if (status.state === 'done' && params?.withExtract === true) {
+          // Chain adoption (#38): "Build deep index" starts a 'tree' task (withExtract) that
+          // chains a backend 'extract' task over the same document. When the tree completes,
+          // adopt the running follow-up task so the row busy state and the chat task banner
+          // stay truthful through both passes. No follow-up (chain dropped: chat streaming /
+          // runtime gone) or a foreign task over other documents keeps the ordinary terminal
+          // handling — the backend ran or dropped the extract either way.
+          const next = await window.api.getActiveDocTask?.().catch(() => null)
+          if (
+            next &&
+            next.jobId !== watchedJobId &&
+            !isDocTaskTerminal(next) &&
+            next.documentIds.some((id) => current.documentIds.includes(id))
+          ) {
+            watchedJobId = next.jobId
+            setActive({ jobId: next.jobId, kind: next.kind, documentIds: next.documentIds, status: next })
+            return
+          }
+        }
         setActive({ ...current, status })
         if (isDocTaskTerminal(status)) stopPolling()
       } catch {

@@ -702,3 +702,62 @@ describe('coverage tiers', () => {
     expect(getDocumentSummary(db, id)?.tier).toBe(1)
   })
 })
+
+// ---- #38: the deep-index chain — "Build deep index" = tree + extract, one user concept ----
+
+describe('deep-index extract chain (#38)', () => {
+  const extractStatusOf = (id: string): string | null =>
+    (
+      db.prepare('SELECT extract_status FROM documents WHERE id = ?').get(id) as unknown as {
+        extract_status: string | null
+      }
+    ).extract_status
+
+  it('a tree task started with withExtract chains the extract pass after success', async () => {
+    const id = await importWords(4000)
+    const runtime = scriptedRuntime()
+    const m = makeManager(runtime, 1024)
+    const s = await waitTerminal(
+      m,
+      m.startDocTask({ kind: 'tree', documentIds: [id], params: { withExtract: true } }).jobId
+    )
+    expect(s.state).toBe('done')
+    expect(treeStatus(id)).toBe('ready')
+    // The chained extract pass was enqueued by the manager itself and runs next — the deep
+    // index is complete only when BOTH passes are (the row action and badge key off this).
+    await waitFor(() => extractStatusOf(id) === 'ready' && !m.hasActiveTask(), 'chained extract')
+  })
+
+  it('a plain tree task (no withExtract) never chains — extract stays manual elsewhere', async () => {
+    const id = await importWords(4000)
+    const m = makeManager(scriptedRuntime(), 1024)
+    const s = await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
+    expect(s.state).toBe('done')
+    await waitFor(() => !m.hasActiveTask(), 'queue drained')
+    expect(extractStatusOf(id)).toBeNull() // no surprise CPU spend (rag-design §14.5)
+  })
+
+  it('a CANCELLED tree build never chains the extract pass', async () => {
+    const id = await importWords(8000)
+    const runtime = scriptedRuntime({ tokenDelayMs: 15 })
+    const m = makeManager(runtime, 1024)
+    const { jobId } = m.startDocTask({ kind: 'tree', documentIds: [id], params: { withExtract: true } })
+    await waitFor(() => m.getDocTask(jobId).state === 'running', 'build running')
+    m.cancelDocTask(jobId)
+    const s = await waitTerminal(m, jobId)
+    expect(s.state).toBe('cancelled')
+    await waitFor(() => !m.hasActiveTask(), 'queue drained')
+    expect(extractStatusOf(id)).toBeNull() // the user said stop — no chained work
+  })
+
+  it('withExtract on the auto-enqueue path is never set — maybeEnqueueTreeBuild starts a plain tree', async () => {
+    // The import-time auto-enqueue must not inherit the chain: the extract pass is user-
+    // triggered only (rag-design §14.5 — no surprise CPU spend at import).
+    const id = await importWords(8000)
+    db.prepare("UPDATE documents SET tree_status = NULL WHERE id = ?").run(id)
+    const m = makeManager(scriptedRuntime(), 1024)
+    m.maybeEnqueueTreeBuild(id)
+    await waitFor(() => treeStatus(id) === 'ready' && !m.hasActiveTask(), 'auto tree')
+    expect(extractStatusOf(id)).toBeNull()
+  })
+})

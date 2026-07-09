@@ -125,7 +125,13 @@ export const DocRow = memo(function DocRow({
   const status = badgeFor(d, t)
   const chips = rowChips(d, t)
   const canDocTasks = d.status === 'indexed' && d.chunkCount > 0
-  const canDeepIndex = canDocTasks && !d.origin && d.treeStatus !== 'ready'
+  // #38: a deep index is COMPLETE only when both passes are done — the summary tree AND the
+  // structured-extract scan. The action stays offered until both are ready (a doc whose tree
+  // was auto-built at import, or deep-indexed before the extract pass was reachable, re-offers
+  // it to finish the missing extract half), and the "Deeply indexed" badge claims completion
+  // only when it is true.
+  const deepIndexComplete = d.treeStatus === 'ready' && d.extractStatus === 'ready'
+  const canDeepIndex = canDocTasks && !d.origin && !deepIndexComplete
   const showOcr = Boolean(d.scanDetected && ocrAvailable)
   const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
   const rowBusyLabel = rowTask
@@ -219,7 +225,7 @@ export const DocRow = memo(function DocRow({
             {t('docs.meta.summary')}
           </Badge>
         )}
-        {d.treeStatus === 'ready' && !d.origin && (
+        {deepIndexComplete && !d.origin && (
           <Badge tone="neutral" icon="▦" title={t('docs.deepIndex.readyTitle')}>
             {t('docs.deepIndex.ready')}
           </Badge>

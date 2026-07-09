@@ -6,9 +6,12 @@ import type { ExtractRecordType } from '../../../shared/types'
 // scope? how many documents are in scope?) and gets back an engine choice.
 //
 // Honesty rules it enforces (H7/M7):
-//   - "list every / how many" routes to COVERAGE-EXTRACT (never top-k relevance) — but ONLY
-//     when there is precomputed extracted data in scope; otherwise it falls back to LABELLED
-//     relevance (we must not claim a complete "0 items" list with no precomputed table).
+//   - "list every / how many" AND the aggregation/categorization verbs (issue #37 —
+//     "categorize / group by / sum per category", DE "kategorisiere / gruppiere / Summe pro
+//     Kategorie") route to COVERAGE-EXTRACT (never top-k relevance) — but ONLY when there is
+//     precomputed extracted data in scope; otherwise it falls back to LABELLED relevance
+//     (we must not claim a complete "0 items" list with no precomputed table), marked
+//     `fallback: 'coverage'` so the caller leads with the "build the deep index" hint (#38).
 //   - A coverage trigger maps the user's "{X}" to one of the fixed extract types via a closed
 //     synonym table (defaulting to `generic`) — the 0-query-call guarantee holds only for a
 //     mapped, pre-extracted type.
@@ -44,12 +47,27 @@ export interface RouteDecision {
    * exhaustive" (the Phase-2 meter), never an empty "no items".
    */
   confidence: 'high' | 'low'
+  /**
+   * WHY a low-confidence decision fell back to relevance (issues #37/#38): `coverage` = a
+   * whole-document trigger (list/count/aggregate) fired but no extract data exists in scope —
+   * the caller leads the answer with the "build the deep index" hint; `compare` = a compare
+   * intent without two documents. Absent on every high-confidence decision.
+   */
+  fallback?: 'coverage' | 'compare'
 }
 
 // --- Language-aware classification regexes (EN + DE) ---
 
 const COVERAGE_RE =
   /\b(list|enumerate|every|each|all of (the|them)|all the|how many|how much|count)\b|\b(jede[rsn]?|alle[rsn]?|sämtliche[rsn]?|wie ?viele?|liste|auflist|aufzähl|zähl)\b/i
+// Aggregation/categorization verbs (issue #37): "categorize the expenses, sum per category" is a
+// whole-document task by nature — no top-k short of "all chunks" yields a correct total. These
+// route to coverage exactly like the list/count triggers above: coverage-extract when extract
+// data exists, else the LABELLED low-confidence relevance fallback (never a silent top-k sum).
+// German verb stems (kategorisier/gruppier/summier/aufschlüssel/aufsummier) deliberately have no
+// trailing boundary so inflections match (kategorisiere, Gruppierung, aufgeschlüsselt, …).
+const AGGREGATION_RE =
+  /\b(categori[sz]e|categori[sz]ation|group(ed)? by|break ?down|sum per|total per|per category|itemi[sz]e|tally)\b|\b(kategorisier|gruppier|summier|aufschlüssel|aufgeschlüsselt|aufsummier)|\b(summe pro|gesamtsumme|pro kategorie|nach kategorie)\b/i
 const SUMMARY_RE =
   /\b(summar(?:y|ise|ize|ies)|overview|tl;?dr|gist|whole document|entire document)\b|\b(zusammenfass|überblick|ganzes? dokument)\b/i
 const COMPARE_RE =
@@ -63,7 +81,7 @@ const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
   },
   {
     type: 'amount',
-    re: /\b(cost|costs|fee|fees|price|prices|amount|amounts|payment|payments|money|sum|sums)\b|\b(kosten|betrag|beträge|gebühr|gebühren|preis|preise|summe|summen|zahlung|zahlungen)\b/i
+    re: /\b(cost|costs|fee|fees|price|prices|amount|amounts|payment|payments|money|sum|sums|expense|expenses|spending|income|revenue)\b|\b(kosten|betrag|beträge|gebühr|gebühren|preis|preise|summe|summen|zahlung|zahlungen|ausgabe|ausgaben|einnahme|einnahmen|umsatz|umsätze)\b/i
   },
   {
     type: 'party',
@@ -92,7 +110,7 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   if (input.taskType === 'compare') {
     return docs >= 2
       ? { engine: 'compare', confidence: 'high' }
-      : { engine: 'relevance', confidence: 'low' }
+      : { engine: 'relevance', confidence: 'low', fallback: 'compare' }
   }
   if (input.taskType === 'summary' || input.taskType === 'translate') {
     // Summarize/translate are served by their own task pipelines, not rag:ask — but for a
@@ -103,7 +121,7 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   }
 
   const wantsCompare = COMPARE_RE.test(q)
-  const wantsCoverage = COVERAGE_RE.test(q)
+  const wantsCoverage = COVERAGE_RE.test(q) || AGGREGATION_RE.test(q)
   const wantsSummary = SUMMARY_RE.test(q)
 
   // 2. Compare (needs two documents). A compare intent without 2 docs is low-confidence and
@@ -111,11 +129,13 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   if (wantsCompare) {
     return docs >= 2
       ? { engine: 'compare', confidence: 'high' }
-      : { engine: 'relevance', confidence: 'low' }
+      : { engine: 'relevance', confidence: 'low', fallback: 'compare' }
   }
 
-  // 3. Coverage-extract ("list every / how many"): only when there IS precomputed extracted
-  //    data — otherwise we cannot honestly claim a complete list, so fall back to relevance.
+  // 3. Coverage-extract ("list every / how many" + the #37 aggregation verbs): only when there
+  //    IS precomputed extracted data — otherwise we cannot honestly claim a complete list, so
+  //    fall back to relevance, marked `fallback: 'coverage'` so the caller can lead the answer
+  //    with the actionable "build the deep index" hint (#38) instead of a silent partial sum.
   if (wantsCoverage) {
     if (input.extractAvailable) {
       return {
@@ -124,7 +144,7 @@ export function routeQuestion(input: RouteInput): RouteDecision {
         confidence: 'high'
       }
     }
-    return { engine: 'relevance', confidence: 'low' }
+    return { engine: 'relevance', confidence: 'low', fallback: 'coverage' }
   }
 
   // 4. Tree-summary ("summarize / overview / whole document") when a deep index is ready.

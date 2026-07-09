@@ -568,9 +568,10 @@ export function registerRagIpc(ctx: AppContext): void {
       // aggregation — exhaustive over indexed sections, with provenance, at ZERO query-time
       // model calls. Anything else (incl. an unmapped/ad-hoc {X} with no precomputed table)
       // falls through to the existing relevance path BYTE-UNCHANGED.
+      const routableDocCount = documentsInScope(ctx.db, scope, { requireChunks: true }).length
       const decision = routeQuestion({
         question: text,
-        documentCount: documentsInScope(ctx.db, scope, { requireChunks: true }).length,
+        documentCount: routableDocCount,
         treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
         extractAvailable: extractionsExistInScope(ctx.db, scope)
       })
@@ -606,6 +607,21 @@ export function registerRagIpc(ctx: AppContext): void {
         )
       }
 
+      // Issues #37/#38: the router WANTED the whole-document coverage engine (a list/count/
+      // aggregation question) but no extract data exists in scope, so it fell back to top-k
+      // relevance. That fallback used to be silent — `decision.confidence` was computed and
+      // discarded, so a categorization/sum answer over 5 of 25 sections read like any normal
+      // answer. Lead the answer with the actionable hint (build the deep index) instead. It
+      // rides the same `answerPrefix` seam as the W2 scope notice (streamed first, persisted
+      // with the content); gated on ≥1 answerable doc so an empty-scope turn keeps its own
+      // "no documents" honesty path unchanged.
+      const wholeDocHint =
+        decision.confidence === 'low' && decision.fallback === 'coverage' && routableDocCount > 0
+          ? tMain('analysis.wholeDocHint')
+          : null
+      const relevancePrefixParts = [scopeNotice, wholeDocHint].filter((s): s is string => s != null)
+      const relevancePrefix = relevancePrefixParts.length > 0 ? `${relevancePrefixParts.join('\n\n')}\n\n` : undefined
+
       return withChatStream(
         event,
         conversationId,
@@ -631,8 +647,9 @@ export function registerRagIpc(ctx: AppContext): void {
             skill,
             // A3: a needle ask that was auto-narrowed to one doc (W2) and then downgraded off the
             // whole-doc engine reaches HERE — lead the honest scope notice so the narrowing stays
-            // visible. `scopeNotice` is null on every other route into this path (byte-unchanged).
-            answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined,
+            // visible. #37/#38: the whole-document-question hint (composed above) rides the same
+            // prefix. Both are null/absent on every ordinary route into this path (byte-unchanged).
+            answerPrefix: relevancePrefix,
             onToken: sendToken
           })),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})

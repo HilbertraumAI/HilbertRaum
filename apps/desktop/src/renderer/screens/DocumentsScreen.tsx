@@ -525,13 +525,20 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // Build a whole-document deep index (whole-document-analysis §5.2). C4 gate: a legacy
   // (not fully-chunked) document must be re-indexed first so "100%" can never be claimed over
   // a silently-truncated set — the row offers "Re-index for deep index" instead of a dead button.
+  // #38: "deep index" is ONE user concept covering TWO yielding passes — the summary tree AND
+  // the structured-extract scan (what "list every / categorize all" answers aggregate over).
+  // A fresh build starts the tree with `withExtract` (the backend chains the extract on
+  // success); a doc whose tree is already ready but whose extract is missing (e.g. auto-built
+  // at import, or deep-indexed before the extract pass was reachable) starts just the extract.
   async function onBuildDeepIndex(d: DocumentInfo): Promise<void> {
     setError(null)
     try {
       if (d.fullyChunked === false) {
         await run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))
+      } else if (d.treeStatus === 'ready') {
+        await startTask('extract', d.id)
       } else {
-        await startTask('tree', d.id)
+        await startTask('tree', d.id, { withExtract: true })
       }
     } catch (e) {
       setError(friendlyIpcError(e))

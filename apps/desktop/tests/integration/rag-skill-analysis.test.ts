@@ -1002,3 +1002,63 @@ describe('askDocuments — W6 multi-currency grounded-data (IPC pin, T2)', () =>
     expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.figureEchoNet', { amount: '13.50', currency: 'EUR' }))
   })
 })
+
+// Issues #37/#38 — the no-skill aggregation incident: „kategorisiere die ausgaben und erstelle
+// eine summe pro kategorie auf" over a 25-page statement silently ran on top-k retrieval and
+// presented per-category sums computed from 5 of 25 sections like a normal answer. The router
+// now classifies aggregation verbs as coverage; with no extract data it falls back to relevance
+// marked `fallback:'coverage'`, and askDocuments LEADS the answer with the actionable deep-index
+// hint instead of discarding the confidence (the pre-fix behaviour).
+describe('askDocuments — whole-document hint on the low-confidence coverage fallback (#37/#38)', () => {
+  it('the #37 aggregation question with NO skill leads with the deep-index hint over the relevance answer', async () => {
+    const h = await makeHarness({ fullyChunked: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf',
+      null // explicit no-skill turn — the incident configuration
+    )
+    const msg = result as Message
+
+    // Teeth: discard `decision.confidence` again (the pre-fix behaviour) → no hint → red.
+    expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
+    // The hint LEADS the ordinary relevance answer — it never replaces it.
+    expect(msg.content).toContain('Model answer.')
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.coverage?.mode).toBe('relevance')
+  })
+
+  it('an ordinary question never carries the hint (byte-unchanged relevance)', async () => {
+    const h = await makeHarness({ fullyChunked: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'who wrote this letter?',
+      null
+    )
+    const msg = result as Message
+    expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+    expect(msg.content).toContain('Model answer.')
+  })
+
+  it('the same #37 question WITH the bank skill takes the whole-document engine — no hint, no top-k', async () => {
+    // The user-facing guarantee behind #37: a bank-statement aggregation ask with the skill
+    // attached is answered from the WHOLE statement (deterministic extract, honest extract
+    // coverage), never from retrieved excerpts — so the hint has nothing to warn about.
+    const h = await makeHarness({ fullyChunked: true })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.coverage?.mode).toBe('extract')
+    expect(msg.coverage?.fullyChunked).toBe(true)
+    expect(msg.content).toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
+    expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+  })
+})

@@ -869,9 +869,13 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
     expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeDisabled()
   })
 
-  it('a ready deep index reads as the "Deeply indexed" badge (not a button), and Build is gone from the overflow', async () => {
+  it('a COMPLETE deep index (tree + extract, #38) reads as the "Deeply indexed" badge (not a button), and Build is gone from the overflow', async () => {
     const user = userEvent.setup()
-    stubApi({ listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: 'ready' })]) })
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: 'ready' })
+      ])
+    })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     expect(screen.getByText('Deeply indexed')).toBeInTheDocument()
@@ -940,7 +944,9 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
   it('keeps readiness as the only green badge — Summary + Deeply indexed are neutral', async () => {
     const summary = { text: 's', modelId: 'm', createdAt: '2026-01-01T00:00:00Z', truncated: false }
     stubApi({
-      listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: 'ready', summary })])
+      listDocuments: vi.fn(async () => [
+        doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: 'ready', summary })
+      ])
     })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')

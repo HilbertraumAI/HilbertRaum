@@ -343,7 +343,10 @@ export class DocTaskManager {
       controller: new AbortController(),
       sourceLang,
       targetLang,
-      summaryTier
+      summaryTier,
+      // #38: only an explicit tree start may chain the extract pass (the deep-index UI action);
+      // any other kind ignores the param.
+      withExtract: kind === 'tree' && req.params?.withExtract === true
     }
     this.tasks.set(jobId, task)
     this.recordKind(jobId, kind)
@@ -573,6 +576,23 @@ export class DocTaskManager {
       task.status.resultRef = { documentId: resultId }
       this.deps.audit?.('document_task_completed', `Document task completed: ${kind}`, auditMeta)
       log.info('Document task completed', { jobId: task.status.jobId, kind, documentId })
+      // #38: "Build deep index" = tree + extract, one user concept. Chain the structured-extract
+      // pass ONLY after a SUCCESSFUL user-initiated tree build (never on cancel/failure — the
+      // catch below returns first, so a cancelled build never spawns surprise CPU work). Enqueued
+      // here (runningId still set), so the outer pump picks it up the moment this task settles.
+      // Best-effort like `maybeEnqueueTreeBuild`: a refused start (chat streaming, runtime gone,
+      // already pending) is logged and dropped — the deep-index row action stays visible until
+      // `extract_status='ready'`, so the user can finish the missing pass later.
+      if (task.withExtract && !this.hasPendingKind(documentId, 'extract')) {
+        try {
+          this.startDocTask({ kind: 'extract', documentIds: [documentId] })
+        } catch (chainErr) {
+          log.info('Deep-index extract chain skipped', {
+            documentId,
+            reason: chainErr instanceof Error ? chainErr.message : String(chainErr)
+          })
+        }
+      }
     } catch (err) {
       if (isAbortError(err, task.controller.signal)) {
         task.status.state = 'cancelled'

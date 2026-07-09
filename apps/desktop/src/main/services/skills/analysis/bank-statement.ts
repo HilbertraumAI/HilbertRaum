@@ -86,9 +86,16 @@ export const BANK_STATEMENT_INSTALL_ID = skillInstallId('app', 'bank-statement')
 // spend-stems makes the flagship true (a filtered spend ask now narrates the verified extract, with the
 // deterministic per-category grouping still riding the grounded-data block), tense-independent. The
 // explicit "break down by category" ask keeps the template via `categor`/`breakdown`/`kategor`/`aufschlüssel`.
+// #37 follow-through: `gruppier`/`summier`/`group by`/`sum per` joined the stems — „gruppiere die
+// Ausgaben", „summiere pro Kategorie" and "group by month, sum per category" are the same
+// whole-statement aggregation ask as „kategorisiere …", and a stem miss here silently degraded
+// them to top-k retrieval (the issue-#37 incident class) whenever the phrasing also missed the
+// route vocabulary. Deliberately NOT the bare stem `group` — a common company-name token
+// ("XY Group GmbH") that would flip a targeted lookup onto the category template (the SKA-20
+// over-broad-stem mistake).
 const CATEGORY_KEYWORDS: readonly string[] = [
-  'categor', 'breakdown', 'by category',
-  'kategor', 'nach kategorie', 'aufschlüssel'
+  'categor', 'breakdown', 'by category', 'group by', 'sum per',
+  'kategor', 'nach kategorie', 'aufschlüssel', 'gruppier', 'summier'
 ]
 
 function isAnalysisShaped(question: string): boolean {

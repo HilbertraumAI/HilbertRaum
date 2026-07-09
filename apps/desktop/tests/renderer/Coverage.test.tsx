@@ -231,7 +231,7 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     }
   }
 
-  it('offers "Build deep index" on a fully-chunked doc with no tree, and starts a tree task', async () => {
+  it('offers "Build deep index" on a fully-chunked doc with no tree, and starts a tree task that chains the extract pass (#38)', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
     stubApi({
@@ -244,7 +244,31 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     // "Build deep index" now lives in the per-row "⋯" overflow (§11.6).
     await user.click(screen.getByRole('button', { name: t('en', 'docs.moreActions', { title: 'report.pdf' }) }))
     await user.click(await screen.findByRole('menuitem', { name: t('en', 'docs.deepIndex.build') }))
-    expect(startDocTask).toHaveBeenCalledWith({ kind: 'tree', documentIds: ['d1'] })
+    // #38: one user concept, two passes — the backend chains the extract after the tree.
+    expect(startDocTask).toHaveBeenCalledWith({
+      kind: 'tree',
+      documentIds: ['d1'],
+      params: { withExtract: true }
+    })
+  })
+
+  it('a tree-ready doc whose extract pass is missing re-offers the action and starts JUST the extract (#38)', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'j2' }))
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: null })
+      ]),
+      startDocTask,
+      getDocTask: vi.fn(async () => task({ jobId: 'j2', kind: 'extract', state: 'running' }))
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('report.pdf')
+    // The deep index is INCOMPLETE (tree ready, extract missing) — no "Deeply indexed" badge yet.
+    expect(screen.queryByText(t('en', 'docs.deepIndex.ready'))).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t('en', 'docs.moreActions', { title: 'report.pdf' }) }))
+    await user.click(await screen.findByRole('menuitem', { name: t('en', 'docs.deepIndex.build') }))
+    expect(startDocTask).toHaveBeenCalledWith({ kind: 'extract', documentIds: ['d1'], params: undefined })
   })
 
   it('C4: a legacy (not fully-chunked) doc offers "Re-index first" and re-indexes, not a dead build', async () => {
@@ -266,9 +290,11 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     expect(startDocTask).not.toHaveBeenCalled()
   })
 
-  it('a ready deep index shows the "Deeply indexed" badge and no build action', async () => {
+  it('a COMPLETE deep index (tree + extract both ready, #38) shows the "Deeply indexed" badge and no build action', async () => {
     stubApi({
-      listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: 'ready' })])
+      listDocuments: vi.fn(async () => [
+        doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: 'ready' })
+      ])
     })
     render(<DocumentsScreen />)
     await screen.findByText('report.pdf')

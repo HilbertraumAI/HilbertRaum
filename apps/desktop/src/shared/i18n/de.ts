@@ -556,15 +556,17 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----
   'docs.deepIndex.build': 'Tiefenindex erstellen',
   'docs.deepIndex.buildTitle':
-    'Liest das ganze Dokument in einen Tiefenindex ein, damit Zusammenfassungen und ' +
-    'Antworten alles abdecken können — läuft auf diesem Laufwerk, nichts verlässt es',
+    'Liest das ganze Dokument in einen Tiefenindex ein — Zusammenfassungen, „Liste alle …"- ' +
+    'und „Summe pro Kategorie"-Antworten können dann alles abdecken — läuft auf diesem ' +
+    'Laufwerk, nichts verlässt es',
   'docs.deepIndex.reindexFirst': 'Für Tiefenindex neu indexieren',
   'docs.deepIndex.reindexFirstTitle':
     'Dieses Dokument wurde hinzugefügt, bevor es Tiefenindexe gab — indexiere es zuerst neu, ' +
     'damit ein Tiefenindex das ganze Dokument abdecken kann',
   'docs.deepIndex.ready': 'Tief indexiert',
   'docs.deepIndex.readyTitle':
-    'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen können alles abdecken',
+    'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen und ' +
+    'Listen-Antworten können alles abdecken',
   'coverage.relevance': 'Basiert auf den relevantesten Passagen — nicht auf dem ganzen Dokument',
   'coverage.relevance.counted': 'Basiert auf {covered} von {total} Abschnitten',
   'coverage.capped.whole': 'Deckt das ganze Dokument ab',
@@ -613,6 +615,15 @@ export const de: Record<keyof typeof en, string> = {
     'zusammengefasst).',
   'analysis.listing.refPage': 'S. {n}',
   'analysis.listing.refSection': 'Abschnitt {n}',
+  // #37/#38: der Router hat eine Frage zum ganzen Dokument erkannt (auflisten / zählen /
+  // kategorisieren / Summe pro Kategorie), aber es gibt keinen Tiefenindex im Umfang — die
+  // Antwort darunter stammt aus der Relevanzsuche. Das AKTIV sagen und den Weg zeigen — der
+  // Abdeckungsbruch allein („Basiert auf 5 von 25 Abschnitten") geht unter einer plausibel
+  // aussehenden Summe zu leicht unter.
+  'analysis.wholeDocHint':
+    '**Hinweis:** Das sieht nach einer Frage zum ganzen Dokument aus, aber diese Antwort ' +
+    'basiert nur auf den relevantesten Abschnitten. Für eine vollständige Antwort öffne ' +
+    '„Dokumente", wähle „Tiefenindex erstellen" für das Dokument und frage dann erneut.',
 
   // ---- Kontoauszug-Auswertung (full-doc-skills Plan §3.1, Phase 2) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
