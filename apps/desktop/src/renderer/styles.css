@@ -73,9 +73,26 @@ button { min-width: 24px; min-height: 24px; }
   gap: 4px;
 }
 
-/* Just the brand mark on the rail — the wordmark sits behind a tooltip so the rail
-   stays quiet and narrow. */
-.brand { display: flex; justify-content: center; padding: 6px 0 14px; }
+/* Just the brand mark on the rail — the wordmark sits behind the tooltip/aria-label so
+   the rail stays quiet and narrow. A BUTTON, not decoration (issue #47): a logo atop a
+   column of clickable items reads as "go Home", so it navigates home like its rail
+   siblings — hover fill + the global :focus-visible ring; the labelled Home item below
+   keeps the active highlight (one lit selection on the rail, not two). */
+.brand {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  /* 6px+4px+margin ≈ the old 6px/14px asymmetric padding, so the rail rhythm holds
+     while the hover fill stays snug around the mark. */
+  padding: 6px 4px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.brand:hover { background: var(--surface-hover); }
 /* Brand mark / lockup (components/BrandMark.tsx): both images render; the CSS pair toggle
    shows the theme-correct one via [data-theme] — no JS theme read, so it works pre-unlock in
    the gate. The dot is always teal; the square ink flips with the background. */
@@ -84,16 +101,6 @@ button { min-width: 24px; min-height: 24px; }
 .brand-img-dark { display: none; }
 [data-theme='dark'] .brand-img-light { display: none; }
 [data-theme='dark'] .brand-img-dark { display: block; }
-.brand-name {
-  /* Visually hidden on the rail; the title attribute carries the tooltip. */
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
 .nav-list { list-style: none; padding: 0; margin: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 /* Bottom utility group (guidelines §2): Settings sits apart from the
    everyday destinations, above the lock button. */

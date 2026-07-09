@@ -238,6 +238,30 @@ describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
     await user.click(await screen.findByRole('button', { name: /AI Model/ }))
     expect(await screen.findByRole('heading', { name: 'AI Model' })).toBeInTheDocument()
   })
+
+  it('the rail brand lockup is a real Home button, not a dead click (issue #47)', async () => {
+    // The logo heads a column of clickable siblings, so it follows the universal
+    // "logo = go Home" convention: a button with an accessible name, aria-current
+    // when Home is the current screen, and the same navigate() path as the Home item.
+    const user = userEvent.setup()
+    stubAppShell()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    const brand = within(nav).getByRole('button', { name: 'HilbertRaum — Home' })
+    // Home is the default screen → the logo is semantically current…
+    expect(brand).toHaveAttribute('aria-current', 'page')
+    // …but it is NOT one of the 8 labelled rail items (the IA count above stays authoritative).
+    expect(brand.className).not.toContain('nav-item')
+
+    await user.click(within(nav).getByRole('button', { name: /AI Model/ }))
+    expect(await screen.findByRole('heading', { name: 'AI Model' })).toBeInTheDocument()
+    expect(brand).not.toHaveAttribute('aria-current')
+
+    await user.click(brand)
+    // stubAppShell has no active model → Home renders the "Almost set up." headline.
+    expect(await screen.findByRole('heading', { name: 'Almost set up.' })).toBeInTheDocument()
+    expect(brand).toHaveAttribute('aria-current', 'page')
+  })
 })
 
 describe('SettingsScreen — tabs (Phase 26)', () => {

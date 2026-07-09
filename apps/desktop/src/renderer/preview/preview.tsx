@@ -12,6 +12,7 @@ import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
 import { CoverageMeter } from '../components'
 import { ScopePopover } from '../chat/ScopePopover'
+import { App } from '../App'
 import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen } from '../screens/ModelsScreen'
@@ -116,6 +117,14 @@ const PREVIEW_MODELS: ModelInfo[] = [
 
 // ---- Mock window.api: a Proxy so any unlisted method resolves to a harmless default ------------
 const overrides: Record<string, unknown> = {
+  // App-shell cases (`brand-home*`): the shell needs an unlocked workspace to render the
+  // nav rail instead of the gate. Harmless for component-level cases (they never call it).
+  getWorkspaceState: async () => ({
+    state: 'unlocked',
+    mode: 'plaintext_dev',
+    plaintextAllowed: true,
+    encryptionRequired: false
+  }),
   listCollections: async () => COLLECTIONS,
   listDocuments: async () => DOCUMENTS,
   searchConversations: async () => [],
@@ -282,6 +291,27 @@ CASES['chat-runtime'] = {
 CASES['chat-runtime-compat'] = {
   ...CASES['chat-runtime'],
   label: `${CASES['chat-runtime'].label} — compat`
+}
+// Issue #47: the rail brand lockup is now a real Home button. `brand-home` shows the resting
+// shell (logo above the labelled Home item — the Home row alone carries the active highlight,
+// no double-lit selection); `brand-home-hover` statically applies the hover fill so the
+// clickable affordance is visible in a screenshot (a real :hover can't be captured).
+CASES['brand-home'] = {
+  label: 'App shell — brand lockup as the Home button (issue #47)',
+  node: (
+    <div style={{ width: 1100, height: 700 }}>
+      <App />
+    </div>
+  )
+}
+CASES['brand-home-hover'] = {
+  label: `${CASES['brand-home'].label} — hover fill`,
+  node: (
+    <div style={{ width: 1100, height: 700 }}>
+      <style>{'.brand { background: var(--surface-hover); }'}</style>
+      <App />
+    </div>
+  )
 }
 CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['context-meter'].label} — DE` }
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }

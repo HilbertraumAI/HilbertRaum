@@ -8,13 +8,20 @@
 // Output: apps/desktop/screenshots/. On a headless box it still needs GL libs on LD_LIBRARY_PATH
 // (the nix dev shell provides them): `nix develop --command npm run screenshot`.
 import { app, BrowserWindow } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const previewHtml = resolve(here, '../out/preview/preview/preview.html')
 const outDir = resolve(here, '../screenshots')
+
+// The brand asset src is deliberately RELATIVE (`brand/…` — design record §13.3: file:// prod
+// load), so from the nested preview.html it resolves to out/preview/preview/brand/, one level
+// below where Vite's publicDir copy lands. Mirror it next to the page so the App-shell cases
+// (`brand-home*`) show the real mark instead of a broken image.
+const brandSrc = resolve(here, '../out/preview/brand')
+if (existsSync(brandSrc)) cpSync(brandSrc, resolve(here, '../out/preview/preview/brand'), { recursive: true })
 
 const SIZES = {
   documents: [1180, 760],
@@ -57,7 +64,9 @@ function capture(c) {
     const url = `${pathToFileURL(previewHtml).href}?case=${encodeURIComponent(c)}`
     win.webContents.once('did-finish-load', async () => {
       // Offscreen needs a tick to paint; give React + the async window.api stubs time too.
-      await new Promise((r) => setTimeout(r, 1800))
+      // Full App-shell cases (`brand-home*`) chain workspace → settings → language re-render
+      // → brand <img> fetch, and a cold first window adds JIT/IO — they need a longer settle.
+      await new Promise((r) => setTimeout(r, c.startsWith('brand-home') ? 4500 : 1800))
       try {
         const img = await win.webContents.capturePage()
         const file = resolve(outDir, `${c}.png`)

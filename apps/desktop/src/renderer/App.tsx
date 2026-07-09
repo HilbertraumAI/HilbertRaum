@@ -233,10 +233,22 @@ function AppShell(): JSX.Element {
     <ToastProvider>
     <div className="app-shell">
       <nav className="sidebar" aria-label={t('nav.aria')}>
-        <div className="brand" title="HilbertRaum">
+        {/* Issue #47: the lockup heads a column of clickable rail items, and decades of
+            convention read a logo in that position as "go Home" — so it must not be the
+            one dead click on the rail. Same navigate() path as the labelled Home item
+            below, which keeps carrying the VISUAL current-screen highlight; the logo
+            carries the semantic aria-current only, so the rail never shows two lit
+            selections. The accessible name folds the wordmark and the destination. */}
+        <button
+          type="button"
+          className="brand"
+          title={`HilbertRaum — ${t('nav.home')}`}
+          aria-label={`HilbertRaum — ${t('nav.home')}`}
+          aria-current={screen === 'home' ? 'page' : undefined}
+          onClick={() => navigate('home')}
+        >
           <BrandMark size={24} />
-          <span className="brand-name">HilbertRaum</span>
-        </div>
+        </button>
         <ul className="nav-list">{NAV_TOP.map(navButton)}</ul>
         <ul className="nav-list nav-bottom">{NAV_BOTTOM.map(navButton)}</ul>
         {workspace.mode === 'encrypted' && (

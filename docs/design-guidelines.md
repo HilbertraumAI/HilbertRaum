@@ -1,7 +1,7 @@
 # Design & UI/UX Guidelines — HilbertRaum
 
-**Status:** ADOPTED 2026-06-10. **Last updated:** 2026-06-19 (brand refresh §13; Home CTA
-follow-up §11.7, 2026-06-16). Source: external design research (Claude web, 2026-06-10),
+**Status:** ADOPTED 2026-06-10. **Last updated:** 2026-07-09 (rail brand slot is a Home button,
+issue #47 — §13.3; brand refresh §13; Home CTA follow-up §11.7, 2026-06-16). Source: external design research (Claude web, 2026-06-10),
 reviewed and adapted to this repo's constraints — adaptations are marked **[adapted]**.
 This is the durable reference for all UI work. The UI polish wave (Phases 23–27) that rolled
 these guidelines out is IMPLEMENTED; its condensed design record (decisions D-UI1–D-UI4,
@@ -925,6 +925,13 @@ stuff staying put", so it stays **rare** — a role accent, never a surface.
 - **Placements:** rail brand slot (`App.tsx`, `size 24`) and the gate (`WorkspaceGate.tsx`,
   `size 36`, above the "HilbertRaum Lite" edition line). **Never inside the chat transcript** — the
   conversation stays the centre of gravity. The `◈` glyph is gone from `src/` entirely.
+  **The rail slot is a real Home button** (issue #47, 2026-07-09): a logo heading a column of
+  clickable rail items reads as "go Home" by universal convention, so a dead click there erodes
+  trust. It shares `navigate('home')` with the labelled Home item, names itself
+  `HilbertRaum — Home` (tooltip + `aria-label`, wordmark + destination), and carries
+  `aria-current="page"` on Home — but the **visual** active highlight stays on the labelled Home
+  row alone, so the rail never shows two lit selections. Hover fill + the global `:focus-visible`
+  ring supply the affordance (`.brand` in `styles.css`).
 
 ### 13.4 Icon pipeline
 
