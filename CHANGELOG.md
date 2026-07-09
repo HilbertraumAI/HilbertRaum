@@ -8,7 +8,7 @@ from its first public `1.0.0` release onward.
 
 > **No public release yet.** HilbertRaum is a pre-1.0 MVP. Internal development
 > checkpoints were tagged `v0.1.0` … `v0.1.34` (2026-06-10 → 2026-06-22, mirrored
-> by the `version` field in `package.json`, currently `0.1.45`); these are rapid
+> by the `version` field in `package.json`, currently `0.1.46`); these are rapid
 > per-phase development checkpoints, **not** published releases, and have no
 > per-tag notes. **Per-tag/`version` checkpointing was paused `v0.1.34` → 2026-06-30**
 > (the audit-remediation rounds were tracked in `BUILD_STATE.md`, not version bumps), then
@@ -46,12 +46,14 @@ first public release. Consciously-accepted gaps are tracked in
   invoices, meeting minutes, contract briefs, deadlines, redaction / share-safe).
 - **Translate view + dedicated translation model (TranslateGemma)** — a top-level
   **Translate** screen for live text translation and drag-and-drop document
-  translation across a curated ten languages (de, en, fr, es, it, pt, nl, pl, cs,
-  uk), source **and** target. Translation runs on a dedicated on-device
-  **TranslateGemma 12B** sidecar (downloaded on demand behind the license
-  acknowledgement; not bundled) — never the chat model; document translations
-  materialize as searchable, exportable local documents. Calibrated against the real
-  model (per-language round-trip evidence + measured tokenizer weights) so a window
+  translation across **51 languages**, source **and** target (the model's full
+  production tier — from German and English to Arabic, Chinese, Swahili, and
+  Vietnamese). Translation runs on a dedicated on-device **TranslateGemma 12B**
+  sidecar (downloaded on demand behind the license acknowledgement; not
+  bundled) — never the chat model; document translations materialize as
+  searchable, exportable local documents. GPU-accelerated when the machine
+  allows it, with an automatic CPU fallback. Calibrated against the real model
+  (per-language round-trip evidence + measured tokenizer weights) so a window
   can only over-chunk, never overflow.
 - **Encrypted, portable workspace** — an optional password-encrypted workspace
   (AES-256-GCM with Argon2id key derivation) covering the database, imported-document
