@@ -1,0 +1,38 @@
+name: "CLA Assistant"
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  CLAAssistant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "CLA Assistant"
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        # Pinned to the v2.6.1 release SHA (verified against the tag): the upstream
+        # repo was archived 2026-03-23, so the tag will never move legitimately but
+        # gets no more fixes either — a maintained replacement is tracked internally.
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: "signatures/version1/cla.json"
+          # NOTE: update this URL if the repo moves to the HilbertRaumAI org.
+          path-to-document: "https://github.com/comilionas/AI_Drive/blob/master/.github/CLA.md"
+          # The cla-signatures branch must exist BEFORE the first signature —
+          # the action does not create it (fails with "Branch not found").
+          branch: "cla-signatures"
+          allowlist: "humaniser,comilionas,djuro-agent,dependabot[bot]"
+          create-file-commit-message: "chore: create CLA signature file"
+          signed-commit-message: "chore: $contributorName has signed the CLA in $owner/$repo#$pullRequestNo"
+          custom-notsigned-prcomment: "Thank you for your contribution to HilbertRaum! Before we can merge, please read our [Contributor License Agreement](https://github.com/comilionas/AI_Drive/blob/master/.github/CLA.md) ([why we ask](https://github.com/comilionas/AI_Drive/blob/master/CONTRIBUTING.md#license-and-cla)) and sign it by posting the sentence below as a comment on this pull request. Note: the e-mail on your commits must be linked to your GitHub account, otherwise the check cannot attribute your signature."
+          custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
+          custom-allsigned-prcomment: "All contributors have signed the CLA ✅"
