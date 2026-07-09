@@ -9,6 +9,7 @@ import {
   SUMMARY_TOKENS_PER_WORD,
   singlePassPrompt
 } from '../doctasks/summary'
+import { ContextOverflowError } from '../doctasks/errors'
 import type { ModelSlotArbiter } from './model-slot-arbiter'
 import { evictSummaryCache } from './summary-cache'
 
@@ -44,6 +45,13 @@ import { evictSummaryCache } from './summary-cache'
  * error to the generic failure copy; the raw string goes to the local log only.
  */
 export const TREE_BUILD_NO_PROGRESS = 'Tree build made no progress at a reduction level'
+
+/**
+ * Floor for the adaptive packing budget (issue #41) — the same 200-word floor
+ * `summaryBudgetWords` bottoms out at. Once halving reaches it, a still-overflowing
+ * group is genuinely unbuildable and the friendly failure propagates.
+ */
+export const TREE_BUDGET_FLOOR_WORDS = 200
 
 /** A child fed into a group: a chunk (level 1) or a lower node (level >= 2). */
 interface BuildChild {
@@ -310,42 +318,83 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
   // level cap below are belt-and-suspenders against a future regression of that invariant:
   // a non-shrinking node level would otherwise loop forever, issue unbounded generate()
   // calls, and — because the doc-task queue is single-slot — permanently block it.
+  // (Halving below only ever SHRINKS the budget, so it can't break the shrink invariant —
+  // a smaller budget yields the same number of groups or more, never fewer.)
+  //
+  // ADAPTIVE BUDGET (issue #41). The packing budget derives from the LAUNCHED context
+  // window (§L0) with the SUMMARY_TOKENS_PER_WORD safety factor — measured on German
+  // office prose. Table/number-heavy documents can tokenize denser than that factor, so a
+  // packed group's REAL token count can still overflow the window; llama-server then
+  // rejects the call instantly (HTTP 400 `exceed_context_size_error`, surfaced as
+  // ContextOverflowError). Failing the whole build on the first such group blamed the
+  // document and dead-ended the deep index on exactly the long documents it exists for.
+  // Instead: halve the budget and re-pack this level's REMAINING children (committed
+  // nodes stay; the summary_cache makes their groups free on any rebuild). The build
+  // degrades to more, smaller groups — just more reduce steps. A LONE child that
+  // overflows by itself can't be re-packed (children are never split), and the floor
+  // bounds retries to O(log budget) per level — each a fast pre-decode rejection.
+  let effectiveBudgetWords = budgetWords
   let currentChildren = leaves
   let level = 1
   let rootId: string | null = null
   const maxLevels = leaves.length + 1
   for (;;) {
     const minPerGroup = level === 1 ? 1 : 2
-    const groups = groupByBudget(currentChildren, budgetWords, minPerGroup)
+    let groups = groupByBudget(currentChildren, effectiveBudgetWords, minPerGroup)
     if ((level > 1 && groups.length >= currentChildren.length) || level > maxLevels) {
       throw new Error(TREE_BUILD_NO_PROGRESS)
     }
-    const isRootLevel = groups.length === 1
     const nextChildren: BuildChild[] = []
-    for (let ordinal = 0; ordinal < groups.length; ordinal++) {
+    let ordinal = 0
+    let g = 0
+    while (g < groups.length) {
       if (signal.aborted) throw new DOMException('Tree build cancelled', 'AbortError')
-      const group = groups[ordinal]
-      const { text, hash } = await summarizeGroup(group)
+      const group = groups[g]
+      let summarized: { text: string; hash: string }
+      try {
+        summarized = await summarizeGroup(group)
+      } catch (err) {
+        if (
+          err instanceof ContextOverflowError &&
+          group.length > 1 &&
+          effectiveBudgetWords > TREE_BUDGET_FLOOR_WORDS
+        ) {
+          effectiveBudgetWords = Math.max(
+            TREE_BUDGET_FLOOR_WORDS,
+            Math.floor(effectiveBudgetWords / 2)
+          )
+          groups = groupByBudget(groups.slice(g).flat(), effectiveBudgetWords, minPerGroup)
+          g = 0
+          continue
+        }
+        throw err
+      }
+      const { text, hash } = summarized
+      // Root iff this level yields exactly ONE node: nothing committed yet at this level
+      // and no groups after this one. A halving re-pack only ever GROWS the remaining
+      // group count and only happens BEFORE a commit, so the flag can't be invalidated.
+      const isRootNode = ordinal === 0 && g === groups.length - 1
       const nodeId = randomUUID()
       commitNode({
         id: nodeId,
         level,
         ordinal,
-        isRoot: isRootLevel,
+        isRoot: isRootNode,
         summaryText: text,
         contentHash: hash,
         children: group
       })
       nextChildren.push({ id: nodeId, text, isChunk: false })
+      ordinal += 1
       stepsDone += 1
       // Clamp the denominator up to the numerator (the upper-level count is an estimate).
       deps.onProgress?.(stepsDone, Math.max(stepsDone, stepsTotal))
-      // The root is the last node; no point yielding the slot just to finalize next.
-      if (isRootLevel) break
-      // Node boundary == commit boundary == yield boundary.
-      await maybeYield()
+      g += 1
+      // Node boundary == commit boundary == yield boundary. The root is the last node;
+      // no point yielding the slot just to finalize next.
+      if (g < groups.length) await maybeYield()
     }
-    if (isRootLevel) {
+    if (nextChildren.length === 1) {
       rootId = nextChildren[0].id
       break
     }

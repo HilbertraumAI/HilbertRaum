@@ -35,6 +35,15 @@ describe('settings.contextTokensOverride validation', () => {
     )
   })
 
+  it('accepts the large long-document rungs up to 128k unclamped (issue #43: the old 32k cap was a dead end)', () => {
+    const db = freshDb()
+    // Deep-index / whole-document workflows need >32k on models with big native windows;
+    // the ceiling must not silently shrink the UI's own presets.
+    expect(MAX_CONTEXT_TOKENS_OVERRIDE).toBe(131_072)
+    expect(updateSettings(db, { contextTokensOverride: 65_536 }).contextTokensOverride).toBe(65_536)
+    expect(updateSettings(db, { contextTokensOverride: 131_072 }).contextTokensOverride).toBe(131_072)
+  })
+
   it('rejects non-numeric junk instead of persisting it (null default defeats the type check)', () => {
     const db = freshDb()
     updateSettings(db, { contextTokensOverride: 8192 })

@@ -535,6 +535,52 @@ describe('ModelsScreen — installed vs downloadable grouping (#35)', () => {
   })
 })
 
+describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
+  function stubWithSettings(
+    settingsOver: Record<string, unknown>,
+    models: ModelInfo[] = [model({ state: 'installed' })]
+  ): void {
+    stubApi({
+      listModels: vi.fn(async () => models),
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, ...settingsOver })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus)
+    })
+  }
+
+  it('offers the 65,536 and 131,072 rungs — the old 32k ceiling dead-ended long-document workflows', async () => {
+    stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4' })
+    render(<ModelsScreen />)
+    const select = await screen.findByRole('combobox')
+    expect(within(select).getByRole('option', { name: '65,536 tokens' })).toBeInTheDocument()
+    expect(within(select).getByRole('option', { name: '131,072 tokens' })).toBeInTheDocument()
+  })
+
+  it('labels Automatic with the number it resolves to for the active model', async () => {
+    stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4' }, [
+      model({ state: 'installed', recommendedContextTokens: 98_304 })
+    ])
+    render(<ModelsScreen />)
+    const select = await screen.findByRole('combobox')
+    // "Auto" is often the LARGEST choice in the list; naming its resolved size stops it
+    // reading as a small default (issue #43).
+    expect(within(select).getByRole('option', { name: /Automatic.*98,304/ })).toBeInTheDocument()
+  })
+
+  it('shows the honest memory warning for a big fixed pick — and not for a small one', async () => {
+    stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 131_072 })
+    render(<ModelsScreen />)
+    await screen.findByRole('combobox')
+    expect(document.querySelector('.context-size-warning')).not.toBeNull()
+    cleanup()
+
+    stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 8192 })
+    render(<ModelsScreen />)
+    await screen.findByRole('combobox')
+    expect(document.querySelector('.context-size-warning')).toBeNull()
+  })
+})
+
 describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () => {
   it('confirms size, license, and URL before starting; approved license needs no checkbox', async () => {
     const downloadModel = vi.fn(async (): Promise<DownloadJob> => ({

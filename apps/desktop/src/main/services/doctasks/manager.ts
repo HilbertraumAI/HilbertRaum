@@ -12,6 +12,7 @@ import {
 } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import { isExceedContextError } from '../runtime/llama'
+import { ContextOverflowError } from './errors'
 import { getDocument } from '../ingestion'
 import { isPdfPath } from '../ingestion/parsers'
 import { isAbortError, stripThinkBlocks } from '../chat'
@@ -645,7 +646,9 @@ export class DocTaskManager {
       // A document window that overflows the model context comes back as an HTTP 400.
       // Surface the actionable "too large for this model" copy (a friendly task error)
       // rather than the raw "Chat request failed: HTTP 400" the generic path would hide.
-      if (isExceedContextError(err)) throw new Error(tMain('main.model.contextExceeded'))
+      // Typed (issue #41) so the tree build can catch it and retry with a smaller
+      // packing budget instead of failing the whole task.
+      if (isExceedContextError(err)) throw new ContextOverflowError(tMain('main.model.contextExceeded'))
       throw err
     }
     // The mock runtime returns cleanly on abort; the real one throws AbortError. Both

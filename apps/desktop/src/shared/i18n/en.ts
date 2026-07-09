@@ -1023,6 +1023,13 @@ export const en = {
   'models.context.title': 'Context size',
   'models.context.label': 'Context window for answers:',
   'models.context.auto': 'Automatic — the model’s recommended size',
+  // Issue #43: "Auto" names its resolved number for the active model — it is often the
+  // largest choice in the list, and an unlabeled "Auto" read as a small default.
+  'models.context.autoResolved': 'Automatic — the model’s recommended size ({count} tokens)',
+  'models.context.bigWarning':
+    'Very large windows need a lot of extra memory while the model runs. On smaller ' +
+    'machines the model may fail to start or answer much slower — if that happens, pick ' +
+    'a smaller size or Automatic.',
   'models.context.hint':
     'A larger context lets a conversation or a document answer carry more text at once, but it ' +
     'needs more memory and can slow answers down. Takes effect the next time a model starts.',
@@ -1656,7 +1663,8 @@ export const en = {
     'the original text is kept below unchanged.',
   'main.translation.attributionLine': 'Machine-translated by {modelId} — may contain errors.',
   'main.model.contextExceeded':
-    "This is too large for the current model's context window. Try a model with a larger context, or a smaller document.",
+    "This is too large for the current model's context window. Raise the context size on " +
+    'the AI Model screen (a fixed pick caps it), or try a smaller document.',
   'main.chat.streamInFlight': 'A response is already being generated for this conversation.',
   'main.chat.emptyCompletion':
     'The model returned an empty response. Try again, or rephrase your message.',

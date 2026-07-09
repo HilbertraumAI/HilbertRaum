@@ -1050,6 +1050,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.context.title': 'Kontextgröße',
   'models.context.label': 'Kontextfenster für Antworten:',
   'models.context.auto': 'Automatisch — empfohlene Größe des Modells',
+  // Issue #43: „Automatisch“ nennt die aufgelöste Zahl für das aktive Modell — sie ist oft
+  // die größte Wahl in der Liste, und ein unbeschriftetes „Automatisch“ wirkte wie ein
+  // kleiner Standardwert.
+  'models.context.autoResolved': 'Automatisch — empfohlene Größe des Modells ({count} Token)',
+  'models.context.bigWarning':
+    'Sehr große Kontextfenster brauchen viel zusätzlichen Arbeitsspeicher, während das Modell ' +
+    'läuft. Auf kleineren Geräten startet das Modell dann möglicherweise nicht oder antwortet ' +
+    'deutlich langsamer — wähle in dem Fall eine kleinere Größe oder „Automatisch“.',
   'models.context.hint':
     'Ein größerer Kontext lässt eine Unterhaltung oder eine Dokument-Antwort mehr Text auf einmal ' +
     'nutzen, braucht aber mehr Arbeitsspeicher und kann Antworten verlangsamen. Wird beim ' +
@@ -1697,7 +1705,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.translation.attributionLine':
     'Maschinell übersetzt von {modelId} — kann Fehler enthalten.',
   'main.model.contextExceeded':
-    'Das ist zu groß für das Kontextfenster des aktuellen Modells. Wähle ein Modell mit größerem Kontext oder ein kleineres Dokument.',
+    'Das ist zu groß für das Kontextfenster des aktuellen Modells. Erhöhe die Kontextgröße ' +
+    'im Bildschirm „KI-Modell“ (eine feste Auswahl begrenzt sie) oder wähle ein kleineres Dokument.',
   'main.chat.streamInFlight': 'Für diese Unterhaltung wird bereits eine Antwort erstellt.',
   'main.chat.emptyCompletion':
     'Das Modell hat eine leere Antwort zurückgegeben. Versuche es erneut oder formuliere deine Nachricht um.',

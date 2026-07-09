@@ -36,7 +36,10 @@ export interface DocTaskDeps {
   getTranslator: () => Translator | null
   /** True while any chat/RAG answer is streaming (the in-flight registry). */
   isChatStreaming: () => boolean
-  /** The user's `contextTokens` setting (drives the window budget). */
+  /** The REAL launched context window (§L0) — NOT bare `settings.contextTokens`; with no
+   *  runtime up, the override-aware value the next start would use (see main/index.ts).
+   *  Drives every doc-task window budget (issue #41: budgets must follow the launched
+   *  `--ctx-size`, or a fixed context-size pick makes the build argue with the server). */
   getContextTokens: () => number
   /** `workspace/documents/` — where materialized documents (and their transients) live. */
   getStoreDir: () => string

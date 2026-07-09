@@ -1182,6 +1182,21 @@ scales with context-window size (roughly 50–300 nodes for a 1000-chunk doc at 
   clamps `contextTokens` UP to a 2048 floor** (`MIN_CONTEXT_TOKENS`, settings.ts) so a renderer-supplied
   value can't drop the budget below a single summary's size — 2048 always fits ≥2 node summaries + reserve
   in one reduce window.
+- **Adaptive budget on real-window overflow [issue #41, 2026-07-09]:** the packing budget derives from
+  the LAUNCHED window (§L0) via `summaryBudgetWords`, whose words→tokens factor
+  (`SUMMARY_TOKENS_PER_WORD` 1.3) is measured on German office **prose** — table/number-heavy PDFs
+  tokenize denser (chat's trim path already carries a 1.5 multiplier for the same reason,
+  architecture.md "German subword safety"), so a packed group's real token count can overflow the
+  window and llama-server rejects it instantly (HTTP 400 `exceed_context_size_error`). That failed the
+  whole build in <0.5 s with copy blaming the document — on exactly the long documents the deep index
+  exists for. Now `DocTaskManager.generate` maps the 400 to a typed **`ContextOverflowError`**
+  (`doctasks/errors.ts`; same friendly message, so non-retrying handlers are unchanged) and `buildTree`
+  **halves `effectiveBudgetWords` and re-packs the level's remaining children** (committed nodes stay;
+  the summary_cache makes them free on rebuild), degrading to more, smaller groups instead of failing.
+  A LONE child that overflows by itself can't be re-packed (children are never split) and rethrows; the
+  `TREE_BUDGET_FLOOR_WORDS` (200) floor bounds retries to O(log budget) per level, each a fast
+  pre-decode rejection. Halving only shrinks the budget, so the `minPerGroup=2` termination invariant
+  above is untouched. Tests: `whole-doc-analysis.test.ts` "adaptive budget on context overflow".
 - **Yielding (H3/H9/H10):** an O(n)-call build cannot block chat. The build commits **one node per
   transaction** and, at each node boundary (synchronous, before the next `generate`), checks the
   **`ModelSlotArbiter`** ([`model-slot-arbiter.ts`](../apps/desktop/src/main/services/analysis/model-slot-arbiter.ts)) —
@@ -1823,17 +1838,23 @@ context size."* All four observations were real seams:
   `DocTaskManager.getContextTokens` dep (main/index.ts) now returns `effectiveContextWindow(active, s)`
   when a runtime is up (fallback: the override-aware next-start value).
 - **User-settable context size.** `settings.contextTokensOverride` (nullable; DEFAULT null = automatic),
-  clamped by `updateSettings` into `[MIN_CONTEXT_TOKENS 2048, MAX_CONTEXT_TOKENS_OVERRIDE 32768]` with
+  clamped by `updateSettings` into `[MIN_CONTEXT_TOKENS 2048, MAX_CONTEXT_TOKENS_OVERRIDE 131072]` with
   junk rejected (the null default defeats the generic type check). The chat launch
   (`registerModelIpc.startModel`) becomes `override ?? (manifest.recommendedContextTokens ||
   settings.contextTokens)` — before this, the manifest ALWAYS won, so the `chat.truncated.hint` copy
   ("raise the context size on the AI Model screen") pointed at a control that neither existed nor would
   have had any effect. The AI Model screen gains the "Context size" card (`CONTEXT_SIZE_PRESETS`
-  4k/8k/16k/32k + Automatic; applies at the next model start, restart note while one runs);
+  4k/8k/16k/32k/64k/128k + Automatic; applies at the next model start, restart note while one runs);
   `effectiveContextWindow`'s no-runtime fallback and the Settings→Workspace display are override-aware
-  (the latter shows "Automatic (model default)" instead of a number nothing uses). Larger windows cost
-  KV-cache RAM + prefill time — hence the bounded presets and the ceiling. Tests:
-  `settings-context-override.test.ts` (round-trip/clamp/junk), `chat.test.ts` (fallback precedence).
+  (the latter shows "Automatic (model default)" instead of a number nothing uses). **Issue #43
+  (2026-07-09):** the original 32k ceiling dead-ended long-document workflows (deep index, whole-doc
+  summaries) on models with far larger native windows, and an unlabeled "Automatic" read as a small
+  default when it often resolves LARGER than every preset. Now the ceiling is 131072, "Automatic" names
+  its resolved number for the active model (`models.context.autoResolved`), and picks ≥ 65536 show an
+  honest KV-cache memory warning (`models.context.bigWarning`, `.context-size-warning`) instead of a
+  silent cap — a start that doesn't fit degrades down the GPU ladder rather than wedging the app.
+  Tests: `settings-context-override.test.ts` (round-trip/clamp/junk/128k rungs), `chat.test.ts`
+  (fallback precedence), `ModelsScreen.test.tsx` "context-size picker beyond 32k".
 
 **Also answered for the report:** context is **per conversation** (assembly replays only
 `conversationId`'s history — nothing accumulates across chats), and the 5-page-PDF limit is real on a

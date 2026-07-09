@@ -14,9 +14,13 @@ const MAX_SETTINGS_ARRAY = 10_000
 const MIN_CONTEXT_TOKENS = 2048
 
 /** Ceiling for the user's `contextTokensOverride` (AI Model screen context-size picker). The KV
- *  cache grows linearly with the window and an over-eager value OOMs/thrashes mid-chat on the
- *  very laptops this app targets; 32k covers every preset the UI offers with headroom. */
-export const MAX_CONTEXT_TOKENS_OVERRIDE = 32_768
+ *  cache grows linearly with the window, so very large picks cost real memory — but a hard 32k
+ *  cap dead-ended long-document workflows (deep index, whole-doc summaries) on models whose
+ *  native window is far larger (issue #43: Qwen3.5 is 262k native). 128k covers every preset
+ *  the UI offers; the picker pairs the big rungs with an honest memory warning instead of a
+ *  silent cap, and a start that doesn't fit falls down the GPU ladder to CPU or fails with a
+ *  friendly error rather than wedging the app. */
+export const MAX_CONTEXT_TOKENS_OVERRIDE = 131_072
 
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.

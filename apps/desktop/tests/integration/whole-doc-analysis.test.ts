@@ -14,6 +14,8 @@ import {
   setDocumentSummary
 } from '../../src/main/services/ingestion'
 import { DocTaskManager } from '../../src/main/services/doctasks'
+import { ContextOverflowError } from '../../src/main/services/doctasks/errors'
+import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import { buildTree } from '../../src/main/services/analysis/tree-build'
 import { ModelSlotArbiter } from '../../src/main/services/analysis/model-slot-arbiter'
 import {
@@ -327,6 +329,103 @@ describe('tree build termination (HIGH_BUG vuln-scan-2026-06-21)', () => {
     // Bounded work: each level at least halves the node count, so total nodes (hence calls)
     // is O(leaves), nowhere near the unbounded loop the bug produced.
     expect(calls).toBeLessThan(leafCount * 4)
+  })
+})
+
+// ---- Issue #41: adaptive packing budget on a REAL-window overflow --------------------
+
+describe('tree build adaptive budget on context overflow (issue #41)', () => {
+  it('halves the packing budget and re-packs instead of failing when a group overflows the real window', async () => {
+    const id = await importWords(4000)
+    const leafCount = chunkIds(id).length
+    expect(leafCount).toBeGreaterThan(1)
+
+    // Simulated dense-tokenizing document: contextTokens 4096 ⇒ a ~2526-word packing
+    // budget, but the "server" only accepts ~1400 prompt words (the words→tokens safety
+    // factor undershot — the #41 repro). The first packed group MUST overflow; the build
+    // must halve + re-pack and still finish, instead of failing the whole task.
+    const REAL_WINDOW_WORDS = 1400
+    let overflows = 0
+    let calls = 0
+    const meta = await buildTree(id, {
+      db,
+      modelId: 'm',
+      contextTokens: 4096,
+      signal: new AbortController().signal,
+      arbiter: new ModelSlotArbiter(),
+      jobId: 'job-adaptive',
+      generate: async (_sys, prompt) => {
+        calls += 1
+        if (prompt.split(/\s+/).length > REAL_WINDOW_WORDS) {
+          overflows += 1
+          throw new ContextOverflowError(t('en', 'main.model.contextExceeded'))
+        }
+        return `summary #${calls}`
+      }
+    })
+
+    expect(overflows).toBeGreaterThan(0) // the fault actually happened…
+    expect(treeStatus(id)).toBe('ready') // …and the build still completed
+    expect(meta.rootId).toBeTruthy()
+    // Re-packing dropped no chunk, and the tree still has exactly one root.
+    expect(reachableLeafChunks(id).size).toBe(leafCount)
+    const roots = db
+      .prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE document_id = ? AND is_root = 1')
+      .get(id) as unknown as { n: number }
+    expect(roots.n).toBe(1)
+    // Bounded work: halving retries are O(log budget) per level, nothing looped.
+    expect(calls).toBeLessThan(leafCount * 4)
+  })
+
+  it('fails with the friendly copy — no futile retries — when the budget is already at the floor', async () => {
+    const id = await importWords(1000)
+    let calls = 0
+    await expect(
+      buildTree(id, {
+        db,
+        modelId: 'm',
+        contextTokens: 1024, // ⇒ the 200-word floor budget: halving is already exhausted
+        signal: new AbortController().signal,
+        arbiter: new ModelSlotArbiter(),
+        jobId: 'job-floor',
+        generate: async () => {
+          calls += 1
+          throw new ContextOverflowError(t('en', 'main.model.contextExceeded'))
+        }
+      })
+    ).rejects.toThrow(t('en', 'main.model.contextExceeded'))
+    expect(calls).toBe(1)
+  })
+
+  it("end to end: llama-server's exceed_context_size_error 400 triggers the retry, not task failure", async () => {
+    const id = await importWords(4000)
+    const REAL_WINDOW_WORDS = 1400
+    let overflows = 0
+    // The RAW runtime error (what LlamaRuntime throws on the HTTP 400) — proves the
+    // manager maps it to the typed ContextOverflowError the build retries on.
+    const rt: ModelRuntime = {
+      modelId: 'scripted-model',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(messages: ChatMessage[]) {
+        const user = messages.find((m) => m.role === 'user')?.content ?? ''
+        if (user.split(/\s+/).length > REAL_WINDOW_WORDS) {
+          overflows += 1
+          throw new ChatRequestError(
+            400,
+            'the request exceeds the available context size',
+            'exceed_context_size_error'
+          )
+        }
+        yield `summary of ${user.length} #${overflows}`
+      }
+    }
+    const m = makeManager(rt, 4096)
+    const s = await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
+    expect(overflows).toBeGreaterThan(0)
+    expect(s.state).toBe('done')
+    expect(treeStatus(id)).toBe('ready')
   })
 })
 

@@ -70,10 +70,15 @@ function plainHintKey(m: ModelInfo): MessageKey {
 /**
  * Context-size picker presets (the "Kontextgröße" card). "Auto" (null override) launches with
  * the model's recommended window; a fixed pick becomes llama-server's `--ctx-size` at the next
- * model start. Bounded set: the main-process clamp allows [2048, 32768], and larger windows cost
- * RAM (KV cache) + prefill time, so the UI offers the sane rungs rather than a free number.
+ * model start. Bounded set matching the main-process clamp [2048, 131072]. The 32k ceiling was
+ * a dead end (issue #43): long-document workflows — the deep index above all — need >32k, and
+ * modern local models support it natively. Big rungs stay honest via the memory warning below
+ * (KV cache grows linearly with the window) instead of a silent cap.
  */
-const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768] as const
+const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768, 65536, 131072] as const
+
+/** Picks at or above this show the "large windows cost memory" hint (issue #43). */
+const CONTEXT_SIZE_WARNING_MIN = 65_536
 
 // The in-flight download survives leaving + re-entering the screen (the job itself
 // lives in the main process; this only remembers which one to keep polling).
@@ -816,7 +821,16 @@ export function ModelsScreen(): JSX.Element {
               value={settings.contextTokensOverride != null ? String(settings.contextTokensOverride) : 'auto'}
               onChange={(e) => void onContextSizeChange(e.target.value)}
             >
-              <option value="auto">{t('models.context.auto')}</option>
+              {/* Issue #43: name the number "Auto" resolves to for the active model — it is
+                  often the LARGEST choice in this list, and an unlabeled "Auto" read as
+                  "small default", sending users into a fixed pick that capped the window. */}
+              <option value="auto">
+                {activeChat
+                  ? t('models.context.autoResolved', {
+                      count: (activeChat.recommendedContextTokens || settings.contextTokens).toLocaleString(lang)
+                    })
+                  : t('models.context.auto')}
+              </option>
               {CONTEXT_SIZE_PRESETS.map((n) => (
                 <option key={n} value={String(n)}>
                   {t('models.tech.contextValue', { count: n.toLocaleString(lang) })}
@@ -825,6 +839,10 @@ export function ModelsScreen(): JSX.Element {
             </select>
           </label>
           <p className="hint">{t('models.context.hint')}</p>
+          {settings.contextTokensOverride != null &&
+            settings.contextTokensOverride >= CONTEXT_SIZE_WARNING_MIN && (
+              <p className="hint context-size-warning">{t('models.context.bigWarning')}</p>
+            )}
           {runtime?.running && <p className="hint">{t('models.context.restartHint')}</p>}
         </div>
       )}
