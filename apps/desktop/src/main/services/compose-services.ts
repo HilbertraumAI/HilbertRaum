@@ -9,7 +9,7 @@ import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
 import type { Transcriber } from './transcriber'
 import type { OcrEngine } from './ocr'
-import type { Translator } from './translation'
+import type { Translator, TranslationGpuDeps } from './translation'
 
 // M-A3 (audit-2026-06-13): the four availability-driven service selectors (embedder,
 // reranker, transcriber, OCR) were ~30 lines of near-identical "resolve the role's model,
@@ -44,6 +44,31 @@ export interface ComposeServicesDeps {
    * Defaults to `false` (ignore the override) so a forgetful caller fails SAFE.
    */
   isDev?: boolean
+  /**
+   * GPU signals for the TRANSLATION sidecar's device ladder (issue #42) — the same Settings
+   * read-callbacks the chat ladder gets. Only the translator consumes them for now: the embedder,
+   * reranker, and vision sidecars keep their own (CPU) device postures per their design records.
+   */
+  gpu?: TranslationGpuDeps
+}
+
+/**
+ * Build (or re-build) JUST the translation sidecar selection from the current drive layout.
+ * Extracted from `composeServices` for issue #40: a completed in-app model download re-runs THIS
+ * selector (via `AppContext.onModelInstalled`) so translation activates without an app restart —
+ * both call sites stay byte-identical in their deps. Cheap + synchronous by design (the sidecar is
+ * lazy; construction spawns nothing).
+ */
+export function composeTranslator(deps: ComposeServicesDeps): Translator | null {
+  return createSelectedTranslator({
+    rootPath: deps.rootPath,
+    isDev: deps.isDev ?? false,
+    model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation'),
+    gpu: deps.gpu,
+    onDeviceFallback: (reason) =>
+      log.warn('Translation sidecar fell back to CPU for this session', { reason }),
+    onSelect: (kind, reason) => log.info('Translation backend selected', { kind, reason })
+  })
 }
 
 /**
@@ -55,7 +80,8 @@ export interface ComposeServicesDeps {
 export function composeServices({
   rootPath,
   manifestsDir,
-  isDev = false
+  isDev = false,
+  gpu
 }: ComposeServicesDeps): AvailabilityServices {
   const embedder = createSelectedEmbedder({
     rootPath,
@@ -92,12 +118,9 @@ export function composeServices({
   // The TranslateGemma sidecar (TG wave). Selected only when the llama-server binary + the
   // translation GGUF are present (null otherwise — no mock; translation refuses with the friendly
   // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.
-  const translator = createSelectedTranslator({
-    rootPath,
-    isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'translation'),
-    onSelect: (kind, reason) => log.info('Translation backend selected', { kind, reason })
-  })
+  // Shares `composeTranslator` with the issue-#40 post-download re-selection so the two call
+  // sites can never drift.
+  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu })
 
   return { embedder, reranker, transcriber, ocrEngine, translator }
 }

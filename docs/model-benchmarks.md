@@ -595,8 +595,11 @@ complaint flows (bank statement, invoice, minutes). Overrides: `HILBERTRAUM_LLAM
 The `translation` role (design record in [`architecture.md`](architecture.md) "Translation sidecar
 — design record") is a THIRD benchmark axis, separate from the chat catalog (§1–§7) and the vision
 sidecar (§8): a different role (`translation`), served by its OWN lazy `llama-server` on the raw
-`/completion` endpoint (NO `--jinja`, `--chat-template gemma`, `--device none`, `--parallel 1`,
-`--ctx-size 4096`), CPU-bound generative decode. The only shipped model is
+`/completion` endpoint (NO `--jinja`, `--chat-template gemma`, `--parallel 1`, `--ctx-size 4096`;
+since issue #42 the device posture follows `gpuMode`/`gpuAutoDisabled` — GPU auto-offload by
+default, `--device none` when forced to CPU). The §11.2 numbers below are the **CPU-decode**
+measurements (recorded under the original TG-2/TG-6 CPU pin); the GPU posture's tokens/sec is the
+open §11.4 re-smoke. The only shipped model is
 **`translategemma-12b-it` (mradermacher Q4_K_M, 7.30 GB, sha256 `b7aac4b4…a528`)**. Numbers below
 are the **real b9849 Vulkan-pin measurements** captured by the TG-6 run of the manual smoke +
 `llama-tokenize` (drive root junctioned to `D:\`, 2026-07-05).
@@ -605,9 +608,11 @@ are the **real b9849 Vulkan-pin measurements** captured by the TG-6 run of the m
 
 [`tests/manual/translategemma-smoke.test.ts`](../apps/desktop/tests/manual/translategemma-smoke.test.ts),
 the same env-gated pattern as vision/gpu/rerank/skills (§8.1, §10.2) — SKIPPED in CI (zero
-model/binary/network). It composes `LlamaServer` with the SHIPPING `TRANSLATION_SERVER_ARGS` and
-drives the SHIPPING prompt builder + `/completion` reader, so it proves model + prompt + endpoint
-fidelity on the real pin AND records the calibration numbers:
+model/binary/network). It composes `LlamaServer` with the SHIPPING `translationServerArgs(device)`
+and drives the SHIPPING prompt builder + `/completion` reader, so it proves model + prompt +
+endpoint fidelity on the real pin AND records the calibration numbers. The device posture defaults
+to the shipping `'auto'` (GPU auto-offload); set `HILBERTRAUM_TRANSLATEGEMMA_SMOKE_DEVICE=cpu` to
+re-measure the forced-CPU posture the §11.2 numbers were recorded on:
 
 ```powershell
 $env:HILBERTRAUM_TRANSLATEGEMMA_SMOKE = "<root with runtime/llama.cpp/<os>/llama-server + models/{translation,embeddings,chat}/*.gguf>"
@@ -662,13 +667,16 @@ the only failure mode; the doc-task suite's "fit property" proves input estimate
 usable context at every context size.
 
 **Decisions revisited at TG-6:**
-- **D8 (GPU) — KEEP CPU-pinned for v1.** ~3–4 tok/s CPU is tolerable for a BACKGROUND doc-task with
-  per-window progress + instant cancel, and the smoke drive is Windows Vulkan where #25142 (the
-  parallel-translation hang) is the live risk; a GPU flip needs its own GPU-decode re-smoke on a
-  paid GPU drive. `TRANSLATION_DEVICE_ARGS` stays the documented one-line flip. GPU is deferred, not
-  rejected. The per-window request timeout was recalibrated to **45 min** (`DEFAULT_REQUEST_TIMEOUT_MS`):
-  a ~2,070-token full window at the observed-worst ~1.1 tok/s is ~30 min, so 45 min never false-kills
-  a live slow decode while still bounding a true hang (user cancel stays instant).
+- **D8 (GPU) — TG-6 kept the CPU pin for v1** (~3–4 tok/s tolerable for a BACKGROUND doc-task with
+  per-window progress + instant cancel; the smoke drive was Windows Vulkan where #25142, the
+  parallel-translation hang, was the live risk; GPU deferred, not rejected). **Superseded by issue
+  #42 (2026-07-09):** the sidecar now honours `gpuMode`/`gpuAutoDisabled` per cold start (GPU
+  auto-offload by default) with a forced-CPU fallback + session latch on a GPU fault — see §11.4
+  for the ladder and the OPEN GPU-decode re-smoke. #25142 stays contained by `--parallel 1` in
+  both postures. The per-window request timeout stays at the CPU-sized **45 min**
+  (`DEFAULT_REQUEST_TIMEOUT_MS`): a ~2,070-token full window at the observed-worst ~1.1 tok/s is
+  ~30 min, so 45 min never false-kills a live slow CPU decode while still bounding a true hang
+  (user cancel stays instant; on a GPU decode the bound is simply generous).
 - **D9 (chat-during-translation relaxation) — KEEP serialization.** The co-residency measurement is
   the reason: translation ≈9.2 GiB + a resident chat + embedder already reaches ≈13.2 GiB with a 4B
   chat; a 12B chat (≈6.5 GiB) pushes the pair PAST a 16 GB machine. Letting chat DECODE during a
@@ -715,6 +723,46 @@ A candidate that only looks better on paper stays `recommendation_rank: 0` (manu
 auto-recommended, never bundled) until the local evidence gives it a real rank. Image translation
 (the model is image-text→text; mmproj projectors exist) stays out of scope (the plan's §6): a later
 Images-screen integration, not a benchmark axis here.
+
+### 11.4 GPU offload (issue #42) — the device ladder + the OPEN GPU-decode re-smoke
+
+Issue #42 (2026-07-09) pulled TG-6's deferred D8 forward. As built (`translation/runtime.ts`,
+regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
+
+- **Signals:** the sidecar reads the SAME Settings callbacks the chat ladder gets (`gpuMode` +
+  `gpuAutoDisabled`, one shared `gpuSignals` object in `main/index.ts`) — re-read per **cold
+  start**, so with the 2-min idle teardown a Settings flip takes effect on the next translate, no
+  restart.
+- **Postures:** allowed ⇒ `translationServerArgs('auto')` — NO device args (b9849 ngl=auto +
+  fit=on VRAM-aware offload; a GPU-less machine lands on CPU exactly as before). `gpuMode: 'off'`,
+  a persisted `gpuAutoDisabled`, or the session fallback latch ⇒ `translationServerArgs('cpu')`
+  (`--device none` — never `-ngl`).
+- **Fallback:** a non-bind-race GPU start failure retries ONCE at forced CPU within the same start;
+  a mid-session crash of a GPU-composed sidecar arms the same session latch (the chat §5.3
+  auto-fallback shape). Only the final CPU rung failing arms the permanent `startFailed` latch
+  (F-7). The latch is session-only and never writes the global `gpuAutoDisabled` — a 12B
+  translation fault must not force the (smaller) chat model into compatibility mode; chat's own
+  ladder owns that flag.
+- **#25142 containment:** `--parallel 1` ships in BOTH postures — the upstream hang was under
+  *parallel* Vulkan translation load; translation stays strictly sequential.
+
+**OPEN — the GPU-decode re-smoke (owner, PAID/GPU drive).** The §11.2 tokens/sec are CPU numbers;
+no GPU decode of TranslateGemma has been measured locally yet. On a drive with the b9849 binary +
+the TranslateGemma GGUF and a real GPU:
+
+```powershell
+$env:HILBERTRAUM_TRANSLATEGEMMA_SMOKE = "<root with runtime/llama.cpp/<os>/llama-server + models/translation/*.gguf>"
+# default device posture = 'auto' (the shipping GPU auto-offload); no extra env needed
+cd apps\desktop
+npx vitest run tests/manual/translategemma-smoke.test.ts
+```
+
+Record here: tokens/sec per leg (vs the ~3–4 CPU), peak RSS/VRAM split, cold-load time, and whether
+`--fit` partial offload engages beside a resident chat model (the D9 co-residency shape). The
+issue-#42 reporter offered RTX 3090 numbers — a community datapoint is welcome but the recorded
+evidence should come from the owner harness. Until this lands, the ladder's safety net (CPU
+fallback + session latch) is what ships the risk down: a machine where GPU translation misbehaves
+degrades to exactly the TG-6 CPU behavior after one failed start.
 
 ---
 

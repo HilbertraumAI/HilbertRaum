@@ -31,24 +31,34 @@ import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCod
 export const TRANSLATION_SLOT_ARGS = ['--parallel', '1'] as const
 
 /**
- * CPU-pin the translation sidecar for TG-2 (plan §2 D8). D8 asked TG-2 to first try reusing the
- * chat GPU ladder (`runtime/factory.ts` rung-1 auto-offload / rung-2 `--device none`); that
- * factory's seams are chat-specific — `createSelectingRuntimeFactory` yields a `chatStream`-based
- * `ModelRuntime` wired to `RuntimeManager`, not a raw-`/completion` sidecar composing `LlamaServer`
- * — so they do not fit here. Per D8's fallback, TG-2 ships `--device none` (CPU) and the smoke's
- * tokens/sec (printed artifact) decides at TG-6 whether to pull GPU work forward. Keeping it a
- * single named constant makes that a one-line flip when the measurement lands. `--parallel 1`
- * contains #25142 either way.
+ * Force-CPU device args — the translation analogue of the chat ladder's rung 2 (`--device none` is
+ * the ONLY CPU-forcing mechanism; NEVER pass `-ngl`). Used whenever GPU must not be attempted:
+ * `gpuMode: 'off'`, a persisted `gpuAutoDisabled`, or this runtime's own session fallback latch.
  *
- * TG-6 OUTCOME (2026-07-05) — KEEP CPU-pinned for v1. The measured CPU decode (~3–4 tok/s nominal;
- * 1.1–4.4 across the run, slowest under memory pressure) is tolerable for a BACKGROUND doc-task with
- * per-window progress + instant cancel, and the only smoke drive is Windows Vulkan where #25142 (the
- * parallel-translation hang) is the live risk — a GPU flip needs its own GPU-decode re-smoke on a
- * paid GPU drive before it can ship. GPU is deferred, NOT rejected: flip this constant to `[]`
- * (the runtime auto-offloads with `--fit`) and re-run the smoke on a GPU drive. See
- * model-benchmarks.md §11.
+ * History: TG-2 shipped the sidecar hard-pinned to these args (plan §2 D8) and TG-6 (2026-07-05)
+ * kept the pin for v1 pending a GPU-drive re-smoke — GPU was deferred, NOT rejected. Issue #42
+ * (2026-07-09) pulled it forward: the sidecar now honours the SAME Settings signals the chat ladder
+ * reads (`gpuMode` + `gpuAutoDisabled`, injected via `TranslationGpuDeps`) and composes NO device
+ * args on the GPU attempt (b9849 defaults ngl=auto + fit=on → VRAM-aware offload; on a GPU-less
+ * machine that IS CPU mode). #25142 (the Windows-Vulkan hang under PARALLEL translation load) stays
+ * contained by `--parallel 1` regardless of the device posture. See model-benchmarks.md §11.4.
  */
-export const TRANSLATION_DEVICE_ARGS = ['--device', 'none'] as const
+export const TRANSLATION_CPU_DEVICE_ARGS = ['--device', 'none'] as const
+
+/** The device posture of one sidecar launch: 'auto' = GPU auto-offload (no device args), 'cpu' = forced CPU. */
+export type TranslationDevice = 'auto' | 'cpu'
+
+/**
+ * The Settings-driven GPU signals, injected exactly like the chat ladder's `GpuLadderDeps`
+ * (read-callbacks, never the DB — keeps the runtime pure + unit-testable). Both optional; the
+ * defaults ('auto', not disabled) mirror `createSelectingRuntimeFactory`.
+ */
+export interface TranslationGpuDeps {
+  /** User intent from Settings ('auto' default). */
+  getGpuMode?: () => 'auto' | 'off'
+  /** The persisted auto-disable flag (a previously detected GPU problem — chat owns writing it). */
+  getGpuAutoDisabled?: () => boolean
+}
 
 /**
  * Override the model's embedded chat template with the built-in `gemma` one (TG-2 smoke finding,
@@ -71,15 +81,18 @@ export const TRANSLATION_DEVICE_ARGS = ['--device', 'none'] as const
 export const TRANSLATION_TEMPLATE_ARGS = ['--chat-template', 'gemma'] as const
 
 /**
- * The full extra-arg set the translation sidecar launches with (composed from the named constants
- * above so the runtime AND the manual smoke stay byte-identical — no drift). NO `--jinja`, NOT the
- * chat `CHAT_SERVER_ARGS`.
+ * The full extra-arg set the translation sidecar launches with for one device posture (composed
+ * from the named constants above so the runtime AND the manual smoke stay byte-identical — no
+ * drift). NO `--jinja`, NOT the chat `CHAT_SERVER_ARGS`. 'auto' composes NO device args — the
+ * chat-rung-1 posture (b9849 defaults ngl=auto + fit=on); 'cpu' forces `--device none`.
  */
-export const TRANSLATION_SERVER_ARGS = [
-  ...TRANSLATION_SLOT_ARGS,
-  ...TRANSLATION_DEVICE_ARGS,
-  ...TRANSLATION_TEMPLATE_ARGS
-] as const
+export function translationServerArgs(device: TranslationDevice): string[] {
+  return [
+    ...TRANSLATION_SLOT_ARGS,
+    ...(device === 'cpu' ? TRANSLATION_CPU_DEVICE_ARGS : []),
+    ...TRANSLATION_TEMPLATE_ARGS
+  ]
+}
 
 /** Launch context window (plan §2 D4). Overridden by the manifest's `recommendedContextTokens`
  *  (4096: the model card's 2K input budget + output headroom). Read back via `contextWindow()`. */
@@ -154,6 +167,17 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
   idleTimeoutMs?: number
   /** Idle-teardown clock (default: the global `setTimeout`). Tests inject a controllable clock. */
   idleClock?: IdleClock
+  /**
+   * GPU signals (issue #42). Read PER COLD START (the idle teardown means cold starts are routine),
+   * so a Settings flip takes effect on the next launch without an app restart. Omitted → chat-ladder
+   * defaults (gpuMode 'auto', not auto-disabled) — i.e. GPU auto-offload where chat also uses it.
+   */
+  gpu?: TranslationGpuDeps
+  /**
+   * Fired when the runtime abandons the GPU posture for the rest of the session (a failed GPU-attempt
+   * start, or a mid-session crash of a GPU-composed sidecar). Observability only; must never throw.
+   */
+  onDeviceFallback?: (reason: string) => void
 }
 
 export interface TranslateOptions {
@@ -238,6 +262,18 @@ export class TranslationRuntime {
    * consumers can surface the distinct "restart / free memory" copy (F-7 / FA-4 option c).
    */
   private startFailed: Error | null = null
+  /**
+   * Session-scoped GPU fallback latch (issue #42 — the chat §5.3 analogue, sized for a sidecar).
+   * Armed when a GPU-attempt start fails (non-bind-race) or a GPU-composed sidecar dies mid-session;
+   * every later cold start then pins CPU (`--device none`) — no repeated GPU health timeouts, no
+   * crash loop across a doc-task's windows (each window retry would otherwise re-pay a ~10 GB GPU
+   * load). Deliberately NOT persisted and NEVER writes the global `gpuAutoDisabled`: a 12B
+   * translation model can fail on a GPU where the (smaller) chat model runs fine, so a
+   * translation-only fault must not force chat into compatibility mode. Chat's own ladder owns the
+   * persisted flag; this runtime only READS it (via `TranslationGpuDeps`). Survives `suspend()`
+   * (same GPU after unlock), resets on app restart.
+   */
+  private gpuFellBack = false
   /** Number of translate() calls currently using the sidecar. Guards the idle teardown. */
   private inFlight = 0
   /** The pending idle-teardown timer handle (armed only when `inFlight === 0`), or null. */
@@ -289,57 +325,9 @@ export class TranslationRuntime {
       if (this.server) return this.server
     }
     if (!this.starting) {
-      const server = new LlamaServer({
-        binPath: this.opts.binPath,
-        modelPath: this.opts.modelPath,
-        contextTokens: this.ctxTokens,
-        // NO `--jinja` (the #20305 regression, plan §2 D2) and NOT CHAT_SERVER_ARGS. `--parallel 1`
-        // (sequential windows; #25142) + `--device none` (CPU-pinned for TG-2, plan §2 D8) +
-        // `--chat-template gemma` (avoids the #20305 STARTUP crash — see TRANSLATION_TEMPLATE_ARGS).
-        extraArgs: [...TRANSLATION_SERVER_ARGS],
-        spawn: this.opts.spawn,
-        fetchImpl: this.opts.fetchImpl,
-        findPort: this.opts.findPort,
-        threads: this.opts.threads,
-        healthTimeoutMs: this.opts.healthTimeoutMs,
-        healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host,
-        // M1: a mid-session sidecar crash (the child dies on its own AFTER becoming healthy — driver
-        // crash, VRAM/RAM exhaustion) otherwise leaves `this.server` pointing at a dead handle: every
-        // subsequent `translate()` fails with a connection error, and each failed attempt re-arms the
-        // idle clock, so the outage persists as long as attempts arrive < the idle window apart. Drop
-        // the dead handle here so the NEXT `translate()` cold-starts (the doc-task's one retry then
-        // gets a fresh spawn). Identity-compared so a late crash notification can never clobber a
-        // NEWER instance that a soft teardown + restart already installed. `LlamaServer` fires this
-        // only for a healthy child dying outside `stop()`, so a lock/quit kill never trips it.
-        onUnexpectedExit: () => {
-          if (this.server === server) this.server = null
-        }
+      this.starting = this.startLadder().finally(() => {
+        this.starting = null
       })
-      this.starting = server
-        .start()
-        .then(() => {
-          this.server = server
-        })
-        .catch((err) => {
-          const error = err instanceof Error ? err : new Error(String(err))
-          // A TRANSIENT port-bind race must NOT arm the latch (the reranker F7 fix): the latch
-          // survives suspend(), so latching a race would kill translation for the whole session.
-          // It propagates RAW (not a TranslationStartError), so `startWithBindRetry`'s one retry and
-          // the consumers' transient-retry paths still treat it as the retryable class it is.
-          if (isBindRaceError(error.message)) throw error
-          // Every other start failure DOES latch (the reranker precedent — a permanent load fault
-          // must not re-spawn + re-await the full health timeout per window). No reliable
-          // transient/OOM signature exists to safely un-latch memory pressure (see
-          // TRANSLATION_START_FAILED_CODE), so we keep the latch and tag it with the distinct code
-          // that lets the UI say "restart the app / free memory" (F-7 / FA-4 option c).
-          const startError = new TranslationStartError(error)
-          this.startFailed = startError
-          throw startError
-        })
-        .finally(() => {
-          this.starting = null
-        })
     }
     await this.starting
     // A teardown (lock/quit) may have begun during the await above and nulled the server we'd
@@ -348,6 +336,117 @@ export class TranslationRuntime {
     if (this.tearingDown) throw new Error('Translation runtime is suspending (workspace is locking)')
     if (!this.server) throw new Error('Translation server failed to start')
     return this.server
+  }
+
+  /**
+   * The device posture for the NEXT launch — re-read per cold start so a Settings flip (or a
+   * mid-session `gpuAutoDisabled` persisted by the chat ladder) takes effect on the next lazy
+   * start without an app restart. `gpuMode: 'off'`, the persisted auto-disable flag, and this
+   * runtime's own session fallback latch each force CPU (issue #42).
+   */
+  private resolveDevice(): TranslationDevice {
+    const gpuAllowed =
+      (this.opts.gpu?.getGpuMode?.() ?? 'auto') === 'auto' &&
+      !(this.opts.gpu?.getGpuAutoDisabled?.() ?? false)
+    return gpuAllowed && !this.gpuFellBack ? 'auto' : 'cpu'
+  }
+
+  /** Arm the session CPU-fallback latch once and report it (observability hook must never throw). */
+  private noteDeviceFallback(reason: string): void {
+    if (this.gpuFellBack) return
+    this.gpuFellBack = true
+    try {
+      this.opts.onDeviceFallback?.(reason)
+    } catch {
+      /* observability only — a throwing hook must not break the start path */
+    }
+  }
+
+  /** One launch attempt at one device posture; installs `this.server` on success. */
+  private async startAttempt(device: TranslationDevice): Promise<void> {
+    const server = new LlamaServer({
+      binPath: this.opts.binPath,
+      modelPath: this.opts.modelPath,
+      contextTokens: this.ctxTokens,
+      // NO `--jinja` (the #20305 regression, plan §2 D2) and NOT CHAT_SERVER_ARGS. `--parallel 1`
+      // (sequential windows; #25142) + the device posture (issue #42: 'auto' = NO device args →
+      // b9849 ngl=auto + fit=on VRAM-aware offload; 'cpu' = `--device none`) + `--chat-template
+      // gemma` (avoids the #20305 STARTUP crash — see TRANSLATION_TEMPLATE_ARGS).
+      extraArgs: translationServerArgs(device),
+      spawn: this.opts.spawn,
+      fetchImpl: this.opts.fetchImpl,
+      findPort: this.opts.findPort,
+      threads: this.opts.threads,
+      healthTimeoutMs: this.opts.healthTimeoutMs,
+      healthIntervalMs: this.opts.healthIntervalMs,
+      host: this.opts.host,
+      // M1: a mid-session sidecar crash (the child dies on its own AFTER becoming healthy — driver
+      // crash, VRAM/RAM exhaustion) otherwise leaves `this.server` pointing at a dead handle: every
+      // subsequent `translate()` fails with a connection error, and each failed attempt re-arms the
+      // idle clock, so the outage persists as long as attempts arrive < the idle window apart. Drop
+      // the dead handle here so the NEXT `translate()` cold-starts (the doc-task's one retry then
+      // gets a fresh spawn). Identity-compared so a late crash notification can never clobber a
+      // NEWER instance that a soft teardown + restart already installed. `LlamaServer` fires this
+      // only for a healthy child dying outside `stop()`, so a lock/quit kill never trips it.
+      // Issue #42: a GPU-composed sidecar dying on its own additionally arms the session CPU
+      // latch — the next cold start pins `--device none` instead of crash-looping the GPU across
+      // a doc-task's per-window retries (the chat §5.3 auto-fallback, session-scoped).
+      onUnexpectedExit: () => {
+        if (this.server === server) this.server = null
+        if (device === 'auto') {
+          this.noteDeviceFallback('GPU-composed translation sidecar exited unexpectedly mid-session')
+        }
+      }
+    })
+    await server.start()
+    this.server = server
+  }
+
+  /**
+   * The translation start LADDER (issue #42 — the chat rung-1/rung-2 pair, sized for a lazy
+   * sidecar): try the resolved device posture; when a GPU attempt fails for a non-transient
+   * reason, fall back to forced CPU ONCE within the same start, then latch the session to CPU.
+   * Only a failure of the FINAL (CPU) attempt arms the permanent `startFailed` latch.
+   */
+  private async startLadder(): Promise<void> {
+    const device = this.resolveDevice()
+    try {
+      await this.startAttempt(device)
+      return
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      // A TRANSIENT port-bind race must NOT arm either latch (the reranker F7 fix / chat REL-1):
+      // it is not a device fault — LlamaServer already retried once on a fresh port. It propagates
+      // RAW (not a TranslationStartError), so the consumers' transient-retry paths still treat it
+      // as the retryable class it is (and the retry re-attempts the SAME device posture).
+      if (isBindRaceError(error.message)) throw error
+      if (device === 'auto') {
+        this.noteDeviceFallback(`translation sidecar GPU-attempt start failed: ${error.message}`)
+        // A lock/quit that began while the GPU attempt was failing must not cold-load ~10 GB on
+        // the CPU rung just to tear it straight down.
+        if (!this.stopped && !this.tearingDown) {
+          try {
+            await this.startAttempt('cpu')
+            return
+          } catch (cpuErr) {
+            const cpuError = cpuErr instanceof Error ? cpuErr : new Error(String(cpuErr))
+            if (isBindRaceError(cpuError.message)) throw cpuError
+            const startError = new TranslationStartError(cpuError)
+            this.startFailed = startError
+            throw startError
+          }
+        }
+        throw error
+      }
+      // Every other start failure DOES latch (the reranker precedent — a permanent load fault
+      // must not re-spawn + re-await the full health timeout per window). No reliable
+      // transient/OOM signature exists to safely un-latch memory pressure (see
+      // TRANSLATION_START_FAILED_CODE), so we keep the latch and tag it with the distinct code
+      // that lets the UI say "restart the app / free memory" (F-7 / FA-4 option c).
+      const startError = new TranslationStartError(error)
+      this.startFailed = startError
+      throw startError
+    }
   }
 
   /**

@@ -10,7 +10,7 @@ import {
   type TranslationLangCode
 } from '../../src/main/services/translation/prompt'
 import { readCompletionSSE, type CompletionFinal } from '../../src/main/services/translation/completion'
-import { TRANSLATION_SERVER_ARGS } from '../../src/main/services/translation/runtime'
+import { translationServerArgs, type TranslationDevice } from '../../src/main/services/translation/runtime'
 import {
   TRANSLATION_PROMPT_RESERVE_TOKENS,
   TRANSLATION_MAX_INPUT_TOKENS,
@@ -29,10 +29,15 @@ import {
 //   HILBERTRAUM_TRANSLATEGEMMA_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/translation/*.gguf>
 //   npx vitest run tests/manual/translategemma-smoke.test.ts
 //
-// It composes `LlamaServer` DIRECTLY with the PRODUCTION translation args (TRANSLATION_SERVER_ARGS
-// — NO --jinja, --parallel 1, --device none, --ctx-size 4096, --chat-template gemma) and drives it
+// It composes `LlamaServer` DIRECTLY with the PRODUCTION translation args (translationServerArgs —
+// NO --jinja, --parallel 1, --ctx-size 4096, --chat-template gemma) and drives it
 // through the SHIPPING prompt builder + /completion reader (`buildTranslationPrompt` /
-// `readCompletionSSE`) — the exact code the TranslationRuntime uses. (The runtime wrapper's
+// `readCompletionSSE`) — the exact code the TranslationRuntime uses. Issue #42: the DEVICE posture
+// is selectable — the default 'auto' mirrors the shipping GPU auto-offload (no device args →
+// b9849 ngl=auto + fit=on); set HILBERTRAUM_TRANSLATEGEMMA_SMOKE_DEVICE=cpu to re-measure the
+// forced-CPU (`--device none`) posture the §11.2 calibration numbers were recorded on. The
+// deferred TG-6 GPU re-smoke = running this file with the default posture on a GPU drive and
+// recording the tokens/sec in model-benchmarks.md §11.4. (The runtime wrapper's
 // lazy-start / idle-teardown / stop-suspend lifecycle is covered deterministically by
 // tests/integration/translation-runtime.test.ts; THIS proves model + prompt + endpoint fidelity on
 // the real pin, and MEASURES the numbers TG-6 bakes into the planner constants + the manifest.)
@@ -80,6 +85,14 @@ import {
 
 const ROOT = process.env.HILBERTRAUM_TRANSLATEGEMMA_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
+
+/**
+ * Device posture for the translation server legs (issue #42): 'auto' (default — the shipping
+ * GPU auto-offload posture) or 'cpu' via HILBERTRAUM_TRANSLATEGEMMA_SMOKE_DEVICE=cpu (the forced
+ * `--device none` posture the TG-6 §11.2 CPU calibration was recorded on).
+ */
+const SMOKE_DEVICE: TranslationDevice =
+  process.env.HILBERTRAUM_TRANSLATEGEMMA_SMOKE_DEVICE?.trim().toLowerCase() === 'cpu' ? 'cpu' : 'auto'
 
 /** Generous health budget: a ~7.3 GB model loaded from a possibly-cold USB drive, on CPU. */
 const PATIENT_MS = 600_000
@@ -249,7 +262,7 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
     contextTokens: CTX,
     // The EXACT production translation args (imported so they can never drift from the runtime) —
     // includes `--chat-template gemma`, WITHOUT which b9849 crashes at startup (#20305, TG-2 finding).
-    extraArgs: [...TRANSLATION_SERVER_ARGS],
+    extraArgs: translationServerArgs(SMOKE_DEVICE),
     healthTimeoutMs: PATIENT_MS
   })
 
@@ -449,7 +462,7 @@ describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real 
       binPath: defaultBin,
       modelPath,
       contextTokens: CTX,
-      extraArgs: [...TRANSLATION_SERVER_ARGS],
+      extraArgs: translationServerArgs(SMOKE_DEVICE),
       healthTimeoutMs: PATIENT_MS
     })
     const embedder = new LlamaServer({
@@ -540,7 +553,7 @@ describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real 
       binPath: defaultBin!,
       modelPath: modelPath!,
       contextTokens: CTX,
-      extraArgs: [...TRANSLATION_SERVER_ARGS],
+      extraArgs: translationServerArgs(SMOKE_DEVICE),
       healthTimeoutMs: PATIENT_MS
     })
     await server.start()

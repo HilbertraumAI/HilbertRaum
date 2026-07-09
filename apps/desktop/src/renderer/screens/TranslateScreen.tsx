@@ -123,9 +123,10 @@ export function TranslateScreen({
   }, [])
 
   // Availability on mount; re-check on focus (the model may have been installed on the AI Model
-  // screen and the user navigated back). A mid-session install still needs a restart to be picked
-  // up (the composed `translator` resolves once at startup — known-limitations), but re-reading
-  // keeps the flag honest across a lock/unlock.
+  // screen and the user navigated back). Issue #40: a completed in-app download now RE-RUNS the
+  // translation selector in main (`AppContext.onModelInstalled`), so the mount/focus re-read here
+  // is what makes a mid-session install show up without a restart — and it keeps the flag honest
+  // across a lock/unlock.
   useEffect(() => {
     void checkStatus()
     const onFocus = (): void => void checkStatus()

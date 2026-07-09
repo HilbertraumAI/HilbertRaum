@@ -2062,12 +2062,12 @@ Per-finding disposition (F-1…F-8):
   `model-policy.md` "The translation role"), so the sidecar launches **without `--jinja`** and
   cannot ride the chat slot (which hard-codes `CHAT_SERVER_ARGS = ['--jinja', …]`). Desirable
   anyway: chat stays usable, and ctx/prompt/sampling are model-specific (plan §2 D1/D2).
-- **Launch args (`runtime.ts`, `TRANSLATION_SERVER_ARGS`).** `--ctx-size 4096` (the model card's 2K
-  input budget + output headroom, plan §2 D4) `--parallel 1` (`TRANSLATION_SLOT_ARGS` — strictly
-  sequential windows; contains the #25142 Windows-Vulkan parallel-translation hang) `--device none`
-  (`TRANSLATION_DEVICE_ARGS` — CPU-pinned for TG-2 per D8: the chat GPU ladder in `runtime/factory.ts`
-  yields a `chatStream` `ModelRuntime`, whose seams don't fit a raw-`/completion` sidecar, so TG-2
-  ships CPU and the smoke's ~4 tok/s decides at TG-6 whether to pull GPU work forward)
+- **Launch args (`runtime.ts`, `translationServerArgs(device)`).** `--ctx-size 4096` (the model
+  card's 2K input budget + output headroom, plan §2 D4) `--parallel 1` (`TRANSLATION_SLOT_ARGS` —
+  strictly sequential windows; contains the #25142 Windows-Vulkan parallel-translation hang in BOTH
+  device postures) the **device posture** (issue #42: `'auto'` = NO device args → b9849 ngl=auto +
+  fit=on VRAM-aware offload, the chat rung-1 shape; `'cpu'` = `--device none` via
+  `TRANSLATION_CPU_DEVICE_ARGS` — the only CPU-forcing mechanism, never `-ngl`)
   `--chat-template gemma` (`TRANSLATION_TEMPLATE_ARGS` — **REQUIRED**, TG-2 smoke finding: b9849
   crashes at STARTUP validating TranslateGemma's embedded template — the #20305 minja crash at init,
   even without `--jinja` — so we override it with the built-in legacy gemma template; safe because
@@ -2106,11 +2106,11 @@ Per-finding disposition (F-1…F-8):
   **`TRANSLATION_OUTPUT_TOKENS_PER_WORD = 3.0`**, both conservative ceilings over the measured maxima
   so a window can only OVER-chunk, never overflow (the D4 clamp still binds: at 2.5 tok/word a
   clamp-word window's input stays under 2K). Windows shrink to **~690 words** (`windowMaxTokens`
-  ≈2,071) — the honest cost of the heavy tokenizer. **D8 (GPU):** KEEP CPU-pinned for v1 (~3–4 tok/s
-  is tolerable for a background doc-task with progress + cancel; a GPU flip needs its own GPU-decode
-  re-smoke where #25142 is contained; `TRANSLATION_DEVICE_ARGS` stays the one-line flip). The
+  ≈2,071) — the honest cost of the heavy tokenizer. **D8 (GPU):** TG-6 KEPT the CPU pin for v1
+  (~3–4 tok/s tolerable for a background doc-task; GPU deferred, not rejected) — **superseded by
+  issue #42 (2026-07-09)**, which pulled GPU forward: see the issue-#40/#42 bullet below. The
   per-window timeout was recalibrated to 45 min (a ~2,070-token full window at the observed-worst
-  ~1.1 tok/s is ~30 min). **D9 (chat-during-translation relaxation):** KEEP serialization —
+  ~1.1 tok/s is ~30 min; it stays — an upper bound is harmless on a fast GPU decode). **D9 (chat-during-translation relaxation):** KEEP serialization —
   co-residency measured ≈13.2 GiB (translation ≈9.2 + a 4B chat + embedder); a 12B chat pushes the
   pair past a 16 GB machine, so two large models decoding at once is infeasible. **min-RAM (D10):**
   `recommended_min_ram_gb` reset to 17 (the §4 peak+3-headroom rule applied to the measured 13.24 GiB
@@ -2160,6 +2160,47 @@ Per-finding disposition (F-1…F-8):
     `approxTokenCount` charges them per-character (over-counts vs the real tokenizer), so windows
     still only ever OVER-chunk. The smoke's calibration leg deliberately keeps measuring its
     curated-10 samples (`SMOKE_LANGS`); the pickers render all 51 native names, defaults stay de/en.
+- **Issues #40 + #42 (2026-07-09) — restart-free activation + GPU offload.** Two beta findings,
+  one wave.
+  - **#40 — the translator selection was frozen at startup.** `composeServices` ran once in
+    `initBackend`, so downloading TranslateGemma mid-session left `ctx.translator` null until a
+    restart — while the Translate empty state kept pointing the user at the download flow (a
+    circle). **Fix:** `DownloadManager` gained `onModelInstalled` (fired once when a job reaches
+    `done`, after every file is renamed into place — placeholder-hash completions included, since
+    the selectors are presence-driven); the IPC wiring routes it to **`AppContext.onModelInstalled`**
+    (main/index.ts), which re-runs **`composeTranslator`** (`compose-services.ts` — the ONE
+    construction startup and refresh share) and re-assigns `ctx.translator` **only when the slot is
+    null** (a live sidecar is never replaced). Every consumer reads `ctx.translator` live
+    (translate jobs, doc tasks — whose `getTranslator` was the one startup-const capture, now fixed
+    — core-status IPC, lock/quit teardowns), and the Translate screen already re-reads
+    `translationAvailable` on mount/focus. Scope: the **transcriber/reranker/embedder keep the
+    restart requirement** — their handles are captured at IPC-registration/ingestion-wiring time
+    (`registerDocsIpc` deps, `getIngestionDeps`), so a ctx re-assignment alone would activate them
+    inconsistently; adopting the same seam there needs its own capture-site pass
+    (`known-limitations.md` records this). Tests: `downloads.test.ts` (hook fires once on `done`,
+    on unverified too, never on failed/cancelled, hook faults can't fail the job) +
+    `compose-translator.test.ts` (real temp-drive layout: null → live selection as the GGUF lands).
+  - **#42 — GPU offload for the translation sidecar (TG-6's deferred D8, pulled forward).** The
+    sidecar now runs a two-rung **device ladder** (`runtime.ts`): per COLD START it re-reads the
+    SAME Settings signals the chat ladder gets (`gpuMode` + `gpuAutoDisabled`, injected as
+    `TranslationGpuDeps` from the shared `gpuSignals` in main/index.ts) — allowed ⇒ launch with
+    **no device args** (b9849 ngl=auto + fit=on; on a GPU-less box that IS CPU mode), else
+    `--device none`. A **non-bind-race GPU start failure** retries once at forced CPU within the
+    same start and arms a **session-scoped `gpuFellBack` latch** (later cold starts pin CPU — no
+    repeated GPU health timeouts); a **mid-session crash of a GPU-composed sidecar** arms the same
+    latch (the chat §5.3 auto-fallback, session-scoped), so a doc-task's per-window retries can't
+    crash-loop a ~10 GB GPU load. Only the FINAL (CPU) rung failing arms the permanent
+    `startFailed` latch (F-7 semantics preserved); a bind race stays raw/retryable and touches
+    neither latch. The latch deliberately **never writes the persisted `gpuAutoDisabled`** — a 12B
+    translation model can fail on a GPU where the smaller chat model runs fine, and chat's ladder
+    owns that flag; translation only reads it. #25142 stays contained by `--parallel 1` in both
+    postures; the 45-min window timeout stays (upper bound, harmless on GPU). The idle-teardown +
+    per-cold-start re-read mean a Settings flip needs no restart. **Open owner action:** the
+    GPU-decode re-smoke on a real GPU drive (`model-benchmarks.md` §11.4) — the smoke now defaults
+    to the shipping 'auto' posture (`HILBERTRAUM_TRANSLATEGEMMA_SMOKE_DEVICE=cpu` re-measures the
+    CPU calibration). Tests: the `translation-runtime.test.ts` ladder suite (off/auto-disabled pin
+    CPU, per-cold-start re-read, GPU-fail → CPU fallback + latch, final-rung-only startFailed,
+    bind-race neutrality, mid-session GPU crash latch, CPU crash does NOT latch).
 
 ### §-anchor legend (historical plan citations)
 
@@ -2195,7 +2236,7 @@ anchor as:
 | D5 | Curated 10 languages, source+target | `TRANSLATION_LANGUAGE_CODES` (shared) + native-name selects; no auto-detect. **Superseded in extent by issue #31 (2026-07-07):** widened to the 51-code WMT24++ production tier — still a closed, server-validated list (see the issue-#31 bullet above) |
 | D6 | Translate view = 7th primary destination | `TranslateScreen` + `TranslateJobService` (`translate:*` IPC, `trToken/trDone/trError`) |
 | D7 | Dropped/picked documents ride the doc-task | `TranslateDropZone` → import `{kind:'temporary'}` → `startDocTask('translation')` → materialized Markdown |
-| D8 | GPU posture | CPU-pinned (`--device none`) shipped; TG-6 KEEPS it (~3–4 tok/s tolerable; GPU deferred behind a GPU-drive re-smoke) — `TRANSLATION_DEVICE_ARGS` is the one-line flip |
+| D8 | GPU posture | CPU-pinned shipped at TG-2; TG-6 kept it (GPU deferred, not rejected). **Superseded by issue #42 (2026-07-09):** a two-rung device ladder honours `gpuMode`/`gpuAutoDisabled` per cold start — GPU auto-offload by default, forced-CPU fallback + session latch on a GPU fault (see the issue-#40/#42 bullet above); the GPU-drive re-smoke (§11.4) is the open owner action |
 | D9 | Concurrency guards stay | doc-task FIFO + chat↔task exclusion + view-job `docTaskBusy`; TG-6 KEEPS them (co-residency ≈13.2 GiB rules out two large models decoding at once) |
 | D10 | Manifest discipline | rank 0, profiles `[]`, not bundled, `license_review: pending`; `recommended_min_ram_gb` set to 17 (§4 rule on the TG-6 co-residency floor 13.24 GiB) |
 
@@ -2919,6 +2960,9 @@ invisible post-download "Checking…" gap where the card briefly looked un-downl
 placeholder-hash completion still invalidates (it is never trusted). Audit events
 (`model_download_started/verified/failed`) flow through the injected
 `DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified".
+A job reaching `done` additionally fires `DownloadManagerDeps.onModelInstalled` → wired to
+`AppContext.onModelInstalled`, which re-runs the startup-frozen availability selectors — the
+translation sidecar today (issue #40; the "Translation sidecar" record has the details).
 No update checks, no catalog (only manifests already on the drive), no background anything;
 a sanctioned download session is by definition not `offlineMode`. Gate semantics +
 licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PRIVACY.md`.

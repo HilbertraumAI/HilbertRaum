@@ -54,6 +54,9 @@ export interface AppContext {
    * binary + GGUF are present; null/absent = translation refuses with a friendly install path
    * (TG-3, O2 — deliberately no mock translator). Held for the session: `stop()` on quit,
    * `suspend()` on lock (it lazily restarts on the next translate), plus its own idle teardown.
+   * MUTABLE (issue #40): starts as the startup composition's selection and is RE-ASSIGNED by
+   * `onModelInstalled` when a mid-session download makes the role available — consumers must read
+   * it off ctx per call (`ctx.translator`), never capture the value at wiring time.
    */
   translator?: Translator | null
   /** Directory holding model-manifests, or null if it could not be located. */
@@ -104,4 +107,13 @@ export interface AppContext {
    * suspended (its next window would otherwise lazily respawn the just-killed server).
    */
   translateJobs?: TranslateJobService
+  /**
+   * Fired by the in-app download manager when a model download completes (issue #40, all files in
+   * place). The live wiring (main/index.ts) re-runs the availability selectors that composed to
+   * null at startup — the translation sidecar today — so a downloaded model activates without an
+   * app restart. The transcriber/reranker/embedder still need a restart: their handles are
+   * captured at IPC-registration/ingestion-wiring time (see the known-limitations doc). Optional
+   * so partial test contexts stay valid; must never throw (the manager guards regardless).
+   */
+  onModelInstalled?: (modelId: string) => void
 }

@@ -1522,9 +1522,13 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   fallback (plan O2/D3).** Translation runs on a dedicated local sidecar, never on the
   chat model (whose translation path was removed at TG-3). Without the installed model the
   Documents "Translate" action is disabled and a "Get the translation model…" item deep-links
-  to the AI Model screen; a task started anyway refuses with the same friendly copy. The
-  sidecar resolves at app START (the `ocrAvailable` pattern) — after installing the model
-  mid-session, restart the app so translation picks it up.
+  to the AI Model screen; a task started anyway refuses with the same friendly copy. Since
+  issue #40 (2026-07-09) a completed **in-app download re-runs the translation selector**
+  (`AppContext.onModelInstalled`), so translation activates the moment the GGUF lands — no
+  restart. Residuals: a weight copied onto the drive OUTSIDE the app (manual file copy) is
+  still only picked up at the next start, and the **transcriber/reranker/embedder** keep the
+  startup-frozen selection (their handles are captured at IPC-registration/ingestion-wiring
+  time — a mid-session whisper download still needs a restart).
 - **A failed translation-model START disables translation until the app restarts — and now says
   so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the first translate. If that start
   fails it is LATCHED for the session (the reranker precedent — a permanent load fault must not
@@ -1538,6 +1542,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   known template-validation crash; a Linux OOM-kill is indistinguishable from our own shutdown), so
   un-latching would re-pay the full spawn + health-timeout cost on every window for a permanent
   fault. A transient port-bind race is the one non-latching start class and still retries silently.
+  Since issue #42 a failed **GPU-attempt** start is a third class: it does NOT latch translation
+  off — the same start retries once at forced CPU, and only that final CPU rung failing arms the
+  latch (the GPU posture itself is then abandoned for the session, without touching chat's
+  persisted `gpuAutoDisabled`).
 - **Languages are a closed set of 51 — source AND target** (issue #31, 2026-07-07: the original
   curated 10 widened to TranslateGemma's full PRODUCTION tier — the 55 WMT24++-evaluated locales
   collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat
@@ -1593,12 +1601,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   whole job VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a
   visible failure beats a silent gap. Before TA-5 a truncated window was stitched in silently as a
   clean translation; that honesty hole is closed.
-- **Long documents take time — linearly.** There is deliberately NO window ceiling (a
-  faithful translation may not cover "the beginning" only, unlike the summary), and the
-  12B sidecar decodes at ~3–4 tok/s on CPU (TG-6 kept it CPU-pinned for v1: GPU is deferred
-  behind a GPU-drive re-smoke where the #25142 Vulkan hang is contained — model-benchmarks
-  §11) — a 100-page document is many minutes to hours. Progress is visible per window and
-  cancel always works (a cancelled translation persists nothing).
+- **Long documents take time — linearly (on CPU).** There is deliberately NO window ceiling (a
+  faithful translation may not cover "the beginning" only, unlike the summary). Since issue #42
+  the sidecar **auto-offloads to the GPU** under the same signals as chat (`gpuMode: 'auto'` and
+  not `gpuAutoDisabled` — Settings → GPU off forces CPU); on a GPU-less or GPU-disabled machine
+  it decodes at the measured ~3–4 tok/s CPU rate (model-benchmarks §11), so a 100-page document
+  is many minutes to hours there. GPU tokens/sec has NOT been locally measured yet (the §11.4
+  re-smoke is an open owner action); the #25142 parallel-Vulkan hang stays contained by
+  `--parallel 1` in both postures. Progress is visible per window and cancel always works (a
+  cancelled translation persists nothing).
 - **Export covers text documents only.** The Export action saves the STORED text
   (materialized translations are Markdown, so it is exact); PDFs/DOCX stored copies are
   original binaries and are not exported through this path.

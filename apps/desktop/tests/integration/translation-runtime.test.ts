@@ -10,10 +10,12 @@ import { createSelectedTranslator } from '../../src/main/services/translation/fa
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
-// --ctx-size 4096, --parallel 1, --device none), the raw /completion streaming + stop/temperature,
-// abort forwarding, error mapping, single-flight + failed-start latch, and — the hybrid heart —
-// the SOFT idle-teardown interlock (vision RUNTIME-4) alongside stop()/suspend() (reranker). No
-// real binary is spawned: spawn/fetchImpl/findPort are injected (the e5/reranker/vision seam).
+// --ctx-size 4096, --parallel 1), the raw /completion streaming + stop/temperature, abort
+// forwarding, error mapping, single-flight + failed-start latch, the GPU device ladder (issue #42:
+// gpuMode/gpuAutoDisabled honoured per cold start, GPU-fail → forced-CPU fallback + session latch),
+// and — the hybrid heart — the SOFT idle-teardown interlock (vision RUNTIME-4) alongside
+// stop()/suspend() (reranker). No real binary is spawned: spawn/fetchImpl/findPort are injected
+// (the e5/reranker/vision seam).
 
 /** A canned /completion SSE stream: two content frames + a terminal stop frame with timings. */
 const COMPLETION_SSE =
@@ -89,7 +91,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 describe('TranslationRuntime — launch + translate', () => {
-  it('launches WITHOUT --jinja, with --ctx-size 4096 --parallel 1 --device none, loopback only', async () => {
+  it('launches WITHOUT --jinja, with --ctx-size 4096 --parallel 1, GPU auto-offload by default, loopback only', async () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = translationFetch()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
@@ -99,7 +101,10 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(args).not.toContain('--reasoning-format') // not the chat CHAT_SERVER_ARGS
     expect(args).toContain('--ctx-size 4096') // plan §2 D4
     expect(args).toContain('--parallel 1') // sequential windows; contains #25142 (plan §2 D8/D9)
-    expect(args).toContain('--device none') // CPU-pinned for TG-2 (plan §2 D8)
+    // Issue #42: default posture = GPU auto-offload, the chat rung-1 shape — NO device args
+    // (b9849 defaults ngl=auto + fit=on; on a GPU-less machine this IS CPU mode).
+    expect(args).not.toContain('--device')
+    expect(args).not.toContain('-ngl') // NEVER pass -ngl (the GPU record's hard rule)
     expect(args).toContain('--chat-template gemma') // avoids the #20305 STARTUP crash (TG-2 smoke finding)
     expect(args).toContain('--host 127.0.0.1') // loopback only
     await rt.stop()
@@ -174,6 +179,9 @@ describe('TranslationRuntime — launch + translate', () => {
     const rt = new TranslationRuntime({
       ...base,
       spawn,
+      // gpuMode 'off' → the launch is ALREADY forced-CPU, so there is no GPU→CPU rung to walk:
+      // a start failure latches after exactly one spawn (the pre-#42 shape, preserved verbatim).
+      gpu: { getGpuMode: () => 'off' },
       fetchImpl: (async () => {
         throw new Error('connection refused')
       }) as unknown as typeof fetch
@@ -553,5 +561,214 @@ describe('createSelectedTranslator — availability ladder', () => {
     expect(t?.modelId).toBe('translategemma')
     expect(t?.contextWindow()).toBe(4096)
     expect(reasons.some((r) => /binary \+ weights present/.test(r))).toBe(true)
+  })
+})
+
+// Issue #42 — the translation device ladder: the sidecar honours the SAME Settings signals the
+// chat ladder reads (gpuMode + gpuAutoDisabled, re-read per COLD START), attempts GPU auto-offload
+// (no device args), and on a non-transient GPU start failure falls back to forced CPU ONCE within
+// the same start, latching the session to CPU afterwards. A mid-session crash of a GPU-composed
+// sidecar arms the same latch. The latch is session-only and never writes the persisted
+// `gpuAutoDisabled` (chat's ladder owns that) — a translation-only GPU fault must not force chat
+// into compatibility mode.
+describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
+  const deviceOf = (args: string[]): string => (args.join(' ').includes('--device none') ? 'cpu' : 'auto')
+
+  it("gpuMode 'off' forces --device none", async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      gpu: { getGpuMode: () => 'off' }
+    })
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[0].args)).toBe('cpu')
+    await rt.stop()
+  })
+
+  it('a persisted gpuAutoDisabled forces --device none (a previously detected GPU problem is respected)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      gpu: { getGpuMode: () => 'auto', getGpuAutoDisabled: () => true }
+    })
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[0].args)).toBe('cpu')
+    await rt.stop()
+  })
+
+  it('the signals are re-read per COLD START: a Settings flip takes effect after a suspend, no restart', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    let mode: 'auto' | 'off' = 'off'
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      gpu: { getGpuMode: () => mode }
+    })
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[0].args)).toBe('cpu') // launched while 'off'
+    await rt.suspend()
+    mode = 'auto'
+    await rt.translate(translateOpts) // lazy cold restart re-resolves the device
+    expect(deviceOf(calls[1].args)).toBe('auto')
+    await rt.stop()
+  })
+
+  it('a failed GPU attempt falls back to forced CPU WITHIN the same translate() and latches the session', async () => {
+    // Child 0 (the GPU attempt) dies before health; every later child is healthy. The fake fetch
+    // refuses connections while attempt 1 is live (a dead child must not pass its health probe).
+    const calls: Array<{ args: string[] }> = []
+    const children: FakeChild[] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      children.push(child)
+      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null))
+      return child
+    }
+    const good = translationFetch()
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (calls.length < 2) throw new Error('connection refused') // the dying GPU attempt
+      return good.fetchImpl(url, init)
+    }) as typeof fetch
+    const fallbacks: string[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    const out = await rt.translate(translateOpts) // GPU rung fails → CPU rung serves the window
+    expect(out).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2)
+    expect(deviceOf(calls[0].args)).toBe('auto') // rung 1: GPU auto-offload
+    expect(deviceOf(calls[1].args)).toBe('cpu') // rung 2: forced CPU, same start
+    expect(fallbacks.length).toBe(1)
+    expect(fallbacks[0]).toMatch(/GPU-attempt start failed/)
+    // The session latch: a later cold start (post-suspend, gpu signals unchanged) pins CPU —
+    // no repeated GPU health timeout per window.
+    await rt.suspend()
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[2].args)).toBe('cpu')
+    expect(fallbacks.length).toBe(1) // the latch arms (and reports) once
+    await rt.stop()
+  })
+
+  it('only the FINAL (CPU) rung failing arms the permanent startFailed latch — with the F-7 code', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      queueMicrotask(() => child.emit('exit', 1, null)) // EVERY child dies (a truly broken GGUF)
+      return child
+    }
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: (async () => {
+        throw new Error('connection refused')
+      }) as unknown as typeof fetch
+    })
+    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err)).toBe(true)
+    expect((err as { code?: string }).code).toBe(TRANSLATION_START_FAILED_CODE)
+    expect(calls.length).toBe(2) // walked BOTH rungs (auto, then cpu) before latching
+    expect(deviceOf(calls[0].args)).toBe('auto')
+    expect(deviceOf(calls[1].args)).toBe('cpu')
+    await expect(rt.translate(translateOpts)).rejects.toThrow() // latched
+    expect(calls.length).toBe(2) // no third spawn
+    await rt.stop()
+  })
+
+  it('a transient bind race on the GPU attempt does NOT fall back or latch — the retry re-attempts GPU', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => {
+        stderr.emit('data', 'bind: address already in use')
+        child.emit('exit', 1, null)
+      })
+      return child
+    }
+    const fallbacks: string[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: (async () => {
+        throw new Error('connection refused')
+      }) as unknown as typeof fetch,
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    await rt.translate(translateOpts).catch(() => undefined)
+    await rt.translate(translateOpts).catch(() => undefined)
+    expect(fallbacks.length).toBe(0) // a port steal is not a device fault (chat REL-1 parity)
+    // LlamaServer itself retries a bind race once on a fresh port → 2 spawns per translate. The
+    // point here: EVERY spawn kept the GPU posture — the CPU rung was never walked, nothing latched.
+    expect(calls.length).toBe(4)
+    expect(calls.every((c) => deviceOf(c.args) === 'auto')).toBe(true)
+    await rt.stop()
+  })
+
+  it('a GPU-composed sidecar dying MID-SESSION latches the session to CPU (chat §5.3, session-scoped)', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const fallbacks: string[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[0].args)).toBe('auto')
+    // The healthy GPU-composed child dies on its own (driver crash) — outside stop().
+    children[0].emit('exit', 134, null)
+    await tick()
+    expect(fallbacks.length).toBe(1)
+    expect(fallbacks[0]).toMatch(/exited unexpectedly mid-session/)
+    // The M1 recovery cold start now pins CPU instead of crash-looping the GPU.
+    const out = await rt.translate(translateOpts)
+    expect(out).toBe(COMPLETION_TEXT)
+    expect(deviceOf(calls[1].args)).toBe('cpu')
+    await rt.stop()
+  })
+
+  it('a CPU-composed sidecar dying mid-session does NOT touch the device posture', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const fallbacks: string[] = []
+    let mode: 'auto' | 'off' = 'off'
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      gpu: { getGpuMode: () => mode },
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[0].args)).toBe('cpu')
+    children[0].emit('exit', 134, null) // a CPU crash is NOT a GPU signal
+    await tick()
+    expect(fallbacks.length).toBe(0)
+    mode = 'auto' // the user re-enables GPU — nothing latched, so it is honoured
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[1].args)).toBe('auto')
+    await rt.stop()
   })
 })

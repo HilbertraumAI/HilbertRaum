@@ -92,6 +92,15 @@ export interface DownloadManagerDeps {
    * the model id and counts — never file contents. Must never throw.
    */
   audit?: (type: DownloadAuditType, message: string, metadata: Record<string, unknown>) => void
+  /**
+   * Fired once when a download job reaches `done` — every file of the model is renamed into
+   * place (issue #40). The IPC layer wires this to `AppContext.onModelInstalled`, which re-runs
+   * the availability selectors that were frozen at startup (the translation sidecar today), so a
+   * mid-session download activates without an app restart. Fires for placeholder-hash
+   * (`unverified`) completions too — the selectors are PRESENCE-driven (`modelExists`), exactly
+   * what a restart would see. Guarded here; a throwing hook must never fail the finished job.
+   */
+  onModelInstalled?: (modelId: string) => void
 }
 
 /** The `.part` staging path for a weight destination. */
@@ -290,6 +299,13 @@ export class DownloadManager {
       modelId: job.modelId,
       verified: !job.unverified
     })
+    // Issue #40: let the app re-run the availability selectors NOW — the weights this session's
+    // startup composition didn't see are on disk. Never let a hook fault fail the finished job.
+    try {
+      this.deps.onModelInstalled?.(job.modelId)
+    } catch {
+      /* the download itself succeeded; selector refresh is best-effort */
+    }
     // Checksum honesty extends to the audit log: only a REAL hash match (no placeholder file in
     // the set) records "verified" — otherwise the model reports UNVERIFIED on the Models screen.
     if (!job.unverified) {

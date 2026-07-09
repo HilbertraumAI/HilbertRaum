@@ -47,7 +47,7 @@ import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
-import { composeServices } from './services/compose-services'
+import { composeServices, composeTranslator } from './services/compose-services'
 import { initBinaryVerification } from './services/binary-verifier'
 import { performShutdown } from './shutdown'
 import type { AppContext } from './services/context'
@@ -210,6 +210,12 @@ function initBackend(): void {
       return fallback // locked workspace → safe default (sidecars start post-unlock)
     }
   }
+  // The Settings-driven GPU intent, shared verbatim between the chat ladder and the translation
+  // sidecar's device ladder (issue #42) so the two can never read the flags differently.
+  const gpuSignals = {
+    getGpuMode: () => readGpuSetting((s) => s.gpuMode, 'auto' as const),
+    getGpuAutoDisabled: () => readGpuSetting((s) => s.gpuAutoDisabled, false)
+  }
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
@@ -218,8 +224,7 @@ function initBackend(): void {
       onSelect: (kind, opts, reason) =>
         log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason }),
       gpu: {
-        getGpuMode: () => readGpuSetting((s) => s.gpuMode, 'auto'),
-        getGpuAutoDisabled: () => readGpuSetting((s) => s.gpuAutoDisabled, false),
+        ...gpuSignals,
         onGpuFailure: persistGpuFailure,
         probeDevices: gpuProbe,
         onGpuCrash: (opts, info) => gpuCrashFallback(opts, info)
@@ -234,7 +239,10 @@ function initBackend(): void {
     rootPath: paths.rootPath,
     manifestsDir,
     // M-5: dev-only binary env overrides are honoured only in a dev build.
-    isDev
+    isDev,
+    // Issue #42: the translation sidecar honours the same gpuMode/gpuAutoDisabled the chat
+    // ladder reads (read per cold start — a Settings flip needs no restart).
+    gpu: gpuSignals
   })
 
   // Document task engine: one-at-a-time summary/translation/compare jobs. The
@@ -246,10 +254,12 @@ function initBackend(): void {
   const docTasks = new DocTaskManager({
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
-    // TG-3: the translation kind runs on the TranslateGemma sidecar (the compose-services
-    // handle above) — availability-driven; null → the friendly install path, never the
-    // chat runtime.
-    getTranslator: () => translator,
+    // TG-3: the translation kind runs on the TranslateGemma sidecar — availability-driven;
+    // null → the friendly install path, never the chat runtime. Read LIVE off ctx (issue #40):
+    // a mid-session model download re-assigns `ctx.translator`, and capturing the startup const
+    // here was exactly the staleness that forced a restart. `ctx` is assigned below, before any
+    // task can run.
+    getTranslator: () => ctx?.translator ?? null,
     isChatStreaming: () => inFlightStreams.size > 0,
     // Doc-task window budgets follow the REAL launched context window (§L0 — the same source
     // chat/RAG assembly budgets against), not bare `settings.contextTokens`: the runtime is
@@ -322,6 +332,23 @@ function initBackend(): void {
     getTranslator: () => (ctx as AppContext).translator ?? null,
     hasActiveDocTask: () => (ctx as AppContext).docTasks?.hasActiveTask() ?? false
   })
+  // Issue #40: a completed in-app model download re-runs the translation selector, so the
+  // Translate screen stops claiming the model is missing the moment the GGUF lands — no restart.
+  // Only a NULL slot is ever re-composed (never replace a LIVE sidecar: a running instance means
+  // the role was already available, and construction of the lazy runtime spawns nothing). All
+  // translator consumers read `ctx.translator` live (translateJobs/docTasks/IPC/lock/quit), so
+  // one re-assignment flips them together. The transcriber/reranker/embedder keep the documented
+  // restart requirement for now — their handles are captured at wiring time in registerDocsIpc /
+  // ingestion deps, so a ctx re-assignment alone would activate them inconsistently.
+  ctx.onModelInstalled = () => {
+    if (!ctx || ctx.translator) return
+    ctx.translator = composeTranslator({
+      rootPath: paths.rootPath,
+      manifestsDir,
+      isDev,
+      gpu: gpuSignals
+    })
+  }
   // Best-effort first reconcile (skills plan §8). In plaintext_dev the DB is already open; in
   // encrypted mode `requireDb()` throws while locked, so swallow it — a later phase reconciles on
   // unlock, and S3 ships no surface that reads skills yet.

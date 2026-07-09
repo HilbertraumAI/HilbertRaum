@@ -354,6 +354,81 @@ describe('DownloadManager jobs', () => {
     expect(existsSync(weightPath(root, m))).toBe(true)
   })
 
+  // Issue #40: `onModelInstalled` is the seam that lets the app re-run the startup-frozen
+  // availability selectors the moment the weights land (the translation sidecar today) — a
+  // downloaded model must activate without an app restart.
+  it('fires onModelInstalled exactly once when the job reaches done — AFTER the weight is in place', async () => {
+    const body = 'real-model-weights-bytes'
+    const m = verifiedManifest(body)
+    const root = tempRoot()
+    const dest = weightPath(root, m)
+    const installed: Array<{ modelId: string; weightPresent: boolean }> = []
+    const mgr = new DownloadManager({
+      fetchImpl: rangeFetch(body).fetch,
+      onModelInstalled: (modelId) => installed.push({ modelId, weightPresent: existsSync(dest) })
+    })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const finished = await waitForTerminal(mgr, job.jobId)
+    expect(finished.status).toBe('done')
+    expect(installed).toEqual([{ modelId: m.id, weightPresent: true }]) // once, and PRESENCE holds
+  })
+
+  it('fires onModelInstalled for a placeholder-hash (unverified) completion too — presence is what the selectors check', async () => {
+    const m = manifest() // placeholder hashes → done + unverified
+    const root = tempRoot()
+    const installed: string[] = []
+    const mgr = new DownloadManager({
+      fetchImpl: rangeFetch('whatever-bytes').fetch,
+      onModelInstalled: (modelId) => installed.push(modelId)
+    })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const finished = await waitForTerminal(mgr, job.jobId)
+    expect(finished.status).toBe('done')
+    expect(finished.unverified).toBe(true)
+    expect(installed).toEqual([m.id]) // exactly what a restart would see (modelExists)
+  })
+
+  it('does NOT fire onModelInstalled on a failed or cancelled job', async () => {
+    const installed: string[] = []
+    // Failed: checksum mismatch.
+    const bad = verifiedManifest('the-bytes-we-expected')
+    const root1 = tempRoot()
+    const mgrFail = new DownloadManager({
+      fetchImpl: rangeFetch('tampered-bytes').fetch,
+      onModelInstalled: (modelId) => installed.push(modelId)
+    })
+    const failJob = await mgrFail.start({ rootPath: root1, manifest: bad, gates: OPEN })
+    expect((await waitForTerminal(mgrFail, failJob.jobId)).status).toBe('failed')
+    // Cancelled: abort mid-stream.
+    const m = verifiedManifest('hello-world-weights')
+    const root2 = tempRoot()
+    const mgrCancel = new DownloadManager({
+      fetchImpl: hangingFetch('hello-'),
+      onModelInstalled: (modelId) => installed.push(modelId)
+    })
+    const cancelJob = await mgrCancel.start({ rootPath: root2, manifest: m, gates: OPEN })
+    await waitFor(() => mgrCancel.get(cancelJob.jobId).receivedBytes > 0)
+    mgrCancel.cancel(cancelJob.jobId)
+    expect((await waitForTerminal(mgrCancel, cancelJob.jobId)).status).toBe('cancelled')
+    expect(installed).toEqual([])
+  })
+
+  it('a throwing onModelInstalled hook never fails the finished job', async () => {
+    const body = 'real-model-weights-bytes'
+    const m = verifiedManifest(body)
+    const root = tempRoot()
+    const mgr = new DownloadManager({
+      fetchImpl: rangeFetch(body).fetch,
+      onModelInstalled: () => {
+        throw new Error('selector refresh blew up')
+      }
+    })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const finished = await waitForTerminal(mgr, job.jobId)
+    expect(finished.status).toBe('done') // the download outcome is untouched
+    expect(finished.error).toBeNull()
+  })
+
   it('hash mismatch → the partial is DELETED and the job fails with friendly copy', async () => {
     const m = verifiedManifest('the-bytes-we-expected')
     const root = tempRoot()

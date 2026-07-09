@@ -28,7 +28,11 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
     new DownloadManager({
       fetchImpl: fetch,
       log: (m, meta) => log.info(m, meta),
-      audit: (type, message, metadata) => ctx.audit?.(type, message, metadata)
+      audit: (type, message, metadata) => ctx.audit?.(type, message, metadata),
+      // Issue #40: a completed download re-runs the availability selectors that were frozen at
+      // startup (main/index.ts wires the ctx hook) — e.g. TranslateGemma activates without a
+      // restart. Read late off ctx (the audit-hook pattern) so registration order can't matter.
+      onModelInstalled: (modelId) => ctx.onModelInstalled?.(modelId)
     })
 
   // Both gates read at call time: the policy from disk (authoritative ceiling), the

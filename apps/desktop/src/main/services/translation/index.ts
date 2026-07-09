@@ -12,7 +12,7 @@ export {
   isTranslationStartError,
   TRANSLATION_START_FAILED_CODE
 } from './runtime'
-export type { TranslateOptions } from './runtime'
+export type { TranslateOptions, TranslationGpuDeps } from './runtime'
 export { isCleanStop } from './completion'
 export type { CompletionFinal } from './completion'
 export { createSelectedTranslator } from './factory'

@@ -1,5 +1,5 @@
 import type { Translator } from './index'
-import { TranslationRuntime } from './runtime'
+import { TranslationRuntime, type TranslationGpuDeps } from './runtime'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
 
@@ -33,6 +33,13 @@ export interface TranslatorSelectionDeps {
   modelExists?: (modelPath: string) => boolean
   makeTranslator?: (model: TranslationModelInfo, binPath: string) => Translator
   onSelect?: (kind: 'llama' | 'none', reason: string) => void
+  /**
+   * GPU signals for the sidecar's device ladder (issue #42) — the SAME Settings read-callbacks the
+   * chat ladder gets (`gpuMode` + `gpuAutoDisabled`). Omitted → 'auto' / not disabled.
+   */
+  gpu?: TranslationGpuDeps
+  /** Session CPU-fallback observability hook (issue #42) — the caller logs it. Must never throw. */
+  onDeviceFallback?: (reason: string) => void
 }
 
 /**
@@ -47,7 +54,9 @@ export function createSelectedTranslator(deps: TranslatorSelectionDeps): Transla
         modelId: model.id,
         binPath,
         modelPath: model.modelPath,
-        contextTokens: model.contextTokens
+        contextTokens: model.contextTokens,
+        gpu: deps.gpu,
+        onDeviceFallback: deps.onDeviceFallback
       }))
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — unavailable means null (plan O2).
