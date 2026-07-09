@@ -30,7 +30,9 @@ jobs:
           # The cla-signatures branch must exist BEFORE the first signature —
           # the action does not create it (fails with "Branch not found").
           branch: "cla-signatures"
-          allowlist: "humaniser,comilionas,djuro-agent,dependabot[bot]"
+          # djuro-agent temporarily removed for the post-launch CLA smoke test —
+          # restore it right after the test PR goes green.
+          allowlist: "humaniser,comilionas,dependabot[bot]"
           create-file-commit-message: "chore: create CLA signature file"
           signed-commit-message: "chore: $contributorName has signed the CLA in $owner/$repo#$pullRequestNo"
           custom-notsigned-prcomment: "Thank you for your contribution to HilbertRaum! Before we can merge, please read our [Contributor License Agreement](https://github.com/comilionas/AI_Drive/blob/master/.github/CLA.md) ([why we ask](https://github.com/comilionas/AI_Drive/blob/master/CONTRIBUTING.md#license-and-cla)) and sign it by posting the sentence below as a comment on this pull request. Note: the e-mail on your commits must be linked to your GitHub account, otherwise the check cannot attribute your signature."
