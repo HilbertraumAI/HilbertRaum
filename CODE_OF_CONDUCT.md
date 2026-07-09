@@ -59,10 +59,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainers privately. As with security reports (see
-[`SECURITY.md`](SECURITY.md)), a dedicated contact address will be published
-before the first public release; until then, raise concerns privately with the
-maintainers rather than in public issues.
+reported to the project maintainers privately at **security@hilbertraum.ai**
+(the same mailbox as security reports — see [`SECURITY.md`](SECURITY.md)).
+Please raise concerns privately rather than in public issues.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

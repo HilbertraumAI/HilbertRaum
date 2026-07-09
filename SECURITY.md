@@ -1,6 +1,6 @@
 # Security Policy — HilbertRaum
 
-_Last updated: 2026-07-06. Security-relevant changes since the Phase 9 baseline: the audit log
+_Last updated: 2026-07-10. Security-relevant changes since the Phase 9 baseline: the audit log
 (Phase 19; document titles/filenames later removed as content, 2026-06-30), the deny-by-default
 renderer permission handler (Phase 31), the v2 vault envelope with O(1) password change (Phase 32),
 encrypted-at-rest diagnostics log, malicious-document resource caps, the fail-closed packaged-build
@@ -16,9 +16,10 @@ is tagged.
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities privately to the maintainers (a dedicated security contact
-will be published before any public release). Do not open public issues for undisclosed
-vulnerabilities. There is **no paid bug bounty** at this stage.
+Please report suspected vulnerabilities privately to **security@hilbertraum.ai**. Do not open
+public issues for undisclosed vulnerabilities. Where available, GitHub's **private vulnerability
+reporting** on this repository is an alternative channel. We are a small team: expect an
+acknowledgement within a few business days. There is **no paid bug bounty** at this stage.
 
 ## Local threat model (summary)
 
