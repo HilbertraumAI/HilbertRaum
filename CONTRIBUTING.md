@@ -3,6 +3,29 @@
 Thanks for your interest! This project values **privacy, portability, and boring reliable tech**.
 By participating you agree to abide by our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
+## License and CLA
+
+The HilbertRaum software is licensed under **[GPL-3.0-or-later](LICENSE)**, and the core will
+stay under a GPL license — see the promise in the [README](README.md#license).
+
+Before we can merge your first pull request, you need to sign our
+**[Contributor License Agreement (CLA)](.github/CLA.md)**. The CLA bot prompts you automatically
+on the PR; signing is a single PR comment and is required only once. (Make sure the e-mail on
+your commits is linked to your GitHub account, or the bot can't attribute your signature.)
+
+**Why a CLA?** We plan to fund the open development of HilbertRaum by also offering the software
+under commercial licenses (dual licensing) — for example tailor-made solutions for small
+businesses. The CLA gives the project the right to do that with your contribution too. You keep
+all rights to your own work and can use it however you like. A plain DCO sign-off is not
+sufficient for this, which is why we ask for the CLA.
+
+If you contribute as part of your job, your employer may need to sign the
+[Corporate CLA](.github/CLA-corporate.md) — ask us, we will sort it out quickly.
+
+**Third-party code:** do not paste in code you did not write. If a dependency or snippet is
+needed, flag it in the PR so we can check the license (GPLv3 compatibility) — see also
+CLA §7 for submissions on behalf of third parties.
+
 ## Ground rules (non-negotiable)
 - No cloud dependencies, hosted AI APIs, telemetry, or analytics.
 - Keep the app fully usable offline.
