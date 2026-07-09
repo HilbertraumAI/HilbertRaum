@@ -464,9 +464,9 @@ describe('parseTaxonomyFileRef', () => {
 
   it('reduces a FULL PATH to its basename (Unix, Windows, quoted) — the library stores titles, not paths', () => {
     expect(
-      parseTaxonomyFileRef('Kategorisiere nach /home/vldmr/Dokumente/HVB/taxonomie.csv bitte')
+      parseTaxonomyFileRef('Kategorisiere nach /home/user/Documents/bank/taxonomie.csv bitte')
     ).toBe('taxonomie.csv')
-    expect(parseTaxonomyFileRef("Kategorisiere nach '/home/vldmr/Dokumente/HVB/taxonomie.csv'")).toBe(
+    expect(parseTaxonomyFileRef("Kategorisiere nach '/home/user/Documents/bank/taxonomie.csv'")).toBe(
       'taxonomie.csv'
     )
     expect(parseTaxonomyFileRef('categorize using C:\\Users\\v\\Dokumente\\buckets.csv')).toBe('buckets.csv')

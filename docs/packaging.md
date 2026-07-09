@@ -487,8 +487,8 @@ M-A5). It is covered instead by the `tests/manual/*.test.ts` harnesses, each gat
 a `HILBERTRAUM_*` env var that points at a provisioned drive / binary / model. They are skipped
 unless that env var is set, so a green CI run says nothing about them.
 
-**Before any drive ships, run the applicable subset against the real artifacts** (the dev
-box has `F:\paid-gpu-smoke-drive` with a llama.cpp binary + Qwen3-4B; see BUILD_STATE).
+**Before any drive ships, run the applicable subset against the real artifacts** (a locally
+provisioned smoke drive with a llama.cpp binary + a small chat GGUF; see BUILD_STATE).
 Treat this as part of the gate, not optional polish. **NOTE (2026-07-01):** the runtime pin
 moved to **b9849**, so re-run `fetch-runtime` on the smoke drive to refresh the binary before
 these harnesses prove the *current* pin (the drive's previous binary was b9585).

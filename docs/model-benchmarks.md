@@ -388,7 +388,7 @@ The vision sidecar (image-understanding feature; design record in
 [`architecture.md`](architecture.md) "Image understanding — design record") is a SEPARATE
 benchmark axis from the chat catalog above — a different role (`vision`), a two-file model
 (language GGUF + `mmproj` projector), and a CPU-bound multimodal prefill. Numbers below are the
-**real V1 measurements** on the pinned **b9585** (PAID smoke drive `F:\paid-gpu-smoke-drive`),
+**real V1 measurements** on the pinned **b9585** (a locally provisioned PAID smoke drive),
 captured during the V1 research gate (BUILD_STATE V1); the **V5 manual harness re-runs them live**.
 
 ### 8.1 The manual smoke harness (`HILBERTRAUM_VISION_SMOKE`)
@@ -397,7 +397,7 @@ captured during the V1 research gate (BUILD_STATE V1); the **V5 manual harness r
 (skipped in CI — the green gate stays zero-binary/zero-model/zero-network):
 
 ```powershell
-$env:HILBERTRAUM_VISION_SMOKE = "F:\paid-gpu-smoke-drive"   # root with runtime/llama.cpp/<os>/llama-server + models/vision/*.gguf
+$env:HILBERTRAUM_VISION_SMOKE = "<your-smoke-drive>"   # root with runtime/llama.cpp/<os>/llama-server + models/vision/*.gguf
 cd apps\desktop
 npx vitest run tests/manual/vision-smoke.test.ts
 ```
@@ -794,7 +794,7 @@ the scripted reply IS the "model", so this proves the app around the model, not 
 
 A human pre-promotion gate — a real chat GGUF must actually FIND the names/addresses in these
 documents before we claim the locate pass earns its keep. This is a `PAID_*` manual harness on the
-smoke drive (`F:\paid-gpu-smoke-drive` — the b9585/b9849 binary + a real chat GGUF; the D:\ root
+smoke drive (a locally provisioned drive with the b9585/b9849 binary + a real chat GGUF; the D:\ root
 convention of §8/§10.2/§11.1), run offline, results recorded in BUILD_STATE. There is no committed
 `e2e-model` file yet (the pipeline is exercised end-to-end by the gold set with a scripted runtime);
 until one is added, run it by hand through the APP per the checklist below.

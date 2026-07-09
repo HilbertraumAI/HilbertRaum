@@ -29,7 +29,7 @@ come from an over/under-extracted set (the honesty is in the caveat).
 ### Corpus layout
 
 The corpus dir is `$HILBERTRAUM_PDF_GOLDSET_DIR`, else the gitignored `./corpus` next to this file.
-**Recommended: point it OFF-REPO** (e.g. `F:\paid-gpu-smoke-drive\pdf-goldset`) so real financial
+**Recommended: point it OFF-REPO** (e.g. `<your-smoke-drive>\pdf-goldset`) so real financial
 data never sits inside the repo tree — defense-in-depth on top of the `.gitignore` entry.
 
 Drop matched pairs into it:
@@ -78,7 +78,7 @@ HILBERTRAUM_PDF_GOLDSET=1 npx vitest run tests/real-data/pdf-goldset.realdata.te
 # PowerShell
 $env:HILBERTRAUM_PDF_GOLDSET=1; npx vitest run tests/real-data/pdf-goldset.realdata.test.ts
 # off-repo corpus:
-$env:HILBERTRAUM_PDF_GOLDSET_DIR='F:\paid-gpu-smoke-drive\pdf-goldset'
+$env:HILBERTRAUM_PDF_GOLDSET_DIR='<your-smoke-drive>\pdf-goldset'
 ```
 
 Copy **only the printed aggregate table** into `BUILD_STATE.md` / the design record. Never paste a
