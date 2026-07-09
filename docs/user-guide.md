@@ -46,6 +46,20 @@ type or import ever leaves the drive.
 
 You do **not** need to install anything, and you don't need admin rights.
 
+### From a downloaded release (GitHub)
+If you downloaded a prebuilt package from the project's **Releases** page instead of buying a
+prepared drive:
+1. **Windows:** put `HilbertRaum-<version>-portable.exe` wherever you like (an external drive or a
+   folder) and double-click it. **macOS:** unzip `HilbertRaum-<version>-mac-arm64.app.zip` and open
+   the app (keep the zip if you copy it onto an exFAT drive — extract on the target computer).
+   **Linux:** make the `.AppImage` executable and run it.
+2. The same first-time security warning as above may appear (the release builds are unsigned for
+   now) — see [`troubleshooting.md`](troubleshooting.md) for the exact clicks, including the newer
+   macOS **System Settings → Privacy & Security → "Open Anyway"** flow.
+3. A fresh download has **no AI models yet** — the app starts in demo mode. Get the models either
+   with the `prepare-drive --with-assets` script (README step 2) or from inside the app on the
+   **AI Model** screen (each download asks first and is checksum-verified).
+
 ### From a normal install
 Launch the app from your Start menu / Applications folder as usual.
 
@@ -524,8 +538,9 @@ a file saved back into your library.
 1. Open **Translate** from the sidebar (between **Documents** and **Images**).
 2. Pick the languages: **From** (the language your text is in) and **To** (the language you want).
    The model needs to be told the source language — it does not guess — so choose both. The
-   **swap** button (↺ between the two) flips them. The ten supported languages are German, English,
-   French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, and Ukrainian.
+   **swap** button (↺ between the two) flips them. **51 languages** are supported, source and
+   target — German, English, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Ukrainian,
+   and many more (from Arabic and Chinese to Swahili and Vietnamese).
 3. Type or paste your text on the left and press **Translate**.
 4. The translation streams into the panel on the right. Press **Stop** to cancel it; press **Copy**
    to put the finished text on your clipboard. Long text is translated in order, a section at a

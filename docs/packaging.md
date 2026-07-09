@@ -418,37 +418,49 @@ CI run says **nothing** about the real-`spawn` / real-binary / real-weights surf
 the automated floor; the manual pre-ship checklist and harness matrix remain a required, human-run
 pre-release gate. The two do not substitute for each other.
 
-### Packaging workflows — `mac-build` / `win-build` (PR #30)
+### The release workflow — `release.yml` (tag-triggered prebuilt packages)
 
-Two **separate, opt-in** workflows actually produce artifacts (unlike `ci.yml`, which only runs the
-offline green gate and ships nothing). They exist because the portable `.exe` and the mac `.app` can
-only be built on their own OS, which the Windows dev machine can't do locally:
+One workflow, [`.github/workflows/release.yml`](../.github/workflows/release.yml), builds and
+draft-publishes the prebuilt packages (it supersedes the earlier `mac-build`/`win-build` pair;
+ad-hoc builds = its `workflow_dispatch` trigger, which runs the build legs but skips the tag-gated
+release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Four jobs:**
 
-- [`.github/workflows/win-build.yml`](../.github/workflows/win-build.yml) — `windows-latest`, runs
-  `npm run package:win`, uploads `HilbertRaum-<version>-portable.exe`. The Windows llama.cpp runtime
-  is **not** fetched (already staged on the drive under `runtime/llama.cpp/win/`, pin b9849).
-- [`.github/workflows/mac-build.yml`](../.github/workflows/mac-build.yml) — `macos-14` (Apple
-  Silicon / arm64), runs `npm run package` (the `dir` target) then **ad-hoc signs** the `.app`
-  (`codesign --force --deep --sign -`, required to launch on Apple Silicon) and **ditto-zips** it
-  (`HilbertRaum-<version>-mac-arm64.app.zip` — it must STAY zipped on exFAT, which can't hold the
-  `.app`'s framework symlinks; the drive launcher extracts to a local cache). It also fetches the
-  mac Metal runtime via `scripts/fetch-runtime.sh` and zips it with symlinks **dereferenced**
-  (`llama-runtime-mac-arm64.zip`) so it can drop straight onto exFAT under `runtime/llama.cpp/mac/`.
+- **`build-win`** — `windows-latest`: `npm ci` → typecheck → **the full test suite** (once, on the
+  first-class OS — belt-and-braces on the exact tagged commit) → `npm run package:win` →
+  `HilbertRaum-<version>-portable.exe`.
+- **`build-mac`** — `macos-14` (Apple Silicon): `npm ci` → typecheck → `npm run package` (`dir`
+  target) → **ad-hoc sign** (`codesign --force --deep --sign -`, required to launch on Apple
+  Silicon) → **ditto-zip** (`HilbertRaum-<version>-mac-arm64.app.zip` — it must STAY zipped on
+  exFAT, which can't hold the `.app`'s framework symlinks; the drive launcher extracts to a local
+  cache). Also fetches the mac Metal runtime via `scripts/fetch-runtime.sh` and zips it with
+  symlinks **dereferenced** (`llama-runtime-mac-arm64.zip`) so it drops straight onto exFAT under
+  `runtime/llama.cpp/mac/`.
+- **`build-linux`** — `ubuntu-latest`: `npm ci` → typecheck → `npm run package` →
+  `HilbertRaum-<version>.AppImage` (community-tested until the GPU-matrix Linux leg runs).
+- **`release`** (tag-gated, needs all three) — asserts **tag == `apps/desktop/package.json`
+  version** (fail fast on mismatch), aggregates `SHA256SUMS.txt`, builds the release notes from the
+  CHANGELOG `[Unreleased]` block (prefixed with the "this download is the app only — models are
+  fetched separately" line), and creates a **DRAFT** GitHub release (`prerelease: true` while 0.x)
+  with everything attached.
 
-**Both produce UNSIGNED / ad-hoc artifacts by design — no signing secrets are assumed present.** The
-mac job sets `CSC_IDENTITY_AUTO_DISCOVERY=false` (skips Developer ID lookup) and never notarizes (no
-`APPLE_*` env); the win job supplies no `WIN_CSC_*`, so SmartScreen shows "unknown publisher". The
-DIY launch flows (right-click → Open on macOS; "More info → Run anyway" on Windows) are documented in
-[`troubleshooting.md`](troubleshooting.md); supply the signing env on a build machine for a signed
-release (see "Code signing & notarization" above).
+**The ritual is draft → owner smoke → publish.** The workflow never publishes: the owner downloads
+the draft's artifacts, runs the applicable "Manual pre-ship checklist" below (at minimum item 1 —
+the post-package smoke — plus an OCR run and model start/stop with no orphaned `llama-server`),
+then clicks **Publish**. A failed smoke → delete the draft, fix, re-tag. A bad build never becomes
+publicly linkable.
 
-**Triggers are self-contained and do not clash with `ci.yml`.** Each fires on `workflow_dispatch`
-**and** `push` to its own integration branch (`ci/mac-build` / `ci/win-build`) only — never on
-`pull_request` or `push: master`, so opening a PR or merging to `master` does **not** kick off a
-packaging build (only `ci.yml`'s green gate runs there). `workflow_dispatch` only becomes available
-once the workflow file is on the default branch; until then, pushing the integration branch is how
-you trigger a build. These run on **Node 24** (electron-builder ships its own pinned Electron
-runtime, so the newer host Node is fine) vs `ci.yml`'s Node 22.x.
+**Signing posture — staged, all via env secrets (no repo change when certs arrive):**
+
+| Stage | Secrets (GitHub Actions → the env `electron-builder.yml` reads) | Result |
+| --- | --- | --- |
+| 0 — now | none | unsigned `.exe` (SmartScreen "More info → Run anyway"), ad-hoc-signed `.app` (macOS 15+: System Settings → Privacy & Security → "Open Anyway"), `SHA256SUMS.txt` as the integrity floor — flows documented in [`troubleshooting.md`](troubleshooting.md) |
+| 1 — Apple | `CSC_LINK` / `CSC_KEY_PASSWORD` + `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` | Developer ID-signed + notarized `.app` (electron-builder auto-notarizes; `hardenedRuntime` + entitlements already wired). Also remove the `CSC_IDENTITY_AUTO_DISCOVERY: 'false'` line from `release.yml` |
+| 2 — Windows | `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` (OV/EV `.pfx` or Azure Trusted Signing via signtool env) | signed `.exe`; SmartScreen reputation builds |
+
+Non-clash with `ci.yml`: `release.yml` never fires on `pull_request`/`push: master` — only tags and
+manual dispatch. It runs on **Node 24** (electron-builder ships its own pinned Electron runtime)
+vs `ci.yml`'s Node 22.x, does **not** set the `ELECTRON_SKIP_BINARY_DOWNLOAD` knobs (packaging
+needs the binary), and installs with `npm ci` (lockfile-pinned — the CI half of hardening L-8).
 
 ## Manual pre-ship checklist (real hardware — not covered by CI)
 

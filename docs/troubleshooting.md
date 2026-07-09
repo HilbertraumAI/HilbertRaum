@@ -33,13 +33,31 @@ normal for any new app** and does not mean anything is wrong — it appears beca
 **macOS (Gatekeeper) — "cannot be opened because it is from an unidentified developer":**
 1. **Right-click** (or Control-click) the launcher / app, then choose **Open**.
 2. Click **Open** again in the dialog.
+3. **On newer macOS (Sequoia / macOS 15 and later)** the right-click → Open bypass no longer works:
+   open the app once (it will be blocked), then go to **System Settings → Privacy & Security**,
+   find the "HilbertRaum was blocked" entry, and click **"Open Anyway"**.
 
 You usually only have to do this **once** per computer. On a signed commercial drive these dialogs
 should not appear at all.
 
 > For a drive builder: signed (Windows) + signed & notarized (macOS) builds avoid these dialogs
 > entirely — see the signing section of [`packaging.md`](packaging.md). The steps above are the
-> fallback for an **unsigned** (DIY) build.
+> fallback for an **unsigned** (DIY or GitHub-release) build.
+
+---
+
+## I downloaded the app from GitHub — where are the models?
+
+A release download is **the app only**. It starts in **demo mode** (simulated placeholder answers)
+until the AI models are on your drive. Two ways to get them:
+
+- **In the app:** open **AI Model** and download a chat model there (each download asks first and
+  is SHA-256-verified). The embeddings model for document Q&A downloads the same way.
+- **Scripted:** run `prepare-drive --with-assets` from the repo (README step 2) to lay out a drive
+  with the default model set + the `llama.cpp` engine in one command.
+
+On **macOS**, keep the `.app` **zipped** when copying it onto an exFAT (USB) drive and extract it
+on the computer you run it from — exFAT cannot hold the symlinks inside a `.app` bundle.
 
 ---
 
