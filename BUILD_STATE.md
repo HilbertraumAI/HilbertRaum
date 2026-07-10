@@ -10,6 +10,50 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-11 — **Beta feedback issues #48 + #49 + #50 (stale model recommendations / 20–24 GB tier gap; lockfile peer-flag churn; reasoning models zero out the coverage-extract pass) — FIXED on local `master`.**_
+Three post-launch tester reports, each analyzed to root cause before any fix:
+- **#50 (the severe one — coverage-extract yields 0 items under reasoning models):** the ingest-time
+  extract pass already sends `enable_thinking: false` (omitted mode → balanced), but Qwen3.5 reasons
+  anyway; `DocTaskManager.generate` discards `reasoning_content` deltas, so a model that spends the
+  whole `EXTRACT_OUTPUT_TOKENS = 384` cap thinking collapses to `''` → `parseExtraction` → `null`,
+  and the temperature-0 "retry" was byte-identical — every chunk landed a permanent `unparsed`
+  marker (cache keyed on `(chunk_id, content_hash)` only; markers of any outcome were hits). Fix in
+  [`extract.ts`](apps/desktop/src/main/services/analysis/extract.ts): (1) the retry escalates to
+  `EXTRACT_RETRY_OUTPUT_TOKENS = 2048` (a cap, not a target — non-reasoning models never pay it);
+  (2) `parseExtraction({salvageTruncated})` recovers the complete leading items of a cap-truncated
+  array on the **final attempt only** (salvaging attempt 1 would commit a silently partial list as
+  a permanent `ok`); (3) an `unparsed` marker is **no longer a cache hit** — retried on the next
+  explicit "Build deep index" run (marker replaced by commitChunk's delete-then-insert; `ok` scans
+  stay 0-call; no schema change — pure query change); (4) an **empty** listing where ≥ half the
+  scanned sections are unparsed appends `analysis.listing.unparsedHint` (+ the bank-statement-skill
+  pointer for `amount`, EN+DE) instead of a bare "No amounts found". Record: rag-design **§14.5**
+  ("Reasoning-model hardening (#50)"). Note: tree-build was already guarded (its summary cache is
+  model-keyed and refuses to cache empty generations) — extract now matches that posture.
+- **#48 (model recommendations stale; "20–24 GB recommends nothing"):** precisely, a 20–24 GB
+  machine got the same 8B as 16 GB — every 12–14B winner carried `recommended_ram_gb: 32`, so the
+  comfortable-fit stage never reached the tier winner. Fixed the in-policy half (record:
+  model-benchmarks **§6.3**): honest comfortable-RAM recalibration (`gemma4-12b` + `qwen3-14b`
+  32→**24** — measured ~10.6 GiB RSS; `qwen3-8b` 32→**16** — 8.3 GiB, Ministral's tier) + a
+  **ranked-only guard** in `recommendModelIdByRam` (a rank-0 model is considered only when no
+  ranked model fits the stage — the §9 "never auto-recommend rank 0" invariant is now structural,
+  not RAM-line-alignment luck). Net mapping asserted at 8/12/16/20/24/32: ≤12 → Qwen3-4B, 16–20 →
+  Ministral, **≥24 → Gemma 4** (only 24 changed — every Phase-29 winner preserved). The rest of
+  #48 is NOT a rank edit and stays owner-gated per §9: run the grounded-QA eval + §9.1 b9849 smoke
+  for the six rank-0 Qwen3.5 manifests (§5 item 8; §9 now also names context length + thinking
+  support as first-class criteria, and the productizing bar for local-only candidates like a
+  Qwen3.6). Also closed the test gap: `committed-catalog.test.ts` wave invariants now cover all
+  six `qwen3.5-*` ids (the fast-tier 2B/0.8B had shipped outside them).
+- **#49 (package-lock.json always dirty after `npm install`):** unpinned npm — different npm
+  versions compute the lockfile `peer` flags differently. Verified the committed lockfile is
+  **canonical under npm 11.6.2** (`npm install --package-lock-only` → zero diff), so no
+  regeneration: pinned `"packageManager": "npm@11.6.2"` + `engines.npm: ">=11"` (advisory),
+  switched `setup-dev.{ps1,sh}` to **`npm ci`** (lockfile-exact, never rewrites — the dev half of
+  hardening L-8; CI already used it), documented `npm ci` as the standard fresh-clone/post-pull
+  install (README, CONTRIBUTING incl. the `git checkout -- package-lock.json && npm ci` unwedge,
+  CLAUDE.md, packaging.md), and pinned the discipline in `repo-hygiene.test.ts`.
+Suite: typecheck clean, **4037 tests pass** (47 skipped). Issue disposition: #49 + #50 commented +
+closed via API; **#48 commented but left OPEN** — its promotion half is the owner-gated §9 eval.
+
 _2026-07-10 — **full-audit 2026-07-10 close-out (Phase 14 of 14): §46 remediation ledger folded into architecture.md; open items registered; working papers deleted. THE ROUND IS COMPLETE.**_
 The 2026-07-10 full-audit + docs-audit round (43 finding ids — BE-1…BE-7, RD-1…RD-6, SC-1, PF-1…PF-8, TS-1…TS-9, DOC-101…DOC-112; 0 Critical) is closed. **Durable record:** new `architecture.md` **§46** ("Full audit (2026-07-10) — remediation ledger + close-out", after §45) — the per-finding disposition table (fixed@phase+commit / deferred / watch / superseded), the audit's headline clean verdicts (hard rules verified clean; every prior ledger residual re-verified accurate — carried PERF-5 is the one item the wave CLOSED, via PF-7c), and the §-anchor legend keeping every `full-audit 2026-07-10 <ID>` citation in commits/comments/tests resolvable. **§46 is the ONLY durable artifact of the round** — the three working papers (the full report, the docs-audit report, the remediation plan) were uncommitted for their whole life and are deleted at this close-out (plain `rm`, no git-history copy; finding detail survives in §46 + these dated entries + the phase commits `16ccbbc`…`19dfbc9`). **Open items registered where they belong:** §5 below gains item 7 — TS-3 (mechanical smoke-record release gate, owner design), TS-7 (macOS CI leg, owner call on minutes), TS-9 (S13a suggestion-bar ratification, owner D1), BE-1's deliberately unclamped `rag*` knobs, SC-1's owner-observed pin validation on the next tag/`workflow_dispatch` run; PF-5 is a watch clause on known-limitations' windowed-documents-list bullet (revisit with DB-8 at ~10k docs); PF-8 is folded into the architecture P4b deferral record (the residency axis joins the P4b design when its trigger fires); known-limitations' audit-log bullet de-staled in passing ("pruned on every insert" → slack-gated, PF-3). **Reference sweep clean:** no tracked file references the three working papers — the repo-wide grep hits are historical entries about OLDER, already-retired audits plus the owner's two launch papers (out of scope); phases 1–13's entries and code comments cite plain ids per the ground rules (verified). **Docs-audit verified complete:** DOC-101…DOC-111 Fixed; DOC-112 Superseded (resolves with the owner's launch close-out, which deletes the release-readiness paper). Also repaired in this file: the Phase-7 (PF-1/PF-2/PF-3) entry's missing dated header line; §5's embedded current-gate count 3956 → 4024. The owner's two launch papers (`docs/public-launch-plan.md`, `docs/release-readiness-2026-07-10.md`) stay untouched on disk pending the launch flip. Suite **4024/47** + typecheck green (docs-only close-out — count unchanged, as expected).
 
@@ -10874,8 +10918,18 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    - Watch-items **PF-5** (listDocuments load-all at ~10k docs — known-limitations, with DB-8) and
      **PF-8** (resident-cache RAM at the 1M-chunk bound — the architecture P4b deferral record)
      are recorded at those sites.
+8. **Qwen3.5 wave promotion eval (owner, offline — issue #48's open half; model-benchmarks §9/§9.1):**
+   run the grounded-QA eval harness (`tests/manual/model-eval.test.ts`, `HILBERTRAUM_MODEL_EVAL=<drive>`)
+   + the §9.1 b9849 manual smoke for the six rank-0 `qwen3.5-*` manifests (now incl. the fast-tier
+   2B/0.8B — no incumbent to displace, low-risk promotions), recording **context length + thinking
+   support** alongside QA/citations/speed (§9, issue #48 item 3); then promote winners via
+   `recommendation_rank` and give the 2B/0.8B their honest RAM lines (safe now — the §6.3
+   ranked-only guard removed the rank-0 capacity hijack those tier-aligned lines defended against).
+   The 20–24 GB tier gap half of #48 is already FIXED (§6.3, 2026-07-11). Candidates without a
+   shippable manifest (e.g. Qwen3.6 27B) additionally need productizing: `download:` block, real
+   upstream sha256, license review.
 
-**Current gate (2026-07-10, full-audit close-out): typecheck clean, 4024 tests pass (47 skipped —
+**Current gate (2026-07-11, issues #48/#49/#50 wave): typecheck clean, 4037 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

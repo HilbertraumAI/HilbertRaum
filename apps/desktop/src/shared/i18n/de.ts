@@ -637,6 +637,15 @@ export const de: Record<keyof typeof en, string> = {
     'zusammengefasst).',
   'analysis.listing.refPage': 'S. {n}',
   'analysis.listing.refSection': 'Abschnitt {n}',
+  // #50: eine leere Liste, in der die meisten Abschnitte nicht lesbar waren, ist fast immer
+  // ein fehlgeschlagener Extraktionslauf — aktiv sagen und den Weg zeigen (wie wholeDocHint).
+  'analysis.listing.unparsedHint':
+    '**Hinweis:** Die meisten Abschnitte konnten beim Indexieren dieses Dokuments nicht ' +
+    'gelesen werden — dieses Ergebnis ist daher unzuverlässig. Öffne „Dokumente" und führe ' +
+    '„Tiefenindex erstellen" erneut aus — nicht lesbare Abschnitte werden dabei erneut ' +
+    'versucht (ein größeres Modell hilft).',
+  'analysis.listing.unparsedHintAmountSkill':
+    'Für Kontoauszüge liest der Kontoauszug-Skill im Skill-Menü des Chats die Beträge exakt.',
   // #37/#38: der Router hat eine Frage zum ganzen Dokument erkannt (auflisten / zählen /
   // kategorisieren / Summe pro Kategorie), aber es gibt keinen Tiefenindex im Umfang — die
   // Antwort darunter stammt aus der Relevanzsuche. Das AKTIV sagen und den Weg zeigen — der

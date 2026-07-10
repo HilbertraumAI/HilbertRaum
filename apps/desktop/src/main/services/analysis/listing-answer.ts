@@ -77,7 +77,18 @@ export function buildListingAnswer(
   }
 
   if (listing.items.length === 0) {
-    return tr('analysis.listing.empty', headParams)
+    let answer = tr('analysis.listing.empty', headParams)
+    // #50: an empty listing where at least half the scanned sections were unreadable is far
+    // more likely a failed extract pass than a document with genuinely nothing to list. Say
+    // so ACTIVELY (the wholeDocHint precedent) and point at the fixes: re-running the deep
+    // index retries unreadable sections; for amounts the bank-statement skill reads exactly.
+    if (listing.unparsedChunks > 0 && listing.unparsedChunks * 2 >= listing.scannedChunks) {
+      answer += `\n\n${tr('analysis.listing.unparsedHint')}`
+      if (listing.recordType === 'amount') {
+        answer += ` ${tr('analysis.listing.unparsedHintAmountSkill')}`
+      }
+    }
+    return answer
   }
 
   // RAG-1 (backend audit 2026-06-27): the "across the whole document" wording requires BOTH the

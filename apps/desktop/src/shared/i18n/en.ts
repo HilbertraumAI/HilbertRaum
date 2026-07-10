@@ -626,6 +626,16 @@ export const en = {
     'model can miss an item, and very similar entries may be merged).',
   'analysis.listing.refPage': 'p. {n}',
   'analysis.listing.refSection': 'section {n}',
+  // #50: an empty listing dominated by unreadable sections is almost always a failed extract
+  // pass (e.g. a reasoning model at indexing time), not a document with nothing to list. Say
+  // so actively and point at the fix, like `analysis.wholeDocHint` does.
+  'analysis.listing.unparsedHint':
+    '**Heads-up:** most sections could not be read when this document was indexed, so this ' +
+    'result is unreliable. Open Documents and run "Build deep index" again — sections that ' +
+    'could not be read are retried (a larger model helps).',
+  'analysis.listing.unparsedHintAmountSkill':
+    'For a bank statement, the bank-statement skill in the chat’s skill menu reads the ' +
+    'amounts exactly.',
   // #37/#38: the router recognised a whole-document question (list / count / categorize /
   // sum per category) but no deep index exists in scope, so the answer below comes from
   // top-k retrieval. Say so ACTIVELY and point at the fix — the coverage fraction alone

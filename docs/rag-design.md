@@ -1307,7 +1307,20 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   obligation`), strict JSON-array prompt at temp 0, tolerant `parseExtraction` + retry-once, then an
   `unparsed` marker (the chunk is **surfaced, never dropped** — H7); same arbiter/cancel/lock discipline
   + per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` (H11); per-`(chunk_id, content_hash)` resume cache = **0**
-  calls on re-run. Gated on `fully_chunked` (C4). **User-triggered via "Build deep index", never
+  calls on re-run **for `ok` scans only**. Gated on `fully_chunked` (C4).
+  **Reasoning-model hardening (#50):** a reasoning model can spend the whole 384-token cap on
+  `reasoning_content` (the manager's `generate` discards reasoning deltas, and `enable_thinking:false`
+  is already sent but a template may ignore it), collapsing the reply to `''` — and at temp 0 an
+  identical retry is byte-identical. Three-part fix: (1) the retry escalates the cap
+  (`EXTRACT_RETRY_OUTPUT_TOKENS`, 2048 — a cap, not a target; non-reasoning models never pay it);
+  (2) on the **final attempt only**, `parseExtraction({salvageTruncated})` recovers the complete
+  leading `{type,value}` objects of a cap-truncated array (final-only, so a salvageable attempt 1
+  can't commit a silently partial list the escalated retry would have parsed whole); (3) an
+  `unparsed` marker is **not a cache hit** — the chunk is retried on the next explicit run (marker
+  replaced by `commitChunk`'s delete-then-insert, coverage accounting unchanged), so one bad model
+  run no longer poisons the document until re-import. An **empty** listing where ≥ half the scanned
+  sections are unparsed also appends `analysis.listing.unparsedHint` (+ the bank-statement-skill
+  pointer for `amount`) — the honest "No X found" was hiding a failed pass. **User-triggered via "Build deep index", never
   auto-enqueued at import** (issue #38 — as designed the pass was manual-only, but no UI ever started an
   `extract` task, so `extractAvailable` was false for every document and the coverage-extract branch was
   dead code). The row action now enqueues the tree with `params.withExtract`; on a **successful** tree

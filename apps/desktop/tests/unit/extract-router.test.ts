@@ -248,4 +248,42 @@ describe('parseExtraction — tolerant JSON-array parse (H7)', () => {
     expect(parseExtraction('I could not find anything useful.')).toBeNull()
     expect(parseExtraction('{not an array}')).toBeNull()
   })
+
+  // #50: a reply cut off at the token cap ends mid-object/mid-string. On the FINAL attempt the
+  // complete leading items are salvaged instead of writing off the whole chunk as unparsed.
+  describe('salvageTruncated (#50 — cap-truncated arrays, final attempt only)', () => {
+    const truncated =
+      '[{"type":"amount","value":"€ 12,90"},{"type":"amount","value":"€ 7,50"},{"type":"amo'
+
+    it('is OFF by default — a truncated array still returns null (attempt-1 contract)', () => {
+      expect(parseExtraction(truncated)).toBeNull()
+    })
+
+    it('recovers the complete leading items of a truncated array', () => {
+      expect(parseExtraction(truncated, { salvageTruncated: true })).toEqual([
+        { type: 'amount', value: '€ 12,90' },
+        { type: 'amount', value: '€ 7,50' }
+      ])
+    })
+
+    it('keeps a `}` inside a completed string value', () => {
+      const braceInValue = '[{"type":"generic","value":"a}b"},{"type":"date","value":"2026-07-'
+      expect(parseExtraction(braceInValue, { salvageTruncated: true })).toEqual([
+        { type: 'generic', value: 'a}b' }
+      ])
+    })
+
+    it('steps back past a `}` inside the UNTERMINATED trailing string', () => {
+      const cutMidString = '[{"type":"generic","value":"ok"},{"type":"generic","value":"cut}'
+      expect(parseExtraction(cutMidString, { salvageTruncated: true })).toEqual([
+        { type: 'generic', value: 'ok' }
+      ])
+    })
+
+    it('still returns null when not even one complete object exists', () => {
+      expect(parseExtraction('[{"type":"amount","value":"€ 12', { salvageTruncated: true })).toBeNull()
+      expect(parseExtraction('', { salvageTruncated: true })).toBeNull()
+      expect(parseExtraction('thinking… no array here', { salvageTruncated: true })).toBeNull()
+    })
+  })
 })

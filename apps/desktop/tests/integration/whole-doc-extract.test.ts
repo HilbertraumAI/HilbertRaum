@@ -219,6 +219,65 @@ describe('extract pass', () => {
     expect(markerCount()).toBe(n) // the re-commit replaced the chunk's marker — no doubling
   })
 
+  it('escalates the retry token cap so a reasoning model that burns the first budget still extracts [#50]', async () => {
+    // A reasoning model can spend the whole 384-token budget on reasoning_content: the
+    // manager's generate discards reasoning deltas, so attempt 1 collapses to ''. The retry
+    // must raise the cap — at temperature 0 an identical retry is byte-identical.
+    const id = await importText('Payment of € 12,90 to @@acme@@ on 2026-01-01.')
+    const budgets: Array<number | undefined> = []
+    const rt: ScriptedRuntime = {
+      ...extractRuntime(),
+      calls: 0,
+      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
+        rt.calls += 1
+        budgets.push(options?.maxTokens)
+        // All reasoning, no content at the small cap; room to answer at the escalated cap.
+        if ((options?.maxTokens ?? 0) <= 384) return
+        yield '[{"type":"party","value":"acme"}]'
+      }
+    }
+    const m = makeManager(rt)
+    expect((await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)).state).toBe('done')
+    expect(rt.calls).toBe(2)
+    expect(budgets[0]).toBe(384)
+    expect(budgets[1]).toBeGreaterThan(384) // the escalated retry cap
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
+    expect(listing.unparsedChunks).toBe(0) // the chunk parsed on the escalated attempt
+    expect(listing.items.map((i) => i.value)).toContain('acme')
+  })
+
+  it('an unparsed marker is NOT a cache hit — the next run retries the chunk [#50]', async () => {
+    const id = await importText('Once-broken chunk. @@BADJSON@@')
+    // Run 1: unparseable both attempts → unparsed marker (the poisoned state of #50).
+    const bad = extractRuntime()
+    const m1 = makeManager(bad)
+    await waitTerminal(m1, m1.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(aggregateExtractions(db, { documentIds: [id] }, 'party').unparsedChunks).toBe(1)
+
+    // Run 2 (e.g. after switching to a better model): the unparsed chunk is RETRIED, not
+    // skipped, and its marker is REPLACED by an ok scan with the extracted items.
+    const good: ScriptedRuntime = {
+      ...extractRuntime(),
+      calls: 0,
+      async *chatStream() {
+        good.calls += 1
+        yield '[{"type":"party","value":"alice"}]'
+      }
+    }
+    const m2 = makeManager(good)
+    await waitTerminal(m2, m2.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(good.calls).toBe(1) // the unparsed chunk was a cache MISS
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
+    expect(listing.unparsedChunks).toBe(0) // marker replaced, never doubled
+    expect(listing.scannedChunks).toBe(1)
+    expect(listing.items.map((i) => i.value)).toContain('alice')
+
+    // Run 3 over the now-ok chunk: back to a warm cache, 0 calls.
+    const m3 = makeManager(good)
+    await waitTerminal(m3, m3.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(good.calls).toBe(1)
+  })
+
   it('rolls back on an injected insert failure; the shared connection is not poisoned [H11]', async () => {
     const id = await importText('Body with @@alice@@ and @@bob@@.')
     let failOnce = true
@@ -350,6 +409,32 @@ describe('aggregateExtractions', () => {
     const answer = buildListingAnswer(db, listing, tr)
     expect(answer).toMatch(/sections scanned/)
     expect(answer).toMatch(/could not be read/)
+  })
+
+  it('an EMPTY listing dominated by unreadable sections carries the retry hint (+ skill hint for amounts) [#50]', async () => {
+    const id = await importText('@@BADJSON@@')
+    await extractOf(id)
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'amount')
+    expect(listing.items.length).toBe(0)
+    expect(listing.unparsedChunks).toBe(1)
+    const answer = buildListingAnswer(db, listing, tr)
+    expect(answer).toMatch(/Build deep index/) // points at the retry (unparsed is retryable now)
+    expect(answer).toMatch(/bank-statement skill/) // amounts → the exact-extraction skill
+    // A non-amount kind gets the retry hint but no bank-statement pointer.
+    const partyAnswer = buildListingAnswer(db, aggregateExtractions(db, { documentIds: [id] }, 'party'), tr)
+    expect(partyAnswer).toMatch(/Build deep index/)
+    expect(partyAnswer).not.toMatch(/bank-statement skill/)
+  })
+
+  it('an empty listing over READABLE sections stays a plain honest "none found" — no hint [#50]', async () => {
+    const id = await importText('Plain text with nothing to extract and no tokens.')
+    await extractOf(id)
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'amount')
+    expect(listing.items.length).toBe(0)
+    expect(listing.unparsedChunks).toBe(0)
+    const answer = buildListingAnswer(db, listing, tr)
+    expect(answer).not.toMatch(/Build deep index/)
+    expect(answer).not.toMatch(/bank-statement skill/)
   })
 
   it('re-index cascades away the old rows [H1] and marks the pass stale', async () => {
