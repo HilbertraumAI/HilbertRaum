@@ -46,6 +46,7 @@ export const de: Record<keyof typeof en, string> = {
     'App neu; wenn das öfter passiert, prüf ',
   'app.fatal.hintAfter': ' auf deinem Laufwerk und sieh in docs/troubleshooting.md nach.',
   'app.loadingWorkspace': 'Arbeitsbereich wird geladen…',
+  'app.loadingScreen': 'Wird geladen…',
 
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
   'errorBoundary.title': 'Auf diesem Bildschirm ist etwas schiefgelaufen',

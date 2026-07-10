@@ -204,6 +204,19 @@ only the electron-vite **output** format is a choice. As built:
   container during the (local, offline, few-ms) load — no blank flash. Tests render markdown
   synchronously: `vitest.config.ts` aliases `./AssistantMarkdownLazy` → the real component so render
   assertions don't have to await Suspense.
+- **Route-level code split (full-audit 2026-07-10 PF-6).** Six screens — Documents, Settings,
+  Models, Images, Skills, Translate — are `React.lazy` in `App.tsx`, each a separate async chunk
+  fetched on first navigation. Initial `index-*.js`: **1,255 kB → 998 kB (−20.5%)**; the split-out
+  chunks are DocumentsScreen 124 kB, SettingsScreen 41 kB, ModelsScreen 31 kB, ImagesScreen 27 kB,
+  SkillsScreen 24 kB, TranslateScreen 15 kB. Deliberately **eager**: the workspace gate + HomeScreen
+  (the first frame) and ChatScreen — Chat is the primary surface (first-run lands there), and
+  splitting it would pull the shared chat components out of the initial chunk, which this record
+  keeps as an explicitly separate decision (same for the two i18n catalogs, the other big initial
+  resident — unminifiable string tables). The suspense point is a quiet localized `.screen`
+  fallback inside the existing per-screen ErrorBoundary (a failed chunk import lands on the
+  boundary's localized retry fallback); `tests/renderer/LazyScreens.test.tsx` pins the
+  fallback → content sequence. The −30% aspiration of the finding is therefore not reached
+  screens-only; the remaining headroom is exactly those two exclusions.
 
 ## Preparing a drive — scripts
 

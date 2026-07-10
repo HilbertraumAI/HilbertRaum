@@ -30,6 +30,8 @@ export const en = {
     'keeps happening, check ',
   'app.fatal.hintAfter': ' on your drive and see docs/troubleshooting.md.',
   'app.loadingWorkspace': 'Loading workspace…',
+  // Suspense fallback while a lazy screen chunk loads (route-level code split, PF-6).
+  'app.loadingScreen': 'Loading…',
 
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
   // Per-screen fallback (the nav rail stays alive behind it). Calm, reassuring tone

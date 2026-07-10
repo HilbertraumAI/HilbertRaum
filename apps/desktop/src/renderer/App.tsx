@@ -1,13 +1,36 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { HomeScreen } from './screens/HomeScreen'
-import { SettingsScreen } from './screens/SettingsScreen'
-import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
-import { DocumentsScreen } from './screens/DocumentsScreen'
-import { TranslateScreen } from './screens/TranslateScreen'
-import { ImagesScreen } from './screens/ImagesScreen'
-import { SkillsScreen } from './screens/SkillsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
+
+// Route-level code split (full-audit 2026-07-10 PF-6). These six screens load as separate
+// async chunks on first navigation, keeping their code (and their exclusive deps — e.g.
+// pdfjs on Documents) out of the init bundle the modest-CPU target must parse before first
+// paint. Deliberately EAGER: the workspace gate + HomeScreen (the first frame) and
+// ChatScreen (the primary surface — first-run lands there, and its shared chat components
+// are used by several screens so splitting it would buy little). The i18n catalogs stay in
+// the init bundle by design — splitting them is a separate decision.
+// Each lazy screen suspends to the quiet fallback below, inside the existing per-screen
+// ErrorBoundary (a failed chunk load rejects the import and lands on the boundary's
+// localized fallback with retry).
+const DocumentsScreen = lazy(() =>
+  import('./screens/DocumentsScreen').then((m) => ({ default: m.DocumentsScreen }))
+)
+const TranslateScreen = lazy(() =>
+  import('./screens/TranslateScreen').then((m) => ({ default: m.TranslateScreen }))
+)
+const ImagesScreen = lazy(() =>
+  import('./screens/ImagesScreen').then((m) => ({ default: m.ImagesScreen }))
+)
+const ModelsScreen = lazy(() =>
+  import('./screens/ModelsScreen').then((m) => ({ default: m.ModelsScreen }))
+)
+const SettingsScreen = lazy(() =>
+  import('./screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen }))
+)
+const SkillsScreen = lazy(() =>
+  import('./screens/SkillsScreen').then((m) => ({ default: m.SkillsScreen }))
+)
 import {
   Banner,
   BrandMark,
@@ -307,24 +330,37 @@ function AppShell(): JSX.Element {
             />
           )}
         >
-          {screen === 'home' && <HomeScreen onNavigate={navigate} />}
-          {screen === 'chat' && (
-            <ChatScreen
-              onNavigate={navigate}
-              initialMode={chatMode}
-              initialScopeDocumentIds={chatScope}
-            />
-          )}
-          {screen === 'documents' && (
-            <DocumentsScreen onAskSelected={askSelectedDocuments} onNavigate={navigate} />
-          )}
-          {screen === 'translate' && <TranslateScreen onNavigate={navigate} />}
-          {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
-          {screen === 'models' && <ModelsScreen />}
-          {screen === 'skills' && <SkillsScreen />}
-          {screen === 'settings' && (
-            <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />
-          )}
+          {/* The suspense point for the lazy screens (PF-6): a quiet, theme-correct hint in
+              the same `.screen` container while a chunk loads off the local disk (a few ms,
+              once per screen per session — React caches the resolved module). No spinner:
+              guidelines §6 bans unlabeled spinners, and the text idiom matches
+              app.loadingWorkspace. */}
+          <Suspense
+            fallback={
+              <div className="screen" aria-busy="true">
+                <p className="hint">{t('app.loadingScreen')}</p>
+              </div>
+            }
+          >
+            {screen === 'home' && <HomeScreen onNavigate={navigate} />}
+            {screen === 'chat' && (
+              <ChatScreen
+                onNavigate={navigate}
+                initialMode={chatMode}
+                initialScopeDocumentIds={chatScope}
+              />
+            )}
+            {screen === 'documents' && (
+              <DocumentsScreen onAskSelected={askSelectedDocuments} onNavigate={navigate} />
+            )}
+            {screen === 'translate' && <TranslateScreen onNavigate={navigate} />}
+            {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
+            {screen === 'models' && <ModelsScreen />}
+            {screen === 'skills' && <SkillsScreen />}
+            {screen === 'settings' && (
+              <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />
+            )}
+          </Suspense>
         </ErrorBoundary>
       </main>
     </div>
