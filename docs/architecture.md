@@ -228,6 +228,12 @@ noted below.
   (compounding FE-1) or re-runs `groupByProject`/`groupConversations`.
 - **FE-4 — conversation rows memoized.** `ConvRow` (React.memo) with stable per-row callbacks, so
   opening one row's ⋯ menu (which flips the parent `menuOpenId`) no longer re-renders every row.
+- **Full-audit 2026-07-10 PF-1/PF-2/PF-3 — streaming + audit-log hot-path closures.**
+  `StreamAnnouncer`'s sentence-boundary scan starts at the previous announce point instead of
+  re-scanning the whole buffer per flush (byte-identical output, oracle-pinned); the live
+  context-meter word count advances incrementally per flushed chunk (exact-equivalence-pinned);
+  the audit-log prune is slack-gated + transactional over `idx_runtime_events_created` (see the
+  Audit log record).
 
 **Documents screen (`renderer/screens/DocumentsScreen.tsx`).**
 - **FE-2 — derivations memoized.** The render body — re-run on every 400 ms import poll and every
@@ -3042,8 +3048,12 @@ pinned build is a manual smoke (like the GPU/PAID harnesses).**
 `services/audit.ts` finally writes the spec §8 `runtime_events` table (created in Phase 1,
 unwritten until now): `recordEvent(db, type, message, metadata?)` (NEVER throws), a typed
 `AuditEventType` union (`shared/types.ts`), `listAuditEvents` (newest-first, `beforeId`
-cursor), and prune-on-insert retention to `AUDIT_MAX_ROWS = 5000` (**wave-1 decision D7** —
-fixed for wave 1; configurability is Office-edition admin surface). **For the user, not
+cursor), and retention to `AUDIT_MAX_ROWS = 5000` (**wave-1 decision D7** —
+fixed for wave 1; configurability is Office-edition admin surface). The prune is slack-gated
+(full-audit 2026-07-10 PF-3): an insert prunes back to the ceiling only once the table exceeds
+`AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK` (250), insert+prune in one transaction, ordered by the
+additive `idx_runtime_events_created` — readers never see the slack (`listAuditEvents` clamps
+to the ceiling). **For the user, not
 telemetry**: it lives in the workspace DB (encrypted at rest on encrypted workspaces) and
 is never uploaded. The app-wide recorder
 (`createAuditRecorder` → `AppContext.audit`, optional so partial test contexts stay valid) is

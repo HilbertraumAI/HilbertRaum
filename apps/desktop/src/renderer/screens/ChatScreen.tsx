@@ -68,10 +68,54 @@ type Mode = 'chat' | 'documents'
  * only has to be approximately right, never authoritative.
  */
 const LIVE_TOKENS_PER_WORD = 1.95
-function estimateLiveTokens(text: string): number {
-  const words = text.trim().split(/\s+/).filter(Boolean).length
+function liveTokensFromWords(words: number): number {
   if (words === 0) return 0
   return Math.ceil(words * LIVE_TOKENS_PER_WORD) + 8
+}
+function estimateLiveTokens(text: string): number {
+  return liveTokensFromWords(advanceWordTally(freshWordTally(), text))
+}
+
+/**
+ * Incremental word counter for the STREAMING answer (full audit 2026-07-10 PF-2): the old
+ * per-flush `text.trim().split(/\s+/).filter(Boolean).length` re-split the whole growing answer
+ * every ~40 ms (O(n²) per answer). The tally scans only the chars appended since the last flush;
+ * `endedInWord` carries the "did the previous chunk end mid-word" state across the chunk boundary
+ * so a word split across two flushes is still counted once. EXACTLY equivalent to the split-based
+ * count: both count the maximal /\s/-separated non-whitespace runs (pinned by the equivalence
+ * test in tests/renderer/live-token-estimate.test.tsx). Exported for that test.
+ */
+export interface LiveWordTally {
+  /** How many chars of the stream have been tallied. */
+  upTo: number
+  words: number
+  endedInWord: boolean
+}
+export function freshWordTally(): LiveWordTally {
+  return { upTo: 0, words: 0, endedInWord: false }
+}
+/**
+ * Advance `tally` over `text` (which must extend the previously tallied text — the streaming
+ * buffer only ever appends within a turn) and return the total word count. A SHORTER text is a
+ * new turn: the tally resets and re-scans from 0. Idempotent for an unchanged text, so re-running
+ * the memo below (other deps changed, StrictMode double-render) never double-counts.
+ */
+export function advanceWordTally(tally: LiveWordTally, text: string): number {
+  if (text.length < tally.upTo) {
+    tally.upTo = 0
+    tally.words = 0
+    tally.endedInWord = false
+  }
+  let { words, endedInWord } = tally
+  for (let i = tally.upTo; i < text.length; i++) {
+    const ws = /\s/.test(text[i]!)
+    if (!ws && !endedInWord) words++
+    endedInWord = !ws
+  }
+  tally.upTo = text.length
+  tally.words = words
+  tally.endedInWord = endedInWord
+  return words
 }
 
 /** localStorage key for the conversation-list collapse (a UI preference, not user data). */
@@ -786,20 +830,29 @@ export function ChatScreen({
   // turn + a running estimate of the streaming answer on top of the resting read, so the bar climbs
   // as the answer grows (and warns before it overflows). Off-stream it is just the resting value; on
   // completion the resting read is reconciled from the main process (the `finally` above).
+  // PF-2 (full audit 2026-07-10): the streaming answer's word count advances incrementally per
+  // flushed chunk instead of re-splitting the whole answer per flush. The tally lives in a ref
+  // and is advanced inside the memo — safe because `streamText` only ever appends within a turn
+  // (reset to '' between turns, which the shorter-text check inside advanceWordTally converts
+  // into a tally reset) and advancing is idempotent for an unchanged text.
+  const streamWordTallyRef = useRef<LiveWordTally>(freshWordTally())
   const liveUsage = useMemo<ContextUsage | null>(() => {
     const streamingHere = busyStreaming && streamConvId === activeId
+    const answerTokens = streamingHere
+      ? liveTokensFromWords(advanceWordTally(streamWordTallyRef.current, streamText))
+      : 0
     // The main process reported the REAL assembled prompt (incl. a document turn's injected
     // excerpt block): it already contains the user turn + fence + history, so only the streaming
     // answer estimate rides on top — never `liveUserTokens` (that would double-count the question).
     if (streamingHere && streamUsage) {
       return {
-        usedTokens: streamUsage.usedTokens + estimateLiveTokens(streamText),
+        usedTokens: streamUsage.usedTokens + answerTokens,
         window: streamUsage.window
       }
     }
     if (!contextUsage) return null
     if (!streamingHere) return contextUsage
-    const extra = liveUserTokens + estimateLiveTokens(streamText)
+    const extra = liveUserTokens + answerTokens
     return { ...contextUsage, usedTokens: contextUsage.usedTokens + extra }
   }, [contextUsage, busyStreaming, streamConvId, activeId, liveUserTokens, streamText, streamUsage])
 

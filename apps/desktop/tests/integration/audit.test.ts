@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   AUDIT_MAX_ROWS,
+  AUDIT_PRUNE_SLACK,
   createAuditRecorder,
   listAuditEvents,
   pruneAuditEvents,
@@ -71,7 +72,7 @@ describe('recordEvent / listAuditEvents', () => {
   })
 })
 
-describe('retention (decision D7: fixed AUDIT_MAX_ROWS, pruned on insert)', () => {
+describe('retention (decision D7 / PF-3: fixed AUDIT_MAX_ROWS, slack-gated prune on insert)', () => {
   it('pruneAuditEvents keeps only the newest maxRows', () => {
     const db = freshDb()
     for (let i = 1; i <= 12; i++) recordEvent(db, 'model_selected', `event ${i}`, undefined, at(i))
@@ -81,20 +82,54 @@ describe('retention (decision D7: fixed AUDIT_MAX_ROWS, pruned on insert)', () =
     expect(events[events.length - 1].message).toBe('event 3') // 1 and 2 pruned
   })
 
-  it('recordEvent prunes to the 5000-row ceiling on insert', () => {
+  // PF-3 (full audit 2026-07-10): the prune no longer runs on EVERY insert (a full-scan DELETE +
+  // a second auto-commit fsync per event). recordEvent lets the table drift up to
+  // AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK, then prunes back to AUDIT_MAX_ROWS in one transaction
+  // with the triggering insert.
+  it('recordEvent prunes back to the ceiling once an insert crosses ceiling + slack', () => {
     const db = freshDb()
-    // Seed past the ceiling with raw inserts (recordEvent would prune as it goes).
+    // Seed exactly to the threshold with raw inserts (recordEvent would prune as it goes).
     const insert = db.prepare(
       'INSERT INTO runtime_events (id, event_type, message, metadata_json, created_at) VALUES (?, ?, ?, NULL, ?)'
     )
-    for (let i = 0; i < AUDIT_MAX_ROWS + 10; i++) {
+    const threshold = AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK
+    for (let i = 0; i < threshold; i++) {
       insert.run(`seed-${i}`, 'model_selected', `seed ${i}`, at(i))
     }
-    recordEvent(db, 'runtime_started', 'the newest event', undefined, at(AUDIT_MAX_ROWS + 11))
+    recordEvent(db, 'runtime_started', 'the newest event', undefined, at(threshold))
     const count = db.prepare('SELECT COUNT(*) AS n FROM runtime_events').get() as { n: number }
     expect(count.n).toBe(AUDIT_MAX_ROWS)
-    // The newest survive — including the event that triggered the prune.
-    expect(listAuditEvents(db, { limit: 1 })[0].message).toBe('the newest event')
+    // Ordering preserved: the newest survive — including the event that triggered the prune —
+    // and the oldest were the ones dropped.
+    const events = listAuditEvents(db, { limit: AUDIT_MAX_ROWS })
+    expect(events[0].message).toBe('the newest event')
+    expect(events[events.length - 1].message).toBe(`seed ${threshold - AUDIT_MAX_ROWS + 1}`)
+  })
+
+  it('below the slack threshold recordEvent inserts WITHOUT pruning (bounded overshoot)', () => {
+    const db = freshDb()
+    const insert = db.prepare(
+      'INSERT INTO runtime_events (id, event_type, message, metadata_json, created_at) VALUES (?, ?, ?, NULL, ?)'
+    )
+    // One short of triggering: post-insert count == threshold, prune requires strictly greater.
+    for (let i = 0; i < AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK - 1; i++) {
+      insert.run(`seed-${i}`, 'model_selected', `seed ${i}`, at(i))
+    }
+    recordEvent(db, 'model_selected', 'still within slack', undefined, at(AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK))
+    const count = db.prepare('SELECT COUNT(*) AS n FROM runtime_events').get() as { n: number }
+    expect(count.n).toBe(AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK)
+    // The next insert crosses the threshold and converges back to the cap.
+    recordEvent(db, 'model_selected', 'crosses threshold', undefined, at(AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK + 1))
+    const after = db.prepare('SELECT COUNT(*) AS n FROM runtime_events').get() as { n: number }
+    expect(after.n).toBe(AUDIT_MAX_ROWS)
+  })
+
+  it('idx_runtime_events_created exists (by NAME via sqlite_master — the prune/order index)', () => {
+    const db = freshDb()
+    const row = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get('idx_runtime_events_created') as { name: string } | undefined
+    expect(row?.name).toBe('idx_runtime_events_created')
   })
 })
 

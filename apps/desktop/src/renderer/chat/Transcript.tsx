@@ -459,7 +459,7 @@ export function StreamAnnouncer({ text }: { text: string }): JSX.Element {
     }
     // Prefer the last completed-sentence boundary; if none is new, fall back to a word boundary once
     // the unannounced tail is long enough (F6) so a terminator-less answer isn't held silent.
-    let boundary = lastSentenceBoundary(text)
+    let boundary = lastSentenceBoundary(text, announcedLenRef.current)
     if (boundary <= announcedLenRef.current) {
       if (text.length - announcedLenRef.current < ANNOUNCE_SOFT_CAP) return
       boundary = lastWordBoundary(text, announcedLenRef.current)
@@ -493,11 +493,30 @@ function lastWordBoundary(text: string, from: number): number {
   return text.length
 }
 
-/** Index just past the last sentence terminator (. ! ? … or newline); 0 if none yet. */
-function lastSentenceBoundary(text: string): number {
+/**
+ * Index just past the last sentence terminator (. ! ? … or newline); 0 if none at/after `from`.
+ *
+ * Streaming hot path (full audit 2026-07-10 PF-1): this runs on every ~40 ms stream flush,
+ * so it scans only from the previous announce point instead of the whole growing buffer (which
+ * made a long answer O(n²)). That is safe by definition: a NEW sentence boundary can only appear
+ * at/after the previous announce point — the effect above ignores any boundary at or before it
+ * (`boundary <= announcedLenRef.current` falls through to the F6 fallback either way), so matches
+ * entirely before `from` never change the outcome. To stay byte-identical with a whole-buffer
+ * scan, the tail scan must NOT start exactly at `from`: a match can span the announce point
+ * (`\n` is both whitespace — a valid F6 word boundary — and a terminator, and the closing-quote
+ * run extends a match), and text appended later can retroactively grow a match whose
+ * end-of-string lookahead used to hold. Every character of such a spanning match before `from`
+ * is in the terminator/closing-quote class, so backing up over that contiguous class run lands
+ * at (or before) the match start, where the scanners provably re-synchronize: no match crosses a
+ * non-class character.
+ */
+function lastSentenceBoundary(text: string, from: number): number {
+  let start = from
+  while (start > 0 && /[.!?…\n"')\]]/.test(text[start - 1]!)) start--
   // Match a terminator optionally followed by closing quotes/brackets then whitespace
   // or end-of-string — the last such match is our boundary.
   const re = /[.!?…\n]+["')\]]*(?=\s|$)/g
+  re.lastIndex = start
   let last = 0
   let m: RegExpExecArray | null
   while ((m = re.exec(text)) !== null) last = m.index + m[0].length

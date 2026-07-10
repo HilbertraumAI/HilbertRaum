@@ -20,18 +20,30 @@ import type { AuditEvent, AuditEventType } from '../../shared/types'
 //   activity-log.json export — so a documentId, not its title, goes on record. Enforced
 //   by review at the call sites + the sentinel-grep test in
 //   tests/integration/audit-ipc.test.ts (the filename basename is now a grepped sentinel).
-// - Retention: the table is pruned to the newest `AUDIT_MAX_ROWS` rows on every insert
-//   — bounded table, no vacuum ceremony.
+// - Retention: the table is pruned back to the newest `AUDIT_MAX_ROWS` rows once an insert
+//   pushes it past `AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK` (PF-3, full audit 2026-07-10 — a
+//   bounded overshoot instead of a DELETE + second fsync per event) — bounded table, no
+//   vacuum ceremony. Readers never see the slack: `listAuditEvents` pages newest-first and
+//   clamps `limit` to AUDIT_MAX_ROWS.
 
 /** Fixed retention ceiling — deliberately not configurable in this edition. */
 export const AUDIT_MAX_ROWS = 5000
+
+/**
+ * PF-3: how far past the ceiling the table may drift before `recordEvent` prunes. Keeps the
+ * common insert a single statement (the COUNT is a cheap index-only scan over
+ * idx_runtime_events_created); when the threshold is crossed, insert + prune run in ONE
+ * transaction (one commit, not two auto-commit fsyncs).
+ */
+export const AUDIT_PRUNE_SLACK = 250
 
 /** Newest-first ordering: ISO-8601 `created_at`, with rowid breaking equal-ms ties. */
 const NEWEST_FIRST = 'ORDER BY created_at DESC, rowid DESC'
 
 /**
- * Drop everything older than the newest `maxRows` events. Exported for tests; callers
- * normally rely on `recordEvent` doing this per insert.
+ * Drop everything older than the newest `maxRows` events (an ordered scan over
+ * idx_runtime_events_created, not a full-table sort). Exported for tests; callers normally
+ * rely on `recordEvent` doing this once the table drifts past the slack threshold.
  */
 export function pruneAuditEvents(db: Db, maxRows: number = AUDIT_MAX_ROWS): void {
   db.prepare(
@@ -41,8 +53,9 @@ export function pruneAuditEvents(db: Db, maxRows: number = AUDIT_MAX_ROWS): void
 }
 
 /**
- * Record one audit event and prune to the retention ceiling. Returns false (and stays
- * silent) on ANY failure — auditing must never break the operation it records.
+ * Record one audit event, pruning back to the retention ceiling once the table exceeds
+ * ceiling + slack (PF-3 — not on every insert). Returns false (and stays silent) on ANY
+ * failure — auditing must never break the operation it records.
  */
 export function recordEvent(
   db: Db,
@@ -52,11 +65,33 @@ export function recordEvent(
   createdAt: string = new Date().toISOString()
 ): boolean {
   try {
-    db.prepare(
+    const insert = db.prepare(
       `INSERT INTO runtime_events (id, event_type, message, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?)`
-    ).run(randomUUID(), type, message, metadata ? JSON.stringify(metadata) : null, createdAt)
-    pruneAuditEvents(db)
+    )
+    const params = [
+      randomUUID(),
+      type,
+      message,
+      metadata ? JSON.stringify(metadata) : null,
+      createdAt
+    ] as const
+    const { n } = db.prepare('SELECT COUNT(*) AS n FROM runtime_events').get() as { n: number }
+    if (n + 1 > AUDIT_MAX_ROWS + AUDIT_PRUNE_SLACK) {
+      // Insert + prune as ONE transaction — one commit fsync, and the prune can never land
+      // without its triggering insert.
+      db.exec('BEGIN')
+      try {
+        insert.run(...params)
+        pruneAuditEvents(db)
+        db.exec('COMMIT')
+      } catch (err) {
+        db.exec('ROLLBACK')
+        throw err // → the outer catch; the never-throws contract stays at recordEvent's edge
+      }
+    } else {
+      insert.run(...params)
+    }
     return true
   } catch {
     return false

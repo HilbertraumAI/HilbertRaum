@@ -887,6 +887,13 @@ export function openDatabase(path: string): Db {
     // content_hash tiebreak within an identical created_at).
     'CREATE INDEX IF NOT EXISTS idx_summary_cache_created ON summary_cache(created_at);'
   )
+  db.exec(
+    // PF-3 (full audit 2026-07-10): the audit-log retention prune orders runtime_events by
+    // created_at (audit.ts pruneAuditEvents); the table's only prior key was the TEXT PK, so
+    // every prune full-scanned + temp-B-tree-sorted the table. Same additive ensure-on-open
+    // idiom as idx_summary_cache_created above, so it applies to existing workspaces too.
+    'CREATE INDEX IF NOT EXISTS idx_runtime_events_created ON runtime_events(created_at);'
+  )
   // run_id indexes (DB-7) deliberately OMITTED: run_id is only ever INSERTed, never joined or
   // filtered anywhere in the codebase, so an index would be pure write-amplification on USB with
   // no read benefit. Add one alongside the first query that joins on run_id.
