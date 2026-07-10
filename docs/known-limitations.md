@@ -591,7 +591,11 @@ password recovery — are documented in
   are the intended way to locate a document by name/attribute. Windowing engages only when a real scroll
   viewport is laid out — with none (e.g. a unit test rendering the screen standalone) the list renders every
   row. The trade-off is **deliberately not** applied to the chat transcript (its scroll-to-bottom /
-  find-in-page / StreamAnnouncer behavior keeps it un-windowed for now).
+  find-in-page / StreamAnnouncer behavior keeps it un-windowed for now). Windowing bounds the DOM
+  only, not the payload: the backend `listDocuments` still loads and ships the whole library per
+  refresh (no LIMIT, unindexed `created_at` sort) — fine at ≤~1k documents, a multi-MB IPC payload
+  at ~10k; revisit together with the `ocr_json` projection migration (the recorded DB-8 residual)
+  if a library approaches that scale (full-audit 2026-07-10 PF-5, watch-item).
 - **Chat "Try again" optimistically drops the last answer before regenerating; it self-heals, never
   data loss (accepted).** `ChatScreen.onTryAgain` slices the last
   assistant turn from the view before calling `stream(...)`, so the regenerate looks immediate. If the
@@ -628,7 +632,8 @@ password recovery — are documented in
 - **Audit log accepted edges:** events recorded while the vault is locked are
   buffered in memory only — quitting the app before the next unlock drops them (bounded buffer,
   oldest dropped past 100). The **persisted** audit log is also capped (`AUDIT_MAX_ROWS = 5000`,
-  pruned on every insert), so on a very active workspace the oldest events fall off over time.
+  pruned back to the cap once a small slack above it is exceeded — full-audit 2026-07-10 PF-3), so
+  on a very active workspace the oldest events fall off over time.
   Lock-on-**quit** and the implicit stop during a model *switch* are
   not audited (only the explicit "Lock now" / stop actions are). A download that completes
   against a placeholder manifest hash records no `model_download_verified` event (checksum

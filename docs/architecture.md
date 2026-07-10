@@ -671,7 +671,11 @@ drive) still blocks — the narrowed remaining D15 cliff.
   (`SharedArrayBuffer` for the vectors, a second read-only DB handle or id-set hand-off, abort/cancel,
   writer-race avoidance) — all of which must stay offline. **Trigger:** a representative corpus measures
   the cached main-thread scan over ~100 ms routinely. The resident cache is the substrate a worker
-  would scan via `SharedArrayBuffer`, so P4a is also P4b's groundwork.
+  would scan via `SharedArrayBuffer`, so P4a is also P4b's groundwork. When the trigger fires, the
+  P4b design must also cover **residency**, not just blocking: at the 1M-chunk bound the Float32
+  vectors are ~1.5 GB (~1.8 GB resident with Map overhead), and a worker scan alone does not fix
+  that — only a quantized/disk-resident scheme would (full-audit 2026-07-10 PF-8; no action at
+  realistic corpora ≤~10k chunks).
 - **P4c (ANN — sqlite-vec / pure-JS HNSW).** sqlite-vec is a **native loadable SQLite extension**, which
   is against the no-native-build / portable cross-OS packaging posture that put the embedder in a
   llama.cpp sidecar rather than `onnxruntime-node` (D15's reasoning). Not adopted; a pure-JS HNSW would
@@ -6751,6 +6755,89 @@ Report + plan retired: `git rm docs/chat-docs-audit-2026-07-07.md docs/chat-docs
 live there, and in the seven `BUILD_STATE.md` Session entries dated 2026-07-07/08). This ledger is the
 durable index; the only open item is the owner push of the whole unpushed local-`master` wave (Sessions
 1–7).
+
+### §46 Full audit (2026-07-10) — remediation ledger + close-out
+
+A five-pass full audit (backend correctness · renderer · security/supply-chain · performance · test
+suite, baseline `fa846cf` = the v0.1.46 bump, suite 3956/47) plus a parallel documentation audit swept
+the whole repo. It found **0 Critical**: one High code finding (BE-3) and two High doc findings
+(DOC-101/102) over a Medium/Low tail — **BE-1…BE-7 · RD-1…RD-6 · SC-1 · PF-1…PF-8 · TS-1…TS-9 ·
+DOC-101…DOC-112** (43 ids). Remediated across a **14-phase wave committed directly to `master`**
+(P1 `16ccbbc` → P13 `19dfbc9`; P14 = this close-out), suite **3956 → 4024/47**, typecheck + build
+green throughout. The audit's headline negative results are worth recording: **the hard rules
+verified clean** — every `fetch`/`net` site is a loopback sidecar client or the single gated
+downloader, the offline guard is intact, no telemetry/analytics/crash-reporting anywhere in the
+dependency tree, and the Electron hardening + S1 log policy hold. And **every prior ledger residual
+re-verified accurate** — PERF-2/PERF-5B, the P4b/P4c triggers (still unmet), the DB-5 decline, DB-8,
+the E5-prefix ceiling and the §26/§34/§40 carried items all still match their recorded rationale
+(carried PERF-5 is the one item this wave CLOSED, via PF-7c).
+
+**This record is the only durable artifact of the round.** Unlike prior audits, the full report, the
+docs-audit report, and the remediation plan were **uncommitted working papers for their whole life
+and were deleted (plain `rm`, never tracked) at this close-out — there is no recoverable copy in git
+history.** Finding detail survives as: this table, the dated 2026-07-10 `BUILD_STATE.md` phase
+entries, and the phase commits.
+
+Per-finding disposition (fixed → phase@commit / deferred·watch → where registered):
+
+| # | Sev | Phase | Disposition (decision / mechanism) |
+|---|---|---|---|
+| **BE-1** | MED | P2 `7a1b61a` | **fixed** — settings write-gate holes closed: `null` rejected unless the key's default is null (a `{checksumCache: null}` patch used to brick every checksum reader until row repair), the five null-default keys shape-checked when non-null (bounded strings for ids/`gpuLastError`, plain objects for `lastBenchmark`/`gpuProbe`), `registerCoreIpc` rejects a null/non-object patch up front with friendly copy, and the hash-store reader degrades a pre-fix corrupted row to a cache miss. The `rag*` numeric knobs stay deliberately unclamped (open item, BUILD_STATE §5). |
+| **BE-2** | MED | P3 `57d205b` | **fixed** — download jobs no longer pin a raw DB handle across a multi-hour run (a workspace lock used to flip a COMPLETED download to `failed`, losing the #40 activation + the audit event): checksum-cache faults can't change job outcome, and `createSettingsHashStore` takes a live-handle **getter** with an in-memory degrade. Recorded policy: **downloads keep running through a workspace lock** (weights live outside the vault). |
+| **BE-3** | HIGH | P1 `16ccbbc` | **fixed** — German COVERAGE/SUMMARY/COMPARE router regexes: verb stems sat behind a trailing `\b` (never matched inflections — "Auflistung", "Zusammenfassung", "Vergleiche") and ASCII `\b` never matched before "Überblick", so realistic German list/count questions silently took top-k partials and the #38 deep-index hint never fired. Stems now follow `AGGREGATION_RE`'s documented rule (leading `\b` only); inflected-DE table + EN byte-identical controls pin it. |
+| **BE-4** | LOW | P3 `57d205b` | **fixed** — `cancel()` also acts in `verifying` (the minutes-long SHA-256 over a multi-GB weight was silently uncancellable and a two-file job started its next file); abort re-checked after the hash and between tasks; `.part`-retention/resume contracts unchanged. |
+| **BE-5** | LOW | P4 `47a9e62` | **fixed** — the no-runtime `getContextTokens` fallback now mirrors the next start's real precedence through the ONE shared `launchContextTokens(settings, manifest)` helper, so `maybeEnqueueTreeBuild` plans against the actual 32k+ window instead of the legacy 4096. |
+| **BE-6** | LOW | P4 `47a9e62` | **fixed** — `buildTree` also yields at the top of each level (the in-level yield skipped every level's LAST node, making the chat-slot worst case ≈ two nodes vs the documented "≈ one"); hoisted outside the #41 re-pack retry so a retry can't double-yield; arbiter test pins the level-boundary park. |
+| **BE-7** | LOW | P3 `57d205b` | **fixed** — `onModelInstalled` also replaces a `startFailed`-latched translator (new `isStartFailed()`; a latched instance is lazy/dead, no child to orphan), unblocking the delete-and-re-download repair without a restart; the never-replace-a-LIVE-sidecar rule holds. |
+| **RD-1** | MED | P8 `b7d93e8` | **fixed** — first send of a just-created conversation: a racing `listMessages` used to resolve `[]` after the optimistic append and wipe the user's bubble for the whole first answer; the history load now skips exactly one fetch for a conversation id this instance just created (characterization test written first, watched fail). |
+| **RD-2** | LOW | P8 `b7d93e8` | **fixed** — `SkillRunTarget.name` is `string \| null` (placeholder applied at render time), so `confirmFormatKey` genuinely falls back to the output-matrix line for an unresolved target instead of asserting ".txt" for a possibly-`.docx` source. |
+| **RD-3** | LOW | P8 `b7d93e8` | **fixed** — `recommendedContextTokens` locale-formatted at the second Models site; DE `models.tech.contextValue` "Tokens" → "Token". |
+| **RD-4** | LOW | P8 `b7d93e8` | **fixed** — a non-preset `contextTokensOverride` renders a synthetic selected `<option>` so the context-size select never shows blank. |
+| **RD-5** | LOW | P8 `b7d93e8` | **fixed** — the ModelsScreen mount-refresh `.catch` gains the file's one missing `mountedRef` guard (FE-4 discipline). |
+| **RD-6** | LOW | P8 `b7d93e8` | **fixed** — `confirmTool` is cleared once its tool leaves `runnableTools`, so a pending confirm can't outlive its offer row and re-open (teeth revert-confirmed). |
+| **SC-1** | LOW | P13 `19dfbc9` | **fixed + watch** — all five third-party actions in `release.yml`/`ci.yml` SHA-pinned from their exact tags (+ `# vX.Y.Z` comments), the repo's `cla.yml` idiom; no other workflow semantics changed. **Watch: owner-observed validation on the next tag/`workflow_dispatch` run** (the packaging tests don't execute workflows). |
+| **PF-1** | MED | P7 `01ae6be` | **fixed** — the StreamAnnouncer sentence-boundary scan starts at the previous announce point (with a terminator-class backup that provably re-syncs) instead of index 0 per ~40 ms flush — O(n²) → O(n) per answer; a 300-flush oracle test pins byte-identical announcements against the old whole-buffer implementation. |
+| **PF-2** | LOW-MED | P7 `01ae6be` | **fixed** — the live word meter advances incrementally per flushed chunk (`endedInWord` carries mid-word chunk boundaries) instead of re-splitting the whole growing answer; equivalence-tested per-flush against the old `split`-based count. |
+| **PF-3** | LOW-MED | P7 `01ae6be` | **fixed** — `idx_runtime_events_created` added on the ensure-on-open path; the audit-log prune is slack-gated (`AUDIT_MAX_ROWS` 5000 + 250, prune back to the cap) and runs in ONE transaction with its insert; `recordEvent`'s never-throws contract kept. |
+| **PF-4** | LOW | P11 `c453f6d` | **fixed** — ONE manifest walk+parse per `composeServices` pass feeds all role resolvers (was five synchronous walks in `initBackend` before the window exists); deliberately NO stateful cache — per-action IPC callers stay fresh (real-discovery walk-count test). |
+| **PF-5** | LOW | — | **watch-item** — `listDocuments` is load-all with an unindexed `created_at` sort; fine at ≤~1k documents, multi-MB IPC payload at ~10k. Registered in `known-limitations.md` (documents-list bullet); revisit together with the DB-8 `ocr_json` projection migration when a library approaches that scale. |
+| **PF-6** | LOW | P12 `46d14ec` | **fixed (−20.5%)** — six screens route-level lazy behind the per-screen ErrorBoundary (Documents/Settings/Models/Images/Skills/Translate); init bundle 1,255 → 998 kB. The audit's −30% aspiration is unreachable screens-only: Chat stays deliberately eager (lazy Chat would de-facto split the shared chat components) and the ~290 kB i18n catalogs are excluded by design — both reserved as separate decisions. |
+| **PF-7** | LOW | P11 `c453f6d` | **fixed (a–d)** — (a) Home runtime poll gates on value change + stops once running (focus re-arm); (b) doctasks store ports the `sameRun`-style no-change gate; (c) visionSession batches token notifies through a 40 ms flush + the `useEventCallback` sweep over ImagesScreen handlers — **closes carried-forward PERF-5** (2026-06-30 ledger row marked); (d) ScopePopover memoizes its list derivations. |
+| **PF-8** | LOW | — | **watch-item** — the resident vector cache at the 1M-chunk bound is a RAM problem (~1.8 GB resident), not just scan time; the P4b worker fixes blocking, not residency. Folded into the P4b deferral record (above) so the residency axis is part of the P4b design when its ">100 ms routinely" trigger fires. |
+| **TS-1** | MED | P10 `9f044d8` | **fixed** — fixed-sleep sweep: the six remaining raw sleep sync points converted to deterministic gates (`reached()` probes, `seenSignal` polls, a positive-control sentinel, an empty-`act` flush); every surviving sleep comment-justified; full suite run 3× — zero flakes; CONTRIBUTING gains the no-fixed-sleeps rule. |
+| **TS-2** | MED | P9 `d6846d1` | **fixed** — webPreferences flags, prod/dev CSP, and the window-open policy extracted verbatim to `window-security.ts` and pin-tested by name/value (a deliberate `sandbox: false` reddens — verified + reverted); a source-level scan keeps the literals from being re-inlined at the call sites. |
+| **TS-3** | MED | — | **deferred → owner design** — the real-model quality gate is human-remembered (opt-in `HILBERTRAUM_*` runs), not mechanical; the proposed release-workflow smoke-record gate (fail unless a smoke record is newer than the last model/runtime-affecting commit) needs the owner's design call. Registered in BUILD_STATE §5. |
+| **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes opt-in `assertNoUnexpectedApiCalls()`; renderer-tier sweep found zero fresh-spy reliance. |
+| **TS-5** | LOW | P9 `d6846d1` | **fixed** — EXPLAIN QUERY PLAN assertions match index NAMES, never planner phrasing (the Node-pinned-SQLite coupling is commented); the teeth counterfactuals kept. |
+| **TS-6** | LOW | P13 `19dfbc9` | **fixed** — optional `test:coverage` (v8 provider, `@vitest/coverage-v8` devDep) + root passthrough; deliberately not CI-wired, no threshold; `coverage/` gitignored; documented in CONTRIBUTING. |
+| **TS-7** | LOW | — | **deferred → owner call** — no macOS CI leg despite first-class macOS support and a history of cross-platform path bugs; a `macos-latest` entry is cheap (the suite is offline and Electron-binary-free) but costs CI minutes. Registered in BUILD_STATE §5. |
+| **TS-8** | LOW | P13 `19dfbc9` | **fixed** — the screenshot harness polls a per-case READY condition (fonts + per-case selector + brand-`img` complete) with the old 1.8 s/4.5 s settles kept as timeout ceilings; 11-case walk 19.3 s, captures verified. |
+| **TS-9** | LOW | — | **known-open (registered)** — the S13a suggestion-selector eval tier measures and prints its baseline without a hard bar (ratification pending owner D1); the AUTO-FIRE precision bar IS a live CI gate. Registered in BUILD_STATE §5 so it doesn't silently become permanent. |
+| **DOC-101** | HIGH | P5 `0fba6d0` | **fixed** — the 2026-07-01 download-posture flip propagated to the four lagging docs (model-policy's canonical gate section, packaging, troubleshooting, user-guide ×3) + one architecture clause + the `policy.ts` comments; duplicated gate re-tellings replaced by pointers to the canonical model-policy section. |
+| **DOC-102** | HIGH | P5 `0fba6d0` | **fixed** — user-guide §7 "ten" translation languages → **51** (defers to §7a's list). |
+| **DOC-103** | MED | P5 `0fba6d0` | **fixed** — Translate activates as soon as the download finishes (#40); the transcriber/reranker/embedder restart requirement is now stated instead. |
+| **DOC-104** | MED | P5 `0fba6d0` | **fixed** — "local logs are not encrypted" corrected: the diagnostics log is `app.log.enc` under the vault key; model files are public weights, not user data. |
+| **DOC-105** | LOW | P6 `437e63c` | **fixed** — the three architecture spots presenting the curated 10-language set as current each gained the append-only "(widened to 51 by issue #31 — see D5/#31b)" pointer. |
+| **DOC-106** | MED | P6 `437e63c` | **fixed** — bundled-skill count "eight" → **nine**; `document-edit` added to the drive-layout + README lists. |
+| **DOC-107** | MED | P6 `437e63c` | **fixed** — the orphaned `L-2`/`L-3` finding-ids cited from code now resolve (security-model.md gained the 2026-06-13 low-severity ledger entries); the SEC-4 id overload disambiguated at both sites. |
+| **DOC-108** | LOW | P6 `437e63c` | **fixed** — user-guide gains the context-size-picker details, the interface-Language / chat-compaction / Developer-mode sentences, and the #39 warm-up-hint note. |
+| **DOC-109** | LOW | P5+P6 | **fixed** — `_Last updated_` stamps refreshed on the five stale docs, each only after that doc was actually verified or edited. |
+| **DOC-110** | LOW | P6 `437e63c` | **fixed** — the big-slot plan's reconcile note names the post-dating Qwen3.5 27B/35B manifests as new, unpromoted big-slot-class candidates. |
+| **DOC-111** | LOW | P6 `437e63c` | **fixed (item 3 partly INVALID)** — troubleshooting names `app.log(.enc)`; the user-guide import list gains `tsv`; two §-citation drifts re-pointed precisely — but `doctasks/context.ts`'s rag-design §14.5 cite was **verified CORRECT and left unchanged** (the audit's proposed re-point to §14.7 was invalid; §14.5 holds the no-surprise-CPU-spend invariant verbatim). |
+| **DOC-112** | LOW | — | **superseded** — the launch working papers' executed-but-unticked checklists resolve with the owner's launch close-out, which deletes the release-readiness paper (tracked by the launch flip checklist, outside this audit). |
+
+Surviving open items were registered where they belong before the reports were deleted: **TS-3, TS-7,
+TS-9, the unclamped `rag*` knobs, and the SC-1 pin validation** in `BUILD_STATE.md` §5; **PF-5** in
+[`known-limitations.md`](known-limitations.md); **PF-8** in the P4b deferral record above.
+
+**§-anchor legend.** Commits, code comments, tests, and BUILD_STATE cite this audit as
+`full-audit 2026-07-10 <ID>` (or the bare id beside a qualified cite); all resolve to the table above.
+The design "as built" lives where each phase folded it: the downloader record (BE-2 lock policy, BE-4
+cancel-during-verify), `launchContextTokens` in `services/models.ts` (BE-5), the perf design record
+(PF-1…PF-4 and the PF-7 wave paragraph, incl. the PERF-5 closure), packaging.md's bundle record (PF-6)
+and CI record (SC-1), `window-security.ts` + its CONTRIBUTING bullet (TS-2), CONTRIBUTING's
+no-fixed-sleeps rule (TS-1) and coverage invocation (TS-6), and the swept docs themselves
+(DOC-101…111, each stamped).
 
 ### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)
 
