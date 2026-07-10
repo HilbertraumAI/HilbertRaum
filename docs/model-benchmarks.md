@@ -247,7 +247,9 @@ D18). Granite 4.1 8B lost its tier (most 8B hallucinations, lowest F1).
 **What was actually applied to the catalog:**
 - **`recommended_min_ram_gb` recalibrated** from measured peak RSS — 8B 16→12, 12–14B 16→14
   (4B held at 8, 30B held at 24 for the MoE/mmap caveat). This is **live**. `recommended_ram_gb`
-  left unchanged (changing it shifts the quality-blind best-fit — see §6.2).
+  left unchanged (changing it shifts the quality-blind best-fit — see §6.2). *(Revised 2026-07-11:
+  §6.3 recalibrated `recommended_ram_gb` for the 12–14B pair and the 8B once the ranked-only guard
+  removed that blocker.)*
 - **The original `qwen3-4b-instruct-q4` stays the bundled default** (user decision) — it has
   hybrid thinking, so Deep keeps working out of the box on low-end machines; 2507 is instruct-only.
 - **Promotions made LIVE via `recommendation_rank`** (the §6.2 follow-up, done same session):
@@ -279,12 +281,42 @@ unchanged. Ranks encode the benchmark verdict folded with the product decisions:
 (default, keeps Deep) > 2507 = 1; Ministral = 2 (8B winner) > Qwen3-8B = 1 > Granite = 0; Gemma 4
 = 2 (12–14B winner) > Qwen3-14B = 1; 30B MoE = 0 (opt-in). Net result on real hardware: **≤12 GB →
 Qwen3-4B, 16–24 GB → Ministral, ≥32 GB → Gemma 4**; Granite and the 30B are never auto-recommended.
-Covered by `tests/integration/benchmark.test.ts` (real-manifest picks) + `models.test.ts` (the
+(Superseded for 20–24 GB by §6.3, 2026-07-11: the 12–14B tier's honest comfortable RAM is 24, so
+**≥24 GB → Gemma 4** and Ministral serves 16–20 GB.) Covered by
+`tests/integration/benchmark.test.ts` (real-manifest picks) + `models.test.ts` (the
 tiebreak unit tests).
 
 **Phase 29 closed 2026-06-11:** the Gemma thinking-quality check ran (flag flipped true) and
 the plan was condensed into §7 below. Only the OPTIONAL dev-box speed/RSS sweep remains, for
 the formal ≥2-machine completeness (QA and RSS are machine-independent, already reproduced).
+
+### 6.3 The 20–24 GB tier gap — FIXED (issue #48, 2026-07-11)
+
+Issue #48 found that a 20–24 GB machine was recommended the same 8B as a 16 GB machine: every
+12–14B model carried `recommended_ram_gb: 32`, so the comfortable-fit stage could never reach the
+tier winner even though Gemma 4 12B (measured ~10.6 GiB peak RSS, hard min 14) runs comfortably
+with the embedder/reranker/app/OS co-resident on 24 GB. §6.1 had deliberately left
+`recommended_ram_gb` unchanged because "changing it shifts the quality-blind best-fit" — that
+blocker is what the guard below removes. Two changes, applied together:
+
+- **Data (honest comfortable RAM):** `gemma4-12b-it-qat-q4` and `qwen3-14b-instruct-q4`
+  `recommended_ram_gb` 32→**24** (same measured RSS, same physical tier — they must stay in one
+  capacity group so the §6.2 rank keeps deciding the tier winner); `qwen3-8b-instruct-q4` 32→**16**
+  (measured 8.3 GiB — Ministral's tier; at 32 it would have sat alone in the top capacity group and
+  hijacked the ≥32 GB pick once the 12–14B pair moved down).
+- **Ranked-only guard (`recommendModelIdByRam`):** within each stage (comfortable, then runnable),
+  a **rank-0** model is considered only when **no ranked model fits that stage at all**. Rank stays
+  a within-tier tiebreak (capacity-first ordering is unchanged), but a never-evaled or
+  benchmark-loser model can no longer win on capacity alone — which §9's "never auto-recommend
+  rank 0" invariant previously got only from careful per-manifest RAM alignment (the fast-tier
+  2B/0.8B manifests carry deliberately tier-aligned RAM lines for exactly that reason; with the
+  guard, honest RAM lines become safe to ship **with** their eval). A role with no ranks at all
+  (embeddings/reranker/…) is unchanged.
+
+Net mapping (asserted in `benchmark.test.ts` at 8/12/16/20/24/32): **≤12 GB → Qwen3-4B,
+16–20 GB → Ministral, ≥24 GB → Gemma 4**; Granite, the MoEs, and every rank-0 Qwen3.5 model are
+never auto-recommended. The rest of issue #48 — promoting the Qwen3.5/3.6 generation — is NOT a
+rank edit: it stays gated on the §9 eval + §9.1 smoke (owner, offline, real weights).
 
 ---
 
@@ -480,6 +512,16 @@ runtime pin they need (**b9849**, bumped from b9585) has not been smoked on this
 > manifest stays `recommendation_rank: 0` (selectable manually, never auto-recommended, never
 > bundled). The §4 `recommended_min_ram_gb` values for these are **placeholders pending a real peak-RSS
 > measurement** (24 GB for the 27B/35B is a conservative guess, not a measured floor).
+
+Issue #48 (2026-07-10) extends this wave's scope, still under the same gate: the fast-tier
+`qwen3.5-2b-ud-q4kxl` / `qwen3.5-0.8b-q6` have no incumbent to displace (low-risk promotions once
+evaled), and the eval should record **context length** and **thinking-mode support** as
+first-class criteria alongside grounded QA / citations / speed — the Qwen3.5 generation's native
+262k window and hybrid thinking are product-relevant differences the §2 score alone does not
+capture (the shipped `recommended_context_tokens` stays the safe local budget either way; a
+promotion may raise it deliberately, per the D69/#43 context policy). Candidates that exist only
+as local manifests elsewhere (e.g. a Qwen3.6 27B) need productizing first: a `download:` block,
+a real upstream sha256, and a license review — same bar as the wave above.
 
 ### 9.1 Manual smoke checklist — b9849 runtime + Qwen3.5 load (REQUIRED; not CI)
 

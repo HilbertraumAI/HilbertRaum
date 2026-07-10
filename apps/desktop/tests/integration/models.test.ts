@@ -547,6 +547,24 @@ describe('recommendModelIdByRam', () => {
     // of the smaller 'alt' (e.g. the thinking-capable default over the instruct-only refresh).
     expect(recommendModelIdByRam([keep, alt], 8)).toBe('keep')
   })
+
+  // #48 ranked-only guard (model-benchmarks.md §6.3): rank is a within-tier tiebreak, so a
+  // rank-0 model (never benchmarked, or a benchmark loser) in a BIGGER capacity group used to
+  // beat every ranked winner on capacity alone. Rank-0 models are now considered only when no
+  // ranked model fits the stage at all.
+  it('never recommends a comfortable rank-0 model over a ranked winner in a smaller tier [#48]', () => {
+    const winner = asManifest({ id: 'winner', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
+    const unevaled = asManifest({ id: 'unevaled', size_on_disk_gb: 22.2, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 0 })
+    // 32 GB: the never-evaled model tops the capacity sort, but a ranked winner fits → winner.
+    expect(recommendModelIdByRam([winner, unevaled], 32)).toBe('winner')
+  })
+
+  it('still recommends a rank-0 model when nothing ranked fits the stage [#48]', () => {
+    const unevaled = asManifest({ id: 'unevaled', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 0 })
+    const rankedTooBig = asManifest({ id: 'big-winner', size_on_disk_gb: 9.5, recommended_min_ram_gb: 32, recommended_ram_gb: 64, recommendation_rank: 2 })
+    expect(recommendModelIdByRam([unevaled, rankedTooBig], 16)).toBe('unevaled') // comfortable stage
+    expect(recommendModelIdByRam([unevaled, rankedTooBig], 8)).toBe('unevaled') // runnable fallback
+  })
 })
 
 describe('buildModelList — RAM gate', () => {

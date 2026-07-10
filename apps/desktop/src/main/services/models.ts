@@ -611,6 +611,14 @@ export function machineRamGb(): number {
  * ranks (all 0) this is exactly the old biggest-disk behaviour, so legacy callers are
  * unchanged; with ranks the picker stops recommending a benchmark loser (e.g. Granite) over a
  * winner (Ministral) just because it is larger on disk.
+ *
+ * RANKED-ONLY GUARD (model-benchmarks.md §6.3, issue #48): within each stage, a rank-0
+ * model (never benchmarked, or a benchmark loser — §9 grants ranks only after the local
+ * eval) is considered ONLY when no ranked model fits that stage at all. Rank is a
+ * within-tier tiebreak, not a cross-tier score, so the capacity-first ordering stays —
+ * but a bigger-on-disk, never-evaled model can no longer hijack the recommendation from
+ * a benchmarked winner by capacity alone. A role whose catalog carries no ranks at all
+ * (e.g. embeddings) is unchanged.
  */
 export function recommendModelIdByRam(
   manifests: ModelManifest[],
@@ -619,25 +627,30 @@ export function recommendModelIdByRam(
 ): string | null {
   if (!Number.isFinite(ramGb) || ramGb <= 0) return null
   const candidates = manifests.filter((m) => m.role === role)
+  /** The stage pool: ranked fits only, unless nothing ranked fits this stage. */
+  const preferRanked = (fits: ModelManifest[]): ModelManifest[] => {
+    const ranked = fits.filter((m) => m.recommendationRank > 0)
+    return ranked.length > 0 ? ranked : fits
+  }
 
-  const comfortable = candidates
-    .filter((m) => m.recommendedRamGb <= ramGb)
-    .sort(
-      (a, b) =>
-        b.recommendedRamGb - a.recommendedRamGb ||
-        b.recommendationRank - a.recommendationRank ||
-        b.sizeOnDiskGb - a.sizeOnDiskGb
-    )
+  const comfortable = preferRanked(
+    candidates.filter((m) => m.recommendedRamGb <= ramGb)
+  ).sort(
+    (a, b) =>
+      b.recommendedRamGb - a.recommendedRamGb ||
+      b.recommendationRank - a.recommendationRank ||
+      b.sizeOnDiskGb - a.sizeOnDiskGb
+  )
   if (comfortable.length > 0) return comfortable[0].id
 
-  const runnable = candidates
-    .filter((m) => m.recommendedMinRamGb <= ramGb)
-    .sort(
-      (a, b) =>
-        a.recommendedMinRamGb - b.recommendedMinRamGb ||
-        b.recommendationRank - a.recommendationRank ||
-        a.sizeOnDiskGb - b.sizeOnDiskGb
-    )
+  const runnable = preferRanked(
+    candidates.filter((m) => m.recommendedMinRamGb <= ramGb)
+  ).sort(
+    (a, b) =>
+      a.recommendedMinRamGb - b.recommendedMinRamGb ||
+      b.recommendationRank - a.recommendationRank ||
+      a.sizeOnDiskGb - b.sizeOnDiskGb
+  )
   return runnable[0]?.id ?? null
 }
 

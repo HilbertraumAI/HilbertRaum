@@ -8,7 +8,10 @@ license: apache-2.0
 size_on_disk_gb: 9.3
 # recommended_min_ram_gb recalibrated 16->14 from the Phase-29 measured ~10.6 GiB peak RSS.
 recommended_min_ram_gb: 14
-recommended_ram_gb: 32
+# recommended_ram_gb recalibrated 32→24 with the tier winner Gemma 4 (issue #48, model-benchmarks.md
+# §6.3): same measured ~10.6 GiB peak RSS, same physical tier — it must stay in the same capacity
+# group as the winner so the §6.2 rank tiebreak (Gemma 2 > this 1) keeps deciding the tier.
+recommended_ram_gb: 24
 recommendation_rank: 1  # Phase-29: ranked below the 12-14B winner Gemma 4 (slower, more hallucinations)
 recommended_context_tokens: 8192
 supports_thinking_mode: true

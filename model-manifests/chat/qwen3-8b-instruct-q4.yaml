@@ -8,7 +8,11 @@ license: apache-2.0
 size_on_disk_gb: 5.0
 # recommended_min_ram_gb recalibrated 16->12 from the Phase-29 measured ~8.3 GiB peak RSS.
 recommended_min_ram_gb: 12
-recommended_ram_gb: 32
+# recommended_ram_gb recalibrated 32→16 (issue #48, model-benchmarks.md §6.3): measured ~8.3 GiB
+# peak RSS — the same physical tier as Ministral (8.7 GiB, rec 16). At 32 it sat alone in the
+# top capacity group and would have hijacked the ≥32 GB recommendation from Gemma 4 once the
+# 12-14B tier moved to its honest 24.
+recommended_ram_gb: 16
 recommendation_rank: 1  # Phase-29: solid 8B incumbent, ranked below the winner Ministral
 recommended_context_tokens: 8192
 supports_thinking_mode: true

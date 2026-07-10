@@ -20,9 +20,13 @@ function committedManifests(): ModelManifest[] {
 }
 
 // The Qwen3.5 Unsloth wave (model-policy.md "Qwen3.5 Unsloth wave"): the 4B incumbent plus the
-// 9B / 27B / 35B-A3B additions. All are text-only chat models, rank 0, not bundled, not
-// auto-recommended until the offline benchmark + b9849 runtime smoke promote them.
+// 9B / 27B / 35B-A3B additions, and the later fast-tier 2B / 0.8B (issue #48 closed the test
+// gap — the fast-tier pair shipped without joining these invariants). All are text-only chat
+// models, rank 0, not bundled, not auto-recommended until the offline benchmark + b9849
+// runtime smoke promote them.
 const QWEN35_WAVE_IDS = [
+  'qwen3.5-0.8b-q6',
+  'qwen3.5-2b-ud-q4kxl',
   'qwen3.5-4b-ud-q4kxl',
   'qwen3.5-9b-ud-q4kxl',
   'qwen3.5-27b-ud-q4kxl',
@@ -30,7 +34,7 @@ const QWEN35_WAVE_IDS = [
 ]
 
 describe('committed catalog — Qwen3.5 Unsloth wave', () => {
-  it('all four Qwen3.5 wave manifests are present and validate', () => {
+  it('all six Qwen3.5 wave manifests are present and validate', () => {
     const ids = new Set(committedManifests().map((m) => m.id))
     for (const id of QWEN35_WAVE_IDS) expect(ids.has(id), `${id} present`).toBe(true)
   })

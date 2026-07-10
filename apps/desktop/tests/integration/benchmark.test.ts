@@ -190,12 +190,16 @@ describe('recommendation per profile', () => {
   })
 
   // Phase-29: the RAM-best-fit picker is now quality-aware (recommendation_rank). It recommends
-  // the BENCHMARK WINNER for each machine size, not the biggest-on-disk model.
+  // the BENCHMARK WINNER for each machine size, not the biggest-on-disk model. Issue #48
+  // (model-benchmarks.md §6.3) recalibrated the 12-14B tier to its honest comfortable RAM (24),
+  // so a 24 GB machine now reaches the tier winner instead of being served the same 8B as 16 GB.
   it('recommends the Phase-29 benchmark winner per machine RAM (real manifests)', () => {
     const m = realManifests()
     expect(recommendModelIdByRam(m, 8, 'chat')).toBe('qwen3-4b-instruct-q4') // default 4B (Deep)
     expect(recommendModelIdByRam(m, 12, 'chat')).toBe('qwen3-4b-instruct-q4')
     expect(recommendModelIdByRam(m, 16, 'chat')).toBe('ministral3-8b-instruct-2512-q4') // best 8B
+    expect(recommendModelIdByRam(m, 20, 'chat')).toBe('ministral3-8b-instruct-2512-q4') // 12-14B tier starts at 24
+    expect(recommendModelIdByRam(m, 24, 'chat')).toBe('gemma4-12b-it-qat-q4') // #48: the 20–24 GB gap
     expect(recommendModelIdByRam(m, 32, 'chat')).toBe('gemma4-12b-it-qat-q4') // best 12-14B
   })
 
