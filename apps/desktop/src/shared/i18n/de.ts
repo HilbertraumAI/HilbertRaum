@@ -1062,7 +1062,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.tech.minRam': 'Minimaler RAM',
   'models.tech.recRam': 'Empfohlener RAM',
   'models.tech.context': 'Kontextfenster',
-  'models.tech.contextValue': '{count} Tokens',
+  // RD-3: deutscher Plural ist „Token“ (wie `models.context.autoResolved` unten), nicht „Tokens“.
+  'models.tech.contextValue': '{count} Token',
   'models.tech.file': 'Datei',
   // ---- Kontextgrößen-Auswahl (Nutzerbericht 2026-07-04 — der Abschneide-Hinweis verweist hierher) ----
   'models.context.title': 'Kontextgröße',

@@ -537,6 +537,53 @@ describe('SkillRunBar (S11b)', () => {
     ).toBeInTheDocument()
   })
 
+  it('CONFIRM (#45/RD-2): an UNRESOLVED target (name null) falls back to the matrix — never asserts ".txt"', async () => {
+    // RD-2 (full-audit 2026-07-10): an unresolved target used to reach here as the localized
+    // "this document" placeholder — truthy, extension-less — so the confirm asserted a plain-text
+    // .txt copy even for a .docx source. The name is now null at the data level; the chooser shows
+    // the placeholder at render time, and the format line honestly falls back to the full matrix.
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[{ name: 'redact_document', requiresConfirmation: true }]}
+          targetDocuments={[{ id: 'd1', name: null }]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    // The display site still shows the placeholder (no display regression).
+    expect(screen.getByText('this document')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Redact personal data' }))
+    expect(
+      screen.getByText('Word documents (.docx) keep their format; PDFs and other formats save as a plain-text (.txt) copy.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('The saved copy will be plain text (.txt) — the original layout and formatting are not kept.')).not.toBeInTheDocument()
+  })
+
+  it('CONFIRM (RD-6): a pending confirm does not re-open when the offer disappears and returns', async () => {
+    // RD-6 (full-audit 2026-07-10): `confirmTool` is state, so it used to survive the offer row
+    // unmounting (tools emptied by a scope change) and silently RE-OPENED the dialog the moment
+    // the offer returned. It is now cleared once the tool is no longer offered.
+    const user = userEvent.setup()
+    const shared = { run: null, onRun: vi.fn(), onCancel: vi.fn(), onDismiss: vi.fn() }
+    const { rerender } = render(withI18n(<SkillRunBar {...shared} runnableTools={[writeTool]} />))
+    await user.click(screen.getByRole('button', { name: 'synthetic_write' }))
+    expect(screen.getByText('Run this tool?')).toBeInTheDocument()
+
+    // The offer unmounts (its tool left the runnable set) — the dialog goes with it…
+    rerender(withI18n(<SkillRunBar {...shared} runnableTools={[]} />))
+    expect(screen.queryByText('Run this tool?')).not.toBeInTheDocument()
+
+    // …and when the offer returns, the stale confirm must stay closed (teeth: without the clear,
+    // the still-set confirmTool re-opens the modal with no user action).
+    rerender(withI18n(<SkillRunBar {...shared} runnableTools={[writeTool]} />))
+    expect(screen.queryByText('Run this tool?')).not.toBeInTheDocument()
+  })
+
   it('CONFIRM (#45): a plain export tool (no document transform) shows NO output-format line', async () => {
     const user = userEvent.setup()
     render(

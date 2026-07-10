@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { MessageKey } from '@shared/i18n'
 import type { RunnableTool, SkillRunState } from '@shared/types'
@@ -27,10 +27,13 @@ import { Button, ConfirmDialog, Spinner } from '../components'
 //
 // Pure + props-driven (the SkillPicker pattern): ChatScreen owns the store wiring; this only renders.
 
-/** A run target the renderer offers: a content-free document id + its renderer-resolved display name. */
+/** A run target the renderer offers: a content-free document id + its renderer-resolved display
+ *  name. RD-2 (full-audit 2026-07-10): `null` when the id is not resolvable (not yet loaded) —
+ *  display sites render the localized "this document" placeholder, while the #45 confirm-format
+ *  line falls back to the full output matrix instead of asserting ".txt" from the placeholder. */
 export interface SkillRunTarget {
   id: string
-  name: string
+  name: string | null
 }
 
 // The tool's display label, done copy and result-shape all come from the self-describing tool
@@ -119,6 +122,9 @@ function TargetMenu({
   const { t } = useT()
   const selected = targets.find((d) => d.id === selectedId) ?? targets[0]
   const single = targets.length <= 1
+  // RD-2: an unresolved name is null at the DATA level; the placeholder is applied here, at render
+  // time only, so it can never masquerade as a real filename downstream (the #45 format line).
+  const displayName = (d: SkillRunTarget): string => d.name ?? t('chat.skill.run.thisDocument')
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -128,7 +134,7 @@ function TargetMenu({
           disabled={disabled || single}
           aria-label={t('chat.skill.run.chooseDocument')}
         >
-          <span className="skill-run-target-name">{selected?.name}</span>
+          <span className="skill-run-target-name">{selected && displayName(selected)}</span>
           {!single && (
             <>
               {' '}
@@ -146,7 +152,7 @@ function TargetMenu({
                   <span className="menu-radio-mark" aria-hidden="true">
                     <DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator>
                   </span>
-                  <span>{d.name}</span>
+                  <span>{displayName(d)}</span>
                 </DropdownMenu.RadioItem>
               ))}
             </DropdownMenu.RadioGroup>
@@ -173,6 +179,15 @@ export function SkillRunBar({
 }: SkillRunBarProps): JSX.Element {
   const { t, tCount } = useT()
   const [confirmTool, setConfirmTool] = useState<RunnableTool | null>(null)
+  // RD-6 (full-audit 2026-07-10): a pending confirm must not outlive its offer. `confirmTool` is
+  // state, so it survives the offer row unmounting (tools emptied by a scope change / a run
+  // starting elsewhere) and would silently RE-OPEN the dialog the moment the offer returns —
+  // unreachable today only by accident of modality. Clear it once the tool is no longer offered.
+  useEffect(() => {
+    if (confirmTool && !runnableTools.some((tool) => tool.name === confirmTool.name)) {
+      setConfirmTool(null)
+    }
+  }, [confirmTool, runnableTools])
   // The user's chosen target. Defaults to (and clamps back to) the first in-scope document, so a
   // scope change never leaves a stale selection pointing outside the offered set.
   const targets = targetDocuments ?? []
@@ -243,8 +258,8 @@ export function SkillRunBar({
   // `docxDialog`) states the OUTPUT format up front, derived the same way MAIN decides it (the source
   // title's extension — `buildOriginalDocumentReader`): `.docx` keeps its Word format; a PDF or any
   // other source saves as a plain-text `.txt` copy. Previously the output-format cliff was only
-  // discoverable in the save dialog / result file. An unknown target name (legacy count label, e.g.
-  // after a remount) falls back to the full matrix line rather than guessing.
+  // discoverable in the save dialog / result file. An UNRESOLVED target name (null, RD-2 — e.g. the
+  // document list not yet loaded) falls back to the full matrix line rather than guessing ".txt".
   const confirmFormatKey: MessageKey | null =
     confirmTool && getToolDescriptor(confirmTool.name)?.docxDialog
       ? (() => {

@@ -567,6 +567,54 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
     expect(within(select).getByRole('option', { name: /Automatic.*98,304/ })).toBeInTheDocument()
   })
 
+  it('locale-formats the tech-details context row via the catalog — DE gets grouping + the "Token" plural (RD-3)', async () => {
+    // RD-3 (full-audit 2026-07-10): the tech-details row used to interpolate the RAW number
+    // (98304) while its sibling call sites already went through toLocaleString(lang); de.ts also
+    // said "Tokens" where the neighboring autoResolved key correctly uses the German plural
+    // "Token". Both asserted from the catalog (D-L8) — never re-typed literals.
+    stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4' }, [
+      model({ state: 'installed', recommendedContextTokens: 98_304 })
+    ])
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(
+      screen.getByText(t('en', 'models.tech.contextValue', { count: (98_304).toLocaleString('en') }))
+    ).toBeInTheDocument()
+    cleanup()
+
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    try {
+      stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4' }, [
+        model({ state: 'installed', recommendedContextTokens: 98_304 })
+      ])
+      render(
+        <I18nProvider>
+          <ModelsScreen />
+        </I18nProvider>
+      )
+      await screen.findByText('Qwen3 4B Instruct')
+      expect(
+        screen.getByText(t('de', 'models.tech.contextValue', { count: (98_304).toLocaleString('de') }))
+      ).toBeInTheDocument()
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
+  })
+
+  it('renders an off-preset override as a selected option — the select never goes blank (RD-4)', async () => {
+    // RD-4 (full-audit 2026-07-10): a persisted override outside CONTEXT_SIZE_PRESETS (an older
+    // release's rung, a hand-edited settings file) matched no <option>, so the select rendered
+    // BLANK. It now gets an extra option in the same label style, selected.
+    stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 24_576 })
+    render(<ModelsScreen />)
+    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+    const option = within(select).getByRole('option', {
+      name: t('en', 'models.tech.contextValue', { count: (24_576).toLocaleString('en') })
+    }) as HTMLOptionElement
+    expect(option.selected).toBe(true)
+    expect(select.value).toBe('24576')
+  })
+
   it('shows the honest memory warning for a big fixed pick — and not for a small one', async () => {
     stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4', contextTokensOverride: 131_072 })
     render(<ModelsScreen />)

@@ -156,7 +156,8 @@ export function ModelsScreen(): JSX.Element {
   }
 
   useEffect(() => {
-    refresh().catch((e) => setError(friendlyIpcError(e)))
+    // RD-5: the reject can land after unmount too — same FE-4 guard as every other setState here.
+    refresh().catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
   }, [])
 
   // Stream first-run verification progress (the cold-hash bar). The terminal `done` event
@@ -592,7 +593,9 @@ export function ModelsScreen(): JSX.Element {
               <dt>{t('models.tech.recRam')}</dt>
               <dd>{fmtGbNum(m.recommendedRamGb, lang)}</dd>
               <dt>{t('models.tech.context')}</dt>
-              <dd>{t('models.tech.contextValue', { count: m.recommendedContextTokens })}</dd>
+              {/* RD-3: locale-formatted like every other figure in this block (fmtGbNum / the
+                  context-size picker below) — a German UI reads "32.768", not raw "32768". */}
+              <dd>{t('models.tech.contextValue', { count: m.recommendedContextTokens.toLocaleString(lang) })}</dd>
               <dt>{t('models.tech.file')}</dt>
               <dd>
                 <code>{m.localPath}</code>
@@ -836,6 +839,17 @@ export function ModelsScreen(): JSX.Element {
                   {t('models.tech.contextValue', { count: n.toLocaleString(lang) })}
                 </option>
               ))}
+              {/* RD-4: an override outside the preset rungs (an older release's preset, a hand-
+                  edited settings file) must still render as the selected value — a <select> whose
+                  value matches no option silently renders BLANK. Same label style as the rungs. */}
+              {settings.contextTokensOverride != null &&
+                !(CONTEXT_SIZE_PRESETS as readonly number[]).includes(settings.contextTokensOverride) && (
+                  <option value={String(settings.contextTokensOverride)}>
+                    {t('models.tech.contextValue', {
+                      count: settings.contextTokensOverride.toLocaleString(lang)
+                    })}
+                  </option>
+                )}
             </select>
           </label>
           <p className="hint">{t('models.context.hint')}</p>

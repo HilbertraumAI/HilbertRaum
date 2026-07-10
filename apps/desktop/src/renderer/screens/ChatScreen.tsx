@@ -347,6 +347,14 @@ export function ChatScreen({
   useEffect(() => {
     activeIdRef.current = activeId
   }, [activeId])
+  // RD-1 (full-audit 2026-07-10): the conversation id THIS instance just created via
+  // ensureConversation. On the FIRST send the history-load effect flushes DURING
+  // ensureConversation's `await refreshConversations()` — its listMessages reaches main BEFORE the
+  // send IPC, main answers [], and that [] lands AFTER onSend's optimistic append, wiping the
+  // user's bubble for the whole first answer (the CR-7 activeIdRef guard passes: it IS the active
+  // conversation). A just-created conversation has no history, so the effect skips exactly ONE
+  // load for this id; switching away and back loads normally.
+  const selfCreatedIdRef = useRef<string | null>(null)
 
   // Token buffering (guidelines §3): deltas accumulate in refs and flush to state on a
   // timer, so a fast model doesn't force a re-render + reflow per token.
@@ -512,6 +520,14 @@ export function ChatScreen({
   useEffect(() => {
     if (!activeId) {
       setMessages([])
+      return
+    }
+    // RD-1: skip the ONE load for a conversation this instance just created (see selfCreatedIdRef)
+    // — it has no history, and its [] would land after the first send's optimistic bubble and wipe
+    // it. The context-info refresh below still runs (same as any other switch).
+    if (selfCreatedIdRef.current === activeId) {
+      selfCreatedIdRef.current = null
+      void refreshContextInfo(activeId)
       return
     }
     // CR-7: guard the switch-time setState against a stale resolve — a slow listMessages for A that
@@ -806,6 +822,9 @@ export function ChatScreen({
       delete next['new']
       return next
     })
+    // RD-1: mark the id BEFORE setActiveId so the history-load effect (which can flush during the
+    // refreshConversations await below) skips its no-op-but-racy listMessages for this send.
+    selfCreatedIdRef.current = conv.id
     setActiveId(conv.id)
     await refreshConversations()
     return conv.id
@@ -1159,13 +1178,16 @@ export function ChatScreen({
 
   // U-1: resolve an in-scope target id to its DISPLAY NAME from the renderer's own loaded documents
   // (Library docs + this chat's attachments). The title is read here, renderer-side — it never comes
-  // from the run state/IPC. An unknown id (not yet loaded) falls back to a generic, content-free label.
+  // from the run state/IPC. RD-2 (full-audit 2026-07-10): an unknown id (not yet loaded) resolves to
+  // NULL at the data level — display sites apply the localized "this document" placeholder at render
+  // time, so the #45 confirm-format line can genuinely fall back to the output matrix instead of
+  // reading the placeholder as a real (extension-less ⇒ ".txt") filename.
   const docNameForId = useCallback(
-    (id: string): string => {
+    (id: string): string | null => {
       const found = docs.find((d) => d.id === id) ?? attachments.find((d) => d.id === id)
-      return found?.title ?? t('chat.skill.run.thisDocument')
+      return found?.title ?? null
     },
-    [docs, attachments, t]
+    [docs, attachments]
   )
   // The in-scope target documents offered in the run bar (id + renderer-resolved name), in main's
   // resolution order. Exactly one ⇒ the name is shown; more than one ⇒ the chooser appears.
@@ -1199,7 +1221,11 @@ export function ChatScreen({
   // store entry exists (and, for the name, when the document isn't in the renderer's loaded list). The
   // NAME is resolved renderer-side (never IPC).
   const resolvedRunDocId = activeRunEntry?.documentId ?? runTargetId ?? null
-  const resolvedRunDocName = resolvedRunDocId ? docNameForId(resolvedRunDocId) : runTargetName
+  // RD-2: the busy/result row is a display site — apply the placeholder here (an unresolved name
+  // stays null only where it feeds format decisions, i.e. `targetDocuments`).
+  const resolvedRunDocName = resolvedRunDocId
+    ? (docNameForId(resolvedRunDocId) ?? t('chat.skill.run.thisDocument'))
+    : runTargetName
   // SKA-6: the post-extract "Categorize" offer must NOT retarget across scopes. Refuse it when the
   // remembered target is a KNOWN document that is NOT in THIS conversation's current scope (e.g. it was
   // removed, or — before conversation-gating — belonged to another chat). An unknown id (null) is safe:
@@ -1213,8 +1239,9 @@ export function ChatScreen({
     if (!currentSkillId || !activeId) return
     const targetId = documentId ?? scopeDocIds[0]
     // Remember the target NAME + ID for the busy/result row (resolved renderer-side; never from the
-    // IPC). The id powers the U-2 post-extract categorize offer (same-document targeting).
-    setRunTargetName(targetId ? docNameForId(targetId) : null)
+    // IPC). The id powers the U-2 post-extract categorize offer (same-document targeting). RD-2: a
+    // display value — an unresolved title takes the placeholder here, matching the live row above.
+    setRunTargetName(targetId ? (docNameForId(targetId) ?? t('chat.skill.run.thisDocument')) : null)
     setRunTargetId(targetId ?? null)
     setError(null)
     // Pass the RESOLVED target id (not the raw `documentId`, which is undefined when the user relied on

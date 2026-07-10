@@ -185,6 +185,60 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
   })
 })
 
+// RD-1 (full-audit 2026-07-10): on the FIRST send of a brand-new conversation, the history-load
+// effect fires DURING ensureConversation's await — its listMessages reaches main BEFORE the send
+// IPC, main answers [], and that [] lands AFTER the optimistic append, wiping the user's bubble
+// for the whole first answer (the CR-7 activeIdRef guard passes: it IS the active conversation).
+describe('ChatScreen — first send keeps the optimistic bubble (RD-1)', () => {
+  it('a history [] that resolves only after the send IPC does not wipe the first user bubble', async () => {
+    vi.useFakeTimers()
+    try {
+      // The exact production interleave, made deterministic: the history read parks until the
+      // send IPC has been invoked, then answers [] — so without the guard the [] always lands
+      // after the optimistic append. The send itself stays in flight (a streaming first answer).
+      let openHistoryGate: (() => void) | null = null
+      const historyGate = new Promise<void>((res) => {
+        openHistoryGate = res
+      })
+      const listMessages = vi.fn(async (): Promise<Message[]> => {
+        await historyGate
+        return []
+      })
+      const sendChatMessage = vi.fn(() => {
+        openHistoryGate?.()
+        return new Promise<Message>(() => {})
+      })
+      const created: Conversation[] = []
+      baseStub({
+        listConversations: vi.fn(async () => created),
+        createConversation: vi.fn(async () => {
+          const conv = chatConv('c-new', 'New chat')
+          created.push(conv)
+          return conv
+        }),
+        listMessages,
+        sendChatMessage
+      })
+
+      renderChat()
+      await flush()
+
+      // No conversation selected — the send goes through ensureConversation (the racy path).
+      const box = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+      fireEvent.change(box, { target: { value: 'first question' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flush()
+
+      // Teeth: the send is in flight and every parked microtask has settled — without the guard
+      // the gated [] has already replaced the transcript and the bubble is gone.
+      expect(sendChatMessage).toHaveBeenCalled()
+      expect(screen.getByText('first question')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('ChatScreen — transcript scroll resets on conversation switch (CR-2)', () => {
   it('re-pins to the bottom of the newly selected conversation even after the user scrolled up in the previous one', async () => {
     vi.useFakeTimers()
