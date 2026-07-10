@@ -183,6 +183,20 @@ describe('persistent checksum cache (settings hash store)', () => {
     expect((await verifyChecksum(file, expected, store)).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1)
   })
+
+  it('get degrades on a corrupted `checksumCache: null` row and the next set self-repairs it (BE-1)', () => {
+    clearChecksumCache()
+    const { store, db } = makeStore()
+    // A row corrupted BEFORE the write gate rejected null (full-audit 2026-07-10 BE-1):
+    // updateSettings drops `{ checksumCache: null }` now, so plant it directly via SQL.
+    db.prepare(`UPDATE settings SET value_json = 'null' WHERE key = 'checksumCache'`).run()
+    expect(getSettings(db).checksumCache).toBeNull() // the corruption really is in place
+    // Read-side belt: degrade to "no cache" instead of throwing out of every checksum reader.
+    expect(store.get('/some/weight.gguf')).toBeNull()
+    // set() writes a healthy object over the corrupted row.
+    store.set('/some/weight.gguf', { size: 3, mtimeMs: 4, actual: 'feed' })
+    expect(getSettings(db).checksumCache['/some/weight.gguf']?.sha256).toBe('feed')
+  })
 })
 
 describe('weightPath', () => {

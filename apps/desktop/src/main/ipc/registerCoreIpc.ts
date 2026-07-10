@@ -123,6 +123,12 @@ export function registerCoreIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
     requireUnlocked()
+    // BE-1 (full-audit 2026-07-10): shape-check the patch BEFORE touching it —
+    // `Object.keys(null)` threw a raw TypeError out of the handler; reject junk with the
+    // friendly localized copy instead (the sibling registrars' validation style).
+    if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+      throw new Error(tMain('main.settings.invalidPatch'))
+    }
     log.info('Settings updated', Object.keys(patch))
     const result = updateSettings(ctx.db, patch)
     // Keep the main-side cached UI language in step with the setting (D-L3) — the

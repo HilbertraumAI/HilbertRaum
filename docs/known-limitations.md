@@ -610,7 +610,10 @@ password recovery — are documented in
   siblings there (keeping a synchronous crash-lock) is a tracked follow-up.
 - The per-import `jobs` map in `registerDocsIpc` is never pruned (tiny, ephemeral, per-process).
 - `getSettings` does not type-guard stored JSON values (the privacy-critical network path is
-  double-gated by the policy AND).
+  double-gated by the policy AND). The write gate in `updateSettings` now also rejects `null` for
+  non-nullable keys and shape-checks the null-default keys (bounded strings for the model ids /
+  `gpuLastError`, plain objects for `lastBenchmark`/`gpuProbe`), and the checksum-cache reader
+  degrades a pre-existing corrupted row to a cache miss (BE-1, full-audit 2026-07-10).
 - `expandPaths` follows directory symlinks during import expansion.
 - Sidecar port selection has a small TOCTOU window between `findFreePort()` and the spawn.
   `LlamaServer.start` retries a bind-class immediate exit ONCE on a fresh port (REL-1), and a

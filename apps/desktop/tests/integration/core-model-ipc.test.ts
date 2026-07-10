@@ -32,8 +32,9 @@ import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
-import type { AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
+import type { AppSettings, AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
+import { t } from '../../src/shared/i18n'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -98,6 +99,27 @@ describe('registerCoreIpc', () => {
 
     const { result } = await invoke(handlers, IPC.writeClipboard, 'copy me')
     expect(result).toBe(false)
+  })
+
+  // BE-1 (full-audit 2026-07-10): the handler used to call Object.keys(patch) before any
+  // validation — a null patch threw a raw TypeError out of the IPC handler; other non-object
+  // shapes silently no-oped. All must reject with the friendly localized copy.
+  it('updateSettings rejects a null/non-object patch with the friendly copy (BE-1)', async () => {
+    const ctx = {
+      paths: { configPath: bogusConfigDir() },
+      db: seededDb(),
+      workspace: { isUnlocked: () => true }
+    } as unknown as AppContext
+    registerCoreIpc(ctx)
+
+    for (const junk of [null, 'allowNetwork', 42, true, ['allowNetwork']]) {
+      await expect(invoke(handlers, IPC.updateSettings, junk)).rejects.toThrow(
+        t('en', 'main.settings.invalidPatch')
+      )
+    }
+    // A real object patch still flows through the handler.
+    const { result } = await invoke(handlers, IPC.updateSettings, { theme: 'dark' })
+    expect((result as AppSettings).theme).toBe('dark')
   })
 })
 

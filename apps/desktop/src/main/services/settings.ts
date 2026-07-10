@@ -6,6 +6,15 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
  *  below stays generic for future ones). */
 const MAX_SETTINGS_ARRAY = 10_000
 
+/** Bounds for the null-default settings keys (BE-1, full-audit 2026-07-10). Their defaults
+ *  carry no type information (they are null), so the generic type gate in `updateSettings`
+ *  cannot check them — each gets an explicit shape check, and the string ones a length cap in
+ *  the SEC-1 bounding style so a buggy/hostile renderer can't bloat the encrypted settings
+ *  blob. Generous on purpose: model ids are short slugs; `gpuLastError` is a one-line
+ *  timestamped reason (`persistGpuFailure` truncates it to 2 000 chars before it gets here). */
+export const MAX_SETTINGS_ID_LENGTH = 512
+export const MAX_SETTINGS_ERROR_LENGTH = 4096
+
 /** Floor for `contextTokens` (HIGH_BUG vuln-scan-2026-06-21). The doc-task window budget is
  *  derived from this; below this floor the summary-tree builder's per-level node summaries can
  *  exceed a single budget window and the build cannot reduce. 2048 always fits >= 2 node
@@ -53,11 +62,26 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue
     // The patch crosses the IPC boundary from the renderer: persist only KNOWN settings
-    // keys, and only when the value's primitive type matches the default's (nullable
-    // fields accept null). Unknown/mistyped entries are dropped.
+    // keys. `null` is accepted ONLY for keys whose default is null (that is how e.g. the
+    // active model is cleared) — anywhere else it would shadow a non-nullable default
+    // (`checksumCache: null` broke every checksum reader — BE-1, full-audit 2026-07-10).
+    // Non-null values must match the default's primitive type; the null-default keys carry
+    // no type information in DEFAULT_SETTINGS, so each gets an explicit shape check
+    // (bounded string / plain object; `contextTokensOverride` has its own clamp below).
+    // Unknown/mistyped entries are dropped.
     if (!(key in DEFAULT_SETTINGS)) continue
     const def = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key]
-    if (def !== null && value !== null && typeof value !== typeof def) continue
+    if (value === null) {
+      if (def !== null) continue
+    } else if (def !== null) {
+      if (typeof value !== typeof def) continue
+    } else if (key === 'activeModelId' || key === 'activeEmbeddingModelId') {
+      if (typeof value !== 'string' || value.length > MAX_SETTINGS_ID_LENGTH) continue
+    } else if (key === 'gpuLastError') {
+      if (typeof value !== 'string' || value.length > MAX_SETTINGS_ERROR_LENGTH) continue
+    } else if (key === 'lastBenchmark' || key === 'gpuProbe') {
+      if (typeof value !== 'object' || Array.isArray(value)) continue
+    }
     // Array-typed defaults (any future `string[]` setting) pass the
     // `typeof === 'object'` check above, so validate them element-wise: require an actual
     // array, keep only string elements, and cap the length (SEC-1) — mirroring the

@@ -1823,6 +1823,9 @@ export const en = {
   'main.models.locked': 'Workspace is locked. Unlock it to manage AI models.',
   'main.audit.locked': 'Workspace is locked. Unlock it to view activity.',
   'main.settings.locked': 'Workspace is locked. Unlock it to change settings.',
+  // BE-1 (full-audit 2026-07-10): a null/non-object settings patch is rejected up front with
+  // this friendly copy instead of the raw TypeError `Object.keys(null)` used to throw.
+  'main.settings.invalidPatch': 'This settings change is not valid and was not saved.',
   // S3 (full-audit-2026-06-30): dictation writes a transient plaintext WAV into the workspace
   // documents dir, so it must lock-gate like the other workspace-touching handlers.
   'main.dictation.locked': 'Workspace is locked. Unlock it to use voice dictation.',

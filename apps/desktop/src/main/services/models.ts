@@ -244,7 +244,10 @@ export function primeChecksum(filePath: string, actual: string, store?: HashStor
 export function createSettingsHashStore(db: Db): HashStore {
   return {
     get(path) {
-      const entry = getSettings(db).checksumCache[path]
+      // Read-side belt (BE-1, full-audit 2026-07-10): a row corrupted to `checksumCache: null`
+      // before the settings write gate rejected it must degrade to a cache miss, not throw out
+      // of every checksum reader; the next set() rewrites a healthy object over it.
+      const entry = (getSettings(db).checksumCache ?? {})[path]
       return entry ? { size: entry.size, mtimeMs: entry.mtimeMs, actual: entry.sha256 } : null
     },
     set(path, entry) {

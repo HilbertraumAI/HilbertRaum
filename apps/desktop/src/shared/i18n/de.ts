@@ -1899,6 +1899,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.audit.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Aktivität anzuzeigen.',
   'main.settings.locked':
     'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Einstellungen zu ändern.',
+  // BE-1 (full-audit 2026-07-10) — siehe en.ts.
+  'main.settings.invalidPatch':
+    'Diese Einstellungsänderung ist ungültig und wurde nicht gespeichert.',
   // S3 (full-audit-2026-06-30) — siehe en.ts.
   'main.dictation.locked':
     'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Spracheingabe zu verwenden.',
