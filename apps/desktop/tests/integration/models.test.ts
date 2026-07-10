@@ -18,6 +18,8 @@ import {
   recommendModelId,
   recommendModelIdByRam,
   discoverManifests,
+  findManifestById,
+  launchContextTokens,
   selectModel,
   resolveManifestsDir,
   weightPath
@@ -815,6 +817,48 @@ describe('discoverManifests', () => {
     writeManifest(join(dir, 'chat'), 'm.yaml', manifestObj())
     const res = discoverManifests(dir)
     expect(res.manifests.length).toBe(1)
+  })
+})
+
+// full-audit 2026-07-10 BE-5: launchContextTokens is the ONE spelling of the launch-window
+// precedence (override ?? manifest recommended ?? legacy setting). startModelRuntime launches
+// with it and the no-runtime doc-task budget fallback (index.ts getContextTokens) mirrors it —
+// these pin the precedence for BOTH callers. Before the fix the fallback skipped the manifest's
+// recommended window, so the tree-build size gate planned against the legacy 4096 default.
+describe('launchContextTokens (full-audit 2026-07-10 BE-5)', () => {
+  const legacy = { contextTokens: 4096, contextTokensOverride: null }
+
+  it('prefers the manifest recommended window over the legacy setting', () => {
+    const dir = tempDir('hilbertraum-launch-ctx-')
+    writeFileSync(join(dir, 'm.yaml'), stringify(manifestObj({ recommended_context_tokens: 32768 })))
+    const manifest = findManifestById(dir, 'qwen3-4b-instruct-q4')
+    expect(manifest?.recommendedContextTokens).toBe(32768)
+    expect(launchContextTokens(legacy, manifest)).toBe(32768)
+  })
+
+  it('falls back to the legacy setting for a manifest without a recommended window (0)', () => {
+    expect(launchContextTokens(legacy, asManifest({ recommended_context_tokens: 0 }))).toBe(4096)
+  })
+
+  it('falls back to the legacy setting when no manifest resolves', () => {
+    const dir = tempDir('hilbertraum-launch-ctx-')
+    writeFileSync(join(dir, 'm.yaml'), stringify(manifestObj()))
+    // A manifest missing the field entirely fails validation → resolves to null, never NaN.
+    const missingField = manifestObj()
+    delete missingField.recommended_context_tokens
+    writeFileSync(join(dir, 'missing.yaml'), stringify({ ...missingField, id: 'no-ctx-model' }))
+    expect(findManifestById(dir, 'no-ctx-model')).toBeNull()
+    expect(findManifestById(dir, 'unknown-id')).toBeNull()
+    expect(findManifestById(null, 'qwen3-4b-instruct-q4')).toBeNull()
+    expect(findManifestById(dir, null)).toBeNull()
+    expect(findManifestById(join(dir, 'no-such-subdir'), 'qwen3-4b-instruct-q4')).toBeNull()
+    expect(launchContextTokens(legacy, null)).toBe(4096)
+  })
+
+  it('the user context-size override wins over both', () => {
+    const s = { contextTokens: 4096, contextTokensOverride: 8192 }
+    expect(launchContextTokens(s, asManifest({ recommended_context_tokens: 32768 }))).toBe(8192)
+    expect(launchContextTokens(s, null)).toBe(8192)
   })
 })
 

@@ -44,7 +44,7 @@ import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './ser
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS } from '../shared/ipc'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import { resolveManifestsDir } from './services/models'
+import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import { composeServices, composeTranslator, shouldReplaceTranslator } from './services/compose-services'
@@ -266,11 +266,16 @@ function initBackend(): void {
     // launched with the user's override ?? the manifest's recommended size, which can diverge
     // from the setting — "different context sizes in different areas" was exactly the 2026-07-04
     // user-report confusion. With no runtime up (tasks then refuse anyway) fall back to the
-    // same override-aware value the next start would use.
+    // SAME value the next start would launch with — launchContextTokens over the ACTIVE
+    // model's manifest, the one precedence startModelRuntime uses. The old fallback skipped
+    // the manifest's recommended window, so maybeEnqueueTreeBuild's size gate planned against
+    // the legacy 4096 default instead of the real 32k+ window and over-marked documents
+    // tree_status='pending' (full-audit 2026-07-10 BE-5).
     getContextTokens: () => {
       const s = getSettings(workspace.requireDb())
       const active = runtime.active()
-      return active ? effectiveContextWindow(active, s) : (s.contextTokensOverride ?? s.contextTokens)
+      if (active) return effectiveContextWindow(active, s)
+      return launchContextTokens(s, findManifestById(manifestsDir, s.activeModelId))
     },
     getStoreDir: () => documentsDir(paths.workspacePath),
     getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher(), ocrEngine }),

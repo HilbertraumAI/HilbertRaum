@@ -140,6 +140,43 @@ export function discoverManifests(manifestsDir: string): DiscoveryResult {
 }
 
 /**
+ * Resolve one manifest by id from `manifestsDir`. Never throws — no dir, no id, no match,
+ * or an unreadable dir all read as null (the `resolveModelByRole` precedent).
+ */
+export function findManifestById(
+  manifestsDir: string | null,
+  modelId: string | null
+): ModelManifest | null {
+  if (!manifestsDir || !modelId) return null
+  try {
+    const { manifests } = discoverManifests(manifestsDir)
+    return manifests.find((m) => m.manifest.id === modelId)?.manifest ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The context window a chat-runtime start launches with (llama-server's `--ctx-size`):
+ * the user's context-size pick (AI Model screen) wins; automatic (null) = the model's
+ * recommended window, falling back to the legacy setting for a manifest without one
+ * (`recommended_context_tokens: 0`) — or when no manifest resolves at all. This is the
+ * ONE spelling of that precedence: `startModelRuntime` launches with it, and the
+ * no-runtime doc-task budget fallback mirrors it (full-audit 2026-07-10 BE-5 — the two
+ * used to be spelled independently and disagreed, so with no runtime up the tree-build
+ * size gate planned against the legacy 4096 default instead of the 32k+ window the next
+ * start would actually use, over-marking documents `tree_status='pending'`).
+ */
+export function launchContextTokens(
+  settings: { contextTokens: number; contextTokensOverride?: number | null },
+  manifest: Pick<ModelManifest, 'recommendedContextTokens'> | null
+): number {
+  return (
+    settings.contextTokensOverride ?? (manifest?.recommendedContextTokens || settings.contextTokens)
+  )
+}
+
+/**
  * Stream a file through SHA-256 (large GGUF files never fully buffer in memory).
  * `onProgress` (optional) receives the running byte count, throttled to at most one call
  * per `PROGRESS_CHUNK_BYTES` (so the 64 KB read chunks of a multi-GB weight don't flood

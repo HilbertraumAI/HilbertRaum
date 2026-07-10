@@ -10,6 +10,7 @@ import {
   createSettingsHashStore,
   discoverManifests,
   invalidateChecksum,
+  launchContextTokens,
   machineRamGb,
   selectModel,
   weightPath
@@ -89,9 +90,10 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     modelPath: weightPath(ctx.paths.rootPath, found.manifest),
     // The user's context-size pick (AI Model screen) wins; automatic (null) = the model's
     // recommended window, falling back to the legacy setting for a manifest without one.
-    // Every downstream budget follows the LAUNCHED window via ModelRuntime.contextWindow() (§L0).
-    contextTokens:
-      s.contextTokensOverride ?? (found.manifest.recommendedContextTokens || s.contextTokens)
+    // The precedence lives in launchContextTokens (shared with the no-runtime doc-task
+    // budget fallback — full-audit 2026-07-10 BE-5). Every downstream budget follows the
+    // LAUNCHED window via ModelRuntime.contextWindow() (§L0).
+    contextTokens: launchContextTokens(s, found.manifest)
   })
   ctx.audit?.('runtime_started', `Model runtime started: ${modelId}`, {
     modelId,

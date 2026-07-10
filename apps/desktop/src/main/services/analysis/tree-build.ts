@@ -339,6 +339,15 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
   let rootId: string | null = null
   const maxLevels = leaves.length + 1
   for (;;) {
+    // Level boundary == node boundary too (full-audit 2026-07-10 BE-6): the in-level yield
+    // below never fires after a level's LAST node, so a chat-slot request landing during
+    // that node used to wait that node PLUS the first node of the next level — breaking
+    // acquireChatSlot's "worst case ≈ one node" promise. Parking here (before the level's
+    // first summarizeGroup) closes that gap. It sits OUTSIDE the halve-and-re-pack retry
+    // below (which only regroups this level's REMAINING children), so an overflow retry
+    // can't double-yield. After the true root the loop breaks instead — still no yield
+    // just to finalize.
+    await maybeYield()
     const minPerGroup = level === 1 ? 1 : 2
     let groups = groupByBudget(currentChildren, effectiveBudgetWords, minPerGroup)
     if ((level > 1 && groups.length >= currentChildren.length) || level > maxLevels) {
@@ -390,8 +399,9 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
       // Clamp the denominator up to the numerator (the upper-level count is an estimate).
       deps.onProgress?.(stepsDone, Math.max(stepsDone, stepsTotal))
       g += 1
-      // Node boundary == commit boundary == yield boundary. The root is the last node;
-      // no point yielding the slot just to finalize next.
+      // Node boundary == commit boundary == yield boundary. A level's LAST node parks at
+      // the top of the next level iteration instead (BE-6 above); after the true root the
+      // loop breaks — no point yielding the slot just to finalize next.
       if (g < groups.length) await maybeYield()
     }
     if (nextChildren.length === 1) {

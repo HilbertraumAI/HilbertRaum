@@ -1,12 +1,23 @@
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   ModelSlotArbiter,
   SlotAbortedError
 } from '../../src/main/services/analysis/model-slot-arbiter'
+import { openDatabase } from '../../src/main/services/db'
+import {
+  createQueuedDocument,
+  documentsDir,
+  processDocument
+} from '../../src/main/services/ingestion'
+import { buildTree } from '../../src/main/services/analysis/tree-build'
 
 // Whole-document-analysis plan §4.1 (H9/H10): the single model-slot arbiter that lets a
 // yielding tree build cede the one chat runtime slot to an interactive answer and resume
-// in-session — without ever both holding the slot. Tested in isolation (no DB/runtime).
+// in-session — without ever both holding the slot. Tested in isolation (no model runtime;
+// the BE-6 interleaving block at the end drives the REAL buildTree over a temp DB).
 
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
@@ -278,5 +289,93 @@ describe('ModelSlotArbiter', () => {
     relA()
     await tick()
     expect(resumed).toBe(true)
+  })
+})
+
+// full-audit 2026-07-10 BE-6: buildTree's in-level yield never fired after a level's LAST
+// node, so a chat-slot request landing during that node waited that node PLUS the first
+// node of the next level — while acquireChatSlot promises "worst case ≈ one node". The fix
+// parks at the level boundary too (top of the level loop, OUTSIDE the halve-and-re-pack
+// retry). This drives the REAL buildTree over a temp DB with a scripted generate —
+// deterministic promise gates only, no fixed sleeps.
+describe('builder parks at the level boundary (full-audit 2026-07-10 BE-6)', () => {
+  // Summaries carry MARK; a level >= 2 prompt embeds its children's summaries, so MARK in
+  // the prompt identifies node-reduction calls (chunk texts are `word0 word1 …`, never MARK).
+  const MARK = 'levelmark'
+
+  it('a chat request during the FINAL level-1 node parks the build BEFORE the first level-2 generation', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-arbiter-yield-'))
+    const db = openDatabase(join(tmp, 'test.sqlite'))
+    const file = join(tmp, 'doc.txt')
+    writeFileSync(file, Array.from({ length: 4000 }, (_, i) => `word${i}`).join(' '), 'utf8')
+    const info = createQueuedDocument(db, file)
+    await processDocument(db, documentsDir(join(tmp, 'workspace')), info.id)
+
+    // Probe build (its own modelId ⇒ cold summary_cache): count the level-1 calls so the
+    // real run below lands its pause exactly on the FINAL level-1 node.
+    let probeL1 = 0
+    let probeL2 = 0
+    await buildTree(info.id, {
+      db,
+      modelId: 'probe',
+      contextTokens: 4096,
+      signal: new AbortController().signal,
+      arbiter: new ModelSlotArbiter(),
+      jobId: 'probe',
+      generate: async (_sys, prompt) => {
+        if (prompt.includes(MARK)) probeL2 += 1
+        else probeL1 += 1
+        // Same word shape as the real run's summaries ⇒ identical upper-level packing.
+        return `${MARK} p ${probeL1 + probeL2}`
+      }
+    })
+    expect(probeL1).toBeGreaterThan(1) // level 1 has multiple nodes…
+    expect(probeL2).toBeGreaterThan(0) // …and the tree is multi-level
+
+    // Real build ('real' modelId ⇒ cache misses again): chat asks for the slot DURING the
+    // final level-1 generation.
+    const arbiter = new ModelSlotArbiter()
+    arbiter.registerBuild('job-level-yield')
+    let calls = 0
+    // Boxed so the outer await does NOT flatten (and thus wait on) the acquire promise.
+    let startChat: (box: { acquire: Promise<() => void> }) => void = () => {}
+    const chatStarted = new Promise<{ acquire: Promise<() => void> }>((r) => (startChat = r))
+    const buildDone = buildTree(info.id, {
+      db,
+      modelId: 'real',
+      contextTokens: 4096,
+      signal: new AbortController().signal,
+      arbiter,
+      jobId: 'job-level-yield',
+      generate: async (_sys, prompt) => {
+        calls += 1
+        if (calls === probeL1) {
+          expect(prompt).not.toContain(MARK) // sanity: this IS still a level-1 node
+          startChat({ acquire: arbiter.acquireForChat() })
+        }
+        return `${MARK} r ${calls}`
+      }
+    })
+
+    const { acquire } = await chatStarted
+    // FIXED: the builder parks at the level boundary, so chat acquires with the final
+    // level-1 node as the newest generation. UNFIXED: the first level-2 generation runs
+    // first (`calls` overshoots) — or, when level 2 is only the root, the build finishes
+    // without ever parking.
+    const winner = await Promise.race([
+      acquire.then(() => 'chat-acquired' as const),
+      buildDone.then(() => 'build-finished' as const)
+    ])
+    expect(winner).toBe('chat-acquired')
+    expect(calls).toBe(probeL1) // parked BEFORE the first level-2 generation
+
+    // Releasing resumes the SAME build in-session to a complete tree.
+    ;(await acquire)()
+    const meta = await buildDone
+    expect(meta.rootId).toBeTruthy()
+    expect(meta.levels).toBeGreaterThan(1)
+    expect(calls).toBe(probeL1 + probeL2) // same structure as the probe run, nothing looped
+    arbiter.unregisterBuild('job-level-yield')
+    db.close()
   })
 })
