@@ -57,9 +57,22 @@ export interface RouteDecision {
 }
 
 // --- Language-aware classification regexes (EN + DE) ---
+//
+// German-morphology rules for EVERY regex below (full-audit 2026-07-10 BE-3; AGGREGATION_RE got
+// this right from the start and is the template):
+//   - Verb/noun STEMS (auflist, zähl, zusammenfass, vergleich, unterschied, …) sit in their own
+//     alternation group with NO trailing \b — the stems only appear inflected (Auflistung,
+//     Zähle, Zusammenfassung, Vergleiche, Unterschiede, …) and a trailing boundary can never
+//     match mid-word. Complete German words (liste, jede[rsn]?, summe pro, …) stay \b-bounded.
+//   - Stems KEEP the leading \b: every stem starts with an ASCII letter, and the leading
+//     boundary is what stops e.g. \bzähl from firing inside "erzählen" (the r→z position is
+//     word→word, not a boundary).
+//   - JS \b is ASCII-defined, so it must never sit adjacent to a non-ASCII initial:
+//     \büberblick can never match "Überblick" (the position before "Ü" is not a JS word
+//     boundary) — überblick therefore carries no boundary at all.
 
 const COVERAGE_RE =
-  /\b(list|enumerate|every|each|all of (the|them)|all the|how many|how much|count)\b|\b(jede[rsn]?|alle[rsn]?|sämtliche[rsn]?|wie ?viele?|liste|auflist|aufzähl|zähl)\b/i
+  /\b(list|enumerate|every|each|all of (the|them)|all the|how many|how much|count)\b|\b(jede[rsn]?|alle[rsn]?|sämtliche[rsn]?|wie ?viele?|liste)\b|\b(auflist|aufzähl|zähl)/i
 // Aggregation/categorization verbs (issue #37): "categorize the expenses, sum per category" is a
 // whole-document task by nature — no top-k short of "all chunks" yields a correct total. These
 // route to coverage exactly like the list/count triggers above: coverage-extract when extract
@@ -68,10 +81,12 @@ const COVERAGE_RE =
 // trailing boundary so inflections match (kategorisiere, Gruppierung, aufgeschlüsselt, …).
 const AGGREGATION_RE =
   /\b(categori[sz]e|categori[sz]ation|group(ed)? by|break ?down|sum per|total per|per category|itemi[sz]e|tally)\b|\b(kategorisier|gruppier|summier|aufschlüssel|aufgeschlüsselt|aufsummier)|\b(summe pro|gesamtsumme|pro kategorie|nach kategorie)\b/i
+// "zusammenfassen" is separable: an imperative splits it ("Fasse das Dokument zusammen"), so a
+// fass(e|t|en)…zusammen alternative catches the split shape alongside the compound stem.
 const SUMMARY_RE =
-  /\b(summar(?:y|ise|ize|ies)|overview|tl;?dr|gist|whole document|entire document)\b|\b(zusammenfass|überblick|ganzes? dokument)\b/i
+  /\b(summar(?:y|ise|ize|ies)|overview|tl;?dr|gist|whole document|entire document)\b|\b(ganzes? dokument)\b|\b(zusammenfass|fass(?:e|t|en)?\b.*?\bzusammen\b)|überblick/i
 const COMPARE_RE =
-  /\b(compare|comparison|difference|differences|versus|vs\.?|diff)\b|\b(vergleich|unterschied)\b/i
+  /\b(compare|comparison|difference|differences|versus|vs\.?|diff)\b|\b(vergleich|unterschied)/i
 
 /** Closed-vocabulary synonym table: a user's "{X}" → an extracted type (plan §4.2 step 4). */
 const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [

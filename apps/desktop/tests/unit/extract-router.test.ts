@@ -106,6 +106,56 @@ describe('routeQuestion — coverage-extract classification', () => {
   })
 })
 
+// full-audit 2026-07-10 BE-3: the German alternatives in COVERAGE_RE/SUMMARY_RE/COMPARE_RE were
+// verb STEMS behind a trailing \b that only inflected forms could ever satisfy (auflist\b can
+// never match "Auflistung"), and \büberblick sat an (ASCII-defined) \b before a non-ASCII
+// initial — so realistic inflected German list/count/summary/compare phrasings silently missed
+// their engines, the exact class issues #37/#38 were shipped to close. Table-driven: the DE rows
+// all FAILED pre-fix; the EN controls pin byte-identical English behaviour; the aggregation row
+// already worked (AGGREGATION_RE is the correct template the fix mirrors).
+describe('routeQuestion — inflected German phrasings reach their engines (BE-3)', () => {
+  // documentCount 2 + tree + extract available: every engine is reachable, so each row's engine
+  // is decided purely by classification (precedence: compare > coverage > summary).
+  const base = { documentCount: 2, treeAvailable: true, extractAvailable: true }
+
+  it('classifies inflected German list/count, summary, and compare phrasings', () => {
+    const rows: Array<[string, string]> = [
+      // coverage: the stems must match their inflections
+      ['Zähle die Ausgaben', 'coverage-extract'],
+      ['Auflistung der Fristen', 'coverage-extract'],
+      ['Aufzählen bitte', 'coverage-extract'],
+      // summary: stem, the ü-initial word, and the separable-verb imperative
+      ['Fasse das Dokument zusammen', 'tree-summary'],
+      ['Zusammenfassung bitte', 'tree-summary'],
+      ['Gib mir einen Überblick', 'tree-summary'],
+      // compare: stems
+      ['Vergleiche die beiden Verträge', 'compare'],
+      ['Unterschiede zwischen den Verträgen', 'compare']
+    ]
+    for (const [q, engine] of rows) {
+      const d = routeQuestion({ ...base, question: q })
+      expect(d.engine, q).toBe(engine)
+      expect(d.confidence, q).toBe('high')
+    }
+  })
+
+  it('EN controls: English classification is byte-identical', () => {
+    expect(routeQuestion({ ...base, question: 'List every deadline' }).engine).toBe('coverage-extract')
+    expect(routeQuestion({ ...base, question: 'Summarize the whole document' }).engine).toBe('tree-summary')
+    expect(routeQuestion({ ...base, question: 'Compare the two contracts' }).engine).toBe('compare')
+  })
+
+  it('DE control: the aggregation route (already correct pre-fix) keeps working', () => {
+    expect(routeQuestion({ ...base, question: 'Kategorisiere die Ausgaben' }).engine).toBe('coverage-extract')
+  })
+
+  it('the LEADING stem boundary stays: "Erzähle" must not fire the zähl stem', () => {
+    const d = routeQuestion({ ...base, question: 'Erzähle mir etwas über die Verträge' })
+    expect(d.engine).toBe('relevance')
+    expect(d.confidence).toBe('high')
+  })
+})
+
 describe('routeQuestion — precedence + non-coverage', () => {
   it('honours precedence: compare (2 docs) > coverage-extract', () => {
     const d = routeQuestion({

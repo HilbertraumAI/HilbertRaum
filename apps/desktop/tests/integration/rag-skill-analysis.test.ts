@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 // Full-doc-skills Phase 3 (§3.2) — the CHAT wiring: `askDocuments` routes a `kind:tool` skill's
 // analysis-shaped question to its registered whole-document handler (exhaustive answer + honest
@@ -30,6 +31,7 @@ import { createSkillRegistry, getSkill } from '../../src/main/services/skills/re
 import { createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers, clearSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
+import { SCAN_MARKER_TYPE } from '../../src/main/services/analysis/extract'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
@@ -1041,6 +1043,53 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     const msg = result as Message
     expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
     expect(msg.content).toContain('Model answer.')
+  })
+
+  // full-audit 2026-07-10 BE-3 — an INFLECTED German count question ("Zähle …": the router's
+  // zähl stem previously sat behind a trailing \b only "zähl"/"zahl" could satisfy) must engage
+  // the same coverage machinery as its English equivalent: the deterministic listing when
+  // extract data exists in scope, the deep-index hint when not. Both cases FAILED pre-fix
+  // (silent top-k relevance, no hint). The doc text carries "Ausgaben" so the hint case's
+  // relevance retrieval finds the chunk under the token-overlap mock embedder (an empty
+  // retrieval takes the no-context honesty path, which never carries a prefix).
+  const DE_STATEMENT =
+    'Ausgaben Statement EUR\nOpening balance 2.000,00\n2026-01-02 Miete -800,00 1.200,00\n' +
+    'Closing balance 1.200,00'
+
+  it('an inflected German count question WITH extract data takes the deterministic coverage-extract route (BE-3)', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+    // Seed a __scan__ completeness marker + one 'amount' record, the shape a finished deep-index
+    // extract pass leaves behind (extractionsExistInScope gates on the marker).
+    const chunkId = (
+      h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
+    ).id
+    const insertRec = (recordType: string, value: string, normalized: string): void => {
+      h.db
+        .prepare(
+          `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(randomUUID(), h.docId, chunkId, recordType, value, normalized, `hash-${normalized}`, '2026-07-10T00:00:00.000Z')
+    }
+    insertRec(SCAN_MARKER_TYPE, '', 'ok')
+    insertRec('amount', '45,90 EUR', '45.90')
+
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+
+    // Deterministic listing over the precomputed extract — zero model calls, never top-k.
+    expect(h.runtime.calls).toBe(0)
+    expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+    expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+  })
+
+  it('the same German count question WITHOUT extract data leads with the deep-index hint (BE-3)', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
+    expect(msg.content).toContain('Model answer.')
+    expect(h.runtime.calls).toBe(1)
   })
 
   it('the same #37 question WITH the bank skill takes the whole-document engine — no hint, no top-k', async () => {
