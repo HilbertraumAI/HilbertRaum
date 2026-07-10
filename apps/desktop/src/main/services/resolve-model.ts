@@ -1,4 +1,4 @@
-import { discoverManifests, weightPath } from './models'
+import { discoverManifests, weightPath, type DiscoveredManifest } from './models'
 import type { ModelRole } from '../../shared/manifest'
 
 // M-A3 (audit-2026-06-13): the embeddings / reranker / transcriber resolvers in index.ts
@@ -26,11 +26,20 @@ export function resolveModelByRole(
   manifestsDir: string | null,
   rootPath: string,
   role: ModelRole,
-  opts: { includeContextTokens?: boolean } = {}
+  opts: {
+    includeContextTokens?: boolean
+    /**
+     * Manifests already discovered by the caller's OWN pass (PF-4, full-audit 2026-07-10):
+     * `composeServices` walks the dir once and threads the result into all of its role
+     * resolutions instead of re-walking + re-parsing YAML per role. Callers that act on a
+     * later user action (IPC handlers, `onModelInstalled`) omit it and stay fresh.
+     */
+    discovered?: DiscoveredManifest[]
+  } = {}
 ): ResolvedModel | null {
   if (!manifestsDir) return null
   try {
-    const { manifests } = discoverManifests(manifestsDir)
+    const manifests = opts.discovered ?? discoverManifests(manifestsDir).manifests
     const found = manifests.find((m) => m.manifest.role === role)
     if (!found) return null
     const resolved: ResolvedModel = {

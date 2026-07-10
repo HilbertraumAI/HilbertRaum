@@ -28,6 +28,7 @@ import {
   type SelectedImage
 } from '../lib/visionSession'
 import { useT } from '../i18n'
+import { useEventCallback } from '../lib/useEventCallback'
 import type { MessageKey } from '@shared/i18n'
 import type { ImageSessionSummary, VisionErrorCode, VisionStatus } from '@shared/types'
 
@@ -317,6 +318,13 @@ export function ImagesScreen({
     setComposer(prompt)
   }
 
+  // PF-7c (full-audit 2026-07-10, the FE-3 useEventCallback pattern): stable identities for the
+  // three handlers the memoized TurnRows receive, so a settled turn's memo holds while a sibling
+  // turn streams — the fresh inline closures busted every row's memo on every stream flush.
+  const handleCopy = useEventCallback(onCopy)
+  const handleTryAgain = useEventCallback(runAnalyze)
+  const handleStop = useEventCallback(onStop)
+
   const chips: ComposerChip[] = CHIP_KEYS.map((c) => ({
     label: t(c.labelKey),
     prompt: t(c.promptKey)
@@ -381,9 +389,9 @@ export function ImagesScreen({
           />
           <AnswerThread
             turns={turns}
-            onCopy={onCopy}
-            onTryAgain={(q) => runAnalyze(q)}
-            onStop={onStop}
+            onCopy={handleCopy}
+            onTryAgain={handleTryAgain}
+            onStop={handleStop}
             busy={analyzing}
           />
         </div>

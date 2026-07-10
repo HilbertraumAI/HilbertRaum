@@ -234,6 +234,24 @@ noted below.
   context-meter word count advances incrementally per flushed chunk (exact-equivalence-pinned);
   the audit-log prune is slack-gated + transactional over `idx_runtime_events_created` (see the
   Audit log record).
+- **Full-audit 2026-07-10 PF-4/PF-7 — startup discovery + renderer churn sweep.** PF-4:
+  `composeServices` discovers manifests ONCE per composition pass and threads the result into its
+  role resolvers (`resolveModelByRole` takes an optional pre-discovered list) — the per-action IPC
+  callers and the issue-#40 `onModelInstalled` refresh still re-discover; deliberately NO stateful
+  module cache, which could serve stale results. PF-7a: the Home runtime poll keeps the previous
+  state object on a value-unchanged tick (React bails out of the re-render) and stops entirely once
+  the model runs, with a window-focus re-check instead (the ChatScreen poll-while-not-running
+  pattern). PF-7b: the doc-task store's 400 ms poll ports the skillruns `sameRun` no-change gate
+  (SKA-39 precedent) — an identical tick sets nothing and the snapshot identity stays stable.
+  PF-7c (**closes the carried-forward PERF-5**, see the 2026-06-30 ledger): `visionSession` batches
+  token deltas through a 40 ms flush buffer (the ChatScreen `STREAM_FLUSH_MS` precedent; settle
+  paths flush first so no token is lost, discard paths drop the buffer), and ImagesScreen got the
+  FE-3 `useEventCallback` sweep over `onCopy`/`onTryAgain`/`onStop` — a settled `TurnRow` no longer
+  re-renders while a sibling turn streams (render-count-pinned via the `__docRowRenderCounts`
+  pattern). `translateSession` deliberately stays per-token (~4 tok/s — documented there). PF-7d:
+  `ScopePopover` memoizes its `indexed`/`addableDocs`/collection derivations on
+  `[docs, docIds, collections]`, so the (usually closed) composer-footer popover no longer
+  re-filters the full docs list on every keystroke/stream flush.
 
 **Documents screen (`renderer/screens/DocumentsScreen.tsx`).**
 - **FE-2 — derivations memoized.** The render body — re-run on every 400 ms import poll and every
@@ -6117,7 +6135,7 @@ retirement.
 | **PERF-2** (High@scale) | 4 | **fixed (documents list)** — `@tanstack/react-virtual` windows the list (viewport-gated; else render all). **Chat-transcript half carried forward** (behavior-sensitive) | §36; known-limitations (find-in-page) |
 | PERF-3 (Med) | 4 | **fixed** — additive nullable `ocr_meta_json` sidecar (counts/ids only) written at OCR-write + backfilled once; `listDocuments` omits `ocr_json` (~147 ms/call removed) | §36 |
 | PERF-4 (Med) | 3 | **fixed** — `textMaxBytes` (64 MiB) + `readsWholeFileToString` flag → friendly `fileTooLarge` reject instead of a V8 string-limit OOM for txt/markdown/csv | §35; known-limitations |
-| PERF-5 (Low) | — | **accepted / carried** — `ImagesScreen` `AnswerThread` memo defeated by unstable `onCopy`/`onTryAgain`/`onStop` props; image sessions are short so the re-render cost is bounded (Low-Med) | this ledger (carried) |
+| PERF-5 (Low) | — | **accepted / carried → CLOSED by full-audit 2026-07-10 PF-7c** — `ImagesScreen` `AnswerThread` memo defeated by unstable `onCopy`/`onTryAgain`/`onStop` props; closed by the `useEventCallback` sweep + the visionSession 40 ms token batch (perf design record) | this ledger (carried); perf record PF-4/PF-7 |
 | PERF-6 (Low) | 4 | **deferred with cause** — per-page OCR child table is a larger schema migration; PERF-3's sidecar already removed the hot-path parse (the actual harm) | §36 |
 | **SEC-4** (Low/Info) | **8** | **fixed** — (this SEC-4 is the 2026-06-29 follow-up's; distinct from backend-audit-2026-06-27's SEC-4 = session-cached binary verification, §24 / `security-model.md`) `runtime-sources.ts` rejects `..`/absolute/drive-letter `extract_to` at PARSE time (new `isUnsafeDrivePath`, applied to the sibling OCR `dest` too for consistency); defense-in-depth ahead of the load-bearing `resolveWithinRoot` | this §38; `shared/runtime-sources.ts`; `runtime-sources.test.ts` |
 | SEC-1c (Low) | — | **accepted residual / open** — unlock-path rate-limit/attempt-counter + create-time strength floor; the at-rest Argon2id KDF is the binding mitigation against the offline (drive-in-hand) attacker, so a UI rate-limit doesn't bind the real threat | §26 |
@@ -6145,9 +6163,10 @@ retirement.
 - **REL-5** — **non-reachable while the single-`DatabaseSync` architecture holds**; becomes a real fix to
   build **only if** a second DB connection (worker-thread reader / connection pool) is introduced. Precondition
   now explicit in §26 so a future worker-pool change can't silently re-open the gap.
-- **PERF-5 (ImagesScreen `AnswerThread` memo)** — Low; image sessions are short, so the unstable-handler
-  re-render is bounded. Wrap `onCopy`/`onTryAgain`/`onStop` in `useEventCallback` when the Images screen is
-  next touched.
+- **PERF-5 (ImagesScreen `AnswerThread` memo)** — **CLOSED (full-audit 2026-07-10 PF-7c):** the Images
+  screen was next touched exactly as planned — `onCopy`/`onTryAgain`/`onStop` wrapped in
+  `useEventCallback`, plus the visionSession per-token notify batched through a 40 ms flush (see the
+  Performance design record, PF-4/PF-7 entry).
 - **PERF-2 chat-transcript half** — list windowing for the chat transcript stays deferred (variable height +
   scroll-to-bottom + find-in-page + StreamAnnouncer are genuinely behavior-sensitive); the **documents-list
   half is CLOSED** (P4). Still the tracked top renderer item.

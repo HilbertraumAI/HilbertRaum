@@ -4,6 +4,7 @@ import { createSelectedTranscriber } from './transcriber'
 import { createSelectedOcrEngine } from './ocr'
 import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
+import { discoverManifests, type DiscoveredManifest } from './models'
 import { log } from './logging'
 import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
@@ -50,6 +51,13 @@ export interface ComposeServicesDeps {
    * reranker, and vision sidecars keep their own (CPU) device postures per their design records.
    */
   gpu?: TranslationGpuDeps
+  /**
+   * Manifests already discovered by THIS composition pass (PF-4, full-audit 2026-07-10).
+   * `composeServices` fills it in so its role resolutions share ONE synchronous walk + YAML
+   * parse; the issue-#40 `onModelInstalled` → `composeTranslator` call site omits it and
+   * re-discovers, because it reacts to a download that just CHANGED the drive layout.
+   */
+  discovered?: DiscoveredManifest[]
 }
 
 /**
@@ -63,7 +71,9 @@ export function composeTranslator(deps: ComposeServicesDeps): Translator | null 
   return createSelectedTranslator({
     rootPath: deps.rootPath,
     isDev: deps.isDev ?? false,
-    model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation'),
+    model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
+      discovered: deps.discovered
+    }),
     gpu: deps.gpu,
     onDeviceFallback: (reason) =>
       log.warn('Translation sidecar fell back to CPU for this session', { reason }),
@@ -95,10 +105,23 @@ export function composeServices({
   isDev = false,
   gpu
 }: ComposeServicesDeps): AvailabilityServices {
+  // PF-4 (full-audit 2026-07-10): ONE manifest walk + YAML parse serves every role resolution
+  // of this composition pass — initBackend runs it synchronously before the window exists, and
+  // each `resolveModelByRole` call used to re-walk the dir. Scoped to THIS call, NOT a module
+  // cache: the per-action callers (model IPC, `onModelInstalled` → `composeTranslator`)
+  // deliberately re-discover so a just-downloaded manifest is never served stale. An unreadable
+  // dir reads as "no models" for every role — exactly what each resolver's own catch produced
+  // before (the same throw, once per role), minus the redundant re-walks.
+  let discovered: DiscoveredManifest[] | undefined
+  try {
+    discovered = manifestsDir ? discoverManifests(manifestsDir).manifests : undefined
+  } catch {
+    discovered = []
+  }
   const embedder = createSelectedEmbedder({
     rootPath,
     isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'embeddings'),
+    model: resolveModelByRole(manifestsDir, rootPath, 'embeddings', { discovered }),
     onSelect: (kind, reason) => log.info('Embedder backend selected', { kind, reason })
   })
   // The retrieval reranker — selected only when binary + reranker GGUF exist (null
@@ -106,7 +129,7 @@ export function composeServices({
   const reranker = createSelectedReranker({
     rootPath,
     isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'reranker'),
+    model: resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered }),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
   })
   // The audio transcriber — the whisper.cpp CLI; selected only when binary + GGML weights
@@ -116,7 +139,8 @@ export function composeServices({
     rootPath,
     isDev,
     model: resolveModelByRole(manifestsDir, rootPath, 'transcriber', {
-      includeContextTokens: false
+      includeContextTokens: false,
+      discovered
     }),
     onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
   })
@@ -132,7 +156,7 @@ export function composeServices({
   // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.
   // Shares `composeTranslator` with the issue-#40 post-download re-selection so the two call
   // sites can never drift.
-  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu })
+  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered })
 
   return { embedder, reranker, transcriber, ocrEngine, translator }
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import type { Collection, DocumentInfo, DocumentScope } from '@shared/types'
 import { Button, Chip, Icon } from '../components'
@@ -34,6 +34,9 @@ interface ScopePopoverProps {
   /** File names of attachments still being processed (N4): non-removable pending chips. */
   pendingAttachmentNames?: string[]
 }
+
+/** Stable empty-id list for a null scope (PF-7d) — a fresh `[]` per render would bust the memos. */
+const EMPTY_IDS: string[] = []
 
 /** Localize a built-in collection's display name by type; projects keep their stored name. */
 export function collectionLabel(c: Collection, t: I18n['t']): string {
@@ -94,14 +97,22 @@ export function ScopePopover({
 }: ScopePopoverProps): JSX.Element {
   const { t, tCount } = useT()
   const [showDocs, setShowDocs] = useState(false)
-  const indexed = docs.filter((d) => d.status === 'indexed')
+  // PF-7d (full-audit 2026-07-10): memo the list derivations — this popover sits in the composer
+  // footer, so it re-renders on every keystroke and stream flush (usually CLOSED), and re-filtering
+  // the full docs list each time was pure churn. Keyed on the inputs that actually change them.
+  const indexed = useMemo(() => docs.filter((d) => d.status === 'indexed'), [docs])
   const fileCount = attachments.length + pendingAttachmentNames.length
 
-  const collIds = scope?.collectionIds ?? []
-  const docIds = scope?.documentIds ?? []
+  const collIds = scope?.collectionIds ?? EMPTY_IDS
+  const docIds = scope?.documentIds ?? EMPTY_IDS
   // Pickable sources: Library + non-archived projects (archived projects drop out — C1).
-  const library = collections.find((c) => c.type === 'library')
-  const projects = collections.filter((c) => c.type === 'project' && c.archivedAt == null)
+  const library = useMemo(() => collections.find((c) => c.type === 'library'), [collections])
+  const projects = useMemo(
+    () => collections.filter((c) => c.type === 'project' && c.archivedAt == null),
+    [collections]
+  )
+  // Hoisted above the empty-corpus early return below — hooks must run unconditionally.
+  const addableDocs = useMemo(() => indexed.filter((d) => !docIds.includes(d.id)), [indexed, docIds])
 
   // Truthful footer copy (guidelines §7): with no indexed documents AND no chat attachments
   // the affordance becomes a direct "Add documents" jump, not a scope picker. (Attachments —
@@ -126,7 +137,6 @@ export function ScopePopover({
     return docs.find((d) => d.id === id)?.title ?? t('chat.scope.removedDoc')
   }
 
-  const addableDocs = indexed.filter((d) => !docIds.includes(d.id))
   // The active retrieval scope, framed as an always-visible "Answering from: {source}" chip (D71).
   // The chip IS the popover trigger, so it stays visible before asking and one click opens the picker.
   const composedEmpty = collIds.length === 0 && docIds.length === 0

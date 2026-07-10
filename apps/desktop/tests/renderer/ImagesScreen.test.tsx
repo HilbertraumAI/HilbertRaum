@@ -4,6 +4,7 @@ import { render, screen, cleanup, waitFor, act, within } from '@testing-library/
 import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import { resetVisionSessionForTests } from '../../src/renderer/lib/visionSession'
+import { __turnRowRenderCounts } from '../../src/renderer/images'
 import type { DecodedImage, DecodeImage } from '../../src/renderer/images'
 import type { ImageJob, VisionStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
@@ -179,7 +180,8 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
 
     await act(async () => s.token.fn?.('It is '))
     await act(async () => s.token.fn?.('a receipt.'))
-    expect(screen.getByText(/It is a receipt\./)).toBeInTheDocument()
+    // PF-7c: tokens land on the store's 40 ms batch flush, not synchronously — findByText waits.
+    expect(await screen.findByText(/It is a receipt\./)).toBeInTheDocument()
 
     await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'It is a receipt.' }))
     expect(screen.getByText('Generated locally from the selected image.')).toBeInTheDocument()
@@ -242,6 +244,40 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled())
   })
 
+  // PF-7c (full-audit 2026-07-10): stable handler identities (useEventCallback) + the token batch
+  // flush mean a SETTLED turn's memoized row no longer re-renders on every stream flush of a
+  // sibling turn — the `__docRowRenderCounts` oracle pattern, applied to TurnRow.
+  it('a settled TurnRow does not re-render while a new turn streams (PF-7c)', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    stubApi({ ...s.api, ...pickStubs() } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await selectImageViaPicker(user)
+
+    // First turn settles.
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.done.fn).toBeDefined())
+    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'A receipt.' }))
+    await screen.findByText('A receipt.')
+
+    // Second turn starts streaming. Measure AFTER its first flush landed — the busy flip that
+    // legitimately re-renders every row (it disables the settled row's "Try again") is behind us.
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'And this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.token.fn).toBeDefined())
+    await act(async () => s.token.fn?.('One'))
+    await screen.findByText(/One/)
+    const before = new Map(__turnRowRenderCounts)
+
+    await act(async () => s.token.fn?.(' two'))
+    await screen.findByText(/One two/)
+    const delta = (id: string): number =>
+      (__turnRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
+    expect(delta('img-turn-1')).toBe(0) // the settled row's memo held through the flush
+    expect(delta('img-turn-2')).toBeGreaterThan(0) // the streaming row is the only one updating
+  })
+
   it('maps an empty model response to the friendly empty-response copy', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
@@ -287,7 +323,8 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
     await user.click(screen.getByRole('button', { name: 'Ask' }))
     await waitFor(() => expect(s.token.fn).toBeDefined())
     await act(async () => s.token.fn?.('Partial…'))
-    expect(screen.getByText(/Partial…/)).toBeInTheDocument()
+    // PF-7c: tokens land on the store's 40 ms batch flush, not synchronously — findByText waits.
+    expect(await screen.findByText(/Partial…/)).toBeInTheDocument()
 
     // Replace the image while the analyze is still running.
     await user.click(screen.getByRole('button', { name: 'Replace' }))

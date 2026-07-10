@@ -14,7 +14,20 @@ interface Props {
 // action ("Start chatting") and quiet preflight warnings. Reuses existing IPC only
 // (getAppStatus / getRuntimeStatus / listDocuments / runPreflight).
 
+/**
+ * PF-7a (full-audit 2026-07-10): the runtime fields this screen actually consumes — an
+ * unchanged poll keeps the PREVIOUS state object so React bails out of the re-render
+ * instead of re-rendering the whole screen every 2.5 s on a fresh-but-identical object.
+ */
+function sameRuntime(a: RuntimeStatus | null, b: RuntimeStatus | null): boolean {
+  return a != null && b != null && a.running === b.running && a.modelId === b.modelId
+}
+
+/** Test probe (the `__docRowRenderCounts` pattern, DEV-only): HomeScreen render count. */
+export const __homeScreenRenderCount = { value: 0 }
+
 export function HomeScreen({ onNavigate }: Props): JSX.Element {
+  if (import.meta.env.DEV) __homeScreenRenderCount.value += 1
   const { t, tCount } = useT()
   const [status, setStatus] = useState<AppStatus | null>(null)
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
@@ -43,27 +56,36 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
 
   // The selected model auto-starts in the background at launch — poll so the model
   // row flips to "running" without a manual refresh (same cadence as ChatScreen).
+  // PF-7a (full-audit 2026-07-10): the poll used to run forever and set a fresh object per
+  // tick. Now (1) an unchanged tick keeps the previous object (`sameRuntime`) so nothing
+  // re-renders, and (2) once the model is running the interval stops — the ChatScreen
+  // pattern (it polls only while NOT running) — with a window-focus re-check so a model
+  // stopped/crashed while the user was away still flips the row.
+  const running = runtime?.running === true
   useEffect(() => {
     let active = true
     const check = (): void => {
       window.api
         ?.getRuntimeStatus()
-        .then((r) => active && setRuntime(r))
+        .then((r) => active && setRuntime((prev) => (sameRuntime(prev, r) ? prev : r)))
         .catch(() => active && setRuntime(null))
     }
     check()
-    const timer = setInterval(check, RUNTIME_POLL_MS)
+    const onFocus = (): void => check()
+    window.addEventListener('focus', onFocus)
+    const timer = running ? null : setInterval(check, RUNTIME_POLL_MS)
     return () => {
       active = false
-      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+      if (timer) clearInterval(timer)
     }
-  }, [])
+  }, [running])
 
   const preflightNotes = preflight
     ? [...preflight.problems, ...(preflight.slowDriveWarning ? [preflight.slowDriveWarning] : [])]
     : []
 
-  const modelRunning = runtime?.running === true
+  const modelRunning = running
   const indexedCount = docs?.filter((d) => d.status === 'indexed').length ?? null
 
   // The hero CTA is adaptive (D-UI3): it leads with the action that unblocks the user.

@@ -72,6 +72,36 @@ const listeners = new Set<() => void>()
 /** Fired when a turn completes + persists, so a mounted screen can refresh its history list. */
 const persistListeners = new Set<() => void>()
 
+// PF-7c (full-audit 2026-07-10, closes carried-forward PERF-5): token deltas are BATCHED through
+// a small flush buffer (the ChatScreen STREAM_FLUSH_MS precedent) instead of notifying per token.
+// Each per-token notify re-mapped the whole `turns` array and re-rendered the Images screen; a
+// vision decode is fast enough for that to be real churn. translateSession documents when
+// per-token IS justified (~4 tok/s decode); vision has no such justification. The buffer is
+// applied by `flushPending` — settle paths (done/error/stop) flush FIRST so no token is lost;
+// teardown paths that discard the turn anyway (new image / Remove / lock purge) drop it unsent.
+const STREAM_FLUSH_MS = 40
+let pendingAnswer = ''
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Apply the buffered token chunk to the active turn — ONE notify per flush window. */
+function flushPending(): void {
+  if (flushTimer != null) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  if (pendingAnswer === '' || activeTurnId == null) {
+    pendingAnswer = ''
+    return
+  }
+  const chunk = pendingAnswer
+  pendingAnswer = ''
+  patchTurn(activeTurnId, (tn) => ({ answer: tn.answer + chunk, state: 'analyzing' }))
+}
+
+function scheduleFlush(): void {
+  if (flushTimer == null) flushTimer = setTimeout(flushPending, STREAM_FLUSH_MS)
+}
+
 function notify(): void {
   for (const fn of listeners) fn()
 }
@@ -99,6 +129,14 @@ function nextTurnId(): string {
 
 /** Drop the live stream listeners (does NOT touch the job main-side). */
 function teardownStream(): void {
+  // PF-7c: drop any un-flushed token chunk with the stream — settle paths that keep the
+  // partial answer (done/error/stop) call `flushPending()` BEFORE tearing down; every other
+  // caller is discarding the turn (or purging on lock), where flushing would be wrong.
+  if (flushTimer != null) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  pendingAnswer = ''
   for (const u of unsubs) u?.()
   unsubs = []
   activeTurnId = null
@@ -170,6 +208,7 @@ export function clearVisionSession(): void {
 export function stopActive(): void {
   const turnId = activeTurnId
   if (!snapshot.activeJobId) return
+  flushPending() // PF-7c: tokens already received land in the stopped turn (pre-batching behavior)
   abortActive()
   if (turnId) patchTurn(turnId, { state: 'cancelled' })
   set({ activeJobId: null, analyzing: false })
@@ -245,12 +284,15 @@ export async function analyze(question: string): Promise<AnalyzeOutcome> {
   unsubs.push(
     window.api?.onImageToken?.(jobId, (token: string) => {
       if (jobId !== snapshot.activeJobId) return // stale/late event for a superseded job (F8)
-      patchTurn(turnId, (tn) => ({ answer: tn.answer + token, state: 'analyzing' }))
+      // PF-7c: buffer + flush on a timer — one snapshot rebuild + notify per window, not per token.
+      pendingAnswer += token
+      scheduleFlush()
     })
   )
   unsubs.push(
     window.api?.onImageDone?.(jobId, (doneJob) => {
       if (jobId !== snapshot.activeJobId) return // F8 belt-and-braces (gen guard already prevents wiring)
+      flushPending() // PF-7c: the `tn.answer` fallback below must see the complete streamed text
       let saved = false
       patchTurn(turnId, (tn) => {
         const answer = doneJob.answer ?? tn.answer
@@ -269,6 +311,7 @@ export async function analyze(question: string): Promise<AnalyzeOutcome> {
   unsubs.push(
     window.api?.onImageError?.(jobId, (errJob) => {
       if (jobId !== snapshot.activeJobId) return // F8 belt-and-braces (gen guard already prevents wiring)
+      flushPending() // PF-7c: the partial answer stays on the failed/cancelled turn (pre-batching behavior)
       const code = errJob.error ?? 'runtimeFailed'
       patchTurn(turnId, code === 'cancelled' ? { state: 'cancelled' } : { state: 'failed', error: code })
       teardownStream()

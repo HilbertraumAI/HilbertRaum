@@ -31,6 +31,12 @@ const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
   decodeFailed: 'images.err.decodeFailed'
 }
 
+/**
+ * Test probe (the `__docRowRenderCounts` pattern, DEV-only): TurnRow render counts by turn id,
+ * so a perf test can assert a SETTLED row's memo holds while a sibling turn streams (PF-7c).
+ */
+export const __turnRowRenderCounts = new Map<string, number>()
+
 // PERF-6: one memoized row per turn, keyed by turn id. While a turn is IN FLIGHT we render its
 // answer as PLAIN TEXT (the streaming token deltas) and run the Markdown parser only ONCE, on
 // completion — mirroring the chat-transcript FE-1 split — so a long answer isn't re-parsed on every
@@ -55,6 +61,7 @@ const TurnRow = memo(function TurnRow({
   /** True while ANY turn is analyzing — vision is one-at-a-time, so a per-turn re-run is rejected. */
   busy: boolean
 }): JSX.Element {
+  if (import.meta.env.DEV) __turnRowRenderCounts.set(turn.id, (__turnRowRenderCounts.get(turn.id) ?? 0) + 1) // DX-2: DEV-only, no-ops in prod
   const running = turn.state === 'starting' || turn.state === 'analyzing'
   return (
     <div className="image-turn">

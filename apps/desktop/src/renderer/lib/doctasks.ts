@@ -63,6 +63,22 @@ export function isDocTaskTerminal(status: DocTaskStatus | null): boolean {
 }
 
 /**
+ * PF-7b (full-audit 2026-07-10): the fields whose change means subscribers must re-render —
+ * an identical 400 ms poll tick skips the set entirely (the skillruns `sameRun` precedent,
+ * SKA-39), so a long-running task no longer re-renders every subscribed screen ~2.5×/s.
+ */
+function sameStatus(a: DocTaskStatus | null, b: DocTaskStatus): boolean {
+  return (
+    a != null &&
+    a.state === b.state &&
+    a.progress.stepsDone === b.progress.stepsDone &&
+    a.progress.stepsTotal === b.progress.stepsTotal &&
+    (a.error ?? null) === (b.error ?? null) &&
+    (a.resultRef?.documentId ?? null) === (b.resultRef?.documentId ?? null)
+  )
+}
+
+/**
  * Start a document task over one document (summary/translation) or two (compare,
  * A/B order) and begin polling. Throws the backend's friendly error when the task is
  * refused (chat streaming, no runtime, bad params, …).
@@ -107,7 +123,8 @@ export async function startTask(
             return
           }
         }
-        setActive({ ...current, status })
+        // PF-7b: an unchanged tick sets nothing — subscribers keep the same snapshot object.
+        if (!sameStatus(current.status, status)) setActive({ ...current, status })
         if (isDocTaskTerminal(status)) stopPolling()
       } catch {
         // Polling failed (e.g. workspace locked) — surface a terminal-ish stop.

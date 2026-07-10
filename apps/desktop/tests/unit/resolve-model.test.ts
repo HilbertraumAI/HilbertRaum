@@ -61,6 +61,18 @@ describe('resolveModelByRole (M-A3)', () => {
     expect(resolveModelByRole('C:/m', 'C:/drive', 'reranker')).toBeNull()
   })
 
+  // PF-4 (full-audit 2026-07-10): composeServices discovers once per composition pass and
+  // threads the result in — the resolver must then NOT re-walk the manifests dir.
+  it('uses caller-provided discovered manifests without re-discovering (PF-4)', () => {
+    const discovered = [manifest('e5-embed', 'embeddings', 512)] as never
+    expect(resolveModelByRole('C:/m', 'C:/drive', 'embeddings', { discovered })).toEqual({
+      id: 'e5-embed',
+      modelPath: 'C:/drive/weights/e5-embed.gguf',
+      contextTokens: 512
+    })
+    expect(discoverManifests).not.toHaveBeenCalled()
+  })
+
   it('never throws — a manifest-layer failure reads as "no model"', () => {
     discoverManifests.mockImplementation(() => {
       throw new Error('corrupt manifests dir')

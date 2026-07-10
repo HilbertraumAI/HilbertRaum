@@ -5,6 +5,8 @@ import {
   selectImage,
   getVisionSession,
   resetVisionSessionForTests,
+  stopActive,
+  subscribeVisionSession,
   type SelectedImage
 } from '../../src/renderer/lib/visionSession'
 import type { DecodedImage } from '../../src/renderer/images'
@@ -72,12 +74,98 @@ describe('visionSession — F8 superseded-analyze teardown', () => {
     expect(imageCancel).toHaveBeenCalledWith('jobA')
     expect(tokenCbs.jobA).toBeUndefined()
 
-    // The live job is B, and its stream is the one wired — a token lands on B's single turn.
+    // The live job is B, and its stream is the one wired — a token lands on B's single turn
+    // (on the PF-7c batch flush, so gate on the observable store state, not synchronously).
     expect(getVisionSession().activeJobId).toBe('jobB')
     tokenCbs.jobB?.('hello')
+    await until(() => getVisionSession().turns[0]?.answer === 'hello')
     const { turns } = getVisionSession()
     expect(turns).toHaveLength(1)
     expect(turns[0].question).toBe('question B')
-    expect(turns[0].answer).toBe('hello')
+  })
+})
+
+/** Poll until `pred` holds (the store's flush window is 40 ms) — a deterministic gate, no fixed sleep. */
+async function until(pred: () => boolean, ms = 5000): Promise<void> {
+  const start = Date.now()
+  while (!pred()) {
+    if (Date.now() - start > ms) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
+// PF-7c (full-audit 2026-07-10, closes carried-forward PERF-5): the store used to notify per token
+// with a freshly mapped `turns` array — every token re-rendered the Images screen. Tokens now
+// buffer through a 40 ms flush (the ChatScreen STREAM_FLUSH_MS precedent): a burst inside one
+// window produces ONE snapshot rebuild + ONE notify, and the settle paths flush FIRST so no
+// token is ever lost.
+describe('visionSession — PF-7c batched token flush', () => {
+  function wireStubs(): { tokenCbs: Record<string, (t: string) => void>; doneCbs: Record<string, (j: unknown) => void> } {
+    const tokenCbs: Record<string, (t: string) => void> = {}
+    const doneCbs: Record<string, (j: unknown) => void> = {}
+    stubApi({
+      imageAnalyze: vi.fn(async () => ({ jobId: 'j1', state: 'starting' })),
+      onImageToken: vi.fn((id: string, cb: (t: string) => void) => {
+        tokenCbs[id] = cb
+        return () => delete tokenCbs[id]
+      }),
+      onImageDone: vi.fn((id: string, cb: (j: unknown) => void) => {
+        doneCbs[id] = cb
+        return () => delete doneCbs[id]
+      }),
+      onImageError: vi.fn(() => () => {})
+    } as never)
+    return { tokenCbs, doneCbs }
+  }
+
+  it('a token burst inside one flush window produces exactly ONE notify', async () => {
+    vi.useFakeTimers()
+    try {
+      const { tokenCbs } = wireStubs()
+      selectImage(img('a.png'))
+      await analyze('question')
+      const listener = vi.fn()
+      const unsub = subscribeVisionSession(listener)
+      const before = getVisionSession()
+
+      for (const tk of ['a', 'b', 'c', 'd', 'e']) tokenCbs.j1?.(tk)
+      // Buffered — nothing applied, the snapshot identity is untouched mid-window.
+      expect(listener).not.toHaveBeenCalled()
+      expect(getVisionSession()).toBe(before)
+
+      await vi.advanceTimersByTimeAsync(40)
+      expect(listener).toHaveBeenCalledTimes(1) // ONE batched notify for the whole burst
+      expect(getVisionSession().turns[0].answer).toBe('abcde')
+      expect(getVisionSession().turns[0].state).toBe('analyzing')
+      unsub()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('done flushes the buffer first — the accumulated-answer fallback sees every token', async () => {
+    const { tokenCbs, doneCbs } = wireStubs()
+    selectImage(img('a.png'))
+    await analyze('question')
+
+    tokenCbs.j1?.('partial ')
+    tokenCbs.j1?.('answer')
+    // Done arrives INSIDE the flush window carrying no full text — the fallback reads the turn.
+    doneCbs.j1?.({ jobId: 'j1', state: 'done' })
+    expect(getVisionSession().turns[0].answer).toBe('partial answer')
+    expect(getVisionSession().turns[0].state).toBe('done')
+    expect(getVisionSession().analyzing).toBe(false)
+  })
+
+  it('Stop flushes the buffer first — tokens already received land in the stopped turn', async () => {
+    const { tokenCbs } = wireStubs()
+    selectImage(img('a.png'))
+    await analyze('question')
+
+    tokenCbs.j1?.('kept ')
+    tokenCbs.j1?.('text')
+    stopActive() // inside the flush window
+    expect(getVisionSession().turns[0].answer).toBe('kept text')
+    expect(getVisionSession().turns[0].state).toBe('cancelled')
   })
 })

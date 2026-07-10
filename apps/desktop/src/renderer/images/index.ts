@@ -4,7 +4,7 @@
 export { ImageDropZone } from './ImageDropZone'
 export { ImagePreview } from './ImagePreview'
 export { QuestionComposer, type ComposerChip } from './QuestionComposer'
-export { AnswerThread, type ImageTurn } from './AnswerThread'
+export { AnswerThread, __turnRowRenderCounts, type ImageTurn } from './AnswerThread'
 export { ImageHistory } from './ImageHistory'
 export { VisionUnavailable } from './VisionUnavailable'
 export {
