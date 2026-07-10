@@ -2943,8 +2943,8 @@ all enforced in MAIN and re-checked per call:**
    still gated by the setting + a per-download confirmation, and update-checks + telemetry stay
    denied so the drive never phones home).
 2. `settings.allowNetwork` — the spec §3.6 checkbox, **default on** for a fresh DIY/dev install
-   (`DEFAULT_SETTINGS.allowNetwork: true`); gate 1's policy ceiling still wins, so prepared
-   drives stay download-disabled. A locked workspace reads as off.
+   (`DEFAULT_SETTINGS.allowNetwork: true`); gate 1's policy ceiling still wins — a `policy.json`
+   hand-edited to deny keeps downloads off regardless of the toggle. A locked workspace reads as off.
 3. A per-download confirmation: model name, size, license + `license_url`, upstream URL, and
    an explicit license acknowledgement when `license_review.status != approved` (the in-app
    `--accept-license`). The renderer dialog is UX; enforcement is main-side. When gate 1

@@ -1,6 +1,8 @@
 # HilbertRaum — Troubleshooting
 
-_Last updated: 2026-07-07 (added "Redaction left a name in, or an edit changed nothing" — the AI-assisted best-effort posture, the no-model-running degrade, steerable scope, verbatim-only edits, and same-format output). Previously: Images entries (the screen needs a vision model; asking about an image is slow); Skills entries (drop-ins install disabled, import rejections, the "Needs newer app" badge, "the skill tool found nothing"); scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
+_Last updated: 2026-07-10 (offline-mode answer corrected, full-audit 2026-07-10 DOC-101: model
+downloads are permitted on prepared commercial drives — every download still asks first). Prior:
+2026-07-07 (added "Redaction left a name in, or an edit changed nothing" — the AI-assisted best-effort posture, the no-model-running degrade, steerable scope, verbatim-only edits, and same-format output). Previously: Images entries (the screen needs a vision model; asking about an image is slow); Skills entries (drop-ins install disabled, import rejections, the "Needs newer app" badge, "the skill tool found nothing"); scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
 
 Quick answers to common situations. Everything here is normal, local, and offline — none of
 these steps require the internet.
@@ -65,9 +67,9 @@ on the computer you run it from — exFAT cannot hold the symlinks inside a `.ap
 
 **No. That is the intended state.** HilbertRaum runs the AI model on your laptop and
 keeps your data local. The core app — chat, documents, search — never goes online; the only
-optional network feature, model/engine downloads, is off on a prepared commercial drive (and
-always asks before any download otherwise). You can confirm the current state in
-**Settings → Privacy & data**.
+optional network feature, model/engine downloads, is permitted even on a prepared commercial
+drive but never runs by itself — every download asks for your explicit confirmation first.
+You can confirm the current state in **Settings → Privacy & data**.
 
 ---
 

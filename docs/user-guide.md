@@ -1,6 +1,10 @@
 # HilbertRaum — User Guide
 
-_Last updated: 2026-06-20 (added §8 "Ask about an image" — the Images screen; subsequent sections
+_Last updated: 2026-07-10 (accuracy sweep, full-audit 2026-07-10 DOC-101…104: model downloads are
+permitted on prepared commercial drives too; document translation supports 51 languages; the
+Translate action activates without a restart after a mid-session model install; the local
+diagnostics log IS encrypted with the workspace). Prior:
+2026-06-20 (added §8 "Ask about an image" — the Images screen; subsequent sections
 renumbered). Previously: Skills — the composer picker, the per-message skill glyph, skills
 that run local tools, and Settings → Skills; deep index + coverage meter and tiers;
 drag-and-drop files into a chat; the composite source picker; regrouped + collapsible Documents
@@ -76,7 +80,8 @@ The first launch walks you through a short, full-window setup:
    account, no tracking. Click **Get started**.
 2. **Create your password.** This password locks everything in your workspace — chats,
    settings, and the stored copies of your imported documents — on the drive. (Model files
-   and local logs are not encrypted — they contain no document contents.) The password is
+   are not encrypted — they are public weights, not your data. The local diagnostics log is
+   encrypted along with your workspace.) The password is
    **never stored** anywhere, and if you forget it the data cannot be recovered — that's
    the point. While you type, a small strength meter offers honest advice (longer is
    stronger); it never blocks you. The **eye button** reveals what you typed, and pasting
@@ -163,8 +168,9 @@ A model marked **Not downloaded** can be fetched from inside the app — for exa
 internet for, and it never happens by itself:
 
 1. Open **Settings** and make sure **Allow internet access for model downloads and updates**
-   is on (it is **on by default on a fresh install**, unless this drive's policy disables it —
-   common on prepared commercial drives; the app is fully usable without it either way).
+   is on (it is **on by default**, including on prepared commercial drives, unless this drive's
+   builder deliberately disabled downloads in the drive's policy — rare; the app is fully usable
+   without it either way).
 2. On **AI Model**, click **Download** on the model you want. A confirmation shows the size,
    the license (with a link), and the address the file comes from. If the model's license
    hasn't been pre-reviewed, you'll also tick a box accepting it.
@@ -174,9 +180,9 @@ internet for, and it never happens by itself:
    discarded automatically, never silently kept.
 
 One model downloads at a time (they are large). If the Download button is greyed out, the
-screen tells you why: either the Settings toggle is off, or this drive's policy has downloads
-disabled (common on preconfigured commercial drives — use the drive's update path instead).
-Nothing about you or your documents is ever sent; the app only fetches the file.
+screen tells you why: either the Settings toggle is off, or this drive's builder deliberately
+disabled downloads in the drive's policy (rare — most drives, including prepared commercial
+ones, allow them). Nothing about you or your documents is ever sent; the app only fetches the file.
 
 Some optional models carry a **license you accept before downloading** — the confirmation shows
 a link to the license and a tick-box you must check first. The **TranslateGemma** translation
@@ -396,9 +402,9 @@ A few honest notes:
 Translation uses the dedicated **TranslateGemma** translation model (see the download note
 above) — if it is not installed yet, the menu shows **Get the translation model…** instead,
 which takes you straight to the AI Model screen. Pick the document's language and the
-language you want (**ten** are supported: Deutsch, English, Français, Español, Italiano,
-Português, Nederlands, Polski, Čeština, Українська — the app does not guess the source
-language) and the model writes a translated copy, fully on this drive. The result is a
+language you want — **51 languages** are supported, source and target, the same list as the
+Translate screen (§7a); the app does not guess the source language — and the model writes a
+translated copy, fully on this drive. The result is a
 **new document** in your list, named like *"report (Deutsch)"*: it is searchable, answerable
 in *Ask my documents* (with citations), and you can **Export** it as a Markdown file. The
 new document starts with an honest *"Machine-translated by &lt;model&gt; — may contain
@@ -418,8 +424,10 @@ A few honest notes about translations:
   target language (e.g. *14.03.2026* → *March 14, 2026*) — that is how a professional
   translation reads. On long documents a recurring term may occasionally be worded
   differently in different parts.
-- If you install the translation model while the app is running, restart the app so the
-  Translate action picks it up.
+- If you install the translation model while the app is running, the **Translate** action
+  becomes available as soon as the download finishes — no restart needed. (The speech and
+  search models — transcription, reranker, embeddings — still need a restart after a
+  mid-session install.)
 
 **Compare two documents.** Tick the checkboxes next to **exactly two** Ready documents and
 click **Compare (2)** in the selection toolbar (it stays disabled until exactly two are
@@ -716,8 +724,8 @@ skill's figures.
 
 Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status in the chat header)
 to see where your data lives and confirm the app's network state. Internet access is used **only**
-for optional model/engine downloads — it is on by default on a fresh install so you can fetch a model
-out of the box (a prepared commercial drive ships with it off), every download is explicit and
+for optional model/engine downloads — it is on by default so you can fetch a model out of the
+box, including on a prepared commercial drive; every download is explicit and
 confirmed, and the core app — chat, documents, search — never goes online. Logs are stored
 **locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 

@@ -272,9 +272,11 @@ Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → d
 
 > **Build-time network ≠ runtime network.** The `fetch-*` scripts make the project's first
 > deliberate network access, but they run on the **builder's** machine at build time. The app stays
-> 100% offline by default; the in-app downloader (architecture.md "In-app model downloader") is
-> triple-gated: policy ∧ default-off setting ∧ per-download confirmation, and hidden entirely on
-> commercial drives. This does not weaken the offline guarantee.
+> 100% offline by default; the in-app downloader is triple-gated (policy ceiling ∧ user setting ∧
+> per-download confirmation) and downloads are policy-permitted in both `prepare-drive` postures —
+> update checks + telemetry stay denied, matching the commercial final check below (gate
+> semantics: [`model-policy.md`](model-policy.md) "The in-app downloader"). This does not weaken
+> the offline guarantee.
 
 These artifacts (weights, sidecar binaries, the workspace DB, logs, the portable `.exe`) are all
 **git-ignored** — they live on the drive, never in the repo.

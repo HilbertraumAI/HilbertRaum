@@ -1,6 +1,9 @@
 # Model Policy — HilbertRaum
 
-_Last updated: 2026-07-01 (Qwen3.5 Unsloth wave: three new text-only chat manifests —
+_Last updated: 2026-07-10 (download-posture correction, full-audit 2026-07-10 DOC-101: the
+in-app downloader section now states that `prepare-drive` permits model downloads in BOTH
+postures — the 2026-07-01 flip; a builder can hand-edit `policy.json` to deny). Prior:
+2026-07-01 (Qwen3.5 Unsloth wave: three new text-only chat manifests —
 `qwen3.5-9b-ud-q4kxl`, `qwen3.5-27b-ud-q4kxl`, `qwen3.5-35b-a3b-ud-q4kxl` — added alongside the
 existing `qwen3.5-4b-ud-q4kxl`; runtime pin BUMPED b9585 → **b9849** as the Qwen3.5 compatibility
 gate. See "Qwen3.5 Unsloth wave" below. Prior:
@@ -230,15 +233,17 @@ A model that is **missing** (or failed its checksum) and whose manifest carries 
 can be fetched from the **AI Model screen**. Three gates, ALL required, re-checked in the main
 process on every start (architecture.md "In-app model downloader"):
 
-1. **Policy ceiling** — `policy.network.allow_model_downloads`. The **default**
-   (no `policy.json`) permits downloads (wave-1 decision D3, resolved (a)) so the user toggle below is the
-   effective gate on DIY/developer setups; `prepare-drive` keeps writing **deny** in both its
-   postures, so prepared drives stay download-disabled unless the drive builder edits
-   `config/policy.json`. Policy only restricts, never expands.
+1. **Policy ceiling** — `policy.network.allow_model_downloads`. Downloads are policy-permitted
+   everywhere by default: the no-`policy.json` default allows them (wave-1 decision D3, resolved
+   (a)), and since 2026-07-01 `prepare-drive` writes **allow** in BOTH its postures (dev and
+   commercial), so the user toggle below is the effective gate on prepared drives too. A drive
+   builder who wants a download-locked drive hand-edits `config/policy.json` to
+   `allow_model_downloads: false`. Policy only restricts, never expands — and update checks +
+   telemetry remain **always denied** in every posture (the app never phones home).
 2. **User setting** — the spec §3.6 Settings checkbox ("Allow internet access for model
    downloads and updates"), **default ON** for a fresh DIY/developer install
-   (`DEFAULT_SETTINGS.allowNetwork: true`); the policy ceiling in gate 1 still wins, so a prepared
-   commercial drive stays download-disabled regardless of this toggle. While the workspace is
+   (`DEFAULT_SETTINGS.allowNetwork: true`); the policy ceiling in gate 1 still wins — on a drive
+   whose `policy.json` denies downloads, the toggle cannot re-enable them. While the workspace is
    locked the setting is unreadable and treated as off.
 3. **Per-download confirmation** — a dialog showing size, license (+ `license_url` link), and the
    upstream URL. When `license_review.status != approved`, an explicit license-acknowledgement

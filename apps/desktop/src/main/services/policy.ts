@@ -13,7 +13,7 @@ import type {
 // Reads `config/policy.json` and `config/drive.json` (both OPTIONAL — developer
 // runs fall back to defaults) and merges them over DEFAULT_POLICY, where **update
 // checks and telemetry are off** and model downloads are policy-permitted but gated
-// behind the default-off user setting plus a per-download confirmation
+// behind the user's `allowNetwork` setting (default ON) plus a per-download confirmation
 // (architecture.md "In-app model downloader"). The module is pure + resilient: a
 // missing or malformed file degrades to safe defaults plus a warning, never a throw.
 //
@@ -29,8 +29,9 @@ import type {
  * ("Allow internet access for model downloads…") is the effective gate for the in-app
  * downloader. That toggle now defaults ON (DEFAULT_SETTINGS.allowNetwork) so downloads work
  * out of the box, and every download still needs an explicit per-download confirmation. A
- * `policy.json` that writes `allow_model_downloads: false` (the commercial prepare-drive
- * posture) restricts this unconditionally — policy only restricts, never expands. Workspace/model
+ * `policy.json` that writes `allow_model_downloads: false` (a drive builder's hand-edit —
+ * `prepare-drive` writes `true` in BOTH its postures, full-audit 2026-07-10 DOC-101)
+ * restricts this unconditionally — policy only restricts, never expands. Workspace/model
  * defaults are developer-friendly (dev with no policy file: plaintext workspace +
  * unverified models allowed) — a commercial `policy.json` tightens these.
  */
