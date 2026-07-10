@@ -6,6 +6,11 @@ import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './serv
 import { applyUiLanguageSetting, initMainI18n } from './services/i18n'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
+import {
+  SECURE_WINDOW_WEB_PREFERENCES,
+  buildCsp,
+  createWindowOpenPolicy
+} from './window-security'
 import { getSettings, updateSettings } from './services/settings'
 import { effectiveContextWindow } from './services/chat'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
@@ -456,24 +461,14 @@ function createWindow(): void {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f7f8fa',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true
+      ...SECURE_WINDOW_WEB_PREFERENCES
     }
   })
 
   // Content-Security-Policy as a response header (defence in depth on top of the
-  // index.html meta tag, spec §3.5). Production is strict: same-origin only, no remote
-  // connect/img/script — the renderer cannot reach any cloud service. Dev relaxes
-  // connect-src for Vite HMR over ws://localhost (otherwise `npm run dev` breaks).
-  const csp = isDev
-    ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
-      "style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* http://localhost:*; " +
-      "img-src 'self' data:; font-src 'self'"
-    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-      "connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; " +
-      "base-uri 'none'; frame-ancestors 'none'"
+  // index.html meta tag, spec §3.5). The strings live in window-security.ts (TS-2),
+  // pinned by tests/unit/window-security.test.ts — edit them THERE.
+  const csp = buildCsp(isDev)
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -500,18 +495,12 @@ function createWindow(): void {
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 
-  // Open external links in the OS browser, never inside the app window — but only safe
-  // web schemes. Handing an arbitrary renderer-supplied URL (e.g. file://, smb://) to the
-  // OS handler is a known Electron pitfall, so anything other than http(s) is dropped.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const { protocol } = new URL(url)
-      if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(url)
-    } catch {
-      /* malformed URL → ignore */
-    }
-    return { action: 'deny' }
-  })
+  // Open external links in the OS browser, never inside the app window — policy in
+  // window-security.ts (only http(s) reaches the OS handler; the in-app open is always
+  // denied), pinned by tests/unit/window-security.test.ts.
+  mainWindow.webContents.setWindowOpenHandler(
+    createWindowOpenPolicy((url) => void shell.openExternal(url))
+  )
 
   // Block in-app navigation to remote origins (defence in depth). SEC-3
   // (backend-audit-2026-06-27): the guard covers BOTH `will-navigate` and `will-redirect`

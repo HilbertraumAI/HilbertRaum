@@ -4,6 +4,7 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { OCR_RASTER } from '../../../shared/ipc'
 import { log } from '../logging'
 import { installNavigationGuard } from '../navigation-guard'
+import { SECURE_WINDOW_WEB_PREFERENCES } from '../../window-security'
 import { assertPageWithinByteCap } from './page-cap'
 import { pipelinePages } from './pipeline'
 
@@ -123,10 +124,7 @@ export async function rasterizePdfWithHiddenWindow(
       skipTaskbar: true,
       webPreferences: {
         preload: join(__dirname, '../preload/ocr.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webSecurity: true
+        ...SECURE_WINDOW_WEB_PREFERENCES
       }
     })
   } catch (err) {

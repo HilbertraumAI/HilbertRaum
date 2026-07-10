@@ -63,6 +63,12 @@ npx vitest run tests/unit/some-file.test.ts   # one file
 npx vitest -t "a test-name substring"          # one test (by name filter)
 npm run test:watch                              # watch mode (re-runs affected tests on save)
 ```
+- **Window security wiring is pin-tested.** The `webPreferences` hardening flags, the CSP
+  strings, and the window-open policy live in `apps/desktop/src/main/window-security.ts`,
+  pinned literal-by-literal by `tests/unit/window-security.test.ts` — do **not** edit CSP or
+  `webPreferences` inline in `index.ts`/the OCR rasterizer; change the module next to its tests
+  (a deliberate change there is a deliberate security decision).
+
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the
 PR is the gate, so open a **draft PR** to run CI on a work-in-progress branch. The env-gated

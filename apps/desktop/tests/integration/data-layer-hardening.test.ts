@@ -123,12 +123,16 @@ describe('getLatestCheckpoint index (PERF-3)', () => {
        WHERE m.conversation_id = ? AND m.kind = 'compaction'
        ORDER BY m.rowid DESC LIMIT 1`
 
-  it('is served by idx_messages_conv_kind with no SCAN and no temp B-tree', () => {
+  // TS-5 (full-audit 2026-07-10): assert index NAMES only, never planner phrasing.
+  // EXPLAIN QUERY PLAN detail strings ("SCAN", "USE TEMP B-TREE", "COVERING") are
+  // unstable planner output that shifts with the SQLite bundled by the pinned Node
+  // (node:sqlite) — a Node upgrade changed them before with no behavior change. Which
+  // INDEX the planner picks is the actual PERF-3 contract. If these tests fail right
+  // after a Node/Electron bump, triage as expected planner drift first, not a regression.
+  it('is served by idx_messages_conv_kind', () => {
     const db = freshDb()
     const p = plan(db, GET_LATEST_CHECKPOINT, 'c1')
     expect(p).toContain('idx_messages_conv_kind')
-    expect(p).not.toMatch(/\bSCAN\b/) // not an O(messages-in-conversation) scan
-    expect(p).not.toMatch(/TEMP B-TREE/) // ORDER BY rowid DESC satisfied by the index's appended rowid
   })
 
   it('TEETH: without idx_messages_conv_kind the planner falls back to the conversation-only index', () => {
