@@ -2173,7 +2173,10 @@ Per-finding disposition (F-1…F-8):
     the selectors are presence-driven); the IPC wiring routes it to **`AppContext.onModelInstalled`**
     (main/index.ts), which re-runs **`composeTranslator`** (`compose-services.ts` — the ONE
     construction startup and refresh share) and re-assigns `ctx.translator` **only when the slot is
-    null** (a live sidecar is never replaced). Every consumer reads `ctx.translator` live
+    null or the current instance reports `isStartFailed()`** (`shouldReplaceTranslator`;
+    full-audit 2026-07-10 BE-7 — a latched instance is lazy/dead with no child to orphan, so the
+    delete-and-re-download repair now activates without a restart; a live sidecar is never
+    replaced). Every consumer reads `ctx.translator` live
     (translate jobs, doc tasks — whose `getTranslator` was the one startup-const capture, now fixed
     — core-status IPC, lock/quit teardowns), and the Translate screen already re-reads
     `translationAvailable` on mount/focus. Scope: the **transcriber/reranker/embedder keep the
@@ -2954,13 +2957,23 @@ extended additively with `signal`/`headers`/`append`/`onResponse`; `verifyDownlo
 Bytes land in `<weightPath>.part`, renamed into place ONLY after the hash verifies; a
 mismatch deletes the partial and fails the job; a placeholder expected hash completes
 `unverified` (checksum honesty). Cancel keeps the `.part`; the next start resumes via a
-`Range` header (append iff the server answered 206). One download at a time; jobs are
+`Range` header (append iff the server answered 206). A cancel is honoured in EVERY live
+state — including `verifying`, where the SHA-256 over a multi-GB weight on USB takes
+minutes: the hash result is discarded, nothing is renamed into place, and a two-file
+(vision) job stops before its next file (full-audit 2026-07-10 BE-4; previously a cancel
+there was silently dropped). One download at a time; jobs are
 in-memory, polled over `downloads:start/get/cancel` (the Phase-4 import precedent — no new
 event channels). On a VERIFIED success the checksum cache is **primed** with the hash just
 computed (`models.ts` `primeChecksum`, keyed by the file's size+mtime) so the Models screen's
 install-state refresh reports `installed` WITHOUT re-hashing the multi-GB weight — this removed the
 invisible post-download "Checking…" gap where the card briefly looked un-downloaded (2026-07-01); a
-placeholder-hash completion still invalidates (it is never trusted). Audit events
+placeholder-hash completion still invalidates (it is never trusted). **Lock policy
+(full-audit 2026-07-10 BE-2): downloads keep running through a workspace lock** — the
+weights live outside the vault, and the persistent checksum cache (the job's only DB
+touchpoint) is lock-aware: `createSettingsHashStore` takes a `() => Db` getter (never a raw
+handle pinned at IPC registration) and degrades to an in-memory fallback while the vault is
+closed, and `runOne` treats any cache fault as non-fatal — the cache is an optimization, so
+a download that verified while locked still reports `done` and fires `onModelInstalled`. Audit events
 (`model_download_started/verified/failed`) flow through the injected
 `DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified".
 A job reaching `done` additionally fires `DownloadManagerDeps.onModelInstalled` → wired to

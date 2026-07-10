@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { composeTranslator } from '../../src/main/services/compose-services'
+import { composeTranslator, shouldReplaceTranslator } from '../../src/main/services/compose-services'
+import type { Translator } from '../../src/main/services/translation'
 import { llamaOsDir, llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
 
 // Issue #40 — the post-download translator re-selection. `composeTranslator` is the ONE
@@ -83,5 +84,44 @@ describe('composeTranslator (issue #40 — post-download re-selection)', () => {
     installBinary(root)
     installWeight(root)
     expect(composeTranslator({ rootPath: root, manifestsDir: null })).toBeNull()
+  })
+})
+
+/** A minimal live Translator fake — the interface `AppContext.translator` carries. */
+function fakeTranslator(overrides: Partial<Translator> = {}): Translator {
+  return {
+    modelId: 'live-instance',
+    contextWindow: () => 4096,
+    translate: async () => 'ok',
+    stop: async () => undefined,
+    ...overrides
+  }
+}
+
+// full-audit 2026-07-10 BE-7: the onModelInstalled refresh (main/index.ts) replaces the slot
+// per THIS rule — a startFailed-latched instance (corrupt GGUF) no longer blocks the
+// delete-and-re-download repair until an app restart.
+describe('shouldReplaceTranslator (BE-7 — latched instances repairable without restart)', () => {
+  it('replaces a null/undefined slot (the original #40 case)', () => {
+    expect(shouldReplaceTranslator(null)).toBe(true)
+    expect(shouldReplaceTranslator(undefined)).toBe(true)
+  })
+
+  it('NEVER replaces a live instance — with or without a latch reporter', () => {
+    expect(shouldReplaceTranslator(fakeTranslator({ isStartFailed: () => false }))).toBe(false)
+    expect(shouldReplaceTranslator(fakeTranslator())).toBe(false) // no reporter → assumed live
+  })
+
+  it('replaces a startFailed-latched instance, and re-composition yields a FRESH working translator', () => {
+    const { root, manifestsDir } = tempDrive()
+    installBinary(root)
+    installWeight(root) // the user deleted the corrupt GGUF and re-downloaded — weights are back
+    const latched = fakeTranslator({ isStartFailed: () => true })
+    expect(shouldReplaceTranslator(latched)).toBe(true)
+    // The refresh path re-runs composeTranslator — the replacement is a live, un-latched selection.
+    const fresh = composeTranslator({ rootPath: root, manifestsDir })
+    expect(fresh).not.toBeNull()
+    expect(fresh?.modelId).toBe('translategemma-test')
+    expect(fresh?.isStartFailed?.()).toBe(false) // the fresh instance starts un-latched
   })
 })

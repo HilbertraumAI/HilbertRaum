@@ -43,4 +43,11 @@ export interface Translator {
   stop(): Promise<void>
   /** Soft teardown (workspace lock) — the sidecar lazily restarts on the next `translate()`. */
   suspend?(): Promise<void>
+  /**
+   * Is the permanent failed-start latch armed (a dead instance with no live child)? Optional —
+   * fakes without it read as "not latched". The issue-#40 `onModelInstalled` refresh uses it to
+   * also replace a latched instance after a delete-and-re-download repair (BE-7, full-audit
+   * 2026-07-10); a live sidecar is still never replaced.
+   */
+  isStartFailed?(): boolean
 }

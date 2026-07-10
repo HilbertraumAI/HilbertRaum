@@ -85,6 +85,9 @@ export interface DownloadManagerDeps {
   fetchImpl?: FetchFn
   /** Injected downloader (default `downloadToFile`) — tests capture the applied size cap (F17). */
   downloadImpl?: typeof downloadToFile
+  /** Injected verifier (default `verifyDownloadedFile`) — tests gate it to pin the
+   *  cancel-during-verify contract deterministically (BE-4, full-audit 2026-07-10). */
+  verifyImpl?: typeof verifyDownloadedFile
   log?: (msg: string, meta?: unknown) => void
   /**
    * Audit hook: the IPC layer injects the app recorder so the background verify/fail
@@ -235,12 +238,15 @@ export class DownloadManager {
 
   /**
    * Cancel an in-flight download. The `.part` file is kept so the next attempt resumes.
-   * Cancelling a job that already reached a terminal state is a no-op.
+   * Cancelling a job that already reached a terminal state is a no-op. `verifying` is a
+   * cancellable state too (BE-4, full-audit 2026-07-10): the SHA-256 over a multi-GB weight
+   * on USB takes minutes, and a dropped cancel there let a two-file job start its next file.
+   * `runOne` re-checks the abort signal after the verify returns, before any rename.
    */
   cancel(jobId: string): DownloadJob {
     const job = this.jobs.get(jobId)
     if (!job) return this.get(jobId)
-    if (job.status === 'queued' || job.status === 'downloading') {
+    if (job.status === 'queued' || job.status === 'downloading' || job.status === 'verifying') {
       job.status = 'cancelled'
       if (this.active?.jobId === jobId) this.active.controller.abort()
       this.deps.log?.('Model download cancelled', { modelId: job.modelId, jobId })
@@ -290,6 +296,13 @@ export class DownloadManager {
       const remainingPlanned = sumSizes(tasks.slice(i + 1))
       const ok = await this.runOne(job, tasks[i], controller, hashStore, completedBytes, remainingPlanned)
       if (!ok) return // cancelled or failed — job already marked; later files are skipped
+      // BE-4 (full-audit 2026-07-10): a cancel that landed in the window after this file's
+      // abort checks (e.g. during the rename) must stop the run here — the next runOne would
+      // otherwise overwrite the `cancelled` status and start downloading the next file.
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        return
+      }
       completedBytes = job.receivedBytes
     }
 
@@ -378,7 +391,19 @@ export class DownloadManager {
       if (controller.signal.aborted) return false // keep the .part for resume
 
       job.status = 'verifying'
-      const verify = await verifyDownloadedFile(part, task.expectedSha256)
+      const verify = await (this.deps.verifyImpl ?? verifyDownloadedFile)(part, task.expectedSha256)
+      // BE-4 (full-audit 2026-07-10): honour a cancel that landed DURING the hash — before
+      // acting on the verify result. Same contract as a mid-download cancel: the `.part` is
+      // kept for resume, nothing is renamed into place, and a two-file job stops here. The
+      // status is set explicitly because a cancel racing the `verifying` transition above
+      // could have been overwritten.
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        this.deps.log?.('Model download cancelled during verify; partial kept for resume', {
+          modelId: job.modelId
+        })
+        return false
+      }
       if (verify.reason === 'mismatch') {
         // Verify-before-trust: the partial is deleted, the job fails loudly.
         await rm(part, { force: true })
@@ -415,10 +440,21 @@ export class DownloadManager {
       // re-hashing the multi-GB weight — that re-hash is the invisible gap where the card briefly
       // looked un-downloaded (download→verify UX). A placeholder file has no real hash to trust, so
       // it is invalidated (computeInstallState short-circuits placeholder weights without hashing).
-      if (verify.reason === 'placeholder' || !verify.actual) {
-        invalidateChecksum(task.dest, hashStore)
-      } else {
-        primeChecksum(task.dest, verify.actual, hashStore)
+      // BE-2 (full-audit 2026-07-10): the checksum cache is an OPTIMIZATION — a store fault
+      // (e.g. the workspace was locked mid-download, closing the settings DB) must never
+      // change the outcome of a download whose bytes are already verified + in place.
+      try {
+        if (verify.reason === 'placeholder' || !verify.actual) {
+          invalidateChecksum(task.dest, hashStore)
+        } else {
+          primeChecksum(task.dest, verify.actual, hashStore)
+        }
+      } catch {
+        // Ids only (S1 policy) — the next install-state read simply re-hashes.
+        this.deps.log?.('Checksum cache update failed after verify; download outcome unchanged', {
+          modelId: job.modelId,
+          jobId: job.jobId
+        })
       }
       // A single placeholder-hash file taints the whole model as UNVERIFIED (never silently pass).
       if (verify.reason === 'placeholder') job.unverified = true

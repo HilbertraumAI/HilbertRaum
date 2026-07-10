@@ -132,7 +132,7 @@ describe('persistent checksum cache (settings hash store)', () => {
   function makeStore(): { store: ReturnType<typeof createSettingsHashStore>; db: ReturnType<typeof openDatabase> } {
     const db = openDatabase(join(tempDir('hilbertraum-db-'), 'cache.sqlite'))
     seedSettings(db)
-    return { store: createSettingsHashStore(db), db }
+    return { store: createSettingsHashStore(() => db), db }
   }
 
   it('serves the hash from the DB after a simulated restart (no re-hash)', async () => {
@@ -196,6 +196,39 @@ describe('persistent checksum cache (settings hash store)', () => {
     // set() writes a healthy object over the corrupted row.
     store.set('/some/weight.gguf', { size: 3, mtimeMs: 4, actual: 'feed' })
     expect(getSettings(db).checksumCache['/some/weight.gguf']?.sha256).toBe('feed')
+  })
+
+  it('degrades to the in-memory fallback on a CLOSED DB — never throws into the caller (BE-2)', () => {
+    // A workspace lock closes the settings DB while a multi-hour download still runs; the
+    // store must keep serving (cache is an optimization), not throw "database is not open".
+    clearChecksumCache()
+    const { store, db } = makeStore()
+    db.close()
+    expect(() => store.set('/w.gguf', { size: 1, mtimeMs: 2, actual: 'abcd' })).not.toThrow()
+    expect(store.get('/w.gguf')).toEqual({ size: 1, mtimeMs: 2, actual: 'abcd' }) // the fallback serves it
+    expect(() => store.delete('/w.gguf')).not.toThrow()
+    expect(store.get('/w.gguf')).toBeNull()
+  })
+
+  it('resolves the LIVE handle per call — a DB swapped between calls is used, never the stale one (BE-2)', () => {
+    // The lock/unlock cycle REPLACES the DB handle (`ctx.db` is a getter); a store created at
+    // IPC registration must follow it instead of pinning the handle it saw at construction.
+    clearChecksumCache()
+    const db1 = openDatabase(join(tempDir('hilbertraum-db-'), 'cache1.sqlite'))
+    seedSettings(db1)
+    let current = db1
+    const store = createSettingsHashStore(() => current)
+    store.set('/a.gguf', { size: 1, mtimeMs: 2, actual: 'aaaa' })
+    expect(getSettings(db1).checksumCache['/a.gguf']?.sha256).toBe('aaaa')
+
+    db1.close() // lock…
+    const db2 = openDatabase(join(tempDir('hilbertraum-db-'), 'cache2.sqlite'))
+    seedSettings(db2)
+    current = db2 // …unlock hands out a fresh handle
+
+    store.set('/b.gguf', { size: 3, mtimeMs: 4, actual: 'bbbb' })
+    expect(getSettings(db2).checksumCache['/b.gguf']?.sha256).toBe('bbbb') // wrote via the LIVE handle
+    expect(store.get('/b.gguf')).toEqual({ size: 3, mtimeMs: 4, actual: 'bbbb' })
   })
 })
 
@@ -716,7 +749,7 @@ describe('buildModelList — verification progress', () => {
     const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
     const db = openDatabase(join(tempDir('hilbertraum-db-'), 'c.sqlite'))
     seedSettings(db)
-    const store = createSettingsHashStore(db)
+    const store = createSettingsHashStore(() => db)
 
     const opts = { manifestsDir: dir, rootPath: root, profile: 'UNKNOWN' as const, developerMode: false, hashStore: store }
     await buildModelList(opts) // warm the cache

@@ -72,6 +72,18 @@ export function composeTranslator(deps: ComposeServicesDeps): Translator | null 
 }
 
 /**
+ * Should the issue-#40 `onModelInstalled` refresh replace the current translator slot?
+ * True for a NULL slot (the role was unavailable at startup — the original #40 case) and for
+ * a `startFailed`-latched instance (BE-7, full-audit 2026-07-10): a latched instance is
+ * lazy/dead — construction spawns nothing and no live child exists to orphan — and without
+ * replacement a corrupt-GGUF delete-and-re-download repair stayed blocked until an app
+ * restart. A LIVE (or merely lazy, non-latched) sidecar is never replaced.
+ */
+export function shouldReplaceTranslator(current: Translator | null | undefined): boolean {
+  return current == null || current.isStartFailed?.() === true
+}
+
+/**
  * Build the availability-driven services from the drive layout: the embedder (real E5 when
  * its binary + weights are present, else mock so the app launches model-free), and the
  * reranker / transcriber / OCR engine (real when provisioned, else `null` — a mock there

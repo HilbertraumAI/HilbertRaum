@@ -29,10 +29,11 @@ export async function getVisionStatus(ctx: AppContext): Promise<VisionStatus> {
   if (visionManifests.length === 0) return { available: false, reason: 'no-model' }
 
   // Lock-safe developer-mode + hash store: a locked DB can't be read, so fall back to the
-  // build's `isDev` and skip the persistent cache (status stays workspace-agnostic).
+  // build's `isDev`; the hash store is lock-aware itself (getter-based, degrades to a cache
+  // miss while locked — BE-2, full-audit 2026-07-10), so status stays workspace-agnostic.
   const unlocked = ctx.workspace.isUnlocked()
   const developerMode = ctx.isDev || (unlocked && getSettings(ctx.db).developerMode)
-  const hashStore = unlocked ? createSettingsHashStore(ctx.db) : undefined
+  const hashStore = createSettingsHashStore(() => ctx.db)
 
   let sawUnsupported = false
   for (const manifest of visionManifests) {

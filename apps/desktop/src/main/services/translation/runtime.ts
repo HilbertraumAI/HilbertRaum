@@ -304,6 +304,16 @@ export class TranslationRuntime {
     return this.ctxTokens
   }
 
+  /**
+   * Is the permanent failed-start latch armed? (BE-7, full-audit 2026-07-10.) A latched
+   * instance is lazy/dead — no live child, every translate() fails fast — so the issue-#40
+   * `onModelInstalled` refresh may safely REPLACE it after a delete-and-re-download repair;
+   * a live sidecar is still never replaced.
+   */
+  isStartFailed(): boolean {
+    return this.startFailed !== null
+  }
+
   /** Lazily spawn the translation sidecar (once). Concurrent callers share one start (single-flight). */
   private async ensureStarted(): Promise<LlamaServer> {
     // Any use of the sidecar resets the idle clock: a teardown must never fire out from under an

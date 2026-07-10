@@ -9,7 +9,7 @@ import {
   partPath,
   type DownloadGates
 } from '../../src/main/services/downloads'
-import type { FetchFn } from '../../src/main/services/assets'
+import { verifyDownloadedFile, type FetchFn } from '../../src/main/services/assets'
 import { weightPath, mmprojPath, type HashStore } from '../../src/main/services/models'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
@@ -599,6 +599,90 @@ describe('DownloadManager jobs', () => {
       expect(finished.unverified).toBe(false)
       expect(finished.receivedBytes).toBe(body.length)
       expect(readFileSync(dest, 'utf8')).toBe(body)
+    })
+  })
+
+  // full-audit 2026-07-10 BE-2: the persistent checksum cache is an OPTIMIZATION. Locking the
+  // encrypted workspace mid-download closes the settings DB, so the store's set/delete can
+  // throw ("database is not open") on completion — that fault must never turn a verified,
+  // in-place download into a failed job, suppress onModelInstalled, or skip a later file.
+  describe('hash-store faults (BE-2)', () => {
+    it('a store whose set/delete throws (workspace locked mid-download) never changes the job outcome', async () => {
+      const gguf = 'the-language-gguf-bytes'
+      const mmproj = 'the-mmproj-projector-bytes'
+      const m = visionManifest(gguf, mmproj) // TWO tasks — the second must still run
+      const root = tempRoot()
+      const lockedStore: HashStore = {
+        get: () => null,
+        set: () => {
+          throw new Error('database is not open')
+        },
+        delete: () => {
+          throw new Error('database is not open')
+        }
+      }
+      const installed: string[] = []
+      const { fetch, urls } = routedFetch({
+        'https://example.test/vl.gguf': gguf,
+        'https://example.test/vl-mmproj.gguf': mmproj
+      })
+      const mgr = new DownloadManager({
+        fetchImpl: fetch,
+        onModelInstalled: (modelId) => installed.push(modelId)
+      })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN, hashStore: lockedStore })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('done') // the cache fault never reached the job outcome
+      expect(finished.unverified).toBe(false)
+      expect(installed).toEqual([m.id]) // fired exactly once — #40 activation preserved
+      // The second task ran despite the first file's store fault, and both files are in place.
+      expect(urls).toEqual(['https://example.test/vl.gguf', 'https://example.test/vl-mmproj.gguf'])
+      expect(readFileSync(weightPath(root, m), 'utf8')).toBe(gguf)
+      expect(readFileSync(mmprojPath(root, m), 'utf8')).toBe(mmproj)
+    })
+  })
+
+  // full-audit 2026-07-10 BE-4: `cancel()` used to act only on queued/downloading — a cancel
+  // during `verifying` (a multi-GB SHA-256 on USB takes minutes) was silently dropped and a
+  // two-task job then started downloading its next file.
+  describe('cancel during verifying (BE-4)', () => {
+    it('is honoured: terminal cancelled, nothing renamed, .part kept, the second file never starts', async () => {
+      const gguf = 'the-language-gguf-bytes'
+      const mmproj = 'the-mmproj-projector-bytes'
+      const m = visionManifest(gguf, mmproj)
+      const root = tempRoot()
+      const dest = weightPath(root, m)
+      const { fetch, urls } = routedFetch({
+        'https://example.test/vl.gguf': gguf,
+        'https://example.test/vl-mmproj.gguf': mmproj
+      })
+      // Deterministic gate (no sleeps): the fake verify signals entry and holds until released.
+      let verifyEntered!: () => void
+      const verifyStarted = new Promise<void>((resolve) => (verifyEntered = resolve))
+      let releaseVerify!: () => void
+      const verifyGate = new Promise<void>((resolve) => (releaseVerify = resolve))
+      const mgr = new DownloadManager({
+        fetchImpl: fetch,
+        verifyImpl: async (path, expected) => {
+          verifyEntered()
+          await verifyGate
+          return verifyDownloadedFile(path, expected) // the real result — the bytes DO verify
+        }
+      })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      await verifyStarted
+      expect(mgr.get(job.jobId).status).toBe('verifying')
+      const cancelled = mgr.cancel(job.jobId) // previously a silent no-op in this state
+      expect(cancelled.status).toBe('cancelled')
+      releaseVerify()
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('cancelled')
+      // The mid-download-cancel contract holds here too: nothing renamed into place, the
+      // fully-downloaded .part KEPT for the next attempt…
+      expect(existsSync(dest)).toBe(false)
+      expect(readFileSync(partPath(dest), 'utf8')).toBe(gguf)
+      // …and task 2 (the mmproj) was never requested.
+      expect(urls).toEqual(['https://example.test/vl.gguf'])
     })
   })
 

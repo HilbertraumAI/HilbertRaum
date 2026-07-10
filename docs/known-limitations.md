@@ -1535,14 +1535,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   still only picked up at the next start, and the **transcriber/reranker/embedder** keep the
   startup-frozen selection (their handles are captured at IPC-registration/ingestion-wiring
   time — a mid-session whisper download still needs a restart).
-- **A failed translation-model START disables translation until the app restarts — and now says
-  so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the first translate. If that start
+- **A failed translation-model START disables translation until the app restarts or the model is
+  re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
+  first translate. If that start
   fails it is LATCHED for the session (the reranker precedent — a permanent load fault must not
   re-spawn and re-await the full health timeout on every window). The most likely cause is not a
   corrupt model but **transient memory pressure** from the co-resident chat model, so the failure
   now surfaces actionable copy — *"The translation model couldn't start — the device may be low on
   memory. Close other apps or restart HilbertRaum, then try again."* — instead of a bare "couldn't
-  finish". Freeing memory and restarting the app clears the latch. We deliberately do NOT
+  finish". Freeing memory and restarting the app clears the latch; since full-audit 2026-07-10
+  BE-7 a completed in-app re-download of the translation model ALSO clears it (`onModelInstalled`
+  replaces a `startFailed`-latched instance with a fresh selection — the delete-and-re-download
+  repair for a genuinely corrupt GGUF no longer needs a restart; a live sidecar is never replaced). We deliberately do NOT
   auto-retry the latched start: no reliable transient/OOM signature exists across OSes to tell
   memory pressure from a genuinely permanent fault (on Windows the OOM exit code collides with the
   known template-validation crash; a Linux OOM-kill is indistinguishable from our own shutdown), so

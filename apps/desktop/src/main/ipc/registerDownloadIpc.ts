@@ -55,7 +55,10 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
         manifest: found.manifest,
         gates: gates(),
         licenseAccepted: opts?.licenseAccepted === true,
-        hashStore: ctx.workspace.isUnlocked() ? createSettingsHashStore(ctx.db) : undefined
+        // BE-2 (full-audit 2026-07-10): the getter resolves the LIVE handle per call, so a
+        // workspace lock mid-download (which closes the DB) degrades the cache instead of
+        // failing the finished job; no unlock guard needed — the store itself is lock-aware.
+        hashStore: createSettingsHashStore(() => ctx.db)
       })
     }
   )

@@ -107,6 +107,7 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(args).not.toContain('-ngl') // NEVER pass -ngl (the GPU record's hard rule)
     expect(args).toContain('--chat-template gemma') // avoids the #20305 STARTUP crash (TG-2 smoke finding)
     expect(args).toContain('--host 127.0.0.1') // loopback only
+    expect(rt.isStartFailed()).toBe(false) // a healthy instance never reads as latched (BE-7)
     await rt.stop()
   })
 
@@ -193,6 +194,9 @@ describe('TranslationRuntime — launch + translate', () => {
     expect((err as { code?: string }).code).toBe(TRANSLATION_START_FAILED_CODE)
     await expect(rt.translate(translateOpts)).rejects.toThrow() // still latched
     expect(calls.length).toBe(1) // the latch prevented a second spawn + health-timeout stall
+    // BE-7 (full-audit 2026-07-10): the latch is now REPORTABLE, so the issue-#40
+    // onModelInstalled refresh can replace this dead instance after a re-download repair.
+    expect(rt.isStartFailed()).toBe(true)
     await rt.stop()
   })
 
@@ -224,6 +228,7 @@ describe('TranslationRuntime — launch + translate', () => {
     const spawnsAfterFirst = calls.length
     await rt.translate(translateOpts).catch(() => undefined)
     expect(calls.length).toBeGreaterThan(spawnsAfterFirst) // not latched → it tried to start again
+    expect(rt.isStartFailed()).toBe(false) // a bind race never reads as latched — no replacement (BE-7)
     await rt.stop()
   })
 

@@ -47,7 +47,7 @@ import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
-import { composeServices, composeTranslator } from './services/compose-services'
+import { composeServices, composeTranslator, shouldReplaceTranslator } from './services/compose-services'
 import { initBinaryVerification } from './services/binary-verifier'
 import { performShutdown } from './shutdown'
 import type { AppContext } from './services/context'
@@ -334,14 +334,17 @@ function initBackend(): void {
   })
   // Issue #40: a completed in-app model download re-runs the translation selector, so the
   // Translate screen stops claiming the model is missing the moment the GGUF lands — no restart.
-  // Only a NULL slot is ever re-composed (never replace a LIVE sidecar: a running instance means
-  // the role was already available, and construction of the lazy runtime spawns nothing). All
-  // translator consumers read `ctx.translator` live (translateJobs/docTasks/IPC/lock/quit), so
-  // one re-assignment flips them together. The transcriber/reranker/embedder keep the documented
-  // restart requirement for now — their handles are captured at wiring time in registerDocsIpc /
-  // ingestion deps, so a ctx re-assignment alone would activate them inconsistently.
+  // Only a NULL slot or a `startFailed`-latched instance is ever re-composed (BE-7, full-audit
+  // 2026-07-10: a latched instance is lazy/dead, so the delete-and-re-download repair flips it
+  // to a working translator; `shouldReplaceTranslator` holds the rule) — never a LIVE sidecar:
+  // a running instance means the role was already available, and construction of the lazy
+  // runtime spawns nothing. All translator consumers read `ctx.translator` live
+  // (translateJobs/docTasks/IPC/lock/quit), so one re-assignment flips them together. The
+  // transcriber/reranker/embedder keep the documented restart requirement for now — their
+  // handles are captured at wiring time in registerDocsIpc / ingestion deps, so a ctx
+  // re-assignment alone would activate them inconsistently.
   ctx.onModelInstalled = () => {
-    if (!ctx || ctx.translator) return
+    if (!ctx || !shouldReplaceTranslator(ctx.translator)) return
     ctx.translator = composeTranslator({
       rootPath: paths.rootPath,
       manifestsDir,

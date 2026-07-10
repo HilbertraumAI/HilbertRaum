@@ -240,26 +240,55 @@ export function primeChecksum(filePath: string, actual: string, store?: HashStor
   store?.set(filePath, entry)
 }
 
-/** HashStore over `AppSettings.checksumCache` (settings rows live inside the DB). */
-export function createSettingsHashStore(db: Db): HashStore {
+/**
+ * HashStore over `AppSettings.checksumCache` (settings rows live inside the DB).
+ *
+ * Lock-aware (BE-2, full-audit 2026-07-10): takes a GETTER, not a raw handle — the stores are
+ * created once at IPC registration, and locking an encrypted workspace CLOSES the DB handle a
+ * multi-hour download job would otherwise still hold; the getter resolves the LIVE handle per
+ * call. Every operation additionally catches DB errors (locked/closed workspace) and degrades
+ * to a store-local in-memory fallback: the persistent cache is an optimization, and a store
+ * fault must never throw into a caller's job/state machinery (a verified download that finished
+ * while the workspace was locked must still report success). The fallback is consulted ONLY
+ * when the DB is unreachable — a live DB read always wins, so cross-instance invalidations
+ * ("Verify checksum") are never shadowed by a stale local entry.
+ */
+export function createSettingsHashStore(getDb: () => Db): HashStore {
+  const fallback = new Map<string, CachedHash>()
   return {
     get(path) {
-      // Read-side belt (BE-1, full-audit 2026-07-10): a row corrupted to `checksumCache: null`
-      // before the settings write gate rejected it must degrade to a cache miss, not throw out
-      // of every checksum reader; the next set() rewrites a healthy object over it.
-      const entry = (getSettings(db).checksumCache ?? {})[path]
-      return entry ? { size: entry.size, mtimeMs: entry.mtimeMs, actual: entry.sha256 } : null
+      try {
+        // Read-side belt (BE-1, full-audit 2026-07-10): a row corrupted to `checksumCache: null`
+        // before the settings write gate rejected it must degrade to a cache miss, not throw out
+        // of every checksum reader; the next set() rewrites a healthy object over it.
+        const entry = (getSettings(getDb()).checksumCache ?? {})[path]
+        return entry ? { size: entry.size, mtimeMs: entry.mtimeMs, actual: entry.sha256 } : null
+      } catch {
+        return fallback.get(path) ?? null
+      }
     },
     set(path, entry) {
-      const cache = { ...getSettings(db).checksumCache }
-      cache[path] = { size: entry.size, mtimeMs: entry.mtimeMs, sha256: entry.actual }
-      updateSettings(db, { checksumCache: cache })
+      fallback.set(path, entry)
+      try {
+        const db = getDb()
+        const cache = { ...getSettings(db).checksumCache }
+        cache[path] = { size: entry.size, mtimeMs: entry.mtimeMs, sha256: entry.actual }
+        updateSettings(db, { checksumCache: cache })
+      } catch {
+        /* workspace locked/closed — the in-memory fallback above keeps the session served */
+      }
     },
     delete(path) {
-      const cache = { ...getSettings(db).checksumCache }
-      if (path in cache) {
-        delete cache[path]
-        updateSettings(db, { checksumCache: cache })
+      fallback.delete(path)
+      try {
+        const db = getDb()
+        const cache = { ...getSettings(db).checksumCache }
+        if (path in cache) {
+          delete cache[path]
+          updateSettings(db, { checksumCache: cache })
+        }
+      } catch {
+        /* workspace locked/closed — nothing persisted is reachable to delete right now */
       }
     }
   }
