@@ -5,8 +5,14 @@
 # NODE_OPTIONS=--use-system-ca so npm install works behind a TLS-intercepting corporate
 # proxy (BUILD_STATE R6).
 #
-# Note: `npm install` downloads the Electron binary (~100 MB) the first time (R2). This is
+# Note: the install downloads the Electron binary (~100 MB) the first time (R2). This is
 # the ONLY network the project needs and it is dev-time only — the app stays offline.
+#
+# Uses `npm ci` (issue #49): it installs exactly what package-lock.json pins and NEVER
+# rewrites it — `npm install` under a different npm version rewrites the lockfile's `peer`
+# flags, leaving every contributor with a permanently dirty lockfile. Use `npm install`
+# only when you deliberately change dependencies (with the pinned npm — see
+# `packageManager` in package.json).
 #
 # Usage:
 #   scripts/setup-dev.sh [--skip-tests]
@@ -29,9 +35,9 @@ else
   echo 'Note: this Node does not support --use-system-ca (needs >= 22.15); continuing without it.'
 fi
 
-echo '==> npm install (downloads the Electron binary on first run, R2)'
-if ! npm install; then
-  echo 'npm install failed. If this is a TLS/cert error, see BUILD_STATE R6:' >&2
+echo '==> npm ci (lockfile-exact install; downloads the Electron binary on first run, R2)'
+if ! npm ci; then
+  echo 'npm ci failed. If this is a TLS/cert error, see BUILD_STATE R6:' >&2
   echo '  - ensure NODE_OPTIONS=--use-system-ca (set automatically by this script)' >&2
   echo '  - or (dev-only, less secure): npm config set strict-ssl false' >&2
   exit 1

@@ -113,7 +113,7 @@ prebuilt app you can skip step 1 and continue at step 2.
 ```bash
 git clone <this-repo>
 cd ai_drive
-npm install        # one-time; downloads the Electron binary (needs internet once)
+npm ci             # one-time; downloads the Electron binary (needs internet once)
 npm run dev        # launches the app
 ```
 
@@ -280,7 +280,10 @@ ai_drive/
 ```
 
 ```bash
-npm install        # install (dev-time only; needs internet once for the Electron binary)
+npm ci             # install (dev-time only; needs internet once for the Electron binary)
+#   npm ci installs EXACTLY what package-lock.json pins and never rewrites it (issue #49) —
+#   use it after every pull; plain `npm install` is only for deliberate dependency changes
+#   (with the pinned npm — see `packageManager` in package.json).
 npm run dev        # launch the app
 npm run build      # production build
 npm test           # unit + integration tests (whole suite)

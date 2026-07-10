@@ -50,12 +50,21 @@ also CLA §7 for submissions on behalf of third parties.
 Requires **Node.js ≥ 22.5** (Node 24 recommended), per `package.json` `engines`. For the repo layout
 and a map of the docs, see the **[README](README.md)** ("For developers" + "Documentation").
 ```bash
-npm install
+npm ci              # fresh clone AND after every pull — installs exactly per package-lock.json
 npm run dev
 npm test            # the whole suite (root; delegates to the apps/desktop workspace)
 npm run typecheck
 npm run test:coverage  # optional: suite + V8 coverage report (writes coverage/, gitignored; not a CI gate)
 ```
+
+**Install with `npm ci`, not `npm install`** (issue #49): different npm versions compute the
+lockfile's `peer` flags differently, so a plain `npm install` under another npm rewrites
+`package-lock.json` and leaves it permanently dirty (and the next `git pull` complains). `npm ci`
+installs exactly what the lockfile pins and never rewrites it. If you hit the dirty-lockfile loop:
+`git checkout -- package-lock.json && npm ci`. Only use `npm install` when you deliberately change
+dependencies, with the pinned npm version (`packageManager` in `package.json`, `npm@11.6.2` — the
+version the committed lockfile is canonical under; with corepack enabled it is picked up
+automatically).
 
 **Faster test iteration** (run from the app workspace — the whole suite is large):
 ```bash

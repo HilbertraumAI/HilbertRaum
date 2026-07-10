@@ -45,7 +45,8 @@ A phase is not done until docs + `BUILD_STATE.md` are updated.
 
 ## Commands
 ```bash
-npm install        # install (dev-time only; needs internet once for the Electron binary)
+npm ci             # install (dev-time only; needs internet once). Lockfile-exact — never rewrites
+                   # package-lock.json (issue #49); `npm install` only for deliberate dep changes.
 npm run dev        # launch the app
 npm run build      # production build
 npm test           # unit + integration tests
