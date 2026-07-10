@@ -292,7 +292,9 @@ describe('conversation persistence', () => {
     const db = freshDb()
     const a = createConversation(db, {})
     const b = createConversation(db, {})
-    // Touch `a` so it becomes the most recently updated.
+    // Touch `a` so it becomes the most recently updated. The 5 ms wall-clock gap IS the
+    // semantics (updated_at has ISO-8601 ms resolution; setTimeout never fires early) — a
+    // clock-advance, not a sync point (TS-1: justified fixed sleep).
     await new Promise((r) => setTimeout(r, 5))
     appendMessage(db, { conversationId: a.id, role: 'user', content: 'hi' })
     const list = listConversations(db)

@@ -99,7 +99,9 @@ describe.skipIf(!enabled)('R-T1: llama-server b9585 concurrent-request behavior 
           return obs
         }
 
-        // Request A: a long generation. Request B: fired 1.5 s into A's stream.
+        // Request A: a long generation. Request B: fired 1.5 s into A's stream. The 1.5 s
+        // stagger IS the probe's semantics (a real server, PAID_* manual run — mid-stream
+        // concurrency is what is being measured), not a sync point (TS-1: justified fixed sleep).
         const aPromise = observe('A (long)', 'Count slowly from 1 to 200, one number per line.', 700)
         await new Promise((r) => setTimeout(r, 1500))
         const bPromise = observe('B (short, concurrent)', 'Say exactly: hello.', 32)

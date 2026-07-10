@@ -632,7 +632,17 @@ describe('maybeAutoStartActiveModel', () => {
     updateSettings(dbRunning, { activeModelId: 'qwen3-4b-instruct-q4' })
     maybeAutoStartActiveModel(autoStartCtx({ db: dbRunning, runningModelId: 'other', onStart }))
 
-    await new Promise((r) => setTimeout(r, 50)) // let any stray background start land
+    // Deterministic teeth for the negative assert: drive a FIFTH, legitimate auto-start through
+    // the SAME background path (discover → computeInstallState → runtime.start) and await its
+    // landing. Any start wrongly launched by the four guarded calls above was enqueued on that
+    // path earlier, so it has landed by now — no fixed "let any stray start land" sleep (TS-1).
+    const dbSentinel = seededDb()
+    updateSettings(dbSentinel, { activeModelId: 'qwen3-4b-instruct-q4' })
+    let resolveSentinel!: () => void
+    const sentinel = new Promise<void>((r) => (resolveSentinel = r))
+    maybeAutoStartActiveModel(autoStartCtx({ db: dbSentinel, onStart: resolveSentinel }))
+    await sentinel
+
     expect(starts).toBe(0)
   })
 })

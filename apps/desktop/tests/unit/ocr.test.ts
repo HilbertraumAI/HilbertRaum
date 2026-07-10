@@ -342,7 +342,10 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
 
     // stop() fires while init #0 is parked. terminateWorker must await it, then terminate worker #0.
     const stopP = engine.stop()
-    await new Promise((r) => setTimeout(r, 2)) // let terminateWorker register its await on this.starting
+    // Let terminateWorker register its await on this.starting: one macrotask hop over a pure
+    // microtask chain — deterministic; a lost race only weakens the interleave, never the
+    // assertions (releaseInit()/await stopP below are the real gates) (TS-1: justified fixed sleep).
+    await new Promise((r) => setTimeout(r, 2))
 
     releaseInit() // init #0 resolves → worker #0 is born
     await stopP

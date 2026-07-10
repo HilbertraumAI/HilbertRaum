@@ -39,10 +39,15 @@ export default defineConfig({
     // backstop for any load-induced fork drop.
     pool: 'forks',
     // The full parallel suite on a loaded machine starves the heavy integration/
-    // renderer tests of CPU and trips vitest's 5 s default timeout (1–2 flakes per
-    // run, a different test each time; all pass in isolation). 3× headroom absorbs
-    // the scheduling, costs nothing when tests are fast, and — unlike capping
-    // maxWorkers — leaves the wall time of a clean run unchanged.
+    // renderer tests of CPU and trips vitest's 5 s default timeout (historically
+    // 1–2 flakes per run, a different test each time; all pass in isolation). 3×
+    // headroom absorbs the scheduling, costs nothing when tests are fast, and —
+    // unlike capping maxWorkers — leaves the wall time of a clean run unchanged.
+    // TS-1 (full-audit 2026-07-10): the raw fixed-sleep sync points behind those
+    // flakes were swept — every wait is now a poll-until gate on observable state,
+    // and each surviving fixed sleep carries a comment justifying it (timestamp
+    // ordering, timeout simulation, single-macrotask hops). The timeout stays as
+    // cheap headroom for genuinely CPU-starved forks, not as a flake mitigation.
     testTimeout: 15_000
   }
 })

@@ -107,7 +107,8 @@ describe('image history — turns + list', () => {
     addImageTurn(db, a, 'q1', 'answer one')
     addImageTurn(db, a, 'q2', 'answer two')
     // A small gap so b's updated_at is strictly later (ISO-8601 ms resolution) — the list is
-    // ordered newest-first by updated_at.
+    // ordered newest-first by updated_at. A clock-advance, not a sync point (TS-1: justified
+    // fixed sleep).
     await new Promise((r) => setTimeout(r, 5))
     const b = createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'b.png' }, null)
     addImageTurn(db, b, 'only', 'b answer')

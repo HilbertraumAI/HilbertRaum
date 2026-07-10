@@ -660,7 +660,10 @@ describe('E5Embedder', () => {
     expect(children.length).toBe(1)
 
     const suspendP = embedder.suspend() // teardown: tearingDown=true, awaits this.starting (start1)
-    await new Promise((r) => setTimeout(r, 1)) // let teardown register its await on start1
+    // Let teardown register its await on start1: one macrotask hop over a pure microtask chain —
+    // deterministic; a lost race only weakens the interleave, never the assertions (the `killed`
+    // poll below is the real gate) (TS-1: justified fixed sleep).
+    await new Promise((r) => setTimeout(r, 1))
 
     firstHealth.release!() // start1 resolves → this.server set → teardown advances to server.stop()
     // teardown calls child1.kill() (exit gated) then PARKS — wait until that observable kill happens.

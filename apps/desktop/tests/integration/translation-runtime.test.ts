@@ -246,7 +246,10 @@ describe('TranslationRuntime — launch + translate', () => {
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: hangingFetch })
     const controller = new AbortController()
     const p = rt.translate({ ...translateOpts, signal: controller.signal })
-    await sleep(2)
+    // Deterministically wait until the request has REACHED fetch (the signal was handed over)
+    // before aborting — a fixed `sleep(2)` could fire before fetch under CPU starvation and
+    // exercise a different (pre-flight) path. State-poll on the captured signal (TS-1).
+    while (!seenSignal) await sleep(1)
     controller.abort()
     await expect(p).rejects.toThrow(/abort/i)
     expect(seenSignal?.aborted).toBe(true)

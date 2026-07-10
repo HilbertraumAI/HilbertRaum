@@ -77,6 +77,8 @@ describe('withParseTimeout', () => {
   })
 
   it('rejects with the supplied message when the budget elapses', async () => {
+    // The 50 ms timer IS the simulated slow parse; the 1 ms budget expires first by timer-expiry
+    // ordering, so the reject always wins — timeout semantics, not a sync point (TS-1).
     const slow = new Promise((resolve) => setTimeout(resolve, 50))
     await expect(withParseTimeout(slow, 1, 'too slow')).rejects.toThrow('too slow')
   })
@@ -251,6 +253,8 @@ describe('parseWithLimits (MAINT-4/REL-5)', () => {
 
   it('exempts audio from the wall-clock timeout (a long transcription is not killed)', async () => {
     const parser = fakeParser(async () => {
+      // The 40 ms IS the simulated long transcription outlasting the 5 ms budget below —
+      // timeout semantics, not a sync point (TS-1).
       await new Promise((r) => setTimeout(r, 40))
       return { segments: [{ text: 'hi' }], mimeType: 'audio/wav' }
     })

@@ -68,6 +68,15 @@ npm run test:watch                              # watch mode (re-runs affected t
   pinned literal-by-literal by `tests/unit/window-security.test.ts` — do **not** edit CSP or
   `webPreferences` inline in `index.ts`/the OCR rasterizer; change the module next to its tests
   (a deliberate change there is a deliberate security decision).
+- **No fixed sleeps in tests — gate on observable state.** A `setTimeout(r, N)` that waits for
+  "the loop to probably get there" flakes under parallel-fork CPU starvation. Instead, expose a
+  "reached" flag/promise from the fake seam or poll-until on observable state with a hard
+  timeout ceiling — exemplars: `tests/integration/ocr-task.test.ts` (the `rasterizeReached`
+  gate replacing a fixed `sleep(30)`) and `tests/integration/vision-runtime.test.ts` (the
+  injected-clock idle-teardown interlock). The rare *justified* fixed sleep — a wall-clock
+  advance for timestamp ordering, a timeout simulation where the timer IS the semantics, a
+  single-macrotask hop with no observable — must carry a comment saying so; everything else
+  is a bug.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

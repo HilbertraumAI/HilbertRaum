@@ -102,9 +102,10 @@ async function runImport(paths: string[], options?: ImportOptions): Promise<Impo
 
 /** An embedder whose `embed` parks on a gate until `release()` — an import job holding it stays
  *  in-flight (and the doc sits in `processing`) until released. Used by T-3 / DB-6. */
-function gatedEmbedder(): { embedder: Embedder; release: () => void } {
+function gatedEmbedder(): { embedder: Embedder; release: () => void; reached: () => boolean } {
   const base = createMockEmbedder()
   let release!: () => void
+  let reached = false
   const gate = new Promise<void>((r) => {
     release = r
   })
@@ -112,11 +113,14 @@ function gatedEmbedder(): { embedder: Embedder; release: () => void } {
     id: base.id,
     dimensions: base.dimensions,
     embed: async (texts: string[]) => {
+      // `reached` flips the moment the import loop is AT the gated embed (about to park) — the
+      // deterministic "in-flight" gate tests poll instead of a fixed sleep (TS-1).
+      reached = true
       await gate
       return base.embed(texts)
     }
   }
-  return { embedder, release }
+  return { embedder, release, reached: () => reached }
 }
 
 /** An embedder that can gate each `embed` call individually (T-7). With gating OFF every embed
@@ -904,9 +908,10 @@ describe('registerDocsIpc — import path binding (D1)', () => {
 // top of Session 1's guards (shared files). Each test reddens if its fix is reverted.
 describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () => {
   /** An embedder whose `embed` parks on a gate so an import job stays in-flight until released. */
-  function gatedEmbedder(): { embedder: Embedder; release: () => void } {
+  function gatedEmbedder(): { embedder: Embedder; release: () => void; reached: () => boolean } {
     const base = createMockEmbedder()
     let release!: () => void
+    let reached = false
     const gate = new Promise<void>((r) => {
       release = r
     })
@@ -914,11 +919,14 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
       id: base.id,
       dimensions: base.dimensions,
       embed: async (texts: string[]) => {
+        // `reached` flips the moment the import loop is AT the gated embed (about to park) — the
+        // deterministic "in-flight" gate tests poll instead of a fixed sleep (TS-1).
+        reached = true
         await gate
         return base.embed(texts)
       }
     }
-    return { embedder, release }
+    return { embedder, release, reached: () => reached }
   }
 
   // DB-4 (unit): the batch inserts one row per file, in order, sizes where statable. A nonexistent
@@ -1060,14 +1068,14 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
   // only DONE jobs, and the in-flight job is the OLDEST (insertion order) here.
   it('DB-6: an in-flight import job is never evicted by newer jobs', async () => {
     const { db, workspacePath } = freshWorkspace()
-    const { embedder, release } = gatedEmbedder()
+    const { embedder, release, reached } = gatedEmbedder()
     registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
     const file = join(workspacePath, 'slow.txt')
     writeFileSync(file, 'a slow-to-embed document alpha beta gamma delta epsilon zeta eta theta')
 
     // Start a real import; its embed parks on the gate, so the job stays in-flight (done:false).
     const gated = (await invoke(handlers, IPC.importDocuments, [file])).result as ImportJob
-    await new Promise((r) => setTimeout(r, 20)) // let the loop reach the gated embed
+    while (!reached()) await new Promise((r) => setTimeout(r, 1)) // loop is AT the gated embed (TS-1)
     // Fire 16 EMPTY imports (instantly done) to exceed IMPORT_JOB_CAP with the gated job the oldest.
     for (let i = 0; i < 16; i++) await invoke(handlers, IPC.importDocuments, [])
 
@@ -1137,14 +1145,15 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
   // parks the import at the embed phase so the row stays in `processing` for the assertions.
   it('T-3: a document in `processing` blocks delete, reindex AND preview (still being processed)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    const { embedder, release } = gatedEmbedder()
+    const { embedder, release, reached } = gatedEmbedder()
     registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
     const file = join(workspacePath, 'slow.txt')
     writeFileSync(file, 'a slow-to-embed document alpha beta gamma delta epsilon zeta eta theta iota')
 
     const gated = (await invoke(handlers, IPC.importDocuments, [file])).result as ImportJob
     const id = gated.documentIds[0]
-    await new Promise((r) => setTimeout(r, 20)) // let the loop reach the gated embed → id in `processing`
+    // Loop is AT the gated embed → id in `processing` (deterministic gate, no fixed sleep — TS-1).
+    while (!reached()) await new Promise((r) => setTimeout(r, 1))
 
     await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/still being processed/)
     await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/still being processed/)

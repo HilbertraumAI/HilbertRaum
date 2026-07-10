@@ -168,8 +168,11 @@ describe('ChatScreen — routed-run relay invariants (C1/C2/ux-6)', () => {
     await act(async () => {
       await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'summarize_cashflow', conversationId: 'convB', documentId: 'docB' })
     })
-    // Give any effect a chance to (wrongly) fire, then assert it did not — the answer waits for convB.
-    await new Promise((r) => setTimeout(r, 50))
+    // Deterministic negative gate (TS-1): a (wrongly) firing relay effect calls askDocuments
+    // SYNCHRONOUSLY — `stream` has no await before the askDocuments call — and every effect for
+    // the store update above already flushed inside `act`. One empty act drains any straggler
+    // microtask cascade, so "not called by now" is conclusive; the answer waits for convB.
+    await act(async () => {})
     expect(askDocuments).not.toHaveBeenCalled()
   })
 })
