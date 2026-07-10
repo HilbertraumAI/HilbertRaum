@@ -36,6 +36,71 @@ const SIZES = {
   'skill-info-card-de': [820, 320],
   'skill-run-result-offer': [820, 220]
 }
+// Per-case readiness selector: an element that only exists once the case's async chain
+// (mock window.api fetch → React state → re-render) has completed, so the poll below can
+// capture as soon as the UI is real instead of sleeping a fixed worst-case interval.
+// Unlisted cases fall back to the generic "harness root has rendered children" check.
+const READY = {
+  documents: '.doc-row',
+  'chat-byproject': '.chat-conv-group',
+  models: '.model-card',
+  'models-de': '.model-card',
+  'chat-runtime': '.chat-runtime-hint',
+  'chat-runtime-compat': '.chat-runtime-hint',
+  'chat-warmup': '.chat-warmup-hint',
+  'skill-info-card': '.skill-info-card',
+  'skill-info-card-de': '.skill-info-card',
+  'skill-run-result-offer': '.skill-run-bar'
+}
+
+// Poll the ready condition, then let two frames paint. The previous fixed settles
+// (1.8 s, 4.5 s for the full App-shell cases) stay as timeout CEILINGS: on timeout we
+// warn and capture anyway — same worst-case behavior, but the common case is much faster.
+async function waitReady(win, c) {
+  const isAppShell = c.startsWith('brand-home')
+  const ceiling = isAppShell ? 4500 : 1800
+  const selector = READY[c] ?? null
+  // Full App-shell cases chain workspace → settings → language re-render → brand <img>
+  // fetch; the brand images completing marks the end of that chain.
+  const expr = `(() => {
+    if (document.fonts.status !== 'loaded') return false
+    const root = document.querySelector('[data-preview-case]')
+    if (!root || root.childElementCount === 0) return false
+    ${selector ? `if (!document.querySelector(${JSON.stringify(selector)})) return false` : ''}
+    ${
+      isAppShell
+        ? `const imgs = [...document.querySelectorAll('.brand img')]
+    if (imgs.length === 0 || !imgs.every((i) => i.complete && i.naturalWidth > 0)) return false`
+        : ''
+    }
+    return true
+  })()`
+  const deadline = Date.now() + ceiling
+  for (;;) {
+    let ok = false
+    try {
+      ok = await win.webContents.executeJavaScript(expr, true)
+    } catch {
+      /* page still navigating — keep polling until the ceiling */
+    }
+    if (ok) break
+    if (Date.now() >= deadline) {
+      console.warn(`  [wait:${c}] ready condition not met within ${ceiling}ms — capturing anyway`)
+      break
+    }
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  // Offscreen still needs the ready DOM to actually paint: wait two animation frames.
+  try {
+    await win.webContents.executeJavaScript(
+      'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))',
+      true
+    )
+  } catch {
+    /* capture regardless */
+  }
+}
+
 // Electron's argv includes flags + the script path; take everything AFTER the script as case ids.
 const sIdx = process.argv.findIndex((a) => a.endsWith('screenshot.mjs'))
 let cases = (sIdx >= 0 ? process.argv.slice(sIdx + 1) : []).filter((a) => !a.startsWith('-'))
@@ -67,10 +132,7 @@ function capture(c) {
     win.webContents.on('render-process-gone', (_e, d) => console.error(`  [gone:${c}]`, d.reason))
     const url = `${pathToFileURL(previewHtml).href}?case=${encodeURIComponent(c)}`
     win.webContents.once('did-finish-load', async () => {
-      // Offscreen needs a tick to paint; give React + the async window.api stubs time too.
-      // Full App-shell cases (`brand-home*`) chain workspace → settings → language re-render
-      // → brand <img> fetch, and a cold first window adds JIT/IO — they need a longer settle.
-      await new Promise((r) => setTimeout(r, c.startsWith('brand-home') ? 4500 : 1800))
+      await waitReady(win, c)
       try {
         const img = await win.webContents.capturePage()
         const file = resolve(outDir, `${c}.png`)

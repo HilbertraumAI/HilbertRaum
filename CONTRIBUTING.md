@@ -54,6 +54,7 @@ npm install
 npm run dev
 npm test            # the whole suite (root; delegates to the apps/desktop workspace)
 npm run typecheck
+npm run test:coverage  # optional: suite + V8 coverage report (writes coverage/, gitignored; not a CI gate)
 ```
 
 **Faster test iteration** (run from the app workspace — the whole suite is large):

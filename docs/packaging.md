@@ -423,7 +423,9 @@ dev-time NTFS half-extract bug):
 
 npm downloads are cached via `actions/setup-node` (`cache: npm`, keyed off the root
 `package-lock.json`); `concurrency: cancel-in-progress` cancels a superseded run when a branch/PR
-is pushed again. This is **dev infrastructure only** — it ships nothing to users, adds no
+is pushed again. All third-party actions in `ci.yml` **and** `release.yml` are pinned to **full
+commit SHAs** with a `# vX.Y.Z` comment (the `cla.yml` idiom — a movable tag like `@v4` would let
+a compromised action repo inject code into CI; full-audit 2026-07-10 SC-1). This is **dev infrastructure only** — it ships nothing to users, adds no
 telemetry/analytics, and performs no network egress beyond the registry install (the "no cloud /
 no telemetry" hard rule governs the shipped app at runtime).
 

@@ -36,8 +36,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
@@ -45,7 +45,7 @@ jobs:
       # this is the cheap belt-and-braces on the exact tagged commit.
       - run: npm test
       - run: npm run package:win
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: win-portable
           path: apps/desktop/release/HilbertRaum-*-portable.exe
@@ -55,8 +55,8 @@ jobs:
     runs-on: macos-14 # arm64 (Apple Silicon)
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
@@ -83,23 +83,23 @@ jobs:
           mkdir -p "$STAGE"
           bash scripts/fetch-runtime.sh --target "$STAGE"
           (cd "$STAGE/runtime/llama.cpp" && zip -r "$GITHUB_WORKSPACE/llama-runtime-mac-arm64.zip" mac)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with: { name: mac-app, path: 'HilbertRaum-*-mac-arm64.app.zip', if-no-files-found: error }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with: { name: mac-runtime, path: llama-runtime-mac-arm64.zip, if-no-files-found: error }
 
   build-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
       # AppImage target from electron-builder.yml (default filename HilbertRaum-<version>.AppImage).
       - run: npm run package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-appimage
           path: apps/desktop/release/*.AppImage
@@ -113,13 +113,13 @@ jobs:
     permissions:
       contents: write # create the draft release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Assert tag matches package version
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           PKG=$(node -p "require('./apps/desktop/package.json').version")
           [ "$TAG" = "$PKG" ] || { echo "tag v$TAG != package $PKG"; exit 1; }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with: { path: dist, merge-multiple: true }
       - name: Checksums
         run: (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
@@ -135,7 +135,7 @@ jobs:
               ' (README step 2 / the in-app downloader). Unsigned build: see the' +
               ' SmartScreen/Gatekeeper notes in docs/troubleshooting.md.\n\n' + body + '\n');
           "
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
           prerelease: true # while 0.x

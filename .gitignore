@@ -16,6 +16,9 @@ out/
 release/
 *.tsbuildinfo
 
+# Test coverage output (npm run test:coverage) — generated, never committed
+coverage/
+
 # Model weights — NEVER commit (spec rule 0.1.8 / 0.2)
 models/
 *.gguf
