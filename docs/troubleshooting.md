@@ -328,7 +328,8 @@ That's expected the first time, and on the first question about a large picture:
 
 Everything is on the drive:
 - `workspace/` — your encrypted/plaintext database (chats, documents, embeddings).
-- `logs/app.log` — local logs only; never uploaded.
+- `logs/app.log` (`app.log.enc` on an encrypted workspace — the diagnostics log is encrypted at
+  rest, same as your data) — local logs only; never uploaded.
 - `models/` — model weights. `config/` — drive settings/policy.
 
 See [`drive-layout.md`](drive-layout.md) for the full layout.

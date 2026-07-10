@@ -1613,7 +1613,8 @@ sentinel-tested), zero native deps.
   `audit-ipc.test.ts`.
 - **Translation (Phase 34, D27/D36; rerouted onto the TranslateGemma sidecar at TG-3): map
   in document order, materialize a NEW document.** `params.sourceLang`/`params.targetLang`
-  over the curated 10-language set (`TRANSLATION_LANGUAGE_CODES`, `shared/types.ts` — the
+  over the curated 10-language set (widened to 51 by issue #31 — see D5/#31b)
+  (`TRANSLATION_LANGUAGE_CODES`, `shared/types.ts` — the
   canonical list the sidecar prompt builder also keys off; validated server-side, source ≠
   target; TranslateGemma needs an explicit source — no auto-detect). **D36 — the input is
   the parser's SEGMENTS, re-extracted from the stored copy via `extractDocumentPreview`,
@@ -1702,6 +1703,7 @@ sentinel-tested), zero native deps.
   (`useSyncExternalStore`), shows the per-row
   "Summarizing…/Translating…/Comparing… (n/m)" busy state + Cancel on EVERY source row;
   "Translate" opens a small modal with SOURCE + TARGET selects over the curated 10
+  (widened to 51 by issue #31 — see D5/#31b)
   (native-name labels, untranslated by design — the Settings language-picker precedent;
   the pair is remembered session-local, source ≠ target enforced in UI and server). With
   no translation model installed (`AppStatus.translationAvailable`, read from
@@ -2048,7 +2050,8 @@ Per-finding disposition (F-1…F-8):
   (its prompts/temperature were deleted; the manager dispatches translation directly like
   `ocr`, outside `MODEL_TASK_HANDLERS`). Guards: enqueue AND dequeue require a non-null
   translator (`main.translation.noModel`, friendly + deep-linked); chat may be entirely absent.
-  Languages widened to the curated 10 with a required `sourceLang` (shared/types owns the
+  Languages widened to the curated 10 (widened to 51 by issue #31 — see D5/#31b) with a
+  required `sourceLang` (shared/types owns the
   canonical `TRANSLATION_LANGUAGE_CODES`; the sidecar's prompt maps key off it — one source of
   truth). Window planning moved to `Translator.contextWindow()` + the D4
   `TRANSLATION_MAX_INPUT_TOKENS = 1800` clamp; the Qwen-measured 1.3/2.0 tokens-per-word
@@ -6106,7 +6109,7 @@ retirement.
 | PERF-4 (Med) | 3 | **fixed** — `textMaxBytes` (64 MiB) + `readsWholeFileToString` flag → friendly `fileTooLarge` reject instead of a V8 string-limit OOM for txt/markdown/csv | §35; known-limitations |
 | PERF-5 (Low) | — | **accepted / carried** — `ImagesScreen` `AnswerThread` memo defeated by unstable `onCopy`/`onTryAgain`/`onStop` props; image sessions are short so the re-render cost is bounded (Low-Med) | this ledger (carried) |
 | PERF-6 (Low) | 4 | **deferred with cause** — per-page OCR child table is a larger schema migration; PERF-3's sidecar already removed the hot-path parse (the actual harm) | §36 |
-| **SEC-4** (Low/Info) | **8** | **fixed** — `runtime-sources.ts` rejects `..`/absolute/drive-letter `extract_to` at PARSE time (new `isUnsafeDrivePath`, applied to the sibling OCR `dest` too for consistency); defense-in-depth ahead of the load-bearing `resolveWithinRoot` | this §38; `shared/runtime-sources.ts`; `runtime-sources.test.ts` |
+| **SEC-4** (Low/Info) | **8** | **fixed** — (this SEC-4 is the 2026-06-29 follow-up's; distinct from backend-audit-2026-06-27's SEC-4 = session-cached binary verification, §24 / `security-model.md`) `runtime-sources.ts` rejects `..`/absolute/drive-letter `extract_to` at PARSE time (new `isUnsafeDrivePath`, applied to the sibling OCR `dest` too for consistency); defense-in-depth ahead of the load-bearing `resolveWithinRoot` | this §38; `shared/runtime-sources.ts`; `runtime-sources.test.ts` |
 | SEC-1c (Low) | — | **accepted residual / open** — unlock-path rate-limit/attempt-counter + create-time strength floor; the at-rest Argon2id KDF is the binding mitigation against the offline (drive-in-hand) attacker, so a UI rate-limit doesn't bind the real threat | §26 |
 | SEC-2 (Low) | — | **accepted residual / open** — stage `previewSkillPackage` content under `userSkillsDir` (trust-zone consistency); today path-/size-validated + finally-cleaned in the shared tmpdir, not an escape | §26 |
 | SEC-3 (Info) | — | **accepted residual / open** — dialog-opener IPCs mint a capability token pre-unlock but every consuming handler is `requireUnlocked()`-gated → inert; a consistency gap, not an exploit | §26 |

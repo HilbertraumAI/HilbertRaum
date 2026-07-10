@@ -1,6 +1,7 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-20 (image understanding V2/V5: `models/vision/` + `model-manifests/vision/` added to the layout — a vision model is the GGUF + its mmproj projector). Prior: 2026-06-17 (Skills S9: `prepare-drive` copies `app-skills/`; the commercial gate asserts app skills present + `user-skills/` empty)_
+_Last updated: 2026-07-10 (full-audit 2026-07-10 DOC-106: the bundled app-skills list is **nine** —
+`document-edit` added to the Tier-2 tool skills). Prior: 2026-06-20 (image understanding V2/V5: `models/vision/` + `model-manifests/vision/` added to the layout — a vision model is the GGUF + its mmproj projector). Prior: 2026-06-17 (Skills S9: `prepare-drive` copies `app-skills/`; the commercial gate asserts app skills present + `user-skills/` empty)_
 
 ## How the app finds its data
 
@@ -79,8 +80,8 @@ HILBERTRAUM/
 ```
 
 > **Skills on a commercial drive (S3 lays the dirs; S9 provisions + asserts).** `app-skills/` carries
-> the bundled product skills (eight today: `bank-statement`, `invoice`, `document-redaction` — all
-> Tier-2 `kind:'tool'` — plus the Tier-1 instruction skills `meeting-protocol` (Meeting Minutes),
+> the bundled product skills (nine today: `bank-statement`, `invoice`, `document-redaction`,
+> `document-edit` — all Tier-2 `kind:'tool'` — plus the Tier-1 instruction skills `meeting-protocol` (Meeting Minutes),
 > `contract-brief`, `deadline-obligation-finder`, `what-changed`, and `share-safe-review`), **copied wholesale from
 > the committed repo `app-skills/` tree by `prepare-drive`**, the same copy step as `model-manifests/`
 > (DS17 — text-only, never network-fetched); `user-skills/` is created empty. The S9 commercial-drive

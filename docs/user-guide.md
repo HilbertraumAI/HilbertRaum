@@ -3,7 +3,9 @@
 _Last updated: 2026-07-10 (accuracy sweep, full-audit 2026-07-10 DOC-101…104: model downloads are
 permitted on prepared commercial drives too; document translation supports 51 languages; the
 Translate action activates without a restart after a mid-session model install; the local
-diagnostics log IS encrypted with the workspace). Prior:
+diagnostics log IS encrypted with the workspace. Same day, DOC-108/DOC-111: §5 context-size
+technical details, §6 warm-up note, §10 Developer-mode + chat-compaction switches, §11 interface
+Language, tsv in the §7 import list). Prior:
 2026-06-20 (added §8 "Ask about an image" — the Images screen; subsequent sections
 renumbered). Previously: Skills — the composer picker, the per-message skill glyph, skills
 that run local tools, and Settings → Skills; deep index + coverage meter and tiers;
@@ -206,6 +208,17 @@ words per second" and "faster than you can read". There is nothing to install or
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.
 
+### Technical details: context size (advanced)
+
+The **Context size** card on the AI Model screen sets how much text (your conversation plus any
+document excerpts) the model can hold at once. **Automatic** — the default — uses the model's
+recommended window and names the number it resolves to (e.g. *"Automatic — the model's
+recommended size (32768 tokens)"*); the fixed presets go from 4k up to 128k tokens, and a new
+pick applies the next time the model starts. Large windows cost memory — choices of 64k and
+above show a note saying so, because the model's working memory grows with the window. If you
+work with long documents and hit "context limit" messages, a larger context size here is the
+remedy.
+
 ---
 
 ## 6. Chat
@@ -231,6 +244,10 @@ with sources (see §7).
    deletes the conversation and its messages — document Q&A conversations too.
 6. Need more room? The **«** button hides the conversation list; **»** brings it back. The
    app remembers your choice.
+
+The very first answer after a model starts takes a little longer — a one-time *"the model is
+warming up"* note appears under the pending answer while it does. Later answers reuse the
+warmed-up model and come faster.
 
 Starting fresh? The empty chat suggests a few example questions — click one to put it in
 the message box — and, if you haven't imported anything yet, offers **Add documents to ask
@@ -298,7 +315,7 @@ your files.
 
 ## 7. Ask your documents (RAG)
 
-1. Open **Documents** and **Import files** (txt, md, pdf, docx, csv — audio
+1. Open **Documents** and **Import files** (txt, md, pdf, docx, csv, tsv — audio
    recordings: wav, mp3, flac, ogg — and, when your drive has the OCR files, photos of
    pages: png, jpg) — or **Import folder** to bring in a whole directory at once.
 2. Each file shows a friendly status while it is prepared locally (Waiting → Reading →
@@ -729,6 +746,14 @@ box, including on a prepared commercial drive; every download is explicit and
 confirmed, and the core app — chat, documents, search — never goes online. Logs are stored
 **locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 
+Two related switches in Settings: **Developer mode** (Settings → Developer, off by default)
+allows developer conveniences — a plaintext workspace and unverified models — though the drive
+policy stays authoritative: on a commercial drive, unverified models are rejected regardless of
+this setting. And **Summarize older messages to free up context** (Settings → Chat, on by
+default) keeps a long conversation going by condensing its oldest messages once into a compact
+note — created locally and kept on this drive — instead of silently dropping them; turn it off
+to keep only the most recent messages that fit.
+
 See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 
 ### The Activity panel (what did the app do?)
@@ -752,6 +777,10 @@ the change applies immediately and is remembered on the drive.
 
 One small exception: the lock screen always follows the system theme. Your settings live
 inside the encrypted workspace, so before you unlock it the app can't know your choice yet.
+
+The interface language works the same way: **Settings → Language** offers **System**,
+**English**, and **Deutsch** — *System* follows your operating system's language (German
+systems get Deutsch, everything else English), and a change applies right away, no restart.
 
 ---
 

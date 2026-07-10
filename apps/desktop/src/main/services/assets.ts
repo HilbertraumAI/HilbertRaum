@@ -18,7 +18,8 @@ import { mmprojPath, sha256File, verifyChecksum, weightPath, type HashStore } fr
 // NETWORK IS EXPLICIT, NEVER AUTOMATIC: the scripts run on the drive-builder's online
 // machine at build time, and the in-app downloader (`downloads.ts`) drives the
 // injected-`fetchImpl` seam below only after its gates pass (policy ceiling ∧ the
-// default-off user setting ∧ a per-download confirmation). The app never auto-downloads.
+// user setting — ON by default since 2026-06-13 — ∧ a per-download confirmation). The app
+// never auto-downloads.
 // Planning/selection/verify here are network-free (only fs + hashing), so the vitest
 // suite makes ZERO network calls.
 

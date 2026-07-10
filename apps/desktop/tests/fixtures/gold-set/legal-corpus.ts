@@ -7,7 +7,7 @@ import type { LocatedEdit } from '../../../src/main/services/skills/tools/docume
 // same rule as `tests/fixtures/real-layouts/corpus.ts`. Each case carries the exact model locate reply a
 // scripted (mock) runtime replays, so the whole verify+sweep / verify+splice pipeline runs DETERMINISTICALLY
 // in CI with no model. The REAL-model pass over these same documents is a PAID_* manual harness
-// (model-benchmarks.md §12) — this corpus is the offline stand-in that pins the pipeline's structural
+// (model-benchmarks.md §12.2) — this corpus is the §12.1 offline stand-in that pins the pipeline's structural
 // guarantees (verbatim verify, every-occurrence sweep, occurrence precision, drop-unverifiable, and the
 // Phase-9 same-format DOCX round-trip), never the model's judgement quality.
 //

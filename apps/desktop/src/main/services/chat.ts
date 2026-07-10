@@ -1054,7 +1054,8 @@ const CHAT_TOKENS_PER_WORD = 1.3
  * then keeps too much history, the real prompt runs larger than estimated, and the balanced path
  * (which sends no `max_tokens`) truncates the answer mid-word at the context ceiling — the exact
  * failure in the D:\ testing report (2026-07-01). Mirrors the RAG grounded-answer budget's ÷1.5
- * German safety (rag-design §15.1): leaning the whole chat budget conservative makes German trim +
+ * German safety (rag-design §15.1; this chat-side mirror is recorded in §15.7): leaning the whole
+ * chat budget conservative makes German trim +
  * compact a touch sooner (and the usage meter read truthfully high) rather than overflow. English
  * reads slightly high — acceptable for a meter that is labelled approximate and designed to warn
  * before the cliff. Effective rate: 1.3 × 1.5 ≈ 1.95 real tokens/word. */

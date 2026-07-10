@@ -163,14 +163,14 @@ describe('loadPolicy', () => {
 // ---- deny-by-default + effective permission -------------------------------------
 
 describe('resolveNetwork (effective = policy ∧ setting)', () => {
-  it('with no policy file, the default-off user setting is the gate (Phase 18, D3a)', () => {
+  it('with no policy file, the user setting is the gate (Phase 18, D3a)', () => {
     // DEFAULT_POLICY permits model downloads since Phase 18 (wave-1 decision D3 (architecture.md "In-app model downloader") resolved (a)):
     // the spec §3.6 Settings toggle is the effective gate when no policy file restricts.
-    // Update checks + telemetry stay denied with no toggle at all, and the app still
-    // ships offline because the SETTING defaults to off.
+    // Update checks + telemetry stay denied with no toggle at all; the download toggle
+    // ships ON by default (since 2026-06-13) — both toggle directions are asserted below.
     expect(DEFAULT_POLICY.network.allowUpdateChecks).toBe(false)
     expect(DEFAULT_POLICY.network.allowTelemetry).toBe(false)
-    const off = resolveNetwork(DEFAULT_POLICY, false) // the shipped default
+    const off = resolveNetwork(DEFAULT_POLICY, false) // toggle off
     expect(off.networkAllowed).toBe(false)
     expect(off.offlineMode).toBe(true)
     const on = resolveNetwork(DEFAULT_POLICY, true) // explicit user opt-in

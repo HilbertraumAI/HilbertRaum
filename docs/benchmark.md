@@ -1,7 +1,9 @@
 # Hardware benchmark & model recommendation
 
-_Last updated: 2026-06-10 (real tokens/sec; injected GPU probe, conservative profile bump,
-per-session probe refresh)._
+_Last updated: 2026-07-10 (full-audit 2026-07-10 DOC-109: content re-verified against the tree —
+the RAM-best-fit table matches the committed chat manifests, and the injected session-cached GPU
+probe + "Try GPU again" description is current; no content change needed). Prior: 2026-06-10
+(real tokens/sec; injected GPU probe, conservative profile bump, per-session probe refresh)._
 
 > **Not to be confused with** [`model-benchmarks.md`](model-benchmarks.md) — that doc is the
 > offline **model-quality** protocol and measured results; this doc is the in-app **hardware**

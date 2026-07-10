@@ -1,6 +1,9 @@
 # Security model — HilbertRaum
 
-_Last updated: 2026-06-29 (the body now carries the 2026-06-27/28/29 security audit records —
+_Last updated: 2026-07-10 (full-audit 2026-07-10 DOC-107: ledger entries added for the 2026-06-13
+lows **L-2** (https-only download URLs) and **L-3** (importPreflight unlock gate) — the ids code
+comments cite; the SEC-4 id overload vs `architecture.md` §38 disambiguated at both sites).
+Prior: 2026-06-29 (the body now carries the 2026-06-27/28/29 security audit records —
 backend-audit SEC-1–SEC-6, full-audit SEC-N1/DOC-N1 + the "Phase-7 security polish" section, and
 post-merge F14/F15/F17). Prior: 2026-06-20 (Image-understanding V8 — encrypted, deletable
 image-analysis history; its write/read temps now joined the startup crash sweep)_
@@ -1047,6 +1050,24 @@ app spawn an arbitrary binary. (The on-drive sidecar is now **re-hashed before s
 builds — see "Re-hash sidecar binaries before spawn" below; the dev-only env overrides are deliberately
 NOT hash-gated, since they point at an explicitly unverified path.)
 
+## Low-severity hardenings from the 2026-06-13 audit (L-2, L-3)
+
+Two lows from the same 2026-06-13 audit round as M-1…M-5 above are cited by id from code
+comments; this is their ledger entry. (Of the round's other lows: L-1 — anchoring the loopback
+regex — is folded into the startup self-check section above; L-4/L-5/L-7/L-8 were deferred and
+are tracked under "Open hardening items" in `BUILD_STATE.md`.)
+
+- **L-2 — model download URLs must be `https://`.** Cleartext `http://` leaks which model is
+  being fetched and is downgrade-friendly. `shared/manifest.ts` `isHttpsUrl` is the single
+  definition of the rule; it gates `validateManifest` (both the `download` and `mmproj.download`
+  blocks) and the `downloadToFile` seam. The vuln-scan 2026-06-21 D3 hardening (below) later
+  extended the same https-only rule to **every redirect hop**.
+- **L-3 — `importPreflight` is unlock-gated and type-filtered.** The docs-IPC import preflight
+  (`registerDocsIpc.ts`) was an unauthenticated filesystem probe; it now calls `requireUnlocked()`
+  and drops non-string path elements exactly like `importDocuments`, so a compromised renderer
+  can neither drive a recursive directory walk of arbitrary paths while the workspace is locked
+  nor crash `expandPaths` with junk elements.
+
 ## Parsing-DoS hardening — the content tools' regexes are now linear (vuln-scan 2026-06-21)
 
 The #1 attacker goal in this app's threat model is **resource exhaustion while parsing a hostile
@@ -1289,7 +1310,9 @@ predating this change has no recorded hash and is tolerated (`skip-legacy`) unti
 still rests on drive provisioning + filesystem integrity (and an attacker who can write the runtime dir
 can usually also tamper the app's own Electron code). See `known-limitations.md`.
 
-**Accepted residual — verification is session-cached by path, not per-spawn (SEC-4, backend-audit-2026-06-27).**
+**Accepted residual — verification is session-cached by path, not per-spawn (SEC-4, backend-audit-2026-06-27;
+a *different* finding also named SEC-4 — hostile `extract_to` path rejection, full audit 2026-06-29 follow-up —
+lives in `architecture.md` §38).**
 `verifyBinaryBeforeSpawn` memoises its verdict per resolved path **for the whole session**, so only the
 *first* spawn of a given binary re-hashes; later model switches / fallback restarts reuse the cached `ok`.
 A tamper that lands *after* the first spawn (then a model switch re-spawns the same path) is not

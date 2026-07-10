@@ -4,7 +4,11 @@ _Status: **WORKING PAPER — still open / not started (created 2026-06-11; recon
 Reconcile (2026-06-29): both tracks remain unstarted — the shipped catalog still defaults to the **E5**
 embedder (`multilingual-e5-small`, the only `model-manifests/embeddings/` entry) and none of the
 Track-A chat candidates (Gemma 4 26B-A4B, Mistral Small 3.2 24B, Granite 4.0 H-Small) or Track-B's
-Granite Embedding R2 have been added. Per the CLAUDE.md doc-lifecycle rule this is the one sanctioned
+Granite Embedding R2 have been added. Since that note, the Qwen3.5 wave (2026-07) added
+`qwen3.5-27b-ud-q4kxl` and `qwen3.5-35b-a3b-ud-q4kxl` manifests — new big-slot-class chat
+candidates that are **not promoted** (the owner's offline b9849 load smoke gates promotion,
+model-benchmarks §9.1) and postdate the Track-A candidate list above. Per the CLAUDE.md
+doc-lifecycle rule this is the one sanctioned
 standalone open plan (work still open) — nothing here is implemented yet, so there is nothing to fold
 into a topic-doc design record or delete. Continues the model-catalog work:
 the wave-1 catalog + benchmark (Phases 28–29) shipped and were condensed into
