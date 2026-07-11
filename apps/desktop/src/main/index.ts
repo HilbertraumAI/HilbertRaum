@@ -548,11 +548,12 @@ app.on('will-quit', (event) => {
 // Last-resort crash safety: a hard `uncaughtException` skips `will-quit`, so try to lock the
 // vault (re-encrypt + shred the plaintext working DB) before the process dies. Best-effort
 // and synchronous; the startup crash-recovery shred is the robust backstop on next launch.
+// shutdown() additionally closes a plaintext_dev DB so no -wal/-shm outlive the process (#51).
 process.on('uncaughtException', (err) => {
   try {
     log.error('Uncaught exception', String(err))
     detachVaultKey() // flush the encrypted log before lock() zeroes the key
-    ctx?.workspace.lock()
+    ctx?.workspace.shutdown()
   } catch {
     /* best-effort */
   }

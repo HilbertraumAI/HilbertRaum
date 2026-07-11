@@ -366,6 +366,59 @@ describe('WorkspaceController', () => {
     expect(existsSync(vp.descriptorPath)).toBe(false) // plaintext needs no vault descriptor
   })
 
+  // Issue #51: a clean quit must leave NO `-wal`/`-shm` on the drive at rest — on a
+  // non-journaling exFAT stick, at-rest WAL sidecars mean the last session never closed
+  // cleanly and worsen hard-unplug outcomes. lock() is a deliberate no-op for
+  // plaintext_dev, so the quit path calls shutdown() (checkpoint + close) instead.
+  it('shutdown() closes a plaintext_dev DB so no -wal/-shm sidecars remain at rest (issue #51)', () => {
+    const vp = freshVault()
+    const ctrl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    ctrl.init()
+    // A write guarantees the WAL sidecars exist on disk during the session.
+    updateSettings(ctrl.requireDb(), { contextTokens: 6144 })
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(true)
+
+    ctrl.shutdown()
+
+    // The main DB stays (plaintext IS the working copy); the sidecars are gone.
+    expect(existsSync(vp.dbPath)).toBe(true)
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
+    // Quit-only teardown: the DB is closed for good in this process…
+    expect(() => ctrl.requireDb()).toThrow()
+
+    // …and the next launch reads the same data back.
+    const reopened = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    reopened.init()
+    expect(getSettings(reopened.requireDb()).contextTokens).toBe(6144)
+    reopened.shutdown()
+  })
+
+  it('shutdown() locks an unlocked encrypted vault and is safe to call when already locked (issue #51)', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('pw')
+    updateSettings(ctrl.requireDb(), { contextTokens: 7777 })
+
+    ctrl.shutdown()
+
+    // Same disk posture the lock() path guarantees: encrypted artifact only.
+    expect(existsSync(vp.encPath)).toBe(true)
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
+    expect(ctrl.getState().state).toBe('locked')
+    ctrl.shutdown() // idempotent on an already-locked vault
+
+    const again = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    again.init()
+    again.unlock('pw')
+    expect(getSettings(again.requireDb()).contextTokens).toBe(7777)
+    again.lock()
+  })
+
   it('drives the encrypted uninitialized → unlocked → locked → unlocked lifecycle', () => {
     const vp = freshVault()
     // Commercial posture: encryption required, not a dev build → onboarding, no plaintext.

@@ -45,7 +45,9 @@ function fakeCtx(order: string[]): AppContext {
     ocrEngine: { stop: stop('ocr.stop') },
     vision: { stop: stop('vision.stop') },
     translator: { stop: stop('translator.stop') },
-    workspace: { lock: () => order.push('lock') }
+    // Issue #51: quit calls workspace.shutdown() (lock + plaintext checkpoint/close). The
+    // ordering event keeps its historical 'lock' label — every assertion below pins it.
+    workspace: { shutdown: () => order.push('lock') }
   } as unknown as AppContext
 }
 

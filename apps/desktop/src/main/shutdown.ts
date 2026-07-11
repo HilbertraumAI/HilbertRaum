@@ -110,9 +110,12 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   // Flush the encrypted diagnostics log to disk while the vault key is still live (lock() zeroes it).
   // No-op for plaintext_dev (that log is appended in real time).
   detachVaultKey()
-  // Lock (re-encrypt + shred) the plaintext working DB. No-op for plaintext_dev.
+  // Lock (re-encrypt + shred) the encrypted vault's working DB; for plaintext_dev — where
+  // lock() is a no-op — checkpoint + close so no -wal/-shm sidecars remain on the drive at
+  // rest (issue #51: at-rest WAL sidecars on a non-journaling exFAT stick read as "the last
+  // session never closed cleanly" and worsen hard-unplug outcomes).
   try {
-    ctx?.workspace.lock()
+    ctx?.workspace.shutdown()
   } catch (err) {
     log.error('Failed to lock workspace on quit', String(err))
   }

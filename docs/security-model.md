@@ -1,6 +1,9 @@
 # Security model — HilbertRaum
 
-_Last updated: 2026-07-10 (full-audit 2026-07-10 DOC-107: ledger entries added for the 2026-06-13
+_Last updated: 2026-07-11 (issue #51: the whole-file-encryption record gains the plaintext-mode
+quit close — `WorkspaceController.shutdown()` checkpoints + closes so no `-wal`/`-shm` remain at
+rest in either mode — and the recorded decision to KEEP WAL rather than switch journal modes on
+exFAT). Prior: 2026-07-10 (full-audit 2026-07-10 DOC-107: ledger entries added for the 2026-06-13
 lows **L-2** (https-only download URLs) and **L-3** (importPreflight unlock gate) — the ids code
 comments cite; the SEC-4 id overload vs `architecture.md` §38 disambiguated at both sites).
 Prior: 2026-06-29 (the body now carries the 2026-06-27/28/29 security audit records —
@@ -365,6 +368,16 @@ individual rows — the spec §8 schema is identical in both modes.
 - **WAL sidecars:** WAL mode creates `hilbertraum.sqlite-wal` / `-shm`, which can hold plaintext pages.
   They are checkpointed before encryption and shredded after, so the encrypted snapshot is complete
   and no plaintext leaks in a sidecar.
+- **Plaintext-mode quit (issue #51):** `lock()` is a deliberate no-op for `plaintext_dev`, so quit
+  routes through `WorkspaceController.shutdown()` — `lock()` for an unlocked encrypted vault, and
+  for plaintext a `wal_checkpoint(TRUNCATE)` + `close()` so no `-wal`/`-shm` remain at rest. Not a
+  confidentiality measure (plaintext mode protects nothing) but drive hygiene: on the non-journaling
+  exFAT stick, at-rest WAL sidecars mean the last session never closed cleanly and worsen the
+  outcome of a hard unplug. **WAL itself is kept in both modes** — it was chosen deliberately for
+  high-latency USB performance (`openDatabase`'s pragma block), and a `journal_mode=DELETE` switch
+  on exFAT would not remove the real risk (a mid-session unplug dirties the volume regardless)
+  while doubling fsync cost on every commit. The user-facing half is the safe-eject guidance in
+  `user-guide.md` §13 + the troubleshooting "scan and fix" entry.
 
 ### Encrypted document cache (spec §3.5: "database AND document cache")
 Imports copy each file into `workspace/documents/` so the drive is self-contained. In an encrypted

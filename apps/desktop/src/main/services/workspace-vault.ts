@@ -1119,4 +1119,29 @@ export class WorkspaceController {
     }
     return this.getState()
   }
+
+  /**
+   * Process-exit teardown (issue #51). For an unlocked encrypted vault this is `lock()`
+   * (checkpoint + close + re-encrypt + shred — the existing path). For `plaintext_dev` —
+   * where `lock()` is a deliberate no-op — it checkpoints and CLOSES the DB, so a clean
+   * quit leaves a bare `hilbertraum.sqlite` with no `-wal`/`-shm` sidecars at rest on the
+   * drive: on a non-journaling exFAT stick, at-rest WAL sidecars mean the last session
+   * never closed cleanly, and they make the next hard unplug likelier to corrupt. ONLY
+   * for callers that are about to exit the process — a closed plaintext DB has no reopen
+   * path short of relaunch (`requireDb` throws afterwards).
+   */
+  shutdown(): void {
+    this.lock()
+    if (this._db) {
+      // plaintext_dev: flush the WAL into the main file, then close — SQLite removes the
+      // -wal/-shm sidecars on the last clean connection close.
+      try {
+        this._db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+      } catch {
+        /* best-effort; close still flushes */
+      }
+      this._db.close()
+      this._db = null
+    }
+  }
 }

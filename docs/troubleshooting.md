@@ -1,7 +1,10 @@
 # HilbertRaum — Troubleshooting
 
-_Last updated: 2026-07-10 (offline-mode answer corrected, full-audit 2026-07-10 DOC-101: model
-downloads are permitted on prepared commercial drives — every download still asks first). Prior:
+_Last updated: 2026-07-11 (issue #51: new "Windows asks to scan and fix the drive" entry — the
+exFAT dirty bit from unplugging without a safe eject, why the scan is safe, and the
+quit-then-eject habit). Prior: 2026-07-10 (offline-mode answer corrected, full-audit 2026-07-10
+DOC-101: model downloads are permitted on prepared commercial drives — every download still asks
+first). Prior:
 2026-07-07 (added "Redaction left a name in, or an edit changed nothing" — the AI-assisted best-effort posture, the no-model-running degrade, steerable scope, verbatim-only edits, and same-format output). Previously: Images entries (the screen needs a vision model; asking about an image is slow); Skills entries (drop-ins install disabled, import rejections, the "Needs newer app" badge, "the skill tool found nothing"); scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
 
 Quick answers to common situations. Everything here is normal, local, and offline — none of
@@ -321,6 +324,32 @@ That's expected the first time, and on the first question about a large picture:
   running is declined, not queued. The picture and answers are **never uploaded**; they are saved
   to your image history (under `workspace/images/`, encrypted at rest on an encrypted workspace) so
   you can revisit them, and you can delete any saved analysis at any time from the Images screen.
+
+---
+
+## Windows asks to "scan and fix" the drive
+
+Plugging the drive into a Windows machine sometimes shows *"There's a problem with this drive.
+Scan the drive now and fix it?"* This almost always means the drive was **unplugged without a
+safe eject** last time — not that the drive is broken.
+
+Why it happens: the drive uses the exFAT filesystem (the one Windows, macOS, and Linux can all
+write). exFAT keeps a "cleanly ejected" marker; pulling the drive while anything on it is still
+open — including HilbertRaum, which keeps its database on the drive while it runs — leaves the
+marker set, and Windows offers a check on the next plug-in.
+
+What to do:
+
+- Letting Windows **scan the drive is safe**. Your workspace database and models are ordinary
+  files; the check either finds nothing or repairs filesystem bookkeeping.
+- To avoid the prompt — and the small risk a hard unplug always carries on exFAT — make it a
+  habit: **quit the app, wait for its window to close, then eject the drive safely** ("Safely
+  Remove Hardware" on Windows, Eject in the Finder / your file manager). The app finishes its
+  writes and closes its database cleanly when it quits; the safe eject flushes everything else.
+- If the scan reports repaired files, or a `FOUND.000` folder appears on the drive, an earlier
+  hard unplug interrupted a write. Start the app and check your documents are present. Model
+  weight files can always be re-downloaded or re-provisioned if one was damaged; your workspace
+  data cannot — which is exactly why the quit-then-eject habit is worth it.
 
 ---
 

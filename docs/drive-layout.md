@@ -1,6 +1,8 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-07-10 (full-audit 2026-07-10 DOC-106: the bundled app-skills list is **nine** —
+_Last updated: 2026-07-11 (issue #51: the layout tree now names the transient `-wal`/`-shm` SQLite
+sidecars and the clean-quit guarantee that removes them in both workspace modes). Prior:
+2026-07-10 (full-audit 2026-07-10 DOC-106: the bundled app-skills list is **nine** —
 `document-edit` added to the Tier-2 tool skills). Prior: 2026-06-20 (image understanding V2/V5: `models/vision/` + `model-manifests/vision/` added to the layout — a vision model is the GGUF + its mmproj projector). Prior: 2026-06-17 (Skills S9: `prepare-drive` copies `app-skills/`; the commercial gate asserts app skills present + `user-skills/` empty)_
 
 ## How the app finds its data
@@ -20,6 +22,9 @@ From the root, these paths are derived and created (idempotently) on first run:
 ├── workspace/
 │   ├── hilbertraum.sqlite        # all app data (spec §8 tables) — hilbertraum.sqlite.enc at rest in
 │   │                      # encrypted mode (decrypted to hilbertraum.sqlite only while unlocked)
+│   │                      # while the app runs, SQLite keeps -wal/-shm sidecars next to it (WAL
+│   │                      # mode); a clean quit checkpoints + removes them in BOTH modes (#51) —
+│   │                      # sidecars present at rest mean the last session ended uncleanly
 │   ├── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
 │   └── images/            # saved image-analysis history copies (<id><ext>.enc in encrypted mode)
 ├── app-skills/            # app-shipped Skills (read-only, PLAIN folders — NOT encrypted; Skills S3/S9)

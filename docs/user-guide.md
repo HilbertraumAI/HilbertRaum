@@ -1,6 +1,8 @@
 # HilbertRaum — User Guide
 
-_Last updated: 2026-07-10 (accuracy sweep, full-audit 2026-07-10 DOC-101…104: model downloads are
+_Last updated: 2026-07-11 (issue #51: §13 "before unplugging" — quit, wait for the window to
+close, then safe-eject; pointer to the new troubleshooting entry on the Windows "scan and fix"
+prompt). Prior: 2026-07-10 (accuracy sweep, full-audit 2026-07-10 DOC-101…104: model downloads are
 permitted on prepared commercial drives too; document translation supports 51 languages; the
 Translate action activates without a restart after a mid-session model install; the local
 diagnostics log IS encrypted with the workspace. Same day, DOC-108/DOC-111: §5 context-size
@@ -812,8 +814,14 @@ is unlocked. Enter your current password, then the new one twice — the same st
 ## 13. Move between laptops
 
 Because everything lives on the drive, you can unplug it and plug it into another laptop —
-your models, documents, and chat history come with you. Eject the drive safely before
-unplugging.
+your models, documents, and chat history come with you.
+
+**Before unplugging:** quit the app, wait for its window to close, then **eject the drive
+safely** ("Safely Remove Hardware" on Windows, Eject in the Finder / your file manager). The
+app keeps its database on the drive while it runs — quitting lets it finish writing and close
+cleanly, and the safe eject flushes everything else. Skipping the eject is what makes Windows
+show the *"scan and fix this drive?"* prompt on the next plug-in (harmless, but see
+[`troubleshooting.md`](troubleshooting.md) if it appears).
 
 ---
 
