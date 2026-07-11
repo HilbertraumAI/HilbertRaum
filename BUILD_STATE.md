@@ -11162,9 +11162,23 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     fixture + the prepare-spy no-full-table-aggregation guard. Docs: rag-design.md §11
     "Trigger sync is rowid-targeted". known-limitations PF-5 bullet unchanged (it describes the
     documents-screen list path, which still loads the whole library — unchanged scope).
-    Remaining phases E, F2, G–J unstarted.
+    **Review follow-up (+2 tests, red-verified against the Phase-D commit):**
+    `ensureFtsRowidSync` made crash-atomic AND self-healing — the multi-statement DROP+CREATE
+    exec auto-committed per statement (a kill mid-upgrade could tear the trigger set, and the
+    sentinel's `!row` early-return made a missing AD trigger a PERMANENT silent failure: deletes
+    stop maintaining the index → ghost search hits), and the sentinel-matching CREATEs could
+    commit with the separately-transacted backfill lost (whole corpus parked on the legacy scan
+    path forever). Fix: DROPs + CREATEs + backfill in ONE transaction (`backfillFtsRowids` gains
+    an ownTransaction=false mode; crash → rollback to intact pre-migration state → retry next
+    open) + the sentinel flipped to `row?.sql.includes('fts_rowid')` so a MISSING AD trigger
+    means "must upgrade" (DROP-IF-EXISTS DDL → re-run safe against any torn state, incl. ones
+    from the pre-existing non-atomic fresh-create execs). Tests: hostile RAISE(ABORT)-on-UPDATE
+    trigger in a pre-migration fixture proves atomic rollback + retry-to-completion; a hand-torn
+    state (AD/AU dropped + handles nulled) self-heals on the next open. Review nits registered
+    in the plan's discoveries (au_legacy's missing compaction exclusion is DELIBERATE —
+    kind-transition re-index semantics). Remaining phases E, F2, G–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase D — CODE-4 FTS rowid-targeted triggers + CODE-20/21 DB batching, +12 tests): typecheck clean, 4103 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase D + review follow-up — CODE-4 FTS rowid-targeted triggers (crash-atomic, self-healing migration) + CODE-20/21 DB batching, +14 tests): typecheck clean, 4105 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

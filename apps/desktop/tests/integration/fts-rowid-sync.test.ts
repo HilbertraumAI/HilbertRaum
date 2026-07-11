@@ -298,4 +298,79 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
     db.prepare("DELETE FROM chunks WHERE id = 'legacy-chunk'").run()
     expect(chunkFtsRows(db)).toHaveLength(0)
   })
+
+  // ---- CODE-4 review follow-up: the migration is crash-atomic AND self-healing --------
+  //
+  // Two holes the review found in the first cut: (a) the upgrade's multi-statement DDL exec
+  // auto-committed per statement, so a kill mid-upgrade could leave a torn trigger set — and
+  // the sentinel's `!row` early-return (copied from the kind-filter idiom, where a missing
+  // trigger is unreachable) turned exactly that torn state into a PERMANENT silent failure
+  // (deletes stop maintaining the index → ghost search hits); (b) the sentinel-matching
+  // CREATEs could commit while the separately-committed backfill was lost, parking the whole
+  // corpus on the legacy scan path forever. Fixed by (i) running DROPs + CREATEs + backfill in
+  // ONE transaction (a crash rolls back to the intact pre-migration state and the sentinel
+  // retries) and (ii) flipping the sentinel so a MISSING AD trigger means "must upgrade" (the
+  // DDL is DROP-IF-EXISTS-safe, so re-running against any torn state repairs it).
+
+  it('crash mid-upgrade rolls back atomically: the old triggers stay intact and the next open retries to completion', () => {
+    const path = buildPreMigrationDb()
+    // A hostile trigger that fires on the backfill's UPDATE — the crash-equivalent injection:
+    // the upgrade transaction dies AFTER its DDL ran but BEFORE the backfill finished.
+    const raw = new DatabaseSync(path)
+    raw.exec(`CREATE TRIGGER boom AFTER UPDATE ON chunks BEGIN SELECT RAISE(ABORT, 'torn-mid-upgrade'); END;`)
+    raw.close()
+
+    expect(() => openDatabase(path)).toThrow(/torn-mid-upgrade/)
+
+    // Rollback proof: NOTHING of the half-run upgrade committed — the OLD (pre-fix) AD
+    // trigger is intact and no _legacy twin exists, so the sentinel will retry.
+    const inspect = new DatabaseSync(path)
+    const ad = inspect
+      .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='chunks_fts_ad'")
+      .get() as unknown as { sql: string } | undefined
+    expect(ad?.sql).toContain('chunk_id = old.id')
+    expect(ad?.sql).not.toContain('fts_rowid')
+    expect(
+      inspect.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='trigger' AND name='chunks_fts_ad_legacy'").get()
+    ).toEqual({ n: 0 })
+    inspect.exec('DROP TRIGGER boom')
+    inspect.close()
+
+    // With the injected failure gone, the retry completes the whole migration.
+    const db = openDatabase(path)
+    expect(triggerSql(db, 'chunks_fts_ad')).toContain('rowid = old.fts_rowid')
+    const handles = db
+      .prepare('SELECT fts_rowid FROM chunks')
+      .all() as unknown as Array<{ fts_rowid: number | null }>
+    expect(handles.length).toBeGreaterThan(0)
+    for (const h of handles) expect(h.fts_rowid).not.toBeNull()
+    expect(searchMessages(db, 'zork')).toHaveLength(1)
+  })
+
+  it('a torn trigger state (AD dropped, handles lost) self-heals on the next open instead of failing silently forever', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'hilbertraum-ftsrowid-torn-')), 'test.sqlite')
+    const db = openDatabase(path)
+    const now = new Date().toISOString()
+    db.prepare(`INSERT INTO documents (id, title, status, created_at, updated_at) VALUES ('d1','a.txt','indexed',?,?)`).run(now, now)
+    db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at) VALUES ('c1','d1',0,'alpha text','a.txt',?)`
+    ).run(now)
+    // Simulate the worst torn state a non-atomic upgrade could have left: the sentinel (AD)
+    // trigger and its AU sibling gone, and the backfill lost (NULL handles). Pre-flip, the
+    // sentinel's `!row` branch bailed here permanently.
+    db.exec('DROP TRIGGER chunks_fts_ad; DROP TRIGGER chunks_fts_au; DROP TRIGGER messages_fts_ad;')
+    db.prepare('UPDATE chunks SET fts_rowid = NULL').run()
+    db.close()
+
+    const healed = openDatabase(path)
+    expect(triggerSql(healed, 'chunks_fts_ad')).toContain('rowid = old.fts_rowid')
+    expect(triggerSql(healed, 'chunks_fts_au')).toContain('rowid = old.fts_rowid')
+    expect(triggerSql(healed, 'messages_fts_ad')).toContain('rowid = old.fts_rowid')
+    // The re-run backfill re-stamped the lost handles…
+    const c1 = healed.prepare("SELECT fts_rowid FROM chunks WHERE id = 'c1'").get() as unknown as { fts_rowid: number | null }
+    expect(c1.fts_rowid).not.toBeNull()
+    // …and deletes maintain the index again (the silent-ghost-hits failure is repaired).
+    healed.prepare("DELETE FROM chunks WHERE id = 'c1'").run()
+    expect(chunkFtsRows(healed)).toHaveLength(0)
+  })
 })
