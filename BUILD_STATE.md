@@ -11041,296 +11041,32 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       `djuro-agent` to cla.yml's allowlist once the post-launch CLA smoke-test PR is green (the
       removal note sits in cla.yml).
 
-11. **Full-audit 2026-07-11 remediation (working papers `docs/audits/full-audit-2026-07-11*.md` —
-    UNCOMMITTED, deleted at the close-out phase like the 2026-07-10 round; the durable ledger will be
-    an `architecture.md` §-record).** 1 High code (CODE-1 vault-lock data loss) + 2 High docs
-    (DOC-1/2 stale RAM tiers) + 13 Medium + ~46 Low; phased plan A–J. **Phase A DONE (2026-07-11):**
-    launch-facing docs truth pass — README/benchmark.md RAM tiers corrected to the shipped
-    16–20 GB → Ministral / ≥24 GB → Gemma 4 12B mapping (DOC-1/2), "Start" → "Use this model"
-    (DOC-3), the clone dir + repo tree root → `HilbertRaum` (DOC-4), TranslateGemma Min RAM 14 → 13
-    (DOC-5), the two stale 4045 gate lines → 4053 (DOC-7), the pre-rebrand example volume →
-    `HILBERTRAUM` in the five shell usage texts + commercial-drive.ts comment (DOC-8), user-guide
-    "No skill"/"Answering from:"/Settings-tab fixes (DOC-9/10/11). **Phase B DONE (2026-07-11,
-    the only High — vault-lock durability, CODE-1/10/14):** (a) CODE-1a — `WorkspaceController.lock()`
-    now restores itself to a consistent UNLOCKED state when the re-encrypt fails (ENOSPC-realistic):
-    plaintext DB re-opened, key kept for retry, typed content-free `VaultLockError` → IPC maps it to
-    friendly `main.workspace.lockFailed` (EN+DE) + `workspace_lock_failed` audit event; the old
-    behavior stranded a CLOSED handle in `_db` while `getState()` said `unlocked`. (b) CODE-1b —
-    `preserveNewerPlaintext`: init()'s crash sweep no longer shreds a working file NEWER than `.enc`
-    (the only fresh copy after a failed lock); the narrow failed-lock signature (newer mtime + no
-    live `-wal`/`-shm` + SQLite header) is moved aside as `<db>.recovery` and rolled FORWARD at the
-    next unlock (re-encrypted over the stale `.enc` once the key exists); anything else (mid-session
-    crash leftovers = the documented power-cut trade-off, garbage) is shredded as before;
-    `WorkspaceController.shutdown()` cleanly closes the re-opened DB on a failed quit-lock so the
-    disk rests in the salvageable signature. (c) CODE-10 — `encryptFile`/`encryptFileAsync` fsync
-    the frame BEFORE the atomic rename (the `writeVaultDescriptor` idiom; covers lock/create/rekey
-    staging/sidecar writes in one place). (d) CODE-14 — fresh-vault creation now stages the DB as
-    `.enc.new` and writes the descriptor LAST as the single commit point (rekey-journal ordering;
-    crash-before → still `uninitialized`, onboarding retries; crash-after → `recoverPendingRekey`
-    rolls forward). NO on-disk format change (VAULT_VERSION/envelope untouched). Tests +11
-    (characterization-first): CODE-1a failed-lock usability+retry, 5× CODE-1b salvage-matrix
-    (roll-forward, wrong-password keeps snapshot, stale/WAL/garbage still shredded), CODE-14
-    end-state + 2 crash simulations, plus `workspace-vault-durability.test.ts` (2 fs-wiring pins
-    with teeth via `vi.mock('node:fs')` — fsync-before-rename, staged→descriptor→swap rename order;
-    plain `vi.spyOn` on the externalized builtin does NOT intercept, recorded in the plan's
-    discoveries). Docs: security-model "Lock failure & durability" (incl. the now-RECORDED accepted
-    power-cut trade-off decision), troubleshooting "Could not lock the workspace". **Review
-    follow-up F1 (fixed, +2 red-verified tests):** the unlock roll-forward is now guarded like the
-    init() salvage (SQLite header + strictly-newer-than-`.enc` mtime) — a spent `.recovery` that
-    outlived its best-effort shred (Windows AV/indexer unlink failure) could otherwise silently roll
-    the vault BACK on every later unlock, or encrypt shred-garbage over the good `.enc`. F2 rider:
-    security-model additionally records the CODE-1b confidentiality trade (plaintext `.recovery`
-    rests on the drive until the next successful unlock secures it). F3 residual registered in the
-    plan (failed interactive lock + immediate hard kill still shreds — the CODE-1a reopen recreates
-    `-wal`/`-shm`; inside the power-cut trade-off; the QUIT path is covered by `shutdown()`).
-    **Phase C DONE (2026-07-11 — quit-path lifecycle, CODE-2/3/11 + riders CODE-12/13):**
-    (a) CODE-3 — `RuntimeManager` gets the `TranslationRuntime.stopped`-style PERMANENT
-    `shutdown()` latch, armed as `performShutdown`'s FIRST act (pinned at index 0 in
-    shutdown.test.ts): once armed, `start()`/`forceRestart()` reject without invoking the factory,
-    a start already queued refuses inside `doStart` before it can spawn, and `startModelRuntime`
-    re-checks the latch right after its multi-GB weight hash — the window where a background
-    auto-start used to enqueue a fresh start AFTER the teardown's stop and orphan the child at
-    `app.exit(0)`. (b) CODE-2 — a stop no longer waits out an UNCANCELLABLE in-flight start (20 GB
-    GGUF load / failing ladder ≈ minutes of frozen quit/"Lock now"): the manager tracks the
-    in-flight `startingRuntime` and `stop()` cancels it directly; `LadderRuntime.stop()` sets a
-    permanent `cancelled` flag that aborts the walk between rungs, stops the in-flight rung's
-    server (unblocking `waitForHealthy` via its existing exit-check throw — never a bare timeout
-    race), never persists `gpuAutoDisabled` for a killed attempt, and refuses the rung-4 mock for
-    a cancelled start; queue semantics unchanged (stop still runs after the start settles — it just
-    settles promptly now); the workspace-lock path benefits through its existing `runtime.stop()`.
-    (c) CODE-11 — module-level sidecar child-PID registry in `runtime/sidecar.ts` (registered on
-    spawn / deregistered on exit-or-error at both funnels: `LlamaServer` + `WhisperCliTranscriber`);
-    the `uncaughtException` handler now best-effort SIGKILLs every registered child (throw-safe per
-    PID, after the vault lock) so a crash exit no longer strands up to five llama-servers on
-    Windows. (d) CODE-12 — `invalidateBinaryVerification(binPath)` evicts the binary-verifier's
-    session-cached verdict after `installOne` writes the fresh marker (repair-after-tamper no
-    longer stays refused until restart). (e) CODE-13 — `EngineDownloadManager.cancel()` now honours
-    `verifying`/`extracting` (post-verify + post-extract-before-marker + between-family abort
-    re-checks; the downloads.ts BE-4 mirror, incl. a new injectable `verifyImpl` seam), and an
-    engine job that would replace the LIVE chat engine's dir is refused while a model runtime runs
-    (`chatRuntimeActive` from the IPC layer; friendly `main.engine.runtimeRunning` EN+DE). Tests
-    +15 (characterization-first; the CODE-2 mid-start-stop red was the pre-fix 60 s queue stall):
-    shutdown latch-ordering pin, 4 manager quit-path/latch tests, 2 ladder cancellation tests,
-    3 registry + LlamaServer wiring pins, 1 whisper wiring pin, 4 engine cancel/refusal tests +
-    1 CODE-12 cache-eviction test. Docs: architecture.md GPU record **§5.6 "Shutdown latch +
-    cancellable start"** (incl. the CODE-11 crash-reap residual: a crash bypassing
-    uncaughtException itself still orphans — accepted). Residual nuances registered in the plan's
-    discoveries (triple-overlap queued start on the interactive-lock path stays uncancelled; a
-    cancel-during-extract leaves a verified marker-less binary). **Review follow-up (+2 tests,
-    red-verified against the Phase-C commit):** (i) `doStart` re-checks the CODE-3 latch AFTER its
-    internal model-switch `doStop()` too — that window (seconds of killing the old runtime, top
-    check already passed, `startingRuntime` not yet set) was missed by both the latch and the
-    CODE-2 cancel, so a quit landing there spawned the new model and stalled behind its full load;
-    (ii) the CODE-13 engine refusal now uses `chatEngineInUse()` (running OR
-    `status().startingModelId` in flight) — `activeModelId()` alone is null during a multi-GB
-    model START while the loading child already executes from the llama_cpp dir.
-    **Phase F1 DONE (2026-07-11 — renderer error-surface class, CODE-6/7/26/27/28/29):**
-    (a) class helper `runAndSurface(fn, onError)` in `renderer/lib/errors.ts` — awaits a
-    fire-and-forget UI action, catches, routes through `friendlyIpcError`, hands the friendly
-    message to the site's own surface (banner/toast), never rejects; converted sites:
-    CODE-26 App "Lock now" (failure → dismissible error banner; session stores NOT purged and
-    shell stays unlocked — main really is still unlocked per CODE-1a), CODE-27 Diagnostics
-    "Try GPU again" (own `gpuRetryError` banner, new `diag.gpu.tryFailed` EN+DE, + the
-    file-uniform mountedRef guard it was missing), CODE-28 both ModelsScreen poll-completion
-    `void refresh()` calls (→ screen error banner), CODE-29 the DocRow task-cancel (now a
-    screen-owned `onCancelTask` prop, useEventCallback-stable for the PERF-5 memo) + the
-    bulk-re-index cancel (→ screen error banner). (b) CODE-6 — doctasks store ports the
-    skillruns SKA-40 tolerance: `MAX_POLL_FAILURES = 3` consecutive-failure counter (any
-    success resets), below the max the task/snapshot stays untouched, at the max polling stops
-    and the task is KEPT flagged `stateUnknown` instead of `setActive(null)` (one transient
-    IPC error used to vanish the busy/Cancel UI mid-run and un-gate every task button);
-    `acknowledgeDocTask()` accepts a state-unknown task (skillruns' dismissible semantics).
-    (c) CODE-7 — `SettingsScreen.patch` try/catch + `settings.saveFailed` toast (EN+DE, the
-    SkillsTab catch+toast precedent) + mountedRef; on failure `settings` state is deliberately
-    untouched so every control keeps showing the server's last-confirmed values. Tests +8 (one
-    RTL test per converted site asserting stub-rejection → visible friendly feedback + intact
-    pre-click state, and both CODE-6 outcomes: reject-once-then-succeed → retained + terminal
-    still surfaces; 3 consecutive → state-unknown, polling stopped, dismissible). No docs
-    changes (behavior now matches what user-guide already implies). Residuals in the plan's
-    discoveries: the state-unknown give-up has no renderer dismissal affordance yet (safe-side;
-    F2 rider), and ChatScreen's third `cancelActiveDocTask` site swallows its failure via an
-    explicit catch (CODE-39 class, F2).
-    **Phase D DONE (2026-07-11 — FTS delete-trigger scan CODE-4 + DB batching CODE-20/21):**
-    (a) CODE-4 **Option 1** (the real fix, decision made at session start; all load-bearing
-    assumptions probed first — see the plan's discoveries): nullable `fts_rowid` handle column
-    on `chunks`/`messages` (`ensureColumn`); the AI triggers stamp it via `last_insert_rowid()`
-    (verified to reflect the trigger's own FTS5 insert), the AD/AU triggers delete
-    `WHERE rowid = old.fts_rowid` — an O(log N) lookup (EQP `VIRTUAL TABLE INDEX 0:=`) instead
-    of the per-row full shadow-table scan (`INDEX 0:`) that made a 250-chunk document delete
-    cost **3536 ms (measured 123×; reproduced 3578 ms → 3.3 ms post-fix)** on a 50k-chunk
-    corpus, synchronous on the main process (re-index, doc delete, every regenerate,
-    conversation delete). Legacy rows (NULL handle) keep the exact old predicate via WHEN-split
-    `_legacy` fallback triggers (a constant conjunct on a virtual-table scan doesn't
-    short-circuit — separate triggers keep the hot path provably rowid-only), so correctness
-    never regresses, incl. under a rolled-back binary (triggers live in the DB file). One-time
-    idempotent migration `ensureFtsRowidSync` (sentinel: the live AD trigger's SQL, the
-    kind-filter idiom) + a single-FTS-scan JS backfill (`backfillFtsRowids`, the ocr-meta
-    pattern); messages keep the R8/DATA-1 compaction guards in the canonical trigger set
-    (checkpoint rows park at NULL, excluded from the legacy AD scan). Characterization-first:
-    all 7 intended assertions watched red (timing >100 ms, trigger DDL, migration). (b) CODE-20
-    `addToCollection`/`removeFromCollection`/`setDocumentsLifecycle` now run their loops in ONE
-    BEGIN…COMMIT/ROLLBACK (`runBatch`, the createQueuedDocuments idiom — one USB fsync per
-    batch AND all-or-nothing; 3 poisoned-id mid-batch tests watched red first) + rider:
-    `insertQueuedRow`'s constant INSERT hoisted to `prepareCached`. (c) CODE-21
-    `listDocumentsByIds(db, embedderId, ids)` in ingestion — shares `rowToInfo` +
-    `LIST_DOCUMENT_COLUMNS`, every aggregate `IN (…)`-scoped (dynamic arity → `db.prepare`, the
-    documented prepareCached constraint); `listAttachments` uses it instead of materializing
-    the whole library per conversation switch (the PF-5 load-all chat rider). Tests +12:
-    `fts-rowid-sync.test.ts` (timing bound ≤100 ms on the 50k fixture, EQP plan shape,
-    plain-SQL sync parity, legacy NULL fallback, compaction NULL handles, pre-fix + pre-FTS
-    migration idempotence ×2 opens), 3 CODE-20 all-or-nothing, CODE-21 equivalence over a mixed
-    fixture + the prepare-spy no-full-table-aggregation guard. Docs: rag-design.md §11
-    "Trigger sync is rowid-targeted". known-limitations PF-5 bullet unchanged (it describes the
-    documents-screen list path, which still loads the whole library — unchanged scope).
-    **Review follow-up (+2 tests, red-verified against the Phase-D commit):**
-    `ensureFtsRowidSync` made crash-atomic AND self-healing — the multi-statement DROP+CREATE
-    exec auto-committed per statement (a kill mid-upgrade could tear the trigger set, and the
-    sentinel's `!row` early-return made a missing AD trigger a PERMANENT silent failure: deletes
-    stop maintaining the index → ghost search hits), and the sentinel-matching CREATEs could
-    commit with the separately-transacted backfill lost (whole corpus parked on the legacy scan
-    path forever). Fix: DROPs + CREATEs + backfill in ONE transaction (`backfillFtsRowids` gains
-    an ownTransaction=false mode; crash → rollback to intact pre-migration state → retry next
-    open) + the sentinel flipped to `row?.sql.includes('fts_rowid')` so a MISSING AD trigger
-    means "must upgrade" (DROP-IF-EXISTS DDL → re-run safe against any torn state, incl. ones
-    from the pre-existing non-atomic fresh-create execs). Tests: hostile RAISE(ABORT)-on-UPDATE
-    trigger in a pre-migration fixture proves atomic rollback + retry-to-completion; a hand-torn
-    state (AD/AU dropped + handles nulled) self-heals on the next open. Review nits registered
-    in the plan's discoveries (au_legacy's missing compaction exclusion is DELIBERATE —
-    kind-transition re-index semantics).
-    **Phase E DONE (2026-07-11 — backend correctness smalls CODE-5/17/18/19/22 + GAP-1..7):**
-    (a) **CODE-5** (test-first, both red-verified) — `retrieveCompareDiff` now budgets
-    `changesText + redlineText` JOINTLY (both the top-level check and `fitChangesToBudget`'s fit
-    test); over budget the redline is dropped FIRST, the load-bearing change list only shrinks
-    after (the doctask mode-d precedent, compare.ts:171–178) — closes the ~2×-budget #41
-    context-exceeded class on the primary version-compare route (rag-design §14 mode-d note).
-    (b) **CODE-17** auto-title cut is code-point-safe (the truncateSnippet/RAG-2 idiom) — no more
-    `�`-tailed persisted titles. (c) **CODE-18** the R1 abort+closed-DB persist guard extracted
-    into shared `persistAssistantMessage` (chat.ts) and applied at ALL FOUR persist sites
-    (plain chat + rag/index.ts ×2 + whole-doc-tree.ts) — the grounded Stop+lock race now drops
-    the partial quietly instead of erroring. (d) **CODE-19** compaction region boundary is
-    exchange-aligned (walk back to end on an ASSISTANT turn) so an odd compactable count no
-    longer replaces the synthetic ack via collapseToAlternating; **rider (the Phase-D
-    observation, FIXED):** `deleteLastAssistantMessage` + `hasRegenerableAssistantReply` now
-    exclude `kind='compaction'` rows — a checkpoint at the conversation tail can no longer be
-    deleted by a regenerate (both queries look at the last VISIBLE message). (e) **CODE-22**
-    the translation offload-line parse matches on window+chunk BEFORE slicing to 512 bytes — a
-    single large stderr chunk no longer loses the line (the #42 hint stays honest).
-    (f) **GAP-2** the four unguarded failure exits (extraction persist-failure + B4 catch,
-    redaction + edit outer catches) route through `finishRunGuarded` (P-8) — a doomed terminal
-    UPDATE resolves the friendly envelope, never rejects raw. (g) **GAP-3** PdfParser awaits
-    `loadingTask.promise` INSIDE the try/finally — a corrupt/password PDF no longer leaks the
-    pdf.js transport + buffer. (h) **GAP-4** the redact/edit locate catches use the app-wide
-    `isAbortError(e, signal)` — a cancel surfacing as a wrapped error records 'cancelled', not
-    'failed'. (i) **GAP-5** delete/re-index IPC (and the reindex-all skip) refuse under an
-    in-flight SKILL run via new `ctx.skillRunActive` (assigned by registerSkillsIpc from its
-    module-local SkillRunController; `main.docs.skillRunning` EN+DE — the requireNoActiveTask
-    mirror). (j) **GAP-6** redact + edit refuse `confirmed !== true` UP FRONT (gate copy
-    mirrored) — no more full LLM locate pass before the gate refusal; edit's DOCX branch gains
-    redaction's explicit `confirmed === true` pre-touch check (parity). (k) **GAP-7** OCR cancel
-    contract decided + documented: pre-persist cancel actually cancels (nothing persisted),
-    a cancel during the signal-less re-ingest completes as 'done' (work persisted — never
-    "cancelled, nothing happened" about a now-searchable document); the false "cancel persists
-    NOTHING" header rewritten. (l) **GAP-1 (owner-decided: provenance survives, SKA-38
-    honoured):** `deleteSkill()` drops the `messages.skill_id` sweep — it clears ONLY the sticky
-    `conversations.active_skill_id`; the per-message stamp survives deletion ("(removed skill)"
-    label reachable via the real path); the SKA-38 test re-pointed at the REAL `deleteSkill()`
-    (it bypassed it via raw SQL — a test bug under both outcomes) and the installer's old
-    sweep-pinning test updated to the new contract; known-limitations SKA-38 bullet updated.
-    Tests +16 across rag-compare-diff-truncation (2), pdf-parser-destroy (new file, module-mock
-    per the Phase-B template), chat (3), chat-compaction (2), lock-stream-persistence (2),
-    translation-runtime (1), skills-run (1), skills-document-edit (2, one converted),
-    skills-redaction (converted), skills-turn (extended), docs-ipc (1), ocr-task (2).
-    **Phase F2 DONE (2026-07-11 — renderer state/UX smalls CODE-30..40, renderer-only):**
-    (a) **CODE-30** the SKA-18 'new'-key carry+delete extracted into a shared
-    `carryNewComposerPicks(convId)` used by BOTH creation entry points — "+ New chat" used to
-    bypass it (a composer skill/depth pick silently vanished, then RESURRECTED on the next empty
-    composer), and its discarded promise now catches → `setError` (a failed create surfaces).
-    (b) **CODE-31 (owner-decided: relabel truthfully, emitted scope unchanged)** — ScopePopover's
-    reset reads `chat.scope.attachmentsOnlyTap` ("Just the files in this chat", EN+DE) whenever
-    the chat has attachments (the same `fileCount` the "Answering from:" chip keys on), since
-    the emitted empty explicit scope resolves to attachments-only (D71); user-guide §"Choose
-    which sources" gained the one-clause truth note. (c) **CODE-32** DR-2 request-seq for
-    PREVIEW INSTALLS (`previewSeq`) — `onPreview` and the done-task auto-open share the stamp,
-    so last-resolved can no longer show the wrong document; the loading flag clears
-    functionally (`cur === d.id ? null : cur`). (d) **CODE-33** DocRow's `onContextMenu` now
-    respects the `busy !== null` gate the "⋯" trigger already had (no more Delete/Re-index
-    clickable mid-import via right-click). (e) **CODE-34** ImagesScreen delete: failure →
-    resync + `images.err.deleteFailed` banner, success toast ONLY on success. (f) **CODE-35**
-    PreviewModal owns a local `loadMoreError` (rendered inside the dialog, above the overlay);
-    the screen's `onPreviewLoadMore` rethrows instead of parking the error under the modal.
-    (g) **CODE-36** saved-analysis open: a THROW → `images.err.openFailed` (distinct from the
-    vanished-entry silent resync); copy failures get the PreviewModal-style
-    `images.answer.copyFailed` toast. (h) **CODE-37** SkillsTab per-action failure keys EN+DE
-    (`skills.row.onFailed/offFailed`, `skills.delete.failed`, `skills.export.failed`) replace
-    the misleading blanket "Skills couldn’t be loaded." (i) **CODE-38** `refreshCollections`
-    rides the SAME DR-2 `refreshSeq` (stale snapshot dropped) and keeps the PRIOR list on
-    failure (never `setCollections([])` — one transient error used to empty the Projects rail).
-    (j) **CODE-39** the two swallowed done-task catches (list refresh + result auto-open) →
-    `setError`, PLUS the F1-discovered third ChatScreen `cancelActiveDocTask` site (the busy
-    banner's cancel button, explicit no-op catch) folded in. (k) **CODE-40** the CR-1 draft
-    restore compares against the TAIL (`last.role === 'user' && last.content === content`)
-    instead of `some(content ===)` — a repeated question no longer matches the OLD turn, so a
-    busy-rejected re-ask restores the draft (a user Stop resolves normally main-side and never
-    reaches the catch, verified in chat.ts). (l) **F1-rider EXECUTED**: the doctasks
-    state-unknown give-up now has its renderer affordance — DocRow renders a labelled
-    `docs.task.stateUnknown` row + Dismiss (EN+DE, the SkillRunBar SKA-40 treatment) via a new
-    screen-owned `onDismissTask` → `acknowledgeDocTask()`; pre-rider the busy/Cancel pair stuck
-    until reload. Tests +19 (one RTL test per touched behavior): SkillRunLifecycle (2, the
-    SKA-18 suite extended with the "+ New chat" carry + the failed-create banner),
-    ChatSendFailure (2: repeated-question restore + rejected banner-cancel surfaces),
-    DocumentsScreenPolish (7: preview ordering, context-menu busy gate, in-modal load-more
-    error, collections keep-on-failure + stale-seq, done-task auto-open failure, state-unknown
-    row + dismiss), ImagesScreen (3), SkillsTab (3), ScopePopover (2: truthful attach-chat
-    reset label + emit coherence, no-attachment label unchanged).
-    **Review follow-up (+1 test, red-verified):** the CODE-40 tail compare had a narrow
-    regression the old `some()` didn't — `stream()`'s try also spans the two POST-send
-    refreshes, so a fully successful send whose `refreshConversations` (or first
-    `refreshIfVisible`) then threw reached the catch with the tail being the fresh ASSISTANT
-    reply → misread as "turn never persisted" → the already-answered question restored into
-    the composer (a duplicate-re-send invitation). Fixed with a `sendSucceeded` latch set the
-    moment the send IPC resolves; the tail compare now runs only for send FAILURES
-    (ChatSendFailure pins: successful send + post-send listConversations rejection → composer
-    stays empty, question appears once, the refresh failure still surfaces).
-    **Phase G DONE (2026-07-11 — i18n & copy polish, CODE-8/23/25/41/42/43/44/45):**
-    (a) **CODE-8** — `.one/.other` pairs + `tCount` for the five non-pluralized `{count}`/
-    `{done}` strings (`docs.retryAllConfirm.title`, `docs.reindexAllConfirm.title`,
-    `docs.reindexAllDone` — its `{done}` placeholder renamed to tCount's `{count}` —
-    `chat.sources.wholeDoc`, `chat.sources.more`), EN+DE with the DE adjective endings
-    („1 fehlgeschlagenes Dokument", „1 weiterer Abschnitt"); all five call sites
-    (DocumentsScreen ×3, SourcesDisclosure ×2) switched to `tCount`. Premise correction: the
-    DocumentsScreen toolbar buttons are `length > 1`-gated, so the confirm-title singular is
-    unreachable through today's UI — pairs landed anyway (plan-ordered, defense-in-depth), the
-    toast's singular pinned RTL via the real mount-adoption path (a total=1 job from main),
-    the titles' `.one` sides at unit level (see the plan's discoveries). (b) **catalog-hygiene
-    net** (`i18n.test.ts`) — statically scans `src/**` for plain-`t('key'` consumptions of
-    `{count}`/`{done}` keys and fails unless the key sits on a reviewed non-grammatical
-    allowlist (parenthetical counts, `{done} of {total}` progress forms, pre-formatted
-    figures); NUL-tolerant read (extract.ts). Net flagged `diag.bench.cores` ("(1 cores)") —
-    same class, not in the findings, allowlisted + registered. (c) **CODE-41** —
-    `ContextMeter.fmtTokens` is locale-aware (`toLocaleString(lang)`, the M-U5
-    fmt1/formatSize treatment): German tooltip now "6,4k von 12,8k Token" in `title` AND
-    `aria-valuetext`; EN output byte-identical. (d) **CODE-23** — TranslateScreen
-    `gpuLayers === 0` renders the new `translate.device.gpuNone`(+`Title`) processor wording
-    instead of the self-contradictory "partly on the graphics card (0/49 layers)";
-    known-limitations' hint-form enumeration extended. (e) **CODE-42** — `fileTx.errorMessage`
-    routed through `localizeServerCopy` (DR-7 parity; doc-task failures are persist-canonical
-    English), pinned by a German-UI RTL test. (f) **CODE-43** — the three DE "Tokens" values
-    (`chat.context.usageTooltip`, `settings.workspace.contextTokens`, `diag.bench.tokens`) →
-    „Token" per the catalog's own RD-3 glossary. (g) **CODE-25** — the two new DE
-    ASCII-quote closers (`analysis.listing.unparsedHint`) + the `:657` precedent
-    (`analysis.wholeDocHint`) → `„…“`; seven-plus OLDER same-class values registered in the
-    plan's discoveries, not swept. (h) **CODE-44** — dead `chat.scope.usingSome.one/.other`
-    pair deleted EN+DE; SectionRail's never-read `collections` prop dropped (type + the one
-    pass site). (i) **CODE-45** — the missing-interpolation dev-warn hoisted above the
-    `lang !== 'en'` branch in `shared/i18n/index.ts` (a forgotten param on the EN dev/CI
-    default used to ship a literal `{name}` silently); rendering unchanged, no test depended
-    on EN silence (full renderer suites green). Tests +10: i18n.test.ts (4: the five pairs at
-    1 AND 2 in both languages, EN missing-param warns, fully-parameterized stays silent, the
-    net), SourcesProvenance (2: label + reveal tail at 1 and 2), ContextMeter (1: DE comma
-    form), TranslateScreen (2: 0-layer hint, DE localization of a persisted failure),
-    DocumentsScreen (1: adopted-job singular toast). Remaining phases H–J unstarted.
+11. **Full-audit 2026-07-11 — ROUND COMPLETE (close-out 2026-07-11; durable ledger + §-anchor
+    legend: [`docs/architecture.md`](docs/architecture.md) **§47**).** Nine-pass pre-release audit
+    at `dda1d25`: 1 High code (CODE-1 vault-lock silent data loss) + 2 High docs (DOC-1/2 stale
+    RAM tiers) + 13 Medium + ~46 Low/Info, 0 Critical; the dedicated security pass found no new
+    vulnerabilities. Remediated across phases A–I + close-out J, commits `e7cda05` → `815b3c0`
+    (+ six in-wave review follow-ups), suite 4053 → **4165/47**, typecheck + build green
+    throughout. Both working papers were deleted at close-out (uncommitted for their whole life —
+    NO git-history copy; §47 is the only durable record: per-finding dispositions, the executed
+    owner decisions GAP-1 provenance-survives / CODE-31 relabel / CODE-15+16 approved, premise
+    corrections, and the complete residuals register). Actionable leftovers:
+    - the **CODE-9/TQ-6 manual-smoke-only coverage inventory** lives in item 7's TS-3 bullet
+      (the labelled (a)–(g) sub-list; SSE fixtures carry b9849 provenance comments —
+      re-verify on a runtime pin bump);
+    - **fix-when-touched polish candidates** (all Low; mechanisms in §47): mock-backend engine
+      first-install refusal exemption (CODE-13) · SettingsScreen mounted-guard narrowing
+      (CODE-7) · the `generateGroundedAnswer` canned-answer persist guard (CODE-18) ·
+      PreviewModal `key={preview.id}` (CODE-35) · SkillsTab `setAutoFire` failure key (CODE-37) ·
+      the `diag.bench.cores` plural pair (CODE-8 net allowlist) · the older DE ASCII-quote
+      closers sweep (CODE-25) · a direct GAP-5 batch-skip test · exporting `TOKENS_PER_WORD` for
+      the compare-budget tests;
+    - **accepted/no-action residuals** are recorded in §47's rows (CODE-1 F3 double-failure,
+      CODE-2 triple-overlap, CODE-11 crash-bypass orphan, CODE-13 cancel-during-extract +
+      download-vs-start race, the torn-FTS-content-backfill observation, the CODE-48 watch trio,
+      DOC-13 PVR-at-flip → item 10).
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase H — hygiene + test hardening CODE-24/DOC-12, CODE-46, CODE-47, DOC-6 + the model-policy.md RAM-tier rider, +8 tests; follow-up: the CODE-24 NUL-ban net extended to tests/** after the fix's own test file recreated the class, +1 test): typecheck clean, 4160 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase J close-out — round complete, durable ledger `docs/architecture.md` §47, both working papers deleted; the round moved the suite 4053 → 4165 across phases A–I): typecheck clean, 4165 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2
