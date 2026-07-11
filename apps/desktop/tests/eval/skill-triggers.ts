@@ -29,7 +29,7 @@ import {
 } from '../../src/main/services/skills/selector'
 import { APP_VOCAB_SKILL_IDS } from '../../src/main/services/skills/vocabulary'
 
-/** The repo root (…/AI_Drive), four levels up from tests/eval/. */
+/** The repo root, four levels up from tests/eval/. */
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 /** W5 (audit §6.4/§8.3): ALL EIGHT real app skills form the label space (was 4 — it excluded exactly the
  *  collision-prone Professional-Documents skills). Sourced from the vocabulary so the corpus label space

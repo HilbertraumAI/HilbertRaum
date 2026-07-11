@@ -25,8 +25,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           path-to-signatures: "signatures/version1/cla.json"
-          # NOTE: update this URL if the repo moves to the HilbertRaumAI org.
-          path-to-document: "https://github.com/comilionas/AI_Drive/blob/master/.github/CLA.md"
+          path-to-document: "https://github.com/HilbertraumAI/HilbertRaum/blob/master/.github/CLA.md"
           # The cla-signatures branch must exist BEFORE the first signature —
           # the action does not create it (fails with "Branch not found").
           branch: "cla-signatures"
@@ -35,6 +34,6 @@ jobs:
           allowlist: "humaniser,comilionas,dependabot[bot]"
           create-file-commit-message: "chore: create CLA signature file"
           signed-commit-message: "chore: $contributorName has signed the CLA in $owner/$repo#$pullRequestNo"
-          custom-notsigned-prcomment: "Thank you for your contribution to HilbertRaum! Before we can merge, please read our [Contributor License Agreement](https://github.com/comilionas/AI_Drive/blob/master/.github/CLA.md) ([why we ask](https://github.com/comilionas/AI_Drive/blob/master/CONTRIBUTING.md#license-and-cla)) and sign it by posting the sentence below as a comment on this pull request. Note: the e-mail on your commits must be linked to your GitHub account, otherwise the check cannot attribute your signature."
+          custom-notsigned-prcomment: "Thank you for your contribution to HilbertRaum! Before we can merge, please read our [Contributor License Agreement](https://github.com/HilbertraumAI/HilbertRaum/blob/master/.github/CLA.md) ([why we ask](https://github.com/HilbertraumAI/HilbertRaum/blob/master/CONTRIBUTING.md#license-and-cla)) and sign it by posting the sentence below as a comment on this pull request. Note: the e-mail on your commits must be linked to your GitHub account, otherwise the check cannot attribute your signature."
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
           custom-allsigned-prcomment: "All contributors have signed the CLA ✅"
