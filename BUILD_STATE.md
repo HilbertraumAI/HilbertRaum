@@ -10,7 +10,8 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
-_2026-07-11 — **Issue #42 REOPENED (v0.1.46 field report: GPU translation silently delivers CPU-grade speed under VRAM contention — no log, no UI trace) — FIXED on local `master` (observability, no ladder change).**_
+_2026-07-11 — **Public-launch plan CLOSE-OUT: v0.1.46 shipped, repo transferred to `HilbertraumAI/HilbertRaum` — the flip checklist is folded into §5 item 10 and both launch working papers are DELETED.**_
+The 2026-07-10 launch plan is complete: **the Phase-7 release-flow test PASSED end-to-end** — the `v0.1.46` tag drove `release.yml` through all three build legs to a draft, the owner smoked + **published** the release (pre-release flag on, 5 assets: win portable `.exe`, mac `.app.zip` + Metal runtime zip, AppImage, `SHA256SUMS.txt`), and the post-launch tester wave (#48–#53) filed against the shipped build — the channel demonstrably works. **The owner also transferred + renamed the repo to `HilbertraumAI/HilbertRaum` (2026-07-11)**, which resolves the flip checklist's repo-name item ahead of schedule: the three hardcoded `comilionas/AI_Drive` URLs in `cla.yml` now point at the canonical location (the old ones only worked via the transfer redirect), and a stale folder-name mention in a test-path comment rode along; the remaining `comilionas` hits are GitHub *account* names (CLA signatories, manifest `reviewed_by`) and dated log entries here — correct as-is. Close-out steps per the plan: (1) the **Deferred flip checklist + the report-§1.3 branch analysis + the report-§3 issue-filing table are folded into §5 item 10** — with one CORRECTION found while folding: the report listed `origin/cla-signatures` among stale-deletable branches, but it is cla.yml's signature-storage `branch:` (and the action cannot recreate it) — flagged load-bearing, never delete; (2) packaging.md's Phase-5c release-flow record re-verified complete (trigger, four jobs, draft→smoke→publish ritual, staged signing table — no gaps to fold); the TranslateGemma manifest's `notes` citation of the report reworded self-contained (the four Gemma-Terms provisions + the commercial flow-down checklist were already restated verbatim in the note; §5 item 1c gains the dated PVR re-check: still 404 on the renamed repo); (3) **both working papers deleted** (`docs/public-launch-plan.md`, `docs/release-readiness-2026-07-10.md` — uncommitted their whole life, NO git-history copy; everything durable now lives in §5 item 10, packaging.md's release record, the manifest note, and the 2026-07-10 phase entries below). Also resolved in passing: architecture.md §46's DOC-112 row ("resolves with the owner's launch close-out") is now true. Still open from the launch context: the flip itself (§5 item 10), the mailbox + Apple-enrollment sidebars, and the model-eval owner gates (§5 item 8). Suite + typecheck green (docs/workflow-URL-only changes).
 The reporter verified the #42 device ladder works as designed (and delivered the §11.4 GPU datapoint: RTX 3090, ~13 GB free → full offload, 7.8 GB VRAM, **75.7 tok/s decode / 140 prompt** vs the ~3–4 CPU calibration), but found the gap: with a large chat model resident (gemma-4-26b-q4, ~16 GB of 24), `--fit` squeezes TranslateGemma into the remainder → **partial offload at roughly CPU speed** — a llama.cpp fit decision, not a fault, so `onDeviceFallback` (correctly) never fires, the sidecar logged NOTHING at cold start, the split stays pinned until the 2-min idle teardown re-fits, and the Translate screen had no device surface: "GPU enabled but slow" was indistinguishable from "GPU not working". Fix along the reporter's three asks:
 - **Cold-start log (symmetric with chat's `"started via rung …"`):** `LlamaServer` gains an optional `onStderrData` tap (the capped `stderrTail` can age the load lines out — the tap sees every chunk; guarded, observability-only); `TranslationRuntime.startAttempt` parses `load_tensors: offloaded X/Y layers to GPU` (rolling 512-char window across chunk boundaries; last match wins; the ONLY place the real fit outcome is reported — `/props` doesn't carry it) and fires a new `onStarted` hook once per successful cold start → compose-services logs `"Translation sidecar started" {device, offload: "X/Y layers" | "not reported"}`.
 - **Translate-screen device hint (the chat-#36 analogue):** new `TranslationRuntime.deviceStatus()` (posture + split + `live`; LAST-KNOWN survives the idle teardown so a finished run stays explainable; null before the first start) → optional on the `Translator` seam → `getAppStatus().translationDevice` (new optional `AppStatus` field + shared `TranslationDeviceStatus` type) → a muted caption under the Translate language bar: GPU with the layer split / **"runs only partly on the graphics card ({done}/{total}) — about processor speed"** with cause+remedy tooltip / CPU; no line before the first start. The screen re-polls `getAppStatus` every 4 s while busy (the cold start lands mid-translate) and once when a run settles. i18n EN+DE (`translate.device.*`).
@@ -10884,8 +10885,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    **security@hilbertraum.ai** as the private channel (same mailbox for both, owner decision
    2026-07-10). Remaining owner actions: create/monitor the mailbox, and enable **GitHub private
    vulnerability reporting** at flip time (confirmed NOT enabled as of 2026-07-06 —
-   `GET /repos/comilionas/AI_Drive/private-vulnerability-reporting` → 404; SECURITY.md phrases it
-   as "where available" so the doc stays honest until then).
+   `GET /repos/comilionas/AI_Drive/private-vulnerability-reporting` → 404; re-confirmed still 404
+   on the renamed `HilbertraumAI/HilbertRaum` 2026-07-11 — the enable-at-flip action now lives in
+   item 10; SECURITY.md phrases it as "where available" so the doc stays honest until then).
 2. **Small live-UI leftovers:** the Diagnostics **Activity-panel eyeball** on a real drive
    (events appear; export saves — the last wave-1 live-UI item); an icon/`buildResources` for
    electron-builder; the **optional** Phase-29 dev-box speed sweep (completeness only — QA +
@@ -10975,6 +10977,49 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
      today, but a `downloads.cancelAll()`-style teardown would make quit-mid-download tidy.
    - **Kit quick-start card:** the printed "Before unplugging" note (quit → wait → eject) is a
      kit-material task, not a repo doc — the wording now exists in user-guide §13.
+10. **Public flip checklist (folded from the launch working papers at the 2026-07-11 close-out —
+    the papers are deleted, NEVER committed, no git-history copy; this item is the durable record.
+    Owner executes at flip time.)** Repo state as of 2026-07-11: transferred + renamed
+    **`comilionas/AI_Drive` → `HilbertraumAI/HilbertRaum`** (the checklist's repo-name item is
+    thereby DONE; the hardcoded cla.yml URLs updated the same day); still **private**; **v0.1.46
+    is published** (pre-release, 5 assets) — the Phase-7 release-flow test PASSED end-to-end
+    (tag → three build legs + SHA256SUMS → draft → owner smoke → Publish; testers filed #48–#53
+    against the shipped build).
+    - [ ] **Branch cleanup** (2026-07-10 interim owner call was keep-ALL; decide at flip).
+      Real unmerged work — decide keep/kill, don't blind-delete: `origin/mkg` (5 commits — the
+      conversation-folders feature: nested collections, folder browser, rail tree; the only
+      genuinely unmerged feature) and `origin/loader-integration` (23 commits — alternate nix/
+      USB-image packaging track incl. an in-app "Updates tab"; superseded in spirit by the
+      Phase-12/18 loaders but never formally killed). Stale, safe to delete after re-verifying
+      0-ahead immediately beforehand: local `pr-13`, local `backend-audit-2026-06-27-fixes` (its
+      only delta is the `full-audit` skill doc — cherry-pick that file first if wanted), remotes
+      `models/qwen35-fast-tier`, `mkg-public`, `mkg2`, `nix-dev-shell`,
+      `chore/portable-build-cleanup`, `full-audit-2026-06-28-fixes`, `screenshot-verify`,
+      `performance-tuning`, plus ~25 merged locals; probably-stale CI experiments `ci/mac-build`,
+      `ci/mac-build-042`, `ci/win-build-042` (verify, then delete — their function lives in
+      release.yml now). **CORRECTION to the original analysis: `origin/cla-signatures` is
+      LOAD-BEARING, not stale** — it is cla.yml's `branch:` for storing CLA signatures (and the
+      action can't recreate it); never delete it.
+    - [ ] **File the known open work as GitHub issues** (good first public-tracker content; then
+      add issue cross-references where the Phase-4 readability sweep left plain-language gap
+      descriptions): signed offline update bundles (item 3, blocked on key management) · big slot
+      + embeddings (item 4) · PDF→PDF output for redact/edit (item 6, #45) ·
+      `result-tables-plan.md` residuals · security-hardening lows L-4/L-5/L-7 (§8; L-8 is closed
+      — `npm ci` everywhere) · the `IBAN_CANDIDATE_RE` backtracking hazard (known-limitations) ·
+      restart-required mid-session installs for transcriber/reranker/embedder · the open GPU
+      hardware-matrix legs (item 1b: ② ④ ⑤ ⑥ ⑦ ⑧ ⑨).
+    - [ ] **Flip to public**, then: enable **private vulnerability reporting** (item 1c — makes
+      SECURITY.md's "where available" phrasing fully true) · branch protection on `master`
+      requiring **`ci-success`** · disable unused Projects (wiki is already off). Issue templates
+      = nice-to-have.
+    - [ ] **Hygiene re-grep immediately before the flip** (dev paths/secrets that crept in since
+      the 2026-07-10 scan; that scan verified NO secrets/PII anywhere in the working tree or git
+      history — history publishes as-is, owner decision 2026-07-10).
+    - Owner sidebars (any time, not flip-gated): monitor `security@hilbertraum.ai` · Apple
+      Developer enrollment (packaging.md signing stage 1; when the `APPLE_*`/`CSC_*` secrets land,
+      remove the one `CSC_IDENTITY_AUTO_DISCOVERY: 'false'` line from release.yml) · restore
+      `djuro-agent` to cla.yml's allowlist once the post-launch CLA smoke-test PR is green (the
+      removal note sits in cla.yml).
 
 **Current gate (2026-07-11, issues #51/#52/#53 wave): typecheck clean, 4045 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
