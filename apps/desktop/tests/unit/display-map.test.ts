@@ -172,10 +172,26 @@ describe('localizeServerCopy (D-L4)', () => {
   it('covers the interpolated persist-canonical set (handled by regex, not exact match)', () => {
     // Interpolated messages carry a value in the persisted string, so they live in
     // INTERPOLATED_MAP_KEYS (reverse-matched by a template regex) rather than DISPLAY_MAP_KEYS.
-    expect([...INTERPOLATED_MAP_KEYS]).toEqual(['main.ingest.unsupportedType'])
-    for (const key of INTERPOLATED_MAP_KEYS) {
-      const en = t('en', key, { ext: '.xyz' })
-      expect(localizeServerCopy(tDe, en), key).toBe(t('de', key, { ext: '.xyz' }))
+    // A new interpolated constant must land here with its params — or this fails loudly.
+    const params: Partial<Record<MessageKey, MessageParams>> = {
+      'main.ingest.unsupportedType': { ext: '.xyz' },
+      'main.benchmark.warnVeryLowTokens': { model: 'qwen3-30b-a3b-q4' }
     }
+    expect([...INTERPOLATED_MAP_KEYS].sort()).toEqual(Object.keys(params).sort())
+    for (const key of INTERPOLATED_MAP_KEYS) {
+      const persisted = t('en', key, params[key])
+      // German UI: genuinely translated with the param carried over.
+      expect(localizeServerCopy(tDe, persisted), key).toBe(t('de', key, params[key]))
+      // English UI: identity round-trip.
+      expect(localizeServerCopy(tEn, persisted), key).toBe(persisted)
+    }
+  })
+
+  it('keeps the measured-model id verbatim inside the localized very-low-tokens warning (issue #52)', () => {
+    const persisted = tEn('main.benchmark.warnVeryLowTokens', { model: 'qwen3.5-4b-ud-q4kxl' })
+    const localized = localizeServerCopy(tDe, persisted)
+    expect(localized).toBe(tDe('main.benchmark.warnVeryLowTokens', { model: 'qwen3.5-4b-ud-q4kxl' }))
+    expect(localized).toContain('qwen3.5-4b-ud-q4kxl')
+    expect(localized).not.toBe(persisted)
   })
 })

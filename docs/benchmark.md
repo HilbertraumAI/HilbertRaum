@@ -1,9 +1,10 @@
 # Hardware benchmark & model recommendation
 
-_Last updated: 2026-07-10 (full-audit 2026-07-10 DOC-109: content re-verified against the tree —
-the RAM-best-fit table matches the committed chat manifests, and the injected session-cached GPU
-probe + "Try GPU again" description is current; no content change needed). Prior: 2026-06-10
-(real tokens/sec; injected GPU probe, conservative profile bump, per-session probe refresh)._
+_Last updated: 2026-07-11 (issue #52: `measuredModelId` records which model the tok/s probe
+streamed through; the Diagnostics card + Copy text name it; the very-low-tok/s profile downgrade
+is no longer silent — a persisted, interpolated warning names the measured model). Prior:
+2026-07-10 (full-audit DOC-109 re-verification); 2026-06-10 (real tokens/sec; injected GPU probe,
+conservative profile bump, per-session probe refresh)._
 
 > **Not to be confused with** [`model-benchmarks.md`](model-benchmarks.md) — that doc is the
 > offline **model-quality** protocol and measured results; this doc is the in-app **hardware**
@@ -45,6 +46,11 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    drives off `runtime.chatStream`, this is now a **real** figure whenever the real `LlamaRuntime`
    is streaming (it remains a simulated figure under the mock runtime). The low-tokens/sec profile
    **downgrade** and the GPU **bump** therefore become live with real local inference.
+   **The number measures the CURRENTLY LOADED model, not the recommended one** (issue #52):
+   `runBenchmark` records the loaded model's id as `BenchmarkResult.measuredModelId` (null when
+   nothing was measured; absent on results persisted before the field existed), and the
+   Diagnostics card + its Copy text render the value as *"30 (measured with the loaded model
+   \<id\>)"* so the tok/s can't be misread as a property of the recommended model.
 
 ## Profile classification (spec §11.3)
 
@@ -67,7 +73,13 @@ Adjustments, in order:
   14B recommendation — a false negative only costs a too-small recommendation, never a
   too-big one.
 - **Very low** throughput (`tokensPerSecond < VERY_LOW_TOKENS_PER_SECOND = 3`) downgrades one
-  step (never below `TINY`).
+  step (never below `TINY`). Since issue #52 this is **no longer silent**: when the reading
+  actually moved the profile (computed as "profile with the tps hint ≠ profile without it", so
+  an already-TINY machine never over-claims), the result carries a warning that **names the
+  measured model** — a crawl measured on an oversized loaded model is evidence about that
+  pairing, and the user can re-run with the recommended model loaded. Whether the downgrade
+  should be *suppressed* when the measured model is much larger than the recommendation is the
+  registered follow-up (issue #53's "signal-aware recommendation" option).
 
 ## Recommendation
 
@@ -106,6 +118,11 @@ bad":
   still work, but loading may take longer" note. Slow drives **warn, never block**.
 - **Drive un-measurable** → "drive speed could not be measured; recommendation uses RAM + CPU
   only."
+- **Very low tok/s downgrade** (issue #52) → *"Text generation was very slow with the loaded
+  model (\<id\>), so the assigned profile was stepped down one level. …"* This is the one
+  **interpolated** persist-canonical warning: it is stored with the model id baked in, so the
+  renderer's display map reverse-matches it via a template regex (`INTERPOLATED_MAP_KEYS`)
+  instead of the exact-match set.
 
 ## Persistence
 

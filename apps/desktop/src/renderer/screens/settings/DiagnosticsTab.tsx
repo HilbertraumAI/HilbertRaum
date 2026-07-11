@@ -146,6 +146,21 @@ function buildAppRuntimeReport(
   ].join('\n')
 }
 
+/**
+ * The "Tokens / sec" value, naming the model the probe actually streamed through (issue #52:
+ * the number is measured on the CURRENTLY LOADED model, not the recommended one the card lists
+ * above — without the name, the layout invites the wrong reading). Shared by the card row and
+ * the Copy text so the two can never disagree. Results persisted before the field existed
+ * have no measuredModelId and render as the bare number, exactly as before.
+ */
+function tokensPerSecondValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+  if (bench.tokensPerSecond == null) return t('diag.bench.tokensNotMeasured')
+  const value = fmtNum(bench.tokensPerSecond, lang)
+  return bench.measuredModelId
+    ? `${value} (${t('diag.bench.tokensModel', { model: bench.measuredModelId })})`
+    : value
+}
+
 /** Plain-text rendering of the "Hardware benchmark" card for the Copy button. */
 function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
   const lines = [
@@ -158,7 +173,7 @@ function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
     `${t('diag.bench.gpu')}: ${bench.gpu ?? t('diag.bench.notDetected')}`,
     `${t('diag.bench.driveRead')}: ${bench.driveReadMbps != null ? `${fmtNum(bench.driveReadMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
     `${t('diag.bench.driveWrite')}: ${bench.driveWriteMbps != null ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
-    `${t('diag.bench.tokens')}: ${bench.tokensPerSecond != null ? fmtNum(bench.tokensPerSecond, lang) : t('diag.bench.tokensNotMeasured')}`,
+    `${t('diag.bench.tokens')}: ${tokensPerSecondValue(bench, t, lang)}`,
     `${t('diag.bench.lastRun')}: ${new Date(bench.ranAt).toLocaleString(lang)}`
   ]
   // Warnings are persisted canonical English — localize the known set at render (D-L4).
@@ -429,11 +444,7 @@ export function DiagnosticsTab(): JSX.Element {
                   : t('diag.bench.notMeasured')}
               </dd>
               <dt>{t('diag.bench.tokens')}</dt>
-              <dd>
-                {bench.tokensPerSecond != null
-                  ? fmtNum(bench.tokensPerSecond, lang)
-                  : t('diag.bench.tokensNotMeasured')}
-              </dd>
+              <dd>{tokensPerSecondValue(bench, t, lang)}</dd>
               <dt>{t('diag.bench.lastRun')}</dt>
               <dd>{new Date(bench.ranAt).toLocaleString(lang)}</dd>
             </dl>

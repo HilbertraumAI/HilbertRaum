@@ -1529,6 +1529,9 @@ export const en = {
   'diag.bench.notMeasured': 'not measured',
   'diag.bench.tokens': 'Tokens / sec',
   'diag.bench.tokensNotMeasured': 'not measured (start a model first)',
+  // Issue #52: names the model the tok/s probe actually streamed through — the loaded one,
+  // which is often not the recommended one the card lists above.
+  'diag.bench.tokensModel': 'measured with the loaded model {model}',
   'diag.bench.lastRun': 'Last run',
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / platform',
@@ -1702,6 +1705,12 @@ export const en = {
     'Drive speed could not be measured, so the recommendation uses RAM and CPU only.',
   'main.benchmark.warnSlowDrive':
     'This drive is on the slower side. Models will still work, but loading them may take longer.',
+  // Interpolated persist-canonical (issue #52): carries the measured model's id, so the display
+  // map reverse-matches it via a template regex (INTERPOLATED_MAP_KEYS), not exact match.
+  'main.benchmark.warnVeryLowTokens':
+    'Text generation was very slow with the loaded model ({model}), so the assigned profile ' +
+    'was stepped down one level. If that model is larger than the recommended one, start the ' +
+    'recommended model and run the benchmark again.',
   'main.benchmark.locked': 'Workspace is locked. Unlock it to run the benchmark.',
 
   // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()

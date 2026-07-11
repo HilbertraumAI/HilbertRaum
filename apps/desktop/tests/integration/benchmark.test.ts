@@ -26,6 +26,7 @@ import {
   SLOW_DRIVE_MBPS
 } from '../../src/main/services/benchmark'
 import { gpuUsefulForProfile } from '../../src/main/services/runtime/gpu'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { GpuDevice } from '../../src/shared/types'
 
 function freshDb(): Db {
@@ -41,6 +42,28 @@ function realManifests(): ModelManifest[] {
 }
 function runtime() {
   return createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 2048 })
+}
+/**
+ * A runtime that generates BELOW `VERY_LOW_TOKENS_PER_SECOND` (issue #52): two chunks at
+ * ~450 ms each → ≈2.2 tok/s. The timers ARE the simulated slow generation — tok/s is
+ * wall-clock-counted, so the fixed delay is the semantics here, not a sync point
+ * (CONTRIBUTING "no fixed sleeps" simulation exception, like ingestion-limits' slow parse).
+ */
+function slowRuntime(modelId: string): ModelRuntime {
+  return {
+    modelId,
+    async start() {},
+    async stop() {},
+    async health() {
+      return { healthy: true, message: '', port: null }
+    },
+    async *chatStream() {
+      for (const chunk of ['one', 'two']) {
+        await new Promise((resolve) => setTimeout(resolve, 450))
+        yield chunk
+      }
+    }
+  }
 }
 
 afterEach(() => {
@@ -287,6 +310,26 @@ describe('buildWarnings', () => {
   it('is empty for a healthy mid-tier machine', () => {
     expect(buildWarnings({ profile: 'BALANCED', driveReadMbps: 500, driveWriteMbps: 500 })).toEqual([])
   })
+
+  // Issue #52: the tok/s profile downgrade used to be completely silent. When it fires, the
+  // warning must NAME the model the probe streamed through — the downgrade is evidence about
+  // that model on this machine, not about the hardware tier in the abstract.
+  it('names the measured model when the very-low tok/s reading stepped the profile down (issue #52)', () => {
+    const w = buildWarnings({
+      profile: 'LITE',
+      driveReadMbps: 500,
+      driveWriteMbps: 500,
+      tokensDowngraded: true,
+      measuredModelId: 'qwen3-30b-a3b-q4'
+    })
+    expect(w.some((m) => m.includes('(qwen3-30b-a3b-q4)') && m.includes('stepped down'))).toBe(true)
+  })
+
+  it('stays silent when the reading did not move the profile, or no measured model is known', () => {
+    const base = { profile: 'BALANCED' as const, driveReadMbps: 500, driveWriteMbps: 500 }
+    expect(buildWarnings({ ...base, tokensDowngraded: false, measuredModelId: 'mock-chat' })).toEqual([])
+    expect(buildWarnings({ ...base, tokensDowngraded: true, measuredModelId: null })).toEqual([])
+  })
 })
 
 // ---- runBenchmark + persistence + downstream reads ------------------------------
@@ -304,7 +347,32 @@ describe('runBenchmark', () => {
     expect(['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN']).toContain(result.profile)
     expect(result.recommendedModelId).toBeTruthy()
     expect(result.tokensPerSecond).not.toBeNull()
+    // Issue #52: the result records WHICH model produced the tok/s number.
+    expect(result.measuredModelId).toBe('mock-chat')
     expect(Array.isArray(result.warnings)).toBe(true)
+  })
+
+  it('records no measured model when no runtime was running (issue #52)', async () => {
+    const result = await runBenchmark({ workspacePath: workspace(), manifests: [] })
+    expect(result.tokensPerSecond).toBeNull()
+    expect(result.measuredModelId).toBeNull()
+  })
+
+  // End-to-end wiring of the issue-#52 downgrade warning. The profile downgrade itself
+  // depends on this machine's real RAM (a ≤8 GB box is already TINY and can't step down),
+  // so the assertion pins CONSISTENCY: the named warning appears exactly when the tok/s
+  // hint moved the profile relative to the same classification without it.
+  it('emits the named very-low-tokens warning exactly when the profile stepped down (issue #52)', async () => {
+    const result = await runBenchmark({
+      workspacePath: workspace(),
+      manifests: realManifests(),
+      runtime: slowRuntime('oversized-27b')
+    })
+    expect(result.tokensPerSecond).not.toBeNull()
+    expect(result.tokensPerSecond!).toBeLessThan(VERY_LOW_TOKENS_PER_SECOND)
+    expect(result.measuredModelId).toBe('oversized-27b')
+    const downgraded = result.profile !== classifyProfile(result.ramGb, { gpuUseful: false })
+    expect(result.warnings.some((w) => w.includes('(oversized-27b)'))).toBe(downgraded)
   })
 
   it('persists to settings; getAppStatus + buildModelList then read the real profile', async () => {

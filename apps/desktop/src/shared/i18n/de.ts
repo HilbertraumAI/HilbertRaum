@@ -1557,6 +1557,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.notMeasured': 'nicht gemessen',
   'diag.bench.tokens': 'Tokens / Sek.',
   'diag.bench.tokensNotMeasured': 'nicht gemessen (starte zuerst ein Modell)',
+  'diag.bench.tokensModel': 'gemessen mit dem geladenen Modell {model}',
   'diag.bench.lastRun': 'Letzter Lauf',
   'diag.system.title': 'System',
   'diag.system.osPlatform': 'OS / Plattform',
@@ -1745,6 +1746,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.benchmark.warnSlowDrive':
     'Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber ' +
     'länger dauern.',
+  'main.benchmark.warnVeryLowTokens':
+    'Die Textgenerierung war mit dem geladenen Modell ({model}) sehr langsam, daher wurde ' +
+    'das zugewiesene Profil eine Stufe herabgesetzt. Wenn dieses Modell größer ist als das ' +
+    'empfohlene, starte das empfohlene Modell und führe den Benchmark erneut aus.',
   'main.benchmark.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um den Benchmark auszuführen.',
 
   // Emission set (D-L5): localized at the emission site via tMain().

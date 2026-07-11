@@ -55,7 +55,10 @@ export type BoundT = (key: MessageKey, params?: MessageParams) => string
 
 /** Persist-canonical keys handled via the interpolated matcher (not exact-match). Exported
  *  so the catalog-hygiene test can pin this set too. */
-export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = ['main.ingest.unsupportedType']
+export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = [
+  'main.ingest.unsupportedType',
+  'main.benchmark.warnVeryLowTokens'
+]
 
 /** Build a `^…$` regex from an English template by escaping it and turning its single
  *  `{param}` placeholder into a capture group. */
@@ -65,6 +68,9 @@ function templateToRegex(template: string, param: string): RegExp {
 }
 
 const UNSUPPORTED_TYPE_RE = templateToRegex(en['main.ingest.unsupportedType'], 'ext')
+// Issue #52: the very-low-tokens benchmark warning is persisted with the measured model's id
+// interpolated, so it round-trips through the same template-regex mechanism.
+const WARN_VERY_LOW_TOKENS_RE = templateToRegex(en['main.benchmark.warnVeryLowTokens'], 'model')
 // Legacy pattern for rows persisted by Phase-4-era ingestion (before this message was
 // localized): the old raw English form ended with the offending extension. Matched here so an
 // already-failed row still localizes after this change instead of leaking raw English into a
@@ -130,6 +136,8 @@ export function localizeServerCopy(t: BoundT, raw: string): string {
   if (key) return t(key)
   const ext = unsupportedTypeExt(raw)
   if (ext != null) return t('main.ingest.unsupportedType', { ext })
+  const model = WARN_VERY_LOW_TOKENS_RE.exec(raw)?.[1]
+  if (model != null) return t('main.benchmark.warnVeryLowTokens', { model })
   const busy = en['main.chat.docTaskBusy']
   if (raw.includes(busy)) return raw.replace(busy, t('main.chat.docTaskBusy'))
   return localizeCitationMarkers(t, raw)

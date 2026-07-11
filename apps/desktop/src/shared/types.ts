@@ -1648,6 +1648,13 @@ export interface BenchmarkResult {
   driveReadMbps: number | null
   driveWriteMbps: number | null
   tokensPerSecond: number | null
+  /**
+   * Id of the model the tokens/sec probe streamed through — the CURRENTLY LOADED model at
+   * benchmark time, which is often NOT `recommendedModelId` (issue #52). null when nothing
+   * was measured; absent on results persisted before this field existed, so readers treat
+   * missing as null.
+   */
+  measuredModelId?: string | null
   profile: HardwareProfile
   recommendedModelId: string | null
   warnings: string[]

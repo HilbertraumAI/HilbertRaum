@@ -221,6 +221,14 @@ export interface WarningInputs {
   driveReadMbps: number | null
   driveWriteMbps: number | null
   driveError?: string
+  /**
+   * True when the very-low tokens/sec reading ACTUALLY stepped the profile down (issue #52) —
+   * computed by the caller as "profile with the tps hint ≠ profile without it", so a TINY
+   * machine (which can't go lower) never claims a downgrade that didn't happen.
+   */
+  tokensDowngraded?: boolean
+  /** Model the tokens/sec probe streamed through — named in the downgrade warning (issue #52). */
+  measuredModelId?: string | null
 }
 
 /**
@@ -240,6 +248,13 @@ export function buildWarnings(input: WarningInputs): string[] {
     warnings.push(t('en', 'main.benchmark.warnTiny'))
   } else if (input.profile === 'UNKNOWN') {
     warnings.push(t('en', 'main.benchmark.warnUnknown'))
+  }
+
+  // Issue #52: the tok/s downgrade used to be completely silent — a crawl measured on an
+  // oversized loaded model shifted the profile (and with it the recommendation) without the
+  // card ever naming the model that produced the number. The warning names it.
+  if (input.tokensDowngraded && input.measuredModelId) {
+    warnings.push(t('en', 'main.benchmark.warnVeryLowTokens', { model: input.measuredModelId }))
   }
 
   if (input.driveError) {
@@ -292,12 +307,16 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   const sys = detectSystem()
   const drive = await measureDriveSpeed(deps.workspacePath)
   const tokensPerSecond = await measureTokensPerSecond(deps.runtime ?? null)
+  // Issue #52: record WHICH model produced the tok/s number — the currently loaded one,
+  // which is often not the recommended one. null whenever nothing was measured.
+  const measuredModelId = tokensPerSecond != null ? (deps.runtime?.modelId ?? null) : null
 
   const gpuName = deps.gpu?.name ?? sys.gpu
-  const profile = classifyProfile(sys.ramGb, {
-    tokensPerSecond,
-    gpuUseful: deps.gpu?.useful ?? false
-  })
+  const gpuUseful = deps.gpu?.useful ?? false
+  const profile = classifyProfile(sys.ramGb, { tokensPerSecond, gpuUseful })
+  // Issue #52: did the tok/s reading actually move the profile? (A TINY machine can't go
+  // lower, so "tps < threshold" alone would over-claim.) Feeds the named downgrade warning.
+  const tokensDowngraded = profile !== classifyProfile(sys.ramGb, { gpuUseful })
   // RAM-best-fit first — rounded to whole GB, the SAME rounding the Models screen's
   // gate uses (`machineRamGb`), so the two surfaces can never disagree at boundary
   // values like 15.7 GiB. The profile-table lookup remains the fallback when RAM
@@ -309,7 +328,9 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     profile,
     driveReadMbps: drive.readMbps,
     driveWriteMbps: drive.writeMbps,
-    driveError: drive.error
+    driveError: drive.error,
+    tokensDowngraded,
+    measuredModelId
   })
 
   return {
@@ -322,6 +343,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     driveReadMbps: drive.readMbps,
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,
+    measuredModelId,
     profile,
     recommendedModelId,
     warnings,

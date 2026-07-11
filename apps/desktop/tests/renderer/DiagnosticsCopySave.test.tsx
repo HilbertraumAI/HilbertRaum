@@ -31,6 +31,9 @@ const benchmark: BenchmarkResult = {
   driveReadMbps: 120,
   driveWriteMbps: 90,
   tokensPerSecond: 30,
+  // Issue #52: the loaded model at measure time — deliberately DIFFERENT from
+  // recommendedModelId above, since disambiguating the two is the point of the label.
+  measuredModelId: 'mock-chat-8b',
   ranAt: '2026-06-15T12:00:00Z',
   warnings: []
 }
@@ -98,6 +101,23 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     expect(lastCopied).toContain('Hardware benchmark')
     expect(lastCopied).toContain('Test CPU')
     expect(lastCopied).toContain('120 MB/s')
+    // Issue #52: the tok/s line names the model that produced the number (the loaded one,
+    // not the recommended one) in the card AND the copied report.
+    expect(lastCopied).toContain('Tokens / sec: 30 (measured with the loaded model mock-chat-8b)')
+  })
+
+  it('renders the tok/s row without a model name for a result persisted before issue #52', async () => {
+    const legacy = { ...benchmark }
+    delete (legacy as Partial<BenchmarkResult>).measuredModelId
+    stubDiagnostics({
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: legacy })) as never
+    })
+    renderDiagnostics()
+
+    // The card row shows the bare number, exactly as before the field existed.
+    await screen.findByText('Test CPU', { exact: false })
+    expect(screen.getByText('30')).toBeInTheDocument()
+    expect(screen.queryByText(/measured with the loaded model/)).not.toBeInTheDocument()
   })
 
   it('copies the logs from a fresh tail read', async () => {
