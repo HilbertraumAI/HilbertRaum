@@ -33,7 +33,7 @@ export async function getVisionStatus(ctx: AppContext): Promise<VisionStatus> {
   // miss while locked — BE-2, full-audit 2026-07-10), so status stays workspace-agnostic.
   const unlocked = ctx.workspace.isUnlocked()
   const developerMode = ctx.isDev || (unlocked && getSettings(ctx.db).developerMode)
-  const hashStore = createSettingsHashStore(() => ctx.db)
+  const hashStore = createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
 
   let sawUnsupported = false
   for (const manifest of visionManifests) {

@@ -235,7 +235,9 @@ export interface AppSettings {
    */
   autoStartActiveModel: boolean
   /**
-   * Persisted SHA-256 cache for model weight files, keyed by absolute path. An entry
+   * Persisted SHA-256 cache for model weight files, keyed by drive-RELATIVE path
+   * (forward slashes — CODE-15, full-audit 2026-07-11; pre-migration entries were keyed by
+   * absolute path and are lazily migrated on read/write by `createSettingsHashStore`). An entry
    * is trusted only while the file's size AND mtime still match; a replaced/changed
    * file is re-hashed. Lives in settings (like `lastBenchmark` — spec §8 defines no
    * extra table), so on an encrypted workspace it is encrypted at rest with the DB.

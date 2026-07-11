@@ -10922,6 +10922,25 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    - **TS-3 (owner design):** make the real-model smoke gate mechanical — e.g. a release-workflow
      step that fails unless a smoke-run record (date + env fingerprint) is newer than the last
      model/runtime-affecting commit; today the `HILBERTRAUM_*` matrix is human-remembered.
+     - **Manual-smoke-only coverage inventory (CODE-9/TQ-6, full-audit 2026-07-11):** the release
+       checklist must name exactly which behaviors a green CI does **NOT** evidence. Everything
+       above the runtime rides mocks/fakes (the mock never emits `reasoning_content`, always
+       finishes `stop`; `finish_reason:'length'` is fake-driven), so these are covered ONLY by the
+       env-gated `HILBERTRAUM_*` manual smokes — a pin bump or a new model manifest can change any
+       of them while CI stays green:
+       - (a) the **real llama-server SSE wire contract** — `reasoning_content` deltas,
+         `finish_reason` (`stop`/`length`), and error-frame shapes. The parser is well covered but
+         only against hand-authored fixtures, now provenance-pinned to the b9849 output shape in
+         `read-chat-sse.test.ts` + `llama-runtime.test.ts` (**re-verify those frames on a runtime
+         pin bump**).
+       - (b) **real-model + RAG answer quality** (grounding, citations, refusal discipline).
+       - (c) **`ragMinSimilarity` vs the real E5 distance distribution** (the mock embedder's
+         distances are synthetic).
+       - (d) **server concurrency** (multiple slots / overlapping requests on one sidecar).
+       - (e) **per-model bring-up + prompt-template / stop-token leak** (each GGUF's chat template).
+       - (f) **all perf numbers** (tok/s, peak RSS, model load time).
+       - (g) **real GPU behavior** — the fake-spawn unit tests cover the ladder LOGIC, not drivers;
+         see item 1b's ①–⑨ hardware matrix for the driver-level legs.
    - **TS-7 (owner call — CI minutes):** add a `macos-latest` CI leg. The suite is offline and
      Electron-binary-free, and cross-platform path bugs have historically been caught only by the
      Ubuntu leg.

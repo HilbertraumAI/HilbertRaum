@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 import { stringify } from 'yaml'
 import { openDatabase } from '../../src/main/services/db'
-import { seedSettings, getSettings } from '../../src/main/services/settings'
+import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   sha256File,
   verifyChecksum,
@@ -231,6 +231,63 @@ describe('persistent checksum cache (settings hash store)', () => {
     store.set('/b.gguf', { size: 3, mtimeMs: 4, actual: 'bbbb' })
     expect(getSettings(db2).checksumCache['/b.gguf']?.sha256).toBe('bbbb') // wrote via the LIVE handle
     expect(store.get('/b.gguf')).toEqual({ size: 3, mtimeMs: 4, actual: 'bbbb' })
+  })
+
+  // CODE-15 (full-audit 2026-07-11): keyed by drive-RELATIVE path so moving the drive between
+  // machines (a new drive letter / mount point) re-hashes nothing — the flagship scenario that
+  // an absolute key forced a full multi-GB re-hash for, plus permanent orphan entries.
+  it('primes under drive root A and rebuilds under root B with ZERO re-hashes (drive-letter move)', async () => {
+    clearChecksumCache()
+    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'cache.sqlite'))
+    seedSettings(db)
+
+    // "Mount A" — the drive as first seen (e.g. E:\). Same physical file, same relative path.
+    const rootA = tempDir('hilbertraum-driveA-')
+    mkdirSync(join(rootA, 'models', 'chat'), { recursive: true })
+    const fileA = join(rootA, 'models', 'chat', 'w.bin')
+    writeFileSync(fileA, 'drive-move weights')
+    // A real drive move keeps the file's size AND mtime; pin both files to one fixed clean-ms
+    // timestamp so the (size, mtime) validity check matches exactly across the two mounts (raw
+    // statSync mtimeMs carries sub-ms precision an utimes copy would truncate).
+    const fixed = new Date('2026-07-01T00:00:00.000Z')
+    utimesSync(fileA, fixed, fixed)
+    const expected = createHash('sha256').update('drive-move weights').digest('hex')
+    const storeA = createSettingsHashStore(() => db, rootA)
+    expect((await verifyChecksum(fileA, expected, storeA)).matched).toBe(true)
+    // Keyed relatively, not by the absolute mount-A path.
+    expect(getSettings(db).checksumCache['models/chat/w.bin']?.sha256).toBe(expected)
+    expect(getSettings(db).checksumCache[fileA]).toBeUndefined()
+
+    // Replug on another machine: the settings DB travels with the drive (reused `db`); the same
+    // physical file now sits under a different mount root, size+mtime preserved by the filesystem.
+    clearChecksumCache() // in-memory L1 is gone across the app restart; the DB survives
+    const rootB = tempDir('hilbertraum-driveB-')
+    mkdirSync(join(rootB, 'models', 'chat'), { recursive: true })
+    const fileB = join(rootB, 'models', 'chat', 'w.bin')
+    writeFileSync(fileB, 'drive-move weights')
+    utimesSync(fileB, fixed, fixed)
+
+    const before = checksumCacheStats.computed
+    const storeB = createSettingsHashStore(() => db, rootB)
+    expect((await verifyChecksum(fileB, expected, storeB)).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before) // served from the relative-keyed entry — no re-hash
+  })
+
+  it('lazily migrates a legacy ABSOLUTE-key entry to the relative key on read (drops the orphan)', () => {
+    clearChecksumCache()
+    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'cache.sqlite'))
+    seedSettings(db)
+    const root = tempDir('hilbertraum-drive-')
+    const abs = join(root, 'models', 'chat', 'legacy.bin')
+    // Pre-migration code keyed by the absolute path — plant such an entry.
+    updateSettings(db, { checksumCache: { [abs]: { size: 5, mtimeMs: 6, sha256: 'legacyhash' } } })
+
+    const store = createSettingsHashStore(() => db, root)
+    // A read under the absolute path resolves to the relative key, misses, adopts the legacy entry.
+    expect(store.get(abs)).toEqual({ size: 5, mtimeMs: 6, actual: 'legacyhash' })
+    const cache = getSettings(db).checksumCache
+    expect(cache['models/chat/legacy.bin']?.sha256).toBe('legacyhash') // rewritten under the relative key
+    expect(cache[abs]).toBeUndefined() // absolute orphan cleaned up
   })
 })
 

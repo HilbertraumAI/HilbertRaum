@@ -7,6 +7,7 @@ import {
   getSettings,
   MAX_SETTINGS_ERROR_LENGTH,
   MAX_SETTINGS_ID_LENGTH,
+  MAX_SETTINGS_OBJECT_BYTES,
   seedSettings,
   updateSettings
 } from '../../src/main/services/settings'
@@ -89,5 +90,49 @@ describe('settings write gate (BE-1)', () => {
     expect(getSettings(db).gpuProbe).toBeNull()
     updateSettings(db, { gpuProbe: { devices: [], probedAt: '2026-07-10T00:00:00.000Z' } })
     expect(getSettings(db).gpuProbe?.probedAt).toBe('2026-07-10T00:00:00.000Z')
+  })
+})
+
+// CODE-16 (full-audit 2026-07-11): the object-valued settings accepted UNBOUNDED payloads from
+// the renderer (a shape check only), and `checksumCache` (non-null object default) let an ARRAY
+// slip through the generic `typeof value !== typeof def` gate (arrays report `object`). Both are
+// bounded now, SEC-1 style: a >256 KB serialized blob is dropped, and an array for an
+// object-default key is rejected.
+describe('settings write gate — object-valued size cap + array rejection (CODE-16)', () => {
+  it('drops an oversized lastBenchmark blob (serialized JSON over the cap)', () => {
+    const db = freshDb()
+    // A healthy small blob persists…
+    updateSettings(db, { lastBenchmark: { profile: 'FAST_LOCAL' } as never })
+    expect(getSettings(db).lastBenchmark?.profile).toBe('FAST_LOCAL')
+    // …an over-cap payload is dropped, leaving the prior value untouched.
+    const huge = { profile: 'FAST_LOCAL', junk: 'x'.repeat(MAX_SETTINGS_OBJECT_BYTES + 1) }
+    updateSettings(db, { lastBenchmark: huge as never })
+    expect(getSettings(db).lastBenchmark?.profile).toBe('FAST_LOCAL')
+    expect((getSettings(db).lastBenchmark as unknown as { junk?: string }).junk).toBeUndefined()
+  })
+
+  it('drops an oversized checksumCache blob and rejects an ARRAY for the object-default key', () => {
+    const db = freshDb()
+    // Array slips through `typeof [] === 'object'` for the non-null object default — reject it.
+    updateSettings(db, { checksumCache: [{ size: 1, mtimeMs: 2, sha256: 'a' }] as never })
+    expect(getSettings(db).checksumCache).toEqual({})
+    // A healthy map persists…
+    updateSettings(db, { checksumCache: { '/w.gguf': { size: 1, mtimeMs: 2, sha256: 'abc' } } })
+    expect(getSettings(db).checksumCache['/w.gguf']?.sha256).toBe('abc')
+    // …but an over-cap map is dropped (prior value survives).
+    const bloat: Record<string, { size: number; mtimeMs: number; sha256: string }> = {}
+    for (let i = 0; bloat && JSON.stringify(bloat).length <= MAX_SETTINGS_OBJECT_BYTES; i++) {
+      bloat[`/weight-${i}.gguf`] = { size: i, mtimeMs: i, sha256: 'f'.repeat(64) }
+    }
+    updateSettings(db, { checksumCache: bloat })
+    expect(getSettings(db).checksumCache['/w.gguf']?.sha256).toBe('abc') // unchanged; the bloat was dropped
+    expect(getSettings(db).checksumCache['/weight-0.gguf']).toBeUndefined()
+  })
+
+  it('gpuProbe honours the same serialized-size cap', () => {
+    const db = freshDb()
+    const huge = { devices: [], probedAt: '2026-07-10T00:00:00.000Z', junk: 'y'.repeat(MAX_SETTINGS_OBJECT_BYTES) }
+    updateSettings(db, { gpuProbe: huge as never })
+    expect(getSettings(db).gpuProbe).toBeNull()
   })
 })

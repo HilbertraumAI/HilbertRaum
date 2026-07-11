@@ -11,6 +11,11 @@ import {
 // budget (prefill, then a tighter inter-chunk budget) and rejects with `RuntimeUnresponsiveError`.
 
 const enc = new TextEncoder()
+// Fixture provenance (CODE-9/TQ-6, full-audit 2026-07-11): these SSE frames are hand-authored to the
+// llama-server (b9849) output shape — `choices[].delta.content` for answer tokens,
+// `choices[].delta.reasoning_content` for `--reasoning-format deepseek` thinking deltas. CI green does
+// NOT evidence the real wire contract (see BUILD_STATE §5 TS-3 inventory); re-verify these frames against
+// a captured smoke transcript on a runtime pin bump.
 const chatChunk = (content: string): string =>
   `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
 const reasoningChunk = (reasoning_content: string): string =>

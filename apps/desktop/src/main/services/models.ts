@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { totalmem } from 'node:os'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
   isRealSha256,
@@ -278,6 +278,23 @@ export function primeChecksum(filePath: string, actual: string, store?: HashStor
 }
 
 /**
+ * Drive-relative, OS-stable cache KEY for an absolute weight path (CODE-15, full-audit
+ * 2026-07-11). The checksum cache was keyed by absolute path, so moving the drive between
+ * machines (`E:\…` → `F:\…`, or `/Volumes/…` ↔ a Windows letter) forced a full multi-GB
+ * re-hash and left the old absolute keys as permanent orphans in the settings blob. Keying by
+ * the path RELATIVE to the drive root (with forward slashes, matching a manifest's own
+ * `local_path`) makes the key independent of the mount point. A path that escapes the root
+ * (should never happen — weight paths are `safeDrivePath`-guarded) or a store created without a
+ * root falls back to the absolute path verbatim, so behaviour never silently changes.
+ */
+function driveRelKey(rootPath: string | undefined, absPath: string): string {
+  if (!rootPath) return absPath
+  const rel = relative(rootPath, absPath)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return absPath
+  return rel.split(sep).join('/')
+}
+
+/**
  * HashStore over `AppSettings.checksumCache` (settings rows live inside the DB).
  *
  * Lock-aware (BE-2, full-audit 2026-07-10): takes a GETTER, not a raw handle — the stores are
@@ -289,16 +306,42 @@ export function primeChecksum(filePath: string, actual: string, store?: HashStor
  * while the workspace was locked must still report success). The fallback is consulted ONLY
  * when the DB is unreachable — a live DB read always wins, so cross-instance invalidations
  * ("Verify checksum") are never shadowed by a stale local entry.
+ *
+ * Keyed by drive-RELATIVE path (CODE-15, full-audit 2026-07-11) when `rootPath` is supplied, so
+ * a drive-letter move re-hashes nothing. Callers still pass the absolute path (its size+mtime
+ * is the validity check, unchanged); the store derives the relative key. Pre-migration entries
+ * were keyed absolutely — on a relative-key miss the store lazily adopts a legacy absolute-key
+ * entry (rewrites it under the relative key, drops the orphan), so old caches migrate as they
+ * are read/written without a forced re-hash.
  */
-export function createSettingsHashStore(getDb: () => Db): HashStore {
+export function createSettingsHashStore(getDb: () => Db, rootPath?: string): HashStore {
   const fallback = new Map<string, CachedHash>()
+  const keyFor = (path: string): string => driveRelKey(rootPath, path)
   return {
     get(path) {
+      const key = keyFor(path)
       try {
         // Read-side belt (BE-1, full-audit 2026-07-10): a row corrupted to `checksumCache: null`
         // before the settings write gate rejected it must degrade to a cache miss, not throw out
         // of every checksum reader; the next set() rewrites a healthy object over it.
-        const entry = (getSettings(getDb()).checksumCache ?? {})[path]
+        const db = getDb()
+        const cache = getSettings(db).checksumCache ?? {}
+        let entry = cache[key]
+        if (!entry && key !== path && cache[path]) {
+          // Lazy migration (CODE-15): a legacy absolute-key entry survives a drive move — adopt it
+          // under the relative key and drop the absolute orphan so it re-hashes nothing and the
+          // stale key is cleaned as it is read. Best-effort — the read below still serves the value
+          // even if the write can't land (locked/closed workspace).
+          entry = cache[path]
+          try {
+            const next = { ...cache }
+            next[key] = entry
+            delete next[path]
+            updateSettings(db, { checksumCache: next })
+          } catch {
+            /* migrate is best-effort; the value is still returned below */
+          }
+        }
         return entry ? { size: entry.size, mtimeMs: entry.mtimeMs, actual: entry.sha256 } : null
       } catch {
         return fallback.get(path) ?? null
@@ -306,10 +349,13 @@ export function createSettingsHashStore(getDb: () => Db): HashStore {
     },
     set(path, entry) {
       fallback.set(path, entry)
+      const key = keyFor(path)
       try {
         const db = getDb()
         const cache = { ...getSettings(db).checksumCache }
-        cache[path] = { size: entry.size, mtimeMs: entry.mtimeMs, sha256: entry.actual }
+        cache[key] = { size: entry.size, mtimeMs: entry.mtimeMs, sha256: entry.actual }
+        // Drop any legacy absolute-key twin so the blob never carries both (CODE-15 orphan cleanup).
+        if (key !== path && path in cache) delete cache[path]
         updateSettings(db, { checksumCache: cache })
       } catch {
         /* workspace locked/closed — the in-memory fallback above keeps the session served */
@@ -317,13 +363,21 @@ export function createSettingsHashStore(getDb: () => Db): HashStore {
     },
     delete(path) {
       fallback.delete(path)
+      const key = keyFor(path)
       try {
         const db = getDb()
         const cache = { ...getSettings(db).checksumCache }
-        if (path in cache) {
-          delete cache[path]
-          updateSettings(db, { checksumCache: cache })
+        let changed = false
+        if (key in cache) {
+          delete cache[key]
+          changed = true
         }
+        // Also evict a legacy absolute-key twin (CODE-15) so a forced re-hash starts fully clean.
+        if (key !== path && path in cache) {
+          delete cache[path]
+          changed = true
+        }
+        if (changed) updateSettings(db, { checksumCache: cache })
       } catch {
         /* workspace locked/closed — nothing persisted is reachable to delete right now */
       }

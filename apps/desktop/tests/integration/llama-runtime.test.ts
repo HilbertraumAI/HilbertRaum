@@ -36,6 +36,10 @@ function sseStream(frames: string[]): ReadableStream<Uint8Array> {
   })
 }
 
+// Fixture provenance (CODE-9/TQ-6, full-audit 2026-07-11): the SSE frames throughout this file are
+// hand-authored to the llama-server (b9849) output shape — content/reasoning_content deltas,
+// `finish_reason` (stop/length), and `[DONE]`. CI green does NOT evidence the real wire contract
+// (see BUILD_STATE §5 TS-3 inventory); re-verify against a captured smoke transcript on a runtime pin bump.
 function chatChunk(content: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
 }

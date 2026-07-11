@@ -15,6 +15,14 @@ const MAX_SETTINGS_ARRAY = 10_000
 export const MAX_SETTINGS_ID_LENGTH = 512
 export const MAX_SETTINGS_ERROR_LENGTH = 4096
 
+/** Serialized-JSON ceiling for the object-valued settings (`checksumCache` map, plus the
+ *  `lastBenchmark`/`gpuProbe` result blobs). These are read on start/hot paths and persist into
+ *  the encrypted settings blob; the shape gates in `updateSettings` check only the top-level type,
+ *  so a buggy/hostile renderer could otherwise bloat the blob without bound (CODE-16,
+ *  full-audit 2026-07-11). 256 KB dwarfs a real benchmark/probe blob and a large checksum map
+ *  (~120 B/entry ⇒ ~2 000 weights) — an over-cap payload is dropped, SEC-1 bounding style. */
+export const MAX_SETTINGS_OBJECT_BYTES = 256 * 1024
+
 /** Floor for `contextTokens` (HIGH_BUG vuln-scan-2026-06-21). The doc-task window budget is
  *  derived from this; below this floor the summary-tree builder's per-level node summaries can
  *  exceed a single budget window and the build cannot reduce. 2048 always fits >= 2 node
@@ -81,6 +89,17 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
       if (typeof value !== 'string' || value.length > MAX_SETTINGS_ERROR_LENGTH) continue
     } else if (key === 'lastBenchmark' || key === 'gpuProbe') {
       if (typeof value !== 'object' || Array.isArray(value)) continue
+    }
+    // Bound the object-valued settings (CODE-16, full-audit 2026-07-11). `checksumCache` has a
+    // non-null object default, so an ARRAY slips through the generic `typeof value !== typeof def`
+    // gate above (arrays report `object`) — reject it here; the null-default `lastBenchmark`/
+    // `gpuProbe` pair reject arrays above, so this re-check is harmless for them. Then cap the
+    // SERIALIZED size of all three (SEC-1 bounding style) so a renderer can't bloat the encrypted
+    // blob these start-hot readers touch. `value === null` (a legitimate clear of the null-default
+    // pair) is accepted upstream and never reaches here.
+    if ((key === 'lastBenchmark' || key === 'gpuProbe' || key === 'checksumCache') && value !== null) {
+      if (typeof value !== 'object' || Array.isArray(value)) continue
+      if (JSON.stringify(value).length > MAX_SETTINGS_OBJECT_BYTES) continue
     }
     // Array-typed defaults (any future `string[]` setting) pass the
     // `typeof === 'object'` check above, so validate them element-wise: require an actual

@@ -895,9 +895,12 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `<root>/models/...`. SHA-256 is streamed (large GGUFs never fully buffer). Placeholder hashes are
   treated as installed only in developer mode; otherwise they fail the §7.4 verification gate.
 - **Checksum cache (two tiers).** Hashing a multi-GB GGUF takes minutes of USB I/O, so verified
-  hashes are cached by `(path, size, mtime)`: an in-memory map (L1) plus the persisted
-  `AppSettings.checksumCache` (L2, injected as a `HashStore`), so an unchanged weight file is hashed
-  **once ever**, not once per session. A size/mtime change re-hashes; the AI Model screen's
+  hashes are cached by `(path, size, mtime)`: an in-memory map (L1, keyed by absolute path) plus the
+  persisted `AppSettings.checksumCache` (L2, injected as a `HashStore`), so an unchanged weight file
+  is hashed **once ever**, not once per session. The L2 store keys by the **drive-relative** path
+  (forward slashes — CODE-15, full-audit 2026-07-11) so moving the drive between machines (a new
+  drive letter / mount point) re-hashes nothing; pre-CODE-15 absolute-key entries are lazily migrated
+  on read/write. A size/mtime change re-hashes; the AI Model screen's
   **Verify checksum** button calls the `verifyModel` IPC, which drops the cache entry and re-hashes
   for real. The ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully.
 - **Model verification progress (first-run bar).** The first cold pass over a fresh drive hashes the

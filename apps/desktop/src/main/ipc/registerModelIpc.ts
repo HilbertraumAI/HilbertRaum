@@ -60,7 +60,7 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   const lenient = developerLeniency(ctx, s)
   const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
     developerMode: lenient,
-    hashStore: createSettingsHashStore(() => ctx.db)
+    hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
   })
   const mockFallback = state === 'missing' && lenient
   if (state !== 'installed' && !mockFallback) {
@@ -164,7 +164,7 @@ export function registerModelIpc(ctx: AppContext): void {
       profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
       developerMode: developerLeniency(ctx, s),
       runningModelId: ctx.runtime.activeModelId(),
-      hashStore: createSettingsHashStore(() => ctx.db),
+      hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
       machineRamGb: machineRamGb(),
       // RT-3: the chat path (the workspace gate into Chat) passes lazyVerify so only the
       // active model is hashed on a cold cache — the full corpus of multi-GB GGUFs is
@@ -202,7 +202,7 @@ export function registerModelIpc(ctx: AppContext): void {
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
     if (!found) throw new Error(`Unknown model id: ${modelId}`)
-    const store = createSettingsHashStore(() => ctx.db)
+    const store = createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
     invalidateChecksum(weightPath(ctx.paths.rootPath, found.manifest), store)
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
       developerMode: developerLeniency(ctx, getSettings(ctx.db)),
