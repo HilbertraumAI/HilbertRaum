@@ -1,20 +1,5 @@
 # Model Policy — HilbertRaum
 
-_Last updated: 2026-07-10 (download-posture correction, full-audit 2026-07-10 DOC-101: the
-in-app downloader section now states that `prepare-drive` permits model downloads in BOTH
-postures — the 2026-07-01 flip; a builder can hand-edit `policy.json` to deny). Prior:
-2026-07-01 (Qwen3.5 Unsloth wave: three new text-only chat manifests —
-`qwen3.5-9b-ud-q4kxl`, `qwen3.5-27b-ud-q4kxl`, `qwen3.5-35b-a3b-ud-q4kxl` — added alongside the
-existing `qwen3.5-4b-ud-q4kxl`; runtime pin BUMPED b9585 → **b9849** as the Qwen3.5 compatibility
-gate. See "Qwen3.5 Unsloth wave" below. Prior:
-2026-06-20 (image understanding V5: the `vision` role + `mmproj` projector + the
-Qwen2.5-VL-3B-Instruct license review — see "The vision role + mmproj projector" below). Prior:
-2026-06-11 (first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
-Granite held, min-RAM recalibrated from measured peak RSS; see
-[`model-benchmarks.md`](model-benchmarks.md) §6; four challenger manifests added per
-decisions D16–D18 — design record in [`model-benchmarks.md`](model-benchmarks.md) §7; runtime
-pinned to llama.cpp b9585; all license reviews approved)_
-
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
 - Every model is described by a **manifest** (YAML) under `model-manifests/`, so models can change

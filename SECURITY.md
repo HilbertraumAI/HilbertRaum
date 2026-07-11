@@ -1,14 +1,5 @@
 # Security Policy — HilbertRaum
 
-_Last updated: 2026-07-10. Security-relevant changes since the Phase 9 baseline: the audit log
-(Phase 19; document titles/filenames later removed as content, 2026-06-30), the deny-by-default
-renderer permission handler (Phase 31), the v2 vault envelope with O(1) password change (Phase 32),
-encrypted-at-rest diagnostics log, malicious-document resource caps, the fail-closed packaged-build
-policy, on-device scanned-PDF/photo OCR (Phase 38), image understanding (local vision analysis with
-encrypted, deletable history), engine-binary re-hash-before-spawn verification, user drop-in skill
-packs (size-gated, sandboxed), and the local translation sidecar (a second on-device `llama-server`
-for text + whole-document translation)._
-
 ## Supported versions
 
 This project is a pre-1.0 MVP. Security fixes target the `master` branch only until a stable release

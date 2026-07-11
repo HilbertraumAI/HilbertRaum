@@ -1,7 +1,5 @@
 # Packaging — portable build, sidecars & model weights
 
-_Last updated: 2026-07-10._
-
 This documents **how the app is packaged into a portable build**, **where the runtime binaries and
 model weights live on the drive**, and that those artifacts are **not** in the git repository.
 The pieces: the runtime-side drive layout; the `electron-builder` portable build +
@@ -505,6 +503,29 @@ run one real-model session covering:
 8. **(If a vision model ships)** open **Images**, analyze a **PNG** and a **JPEG** from the
    produced `.exe` (the `vision-smoke` harness covers the runtime mechanics; this is the
    packaged-app pass) and confirm the calm unavailable state on a drive with **no** vision model.
+
+### The canonical USB demo (original spec §17)
+
+The acceptance walkthrough that checklist item 6 (and the R5/R7 gate) refers to — transferred
+verbatim-in-substance from the retired original spec, §17. The active-model name in step 4 tracks
+whatever the drive bundles as its default chat model (Ministral 3 8B today; the spec's example was
+Qwen3 4B), and assumes drive preparation selected that model once (a factory-fresh tree has no
+active model until "Use this model" is clicked on the AI Model screen):
+
+1. Laptop has Wi-Fi turned off.
+2. User plugs in HilbertRaum.
+3. User launches the app.
+4. Home screen shows: **Offline Mode: ON**, the active default chat model, **Workspace: Encrypted**.
+5. User opens Documents.
+6. User imports `sample-contract.pdf`.
+7. App indexes the file locally.
+8. User asks: *"What are the termination rights in this contract?"*
+9. App responds with a concise answer, citations to pages/sections, and source snippets.
+10. User asks: *"Draft a polite email summarizing the risk."*
+11. App drafts the email locally.
+12. User closes the app.
+13. The runtime stops.
+14. **No network activity occurred.**
 
 ### The `HILBERTRAUM_*` manual harness matrix — a REQUIRED pre-release gate (audit M-A5)
 

@@ -1,7 +1,5 @@
 # Privacy Notice — HilbertRaum
 
-_Last updated: 2026-07-06 (Translation — on-device text + document translation by a local model)_
-
 HilbertRaum runs AI models **locally** on your laptop. This document explains, in plain
 language, what the app does and does not do with your data.
 

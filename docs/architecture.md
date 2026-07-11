@@ -1,6 +1,6 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-07-10. This doc is both the architecture overview and the home of the
+_This doc is both the architecture overview and the home of the
 **§-numbered design records** (with their §-anchor legends): code comments and the other docs cite
 `§N` / finding-id anchors that resolve here. The records absorb the earlier audit ledgers and
 remediation waves; the full original working papers live in git history._
@@ -978,8 +978,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   browsed / accessed data you weren't given") plus a positive instruction to **answer general
   questions directly from the model's own knowledge, without per-turn disclaimers**, and to respond in
   the user's language. `GROUNDED_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + GROUNDING_RULES` still governs
-  document questions (the later, more-specific rule wins). The frozen spec §7.6 prompt is retained in
-  `CLAUDE_HilbertRaum_MVP.md` as historical intent; this record is the as-built source of truth.
+  document questions (the later, more-specific rule wins). The frozen spec §7.6 prompt survives only in
+  git history (the retired spec — see the retirement legend at the end of this doc); this record
+  is the as-built source of truth.
 - **Role alternation (fix 2026-06-14).** A failed answer persists the user turn but no
   assistant reply; left unguarded, the next turn sent **consecutive user messages**, which
   several chat templates (Mistral, Qwen tool-style) reject with `HTTP 500` ("roles must
@@ -5131,9 +5132,13 @@ without churning ~150 comments. Read a historical `§N` as:
 | `skills-s13-plan.md` §2.1 / D1–D6 | Ratified auto-fire contract (precision bar, threshold-3, opt-in, app-only, no-override, schema) | §18 |
 | `skills-s13-plan.md` §3 / §4 / §5 | Eval harness + corpus (S13a) / auto-fire mechanics (S13b) / surprise-mitigation UX (S13c) | §18 |
 | §22-A1/A5/A6 | One skill-resolution path; stamp only when placed; fence pre-sized | §5 |
+| §22-A2 | Net-new member-by-member safe zip extractor — a `.skill.zip` never routes through `extractWithTar`; zip-bomb enforced on actual inflated bytes | §4 + security-model "Skill-import defences" |
 | §22-C2 | Selector reads triggers from the cache, never unpacks a blob | §6 |
 | §22-C3/C4 | No FK into `skills` (app-level sweep); scope resolved main-side | §4 + §9 |
 | §22-D1/D3 | Honesty posture (drop, don't invent); suggestion is an inert offer | §6 + §8 |
+| §22-E2 | Nested-archive defence is magic-byte sniffing, not extension allowlisting (a zip renamed `.csv` is caught) | §4 + security-model "Skill-import defences" |
+| §22-E4 | `assertCommercialDrive` gate mirrored in both provisioning scripts | `services/commercial-drive.ts` + `scripts/build-commercial-drive.{ps1,sh}` (parity pinned by `skills-bank-statement.test.ts`) |
+| §22-H2 | Fence placement — the RAG skill fence rides in the user turn with the excerpts, never `system` (plain chat: app-bracketed) | §5 + rag-design.md §8 "Grounded prompt" |
 | §22-M1 | Content-class rule — ids/counts only; no content in log/audit/IPC | §2 (the consolidated sentinel guard) |
 | §22-M2 | App-skill integrity by location, not signature (accepted residual) | §12 + security-model |
 | §22-M4 | v1 permissions are a display summary; nothing executes | §1 (DS6) |
@@ -6962,7 +6967,7 @@ review-round findings are folded into their rows):
 | **CODE-21** | LOW | D | **fixed** — `listDocumentsByIds(db, embedderId, ids)` (shares `rowToInfo`/`LIST_DOCUMENT_COLUMNS`, every aggregate `IN (…)`-scoped) replaces the whole-library materialization in `listAttachments` (the PF-5 chat rider); equivalence + no-full-table-aggregation prepare-spy guard. The documents-SCREEN load-all (PF-5 proper) is unchanged and stays a `known-limitations` watch item. |
 | **CODE-22** | LOW | E | **fixed** — the translation GPU offload-line parse matches on `window + chunk` BEFORE slicing to 512 bytes — a single large stderr chunk containing the line + trailing log no longer loses it (the #42 device hint stays honest). |
 | **CODE-23** | LOW | G | **fixed** — TranslateScreen `gpuLayers === 0` renders the CPU wording (`translate.device.gpuNone`(+`Title`) EN+DE) instead of the self-contradictory "partly on the graphics card (0/49 layers)"; known-limitations' hint-form enumeration extended. |
-| **CODE-24/DOC-12** | LOW/MED | H `633dc45`+`d7787b1` | **fixed (byte-identity proven test-first)** — the literal U+0000 in `analysis/extract.ts` `contentHashOf` → ` ` escape: five hash constants captured against the PRE-edit code stay green (no persisted extraction-cache hash invalidates), the file diffs as text, ripgrep sees content. The recommended **NUL-ban net** (src/** read as buffers) found a SECOND offender the audit missed for exactly the CODE-24 reason (rg skips NUL-bearing files): `doctasks/compare.ts` `pairKey` (in-memory key, NUL past git's 8000-byte binary-sniff window — so git diffed it as text while rg still skipped it) — fixed identically. Review follow-up `d7787b1`: the fix's OWN test file shipped 2 literal NULs (comments — the authoring-tool escape trap), recreating the class inside its own guard: escaped, the frozen constants re-verified green, and the net extended to **tests/**** (binary fixtures excluded by the extension filter). Lesson recorded: byte-verify any tool-written escape sequences — the net now enforces it mechanically for both trees. |
+| **CODE-24/DOC-12** | LOW/MED | H `633dc45`+`d7787b1` | **fixed (byte-identity proven test-first)** — the literal U+0000 in `analysis/extract.ts` `contentHashOf` → `\u0000` escape: five hash constants captured against the PRE-edit code stay green (no persisted extraction-cache hash invalidates), the file diffs as text, ripgrep sees content. The recommended **NUL-ban net** (src/** read as buffers) found a SECOND offender the audit missed for exactly the CODE-24 reason (rg skips NUL-bearing files): `doctasks/compare.ts` `pairKey` (in-memory key, NUL past git's 8000-byte binary-sniff window — so git diffed it as text while rg still skipped it) — fixed identically. Review follow-up `d7787b1`: the fix's OWN test file shipped 2 literal NULs (comments — the authoring-tool escape trap), recreating the class inside its own guard: escaped, the frozen constants re-verified green, and the net extended to **tests/**** (binary fixtures excluded by the extension filter). Lesson recorded: byte-verify any tool-written escape sequences — the net now enforces it mechanically for both trees. |
 | **CODE-25** | LOW | G | **fixed (scoped)** — the two new DE ASCII-quote closers + the `:657` precedent → `„…“`. Registered: seven-plus OLDER same-class de.ts values (~:428, :594–595, :907, :1059/:1061, :2150, :2171, :2290) left for one mechanical sweep on a future copy pass (the catalog's 66 correct `“` closers establish the convention). |
 | **CODE-26…29** | LOW-MED/LOW | F1 | **fixed (class)** — shared `runAndSurface(fn, onError)` in `renderer/lib/errors.ts` (awaits, catches, routes `friendlyIpcError`, surfaces per site, never rejects); converted: **CODE-26** App "Lock now" (dismissible error banner; session stores NOT purged and shell stays unlocked — coherent with CODE-1a, main really is still unlocked), **CODE-27** Diagnostics "Try GPU again" (`gpuRetryError` banner, new `diag.gpu.tryFailed` EN+DE, + the file-uniform mountedRef it was missing), **CODE-28** both ModelsScreen poll-completion refreshes (→ screen error banner), **CODE-29** the DocRow task-cancel (screen-owned `onCancelTask` prop, useEventCallback-stable for the PERF-5 memo) + the bulk-re-index cancel. |
 | **CODE-30** | LOW-MED | F2 `9b4df23` | **fixed** — the SKA-18 'new'-key carry+delete extracted into shared `carryNewComposerPicks`, used by BOTH creation entry points ("+ New chat" bypassed it: a composer skill/depth pick silently vanished, then resurrected on the next empty composer); the discarded promise now catches → `setError`. Registered nit: an interleaved first-send + "+ New chat" click can double-carry the picks onto both conversations — benign (idempotent delete; each gets the visibly-selected pick), not scheduled. |
@@ -8163,3 +8168,42 @@ cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build g
 | `services/select-sidecar-backed.ts` | 7.5 selects the sidecar-backed runtime for an available model |
 | `services/retrieval-scope.ts` | 7.8 builds the SQL scope filter for retrieval (collection/document scoping) |
 | `services/settings.ts` | §8 persisted user settings access |
+
+## Original MVP spec — retirement record & §-anchor legend (2026-07-11)
+
+The frozen original product/architecture spec **`CLAUDE_HilbertRaum_MVP.md` was retired and
+deleted on 2026-07-11** (full text: `git show ed1332c:CLAUDE_HilbertRaum_MVP.md`). A five-way
+coverage audit confirmed every substantive section is either represented in the as-built topic
+docs or deliberately superseded; the durable **product intent** (thesis, target user, commercial
+model, positioning guardrails, scope boundaries, future editions/backends) was condensed into
+[`product-vision.md`](product-vision.md), and the §17 canonical USB demo script into
+[`packaging.md`](packaging.md). Code comments, tests, manifests, and docs keep citing **`spec §N`**
+unchanged — those anchors resolve here:
+
+| Spec anchor | Resolves to (as-built) |
+|---|---|
+| §0 operating rules | `CLAUDE.md` "Hard rules" + `CONTRIBUTING.md` "Ground rules"; the "not RAM expansion" guardrail → [`product-vision.md`](product-vision.md) |
+| §1.1, §1.2/§1.3/§1.4, §19, §23 | [`product-vision.md`](product-vision.md) (naming, thesis, commercial model, target user, future editions, philosophy) |
+| §1.5 / "success criterion #10" | [`product-vision.md`](product-vision.md) success definition; portability as-built in [`drive-layout.md`](drive-layout.md) "Launchers" |
+| §2.1 scope includes / §2.2 excludes | `README.md` features / [`product-vision.md`](product-vision.md) scope boundaries |
+| §3.1 drive role | [`product-vision.md`](product-vision.md) positioning guardrails |
+| §3.2 runtime strategy | Overview + "Swappable interfaces (spec §9.2)" (this doc); future backends → [`product-vision.md`](product-vision.md) |
+| §3.3 model strategy | [`model-policy.md`](model-policy.md) (deviations from the spec's model list are recorded inline — e.g. the spec-§7.3 dropped-models note) |
+| §3.5 security baseline | [`security-model.md`](security-model.md) "Security baseline (spec §3.5)" |
+| §3.6 offline mode | [`security-model.md`](security-model.md) "Offline posture (spec §3.6)" |
+| §6 drive layout, `drive.json`/`policy.json` | [`drive-layout.md`](drive-layout.md) (incl. "Naming reconciliation"); canonical code `services/drive.ts` / `services/policy.ts` |
+| §7.1–§7.11 app modules | the "Module ↔ spec map" table above + this doc's per-module sections; §7.6's base prompt superseded by `chat.ts` `BASE_SYSTEM_PROMPT` (see "Chat & streaming"); §7.7/§7.8 pipeline + defaults → [`rag-design.md`](rag-design.md) §1/§3/§8 |
+| §8 data model, §8.2 ids | `services/db.ts` `SCHEMA` (this doc's "Storage" section) |
+| §9.1 command surface | `ipc/register*Ipc.ts` + `preload/index.ts` (Overview) |
+| §9.2 service interfaces | "Swappable interfaces (spec §9.2)" (this doc) |
+| §10.x UI screens | [`design-guidelines.md`](design-guidelines.md) — §10.3 → §3 (+ D-UI4 Quick/Balanced/Thorough), §10.4 → §11.6, §10.6 → §2/§11.3; §10.7 → "Diagnostics & transcript export" (this doc) |
+| §11.1–§11.4 benchmark & profiles | [`benchmark.md`](benchmark.md) (goals / detection steps / profile classification / "Warnings"); the §11.4 friendly-language rule also in [`design-guidelines.md`](design-guidelines.md) §7 |
+| §12, §12.2 packaging / §12.3 updates | [`packaging.md`](packaging.md) (commercial drive + release workflow); manual drive update in [`drive-layout.md`](drive-layout.md) |
+| §13 model licensing | [`model-policy.md`](model-policy.md) "Manifest fields" + "License review gate" |
+| §17 demo script | [`packaging.md`](packaging.md) "The canonical USB demo (original spec §17)" |
+| §18.1 offline statement | `shared/i18n/en.ts` `privacy.statement.offline` (verbatim) |
+| §22 definition of done | `BUILD_STATE.md` §4 "MVP Definition of Done" checklist |
+
+Any spec anchor not in the table (e.g. §16 milestones, §20 open questions, §21 implementation
+plan) is completed history — resolved in `BUILD_STATE.md`'s phase log or decided in this doc's
+design records — and resolvable in full via the `git show` pointer above.

@@ -1,11 +1,5 @@
 # Hardware benchmark & model recommendation
 
-_Last updated: 2026-07-11 (issue #52: `measuredModelId` records which model the tok/s probe
-streamed through; the Diagnostics card + Copy text name it; the very-low-tok/s profile downgrade
-is no longer silent — a persisted, interpolated warning names the measured model). Prior:
-2026-07-10 (full-audit DOC-109 re-verification); 2026-06-10 (real tokens/sec; injected GPU probe,
-conservative profile bump, per-session probe refresh)._
-
 > **Not to be confused with** [`model-benchmarks.md`](model-benchmarks.md) — that doc is the
 > offline **model-quality** protocol and measured results; this doc is the in-app **hardware**
 > probe that recommends which model a given machine can run.

@@ -1,12 +1,5 @@
 # HilbertRaum — Troubleshooting
 
-_Last updated: 2026-07-11 (issue #51: new "Windows asks to scan and fix the drive" entry — the
-exFAT dirty bit from unplugging without a safe eject, why the scan is safe, and the
-quit-then-eject habit). Prior: 2026-07-10 (offline-mode answer corrected, full-audit 2026-07-10
-DOC-101: model downloads are permitted on prepared commercial drives — every download still asks
-first). Prior:
-2026-07-07 (added "Redaction left a name in, or an edit changed nothing" — the AI-assisted best-effort posture, the no-model-running degrade, steerable scope, verbatim-only edits, and same-format output). Previously: Images entries (the screen needs a vision model; asking about an image is slow); Skills entries (drop-ins install disabled, import rejections, the "Needs newer app" badge, "the skill tool found nothing"); scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
-
 Quick answers to common situations. Everything here is normal, local, and offline — none of
 these steps require the internet.
 

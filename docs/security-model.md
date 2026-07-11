@@ -1,16 +1,5 @@
 # Security model — HilbertRaum
 
-_Last updated: 2026-07-11 (issue #51: the whole-file-encryption record gains the plaintext-mode
-quit close — `WorkspaceController.shutdown()` checkpoints + closes so no `-wal`/`-shm` remain at
-rest in either mode — and the recorded decision to KEEP WAL rather than switch journal modes on
-exFAT). Prior: 2026-07-10 (full-audit 2026-07-10 DOC-107: ledger entries added for the 2026-06-13
-lows **L-2** (https-only download URLs) and **L-3** (importPreflight unlock gate) — the ids code
-comments cite; the SEC-4 id overload vs `architecture.md` §38 disambiguated at both sites).
-Prior: 2026-06-29 (the body now carries the 2026-06-27/28/29 security audit records —
-backend-audit SEC-1–SEC-6, full-audit SEC-N1/DOC-N1 + the "Phase-7 security polish" section, and
-post-merge F14/F15/F17). Prior: 2026-06-20 (Image-understanding V8 — encrypted, deletable
-image-analysis history; its write/read temps now joined the startup crash sweep)_
-
 This document describes the local threat model, the security baseline (spec §3.5), the offline
 posture (spec §3.6), how the privacy policy is loaded and enforced, and the **encrypted workspace**
 (spec §3.5/§7.9, implemented in Phase 9).

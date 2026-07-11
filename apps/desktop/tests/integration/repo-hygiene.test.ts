@@ -29,7 +29,7 @@ describe('repo hygiene — lockfile discipline (issue #49)', () => {
 // hash-domain separator) which made git treat the file as binary — unreviewable text diffs, and
 // ripgrep silently skips it (the audit's own greps missed the file). It was rewritten to the
 // escape form (byte-identical). This net bans any new literal NUL in source-code files under
-// BOTH src/** and tests/** so the whole class can't regress: a domain separator or delimiter
+// src/**, tests/**, and the repo docs/** so the whole class can't regress: a domain separator or delimiter
 // must always be written as an escape. tests/ is included because the class immediately
 // recurred there — the CODE-24 fix's own test file shipped with 2 literal NULs in comments,
 // caught by review, not by the original src-only net. The extension filter deliberately
@@ -55,6 +55,31 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
     const offenders = walk(join(process.cwd(), 'tests')).filter((p) =>
       readFileSync(p).includes(0)
     )
+    expect(offenders).toEqual([])
+  })
+
+  // The class recurred a THIRD time, in docs/: the §47 audit ledger's own CODE-24/DOC-12 row in
+  // docs/architecture.md shipped with a literal NUL (the same authoring-tool escape trap), which
+  // made every plain grep over that file silently stop mid-file — including the §-anchor
+  // retirement legend at its end. Docs are grep-navigated reference material, so they get the
+  // same net (the extension filter keeps it to text files).
+  it('holds no 0x00 byte in any docs file either', () => {
+    const offenders = walk(join(process.cwd(), '..', '..', 'docs')).filter((p) =>
+      readFileSync(p).includes(0)
+    )
+    expect(offenders).toEqual([])
+  })
+
+  // …and a FOURTH time, in BUILD_STATE.md, while WRITING UP the docs/ recurrence — the journal
+  // entry describing the escape trap fell into it. Root-level .md files (BUILD_STATE, CLAUDE,
+  // README, …) are scanned non-recursively: the repo root also holds node_modules, which must
+  // never be walked.
+  it('holds no 0x00 byte in any repo-root markdown file either', () => {
+    const root = join(process.cwd(), '..', '..')
+    const offenders = readdirSync(root, { withFileTypes: true })
+      .filter((e) => e.isFile() && /\.md$/.test(e.name))
+      .map((e) => join(root, e.name))
+      .filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
   })
 })

@@ -1,7 +1,5 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-07-10._
-
 The MVP is feature-complete. A series of internal audit rounds found and fixed every Critical,
 High, and Medium finding plus the actionable Lows (their full reports and disposition ledgers live
 in git history and in the `architecture.md` design records). What remains below are the

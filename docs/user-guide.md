@@ -1,19 +1,5 @@
 # HilbertRaum — User Guide
 
-_Last updated: 2026-07-11 (issue #51: §13 "before unplugging" — quit, wait for the window to
-close, then safe-eject; pointer to the new troubleshooting entry on the Windows "scan and fix"
-prompt). Prior: 2026-07-10 (accuracy sweep, full-audit 2026-07-10 DOC-101…104: model downloads are
-permitted on prepared commercial drives too; document translation supports 51 languages; the
-Translate action activates without a restart after a mid-session model install; the local
-diagnostics log IS encrypted with the workspace. Same day, DOC-108/DOC-111: §5 context-size
-technical details, §6 warm-up note, §10 Developer-mode + chat-compaction switches, §11 interface
-Language, tsv in the §7 import list). Prior:
-2026-06-20 (added §8 "Ask about an image" — the Images screen; subsequent sections
-renumbered). Previously: Skills — the composer picker, the per-message skill glyph, skills
-that run local tools, and Settings → Skills; deep index + coverage meter and tiers;
-drag-and-drop files into a chat; the composite source picker; regrouped + collapsible Documents
-sidebar; audio transcription, OCR and voice dictation)_
-
 HilbertRaum is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
 **no cloud, no account, and no internet required**.
