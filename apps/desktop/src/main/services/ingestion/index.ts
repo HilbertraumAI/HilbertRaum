@@ -498,7 +498,10 @@ function insertQueuedRow(
 ): string {
   const id = randomUUID()
   const title = o.displayTitle ?? basename(filePath)
-  db.prepare(
+  // CODE-20 rider (full audit 2026-07-11): constant SQL on a per-file loop path
+  // (createQueuedDocuments runs this once per queued file) — compile once per connection.
+  prepareCached(
+    db,
     `INSERT INTO documents
        (id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message,
         pending_destination_json, origin_json, source_relative_path, source_folder_label, created_at, updated_at)
@@ -1621,6 +1624,85 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
       // HR_FORCE_REINDEX (dev): report every indexed document as outdated regardless of which
       // embedder produced its vectors, so the "needs re-index" view + "Re-index all" cover the whole
       // corpus — the lever for re-embedding everything after a chunk-size/embedder change.
+      if (force) stale = true
+      else if (activeEmbeddingModelId) stale = (embeddedCounts.get(r.id) ?? 0) === 0
+    }
+    return { ...rowToInfo(r, chunkCount, stale), collections: memberships.get(r.id) ?? [] }
+  })
+}
+
+/**
+ * CODE-21 (full audit 2026-07-11): id-targeted sibling of `listDocuments` for callers that
+ * hold a small set of ids — the chat attachment list (`registerChatIpc.listAttachments`) used
+ * to materialize the ENTIRE library (the known PF-5 load-all: every membership row, a
+ * full-corpus chunk GROUP BY, and the embeddings⋈chunks join) on every conversation switch
+ * just to return a handful of attached docs. Shares `rowToInfo` + `LIST_DOCUMENT_COLUMNS`
+ * (same narrow projection, same OCR-sidecar rule) and mirrors `listDocuments`' step order —
+ * memberships, chunk counts, the indexed-row-gated stale check, `force` — but scopes every
+ * query with `id IN (…)`, so cost tracks the id count, not the library size. Ordering matches
+ * the list path (newest first). Statements use `db.prepare`, NOT `prepareCached`: the IN
+ * arity varies per call (the documented prepareCached hard constraint).
+ */
+export function listDocumentsByIds(
+  db: Db,
+  activeEmbeddingModelId: string | null | undefined,
+  ids: string[]
+): DocumentInfo[] {
+  if (ids.length === 0) return []
+  const ph = ids.map(() => '?').join(', ')
+  const rows = db
+    .prepare(
+      `SELECT ${LIST_DOCUMENT_COLUMNS} FROM documents
+       WHERE status != 'deleted' AND id IN (${ph})
+       ORDER BY created_at DESC, rowid DESC`
+    )
+    .all(...ids) as unknown as DocumentRow[]
+  if (rows.length === 0) return []
+  const memberships = new Map<string, DocumentCollectionMembership[]>()
+  const memberRows = db
+    .prepare(
+      `SELECT dc.document_id AS documentId, c.id AS id, c.name AS name, c.type AS type, dc.role AS role
+         FROM document_collections dc JOIN collections c ON c.id = dc.collection_id
+        WHERE dc.document_id IN (${ph})`
+    )
+    .all(...ids) as Array<{ documentId: string; id: string; name: string; type: string; role: string }>
+  for (const m of memberRows) {
+    const list = memberships.get(m.documentId) ?? []
+    list.push({
+      id: m.id,
+      name: m.name,
+      type: m.type as DocumentCollectionMembership['type'],
+      role: m.role as DocumentCollectionMembership['role']
+    })
+    memberships.set(m.documentId, list)
+  }
+  const chunkCounts = new Map<string, number>()
+  for (const c of db
+    .prepare(
+      `SELECT document_id AS documentId, COUNT(*) AS n FROM chunks
+        WHERE document_id IN (${ph}) GROUP BY document_id`
+    )
+    .all(...ids) as Array<{ documentId: string; n: number }>) {
+    chunkCounts.set(c.documentId, c.n)
+  }
+  const force = forceReindexEnabled()
+  const embeddedCounts = new Map<string, number>()
+  if (activeEmbeddingModelId && !force && rows.some((r) => r.status === 'indexed')) {
+    for (const e of db
+      .prepare(
+        `SELECT c.document_id AS documentId, COUNT(*) AS n
+           FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
+          WHERE e.embedding_model_id = ? AND c.document_id IN (${ph})
+          GROUP BY c.document_id`
+      )
+      .all(activeEmbeddingModelId, ...ids) as Array<{ documentId: string; n: number }>) {
+      embeddedCounts.set(e.documentId, e.n)
+    }
+  }
+  return rows.map((r) => {
+    const chunkCount = chunkCounts.get(r.id) ?? 0
+    let stale: boolean | undefined
+    if (r.status === 'indexed' && chunkCount > 0) {
       if (force) stale = true
       else if (activeEmbeddingModelId) stale = (embeddedCounts.get(r.id) ?? 0) === 0
     }

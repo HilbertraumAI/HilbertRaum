@@ -39,7 +39,8 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { createConversation, listConversations, listMessages, appendMessage } from '../../src/main/services/chat'
-import { linkConversationDocument } from '../../src/main/services/collections'
+import { addToCollection, createCollection, getBuiltinCollection, linkConversationDocument } from '../../src/main/services/collections'
+import { listDocuments, listDocumentsByIds } from '../../src/main/services/ingestion'
 import { saveResultTable } from '../../src/main/services/tables/store'
 import type { TableSpec } from '../../src/main/services/tables'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
@@ -193,6 +194,112 @@ describe('registerChatIpc', () => {
     const other = createConversation(db, { mode: 'documents' })
     const { result: none } = await invoke(handlers, IPC.listAttachments, other.id)
     expect(none).toEqual([])
+  })
+
+  // ---- CODE-21 (full audit 2026-07-11): id-targeted attachment listing ---------------
+  // `listAttachments` used to materialize the ENTIRE library via `listDocuments` (the PF-5
+  // load-all) and filter to the attached handful. It now uses `listDocumentsByIds`, which
+  // must (a) return byte-identical results to the old filter-based path and (b) scope every
+  // aggregate with `IN (…)` — no full-table GROUP BY / membership join.
+
+  /** A mixed corpus: chunked+embedded docs (two embedder ids), memberships, a chunkless doc,
+   *  a failed doc, and a status='deleted' doc — every branch rowToInfo/stale/collections take. */
+  function seedMixedCorpus(db: Db): void {
+    const now = new Date().toISOString()
+    const insDoc = db.prepare(
+      `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
+    )
+    const insChunk = db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    const insEmb = db.prepare(
+      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    // att-a: indexed, embedded under the active model, filed into Library + a project.
+    insDoc.run('att-a', 'a.pdf', 'indexed', '2026-01-01T00:00:01Z', now)
+    insChunk.run('ch-a1', 'att-a', 0, 'alpha text', 'a.pdf', now)
+    insChunk.run('ch-a2', 'att-a', 1, 'beta text', 'a.pdf', now)
+    insEmb.run('ch-a1', 'active-model', new Uint8Array(8), 2, now)
+    insEmb.run('ch-a2', 'active-model', new Uint8Array(8), 2, now)
+    // att-b: indexed with chunks but embedded under ANOTHER model → staleEmbeddings.
+    insDoc.run('att-b', 'b.pdf', 'indexed', '2026-01-01T00:00:02Z', now)
+    insChunk.run('ch-b1', 'att-b', 0, 'gamma text', 'b.pdf', now)
+    insEmb.run('ch-b1', 'old-model', new Uint8Array(8), 2, now)
+    // att-c: failed, chunkless. att-d: deleted (must not be listed). lib-x: unattached noise.
+    insDoc.run('att-c', 'c.pdf', 'failed', '2026-01-01T00:00:03Z', now)
+    insDoc.run('att-d', 'd.pdf', 'deleted', '2026-01-01T00:00:04Z', now)
+    insDoc.run('lib-x', 'x.pdf', 'indexed', '2026-01-01T00:00:05Z', now)
+    const lib = getBuiltinCollection(db, 'library')!
+    const project = createCollection(db, 'P')
+    addToCollection(db, ['att-a', 'lib-x'], lib.id)
+    addToCollection(db, ['att-a'], project.id)
+  }
+
+  /** Order-insensitive membership compare (the grouped-join row order is unspecified). */
+  function sortedCollections(docs: Array<{ collections?: Array<{ id: string }> }>): unknown {
+    return docs.map((d) => ({ ...d, collections: [...(d.collections ?? [])].sort((a, b) => a.id.localeCompare(b.id)) }))
+  }
+
+  it('listDocumentsByIds is result-identical to the old filter-over-listDocuments path (CODE-21 equivalence)', () => {
+    const db = freshDb()
+    seedMixedCorpus(db)
+    const ids = ['att-a', 'att-b', 'att-c', 'att-d', 'att-missing']
+    const targeted = listDocumentsByIds(db, 'active-model', ids)
+    const wanted = new Set(ids)
+    const filtered = listDocuments(db, 'active-model').filter((d) => wanted.has(d.id))
+    expect(sortedCollections(targeted)).toEqual(sortedCollections(filtered))
+    // Teeth: the comparison covered real rows and every branch we seeded.
+    expect(targeted.map((d) => d.id)).toEqual(['att-c', 'att-b', 'att-a']) // newest first; deleted+missing dropped
+    expect(targeted.find((d) => d.id === 'att-a')?.staleEmbeddings).toBe(false)
+    expect(targeted.find((d) => d.id === 'att-b')?.staleEmbeddings).toBe(true)
+    expect(targeted.find((d) => d.id === 'att-a')?.collections).toHaveLength(2)
+    expect(listDocumentsByIds(db, 'active-model', [])).toEqual([])
+  })
+
+  it('listAttachments scopes every query with IN — no full-table aggregation (CODE-21)', async () => {
+    const db = freshDb()
+    seedMixedCorpus(db)
+    const conv = createConversation(db, { mode: 'documents' })
+    linkConversationDocument(db, conv.id, 'att-a')
+    linkConversationDocument(db, conv.id, 'att-b')
+    const ctx = {
+      db,
+      workspace: { isUnlocked: () => true },
+      embedder: { id: 'active-model' },
+      runtime: { active: () => null, activeModelId: () => null }
+    } as unknown as AppContext
+    registerChatIpc(ctx)
+
+    // Capture every SQL prepared while the handler runs (the ocr-meta PERF-3 guard pattern).
+    const prepared: string[] = []
+    const orig = db.prepare.bind(db)
+    Object.defineProperty(db, 'prepare', {
+      configurable: true,
+      writable: true,
+      value: (sql: string) => {
+        prepared.push(sql)
+        return orig(sql)
+      }
+    })
+    let result: Array<{ id: string }>
+    try {
+      result = (await invoke(handlers, IPC.listAttachments, conv.id)).result as Array<{ id: string }>
+    } finally {
+      Object.defineProperty(db, 'prepare', { configurable: true, writable: true, value: orig })
+    }
+    expect(result.map((d) => d.id).sort()).toEqual(['att-a', 'att-b'])
+
+    // The documents read is id-targeted (reverting to the listDocuments load-all reds this).
+    const listSql = prepared.find((s) => /FROM documents\s+WHERE status != 'deleted'/.test(s))
+    expect(listSql).toBeDefined()
+    expect(listSql).toMatch(/id IN \(/)
+    // And EVERY aggregate/join over chunks / embeddings / memberships is IN-scoped —
+    // no full-table GROUP BY rides the per-conversation-switch attachment path.
+    for (const sql of prepared.filter((s) => /GROUP BY|document_collections/.test(s))) {
+      expect(sql).toMatch(/ IN \(/)
+    }
   })
 
   it('rejects a second concurrent stream on the same conversation without clobbering the first (H3)', async () => {

@@ -732,12 +732,33 @@ unique, so the order is total.)
 Self-contained FTS5 table `fts5(text, chunk_id UNINDEXED)` — NOT external-content on
 `chunks`' implicit rowid (VACUUM may renumber implicit rowids and would silently desync
 the index; the duplicated text lives in the same workspace DB, encrypted at rest with
-it). Synced by three triggers on `chunks` (insert/delete/update-of-text), so
+it). Synced by triggers on `chunks` (insert/delete/update-of-text), so
 ingest/re-index/delete can never miss it; created + backfilled by a guarded additive
 migration in `openDatabase` (the `scope_json` precedent). Questions are sanitized into
 `MATCH` queries by `fts.ts` `buildFtsMatchQuery` (shared with conversation search, re-exported
 from `rag/hybrid.ts`): quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax in user
 text never reaches MATCH raw; ranking is `bm25()`.
+
+**Trigger sync is rowid-targeted (full-audit 2026-07-11 CODE-4).** The original delete/update
+triggers removed FTS rows by `WHERE chunk_id = old.id` — FTS5 has no index on UNINDEXED
+columns, so every per-row firing full-scanned the `%_content` shadow table: O(K·N) for a K-chunk
+delete over an N-chunk corpus, **measured 3536 ms vs 29 ms set-based (123×)** for one 250-chunk
+document delete on a 50k-chunk/~30 MB corpus, synchronous on the main process (re-index,
+document delete, every chat regenerate, conversation delete). Since CODE-4, `chunks` and
+`messages` carry a nullable `fts_rowid` handle: the insert trigger stamps it via
+`last_insert_rowid()` (the FTS `%_content` table has an *explicit* integer PK, so FTS rowids —
+unlike the base tables' implicit ones — are VACUUM-stable), and the delete/update triggers
+remove `WHERE rowid = old.fts_rowid`, an O(log N) lookup (the post-fix 250-chunk delete
+measures ~3 ms). Legacy rows (`fts_rowid` NULL) keep the exact old predicate via WHEN-split
+`_legacy` fallback triggers — a separate trigger rather than an OR because a constant conjunct
+on a virtual-table scan is evaluated per row, not short-circuited at plan time — so correctness
+never regresses, including under a rolled-back binary (triggers live in the DB file). A
+one-time idempotent migration (`ensureFtsRowidSync`, db.ts — sentinel: the live AD trigger's
+SQL) rewrites old workspaces' triggers and backfills the handles in one FTS scan; the
+`messages` twins keep the compaction `kind` guards (§15.3 R8/DATA-1) and park checkpoint rows
+at a permanently-NULL handle. Pinned by `tests/integration/fts-rowid-sync.test.ts` (timing
+bound, `EXPLAIN QUERY PLAN` rowid-lookup vs scan shape, migration idempotence, NULL-fallback
+parity).
 
 **Embedder-visibility rule (the §10 honesty story, reconciled):** keyword hits are
 restricted to chunks that have a vector under the ACTIVE embedder. Hybrid search can

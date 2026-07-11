@@ -32,7 +32,7 @@ import {
 } from '../services/chat'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { conversationAttachmentIds } from '../services/collections'
-import { listDocuments } from '../services/ingestion'
+import { listDocumentsByIds } from '../services/ingestion'
 import type { DocumentInfo } from '../../shared/types'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -174,11 +174,13 @@ export function registerChatIpc(ctx: AppContext): void {
   // chat" affordance. The link — not Temporary membership — is authoritative, so a doc the
   // user later Keeps in Library still shows here. Only indexed+linked docs appear; a
   // still-processing attachment is surfaced by the renderer's pending chip (import polling).
+  // CODE-21 (full audit 2026-07-11): id-targeted — this used to materialize the whole library
+  // (the PF-5 load-all) per conversation switch to return a handful of linked docs.
   ipcMain.handle(IPC.listAttachments, (_e, conversationId: string): DocumentInfo[] => {
     requireUnlocked()
-    const ids = new Set(conversationAttachmentIds(ctx.db, conversationId))
-    if (ids.size === 0) return []
-    return listDocuments(ctx.db, ctx.embedder.id).filter((d) => ids.has(d.id))
+    const ids = conversationAttachmentIds(ctx.db, conversationId)
+    if (ids.length === 0) return []
+    return listDocumentsByIds(ctx.db, ctx.embedder.id, ids)
   })
 
   // Full-text search across conversations. The query and the returned snippets are

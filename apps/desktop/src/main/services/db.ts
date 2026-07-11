@@ -534,15 +534,177 @@ function backfillOcrMeta(db: Db): void {
   }
 }
 
+// CODE-4 (full audit 2026-07-11) — the canonical, rowid-targeted FTS sync trigger sets.
+//
+// The original AD/AU triggers deleted `WHERE chunk_id/message_id = old.id`. FTS5 has NO index
+// on UNINDEXED columns, so every per-row trigger firing full-scanned the `%_content` shadow
+// table — O(K·N) for a K-row delete over an N-row corpus. Measured on the production schema
+// (50k chunks / ~30 MB text, in-memory): 3536 ms to delete one 250-chunk document via the
+// triggers vs 29 ms set-based (123×) — synchronous on the Electron main process, fired by
+// re-index/delete (ingestion), every regenerate, and conversation delete (chat.ts).
+//
+// The fix: a nullable `fts_rowid` handle column on `chunks`/`messages` (FTS5's `%_content`
+// table has an EXPLICIT integer PK, so FTS rowids are VACUUM-stable — unlike the base tables'
+// implicit rowids that ruled out external-content). The AI trigger stamps it via
+// `last_insert_rowid()` (which, INSIDE a trigger body, reflects the trigger's own FTS insert —
+// probed on node:sqlite/SQLite 3.50); the AD/AU triggers delete `WHERE rowid = old.fts_rowid`,
+// an O(log N) lookup (EXPLAIN QUERY PLAN "VIRTUAL TABLE INDEX 0:=", not the bare-scan "0:").
+//
+// The NULL fallback is a SEPARATE `_legacy` trigger gated by `WHEN old.fts_rowid IS NULL`
+// rather than an OR inside one DELETE: a constant conjunct on a virtual-table scan is evaluated
+// per row, not short-circuited at plan time, so a single combined predicate would still scan.
+// The WHEN split keeps the hot path provably rowid-only while legacy rows (pre-migration, or a
+// row written mid-upgrade) keep the exact old predicate — correctness never regresses, even
+// under a ROLLED-BACK binary: triggers live in the DB file, so an older app keeps stamping and
+// consuming the handle without knowing about it.
+//
+// Recursion safety: the AI-trigger `UPDATE chunks SET fts_rowid=…` cannot re-fire the AU
+// triggers (they are `UPDATE OF text`/`OF content` only), and recursive triggers are off by
+// default in SQLite.
+const CHUNKS_FTS_TRIGGERS = `
+CREATE TRIGGER chunks_fts_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunks_fts(text, chunk_id) VALUES (new.text, new.id);
+  UPDATE chunks SET fts_rowid = last_insert_rowid() WHERE id = new.id;
+END;
+
+CREATE TRIGGER chunks_fts_ad AFTER DELETE ON chunks WHEN old.fts_rowid IS NOT NULL BEGIN
+  DELETE FROM chunks_fts WHERE rowid = old.fts_rowid;
+END;
+
+CREATE TRIGGER chunks_fts_ad_legacy AFTER DELETE ON chunks WHEN old.fts_rowid IS NULL BEGIN
+  DELETE FROM chunks_fts WHERE chunk_id = old.id;
+END;
+
+CREATE TRIGGER chunks_fts_au AFTER UPDATE OF text ON chunks WHEN old.fts_rowid IS NOT NULL BEGIN
+  DELETE FROM chunks_fts WHERE rowid = old.fts_rowid;
+  INSERT INTO chunks_fts(text, chunk_id) VALUES (new.text, new.id);
+  UPDATE chunks SET fts_rowid = last_insert_rowid() WHERE id = new.id;
+END;
+
+CREATE TRIGGER chunks_fts_au_legacy AFTER UPDATE OF text ON chunks WHEN old.fts_rowid IS NULL BEGIN
+  DELETE FROM chunks_fts WHERE chunk_id = old.id;
+  INSERT INTO chunks_fts(text, chunk_id) VALUES (new.text, new.id);
+  UPDATE chunks SET fts_rowid = last_insert_rowid() WHERE id = new.id;
+END;
+`
+
+// The messages twins carry the compaction `kind` guards (R8/DATA-1) IN the canonical set, so
+// the older ensureMessagesFts*KindFilter migrations see `new.kind` present and stay no-ops on
+// every later open. Nuances beyond the chunks set:
+//   - messages_fts_ad_legacy ALSO excludes `old.kind IS 'compaction'`: a compaction row is
+//     guaranteed absent from the index (the AI guard for new rows; ensureMessagesFtsKindFilter
+//     pruned any legacy-indexed ones on the same upgrade open), so its handle is permanently
+//     NULL and without the exclusion every checkpoint-row delete would pay one legacy scan for
+//     a row that has no FTS entry at all.
+//   - the AU stamps `CASE WHEN new.kind IS NOT 'compaction' THEN last_insert_rowid() ELSE NULL
+//     END`: when the kind guard suppresses the re-insert, last_insert_rowid() is a stale value
+//     from some earlier statement and must not be stored (a plain→compaction transition parks
+//     the handle at NULL, matching the row's now-unindexed state).
+const MESSAGES_FTS_TRIGGERS = `
+CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages WHEN new.kind IS NOT 'compaction' BEGIN
+  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+  UPDATE messages SET fts_rowid = last_insert_rowid() WHERE id = new.id;
+END;
+
+CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages WHEN old.fts_rowid IS NOT NULL BEGIN
+  DELETE FROM messages_fts WHERE rowid = old.fts_rowid;
+END;
+
+CREATE TRIGGER messages_fts_ad_legacy AFTER DELETE ON messages
+WHEN old.fts_rowid IS NULL AND old.kind IS NOT 'compaction' BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+END;
+
+CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages WHEN old.fts_rowid IS NOT NULL BEGIN
+  DELETE FROM messages_fts WHERE rowid = old.fts_rowid;
+  INSERT INTO messages_fts(content, message_id)
+    SELECT new.content, new.id WHERE new.kind IS NOT 'compaction';
+  UPDATE messages SET fts_rowid = CASE WHEN new.kind IS NOT 'compaction' THEN last_insert_rowid() ELSE NULL END
+    WHERE id = new.id;
+END;
+
+CREATE TRIGGER messages_fts_au_legacy AFTER UPDATE OF content ON messages WHEN old.fts_rowid IS NULL BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+  INSERT INTO messages_fts(content, message_id)
+    SELECT new.content, new.id WHERE new.kind IS NOT 'compaction';
+  UPDATE messages SET fts_rowid = CASE WHEN new.kind IS NOT 'compaction' THEN last_insert_rowid() ELSE NULL END
+    WHERE id = new.id;
+END;
+`
+
+/**
+ * CODE-4 — populate `fts_rowid` for rows that predate the handle (the one-time backfill half
+ * of the migration; also used by the fresh-create paths, whose bulk `INSERT … SELECT` into the
+ * FTS table bypasses the AI trigger). ONE scan of the FTS table builds the id→rowid map (the
+ * per-row correlated-subquery alternative would be the very O(N²) scan this migration removes),
+ * then PK-targeted updates run inside a single transaction (the `backfillOcrMeta` pattern).
+ * Rows with no FTS entry (compaction messages; a genuinely orphaned row) keep NULL and stay on
+ * the legacy-trigger path — correct, just slow, and never re-scanned per open (the caller's
+ * trigger-DDL sentinel is the run-once guard). `target` is a compile-time union, so the
+ * interpolation cannot become an injection point.
+ */
+function backfillFtsRowids(db: Db, target: 'chunks' | 'messages'): void {
+  const fts = target === 'chunks' ? 'chunks_fts' : 'messages_fts'
+  const key = target === 'chunks' ? 'chunk_id' : 'message_id'
+  const rows = db
+    .prepare(`SELECT rowid AS r, ${key} AS id FROM ${fts}`)
+    .all() as unknown as Array<{ r: number; id: string }>
+  if (rows.length === 0) return
+  // `AND fts_rowid IS NULL` keeps this idempotent-safe: a handle the triggers already stamped
+  // (rows written after the trigger rewrite, before this backfill ran) is never clobbered.
+  const update = db.prepare(`UPDATE ${target} SET fts_rowid = ? WHERE id = ? AND fts_rowid IS NULL`)
+  db.exec('BEGIN')
+  try {
+    for (const row of rows) update.run(row.r, row.id)
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
+/**
+ * CODE-4 (full audit 2026-07-11) — upgrade a pre-fix workspace to the rowid-targeted trigger
+ * sets (see the CHUNKS_FTS_TRIGGERS comment for the why + measurements). Idempotent via the
+ * `ensureMessagesFtsKindFilter` sentinel idiom: rewrites only when the live AD trigger lacks
+ * `fts_rowid`, and backfills the handles exactly once (in the same open). Runs AFTER the FTS
+ * ensures + kind-filter migrations, so (a) the tables/columns exist, (b) the kind filters'
+ * legacy-shaped rewrites on the same upgrade open are superseded here rather than racing us,
+ * and (c) their compaction-row prune has already run, so the backfill can never map a
+ * checkpoint row (its FTS entry is gone by now).
+ */
+function ensureFtsRowidSync(db: Db): void {
+  const upgrade = (adTrigger: string, triggerNames: string[], ddl: string, target: 'chunks' | 'messages'): void => {
+    const row = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name = ?")
+      .get(adTrigger) as unknown as { sql: string } | undefined
+    if (!row || row.sql.includes('fts_rowid')) return
+    db.exec(triggerNames.map((n) => `DROP TRIGGER IF EXISTS ${n};`).join('\n') + ddl)
+    backfillFtsRowids(db, target)
+  }
+  upgrade(
+    'chunks_fts_ad',
+    ['chunks_fts_ai', 'chunks_fts_ad', 'chunks_fts_au', 'chunks_fts_ad_legacy', 'chunks_fts_au_legacy'],
+    CHUNKS_FTS_TRIGGERS,
+    'chunks'
+  )
+  upgrade(
+    'messages_fts_ad',
+    ['messages_fts_ai', 'messages_fts_ad', 'messages_fts_au', 'messages_fts_ad_legacy', 'messages_fts_au_legacy'],
+    MESSAGES_FTS_TRIGGERS,
+    'messages'
+  )
+}
+
 // The FTS5 keyword index over chunk text, used by hybrid retrieval (rag-design §11).
 // SELF-CONTAINED (text + chunk_id UNINDEXED), deliberately NOT an
 // external-content table keyed on chunks' implicit rowid — `chunks.id` is a TEXT PK, so
 // the table has only an implicit rowid, and VACUUM is documented to renumber those,
 // which would silently desync an external-content index. Sync is via triggers so no
-// ingest/reindex/delete code path can ever miss it; the one-time backfill makes an
-// older workspace searchable on first open after upgrade (guarded additive migration).
-// FTS5 availability in BOTH runtimes (Electron's bundled Node + system Node) is
-// verified.
+// ingest/reindex/delete code path can ever miss it (rowid-targeted since CODE-4 — see
+// CHUNKS_FTS_TRIGGERS above); the one-time backfill makes an older workspace searchable
+// on first open after upgrade (guarded additive migration). FTS5 availability in BOTH
+// runtimes (Electron's bundled Node + system Node) is verified.
 function ensureChunksFts(db: Db): void {
   const exists = db
     .prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_fts'")
@@ -550,22 +712,12 @@ function ensureChunksFts(db: Db): void {
   if (exists) return
   db.exec(`
 CREATE VIRTUAL TABLE chunks_fts USING fts5(text, chunk_id UNINDEXED);
-
-CREATE TRIGGER chunks_fts_ai AFTER INSERT ON chunks BEGIN
-  INSERT INTO chunks_fts(text, chunk_id) VALUES (new.text, new.id);
-END;
-
-CREATE TRIGGER chunks_fts_ad AFTER DELETE ON chunks BEGIN
-  DELETE FROM chunks_fts WHERE chunk_id = old.id;
-END;
-
-CREATE TRIGGER chunks_fts_au AFTER UPDATE OF text ON chunks BEGIN
-  DELETE FROM chunks_fts WHERE chunk_id = old.id;
-  INSERT INTO chunks_fts(text, chunk_id) VALUES (new.text, new.id);
-END;
-
+${CHUNKS_FTS_TRIGGERS}
 INSERT INTO chunks_fts(text, chunk_id) SELECT text, id FROM chunks;
 `)
+  // The bulk INSERT above writes the FTS table directly (no chunks trigger fires), so a
+  // pre-FTS workspace's existing chunks still carry a NULL handle — stamp them now (CODE-4).
+  backfillFtsRowids(db, 'chunks')
 }
 
 // The FTS5 index over message text, used by conversation search.
@@ -589,23 +741,11 @@ function ensureMessagesFts(db: Db): void {
   if (exists) return
   db.exec(`
 CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);
-
-CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages WHEN new.kind IS NOT 'compaction' BEGIN
-  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
-END;
-
-CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN
-  DELETE FROM messages_fts WHERE message_id = old.id;
-END;
-
-CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages BEGIN
-  DELETE FROM messages_fts WHERE message_id = old.id;
-  INSERT INTO messages_fts(content, message_id)
-    SELECT new.content, new.id WHERE new.kind IS NOT 'compaction';
-END;
-
+${MESSAGES_FTS_TRIGGERS}
 INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages WHERE kind IS NOT 'compaction';
 `)
+  // As in ensureChunksFts: the bulk INSERT bypasses the AI trigger — stamp the handles (CODE-4).
+  backfillFtsRowids(db, 'messages')
 }
 
 /**
@@ -897,10 +1037,16 @@ export function openDatabase(path: string): Db {
   // run_id indexes (DB-7) deliberately OMITTED: run_id is only ever INSERTed, never joined or
   // filtered anywhere in the codebase, so an index would be pure write-amplification on USB with
   // no read benefit. Add one alongside the first query that joins on run_id.
+  // CODE-4 (full audit 2026-07-11): the FTS rowid handle columns — added BEFORE the FTS
+  // ensures below, whose triggers read and stamp them. Additive + nullable (NULL = legacy
+  // row, served by the `_legacy` fallback triggers; see CHUNKS_FTS_TRIGGERS).
+  ensureColumn(db, 'chunks', 'fts_rowid', 'fts_rowid INTEGER')
+  ensureColumn(db, 'messages', 'fts_rowid', 'fts_rowid INTEGER')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   ensureMessagesFtsKindFilter(db)
   ensureMessagesFtsUpdateKindFilter(db)
+  ensureFtsRowidSync(db)
   seedCollections(db)
   return db
 }

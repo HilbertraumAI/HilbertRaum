@@ -11129,9 +11129,42 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     changes (behavior now matches what user-guide already implies). Residuals in the plan's
     discoveries: the state-unknown give-up has no renderer dismissal affordance yet (safe-side;
     F2 rider), and ChatScreen's third `cancelActiveDocTask` site swallows its failure via an
-    explicit catch (CODE-39 class, F2). Remaining phases D, E, F2, G–J unstarted.
+    explicit catch (CODE-39 class, F2).
+    **Phase D DONE (2026-07-11 — FTS delete-trigger scan CODE-4 + DB batching CODE-20/21):**
+    (a) CODE-4 **Option 1** (the real fix, decision made at session start; all load-bearing
+    assumptions probed first — see the plan's discoveries): nullable `fts_rowid` handle column
+    on `chunks`/`messages` (`ensureColumn`); the AI triggers stamp it via `last_insert_rowid()`
+    (verified to reflect the trigger's own FTS5 insert), the AD/AU triggers delete
+    `WHERE rowid = old.fts_rowid` — an O(log N) lookup (EQP `VIRTUAL TABLE INDEX 0:=`) instead
+    of the per-row full shadow-table scan (`INDEX 0:`) that made a 250-chunk document delete
+    cost **3536 ms (measured 123×; reproduced 3578 ms → 3.3 ms post-fix)** on a 50k-chunk
+    corpus, synchronous on the main process (re-index, doc delete, every regenerate,
+    conversation delete). Legacy rows (NULL handle) keep the exact old predicate via WHEN-split
+    `_legacy` fallback triggers (a constant conjunct on a virtual-table scan doesn't
+    short-circuit — separate triggers keep the hot path provably rowid-only), so correctness
+    never regresses, incl. under a rolled-back binary (triggers live in the DB file). One-time
+    idempotent migration `ensureFtsRowidSync` (sentinel: the live AD trigger's SQL, the
+    kind-filter idiom) + a single-FTS-scan JS backfill (`backfillFtsRowids`, the ocr-meta
+    pattern); messages keep the R8/DATA-1 compaction guards in the canonical trigger set
+    (checkpoint rows park at NULL, excluded from the legacy AD scan). Characterization-first:
+    all 7 intended assertions watched red (timing >100 ms, trigger DDL, migration). (b) CODE-20
+    `addToCollection`/`removeFromCollection`/`setDocumentsLifecycle` now run their loops in ONE
+    BEGIN…COMMIT/ROLLBACK (`runBatch`, the createQueuedDocuments idiom — one USB fsync per
+    batch AND all-or-nothing; 3 poisoned-id mid-batch tests watched red first) + rider:
+    `insertQueuedRow`'s constant INSERT hoisted to `prepareCached`. (c) CODE-21
+    `listDocumentsByIds(db, embedderId, ids)` in ingestion — shares `rowToInfo` +
+    `LIST_DOCUMENT_COLUMNS`, every aggregate `IN (…)`-scoped (dynamic arity → `db.prepare`, the
+    documented prepareCached constraint); `listAttachments` uses it instead of materializing
+    the whole library per conversation switch (the PF-5 load-all chat rider). Tests +12:
+    `fts-rowid-sync.test.ts` (timing bound ≤100 ms on the 50k fixture, EQP plan shape,
+    plain-SQL sync parity, legacy NULL fallback, compaction NULL handles, pre-fix + pre-FTS
+    migration idempotence ×2 opens), 3 CODE-20 all-or-nothing, CODE-21 equivalence over a mixed
+    fixture + the prepare-spy no-full-table-aggregation guard. Docs: rag-design.md §11
+    "Trigger sync is rowid-targeted". known-limitations PF-5 bullet unchanged (it describes the
+    documents-screen list path, which still loads the whole library — unchanged scope).
+    Remaining phases E, F2, G–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase F1 — CODE-6/7/26/27/28/29 renderer error-surface class, +8 tests): typecheck clean, 4091 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase D — CODE-4 FTS rowid-targeted triggers + CODE-20/21 DB batching, +12 tests): typecheck clean, 4103 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

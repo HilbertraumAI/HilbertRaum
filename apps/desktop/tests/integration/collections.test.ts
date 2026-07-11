@@ -23,7 +23,8 @@ import {
   removeFromCollection,
   renameCollection,
   resolveScope,
-  setCollectionArchived
+  setCollectionArchived,
+  setDocumentsLifecycle
 } from '../../src/main/services/collections'
 import {
   createConversation,
@@ -169,6 +170,58 @@ describe('collection CRUD + membership', () => {
     expect(docLifecycle('weird')).toBe('permanent')
     expect(docLifecycle('temporary')).toBe('temporary')
     expect(docLifecycle('archived')).toBe('archived')
+  })
+})
+
+// ---- CODE-20 (full audit 2026-07-11): bulk filing is transactional -------------------
+//
+// The three bulk membership/lifecycle helpers used to run one auto-commit (= one USB fsync)
+// per row, so a mid-batch failure left the batch HALF-applied. Each is now one
+// BEGIN…COMMIT/ROLLBACK (the createQueuedDocuments idiom): a poisoned id anywhere in the
+// batch must leave the rows written BEFORE it untouched — all-or-nothing.
+
+describe('bulk filing is transactional (CODE-20)', () => {
+  it('addToCollection: an FK-poisoned id mid-batch rolls back the rows already inserted', () => {
+    const db = freshDb()
+    const project = createCollection(db, 'P')
+    seedDoc(db, 'd1')
+    seedDoc(db, 'd2')
+    // 'ghost' has no documents row → the enforced FK on document_collections throws mid-loop.
+    expect(() => addToCollection(db, ['d1', 'ghost', 'd2'], project.id)).toThrow(/FOREIGN KEY/)
+    // All-or-nothing: d1 (inserted before the poison) must NOT remain filed.
+    expect(documentIdsInCollection(db, project.id)).toEqual([])
+    // The connection is reusable (the ROLLBACK left no open transaction).
+    addToCollection(db, ['d1', 'd2'], project.id)
+    expect(documentIdsInCollection(db, project.id).sort()).toEqual(['d1', 'd2'])
+  })
+
+  it('removeFromCollection: a bind-poisoned id mid-batch keeps the earlier memberships', () => {
+    const db = freshDb()
+    const project = createCollection(db, 'P')
+    seedDoc(db, 'd1')
+    seedDoc(db, 'd2')
+    addToCollection(db, ['d1', 'd2'], project.id)
+    // A non-bindable id (an object) makes stmt.run throw after d1's delete already ran.
+    const poisoned = ['d1', {} as unknown as string, 'd2']
+    expect(() => removeFromCollection(db, poisoned, project.id)).toThrow()
+    expect(documentIdsInCollection(db, project.id).sort()).toEqual(['d1', 'd2'])
+  })
+
+  it('setDocumentsLifecycle: a bind-poisoned id mid-batch keeps the earlier lifecycles', () => {
+    const db = freshDb()
+    seedDoc(db, 'd1')
+    seedDoc(db, 'd2')
+    const poisoned = ['d1', {} as unknown as string, 'd2']
+    expect(() => setDocumentsLifecycle(db, poisoned, 'temporary')).toThrow()
+    const rows = db
+      .prepare('SELECT id, lifecycle FROM documents ORDER BY id')
+      .all() as unknown as Array<{ id: string; lifecycle: string | null }>
+    // All-or-nothing: d1's update (which ran before the poison) was rolled back.
+    expect(rows.map((r) => r.lifecycle)).toEqual([null, null])
+    setDocumentsLifecycle(db, ['d1', 'd2'], 'temporary')
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM documents WHERE lifecycle = 'temporary'").get() as unknown as { n: number }).n
+    ).toBe(2)
   })
 })
 

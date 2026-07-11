@@ -163,8 +163,35 @@ export function deleteCollection(db: Db, id: string): void {
 }
 
 /**
+ * CODE-20 (full audit 2026-07-11): run a bulk membership/lifecycle loop inside ONE
+ * BEGIN…COMMIT (the `createQueuedDocuments` idiom, ingestion/index.ts). Each row used to be
+ * its own fsync'd auto-commit — a multi-second main-process stall filing hundreds of docs on
+ * the high-latency USB drive (the per-row pattern DB-1 eliminated elsewhere) — and a
+ * mid-batch failure left the batch HALF-applied. One transaction makes the batch a single
+ * commit AND all-or-nothing: a failure ROLLBACKs and rethrows, so nothing is half-filed. The
+ * txn body stays synchronous. No caller holds an open transaction (verified: the filing
+ * entry points — the docs IPC handlers, `fileFromPendingDestination` via the import loop /
+ * `reindexDocument` — all run outside one).
+ */
+function runBatch(db: Db, apply: () => void): void {
+  db.exec('BEGIN')
+  try {
+    apply()
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
+    throw err
+  }
+}
+
+/**
  * Add documents to a collection (idempotent — `ON CONFLICT DO NOTHING` on the composite PK,
  * so re-adding is a no-op and a shared document keeps its single chunk/vector set, plan §8.4).
+ * Transactional per batch (CODE-20): all-or-nothing, one commit.
  */
 export function addToCollection(
   db: Db,
@@ -178,18 +205,24 @@ export function addToCollection(
      VALUES (?, ?, ?, ?)
      ON CONFLICT (document_id, collection_id) DO NOTHING`
   )
-  for (const docId of documentIds) stmt.run(docId, collectionId, role, now)
+  runBatch(db, () => {
+    for (const docId of documentIds) stmt.run(docId, collectionId, role, now)
+  })
 }
 
-/** Remove documents from a collection (no-op for documents that were not members). */
+/** Remove documents from a collection (no-op for documents that were not members).
+ *  Transactional per batch (CODE-20): all-or-nothing, one commit. */
 export function removeFromCollection(db: Db, documentIds: string[], collectionId: string): void {
   const stmt = db.prepare(
     'DELETE FROM document_collections WHERE collection_id = ? AND document_id = ?'
   )
-  for (const docId of documentIds) stmt.run(collectionId, docId)
+  runBatch(db, () => {
+    for (const docId of documentIds) stmt.run(collectionId, docId)
+  })
 }
 
-/** Set the retention lifecycle on documents (plan §8.2; 'permanent'|'temporary'|'archived'). */
+/** Set the retention lifecycle on documents (plan §8.2; 'permanent'|'temporary'|'archived').
+ *  Transactional per batch (CODE-20): all-or-nothing, one commit. */
 export function setDocumentsLifecycle(
   db: Db,
   documentIds: string[],
@@ -197,7 +230,9 @@ export function setDocumentsLifecycle(
 ): void {
   const now = nowIso()
   const stmt = db.prepare('UPDATE documents SET lifecycle = ?, updated_at = ? WHERE id = ?')
-  for (const docId of documentIds) stmt.run(lifecycle, now, docId)
+  runBatch(db, () => {
+    for (const docId of documentIds) stmt.run(lifecycle, now, docId)
+  })
 }
 
 /**
