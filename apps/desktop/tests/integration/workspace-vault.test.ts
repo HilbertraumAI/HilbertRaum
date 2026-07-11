@@ -713,6 +713,63 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
+  // CODE-1 review follow-up F1: shredFile is best-effort, so a CONSUMED `.recovery` can
+  // outlive its unlink (Windows: AV/search indexer holding the file without
+  // FILE_SHARE_DELETE). The unlock-side roll-forward must apply the same freshness +
+  // header guards as the init() salvage — unguarded, the leftover silently rolls the
+  // vault BACK (stale snapshot re-encrypted on every later unlock) or destroys it
+  // (shred-garbage encrypted over the good `.enc`).
+
+  it('CODE-1b guard (F1): a stale .recovery that outlived its shred never rolls back a fresher .enc', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    failedLockState(vp) // `.enc` stale; the working file holds 7171
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init() // → `.recovery` snapshot (7171)
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    const staleSnapshot = readFileSync(recoveryPath)
+
+    ctl.unlock('pw') // the roll-forward consumes the snapshot …
+    updateSettings(ctl.requireDb(), { contextTokens: 9292 }) // … and the session moves ON
+    ctl.lock() // `.enc` now holds the FRESHER 9292
+
+    // The failed-unlink aftermath: the spent snapshot re-appears, OLDER than `.enc`.
+    writeFileSync(recoveryPath, staleSnapshot)
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(recoveryPath, past, past)
+
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(9292) // NOT rolled back to 7171
+    expect(existsSync(recoveryPath)).toBe(false) // and the leftover was cleaned up
+    ctl.lock()
+    // Durable: the fresher data still unlocks after the leftover is gone.
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(9292)
+    ctl.lock()
+  })
+
+  it('CODE-1b guard (F1): a garbage (shred-overwritten) .recovery is never encrypted over the good .enc', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    updateSettings(db, { contextTokens: 6161 })
+    lockEncryptedVault(vp, db, key)
+
+    // The failed-unlink aftermath of a shred whose OVERWRITE ran: random bytes, not
+    // older than `.enc`, no SQLite header. Unguarded, unlock would encrypt this over
+    // `.enc` (GCM verifies fine — it is our own ciphertext) and openDatabase would then
+    // fail: the workspace destroyed.
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    writeFileSync(recoveryPath, randomBytes(4096))
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161) // data intact
+    expect(existsSync(recoveryPath)).toBe(false) // leftover shredded, not rolled forward
+    ctl.lock()
+  })
+
   // NB: the CODE-10 fsync-before-rename and CODE-14 rename-ordering WIRING pins live in
   // workspace-vault-durability.test.ts — they need `vi.mock('node:fs')` (a plain spy on
   // the externalized builtin does not intercept the module's internal calls).

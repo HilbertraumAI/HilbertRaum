@@ -397,8 +397,17 @@ explicitly:
   data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer
   than `.enc`** by mtime, **no live `-wal`/`-shm`** — the checkpoint + close ran — and a
   valid SQLite header) and moves it aside as `<db>.recovery`; the next successful unlock
-  re-encrypts it over the stale `.enc` (roll-forward) before the normal decrypt. Anything
-  not matching that narrow signature is shredded as before.
+  re-encrypts it over the stale `.enc` (roll-forward) before the normal decrypt. The
+  roll-forward re-applies the same freshness + header guards at unlock (a best-effort
+  shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
+  it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
+  good `.enc`). Anything not matching that narrow signature is shredded as before.
+  **Part of this decision is a confidentiality trade:** after a failed lock + quit, the
+  session's data rests on the drive **in plaintext** as `<db>.recovery` until the next
+  successful unlock secures it — previously that leftover was shredded at the next launch
+  (at the cost of silently losing it). Availability of the user's data wins in this
+  already-failed corner; the exposure window ends at the next unlock, when the snapshot
+  is re-encrypted and shredded.
 - **fsync before the atomic rename (CODE-10).** `encryptFile`/`encryptFileAsync` fsync the
   written frame before renaming it into place (the `writeVaultDescriptor` idiom). Without
   it, quit → unplug-without-eject on a non-write-through mount could land a truncated

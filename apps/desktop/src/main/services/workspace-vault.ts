@@ -905,9 +905,26 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   // and fsyncs — CODE-10), shred it, and continue with the normal unlock, which decrypts
   // the freshly written `.enc` right back. If the re-encrypt fails (e.g. the disk is
   // still full) the snapshot survives under `.recovery` for the next attempt.
+  //
+  // The roll-forward is GUARDED like the init() salvage (CODE-1 review follow-up F1):
+  // shredFile is best-effort, so a CONSUMED `.recovery` can outlive its unlink (Windows:
+  // AV/search indexer holding the file without FILE_SHARE_DELETE). Unguarded, that
+  // leftover would (a) if still intact, re-encrypt a now-STALE snapshot over the fresh
+  // `.enc` on every later unlock — a silent recurring rollback of everything since the
+  // failed lock — or (b) if the shred's random-overwrite ran but the unlink failed,
+  // encrypt GARBAGE over the good `.enc` (GCM verifies fine — it is our own ciphertext)
+  // and destroy the workspace. So roll forward only a snapshot that is still the
+  // freshest data: a real SQLite file (header) strictly NEWER than `.enc` (mtime; a
+  // missing `.enc` counts as older — restoring an unlockable vault beats none). Anything
+  // else is a spent or corrupt leftover: shred it (retrying the failed unlink) and
+  // unlock normally.
   const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
   if (existsSync(recoveryPath)) {
-    encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
+    const fresher =
+      fileHasSqliteHeader(recoveryPath) &&
+      (!existsSync(vaultPaths.encPath) ||
+        statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
+    if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
     shredFile(recoveryPath)
   }
   // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay

@@ -11054,10 +11054,18 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     with teeth via `vi.mock('node:fs')` — fsync-before-rename, staged→descriptor→swap rename order;
     plain `vi.spyOn` on the externalized builtin does NOT intercept, recorded in the plan's
     discoveries). Docs: security-model "Lock failure & durability" (incl. the now-RECORDED accepted
-    power-cut trade-off decision), troubleshooting "Could not lock the workspace". Remaining phases
-    C–J unstarted.
+    power-cut trade-off decision), troubleshooting "Could not lock the workspace". **Review
+    follow-up F1 (fixed, +2 red-verified tests):** the unlock roll-forward is now guarded like the
+    init() salvage (SQLite header + strictly-newer-than-`.enc` mtime) — a spent `.recovery` that
+    outlived its best-effort shred (Windows AV/indexer unlink failure) could otherwise silently roll
+    the vault BACK on every later unlock, or encrypt shred-garbage over the good `.enc`. F2 rider:
+    security-model additionally records the CODE-1b confidentiality trade (plaintext `.recovery`
+    rests on the drive until the next successful unlock secures it). F3 residual registered in the
+    plan (failed interactive lock + immediate hard kill still shreds — the CODE-1a reopen recreates
+    `-wal`/`-shm`; inside the power-cut trade-off; the QUIT path is covered by `shutdown()`).
+    Remaining phases C–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase B — CODE-1/10/14 vault-lock durability, +11 tests): typecheck clean, 4064 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase B — CODE-1/10/14 vault-lock durability incl. the F1 review follow-up, +13 tests): typecheck clean, 4066 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2
