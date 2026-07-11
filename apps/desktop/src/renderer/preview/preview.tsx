@@ -4,8 +4,9 @@
 //
 // Add a case: extend CASES below with a label + an element. Keep the mock data inline so a case is
 // self-describing. This file is dev-only (never bundled into the shipped app).
+import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DEFAULT_SETTINGS, type Collection, type Conversation, type DocumentInfo, type ModelInfo, type SkillInfo } from '@shared/types'
+import { DEFAULT_SETTINGS, type Collection, type Conversation, type DocumentInfo, type Message, type ModelInfo, type SkillInfo } from '@shared/types'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../i18n'
 import { ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
@@ -452,6 +453,160 @@ CASES['context-meter-de'] = { ...CASES['context-meter'], label: `${CASES['contex
 CASES['models-de'] = { ...CASES.models, label: `${CASES.models.label} — DE` }
 CASES['scope-chip-de'] = { ...CASES['scope-chip'], label: `${CASES['scope-chip'].label} — DE` }
 CASES['coverage-line-de'] = { ...CASES['coverage-line'], label: `${CASES['coverage-line'].label} — DE` }
+
+
+// ---- Marketing staged chat (website/press screenshots) ------------------------------------------
+// A full app-shell chat showing a finished, entirely FICTIONAL spending answer — no real user
+// data ever appears in marketing captures. `?case=marketing-spending` (EN) / `-de` (DE). The
+// wrapper walks the real UI (rail → Chat → conversation row) so the capture is the actual
+// product rendering, not a mock composition. Dark theme is forced (the website is dark).
+const mktCase = (): string => new URLSearchParams(location.search).get('case') ?? ''
+const isMkt = (): boolean => mktCase().startsWith('marketing-spending')
+const mktDe = (): boolean => mktCase().endsWith('-de')
+
+const MKT_ANSWER_EN = [
+  'Based on your bank statements, your largest spending category last year was **housing**. Here is the full breakdown:',
+  '',
+  '1. **Rent** — **€13,140** total (€1,095 monthly, January–December) [S2].',
+  '2. **Groceries & household** — **€4,870** across 214 transactions [S4].',
+  '3. **Car & transport** — **€3,205**: fuel €1,610, insurance €780 [S7], repairs €815 [S9].',
+  '4. **Insurance** — **€2,455**: health top-up €1,270 [S3], household contents €310, personal liability €185, life insurance €690 [S6].',
+  '5. **Travel** — **€1,980**: flights in May and September plus three hotel stays [S8].',
+  '',
+  'The largest *single* transaction was **€2,140** on 14.08.2025 — a dental invoice [S5].',
+  '',
+  'Together these five categories account for roughly **71%** of your total spending of **€35,900** last year [S1].'
+].join('\n')
+const MKT_ANSWER_DE = [
+  'Auf Basis deiner Kontoauszüge war deine größte Ausgabenkategorie im letzten Jahr **Wohnen**. Hier die vollständige Aufschlüsselung:',
+  '',
+  '1. **Miete** — **13.140 €** gesamt (1.095 € monatlich, Januar–Dezember) [S2].',
+  '2. **Lebensmittel & Haushalt** — **4.870 €** in 214 Transaktionen [S4].',
+  '3. **Auto & Verkehr** — **3.205 €**: Tanken 1.610 €, Versicherung 780 € [S7], Reparaturen 815 € [S9].',
+  '4. **Versicherungen** — **2.455 €**: private Krankenzusatzversicherung 1.270 € [S3], Hausrat 310 €, Haftpflicht 185 €, Lebensversicherung 690 € [S6].',
+  '5. **Reisen** — **1.980 €**: Flüge im Mai und September plus drei Hotelaufenthalte [S8].',
+  '',
+  'Die größte *Einzeltransaktion* war **2.140 €** am 14.08.2025 — eine Zahnarztrechnung [S5].',
+  '',
+  'Zusammen machen diese fünf Kategorien rund **71 %** deiner Gesamtausgaben von **35.900 €** im letzten Jahr aus [S1].'
+].join('\n')
+
+function mktConversations(): Conversation[] {
+  const de = mktDe()
+  const mk = (id: string, title: string): Conversation => ({
+    ...conv(id, title, null),
+    mode: 'documents' as Conversation['mode']
+  })
+  return [
+    mk('m1', de ? 'Ausgabenübersicht 2025' : 'Spending overview 2025'),
+    { ...conv('m2', de ? 'Mietvertrag: Kündigungsklauseln' : 'Rental contract clauses', null) },
+    { ...conv('m3', de ? 'Versicherungsbrief zusammengefasst' : 'Insurance letter summary', null) }
+  ]
+}
+function mktMessages(): Message[] {
+  const de = mktDe()
+  return [
+    {
+      id: 'mm1',
+      conversationId: 'm1',
+      role: 'user',
+      content: de ? 'Wofür habe ich letztes Jahr am meisten Geld ausgegeben?' : 'What did I spend the most money on last year?',
+      createdAt: now
+    },
+    {
+      id: 'mm2',
+      conversationId: 'm1',
+      role: 'assistant',
+      content: de ? MKT_ANSWER_DE : MKT_ANSWER_EN,
+      createdAt: now
+    }
+  ]
+}
+// Case-aware overrides: the marketing case swaps in its own conversations/messages and
+// forces the dark theme; every other case keeps the exact behavior above.
+const baseListConversations = overrides.listConversations as () => Promise<Conversation[]>
+overrides.listConversations = async () => (isMkt() ? mktConversations() : baseListConversations())
+overrides.listMessages = async () => (isMkt() ? mktMessages() : [])
+const baseGetSettings = overrides.getSettings as () => Promise<typeof DEFAULT_SETTINGS>
+overrides.getSettings = async () => {
+  const s = await baseGetSettings()
+  // Force theme AND UI language: settings-driven language resolution would otherwise follow
+  // the OS locale, mixing e.g. German chrome into the English capture.
+  return isMkt() ? { ...s, theme: 'dark', uiLanguage: mktDe() ? 'de' : 'en' } : s
+}
+const baseGetRuntimeStatus = overrides.getRuntimeStatus as () => Promise<Record<string, unknown>>
+overrides.getRuntimeStatus = async () => {
+  const st = await baseGetRuntimeStatus()
+  // A believable model name in the header hint instead of the mock id.
+  return isMkt() ? { ...st, modelId: 'qwen3.5-35b-a3b-q4kxl' } : st
+}
+overrides.listDocuments = async () => {
+  if (!isMkt()) return DOCUMENTS
+  const de = mktDe()
+  const names = de
+    ? ['kontoauszuege-2025-q1.pdf', 'kontoauszuege-2025-q2.pdf', 'kontoauszuege-2025-q3.pdf',
+       'kontoauszuege-2025-q4.pdf', 'kreditkarte-2025.csv', 'mietvertrag-2024.pdf',
+       'versicherungspolicen.pdf', 'gehaltsabrechnungen-2025.pdf', 'steuerbescheid-2024.pdf',
+       'rechnungen-haushalt-2025.pdf']
+    : ['bank-statements-2025-q1.pdf', 'bank-statements-2025-q2.pdf', 'bank-statements-2025-q3.pdf',
+       'bank-statements-2025-q4.pdf', 'credit-card-2025.csv', 'rental-contract-2024.pdf',
+       'insurance-policies.pdf', 'payslips-2025.pdf', 'tax-assessment-2024.pdf',
+       'household-invoices-2025.pdf']
+  return names.map((n, i) => docRow(`mkt-d${i + 1}`, n))
+}
+
+function StagedMarketingChat(): JSX.Element {
+  // Walk the real UI once the shell has rendered: rail "Chat" → the staged conversation.
+  // Marks body[data-marketing-ready] for the screenshot script when the transcript is up.
+  useEffect(() => {
+    document.documentElement.dataset.theme = 'dark'
+    // The settings load can remount the tree (language/theme application) AFTER a first
+    // successful walk, resetting the selection — so keep walking until the transcript has
+    // been continuously present for a few ticks, and only then mark the capture ready.
+    let tries = 0
+    let stable = 0
+    const timer = setInterval(() => {
+      tries += 1
+      if (tries > 120) {
+        clearInterval(timer)
+        return
+      }
+      if (document.querySelector('.msg-content')) {
+        stable += 1
+        if (stable >= 5) {
+          document.body.dataset.marketingReady = '1'
+          clearInterval(timer)
+        }
+        return
+      }
+      stable = 0
+      delete document.body.dataset.marketingReady
+      const row = document.querySelector<HTMLButtonElement>('.chat-conv-row button')
+      if (row) {
+        row.click()
+        return
+      }
+      const chatNav = Array.from(document.querySelectorAll<HTMLButtonElement>('.nav-item')).find(
+        (b) => b.querySelector('.nav-label')?.textContent === 'Chat'
+      )
+      chatNav?.click()
+    }, 100)
+    return () => clearInterval(timer)
+  }, [])
+  return <App />
+}
+CASES['marketing-spending'] = {
+  label: 'Marketing — full shell, staged fictional spending answer (dark)',
+  node: (
+    <div style={{ width: 1180, height: 800 }}>
+      <StagedMarketingChat />
+    </div>
+  )
+}
+CASES['marketing-spending-de'] = {
+  ...CASES['marketing-spending'],
+  label: 'Marketing — full shell, staged fictional spending answer (dark) — DE'
+}
 
 const params = new URLSearchParams(location.search)
 const caseId = params.get('case') ?? 'documents'
