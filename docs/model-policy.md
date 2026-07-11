@@ -66,9 +66,10 @@ Sizes/RAM come from each manifest
 > profiles` (that list is only the legacy no-RAM path, which is one-model-per-profile). Rather
 > than mis-encode the **Phase-29** winners there, each manifest carries a `recommendation_rank`
 > (higher = preferred) that the picker now uses as the tiebreak among models that fit the
-> machine's RAM (the **quality-aware recommender** follow-up — `model-benchmarks.md` §6.2). Net
-> effect on real hardware: **≤12 GB → Qwen3-4B (default, keeps Deep), 16–24 GB → Ministral 8B,
-> ≥32 GB → Gemma 4 12B**; Granite (loser) and the 30B MoE (opt-in) are never auto-recommended.
+> machine's RAM (the **quality-aware recommender** follow-up — `model-benchmarks.md` §6.2, tiers
+> since recalibrated by §6.3). Net effect on real hardware (§6.3 / issue #48, 2026-07-11; asserted
+> in `benchmark.test.ts`): **≤12 GB → Qwen3-4B (default, keeps Deep), 16–20 GB → Ministral 8B,
+> ≥24 GB → Gemma 4 12B**; Granite (loser) and the 30B MoE (opt-in) are never auto-recommended.
 > The "Auto-tier" column above is the declared `recommended_profiles` (kept as-is); the live
 > recommendation is `recommendation_rank` + RAM-best-fit.
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,

@@ -139,7 +139,11 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
     await user.click(await screen.findByRole('menuitem', { name: /^summarize$/i }))
     await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
-    expect(cancelDocTask).toHaveBeenCalled()
+    // full-audit 2026-07-11 CODE-47: assert the EXACT args so cancelling the wrong task can't
+    // stay green. The row Cancel routes through `cancelActiveDocTask()`, the no-arg active-task
+    // fallback (`cancelDocTask(null)` server-side — manager.ts), so the truthful teeth-giving
+    // pin is zero args; any stale/foreign jobId slipping in would redden this.
+    expect(cancelDocTask).toHaveBeenCalledWith()
   })
 
   // full-audit 2026-07-11 CODE-29: the row's Cancel was fire-and-forget (`void

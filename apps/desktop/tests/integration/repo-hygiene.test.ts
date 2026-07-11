@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
@@ -22,5 +22,29 @@ describe('repo hygiene — lockfile discipline (issue #49)', () => {
   it('declares the npm engines floor alongside the node one', () => {
     expect(rootPkg.engines?.node).toBeDefined()
     expect(rootPkg.engines?.npm).toBeDefined()
+  })
+})
+
+// full-audit 2026-07-11 CODE-24/DOC-12: `analysis/extract.ts` carried a LITERAL NUL byte (a
+// hash-domain separator) which made git treat the file as binary — unreviewable text diffs, and
+// ripgrep silently skips it (the audit's own greps missed the file). It was rewritten to the
+//   escape (byte-identical). This net bans any new literal NUL under src/** so the whole class
+// can't regress: a domain separator or delimiter must always be written as an escape.
+describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
+  const srcRoot = join(process.cwd(), 'src')
+
+  const walk = (dir: string): string[] => {
+    const out: string[] = []
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) out.push(...walk(p))
+      else if (/\.(ts|tsx|js|jsx|json|css|md|html)$/.test(entry.name)) out.push(p)
+    }
+    return out
+  }
+
+  it('holds no 0x00 byte in any src file (git must see them all as text)', () => {
+    const offenders = walk(srcRoot).filter((p) => readFileSync(p).includes(0))
+    expect(offenders).toEqual([])
   })
 })

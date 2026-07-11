@@ -202,7 +202,10 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
     await openTranslateModal(user)
     await chooseAndStart(user, 'de', 'en')
     await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
-    expect(cancelDocTask).toHaveBeenCalled()
+    // full-audit 2026-07-11 CODE-47: pin the EXACT args — the row Cancel is the no-arg
+    // active-task fallback (`cancelActiveDocTask()` → `cancelDocTask(null)` server-side), so zero
+    // args is the truthful teeth-giving assertion; a stray/foreign jobId would redden this.
+    expect(cancelDocTask).toHaveBeenCalledWith()
   })
 
   it('surfaces the friendly failure copy (e.g. password change in progress)', async () => {

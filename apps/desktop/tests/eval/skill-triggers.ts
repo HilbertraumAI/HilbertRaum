@@ -260,7 +260,8 @@ const pct = (v: number | null): string => (v == null ? '  n/a' : `${(v * 100).to
 
 /**
  * A human-readable baseline report (metrics + confusion only — NO question text). This is what gets
- * transcribed into skills-s13-plan.md §3.3 for the owner to set D1/D2.
+ * transcribed into the `architecture.md` §18 record (S13a suggestion-selector baseline) for the owner
+ * to set D1/D2 — its durable home since `skills-s13-plan.md` §3.3 was deleted at S13 close.
  */
 export function formatReport(results: PolicyResult[], corpusSize: number): string {
   const lines: string[] = []

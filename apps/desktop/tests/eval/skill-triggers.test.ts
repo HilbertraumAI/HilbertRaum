@@ -158,10 +158,11 @@ describe('S13a privacy — the harness scores questions but never logs them (§6
   })
 })
 
-// MEASUREMENT: print the baseline so `npm test` surfaces the numbers (still transcribed into
-// skills-s13-plan.md §3.3). KEPT as a measurement — the hard gate-assertion lives in its own block
-// below so the printout survives even if the bar regresses.
-describe('S13a baseline — measured (recorded in skills-s13-plan.md §3.3)', () => {
+// MEASUREMENT: print the baseline so `npm test` surfaces the numbers (recorded in the
+// `architecture.md` §18 S13a record — its durable home since `skills-s13-plan.md` §3.3 was deleted at
+// S13 close). KEPT as a measurement — the hard gate-assertion lives in its own block below so the
+// printout survives even if the bar regresses.
+describe('S13a baseline — measured (recorded in architecture.md §18)', () => {
   it('prints the precision/recall/confusion sweep', () => {
     const corpus = loadCorpus()
     const candidates = loadSkillCandidates()
@@ -172,7 +173,8 @@ describe('S13a baseline — measured (recorded in skills-s13-plan.md §3.3)', ()
   })
 })
 
-// S13b — the HARD GATE (owner-set form, skills-s13-plan.md §2.1): the ratified auto-fire policy
+// S13b — the HARD GATE (owner-set form, architecture.md §18 ratified contract, ex-skills-s13-plan.md
+// §2.1): the ratified auto-fire policy
 // (`threshold-3` ≡ AUTOFIRE_SCORE_THRESHOLD) must clear D1 on the corpus. Asserted as
 // `fired-wrong == 0 AND precision ≥ 0.95` (NOT a brittle `== 100%`) so it survives corpus growth.
 // Any change to `scoreSkillTriggers` or the threshold now re-runs this and fails if it regresses

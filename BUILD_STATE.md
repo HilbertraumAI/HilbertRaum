@@ -10927,8 +10927,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
      Ubuntu leg.
    - **TS-9 (pending owner D1):** the S13a suggestion-selector eval tier measures + prints its
      baseline without a hard bar (the AUTO-FIRE precision bar IS a live CI gate); ratify the
-     suggestion bar (`docs/skills-s13-plan.md` §3.3) so measurement-without-assertion doesn't
-     silently become permanent.
+     suggestion bar (record: [`docs/architecture.md`](docs/architecture.md) §18 "Suggestion-selector
+     baseline", the durable home since `docs/skills-s13-plan.md` §3.3 was deleted at S13 close) so
+     measurement-without-assertion doesn't silently become permanent.
    - **BE-1 rider:** the `rag*` numeric settings knobs remain deliberately unclamped (they flow
      into retrieval via `ragSettingsFrom`; clamping changes behavior for extreme-value users —
      needs its own small decision before any bound).
@@ -11310,7 +11311,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     form), TranslateScreen (2: 0-layer hint, DE localization of a persisted failure),
     DocumentsScreen (1: adopted-job singular toast). Remaining phases H–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase G — i18n & copy polish CODE-8/23/25/41..45 + the catalog-hygiene plural net, +10 tests): typecheck clean, 4151 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase H — hygiene + test hardening CODE-24/DOC-12, CODE-46, CODE-47, DOC-6 + the model-policy.md RAM-tier rider, +8 tests): typecheck clean, 4159 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

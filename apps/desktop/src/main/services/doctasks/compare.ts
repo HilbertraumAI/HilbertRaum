@@ -433,9 +433,12 @@ export interface NodeAlignment {
   unmatchedB: string[]
 }
 
-/** Swap-invariant ordering key for a candidate pair (so swapping A/B yields the mirror). */
+/** Swap-invariant ordering key for a candidate pair (so swapping A/B yields the mirror). The
+ *  NUL delimiter is written as the escape sequence, never a literal 0x00 byte — a literal NUL
+ *  makes git treat this file as binary and ripgrep skip it (full-audit 2026-07-11 CODE-24/DOC-12
+ *  class; the audit's greps missed this file for exactly that reason). The key is in-memory only. */
 function pairKey(aId: string, bId: string): string {
-  return aId < bId ? `${aId} ${bId}` : `${bId} ${aId}`
+  return aId < bId ? `${aId}\u0000${bId}` : `${bId}\u0000${aId}`
 }
 
 /**

@@ -532,6 +532,27 @@ describe('expandPaths', () => {
     }
   })()
 
+  // full-audit 2026-07-11 CODE-46: make a silent skip observable — on a machine without symlink
+  // privilege (Windows without Developer Mode/admin) the three `skipIf(!symlinkOk)` tests below
+  // just vanish from the run with no trace. A one-line warn tells the developer why.
+  if (!symlinkOk) {
+    console.warn(
+      'ingestion.test: symlink creation unavailable (needs Developer Mode/admin on Windows) — ' +
+        'the 3 symlink-following expandPaths tests are SKIPPED here.'
+    )
+  }
+
+  // CODE-46 positive control: on the Linux CI leg symlinks MUST be creatable, so the trio above
+  // MUST actually run there. If CI ever loses its Ubuntu job, these three tests would silently
+  // stop executing everywhere (all runners lack the privilege) and their regressions would go
+  // unnoticed; this assertion reddens instead, flagging the lost coverage (not a real symlink
+  // regression). It is a no-op off Linux-CI, so local Windows/mac runs stay green.
+  it('symlink support is present on Linux CI so the skipIf trio actually runs (CODE-46)', () => {
+    if (process.env.CI && process.platform === 'linux') {
+      expect(symlinkOk).toBe(true)
+    }
+  })
+
   it.skipIf(!symlinkOk)('follows a symlink to a supported file during the walk', () => {
     const root = join(dir(), 'root')
     mkdirSync(root)

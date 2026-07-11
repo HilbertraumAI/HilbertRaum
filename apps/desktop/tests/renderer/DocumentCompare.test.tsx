@@ -159,7 +159,10 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
     await user.click(screen.getByLabelText('Select contract-v2.pdf for asking'))
     await user.click(screen.getByRole('button', { name: /compare \(2\)/i }))
     await user.click((await screen.findAllByRole('button', { name: /^cancel$/i }))[0])
-    expect(cancelDocTask).toHaveBeenCalled()
+    // full-audit 2026-07-11 CODE-47: pin the EXACT args — the row Cancel is the no-arg
+    // active-task fallback (`cancelActiveDocTask()` → `cancelDocTask(null)` server-side), so zero
+    // args is the truthful teeth-giving assertion; a stray/foreign jobId would redden this.
+    expect(cancelDocTask).toHaveBeenCalledWith()
   })
 
   it('surfaces the friendly failure copy (e.g. the re-index-first guard)', async () => {

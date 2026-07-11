@@ -4472,6 +4472,17 @@ per-turn pick/clear). D6 additive **`triggers.autoFire?: boolean`** (only `true`
 the §3.3.1 baseline threshold-3 clears 100% / 88.2% recall; the harness asserts the owner-set form
 **`fired-wrong == 0` AND `precision ≥ 0.95`** so it survives corpus growth.
 
+**Suggestion-selector baseline (S13a — measured, not yet gated).** The same offline harness also
+prints the **suggestion**-bar sweep — `formatReport` over the `POLICIES` in
+`tests/eval/skill-triggers.{ts,test.ts}`: precision/recall + a confusion matrix for the §6 suggestion
+selector, question text scored-but-never-logged. The numbers the deleted `skills-s13-plan.md §3.3`
+used to hold now live here — **this record is their durable home** (the harness comments and BUILD_STATE
+§5's TS-9 item point at `architecture.md §18`, not the retired plan file). Unlike the auto-fire bar
+above, the suggestion selector's own thresholds (a D1/D2 for the *offer* bar, `SUGGEST_SCORE_THRESHOLD`)
+are **not yet ratified**, so that eval tier only measures and records — there is **no** hard CI
+assertion on it (contrast the S13b auto-fire gate) until the owner sets them. Tracked as the open
+**TS-9** item (BUILD_STATE §5 item 7) so measurement-without-a-bar can't silently become permanent.
+
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
 byte-unchanged). `services/skills/autofire.ts` `resolveAutoFireSkill(db, deps, conversationId,
