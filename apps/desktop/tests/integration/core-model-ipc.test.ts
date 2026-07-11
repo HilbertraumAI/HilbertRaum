@@ -81,6 +81,35 @@ describe('registerCoreIpc', () => {
     expect(status.workspaceReady).toBe(false)
     expect(status.activeModelId).toBeNull()
     expect(status.hardwareProfile).toBe('UNKNOWN')
+    // No translator composed → no device outcome (issue #42 reopen), never a crash.
+    expect(status.translationDevice).toBeNull()
+  })
+
+  it('getAppStatus forwards the translation device outcome (issue #42 reopen — the Translate hint feed)', async () => {
+    const lockedWorkspace = {
+      isUnlocked: () => false,
+      getState: (): WorkspaceStateInfo => ({
+        state: 'locked',
+        mode: null,
+        plaintextAllowed: false,
+        encryptionRequired: true
+      })
+    }
+    const ctx = {
+      paths: { configPath: bogusConfigDir() },
+      workspace: lockedWorkspace,
+      // The Translator seam's OPTIONAL deviceStatus (a fake without it reads as null via `?.`).
+      translator: {
+        deviceStatus: () => ({ device: 'auto', gpuLayers: 12, totalLayers: 49, live: true })
+      }
+    } as unknown as AppContext
+    registerCoreIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.getAppStatus)
+    const status = result as AppStatus
+    expect(status.translationAvailable).toBe(true)
+    // The partial-offload split reaches the renderer verbatim — the Translate screen's hint.
+    expect(status.translationDevice).toEqual({ device: 'auto', gpuLayers: 12, totalLayers: 49, live: true })
   })
 
   it('writeClipboard writes text via the MAIN clipboard module and reports success', async () => {

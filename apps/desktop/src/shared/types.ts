@@ -44,6 +44,32 @@ export interface AppStatus {
    * composed `ctx.translator`, so this flag can never disagree with the doc-task guard.
    */
   translationAvailable: boolean
+  /**
+   * The translation sidecar's device outcome as of its LAST cold start (issue #42 reopen), or
+   * null before the first start of the session / when translation is unavailable. Feeds the
+   * Translate screen's #36-style device hint, so a silent `--fit` PARTIAL offload (a resident
+   * chat model took the VRAM → ~CPU-speed decode under a GPU posture) is visible instead of
+   * reading as "GPU translation not working". Optional so older status fixtures stay valid.
+   */
+  translationDevice?: TranslationDeviceStatus | null
+}
+
+/**
+ * The observed device outcome of one translation-sidecar cold start (issue #42 reopen; produced
+ * by `TranslationRuntime.deviceStatus()` in `main/services/translation/runtime.ts`). The layer
+ * split is parsed from llama.cpp's own load log (`load_tensors: offloaded X/Y layers to GPU`) —
+ * the only place the real `--fit` outcome is reported; null when the server printed no offload
+ * line (e.g. a forced-CPU start on a GPU-less machine).
+ */
+export interface TranslationDeviceStatus {
+  /** The launch posture: 'auto' = GPU auto-offload (no device args), 'cpu' = forced `--device none`. */
+  device: 'auto' | 'cpu'
+  /** Layers the server reported offloaded to the GPU, or null when unreported. */
+  gpuLayers: number | null
+  /** The model's total layer count from the same log line, or null. */
+  totalLayers: number | null
+  /** Is the sidecar currently up? False after the 2-min idle teardown / lock / a crash. */
+  live: boolean
 }
 
 // ---- Privacy / offline policy (spec §6 config/policy.json + §3.5/§3.6) ----

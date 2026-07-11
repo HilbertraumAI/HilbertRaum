@@ -77,6 +77,15 @@ export function composeTranslator(deps: ComposeServicesDeps): Translator | null 
     gpu: deps.gpu,
     onDeviceFallback: (reason) =>
       log.warn('Translation sidecar fell back to CPU for this session', { reason }),
+    // Issue #42 reopen: log every cold start's observed outcome symmetrically with the chat
+    // ladder's "started via rung …" line. The layer split is what makes a silent `--fit`
+    // PARTIAL offload (a resident chat model took the VRAM → ~CPU-speed decode under a 'gpu'
+    // posture) diagnosable from app.log; posture alone would hide it.
+    onStarted: ({ device, gpuLayers, totalLayers }) =>
+      log.info('Translation sidecar started', {
+        device,
+        offload: gpuLayers != null && totalLayers != null ? `${gpuLayers}/${totalLayers} layers` : 'not reported'
+      }),
     onSelect: (kind, reason) => log.info('Translation backend selected', { kind, reason })
   })
 }

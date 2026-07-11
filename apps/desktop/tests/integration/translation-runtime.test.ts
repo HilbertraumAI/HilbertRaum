@@ -780,3 +780,111 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
     await rt.stop()
   })
 })
+
+// Issue #42 reopen — cold-start observability: the runtime parses llama.cpp's own load log
+// (`load_tensors: offloaded X/Y layers to GPU`, streamed on stderr) for the REAL offload outcome,
+// reports it once per successful cold start (`onStarted` — compose-services logs it symmetrically
+// with the chat ladder's start line), and exposes it with liveness via `deviceStatus()` (→
+// getAppStatus → the Translate screen's #36-style hint). The point: under `--fit` a resident chat
+// model can force a silent PARTIAL offload at ~CPU speed — posture alone would hide it.
+describe('TranslationRuntime — cold-start device observability (issue #42 reopen)', () => {
+  /** fakeSpawn whose children carry a stderr that emits the given chunks after spawn. */
+  function fakeSpawnWithStderr(chunks: string[]) {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => {
+        for (const chunk of chunks) stderr.emit('data', chunk)
+      })
+      return child
+    }
+    return { spawn, calls }
+  }
+
+  it('parses the offload split from the server load log — across chunk boundaries — and reports it once', async () => {
+    // The offload line split mid-number across two stderr chunks (real pipes chunk arbitrarily).
+    const { spawn } = fakeSpawnWithStderr([
+      'ggml_vulkan: Found 1 Vulkan devices\nload_tensors: offloaded 12',
+      '/49 layers to GPU\nload_all: model loaded\n'
+    ])
+    const { fetchImpl } = translationFetch()
+    const started: unknown[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      onStarted: (info) => started.push(info)
+    })
+    expect(rt.deviceStatus()).toBeNull() // unknown before the first start
+    await rt.translate(translateOpts)
+    expect(started).toEqual([{ device: 'auto', gpuLayers: 12, totalLayers: 49 }])
+    expect(rt.deviceStatus()).toEqual({ device: 'auto', gpuLayers: 12, totalLayers: 49, live: true })
+    // LAST-KNOWN values survive a teardown (the hint stays explainable after a run)…
+    await rt.suspend()
+    expect(rt.deviceStatus()).toEqual({ device: 'auto', gpuLayers: 12, totalLayers: 49, live: false })
+    // …and the next cold start re-reports (one onStarted per successful start).
+    await rt.translate(translateOpts)
+    expect(started.length).toBe(2)
+    expect(rt.deviceStatus()?.live).toBe(true)
+    await rt.stop()
+  })
+
+  it("a forced-CPU start reports device 'cpu' with an honest null split (no offload line printed)", async () => {
+    const { spawn } = fakeSpawnWithStderr(['load_all: model loaded\n'])
+    const { fetchImpl } = translationFetch()
+    const started: unknown[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      gpu: { getGpuMode: () => 'off' },
+      onStarted: (info) => started.push(info)
+    })
+    await rt.translate(translateOpts)
+    expect(started).toEqual([{ device: 'cpu', gpuLayers: null, totalLayers: null }])
+    expect(rt.deviceStatus()).toEqual({ device: 'cpu', gpuLayers: null, totalLayers: null, live: true })
+    await rt.stop()
+  })
+
+  it('after the GPU→CPU fallback, deviceStatus reflects the CPU attempt that actually serves', async () => {
+    // Child 0 (the GPU attempt) dies before health; the CPU rung is healthy (the ladder test's shape).
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null))
+      return child
+    }
+    const good = translationFetch()
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (calls.length < 2) throw new Error('connection refused')
+      return good.fetchImpl(url, init)
+    }) as typeof fetch
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    await rt.translate(translateOpts)
+    expect(rt.deviceStatus()).toEqual({ device: 'cpu', gpuLayers: null, totalLayers: null, live: true })
+    await rt.stop()
+  })
+
+  it('a throwing onStarted hook never breaks the start path (observability only)', async () => {
+    const { spawn } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      onStarted: () => {
+        throw new Error('boom')
+      }
+    })
+    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
+    expect(rt.deviceStatus()?.live).toBe(true)
+    await rt.stop()
+  })
+})

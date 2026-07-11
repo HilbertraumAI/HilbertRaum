@@ -2238,6 +2238,23 @@ Per-finding disposition (F-1…F-8):
     CPU calibration). Tests: the `translation-runtime.test.ts` ladder suite (off/auto-disabled pin
     CPU, per-cold-start re-read, GPU-fail → CPU fallback + latch, final-rung-only startFailed,
     bind-race neutrality, mid-session GPU crash latch, CPU crash does NOT latch).
+  - **#42 reopen (2026-07-10) — cold-start observability.** Field-verified on an RTX 3090: the
+    ladder works, but under `--fit` a large RESIDENT chat model silently squeezes the 12B into
+    leftover VRAM — a partial offload at ~CPU speed, with no failure for the fallback hook to see
+    and no log/UI trace (the fit is also pinned per cold start until the idle teardown re-fits).
+    Fix (observability only, no ladder change): `LlamaServer` gains an `onStderrData` tap; the
+    translation runtime parses the server's own `load_tensors: offloaded X/Y layers to GPU` line
+    (a rolling window across chunk boundaries — the only place the real fit outcome is reported),
+    fires `onStarted` once per successful cold start (compose-services logs `"Translation sidecar
+    started"` with posture + split, symmetric with the chat `"started via rung …"` line), and
+    exposes `deviceStatus()` (last-known survives the teardown, `live` flags a current child) →
+    `getAppStatus().translationDevice` → the Translate screen's muted #36-style device line, whose
+    partial-offload form names the ~CPU speed and whose tooltip carries cause + remedy. Field
+    numbers + the contention case: `model-benchmarks.md` §11.4; user-facing shape:
+    `known-limitations.md` "Document translation". Tests: `translation-runtime.test.ts`
+    ("cold-start device observability" — chunk-split parse, once-per-start, honest-null CPU form,
+    fallback lands as 'cpu', throwing hook harmless), `core-model-ipc.test.ts` (status feed),
+    `TranslateScreen.test.tsx` (hint forms + absent-before-first-start).
 
 ### §-anchor legend (historical plan citations)
 

@@ -2138,6 +2138,23 @@ export const en = {
   'translate.working': 'Translating…',
   'translate.copy': 'Copy',
   'translate.copied': 'Copied',
+  // The muted device hint (issue #42 reopen — the chat #36 analogue): where the LAST translation
+  // sidecar start landed. The partial-offload form is the important one — under GPU auto-offload a
+  // large resident chat model can leave the translator only part of the graphics memory, which
+  // then runs at roughly processor speed and otherwise reads as "GPU translation not working".
+  'translate.device.gpu': 'Translation runs on the graphics card (GPU, {done}/{total} layers)',
+  'translate.device.gpuUnknown': 'Translation runs on the graphics card (GPU)',
+  'translate.device.gpuPartial':
+    'Translation runs only partly on the graphics card ({done}/{total} layers) — about processor speed',
+  'translate.device.cpu': 'Translation runs on the processor (CPU)',
+  'translate.device.title':
+    'Where the translation model ran when it last started. It decides again on each start ' +
+    '(it unloads about 2 minutes after the last translation).',
+  'translate.device.partialTitle':
+    'The graphics memory was mostly taken — usually by the chat model — so only part of the ' +
+    'translation model fit on the graphics card, and translation runs at roughly processor ' +
+    'speed. A smaller chat model frees memory; the translator re-fits on its next start ' +
+    '(about 2 minutes after the last translation).',
   // Friendly error rows — a CODE is mapped here; raw model/runtime text never shows.
   'translate.err.noModel': 'The translation model is no longer available. Open the AI Model screen to install it.',
   'translate.err.badRequest': 'Pick a source and target language and enter some text to translate.',

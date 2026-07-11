@@ -244,6 +244,14 @@ export interface LlamaServerOptions {
    */
   onUnexpectedExit?: (info: UnexpectedExitInfo) => void
   /**
+   * Observe the child's stderr as it streams (issue #42 reopen). The stderr tail kept for
+   * error messages is CAPPED (`STDERR_TAIL_MAX`), so a load-time line — e.g. llama.cpp's
+   * `load_tensors: offloaded X/Y layers to GPU`, the only place the real offload outcome is
+   * reported — can age out of it before `/health` turns ready; this hook sees every chunk.
+   * Observability only: a throwing hook must never break the drain (guarded at the call site).
+   */
+  onStderrData?: (text: string) => void
+  /**
    * Re-hash the binary against its install marker immediately before spawn (vuln-scan B).
    * Defaults to the shared `verifyBinaryBeforeSpawn` (session-cached; inert in dev / before
    * init). On a `mismatch` (packaged tamper) `start()` throws so the ladder falls to the
@@ -436,7 +444,13 @@ export class LlamaServer {
     })
     this.child = child
     child.stderr?.on('data', (chunk: unknown) => {
-      this.stderrTail = (this.stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX)
+      const text = String(chunk)
+      this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_MAX)
+      try {
+        this.opts.onStderrData?.(text)
+      } catch {
+        /* observability only — never break the stderr drain */
+      }
     })
     child.once('error', (err: unknown) => {
       this.spawnError = err instanceof Error ? err : new Error(String(err))

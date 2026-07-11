@@ -2187,6 +2187,20 @@ export const de: Record<keyof typeof en, string> = {
   'translate.working': 'Übersetzen…',
   'translate.copy': 'Kopieren',
   'translate.copied': 'Kopiert',
+  // Gedämpfter Geräte-Hinweis (Issue #42 Reopen — das Chat-#36-Pendant).
+  'translate.device.gpu': 'Übersetzung läuft auf der Grafikkarte (GPU, {done}/{total} Schichten)',
+  'translate.device.gpuUnknown': 'Übersetzung läuft auf der Grafikkarte (GPU)',
+  'translate.device.gpuPartial':
+    'Übersetzung läuft nur teilweise auf der Grafikkarte ({done}/{total} Schichten) — etwa Prozessor-Tempo',
+  'translate.device.cpu': 'Übersetzung läuft auf dem Prozessor (CPU)',
+  'translate.device.title':
+    'Wo das Übersetzungsmodell beim letzten Start gelaufen ist. Es entscheidet bei jedem Start neu ' +
+    '(etwa 2 Minuten nach der letzten Übersetzung wird es entladen).',
+  'translate.device.partialTitle':
+    'Der Grafikspeicher war größtenteils belegt — meist durch das Chat-Modell —, sodass nur ein Teil ' +
+    'des Übersetzungsmodells auf die Grafikkarte passte und die Übersetzung etwa in Prozessor-Tempo ' +
+    'läuft. Ein kleineres Chat-Modell gibt Speicher frei; der Übersetzer passt sich beim nächsten ' +
+    'Start neu an (etwa 2 Minuten nach der letzten Übersetzung).',
   'translate.err.noModel': 'Das Übersetzungsmodell ist nicht mehr verfügbar. Öffne den KI-Modell-Bildschirm, um es zu installieren.',
   'translate.err.badRequest': 'Wähle eine Ausgangs- und Zielsprache und gib einen Text zum Übersetzen ein.',
   'translate.err.busy': 'Es läuft bereits eine Übersetzung. Warte, bis sie fertig ist, und versuche es dann erneut.',

@@ -1,4 +1,4 @@
-import type { TranslateOptions } from './runtime'
+import type { TranslateOptions, TranslationDeviceStatus } from './runtime'
 
 // The translation sidecar family (TG wave, plan §2 D1). A SEPARATE lazy `llama-server` serving
 // TranslateGemma over the raw `/completion` endpoint — the fifth `LlamaServer` composition after
@@ -12,7 +12,12 @@ export {
   isTranslationStartError,
   TRANSLATION_START_FAILED_CODE
 } from './runtime'
-export type { TranslateOptions, TranslationGpuDeps } from './runtime'
+export type {
+  TranslateOptions,
+  TranslationGpuDeps,
+  TranslationStartInfo,
+  TranslationDeviceStatus
+} from './runtime'
 export { isCleanStop } from './completion'
 export type { CompletionFinal } from './completion'
 export { createSelectedTranslator } from './factory'
@@ -50,4 +55,10 @@ export interface Translator {
    * 2026-07-10); a live sidecar is still never replaced.
    */
   isStartFailed?(): boolean
+  /**
+   * The device outcome of the last successful cold start (posture + parsed offload split +
+   * liveness), or null before the first start (issue #42 reopen). Optional — fakes without it
+   * read as "unknown"; `getAppStatus` forwards it to the Translate screen's device hint.
+   */
+  deviceStatus?(): TranslationDeviceStatus | null
 }

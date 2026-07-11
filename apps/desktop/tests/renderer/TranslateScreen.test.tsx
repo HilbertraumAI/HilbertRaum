@@ -93,6 +93,55 @@ describe('TranslateScreen — availability (O2 install path)', () => {
   })
 })
 
+describe('TranslateScreen — device hint (issue #42 reopen)', () => {
+  it('shows the full-offload GPU hint once the sidecar has started', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'auto', gpuLayers: 49, totalLayers: 49, live: true } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    } as never)
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+    expect(
+      await screen.findByText(t('en', 'translate.device.gpu', { done: 49, total: 49 }))
+    ).toBeInTheDocument()
+  })
+
+  it('a PARTIAL offload shows the near-CPU-speed form with the contention tooltip (the reopened-#42 case)', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'auto', gpuLayers: 12, totalLayers: 49, live: false } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    } as never)
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+    const hint = await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
+    // The tooltip carries the cause (VRAM taken by the chat model) + the remedy (re-fit after idle).
+    expect(hint).toHaveAttribute('title', t('en', 'translate.device.partialTitle'))
+  })
+
+  it('a forced-CPU start shows the CPU form; no outcome yet shows NO hint', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'cpu', gpuLayers: null, totalLayers: null, live: true } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    } as never)
+    const { unmount } = render(<TranslateScreen onNavigate={vi.fn()} />)
+    expect(await screen.findByText(t('en', 'translate.device.cpu'))).toBeInTheDocument()
+    unmount()
+
+    // Before the sidecar's first start (translationDevice null) the line is absent entirely.
+    stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
+      getActiveTranslateJob: vi.fn(async () => null)
+    } as never)
+    const { container } = render(<TranslateScreen onNavigate={vi.fn()} />)
+    await screen.findByText(t('en', 'translate.action'))
+    expect(container.querySelector('.translate-device-hint')).toBeNull()
+  })
+})
+
 describe('TranslateScreen — translate → stream → copy', () => {
   it('types text, translates, streams the output, and copies it', async () => {
     const s = streamStubs()

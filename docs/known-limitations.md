@@ -1561,6 +1561,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   off — the same start retries once at forced CPU, and only that final CPU rung failing arms the
   latch (the GPU posture itself is then abandoned for the session, without touching chat's
   persisted `gpuAutoDisabled`).
+- **A large resident chat model can starve GPU translation down to roughly CPU speed — visibly,
+  not silently (issue #42 reopen, 2026-07-10).** Under the GPU posture the sidecar launches with
+  VRAM-aware auto-offload (`--fit`): whatever graphics memory the resident chat model left over is
+  what TranslateGemma gets. Field-measured on a 24 GB RTX 3090 (model-benchmarks.md §11.4): ~13 GB
+  free → full offload at ~75 tok/s; a ~16 GB chat model (gemma-4-26b-q4) resident → PARTIAL
+  offload at roughly the ~3–4 tok/s CPU speed. That is a llama.cpp fit decision, not a fault — no
+  fallback fires and nothing latches. Two properties matter: the split is pinned per **cold
+  start** (freeing VRAM mid-session takes effect only after the ~2-min idle teardown forces a
+  fresh fit), and the remedy is a smaller chat model (or stopping it) before translating. Since
+  the #42 reopen this state is OBSERVABLE instead of reading as "GPU translation not working":
+  every cold start logs `"Translation sidecar started"` with the posture + the offloaded-layer
+  split, and the Translate screen shows a muted device line (GPU with the layer split / "partly on
+  the graphics card … about processor speed" with the cause + remedy in its tooltip / CPU).
 - **Languages are a closed set of 51 — source AND target** (issue #31, 2026-07-07: the original
   curated 10 widened to TranslateGemma's full PRODUCTION tier — the 55 WMT24++-evaluated locales
   collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat

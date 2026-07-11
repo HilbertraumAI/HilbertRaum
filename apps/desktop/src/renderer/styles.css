@@ -1584,6 +1584,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Language bar: source select · swap · target select, centered on one calm row. */
 .translate-langbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .translate-langbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+/* Issue #42 reopen: the muted device one-liner (the chat #36 analogue) — caption-quiet,
+   negative top margin tucks it under the language bar it annotates. */
+.translate-device-hint { margin: -8px 0 0; font-size: 12px; cursor: default; }
 .translate-swap { padding: 6px; }
 /* Two equal panes: input left, output right (stacks on a narrow width). */
 .translate-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }

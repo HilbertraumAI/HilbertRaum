@@ -27,6 +27,7 @@ import {
   TRANSLATION_LANGUAGE_CODES,
   TRANSLATION_NATIVE_NAMES,
   type TranslateErrorCode,
+  type TranslationDeviceStatus,
   type TranslationSourceLang,
   type TranslationTargetLang
 } from '@shared/types'
@@ -82,6 +83,9 @@ export function TranslateScreen({
   const showToast = useToast()
   // null while the first availability read is in flight (a calm placeholder, never a spinner).
   const [available, setAvailable] = useState<boolean | null>(null)
+  // The sidecar's last cold-start device outcome (issue #42 reopen) — null before its first
+  // start this session. Drives the muted #36-style device hint below the language bar.
+  const [device, setDevice] = useState<TranslationDeviceStatus | null>(null)
   const [input, setInput] = useState('')
   // Source+target start from the session's last choice (else a UI-language-aware default), the
   // DocumentsScreen translate-modal precedent. TranslateGemma needs an explicit source — no auto-detect.
@@ -115,7 +119,12 @@ export function TranslateScreen({
   const checkStatus = useCallback(async (): Promise<void> => {
     try {
       const st = await window.api?.getAppStatus?.()
-      if (st) setAvailable(st.translationAvailable)
+      if (st) {
+        setAvailable(st.translationAvailable)
+        // Issue #42 reopen: the device hint. `?? null` keeps a partial bridge (older status
+        // shape without the field) rendering no hint rather than crashing.
+        setDevice(st.translationDevice ?? null)
+      }
     } catch {
       // No status (partial bridge) → calm unavailable, never a crash.
       setAvailable(false)
@@ -150,6 +159,42 @@ export function TranslateScreen({
   // — the purge of the module stores runs at the real seam, App.lockNow → purgeSessionStores (TA-2).
 
   const sameLang = choice.sourceLang === choice.targetLang
+
+  // Issue #42 reopen: keep the device hint live around a run. The sidecar cold-starts INSIDE a
+  // translate (its outcome exists only once the model has loaded, seconds-to-a-minute in), so the
+  // mount/focus reads above can't see it — poll gently while busy, and read once more when the
+  // run settles (that read also reflects a mid-run CPU fallback). 4 s is a cheap local IPC and
+  // far under any cold start + first window.
+  useEffect(() => {
+    if (!busy) {
+      void checkStatus()
+      return
+    }
+    const id = setInterval(() => void checkStatus(), 4000)
+    return () => clearInterval(id)
+  }, [busy, checkStatus])
+
+  // The #36-style muted device line: posture + the parsed offload split of the LAST cold start.
+  // The partial-offload form is the point of the feature — under GPU auto-offload a large resident
+  // chat model can leave the translator a sliver of VRAM, which decodes at ~processor speed and
+  // would otherwise be indistinguishable from "GPU translation not working"; its tooltip explains
+  // the cause and the remedy (smaller chat model; the ~2-min idle teardown re-fits).
+  const deviceHint = ((): { text: string; title: string } | null => {
+    if (!device) return null
+    if (device.device === 'cpu') {
+      return { text: t('translate.device.cpu'), title: t('translate.device.title') }
+    }
+    if (device.gpuLayers != null && device.totalLayers != null) {
+      const partial = device.gpuLayers < device.totalLayers
+      const params = { done: device.gpuLayers, total: device.totalLayers }
+      return {
+        text: t(partial ? 'translate.device.gpuPartial' : 'translate.device.gpu', params),
+        title: t(partial ? 'translate.device.partialTitle' : 'translate.device.title')
+      }
+    }
+    // GPU posture but the server printed no offload line — say GPU without inventing a split.
+    return { text: t('translate.device.gpuUnknown'), title: t('translate.device.title') }
+  })()
 
   function onTranslate(): void {
     setScreenError(null)
@@ -375,6 +420,14 @@ export function TranslateScreen({
             </select>
           </label>
         </div>
+
+        {/* Issue #42 reopen: the muted device line (the chat #36 analogue). Appears once the
+            sidecar has cold-started this session; `title` carries the explanation/remedy. */}
+        {deviceHint && (
+          <p className="hint translate-device-hint" title={deviceHint.title}>
+            {deviceHint.text}
+          </p>
+        )}
 
         {sameLang && <p className="hint">{t('translate.err.sameLang')}</p>}
 

@@ -1,5 +1,5 @@
 import type { Translator } from './index'
-import { TranslationRuntime, type TranslationGpuDeps } from './runtime'
+import { TranslationRuntime, type TranslationGpuDeps, type TranslationStartInfo } from './runtime'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
 
@@ -40,6 +40,11 @@ export interface TranslatorSelectionDeps {
   gpu?: TranslationGpuDeps
   /** Session CPU-fallback observability hook (issue #42) — the caller logs it. Must never throw. */
   onDeviceFallback?: (reason: string) => void
+  /**
+   * Per-cold-start outcome hook (issue #42 reopen) — the caller logs posture + offload split
+   * symmetrically with the chat ladder's start line. Must never throw.
+   */
+  onStarted?: (info: TranslationStartInfo) => void
 }
 
 /**
@@ -56,7 +61,8 @@ export function createSelectedTranslator(deps: TranslatorSelectionDeps): Transla
         modelPath: model.modelPath,
         contextTokens: model.contextTokens,
         gpu: deps.gpu,
-        onDeviceFallback: deps.onDeviceFallback
+        onDeviceFallback: deps.onDeviceFallback,
+        onStarted: deps.onStarted
       }))
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — unavailable means null (plan O2).

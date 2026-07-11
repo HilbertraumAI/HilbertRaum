@@ -1,6 +1,7 @@
 import { LlamaServer, combineSignals, isBindRaceError, type LlamaServerOptions } from '../runtime/sidecar'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
+import type { TranslationDeviceStatus } from '../../../shared/types'
 
 // The lazily-started TranslateGemma sidecar (TG wave, plan §2 D1). It composes `LlamaServer`
 // DIRECTLY — like the E5 embedder / reranker / vision, NOT the chat `RuntimeManager` — so it does
@@ -47,6 +48,31 @@ export const TRANSLATION_CPU_DEVICE_ARGS = ['--device', 'none'] as const
 
 /** The device posture of one sidecar launch: 'auto' = GPU auto-offload (no device args), 'cpu' = forced CPU. */
 export type TranslationDevice = 'auto' | 'cpu'
+
+/**
+ * The observed outcome of ONE successful sidecar cold start (issue #42 reopen). The device
+ * posture alone is NOT the story: under `--fit` (the 'auto' posture) llama.cpp silently squeezes
+ * the 12B into whatever VRAM a resident chat model left over, and a partial offload decodes at
+ * roughly CPU speed — indistinguishable from "GPU not working" without this record. The layer
+ * split is parsed from the server's own load log (`load_tensors: offloaded X/Y layers to GPU`,
+ * the only place the real fit outcome is reported — `/props` does not carry it); null when the
+ * line wasn't seen (a forced-CPU start on a GPU-less machine prints none). With liveness added
+ * this becomes the wire shape `TranslationDeviceStatus` (shared/types.ts — the Translate
+ * screen's #36-style device hint); last-known values survive the idle teardown (`live: false`)
+ * so a finished run stays explainable, and reset only with the instance (app restart).
+ */
+export type TranslationStartInfo = Omit<TranslationDeviceStatus, 'live'>
+export type { TranslationDeviceStatus }
+
+/**
+ * Match llama.cpp's load-log offload line across the naming drift (`llm_load_tensors:` on older
+ * builds, `load_tensors:` on b9849): `… offloaded 48/49 layers to GPU`. The LAST match wins —
+ * a retried load within one child would print it again.
+ */
+const OFFLOAD_LINE_RE = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers to GPU/g
+
+/** How much rolling stderr to keep for the offload parse (a chunk boundary can split the line). */
+const OFFLOAD_PARSE_WINDOW = 512
 
 /**
  * The Settings-driven GPU signals, injected exactly like the chat ladder's `GpuLadderDeps`
@@ -178,6 +204,13 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
    * start, or a mid-session crash of a GPU-composed sidecar). Observability only; must never throw.
    */
   onDeviceFallback?: (reason: string) => void
+  /**
+   * Fired once per SUCCESSFUL cold start with the observed device outcome (issue #42 reopen) —
+   * the caller logs it symmetrically with the chat ladder's "started via rung …" line, so a
+   * silent `--fit` partial offload is at least visible in the log. Observability only; must
+   * never throw.
+   */
+  onStarted?: (info: TranslationStartInfo) => void
 }
 
 export interface TranslateOptions {
@@ -274,6 +307,13 @@ export class TranslationRuntime {
    * (same GPU after unlock), resets on app restart.
    */
   private gpuFellBack = false
+  /**
+   * The observed outcome of the LAST successful cold start (issue #42 reopen) — device posture +
+   * the offload split parsed from the server's load log. Kept across the idle teardown (the
+   * Translate screen's hint must stay explainable after a run finishes); null until the first
+   * successful start of this instance.
+   */
+  private lastStart: TranslationStartInfo | null = null
   /** Number of translate() calls currently using the sidecar. Guards the idle teardown. */
   private inFlight = 0
   /** The pending idle-teardown timer handle (armed only when `inFlight === 0`), or null. */
@@ -372,8 +412,31 @@ export class TranslationRuntime {
     }
   }
 
+  /**
+   * The device outcome of the last successful cold start, with liveness — the Translate screen's
+   * device hint (issue #42 reopen). Null until the first successful start; last-known values are
+   * kept after the idle teardown / suspend (`live: false`) so a finished run stays explainable.
+   */
+  deviceStatus(): TranslationDeviceStatus | null {
+    return this.lastStart ? { ...this.lastStart, live: this.server !== null } : null
+  }
+
   /** One launch attempt at one device posture; installs `this.server` on success. */
   private async startAttempt(device: TranslationDevice): Promise<void> {
+    // Parse the server's own load log for the offload outcome (issue #42 reopen): under the
+    // 'auto' posture llama.cpp `--fit` can silently land a PARTIAL offload (a resident chat
+    // model took the VRAM) that decodes at ~CPU speed, and the offload line is the only place
+    // the real split is reported. Rolling window because a chunk boundary can split the line.
+    let offloadWindow = ''
+    let gpuLayers: number | null = null
+    let totalLayers: number | null = null
+    const parseOffload = (text: string): void => {
+      offloadWindow = (offloadWindow + text).slice(-OFFLOAD_PARSE_WINDOW)
+      for (const m of offloadWindow.matchAll(OFFLOAD_LINE_RE)) {
+        gpuLayers = Number(m[1])
+        totalLayers = Number(m[2])
+      }
+    }
     const server = new LlamaServer({
       binPath: this.opts.binPath,
       modelPath: this.opts.modelPath,
@@ -406,10 +469,20 @@ export class TranslationRuntime {
         if (device === 'auto') {
           this.noteDeviceFallback('GPU-composed translation sidecar exited unexpectedly mid-session')
         }
-      }
+      },
+      onStderrData: parseOffload
     })
     await server.start()
     this.server = server
+    // Record + report the observed outcome ONCE per successful cold start (issue #42 reopen).
+    // A parse miss stays honest as null (e.g. a forced-CPU start on a GPU-less machine prints
+    // no offload line); the hook is observability-only and must never break the start path.
+    this.lastStart = { device, gpuLayers, totalLayers }
+    try {
+      this.opts.onStarted?.({ device, gpuLayers, totalLayers })
+    } catch {
+      /* observability only */
+    }
   }
 
   /**

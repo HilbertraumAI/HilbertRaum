@@ -848,10 +848,35 @@ regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
   ladder owns that flag.
 - **#25142 containment:** `--parallel 1` ships in BOTH postures — the upstream hang was under
   *parallel* Vulkan translation load; translation stays strictly sequential.
+- **Cold-start observability (issue #42 reopen, 2026-07-10):** the runtime parses the server's own
+  load log (`load_tensors: offloaded X/Y layers to GPU` on stderr — the only place the real `--fit`
+  outcome is reported; `/props` does not carry it) and (a) logs every successful cold start
+  (`"Translation sidecar started"` with posture + the layer split, symmetric with the chat
+  ladder's `"started via rung …"` line), and (b) exposes it as `TranslationRuntime.deviceStatus()`
+  → `getAppStatus().translationDevice` → the Translate screen's muted #36-style device hint. The
+  hint's PARTIAL-offload form ("{done}/{total} layers — about processor speed", tooltip naming the
+  cause + remedy) is the point: without it a `--fit` partial offload is indistinguishable from
+  "GPU translation not working". Last-known values survive the idle teardown (`live: false`) so a
+  finished run stays explainable. Pinned in `translation-runtime.test.ts` ("cold-start device
+  observability"), `core-model-ipc.test.ts` (the status feed), and `TranslateScreen.test.tsx`
+  (the hint forms).
+
+**Field datapoint (issue #42 reopen — v0.1.46, RTX 3090 24 GB, Linux/Vulkan, b9849,
+`translategemma-12b-it.Q4_K_M`, the shipping `translationServerArgs('auto')` at ctx 4096):**
+
+- ~13 GB VRAM free → **full offload, 7.8 GB VRAM, 75.7 tok/s decode / 140 tok/s prompt** — vs the
+  §11.2 ~3–4 tok/s CPU calibration (≈20× decode).
+- **VRAM contention:** with a large chat model resident (gemma-4-26b-q4, ~16 GB), `--fit` squeezes
+  TranslateGemma into the ~7 GB remainder → **partial offload at roughly CPU speed**, silently.
+  The split is pinned per COLD START — freeing VRAM mid-session helps only once the 2-min idle
+  teardown forces a fresh fit. This is the case the observability bullet above makes visible;
+  `known-limitations.md` (Document translation) records the user-facing shape + remedy.
 
 **OPEN — the GPU-decode re-smoke (owner, PAID/GPU drive).** The §11.2 tokens/sec are CPU numbers;
-no GPU decode of TranslateGemma has been measured locally yet. On a drive with the b9849 binary +
-the TranslateGemma GGUF and a real GPU:
+no GPU decode of TranslateGemma has been measured on the owner harness yet — the community
+datapoint above answers the architecture-risk question, but the recorded §11.2-grade evidence
+should still come from the owner run. On a drive with the b9849 binary + the TranslateGemma GGUF
+and a real GPU:
 
 ```powershell
 $env:HILBERTRAUM_TRANSLATEGEMMA_SMOKE = "<root with runtime/llama.cpp/<os>/llama-server + models/translation/*.gguf>"
@@ -861,11 +886,10 @@ npx vitest run tests/manual/translategemma-smoke.test.ts
 ```
 
 Record here: tokens/sec per leg (vs the ~3–4 CPU), peak RSS/VRAM split, cold-load time, and whether
-`--fit` partial offload engages beside a resident chat model (the D9 co-residency shape). The
-issue-#42 reporter offered RTX 3090 numbers — a community datapoint is welcome but the recorded
-evidence should come from the owner harness. Until this lands, the ladder's safety net (CPU
-fallback + session latch) is what ships the risk down: a machine where GPU translation misbehaves
-degrades to exactly the TG-6 CPU behavior after one failed start.
+`--fit` partial offload engages beside a resident chat model (the D9 co-residency shape — the field
+datapoint above already demonstrates both sides of it). Until this lands, the ladder's safety net
+(CPU fallback + session latch) is what ships the risk down: a machine where GPU translation
+misbehaves degrades to exactly the TG-6 CPU behavior after one failed start.
 
 ---
 

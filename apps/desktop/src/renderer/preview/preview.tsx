@@ -19,6 +19,7 @@ import { App } from '../App'
 import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen } from '../screens/ModelsScreen'
+import { TranslateScreen } from '../screens/TranslateScreen'
 import '../tokens.css'
 import '../styles.css'
 
@@ -131,7 +132,20 @@ const overrides: Record<string, unknown> = {
   listCollections: async () => COLLECTIONS,
   listDocuments: async () => DOCUMENTS,
   searchConversations: async () => [],
-  getAppStatus: async () => ({ ready: true, machineRamGb: 32 }),
+  getAppStatus: async () => {
+    // Issue #42 reopen: the `translate-device*` cases exercise the Translate device hint —
+    // full offload vs the partial-offload (~CPU speed) form vs forced CPU. Other cases keep
+    // the old minimal shape (translationAvailable stays falsy so e.g. `documents` is unchanged).
+    const c = new URLSearchParams(location.search).get('case') ?? ''
+    if (!c.startsWith('translate-device')) return { ready: true, machineRamGb: 32 }
+    const translationDevice =
+      c === 'translate-device-partial'
+        ? { device: 'auto', gpuLayers: 12, totalLayers: 49, live: false }
+        : c === 'translate-device-cpu'
+          ? { device: 'cpu', gpuLayers: null, totalLayers: null, live: true }
+          : { device: 'auto', gpuLayers: 49, totalLayers: 49, live: true }
+    return { ready: true, machineRamGb: 32, translationAvailable: true, translationDevice }
+  },
   getImportJob: async () => null,
   // ChatScreen data (the `chat-runtime*` cases; harmless elsewhere).
   listConversations: async () => CONVERSATIONS,
@@ -173,6 +187,33 @@ const overrides: Record<string, unknown> = {
 const noop = (): void => {}
 
 const CASES: Record<string, { label: string; node: JSX.Element }> = {
+  // Issue #42 reopen: the muted device line under the Translate language bar (the chat-#36
+  // analogue). The partial case is the feature's point — a resident chat model starved the
+  // sidecar's VRAM fit, so it names the ~processor speed (tooltip carries cause + remedy).
+  'translate-device': {
+    label: 'Translate screen — device hint (full GPU offload)',
+    node: (
+      <div style={{ width: 1100, height: 720 }}>
+        <TranslateScreen onNavigate={noop} />
+      </div>
+    )
+  },
+  'translate-device-partial': {
+    label: 'Translate screen — device hint (PARTIAL offload, ~CPU speed)',
+    node: (
+      <div style={{ width: 1100, height: 720 }}>
+        <TranslateScreen onNavigate={noop} />
+      </div>
+    )
+  },
+  'translate-device-cpu': {
+    label: 'Translate screen — device hint (forced CPU)',
+    node: (
+      <div style={{ width: 1100, height: 720 }}>
+        <TranslateScreen onNavigate={noop} />
+      </div>
+    )
+  },
   'chat-byproject': {
     label: 'Chat sidebar — By Project grouping',
     node: (

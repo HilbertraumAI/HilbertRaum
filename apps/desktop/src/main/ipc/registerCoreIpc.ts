@@ -61,7 +61,11 @@ export function registerCoreIpc(ctx: AppContext): void {
       // sidecar is selected at startup iff llama-server + the translation GGUF exist) —
       // gates the Documents "Translate" action. Reading the composed handle keeps this
       // flag in lockstep with the doc-task guard.
-      translationAvailable: ctx.translator != null
+      translationAvailable: ctx.translator != null,
+      // Issue #42 reopen: the sidecar's last cold-start device outcome (posture + parsed
+      // offload split + liveness) — the Translate screen's #36-style hint. Null before the
+      // first start / when unavailable; optional on the Translator seam (fakes omit it).
+      translationDevice: ctx.translator?.deviceStatus?.() ?? null
     }
   })
 
