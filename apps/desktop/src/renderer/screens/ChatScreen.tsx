@@ -1414,6 +1414,13 @@ export function ChatScreen({
     // as the signal to restore the just-cleared draft. Derived from the post-failure persisted list —
     // no new IPC. Defaults true so success and the not-visible case never restore into another chat.
     let userTurnPersisted = true
+    // CODE-40 follow-up: latched the moment the send IPC RESOLVES. The try below also spans the
+    // two post-send refreshes — a send that fully succeeded but whose refreshIfVisible /
+    // refreshConversations then threw lands in the SAME catch with the persisted tail being the
+    // ASSISTANT reply, which the tail compare would misread as "turn never persisted" and
+    // restore an already-answered question into the composer (inviting a duplicate re-send).
+    // A resolved send has persisted the turn by definition, so the compare is skipped entirely.
+    let sendSucceeded = false
     try {
       // Send the resolved skill choice VERBATIM (audit §4.3 per-turn semantics): `undefined` lets main
       // resolve the saved default (and may auto-fire), an explicit `null` forces a skill-free turn (no
@@ -1436,6 +1443,7 @@ export function ChatScreen({
           ...(regenerate ? { regenerate: true } : {})
         })
       }
+      sendSucceeded = true // CODE-40 follow-up: the turn is persisted; the catch must not re-judge it
       // Re-read the persisted history (includes the user turn + final assistant reply).
       await refreshIfVisible()
       await refreshConversations()
@@ -1447,12 +1455,14 @@ export function ChatScreen({
       // signal onSend to restore the draft. An error AFTER the turn persisted (or while we're no longer
       // viewing this conversation) keeps `userTurnPersisted` true, so we never re-inject a question that
       // is already in the transcript.
-      if (persisted !== null) {
+      if (!sendSucceeded && persisted !== null) {
         // full-audit 2026-07-11 CODE-40: compare against the TAIL, not `some(content ===)` — a
-        // repeated question matched the OLD turn, so a busy-rejected re-ask was silently lost. A
-        // send that persisted its user turn leaves the conversation ENDING in that turn when this
-        // catch runs: a failed generation persists no reply, and a user Stop persists its partial
-        // and RESOLVES normally (chat.ts — it never reaches this catch).
+        // repeated question matched the OLD turn, so a busy-rejected re-ask was silently lost. When a
+        // FAILED send persisted its user turn the conversation ENDS in that turn: a failed generation
+        // persists no reply, and a user Stop persists its partial and RESOLVES normally (chat.ts — it
+        // never reaches this catch). The `!sendSucceeded` gate scopes the compare to send FAILURES —
+        // a post-send refresh throw arrives here with the tail being the fresh ASSISTANT reply, which
+        // the compare alone would misread as "not persisted" (the `some()` shape's one advantage).
         const last = persisted[persisted.length - 1]
         userTurnPersisted = last != null && last.role === 'user' && last.content === content
       }

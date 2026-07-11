@@ -11261,10 +11261,19 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     DocumentsScreenPolish (7: preview ordering, context-menu busy gate, in-modal load-more
     error, collections keep-on-failure + stale-seq, done-task auto-open failure, state-unknown
     row + dismiss), ImagesScreen (3), SkillsTab (3), ScopePopover (2: truthful attach-chat
-    reset label + emit coherence, no-attachment label unchanged). Remaining phases G–J
-    unstarted.
+    reset label + emit coherence, no-attachment label unchanged).
+    **Review follow-up (+1 test, red-verified):** the CODE-40 tail compare had a narrow
+    regression the old `some()` didn't — `stream()`'s try also spans the two POST-send
+    refreshes, so a fully successful send whose `refreshConversations` (or first
+    `refreshIfVisible`) then threw reached the catch with the tail being the fresh ASSISTANT
+    reply → misread as "turn never persisted" → the already-answered question restored into
+    the composer (a duplicate-re-send invitation). Fixed with a `sendSucceeded` latch set the
+    moment the send IPC resolves; the tail compare now runs only for send FAILURES
+    (ChatSendFailure pins: successful send + post-send listConversations rejection → composer
+    stays empty, question appears once, the refresh failure still surfaces). Remaining phases
+    G–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase F2 — renderer state/UX smalls CODE-30..40 (CODE-31 per the owner's relabel-truthfully decision) + the F1 state-unknown-dismissal rider, +19 tests): typecheck clean, 4140 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase F2 — renderer state/UX smalls CODE-30..40 (CODE-31 per the owner's relabel-truthfully decision) + the F1 state-unknown-dismissal rider + the CODE-40 sendSucceeded-latch review follow-up, +20 tests): typecheck clean, 4141 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

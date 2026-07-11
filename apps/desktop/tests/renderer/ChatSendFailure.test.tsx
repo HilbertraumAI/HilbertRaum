@@ -220,6 +220,53 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
       vi.useRealTimers()
     }
   })
+
+  // CODE-40 follow-up (review): the try also spans the two POST-send refreshes — a fully
+  // successful send whose refreshConversations then throws lands in the same catch with the
+  // persisted tail being the ASSISTANT reply. The bare tail compare misread that as "turn never
+  // persisted" and restored the already-answered question (a duplicate-re-send invitation);
+  // the `sendSucceeded` latch scopes the compare to send FAILURES.
+  it('does NOT restore the draft when the send succeeded but a post-send refresh throws (CODE-40 follow-up)', async () => {
+    vi.useFakeTimers()
+    try {
+      // The send itself SUCCEEDS, resolving the persisted assistant reply.
+      const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'c1', 'the answer'))
+      const listConversations = vi
+        .fn<() => Promise<Conversation[]>>()
+        .mockResolvedValueOnce([chatConv('c1', 'Chat 1')]) // mount refresh
+        .mockRejectedValue(new Error('list failed after send')) // the post-send refresh throws
+      baseStub({
+        listConversations,
+        // The persisted truth after the successful send: question + fresh answer (tail = assistant).
+        listMessages: vi.fn(async () => [
+          userMsg('u1', 'c1', 'quantum question'),
+          assistantMsg('a1', 'c1', 'the answer')
+        ]),
+        sendChatMessage
+      })
+
+      renderChat()
+      await flush()
+      fireEvent.click(screen.getByText('Chat 1'))
+      await flush()
+
+      fireEvent.change(screen.getByPlaceholderText('Message…'), {
+        target: { value: 'quantum question' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flush()
+
+      // TEETH: without the latch the assistant tail reads as "not persisted" → the composer
+      // refills with the ALREADY-ANSWERED question (one Enter away from a duplicate turn).
+      expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('')
+      // The question shows exactly once, in the transcript — no duplicate vector anywhere.
+      expect(screen.getAllByText('quantum question')).toHaveLength(1)
+      // The refresh failure itself still surfaces (never silent).
+      expect(screen.getByRole('alert').textContent ?? '').toMatch(/list failed after send/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 // full-audit 2026-07-11 CODE-39 (ChatScreen fold): the busy banner's "Cancel document task" button
