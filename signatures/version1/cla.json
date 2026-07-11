@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "djuro-agent",
+      "id": 292343715,
+      "comment_id": 4948330194,
+      "created_at": "2026-07-11T18:41:43Z",
+      "repoId": 1264405172,
+      "pullRequestNo": 55
+    }
+  ]
 }
