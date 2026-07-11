@@ -16,7 +16,7 @@
 # unless --accept-license is passed; the license + license_url are printed first.
 #
 # Usage:
-#   scripts/fetch-models.sh --target /Volumes/PRIVATE_AI_DRIVE [--only <id>] \
+#   scripts/fetch-models.sh --target /Volumes/HILBERTRAUM [--only <id>] \
 #       [--accept-license] [--dry-run]
 set -euo pipefail
 

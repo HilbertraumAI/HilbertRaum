@@ -534,7 +534,7 @@ that live *only* in that project — Library knowledge is never deleted by accid
 
 ### Choose which sources a chat uses
 
-In **Ask my documents**, the **📄 Using…** button under the message box lets you compose
+In **Ask my documents**, the **📄 Answering from:** chip under the message box lets you compose
 exactly where answers come from: tick **Library**, any **projects**, and/or pick **specific
 documents** — they all add together (e.g. *"Library + Tax 2025 + contract.pdf"*). Your choice
 is remembered for that chat, even after you restart the app. Files you dropped into the chat
@@ -667,7 +667,7 @@ compliance.
 ### Pick a skill for an answer
 
 Under the message box there's a quiet **Skill:** picker. Choose a skill and it shapes your answers
-in that chat until you change or clear it (pick **None** or tap the chip's ✕); tick **Keep for this
+in that chat until you change or clear it (pick **No skill** or tap the chip's ✕); tick **Keep for this
 conversation** in the picker to save it across restarts. When a skill shaped an answer, that message
 carries a small **skill glyph** — an icon and the skill's name — so you can see at a glance which
 one was used.
@@ -748,10 +748,10 @@ box, including on a prepared commercial drive; every download is explicit and
 confirmed, and the core app — chat, documents, search — never goes online. Logs are stored
 **locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 
-Two related switches in Settings: **Developer mode** (Settings → Developer, off by default)
+Two related switches in Settings: **Developer mode** (Settings → General → Developer card, off by default)
 allows developer conveniences — a plaintext workspace and unverified models — though the drive
 policy stays authoritative: on a commercial drive, unverified models are rejected regardless of
-this setting. And **Summarize older messages to free up context** (Settings → Chat, on by
+this setting. And **Summarize older messages to free up context** (Settings → General → Chat card, on by
 default) keeps a long conversation going by condensing its oldest messages once into a compact
 note — created locally and kept on this drive — instead of silently dropping them; turn it off
 to keep only the most recent messages that fit.

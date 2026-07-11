@@ -25,8 +25,8 @@ describe('resolveDriveRootFromLauncher', () => {
 
   it('derives the drive root from a POSIX / macOS launcher', () => {
     expect(
-      resolveDriveRootFromLauncher('/Volumes/PRIVATE_AI_DRIVE/start-hilbertraum.sh', 'posix')
-    ).toBe('/Volumes/PRIVATE_AI_DRIVE')
+      resolveDriveRootFromLauncher('/Volumes/MYDRIVE/start-hilbertraum.sh', 'posix')
+    ).toBe('/Volumes/MYDRIVE')
     expect(
       resolveDriveRootFromLauncher('/Volumes/HILBERTRAUM/Start HilbertRaum.command', 'posix')
     ).toBe('/Volumes/HILBERTRAUM')

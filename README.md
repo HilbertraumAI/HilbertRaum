@@ -75,7 +75,7 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 
 - **A computer:** Windows (first-class), macOS, or Linux.
 - **RAM decides which model the benchmark recommends** (the app benchmarks your machine and picks the
-  best *fit*): ≤12 GB → Qwen3-4B · 16–24 GB → Ministral 8B · ≥32 GB → Gemma 4 12B (or the 30B-A3B MoE,
+  best *fit*): ≤12 GB → Qwen3-4B · 16–20 GB → Ministral 8B · ≥24 GB → Gemma 4 12B (or the 30B-A3B MoE,
   opt-in). These are *recommended best-fit* tiers, **not** hard minimums — each model's actual floor is
   the lower **Min RAM** column in the model table below (e.g. Ministral 8B already runs from 12 GB).
 - **Disk space:** ~**3 GB** for the smallest *hand-built* setup (the 4B chat model + the embeddings
@@ -112,7 +112,7 @@ prebuilt app you can skip step 1 and continue at step 2.
 
 ```bash
 git clone <this-repo>
-cd ai_drive
+cd HilbertRaum
 npm ci             # one-time; downloads the Electron binary (needs internet once)
 npm run dev        # launches the app
 ```
@@ -184,7 +184,7 @@ $env:HILBERTRAUM_DRIVE_ROOT = 'E:\'; npm run dev    # Windows
 HILBERTRAUM_DRIVE_ROOT=/Volumes/HILBERTRAUM npm run dev    # macOS / Linux
 ```
 
-Open **AI Model**, press **Start** on the recommended model, and chat for real. To ship a portable
+Open **AI Model**, press **Use this model** on the recommended model, and chat for real. To ship a portable
 build instead of `npm run dev`, see `npm run package:win` in **[`docs/packaging.md`](docs/packaging.md)**.
 
 Run tests / type-check: `npm test`, `npm run typecheck`.
@@ -197,8 +197,8 @@ policy in **[`docs/model-policy.md`](docs/model-policy.md)**.
 
 **The default set** (`-WithAssets`) is enough for everyday use: a chat model + **embeddings**
 (document Q&A) + **reranker** (retrieval quality) + **Whisper** (audio). The benchmark
-auto-recommends the best chat model that fits your RAM: **≤12 GB → Qwen3-4B, 16–24 GB → Ministral
-8B, ≥32 GB → Gemma 4 12B** (best-*fit* tiers; the table's **Min RAM** column is each model's lower
+auto-recommends the best chat model that fits your RAM: **≤12 GB → Qwen3-4B, 16–20 GB → Ministral
+8B, ≥24 GB → Gemma 4 12B** (best-*fit* tiers; the table's **Min RAM** column is each model's lower
 hard floor). The **30B-A3B MoE** is opt-in (≈30B quality at ≈3.3B *active*
 params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 
@@ -227,7 +227,7 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 | BGE Reranker v2 M3 (F16) | Reranker | Higher-quality retrieval ordering | 6 GB | Apache-2.0 |
 | Whisper Small (multilingual) | Transcriber | Audio-file transcription + dictation | 4 GB | MIT |
 | Qwen2.5-VL 3B Instruct Q4 | Vision | Image understanding (opt-in; in-app download) | 12 GB | Apache-2.0 |
-| TranslateGemma 12B (Q4_K_M) | Translation | Document & text translation (opt-in; in-app download behind a license prompt) | 14 GB | Gemma Terms |
+| TranslateGemma 12B (Q4_K_M) | Translation | Document & text translation (opt-in; in-app download behind a license prompt) | 13 GB | Gemma Terms |
 
 Document Q&A needs the **embeddings** model; chat needs **one** of the chat models. Bigger **dense**
 models are smarter but slower on CPU — pick by your RAM. Benchmark methodology and measured numbers
@@ -268,7 +268,7 @@ A **single Electron app** in an npm-workspaces monorepo (`apps/desktop`), built 
 sidecars (`llama.cpp`, `whisper.cpp`) so they stay swappable behind clean service interfaces.
 
 ```text
-ai_drive/
+HilbertRaum/
 ├─ apps/desktop/        # the Electron app (main / preload / renderer + tests)
 │  └─ src/main/services # chat, rag, embeddings, reranker, vision, ocr, skills, …
 ├─ docs/                # architecture, rag, security, packaging, … (see above)

@@ -18,7 +18,7 @@
 # (the sidecar runtimes are fetched either way).
 #
 # Usage:
-#   scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE [--dry-run] [--force] \
+#   scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM [--dry-run] [--force] \
 #       [--dev] [--with-assets] [--all-models] [--accept-license]
 set -euo pipefail
 

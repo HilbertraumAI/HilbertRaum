@@ -12,7 +12,7 @@
 #            exists) — mirrors commercial-drive.ts assertCommercialDrive.
 #
 # Usage:
-#   scripts/verify-models.sh --target /Volumes/PRIVATE_AI_DRIVE [--generate] [--strict]
+#   scripts/verify-models.sh --target /Volumes/HILBERTRAUM [--generate] [--strict]
 set -euo pipefail
 
 TARGET=""

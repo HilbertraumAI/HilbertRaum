@@ -27,7 +27,7 @@
 # downloads into ocr/ — no extraction, no marker; idempotency IS the hash).
 #
 # Usage:
-#   scripts/fetch-runtime.sh --target /Volumes/PRIVATE_AI_DRIVE \
+#   scripts/fetch-runtime.sh --target /Volumes/HILBERTRAUM \
 #       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|ocr] [--dry-run]
 set -euo pipefail
 

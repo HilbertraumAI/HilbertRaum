@@ -45,7 +45,7 @@ export interface CommercialStep {
 export type CommercialOs = 'win' | 'mac' | 'linux'
 
 export interface PlanCommercialDriveOptions {
-  /** The drive root to build onto (e.g. `E:\` or `/Volumes/PRIVATE_AI_DRIVE`). */
+  /** The drive root to build onto (e.g. `E:\` or `/Volumes/HILBERTRAUM`). */
   target: string
   /** Which OS the portable app is packaged + signed for. Default `win`. */
   os?: CommercialOs

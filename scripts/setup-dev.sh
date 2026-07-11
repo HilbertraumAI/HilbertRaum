@@ -54,4 +54,4 @@ fi
 echo
 echo 'Setup complete. Next:'
 echo '  npm run dev                                   # launch the app'
-echo '  scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE'
+echo '  scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM'

@@ -90,7 +90,7 @@ real AI answers.
    model into `models/embeddings/`). File names come from the model's manifest (`local_path`).
 3. Put the `llama-server` program for your system into `runtime/llama.cpp/win` (Windows),
    `runtime/llama.cpp/mac` (macOS), or `runtime/llama.cpp/linux` (Linux).
-4. Restart the app and **Start** the model again.
+4. Restart the app and press **Use this model** again.
 
 If you have the repo, a drive builder can do steps 2–3 with the prepare-drive + verify-models
 scripts (see [`packaging.md`](packaging.md)).
