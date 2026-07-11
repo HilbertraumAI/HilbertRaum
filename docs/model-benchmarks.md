@@ -513,6 +513,21 @@ runtime pin they need (**b9849**, bumped from b9585) has not been smoked on this
 > bundled). The §4 `recommended_min_ram_gb` values for these are **placeholders pending a real peak-RSS
 > measurement** (24 GB for the 27B/35B is a conservative guess, not a measured floor).
 
+**Field signal on the 4B (issue #53, 2026-07-11)** — recorded as eval input, NOT a promotion: a
+tester on a weak 16 GB laptop (weak iGPU) reports `qwen3.5-4b-ud-q4kxl` at **~2 tok/s with usable
+quality** as the best speed/quality trade-off of the catalog on that class of machine — the 16 GB
+recommendation (Ministral 8B) is roughly twice the compute per token there, and the fast-tier
+2B/0.8B give up more quality than they save. Running through the app is also an informal
+load+stream datapoint for b9849 (the §9.1 smoke on this project's drive is still owed). Two
+mechanics facts for the eventual promotion (verified against `recommendModelIdByRam`, recorded in
+the manifest): **rank 1–2 wins nothing** (qwen3-4b takes ≤12 GB on the rank/size tiebreaks,
+Ministral keeps 16–20 GB), and **rank ≥ 3 also steals 16/20 GB from Ministral** (both carry
+`recommended_ram_gb: 16`) — so a low-end-only promotion must retune `recommended_ram_gb` from the
+real peak-RSS measurement, or land with the signal-aware picker follow-up (issue #53 option 2:
+feed the Diagnostics benchmark's measured tok/s — persisted with its `measuredModelId` since
+issue #52 — into the recommendation, capturing the weak-16 GB-laptop case without misranking
+capable 16 GB machines).
+
 Issue #48 (2026-07-10) extends this wave's scope, still under the same gate: the fast-tier
 `qwen3.5-2b-ud-q4kxl` / `qwen3.5-0.8b-q6` have no incumbent to displace (low-risk promotions once
 evaled), and the eval should record **context length** and **thinking-mode support** as

@@ -12,6 +12,19 @@ recommended_ram_gb: 16
 # run like the Phase-29 models, and (2) the RUNTIME compatibility on the freshly-bumped b9849
 # build still needs a manual smoke (see the note below). Selectable manual pick; promote with a
 # real `recommendation_rank` only after it is both benchmarked AND confirmed to load on b9849.
+#
+# FIELD SIGNAL (issue #53, 2026-07-11): a tester reports this model as the best speed/quality
+# trade-off on a weak 16 GB laptop (weak iGPU, ~2 tok/s via the app — which is also an informal
+# load+stream datapoint for b9849, though not the §9.1 smoke). The issue asks to promote it as
+# the standard low-end pick; per model-benchmarks.md §9 that stays gated on the local grounded-QA
+# eval + the §9.1 smoke (field/public datapoints deliberately don't count).
+# PICKER MECHANICS FOR THE EVENTUAL PROMOTION (verified against recommendModelIdByRam): at rank
+# 1–2 this model wins NOTHING — qwen3-4b-instruct-q4 (rank 2, min 8, smaller on disk) takes the
+# ≤12 GB tiers on the tiebreaks, Ministral the 16–20 GB ones. Rank ≥ 3 makes it the ≤12 GB pick
+# but would ALSO steal 16/20 GB from Ministral (both carry recommended_ram_gb: 16) — so a
+# promotion that only targets the low end must retune recommended_ram_gb (needs the real
+# peak-RSS measurement) or rank it alongside a picker change (issue #53 option 2: feed the
+# benchmark's measured tok/s — now recorded per issue #52 — into the recommendation).
 recommendation_rank: 0
 recommended_context_tokens: 4096
 # Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat

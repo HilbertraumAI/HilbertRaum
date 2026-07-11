@@ -10,6 +10,13 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-11 — **Beta feedback issues #51 + #52 + #53 (exFAT "scan and fix" prompt / at-rest WAL sidecars; Diagnostics tok/s measures the loaded model unlabeled + silently steers the profile; Qwen3.5 4B low-end promotion request) — #51/#52 FIXED, #53 groundwork recorded (rank stays owner-gated).**_
+Second post-launch tester wave, each analyzed to root cause before any fix:
+- **#51 (Windows "scan and fix" on plug-in — exFAT dirty bit):** the report's framing ("app-side WAL/log handles make it routine") was PARTIALLY stale: the encrypted quit path already checkpoints+closes+shreds via `workspace.lock()`, and the log holds no persistent handle (memory-buffered, whole-file atomic replace per flush). The REAL gap: `lock()` is a documented no-op for `plaintext_dev`, so every clean quit of a plaintext workspace left `-wal`/`-shm` at rest (what the reporter's dev drive shows). Fix: new **`WorkspaceController.shutdown()`** — `lock()` for encrypted, plus `wal_checkpoint(TRUNCATE)` + `close()` for plaintext — wired into `performShutdown` AND the `uncaughtException` handler; quit now leaves a bare `hilbertraum.sqlite` in BOTH modes (crash-left plaintext sidecars are deliberately KEPT — they hold committed transactions SQLite replays on next open). Tests: shutdown ordering updated (`workspace.shutdown()`, event label kept); +2 integration (on-disk `-wal`/`-shm` absence after shutdown, both modes, with relaunch round-trip). Docs: troubleshooting gains the "Windows asks to scan and fix" entry (scan is safe; quit-then-eject habit; `FOUND.000` meaning); user-guide §13 "Before unplugging"; drive-layout names the sidecars; security-model records the design INCLUDING the declined alternative (**`journal_mode=DELETE` on exFAT: declined** — WAL is the deliberate USB-perf choice, a mid-session unplug dirties the volume regardless, DELETE doubles fsync cost). Residuals → §5 item 9 (idle checkpoint posture, in-app eject button, download `.part` stream not torn down on quit, kit quick-start card).
+- **#52 (Diagnostics "Tokens / sec" names no model + silently steers the recommendation):** confirmed as reported, plus one aggravation — the tok/s profile downgrade emitted NO warning at all. Fix in [`benchmark.ts`](apps/desktop/src/main/services/benchmark.ts): **`BenchmarkResult.measuredModelId`** (loaded model at measure time; null when unmeasured; absent pre-field → readers treat as null, old cards render unchanged; no settings-validation change — `lastBenchmark` is shape-checked as a plain object); the card + Copy text render `30 (measured with the loaded model <id>)` via ONE shared helper; new persisted warning `main.benchmark.warnVeryLowTokens` NAMES the model, emitted only when the reading ACTUALLY moved the profile ("with-tps ≠ without-tps" classification — an already-TINY box never over-claims). The warning is the display map's second INTERPOLATED persist-canonical key (template-regex round-trip keeps the id verbatim in German). Deliberately NOT done: suppressing the downgrade for oversized measured models — that is #53's signal-aware-picker follow-up, now unblocked data-wise. Tests +6 across benchmark (incl. a deliberately-slow fake runtime driving the warning end-to-end, machine-independent consistency assertion), display-map, DiagnosticsCopySave (+legacy-result rendering). Record: benchmark.md (steps/classification/warnings).
+- **#53 (promote Qwen3.5 4B to the standard low-end pick):** the rank edit is owner-gated in five places (manifest gate, model-policy, model-benchmarks §9/§6.3, §5 item 8) on the local grounded-QA eval + §9.1 b9849 smoke — field datapoints deliberately don't count, so **rank stays 0**; issue left OPEN like #48. NEW mechanics finding recorded (manifest + §9 + §5 item 8): **the issue's option 1 doesn't work as written** — at rank 1–2 the 4B wins NOTHING (qwen3-4b rank 2 + smaller-disk takes ≤12 GB; Ministral holds 16–20), and at rank ≥3 it ALSO steals 16/20 GB from Ministral (shared `recommended_ram_gb: 16`) — so the promotion needs a peak-RSS-based RAM retune or the option-2 signal-aware picker (which #52's `measuredModelId` now feeds). The ~2 tok/s field report is recorded as eval input + an informal b9849 load observation.
+Suite: typecheck clean, **4045 tests pass** (47 skipped), `npm run build` green. Issue disposition: #51 + #52 commented + closed via API; **#53 commented but left OPEN** (owner-gated §9 eval, §5 item 8).
+
 _2026-07-11 — **Beta feedback issues #48 + #49 + #50 (stale model recommendations / 20–24 GB tier gap; lockfile peer-flag churn; reasoning models zero out the coverage-extract pass) — FIXED on local `master`.**_
 Three post-launch tester reports, each analyzed to root cause before any fix:
 - **#50 (the severe one — coverage-extract yields 0 items under reasoning models):** the ingest-time
@@ -10927,9 +10934,29 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    ranked-only guard removed the rank-0 capacity hijack those tier-aligned lines defended against).
    The 20–24 GB tier gap half of #48 is already FIXED (§6.3, 2026-07-11). Candidates without a
    shippable manifest (e.g. Qwen3.6 27B) additionally need productizing: `download:` block, real
-   upstream sha256, license review.
+   upstream sha256, license review. **Issue #53 (2026-07-11) raises this eval's priority for the
+   4B:** a field report (weak 16 GB laptop, weak iGPU) finds `qwen3.5-4b-ud-q4kxl` at ~2 tok/s the
+   best speed/quality trade-off of the catalog on that machine class — recorded as eval INPUT in
+   model-benchmarks §9 + the manifest (per §9, field/public datapoints never substitute for the
+   local eval). Two mechanics facts for the promotion (verified against `recommendModelIdByRam`):
+   rank 1–2 wins the 4B nothing (qwen3-4b takes ≤12 GB on the rank/disk-size tiebreaks); rank ≥ 3
+   also steals 16/20 GB from Ministral (shared `recommended_ram_gb: 16`) — so promote WITH a
+   peak-RSS-based `recommended_ram_gb` retune, or via issue #53 option 2 (signal-aware picker:
+   feed the benchmark's measured tok/s — persisted with `measuredModelId` since #52 — into the
+   recommendation; that follow-up would also resolve #52's remaining downgrade question).
+9. **Issue #51 residuals (owner decisions — the app-side quit close + docs shipped 2026-07-11):**
+   - **Idle posture:** checkpoint + release the DB when the app is idle, so an unplug while "open
+     but not in use" is harmless. New machinery (no app-level idle detector exists); the
+     injected-clock idle-teardown in `translation/runtime.ts` is the pattern to mirror.
+   - **In-app "Eject drive" button** (flush everything, then trigger the OS eject) — the safest
+     UX for non-technical kit customers; needs per-OS eject plumbing.
+   - **Downloads on quit:** a running model download's `.part` write stream is not torn down by
+     `performShutdown` (the process exit closes the fd; `.part` resume re-validates) — harmless
+     today, but a `downloads.cancelAll()`-style teardown would make quit-mid-download tidy.
+   - **Kit quick-start card:** the printed "Before unplugging" note (quit → wait → eject) is a
+     kit-material task, not a repo doc — the wording now exists in user-guide §13.
 
-**Current gate (2026-07-11, issues #48/#49/#50 wave): typecheck clean, 4037 tests pass (47 skipped —
+**Current gate (2026-07-11, issues #51/#52/#53 wave): typecheck clean, 4045 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2
