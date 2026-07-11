@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
+import { ToastProvider } from '../../src/renderer/components'
 import {
   DEFAULT_SETTINGS,
   type AppSettings,
@@ -181,5 +182,36 @@ describe('Settings → General — Use GPU acceleration (Phase 16)', () => {
     expect(toggle.checked).toBe(false)
     await userEvent.click(toggle)
     expect(update).toHaveBeenCalledWith({ gpuMode: 'auto' })
+  })
+
+  // full-audit 2026-07-11 CODE-7: a refused save (the BE-1 write gate on a locked workspace)
+  // used to be an unhandled rejection with zero feedback — the controlled Switch just snapped
+  // back, a silent revert. Now a failure toast explains it and the control keeps showing the
+  // server's (unchanged) state.
+  it('toasts a failed save and keeps the switch on the server state (no unhandled rejection)', async () => {
+    const update = vi.fn(async () => {
+      throw new Error(
+        "Error invoking remote method 'settings:update': Error: The workspace is locked."
+      )
+    })
+    stubApi({
+      getSettings: vi.fn(async () => settings()), // server state: gpuMode 'auto' → ON
+      updateSettings: update as never
+    })
+    render(
+      <ToastProvider>
+        <SettingsScreen />
+      </ToastProvider>
+    )
+    const toggle = (await screen.findByLabelText(/use gpu acceleration/i)) as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+
+    await userEvent.click(toggle)
+    expect(update).toHaveBeenCalledWith({ gpuMode: 'off' })
+    // The failure toast — never the success "Saved".
+    expect(await screen.findByText('This setting couldn’t be saved. Please try again.')).toBeInTheDocument()
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument()
+    // The controlled Switch reflects the SERVER state (the save never landed): still ON.
+    expect((screen.getByLabelText(/use gpu acceleration/i) as HTMLInputElement).checked).toBe(true)
   })
 })

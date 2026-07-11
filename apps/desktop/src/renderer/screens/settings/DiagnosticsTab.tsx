@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Banner, Button, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
-import { friendlyIpcError } from '../../lib/errors'
+import { friendlyIpcError, runAndSurface } from '../../lib/errors'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
@@ -194,6 +194,11 @@ export function DiagnosticsTab(): JSX.Element {
   const [showLogs, setShowLogs] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // full-audit 2026-07-11 CODE-27: "Try GPU again" was the one handler in this file without
+  // a try/catch + mounted guard — a rejected re-probe was an unhandled rejection with zero
+  // feedback. Its failure gets its own banner next to the button (the benchmark's `error`
+  // slot carries benchmark-specific copy).
+  const [gpuRetryError, setGpuRetryError] = useState<string | null>(null)
   // Activity panel: loaded on demand, paged via the beforeId cursor.
   const [showActivity, setShowActivity] = useState(false)
   const [events, setEvents] = useState<AuditEvent[] | null>(null)
@@ -312,9 +317,20 @@ export function DiagnosticsTab(): JSX.Element {
   // (e.g. after a graphics-driver update) WITHOUT touching the Settings toggle. The
   // dedicated IPC also invalidates the session probe cache + re-probes — a plain
   // settings write would keep a stale "no GPU" probe for the whole session.
+  // CODE-27: awaited + surfaced (the shared runAndSurface class fix) and mountedRef-guarded
+  // like every sibling handler (audit FE-4) — a late reply/rejection after leaving the tab
+  // must neither setState nor vanish silently.
   async function tryGpuAgain(): Promise<void> {
-    const next = await window.api.tryGpuAgain()
-    setSettings(next)
+    setGpuRetryError(null)
+    await runAndSurface(
+      async () => {
+        const next = await window.api.tryGpuAgain()
+        if (mountedRef.current) setSettings(next)
+      },
+      (message) => {
+        if (mountedRef.current) setGpuRetryError(message)
+      }
+    )
   }
 
   async function runBenchmark(): Promise<void> {
@@ -374,6 +390,10 @@ export function DiagnosticsTab(): JSX.Element {
             {t('diag.gpu.compat')}{' '}
             {settings.gpuMode === 'auto' ? t('diag.gpu.tryHint') : t('diag.gpu.offHint')}
           </Banner>
+        )}
+        {/* CODE-27: the re-probe's failure, in context under the button that triggered it. */}
+        {gpuRetryError && (
+          <Banner tone="error">{t('diag.gpu.tryFailed', { error: gpuRetryError })}</Banner>
         )}
         <div className="actions">
           <Button size="sm" onClick={() => void refreshStatus()}>

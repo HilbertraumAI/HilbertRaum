@@ -8,7 +8,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Badge, Banner, Button, Chip, Icon, Spinner } from '../../components'
 import type { DocumentInfo, DocumentLifecycle } from '@shared/types'
 import { generatedStaleness } from '@shared/types'
-import { cancelActiveDocTask, type ActiveDocTask } from '../../lib/doctasks'
+import type { ActiveDocTask } from '../../lib/doctasks'
 import { localizeServerCopy } from '../../lib/displayMap'
 import type { I18n } from '../../i18n'
 import type { UiLanguage } from '@shared/i18n'
@@ -55,6 +55,7 @@ export const DocRow = memo(function DocRow({
   hasActiveProjects,
   onToggleSelected,
   setMenuOpenId,
+  onCancelTask,
   onPreview,
   run,
   onSummarize,
@@ -96,6 +97,10 @@ export const DocRow = memo(function DocRow({
   hasActiveProjects: boolean
   onToggleSelected: (id: string) => void
   setMenuOpenId: (id: string | null) => void
+  /** Cancel the row's active task — screen-owned so a REJECTED cancel surfaces on the shared
+   *  error banner instead of vanishing as an unhandled rejection (full-audit 2026-07-11
+   *  CODE-29); stable identity via useEventCallback (PERF-5). */
+  onCancelTask: () => void
   onPreview: (d: DocumentInfo) => void
   run: (key: string, fn: () => Promise<unknown>) => void
   onSummarize: (d: DocumentInfo) => void
@@ -241,7 +246,7 @@ export const DocRow = memo(function DocRow({
             </Button>
             <Button
               size="sm"
-              onClick={() => void cancelActiveDocTask()}
+              onClick={onCancelTask}
               title={t(rowTask.kind === 'ocr' ? 'docs.cancelOcrTitle' : 'docs.cancelTaskTitle')}
             >
               {t('docs.cancel')}

@@ -10,3 +10,24 @@ export function friendlyIpcError(err: unknown): string {
     .replace(/^Error invoking remote method '[^']+':\s*/, '')
     .replace(/^\w*Error:\s*/, '')
 }
+
+/**
+ * Await a click-handler's async work and SURFACE a failure instead of dropping it
+ * (full-audit 2026-07-11 CODE-26..29 class fix). The bare `void handler()` idiom
+ * discarded the promise: a rejection became an unhandled rejection with zero user
+ * feedback, leaving the UI stuck in its pre-click state (an unlocked shell after a
+ * failed "Lock now", a spinning row after a failed cancel). This awaits, catches,
+ * strips the IPC transport prefix via `friendlyIpcError`, and hands the friendly
+ * message to the call site's own surface (banner or toast — per-site choice). Never
+ * rejects, so `void runAndSurface(…)` at a JSX call site is genuinely fire-safe.
+ */
+export async function runAndSurface(
+  fn: () => unknown,
+  onError: (message: string) => void
+): Promise<void> {
+  try {
+    await fn()
+  } catch (err) {
+    onError(friendlyIpcError(err))
+  }
+}

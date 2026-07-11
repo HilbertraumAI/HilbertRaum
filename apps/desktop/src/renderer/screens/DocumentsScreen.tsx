@@ -35,7 +35,7 @@ import {
   subscribeDocTask,
   type ActiveDocTask
 } from '../lib/doctasks'
-import { friendlyIpcError } from '../lib/errors'
+import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
@@ -852,9 +852,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // wrappers keep each handler's identity constant across the 400 ms task-progress ticks (which
   // re-run this body via the `activeTask` store) and unrelated state changes, so a row's React.memo
   // holds unless ITS OWN props change. useState setters (setMenuOpenId/setTranslateDoc/
-  // setAddToProjectFor/setProjectModal/setConfirmDelete) and the imported cancelActiveDocTask are
-  // already stable, so they pass through directly. The impl functions above are hoisted, so
-  // referencing them here is fine.
+  // setAddToProjectFor/setProjectModal/setConfirmDelete) are already stable, so they pass
+  // through directly. The impl functions above are hoisted, so referencing them here is fine.
   const handleToggleSelected = useEventCallback(toggleSelected)
   const handlePreview = useEventCallback(onPreview)
   const handleRun = useEventCallback(run)
@@ -867,6 +866,14 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const handleRemoveFromCollection = useEventCallback(onRemoveFromCollection)
   // The translate model-missing deep link (TG-3): the DocRow install item → AI Model screen.
   const handleOpenModels = useEventCallback(() => onNavigate?.('models'))
+  // full-audit 2026-07-11 CODE-29: the row's Cancel used to call cancelActiveDocTask()
+  // fire-and-forget from inside DocRow — a rejected cancel (workspace locked, backend gone)
+  // left the row spinning with an unhandled rejection and zero feedback. Routed through the
+  // screen so the failure lands on the shared error banner; useEventCallback keeps the
+  // identity stable for the row memo (PERF-5).
+  const handleCancelTask = useEventCallback(() =>
+    runAndSurface(cancelActiveDocTask, (m) => mountedRef.current && setError(m))
+  )
 
   // One row's <DocRow> — shared by the windowed and the un-windowed (fallback) list paths (PERF-2),
   // so the props wiring stays in exactly one place. The data SOURCE is unchanged from the former
@@ -910,6 +917,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         hasActiveProjects={activeProjects.length > 0}
         onToggleSelected={handleToggleSelected}
         setMenuOpenId={setMenuOpenId}
+        onCancelTask={handleCancelTask}
         onPreview={handlePreview}
         run={handleRun}
         onSummarize={handleSummarize}
@@ -1092,8 +1100,17 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
             max={reindexProgress.total}
           />
           {/* Stop the in-flight bulk re-index. The current document finishes; the rest are skipped
-              (main aborts at the next iteration boundary). The poll then clears this bar + toasts. */}
-          <Button size="sm" onClick={() => void window.api.cancelReindexAll?.()}>
+              (main aborts at the next iteration boundary). The poll then clears this bar + toasts.
+              CODE-29: surfaced — a rejected cancel used to leave the bar running silently. */}
+          <Button
+            size="sm"
+            onClick={() =>
+              void runAndSurface(
+                () => window.api.cancelReindexAll?.(),
+                (m) => mountedRef.current && setError(m)
+              )
+            }
+          >
             {t('docs.reindexAllCancel')}
           </Button>
         </div>

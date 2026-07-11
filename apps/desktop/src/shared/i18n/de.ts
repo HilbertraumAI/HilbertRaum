@@ -1129,6 +1129,8 @@ export const de: Record<keyof typeof en, string> = {
   'settings.tab.diagnostics': 'Diagnose (erweitert)',
   'settings.loading': 'Einstellungen werden geladen…',
   'settings.saved': 'Gespeichert',
+  // CODE-7 (full-audit 2026-07-11): ein abgelehntes Speichern darf nie stumm bleiben.
+  'settings.saveFailed': 'Diese Einstellung konnte nicht gespeichert werden. Bitte versuch es erneut.',
   'settings.network.title': 'Privatsphäre & Offline-Modus',
   'settings.network.allow': 'Internetzugriff für Modell-Downloads und Updates erlauben',
   'settings.network.hint':
@@ -1535,6 +1537,8 @@ export const de: Record<keyof typeof en, string> = {
     'Die Grafikbeschleunigung ist in den Einstellungen ausgeschaltet — schalte sie dort ' +
     'wieder ein, um die Grafikkarte zu verwenden.',
   'diag.gpu.tryAgain': 'GPU erneut versuchen',
+  // CODE-27 (full-audit 2026-07-11): die Fehlerzeile des erneuten GPU-Versuchs.
+  'diag.gpu.tryFailed': 'Der erneute Versuch mit der Grafikkarte hat nicht geklappt: {error}',
   'diag.refresh': 'Aktualisieren',
   'diag.bench.title': 'Hardware-Benchmark',
   'diag.bench.hint':

@@ -1101,6 +1101,9 @@ export const en = {
   'settings.tab.diagnostics': 'Diagnostics (advanced)',
   'settings.loading': 'Loading settings…',
   'settings.saved': 'Saved',
+  // CODE-7 (full-audit 2026-07-11): a refused save must never be silent — the toast pairs
+  // with the control keeping its last-confirmed (server) state.
+  'settings.saveFailed': 'This setting couldn’t be saved. Please try again.',
   'settings.network.title': 'Privacy & Offline Mode',
   'settings.network.allow': 'Allow internet access for model downloads and updates',
   'settings.network.hint':
@@ -1507,6 +1510,9 @@ export const en = {
     'GPU acceleration is turned off in Settings — turn it back on there to use the ' +
     'graphics card again.',
   'diag.gpu.tryAgain': 'Try GPU again',
+  // CODE-27 (full-audit 2026-07-11): the re-probe's failure line — {error} is the friendly
+  // main-process message after friendlyIpcError stripped the transport prefix.
+  'diag.gpu.tryFailed': 'Trying the graphics card again didn’t work: {error}',
   'diag.refresh': 'Refresh',
   'diag.bench.title': 'Hardware benchmark',
   'diag.bench.hint':

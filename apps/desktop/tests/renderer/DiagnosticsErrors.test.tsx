@@ -38,11 +38,17 @@ const appStatus = {
   dictationAvailable: false
 } as unknown as AppStatus
 
-function stubDiag(over: { runBenchmark?: ReturnType<typeof vi.fn> } = {}): void {
+function stubDiag(
+  over: {
+    runBenchmark?: ReturnType<typeof vi.fn>
+    settings?: typeof DEFAULT_SETTINGS
+    tryGpuAgain?: ReturnType<typeof vi.fn>
+  } = {}
+): void {
   stubApi({
     getDriveStatus: vi.fn(async () => ({}) as never),
     getRuntimeInstall: vi.fn(async () => null),
-    getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+    getSettings: vi.fn(async () => over.settings ?? DEFAULT_SETTINGS),
     getAppStatus: vi.fn(async () => appStatus),
     getRuntimeStatus: vi.fn(async () => ({
       running: false,
@@ -51,7 +57,8 @@ function stubDiag(over: { runBenchmark?: ReturnType<typeof vi.fn> } = {}): void 
       healthy: false,
       message: 'Stopped'
     })),
-    runBenchmark: (over.runBenchmark ?? vi.fn()) as never
+    runBenchmark: (over.runBenchmark ?? vi.fn()) as never,
+    tryGpuAgain: (over.tryGpuAgain ?? vi.fn()) as never
   } as never)
 }
 
@@ -70,6 +77,28 @@ describe('DiagnosticsTab — localized errors (FE-8)', () => {
     // The transport prefix + Error-class name were stripped (the bug FE-8 fixes).
     expect(banner.textContent).not.toContain('Error invoking remote method')
     expect(banner.textContent).not.toContain('Error:')
+  })
+
+  // full-audit 2026-07-11 CODE-27: "Try GPU again" was the one handler in the file without a
+  // try/catch — a rejecting re-probe was an unhandled promise rejection with zero feedback.
+  it('surfaces a rejected "Try GPU again" on a banner (no unhandled rejection)', async () => {
+    const user = userEvent.setup()
+    const tryGpuAgain = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'tryGpuAgain': Error: gpu probe exploded")
+    })
+    stubDiag({
+      settings: { ...DEFAULT_SETTINGS, gpuAutoDisabled: true },
+      tryGpuAgain
+    })
+    renderTab()
+    await user.click(await screen.findByRole('button', { name: /try gpu again/i }))
+    expect(tryGpuAgain).toHaveBeenCalledTimes(1)
+
+    // The failure line, with the friendly message only (transport prefix stripped).
+    const banner = await screen.findByText(/didn’t work: gpu probe exploded/)
+    expect(banner.textContent).not.toContain('Error invoking remote method')
+    // The compatibility-mode banner (and its retry button) stays — the flag was not cleared.
+    expect(screen.getByRole('button', { name: /try gpu again/i })).toBeInTheDocument()
   })
 
   it('renders the localized "unknown" hardware profile, not the literal UNKNOWN', async () => {

@@ -11103,10 +11103,35 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     CODE-2 cancel, so a quit landing there spawned the new model and stalled behind its full load;
     (ii) the CODE-13 engine refusal now uses `chatEngineInUse()` (running OR
     `status().startingModelId` in flight) — `activeModelId()` alone is null during a multi-GB
-    model START while the loading child already executes from the llama_cpp dir. Remaining phases
-    D–J unstarted.
+    model START while the loading child already executes from the llama_cpp dir.
+    **Phase F1 DONE (2026-07-11 — renderer error-surface class, CODE-6/7/26/27/28/29):**
+    (a) class helper `runAndSurface(fn, onError)` in `renderer/lib/errors.ts` — awaits a
+    fire-and-forget UI action, catches, routes through `friendlyIpcError`, hands the friendly
+    message to the site's own surface (banner/toast), never rejects; converted sites:
+    CODE-26 App "Lock now" (failure → dismissible error banner; session stores NOT purged and
+    shell stays unlocked — main really is still unlocked per CODE-1a), CODE-27 Diagnostics
+    "Try GPU again" (own `gpuRetryError` banner, new `diag.gpu.tryFailed` EN+DE, + the
+    file-uniform mountedRef guard it was missing), CODE-28 both ModelsScreen poll-completion
+    `void refresh()` calls (→ screen error banner), CODE-29 the DocRow task-cancel (now a
+    screen-owned `onCancelTask` prop, useEventCallback-stable for the PERF-5 memo) + the
+    bulk-re-index cancel (→ screen error banner). (b) CODE-6 — doctasks store ports the
+    skillruns SKA-40 tolerance: `MAX_POLL_FAILURES = 3` consecutive-failure counter (any
+    success resets), below the max the task/snapshot stays untouched, at the max polling stops
+    and the task is KEPT flagged `stateUnknown` instead of `setActive(null)` (one transient
+    IPC error used to vanish the busy/Cancel UI mid-run and un-gate every task button);
+    `acknowledgeDocTask()` accepts a state-unknown task (skillruns' dismissible semantics).
+    (c) CODE-7 — `SettingsScreen.patch` try/catch + `settings.saveFailed` toast (EN+DE, the
+    SkillsTab catch+toast precedent) + mountedRef; on failure `settings` state is deliberately
+    untouched so every control keeps showing the server's last-confirmed values. Tests +8 (one
+    RTL test per converted site asserting stub-rejection → visible friendly feedback + intact
+    pre-click state, and both CODE-6 outcomes: reject-once-then-succeed → retained + terminal
+    still surfaces; 3 consecutive → state-unknown, polling stopped, dismissible). No docs
+    changes (behavior now matches what user-guide already implies). Residuals in the plan's
+    discoveries: the state-unknown give-up has no renderer dismissal affordance yet (safe-side;
+    F2 rider), and ChatScreen's third `cancelActiveDocTask` site swallows its failure via an
+    explicit catch (CODE-39 class, F2). Remaining phases D, E, F2, G–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase C — CODE-2/3/11/12/13 quit-path lifecycle incl. the review follow-up, +17 tests): typecheck clean, 4083 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase F1 — CODE-6/7/26/27/28/29 renderer error-surface class, +8 tests): typecheck clean, 4091 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

@@ -42,6 +42,7 @@ import {
   type IconName
 } from './components'
 import { setThemeSetting } from './theme'
+import { runAndSurface } from './lib/errors'
 import { purgeSessionStores } from './lib/lockPurge'
 import { I18nProvider, useT, type I18n } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
@@ -114,6 +115,12 @@ function AppShell(): JSX.Element {
   // One-line, dismissible runtime notice: currently the GPU crash auto-fallback's
   // friendly "switched to compatibility mode" message (spec §11.4 tone).
   const [notice, setNotice] = useState<string | null>(null)
+  // full-audit 2026-07-11 CODE-26: a FAILED "Lock now" (main restored the unlocked vault,
+  // CODE-1a) used to be an unhandled rejection — the shell silently stayed unlocked on the
+  // most security-sensitive control. Main's friendly copy is surfaced here as a dismissible
+  // error banner; the session stores are deliberately NOT purged and the shell stays usable
+  // (the workspace really is still unlocked), so the user can free space and retry.
+  const [lockError, setLockError] = useState<string | null>(null)
   const { t, applyLanguageSetting } = useT()
 
   useEffect(() => {
@@ -179,6 +186,7 @@ function AppShell(): JSX.Element {
   }
 
   async function lockNow(): Promise<void> {
+    setLockError(null)
     const next = await window.api.lockWorkspace()
     // The real lock seam (TA-2 / H3): main has now aborted the jobs + re-encrypted the vault, so
     // drop the resident source/translation/image content from the module-level session stores in
@@ -280,7 +288,8 @@ function AppShell(): JSX.Element {
             className="lock-btn"
             title={t('app.lockNowTitle')}
             aria-label={t('app.lockNow')}
-            onClick={() => void lockNow()}
+            // CODE-26: surfaced, never fire-and-forget — a rejected lock lands on the banner.
+            onClick={() => void runAndSurface(lockNow, setLockError)}
           >
             <Icon name="lock" className="nav-icon" />
             <span className="nav-label">{t('app.lockNow')}</span>
@@ -294,6 +303,13 @@ function AppShell(): JSX.Element {
       </nav>
 
       <main className="content">
+        {/* CODE-26: the failed-lock notice — main's friendly persist-canonical copy
+            (already localized main-side), next to the content the user keeps working in. */}
+        {lockError && (
+          <Banner tone="error" t={t} onDismiss={() => setLockError(null)}>
+            {lockError}
+          </Banner>
+        )}
         {notice && (
           <Banner
             tone="info"

@@ -24,12 +24,24 @@ export interface ActiveDocTask {
   documentIds: string[]
   /** Latest polled status; null until the first poll lands. */
   status: DocTaskStatus | null
+  /** CODE-6: true after MAX_POLL_FAILURES consecutive poll errors — live state unknown, task kept. */
+  stateUnknown: boolean
 }
 
 const POLL_MS = 400
 
+// CODE-6 (full-audit 2026-07-11) — the skillruns SKA-40 tolerance, ported: how many CONSECUTIVE
+// poll failures the active task tolerates before the store gives up polling it. On give-up it
+// keeps a labelled "state unknown" task (never silently dropping a live task — today ONE
+// transient IPC error nulled the store: the busy/Cancel UI vanished while the task still ran,
+// `anyTaskActive` flipped false so re-enabled actions hit backend busy-rejects, and the
+// done-task effect never fired, so a finished task's outcome was never surfaced).
+const MAX_POLL_FAILURES = 3
+
 let active: ActiveDocTask | null = null
 let timer: ReturnType<typeof setInterval> | null = null
+/** CODE-6: consecutive poll-failure counter for the active task; any successful poll resets it. */
+let pollFailures = 0
 const listeners = new Set<() => void>()
 
 function notify(): void {
@@ -91,7 +103,8 @@ export async function startTask(
   const ids = Array.isArray(documentIds) ? documentIds : [documentIds]
   const { jobId } = await window.api.startDocTask({ kind, documentIds: ids, params })
   stopPolling()
-  setActive({ jobId, kind, documentIds: ids, status: null })
+  pollFailures = 0 // CODE-6: the counter tracks the CURRENT task's polling run
+  setActive({ jobId, kind, documentIds: ids, status: null, stateUnknown: false })
   // The id this timer is watching. Reassigned when a chained follow-up task is adopted
   // (deep-index tree → extract, #38), so the same loop keeps polling through both passes.
   let watchedJobId = jobId
@@ -104,6 +117,7 @@ export async function startTask(
       }
       try {
         const status = await window.api.getDocTask(watchedJobId)
+        pollFailures = 0 // CODE-6: only CONSECUTIVE failures count — any success resets
         if (status.state === 'done' && params?.withExtract === true) {
           // Chain adoption (#38): "Build deep index" starts a 'tree' task (withExtract) that
           // chains a backend 'extract' task over the same document. When the tree completes,
@@ -119,17 +133,29 @@ export async function startTask(
             next.documentIds.some((id) => current.documentIds.includes(id))
           ) {
             watchedJobId = next.jobId
-            setActive({ jobId: next.jobId, kind: next.kind, documentIds: next.documentIds, status: next })
+            setActive({ jobId: next.jobId, kind: next.kind, documentIds: next.documentIds, status: next, stateUnknown: false })
             return
           }
         }
         // PF-7b: an unchanged tick sets nothing — subscribers keep the same snapshot object.
-        if (!sameStatus(current.status, status)) setActive({ ...current, status })
+        // (CODE-6: a recovered poll also clears a stateUnknown flag, mirroring skillruns.)
+        if (!sameStatus(current.status, status) || current.stateUnknown) {
+          setActive({ ...current, status, stateUnknown: false })
+        }
         if (isDocTaskTerminal(status)) stopPolling()
       } catch {
-        // Polling failed (e.g. workspace locked) — surface a terminal-ish stop.
-        stopPolling()
-        setActive(null)
+        // CODE-6 (full-audit 2026-07-11; SKA-40 port): tolerate transient IPC errors; give up
+        // only after MAX_POLL_FAILURES in a row, and KEEP a labelled "state unknown" task
+        // rather than silently dropping a live one (one flaky poll used to null the store).
+        // Below the max the snapshot stays untouched, so subscribers see no churn at all.
+        pollFailures += 1
+        if (pollFailures >= MAX_POLL_FAILURES) {
+          stopPolling()
+          const cur = active
+          if (cur && cur.jobId === watchedJobId && !cur.stateUnknown) {
+            setActive({ ...cur, stateUnknown: true })
+          }
+        }
       }
     })()
   }, POLL_MS)
@@ -140,9 +166,13 @@ export async function cancelActiveDocTask(): Promise<void> {
   await window.api.cancelDocTask()
 }
 
-/** Clear a finished (terminal) task after a screen has handled its outcome. */
+/**
+ * Clear a finished (terminal) task after a screen has handled its outcome. A state-unknown
+ * task (CODE-6 give-up) is dismissible the same way — mirroring skillruns' acknowledge —
+ * so a task whose live state the store could no longer learn is never stuck forever.
+ */
 export function acknowledgeDocTask(): void {
-  if (active && isDocTaskTerminal(active.status)) {
+  if (active && (isDocTaskTerminal(active.status) || active.stateUnknown)) {
     setActive(null)
   }
 }
@@ -151,5 +181,6 @@ export function acknowledgeDocTask(): void {
 export function resetDocTaskStoreForTests(): void {
   stopPolling()
   active = null
+  pollFailures = 0
   listeners.clear()
 }

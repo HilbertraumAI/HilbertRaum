@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, Spinner, type BadgeTone } from '../components'
-import { friendlyIpcError } from '../lib/errors'
+import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
@@ -198,9 +198,11 @@ export function ModelsScreen(): JSX.Element {
         .then((next) => {
           if (!mountedRef.current) return // late tick after unmount (FE-4)
           setJob(next)
-          // A finished download changes install state — refresh the cards once.
+          // A finished download changes install state — refresh the cards once. CODE-28
+          // (full-audit 2026-07-11): surfaced, not fire-and-forget — a failing refresh at
+          // exactly this transition left stale cards + an unhandled rejection.
           if (!JOB_LIVE.has(next.status) && JOB_LIVE.has(jobRef.current?.status ?? 'done')) {
-            void refresh()
+            void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
           }
         })
         .catch(() => undefined)
@@ -224,7 +226,8 @@ export function ModelsScreen(): JSX.Element {
             !ENGINE_JOB_LIVE.has(next.status) &&
             ENGINE_JOB_LIVE.has(engineJobRef.current?.status ?? 'done')
           ) {
-            void refresh()
+            // CODE-28: same surfaced completion-refresh as the model-download poll above.
+            void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
           }
         })
         .catch(() => undefined)

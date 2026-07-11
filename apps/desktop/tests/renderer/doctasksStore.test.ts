@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  acknowledgeDocTask,
   getActiveDocTask,
   resetDocTaskStoreForTests,
   startTask,
@@ -93,6 +94,68 @@ describe('doc-task store — no-change poll gate (PF-7b)', () => {
       cur.status = status({ state: 'done', progress: { stepsDone: 3, stepsTotal: 3 } })
       await vi.advanceTimersByTimeAsync(POLL_MS)
       expect(getActiveDocTask()?.status?.state).toBe('done') // terminal still lands + stops polling
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// CODE-6 (full-audit 2026-07-11) — the SKA-40 tolerance ported from skillruns: ONE transient
+// `getDocTask` rejection used to null the store (stopPolling + setActive(null)): the busy/Cancel
+// UI vanished while the task still ran, `anyTaskActive` flipped false (re-enabled buttons then
+// hit backend busy-rejects), and the done-task effect never fired — a finished summary never
+// auto-opened, a failed task's error was never shown.
+describe('doc-task store — poll-failure tolerance (CODE-6, SKA-40 port)', () => {
+  const POLL_MS = 400
+
+  it('tolerates a transient poll failure — the task is kept and its terminal state still surfaces', async () => {
+    vi.useFakeTimers()
+    try {
+      let polls = 0
+      stubApi({
+        startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
+        getDocTask: vi.fn(async () => {
+          polls += 1
+          // Tick 1 fails (the pre-fix drop), tick 2 recovers, tick 3 reports terminal.
+          if (polls === 1) throw new Error('transient IPC error')
+          return status({
+            state: polls >= 3 ? 'done' : 'running',
+            progress: { stepsDone: Math.min(polls, 3), stepsTotal: 3 }
+          })
+        })
+      } as never)
+      await startTask('summary', 'd1')
+      await vi.advanceTimersByTimeAsync(POLL_MS) // the failing tick
+      // Below MAX_POLL_FAILURES the task is RETAINED with an untouched snapshot (pre-fix: null).
+      expect(getActiveDocTask()).not.toBeNull()
+      expect(getActiveDocTask()?.stateUnknown).toBe(false)
+      // The next successful polls still land, through to the terminal outcome.
+      await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+      expect(getActiveDocTask()?.status?.state).toBe('done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gives up after MAX_POLL_FAILURES consecutive failures — keeps a state-unknown task, never a silent drop', async () => {
+    vi.useFakeTimers()
+    try {
+      const getDocTask = vi.fn(async () => {
+        throw new Error('transient IPC error')
+      })
+      stubApi({ startDocTask: vi.fn(async () => ({ jobId: 'jt' })), getDocTask } as never)
+      await startTask('summary', 'd1')
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3) // three consecutive failures = the max
+      const task = getActiveDocTask()
+      expect(task).not.toBeNull() // kept — anyTaskActive stays true, rows keep their busy state
+      expect(task?.stateUnknown).toBe(true)
+      // Give-up stops the polling loop: no further getDocTask churn.
+      const callsAtGiveUp = getDocTask.mock.calls.length
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+      expect(getDocTask.mock.calls.length).toBe(callsAtGiveUp)
+      // A state-unknown task is dismissible (mirrors skillruns' acknowledge) — never stuck forever.
+      acknowledgeDocTask()
+      expect(getActiveDocTask()).toBeNull()
     } finally {
       vi.useRealTimers()
     }

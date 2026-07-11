@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Banner,
   Button,
@@ -89,6 +89,16 @@ function GeneralTab(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const toast = useToast()
   const { t, lang, applyLanguageSetting } = useT()
+  // Component-level mounted flag (audit FE-4, the DiagnosticsTab discipline): `patch` runs
+  // from every toggle/segment click and its reply — or rejection — can land after the tab
+  // was left; each setState/toast below checks it first.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // The `active` guard avoids a setState after unmount if the read resolves late (audit FE-4).
   useEffect(() => {
@@ -103,12 +113,22 @@ function GeneralTab(): JSX.Element {
   }, [])
 
   async function patch(p: Partial<AppSettings>): Promise<void> {
-    const next = await window.api.updateSettings(p)
-    setSettings(next)
-    // Appearance + language apply immediately — the saved value, not the request.
-    if (p.theme !== undefined) setThemeSetting(next.theme)
-    if (p.uiLanguage !== undefined) applyLanguageSetting(next.uiLanguage)
-    toast(t('settings.saved'))
+    try {
+      const next = await window.api.updateSettings(p)
+      if (!mountedRef.current) return
+      setSettings(next)
+      // Appearance + language apply immediately — the saved value, not the request.
+      if (p.theme !== undefined) setThemeSetting(next.theme)
+      if (p.uiLanguage !== undefined) applyLanguageSetting(next.uiLanguage)
+      toast(t('settings.saved'))
+    } catch {
+      // full-audit 2026-07-11 CODE-7: a refused save (e.g. the BE-1 write gate on a locked
+      // workspace) used to be an unhandled rejection with ZERO feedback — the controlled
+      // Switch just snapped back, a silent revert. Surface it (the SkillsTab catch+toast
+      // precedent). `settings` is deliberately NOT touched: it still holds the server's
+      // last-confirmed values, so every control keeps showing the true persisted state.
+      if (mountedRef.current) toast(t('settings.saveFailed'))
+    }
   }
 
   if (!settings) {

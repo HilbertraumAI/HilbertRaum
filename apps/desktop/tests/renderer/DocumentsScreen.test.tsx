@@ -782,6 +782,27 @@ describe('DocumentsScreen', () => {
     await user.click(cancelBtn)
     expect(cancelReindexAll).toHaveBeenCalled()
   })
+
+  // full-audit 2026-07-11 CODE-29: the bulk-re-index Cancel was fire-and-forget (`void
+  // window.api.cancelReindexAll?.()`) — a rejected cancel left the bar running silently with
+  // an unhandled rejection. It now routes through runAndSurface → the screen's error banner.
+  it('surfaces a rejected bulk-re-index cancel on the error banner (no unhandled rejection)', async () => {
+    const user = userEvent.setup()
+    const running = { jobId: 'r1', total: 5, completed: 1, failed: 0, done: false, cancelled: false }
+    const getReindexAllJob = vi.fn(async () => running)
+    const cancelReindexAll = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'cancelReindexAll': Error: cancel exploded")
+    })
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob, cancelReindexAll })
+    render(<DocumentsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }))
+    expect(cancelReindexAll).toHaveBeenCalled()
+    // The friendly message (transport prefix stripped) lands on the error banner; the bar
+    // stays truthful — main still runs the job.
+    expect(await screen.findByText('cancel exploded')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+  })
 })
 
 // ---- §11.6 refinement: action overflow, MIME→label, selection toolbar, status badges ----

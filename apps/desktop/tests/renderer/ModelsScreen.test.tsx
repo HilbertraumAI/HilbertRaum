@@ -777,7 +777,69 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     // friendlyIpcError strips the transport + Error-class prefix → only the message shows; the
     // .catch means the rejection never escapes as an unhandled promise rejection.
     expect(await screen.findByText('cancel exploded')).toBeInTheDocument()
-    // This is the last test in the file, so the still-live remembered job leaks into no later
-    // test; cleanup() unmounts the screen and clears the poll interval.
+    // The CODE-28 test below drains this still-live remembered job on its first poll (its
+    // getDownloadJob returns a terminal status for foreign job ids); cleanup() unmounts the
+    // screen and clears the poll interval.
+  })
+
+  // full-audit 2026-07-11 CODE-28: the poll-completion `void refresh()` had no catch — a
+  // refresh failing exactly at the download's live→terminal transition left stale cards and
+  // an unhandled promise rejection. Now it routes through runAndSurface → the error banner.
+  it('surfaces a failing poll-completion refresh on the error banner (no unhandled rejection)', async () => {
+    const myModel = model({ id: 'refresh-fail-model', displayName: 'Refresh Fail Model' })
+    let failRefresh = false
+    const listModels = vi.fn(async () => {
+      if (failRefresh) {
+        throw new Error("Error invoking remote method 'models:list': Error: refresh exploded")
+      }
+      return [myModel]
+    })
+    const downloadModel = vi.fn(async (): Promise<DownloadJob> => ({
+      jobId: 'jr',
+      modelId: 'refresh-fail-model',
+      status: 'queued',
+      receivedBytes: 0,
+      totalBytes: 1000,
+      unverified: false,
+      error: null
+    }))
+    // OUR job ('jr') completes on its first poll — and from that moment every refresh fails,
+    // so the completion refresh is the one that rejects. Foreign (leaked) jobs drain terminal.
+    const getDownloadJob = vi.fn(async (jobId: string): Promise<DownloadJob> => {
+      if (jobId === 'jr') {
+        failRefresh = true
+        return {
+          jobId: 'jr',
+          modelId: 'refresh-fail-model',
+          status: 'done',
+          receivedBytes: 1000,
+          totalBytes: 1000,
+          unverified: false,
+          error: null
+        }
+      }
+      return { jobId, modelId: 'qwen3-4b-instruct-q4', status: 'cancelled', receivedBytes: 0, totalBytes: null, unverified: false, error: null }
+    })
+    stubApi({
+      listModels,
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: null })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus),
+      downloadModel: downloadModel as never,
+      getDownloadJob: getDownloadJob as never
+    })
+    const user = userEvent.setup()
+    render(<ModelsScreen />)
+
+    // Wait out any leaked live job (see the cancel test above) so Download is clickable.
+    const downloadBtn = await screen.findByRole('button', { name: 'Download' })
+    await waitFor(() => expect(downloadBtn).toBeEnabled(), { timeout: 3000 })
+    await user.click(downloadBtn)
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+
+    // The first poll flips the job queued→done → the completion refresh runs → listModels
+    // rejects → the friendly message (transport prefix stripped) lands on the error banner.
+    expect(await screen.findByText('refresh exploded', undefined, { timeout: 3000 })).toBeInTheDocument()
+    // The remembered job ends terminal ('done'), so nothing live leaks into later tests.
   })
 })

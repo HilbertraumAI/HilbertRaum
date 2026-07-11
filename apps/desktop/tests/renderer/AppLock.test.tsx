@@ -113,4 +113,59 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
       expect(getVisionSession().turns).toHaveLength(0)
     })
   })
+
+  // full-audit 2026-07-11 CODE-26: a FAILED lock (main restored the unlocked vault, CODE-1a)
+  // used to be an unhandled rejection — the shell silently stayed unlocked on the most
+  // security-sensitive control. Now the friendly copy surfaces on a banner, the session
+  // stores are NOT purged (the workspace really is still unlocked), and the shell stays up.
+  it('surfaces a failed lock on a banner — stores kept, shell still unlocked (CODE-26)', async () => {
+    const lockWorkspace = vi.fn(async () => {
+      throw new Error(
+        "Error invoking remote method 'workspace:lock': Error: The workspace could not be locked — free some disk space and try again."
+      )
+    })
+    stubApi({
+      getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+      getPolicy: vi.fn(async () => offlinePolicy),
+      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+      onRuntimeNotice: vi.fn(() => () => {}) as never,
+      lockWorkspace,
+      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as never),
+      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }) as never),
+      listDocuments: vi.fn(async () => []),
+      runPreflight: vi.fn(async () => ({ ok: true, rootPath: '/d', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] }) as never)
+    } as never)
+
+    const user = userEvent.setup()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+
+    // Seed one session store so the "stores NOT purged" half has teeth.
+    loadSession(
+      { decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as never, name: 'secret.png', sizeBytes: 42 },
+      [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
+      'sess1'
+    )
+
+    await user.click(within(nav).getByRole('button', { name: 'Lock now' }))
+    expect(lockWorkspace).toHaveBeenCalledTimes(1)
+
+    // The friendly main-process copy, stripped of the IPC transport prefix, on an alert banner.
+    const banner = await screen.findByText(
+      'The workspace could not be locked — free some disk space and try again.'
+    )
+    expect(banner.textContent).not.toContain('Error invoking remote method')
+
+    // Shell still unlocked: the rail (with its Lock button) is up, not the WorkspaceGate.
+    expect(within(nav).getByRole('button', { name: 'Lock now' })).toBeInTheDocument()
+    // Stores NOT purged: the vault is still unlocked, so the resident session content stays.
+    expect(getVisionSession().selected).not.toBeNull()
+    expect(getVisionSession().turns).toHaveLength(1)
+
+    // The banner is dismissible (retry stays available).
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(
+      screen.queryByText('The workspace could not be locked — free some disk space and try again.')
+    ).not.toBeInTheDocument()
+  })
 })

@@ -142,6 +142,32 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     expect(cancelDocTask).toHaveBeenCalled()
   })
 
+  // full-audit 2026-07-11 CODE-29: the row's Cancel was fire-and-forget (`void
+  // cancelActiveDocTask()` inside DocRow) — a rejected cancel left the row spinning with an
+  // unhandled rejection and zero feedback. It now routes through the screen's error banner.
+  it('surfaces a rejected cancel on the error banner (no unhandled rejection)', async () => {
+    const user = userEvent.setup()
+    const cancelDocTask = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'cancelDocTask': Error: cancel exploded")
+    })
+    stubApi({
+      listDocuments: vi.fn(async () => [doc()]),
+      startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
+      getDocTask: vi.fn(async () => task({ state: 'running' })),
+      cancelDocTask
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /^summarize$/i }))
+    await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
+    expect(cancelDocTask).toHaveBeenCalled()
+    // The friendly message (transport prefix stripped) lands on the screen's error banner;
+    // the busy row stays truthful — the task is still running backend-side.
+    expect(await screen.findByText('cancel exploded')).toBeInTheDocument()
+    expect(screen.getByText(/Summarizing…/)).toBeInTheDocument()
+  })
+
   it('shows the friendly failure copy when the task fails', async () => {
     const user = userEvent.setup()
     stubApi({
