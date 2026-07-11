@@ -495,8 +495,11 @@ manifest should do it.
 
 Four `qwen3.5`-family chat manifests are in the catalog as **pending benchmark candidates** — added
 manifest-only, **rank 0**, **not bundled**, **not auto-recommended** (model-policy.md "Qwen3.5
-Unsloth wave"). **No wins are claimed here.** They have NOT been through the §2–§6 harness and the
-runtime pin they need (**b9849**, bumped from b9585) has not been smoked on this project's drive.
+Unsloth wave"). **No wins are claimed here.** They had NOT been through the §2–§6 harness when
+this section was written, and the runtime pin they need (**b9849**, bumped from b9585) has not
+been smoked on this project's drive. *(Update 2026-07-11: a tester has since run the §2 quality
+half on their own machine — see "Tester eval runs (2026-07-09)" below. Ranks still unchanged:
+ratification + the speed/RSS and §9.1 halves are owner work.)*
 
 | Candidate | Tier | Must beat (to earn a `recommendation_rank > 0`) |
 |---|---|---|
@@ -513,6 +516,46 @@ runtime pin they need (**b9849**, bumped from b9585) has not been smoked on this
 > bundled). The §4 `recommended_min_ram_gb` values for these are **placeholders pending a real peak-RSS
 > measurement** (24 GB for the 27B/35B is a conservative guess, not a measured floor).
 
+**Tester eval runs (2026-07-09, recorded here 2026-07-11; full tables in issue #48's comments)** —
+a tester ran the §2 grounded-QA harness (`tests/manual/model-eval.test.ts`) on their own machine
+(i9-9900X + RTX 3090, Vulkan, the b9849 drive binary; 100 DE/EN items, temp 0, identical
+retrieval) over **13 chat GGUFs** in two runs — all six wave candidates included. Raw CSV/JSONL
+stay on the tester's drive (not committed). Cross-run calibration held (three overlap models
+within ≤.022 F1 / ≤1 hallucination item of the committed Phase-29 i7 run), and the tester audited
+all flagged hallucinations by hand. **Status: quality evidence, pending owner ratification —
+NOT yet the §9 record and no rank has moved.** Headline verdicts as reported:
+
+- **Qwen3.6 27B (local-only manifests) sweeps the 20–24 GB tier** — Q5: best F1 ever measured on
+  the harness (.3573), zero hallucinations, best DE F1; Q4 clean after audit. Proposal: Q5 →
+  rank 2, Q4 → rank 1 — **blocked on productizing** (no `download:` block / upstream sha256 /
+  license review; the #48 item-2 bar below).
+- **`qwen3.5-4b-ud-q4kxl` FAILS its §9 bar** (issue #53's candidate): fewer real hallucinations
+  than the bundled `qwen3-4b-instruct-q4` (2 vs 3) but F1 .2728 vs .3277 — a loss larger than the
+  verbosity confound (below) plausibly explains at this size — and `qwen3-4b-instruct-2507`
+  (F1 .3613, 1 halluc) dominates both. Phase-29 status quo stands on quality grounds.
+- **`qwen3.5-2b-ud-q4kxl` should not be recommended anywhere**: worse F1 than the 0.8B and the
+  worst unanswerable-discipline of all 13 models (4–5 real hallucinations); the 0.8B remains the
+  honest floor.
+- **`qwen3.5-9b-ud-q4kxl` does not clear the strict 8B bar** (edges Ministral on EM/F1 within
+  tolerance but fell once for the `en-contract-penalty` invoice-distractor trap where Ministral's
+  record is clean); tester proposes rank 1 under Ministral's rank 2.
+- **`qwen3.5-35b-a3b-ud-q4kxl` is hallucination-clean after audit** (0 real vs the incumbent
+  MoE's 2, EM parity, F1 gap within confound territory) — **rank deferred to the §3/§4 speed
+  rows**, which is exactly the axis its 3B-active architecture should win.
+- **Scorer confound + fixes (do BEFORE canonizing numbers):** token-F1 inversely tracks answer
+  length (Qwen3.5 house style answers 125–215 chars vs Gemma/Qwen3.6's 87–93), so F1 partly
+  measures style, not knowledge — read EM + audited hallucinations as primary for cross-family
+  calls, or add a length-normalized column; and the refusal detector missed four abstentions
+  across the runs (incl. a German "kein/keine … erwähnt" negation family) — extend the phrase
+  list + rescore via the §2 `rescore.mjs` flow (no model re-runs needed).
+
+**What the runs do NOT cover (why ranks are still unmoved):** owner ratification of a
+tester-machine run as the §9 record; the §3/§4 speed/RSS sweep (decides the 35B-A3B and supplies
+the measured peak RSS any RAM-line retune needs); the §9.1 through-the-app smoke (abort,
+lock/quit teardown, thinking-mode toggles — the eval harness exercises the RAG path, not the app
+UI); and committed raw results. The runs DO constitute strong informal b9849 load+stream evidence
+for every model they scored.
+
 **Field signal on the 4B (issue #53, 2026-07-11)** — recorded as eval input, NOT a promotion: a
 tester on a weak 16 GB laptop (weak iGPU) reports `qwen3.5-4b-ud-q4kxl` at **~2 tok/s with usable
 quality** as the best speed/quality trade-off of the catalog on that class of machine — the 16 GB
@@ -526,7 +569,10 @@ Ministral keeps 16–20 GB), and **rank ≥ 3 also steals 16/20 GB from Ministra
 real peak-RSS measurement, or land with the signal-aware picker follow-up (issue #53 option 2:
 feed the Diagnostics benchmark's measured tok/s — persisted with its `measuredModelId` since
 issue #52 — into the recommendation, capturing the weak-16 GB-laptop case without misranking
-capable 16 GB machines).
+capable 16 GB machines). *(Update 2026-07-11: the tester eval above scored the 4B and it FAILS
+its quality bar against `qwen3-4b-instruct-q4` — so if that run is ratified, the #53 case reduces
+entirely to the compute axis the quality harness doesn't measure, i.e. option 2, not a rank
+edit.)*
 
 Issue #48 (2026-07-10) extends this wave's scope, still under the same gate: the fast-tier
 `qwen3.5-2b-ud-q4kxl` / `qwen3.5-0.8b-q6` have no incumbent to displace (low-risk promotions once

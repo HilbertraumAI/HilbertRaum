@@ -10,6 +10,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-11 — **Docs reconciliation: the #48 tester eval runs (2026-07-09) are now recorded in model-benchmarks §9 — the repo no longer claims the Qwen3.5 wave is un-evaled.**_
+Yesterday's #53 close-out (and §9 itself) still said the wave "has NOT been through the harness" — but issue #48's COMMENTS contain two §2-protocol grounded-QA runs by a tester (i9-9900X + RTX 3090, b9849 binary, 13 chat GGUFs incl. all six wave candidates, hand-audited hallucination flags, cross-run calibration vs Phase-29 within tolerance). Recorded as **quality evidence pending owner ratification** (raw CSVs uncommitted; ranks unmoved): new §9 block "Tester eval runs (2026-07-09)" with per-model verdicts — Qwen3.6 27B Q5/Q4 sweep 20–24 GB (blocked on productizing), **the 4B FAILS its bar** (F1 .2728 vs qwen3-4b's .3277 → #53's weak-hardware case reduces to the option-2 signal-aware picker), the 2B never recommendable, the 9B under Ministral, the 35B-A3B clean-after-audit awaiting the speed rows — plus the scorer follow-ups the tester flagged as prerequisites for canonizing numbers (refusal-detector phrase list + `rescore.mjs`; length-confounded F1 → read EM + audited hallucinations as primary). §9's header + the #53 field-signal paragraph gained dated update notes; §5 item 8 REWRITTEN from "run the eval" to the ratify-and-complete sequence (scorer fix → ratify → §3/§4 speed/RSS → §9.1 app smoke → productize Qwen3.6 → coupled rank/RAM/test edits). Cross-reference comment posted on #53. Docs-only — suite 4045/47 + typecheck green (unchanged, as expected).
+
 _2026-07-11 — **Beta feedback issues #51 + #52 + #53 (exFAT "scan and fix" prompt / at-rest WAL sidecars; Diagnostics tok/s measures the loaded model unlabeled + silently steers the profile; Qwen3.5 4B low-end promotion request) — #51/#52 FIXED, #53 groundwork recorded (rank stays owner-gated).**_
 Second post-launch tester wave, each analyzed to root cause before any fix:
 - **#51 (Windows "scan and fix" on plug-in — exFAT dirty bit):** the report's framing ("app-side WAL/log handles make it routine") was PARTIALLY stale: the encrypted quit path already checkpoints+closes+shreds via `workspace.lock()`, and the log holds no persistent handle (memory-buffered, whole-file atomic replace per flush). The REAL gap: `lock()` is a documented no-op for `plaintext_dev`, so every clean quit of a plaintext workspace left `-wal`/`-shm` at rest (what the reporter's dev drive shows). Fix: new **`WorkspaceController.shutdown()`** — `lock()` for encrypted, plus `wal_checkpoint(TRUNCATE)` + `close()` for plaintext — wired into `performShutdown` AND the `uncaughtException` handler; quit now leaves a bare `hilbertraum.sqlite` in BOTH modes (crash-left plaintext sidecars are deliberately KEPT — they hold committed transactions SQLite replays on next open). Tests: shutdown ordering updated (`workspace.shutdown()`, event label kept); +2 integration (on-disk `-wal`/`-shm` absence after shutdown, both modes, with relaunch round-trip). Docs: troubleshooting gains the "Windows asks to scan and fix" entry (scan is safe; quit-then-eject habit; `FOUND.000` meaning); user-guide §13 "Before unplugging"; drive-layout names the sidecars; security-model records the design INCLUDING the declined alternative (**`journal_mode=DELETE` on exFAT: declined** — WAL is the deliberate USB-perf choice, a mid-session unplug dirties the volume regardless, DELETE doubles fsync cost). Residuals → §5 item 9 (idle checkpoint posture, in-app eject button, download `.part` stream not torn down on quit, kit quick-start card).
@@ -10925,25 +10928,35 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    - Watch-items **PF-5** (listDocuments load-all at ~10k docs — known-limitations, with DB-8) and
      **PF-8** (resident-cache RAM at the 1M-chunk bound — the architecture P4b deferral record)
      are recorded at those sites.
-8. **Qwen3.5 wave promotion eval (owner, offline — issue #48's open half; model-benchmarks §9/§9.1):**
-   run the grounded-QA eval harness (`tests/manual/model-eval.test.ts`, `HILBERTRAUM_MODEL_EVAL=<drive>`)
-   + the §9.1 b9849 manual smoke for the six rank-0 `qwen3.5-*` manifests (now incl. the fast-tier
-   2B/0.8B — no incumbent to displace, low-risk promotions), recording **context length + thinking
-   support** alongside QA/citations/speed (§9, issue #48 item 3); then promote winners via
-   `recommendation_rank` and give the 2B/0.8B their honest RAM lines (safe now — the §6.3
-   ranked-only guard removed the rank-0 capacity hijack those tier-aligned lines defended against).
-   The 20–24 GB tier gap half of #48 is already FIXED (§6.3, 2026-07-11). Candidates without a
-   shippable manifest (e.g. Qwen3.6 27B) additionally need productizing: `download:` block, real
-   upstream sha256, license review. **Issue #53 (2026-07-11) raises this eval's priority for the
-   4B:** a field report (weak 16 GB laptop, weak iGPU) finds `qwen3.5-4b-ud-q4kxl` at ~2 tok/s the
-   best speed/quality trade-off of the catalog on that machine class — recorded as eval INPUT in
-   model-benchmarks §9 + the manifest (per §9, field/public datapoints never substitute for the
-   local eval). Two mechanics facts for the promotion (verified against `recommendModelIdByRam`):
-   rank 1–2 wins the 4B nothing (qwen3-4b takes ≤12 GB on the rank/disk-size tiebreaks); rank ≥ 3
-   also steals 16/20 GB from Ministral (shared `recommended_ram_gb: 16`) — so promote WITH a
-   peak-RSS-based `recommended_ram_gb` retune, or via issue #53 option 2 (signal-aware picker:
-   feed the benchmark's measured tok/s — persisted with `measuredModelId` since #52 — into the
-   recommendation; that follow-up would also resolve #52's remaining downgrade question).
+8. **Qwen3.5/3.6 wave promotion (owner — issue #48's open half + issue #53; model-benchmarks
+   §9/§9.1): the QUALITY half now EXISTS as tester evidence — remaining work is ratify + the
+   missing axes, not "run the eval from scratch".** A tester ran the §2 grounded-QA harness over
+   13 chat GGUFs incl. all six wave candidates (2026-07-09, i9-9900X + RTX 3090, b9849 binary;
+   full tables in issue #48's comments; recorded in model-benchmarks §9 "Tester eval runs",
+   2026-07-11). Verdicts as reported: **Qwen3.6 27B Q5/Q4 sweep the 20–24 GB tier** (rank 2/1
+   proposal — blocked on productizing: no manifests in the repo, need `download:` block + real
+   sha256 + license review); **the 4B FAILS its bar** vs `qwen3-4b-instruct-q4` (F1 .2728 vs
+   .3277; 2507 dominates both) — so issue #53's case reduces to the compute axis = option 2;
+   **the 2B should never be recommended** (worst unanswerable-discipline of all 13); the 9B
+   proposed rank 1 under Ministral; **the 35B-A3B is hallucination-clean after audit, rank
+   deferred to the speed rows**. Owner steps, in order: (a) fix the scorer first — refusal
+   detector missed 4 abstentions (incl. the German "kein/keine … erwähnt" family) → extend the
+   phrase list + `rescore.mjs` re-score (no model re-runs), and treat EM + audited hallucinations
+   as primary over the length-confounded F1 (Qwen3.5's verbose house style); (b) RATIFY the
+   tester run as the §9 record (or re-run locally); (c) the §3/§4 speed/RSS sweep (decides the
+   35B-A3B; supplies the measured peak RSS for RAM-line retunes); (d) the §9.1 through-the-app
+   smoke (abort/teardown/thinking toggles — the tester runs are strong informal b9849
+   load+stream evidence but exercise the RAG path, not the app UI); (e) productize Qwen3.6 27B;
+   then the coupled edits land together: `recommendation_rank`s, honest RAM lines for the
+   2B/0.8B (safe now — the §6.3 ranked-only guard), `committed-catalog.test.ts` wave invariants,
+   `benchmark.test.ts` RAM mapping. The 20–24 GB tier gap half of #48 is already FIXED (§6.3,
+   2026-07-11). **Issue #53 mechanics (verified against `recommendModelIdByRam`, recorded in the
+   manifest + §9):** rank 1–2 wins the 4B nothing (qwen3-4b takes ≤12 GB on the rank/disk-size
+   tiebreaks); rank ≥ 3 also steals 16/20 GB from Ministral (shared `recommended_ram_gb: 16`) —
+   with the failed quality bar, the weak-hardware case is served by option 2 (signal-aware
+   picker: feed the benchmark's measured tok/s — persisted with `measuredModelId` since #52 —
+   into the recommendation; also resolves #52's remaining downgrade question), which needs its
+   own short design note before code.
 9. **Issue #51 residuals (owner decisions — the app-side quit close + docs shipped 2026-07-11):**
    - **Idle posture:** checkpoint + release the DB when the app is idle, so an unplug while "open
      but not in use" is harmless. New machinery (no app-level idle detector exists); the
