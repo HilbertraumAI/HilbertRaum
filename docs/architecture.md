@@ -3340,7 +3340,7 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
 | `chat:setScope` / `setCollection` / `listAttachments` | composite scope persist · creation anchor · the `conversation_documents` attachments | `registerChatIpc.ts` |
 | `skills:list/get` | `() ⇒ SkillInfo[]` · `(installId) ⇒ SkillInfo \| null` (first read reconciles disk→DB) | `registerSkillsIpc.ts` |
 | `skills:pick/preview/import` | OS picker ⇒ path · `(source) ⇒ SkillPreview` (no write) · `(source) ⇒ SkillInfo` (validate→place→DS7) | `registerSkillsIpc.ts` |
-| `skills:export/delete` | save dialog ⇒ `.skill.zip` (package tree only) · ref-clear sweep + rm folder (app skills refuse) | `registerSkillsIpc.ts` |
+| `skills:export/delete` | save dialog ⇒ `.skill.zip` (package tree only) · default-clear + rm folder — message stamps survive (GAP-1/SKA-38; app skills refuse) | `registerSkillsIpc.ts` |
 | `skills:enable/disable/acknowledgeWarning` | `(installId) ⇒ SkillInfo`; enable enforces one-active-per-id (DS12) | `registerSkillsIpc.ts` |
 
 Renderer-untrusted inputs are sanitized at the boundary (`sanitizeDestination` ⇒ Library fallback;
@@ -3484,9 +3484,12 @@ same `relPath`** (`SKILL_IMPORT_ERRORS.duplicatePath`) so a later duplicate can'
 shadow a preview-validated `SKILL.md`. It then
 reconciles the row to **enabled-with-warning** (DS7) — unless an enabled app skill of the same id is
 already effective, in which case the import **coexists disabled** (trust-first precedence, DS12). A
-lower version is refused unless developer mode (DS15). **Delete** is an app-level **ref-clear sweep**:
-in one transaction it nulls `conversations.active_skill_id` + `messages.skill_id` pointing at the
-install id and deletes the row (no FK to cascade), then removes the folder; app skills refuse. **Enable**
+lower version is refused unless developer mode (DS15). **Delete** clears the sticky default ONLY
+(full-audit 2026-07-11 GAP-1 — the SKA-38 contract): in one transaction it nulls
+`conversations.active_skill_id` pointing at the install id and deletes the row (no FK to cascade),
+then removes the folder; `messages.skill_id` is deliberately KEPT — the per-message stamp is
+provenance, the JOIN title resolves to NULL and the renderer shows "(removed skill)", so the glyph
++ the "answer without it" undo survive deletion. App skills refuse. **Enable**
 enforces **one-active-per-id**. The registry handle reconciles disk→DB **once per session on the first
 read after unlock** (a `reconciledThisSession` guard, not an unlock hook); the importer/deleter call
 `reconcile()` explicitly after mutating disk. Audit events
