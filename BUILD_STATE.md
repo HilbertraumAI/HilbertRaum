@@ -11311,7 +11311,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     form), TranslateScreen (2: 0-layer hint, DE localization of a persisted failure),
     DocumentsScreen (1: adopted-job singular toast). Remaining phases H–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase H — hygiene + test hardening CODE-24/DOC-12, CODE-46, CODE-47, DOC-6 + the model-policy.md RAM-tier rider, +8 tests): typecheck clean, 4159 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase H — hygiene + test hardening CODE-24/DOC-12, CODE-46, CODE-47, DOC-6 + the model-policy.md RAM-tier rider, +8 tests; follow-up: the CODE-24 NUL-ban net extended to tests/** after the fix's own test file recreated the class, +1 test): typecheck clean, 4160 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

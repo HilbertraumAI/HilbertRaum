@@ -28,11 +28,14 @@ describe('repo hygiene — lockfile discipline (issue #49)', () => {
 // full-audit 2026-07-11 CODE-24/DOC-12: `analysis/extract.ts` carried a LITERAL NUL byte (a
 // hash-domain separator) which made git treat the file as binary — unreviewable text diffs, and
 // ripgrep silently skips it (the audit's own greps missed the file). It was rewritten to the
-//   escape (byte-identical). This net bans any new literal NUL under src/** so the whole class
-// can't regress: a domain separator or delimiter must always be written as an escape.
+// escape form (byte-identical). This net bans any new literal NUL in source-code files under
+// BOTH src/** and tests/** so the whole class can't regress: a domain separator or delimiter
+// must always be written as an escape. tests/ is included because the class immediately
+// recurred there — the CODE-24 fix's own test file shipped with 2 literal NULs in comments,
+// caught by review, not by the original src-only net. The extension filter deliberately
+// excludes the legitimate BINARY fixtures under tests/ (the .png vision chart, the local-only
+// real-data .pdf corpus) — only text/source files must be NUL-free.
 describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
-  const srcRoot = join(process.cwd(), 'src')
-
   const walk = (dir: string): string[] => {
     const out: string[] = []
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -44,7 +47,14 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   }
 
   it('holds no 0x00 byte in any src file (git must see them all as text)', () => {
-    const offenders = walk(srcRoot).filter((p) => readFileSync(p).includes(0))
+    const offenders = walk(join(process.cwd(), 'src')).filter((p) => readFileSync(p).includes(0))
+    expect(offenders).toEqual([])
+  })
+
+  it('holds no 0x00 byte in any tests source file either', () => {
+    const offenders = walk(join(process.cwd(), 'tests')).filter((p) =>
+      readFileSync(p).includes(0)
+    )
     expect(offenders).toEqual([])
   })
 })
