@@ -268,6 +268,13 @@ export class RuntimeManager {
     if (this.stopped) throw shutdownError()
     // Restart cleanly on a model switch (spec §7.5).
     if (this.current) await this.doStop()
+    // CODE-3 review follow-up: the internal doStop above can take seconds (SIGTERM →
+    // grace → SIGKILL on the old runtime), and in that window the TOP check has already
+    // passed while `startingRuntime` is not yet set — a quit arming the latch there is
+    // missed by both the check above and stop()'s CODE-2 cancel. Re-check before the
+    // factory is invoked, or the switch would spawn and the quit's queued stop would
+    // wait out the full model load/health timeout (the CODE-2 freeze, reintroduced).
+    if (this.stopped) throw shutdownError()
     // Commit to `this.current`/`this.last` only on a FULLY successful start. A failed
     // start (e.g. the real sidecar's health timeout) must not leave a half-started
     // runtime as "active" — callers gate chat/RAG on `active() != null`, so a stale

@@ -6,12 +6,25 @@ import { EngineDownloadManager, engineStatus } from '../services/runtime-downloa
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
+import type { RuntimeManager } from '../services/runtime'
 import type { DownloadGates } from '../services/downloads'
 
 // IPC for the in-app engine (llama.cpp sidecar) downloader. Without the engine binary a
 // started model falls back to the built-in demo runtime — this lets the user install the
 // real engine from inside the app. The gates mirror the model downloader exactly (the
 // policy ceiling AND the user's allowNetwork setting), re-checked HERE on every start.
+
+/**
+ * Is the chat engine's install dir in LIVE use? True while a model runtime is RUNNING or
+ * still STARTING (full-audit 2026-07-11 CODE-13, review follow-up): `activeModelId()` is
+ * null during a multi-GB load — the manager commits `current` only after health — but the
+ * loading child is ALREADY executing from the llama_cpp dir, so an engine install begun
+ * mid-start would still rimraf it. `status().startingModelId` names the in-flight start.
+ * Exported for the engine-download suite; the downloadEngine handler is the one consumer.
+ */
+export function chatEngineInUse(runtime: Pick<RuntimeManager, 'activeModelId' | 'status'>): boolean {
+  return runtime.activeModelId() !== null || runtime.status().startingModelId != null
+}
 
 export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManager): void {
   const engine =
@@ -36,9 +49,9 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
         manifestsDir: ctx.manifestsDir ?? null,
         gates: gates(),
         // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
-        // RUNNING chat sidecar executes from — the manager refuses a job that would touch
-        // it while a model runtime is up (friendly copy; stop the model first).
-        chatRuntimeActive: ctx.runtime.activeModelId() !== null
+        // LIVE chat sidecar executes from — the manager refuses a job that would touch it
+        // while a model runtime is up OR still starting (friendly copy; stop the model first).
+        chatRuntimeActive: chatEngineInUse(ctx.runtime)
       })
   )
 

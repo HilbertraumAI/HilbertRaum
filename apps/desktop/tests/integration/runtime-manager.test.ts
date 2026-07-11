@@ -637,6 +637,43 @@ describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
     await expect(mgr.stop()).resolves.toBeUndefined()
   })
 
+  // CODE-3 review follow-up: doStart's TOP latch check can already have passed when quit
+  // arms the latch — a model SWITCH first spends `await this.doStop()` seconds killing the
+  // old runtime (SIGTERM → grace → SIGKILL), and in that window `startingRuntime` is not
+  // yet set either, so stop()'s CODE-2 cancel misses. Without a re-check AFTER the internal
+  // stop, the factory then spawns and the quit's queued stop waits out the full model load.
+  it("quit landing inside a model-switch's internal stop never spawns the new model (CODE-3 follow-up)", async () => {
+    let made = 0
+    let releaseStop: () => void = () => undefined
+    const stopGate = new Promise<void>((r) => (releaseStop = r))
+    const mgr = new RuntimeManager((o) => {
+      made++
+      return {
+        modelId: o.modelId,
+        start: async () => {},
+        stop: async () => {
+          if (o.modelId === 'a') await stopGate // the old runtime's teardown takes a while
+        },
+        health: async () => ({ healthy: true, message: '', port: 1 }),
+        chatStream: async function* () {}
+      }
+    })
+    await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    expect(made).toBe(1)
+
+    // The switch: doStart('b') passes its TOP latch check, then parks inside doStop('a').
+    const p2 = mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 })
+    await tick(0)
+    expect(made).toBe(1) // still stopping 'a' — 'b' has not been built yet
+    mgr.shutdown() // quit arms the latch INSIDE that window (top check already passed)
+    releaseStop()
+
+    await expect(p2).rejects.toThrow(/shut down/i)
+    expect(made).toBe(1) // the post-internal-stop re-check refused BEFORE the factory ran
+    await expect(mgr.stop()).resolves.toBeUndefined() // the quit's queued stop settles promptly
+    expect(mgr.active()).toBeNull()
+  })
+
   it('a start already ENQUEUED when shutdown() arms never spawns (CODE-3)', async () => {
     const events: string[] = []
     const gate: { release: (() => void) | null } = { release: null }

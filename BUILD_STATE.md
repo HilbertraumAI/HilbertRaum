@@ -11096,9 +11096,17 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     cancellable start"** (incl. the CODE-11 crash-reap residual: a crash bypassing
     uncaughtException itself still orphans — accepted). Residual nuances registered in the plan's
     discoveries (triple-overlap queued start on the interactive-lock path stays uncancelled; a
-    cancel-during-extract leaves a verified marker-less binary). Remaining phases D–J unstarted.
+    cancel-during-extract leaves a verified marker-less binary). **Review follow-up (+2 tests,
+    red-verified against the Phase-C commit):** (i) `doStart` re-checks the CODE-3 latch AFTER its
+    internal model-switch `doStop()` too — that window (seconds of killing the old runtime, top
+    check already passed, `startingRuntime` not yet set) was missed by both the latch and the
+    CODE-2 cancel, so a quit landing there spawned the new model and stalled behind its full load;
+    (ii) the CODE-13 engine refusal now uses `chatEngineInUse()` (running OR
+    `status().startingModelId` in flight) — `activeModelId()` alone is null during a multi-GB
+    model START while the loading child already executes from the llama_cpp dir. Remaining phases
+    D–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase C — CODE-2/3/11/12/13 quit-path lifecycle, +15 tests): typecheck clean, 4081 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase C — CODE-2/3/11/12/13 quit-path lifecycle incl. the review follow-up, +17 tests): typecheck clean, 4083 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2
