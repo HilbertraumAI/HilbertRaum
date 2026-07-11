@@ -1459,6 +1459,7 @@ export const en = {
   'diag.audit.workspace_unlocked': 'Workspace unlocked',
   'diag.audit.workspace_locked': 'Workspace locked',
   'diag.audit.workspace_unlock_failed': 'Unlock attempt failed',
+  'diag.audit.workspace_lock_failed': 'Lock attempt failed (workspace stayed open)',
   'diag.audit.workspace_password_changed': 'Workspace password changed',
   'diag.audit.settings_changed': 'Settings changed',
   'diag.audit.policy_warning': 'Policy notice',
@@ -1729,6 +1730,11 @@ export const en = {
     'Could not change the password. Your current password still works.',
   'main.workspace.busyPasswordChange':
     'The workspace password is being changed right now. Try again in a moment.',
+  // full-audit 2026-07-11 CODE-1a: the lock re-encrypt failed (typically a full drive).
+  // The workspace stays unlocked and usable; nothing is lost.
+  'main.workspace.lockFailed':
+    'Could not lock the workspace — it stays open and your data is safe. ' +
+    'Free some space on the drive, then try again.',
   'main.runtime.compatibilityMode':
     'Switched to compatibility mode for stability. Everything keeps working — responses may be a bit slower.',
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',

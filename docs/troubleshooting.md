@@ -140,6 +140,19 @@ it, the data **cannot be recovered** — this is by design. Create a new workspa
 
 ---
 
+## "Could not lock the workspace"
+
+Locking re-encrypts your workspace on the drive, and that briefly needs **free space about the
+size of your workspace database**. On a nearly-full drive the re-encrypt can fail — the app
+then keeps the workspace **open and usable**, and nothing is lost.
+
+What to do: free some space on the drive (delete files you no longer need, or move a large
+model off the drive via the AI Model screen), then press **Lock now** again. Quitting the app
+retries the lock too. Even if the app closes before a lock ever succeeds, your newest data is
+kept safely on the drive and secured at the next unlock — you don't lose the session's work.
+
+---
+
 ## The app feels slow
 
 - **Slow drive:** running from a slow USB stick makes model loading and indexing sluggish. Use

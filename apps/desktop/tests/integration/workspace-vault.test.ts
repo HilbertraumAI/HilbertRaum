@@ -1,11 +1,20 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  utimesSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import { getSettings, updateSettings } from '../../src/main/services/settings'
+import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
+import { openDatabase } from '../../src/main/services/db'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { PrivacyPolicy } from '../../src/shared/types'
 import {
@@ -23,8 +32,10 @@ import {
   shredFile,
   applyPendingRekey,
   REKEY_SUFFIX,
+  RECOVERY_SUFFIX,
   WorkspaceController,
   WrongPasswordError,
+  VaultLockError,
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import { randomBytes } from 'node:crypto'
@@ -548,6 +559,210 @@ describe('WorkspaceController', () => {
     expect(existsSync(join(docsDir, `c.enc${REKEY_SUFFIX}`))).toBe(false)
     // The stuck file stays staged for recoverPendingRekey on the next unlock (old-or-new, never mixed).
     expect(existsSync(join(docsDir, `bad.enc${REKEY_SUFFIX}`))).toBe(true)
+  })
+})
+
+// ---- vault lock durability (full-audit 2026-07-11 CODE-1 / CODE-10 / CODE-14) -----
+//
+// CODE-1 (High): a failed re-encrypt on lock (ENOSPC is realistic — during lock the
+// plaintext DB + old `.enc` + new `.enc.tmp` coexist) must never strand the controller
+// half-locked (1a), and the next launch's crash sweep must never shred a working file
+// that is NEWER than `.enc` — the only fresh copy of the session's data (1b).
+// CODE-10: the re-encrypt fsyncs before its atomic rename, so quit → unplug-without-eject
+// cannot leave a truncated `.enc` after the plaintext was already durably shredded.
+// CODE-14: fresh-vault creation commits at the DESCRIPTOR write (the rekey-journal
+// ordering) — a crash mid-create leaves `uninitialized`, never a bricked onboarding.
+
+describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
+  /** The exact disk state a failed lock leaves behind: a checkpointed, cleanly CLOSED
+   *  plaintext working file (no -wal/-shm sidecars) newer than the stale `.enc`. */
+  function failedLockState(vp: VaultPaths): void {
+    const { db } = unlockEncryptedVault(vp, 'pw')
+    updateSettings(db, { contextTokens: 7171 })
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    // Deterministic mtime ordering even on coarse-timestamp filesystems: backdate `.enc`.
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(vp.encPath, past, past)
+  }
+
+  it('CODE-1a: a failed re-encrypt on lock() leaves the controller unlocked and usable; retry locks', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    // The CODE-1 seam: the first lock attempt fails like a full drive, later ones succeed.
+    let failNext = true
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, (src, dest, key) => {
+      if (failNext) {
+        failNext = false
+        throw new Error('ENOSPC: no space left on device, write')
+      }
+      encryptFile(src, dest, key)
+    })
+    ctl.init()
+    ctl.unlock('pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 5150 })
+    const encBefore = readFileSync(vp.encPath)
+
+    // The failure surfaces as the TYPED, content-free error …
+    expect(() => ctl.lock()).toThrow(VaultLockError)
+    // … the stale `.enc` (last good snapshot) is untouched …
+    expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    // … and the controller is consistently UNLOCKED and USABLE: state, reads AND writes
+    // (the old behavior kept a CLOSED handle in `_db` — every later DB call failed raw).
+    expect(ctl.getState().state).toBe('unlocked')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5150)
+    updateSettings(ctl.requireDb(), { contextTokens: 5151 })
+
+    // The key was kept, so a retry (after "freeing space") locks cleanly …
+    expect(ctl.lock().state).toBe('locked')
+    expect(existsSync(vp.dbPath)).toBe(false)
+    // … and nothing was lost: the unlock reads back the post-failure write.
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    ctl.lock()
+  })
+
+  it('CODE-1b: init() preserves a working file newer than .enc; unlock rolls it forward', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    failedLockState(vp)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    // NOT shredded: moved aside as the recovery snapshot; the workspace stays locked.
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(true)
+    expect(ctl.getState().state).toBe('locked')
+
+    // Unlock rolls the newer data FORWARD (re-encrypts it over the stale `.enc`) and consumes it.
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    ctl.lock()
+    // The roll-forward is durable: a later plain unlock still has the salvaged data.
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    ctl.lock()
+  })
+
+  it('CODE-1b: a wrong password neither consumes nor destroys the recovery snapshot', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    failedLockState(vp)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+
+    expect(() => ctl.unlock('wrong-password')).toThrow(WrongPasswordError)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(true) // still there for the retry
+
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    ctl.lock()
+  })
+
+  it('CODE-1b: a STALE working file (older than .enc) is still shredded as today', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    // A leftover OLDER than the at-rest snapshot (e.g. crash after lock's encryptFile
+    // succeeded but before the shred) is derived data — shredding loses nothing.
+    writeFileSync(vp.dbPath, 'stale leftover')
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(vp.dbPath, past, past)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    expect(ctl.unlock('pw').state).toBe('unlocked')
+    ctl.lock()
+  })
+
+  it('CODE-1b: a mid-session crash leftover (live -wal/-shm) is still shredded — the documented power-cut trade-off', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    failedLockState(vp)
+    // Live WAL sidecars = the mid-session crash state: the main file can be mid-checkpoint
+    // (torn), so it must NOT be rolled forward over the intact stale `.enc`.
+    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    // The stale `.enc` snapshot wins (the 7171 write is gone — the accepted trade-off).
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).not.toBe(7171)
+    ctl.lock()
+  })
+
+  it('CODE-1b: a non-SQLite (garbage) newer working file is still shredded, never rolled forward', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    // E.g. a failed shred's random-overwrite survived its unlink: newer than `.enc`, no
+    // sidecars — but rolling THAT forward would replace the intact `.enc` with garbage.
+    writeFileSync(vp.dbPath, 'garbage that is not a database')
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(vp.encPath, past, past)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    expect(ctl.unlock('pw').state).toBe('unlocked')
+    ctl.lock()
+  })
+
+  // NB: the CODE-10 fsync-before-rename and CODE-14 rename-ordering WIRING pins live in
+  // workspace-vault-durability.test.ts — they need `vi.mock('node:fs')` (a plain spy on
+  // the externalized builtin does not intercept the module's internal calls).
+
+  it('CODE-14: creation leaves no staged leftovers (end-state pin)', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    // End state unchanged by the CODE-14 reorder: descriptor + `.enc`, no staged file.
+    expect(existsSync(vp.encPath)).toBe(true)
+    expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+    expect(existsSync(vp.dbPath)).toBe(false)
+  })
+
+  it('CODE-14: crash BEFORE the descriptor write → still uninitialized; onboarding retries cleanly', () => {
+    const vp = freshVault()
+    // Replicate createEncryptedVaultOnDisk up to but NOT including the descriptor write
+    // (the commit point): seeded DB → staged `.enc.new` → plaintext shredded.
+    const db = openDatabase(vp.dbPath)
+    seedSettings(db)
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    encryptFile(vp.dbPath, `${vp.encPath}${REKEY_SUFFIX}`, randomBytes(32))
+    shredFile(vp.dbPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    // NOT locked/bricked: no descriptor and no `.enc` committed → the create flow is offered.
+    expect(ctl.getState().state).toBe('uninitialized')
+    // …and the retry works cleanly over the stray staged file (encryptFile overwrites it).
+    expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+    ctl.lock()
+    expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false) // consumed by the retry's swap
+    expect(ctl.unlock('fresh-password').state).toBe('unlocked')
+    ctl.lock()
+  })
+
+  it('CODE-14: crash AFTER the descriptor commit, BEFORE the swap → rolls forward on next start', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    // Undo the final swap — exactly the disk state of a crash between the descriptor
+    // commit and the staged rename.
+    renameSync(vp.encPath, `${vp.encPath}${REKEY_SUFFIX}`)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init() // recoverPendingRekey: v2 descriptor + staged file = committed → roll FORWARD
+    expect(existsSync(vp.encPath)).toBe(true)
+    expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+    expect(ctl.getState().state).toBe('locked')
+    expect(ctl.unlock('pw').state).toBe('unlocked')
+    ctl.lock()
   })
 })
 

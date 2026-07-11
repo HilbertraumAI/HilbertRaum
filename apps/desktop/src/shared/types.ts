@@ -2125,6 +2125,9 @@ export type AuditEventType =
   | 'workspace_unlocked'
   | 'workspace_locked'
   | 'workspace_unlock_failed'
+  // Lock re-encrypt failed (e.g. disk full) — the workspace stayed unlocked and usable
+  // (full-audit 2026-07-11 CODE-1a). Content-free, like the other workspace events.
+  | 'workspace_lock_failed'
   | 'workspace_password_changed'
   | 'settings_changed'
   | 'policy_warning'

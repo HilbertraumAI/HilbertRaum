@@ -11030,10 +11030,34 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     (DOC-3), the clone dir + repo tree root → `HilbertRaum` (DOC-4), TranslateGemma Min RAM 14 → 13
     (DOC-5), the two stale 4045 gate lines → 4053 (DOC-7), the pre-rebrand example volume →
     `HILBERTRAUM` in the five shell usage texts + commercial-drive.ts comment (DOC-8), user-guide
-    "No skill"/"Answering from:"/Settings-tab fixes (DOC-9/10/11). Remaining phases B–J unstarted;
-    B (the only High, vault-lock durability) is the recommended pre-flip gate.
+    "No skill"/"Answering from:"/Settings-tab fixes (DOC-9/10/11). **Phase B DONE (2026-07-11,
+    the only High — vault-lock durability, CODE-1/10/14):** (a) CODE-1a — `WorkspaceController.lock()`
+    now restores itself to a consistent UNLOCKED state when the re-encrypt fails (ENOSPC-realistic):
+    plaintext DB re-opened, key kept for retry, typed content-free `VaultLockError` → IPC maps it to
+    friendly `main.workspace.lockFailed` (EN+DE) + `workspace_lock_failed` audit event; the old
+    behavior stranded a CLOSED handle in `_db` while `getState()` said `unlocked`. (b) CODE-1b —
+    `preserveNewerPlaintext`: init()'s crash sweep no longer shreds a working file NEWER than `.enc`
+    (the only fresh copy after a failed lock); the narrow failed-lock signature (newer mtime + no
+    live `-wal`/`-shm` + SQLite header) is moved aside as `<db>.recovery` and rolled FORWARD at the
+    next unlock (re-encrypted over the stale `.enc` once the key exists); anything else (mid-session
+    crash leftovers = the documented power-cut trade-off, garbage) is shredded as before;
+    `WorkspaceController.shutdown()` cleanly closes the re-opened DB on a failed quit-lock so the
+    disk rests in the salvageable signature. (c) CODE-10 — `encryptFile`/`encryptFileAsync` fsync
+    the frame BEFORE the atomic rename (the `writeVaultDescriptor` idiom; covers lock/create/rekey
+    staging/sidecar writes in one place). (d) CODE-14 — fresh-vault creation now stages the DB as
+    `.enc.new` and writes the descriptor LAST as the single commit point (rekey-journal ordering;
+    crash-before → still `uninitialized`, onboarding retries; crash-after → `recoverPendingRekey`
+    rolls forward). NO on-disk format change (VAULT_VERSION/envelope untouched). Tests +11
+    (characterization-first): CODE-1a failed-lock usability+retry, 5× CODE-1b salvage-matrix
+    (roll-forward, wrong-password keeps snapshot, stale/WAL/garbage still shredded), CODE-14
+    end-state + 2 crash simulations, plus `workspace-vault-durability.test.ts` (2 fs-wiring pins
+    with teeth via `vi.mock('node:fs')` — fsync-before-rename, staged→descriptor→swap rename order;
+    plain `vi.spyOn` on the externalized builtin does NOT intercept, recorded in the plan's
+    discoveries). Docs: security-model "Lock failure & durability" (incl. the now-RECORDED accepted
+    power-cut trade-off decision), troubleshooting "Could not lock the workspace". Remaining phases
+    C–J unstarted.
 
-**Current gate (2026-07-11, #42-reopen wave `ef99ced`): typecheck clean, 4053 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase B — CODE-1/10/14 vault-lock durability, +11 tests): typecheck clean, 4064 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

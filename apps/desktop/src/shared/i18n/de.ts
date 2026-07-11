@@ -1485,6 +1485,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.workspace_unlocked': 'Arbeitsbereich entsperrt',
   'diag.audit.workspace_locked': 'Arbeitsbereich gesperrt',
   'diag.audit.workspace_unlock_failed': 'Entsperrversuch fehlgeschlagen',
+  'diag.audit.workspace_lock_failed': 'Sperrversuch fehlgeschlagen (Arbeitsbereich blieb geöffnet)',
   'diag.audit.workspace_password_changed': 'Arbeitsbereich-Passwort geändert',
   'diag.audit.settings_changed': 'Einstellungen geändert',
   'diag.audit.policy_warning': 'Richtlinien-Hinweis',
@@ -1769,6 +1770,10 @@ export const de: Record<keyof typeof en, string> = {
     'Das Passwort konnte nicht geändert werden. Dein aktuelles Passwort funktioniert weiterhin.',
   'main.workspace.busyPasswordChange':
     'Das Passwort des Arbeitsbereichs wird gerade geändert. Versuch es gleich noch einmal.',
+  // full-audit 2026-07-11 CODE-1a: the lock re-encrypt failed (typically a full drive).
+  'main.workspace.lockFailed':
+    'Der Arbeitsbereich konnte nicht gesperrt werden — er bleibt geöffnet und deine Daten ' +
+    'sind sicher. Gib etwas Speicherplatz auf dem Laufwerk frei und versuch es noch einmal.',
   'main.runtime.compatibilityMode':
     'Aus Stabilitätsgründen in den Kompatibilitätsmodus gewechselt. Alles funktioniert ' +
     'weiter — Antworten können etwas langsamer sein.',

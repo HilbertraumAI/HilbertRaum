@@ -318,13 +318,29 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // while `ctx.db` is still open (before `lock()` makes it unreachable). The next search after
     // unlock rebuilds the cache from the re-opened DB.
     purgeResidentVectors(ctx.db)
-    // Recorded BEFORE the vault closes — afterwards the DB is unreachable.
+    // Recorded BEFORE the vault closes — afterwards the DB is unreachable. (If the lock
+    // below FAILS, the follow-up `workspace_lock_failed` event corrects the record.)
     ctx.audit?.('workspace_locked', 'Workspace locked')
     // Flush the encrypted diagnostics log while the key is still live, then drop it —
     // lock() zeroes the key, after which the log can no longer be persisted. The next
     // unlock re-attaches and continues the same `app.log.enc`.
     detachVaultKey()
-    const state = ctx.workspace.lock()
+    let state: WorkspaceStateInfo
+    try {
+      state = ctx.workspace.lock()
+    } catch (err) {
+      // full-audit 2026-07-11 CODE-1a — the re-encrypt failed (realistically ENOSPC:
+      // during lock the plaintext DB + old `.enc` + new `.enc.tmp` coexist, so each lock
+      // needs ~DB-size free space). The controller has restored itself to a consistently
+      // UNLOCKED state (plaintext DB re-opened, key kept for the retry), so re-adopt the
+      // vault key for the diagnostics log and surface friendly copy — §7 voice, localized
+      // at emission (D-L5), never the raw error. The renderer keeps the workspace open;
+      // the user frees space and taps "Lock now" again.
+      attachLogKey(ctx)
+      log.error('Workspace lock failed — workspace stays unlocked', String(err))
+      ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
+      throw new Error(tMain('main.workspace.lockFailed'))
+    }
     log.info('Workspace locked (sidecars stopped)')
     return state
   })

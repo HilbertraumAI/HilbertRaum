@@ -379,6 +379,44 @@ individual rows — the spec §8 schema is identical in both modes.
   while doubling fsync cost on every commit. The user-facing half is the safe-eject guidance in
   `user-guide.md` §13 + the troubleshooting "scan and fix" entry.
 
+### Lock failure & durability (full-audit 2026-07-11 CODE-1 / CODE-10 / CODE-14)
+
+A lock is a re-encrypt of the whole working file, so it can *fail* — realistically on a
+nearly-full stick (during lock the plaintext DB, the old `.enc`, and the new `.enc.tmp`
+coexist, so each lock needs roughly DB-size free space). The failure modes are handled
+explicitly:
+
+- **Failed lock → the workspace stays open (CODE-1a).** If the re-encrypt throws, the
+  controller re-opens the plaintext working file and restores itself to a consistent
+  **unlocked** state (key kept for the retry); the IPC layer surfaces "could not lock — free
+  space and retry" (`main.workspace.lockFailed`) and audits a content-free
+  `workspace_lock_failed`. The stale `.enc` is untouched (`encryptFile` is atomic
+  tmp→rename), so the last good snapshot always survives.
+- **Newer-file roll-forward (CODE-1b).** If the app exits after a failed lock, the startup
+  crash sweep must NOT shred the working file — it is the only fresh copy of the session's
+  data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer
+  than `.enc`** by mtime, **no live `-wal`/`-shm`** — the checkpoint + close ran — and a
+  valid SQLite header) and moves it aside as `<db>.recovery`; the next successful unlock
+  re-encrypts it over the stale `.enc` (roll-forward) before the normal decrypt. Anything
+  not matching that narrow signature is shredded as before.
+- **fsync before the atomic rename (CODE-10).** `encryptFile`/`encryptFileAsync` fsync the
+  written frame before renaming it into place (the `writeVaultDescriptor` idiom). Without
+  it, quit → unplug-without-eject on a non-write-through mount could land a truncated
+  `.enc` *after* the plaintext was already durably shredded — an unrecoverable workspace.
+  This covers lock, create, rekey staging, and document-sidecar writes in one place.
+- **Crash-safe creation (CODE-14).** Fresh-vault creation builds + seeds the DB, encrypts
+  it **staged** (`.enc.new`, the rekey journal's suffix), and writes the descriptor **last**
+  as the single atomic commit point. A crash before the descriptor write leaves the
+  workspace `uninitialized` (onboarding simply retries); a crash after it rolls the staged
+  file forward via the existing `recoverPendingRekey` path.
+- **Accepted trade-off (decision): a hard power cut / kill mid-session loses the changes
+  since the last successful lock.** Whole-file encryption means the at-rest `.enc` is only
+  updated on lock/quit; a mid-session crash leaves a working file with live WAL sidecars,
+  whose main file can be mid-checkpoint (torn) — rolling *that* forward could replace the
+  intact stale `.enc` with garbage, so it is deliberately shredded instead. Confidentiality
+  is chosen over mid-session durability here; the mitigations are the clean quit path
+  (lock-on-quit + the `uncaughtException` crash lock) and the safe-eject guidance above.
+
 ### Encrypted document cache (spec §3.5: "database AND document cache")
 Imports copy each file into `workspace/documents/` so the drive is self-contained. In an encrypted
 workspace those copies rest **encrypted** too — encrypting only the DB would leave the raw bytes of

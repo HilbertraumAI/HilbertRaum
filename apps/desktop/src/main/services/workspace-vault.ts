@@ -105,6 +105,22 @@ export class WrongPasswordError extends Error {
 }
 
 /**
+ * Thrown by `WorkspaceController.lock()` when re-encrypting the vault fails (realistically
+ * ENOSPC: during lock the plaintext DB + old `.enc` + new `.enc.tmp` coexist, so each lock
+ * needs ~DB-size free space — plausible on a nearly-full USB stick). Content-free ON
+ * PURPOSE: the IPC layer maps it to friendly localized copy (`main.workspace.lockFailed`).
+ * When this is thrown the controller has already restored itself to a consistent UNLOCKED
+ * state (plaintext DB re-opened, key kept), so retrying lock after freeing space is safe.
+ * full-audit 2026-07-11 CODE-1a.
+ */
+export class VaultLockError extends Error {
+  constructor() {
+    super('Could not lock the workspace')
+    this.name = 'VaultLockError'
+  }
+}
+
+/**
  * Thrown when a password change and document work (import/re-index, which writes `.enc`
  * sidecars) would overlap — either operation refuses to START while the other runs, so
  * a sidecar is never written under a key that is being swapped out.
@@ -241,6 +257,14 @@ export function encryptFile(srcPath: string, destPath: string, key: Buffer): voi
     if (fin.length > 0) writeSync(out, fin)
     const tag = cipher.getAuthTag()
     writeSync(out, tag, 0, tag.length, tagPos)
+    // full-audit 2026-07-11 CODE-10 — fsync BEFORE the atomic rename (the
+    // writeVaultDescriptor idiom): without it, quit → unplug-without-eject on a
+    // non-write-through mount can land the rename while the ciphertext blocks are still
+    // in the OS cache, leaving `.enc` truncated AFTER the plaintext was already durably
+    // shredded — GCM fails at the next unlock and the workspace is unrecoverable. One
+    // fsync per whole-file encrypt (lock/create/rekey-stage/sidecar write) is cheap next
+    // to the streaming encrypt itself.
+    fsyncSync(out)
     closeSync(out)
     out = null
     renameSync(tmp, destPath)
@@ -355,6 +379,9 @@ export async function encryptFileAsync(srcPath: string, destPath: string, key: B
     if (fin.length > 0) await out.write(fin, 0, fin.length, null)
     const tag = cipher.getAuthTag()
     await out.write(tag, 0, tag.length, tagPos)
+    // full-audit 2026-07-11 CODE-10 — fsync before the atomic rename, mirroring the sync
+    // twin (see encryptFile): the frame must be durable before it lands under its final name.
+    await out.sync()
     await out.close()
     out = null
     await renameAsync(tmp, destPath)
@@ -463,14 +490,23 @@ export function cleanSidecars(dbPath: string): void {
   }
 }
 
+/** Suffix of a preserved newer-than-`.enc` working file awaiting roll-forward at unlock
+ *  (full-audit 2026-07-11 CODE-1b — see `preserveNewerPlaintext`). Deliberately matches
+ *  none of `shredStalePlaintext`'s transient patterns (`.tmp` / `.parse` / `-wal` / `-shm`). */
+export const RECOVERY_SUFFIX = '.recovery'
+
 /**
  * Crash recovery for an encrypted vault: shred every leftover plaintext artifact a
  * killed run can leave behind — the working DB, its WAL/SHM sidecars, the atomic-write
  * `.tmp` files of encrypt/decryptFile, and transient decrypted document/image copies
  * (`*.parse*`/`*.tmp` under `workspace/documents/` and `workspace/images/`, written while
- * re-indexing or decrypting an encrypted copy). For an encrypted vault these are all derived
- * from the `.enc` artifacts (the source of truth), so shredding loses nothing. MUST NOT be
- * called for `plaintext_dev`, where the working file IS the database.
+ * re-indexing or decrypting an encrypted copy). For an encrypted vault these are derived
+ * from the `.enc` artifacts (the source of truth), so shredding loses nothing — with ONE
+ * exception (full-audit 2026-07-11 CODE-1): after a FAILED lock (e.g. disk-full during the
+ * re-encrypt) the cleanly-closed working file is NEWER than `.enc` and is the only fresh
+ * copy of the session's data. Callers must run `preserveNewerPlaintext` FIRST (init() does),
+ * which moves that one case aside as a `.recovery` snapshot this sweep never matches.
+ * MUST NOT be called for `plaintext_dev`, where the working file IS the database.
  */
 export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   shredFile(vaultPaths.dbPath)
@@ -493,6 +529,54 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
     } catch {
       /* dir not created yet */
     }
+  }
+}
+
+/** A real SQLite database file starts with this 16-byte header. */
+const SQLITE_HEADER = Buffer.from('SQLite format 3\u0000')
+
+/** True when the file begins with the SQLite header (guards the CODE-1b roll-forward
+ *  against garbage — e.g. a failed shred's random-overwrite whose unlink also failed). */
+function fileHasSqliteHeader(path: string): boolean {
+  const buf = Buffer.alloc(SQLITE_HEADER.length)
+  const fd = openSync(path, 'r')
+  try {
+    const got = readSync(fd, buf, 0, buf.length, 0)
+    return got === buf.length && buf.equals(SQLITE_HEADER)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * full-audit 2026-07-11 CODE-1b — the salvage half of the startup crash sweep. A FAILED
+ * lock (encryptFile threw after checkpoint + close — ENOSPC is realistic on a nearly-full
+ * stick) leaves the plaintext working file as the ONLY fresh copy of the session's data,
+ * with the `.enc` still the stale snapshot of the previous successful lock. Shredding it
+ * (what `shredStalePlaintext` would do next) silently loses everything since that lock.
+ *
+ * Detect exactly that state and move the file aside as `<db>.recovery`, which the sweep
+ * never matches; `unlockEncryptedVault` rolls it FORWARD once the key exists. The
+ * failed-lock signature is deliberately narrow — every check must hold, else fall through
+ * to the shred (today's behavior):
+ *   • the working file is strictly NEWER than `.enc` (mtime) — else it is derived data;
+ *   • NO live `-wal`/`-shm` sidecars — lock's checkpoint + close flushed and removed them.
+ *     Live sidecars are the MID-SESSION crash state instead: the main file can be
+ *     mid-checkpoint (torn), so rolling it forward could replace the intact stale `.enc`
+ *     with garbage. That state stays shredded — the documented power-cut trade-off
+ *     (docs/security-model.md "Lock failure & durability");
+ *   • the file starts with the SQLite header — a failed shred's random-overwrite must
+ *     never be re-encrypted over the good `.enc`.
+ */
+export function preserveNewerPlaintext(vaultPaths: VaultPaths): void {
+  try {
+    if (!existsSync(vaultPaths.dbPath) || !existsSync(vaultPaths.encPath)) return
+    if (existsSync(`${vaultPaths.dbPath}-wal`) || existsSync(`${vaultPaths.dbPath}-shm`)) return
+    if (statSync(vaultPaths.dbPath).mtimeMs <= statSync(vaultPaths.encPath).mtimeMs) return
+    if (!fileHasSqliteHeader(vaultPaths.dbPath)) return
+    renameSync(vaultPaths.dbPath, `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+  } catch {
+    /* best-effort: on any doubt fall through to the sweep (today's behavior) */
   }
 }
 
@@ -744,17 +828,30 @@ export function createEncryptedVaultOnDisk(
     fileKey = generateDataKey()
     descriptor = buildEnvelopeDescriptor(password, fileKey, kdf)
   }
-  writeVaultDescriptor(vaultPaths.descriptorPath, descriptor)
 
-  // Build an initial, seeded database, then encrypt the file and shred the plaintext.
+  // full-audit 2026-07-11 CODE-14 — crash-safe creation with the rekey-journal ordering:
+  // build + seed + checkpoint the database, encrypt it STAGED as `.enc.new` (the rekey
+  // journal's own suffix), and only then write the descriptor — the single atomic COMMIT
+  // POINT (writeVaultDescriptor is fsync + rename). A crash BEFORE it leaves neither a
+  // descriptor nor an `.enc`, so init() still reports `uninitialized` and onboarding
+  // retries cleanly (the stray staged file is simply overwritten by the retry). A crash
+  // AFTER it is the committed-rekey crash state: `recoverPendingRekey` rolls the staged
+  // file forward on the next init()/unlock. The descriptor used to be written FIRST — a
+  // crash mid-create then bricked onboarding behind the misleading "restore
+  // workspace.json" hint (the actual repair was deleting it). NB the `legacyV1` fixture
+  // path shares this ordering but not the roll-forward (recovery is v2-gated); it exists
+  // only so tests can build migration fixtures — the app never passes it.
+  const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
   const db = openDatabase(vaultPaths.dbPath)
   seedSettings(db)
   updateSettings(db, { workspaceMode: 'encrypted' })
   db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
   db.close()
-  encryptFile(vaultPaths.dbPath, vaultPaths.encPath, fileKey)
+  encryptFile(vaultPaths.dbPath, staged, fileKey)
   shredFile(vaultPaths.dbPath)
   cleanSidecars(vaultPaths.dbPath)
+  writeVaultDescriptor(vaultPaths.descriptorPath, descriptor) // COMMIT POINT
+  renameSync(staged, vaultPaths.encPath)
   fileKey.fill(0)
 }
 
@@ -803,6 +900,16 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
     key.fill(0)
   }
+  // full-audit 2026-07-11 CODE-1b — roll a preserved newer working file FORWARD now that
+  // the key exists: re-encrypt it over the stale `.enc` (encryptFile is atomic tmp→rename
+  // and fsyncs — CODE-10), shred it, and continue with the normal unlock, which decrypts
+  // the freshly written `.enc` right back. If the re-encrypt fails (e.g. the disk is
+  // still full) the snapshot survives under `.recovery` for the next attempt.
+  const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
+  if (existsSync(recoveryPath)) {
+    encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
+    shredFile(recoveryPath)
+  }
   // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
   // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
   cleanSidecars(vaultPaths.dbPath)
@@ -817,7 +924,15 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
  * main file), re-encrypt the working file → `.enc`, then shred the plaintext working
  * file and its sidecars. Idempotent-ish: safe to call once per unlock.
  */
-export function lockEncryptedVault(vaultPaths: VaultPaths, db: Db, key: Buffer): void {
+export function lockEncryptedVault(
+  vaultPaths: VaultPaths,
+  db: Db,
+  key: Buffer,
+  /** Test seam (full-audit 2026-07-11 CODE-1): the lock path's re-encrypt boundary.
+   *  Production callers omit it; tests inject a throwing impl to drive the lock-failure
+   *  recovery without needing a genuinely full disk. */
+  encryptFileImpl: typeof encryptFile = encryptFile
+): void {
   // Flush WAL into the main file so the encrypted snapshot is complete, then close.
   try {
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
@@ -825,7 +940,7 @@ export function lockEncryptedVault(vaultPaths: VaultPaths, db: Db, key: Buffer):
     /* checkpoint is best-effort; close still flushes */
   }
   db.close()
-  encryptFile(vaultPaths.dbPath, vaultPaths.encPath, key)
+  encryptFileImpl(vaultPaths.dbPath, vaultPaths.encPath, key)
   shredFile(vaultPaths.dbPath)
   cleanSidecars(vaultPaths.dbPath)
 }
@@ -869,7 +984,10 @@ export class WorkspaceController {
   constructor(
     private readonly vaultPaths: VaultPaths,
     private readonly policy: PrivacyPolicy,
-    private readonly isDev: boolean
+    private readonly isDev: boolean,
+    /** Test seam (full-audit 2026-07-11 CODE-1): the lock path's re-encrypt boundary,
+     *  forwarded to `lockEncryptedVault`. Production callers omit it. */
+    private readonly encryptFileImpl: typeof encryptFile = encryptFile
   ) {
     this.descriptor = readVaultDescriptor(vaultPaths.descriptorPath)
   }
@@ -918,7 +1036,11 @@ export class WorkspaceController {
     if (this.descriptor?.mode === 'encrypted') {
       // Crash recovery: an encrypted vault must have NO plaintext working file at rest.
       // If a previous run was killed before lock-on-quit ran, shred the leftover so the
-      // decrypted database (+ WAL/SHM) never lingers on disk. Safe — see shredStalePlaintext.
+      // decrypted database (+ WAL/SHM) never lingers on disk. Safe — see shredStalePlaintext
+      // — EXCEPT the failed-lock state (full-audit 2026-07-11 CODE-1b): a cleanly-closed
+      // working file NEWER than `.enc` is the only fresh copy of the last session's data,
+      // so it is moved aside FIRST and rolled forward at unlock instead of shredded.
+      preserveNewerPlaintext(this.vaultPaths)
       shredStalePlaintext(this.vaultPaths)
       // And resolve any password change the crash interrupted (roll forward or back per
       // the descriptor — unlock would do this too; doing it here keeps disk state clean
@@ -1110,7 +1232,30 @@ export class WorkspaceController {
    */
   lock(): WorkspaceStateInfo {
     if (this._db && this.key && this.descriptor?.mode === 'encrypted') {
-      lockEncryptedVault(this.vaultPaths, this._db, this.key)
+      try {
+        lockEncryptedVault(this.vaultPaths, this._db, this.key, this.encryptFileImpl)
+      } catch (err) {
+        // full-audit 2026-07-11 CODE-1a — a failed re-encrypt (realistically ENOSPC)
+        // must never strand the controller half-locked. `lockEncryptedVault` had already
+        // closed the DB, so `_db` held a CLOSED handle while getState() kept reporting
+        // `unlocked`: every later DB IPC failed raw and a lock retry re-closed a closed
+        // DB. Worse, the plaintext working file was now the ONLY fresh copy of the
+        // session's data (encryptFile is atomic tmp→rename, so the stale `.enc`
+        // survives) and the next launch's crash sweep shredded it. Recovery: re-open the
+        // plaintext DB — the file is intact and quiescent after the checkpoint + close —
+        // and restore `_db` so the controller stays consistently UNLOCKED and usable;
+        // keep the key so a retry (after freeing space) can succeed; surface a typed,
+        // content-free error for the IPC layer to map to friendly copy.
+        try {
+          this._db = openDatabase(this.vaultPaths.dbPath)
+        } catch {
+          // Re-open is best-effort: if the disk is too broken even for that, keep the
+          // closed handle — isUnlocked() stays true, so no unlock can decrypt the STALE
+          // `.enc` over the newer working file this session, and the init() salvage
+          // (CODE-1b) preserves + rolls the file forward on the next launch.
+        }
+        throw new VaultLockError()
+      }
       // Zero the key bytes before dropping the reference — otherwise the 32-byte key
       // lingers in the heap until GC and could surface in a dump/swap.
       this.key.fill(0)
@@ -1131,7 +1276,31 @@ export class WorkspaceController {
    * path short of relaunch (`requireDb` throws afterwards).
    */
   shutdown(): void {
-    this.lock()
+    try {
+      this.lock()
+    } catch (err) {
+      // full-audit 2026-07-11 CODE-1 — the failed lock re-opened the plaintext DB so an
+      // INTERACTIVE session stays usable, but this caller is exiting the process. Close
+      // the re-opened handle cleanly (checkpoint + close removes -wal/-shm), so the
+      // working file rests bare and newer than `.enc` — exactly the salvage signature
+      // init() (CODE-1b) preserves and rolls forward on the next launch instead of
+      // shredding. Then rethrow: the quit paths catch + log ("Failed to lock workspace
+      // on quit"), and the process still exits.
+      if (this._db) {
+        try {
+          this._db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+        } catch {
+          /* best-effort; close still flushes */
+        }
+        try {
+          this._db.close()
+        } catch {
+          /* the reopen may have failed — the handle is already closed */
+        }
+        this._db = null
+      }
+      throw err
+    }
     if (this._db) {
       // plaintext_dev: flush the WAL into the main file, then close — SQLite removes the
       // -wal/-shm sidecars on the last clean connection close.
