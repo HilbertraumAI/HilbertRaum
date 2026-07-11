@@ -4,7 +4,7 @@ HilbertRaum is an **open-source, offline, local-LLM workspace** that runs from a
 portable drive. No cloud, no telemetry, all user data local.
 
 ## Read these first, in order
-1. [`BUILD_STATE.md`](BUILD_STATE.md) — the live handoff/state file. **Always read first.** It says what is done, current decisions, data contracts, and the next actions.
+1. [`BUILD_STATE.md`](BUILD_STATE.md) — the live handoff/state file. **Always read first.** It says what is done, current decisions, and the next actions. It holds dated entries for the currently-open waves ONLY (hard size budget, enforced by `repo-hygiene.test.ts`): retired entries live verbatim in [`docs/build-log.md`](docs/build-log.md) (grep it when an old "BUILD_STATE <date> entry" citation needs resolving), and the shared data contracts live in [`docs/data-contracts.md`](docs/data-contracts.md).
 2. [`docs/product-vision.md`](docs/product-vision.md) — the durable product intent (thesis, target user, commercial model, positioning guardrails, scope boundaries, roadmap). It condenses the retired original spec `CLAUDE_HilbertRaum_MVP.md` (deleted 2026-07-11; full text in git history). The `spec §N` anchors cited across code and docs resolve via the **§-anchor legend** at the end of [`docs/architecture.md`](docs/architecture.md) ("Original MVP spec — retirement record").
 3. Topic docs under [`docs/`](docs/) (architecture, drive layout, packaging, model policy, …) as the task requires.
 
@@ -39,7 +39,7 @@ legend), and the Skills / Image-understanding records.
 ## Per-phase ritual (MANDATORY — spec-driven)
 At the end of every phase:
 1. Tests green (`npm test`). 2. App still builds/launches. 3. **Update affected `docs/`.**
-4. **Update `BUILD_STATE.md`** (status, decisions, data contracts, next actions, risks). 5. Commit referencing the phase.
+4. **Update `BUILD_STATE.md`** (status, decisions, next actions, risks — short entries per its retention rule; shared-shape changes go to `docs/data-contracts.md`). 5. Commit referencing the phase.
 
 A phase is not done until docs + `BUILD_STATE.md` are updated.
 

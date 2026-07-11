@@ -258,6 +258,8 @@ are in **[`docs/model-benchmarks.md`](docs/model-benchmarks.md)**.
 | [`docs/packaging.md`](docs/packaging.md) | Preparing a drive, fetch scripts, portable builds |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and fixes |
 | [`docs/known-limitations.md`](docs/known-limitations.md) | Consciously-accepted gaps |
+| [`docs/data-contracts.md`](docs/data-contracts.md) | Shared cross-module data contracts (IPC surface, DB schema, streaming, …) |
+| [`docs/build-log.md`](docs/build-log.md) | Archive of retired `BUILD_STATE.md` entries (frozen; grep for old citations) |
 | [`BUILD_STATE.md`](BUILD_STATE.md) | Live build state — read first when contributing |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release/version history (pre-1.0; see also `BUILD_STATE.md`) |
 

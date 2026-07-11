@@ -83,3 +83,19 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
     expect(offenders).toEqual([])
   })
 })
+
+// BUILD_STATE.md restructure (2026-07-12): the handoff file had grown to 1.48 MB / ~11,200
+// lines (272 dated entries + retired handoff sections) — larger than any context window and
+// beyond a single Read pass, so its own "read this FIRST" instruction silently failed: a
+// fresh session got the newest journal entries and never reached the live §1–§9 sections.
+// Closed waves' dated entries now retire verbatim (newest-first) to docs/build-log.md and the
+// §4 data contracts live in docs/data-contracts.md; this budget makes the retention rule in
+// BUILD_STATE's header mechanical instead of human-remembered. If this test fails, MOVE the
+// oldest closed waves' entries to the top of docs/build-log.md — do not raise the numbers.
+describe('repo hygiene — BUILD_STATE.md stays a one-pass handoff file (retention budget)', () => {
+  it('stays under the retention budget (archive closed waves to docs/build-log.md)', () => {
+    const raw = readFileSync(join(process.cwd(), '..', '..', 'BUILD_STATE.md'))
+    expect(raw.byteLength).toBeLessThanOrEqual(300 * 1024)
+    expect(raw.toString('utf8').split('\n').length).toBeLessThanOrEqual(2000)
+  })
+})
