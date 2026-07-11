@@ -312,6 +312,21 @@ describe('conversation persistence', () => {
     maybeSetTitleFromFirstMessage(db, conv.id, 'second question')
     expect(listConversations(db)[0].title).toBe('What is a vector store?')
   })
+
+  // CODE-17 (full-audit 2026-07-11): the auto-title cut is code-point-safe (the RAG-2
+  // truncateSnippet idiom) — a raw `.slice(0, 60)` counts UTF-16 units and can cut inside a
+  // surrogate pair, persisting a title that forever renders `�` in the sidebar.
+  it('never cuts the auto-title inside a surrogate pair (59 ASCII + emoji)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const content = 'a'.repeat(59) + '😀😀' // 61 code points; the emoji straddles UTF-16 index 60
+    maybeSetTitleFromFirstMessage(db, conv.id, content)
+    const title = listConversations(db)[0].title
+    // The cut lands on the code-point boundary: 59 ASCII + ONE whole emoji (61 UTF-16 units).
+    expect(title).toBe('a'.repeat(59) + '😀')
+    // No lone surrogate anywhere (the pre-fix title ended in '\ud83d' → `�`).
+    expect(title.isWellFormed?.() ?? !/[\uD800-\uDBFF]$/.test(title)).toBe(true)
+  })
 })
 
 describe('message ordering', () => {
@@ -660,6 +675,44 @@ describe('generateAssistantMessage (streaming)', () => {
     const history = listMessages(db, conv.id)
     expect(history).toHaveLength(3)
     expect(history.some((m) => m.id === answer.id)).toBe(true) // the earlier answer survives
+  })
+
+  // CODE-19 rider (full-audit 2026-07-11, Phase-D observation): a compaction checkpoint row also
+  // carries role 'assistant' — when one sits at the conversation tail (generation failed right
+  // after the pre-pass persisted it), the regenerate delete must skip it and take the last VISIBLE
+  // message, and `hasRegenerableAssistantReply` must agree with what the user sees.
+  it('regenerate skips a tail compaction checkpoint — deletes the visible answer, keeps the checkpoint', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'question' })
+    const answer = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the answer' })
+    // A checkpoint persisted AFTER the answer (the Phase-D fixture shape).
+    writeCheckpoint(db, { conversationId: conv.id, summary: 'summary of older turns', coversThroughRowid: 0 })
+
+    // The checkpoint is invisible bookkeeping: the visible tail is the answer, so regenerate applies…
+    expect(hasRegenerableAssistantReply(db, conv.id)).toBe(true)
+    const deleted = deleteLastAssistantMessage(db, conv.id)
+    // …and deletes the ANSWER, never the checkpoint (pre-fix it took the literal last row).
+    expect(deleted?.id).toBe(answer.id)
+    const kinds = db
+      .prepare('SELECT kind FROM messages WHERE conversation_id = ?')
+      .all(conv.id) as Array<{ kind: string | null }>
+    expect(kinds.some((k) => k.kind === 'compaction')).toBe(true) // the checkpoint survives
+  })
+
+  it('a checkpoint-tail conversation whose visible tail is a USER turn has nothing to regenerate', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'unanswered question' })
+    // Generation failed right after the compaction pre-pass persisted the checkpoint (Phase-D shape).
+    writeCheckpoint(db, { conversationId: conv.id, summary: 'summary', coversThroughRowid: 0 })
+
+    expect(hasRegenerableAssistantReply(db, conv.id)).toBe(false) // the visible tail is the user turn
+    expect(deleteLastAssistantMessage(db, conv.id)).toBeNull() // nothing deleted — checkpoint intact
+    const kinds = db
+      .prepare('SELECT kind FROM messages WHERE conversation_id = ?')
+      .all(conv.id) as Array<{ kind: string | null }>
+    expect(kinds.some((k) => k.kind === 'compaction')).toBe(true)
   })
 
   // F2 (post-merge audit): the regenerate guard restores the prior reply byte-faithfully on a

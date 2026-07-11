@@ -227,6 +227,18 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   }
 
+  // GAP-5 (full-audit 2026-07-11) — the requireNoActiveTask mirror for SKILL runs: an in-flight
+  // run (extraction/redaction/edit, possibly suspended at a seam await) reads this document's
+  // chunks/segments and persists rows against it. Deleting or re-indexing underneath it would
+  // interleave with the run — a confusing persistFailed for the user, and (with FK enforcement
+  // off) orphaned bank/invoice rows surviving the purge. `ctx.skillRunActive` is assigned by
+  // registerSkillsIpc (the controller is module-local there); absent in partial test contexts.
+  const requireNoActiveSkillRun = (documentId: string): void => {
+    if (ctx.skillRunActive?.(documentId)) {
+      throw new Error(tMain('main.docs.skillRunning'))
+    }
+  }
+
   // Ingestion dependencies. Vectors are tagged with the id of the embedder that
   // ACTUALLY produced them (`embedder.id`, the embedChunks fallback) — never the
   // settings selection: with the E5 manifest selected but the mock embedder active
@@ -553,6 +565,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireUnlocked()
     requireNotProcessing(documentId)
     requireNoActiveTask(documentId)
+    requireNoActiveSkillRun(documentId)
     log.info('Delete document', { documentId })
     deleteDocument(ctx.db, documentId)
     ctx.audit?.('document_deleted', 'Document deleted', { documentId })
@@ -743,6 +756,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireUnlocked()
     requireNotProcessing(documentId)
     requireNoActiveTask(documentId)
+    requireNoActiveSkillRun(documentId)
     // Race guard: re-index rewrites the `.enc` sidecar — mutually exclusive
     // with a password change (see importDocuments).
     const releaseDocWork = ctx.workspace.beginDocumentWork()
@@ -785,10 +799,11 @@ export function registerDocsIpc(ctx: AppContext): void {
             log.warn('Re-index all stopped: workspace locked mid-batch', { jobId })
             break
           }
-          // Skip a doc already being processed or held by a live doc task (summary/deep-index):
-          // re-indexing under it would lose the race (see requireNoActiveTask). Count as failed so
-          // total still adds up and the user sees it didn't complete.
-          if (processing.has(id) || ctx.docTasks?.isDocumentBusy(id)) {
+          // Skip a doc already being processed, held by a live doc task (summary/deep-index), or
+          // worked on by a live SKILL run (GAP-5): re-indexing under either would lose the race
+          // (see requireNoActiveTask / requireNoActiveSkillRun). Count as failed so total still
+          // adds up and the user sees it didn't complete.
+          if (processing.has(id) || ctx.docTasks?.isDocumentBusy(id) || ctx.skillRunActive?.(id)) {
             job.failed += 1
             continue
           }

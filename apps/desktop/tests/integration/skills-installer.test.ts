@@ -660,14 +660,14 @@ describe('export excludes the cache + includes the package tree (§9.5 / SKA-34)
   })
 })
 
-describe('delete — ref-clear sweep in one txn (§22-C3)', () => {
-  it('removes the folder + row and nulls active_skill_id / messages.skill_id', async () => {
+describe('delete — default-clear only, provenance survives (§22-C3 / SKA-38 / GAP-1)', () => {
+  it('removes the folder + row, nulls active_skill_id, and KEEPS messages.skill_id', async () => {
     const db = freshDb()
     const deps = makeDeps()
     const info = importSkill(db, await validZip({ id: 'del' }), deps).info
     const installId = info.installId
 
-    // Wire up references the way chat/RAG will (no FK — an app-level sweep clears them).
+    // Wire up references the way chat/RAG will (no FK — §22-C3).
     db.exec(
       "INSERT INTO conversations (id, title, created_at, updated_at) VALUES ('c1','t','2026-06-17','2026-06-17')"
     )
@@ -685,8 +685,12 @@ describe('delete — ref-clear sweep in one txn (§22-C3)', () => {
       active_skill_id: string | null
     }
     const msg = db.prepare('SELECT skill_id FROM messages WHERE id = ?').get('m1') as { skill_id: string | null }
+    // The sticky per-conversation default is cleared (a deleted skill must not stay the default)…
     expect(conv.active_skill_id).toBeNull()
-    expect(msg.skill_id).toBeNull()
+    // …but the per-message stamp SURVIVES (GAP-1, full-audit 2026-07-11 — the SKA-38 contract):
+    // it is provenance for an already-shaped answer; the JOIN title resolves to NULL and the
+    // renderer shows "(removed skill)". The pre-SKA-38 sweep this test used to pin erased it.
+    expect(msg.skill_id).toBe(installId)
   })
 
   it('refuses to delete an app-shipped skill', async () => {

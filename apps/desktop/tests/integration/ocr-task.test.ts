@@ -226,6 +226,76 @@ describe('Make searchable (OCR) end to end', () => {
     expect(getDocument(db, docId)?.scanDetected).toBe(true)
   })
 
+  // GAP-7 (full-audit 2026-07-11) — the decided cancel contract, both halves:
+  //   before the persist point → a calm cancel that persists NOTHING;
+  //   after it (during the signal-less re-ingest) → the task completes as 'done' (the work is real).
+  it("GAP-7: a cancel after the LAST page but before the persist still cancels — nothing persisted", async () => {
+    const docId = await importScan()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    let recognitionDone = false
+    const engine = fakeEngine(() => 'never persisted')
+    // A rasterizer that parks AFTER the last onPage — the cancel lands in the recognition→persist
+    // window, exactly where the pre-persist abort check must catch it.
+    const rasterize: RasterizePdf = async (_pdf, o) => {
+      o.onPageCount?.(2)
+      for (let n = 1; n <= 2; n++) await o.onPage(n, Buffer.from([n]))
+      recognitionDone = true
+      await gate
+      return { pageCount: 2 }
+    }
+    const manager = makeManager({ engine, rasterize })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    while (!recognitionDone) await new Promise((r) => setTimeout(r, 1))
+    manager.cancelDocTask(jobId)
+    release()
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('cancelled')
+    expect(getDocumentOcrPages(db, docId)).toBeNull() // nothing persisted
+    expect(getDocument(db, docId)?.scanDetected).toBe(true)
+  })
+
+  it("GAP-7: a cancel during the re-ingest completes as 'done' — the persisted work is reported honestly", async () => {
+    const docId = await importScan()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    let embedReached = false
+    const base = createMockEmbedder()
+    // A gated embedder parks the RE-INGEST (recognition already persisted) so the cancel lands in
+    // the post-persist window — the deliberately-ignored one (see the handler's cancel contract).
+    const embedder = {
+      id: base.id,
+      dimensions: base.dimensions,
+      embed: async (texts: string[]) => {
+        embedReached = true
+        await gate
+        return base.embed(texts)
+      }
+    }
+    const manager = new DocTaskManager({
+      getDb: () => db,
+      getRuntime: () => null,
+      getTranslator: () => null,
+      isChatStreaming: () => false,
+      getContextTokens: () => 4096,
+      getStoreDir: () => storeDir,
+      getIngestionDeps: () => ({ embedder }),
+      beginDocumentWork: () => () => {},
+      getOcrEngine: () => fakeEngine((n) => `Seite ${n} erkannt.`),
+      rasterizePdf: fakeRasterizer(2)
+    })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    while (!embedReached) await new Promise((r) => setTimeout(r, 1))
+    manager.cancelDocTask(jobId) // lands mid-re-ingest, after setDocumentOcr persisted
+    release()
+    const status = await waitTerminal(manager, jobId)
+    // The recognition + index are real, persisted work — reported 'done', never "cancelled, nothing
+    // happened" about a now-searchable document (the decided GAP-7 contract).
+    expect(status.state).toBe('done')
+    expect(getDocumentOcrPages(db, docId)?.length).toBe(2)
+    expect(getDocument(db, docId)?.status).toBe('indexed')
+  })
+
   it('fails friendly when every recognized page is empty', async () => {
     const docId = await importScan()
     const manager = makeManager({ engine: fakeEngine(() => '   '), rasterize: fakeRasterizer(2) })

@@ -292,20 +292,27 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     expect(saved).toBe(true)
   })
 
-  it('refuses without confirmation (the gate) — nothing is written', async () => {
+  it('refuses without confirmation UP FRONT — zero model calls, nothing is written (GAP-6)', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, PII_TEXT)
     const { audit } = capturingAudit()
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(() => JSON.stringify({ entities: [] }), calls)
     let saveCalled = false
     const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
       audit,
+      runtime,
       saveTextFile: async () => {
         saveCalled = true
         return true
       }
     })
     expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/confirmation/i) // the gate's exact refusal copy, surfaced up front
     expect(saveCalled).toBe(false)
+    // GAP-6 (full-audit 2026-07-11): the refusal lands BEFORE the multi-window LLM locate pass —
+    // pre-fix the whole locate ran for nothing before the gate refused.
+    expect(calls).toHaveLength(0)
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('failed')
   })

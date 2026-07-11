@@ -19,7 +19,16 @@ import type { DocTaskCtx, InternalTask } from '../context'
  * the local engine, persist the recognition (`documents.ocr_json`, content → DB
  * only), then re-ingest — the PdfParser's ocrPages hook turns the recognition into
  * one segment per page, so page citations work unchanged.
- * Progress = pages recognized + the final re-ingest step; cancel persists NOTHING.
+ * Progress = pages recognized + the final re-ingest step.
+ *
+ * Cancel contract (GAP-7, full-audit 2026-07-11 — decided deliberately): a cancel landing
+ * anywhere BEFORE the persist point (`setDocumentOcr`) persists NOTHING — the rasterize loop,
+ * each per-page recognition, and the last pre-persist check below all honour the signal, and the
+ * document stays a detected scan. A cancel landing AFTER the persist point (i.e. during the
+ * signal-less, minutes-long re-ingest) is deliberately IGNORED: the recognition is already
+ * persisted and the chunks/index are being rebuilt from it, so the task completes and reports
+ * 'done' — claiming "cancelled, nothing happened" about a now-searchable document would lie about
+ * persisted work (the B2 lesson from the skill seams).
  */
 export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<string> {
   const engine = ctx.deps.getOcrEngine?.()
@@ -57,6 +66,9 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
     })
     throw new Error(tMain('main.task.ocrFailed'))
   }
+  // GAP-7: the LAST pre-persist abort check — a cancel that landed by the end of recognition
+  // actually cancels (nothing persisted). There is no await between here and `setDocumentOcr`,
+  // so past this line the task is committed to completing (see the header's cancel contract).
   if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
   if (!pages.some((p) => p.text.length > 0)) {
     throw new Error(tMain('main.task.ocrNoText'))
@@ -91,6 +103,13 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
     }
   } finally {
     release()
+  }
+  // GAP-7: the deliberate post-persist re-check — a cancel that landed during the (signal-less)
+  // re-ingest arrives with the work already persisted and the index rebuilt. Log it (ids only) and
+  // complete as 'done'; the manager maps a clean return to 'done' even under an aborted signal,
+  // which is exactly the honest outcome here (see the header's cancel contract).
+  if (signal.aborted) {
+    log.info('OCR task cancel landed after the persist point — completing as done', { documentId })
   }
   task.status.progress.stepsDone += 1
   return documentId

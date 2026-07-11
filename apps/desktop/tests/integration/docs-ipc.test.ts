@@ -1195,6 +1195,39 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
     expect(preview.segments.length).toBeGreaterThan(0)
   })
 
+  // GAP-5 (full-audit 2026-07-11) — the requireNoActiveTask mirror for SKILL runs: an in-flight run
+  // (e.g. an extraction suspended at a seam await) reads the document's chunks/segments and persists
+  // rows against it; delete/re-index underneath it would interleave with the run. `ctx.skillRunActive`
+  // is the probe registerSkillsIpc assigns from its module-local SkillRunController.
+  it('GAP-5: a live skill run blocks delete/reindex with the friendly busy copy', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let skillBusy = false
+    const ctx = {
+      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, {
+        isDocumentBusy: () => false,
+        hasActiveTask: () => false,
+        maybeEnqueueTreeBuild: () => {}
+      }),
+      skillRunActive: (documentId: string) => skillBusy && typeof documentId === 'string'
+    } as unknown as AppContext
+    registerDocsIpc(ctx)
+    const file = join(workspacePath, 'statement.txt')
+    writeFileSync(file, 'a bank statement with enough words to index for the skill-run guard test here')
+    const { documentIds } = await runImport([file])
+    const id = documentIds[0]
+
+    // A skill run now works on the document (the extraction stalled at a seam, from the UI's view).
+    skillBusy = true
+    await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/skill is working/i)
+    await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/skill is working/i)
+
+    // The run finishes → both proceed again (the guard is scoped to a LIVE run, not sticky).
+    skillBusy = false
+    const re = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
+    expect(re.id).toBe(id)
+    await invoke(handlers, IPC.deleteDocument, id) // resolves cleanly — no lingering refusal
+  })
+
   // T-4: a "Lock now" that lands mid-import must break the loop cleanly and leave the not-yet-
   // finalized look-ahead document non-terminal INSIDE the lock (never a half-written terminal
   // state), with the doc-work lease balanced; then, after unlock, the very reconcile the drain

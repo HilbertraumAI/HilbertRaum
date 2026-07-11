@@ -1407,7 +1407,12 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   chat compare (`grounded-whole-doc-compare`) has the mirror read `retrieveCompareDiff` in
   [`rag/index.ts`](../apps/desktop/src/main/services/rag/index.ts): it reads both docs whole (no cap →
   honest whole-document coverage, no page-2 truncation), feeds the changes+redline via
-  `buildCompareDiffPrompt`, and cites the chunks where the changes are.
+  `buildCompareDiffPrompt`, and cites the chunks where the changes are. **The token budget covers the
+  changes + redline JOINTLY** (full-audit 2026-07-11 CODE-5): per change the redline repeats the same
+  removed+added words plus context, so budgeting the change list alone let the assembled turn run ~2×
+  the proven budget (the #41 context-exceeded class). The change list is the load-bearing half — when
+  the pair over-runs, the redline is dropped FIRST and only then is the list shrunk; the doctask
+  surface never had the problem (its redline is materialized into the report, not the prompt).
   **Render-cap-sets-`truncated` invariant (skills-audit-2026-07-07 SK-2):** the model-facing renderers
   cap at `DIFF_RENDER_MAX` (200, the single source of truth exported from `services/diff`) and drop the
   LATER changes. Both consumers pass that constant explicitly and OR `changes.length > DIFF_RENDER_MAX`

@@ -7,6 +7,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
+import { deleteSkill } from '../../src/main/services/skills/installer'
 import { resolveTurnSkill } from '../../src/main/services/skills/turn'
 import {
   appendMessage,
@@ -232,18 +233,30 @@ describe('assistant-row stamping (DS16/§22-A5) + the deleted-skill provenance (
     // now — deleting the skill must NOT erase the glyph + the "answer without it" undo from an
     // already-stamped turn (a disabled skill already kept both). The read keeps `skillId` (raw) and
     // drops only `skillTitle` (no JOIN row); the renderer labels such a turn "(removed skill)".
-    const { db, installId } = envWithSkill()
+    //
+    // GAP-1 (full-audit 2026-07-11): deletion goes through the REAL `deleteSkill()` path — this test
+    // used to delete the row with raw SQL, which hid that the installer still ran the pre-SKA-38
+    // `messages.skill_id` ref-clear sweep and erased exactly this provenance. `deleteSkill` now keeps
+    // the message stamps and clears ONLY the sticky conversation default.
+    const { db, dirs, installId } = envWithSkill()
     const conv = createConversation(db, {})
+    setConversationDefaultSkill(db, conv.id, installId) // the sticky default that MUST be cleared
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Go.' })
     await generateAssistantMessage(db, runtime(), conv.id, {
       skill: { installId, title: 'Skill bank', body: 'Quote totals.' }
     })
     expect(listMessages(db, conv.id).at(-1)?.skillId).toBe(installId)
-    // Delete the skill row — the stamped id SURVIVES (provenance), only the JOIN title is now NULL.
-    db.prepare('DELETE FROM skills WHERE install_id = ?').run(installId)
+
+    // Delete via the real installer path — the stamped id SURVIVES (provenance), only the JOIN
+    // title is now NULL, and the sticky per-conversation default is cleared.
+    expect(deleteSkill(db, installId, dirs)).toEqual({ deleted: true })
     const after = listMessages(db, conv.id).at(-1)
     expect(after?.skillId).toBe(installId)
     expect(after?.skillTitle ?? null).toBeNull()
+    const conversationDefault = db
+      .prepare('SELECT active_skill_id FROM conversations WHERE id = ?')
+      .get(conv.id) as { active_skill_id: string | null }
+    expect(conversationDefault.active_skill_id).toBeNull()
   })
 
   it('does NOT stamp when the fence is omitted for budget (a skill that did not shape the answer)', async () => {

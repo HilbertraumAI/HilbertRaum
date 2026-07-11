@@ -11176,9 +11176,53 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     trigger in a pre-migration fixture proves atomic rollback + retry-to-completion; a hand-torn
     state (AD/AU dropped + handles nulled) self-heals on the next open. Review nits registered
     in the plan's discoveries (au_legacy's missing compaction exclusion is DELIBERATE —
-    kind-transition re-index semantics). Remaining phases E, F2, G–J unstarted.
+    kind-transition re-index semantics).
+    **Phase E DONE (2026-07-11 — backend correctness smalls CODE-5/17/18/19/22 + GAP-1..7):**
+    (a) **CODE-5** (test-first, both red-verified) — `retrieveCompareDiff` now budgets
+    `changesText + redlineText` JOINTLY (both the top-level check and `fitChangesToBudget`'s fit
+    test); over budget the redline is dropped FIRST, the load-bearing change list only shrinks
+    after (the doctask mode-d precedent, compare.ts:171–178) — closes the ~2×-budget #41
+    context-exceeded class on the primary version-compare route (rag-design §14 mode-d note).
+    (b) **CODE-17** auto-title cut is code-point-safe (the truncateSnippet/RAG-2 idiom) — no more
+    `�`-tailed persisted titles. (c) **CODE-18** the R1 abort+closed-DB persist guard extracted
+    into shared `persistAssistantMessage` (chat.ts) and applied at ALL FOUR persist sites
+    (plain chat + rag/index.ts ×2 + whole-doc-tree.ts) — the grounded Stop+lock race now drops
+    the partial quietly instead of erroring. (d) **CODE-19** compaction region boundary is
+    exchange-aligned (walk back to end on an ASSISTANT turn) so an odd compactable count no
+    longer replaces the synthetic ack via collapseToAlternating; **rider (the Phase-D
+    observation, FIXED):** `deleteLastAssistantMessage` + `hasRegenerableAssistantReply` now
+    exclude `kind='compaction'` rows — a checkpoint at the conversation tail can no longer be
+    deleted by a regenerate (both queries look at the last VISIBLE message). (e) **CODE-22**
+    the translation offload-line parse matches on window+chunk BEFORE slicing to 512 bytes — a
+    single large stderr chunk no longer loses the line (the #42 hint stays honest).
+    (f) **GAP-2** the four unguarded failure exits (extraction persist-failure + B4 catch,
+    redaction + edit outer catches) route through `finishRunGuarded` (P-8) — a doomed terminal
+    UPDATE resolves the friendly envelope, never rejects raw. (g) **GAP-3** PdfParser awaits
+    `loadingTask.promise` INSIDE the try/finally — a corrupt/password PDF no longer leaks the
+    pdf.js transport + buffer. (h) **GAP-4** the redact/edit locate catches use the app-wide
+    `isAbortError(e, signal)` — a cancel surfacing as a wrapped error records 'cancelled', not
+    'failed'. (i) **GAP-5** delete/re-index IPC (and the reindex-all skip) refuse under an
+    in-flight SKILL run via new `ctx.skillRunActive` (assigned by registerSkillsIpc from its
+    module-local SkillRunController; `main.docs.skillRunning` EN+DE — the requireNoActiveTask
+    mirror). (j) **GAP-6** redact + edit refuse `confirmed !== true` UP FRONT (gate copy
+    mirrored) — no more full LLM locate pass before the gate refusal; edit's DOCX branch gains
+    redaction's explicit `confirmed === true` pre-touch check (parity). (k) **GAP-7** OCR cancel
+    contract decided + documented: pre-persist cancel actually cancels (nothing persisted),
+    a cancel during the signal-less re-ingest completes as 'done' (work persisted — never
+    "cancelled, nothing happened" about a now-searchable document); the false "cancel persists
+    NOTHING" header rewritten. (l) **GAP-1 (owner-decided: provenance survives, SKA-38
+    honoured):** `deleteSkill()` drops the `messages.skill_id` sweep — it clears ONLY the sticky
+    `conversations.active_skill_id`; the per-message stamp survives deletion ("(removed skill)"
+    label reachable via the real path); the SKA-38 test re-pointed at the REAL `deleteSkill()`
+    (it bypassed it via raw SQL — a test bug under both outcomes) and the installer's old
+    sweep-pinning test updated to the new contract; known-limitations SKA-38 bullet updated.
+    Tests +16 across rag-compare-diff-truncation (2), pdf-parser-destroy (new file, module-mock
+    per the Phase-B template), chat (3), chat-compaction (2), lock-stream-persistence (2),
+    translation-runtime (1), skills-run (1), skills-document-edit (2, one converted),
+    skills-redaction (converted), skills-turn (extended), docs-ipc (1), ocr-task (2).
+    Remaining phases F2, G–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase D + review follow-up — CODE-4 FTS rowid-targeted triggers (crash-atomic, self-healing migration) + CODE-20/21 DB batching, +14 tests): typecheck clean, 4105 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase E — backend correctness smalls CODE-5/17/18/19/22 + GAP-1..7 (GAP-1 = the owner's SKA-38-honouring deleteSkill variant), +16 tests): typecheck clean, 4121 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

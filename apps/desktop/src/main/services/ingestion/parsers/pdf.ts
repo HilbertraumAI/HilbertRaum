@@ -81,7 +81,6 @@ export const PdfParser: DocumentParser = {
     // every page. They are pdf.js worker noise, not our code, and carry no diagnostic value here; real
     // ERRORS still surface. Offline-safe (a verbosity flag, no network/telemetry).
     const loadingTask = pdfjs.getDocument({ data, verbosity: 0 })
-    const doc = await loadingTask.promise
 
     const segments: ExtractedSegment[] = []
     // Scan detection (below) must judge an image-only PDF from its RAW text-layer, INDEPENDENTLY of
@@ -90,6 +89,11 @@ export const PdfParser: DocumentParser = {
     let rawTextPageCount = 0
     let numPages = 0
     try {
+      // GAP-3 (full-audit 2026-07-11): the open await sits INSIDE the try so a document that fails
+      // to open (corrupt/password PDF) still reaches the finally's `loadingTask.destroy()` — it used
+      // to sit before the try, leaking the loading task's transport state + up to `maxBytes` of
+      // buffer on every failed parse.
+      const doc = await loadingTask.promise
       numPages = doc.numPages
       // Page cap (security audit M-2): a tiny PDF can declare an enormous page count to
       // make this loop (getPage + getTextContent per page) spin unbounded. Walk at most

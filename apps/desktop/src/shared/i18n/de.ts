@@ -1905,6 +1905,9 @@ export const de: Record<keyof typeof en, string> = {
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',
   'main.docs.taskRunning':
     'Für dieses Dokument läuft eine Aufgabe. Brich sie ab oder warte, bis sie fertig ist.',
+  // GAP-5 (full-audit 2026-07-11): das requireNoActiveTask-Pendant für laufende SKILL-Läufe.
+  'main.docs.skillRunning':
+    'Ein Skill arbeitet gerade mit diesem Dokument. Brich ihn ab oder warte, bis er fertig ist.',
   'main.docs.previewEncrypted':
     'Dieses Dokument ist verschlüsselt; entsperre den Arbeitsbereich, um es anzusehen.',
   'main.docs.previewGone':

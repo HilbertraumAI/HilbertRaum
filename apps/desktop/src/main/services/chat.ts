@@ -801,9 +801,11 @@ interface DeletedMessageRow {
  * in-stream delete (F2) agree. Non-destructive — safe to call before the stream slot is held.
  */
 export function hasRegenerableAssistantReply(db: Db, conversationId: string): boolean {
+  // `kind IS NOT 'compaction'`: checkpoint rows are invisible transcript bookkeeping (they carry
+  // role 'assistant' but are never a reply) — see deleteLastAssistantMessage (CODE-19 rider).
   const row = db
     .prepare(
-      `SELECT role FROM messages WHERE conversation_id = ?
+      `SELECT role FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
     .get(conversationId) as unknown as { role: string } | undefined
@@ -819,13 +821,20 @@ export function hasRegenerableAssistantReply(db: Db, conversationId: string): bo
  * a failed generation the conversation ends in a user turn — deleting the most recent
  * assistant message would then permanently destroy the answer to a *previous* question.
  * In that case regenerate just re-streams from history without deleting anything.
+ *
+ * CODE-19 rider (full-audit 2026-07-11, Phase-D observation): checkpoint rows are EXCLUDED
+ * (`kind IS NOT 'compaction'` — the listConversationTurns predicate). A compaction checkpoint also
+ * carries role 'assistant', so if generation failed right after the pre-pass persisted one, the
+ * checkpoint sat at the conversation tail and a regenerate deleted IT instead of the prior answer
+ * (and `hasRegenerableAssistantReply` disagreed with what the user sees — the checkpoint is
+ * invisible in the transcript). Both queries now look at the last VISIBLE message.
  */
 export function deleteLastAssistantMessage(db: Db, conversationId: string): DeletedMessage | null {
   const row = db
     .prepare(
       `SELECT id, conversation_id, role, content, created_at, token_count, citations_json,
               skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated
-       FROM messages WHERE conversation_id = ?
+       FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
     .get(conversationId) as unknown as DeletedMessageRow | undefined
@@ -986,7 +995,12 @@ export function searchMessages(
 export function maybeSetTitleFromFirstMessage(db: Db, conversationId: string, content: string): void {
   const conv = getConversation(db, conversationId)
   if (!conv || conv.title !== DEFAULT_TITLE) return
-  const title = content.trim().replace(/\s+/g, ' ').slice(0, 60) || DEFAULT_TITLE
+  // Code-point-safe cut (the truncateSnippet idiom, rag/index.ts — RAG-2; full-audit 2026-07-11
+  // CODE-17): a raw `.slice(0, 60)` counts UTF-16 units and can cut inside a surrogate pair
+  // (emoji, CJK ext-B), persisting a title that forever ends in `�` in the sidebar. Spreading
+  // iterates whole code points, so the cut always lands on a code-point boundary.
+  const normalized = content.trim().replace(/\s+/g, ' ')
+  const title = [...normalized].slice(0, 60).join('') || DEFAULT_TITLE
   db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, conversationId)
 }
 
@@ -1382,10 +1396,15 @@ export async function generateAssistantMessage(
     if (wasAborted || receivedAnyToken) return emptyAssistantMessage(conversationId)
     throw new EmptyCompletionError()
   }
-  try {
-    // Stamp the skill only when its fence was actually placed (DS16/§22-A5) — an omitted-for-budget
-    // skill did not shape this answer, so it gets no glyph.
-    return appendMessage(db, {
+  // R1 (full-audit-2026-06-30, Phase C) defense-in-depth: the persist rides through
+  // `persistAssistantMessage`, whose abort+closed-DB guard swallows a teardown that closed the DB
+  // under an aborted partial-persist (the partial is lost, not a crash) — extracted to the shared
+  // helper so the grounded paths behave identically (full-audit 2026-07-11 CODE-18).
+  // Stamp the skill only when its fence was actually placed (DS16/§22-A5) — an omitted-for-budget
+  // skill did not shape this answer, so it gets no glyph.
+  return persistAssistantMessage(
+    db,
+    {
       conversationId,
       role: 'assistant',
       content,
@@ -1395,21 +1414,9 @@ export async function generateAssistantMessage(
       autoFired: fence ? opts.skill?.autoFired === true : false,
       // Honest-signal flag: mark a reply the model cut off at the context ceiling ('length').
       truncated
-    })
-  } catch (err) {
-    // R1 (full-audit-2026-06-30, Phase C) — defense-in-depth guard. The lock/quit teardown now
-    // deterministically awaits this stream's settle BEFORE closing the DB (so on the live path the
-    // partial persists first), but if the signal was aborted AND the DB is already closed, this is
-    // a teardown that closed `ctx.db` under an aborted partial-persist: swallow it cleanly (the
-    // partial is lost, not a crash) instead of rejecting into the global unhandled-rejection
-    // handler. A genuine open-DB persistence error (constraint/disk) still propagates. Content is
-    // never logged — only the conversation id + the reason.
-    if (opts.signal?.aborted && !db.isOpen) {
-      log.warn('chat: dropped partial reply — workspace locked during persist', { conversationId })
-      return emptyAssistantMessage(conversationId)
-    }
-    throw err
-  }
+    },
+    opts.signal
+  )
 }
 
 /**
@@ -1453,5 +1460,31 @@ export function emptyAssistantMessage(conversationId: string): Message {
     content: '',
     createdAt: nowIso(),
     tokenCount: null
+  }
+}
+
+/**
+ * Persist an assistant turn with the R1 abort+closed-DB guard (full-audit-2026-06-30 Phase C;
+ * extracted as a shared helper for full-audit 2026-07-11 CODE-18). The lock/quit teardown
+ * deterministically awaits the stream's settle BEFORE closing the DB, so on the live path the
+ * (partial) answer persists first — but if the turn's signal was aborted AND the DB is already
+ * closed, this is a teardown that closed the DB under an aborted partial-persist: drop the message
+ * quietly (return the unpersisted empty message, keeping the resolve contract) instead of rejecting
+ * into the global unhandled-rejection handler. A genuine open-DB persistence error (constraint/disk)
+ * still propagates. Content is never logged — only the conversation id. Shared by the plain-chat
+ * persist and the three grounded persist sites (rag/index.ts ×2, rag/whole-doc-tree.ts) so the
+ * Stop+lock race behaves identically on every answer path.
+ */
+export function persistAssistantMessage(db: Db, input: AppendMessageInput, signal?: AbortSignal): Message {
+  try {
+    return appendMessage(db, input)
+  } catch (err) {
+    if (signal?.aborted && !db.isOpen) {
+      log.warn('chat: dropped partial reply — workspace locked during persist', {
+        conversationId: input.conversationId
+      })
+      return emptyAssistantMessage(input.conversationId)
+    }
+    throw err
   }
 }

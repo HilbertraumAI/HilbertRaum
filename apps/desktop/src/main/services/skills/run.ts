@@ -19,6 +19,7 @@ import { locateEntities, type LocatedEntity } from './tools/redaction-locate'
 import { verifyAndSpliceEdits, type ApplyDocumentEditsOutput } from './tools/document-edit'
 import { locateDocumentEdits, type LocatedEdit } from './tools/document-edit-locate'
 import { readDocxTextLayer, applySpansToDocx } from '../export/docx-rewrite'
+import { isAbortError } from '../chat'
 import type { ModelRuntime } from '../runtime'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
@@ -449,7 +450,10 @@ export async function runDomainExtractionInner<TOutput, TLoaded>(
       // Technical reason to the local log only — never the renderer/audit (§22-M1).
       console.error(config.messages.extractPersistLog)
       const msg = config.messages.persistFailed
-      finishRun(db, runId, 'failed', now(), null, msg)
+      // P-8 (GAP-2, full-audit 2026-07-11): the persist just failed (workspace locked / DB gone) —
+      // the very state that also fails this terminal write. Guarded so the friendly envelope is
+      // always returned, never a raw rejection out of the seam.
+      finishRunGuarded(db, runId, 'failed', now(), msg, '[skills] extraction persist-failure run bookkeeping failed')
       return { ok: false, runId, errorCode: 'persistFailed', error: msg }
     }
 
@@ -462,7 +466,9 @@ export async function runDomainExtractionInner<TOutput, TLoaded>(
     }
     console.error(config.messages.extractUnexpectedLog)
     const msg = config.messages.persistFailed
-    finishRun(db, runId, 'failed', now(), null, msg)
+    // P-8 (GAP-2): a DB error in the try is exactly when the terminal UPDATE is also likely to
+    // fail — guard it so the B4 catch resolves the envelope instead of rethrowing.
+    finishRunGuarded(db, runId, 'failed', now(), msg, '[skills] extraction-failure run bookkeeping failed')
     return { ok: false, runId, errorCode: 'persistFailed', error: msg }
   }
 }
@@ -1380,7 +1386,10 @@ async function runRedactionLocate(
     })
     return { entities, degraded: false }
   } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') throw e
+    // GAP-4 (full-audit 2026-07-11): the app-wide `isAbortError(e, signal)` instead of the narrow
+    // DOMException name-check — a user cancel surfacing as a wrapped runtime error (e.g.
+    // 'terminated' from a killed fetch) must rethrow as a cancel, never degrade to the floor.
+    if (isAbortError(e, signal)) throw e
     console.error('[skills] redaction locate pass failed — degrading to the rule-based floor')
     return { entities: [], degraded: true }
   }
@@ -1414,6 +1423,16 @@ export async function runDocumentRedaction(
       const msg = 'This tool is not available.'
       finishRun(db, runId, 'failed', now(), null, msg)
       return { ok: false, runId, errorCode: 'unavailable', error: msg }
+    }
+
+    // GAP-6 (full-audit 2026-07-11): refuse an UNCONFIRMED run UP FRONT — before the original-bytes
+    // read and the (multi-window, minutes-long) LLM locate pass. The gate (tool-registry §12.2)
+    // stays the enforcement authority and would still refuse, but only AFTER all that work ran for
+    // nothing; the copy mirrors the gate's exactly so the refusal reads identically.
+    if (deps.confirmed !== true) {
+      const msg = 'This tool needs your confirmation before it can run.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, error: msg }
     }
 
     const signal = deps.signal ?? new AbortController().signal
@@ -1475,7 +1494,9 @@ export async function runDocumentRedaction(
       entities = located.entities
       degraded = located.degraded
     } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
+      // GAP-4: the app-wide abort classifier — a cancel surfacing as a wrapped runtime error is
+      // still a calm cancel, never a 'failed' run.
+      if (isAbortError(e, signal)) {
         // A user cancel mid-locate — calm cancel (B2): nothing written, recorded 'cancelled'.
         finishRun(db, runId, 'cancelled', now(), null, null)
         return { ok: false, runId, cancelled: true, error: 'Redaction cancelled. Nothing was saved.' }
@@ -1553,7 +1574,9 @@ export async function runDocumentRedaction(
   } catch {
     console.error('[skills] redaction failed unexpectedly')
     const msg = 'This could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
+    // P-8 (GAP-2, full-audit 2026-07-11): a locked-workspace/DB-gone failure in the try also fails
+    // this terminal UPDATE — guarded so the seam resolves the friendly envelope, never rejects raw.
+    finishRunGuarded(db, runId, 'failed', now(), msg, '[skills] redaction-failure run bookkeeping failed')
     return { ok: false, runId, errorCode: 'persistFailed', error: msg }
   }
 }
@@ -1663,6 +1686,15 @@ export async function runDocumentEdit(
       return { ok: false, runId, errorCode: 'unavailable', error: msg }
     }
 
+    // GAP-6 (full-audit 2026-07-11): refuse an UNCONFIRMED run UP FRONT — before the original-bytes
+    // read and the multi-window LLM locate pass (mirror of the redaction seam). The gate
+    // (tool-registry §12.2) stays the enforcement authority; the copy mirrors its refusal exactly.
+    if (deps.confirmed !== true) {
+      const msg = 'This tool needs your confirmation before it can run.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, error: msg }
+    }
+
     // No floor for edits (D76): refuse cleanly when the model or the instruction is missing — a friendly,
     // content-free note, never a silent nothing. Checked BEFORE any read/model call.
     if (deps.runtime == null) {
@@ -1686,7 +1718,9 @@ export async function runDocumentEdit(
     // SAME spans (`verifyAndSpliceEdits(...).spans`) and splices them across the node map.
     let docxLayer: string | null = null
     let docxBytes: Uint8Array | null = null
-    if (deps.readOriginalDocument && deps.saveBinaryFile) {
+    // `deps.confirmed === true` aligns the branch with redaction's explicit pre-touch check
+    // (GAP-6 rider) — redundant under the up-front refusal above, but the two seams must not drift.
+    if (deps.readOriginalDocument && deps.saveBinaryFile && deps.confirmed === true) {
       const original = await deps.readOriginalDocument(args.documentId)
       if (original.format === 'docx') {
         try {
@@ -1731,7 +1765,10 @@ export async function runDocumentEdit(
           onProgress: (done, total) => deps.onProgress?.({ done, total })
         })
       } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') {
+        // GAP-4 (full-audit 2026-07-11): the app-wide `isAbortError(e, signal)` — a cancel
+        // surfacing as a wrapped runtime error must record 'cancelled', not a 'failed' run with
+        // "The edits could not be completed".
+        if (isAbortError(e, signal)) {
           // A user cancel mid-locate — calm cancel (B2): nothing written, recorded 'cancelled'.
           finishRun(db, runId, 'cancelled', now(), null, null)
           return { ok: false, runId, cancelled: true, error: 'Edit cancelled. Nothing was saved.' }
@@ -1816,7 +1853,9 @@ export async function runDocumentEdit(
   } catch {
     console.error('[skills] document edit failed unexpectedly')
     const msg = 'This could not be saved. Nothing was changed.'
-    finishRun(db, runId, 'failed', now(), null, msg)
+    // P-8 (GAP-2, full-audit 2026-07-11): a locked-workspace/DB-gone failure in the try also fails
+    // this terminal UPDATE — guarded so the seam resolves the friendly envelope, never rejects raw.
+    finishRunGuarded(db, runId, 'failed', now(), msg, '[skills] document-edit-failure run bookkeeping failed')
     return { ok: false, runId, errorCode: 'persistFailed', error: msg }
   }
 }

@@ -86,6 +86,15 @@ export interface AppContext {
    */
   docTasks?: DocTaskManager
   /**
+   * In-flight skill-run probe (GAP-5, full-audit 2026-07-11): true while the SkillRunController —
+   * module-local to registerSkillsIpc, which assigns this at registration time — has a
+   * non-terminal run on the document. The docs IPC delete/re-index guards consult it exactly like
+   * `docTasks?.isDocumentBusy`: a delete or chunk rebuild under a suspended extraction would
+   * interleave with the run (and, with FK enforcement off, orphan its bank/invoice rows).
+   * Optional so partial test contexts stay valid.
+   */
+  skillRunActive?: (documentId: string) => boolean
+  /**
    * Skill registry (skills plan §8): the uniform disk-reconcile + state cache over the plain
    * app-skills/ + user-skills/ folders. Optional so partial test contexts stay valid. `reconcile`
    * needs an unlocked DB, so the live wiring reconciles best-effort at startup (plaintext_dev) and

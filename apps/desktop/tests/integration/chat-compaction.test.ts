@@ -269,6 +269,51 @@ describe('T-5 — compaction boundaries (teeth on the equality edges)', () => {
   })
 })
 
+// CODE-19 (full-audit 2026-07-11): the region boundary is exchange-aligned — it must end on an
+// ASSISTANT turn. With an ODD compactable count the naive cut ends on a USER turn, so the first
+// replayed post-checkpoint turn is the assistant ANSWER to a summarized-away question and
+// `collapseToAlternating` (last-wins) silently REPLACES the synthetic summary ack with it.
+describe('ensureCompacted — exchange-aligned region boundary (CODE-19)', () => {
+  it('an odd compactable count still replays user-first: the ack survives assembly', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    appendTurns(db, conv.id, 15, 90) // ODD count; the naive region cut (15 − 6 = 9) ends on a USER turn
+    const rt = scriptedRuntime({ window: 2000 })
+    await ensureCompacted(db, rt, conv.id, 2000, {})
+    const cp = getLatestCheckpoint(db, conv.id)
+    expect(cp).not.toBeNull()
+
+    // The region boundary walked back to an ASSISTANT turn…
+    const coveredRole = (
+      db.prepare('SELECT role FROM messages WHERE rowid = ?').get(cp!.coversThroughRowid) as { role: string }
+    ).role
+    expect(coveredRole).toBe('assistant')
+    // …so the first replayed post-checkpoint turn is a USER turn.
+    const replayedTurns = listConversationTurns(db, conv.id, cp!.coversThroughRowid)
+    expect(replayedTurns[0]?.role).toBe('user')
+
+    // Assembly: the synthetic ack survives (pre-fix it was silently replaced by the stale answer
+    // to a summarized-away question) and alternation holds from the summary pair onward.
+    const built = buildChatMessages(db, conv.id)
+    expect(built[2]).toEqual({ role: 'assistant', content: COMPACTION_SUMMARY_ACK })
+    expect(built[3]?.role).toBe('user')
+    for (let i = 2; i < built.length; i++) expect(built[i].role).not.toBe(built[i - 1].role)
+  })
+
+  it('an even compactable count is byte-identical to before (the walk is a no-op)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    appendTurns(db, conv.id, 14, 90) // EVEN — the naive cut already ends on an assistant turn
+    const rt = scriptedRuntime({ window: 2000 })
+    await ensureCompacted(db, rt, conv.id, 2000, {})
+    const cp = getLatestCheckpoint(db, conv.id)
+    expect(cp).not.toBeNull()
+    // The region still covers exactly the first 8 turns (14 − KEEP_RECENT_TURNS), ending assistant.
+    const turns = listConversationTurns(db, conv.id)
+    expect(cp!.coversThroughRowid).toBe(turns[14 - KEEP_RECENT_TURNS - 1].rowid)
+  })
+})
+
 describe('ensureCompacted — checkpoint lifecycle', () => {
   it('writes ONE checkpoint over threshold and reuses it across later turns (summarize once)', async () => {
     const db = freshDb()

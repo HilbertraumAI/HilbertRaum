@@ -300,12 +300,14 @@ describe('document-edit — the run seam (locate → verify → splice → write
     expect(run.status).toBe('cancelled')
   })
 
-  it('refuses without confirmation (the gate) — nothing is written', async () => {
+  it('refuses without confirmation UP FRONT — zero model calls, nothing is written (GAP-6)', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, 'Der Vertreter kennt den Fall.')
     const { audit } = capturingAudit()
-    const runtime = scriptedRuntime(() =>
-      JSON.stringify({ edits: [{ line: 1, find: 'Vertreter', occurrence: 1, replace: 'Anwalt' }] })
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(
+      () => JSON.stringify({ edits: [{ line: 1, find: 'Vertreter', occurrence: 1, replace: 'Anwalt' }] }),
+      calls
     )
     let saveCalled = false
     const res = await runDocumentEdit(db, { skillInstallId: skillInstall, documentId: docId }, {
@@ -318,9 +320,52 @@ describe('document-edit — the run seam (locate → verify → splice → write
       }
     })
     expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/confirmation/i) // the gate's exact refusal copy, surfaced up front
     expect(saveCalled).toBe(false)
+    // GAP-6 (full-audit 2026-07-11): the refusal lands BEFORE the LLM locate pass — pre-fix the
+    // whole multi-window locate ran for nothing before the gate refused.
+    expect(calls).toHaveLength(0)
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('failed')
+  })
+
+  // GAP-4 (full-audit 2026-07-11): a user cancel whose in-flight stream rejects with a WRAPPED
+  // error (a killed fetch surfaces e.g. 'terminated', not a DOMException named AbortError) must
+  // still record a calm 'cancelled' — pre-fix the narrow name-check recorded a 'failed' run with
+  // "The edits could not be completed".
+  it("a cancel surfacing as a wrapped runtime error records 'cancelled', not 'failed' (GAP-4)", async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'Der Vertreter kennt den Fall.')
+    const { audit } = capturingAudit()
+    const controller = new AbortController()
+    const runtime: ModelRuntime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      // eslint-disable-next-line require-yield
+      async *chatStream() {
+        controller.abort() // the user cancels…
+        throw new Error('terminated') // …and the aborted request rejects with a plain Error
+      }
+    }
+    let saveCalled = false
+    const res = await runDocumentEdit(db, { skillInstallId: skillInstall, documentId: docId }, {
+      audit,
+      confirmed: true,
+      signal: controller.signal,
+      runtime,
+      instruction: 'replace Vertreter with Anwalt',
+      saveTextFile: async () => {
+        saveCalled = true
+        return true
+      }
+    })
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(true)
+    expect(saveCalled).toBe(false)
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('cancelled')
   })
 
   it('a dismissed save persists nothing and reports it calmly (cancelled, not failed)', async () => {

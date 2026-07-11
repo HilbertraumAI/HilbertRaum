@@ -833,6 +833,28 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
     await rt.stop()
   })
 
+  it('parses an offload line buried in ONE large chunk with >window trailing log (CODE-22)', async () => {
+    // CODE-22 (full-audit 2026-07-11): the parse used to slice the rolling window to
+    // OFFLOAD_PARSE_WINDOW (512) bytes BEFORE matching — a single stderr chunk carrying the line
+    // plus >512 bytes of trailing log lost it permanently and the hint degraded to "unknown".
+    const { spawn } = fakeSpawnWithStderr([
+      'load_tensors: offloaded 7/49 layers to GPU\n' + 'x'.repeat(600) + '\nload_all: model loaded\n'
+    ])
+    const { fetchImpl } = translationFetch()
+    const started: unknown[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      onStarted: (info) => started.push(info)
+    })
+    await rt.translate(translateOpts)
+    expect(started).toEqual([{ device: 'auto', gpuLayers: 7, totalLayers: 49 }])
+    expect(rt.deviceStatus()).toEqual({ device: 'auto', gpuLayers: 7, totalLayers: 49, live: true })
+    await rt.stop()
+  })
+
   it("a forced-CPU start reports device 'cpu' with an honest null split (no offload line printed)", async () => {
     const { spawn } = fakeSpawnWithStderr(['load_all: model loaded\n'])
     const { fetchImpl } = translationFetch()

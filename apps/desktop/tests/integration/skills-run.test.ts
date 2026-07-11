@@ -926,4 +926,30 @@ describe('domainPersistFailure — guarded terminal write (IA-6 P-8)', () => {
     const row = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(runId) as { status: string }
     expect(row.status).toBe('failed') // the retry landed the terminal status
   })
+
+  // GAP-2 (full-audit 2026-07-11): the P-8 guard now covers the extraction seam's own failure
+  // exits too — a persist failure (workspace locked / DB gone) whose terminal `UPDATE skill_runs`
+  // ALSO fails must resolve the friendly envelope, never reject raw out of the seam (the
+  // chat-analysis lane awaits this exact function).
+  it('GAP-2: extraction persist failure + doomed terminal UPDATE still resolves the envelope', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [
+      { text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }
+    ])
+    db.exec('DROP TABLE bank_transactions') // the persist transaction fails mid-write
+    const patch = failTerminalWrites(db, Infinity) // …and every terminal UPDATE fails too
+
+    // Pre-fix the unguarded `finishRun` rethrew out of BOTH catch exits and this REJECTED.
+    const res = await runBankExtraction(
+      db,
+      { skillInstallId: 'app:bank-statement', documentId: docId },
+      { audit: () => {} }
+    )
+    patch.restore()
+    expect(res).toMatchObject({ ok: false, errorCode: 'persistFailed' })
+    expect(patch.attempts()).toBeGreaterThanOrEqual(2) // the guarded write + its one retry, swallowed
+    // The DB was genuinely unwritable — the row stays 'started' (reconciled next session, P-7).
+    const row = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(row.status).toBe('started')
+  })
 })

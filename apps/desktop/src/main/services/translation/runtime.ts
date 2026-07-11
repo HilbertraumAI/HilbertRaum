@@ -431,11 +431,17 @@ export class TranslationRuntime {
     let gpuLayers: number | null = null
     let totalLayers: number | null = null
     const parseOffload = (text: string): void => {
-      offloadWindow = (offloadWindow + text).slice(-OFFLOAD_PARSE_WINDOW)
-      for (const m of offloadWindow.matchAll(OFFLOAD_LINE_RE)) {
+      // CODE-22 (full-audit 2026-07-11): match on the UNSLICED window+chunk FIRST — a single large
+      // stderr chunk carrying the offload line plus >OFFLOAD_PARSE_WINDOW bytes of trailing log
+      // used to slice the line away before it was ever matched (the hint then degraded to
+      // "unknown" permanently). The rolling window exists ONLY to bridge a chunk boundary; a
+      // retained-window re-match on the next chunk is harmless (same values, last match wins).
+      const haystack = offloadWindow + text
+      for (const m of haystack.matchAll(OFFLOAD_LINE_RE)) {
         gpuLayers = Number(m[1])
         totalLayers = Number(m[2])
       }
+      offloadWindow = haystack.slice(-OFFLOAD_PARSE_WINDOW)
     }
     const server = new LlamaServer({
       binPath: this.opts.binPath,

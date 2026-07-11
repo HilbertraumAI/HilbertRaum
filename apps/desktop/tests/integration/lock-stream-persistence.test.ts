@@ -2,13 +2,18 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createConversation,
   appendMessage,
   generateAssistantMessage,
-  listMessages
+  listMessages,
+  persistAssistantMessage
 } from '../../src/main/services/chat'
+import { generateGroundedAnswer, ragSettingsFrom } from '../../src/main/services/rag'
+import { MockEmbedder } from '../../src/main/services/embeddings'
+import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
 // R1 (full-audit-2026-06-30, Phase C): a workspace LOCK / quit aborts an in-flight chat stream while
@@ -120,5 +125,76 @@ describe('R1 — chat partial persistence vs a locking DB', () => {
     db.exec('DROP TABLE messages') // DB stays OPEN, but the insert will fail
     release()
     await expect(p).rejects.toThrow()
+  })
+})
+
+// CODE-18 (full-audit 2026-07-11): the R1 guard used to exist ONLY on the plain-chat persist — the
+// grounded persist sites (rag/index.ts ×2, whole-doc-tree.ts) errored on the same Stop+lock race
+// instead of the designed quiet drop. All four sites now share `persistAssistantMessage`.
+describe('CODE-18 — the shared persistAssistantMessage guard on the grounded paths', () => {
+  /** Seed one indexed document with a single chunk so the whole-document grounded read has content
+   *  (retrieveWholeDocument reads chunks directly — no embeddings needed). */
+  function seedDoc(db: Db): string {
+    const now = new Date().toISOString()
+    const docId = randomUUID()
+    db.prepare(
+      `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
+       VALUES (?, 'memo.txt', 'indexed', 'text/plain', ?, ?)`
+    ).run(docId, now, now)
+    db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
+       VALUES (?, ?, 0, 'the quarterly totals are stable', 'memo.txt', 1, ?)`
+    ).run(randomUUID(), docId, now)
+    return docId
+  }
+
+  it('a grounded (whole-document) Stop+lock race quietly drops the partial — no rejection', async () => {
+    const db = freshDb()
+    const docId = seedDoc(db)
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'what does it say?' })
+
+    const ctrl = new AbortController()
+    let token = ''
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const p = generateGroundedAnswer(
+      db,
+      gatedRuntime(gate),
+      new MockEmbedder(),
+      conv.id,
+      'what does it say?',
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { signal: ctrl.signal, onToken: (t) => (token += t), wholeDocument: { documentId: docId } }
+    )
+    while (!token) await tick()
+
+    ctrl.abort()
+    db.close() // the lock CLOSED the DB before the abort-unwind reached the grounded persist
+    release()
+
+    // Pre-fix this REJECTED ("database is not open"); the shared guard drops the partial quietly.
+    await expect(p).resolves.toMatchObject({ content: '' })
+  })
+
+  it('persistAssistantMessage: guard fires ONLY on aborted+closed; open-DB errors propagate', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const aborted = new AbortController()
+    aborted.abort()
+
+    // Aborted + closed DB → quiet drop (the unpersisted empty message).
+    db.close()
+    const dropped = persistAssistantMessage(
+      db,
+      { conversationId: conv.id, role: 'assistant', content: 'partial' },
+      aborted.signal
+    )
+    expect(dropped.content).toBe('')
+
+    // NOT aborted + closed DB → the genuine error still propagates (the guard is narrow).
+    expect(() =>
+      persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content: 'x' })
+    ).toThrow()
   })
 })

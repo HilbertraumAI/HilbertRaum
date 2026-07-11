@@ -1843,6 +1843,8 @@ export const en = {
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
   'main.docs.taskRunning': 'A task is running for this document. Cancel it or wait for it to finish.',
+  // GAP-5 (full-audit 2026-07-11): the requireNoActiveTask mirror for in-flight SKILL runs.
+  'main.docs.skillRunning': 'A skill is working on this document. Cancel it or wait for it to finish.',
   'main.docs.previewEncrypted': 'This document is encrypted; unlock the workspace to preview it.',
   'main.docs.previewGone': 'The document file is no longer on disk. Re-import it to preview.',
   'main.docs.exportTextOnly': 'Only text documents (Markdown, TXT, CSV) can be exported this way.',

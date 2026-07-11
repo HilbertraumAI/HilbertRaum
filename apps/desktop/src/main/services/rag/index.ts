@@ -41,6 +41,7 @@ import {
   isAbortError,
   listConversationTurns,
   messageTokens,
+  persistAssistantMessage,
   stripThinkBlocks,
   type TurnSkill
 } from '../chat'
@@ -907,13 +908,24 @@ export function retrieveCompareDiff(
     ? '(No differences — a word-level comparison found the two documents to be textually identical.)'
     : renderChangesForModel(diff.changes, { max: DIFF_RENDER_MAX }).text
   // Cap the change list to the budget; if even capped it overflows, fall back (docs too different).
-  if (approxTokenCount(changesText) * TOKENS_PER_WORD > budgetTokens) {
+  // CODE-5 (full-audit 2026-07-11): the budget must cover the WHOLE model-facing payload — the
+  // prompt injects `changesText` AND `redlineText` (buildCompareDiffPrompt), and per change the
+  // redline repeats the same removed+added words plus context, so budgeting the change list alone
+  // let the assembled turn run ~2× the proven budget (which already consumes the whole
+  // RETRIEVAL_FIT_SAFETY headroom) — the #41 exceed_context_size_error class on the primary
+  // version-compare route. The doctask mode-d sibling budgets the combined payload by keeping the
+  // redline OUT of the model prompt (doctasks/handlers/compare.ts:171–178); here the redline earns
+  // its keep (exact-quote support) so it is included only while the PAIR fits — over budget it is
+  // dropped FIRST, and only then is the load-bearing change list shrunk (`fitChangesToBudget`).
+  const changesTokens = approxTokenCount(changesText) * TOKENS_PER_WORD
+  if (changesTokens > budgetTokens) {
     const fitted = fitChangesToBudget(diff.changes, budgetWords)
     if (!fitted) return null
     return buildDiffResult(diff, fitted.changesText, fitted.redlineText, fitted.truncated, cited, chunksTotal, labelA, labelB)
   }
   const redlineText = diff.identical ? '' : renderRedline(diff.changes, { max: DIFF_RENDER_MAX }).text
-  return buildDiffResult(diff, changesText, redlineText, renderCapped, cited, chunksTotal, labelA, labelB)
+  const withRedline = changesTokens + approxTokenCount(redlineText) * TOKENS_PER_WORD <= budgetTokens
+  return buildDiffResult(diff, changesText, withRedline ? redlineText : '', renderCapped, cited, chunksTotal, labelA, labelB)
 }
 
 /** Cap the change list to a word budget (best-first) so a very-many-changes pair still answers. */
@@ -923,10 +935,16 @@ function fitChangesToBudget(
 ): { changesText: string; redlineText: string; truncated: boolean } | null {
   for (let max = Math.min(changes.length, DIFF_RENDER_MAX); max >= 1; max = Math.floor(max / 2)) {
     const forModel = renderChangesForModel(changes, { max })
-    if (approxTokenCount(forModel.text) <= budgetWords) {
+    const changesWords = approxTokenCount(forModel.text)
+    if (changesWords <= budgetWords) {
+      // CODE-5: fit-test the redline JOINTLY with the change list — it rides in the same grounded
+      // turn. Include it only while the PAIR fits the budget; otherwise it is the first thing to go
+      // (the change list is the load-bearing half — see retrieveCompareDiff).
+      const redlineText = renderRedline(changes, { max }).text
+      const pairFits = changesWords + approxTokenCount(redlineText) <= budgetWords
       return {
         changesText: forModel.text,
-        redlineText: renderRedline(changes, { max }).text,
+        redlineText: pairFits ? redlineText : '',
         truncated: true
       }
     }
@@ -1714,8 +1732,10 @@ export async function generateGroundedAnswer(
   // With no prefix `seededPrefix` is '' → byte-identical to the prior `content === ''` guard.
   if (content === '' || content === seededPrefix) return emptyAssistantMessage(conversationId)
   // Persist the assistant turn with the computed citations (source of truth = retrieval) and stamp
-  // the skill only when its fence was actually placed (DS16/§22-A5).
-  return appendMessage(db, {
+  // the skill only when its fence was actually placed (DS16/§22-A5). Via `persistAssistantMessage`
+  // (full-audit 2026-07-11 CODE-18): the R1 abort+closed-DB guard now covers this grounded persist
+  // too, so a Stop+lock race quietly drops the partial instead of erroring.
+  return persistAssistantMessage(db, {
     conversationId,
     role: 'assistant',
     content,
@@ -1733,7 +1753,7 @@ export async function generateGroundedAnswer(
     // continue-generation this is true only when the bounded re-prompts were EXHAUSTED and the answer is
     // still cut (false on a clean finish and on a user Stop — computed above).
     truncated: outputTruncated
-  })
+  }, opts.signal)
 }
 
 /** Options for the W3 grounded-DATA stream (audit §3.1/§8.1). A slim sibling of `GroundedAnswerOptions`:
@@ -1851,7 +1871,9 @@ export async function generateGroundedDataAnswer(
     content += trailer
     opts.onToken?.(trailer)
   }
-  return appendMessage(db, {
+  // Via `persistAssistantMessage` (full-audit 2026-07-11 CODE-18): the R1 abort+closed-DB guard
+  // covers the grounded-data persist too — parity with plain chat and the other grounded sites.
+  return persistAssistantMessage(db, {
     conversationId,
     role: 'assistant',
     content,
@@ -1862,5 +1884,5 @@ export async function generateGroundedDataAnswer(
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     autoFired: skillFence ? opts.skill?.autoFired === true : false,
     truncated: finishReason === 'length'
-  })
+  }, opts.signal)
 }

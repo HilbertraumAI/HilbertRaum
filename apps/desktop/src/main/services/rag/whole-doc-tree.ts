@@ -3,10 +3,10 @@ import type { Citation, CoverageInfo, Message } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import {
   ANALYSIS_RESPONSE_RESERVE_TOKENS,
-  appendMessage,
   CHAT_RESPONSE_RESERVE_TOKENS,
   emptyAssistantMessage,
   isAbortError,
+  persistAssistantMessage,
   stripThinkBlocks,
   type TurnSkill
 } from '../chat'
@@ -634,7 +634,9 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     coverageMode === 'tree'
       ? { mode: 'tree', treeStatus: 'ready', chunksCovered, chunksTotal, treeLevels, truncated }
       : { mode: 'capped', chunksCovered, chunksTotal, truncated }
-  return appendMessage(db, {
+  // Via `persistAssistantMessage` (full-audit 2026-07-11 CODE-18): the R1 abort+closed-DB guard
+  // covers the map-reduce persist too — a Stop+lock race quietly drops the partial, never a throw.
+  return persistAssistantMessage(db, {
     conversationId,
     role: 'assistant',
     content,
@@ -647,7 +649,7 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     // deliverable is still cut at the ceiling — the "Answer truncated" badge, distinct from the coverage
     // (INPUT) truncation above. False on a clean finish and on a user Stop.
     truncated: outputTruncated
-  })
+  }, signal)
 }
 
 /**

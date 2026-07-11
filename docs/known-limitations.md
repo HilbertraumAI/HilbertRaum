@@ -233,7 +233,9 @@ password recovery — are documented in
   *Try again* render only when the LAST message is that assistant turn (SKA-37 — a trailing unanswered user
   turn no longer misdirects the undo to a later question), and the skill glyph + undo are keyed off the
   persisted `messages.skill_id` with a localized **"(removed skill)"** label, so DELETING a skill keeps the
-  provenance (consistent with a disabled skill) (SKA-38). The 'new'-composer skill pick is deleted after being
+  provenance (consistent with a disabled skill) (SKA-38; the in-app `deleteSkill()` path honours this since
+  full-audit 2026-07-11 GAP-1 — it clears only the sticky conversation default, never the per-message
+  stamps its pre-SKA-38 ref-clear sweep used to erase). The 'new'-composer skill pick is deleted after being
   carried onto the created conversation, so it no longer resurrects on a later empty composer (SKA-18).
   **Residuals (accepted):** when a single conversation holds two concurrent runs (a multi-document scope,
   different docs), the bar shows only the MOST RECENT one (v1 tools are single-document, so this is rare); a

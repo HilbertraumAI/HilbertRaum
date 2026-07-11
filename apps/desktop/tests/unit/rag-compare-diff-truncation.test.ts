@@ -3,8 +3,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { retrieveCompareDiff, buildCompareDiffPrompt } from '../../src/main/services/rag'
-import { wordDiff, renderChangesForModel, DIFF_RENDER_MAX } from '../../src/main/services/diff'
+import { retrieveCompareDiff, buildCompareDiffPrompt, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
+import { wordDiff, renderChangesForModel, renderRedline, DIFF_RENDER_MAX } from '../../src/main/services/diff'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 
 // Audit SK-2 (skills-audit-2026-07-07): the model-facing diff renderers cap the change list at
@@ -90,5 +90,61 @@ describe('retrieveCompareDiff — the DIFF_RENDER_MAX render cap sets truncated 
     expect(truncated).toBe(false)
     expect(prompt).toContain('they are complete and exact')
     expect(prompt).not.toContain('PARTIAL')
+  })
+})
+
+// CODE-5 (full-audit 2026-07-11): the token budget must cover the WHOLE model-facing payload —
+// `changesText` AND `redlineText` together. Per change the redline repeats the same removed+added
+// words plus context as the change list, so budgeting `changesText` alone let the assembled turn run
+// ~2× the proven budget (which already consumes the whole RETRIEVAL_FIT_SAFETY headroom) — the #41
+// `exceed_context_size_error` class on the primary version-compare route. The change list is the
+// load-bearing half: when the pair over-runs, the redline is dropped FIRST (the doctask mode-d
+// sibling keeps the redline out of the prompt entirely — doctasks/handlers/compare.ts:171–178).
+describe('retrieveCompareDiff — the budget covers changes + redline JOINTLY (CODE-5)', () => {
+  /** Total approx-token cost of both model-facing blocks, in the SAME 1.3-scaled currency the
+   *  budget check uses (`approxTokenCount × TOKENS_PER_WORD`). */
+  const payloadTokens = (r: { changesText: string; redlineText: string }): number =>
+    (approxTokenCount(r.changesText) + approxTokenCount(r.redlineText)) * 1.3
+
+  it('a ~200-one-word-change pair at a 4096-token window keeps the whole payload within budget', () => {
+    const nChanges = 200
+    const db = freshDb()
+    seedDoc(db, 'docA', stream(nChanges, 'A'))
+    seedDoc(db, 'docB', stream(nChanges, 'B'))
+    // The REAL budget the grounded compare path hands retrieveCompareDiff for a 4096-token window.
+    const budget = wholeDocumentFitBudgetTokens(4096, 'what changed?', null)
+    const result = retrieveCompareDiff(db, ['docA', 'docB'], budget)
+    db.close()
+    // The diff route still answers (no fall-through to the capped whole-doc read)…
+    expect(result).not.toBeNull()
+    expect(result!.changesText.length).toBeGreaterThan(0)
+    // …and the assembled model-facing payload fits the proven budget — redline INCLUDED. Pre-fix the
+    // redline rode unbudgeted, so this total ran ~2× the budget and provably exceeded n_ctx.
+    expect(payloadTokens(result!)).toBeLessThanOrEqual(budget)
+  })
+
+  it('drops the redline FIRST when the pair over-runs but the full change list alone fits', () => {
+    const nChanges = 120 // under DIFF_RENDER_MAX so the render cap cannot interfere
+    const a = stream(nChanges, 'A')
+    const b = stream(nChanges, 'B')
+    const full = wordDiff(a, b)!
+    const changesText = renderChangesForModel(full.changes, { max: DIFF_RENDER_MAX }).text
+    const changesWords = approxTokenCount(changesText)
+    const redlineWords = approxTokenCount(renderRedline(full.changes, { max: DIFF_RENDER_MAX }).text)
+    // A budget the COMPLETE change list fits alone but the changes+redline pair over-runs.
+    const budget = Math.floor((changesWords + redlineWords / 2) * 1.3)
+    expect(changesWords * 1.3).toBeLessThanOrEqual(budget) // sanity: the list alone fits
+
+    const db = freshDb()
+    seedDoc(db, 'docA', a)
+    seedDoc(db, 'docB', b)
+    const result = retrieveCompareDiff(db, ['docA', 'docB'], budget)
+    db.close()
+    expect(result).not.toBeNull()
+    // The load-bearing change list survives COMPLETE; the redline is the first thing to go.
+    expect(result!.changesText).toBe(changesText)
+    expect(result!.redlineText).toBe('')
+    expect(result!.truncated).toBe(false) // the change list itself is complete — the prompt may say so
+    expect(payloadTokens(result!)).toBeLessThanOrEqual(budget)
   })
 })

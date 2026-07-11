@@ -132,7 +132,16 @@ export async function ensureCompacted(
   if (estimated < threshold) return
 
   // Protect the recent tail verbatim; summarize the region before it. Too few ⇒ no-op.
-  const region = compactable.slice(0, Math.max(0, compactable.length - KEEP_RECENT_TURNS))
+  // CODE-19 (full-audit 2026-07-11): walk the boundary BACK so the region ends on an ASSISTANT
+  // turn (exchange alignment). With an odd compactable count the naive cut ends on a USER turn, so
+  // the first replayed post-checkpoint turn is the assistant ANSWER to a summarized-away question —
+  // assembly's synthetic summary pair ends with the assistant ack, and `collapseToAlternating`
+  // (last-wins) then silently REPLACES the ack with that stale answer. Ending on an assistant turn
+  // keeps the replay user-first, so the ack survives assembly. The walked-out turn simply stays in
+  // the verbatim tail (KEEP_RECENT_TURNS is a minimum, not an exact count).
+  let regionEnd = Math.max(0, compactable.length - KEEP_RECENT_TURNS)
+  while (regionEnd > 0 && compactable[regionEnd - 1].role !== 'assistant') regionEnd--
+  const region = compactable.slice(0, regionEnd)
   if (region.length < MIN_COMPACTABLE_TURNS) return
 
   // The summary subsumes through the last turn of the region; assembly replays turns after it.

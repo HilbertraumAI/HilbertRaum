@@ -63,6 +63,10 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // it knows nothing about banks; the `tool-runs.ts` dispatch supplies the bank seam as an opaque runner.
   const runController = new SkillRunController()
   const runAudit = toSkillToolAudit(ctx.audit)
+  // GAP-5 (full-audit 2026-07-11): expose the per-document "run in flight?" probe on the context so
+  // the docs IPC delete/re-index guards can refuse under a live skill run (the requireNoActiveTask
+  // mirror) — the controller itself stays module-local (no lifecycle leaks; a bool is all they need).
+  ctx.skillRunActive = (documentId) => runController.isRunning(documentId)
 
   // The MAIN-side CSV write for `export_transactions_csv` (skills plan §9.5, S11c — the first
   // FS-write from a skill tool). The tool only PRODUCES the CSV; this saves it to a user-chosen path

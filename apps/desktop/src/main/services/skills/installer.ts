@@ -938,7 +938,7 @@ export function exportSkill(db: Db, installId: string, destPath: string, deps: S
   return zip.length
 }
 
-// ---- delete (app-level ref-clear sweep; skills plan §9.4 / §22-C3) -------------------
+// ---- delete (default-clear only; provenance survives — skills plan §9.4 / §22-C3 / SKA-38) ----
 
 export interface DeleteResult {
   deleted: boolean
@@ -946,13 +946,22 @@ export interface DeleteResult {
 
 /**
  * Delete a USER skill (skills plan §9.4, revised §0 — a plain delete, not a shred). There is
- * intentionally NO foreign key into `skills` (§22-C3), so refs are cleared by an app-level sweep:
- * in ONE transaction we clear `conversations.active_skill_id` + `messages.skill_id` pointing at
- * this install id and delete the row, mirroring `deleteConversation`. Then the on-disk folder is
- * removed. App-shipped skills are read-only and refuse deletion (the built-in-collection
- * precedent). The delete-during-active-stream race is covered by the documented rule "a stamp
- * whose skill vanished mid-turn resolves to NULL" (S6 reads the glyph through the row, which is
- * gone) — the txn keeps a reader from ever seeing a row-deleted-but-refs-present half state.
+ * intentionally NO foreign key into `skills` (§22-C3). In ONE transaction we clear ONLY
+ * `conversations.active_skill_id` (a deleted skill must not stay the sticky per-conversation
+ * default) and delete the row; then the on-disk folder is removed.
+ *
+ * `messages.skill_id` is deliberately KEPT (GAP-1, full-audit 2026-07-11 — the SKA-38 contract):
+ * the per-message stamp is PROVENANCE for already-shaped answers, keyed off the persisted raw id
+ * (`chat.ts` glyph read / `shared/types.ts` Message.skillId). Deleting the skill leaves the stamp
+ * dangling on purpose — the JOIN title resolves to NULL and the renderer shows the localized
+ * "(removed skill)" label, so the glyph, the auto-fire provenance, and the "answer without it"
+ * undo all survive deletion (consistent with a disabled skill). The pre-SKA-38 ref-clear sweep
+ * that nulled `messages.skill_id` here irreversibly erased exactly that provenance.
+ *
+ * App-shipped skills are read-only and refuse deletion (the built-in-collection precedent). The
+ * delete-during-active-stream race is covered by the documented rule "a stamp whose skill vanished
+ * mid-turn resolves to NULL title" (S6 reads the glyph through the row, which is gone) — the txn
+ * keeps a reader from ever seeing a row-deleted-but-default-present half state.
  */
 export function deleteSkill(db: Db, installId: string, deps: SkillInstallerDeps): DeleteResult {
   const record = getSkill(db, installId)
@@ -964,7 +973,6 @@ export function deleteSkill(db: Db, installId: string, deps: SkillInstallerDeps)
   db.exec('BEGIN')
   try {
     db.prepare('UPDATE conversations SET active_skill_id = NULL WHERE active_skill_id = ?').run(installId)
-    db.prepare('UPDATE messages SET skill_id = NULL WHERE skill_id = ?').run(installId)
     db.prepare('DELETE FROM skills WHERE install_id = ?').run(installId)
     db.exec('COMMIT')
   } catch (e) {
