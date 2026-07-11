@@ -11066,6 +11066,11 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       download-vs-start race, the torn-FTS-content-backfill observation, the CODE-48 watch trio,
       DOC-13 PVR-at-flip → item 10).
 
+Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
+lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
+round complete at the 4165/47 gate. Tag is local until the owner pushes it (a pushed tag
+triggers the release workflow's draft build).
+
 **Current gate (2026-07-11, full-audit 2026-07-11 Phase J close-out — round complete, durable ledger `docs/architecture.md` §47, both working papers deleted; the round moved the suite 4053 → 4165 across phases A–I): typecheck clean, 4165 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
