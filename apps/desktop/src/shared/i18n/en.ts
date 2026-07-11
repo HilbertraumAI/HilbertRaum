@@ -487,6 +487,11 @@ export const en = {
   'docs.cancel': 'Cancel',
   'docs.cancelOcrTitle': 'Stop reading the scan',
   'docs.cancelTaskTitle': 'Stop the task',
+  // full-audit 2026-07-11 F2 rider (CODE-6 follow-up): the doctasks store gave up polling after
+  // repeated IPC errors — the row shows a labelled, dismissable state (the SKA-40
+  // `chat.skill.run.stateUnknown` treatment) instead of a busy/Cancel pair stuck until reload.
+  'docs.task.stateUnknown': "Couldn't check on this task — it may still be running.",
+  'docs.task.dismiss': 'Dismiss',
   'docs.makeSearchable': 'Make searchable (OCR)',
   'docs.makeSearchableTitle':
     'Read the scanned pages with local text recognition — nothing leaves this drive',
@@ -1252,6 +1257,10 @@ export const en = {
   'skills.row.enableLabel': 'Enabled',
   'skills.row.on': 'Skill on',
   'skills.row.off': 'Skill off',
+  // full-audit 2026-07-11 CODE-37: per-action failure copy — a failed toggle/delete/export used to
+  // toast the unrelated "Skills couldn’t be loaded."
+  'skills.row.onFailed': 'This skill couldn’t be turned on.',
+  'skills.row.offFailed': 'This skill couldn’t be turned off.',
   // DS12 — two installed skills declare the same id; only one can be active.
   'skills.dup.chip': 'Duplicate name',
   'skills.dup.title': 'Another installed skill uses this name. Only one can be active at a time.',
@@ -1270,11 +1279,13 @@ export const en = {
   'skills.menu.export': 'Export…',
   'skills.menu.delete': 'Delete',
   'skills.export.done': 'Skill exported',
+  'skills.export.failed': 'This skill couldn’t be exported.', // CODE-37
   // Delete confirmation (DS-/§9.4 — chats that used it keep working; no FK).
   'skills.delete.title': 'Delete this skill?',
   'skills.delete.body': 'This removes the skill from the drive. Chats that already used it keep working.',
   'skills.delete.confirm': 'Delete',
   'skills.delete.done': 'Skill deleted',
+  'skills.delete.failed': 'This skill couldn’t be deleted.', // CODE-37
   // Detail drawer.
   'skills.detail.aria': 'Skill details',
   'skills.detail.version': 'Version',
@@ -2012,6 +2023,10 @@ export const en = {
   'chat.scope.librarySourceHint': 'Your whole knowledge base',
   'chat.scope.specificToggle': 'Specific documents…',
   'chat.scope.allTap': 'All documents',
+  // full-audit 2026-07-11 CODE-31: in a chat with attached files the reset's empty explicit scope
+  // means "just those files" (main-side resolveScope unions the attachments in — D71), NOT the
+  // whole corpus — so the reset button says what it actually does there.
+  'chat.scope.attachmentsOnlyTap': 'Just the files in this chat',
   'chat.scope.filesInChatLine': 'Files in this chat',
   'chat.scope.noProjects': 'No projects yet',
   'chat.scope.archivedFallback': 'This project was archived — answering from your Library.',
@@ -2097,6 +2112,8 @@ export const en = {
   'images.answer.localNote': 'Generated locally from the selected image.',
   'images.answer.copy': 'Copy',
   'images.answer.copied': 'Copied',
+  // full-audit 2026-07-11 CODE-36: a failed copy gets the PreviewModal-style feedback toast.
+  'images.answer.copyFailed': 'Could not copy to the clipboard',
   'images.answer.tryAgain': 'Try again',
   'images.answer.reading': 'Reading the image…',
   'images.answer.starting': 'Starting the vision model…',
@@ -2111,6 +2128,10 @@ export const en = {
   'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
   'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
   'images.err.busy': 'Working on the previous question…',
+  // full-audit 2026-07-11 CODE-36/34: a saved-analysis open that FAILED (vs one that vanished,
+  // which just resyncs the list) and a delete that failed — both used to be silent/mislabelled.
+  'images.err.openFailed': "That analysis couldn't be opened. Try again.",
+  'images.err.deleteFailed': "That analysis couldn't be deleted. Try again.",
   // History (image-understanding history): saved analyses, encrypted at rest, deletable.
   'images.history.title': 'History',
   'images.history.empty': 'Images you analyze will appear here.',

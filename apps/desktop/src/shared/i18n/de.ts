@@ -500,6 +500,11 @@ export const de: Record<keyof typeof en, string> = {
   'docs.cancel': 'Abbrechen',
   'docs.cancelOcrTitle': 'Das Lesen des Scans stoppen',
   'docs.cancelTaskTitle': 'Die Aufgabe stoppen',
+  // full-audit 2026-07-11 F2-Rider (CODE-6-Anschluss): der Aufgaben-Store hat das Abfragen nach
+  // wiederholten Fehlern aufgegeben — die Zeile zeigt einen benannten, schließbaren Zustand
+  // (die SKA-40-Behandlung) statt eines bis zum Neustart festhängenden Beschäftigt/Abbrechen-Paars.
+  'docs.task.stateUnknown': 'Diese Aufgabe ließ sich nicht prüfen – vielleicht läuft sie noch.',
+  'docs.task.dismiss': 'Schließen',
   'docs.makeSearchable': 'Durchsuchbar machen (OCR)',
   'docs.makeSearchableTitle':
     'Die gescannten Seiten mit lokaler Texterkennung lesen — nichts verlässt dieses Laufwerk',
@@ -1292,6 +1297,10 @@ export const de: Record<keyof typeof en, string> = {
   'skills.row.enableLabel': 'Aktiviert',
   'skills.row.on': 'Skill an',
   'skills.row.off': 'Skill aus',
+  // full-audit 2026-07-11 CODE-37: Fehlermeldungen je Aktion — ein fehlgeschlagenes
+  // Umschalten/Löschen/Exportieren zeigte vorher das unpassende „Skills konnten nicht geladen werden."
+  'skills.row.onFailed': 'Dieser Skill konnte nicht eingeschaltet werden.',
+  'skills.row.offFailed': 'Dieser Skill konnte nicht ausgeschaltet werden.',
   'skills.dup.chip': 'Doppelter Name',
   'skills.dup.title': 'Ein anderer installierter Skill nutzt diesen Namen. Es kann immer nur einer aktiv sein.',
   'skills.unavailable.chip': 'Dateien fehlen',
@@ -1306,10 +1315,12 @@ export const de: Record<keyof typeof en, string> = {
   'skills.menu.export': 'Exportieren…',
   'skills.menu.delete': 'Löschen',
   'skills.export.done': 'Skill exportiert',
+  'skills.export.failed': 'Dieser Skill konnte nicht exportiert werden.', // CODE-37
   'skills.delete.title': 'Diesen Skill löschen?',
   'skills.delete.body': 'Damit wird der Skill vom Laufwerk entfernt. Chats, die ihn bereits genutzt haben, funktionieren weiter.',
   'skills.delete.confirm': 'Löschen',
   'skills.delete.done': 'Skill gelöscht',
+  'skills.delete.failed': 'Dieser Skill konnte nicht gelöscht werden.', // CODE-37
   'skills.detail.aria': 'Skill-Details',
   'skills.detail.version': 'Version',
   'skills.detail.author': 'Autor',
@@ -2081,6 +2092,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.librarySourceHint': 'Deine gesamte Wissensbasis',
   'chat.scope.specificToggle': 'Bestimmte Dokumente…',
   'chat.scope.allTap': 'Alle Dokumente',
+  // full-audit 2026-07-11 CODE-31: In einem Chat mit angehängten Dateien bedeutet der leere
+  // explizite Bereich „nur diese Dateien" (resolveScope nimmt die Anhänge dazu — D71), nicht
+  // den ganzen Bestand — der Zurücksetzen-Knopf sagt dort, was er wirklich tut.
+  'chat.scope.attachmentsOnlyTap': 'Nur die Dateien in diesem Chat',
   'chat.scope.filesInChatLine': 'Dateien in diesem Chat',
   'chat.scope.noProjects': 'Noch keine Projekte',
   'chat.scope.archivedFallback': 'Dieses Projekt wurde archiviert — Antwort aus deiner Bibliothek.',
@@ -2152,6 +2167,8 @@ export const de: Record<keyof typeof en, string> = {
   'images.answer.localNote': 'Lokal aus dem ausgewählten Bild erzeugt.',
   'images.answer.copy': 'Kopieren',
   'images.answer.copied': 'Kopiert',
+  // full-audit 2026-07-11 CODE-36: fehlgeschlagenes Kopieren bekommt die PreviewModal-Rückmeldung.
+  'images.answer.copyFailed': 'Kopieren in die Zwischenablage nicht möglich',
   'images.answer.tryAgain': 'Erneut versuchen',
   'images.answer.reading': 'Bild wird gelesen…',
   'images.answer.starting': 'KI-Bildmodell wird gestartet…',
@@ -2167,6 +2184,11 @@ export const de: Record<keyof typeof en, string> = {
   'images.err.emptyResponse':
     'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
   'images.err.busy': 'Die vorige Frage wird noch bearbeitet…',
+  // full-audit 2026-07-11 CODE-36/34: ein FEHLGESCHLAGENES Öffnen einer gespeicherten Analyse
+  // (anders als eine verschwundene, die nur die Liste aktualisiert) und ein fehlgeschlagenes
+  // Löschen — beides war vorher stumm bzw. falsch beschriftet.
+  'images.err.openFailed': 'Diese Analyse konnte nicht geöffnet werden. Versuch es erneut.',
+  'images.err.deleteFailed': 'Diese Analyse konnte nicht gelöscht werden. Versuch es erneut.',
   // Verlauf (Bildverständnis-Verlauf): gespeicherte Analysen, verschlüsselt, löschbar.
   'images.history.title': 'Verlauf',
   'images.history.empty': 'Analysierte Bilder erscheinen hier.',

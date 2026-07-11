@@ -284,7 +284,13 @@ export function ScopePopover({
               disabled={disabled}
               onClick={() => emit([], [])}
             >
-              {t('chat.scope.allTap')}
+              {/* full-audit 2026-07-11 CODE-31 (owner decision: relabel truthfully — the emitted
+                  scope stays the empty explicit one). In a chat WITH attachments, main-side
+                  resolveScope reads that empty scope as "no collections" + the unioned attachments
+                  (D71), i.e. JUST the attached files — the opposite of "All documents". The label
+                  keys on the same `fileCount` the "Answering from:" chip uses, so the pair stays
+                  coherent after the tap. */}
+              {fileCount > 0 ? t('chat.scope.attachmentsOnlyTap') : t('chat.scope.allTap')}
             </Button>
           )}
         </Popover.Content>

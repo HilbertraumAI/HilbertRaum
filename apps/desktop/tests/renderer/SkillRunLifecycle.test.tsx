@@ -254,4 +254,84 @@ describe('ChatScreen — the "new"-composer pick is cleared after being carried 
     // …and it was never re-persisted for any conversation.
     expect(setConversationDefaultSkill).not.toHaveBeenCalledWith(expect.anything(), 'app:bank-statement')
   })
+
+  // full-audit 2026-07-11 CODE-30: "+ New chat" used to BYPASS the SKA-18 carry+delete block (it
+  // only ran inside ensureConversation, i.e. on a SEND) — a composer pick silently vanished from
+  // the created chat and then resurrected on the next empty composer.
+  it('"+ New chat" carries the composer pick onto the created conversation and cleans the "new" keys (CODE-30)', async () => {
+    const setConversationDefaultSkill = vi.fn(async () => {})
+    const created: Conversation = { ...conv({ id: 'conv1', title: 'Created', mode: 'chat', scope: null, scopeDocumentIds: null }) }
+    let convList: Conversation[] = []
+    stubApi({
+      listConversations: vi.fn(async () => convList),
+      getRuntimeStatus: vi.fn(async () => status()),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => []),
+      listSkills: vi.fn(async () => [skill()]),
+      suggestSkills: vi.fn(async () => []),
+      listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
+      listAttachments: vi.fn(async () => []),
+      getAppStatus: vi.fn(async () => ({ dictationAvailable: false })),
+      listSkillRuns: vi.fn(async () => []),
+      createConversation: vi.fn(async () => {
+        convList = [created]
+        return created
+      }),
+      setConversationDefaultSkill,
+      onToken: vi.fn(unsub),
+      onReasoning: vi.fn(unsub),
+      onScopeNotice: vi.fn(unsub),
+      onCompaction: vi.fn(unsub)
+    } as unknown as Parameters<typeof stubApi>[0])
+    const user = userEvent.setup()
+    render(<ChatScreen onNavigate={() => {}} />)
+    // Pick + keep on the 'new' composer (no send).
+    await user.click(await screen.findByRole('button', { name: /^skill:/i }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /bank statement helper/i }))
+    await user.click(pickerTrigger())
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: /keep for this conversation/i }))
+    await user.keyboard('{Escape}')
+    // "+ New chat" — the CODE-30 entry point. Pre-fix: no carry ran, so the pick vanished (the
+    // picker read "No skill" for the created conversation) and the kept default was never persisted.
+    await user.click(screen.getByRole('button', { name: '+ New chat' }))
+    await waitFor(() => expect(setConversationDefaultSkill).toHaveBeenCalledWith('conv1', 'app:bank-statement'))
+    expect(pickerTrigger()).toHaveTextContent('Bank statement helper')
+    setConversationDefaultSkill.mockClear()
+    // …and the 'new' keys were DELETED: deselect via the mode toggle → the fresh composer is clean
+    // (pre-fix the leftover 'new' key resurrected the pick here).
+    await user.click(screen.getByRole('radio', { name: /ask my documents/i }))
+    await waitFor(() => expect(pickerTrigger()).toHaveTextContent('No skill'))
+    expect(setConversationDefaultSkill).not.toHaveBeenCalledWith(expect.anything(), 'app:bank-statement')
+  })
+
+  // CODE-30 rider: ConversationList's `onClick={onNew}` discards the promise — a failed
+  // createConversation used to be an unhandled rejection with zero feedback.
+  it('a failed "+ New chat" surfaces on the error banner (CODE-30)', async () => {
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => status()),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => []),
+      listSkills: vi.fn(async () => [] as SkillInfo[]),
+      suggestSkills: vi.fn(async () => []),
+      listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
+      listAttachments: vi.fn(async () => []),
+      getAppStatus: vi.fn(async () => ({ dictationAvailable: false })),
+      listSkillRuns: vi.fn(async () => []),
+      createConversation: vi.fn(async () => {
+        throw new Error(
+          "Error invoking remote method 'chat:createConversation': Error: The workspace is locked. Unlock it to continue."
+        )
+      }),
+      onToken: vi.fn(unsub),
+      onReasoning: vi.fn(unsub),
+      onScopeNotice: vi.fn(unsub),
+      onCompaction: vi.fn(unsub)
+    } as unknown as Parameters<typeof stubApi>[0])
+    const user = userEvent.setup()
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByRole('button', { name: '+ New chat' }))
+    // Pre-fix: an unhandled rejection (vitest fails on it) and no banner.
+    expect(await screen.findByText(/workspace is locked/i)).toBeInTheDocument()
+  })
 })

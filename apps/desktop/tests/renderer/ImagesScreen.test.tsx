@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
+import { ToastProvider } from '../../src/renderer/components'
 import { resetVisionSessionForTests } from '../../src/renderer/lib/visionSession'
 import { __turnRowRenderCounts } from '../../src/renderer/images'
 import type { DecodedImage, DecodeImage } from '../../src/renderer/images'
@@ -480,6 +481,85 @@ describe('ImagesScreen — history (image-understanding history)', () => {
 
     await waitFor(() => expect(deleteImageSession).toHaveBeenCalledWith('s1'))
     await waitFor(() => expect(screen.queryByText('receipt.png')).not.toBeInTheDocument())
+  })
+
+  // full-audit 2026-07-11 CODE-34: a FAILED delete used to fall through to the success toast
+  // ("Removed from history") while the entry stayed in the list.
+  it('a failed delete shows the failure banner and never the success toast (CODE-34)', async () => {
+    const deleteImageSession = vi.fn(async () => {
+      throw new Error('The workspace is locked. Unlock it to continue.')
+    })
+    const listImageSessions = vi.fn(async () => [summary()])
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions,
+      deleteImageSession
+    } as never)
+    render(
+      <ToastProvider>
+        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+      </ToastProvider>
+    )
+
+    await screen.findByText('receipt.png')
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    // TEETH: pre-fix "Removed from history" toasted here despite the throw, and no failure showed.
+    expect(
+      await screen.findByText("That analysis couldn't be deleted. Try again.")
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Removed from history')).not.toBeInTheDocument()
+    // The entry is still listed — the list refresh reflects the true state.
+    expect(screen.getByText('receipt.png')).toBeInTheDocument()
+  })
+
+  // full-audit 2026-07-11 CODE-36: a load FAILURE used to be indistinguishable from a vanished
+  // entry (both fell into the silent list-resync no-op).
+  it('a saved-analysis open FAILURE surfaces, distinct from a vanished entry (CODE-36)', async () => {
+    const getImageSession = vi.fn(async () => {
+      throw new Error('The workspace is locked. Unlock it to continue.')
+    })
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions: vi.fn(async () => [summary()]),
+      getImageSession
+    } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+
+    await user.click(await screen.findByText('receipt.png'))
+    // TEETH: pre-fix this was a silent no-op (the vanished-entry path) — no banner ever appeared.
+    expect(
+      await screen.findByText("That analysis couldn't be opened. Try again.")
+    ).toBeInTheDocument()
+  })
+})
+
+describe('ImagesScreen — copy feedback (full-audit 2026-07-11 CODE-36)', () => {
+  it('a failed copy toasts the failure instead of staying silent', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    s.copyToClipboard.mockResolvedValue(false) // main refused the write
+    stubApi({ ...s.api, ...pickStubs() } as never)
+    render(
+      <ToastProvider>
+        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+      </ToastProvider>
+    )
+    await selectImageViaPicker(user)
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.done.fn).toBeDefined())
+    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'Answer.' }))
+
+    await user.click(screen.getByRole('button', { name: 'Copy' }))
+
+    // TEETH: pre-fix a refused copy gave NO feedback at all (the `if (ok)` gate).
+    expect(await screen.findByText('Could not copy to the clipboard')).toBeInTheDocument()
+    expect(screen.queryByText('Copied')).not.toBeInTheDocument()
   })
 })
 

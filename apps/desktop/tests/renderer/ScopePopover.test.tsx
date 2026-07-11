@@ -93,6 +93,60 @@ describe('ScopePopover — pending attachment chips (FE-6)', () => {
   })
 })
 
+// full-audit 2026-07-11 CODE-31 (owner decision: relabel truthfully; emitted scope unchanged).
+// In a chat WITH attachments the reset's empty explicit scope means "just the attached files"
+// (main-side resolveScope unions them in — D71), the OPPOSITE of "All documents".
+describe('ScopePopover — attach-chat reset label (CODE-31)', () => {
+  it('labels the reset truthfully in an attach-chat and still emits the empty explicit scope', async () => {
+    const user = userEvent.setup()
+    const onChangeScope = vi.fn()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[indexedDoc({ id: 'a' })]}
+          collections={[libraryCollection()]}
+          scope={{ collectionIds: ['lib'], documentIds: [] }}
+          onChangeScope={onChangeScope}
+          attachments={[indexedDoc({ id: 'att1', title: 'statement.pdf' })]}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button')) // open the picker
+    // TEETH: pre-fix the reset read "All documents" while emitting the attachments-only scope.
+    const reset = await screen.findByRole('button', {
+      name: t('en', 'chat.scope.attachmentsOnlyTap')
+    })
+    expect(
+      screen.queryByRole('button', { name: t('en', 'chat.scope.allTap') })
+    ).not.toBeInTheDocument()
+    // The emitted scope is UNCHANGED by the relabel (the owner-decided half of CODE-31): an
+    // empty explicit scope, which resolveScope narrows to the chat's attachments.
+    await user.click(reset)
+    expect(onChangeScope).toHaveBeenCalledWith({ collectionIds: [], documentIds: [] })
+  })
+
+  it('keeps the "All documents" label when the chat has no attachments', async () => {
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[indexedDoc({ id: 'a' })]}
+          collections={[libraryCollection()]}
+          scope={{ collectionIds: ['lib'], documentIds: [] }}
+          onChangeScope={() => {}}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    expect(
+      await screen.findByRole('button', { name: t('en', 'chat.scope.allTap') })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: t('en', 'chat.scope.attachmentsOnlyTap') })
+    ).not.toBeInTheDocument()
+  })
+})
+
 describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
   // The always-visible chip near the composer reframes the scope popover's trigger so the active
   // retrieval scope is legible BEFORE asking. It IS the popover trigger — one click opens the picker.

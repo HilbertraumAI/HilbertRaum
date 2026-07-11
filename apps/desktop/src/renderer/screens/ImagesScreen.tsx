@@ -52,8 +52,9 @@ const CHIP_KEYS: { labelKey: MessageKey; promptKey: MessageKey }[] = [
 ]
 
 // `multiDrop` is a UI-only concern (NOT a VisionErrorCode — there is no such backend code);
-// it joins the client-guard codes the screen-level banner can show.
-type ClientImageError = VisionErrorCode | 'multiDrop'
+// it joins the client-guard codes the screen-level banner can show. `openFailed`/`deleteFailed`
+// (full-audit 2026-07-11 CODE-36/34) are UI-only too: a history entry whose open/delete IPC threw.
+type ClientImageError = VisionErrorCode | 'multiDrop' | 'openFailed' | 'deleteFailed'
 
 // Client-guard error codes → friendly banner copy (the runtime codes map inside AnswerThread).
 const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
@@ -61,7 +62,9 @@ const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
   unsupportedType: 'images.err.unsupported',
   decodeFailed: 'images.err.decodeFailed',
   multiDrop: 'images.err.multiDrop',
-  busy: 'images.err.busy'
+  busy: 'images.err.busy',
+  openFailed: 'images.err.openFailed',
+  deleteFailed: 'images.err.deleteFailed'
 }
 
 export function ImagesScreen({
@@ -165,7 +168,10 @@ export function ImagesScreen({
     try {
       detail = (await window.api?.getImageSession?.(id)) ?? null
     } catch {
-      detail = null
+      // full-audit 2026-07-11 CODE-36: a load FAILURE (locked read, IPC error) is NOT "vanished" —
+      // it used to fall into the silent resync below, indistinguishable from a deleted entry.
+      setScreenError('openFailed')
+      return
     }
     if (!detail) {
       // The entry vanished (deleted elsewhere / missing file) — resync the list.
@@ -201,7 +207,12 @@ export function ImagesScreen({
     try {
       await window.api?.deleteImageSession?.(id)
     } catch {
-      // Best-effort; the list refresh below reflects the true state either way.
+      // full-audit 2026-07-11 CODE-34: a FAILED delete used to fall through to the success toast
+      // ("Removed from history") while the entry stayed. Resync the list (it reflects the true
+      // state) and say what happened instead — never the success copy.
+      await loadSessions()
+      setScreenError('deleteFailed')
+      return
     }
     if (getVisionSession().sessionId === id) {
       removeVisionImage()
@@ -307,10 +318,11 @@ export function ImagesScreen({
   function onCopy(text: string): void {
     // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter needs a
     // secure context + focused document and is denied (`clipboard-sanitized-write`) in the
-    // file://-loaded renderer. Mirrors ChatScreen.onCopyMessage.
-    void window.api?.copyToClipboard?.(text)?.then?.((ok) => {
-      if (ok) showToast(t('images.answer.copied'))
-    })
+    // file://-loaded renderer. full-audit 2026-07-11 CODE-36: a failed/refused copy used to give
+    // NO feedback at all — mirror PreviewModal.onCopySummary's both-outcome toast.
+    void Promise.resolve(window.api?.copyToClipboard?.(text))
+      .then((ok) => showToast(ok ? t('images.answer.copied') : t('images.answer.copyFailed')))
+      .catch(() => showToast(t('images.answer.copyFailed')))
   }
 
   function onChip(prompt: string): void {

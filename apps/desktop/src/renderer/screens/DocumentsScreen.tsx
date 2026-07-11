@@ -219,10 +219,17 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const activeTask = useSyncExternalStore(subscribeDocTask, getActiveDocTask)
 
   const refreshCollections = useCallback(async (): Promise<void> => {
+    // full-audit 2026-07-11 CODE-38: ride the SAME DR-2 seq as `refresh` (its only caller, which
+    // stamps a fresh seq just before invoking this) — two overlapping refreshes each fire a
+    // listCollections, and the STALE one resolving last used to clobber the newer snapshot.
+    const seq = refreshSeq.current
     try {
-      setCollections((await window.api.listCollections?.()) ?? [])
+      const next = (await window.api.listCollections?.()) ?? []
+      if (!mountedRef.current || seq !== refreshSeq.current) return
+      setCollections(next)
     } catch {
-      setCollections([])
+      // CODE-38: keep the PRIOR list — one transient failure used to `setCollections([])`, which
+      // emptied the Projects rail (and re-bucketed every row) until the next successful refresh.
     }
   }, [])
 
@@ -430,43 +437,53 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
     }
   }
 
+  // full-audit 2026-07-11 CODE-32: the DR-2 request-seq for PREVIEW INSTALLS. Two clicked
+  // previews (or a click racing a done-task auto-open) can be in flight at once, and the
+  // LAST-RESOLVED used to win — the modal could show the wrong document under the right title
+  // row. Only the latest stamp may commit `setPreview`; the done-task auto-open below stamps the
+  // same counter so every preview install is totally ordered.
+  const previewSeq = useRef(0)
+
   // Read-only in-app preview: the extracted text, never the raw file in an external
   // viewer (in encrypted workspaces the stored copy must stay encrypted on disk).
   async function onPreview(d: DocumentInfo): Promise<void> {
+    const seq = ++previewSeq.current // CODE-32
     setError(null)
     setPreviewLoadingId(d.id)
     try {
       // FE-6: this is the BOUNDED first page (+ cursor), not the whole document.
-      setPreview(await window.api.previewDocument(d.id))
+      const next = await window.api.previewDocument(d.id)
+      if (seq === previewSeq.current) setPreview(next)
     } catch (e) {
-      setError(friendlyIpcError(e))
+      if (seq === previewSeq.current) setError(friendlyIpcError(e))
     } finally {
-      setPreviewLoadingId(null)
+      // CODE-32: functional clear — only OUR row's loading flag. A flat `setPreviewLoadingId(null)`
+      // from the slower request used to wipe the newer click's "Opening…" state mid-flight.
+      setPreviewLoadingId((cur) => (cur === d.id ? null : cur))
     }
   }
 
   // FE-6: append the next preview page (the modal's "Show more"). Reads the cursor off the
   // current `preview` and merges the new slice onto the accumulated segments. A guarded no-op
   // once `nextOffset` is null (last page). Tolerant of a partial test bridge missing the method.
+  // full-audit 2026-07-11 CODE-35: a failure now PROPAGATES to PreviewModal's own loadMore, which
+  // shows it INSIDE the dialog — the screen banner here sat UNDER the modal overlay, so the
+  // "Show more" button just looked dead.
   async function onPreviewLoadMore(): Promise<void> {
     if (!preview || preview.nextOffset == null || !window.api.previewDocumentPage) return
-    try {
-      const next = await window.api.previewDocumentPage(
-        preview.id,
-        preview.nextOffset,
-        PREVIEW_PAGE_SIZE
-      )
-      setPreview((cur) =>
-        cur && cur.id === next.id
-          ? { ...next, segments: [...cur.segments, ...next.segments] }
-          : // DR-1: the modal was closed (Esc) or a done-task auto-opened a DIFFERENT document
-            // while this page was in flight — DROP the late page (return `cur`) instead of
-            // installing it, which would resurrect the closed modal or clobber the other doc.
-            cur
-      )
-    } catch (e) {
-      setError(friendlyIpcError(e))
-    }
+    const next = await window.api.previewDocumentPage(
+      preview.id,
+      preview.nextOffset,
+      PREVIEW_PAGE_SIZE
+    )
+    setPreview((cur) =>
+      cur && cur.id === next.id
+        ? { ...next, segments: [...cur.segments, ...next.segments] }
+        : // DR-1: the modal was closed (Esc) or a done-task auto-opened a DIFFERENT document
+          // while this page was in flight — DROP the late page (return `cur`) instead of
+          // installing it, which would resurrect the closed modal or clobber the other doc.
+          cur
+    )
   }
 
   // When the active task finishes: refresh the list, then show the outcome — a done
@@ -485,12 +502,22 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
           ? status?.resultRef?.documentId
           : null
     acknowledgeDocTask()
-    void refresh().catch(() => undefined)
+    // full-audit 2026-07-11 CODE-39: both of these completions were swallowed (`.catch(() =>
+    // undefined)`) — a finished task whose list refresh or result auto-open then failed lost its
+    // outcome silently, with no retry path. Route the failures to the screen banner.
+    void refresh().catch((e) => {
+      if (mountedRef.current) setError(friendlyIpcError(e))
+    })
     if (status?.state === 'done' && openId) {
+      const seq = ++previewSeq.current // CODE-32: the auto-open participates in the preview order
       void window.api
         .previewDocument(openId)
-        .then(setPreview)
-        .catch(() => undefined)
+        .then((p) => {
+          if (mountedRef.current && seq === previewSeq.current) setPreview(p)
+        })
+        .catch((e) => {
+          if (mountedRef.current) setError(friendlyIpcError(e))
+        })
     } else if (status?.state === 'failed' && status.error) {
       // DR-7: a failed summary/translation/OCR task's `status.error` is persist-canonical English
       // — run it through the same display map DocRow / the chat banner use, or the de-AT UI shows
@@ -874,6 +901,11 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const handleCancelTask = useEventCallback(() =>
     runAndSurface(cancelActiveDocTask, (m) => mountedRef.current && setError(m))
   )
+  // full-audit 2026-07-11 F2 rider (CODE-6 follow-up): dismiss a STATE-UNKNOWN task (the doctasks
+  // store gave up polling after repeated IPC errors). The done-task effect above keys on a
+  // TERMINAL status, so without this the row's busy/Cancel pair persisted until reload/lock;
+  // `acknowledgeDocTask` accepts the state-unknown case (the SkillRunBar dismissal semantics).
+  const handleDismissTask = useEventCallback(() => acknowledgeDocTask())
 
   // One row's <DocRow> — shared by the windowed and the un-windowed (fallback) list paths (PERF-2),
   // so the props wiring stays in exactly one place. The data SOURCE is unchanged from the former
@@ -918,6 +950,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         onToggleSelected={handleToggleSelected}
         setMenuOpenId={setMenuOpenId}
         onCancelTask={handleCancelTask}
+        onDismissTask={handleDismissTask}
         onPreview={handlePreview}
         run={handleRun}
         onSummarize={handleSummarize}

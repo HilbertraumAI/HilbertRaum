@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen, __docRowRenderCounts } from '../../src/renderer/screens/DocumentsScreen'
 import { formatSize } from '../../src/renderer/screens/documents/format'
@@ -289,6 +289,242 @@ describe('DocumentsScreen — DR-8 first-mount loading state', () => {
     await screen.findByText('contract.pdf')
     // TEETH: remove the branch → nothing renders here (blank list) and the spinner never showed.
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+})
+
+// ---- CODE-32 (full-audit 2026-07-11): preview installs are seq-ordered -------------------
+describe('DocumentsScreen — CODE-32 preview install ordering', () => {
+  it('slow-first-resolves-last: the modal shows the SECOND clicked document', async () => {
+    const resolvers = new Map<string, (p: DocumentPreview) => void>()
+    const previewDocument = vi.fn(
+      (id: string) => new Promise<DocumentPreview>((res) => { resolvers.set(id, res) })
+    )
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'alpha.pdf' }),
+        doc({ id: 'd2', title: 'beta.pdf' })
+      ]),
+      previewDocument
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('alpha.pdf')
+
+    const [aBtn, bBtn] = screen.getAllByRole('button', { name: 'Preview' })
+    fireEvent.click(aBtn) // A first (its IPC will resolve LAST)
+    fireEvent.click(bBtn) // then B — the newer request
+    await waitFor(() => expect(resolvers.size).toBe(2))
+
+    // B (newer) resolves FIRST and opens the modal…
+    await act(async () => {
+      resolvers.get('d2')!(
+        firstPage({ id: 'd2', title: 'beta.pdf', segments: [{ text: 'Beta text.', pageNumber: 1, sectionLabel: null }], nextOffset: null })
+      )
+    })
+    // …then A (older) resolves LAST — its stamp is stale, so it must be dropped.
+    await act(async () => {
+      resolvers.get('d1')!(
+        firstPage({ id: 'd1', title: 'alpha.pdf', segments: [{ text: 'Alpha text.', pageNumber: 1, sectionLabel: null }], nextOffset: null })
+      )
+    })
+
+    // TEETH: without the seq stamp, last-resolved wins → the modal flips to alpha.pdf here.
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('beta.pdf')).toBeInTheDocument()
+    expect(within(dialog).queryByText(/Alpha text/)).not.toBeInTheDocument()
+  })
+})
+
+// ---- CODE-33 (full-audit 2026-07-11): right-click respects the busy gate ------------------
+describe('DocumentsScreen — CODE-33 context menu busy gate', () => {
+  it('right-click does NOT open the row menu while a busy op runs', async () => {
+    // The DR-5 recover path latches busy='reindex-all' on mount — the same gate that disables
+    // the "⋯" trigger, which right-click used to bypass.
+    const getReindexAllJob = vi.fn(async () => ({
+      jobId: 'r1', total: 3, completed: 1, failed: 0, done: false, cancelled: false
+    }))
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Import files' })).toBeDisabled())
+
+    fireEvent.contextMenu(screen.getByText('contract.pdf'))
+
+    // TEETH: pre-fix the overflow opened and Delete/Re-index were clickable mid-op.
+    expect(screen.queryByRole('menuitem', { name: /Delete/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Re-index' })).not.toBeInTheDocument()
+  })
+})
+
+// ---- CODE-35 (full-audit 2026-07-11): "Show more" failure shows INSIDE the modal ----------
+describe('DocumentsScreen — CODE-35 preview load-more error placement', () => {
+  it('a rejected page fetch surfaces inside the open modal, not under its overlay', async () => {
+    const user = userEvent.setup()
+    const previewDocument = vi.fn(async () => firstPage())
+    const previewDocumentPage = vi.fn(async () => {
+      throw new Error(
+        "Error invoking remote method 'docs:previewPage': Error: The workspace is locked. Unlock it to continue."
+      )
+    })
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /preview/i }))
+    expect(await screen.findByText(/First page clause/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /show more/i }))
+
+    // TEETH: pre-fix the failure went to the SCREEN banner (under the dialog overlay) — inside
+    // the dialog nothing appeared and the button just looked dead.
+    const dialog = screen.getByRole('dialog')
+    expect(await within(dialog).findByText(/workspace is locked/i)).toBeInTheDocument()
+    // The modal stays open with its content intact, ready for a retry.
+    expect(within(dialog).getByText(/First page clause/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /show more/i })).toBeEnabled()
+  })
+})
+
+// ---- CODE-38 (full-audit 2026-07-11): collections refresh — seq + keep-on-failure ---------
+describe('DocumentsScreen — CODE-38 collections refresh', () => {
+  it('keeps the prior collections when a later listCollections fails (never empties the rail)', async () => {
+    let fail = false
+    const listCollections = vi.fn(async () => {
+      if (fail) throw new Error('The workspace is locked. Unlock it to continue.')
+      return [coll({ id: 'p1', name: 'Cases' })]
+    })
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), listCollections })
+    render(<DocumentsScreen />)
+    expect(await screen.findByRole('button', { name: 'Cases' })).toBeInTheDocument()
+
+    fail = true
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(listCollections.mock.calls.length).toBeGreaterThan(1))
+
+    // TEETH: pre-fix the catch ran `setCollections([])` — the Projects rail emptied here.
+    expect(screen.getByRole('button', { name: 'Cases' })).toBeInTheDocument()
+  })
+
+  it('a stale listCollections resolving last does not overwrite the newer snapshot', async () => {
+    const collResolvers: Array<(v: Collection[]) => void> = []
+    const listCollections = vi.fn(
+      () => new Promise<Collection[]>((res) => { collResolvers.push(res) })
+    )
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), listCollections })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await waitFor(() => expect(collResolvers.length).toBe(1)) // the mount refresh's read
+
+    // Two overlapping manual refreshes: their collections reads carry seq 2 (STALE) and 3 (FRESH).
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(collResolvers.length).toBe(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(collResolvers.length).toBe(3))
+
+    // The NEWEST resolves first with the fresh project…
+    await act(async () => { collResolvers[2]([coll({ id: 'p2', name: 'Fresh' })]) })
+    // …then the STALE one resolves last — without the seq gate it would clobber 'Fresh'.
+    await act(async () => { collResolvers[1]([coll({ id: 'p1', name: 'Stale' })]) })
+    await act(async () => { collResolvers[0]([]) }) // settle the mount read (stale too — dropped)
+
+    expect(screen.getByRole('button', { name: 'Fresh' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stale' })).not.toBeInTheDocument()
+  })
+})
+
+// ---- CODE-39 (full-audit 2026-07-11): done-task completions surface their failures --------
+describe('DocumentsScreen — CODE-39 done-task auto-open failure', () => {
+  it('a failed result auto-open after a done summary lands on the banner (not swallowed)', async () => {
+    vi.useFakeTimers()
+    try {
+      const done: DocTaskStatus = {
+        jobId: 'j1',
+        kind: 'summary',
+        documentIds: ['d1'],
+        state: 'done',
+        progress: { stepsDone: 1, stepsTotal: 1 },
+        error: null,
+        resultRef: null
+      }
+      const previewDocument = vi.fn(async () => {
+        throw new Error(
+          "Error invoking remote method 'docs:preview': Error: The workspace is locked. Unlock it to continue."
+        )
+      })
+      stubApi({
+        listDocuments: vi.fn(async () => [doc({})]),
+        startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
+        getDocTask: vi.fn(async () => done),
+        previewDocument
+      })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
+      render(<DocumentsScreen />)
+      await flush() // mount refresh
+      await act(async () => {
+        await startTask('summary', 'd1')
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400) // first poll → terminal done → auto-open fires
+      })
+      await flush()
+
+      // TEETH: pre-fix the `.catch(() => undefined)` swallowed this — no banner, outcome lost.
+      expect(screen.getByText(/workspace is locked/i)).toBeInTheDocument()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    } finally {
+      resetDocTaskStoreForTests()
+      vi.useRealTimers()
+    }
+  })
+})
+
+// ---- F2 rider (CODE-6 follow-up): the state-unknown task row is labelled + dismissable ----
+describe('DocumentsScreen — state-unknown task row (F2 rider)', () => {
+  it('after the store gives up polling, the row shows the labelled state and Dismiss clears it', async () => {
+    vi.useFakeTimers()
+    try {
+      const getDocTask = vi.fn(async () => {
+        throw new Error('ipc gone')
+      })
+      stubApi({
+        listDocuments: vi.fn(async () => [doc({})]),
+        startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
+        getDocTask
+      })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
+      render(<DocumentsScreen />)
+      await flush()
+      await act(async () => {
+        await startTask('summary', 'd1')
+      })
+      // Three consecutive poll failures (MAX_POLL_FAILURES) → the store latches stateUnknown.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1300)
+      })
+      await flush()
+
+      // TEETH: pre-rider the row kept the busy/Cancel pair until reload — no label, no way out.
+      expect(
+        screen.getByText("Couldn't check on this task — it may still be running.")
+      ).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+      await flush()
+      expect(
+        screen.queryByText("Couldn't check on this task — it may still be running.")
+      ).not.toBeInTheDocument()
+      // The row is interactive again (the normal Preview action is back).
+      expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument()
+    } finally {
+      resetDocTaskStoreForTests()
+      vi.useRealTimers()
+    }
   })
 })
 

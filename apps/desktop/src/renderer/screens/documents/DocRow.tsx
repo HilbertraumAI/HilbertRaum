@@ -56,6 +56,7 @@ export const DocRow = memo(function DocRow({
   onToggleSelected,
   setMenuOpenId,
   onCancelTask,
+  onDismissTask,
   onPreview,
   run,
   onSummarize,
@@ -101,6 +102,9 @@ export const DocRow = memo(function DocRow({
    *  error banner instead of vanishing as an unhandled rejection (full-audit 2026-07-11
    *  CODE-29); stable identity via useEventCallback (PERF-5). */
   onCancelTask: () => void
+  /** Dismiss a STATE-UNKNOWN task (the doctasks store's CODE-6 give-up) — without this the
+   *  busy/Cancel pair persisted until reload (full-audit 2026-07-11 F2 rider). */
+  onDismissTask: () => void
   onPreview: (d: DocumentInfo) => void
   run: (key: string, fn: () => Promise<unknown>) => void
   onSummarize: (d: DocumentInfo) => void
@@ -152,7 +156,10 @@ export const DocRow = memo(function DocRow({
       onContextMenu={(e) => {
         // Right-click opens the same "⋯" overflow (mirrors the chat list). A failed row
         // has no overflow (just inline Remove / Try again), so leave the native menu.
-        if (rowTask || d.status === 'failed') return
+        // full-audit 2026-07-11 CODE-33: also refuse while ANY busy op runs — the "⋯" trigger is
+        // disabled then (`busy !== null` below), but right-click bypassed the gate and opened a
+        // menu whose Delete/Re-index items were clickable mid-import.
+        if (rowTask || busy !== null || d.status === 'failed') return
         e.preventDefault()
         setMenuOpenId(d.id)
       }}
@@ -239,7 +246,21 @@ export const DocRow = memo(function DocRow({
       {/* Inline action + overflow (Task 1). While a task runs on this row, a busy/cancel
           pair takes their place. */}
       <div className="doc-row-actions">
-        {rowTask ? (
+        {rowTask && rowTask.stateUnknown ? (
+          // full-audit 2026-07-11 F2 rider (CODE-6 follow-up): the store gave up polling this task
+          // after repeated IPC errors — a labelled, dismissable row (the SkillRunBar SKA-40
+          // treatment) instead of a busy/Cancel pair stuck until reload. The backend may genuinely
+          // still be running it; a re-enabled action that hits the backend's busy-refusal surfaces
+          // friendly (CODE-29/GAP-5), so dismissal is safe-side.
+          <>
+            <span className="hint" role="status">
+              {t('docs.task.stateUnknown')}
+            </span>
+            <Button size="sm" onClick={onDismissTask}>
+              {t('docs.task.dismiss')}
+            </Button>
+          </>
+        ) : rowTask ? (
           <>
             <Button size="sm" disabled title={t(TASK_BUSY_TITLE[rowTask.kind])}>
               <Spinner /> {rowBusyLabel}

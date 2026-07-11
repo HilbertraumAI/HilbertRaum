@@ -98,6 +98,59 @@ describe('SkillsTab — list + empty state', () => {
   })
 })
 
+// full-audit 2026-07-11 CODE-37: enable/disable/delete/export failures all toasted the unrelated
+// "Skills couldn’t be loaded." — each action now names its own failure.
+describe('SkillsTab — per-action failure copy (CODE-37)', () => {
+  it('a failed disable toasts the toggle failure, not the load-failure copy', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      disableSkill: vi.fn(async () => {
+        throw new Error('The workspace is locked. Unlock it to continue.')
+      })
+    })
+    renderTab()
+    await user.click(await screen.findByRole('switch'))
+    // TEETH: pre-fix this toasted "Skills couldn’t be loaded." — the list IS loaded and visible.
+    expect(await screen.findByText('This skill couldn’t be turned off.')).toBeInTheDocument()
+    expect(screen.queryByText('Skills couldn’t be loaded.')).not.toBeInTheDocument()
+  })
+
+  it('a failed delete toasts the delete failure', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      deleteSkill: vi.fn(async () => {
+        throw new Error('The workspace is locked. Unlock it to continue.')
+      })
+    })
+    renderTab()
+    await screen.findByText('Bank statement helper')
+    await user.click(screen.getByRole('button', { name: 'Skill actions' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('This skill couldn’t be deleted.')).toBeInTheDocument()
+    expect(screen.queryByText('Skills couldn’t be loaded.')).not.toBeInTheDocument()
+  })
+
+  it('a failed export toasts the export failure', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      exportSkill: vi.fn(async () => {
+        throw new Error('The folder could not be written.')
+      })
+    })
+    renderTab()
+    await screen.findByText('Bank statement helper')
+    await user.click(screen.getByRole('button', { name: 'Skill actions' }))
+    await user.click(screen.getByRole('menuitem', { name: /Export/ }))
+    expect(await screen.findByText('This skill couldn’t be exported.')).toBeInTheDocument()
+    expect(screen.queryByText('Skills couldn’t be loaded.')).not.toBeInTheDocument()
+  })
+})
+
 describe('SkillsTab — enable / disable', () => {
   it('disables an enabled skill through the switch', async () => {
     const disableSkill = vi.fn(async () => skill({ enabled: false }))

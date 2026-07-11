@@ -539,7 +539,9 @@ exactly where answers come from: tick **Library**, any **projects**, and/or pick
 documents** — they all add together (e.g. *"Library + Tax 2025 + contract.pdf"*). Your choice
 is remembered for that chat, even after you restart the app. Files you dropped into the chat
 are always included and shown separately as *"files in this chat"*. A chat started inside a
-project uses that project to begin with; **"All documents"** is always one tap away.
+project uses that project to begin with; **"All documents"** is always one tap away. In a chat
+with attached files that reset reads **"Just the files in this chat"** instead — clearing the
+other sources there means the attached files are exactly what the chat answers from.
 
 ### Generated documents stay out of answers until you decide
 

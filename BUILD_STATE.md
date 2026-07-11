@@ -11220,9 +11220,51 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     per the Phase-B template), chat (3), chat-compaction (2), lock-stream-persistence (2),
     translation-runtime (1), skills-run (1), skills-document-edit (2, one converted),
     skills-redaction (converted), skills-turn (extended), docs-ipc (1), ocr-task (2).
-    Remaining phases F2, G–J unstarted.
+    **Phase F2 DONE (2026-07-11 — renderer state/UX smalls CODE-30..40, renderer-only):**
+    (a) **CODE-30** the SKA-18 'new'-key carry+delete extracted into a shared
+    `carryNewComposerPicks(convId)` used by BOTH creation entry points — "+ New chat" used to
+    bypass it (a composer skill/depth pick silently vanished, then RESURRECTED on the next empty
+    composer), and its discarded promise now catches → `setError` (a failed create surfaces).
+    (b) **CODE-31 (owner-decided: relabel truthfully, emitted scope unchanged)** — ScopePopover's
+    reset reads `chat.scope.attachmentsOnlyTap` ("Just the files in this chat", EN+DE) whenever
+    the chat has attachments (the same `fileCount` the "Answering from:" chip keys on), since
+    the emitted empty explicit scope resolves to attachments-only (D71); user-guide §"Choose
+    which sources" gained the one-clause truth note. (c) **CODE-32** DR-2 request-seq for
+    PREVIEW INSTALLS (`previewSeq`) — `onPreview` and the done-task auto-open share the stamp,
+    so last-resolved can no longer show the wrong document; the loading flag clears
+    functionally (`cur === d.id ? null : cur`). (d) **CODE-33** DocRow's `onContextMenu` now
+    respects the `busy !== null` gate the "⋯" trigger already had (no more Delete/Re-index
+    clickable mid-import via right-click). (e) **CODE-34** ImagesScreen delete: failure →
+    resync + `images.err.deleteFailed` banner, success toast ONLY on success. (f) **CODE-35**
+    PreviewModal owns a local `loadMoreError` (rendered inside the dialog, above the overlay);
+    the screen's `onPreviewLoadMore` rethrows instead of parking the error under the modal.
+    (g) **CODE-36** saved-analysis open: a THROW → `images.err.openFailed` (distinct from the
+    vanished-entry silent resync); copy failures get the PreviewModal-style
+    `images.answer.copyFailed` toast. (h) **CODE-37** SkillsTab per-action failure keys EN+DE
+    (`skills.row.onFailed/offFailed`, `skills.delete.failed`, `skills.export.failed`) replace
+    the misleading blanket "Skills couldn’t be loaded." (i) **CODE-38** `refreshCollections`
+    rides the SAME DR-2 `refreshSeq` (stale snapshot dropped) and keeps the PRIOR list on
+    failure (never `setCollections([])` — one transient error used to empty the Projects rail).
+    (j) **CODE-39** the two swallowed done-task catches (list refresh + result auto-open) →
+    `setError`, PLUS the F1-discovered third ChatScreen `cancelActiveDocTask` site (the busy
+    banner's cancel button, explicit no-op catch) folded in. (k) **CODE-40** the CR-1 draft
+    restore compares against the TAIL (`last.role === 'user' && last.content === content`)
+    instead of `some(content ===)` — a repeated question no longer matches the OLD turn, so a
+    busy-rejected re-ask restores the draft (a user Stop resolves normally main-side and never
+    reaches the catch, verified in chat.ts). (l) **F1-rider EXECUTED**: the doctasks
+    state-unknown give-up now has its renderer affordance — DocRow renders a labelled
+    `docs.task.stateUnknown` row + Dismiss (EN+DE, the SkillRunBar SKA-40 treatment) via a new
+    screen-owned `onDismissTask` → `acknowledgeDocTask()`; pre-rider the busy/Cancel pair stuck
+    until reload. Tests +19 (one RTL test per touched behavior): SkillRunLifecycle (2, the
+    SKA-18 suite extended with the "+ New chat" carry + the failed-create banner),
+    ChatSendFailure (2: repeated-question restore + rejected banner-cancel surfaces),
+    DocumentsScreenPolish (7: preview ordering, context-menu busy gate, in-modal load-more
+    error, collections keep-on-failure + stale-seq, done-task auto-open failure, state-unknown
+    row + dismiss), ImagesScreen (3), SkillsTab (3), ScopePopover (2: truthful attach-chat
+    reset label + emit coherence, no-attachment label unchanged). Remaining phases G–J
+    unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase E — backend correctness smalls CODE-5/17/18/19/22 + GAP-1..7 (GAP-1 = the owner's SKA-38-honouring deleteSkill variant), +16 tests): typecheck clean, 4121 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase F2 — renderer state/UX smalls CODE-30..40 (CODE-31 per the owner's relabel-truthfully decision) + the F1 state-unknown-dismissal rider, +19 tests): typecheck clean, 4140 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

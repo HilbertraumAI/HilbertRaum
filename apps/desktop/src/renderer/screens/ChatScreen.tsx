@@ -785,43 +785,50 @@ export function ChatScreen({
     return conv
   }
 
-  async function ensureConversation(): Promise<string> {
-    if (activeId) return activeId
-    const conv = await createConversationInMode()
-    // Carry a skill picked while still on the 'new' composer onto the created conversation, and re-key
-    // the session override to the new id. U3 (audit §4.3): per-turn by default — persist the sticky
-    // default ONLY when the user opted in via "keep for this conversation" (`keepByConv['new']`).
+  // The SKA-18 'new'-key carry+delete, shared by BOTH conversation-creation entry points
+  // (ensureConversation and onNewChat — full-audit 2026-07-11 CODE-30: "+ New chat" used to bypass
+  // it, so a composer pick silently vanished from the new chat and then RESURRECTED on the next
+  // empty composer). Re-keys the 'new'-composer skill/keep/depth picks onto the created
+  // conversation AND deletes the 'new' keys — leaving them behind would let the NEXT send persist a
+  // keep opt-in made for conversation 1 as conversation 2's sticky default. "New chat" starts clean.
+  function carryNewComposerPicks(convId: string): void {
+    // U3 (audit §4.3): per-turn by default — persist the sticky default ONLY when the user opted in
+    // via "keep for this conversation" (`keepByConv['new']`).
     if ('new' in skillByConv) {
       const picked = skillByConv['new'] ?? null
-      if (picked && keepByConv['new']) void window.api.setConversationDefaultSkill?.(conv.id, picked)
-      // SKA-18: re-key the 'new'-composer pick onto the created conversation AND DELETE the 'new' keys.
-      // Leaving them behind resurrects the pick on any later empty composer (a mode toggle, a
-      // conversation delete), so the NEXT send would persist a keep opt-in made for conversation 1 as
-      // conversation 2's sticky default. "New chat" starts clean — the re-key must too.
+      if (picked && keepByConv['new']) void window.api.setConversationDefaultSkill?.(convId, picked)
       setSkillByConv((prev) => {
-        const next = { ...prev, [conv.id]: picked }
+        const next = { ...prev, [convId]: picked }
         delete next['new']
         return next
       })
       if ('new' in keepByConv) {
         setKeepByConv((prev) => {
-          const next = { ...prev, [conv.id]: keepByConv['new']! }
+          const next = { ...prev, [convId]: keepByConv['new']! }
           delete next['new']
           return next
         })
       }
     }
-    // CR-8 (SKA-18 parity): the depth picked on the 'new' composer is re-keyed onto the created
-    // conversation by onSend's `depths[convId]` write; drop the leftover 'new' key so a Thorough/Quick
-    // pick made once does not silently become the default for every LATER new chat this session. "New
-    // chat starts clean" — the depth re-key must match the skill re-key above. Unconditional (a depth
-    // can be picked with no skill), and a no-op when 'new' was never set.
+    // CR-8 (SKA-18 parity): re-key the 'new'-composer depth too, so a Thorough/Quick pick made once
+    // does not silently become the default for every LATER new chat this session. Carrying it onto
+    // the created conversation is a no-op on the send path (onSend re-writes `depths[convId]` with
+    // the depth it captured from the same 'new' key) and is what keeps a "+ New chat" pick visible
+    // (CODE-30). Unconditional (a depth can be picked with no skill); a no-op when 'new' is unset.
     setDepths((prev) => {
       if (!('new' in prev)) return prev
-      const next = { ...prev }
+      const next = { ...prev, [convId]: prev['new']! }
       delete next['new']
       return next
     })
+  }
+
+  async function ensureConversation(): Promise<string> {
+    if (activeId) return activeId
+    const conv = await createConversationInMode()
+    // Carry a skill picked while still on the 'new' composer onto the created conversation, and
+    // re-key the session override to the new id (SKA-18/CR-8 — the shared block above).
+    carryNewComposerPicks(conv.id)
     // RD-1: mark the id BEFORE setActiveId so the history-load effect (which can flush during the
     // refreshConversations await below) skips its no-op-but-racy listMessages for this send.
     selfCreatedIdRef.current = conv.id
@@ -1441,7 +1448,13 @@ export function ChatScreen({
       // viewing this conversation) keeps `userTurnPersisted` true, so we never re-inject a question that
       // is already in the transcript.
       if (persisted !== null) {
-        userTurnPersisted = persisted.some((m) => m.role === 'user' && m.content === content)
+        // full-audit 2026-07-11 CODE-40: compare against the TAIL, not `some(content ===)` — a
+        // repeated question matched the OLD turn, so a busy-rejected re-ask was silently lost. A
+        // send that persisted its user turn leaves the conversation ENDING in that turn when this
+        // catch runs: a failed generation persists no reply, and a user Stop persists its partial
+        // and RESOLVES normally (chat.ts — it never reaches this catch).
+        const last = persisted[persisted.length - 1]
+        userTurnPersisted = last != null && last.role === 'user' && last.content === content
       }
       await checkRuntime().catch(() => undefined)
     } finally {
@@ -1590,10 +1603,19 @@ export function ChatScreen({
   }
 
   async function onNewChat(): Promise<void> {
-    const conv = await createConversationInMode()
-    await refreshConversations()
-    setActiveId(conv.id)
-    setMessages([])
+    // full-audit 2026-07-11 CODE-30: this entry point used to skip the SKA-18 carry+delete (a
+    // composer pick vanished, then resurrected on the next empty composer) AND discarded its
+    // promise (ConversationList's `onClick={onNew}`) — a failed createConversation was an
+    // unhandled rejection with zero feedback. The catch keeps the discarded promise fire-safe.
+    try {
+      const conv = await createConversationInMode()
+      carryNewComposerPicks(conv.id)
+      await refreshConversations()
+      setActiveId(conv.id)
+      setMessages([])
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
   }
 
   // Selecting a conversation also syncs the composer mode to that conversation's mode.
@@ -2031,9 +2053,11 @@ export function ChatScreen({
               <Button
                 size="sm"
                 onClick={() => {
+                  // full-audit 2026-07-11 CODE-39: a rejected cancel was swallowed here (an
+                  // explicit no-op catch) — the banner stayed up with zero feedback. Surface it.
                   void cancelActiveDocTask()
                     .then(() => setError(null))
-                    .catch(() => undefined)
+                    .catch((e) => setError(friendlyIpcError(e)))
                 }}
               >
                 {t('chat.cancelDocTask')}

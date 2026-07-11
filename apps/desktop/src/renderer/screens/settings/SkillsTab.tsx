@@ -174,7 +174,9 @@ export function SkillsTab(): JSX.Element {
       await refresh()
       toast(on ? t('skills.row.on') : t('skills.row.off'))
     } catch {
-      toast(t('skills.loadFailed'))
+      // full-audit 2026-07-11 CODE-37: name the action that failed — the old "Skills couldn’t be
+      // loaded." misdescribed a failed toggle (the list IS loaded and visible).
+      toast(on ? t('skills.row.onFailed') : t('skills.row.offFailed'))
     } finally {
       setToggling((prev) => {
         const next = new Set(prev)
@@ -193,7 +195,7 @@ export function SkillsTab(): JSX.Element {
       await refresh()
       toast(t('skills.delete.done'))
     } catch {
-      toast(t('skills.loadFailed'))
+      toast(t('skills.delete.failed')) // CODE-37: per-action failure copy
     }
   }
 
@@ -202,7 +204,7 @@ export function SkillsTab(): JSX.Element {
       const dest = await window.api.exportSkill(skill.installId)
       if (dest) toast(t('skills.export.done'))
     } catch {
-      toast(t('skills.loadFailed'))
+      toast(t('skills.export.failed')) // CODE-37: per-action failure copy
     }
   }
 

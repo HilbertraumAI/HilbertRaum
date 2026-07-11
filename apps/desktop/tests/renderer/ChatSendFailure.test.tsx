@@ -39,6 +39,10 @@ function userMsg(id: string, convId: string, content: string): Message {
   return { id, conversationId: convId, role: 'user', content, createdAt: '2026-01-01T00:01:00Z' }
 }
 
+function assistantMsg(id: string, convId: string, content: string): Message {
+  return { id, conversationId: convId, role: 'assistant', content, createdAt: '2026-01-01T00:02:00Z' }
+}
+
 beforeAll(() => {
   Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
     configurable: true,
@@ -179,6 +183,76 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
       // transcript — restoring it would invite a duplicate re-send). Drop the check → it refills.
       expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('')
       expect(screen.getByText('persisted question')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // full-audit 2026-07-11 CODE-40: the persisted-check used to be `persisted.some(content ===)` —
+  // a REPEATED question matched the OLD turn, so a busy-rejected re-ask was silently lost (no
+  // restore, no bubble). The check now compares against the TAIL: a send that persisted its user
+  // turn leaves the conversation ENDING in that turn when the catch runs.
+  it('restores the draft when a REPEATED question is busy-rejected before it persists (CODE-40)', async () => {
+    vi.useFakeTimers()
+    try {
+      // History: the SAME question was asked and answered earlier; the new send is guard-rejected
+      // pre-persist, so the failure refresh returns that unchanged history (tail = assistant).
+      const history = [userMsg('u1', 'c1', 'x'), assistantMsg('a1', 'c1', 'answer to x')]
+      const sendChatMessage = vi.fn(async () => {
+        throw new Error(DOC_TASK_BUSY_MESSAGE)
+      })
+      baseStub({ listMessages: vi.fn(async () => history), sendChatMessage })
+
+      renderChat()
+      await flush()
+      fireEvent.click(screen.getByText('Chat 1'))
+      await flush()
+
+      const box = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+      fireEvent.change(box, { target: { value: 'x' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flush()
+
+      // TEETH: with `some(content ===)` the OLD 'x' matches → no restore → this reads ''.
+      expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('x')
+      expect(screen.getByRole('alert').textContent ?? '').toMatch(/document task/i)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// full-audit 2026-07-11 CODE-39 (ChatScreen fold): the busy banner's "Cancel document task" button
+// had an explicit `.catch(() => undefined)` — a REJECTED cancel left the banner up with zero
+// feedback. The failure now lands on the same banner.
+describe('ChatScreen — rejected banner cancel surfaces (CODE-39)', () => {
+  it('shows the cancel failure instead of swallowing it', async () => {
+    vi.useFakeTimers()
+    try {
+      const sendChatMessage = vi.fn(async () => {
+        throw new Error(DOC_TASK_BUSY_MESSAGE)
+      })
+      const cancelDocTask = vi.fn(async () => {
+        throw new Error("Error invoking remote method 'docs:cancelTask': Error: cancel exploded")
+      })
+      baseStub({ listMessages: vi.fn(async () => []), sendChatMessage, cancelDocTask })
+
+      renderChat()
+      await flush()
+      fireEvent.click(screen.getByText('Chat 1'))
+      await flush()
+
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'q' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flush()
+      expect(screen.getByRole('alert').textContent ?? '').toMatch(/document task/i)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel document task' }))
+      await flush()
+
+      // TEETH: with the old no-op catch the banner keeps the busy copy and the failure vanishes.
+      expect(cancelDocTask).toHaveBeenCalled()
+      expect(screen.getByRole('alert').textContent ?? '').toMatch(/cancel exploded/)
     } finally {
       vi.useRealTimers()
     }
