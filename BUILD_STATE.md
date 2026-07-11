@@ -11270,10 +11270,47 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     the composer (a duplicate-re-send invitation). Fixed with a `sendSucceeded` latch set the
     moment the send IPC resolves; the tail compare now runs only for send FAILURES
     (ChatSendFailure pins: successful send + post-send listConversations rejection → composer
-    stays empty, question appears once, the refresh failure still surfaces). Remaining phases
-    G–J unstarted.
+    stays empty, question appears once, the refresh failure still surfaces).
+    **Phase G DONE (2026-07-11 — i18n & copy polish, CODE-8/23/25/41/42/43/44/45):**
+    (a) **CODE-8** — `.one/.other` pairs + `tCount` for the five non-pluralized `{count}`/
+    `{done}` strings (`docs.retryAllConfirm.title`, `docs.reindexAllConfirm.title`,
+    `docs.reindexAllDone` — its `{done}` placeholder renamed to tCount's `{count}` —
+    `chat.sources.wholeDoc`, `chat.sources.more`), EN+DE with the DE adjective endings
+    („1 fehlgeschlagenes Dokument", „1 weiterer Abschnitt"); all five call sites
+    (DocumentsScreen ×3, SourcesDisclosure ×2) switched to `tCount`. Premise correction: the
+    DocumentsScreen toolbar buttons are `length > 1`-gated, so the confirm-title singular is
+    unreachable through today's UI — pairs landed anyway (plan-ordered, defense-in-depth), the
+    toast's singular pinned RTL via the real mount-adoption path (a total=1 job from main),
+    the titles' `.one` sides at unit level (see the plan's discoveries). (b) **catalog-hygiene
+    net** (`i18n.test.ts`) — statically scans `src/**` for plain-`t('key'` consumptions of
+    `{count}`/`{done}` keys and fails unless the key sits on a reviewed non-grammatical
+    allowlist (parenthetical counts, `{done} of {total}` progress forms, pre-formatted
+    figures); NUL-tolerant read (extract.ts). Net flagged `diag.bench.cores` ("(1 cores)") —
+    same class, not in the findings, allowlisted + registered. (c) **CODE-41** —
+    `ContextMeter.fmtTokens` is locale-aware (`toLocaleString(lang)`, the M-U5
+    fmt1/formatSize treatment): German tooltip now "6,4k von 12,8k Token" in `title` AND
+    `aria-valuetext`; EN output byte-identical. (d) **CODE-23** — TranslateScreen
+    `gpuLayers === 0` renders the new `translate.device.gpuNone`(+`Title`) processor wording
+    instead of the self-contradictory "partly on the graphics card (0/49 layers)";
+    known-limitations' hint-form enumeration extended. (e) **CODE-42** — `fileTx.errorMessage`
+    routed through `localizeServerCopy` (DR-7 parity; doc-task failures are persist-canonical
+    English), pinned by a German-UI RTL test. (f) **CODE-43** — the three DE "Tokens" values
+    (`chat.context.usageTooltip`, `settings.workspace.contextTokens`, `diag.bench.tokens`) →
+    „Token" per the catalog's own RD-3 glossary. (g) **CODE-25** — the two new DE
+    ASCII-quote closers (`analysis.listing.unparsedHint`) + the `:657` precedent
+    (`analysis.wholeDocHint`) → `„…“`; seven-plus OLDER same-class values registered in the
+    plan's discoveries, not swept. (h) **CODE-44** — dead `chat.scope.usingSome.one/.other`
+    pair deleted EN+DE; SectionRail's never-read `collections` prop dropped (type + the one
+    pass site). (i) **CODE-45** — the missing-interpolation dev-warn hoisted above the
+    `lang !== 'en'` branch in `shared/i18n/index.ts` (a forgotten param on the EN dev/CI
+    default used to ship a literal `{name}` silently); rendering unchanged, no test depended
+    on EN silence (full renderer suites green). Tests +10: i18n.test.ts (4: the five pairs at
+    1 AND 2 in both languages, EN missing-param warns, fully-parameterized stays silent, the
+    net), SourcesProvenance (2: label + reveal tail at 1 and 2), ContextMeter (1: DE comma
+    form), TranslateScreen (2: 0-layer hint, DE localization of a persisted failure),
+    DocumentsScreen (1: adopted-job singular toast). Remaining phases H–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase F2 — renderer state/UX smalls CODE-30..40 (CODE-31 per the owner's relabel-truthfully decision) + the F1 state-unknown-dismissal rider + the CODE-40 sendSucceeded-latch review follow-up, +20 tests): typecheck clean, 4141 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase G — i18n & copy polish CODE-8/23/25/41..45 + the catalog-hygiene plural net, +10 tests): typecheck clean, 4151 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

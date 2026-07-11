@@ -1575,7 +1575,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the #42 reopen this state is OBSERVABLE instead of reading as "GPU translation not working":
   every cold start logs `"Translation sidecar started"` with the posture + the offloaded-layer
   split, and the Translate screen shows a muted device line (GPU with the layer split / "partly on
-  the graphics card … about processor speed" with the cause + remedy in its tooltip / CPU).
+  the graphics card … about processor speed" with the cause + remedy in its tooltip / for a
+  fully-starved 0-layer fit "runs on the processor — no layers fit on the graphics card", same
+  tooltip family (full-audit 2026-07-11 CODE-23) / CPU).
 - **Languages are a closed set of 51 — source AND target** (issue #31, 2026-07-07: the original
   curated 10 widened to TranslateGemma's full PRODUCTION tier — the 55 WMT24++-evaluated locales
   collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat

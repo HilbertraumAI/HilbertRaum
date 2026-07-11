@@ -21,6 +21,7 @@ import {
   type FileTranslateErrorCode
 } from '../lib/fileTranslateSession'
 import { TranslateDropZone } from '../translate/TranslateDropZone'
+import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
 import {
@@ -185,6 +186,14 @@ export function TranslateScreen({
       return { text: t('translate.device.cpu'), title: t('translate.device.title') }
     }
     if (device.gpuLayers != null && device.totalLayers != null) {
+      // Fully starved (0 layers fit): "runs only partly on the graphics card (0/49 layers)"
+      // contradicted itself — say processor plainly (full-audit 2026-07-11 CODE-23).
+      if (device.gpuLayers === 0) {
+        return {
+          text: t('translate.device.gpuNone', { total: device.totalLayers }),
+          title: t('translate.device.gpuNoneTitle')
+        }
+      }
       const partial = device.gpuLayers < device.totalLayers
       const params = { done: device.gpuLayers, total: device.totalLayers }
       return {
@@ -477,7 +486,13 @@ export function TranslateScreen({
     // failed state is persistent; a component-local dismiss flag would reset).
     dismissBanner = () => acknowledgeError()
   } else if (fileTx.state === 'failed') {
-    bannerText = fileTx.errorMessage ?? t(fileTx.error ? FILE_ERR_KEY[fileTx.error] : 'translate.file.err.runtimeFailed')
+    // Doc-task failure messages are persist-canonical ENGLISH — localize at display time via
+    // the DR-7 map, like DocumentsScreen does for the same family (full-audit 2026-07-11
+    // CODE-42). Unknown strings pass through unchanged.
+    bannerText =
+      fileTx.errorMessage != null
+        ? localizeServerCopy(t, fileTx.errorMessage)
+        : t(fileTx.error ? FILE_ERR_KEY[fileTx.error] : 'translate.file.err.runtimeFailed')
     dismissBanner = () => resetFileTranslation()
   }
 

@@ -59,7 +59,9 @@ export interface FileTranslateSnapshot {
   resultDocumentId: string | null
   /** A CODE the screen maps to friendly copy. */
   error: FileTranslateErrorCode | null
-  /** A backend-provided friendly failure message (already localized), shown verbatim when present. */
+  /** A backend-provided friendly failure message. Doc-task failures are persist-canonical
+   *  ENGLISH — the screen localizes at display time via `localizeServerCopy` (DR-7 parity;
+   *  full-audit 2026-07-11 CODE-42). */
   errorMessage: string | null
   /** importing || translating — the file path's contribution to the screen's single busy state. */
   busy: boolean

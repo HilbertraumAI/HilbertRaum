@@ -1,4 +1,5 @@
 import type { ContextUsage } from '@shared/types'
+import type { UiLanguage } from '@shared/i18n'
 import { useT } from '../i18n'
 
 // Conversation-memory meter (context-compaction plan §5.1; beta-feedback #25 / D69): a short visible
@@ -19,15 +20,24 @@ import { useT } from '../i18n'
 const AMBER_AT = 0.75
 const NEAR_FULL_AT = 0.9
 
-/** "8000" → "8k", "6400" → "6.4k", "512" → "512" — compact token counts for the tooltip. */
-function fmtTokens(n: number): string {
+/** "8000" → "8k", "6400" → "6.4k" (DE "6,4k"), "512" → "512" — compact token counts for the
+ *  tooltip. Locale-aware via `toLocaleString(lang)` like the sibling formatters (M-U5;
+ *  DiagnosticsTab.fmt1 / documents/format.tsx `formatSize`) — the bare `toFixed` shipped a
+ *  wrong decimal separator into the German tooltip (full-audit 2026-07-11 CODE-41). EN
+ *  output stays byte-identical to the previous toFixed form. */
+function fmtTokens(n: number, lang: UiLanguage): string {
   if (n < 1000) return String(Math.max(0, Math.round(n)))
   const k = n / 1000
-  return `${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}k`
+  const digits = k % 1 === 0 ? 0 : 1
+  return `${k.toLocaleString(lang, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+    useGrouping: false
+  })}k`
 }
 
 export function ContextMeter({ usage }: { usage: ContextUsage }): JSX.Element | null {
-  const { t } = useT()
+  const { t, lang } = useT()
   const { usedTokens, window } = usage
   if (!(window > 0)) return null
   const ratio = usedTokens / window
@@ -40,8 +50,8 @@ export function ContextMeter({ usage }: { usage: ContextUsage }): JSX.Element | 
   // conversation: 45% full (about 6.4k of 8k tokens)", plus the will-summarize heads-up once amber.
   let tooltip = t('chat.context.usageTooltip', {
     pct: String(pct),
-    used: fmtTokens(usedTokens),
-    window: fmtTokens(window)
+    used: fmtTokens(usedTokens, lang),
+    window: fmtTokens(window, lang)
   })
   if (ratio >= AMBER_AT) tooltip += ` ${t('chat.context.willSummarize')}`
 

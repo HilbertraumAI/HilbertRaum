@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { I18nProvider } from '../../src/renderer/i18n'
-import { t } from '../../src/shared/i18n'
+import { t, tCount } from '../../src/shared/i18n'
 import type { Citation, CoverageInfo, CoverageMode, Message } from '../../src/shared/types'
 
 // Phase 5 (full-audit-2026-06-29 follow-up) — FE-B / F11 renderer half + FE-D a11y.
@@ -78,7 +78,7 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
       renderTranscript(message(cites(n), { ...treeCoverage(n), mode }))
       // The provenance label is shown; the literal "Sources (1000)" inline-citation label is NOT.
       expect(
-        screen.getByRole('button', { name: t('en', 'chat.sources.wholeDoc', { count: n }) })
+        screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', n) })
       ).toBeInTheDocument()
       expect(
         screen.queryByRole('button', { name: t('en', 'chat.sources.toggle', { count: n }) })
@@ -90,7 +90,7 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
     const n = 1000
     const container = renderTranscript(message(cites(n), treeCoverage(n)))
     fireEvent.click(
-      screen.getByRole('button', { name: t('en', 'chat.sources.wholeDoc', { count: n }) })
+      screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', n) })
     )
     // Only the first 24 of 1000 sections render — not a 1000-card wall.
     expect(container.querySelectorAll('.source-card').length).toBe(24)
@@ -98,15 +98,40 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
     expect(container.querySelector('.cite-label')).toBeNull()
     expect(screen.getByText(t('en', 'chat.sources.wholeDocCaption'))).toBeInTheDocument()
     // The held-back tail is reachable via the reveal affordance.
-    const more = screen.getByRole('button', { name: t('en', 'chat.sources.more', { count: 976 }) })
+    const more = screen.getByRole('button', { name: tCount('en', 'chat.sources.more', 976) })
     fireEvent.click(more)
     expect(container.querySelectorAll('.source-card').length).toBe(n)
+  })
+
+  // full-audit 2026-07-11 CODE-8: both provenance labels ride tCount — a one-section document
+  // used to read "— 1 sections", a one-section reveal tail "and 1 more sections".
+  it('CODE-8: the provenance label is singular at 1 section and plural at 2', () => {
+    renderTranscript(message(cites(1), treeCoverage(1)))
+    expect(
+      screen.getByRole('button', { name: 'Drawn from the document — 1 section' })
+    ).toBeInTheDocument()
+    cleanup()
+    renderTranscript(message(cites(2), treeCoverage(2)))
+    expect(
+      screen.getByRole('button', { name: 'Drawn from the document — 2 sections' })
+    ).toBeInTheDocument()
+  })
+
+  it('CODE-8: the reveal tail is singular at exactly one held-back section and plural at two', () => {
+    // 25 sections = 24 rendered + 1 held back; 26 = 24 + 2.
+    renderTranscript(message(cites(25), treeCoverage(25)))
+    fireEvent.click(screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 25) }))
+    expect(screen.getByRole('button', { name: 'and 1 more section' })).toBeInTheDocument()
+    cleanup()
+    renderTranscript(message(cites(26), treeCoverage(26)))
+    fireEvent.click(screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 26) }))
+    expect(screen.getByRole('button', { name: 'and 2 more sections' })).toBeInTheDocument()
   })
 
   it('does not cap a small provenance list (under the cap renders every section)', () => {
     const container = renderTranscript(message(cites(5), treeCoverage(5)))
     fireEvent.click(
-      screen.getByRole('button', { name: t('en', 'chat.sources.wholeDoc', { count: 5 }) })
+      screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 5) })
     )
     expect(container.querySelectorAll('.source-card').length).toBe(5)
     expect(
@@ -123,7 +148,7 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
     expect(container.querySelectorAll('.source-card').length).toBe(n) // 1:1, NOT capped
     expect(container.querySelector('.cite-label')?.textContent).toBe('[S1]')
     expect(
-      screen.queryByRole('button', { name: t('en', 'chat.sources.wholeDoc', { count: n }) })
+      screen.queryByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', n) })
     ).not.toBeInTheDocument()
   })
 
@@ -140,7 +165,7 @@ describe('SourcesDisclosure a11y — toggle aria-controls names the region (FE-D
   it('aria-controls resolves to the rendered region id when expanded (provenance)', () => {
     renderTranscript(message(cites(3), treeCoverage(3)))
     const toggle = screen.getByRole('button', {
-      name: t('en', 'chat.sources.wholeDoc', { count: 3 })
+      name: tCount('en', 'chat.sources.wholeDoc', 3)
     })
     const controls = toggle.getAttribute('aria-controls')
     expect(controls).toBeTruthy()

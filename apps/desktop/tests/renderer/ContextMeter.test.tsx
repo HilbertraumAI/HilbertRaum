@@ -63,6 +63,28 @@ describe('ContextMeter — memory gauge, not a progress bar (#25, D69)', () => {
     expect(t('de', 'chat.context.label')).not.toBe(t('en', 'chat.context.label'))
   })
 
+  it('CODE-41: the German tooltip uses the locale decimal separator ("6,4k") in title AND aria-valuetext', () => {
+    // 6400 of 12800 tokens = 50% (calm, no will-summarize suffix): fmtTokens must render
+    // "6,4k von 12,8k" in German — the bare toFixed shipped "6.4k" (full-audit 2026-07-11
+    // CODE-41; M-U5 convention, the DiagnosticsTab.fmt1 / formatSize treatment).
+    const container = renderMeter('de', usage(6400, 12800))
+    const meter = container.querySelector('.context-meter')
+    const expected = t('de', 'chat.context.usageTooltip', {
+      pct: '50',
+      used: '6,4k',
+      window: '12,8k'
+    })
+    expect(expected).toContain('6,4k') // guard: the assertion below really checks the comma form
+    expect(meter?.getAttribute('title')).toBe(expected)
+    expect(meter?.getAttribute('aria-valuetext')).toBe(expected)
+    // English output stays byte-identical to the previous toFixed form.
+    cleanup()
+    const enContainer = renderMeter('en', usage(6400, 12800))
+    expect(enContainer.querySelector('.context-meter')?.getAttribute('title')).toBe(
+      t('en', 'chat.context.usageTooltip', { pct: '50', used: '6.4k', window: '12.8k' })
+    )
+  })
+
   it('below the amber band the tooltip omits the will-summarize heads-up', () => {
     const container = renderMeter('en', usage(50)) // 50% — calm
     const meter = container.querySelector('.context-meter')

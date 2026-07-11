@@ -351,7 +351,8 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
                 })
               )
             } else if (job.total > 0) {
-              showToast(t('docs.reindexAllDone', { done: job.completed }))
+              // tCount — "Re-indexed 1 documents." (full-audit 2026-07-11 CODE-8).
+              showToast(tCount('docs.reindexAllDone', job.completed))
             }
           }
         }
@@ -364,7 +365,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         setError(friendlyIpcError(e))
       }
     }, 400)
-  }, [refresh, showToast, t])
+  }, [refresh, showToast, t, tCount])
 
   // Recover a bulk re-index already running in main when the screen (re)mounts: this is what keeps
   // the progress bar alive across navigation. Also clears the poll on unmount.
@@ -979,7 +980,6 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
           <SectionRail
             section={section}
             onSelect={setSection}
-            collections={collections}
             activeProjects={activeProjects}
             archivedProjects={archivedProjects}
             rareCounts={rareCounts}
@@ -1355,9 +1355,10 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       <ConfirmDialog
         open={confirmReindexAll !== null}
         title={
+          // tCount — "Retry 1 failed documents?" was the common single-failure case (CODE-8).
           confirmReindexAll?.kind === 'failed'
-            ? t('docs.retryAllConfirm.title', { count: confirmReindexAll.docs.length })
-            : t('docs.reindexAllConfirm.title', { count: confirmReindexAll?.docs.length ?? 0 })
+            ? tCount('docs.retryAllConfirm.title', confirmReindexAll.docs.length)
+            : tCount('docs.reindexAllConfirm.title', confirmReindexAll?.docs.length ?? 0)
         }
         confirmLabel={
           confirmReindexAll?.kind === 'failed'

@@ -1,6 +1,8 @@
 // The Documents left section-rail / sub-nav, extracted to its own sibling file (DX-3 split,
 // full-audit-2026-06-29 follow-up Phase 8). Relocated VERBATIM from `DocumentsScreen.tsx`;
 // the markup, the remembered "More" disclosure, and the project menus are byte-identical.
+// (The never-read `collections` prop the split carried along was dropped — full-audit
+// 2026-07-11 CODE-44; the rail reads activeProjects/archivedProjects.)
 
 import { useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -34,7 +36,6 @@ export function SectionRail({
 }: {
   section: DocSection
   onSelect: (s: DocSection) => void
-  collections: Collection[]
   activeProjects: Collection[]
   archivedProjects: Collection[]
   /** Document count per rare view, so an empty diagnostic view is hidden (presentation only). */

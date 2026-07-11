@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   de,
   en,
@@ -64,6 +66,67 @@ describe('tCount — .one/.other plural pairs (n === 1 rule)', () => {
     expect(tCount('de', 'home.docsReady', 1)).toBe('1 Dokument bereit für deine Fragen')
     expect(tCount('de', 'home.docsReady', 5)).toBe('5 Dokumente bereit für deine Fragen')
   })
+
+  it('CODE-8: the five previously non-pluralized strings decline correctly at 1 and 2 (EN + DE)', () => {
+    // full-audit 2026-07-11 CODE-8 — the DE singular carries the adjective ending
+    // („1 fehlgeschlagenES Dokument"), which is why these are catalog pairs, not code.
+    expect(tCount('en', 'docs.retryAllConfirm.title', 1)).toBe('Retry 1 failed document?')
+    expect(tCount('en', 'docs.retryAllConfirm.title', 2)).toBe('Retry 2 failed documents?')
+    expect(tCount('de', 'docs.retryAllConfirm.title', 1)).toBe(
+      '1 fehlgeschlagenes Dokument erneut versuchen?'
+    )
+    expect(tCount('de', 'docs.retryAllConfirm.title', 2)).toBe(
+      '2 fehlgeschlagene Dokumente erneut versuchen?'
+    )
+
+    expect(tCount('en', 'docs.reindexAllConfirm.title', 1)).toBe('Re-index 1 document?')
+    expect(tCount('en', 'docs.reindexAllConfirm.title', 2)).toBe('Re-index 2 documents?')
+    expect(tCount('de', 'docs.reindexAllConfirm.title', 1)).toBe('1 Dokument neu indexieren?')
+    expect(tCount('de', 'docs.reindexAllConfirm.title', 2)).toBe('2 Dokumente neu indexieren?')
+
+    expect(tCount('en', 'docs.reindexAllDone', 1)).toBe('Re-indexed 1 document.')
+    expect(tCount('en', 'docs.reindexAllDone', 2)).toBe('Re-indexed 2 documents.')
+    expect(tCount('de', 'docs.reindexAllDone', 1)).toBe('1 Dokument neu indexiert.')
+    expect(tCount('de', 'docs.reindexAllDone', 2)).toBe('2 Dokumente neu indexiert.')
+
+    expect(tCount('en', 'chat.sources.wholeDoc', 1)).toBe('Drawn from the document — 1 section')
+    expect(tCount('en', 'chat.sources.wholeDoc', 2)).toBe('Drawn from the document — 2 sections')
+    expect(tCount('de', 'chat.sources.wholeDoc', 1)).toBe('Aus dem Dokument entnommen — 1 Abschnitt')
+    expect(tCount('de', 'chat.sources.wholeDoc', 2)).toBe('Aus dem Dokument entnommen — 2 Abschnitte')
+
+    expect(tCount('en', 'chat.sources.more', 1)).toBe('and 1 more section')
+    expect(tCount('en', 'chat.sources.more', 2)).toBe('and 2 more sections')
+    // DE: „weiterER Abschnitt" (starke Flexion im Singular) vs „weiterE Abschnitte".
+    expect(tCount('de', 'chat.sources.more', 1)).toBe('und 1 weiterer Abschnitt')
+    expect(tCount('de', 'chat.sources.more', 2)).toBe('und 2 weitere Abschnitte')
+  })
+})
+
+describe('missing-interpolation dev-warning (CODE-45)', () => {
+  it('warns on a missing param in ENGLISH too (used to be non-EN-only)', () => {
+    // full-audit 2026-07-11 CODE-45: on the EN dev/CI default a forgotten param shipped a
+    // literal '{name}' with no diagnostic. The render itself is unchanged (placeholder
+    // stays visibly literal, never a crash).
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(t('en', 'home.docsReady.other')).toBe('{count} documents ready to ask about')
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining("missing param for 'home.docsReady.other' (en)")
+      )
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('a fully-parameterized EN render stays silent', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(t('en', 'home.docsReady.other', { count: 3 })).toBe('3 documents ready to ask about')
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })
 
 describe('resolveUiLanguage (D-L2)', () => {
@@ -111,6 +174,70 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
       expect(placeholders(de[key]), `placeholder mismatch in ${key}`).toEqual(
         placeholders(en[key])
       )
+    }
+  })
+
+  it('CODE-8 net: every {count}/{done} key consumed via plain t() is on the reviewed non-grammatical list', () => {
+    // full-audit 2026-07-11 CODE-8 (task 2): the plural class must not regress. A key whose
+    // value interpolates {count} (or the {done} progress twin) and is consumed via plain
+    // t() can render broken grammar the moment a call site passes 1 ("Retry 1 failed
+    // documents?"). Every such key must either be a .one/.other pair consumed via tCount,
+    // or sit on this reviewed list of counts that never inflect (parenthetical counts,
+    // "{done} of {total}" progress forms, pre-formatted figures). Adding a NEW plain-t()
+    // consumer of a counting key fails here — pluralize it or justify it below.
+    const NON_GRAMMATICAL: ReadonlySet<string> = new Set([
+      'chat.sources.toggle', // "Sources ({count})" — parenthetical
+      'docs.askSelected', // "Ask these documents ({count})" — parenthetical
+      'docs.reindexAll', // "Re-index all ({count})" — parenthetical
+      'docs.retryAllFailed', // "Retry all ({count})" — parenthetical
+      'docs.reindexAllProgress', // "Re-indexing {done} of {total}…" — no noun inflects
+      'docs.reindexAllCancelled', // "… {done} of {total} done."
+      'docs.reindexAllPartial', // "{done} of {total} — {failed} failed."
+      'translate.file.progress', // "Translating… ({done}/{total})"
+      'models.tech.contextValue', // "{count} tokens" — pre-formatted figure, window ≥ 512
+      'models.context.autoResolved', // the same pre-formatted figure in the Auto label
+      // " ({count} cores)" — a single-core machine would read "(1 cores)"; registered as a
+      // residual in the remediation plan's discoveries, deliberately not fixed in Phase G.
+      'diag.bench.cores'
+    ])
+    // Scan the shipped source for plain `t('key'` consumptions (bound renderer t and the
+    // shared t(lang, …) form differ in shape — the latter never matches `t('`). The read is
+    // NUL-tolerant by construction (utf8 readFileSync): analysis/extract.ts carries a
+    // literal NUL byte until CODE-24 lands in Phase H.
+    const srcRoot = join(process.cwd(), 'src')
+    const files: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name)
+        if (entry.isDirectory()) walk(p)
+        else if (/\.(ts|tsx)$/.test(entry.name)) files.push(p)
+      }
+    }
+    walk(srcRoot)
+    expect(files.length).toBeGreaterThan(100) // sanity: the walk really saw the tree
+
+    const catalog = en as Record<string, string>
+    const offenders = new Set<string>()
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8')
+      for (const m of text.matchAll(/\bt\(\s*'([^']+)'/g)) {
+        const key = m[1]
+        const value = catalog[key]
+        if (value === undefined) continue // dynamic/derived keys are out of static reach
+        if (!/\{count\}|\{done\}/.test(value)) continue
+        if (!NON_GRAMMATICAL.has(key)) offenders.add(key)
+      }
+    }
+    expect(
+      [...offenders].sort(),
+      'plain-t()-consumed {count}/{done} keys — switch them to tCount with .one/.other variants (CODE-8) or justify them on the list above'
+    ).toEqual([])
+
+    // Teeth for the allowlist itself: every entry still exists and still counts — a renamed
+    // or de-counted key must be pruned here, not silently ignored.
+    for (const key of NON_GRAMMATICAL) {
+      expect(catalog[key], `stale allowlist entry ${key}`).toBeDefined()
+      expect(/\{count\}|\{done\}/.test(catalog[key]), `allowlisted key no longer counts: ${key}`).toBe(true)
     }
   })
 

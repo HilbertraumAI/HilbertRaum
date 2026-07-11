@@ -11,6 +11,7 @@ import {
   __docRowRenderCounts
 } from '../../src/renderer/screens/DocumentsScreen'
 import { t as translate } from '../../src/shared/i18n'
+import { ToastProvider } from '../../src/renderer/components'
 import type { Collection, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -594,7 +595,11 @@ describe('DocumentsScreen', () => {
     const startReindexAll = vi.fn(async () => finished)
     const getReindexAllJob = vi.fn(async () => finished)
     stubApi({ listDocuments, startReindexAll, getReindexAllJob })
-    render(<DocumentsScreen />)
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
 
     // The toolbar button opens a ConfirmDialog — nothing runs until it is confirmed (M-U6).
     await user.click(await screen.findByRole('button', { name: /re-index all \(2\)/i }))
@@ -604,10 +609,44 @@ describe('DocumentsScreen', () => {
 
     await user.click(dialog.getByRole('button', { name: /^re-index all$/i }))
     await waitFor(() => expect(startReindexAll).toHaveBeenCalledWith(['d1', 'd2']))
+    // The completion toast stays plural for 2 (the tCount .other side — CODE-8).
+    expect(
+      await screen.findByText('Re-indexed 2 documents.', {}, { timeout: 5000 })
+    ).toBeInTheDocument()
     // The bar clears once the polled job reports done and the list refreshes (no more stale docs).
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /re-index all/i })).not.toBeInTheDocument()
     )
+  })
+
+  // full-audit 2026-07-11 CODE-8: the completion toast used to read "Re-indexed 1 documents."
+  // The toolbar buttons are gated `length > 1`, so a count=1 CONFIRM title is not reachable
+  // through the UI today (the ≥2 pins above cover the .other side; the .one side of both
+  // titles is pinned at the unit level in i18n.test.ts) — but the toast renders whatever job
+  // shape MAIN reports, exercised here through the real mount-adoption path.
+  it('CODE-8: an adopted single-document job toasts the singular summary', async () => {
+    const stale = [doc({ id: 'd1', staleEmbeddings: true })]
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue(stale.map((d) => ({ ...d, staleEmbeddings: false })))
+    // Mount-adoption: the screen finds a still-running single-document job in main and
+    // watches it; the next poll reports it done.
+    const getReindexAllJob = vi
+      .fn<() => Promise<{ jobId: string; total: number; completed: number; failed: number; done: boolean; cancelled: boolean }>>()
+      .mockResolvedValueOnce({ jobId: 'r1', total: 1, completed: 0, failed: 0, done: false, cancelled: false })
+      .mockResolvedValue({ jobId: 'r1', total: 1, completed: 1, failed: 0, done: true, cancelled: false })
+    stubApi({ listDocuments, getReindexAllJob })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+
+    // Pre-fix: "Re-indexed 1 documents." (plain t() over the {done} key — CODE-8).
+    expect(
+      await screen.findByText('Re-indexed 1 document.', {}, { timeout: 5000 })
+    ).toBeInTheDocument()
   })
 
   it('"Retry all" on the Failed tab confirms first, then starts the bulk job with every failed id', async () => {

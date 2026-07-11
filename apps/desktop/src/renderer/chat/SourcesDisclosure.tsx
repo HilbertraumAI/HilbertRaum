@@ -32,7 +32,9 @@ export function SourcesDisclosure({
   /** The answer's coverage mode; any whole-document mode (≠ relevance) renders as provenance. */
   mode?: CoverageMode
 }): JSX.Element {
-  const { t } = useT()
+  // tCount for the provenance labels (full-audit 2026-07-11 CODE-8): a one-section document
+  // ("— 1 section") and a one-section reveal tail ("and 1 more section") are both reachable.
+  const { t, tCount } = useT()
   const [open, setOpen] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const baseId = useId()
@@ -55,7 +57,7 @@ export function SourcesDisclosure({
       >
         <span aria-hidden="true">{open ? '▾' : '▸'}</span>{' '}
         {isProvenance
-          ? t('chat.sources.wholeDoc', { count: citations.length })
+          ? tCount('chat.sources.wholeDoc', citations.length)
           : t('chat.sources.toggle', { count: citations.length })}
       </button>
       {open && (
@@ -92,7 +94,7 @@ export function SourcesDisclosure({
           ))}
           {overCap && (
             <button type="button" className="sources-more" onClick={() => setShowAll(true)}>
-              {t('chat.sources.more', { count: citations.length - PROVENANCE_CARD_CAP })}
+              {tCount('chat.sources.more', citations.length - PROVENANCE_CARD_CAP)}
             </button>
           )}
         </div>

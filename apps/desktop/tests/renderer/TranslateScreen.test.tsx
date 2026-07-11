@@ -6,7 +6,8 @@ import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { resetTranslateSessionForTests } from '../../src/renderer/lib/translateSession'
 import { resetFileTranslateSessionForTests } from '../../src/renderer/lib/fileTranslateSession'
 import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
-import { t } from '../../src/shared/i18n'
+import { en, t } from '../../src/shared/i18n'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import type { AppStatus, DocTaskStatus, TranslateJob } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -118,6 +119,23 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
     const hint = await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
     // The tooltip carries the cause (VRAM taken by the chat model) + the remedy (re-fit after idle).
     expect(hint).toHaveAttribute('title', t('en', 'translate.device.partialTitle'))
+  })
+
+  it('CODE-23: a fully-starved fit (0 layers) says processor, not "partly on the graphics card"', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'auto', gpuLayers: 0, totalLayers: 49, live: false } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    } as never)
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+    // Pre-fix this rendered the contradictory "runs only partly on the graphics card
+    // (0/49 layers)" (full-audit 2026-07-11 CODE-23).
+    const hint = await screen.findByText(t('en', 'translate.device.gpuNone', { total: 49 }))
+    expect(hint).toHaveAttribute('title', t('en', 'translate.device.gpuNoneTitle'))
+    expect(
+      screen.queryByText(t('en', 'translate.device.gpuPartial', { done: 0, total: 49 }))
+    ).not.toBeInTheDocument()
   })
 
   it('a forced-CPU start shows the CPU form; no outcome yet shows NO hint', async () => {
@@ -326,8 +344,8 @@ function fileStubs(opts: {
   }
 }
 
-function dropOnZone(files: File[]): void {
-  const zone = screen.getByRole('button', { name: t('en', 'translate.drop.title') })
+function dropOnZone(files: File[], zoneName: string = t('en', 'translate.drop.title')): void {
+  const zone = screen.getByRole('button', { name: zoneName })
   // A real file drag reports the 'Files' type — the zone gates on it (L8).
   fireEvent.drop(zone, { dataTransfer: { files, types: ['Files'] } })
 }
@@ -454,6 +472,39 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
     await user.click(screen.getByRole('button', { name: t('en', 'translate.file.show') }))
     expect(onNavigate).toHaveBeenCalledWith('documents')
+  }, 10000)
+
+  it('CODE-42: a persisted-English doc-task failure message localizes in the German UI', async () => {
+    // Doc-task failure messages are persist-canonical ENGLISH (D-L4); the banner must route
+    // them through localizeServerCopy like DocumentsScreen does (DR-7 parity — full-audit
+    // 2026-07-11 CODE-42). Rendered under the real I18nProvider forced to German.
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    try {
+      const f = fileStubs({
+        terminal: docTask({ state: 'failed', error: en['main.chat.docTaskBusy'] })
+      })
+      stubApi(f.api as never)
+      render(
+        <I18nProvider>
+          <TranslateScreen onNavigate={() => {}} />
+        </I18nProvider>
+      )
+      await screen.findByLabelText(t('de', 'translate.input.label'))
+
+      act(() =>
+        dropOnZone(
+          [new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })],
+          t('de', 'translate.drop.title')
+        )
+      )
+      // The German banner copy shows — not the raw persisted English constant.
+      expect(
+        await screen.findByText(t('de', 'main.chat.docTaskBusy'), {}, { timeout: 8000 })
+      ).toBeInTheDocument()
+      expect(screen.queryByText(en['main.chat.docTaskBusy'])).not.toBeInTheDocument()
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
   }, 10000)
 
   it('surfaces a truncated hint when only the start of a long translation is shown', async () => {

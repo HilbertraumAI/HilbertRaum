@@ -77,10 +77,17 @@ export function t(lang: UiLanguage, key: MessageKey, params?: MessageParams): st
     // Unreachable for real keys (typecheck enforces catalog parity) — runtime guard
     // for casts/persisted junk.
     warnDev(`unknown message key '${key}'`)
-  } else if (lang !== 'en') {
+  } else {
     const result = interpolate(localized, params)
     if (!result.missingParam) return result.text
-    warnDev(`missing param for '${key}' (${lang}) — falling back to English`)
+    // Missing-param diagnostic for EVERY language (full-audit 2026-07-11 CODE-45): it used
+    // to fire only on the non-EN path, so on the EN dev/CI default a forgotten param
+    // shipped a literal '{name}' silently. Rendering is unchanged — EN still falls through
+    // to the English interpolation below (same text, placeholder left visibly literal);
+    // non-EN still falls back to the English string.
+    warnDev(
+      `missing param for '${key}' (${lang})${lang === 'en' ? '' : ' — falling back to English'}`
+    )
   }
   const english = (en as Record<string, string>)[key]
   if (english === undefined) return key

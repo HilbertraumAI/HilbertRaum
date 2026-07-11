@@ -355,8 +355,6 @@ export const en = {
   // Truthful, calm scope copy: never "Using all 0 documents". Zero documents routes to
   // a "No documents yet · Add documents" affordance; "all" never shows a count.
   'chat.scope.usingAll': 'Using all documents',
-  'chat.scope.usingSome.one': 'Using {count} document',
-  'chat.scope.usingSome.other': 'Using {count} documents',
   'chat.scope.none': 'No documents yet · Add documents',
   'chat.scope.popoverAria': 'Documents to ask',
   'chat.scope.allLine': 'Answers come from all your documents. Pick documents to ask only those:',
@@ -381,9 +379,13 @@ export const en = {
   // (leaf provenance, up to ~1000), NOT 1:1 inline-cited excerpts. The wording stays
   // breadth-neutral on purpose — the CoverageMeter beside it owns "whole document" /
   // "beginning" / "partial", so this label must not restate the breadth claim.
-  'chat.sources.wholeDoc': 'Drawn from the document — {count} sections',
+  // .one/.other pairs via tCount — a one-section document / a one-section reveal tail
+  // rendered "1 sections" (full-audit 2026-07-11 CODE-8).
+  'chat.sources.wholeDoc.one': 'Drawn from the document — {count} section',
+  'chat.sources.wholeDoc.other': 'Drawn from the document — {count} sections',
   'chat.sources.wholeDocCaption': 'Sections covered',
-  'chat.sources.more': 'and {count} more sections',
+  'chat.sources.more.one': 'and {count} more section',
+  'chat.sources.more.other': 'and {count} more sections',
 
   // ---- Chat: dictation (DictationButton.tsx) ----
   'chat.dictation.start': 'Dictate a message',
@@ -442,7 +444,10 @@ export const en = {
     'leaves this drive',
   'docs.reindexAll': 'Re-index all ({count})',
   'docs.reindexAllTitle': 'Re-index every document that was indexed with a different search model',
-  'docs.reindexAllConfirm.title': 'Re-index {count} documents?',
+  // .one/.other pairs via tCount — the single-stale-document case read "Re-index 1
+  // documents?" (full-audit 2026-07-11 CODE-8).
+  'docs.reindexAllConfirm.title.one': 'Re-index {count} document?',
+  'docs.reindexAllConfirm.title.other': 'Re-index {count} documents?',
   'docs.reindexAllConfirm.body':
     'This re-reads and re-embeds every stale document one at a time. It can take several ' +
     'minutes and uses the processor heavily — you can keep working, but answers may be slower ' +
@@ -450,7 +455,8 @@ export const en = {
   'docs.reindexAllConfirm.confirm': 'Re-index all',
   'docs.retryAllFailed': 'Retry all ({count})',
   'docs.retryAllFailedTitle': 'Re-index every document that failed to index',
-  'docs.retryAllConfirm.title': 'Retry {count} failed documents?',
+  'docs.retryAllConfirm.title.one': 'Retry {count} failed document?',
+  'docs.retryAllConfirm.title.other': 'Retry {count} failed documents?',
   'docs.retryAllConfirm.body':
     'This re-reads and re-embeds every failed document one at a time. It can take several ' +
     'minutes and uses the processor heavily — you can keep working, but answers may be slower ' +
@@ -459,7 +465,9 @@ export const en = {
   'docs.reindexAllProgress': 'Re-indexing {done} of {total}…',
   'docs.reindexAllCancel': 'Cancel',
   'docs.reindexAllCancelled': 'Re-indexing stopped — {done} of {total} done.',
-  'docs.reindexAllDone': 'Re-indexed {done} documents.',
+  // Plural pair ({done} → tCount's {count}) — "Re-indexed 1 documents." (CODE-8).
+  'docs.reindexAllDone.one': 'Re-indexed {count} document.',
+  'docs.reindexAllDone.other': 'Re-indexed {count} documents.',
   'docs.reindexAllPartial': 'Re-indexed {done} of {total} — {failed} failed. Failed documents stay on the Failed imports tab.',
   'docs.supported.base':
     'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +
@@ -2185,6 +2193,10 @@ export const en = {
   'translate.device.gpuUnknown': 'Translation runs on the graphics card (GPU)',
   'translate.device.gpuPartial':
     'Translation runs only partly on the graphics card ({done}/{total} layers) — about processor speed',
+  // The fully-starved fit (0 layers): "runs only partly on the graphics card (0/49 layers)" was
+  // self-contradictory — nothing runs on the graphics card (full-audit 2026-07-11 CODE-23).
+  'translate.device.gpuNone':
+    'Translation runs on the processor — no layers fit on the graphics card (0/{total} layers)',
   'translate.device.cpu': 'Translation runs on the processor (CPU)',
   'translate.device.title':
     'Where the translation model ran when it last started. It decides again on each start ' +
@@ -2193,6 +2205,12 @@ export const en = {
     'The graphics memory was mostly taken — usually by the chat model — so only part of the ' +
     'translation model fit on the graphics card, and translation runs at roughly processor ' +
     'speed. A smaller chat model frees memory; the translator re-fits on its next start ' +
+    '(about 2 minutes after the last translation).',
+  // CODE-23: same cause/remedy as partialTitle, worded for the none-fit outcome.
+  'translate.device.gpuNoneTitle':
+    'The graphics memory was fully taken — usually by the chat model — so none of the ' +
+    'translation model fit on the graphics card, and translation runs on the processor. ' +
+    'A smaller chat model frees memory; the translator re-fits on its next start ' +
     '(about 2 minutes after the last translation).',
   // Friendly error rows — a CODE is mapped here; raw model/runtime text never shows.
   'translate.err.noModel': 'The translation model is no longer available. Open the AI Model screen to install it.',

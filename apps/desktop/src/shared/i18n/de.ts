@@ -354,7 +354,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.compaction.markerLabel': 'Frühere Nachrichten zusammengefasst',
   'chat.compaction.viewSummary': 'Zusammenfassung der früheren Nachrichten anzeigen',
   'chat.context.label': 'Speicher',
-  'chat.context.usageTooltip': 'Speicher für dieses Gespräch: {pct} % belegt (etwa {used} von {window} Tokens).',
+  // RD-3-Glossar: deutscher Plural ist „Token", nicht „Tokens" (full-audit 2026-07-11 CODE-43).
+  'chat.context.usageTooltip': 'Speicher für dieses Gespräch: {pct} % belegt (etwa {used} von {window} Token).',
   'chat.context.willSummarize': 'Bei vollem Speicher werden ältere Nachrichten automatisch zusammengefasst, um Platz zu schaffen.',
   // Ehrliches Signal (§L0): erscheint bei einer Antwort, die das Modell am Kontextlimit abgeschnitten hat.
   'chat.truncated.label': 'Antwort abgeschnitten – Kontextlimit des Modells erreicht',
@@ -363,8 +364,6 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Chat: document scope ----
   'chat.scope.usingAll': 'Nutzt alle Dokumente',
-  'chat.scope.usingSome.one': 'Nutzt {count} Dokument',
-  'chat.scope.usingSome.other': 'Nutzt {count} Dokumente',
   'chat.scope.none': 'Noch keine Dokumente · Dokumente hinzufügen',
   'chat.scope.popoverAria': 'Zu befragende Dokumente',
   'chat.scope.allLine':
@@ -387,9 +386,12 @@ export const de: Record<keyof typeof en, string> = {
   // Extrakt-Antwort sind die genutzten Dokument-Abschnitte (Herkunft), keine 1:1 zitierten
   // Auszüge. Bewusst breitenneutral — die Abdeckungsanzeige daneben sagt „ganzes Dokument“ /
   // „Anfang“ / „teilweise“.
-  'chat.sources.wholeDoc': 'Aus dem Dokument entnommen — {count} Abschnitte',
+  // .one/.other-Paare via tCount — „1 Abschnitte" bei Ein-Abschnitt-Dokumenten (CODE-8).
+  'chat.sources.wholeDoc.one': 'Aus dem Dokument entnommen — {count} Abschnitt',
+  'chat.sources.wholeDoc.other': 'Aus dem Dokument entnommen — {count} Abschnitte',
   'chat.sources.wholeDocCaption': 'Abgedeckte Abschnitte',
-  'chat.sources.more': 'und {count} weitere Abschnitte',
+  'chat.sources.more.one': 'und {count} weiterer Abschnitt',
+  'chat.sources.more.other': 'und {count} weitere Abschnitte',
 
   // ---- Chat: dictation ----
   'chat.dictation.start': 'Nachricht diktieren',
@@ -450,7 +452,10 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexAll': 'Alle neu indexieren ({count})',
   'docs.reindexAllTitle':
     'Jedes Dokument neu indexieren, das mit einem anderen Suchmodell indexiert wurde',
-  'docs.reindexAllConfirm.title': '{count} Dokumente neu indexieren?',
+  // .one/.other-Paare via tCount — „1 Dokumente neu indexieren?" war doppelt falsch
+  // (full-audit 2026-07-11 CODE-8; Adjektiv-Endungen beachten).
+  'docs.reindexAllConfirm.title.one': '{count} Dokument neu indexieren?',
+  'docs.reindexAllConfirm.title.other': '{count} Dokumente neu indexieren?',
   'docs.reindexAllConfirm.body':
     'Dabei wird jedes veraltete Dokument nacheinander neu eingelesen und neu eingebettet. ' +
     'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – du kannst ' +
@@ -458,7 +463,8 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexAllConfirm.confirm': 'Alle neu indexieren',
   'docs.retryAllFailed': 'Alle erneut versuchen ({count})',
   'docs.retryAllFailedTitle': 'Jedes Dokument neu indexieren, dessen Indexierung fehlgeschlagen ist',
-  'docs.retryAllConfirm.title': '{count} fehlgeschlagene Dokumente erneut versuchen?',
+  'docs.retryAllConfirm.title.one': '{count} fehlgeschlagenes Dokument erneut versuchen?',
+  'docs.retryAllConfirm.title.other': '{count} fehlgeschlagene Dokumente erneut versuchen?',
   'docs.retryAllConfirm.body':
     'Dabei wird jedes fehlgeschlagene Dokument nacheinander neu eingelesen und neu eingebettet. ' +
     'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – du kannst ' +
@@ -468,7 +474,9 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexAllProgress': 'Indexiere {done} von {total} neu…',
   'docs.reindexAllCancel': 'Abbrechen',
   'docs.reindexAllCancelled': 'Neu-Indexierung gestoppt – {done} von {total} erledigt.',
-  'docs.reindexAllDone': '{done} Dokumente neu indexiert.',
+  // Plural-Paar ({done} → tCounts {count}) — „1 Dokumente neu indexiert." (CODE-8).
+  'docs.reindexAllDone.one': '{count} Dokument neu indexiert.',
+  'docs.reindexAllDone.other': '{count} Dokumente neu indexiert.',
   'docs.reindexAllPartial': '{done} von {total} neu indexiert – {failed} fehlgeschlagen. Fehlgeschlagene Dokumente bleiben im Tab „Fehlgeschlagene Importe“.',
   'docs.supported.base':
     'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +
@@ -644,10 +652,11 @@ export const de: Record<keyof typeof en, string> = {
   'analysis.listing.refSection': 'Abschnitt {n}',
   // #50: eine leere Liste, in der die meisten Abschnitte nicht lesbar waren, ist fast immer
   // ein fehlgeschlagener Extraktionslauf — aktiv sagen und den Weg zeigen (wie wholeDocHint).
+  // Anführungszeichen „…“ (Katalog-Konvention; full-audit 2026-07-11 CODE-25).
   'analysis.listing.unparsedHint':
     '**Hinweis:** Die meisten Abschnitte konnten beim Indexieren dieses Dokuments nicht ' +
-    'gelesen werden — dieses Ergebnis ist daher unzuverlässig. Öffne „Dokumente" und führe ' +
-    '„Tiefenindex erstellen" erneut aus — nicht lesbare Abschnitte werden dabei erneut ' +
+    'gelesen werden — dieses Ergebnis ist daher unzuverlässig. Öffne „Dokumente“ und führe ' +
+    '„Tiefenindex erstellen“ erneut aus — nicht lesbare Abschnitte werden dabei erneut ' +
     'versucht (ein größeres Modell hilft).',
   'analysis.listing.unparsedHintAmountSkill':
     'Für Kontoauszüge liest der Kontoauszug-Skill im Skill-Menü des Chats die Beträge exakt.',
@@ -656,10 +665,11 @@ export const de: Record<keyof typeof en, string> = {
   // Antwort darunter stammt aus der Relevanzsuche. Das AKTIV sagen und den Weg zeigen — der
   // Abdeckungsbruch allein („Basiert auf 5 von 25 Abschnitten") geht unter einer plausibel
   // aussehenden Summe zu leicht unter.
+  // Anführungszeichen „…“ (CODE-25 — das :657-Präzedenz-Vorkommen, mitkorrigiert).
   'analysis.wholeDocHint':
     '**Hinweis:** Das sieht nach einer Frage zum ganzen Dokument aus, aber diese Antwort ' +
     'basiert nur auf den relevantesten Abschnitten. Für eine vollständige Antwort öffne ' +
-    '„Dokumente", wähle „Tiefenindex erstellen" für das Dokument und frage dann erneut.',
+    '„Dokumente“, wähle „Tiefenindex erstellen“ für das Dokument und frage dann erneut.',
 
   // ---- Kontoauszug-Auswertung (full-doc-skills Plan §3.1, Phase 2) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
@@ -1188,7 +1198,8 @@ export const de: Record<keyof typeof en, string> = {
   'settings.workspace.mode': 'Modus',
   'settings.workspace.modeEncrypted': 'Verschlüsselt',
   'settings.workspace.modePlaintext': 'Unverschlüsselt (Entwickler)',
-  'settings.workspace.contextTokens': 'Kontext-Tokens',
+  // RD-3-Glossar: „Token", nicht „Tokens" (CODE-43).
+  'settings.workspace.contextTokens': 'Kontext-Token',
   // Ohne Override folgt das gestartete Fenster der Modell-Empfehlung.
   'settings.workspace.contextAuto': 'Automatisch (Modell-Standard) — änderbar im Bereich „KI-Modell“',
   'settings.workspace.encryptedHint':
@@ -1571,7 +1582,9 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.driveRead': 'Laufwerk lesen',
   'diag.bench.driveWrite': 'Laufwerk schreiben',
   'diag.bench.notMeasured': 'nicht gemessen',
-  'diag.bench.tokens': 'Tokens / Sek.',
+  // RD-3-Glossar: „Token", nicht „Tokens" — steht auf Diagnose direkt neben
+  // models.tech.contextValue („{count} Token") (CODE-43).
+  'diag.bench.tokens': 'Token / Sek.',
   'diag.bench.tokensNotMeasured': 'nicht gemessen (starte zuerst ein Modell)',
   'diag.bench.tokensModel': 'gemessen mit dem geladenen Modell {model}',
   'diag.bench.lastRun': 'Letzter Lauf',
@@ -2230,6 +2243,10 @@ export const de: Record<keyof typeof en, string> = {
   'translate.device.gpuUnknown': 'Übersetzung läuft auf der Grafikkarte (GPU)',
   'translate.device.gpuPartial':
     'Übersetzung läuft nur teilweise auf der Grafikkarte ({done}/{total} Schichten) — etwa Prozessor-Tempo',
+  // Der Null-Schichten-Fall: „läuft nur teilweise … (0/49 Schichten)" widersprach sich selbst
+  // (full-audit 2026-07-11 CODE-23).
+  'translate.device.gpuNone':
+    'Übersetzung läuft auf dem Prozessor — keine Schicht passte auf die Grafikkarte (0/{total} Schichten)',
   'translate.device.cpu': 'Übersetzung läuft auf dem Prozessor (CPU)',
   'translate.device.title':
     'Wo das Übersetzungsmodell beim letzten Start gelaufen ist. Es entscheidet bei jedem Start neu ' +
@@ -2238,6 +2255,12 @@ export const de: Record<keyof typeof en, string> = {
     'Der Grafikspeicher war größtenteils belegt — meist durch das Chat-Modell —, sodass nur ein Teil ' +
     'des Übersetzungsmodells auf die Grafikkarte passte und die Übersetzung etwa in Prozessor-Tempo ' +
     'läuft. Ein kleineres Chat-Modell gibt Speicher frei; der Übersetzer passt sich beim nächsten ' +
+    'Start neu an (etwa 2 Minuten nach der letzten Übersetzung).',
+  // CODE-23: dieselbe Ursache/Abhilfe wie partialTitle, formuliert für den Nichts-passte-Fall.
+  'translate.device.gpuNoneTitle':
+    'Der Grafikspeicher war vollständig belegt — meist durch das Chat-Modell —, sodass nichts vom ' +
+    'Übersetzungsmodell auf die Grafikkarte passte und die Übersetzung auf dem Prozessor läuft. ' +
+    'Ein kleineres Chat-Modell gibt Speicher frei; der Übersetzer passt sich beim nächsten ' +
     'Start neu an (etwa 2 Minuten nach der letzten Übersetzung).',
   'translate.err.noModel': 'Das Übersetzungsmodell ist nicht mehr verfügbar. Öffne den KI-Modell-Bildschirm, um es zu installieren.',
   'translate.err.badRequest': 'Wähle eine Ausgangs- und Zielsprache und gib einen Text zum Übersetzen ein.',
