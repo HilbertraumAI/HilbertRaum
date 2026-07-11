@@ -467,26 +467,26 @@ const mktDe = (): boolean => mktCase().endsWith('-de')
 const MKT_ANSWER_EN = [
   'Based on your bank statements, your largest spending category last year was **housing**. Here is the full breakdown:',
   '',
-  '1. **Rent** — **€13,140** total (€1,095 monthly, January–December) [S2].',
-  '2. **Groceries & household** — **€4,870** across 214 transactions [S4].',
-  '3. **Car & transport** — **€3,205**: fuel €1,610, insurance €780 [S7], repairs €815 [S9].',
-  '4. **Insurance** — **€2,455**: health top-up €1,270 [S3], household contents €310, personal liability €185, life insurance €690 [S6].',
-  '5. **Travel** — **€1,980**: flights in May and September plus three hotel stays [S8].',
+  '1. **Rent**: **€13,140** total (€1,095 monthly, January–December) [S2].',
+  '2. **Groceries & household**: **€4,870** across 214 transactions [S4].',
+  '3. **Car & transport**: **€3,205**, fuel €1,610, insurance €780 [S7], repairs €815 [S9].',
+  '4. **Insurance**: **€2,455**, health top-up €1,270 [S3], household contents €310, personal liability €185, life insurance €690 [S6].',
+  '5. **Travel**: **€1,980**, flights in May and September plus three hotel stays [S8].',
   '',
-  'The largest *single* transaction was **€2,140** on 14.08.2025 — a dental invoice [S5].',
+  'The largest *single* transaction was **€2,140** on 14.08.2025, a dental invoice [S5].',
   '',
   'Together these five categories account for roughly **71%** of your total spending of **€35,900** last year [S1].'
 ].join('\n')
 const MKT_ANSWER_DE = [
   'Auf Basis deiner Kontoauszüge war deine größte Ausgabenkategorie im letzten Jahr **Wohnen**. Hier die vollständige Aufschlüsselung:',
   '',
-  '1. **Miete** — **13.140 €** gesamt (1.095 € monatlich, Januar–Dezember) [S2].',
-  '2. **Lebensmittel & Haushalt** — **4.870 €** in 214 Transaktionen [S4].',
-  '3. **Auto & Verkehr** — **3.205 €**: Tanken 1.610 €, Versicherung 780 € [S7], Reparaturen 815 € [S9].',
-  '4. **Versicherungen** — **2.455 €**: private Krankenzusatzversicherung 1.270 € [S3], Hausrat 310 €, Haftpflicht 185 €, Lebensversicherung 690 € [S6].',
-  '5. **Reisen** — **1.980 €**: Flüge im Mai und September plus drei Hotelaufenthalte [S8].',
+  '1. **Miete**: **13.140 €** gesamt (1.095 € monatlich, Januar–Dezember) [S2].',
+  '2. **Lebensmittel & Haushalt**: **4.870 €** in 214 Transaktionen [S4].',
+  '3. **Auto & Verkehr**: **3.205 €**, Tanken 1.610 €, Versicherung 780 € [S7], Reparaturen 815 € [S9].',
+  '4. **Versicherungen**: **2.455 €**, private Krankenzusatzversicherung 1.270 € [S3], Hausrat 310 €, Haftpflicht 185 €, Lebensversicherung 690 € [S6].',
+  '5. **Reisen**: **1.980 €**, Flüge im Mai und September plus drei Hotelaufenthalte [S8].',
   '',
-  'Die größte *Einzeltransaktion* war **2.140 €** am 14.08.2025 — eine Zahnarztrechnung [S5].',
+  'Die größte *Einzeltransaktion* war **2.140 €** am 14.08.2025, eine Zahnarztrechnung [S5].',
   '',
   'Zusammen machen diese fünf Kategorien rund **71 %** deiner Gesamtausgaben von **35.900 €** im letzten Jahr aus [S1].'
 ].join('\n')
