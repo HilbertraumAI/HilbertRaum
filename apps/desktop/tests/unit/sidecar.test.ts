@@ -14,8 +14,12 @@ import {
   llamaOsDir,
   defaultThreadCount,
   findFreePort,
+  killRegisteredSidecarChildren,
   LlamaServer,
   LOOPBACK_HOST,
+  registeredSidecarPids,
+  registerSidecarChild,
+  unregisterSidecarChild,
   type ChildProcessLike,
   type UnexpectedExitInfo
 } from '../../src/main/services/runtime/sidecar'
@@ -610,6 +614,31 @@ describe('LlamaServer', () => {
     expect(exits).toHaveLength(0)
   })
 
+  // CODE-11 (full-audit 2026-07-11): every LlamaServer child is registered in the module-level
+  // PID registry the moment it spawns and deregistered when it exits/errors — so the
+  // `uncaughtException` crash exit (which skips will-quit's awaited stops) can best-effort
+  // reap it before `process.exit(1)`. On Windows the children otherwise survive the parent.
+  it('registers the child PID on spawn and deregisters it on exit (CODE-11 crash reap)', async () => {
+    killRegisteredSidecarChildren(() => undefined) // isolate: clear any leftover registrations
+    const { spawn, child } = fakeSpawn() // FakeChild pid 4242
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50013,
+      healthIntervalMs: 1
+    })
+    expect(registeredSidecarPids()).not.toContain(4242)
+    await server.start()
+    expect(registeredSidecarPids()).toContain(4242) // reachable by the crash-exit reap
+    await server.stop() // FakeChild.kill emits 'exit' → deregistered
+    await new Promise((r) => setTimeout(r, 0))
+    expect(registeredSidecarPids()).not.toContain(4242)
+  })
+
   it('makes ZERO non-loopback network calls during start/health/stop', async () => {
     const httpSpy = vi.spyOn(http, 'request')
     const httpsSpy = vi.spyOn(https, 'request')
@@ -636,5 +665,48 @@ describe('LlamaServer', () => {
     expect(httpsSpy).not.toHaveBeenCalled()
     expect(connectSpy).not.toHaveBeenCalled()
     expect(socketConnectSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ---- Crash-exit child reap registry (full-audit 2026-07-11 CODE-11) --------------------
+//
+// A hard `uncaughtException` skips the graceful will-quit teardown; on Windows the sidecar
+// children (up to five co-resident llama-servers + whisper-cli) survive `process.exit(1)`,
+// holding GBs of RAM + loopback ports. The registry is the crash handler's kill list:
+// LlamaServer + WhisperCliTranscriber (the two seams every sidecar spawn funnels through)
+// register on spawn and deregister on exit/error.
+
+describe('sidecar child-PID registry (full-audit 2026-07-11 CODE-11)', () => {
+  it('register/deregister lifecycle, guarded against pid-less failed spawns', () => {
+    killRegisteredSidecarChildren(() => undefined) // isolate: clear leftovers from other tests
+    registerSidecarChild(undefined) // a failed spawn has no pid — ignored, never throws
+    registerSidecarChild(1234)
+    registerSidecarChild(1234) // idempotent
+    registerSidecarChild(5678)
+    expect([...registeredSidecarPids()].sort()).toEqual([1234, 5678])
+    unregisterSidecarChild(1234)
+    unregisterSidecarChild(undefined)
+    unregisterSidecarChild(999_999) // never registered — harmless
+    expect(registeredSidecarPids()).toEqual([5678])
+    unregisterSidecarChild(5678)
+    expect(registeredSidecarPids()).toEqual([])
+  })
+
+  it('killRegisteredSidecarChildren SIGKILLs every registered pid, is throw-safe per pid, and clears the set', () => {
+    killRegisteredSidecarChildren(() => undefined)
+    registerSidecarChild(11)
+    registerSidecarChild(22)
+    registerSidecarChild(33)
+    const killed: number[] = []
+    const signals = new Set<string>()
+    killRegisteredSidecarChildren((pid, signal) => {
+      signals.add(String(signal))
+      // One already-dead / foreign pid throwing (ESRCH/EPERM) must not stop the loop.
+      if (pid === 22) throw new Error('kill ESRCH')
+      killed.push(pid)
+    })
+    expect(killed.sort()).toEqual([11, 33])
+    expect(signals).toEqual(new Set(['SIGKILL'])) // no polite-then-escalate: the parent is dying NOW
+    expect(registeredSidecarPids()).toEqual([]) // cleared either way — the process is exiting
   })
 })

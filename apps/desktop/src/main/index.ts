@@ -46,6 +46,7 @@ import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager } from './services/runtime'
 import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
+import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS } from '../shared/ipc'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
@@ -554,6 +555,16 @@ process.on('uncaughtException', (err) => {
     log.error('Uncaught exception', String(err))
     detachVaultKey() // flush the encrypted log before lock() zeroes the key
     ctx?.workspace.shutdown()
+  } catch {
+    /* best-effort */
+  }
+  // CODE-11 (full-audit 2026-07-11): a crash exit skips will-quit's awaited sidecar stops,
+  // and on Windows the children survive the parent — reap every registered sidecar child
+  // (best-effort, synchronous, throw-safe per PID) so no llama-server/whisper-cli orphans
+  // holding GBs of RAM + loopback ports outlive the crash. After the vault lock: the lock
+  // is the data-safety half, the reap is hygiene. Own try so a lock throw can't skip it.
+  try {
+    killRegisteredSidecarChildren()
   } catch {
     /* best-effort */
   }

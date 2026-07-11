@@ -16,8 +16,18 @@ import {
   type ExtractFn
 } from '../../src/main/services/runtime-download'
 import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
-import { runtimeMarkerPath, ENGINE_DOWNLOAD_MAX_BYTES } from '../../src/main/services/assets'
+import {
+  runtimeMarkerPath,
+  verifyDownloadedFile,
+  writeRuntimeMarker,
+  ENGINE_DOWNLOAD_MAX_BYTES
+} from '../../src/main/services/assets'
 import type { FetchFn } from '../../src/main/services/assets'
+import {
+  _resetBinaryVerificationForTests,
+  initBinaryVerification,
+  verifyBinaryBeforeSpawn
+} from '../../src/main/services/binary-verifier'
 import type { EngineDownloadJob } from '../../src/shared/types'
 
 // In-app engine (llama.cpp sidecar) downloader: the gates (a closed gate never reaches the
@@ -289,6 +299,138 @@ describe('EngineDownloadManager install flow', () => {
     expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(false)
     // The chat engine is still missing.
     expect(engineStatus(rootPath, manifestsDir).missingFamilies).toEqual(['llama_cpp'])
+  })
+})
+
+// ---- Phase C riders (full-audit 2026-07-11): CODE-13 cancel + upgrade guard, CODE-12 cache ----
+
+describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-07-11 CODE-13)', () => {
+  const markerFor = (rootPath: string): string =>
+    runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS))
+
+  /** Poll until the job reports `status` (the manager runs the install in the background). */
+  async function waitForStatus(
+    mgr: EngineDownloadManager,
+    jobId: string,
+    status: EngineDownloadJob['status']
+  ): Promise<void> {
+    const start = Date.now()
+    while (mgr.get(jobId).status !== status) {
+      if (Date.now() - start > 5000) throw new Error(`job never reached ${status}`)
+      await new Promise((r) => setTimeout(r, 2))
+    }
+  }
+
+  it('a cancel DURING the archive hash is honoured — job cancelled, nothing extracted, no marker (BE-4 mirror)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    let releaseVerify: () => void = () => undefined
+    const verifyGate = new Promise<void>((r) => (releaseVerify = r))
+    let extracted = false
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async () => {
+        extracted = true
+      },
+      // Gate the injected verifier so the cancel lands deterministically mid-hash
+      // (the downloads.ts BE-4 test pattern).
+      verifyImpl: async (path, sha) => {
+        await verifyGate
+        return verifyDownloadedFile(path, sha)
+      }
+    })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await waitForStatus(mgr, started.jobId, 'verifying')
+    mgr.cancel(started.jobId) // pre-fix: dropped — 'verifying' was not a cancellable state
+    releaseVerify()
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('cancelled')
+    expect(extracted).toBe(false) // the verify result was never acted on
+    expect(existsSync(markerFor(rootPath))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+  })
+
+  it('a cancel DURING extraction is honoured — no marker write, install stays non-current', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    let releaseExtract: () => void = () => undefined
+    const extractGate = new Promise<void>((r) => (releaseExtract = r))
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async (_archive, destDir) => {
+        await extractGate
+        await writeFile(join(destDir, BIN_NAME), 'binary')
+      }
+    })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await waitForStatus(mgr, started.jobId, 'extracting')
+    mgr.cancel(started.jobId) // pre-fix: dropped — 'extracting' was not a cancellable state
+    releaseExtract()
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('cancelled')
+    // The binary may have landed, but WITHOUT a marker the install is not "current":
+    // the next install re-runs cleanly and the pre-spawn verifier treats it as legacy.
+    expect(existsSync(markerFor(rootPath))).toBe(false)
+  })
+
+  it('refuses a chat-engine install while a model runtime is running — fetch never called', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const fetchSpy = vi.fn()
+    const mgr = new EngineDownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+    // install() pre-cleans the LIVE llama_cpp dir (Windows: confusing lock failure;
+    // POSIX: silent under-swap of the running binary) — refused with friendly copy.
+    await expect(
+      mgr.start({ rootPath, manifestsDir, gates: ALLOW, chatRuntimeActive: true })
+    ).rejects.toThrow(/while a model is running/i)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('a voice-only install still proceeds while a model runs (llama_cpp already current)', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+    // Chat engine installed first (nothing running yet)…
+    await runToEnd(
+      mgr,
+      (await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'] })).jobId
+    )
+    // …then, with a model running, the missing WHISPER engine must still be installable —
+    // the refusal is scoped to jobs that would touch the live llama_cpp dir.
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, chatRuntimeActive: true })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(rootPath, 'runtime', 'whisper.cpp', HOST_OS, WHISPER_BIN))).toBe(true)
+  })
+})
+
+describe('re-install invalidates the binary-verifier session cache (full-audit 2026-07-11 CODE-12)', () => {
+  it('a pre-install mismatch verdict does not stick to the freshly installed binary', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const dir = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const binPath = join(dir, BIN_NAME)
+    // A tampered pre-existing install: on-disk bytes that do NOT match the marker's hash
+    // (an old version string keeps `runtimeInstallCurrent` false so the re-install runs).
+    await mkdir(dir, { recursive: true })
+    await writeFile(binPath, 'tampered-bytes')
+    writeRuntimeMarker(dir, {
+      version: 'old',
+      backend: 'cpu',
+      os: HOST_OS,
+      arch: HOST_ARCH,
+      binaries: { [BIN_NAME]: createHash('sha256').update('binary').digest('hex') }
+    })
+    _resetBinaryVerificationForTests()
+    initBinaryVerification(false) // packaged build: enforce + session-cache the verdicts
+    try {
+      // The tamper is detected and the verdict lands in the session cache.
+      await expect(verifyBinaryBeforeSpawn(binPath)).resolves.toBe('mismatch')
+      // Repair: re-install the engine in-app (fresh bytes + fresh marker hash).
+      const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: fakeExtract })
+      const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+      expect(job.status).toBe('done')
+      // Pre-fix: the cached 'mismatch' stuck until app restart (silent MockRuntime after a
+      // repair). installOne now evicts the entry, so the next spawn re-hashes → ok.
+      await expect(verifyBinaryBeforeSpawn(binPath)).resolves.toBe('ok')
+    } finally {
+      _resetBinaryVerificationForTests()
+    }
   })
 })
 

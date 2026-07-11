@@ -48,6 +48,18 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
   const log = deps.log ?? realLog
 
+  // CODE-3 (full-audit 2026-07-11): arm the runtime manager's PERMANENT shutdown latch before
+  // anything else runtime-related. `maybeAutoStartActiveModel` hashes a multi-GB weight before it
+  // ever touches the manager; if that hash completes during this teardown's awaited windows, the
+  // background start would otherwise enqueue AFTER the `runtime.stop()` below — and `app.exit(0)`
+  // then kills the parent mid-start, orphaning the child (loopback port + GBs of RAM, Windows
+  // especially). With the latch armed, `start()` rejects without invoking the factory. Latch-only
+  // and synchronous — the awaited stop stays in the sidecar block below (REL-4 ordering intact).
+  try {
+    ctx?.runtime.shutdown()
+  } catch {
+    /* best-effort */
+  }
   // Abort an in-flight deep-index build before stopping the sidecars (plan §4.1 M9): it is not in
   // inFlightStreams, so nothing else would stop it, and it would keep using the runtime as it is torn
   // down. Leaves the tree resumable (reconcileStuckTrees on relaunch).

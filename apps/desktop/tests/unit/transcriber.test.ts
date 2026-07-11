@@ -14,6 +14,10 @@ import {
   type TranscriberModelInfo
 } from '../../src/main/services/transcriber'
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/cli'
+import {
+  killRegisteredSidecarChildren,
+  registeredSidecarPids
+} from '../../src/main/services/runtime/sidecar'
 
 // Phase 36 — transcriber selector (the reranker D9 availability matrix) + the CLI
 // backend driven by a FAKE spawn (CI is zero-binary: no real process, no real audio).
@@ -223,6 +227,34 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     expect(outBase).toContain('.parse')
     expect(existsSync(`${outBase}.json`)).toBe(false)
     expect(readdirSync(workDir)).toEqual([])
+  })
+
+  // CODE-11 (full-audit 2026-07-11): the whisper child rides the same crash-exit PID registry
+  // as LlamaServer — registered while it runs (so an uncaughtException reap can kill it),
+  // deregistered once it closes.
+  it('registers the child PID while running and deregisters it on close (CODE-11 crash reap)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-reap-'))
+    killRegisteredSidecarChildren(() => undefined) // isolate: clear leftovers from other tests
+    let observedDuringRun: number[] = []
+    const transcriber = createWhisperCliTranscriber({
+      id: 'whisper-small-multilingual',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/ggml-small.bin',
+      spawnImpl: (_cmd, args, _o): ChildProcess => {
+        const child = makeFakeChild() as FakeChild & { pid: number }
+        child.pid = 7777
+        setImmediate(() => {
+          observedDuringRun = registeredSidecarPids()
+          const outBase = args[args.indexOf('-of') + 1]
+          writeFileSync(`${outBase}.json`, JSON.stringify(WHISPER_JSON))
+          child.emit('close', 0, null)
+        })
+        return child as unknown as ChildProcess
+      }
+    })
+    await transcriber.transcribe('a.mp3', { workDir })
+    expect(observedDuringRun).toContain(7777) // reachable by the crash-exit reap mid-run
+    expect(registeredSidecarPids()).not.toContain(7777) // forgotten once the child closed
   })
 
   it('reports -pp progress percentages', async () => {

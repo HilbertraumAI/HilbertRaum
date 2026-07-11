@@ -38,7 +38,10 @@ function fakeCtx(order: string[]): AppContext {
     // TG-4: the Translate-view job service is aborted on quit too (before the sidecar stop below),
     // so its next window can't respawn the server being killed.
     translateJobs: { stop: stop('translateJobs.stop') },
-    runtime: { stop: stop('runtime.stop') },
+    // CODE-3 (full-audit 2026-07-11): the manager's permanent shutdown latch is armed FIRST,
+    // before anything else runtime-related, so a background auto-start whose weight hash
+    // completes during this teardown can never enqueue a fresh start after the stop.
+    runtime: { shutdown: () => order.push('runtime.latch'), stop: stop('runtime.stop') },
     embedder: { stop: stop('embedder.stop') },
     reranker: { stop: stop('reranker.stop') },
     transcriber: { stop: stop('transcriber.stop') },
@@ -68,6 +71,13 @@ describe('performShutdown ordering (REL-4)', () => {
     expect(order).toContain('abort-stream')
 
     const i = (label: string): number => order.indexOf(label)
+    // CODE-3 (full-audit 2026-07-11): the runtime manager's permanent shutdown latch is the
+    // FIRST thing the teardown does — armed before the aborts and before every sidecar stop,
+    // so a racing auto-start (its multi-GB hash just completed) finds start() latched no
+    // matter where in this sequence it lands.
+    expect(i('runtime.latch')).toBe(0)
+    expect(i('runtime.latch')).toBeLessThan(i('abort-build'))
+    expect(i('runtime.latch')).toBeLessThan(i('runtime.stop'))
     // Streams aborted before EVERY sidecar stop — so the partial persists (DB still open) before
     // the sidecar dies.
     expect(i('abort-stream')).toBeGreaterThanOrEqual(0)

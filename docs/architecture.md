@@ -2741,6 +2741,40 @@ race is already closed by armIdleTimer's `this.stopped` + `!this.server` early-r
 by `stop()` before any await — triple-guarded), so this is a defense-in-depth backstop in the same co-guarded
 family, not a live fix.
 
+**§5.6 Shutdown latch + cancellable start (full-audit 2026-07-11 CODE-2/CODE-3; rider CODE-11).**
+Two quit-path gaps in the manager/ladder lifecycle, closed together:
+
+- **CODE-3 — `RuntimeManager.shutdown()` latch.** The chat manager was the one runtime without the
+  `TranslationRuntime.stopped`-style permanent latch. `startModelRuntime` hashes a multi-GB weight
+  *before* touching the manager; a quit beginning in that window found nothing to stop, and the hash
+  could then complete inside the teardown's awaited windows and enqueue a fresh start AFTER the stop —
+  `app.exit(0)` kills the parent mid-start and orphans the child (Windows especially). Now:
+  `performShutdown` arms `runtime.shutdown()` (synchronous, latch-only) as its FIRST act; once armed,
+  `start()`/`forceRestart()` reject without invoking the factory, a start already sitting in the queue
+  refuses inside `doStart` before it can spawn, and `startModelRuntime` re-checks the latch right after
+  its hash completes (`ctx.runtime.isShutdown()`). The awaited `runtime.stop()` stays in the sidecar
+  block (REL-4 ordering intact — pinned in `shutdown.test.ts`).
+- **CODE-2 — cancellable model start.** `stop()` deliberately queues behind an in-flight `start()`
+  (that ordering is what prevents orphans), but the start itself was uncancellable — a 20 GB GGUF load,
+  or a failing ladder walking up to 3 rungs × 180 s health timeouts, froze quit and "Lock now" for
+  minutes (users hard-kill → orphan, the exact outcome the queue exists to prevent).
+  `LlamaServer.stop()` during `waitForHealthy` already worked one layer down (the exit-check throw);
+  the fix makes it reachable: the manager tracks the in-flight `startingRuntime` and `stop()` forwards
+  a cancel to it directly, and `LadderRuntime.stop()` sets a permanent `cancelled` flag that (a) aborts
+  the ladder walk between rungs, (b) stops the in-flight rung's server, (c) never persists
+  `gpuAutoDisabled` for a killed attempt (not a device fault), and (d) refuses the rung-4 mock fallback
+  for a cancelled start. Queue semantics are unchanged — the queued stop still runs after the start
+  settles; the start just settles *promptly* now. Never a bare timeout race (would orphan the loading
+  child). Pinned in `runtime-manager.test.ts` ("quit-path lifecycle") + `runtime-ladder.test.ts`
+  ("ladder start cancellation").
+- **CODE-11 — crash-exit child reap (rider).** A hard `uncaughtException` skips will-quit's awaited
+  sidecar stops entirely, and on Windows the children survive `process.exit(1)`. Every sidecar spawn
+  funnels through `LlamaServer` or `WhisperCliTranscriber`; both now register/deregister their live
+  child PIDs in a module-level registry (`runtime/sidecar.ts`), and the crash handler's last act is a
+  best-effort synchronous SIGKILL loop over it (throw-safe per PID, after the vault lock). Residual:
+  a crash that bypasses `uncaughtException` itself (native crash of the main process, external kill)
+  still orphans — accepted; the OS is the only backstop there.
+
 **§5.4 Where GPU state lives:**
 
 | Datum | Home |

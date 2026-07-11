@@ -2,7 +2,13 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { llamaOsDir, defaultThreadCount, type ResolveBinOptions } from '../runtime/sidecar'
+import {
+  defaultThreadCount,
+  llamaOsDir,
+  registerSidecarChild,
+  unregisterSidecarChild,
+  type ResolveBinOptions
+} from '../runtime/sidecar'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
@@ -240,6 +246,9 @@ export class WhisperCliTranscriber implements Transcriber {
     return new Promise((resolve, reject) => {
       const child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
       onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup
+      // CODE-11 (full-audit 2026-07-11): make the child reachable by the crash-exit reap —
+      // a hard uncaughtException skips suspend()/stop(), and on Windows the child survives.
+      registerSidecarChild(child.pid)
       let stderrTail = ''
       const scanProgress = (text: string): void => {
         for (const m of text.matchAll(/progress\s*=\s*(\d{1,3})%/g)) {
@@ -291,11 +300,13 @@ export class WhisperCliTranscriber implements Transcriber {
       else opts.signal?.addEventListener('abort', onAbort, { once: true })
 
       child.on('error', (err) => {
+        unregisterSidecarChild(child.pid) // CODE-11: gone/never started — off the kill list
         clearWatchdog()
         opts.signal?.removeEventListener('abort', onAbort)
         reject(err)
       })
       child.on('close', (code, signal) => {
+        unregisterSidecarChild(child.pid) // CODE-11: dead — off the crash-reap kill list
         clearWatchdog()
         opts.signal?.removeEventListener('abort', onAbort)
         if (opts.signal?.aborted || this.stopped) {

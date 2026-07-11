@@ -15,6 +15,8 @@ import {
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
 import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
+import { performShutdown } from '../../src/main/shutdown'
+import type { AppContext } from '../../src/main/services/context'
 import type { GpuDevice } from '../../src/shared/types'
 
 // Regression tests for the two runtime-lifecycle fixes:
@@ -485,6 +487,186 @@ describe('GPU mid-session crash auto-fallback through the real manager (REL-1)',
     await new Promise((r) => setTimeout(r, 0))
     expect(h.restartPromises).toHaveLength(1) // still exactly one — no loop
     expect(h.children).toHaveLength(2) // no third spawn
+  })
+})
+
+// ---- Phase C (full-audit 2026-07-11): CODE-2 cancellable start + CODE-3 shutdown latch ----
+//
+// CODE-2: `stop()` used to QUEUE behind an uncancellable in-flight start — a 20 GB GGUF load
+// (or a failing ladder walking up to 3 rungs × 180 s health timeouts) held the queue for
+// minutes while quit and "Lock now" both awaited it; users hard-kill, which orphans the
+// loading child — the exact outcome the queue exists to prevent. `LlamaServer.stop()`
+// DURING `waitForHealthy` already worked one layer down (the exit-check throw); these tests
+// pin that the manager's stop now actually REACHES it.
+// CODE-3: `performShutdown` had no latch, so an auto-start whose multi-GB weight hash
+// completed during the ~7 s of awaited teardown windows could enqueue a fresh start AFTER
+// the stop; `app.exit(0)` then killed the parent mid-start and orphaned the child.
+
+const QUIT_OPTS: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 2048 }
+
+/**
+ * The REAL ladder + REAL LlamaRuntime/LlamaServer over a fake child that never turns
+ * healthy (a slow multi-GB load, /health stays 503). `healthTimeoutMs` is 60 s so the
+ * PRE-fix behavior (stop waits out the whole timeout) reds as a test timeout, while the
+ * fixed prompt-cancel path settles in milliseconds.
+ */
+function loadingStartHarness() {
+  const child = new RecordingChild('SIGTERM')
+  let spawned = 0
+  const failures: string[] = []
+  let mockMade = false
+  const makeLlama = (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime =>
+    createLlamaRuntime(o, {
+      binPath,
+      extraArgs: rung?.extraArgs,
+      onUnexpectedExit: rung?.onUnexpectedExit,
+      spawn: () => {
+        spawned++
+        return child
+      },
+      fetchImpl: (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch,
+      findPort: async () => 52100,
+      healthTimeoutMs: 60_000,
+      healthIntervalMs: 5
+      // (no killGraceMs seam through LlamaRuntimeDeps — irrelevant: the fake child dies on SIGTERM)
+    })
+  const factory = createSelectingRuntimeFactory({
+    rootPath: '/root',
+    resolveBin: () => '/bin/llama-server',
+    modelExists: () => true,
+    makeLlama,
+    makeMock: (o) => {
+      mockMade = true
+      return {
+        modelId: o.modelId,
+        backend: 'mock',
+        start: async () => {},
+        stop: async () => {},
+        health: async () => ({ healthy: true, message: 'mock', port: null }),
+        chatStream: async function* () {}
+      }
+    },
+    gpu: {
+      probeDevices: async () => [],
+      onGpuFailure: (r) => failures.push(r),
+      resolveCpuBin: () => null
+    }
+  })
+  return {
+    mgr: new RuntimeManager(factory),
+    child,
+    failures,
+    spawnCount: () => spawned,
+    wasMock: () => mockMade
+  }
+}
+
+const tick = (ms = 1): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
+  it(
+    'stop() mid-start kills the loading child and settles promptly (CODE-2, mid-waitForHealthy)',
+    { timeout: 15_000 },
+    async () => {
+      const h = loadingStartHarness()
+      const startP = h.mgr.start(QUIT_OPTS)
+      startP.catch(() => undefined) // asserted below; pre-arm so no unhandled rejection
+      while (h.spawnCount() === 0) await tick()
+      const t0 = Date.now()
+      await h.mgr.stop() // pre-fix: queued behind the full 60 s health timeout → test timeout
+      expect(Date.now() - t0).toBeLessThan(5_000)
+      expect(h.child.killed).toBe(true)
+      await expect(startP).rejects.toThrow(/cancelled/i)
+      // A start killed by the cancel is NOT a GPU fault — nothing persists gpuAutoDisabled…
+      expect(h.failures).toEqual([])
+      // …and the ladder walk aborted: no rung-2 respawn, no mock fallback for a cancelled start.
+      expect(h.spawnCount()).toBe(1)
+      expect(h.wasMock()).toBe(false)
+      expect(h.mgr.active()).toBeNull()
+      expect(h.mgr.status().running).toBe(false)
+    }
+  )
+
+  it(
+    'performShutdown during a model start settles promptly and latches the manager (CODE-2/CODE-3 quit path)',
+    { timeout: 15_000 },
+    async () => {
+      const h = loadingStartHarness()
+      const startP = h.mgr.start(QUIT_OPTS)
+      startP.catch(() => undefined)
+      while (h.spawnCount() === 0) await tick()
+
+      const ctx = {
+        runtime: h.mgr,
+        embedder: {},
+        workspace: { shutdown: () => undefined }
+      } as unknown as AppContext
+      await performShutdown(ctx, {
+        inFlightStreams: new Map(),
+        streamSettled: new Map(),
+        detachVaultKey: () => undefined,
+        log: { error: () => undefined }
+      })
+
+      expect(h.child.killed).toBe(true) // the loading child died with the teardown — no orphan
+      await expect(startP).rejects.toThrow()
+      // The latch is armed: a late auto-start (its weight hash just completed) can't spawn.
+      await expect(h.mgr.start(QUIT_OPTS)).rejects.toThrow(/shut down/i)
+      expect(h.spawnCount()).toBe(1)
+    }
+  )
+
+  it('start() after shutdown() rejects WITHOUT invoking the factory (CODE-3)', async () => {
+    let made = 0
+    const mgr = new RuntimeManager(() => {
+      made++
+      return {
+        modelId: 'm',
+        start: async () => {},
+        stop: async () => {},
+        health: async () => ({ healthy: true, message: '', port: 1 }),
+        chatStream: async function* () {}
+      }
+    })
+    mgr.shutdown()
+    expect(mgr.isShutdown()).toBe(true)
+    await expect(mgr.start(QUIT_OPTS)).rejects.toThrow(/shut down/i)
+    await expect(mgr.forceRestart(QUIT_OPTS)).rejects.toThrow(/shut down/i) // crash restart too
+    expect(made).toBe(0)
+    // stop() still works after the latch (it IS the teardown) — a no-op here.
+    await expect(mgr.stop()).resolves.toBeUndefined()
+  })
+
+  it('a start already ENQUEUED when shutdown() arms never spawns (CODE-3)', async () => {
+    const events: string[] = []
+    const gate: { release: (() => void) | null } = { release: null }
+    let made = 0
+    const mgr = new RuntimeManager((o) => {
+      made++
+      return {
+        modelId: o.modelId,
+        start: async () => {
+          events.push(`start:${o.modelId}`)
+          if (o.modelId === 'a') await new Promise<void>((r) => (gate.release = r))
+        },
+        stop: async () => {
+          events.push(`stop:${o.modelId}`)
+        },
+        health: async () => ({ healthy: true, message: '', port: 1 }),
+        chatStream: async function* () {}
+      }
+    })
+    const p1 = mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    // b is enqueued BEHIND a's in-flight start (a switch) — it passed start()'s entry check
+    // before the latch armed, so only doStart's re-check can stop it from spawning.
+    const p2 = mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 })
+    await tick(0)
+    mgr.shutdown() // quit begins while b still sits in the queue
+    gate.release?.()
+    await p1 // a committed (it started before the latch)
+    await expect(p2).rejects.toThrow(/shut down/i)
+    expect(made).toBe(1) // b's factory was NEVER invoked
+    expect(events).toEqual(['start:a'])
   })
 })
 

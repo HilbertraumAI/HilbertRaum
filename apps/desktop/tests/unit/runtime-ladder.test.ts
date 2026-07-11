@@ -232,6 +232,97 @@ describe('the GPU start ladder', () => {
   })
 })
 
+// CODE-2 (full-audit 2026-07-11): stop() during the ladder walk CANCELS the start — the walk
+// aborts between rungs instead of paying the remaining rungs' health timeouts, the in-flight
+// rung's runtime is stopped directly (which unblocks a real `waitForHealthy` via its exit
+// check), a killed attempt is never persisted as a GPU fault, and the rung-4 mock is NOT
+// started for a cancelled start (it would commit a runtime the queued stop must then undo).
+describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
+  function cancellableHarness() {
+    const failures: string[] = []
+    const rungStops: number[] = []
+    let mockMade = false
+    let rungStarts = 0
+    let failInFlight: (err: Error) => void = () => {
+      throw new Error('rung start not in flight yet')
+    }
+    const makeLlama = (o: RuntimeStartOptions): ModelRuntime => {
+      const index = rungStarts++
+      return {
+        modelId: o.modelId,
+        start: () =>
+          new Promise<void>((_resolve, reject) => {
+            failInFlight = reject
+          }),
+        stop: async () => {
+          rungStops.push(index)
+        },
+        health: async () => ({ healthy: true, message: '', port: 1 }),
+        chatStream: async function* () {}
+      }
+    }
+    const factory = createSelectingRuntimeFactory({
+      rootPath: '/root',
+      resolveBin: () => '/bin/llama-server',
+      modelExists: () => true,
+      makeLlama,
+      makeMock: (o) => {
+        mockMade = true
+        return {
+          modelId: o.modelId,
+          backend: 'mock',
+          gpuName: null,
+          start: async () => {},
+          stop: async () => {},
+          health: async () => ({ healthy: true, message: 'mock', port: null }),
+          chatStream: async function* () {}
+        }
+      },
+      gpu: {
+        probeDevices: async () => [],
+        onGpuFailure: (reason) => failures.push(reason),
+        resolveCpuBin: () => '/bin/cpu/llama-server'
+      }
+    })
+    return {
+      runtime: factory(opts),
+      failures,
+      rungStops,
+      wasMock: () => mockMade,
+      rungStartCount: () => rungStarts,
+      failInFlight: (err: Error) => failInFlight(err)
+    }
+  }
+
+  it('stop() mid-rung aborts the walk: rung stopped, no next rung, no mock, no gpuAutoDisabled', async () => {
+    const h = cancellableHarness()
+    const startP = h.runtime.start()
+    startP.catch(() => undefined)
+    await new Promise((r) => setTimeout(r, 0)) // rung 1's start() is now in flight
+
+    const stopP = h.runtime.stop() // sets the cancel flag + forwards stop to the in-flight rung
+    await stopP
+    expect(h.rungStops).toContain(0) // the loading rung's runtime WAS stopped (kill reached it)
+
+    // The killed child's start() rejects (in prod: waitForHealthy's exit-check throw)…
+    h.failInFlight(new Error('llama-server exited before becoming healthy (code 0)'))
+    await expect(startP).rejects.toThrow(/cancelled/i)
+
+    // …and the walk aborted rather than falling through the remaining rungs.
+    expect(h.rungStartCount()).toBe(1) // rung 2 / rung 3 never attempted
+    expect(h.wasMock()).toBe(false) // no mock fallback for a cancelled start
+    expect(h.failures).toEqual([]) // a killed rung-1 attempt is NOT a GPU fault
+  })
+
+  it('a stop() BEFORE start() aborts the walk without ever invoking a rung', async () => {
+    const h = cancellableHarness()
+    await h.runtime.stop() // e.g. quit lands between factory() and the queued start
+    await expect(h.runtime.start()).rejects.toThrow(/cancelled/i)
+    expect(h.rungStartCount()).toBe(0)
+    expect(h.wasMock()).toBe(false)
+  })
+})
+
 describe('createGpuCrashAutoFallback (§5.3)', () => {
   const info: UnexpectedExitInfo = { exitCode: 134, exitSignal: null, stderrTail: 'vk error' }
 

@@ -11063,9 +11063,42 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     rests on the drive until the next successful unlock secures it). F3 residual registered in the
     plan (failed interactive lock + immediate hard kill still shreds — the CODE-1a reopen recreates
     `-wal`/`-shm`; inside the power-cut trade-off; the QUIT path is covered by `shutdown()`).
-    Remaining phases C–J unstarted.
+    **Phase C DONE (2026-07-11 — quit-path lifecycle, CODE-2/3/11 + riders CODE-12/13):**
+    (a) CODE-3 — `RuntimeManager` gets the `TranslationRuntime.stopped`-style PERMANENT
+    `shutdown()` latch, armed as `performShutdown`'s FIRST act (pinned at index 0 in
+    shutdown.test.ts): once armed, `start()`/`forceRestart()` reject without invoking the factory,
+    a start already queued refuses inside `doStart` before it can spawn, and `startModelRuntime`
+    re-checks the latch right after its multi-GB weight hash — the window where a background
+    auto-start used to enqueue a fresh start AFTER the teardown's stop and orphan the child at
+    `app.exit(0)`. (b) CODE-2 — a stop no longer waits out an UNCANCELLABLE in-flight start (20 GB
+    GGUF load / failing ladder ≈ minutes of frozen quit/"Lock now"): the manager tracks the
+    in-flight `startingRuntime` and `stop()` cancels it directly; `LadderRuntime.stop()` sets a
+    permanent `cancelled` flag that aborts the walk between rungs, stops the in-flight rung's
+    server (unblocking `waitForHealthy` via its existing exit-check throw — never a bare timeout
+    race), never persists `gpuAutoDisabled` for a killed attempt, and refuses the rung-4 mock for
+    a cancelled start; queue semantics unchanged (stop still runs after the start settles — it just
+    settles promptly now); the workspace-lock path benefits through its existing `runtime.stop()`.
+    (c) CODE-11 — module-level sidecar child-PID registry in `runtime/sidecar.ts` (registered on
+    spawn / deregistered on exit-or-error at both funnels: `LlamaServer` + `WhisperCliTranscriber`);
+    the `uncaughtException` handler now best-effort SIGKILLs every registered child (throw-safe per
+    PID, after the vault lock) so a crash exit no longer strands up to five llama-servers on
+    Windows. (d) CODE-12 — `invalidateBinaryVerification(binPath)` evicts the binary-verifier's
+    session-cached verdict after `installOne` writes the fresh marker (repair-after-tamper no
+    longer stays refused until restart). (e) CODE-13 — `EngineDownloadManager.cancel()` now honours
+    `verifying`/`extracting` (post-verify + post-extract-before-marker + between-family abort
+    re-checks; the downloads.ts BE-4 mirror, incl. a new injectable `verifyImpl` seam), and an
+    engine job that would replace the LIVE chat engine's dir is refused while a model runtime runs
+    (`chatRuntimeActive` from the IPC layer; friendly `main.engine.runtimeRunning` EN+DE). Tests
+    +15 (characterization-first; the CODE-2 mid-start-stop red was the pre-fix 60 s queue stall):
+    shutdown latch-ordering pin, 4 manager quit-path/latch tests, 2 ladder cancellation tests,
+    3 registry + LlamaServer wiring pins, 1 whisper wiring pin, 4 engine cancel/refusal tests +
+    1 CODE-12 cache-eviction test. Docs: architecture.md GPU record **§5.6 "Shutdown latch +
+    cancellable start"** (incl. the CODE-11 crash-reap residual: a crash bypassing
+    uncaughtException itself still orphans — accepted). Residual nuances registered in the plan's
+    discoveries (triple-overlap queued start on the interactive-lock path stays uncancelled; a
+    cancel-during-extract leaves a verified marker-less binary). Remaining phases D–J unstarted.
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase B — CODE-1/10/14 vault-lock durability incl. the F1 review follow-up, +13 tests): typecheck clean, 4066 tests pass (47 skipped —
+**Current gate (2026-07-11, full-audit 2026-07-11 Phase C — CODE-2/3/11/12/13 quit-path lifecycle, +15 tests): typecheck clean, 4081 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2

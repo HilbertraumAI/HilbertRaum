@@ -1892,6 +1892,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.engine.httpFailed':
     'Der Engine-Download konnte nicht starten ({reason}). Bitte prüfe die Verbindung und versuche es erneut.',
   'main.engine.interrupted': 'Der Engine-Download wurde unterbrochen ({reason}). Bitte versuche es erneut.',
+  // CODE-13 (full-audit 2026-07-11): Installation ersetzt den Ordner der laufenden Chat-Engine.
+  'main.engine.runtimeRunning':
+    'Die KI-Engine kann nicht ersetzt werden, während ein Modell läuft. Stoppe das Modell im ' +
+    'KI-Modell-Bereich und versuche es dann erneut.',
   'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
   'main.docs.processing':
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',

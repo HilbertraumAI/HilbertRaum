@@ -207,6 +207,54 @@ export type FetchFn = typeof fetch
 
 const realSpawn: SpawnFn = (command, args, options) => nodeSpawn(command, args, options)
 
+// ---- Crash-exit child reap (full-audit 2026-07-11 CODE-11) ------------------------------
+//
+// A hard `uncaughtException` skips the graceful will-quit teardown (which stops + awaits
+// every sidecar), and on Windows the children survive the parent's `process.exit(1)` — up
+// to five co-resident llama-servers plus whisper-cli, holding GBs of RAM and loopback
+// ports. Every sidecar spawn funnels through `LlamaServer` (chat / embedder / reranker /
+// vision / translation) or `WhisperCliTranscriber`; both register their live child PIDs
+// here so the crash handler (`main/index.ts`) can best-effort kill them synchronously
+// before dying. Dependency-free and throw-safe: each kill is wrapped, and a PID that is
+// already gone (or was recycled to a foreign process the kill then fails on) is skipped.
+
+const liveSidecarPids = new Set<number>()
+
+/** Record a just-spawned sidecar child so a crash exit can reap it (CODE-11). */
+export function registerSidecarChild(pid: number | undefined): void {
+  if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) liveSidecarPids.add(pid)
+}
+
+/** Forget a sidecar child that exited/errored — on its own or via stop() (CODE-11). */
+export function unregisterSidecarChild(pid: number | undefined): void {
+  if (typeof pid === 'number') liveSidecarPids.delete(pid)
+}
+
+/** Read-only view of the currently registered sidecar PIDs (tests / diagnostics). */
+export function registeredSidecarPids(): number[] {
+  return [...liveSidecarPids]
+}
+
+/**
+ * Best-effort synchronous kill of every still-registered sidecar child (CODE-11) — the
+ * `uncaughtException` handler's last act before `process.exit(1)`. SIGKILL directly, no
+ * polite-then-escalate: the parent is crashing NOW and no event loop remains to run a
+ * grace timer. Each kill is wrapped so one dead/foreign PID never stops the loop; the
+ * registry is cleared either way (the process is exiting). `kill` is a test seam.
+ */
+export function killRegisteredSidecarChildren(
+  kill: (pid: number, signal: NodeJS.Signals) => unknown = (pid, signal) => process.kill(pid, signal)
+): void {
+  for (const pid of [...liveSidecarPids]) {
+    try {
+      kill(pid, 'SIGKILL')
+    } catch {
+      /* already gone / not ours — best-effort */
+    }
+    liveSidecarPids.delete(pid)
+  }
+}
+
 /** What a server that died on its own (not via `stop()`) left behind. */
 export interface UnexpectedExitInfo {
   exitCode: number | null
@@ -443,6 +491,8 @@ export class LlamaServer {
       windowsHide: true
     })
     this.child = child
+    // CODE-11: make the child reachable by the crash-exit reap for as long as it lives.
+    registerSidecarChild(child.pid)
     child.stderr?.on('data', (chunk: unknown) => {
       const text = String(chunk)
       this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_MAX)
@@ -453,6 +503,9 @@ export class LlamaServer {
       }
     })
     child.once('error', (err: unknown) => {
+      // CODE-11: an 'error' means the process is gone (ECHILD/EPIPE) or never started
+      // (spawn ENOENT) — either way there is nothing left for the crash reap to kill.
+      unregisterSidecarChild(child.pid)
       this.spawnError = err instanceof Error ? err : new Error(String(err))
       // An 'error' after the process is up means it is gone (the OS reports it via
       // ECHILD, an EPIPE writing to a dead child) — possibly without ever emitting
@@ -474,6 +527,7 @@ export class LlamaServer {
       }
     })
     child.once('exit', (code: unknown, signal: unknown) => {
+      unregisterSidecarChild(child.pid) // CODE-11: dead — off the crash-reap kill list
       this.exited = true
       this.exitCode = typeof code === 'number' ? code : null
       this.exitSignal = typeof signal === 'string' ? signal : null

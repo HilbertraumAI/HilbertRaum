@@ -110,6 +110,11 @@ export interface ModelRuntime {
 
 export type RuntimeFactory = (opts: RuntimeStartOptions) => ModelRuntime
 
+/** The CODE-3 latch refusal — content-free; auto-start logs it, users never see it. */
+function shutdownError(): Error {
+  return new Error('Runtime manager is shut down (the app is quitting)')
+}
+
 /**
  * Holds the single active runtime. The factory lets us swap mock → llama.cpp
  * without touching callers (the IPC layer just sees start/stop/status).
@@ -133,8 +138,44 @@ export class RuntimeManager {
    * while the first is still loading) must not stop-and-restart the runtime.
    */
   private startingModelId: string | null = null
+  /**
+   * The runtime instance a start is currently bringing up INSIDE the queue (full-audit
+   * 2026-07-11 CODE-2) — set by `doStart` before `next.start()`, cleared when that await
+   * settles. `stop()` uses it to cancel the in-flight start directly: the queue
+   * deliberately runs stop AFTER start settles (that ordering prevents orphans), but a
+   * start loading a 20 GB GGUF — or walking a failing ladder for up to ~9 min of serial
+   * health timeouts — used to be uncancellable, so quit and "Lock now" froze behind it.
+   */
+  private startingRuntime: ModelRuntime | null = null
+  /**
+   * Permanent shutdown latch (full-audit 2026-07-11 CODE-3), mirroring
+   * `TranslationRuntime.stopped`: armed by `shutdown()` at the very top of the quit
+   * teardown (`performShutdown`) and never cleared. Without it, a background auto-start
+   * that spends a long pre-start window hashing a multi-GB weight (`startModelRuntime`)
+   * could complete DURING the teardown and enqueue a fresh start AFTER the stop —
+   * `app.exit(0)` then kills the parent mid-start and the child survives as an orphan
+   * (loopback port + GBs of RAM held, especially on Windows). Once set,
+   * `start()`/`forceRestart()` reject WITHOUT invoking the factory, and a start already
+   * sitting in the queue refuses inside `doStart` before it can spawn.
+   */
+  private stopped = false
 
   constructor(private readonly factory: RuntimeFactory) {}
+
+  /**
+   * Arm the permanent shutdown latch (CODE-3). Synchronous and latch-only so the quit
+   * teardown can set it before anything else runtime-related without disturbing the
+   * queue's stop-in-progress semantics — `performShutdown` still calls `stop()` (which
+   * also cancels an in-flight start, CODE-2) in its awaited sidecar-stop block.
+   */
+  shutdown(): void {
+    this.stopped = true
+  }
+
+  /** True once `shutdown()` ran. Long pre-start work re-checks this (CODE-3). */
+  isShutdown(): boolean {
+    return this.stopped
+  }
 
   /** Run `task` after every previously queued start/stop, success or failure. */
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -147,6 +188,8 @@ export class RuntimeManager {
   }
 
   async start(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+    // CODE-3: after shutdown() nothing may spawn — reject before the queue/factory.
+    if (this.stopped) throw shutdownError()
     // Idempotent for the same model: if it is already running, or a start for it is
     // already in flight (a double-click, or a revisit to the AI Model screen before the
     // GGUF finished loading), do NOT stop-and-restart it — just resolve with the
@@ -166,6 +209,20 @@ export class RuntimeManager {
   }
 
   async stop(): Promise<void> {
+    // CODE-2 (full-audit 2026-07-11): cancel an in-flight start so it settles PROMPTLY
+    // instead of holding the queue for the remaining health timeouts. The queue semantics
+    // stay untouched (the doStop below still runs only after the start settles and acts on
+    // its committed result) — and never a bare timeout race, which would orphan the loading
+    // child (report §2.3). `LadderRuntime.stop()` aborts the ladder walk and forwards to the
+    // in-flight `LlamaServer.stop()`, whose exit check unblocks `waitForHealthy`.
+    const starting = this.startingRuntime
+    if (starting) {
+      // Fire-and-forget is safe: the enqueued doStop already awaits the start's settle,
+      // and the ladder's own failure path re-stops its inner runtime idempotently.
+      void Promise.resolve()
+        .then(() => starting.stop())
+        .catch(() => undefined)
+    }
     return this.enqueue(() => this.doStop())
   }
 
@@ -194,6 +251,8 @@ export class RuntimeManager {
    * it on `backend === 'gpu'`, factory.ts:137-139), so a GPU session auto-falls-back at most once.
    */
   async forceRestart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+    // CODE-3: a crash restart racing the quit teardown must not respawn either.
+    if (this.stopped) throw shutdownError()
     this.startingModelId = opts.modelId
     try {
       return await this.enqueue(() => this.doStart(opts))
@@ -203,6 +262,10 @@ export class RuntimeManager {
   }
 
   private async doStart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+    // CODE-3: a start that was already IN the queue when shutdown() armed the latch
+    // (e.g. enqueued behind an in-flight start/stop) must not spawn either — re-check
+    // before touching anything, so the factory is never invoked past the latch.
+    if (this.stopped) throw shutdownError()
     // Restart cleanly on a model switch (spec §7.5).
     if (this.current) await this.doStop()
     // Commit to `this.current`/`this.last` only on a FULLY successful start. A failed
@@ -210,6 +273,8 @@ export class RuntimeManager {
     // runtime as "active" — callers gate chat/RAG on `active() != null`, so a stale
     // `current` would route requests to a server that never came up. Clean up + reset.
     const next = this.factory(opts)
+    // Visible to stop() so a quit/lock can cancel this start while it is in flight (CODE-2).
+    this.startingRuntime = next
     try {
       await next.start()
       const health = await next.health()
@@ -224,6 +289,8 @@ export class RuntimeManager {
       this.current = null
       this.last = null
       throw err
+    } finally {
+      this.startingRuntime = null
     }
     return this.status()
   }

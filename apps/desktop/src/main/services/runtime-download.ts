@@ -28,6 +28,7 @@ import {
   type RuntimeDownloadPlan
 } from './assets'
 import { sha256File } from './models'
+import { invalidateBinaryVerification } from './binary-verifier'
 import { assertDownloadAllowed, type DownloadGates } from './downloads'
 
 // In-app engine (prebuilt sidecar binary) downloader. The model downloader fetches model
@@ -229,6 +230,10 @@ export interface EngineDownloadDeps {
   fetchImpl?: FetchFn
   /** Injected downloader (default `downloadToFile`) — tests capture the applied size cap (F17). */
   downloadImpl?: typeof downloadToFile
+  /** Injected verifier (default `verifyDownloadedFile`) — tests gate it to pin the
+   *  cancel-during-verify contract deterministically (full-audit 2026-07-11 CODE-13,
+   *  mirroring the model downloader's BE-4 seam in downloads.ts). */
+  verifyImpl?: typeof verifyDownloadedFile
   extractImpl?: ExtractFn
   log?: (msg: string, meta?: unknown) => void
 }
@@ -239,6 +244,17 @@ export interface StartEngineDownloadOptions {
   gates: DownloadGates
   /** Restrict the install to these families (default: every missing, fetchable family). */
   families?: EngineFamily[]
+  /**
+   * True when a chat model runtime is currently RUNNING off the llama_cpp install dir
+   * (full-audit 2026-07-11 CODE-13). An engine (re-)install pre-cleans that dir
+   * (`install()` removes everything but the archive + `cpu/`), which on Windows fails
+   * confusingly against the running binary's file lock and on POSIX silently swaps the
+   * binary under the live process — so a job that would touch llama_cpp is refused with
+   * friendly copy while a model runs. Installs that only touch other families (e.g. a
+   * missing whisper_cpp) are unaffected. The IPC layer passes
+   * `ctx.runtime.activeModelId() !== null`.
+   */
+  chatRuntimeActive?: boolean
   platform?: NodeJS.Platform
   arch?: string
 }
@@ -284,6 +300,10 @@ export class EngineDownloadManager {
     if (installs.length === 0) {
       throw new Error(tMain('main.engine.alreadyInstalled'))
     }
+    // CODE-13: refuse to replace the LIVE chat engine — see `StartEngineDownloadOptions`.
+    if (opts.chatRuntimeActive && installs.some((e) => e.family === 'llama_cpp')) {
+      throw new Error(tMain('main.engine.runtimeRunning'))
+    }
 
     const job: EngineDownloadJob = {
       jobId: randomUUID(),
@@ -321,10 +341,23 @@ export class EngineDownloadManager {
     }
   }
 
+  /**
+   * Cancel an in-flight engine job. `verifying` and `extracting` are cancellable states
+   * too (full-audit 2026-07-11 CODE-13 — the downloads.ts BE-4 precedent): the SHA-256
+   * hash and the extraction of a tens-of-MB archive take real time on a USB drive, and a
+   * cancel landing there used to be silently dropped (the job kept installing).
+   * `installOne` re-checks the abort signal after the verify and after the extraction
+   * (before the marker write), and `run` re-checks between families.
+   */
   cancel(jobId: string): EngineDownloadJob {
     const job = this.jobs.get(jobId)
     if (!job) return this.get(jobId)
-    if (job.status === 'queued' || job.status === 'downloading') {
+    if (
+      job.status === 'queued' ||
+      job.status === 'downloading' ||
+      job.status === 'verifying' ||
+      job.status === 'extracting'
+    ) {
       job.status = 'cancelled'
       if (this.active?.jobId === jobId) this.active.controller.abort()
       this.deps.log?.('Engine download cancelled', { jobId })
@@ -367,6 +400,13 @@ export class EngineDownloadManager {
       const outcome = await this.installOne(job, engine.plan, controller)
       if (outcome === 'aborted') return // a cancel; the partial archive was cleaned
       if (outcome === 'failed') return // job.status/error already set
+      // CODE-13 (the BE-4 shape): a cancel that landed in the window after this family's
+      // abort checks must stop the run here — the next installOne would otherwise
+      // overwrite the `cancelled` status and start downloading the next family.
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        return
+      }
       if (!firstBinary) firstBinary = engine.plan.binaryPath
     }
     job.binaryPath = firstBinary
@@ -414,7 +454,17 @@ export class EngineDownloadManager {
       })
 
       job.status = 'verifying'
-      const verify = await verifyDownloadedFile(plan.zipDest, plan.sha256)
+      const verify = await (this.deps.verifyImpl ?? verifyDownloadedFile)(plan.zipDest, plan.sha256)
+      // CODE-13 (mirrors downloads.ts BE-4): honour a cancel that landed DURING the hash —
+      // before acting on the verify result. Nothing extracts, no marker is written, the
+      // archive is discarded (the engine downloader never resumes partials). The status is
+      // set explicitly because a cancel racing the `verifying` transition above could have
+      // been overwritten.
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        await rm(plan.zipDest, { force: true })
+        return 'aborted'
+      }
       if (verify.reason === 'mismatch') {
         await rm(plan.zipDest, { force: true })
         job.status = 'failed'
@@ -435,6 +485,16 @@ export class EngineDownloadManager {
 
       job.status = 'extracting'
       await this.install(plan)
+      // CODE-13: honour a cancel that landed DURING the extraction, BEFORE the marker
+      // write. The extracted files may exist, but without a marker the install is not
+      // "current" (`runtimeInstallCurrent`), so the next job re-installs cleanly — and the
+      // pre-spawn verifier treats a marker-less binary as legacy rather than trusting a
+      // half-cancelled install.
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        await rm(plan.zipDest, { force: true })
+        return 'aborted'
+      }
       await rm(plan.zipDest, { force: true })
 
       if (!existsSync(plan.binaryPath)) {
@@ -468,6 +528,11 @@ export class EngineDownloadManager {
         arch: plan.arch,
         ...(binaries ? { binaries } : {})
       })
+      // CODE-12 (full-audit 2026-07-11): drop the binary-verifier's session-cached verdict
+      // for the path we just replaced — a stale pre-install verdict (the `mismatch` after a
+      // tamper repair, or an `ok` hashed from the OLD bytes) must not apply to the new
+      // binary until app restart. The next spawn re-hashes against the fresh marker.
+      invalidateBinaryVerification(plan.binaryPath)
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'
     } catch (err) {

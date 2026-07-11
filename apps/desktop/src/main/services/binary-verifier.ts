@@ -62,6 +62,18 @@ export function _resetBinaryVerificationForTests(): void {
   cache.clear()
 }
 
+/**
+ * Evict one binary's session-cached verdict (full-audit 2026-07-11 CODE-12). The in-app
+ * engine installer calls this after re-extracting a binary and writing its fresh marker:
+ * the session cache is keyed by resolved path, so a pre-install verdict — the `mismatch`
+ * that made the user repair in the first place, or an `ok` hashed from the OLD bytes —
+ * would otherwise stick to the NEW binary until app restart (a repair-after-tamper stayed
+ * refused: silent MockRuntime on a fixed drive). The next spawn re-hashes fresh.
+ */
+export function invalidateBinaryVerification(binPath: string): void {
+  cache.delete(binPath)
+}
+
 /** Injectable I/O for `computeBinaryVerification` (real fs by default). */
 export interface BinaryVerificationIo {
   readMarkerAt?: (dir: string) => RuntimeInstallMarker | null

@@ -97,6 +97,15 @@ interface Rung {
 }
 
 /**
+ * The CODE-2 cancellation outcome (full-audit 2026-07-11): thrown out of a ladder
+ * `start()` that was cancelled by `stop()` (quit / "Lock now" / a manual model stop).
+ * Content-free; the auto-start path logs it, users never see it.
+ */
+function cancelledStartError(): Error {
+  return new Error('Model start was cancelled (stopped while loading)')
+}
+
+/**
  * The ladder runtime: presents one `ModelRuntime` to the `RuntimeManager`, walking the
  * rungs inside `start()`. `backend`/`gpuName` expose where it landed (→ RuntimeStatus).
  */
@@ -107,6 +116,18 @@ class LadderRuntime implements ModelRuntime {
   private inner: ModelRuntime | null = null
   /** #39: flips on the first streamed chunk of the first real generation since start(). */
   private served = false
+  /**
+   * Set by `stop()` (full-audit 2026-07-11 CODE-2): a quit / "Lock now" / model stop must
+   * not wait out the remaining rungs' health timeouts (up to ~9 min serial on a failing
+   * ladder). The flag aborts the walk at the next rung boundary; the in-flight rung's
+   * runtime is stopped directly (`startingInner`), which unblocks its `waitForHealthy`
+   * via the existing exit-check throw — never a bare timeout race, which would orphan the
+   * loading child (report §2.3). Permanent for this instance: the manager builds a fresh
+   * `LadderRuntime` per start, so a cancelled ladder is never restarted.
+   */
+  private cancelled = false
+  /** The rung runtime whose `start()` is currently in flight (CODE-2), if any. */
+  private startingInner: ModelRuntime | null = null
 
   constructor(
     private readonly opts: RuntimeStartOptions,
@@ -124,6 +145,9 @@ class LadderRuntime implements ModelRuntime {
   async start(): Promise<void> {
     let lastError: unknown = null
     for (const rung of this.rungs) {
+      // CODE-2: cancelled between rungs — abort the walk instead of paying the next
+      // rung's health timeout.
+      if (this.cancelled) throw cancelledStartError()
       // Kick the (cached) probe off BEFORE the server start so the two run
       // concurrently — the model load dominates, so by the time the server is healthy
       // the backend label is normally already known. Probing only after health would
@@ -141,15 +165,22 @@ class LadderRuntime implements ModelRuntime {
           if (this.backend === 'gpu') this.deps.gpu.onGpuCrash?.(this.opts, info)
         }
       })
+      // Visible to stop() so a cancel can reach the in-flight LlamaServer (CODE-2).
+      this.startingInner = runtime
       try {
         await runtime.start()
       } catch (err) {
+        this.startingInner = null
         lastError = err
         try {
           await runtime.stop()
         } catch {
           /* best-effort cleanup; the start error is what matters */
         }
+        // CODE-2: a start that failed because the cancel KILLED it must abort the walk —
+        // and must never be persisted as a GPU fault (the child was loading, not broken),
+        // so this check runs before the gpuAttempt persist below.
+        if (this.cancelled) throw cancelledStartError()
         if (rung.gpuAttempt) {
           // Persist so later starts skip straight to rung 2 — no repeated GPU timeouts.
           const reason = err instanceof Error ? err.message : String(err)
@@ -160,6 +191,19 @@ class LadderRuntime implements ModelRuntime {
           if (!isBindRaceError(reason)) this.deps.gpu.onGpuFailure?.(reason)
         }
         continue
+      }
+      this.startingInner = null
+
+      // CODE-2: cancelled while THIS rung came up but the kill missed it (the pre-spawn
+      // window: verify/findPort run before `this.child` exists, and `doStart` resets the
+      // `stopping` flag) — stop the fresh server and abort rather than hand it back.
+      if (this.cancelled) {
+        try {
+          await runtime.stop()
+        } catch {
+          /* best-effort — the queued manager stop re-stops idempotently */
+        }
+        throw cancelledStartError()
       }
 
       this.inner = runtime
@@ -177,6 +221,10 @@ class LadderRuntime implements ModelRuntime {
       return
     }
 
+    // CODE-2: a cancelled start must settle as CANCELLED, not commit the rung-4 mock —
+    // the queued stop would then have to undo a runtime nobody asked for.
+    if (this.cancelled) throw cancelledStartError()
+
     // Rung 4 — the existing graceful fallback: the app can never be stuck. The mock's
     // replies are visibly simulated, and the next start retries the ladder (from rung 2,
     // since a rung-1 failure persisted the auto-disable flag).
@@ -190,9 +238,23 @@ class LadderRuntime implements ModelRuntime {
   }
 
   async stop(): Promise<void> {
+    // CODE-2: flag first so the walk aborts at the next rung boundary…
+    this.cancelled = true
+    // …then unblock an in-flight rung: `LlamaServer.stop()` during `waitForHealthy` makes
+    // the readiness loop throw via its exit check (the layer that already worked — this
+    // makes it reachable). Best-effort: the walk's catch path re-stops idempotently.
+    const starting = this.startingInner
+    this.startingInner = null
+    if (starting) {
+      try {
+        await starting.stop()
+      } catch {
+        /* best-effort — the ladder's own failure path re-stops the rung runtime */
+      }
+    }
     const inner = this.inner
     this.inner = null
-    if (inner) await inner.stop()
+    if (inner && inner !== starting) await inner.stop()
   }
 
   async health(): Promise<HealthStatus> {

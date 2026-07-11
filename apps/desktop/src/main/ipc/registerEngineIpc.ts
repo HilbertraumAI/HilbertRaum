@@ -34,7 +34,11 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
       engine.start({
         rootPath: ctx.paths.rootPath,
         manifestsDir: ctx.manifestsDir ?? null,
-        gates: gates()
+        gates: gates(),
+        // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
+        // RUNNING chat sidecar executes from — the manager refuses a job that would touch
+        // it while a model runtime is up (friendly copy; stop the model first).
+        chatRuntimeActive: ctx.runtime.activeModelId() !== null
       })
   )
 

@@ -1830,6 +1830,10 @@ export const en = {
   'main.engine.httpFailed':
     'The engine download could not start ({reason}). Please check the connection and try again.',
   'main.engine.interrupted': 'The engine download was interrupted ({reason}). Please try again.',
+  // CODE-13 (full-audit 2026-07-11): the install replaces the folder the running chat
+  // engine executes from — refuse while a model runs (stop it first; §11.4 tone, no blame).
+  'main.engine.runtimeRunning':
+    "The AI engine can't be replaced while a model is running. Stop the model on the AI Model screen, then try again.",
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
   'main.docs.taskRunning': 'A task is running for this document. Cancel it or wait for it to finish.',

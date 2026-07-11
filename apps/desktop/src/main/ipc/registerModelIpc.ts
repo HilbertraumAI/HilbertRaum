@@ -84,6 +84,16 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     )
   }
 
+  // CODE-3 (full-audit 2026-07-11): the multi-GB weight hash above (`computeInstallState`)
+  // is the long pre-start window a quit can begin inside — re-check the manager's shutdown
+  // latch before touching the runtime, so a background auto-start racing `performShutdown`
+  // never enqueues a fresh start after the teardown's stop. `RuntimeManager.start()`
+  // re-checks too; this earlier check just fails the auto-start cheaply and clearly.
+  // Optional call: bare boundary-fake runtimes in tests omit it (the `warmedUp?.()` idiom).
+  if (ctx.runtime.isShutdown?.()) {
+    throw new Error('The app is quitting — the model start was abandoned')
+  }
+
   log.info('Start runtime', { modelId, state })
   const status = await ctx.runtime.start({
     modelId,
