@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
 // long-standing npm/Arborist behaviour), so with an unpinned npm every contributor's
@@ -81,6 +81,118 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
       .map((e) => join(root, e.name))
       .filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
+  })
+
+  // full-audit 2026-07-12 TQ-1: `app-skills/*/SKILL.md` ships to the drive and is PARSED for
+  // YAML frontmatter — the exact class where a stray byte breaks the skill silently (a BOM
+  // recently broke a skill file's frontmatter detection). `.github/*.md` (the CLA texts) is
+  // public-facing. Both trees hold only text files under the extension filter (SKILL.md +
+  // example .md + schema .json; workflow .yml is outside the filter by design) and neither
+  // contains node_modules, so the recursive walk is safe.
+  it('holds no 0x00 byte in any app-skills or .github text file either', () => {
+    const repoRoot = join(process.cwd(), '..', '..')
+    const offenders = [
+      ...walk(join(repoRoot, 'app-skills')),
+      ...walk(join(repoRoot, '.github'))
+    ].filter((p) => readFileSync(p).includes(0))
+    expect(offenders).toEqual([])
+  })
+})
+
+// full-audit 2026-07-12 TQ-1 (BOM half): a UTF-8 BOM is the same authoring-tool byte-trap as
+// the literal NUL, with a nastier failure mode for `app-skills/*/SKILL.md` — the frontmatter
+// parser looks for `---` at byte 0, so a BOM'd skill file silently stops being a skill. Ban
+// the first-3-bytes EF BB BF signature across every root the NUL net covers (same extension
+// filter; PowerShell 5.1 writes BOM'd UTF-8 by default on this dev machine, so the class is
+// one careless `Out-File` away).
+describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => {
+  const walk = (dir: string): string[] => {
+    const out: string[] = []
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) out.push(...walk(p))
+      else if (/\.(ts|tsx|js|jsx|json|css|md|html)$/.test(entry.name)) out.push(p)
+    }
+    return out
+  }
+  const hasBom = (p: string): boolean => {
+    const b = readFileSync(p)
+    return b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf
+  }
+
+  it('no src/tests/docs/app-skills/.github/root-md file starts with EF BB BF', () => {
+    const repoRoot = join(process.cwd(), '..', '..')
+    const files = [
+      ...walk(join(process.cwd(), 'src')),
+      ...walk(join(process.cwd(), 'tests')),
+      ...walk(join(repoRoot, 'docs')),
+      ...walk(join(repoRoot, 'app-skills')),
+      ...walk(join(repoRoot, '.github')),
+      ...readdirSync(repoRoot, { withFileTypes: true })
+        .filter((e) => e.isFile() && /\.md$/.test(e.name))
+        .map((e) => join(repoRoot, e.name))
+    ]
+    expect(files.length).toBeGreaterThan(500) // the walk really walked (not a moved root)
+    expect(files.filter(hasBom)).toEqual([])
+  })
+})
+
+// full-audit 2026-07-12 DOC-1 (hand-off from the Phase-2 de-linkify): docs/build-log.md is the
+// FROZEN archive of retired BUILD_STATE entries, relocated from the repo root — where every
+// relative `](target)` used to resolve. Phase 2 de-linkified all 258 relocation-broken links
+// (targets → inline code, prose byte-identical); the ONLY live relative link left is the
+// header's `../BUILD_STATE.md`. This pins that state: any future retirement pass that pastes
+// entries in WITH their links (or a "helpful" re-linkify) fails here instead of publishing a
+// wall of dead links. Code spans are stripped first (CommonMark pairing) because the archive
+// legitimately holds `](…)` sequences inside inline code — a regex/call-syntax fragment and a
+// stray-backtick paragraph that never rendered as links (6 such false positives at Phase 2).
+describe('repo hygiene — docs/build-log.md holds no relative markdown links (DOC-1)', () => {
+  /** Strip fenced blocks + inline code spans (a run of N backticks closes at the next run of
+   *  exactly N; an unclosed run is literal text — the CommonMark rule, which is what makes the
+   *  archive's stray-backtick paragraph a non-link). */
+  const stripCode = (s: string): string => {
+    const noFences = s.replace(/^```[\s\S]*?^```/gm, '')
+    let out = ''
+    let i = 0
+    while (i < noFences.length) {
+      if (noFences[i] === '`') {
+        let n = 1
+        while (noFences[i + n] === '`') n++
+        let j = i + n
+        let closed = -1
+        while (j < noFences.length) {
+          if (noFences[j] === '`') {
+            let m = 1
+            while (noFences[j + m] === '`') m++
+            if (m === n) {
+              closed = j + m
+              break
+            }
+            j += m
+          } else j++
+        }
+        if (closed === -1) {
+          out += noFences.slice(i, i + n)
+          i += n
+        } else i = closed
+      } else {
+        out += noFences[i]
+        i++
+      }
+    }
+    return out
+  }
+
+  it('the only relative link is the header ../BUILD_STATE.md pointer, and it resolves', () => {
+    const buildLog = join(process.cwd(), '..', '..', 'docs', 'build-log.md')
+    const text = stripCode(readFileSync(buildLog, 'utf8'))
+    const targets: string[] = []
+    for (const m of text.matchAll(/\[[^\]\n]*\]\(([^()\s]+)\)/g)) targets.push(m[1])
+    const relativeTargets = targets.filter((t) => !/^https?:\/\//.test(t) && !t.startsWith('#'))
+    expect(relativeTargets).toEqual(['../BUILD_STATE.md'])
+    for (const t of relativeTargets) {
+      expect(existsSync(resolve(dirname(buildLog), t.split('#')[0])), `${t} resolves`).toBe(true)
+    }
   })
 })
 

@@ -3,6 +3,7 @@
   "version": "0.1.47",
   "private": true,
   "description": "HilbertRaum desktop app (Electron).",
+  "license": "GPL-3.0-or-later",
   "author": "HilbertRaum contributors",
   "main": "out/main/index.mjs",
   "sideEffects": [

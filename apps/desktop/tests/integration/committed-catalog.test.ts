@@ -102,12 +102,62 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     const ids = new Set(committedManifests().map((m) => m.id))
     for (const id of [
       'qwen3-4b-instruct-q4',
+      'qwen3-4b-instruct-2507-q4',
       'ministral3-8b-instruct-2512-q4',
       'gemma4-12b-it-qat-q4',
       'qwen3-14b-instruct-q4',
       'qwen3-30b-a3b-q4'
     ]) {
       expect(ids.has(id), `${id} still present`).toBe(true)
+    }
+  })
+})
+
+// full-audit 2026-07-12 TQ-2: the 2507 refresh is the one RANKED (auto-recommendable) chat
+// manifest that carried no named CI invariant — a rank/license/hash mis-edit or an accidental
+// deletion passed the suite (issue #48 closed exactly this gap for the fast-tier pair; this
+// closes it one manifest over). Values below are the manifest's COMMITTED promotion facts
+// (Phase-29 D18, model-policy.md "Chat (better 4B)" row), not aspirations.
+describe('committed catalog — qwen3-4b-instruct-2507-q4 invariants (TQ-2)', () => {
+  it('the 2507 refresh holds its Phase-29 promotion values', () => {
+    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
+    const m = byId['qwen3-4b-instruct-2507-q4']
+    expect(m, 'manifest present').toBeDefined()
+    expect(m.role, 'role').toBe('chat')
+    expect(m.family, 'family').toBe('qwen3')
+    expect(m.runtime, 'runtime').toBe('llama_cpp')
+    expect(m.format, 'format').toBe('gguf')
+    // Phase-29 user decision: the ORIGINAL 4B (rank 2, hybrid thinking → Deep) stays the
+    // catalog default; 2507 is the better-RAG manual pick ranked just BELOW it (rank 1).
+    // Pin BOTH ranks so the ordering (not just one number) can't silently invert.
+    expect(m.recommendationRank, '2507 rank').toBe(1)
+    expect(byId['qwen3-4b-instruct-q4'].recommendationRank, 'original 4B rank').toBe(2)
+    expect(m.recommendedProfiles, 'no legacy profiles').toEqual([])
+    // Apache-2.0, review approved (drive-shippable provenance), real verified hash.
+    expect(m.license, 'license').toBe('apache-2.0')
+    expect(m.licenseReview.status, 'license review').toBe('approved')
+    expect(isRealSha256(m.sha256), 'real sha256').toBe(true)
+    expect(m.download?.sha256, 'download hash equals top-level').toBe(m.sha256)
+    expect(m.mmproj, 'text-only chat model').toBeUndefined()
+  })
+
+  // The four single-per-role manifests (+ vision) share the thin-coverage gap but churn far
+  // less; a presence + real-hash pin is the cheap half that catches deletion/hash mis-edits.
+  // License posture is deliberately NOT pinned here: TranslateGemma's `pending` is a standing
+  // owner decision (the mechanical sell-gate guard) — pinning statuses would freeze that.
+  it('each non-chat role ships exactly its one known manifest with a real hash', () => {
+    const manifests = committedManifests()
+    const expected: Record<string, string> = {
+      embeddings: 'multilingual-e5-small-q8',
+      reranker: 'bge-reranker-v2-m3-f16', // manifest id ≠ its filename (bge-reranker-v2-m3.yaml)
+      transcriber: 'whisper-small-multilingual',
+      translation: 'translategemma-12b-it-q4',
+      vision: 'qwen2.5-vl-3b-instruct-q4'
+    }
+    for (const [role, id] of Object.entries(expected)) {
+      const ofRole = manifests.filter((m) => m.role === role)
+      expect(ofRole.map((m) => m.id), `${role} manifest set`).toEqual([id])
+      expect(isRealSha256(ofRole[0].sha256), `${id} real sha256`).toBe(true)
     }
   })
 })

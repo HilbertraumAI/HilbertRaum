@@ -1310,6 +1310,32 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       BUILD_STATE §4 hop) — §47 ledger untouched, file byte-verified NUL-free. No doc-pinning test
       asserts any changed sentence; every edited doc byte-verified NUL-free. Docs-only ⇒ build
       unaffected.
+    - _2026-07-12 Phase 5 (test-net, coverage, licensing — suite 4178 → **4190/47**):_ **TQ-1**
+      fixed — the hygiene NUL net now also walks `app-skills/**` + `.github/**` (same extension
+      filter; skill frontmatter is the class a stray byte breaks silently), and a new UTF-8 BOM
+      ban (first-3-bytes EF BB BF) covers every NUL-net root + root `*.md` (642 files, all
+      verified clean first). **TQ-2** fixed — `qwen3-4b-instruct-2507-q4` joined the incumbents
+      presence pin + gained a Phase-29 invariant block (rank 1 AND original-4B rank 2 pinned as a
+      pair, apache-2.0 approved, real sha256 = download hash, no mmproj); the five non-chat roles
+      get a one-manifest-per-role presence + real-hash pin (license posture deliberately NOT
+      pinned — TranslateGemma `pending` is the standing sell-gate decision). **SEC-2 (code half)**
+      landed as the containment sweep ONLY: `install()` now runs an exported
+      `assertExtractedSymlinksContained` over the FINAL post-flatten layout — any symlink/junction
+      member resolving outside `extractTo` fails the install (job `failed`, no marker; lexical
+      `readlink` resolution so broken links are still caught). The `--no-same-owner
+      --no-same-permissions -k` tar flags were DROPPED per the plan's criterion: bsdtar 3.8.4
+      (Windows) accepts them (verified live), but GNU tar's `-k` makes an existing file a HARD
+      error and no GNU tar exists on this machine to verify against — sweep-only avoids the
+      untestable flag semantics. `placeholder`-verify still extracts with `job.unverified` (posture
+      unchanged). **DOC-1 hand-off** done — `repo-hygiene.test.ts` pins docs/build-log.md to
+      exactly one relative markdown link (`../BUILD_STATE.md`, must resolve) after stripping
+      code fences + CommonMark-paired inline spans (the archive's 6 non-link `](…)` false
+      positives stay invisible to it). **LIC-1** fixed — `apps/desktop/package.json` declares
+      `"license": "GPL-3.0-or-later"` (matches root; electron-builder.yml carries no conflicting
+      field). Teeth demonstrated live for all new nets: planted BOM + NUL files and a dead
+      archive link each failed their assertion; disabling the sweep call turned the escaping-link
+      job `done` — all reverted/restored byte-verified. New `engine-extract-containment.test.ts`
+      (7 tests, junction-based so unprivileged on Windows); typecheck + build green.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

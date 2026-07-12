@@ -1,8 +1,8 @@
 import { chmodSync, existsSync, readFileSync } from 'node:fs'
-import { mkdir, readdir, rename, rm } from 'node:fs/promises'
+import { mkdir, readdir, readlink, rename, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { basename, join, win32 } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { tMain } from './i18n'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
@@ -565,11 +565,25 @@ export class EngineDownloadManager {
 
     const extract = this.deps.extractImpl ?? extractWithTar
     await extract(plan.zipDest, plan.extractTo)
+    await this.flattenNestedBinary(plan)
 
-    // Flatten: when the binary is nested, move its directory's contents up to the extract
-    // root, where services/runtime/sidecar.ts resolves it. The `cpu/` subdir is excluded
-    // from the search so a re-fetch of the DEFAULT build never mistakes the safety net for
-    // the freshly extracted nested binary.
+    // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already
+    // refuses `..` members and the archive hash is verified before extraction, but a
+    // SYMLINK member pointing outside the install dir extracts fine and would be followed
+    // by any later read/write through it. Sweep the FINAL layout (after flatten, so a
+    // relative link is checked where it will actually live) and refuse the install if any
+    // link escapes. Legitimate engine archives carry no escaping links, so this changes
+    // nothing for a good archive.
+    await assertExtractedSymlinksContained(plan.extractTo)
+  }
+
+  /**
+   * Flatten: when the binary is nested, move its directory's contents up to the extract
+   * root, where services/runtime/sidecar.ts resolves it. The `cpu/` subdir is excluded
+   * from the search so a re-fetch of the DEFAULT build never mistakes the safety net for
+   * the freshly extracted nested binary.
+   */
+  private async flattenNestedBinary(plan: RuntimeDownloadPlan): Promise<void> {
     if (existsSync(plan.binaryPath)) return
     const binName = basename(plan.binaryPath)
     const found = await findBinary(plan.extractTo, binName, join(plan.extractTo, 'cpu'))
@@ -580,6 +594,39 @@ export class EngineDownloadManager {
       await rename(join(srcDir, entry), join(plan.extractTo, entry))
     }
   }
+}
+
+/**
+ * SEC-2 (full-audit 2026-07-12): walk the freshly extracted tree and throw when any
+ * symlink (or Windows junction — Node reports both as symbolic links) resolves outside
+ * `extractTo`. Lexical resolution via `readlink` (not `realpath`) so a BROKEN escaping
+ * link is still caught, and no recursion THROUGH links (a link dirent is never a
+ * directory dirent, so link cycles cannot loop the walk). The offending link is removed
+ * best-effort before throwing — the next install's pre-clean removes the rest.
+ * Exported for tests.
+ */
+export async function assertExtractedSymlinksContained(extractTo: string): Promise<void> {
+  const root = resolve(extractTo)
+  const sweep = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isSymbolicLink()) {
+        // Junction targets may carry the `\\?\` long-path prefix on some Node/Windows
+        // combinations; strip it so `relative` compares like with like.
+        const target = (await readlink(p)).replace(/^\\\\\?\\/, '')
+        const resolved = isAbsolute(target) ? resolve(target) : resolve(dirname(p), target)
+        const rel = relative(root, resolved)
+        const escapes = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)
+        if (escapes) {
+          await rm(p, { force: true, recursive: false }).catch(() => undefined)
+          throw new Error(`extracted archive member escapes the install dir: ${entry.name} -> ${target}`)
+        }
+      } else if (entry.isDirectory()) {
+        await sweep(p)
+      }
+    }
+  }
+  await sweep(root)
 }
 
 /** Depth-first search for a file named `binName` under `dir`, skipping `skipDir`. */
