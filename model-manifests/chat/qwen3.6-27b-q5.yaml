@@ -1,0 +1,24 @@
+id: qwen3.6-27b-q5
+display_name: Qwen3.6 27B Q5_K_M
+family: qwen3.6
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 18.2
+recommended_min_ram_gb: 24
+recommended_ram_gb: 32
+# 27B Q5 weight ~18.2 GB — tight on the 24 GB RTX 3090. Small default ctx-size to fit
+# the KV cache in remaining VRAM; expect partial CPU offload at larger contexts.
+recommended_context_tokens: 8192
+supports_thinking_mode: true
+local_path: models/chat/qwen3.6-27b-q5.gguf
+sha256: local-unverified
+# User-added local model (managed by `llama list`, symlinked into the dev-root models/chat).
+recommended_profiles: [PRO]
+recommendation_rank: 0
+license_review:
+  status: approved
+  reviewed_by: "vldmr (manual, local test model)"
+  reviewed_at: "2026-06-22"
+  notes: "User-added for local testing. Source: Qwen3.6-27B GGUF (Q5_K_M), license apache-2.0. Added manually via `llama get`, not via fetch-models."

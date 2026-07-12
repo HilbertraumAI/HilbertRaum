@@ -1,0 +1,29 @@
+id: qwen3.5-9b-q8
+display_name: Qwen3.5 9B Q8_0
+family: qwen3.5
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 8.9
+recommended_min_ram_gb: 14
+recommended_ram_gb: 32
+# Raised from 32768 to 96k (2026-06-18). GGUF native context_length=262144 (rope freq_base
+# 10M, no YaRN needed); real ceiling here is VRAM. At 96k the KV cache (~12 GB f16) + Q8 weight
+# (~8.9 GB) ≈ 22 GB on the 24 GB RTX 3090 — tight but full-GPU. Becomes llama-server --ctx-size.
+recommended_context_tokens: 98304
+supports_thinking_mode: true
+local_path: models/chat/qwen3.5-9b-q8.gguf
+# Placeholder (non-hex) on purpose: a real 64-hex hash forces the app to hash the
+# whole multi-GB weight on every load. A placeholder + lenient policy skips hashing
+# entirely (developer/local-test only). Real hash on record: 809626574d0cb43d4becfa56169980da2bb448f2299270f7be443cb89d0a6ae4
+sha256: local-unverified
+# User-added local model (downloaded via `llama get`, hardlinked into models/chat).
+# No `download:` block — the weight is supplied locally, not fetched by fetch-models.
+recommended_profiles: [PRO]
+recommendation_rank: 0
+license_review:
+  status: approved
+  reviewed_by: "vldmr (manual, local test model)"
+  reviewed_at: "2026-06-17"
+  notes: "User-added for local testing. Source: unsloth/Qwen3.5-9B-GGUF (Q8_0), license apache-2.0 (verified on the HF model card 2026-06-17). Added manually, not via fetch-models."

@@ -1,0 +1,24 @@
+id: gemma-4-26b-q4
+display_name: Gemma 4 26B A4B Q4_K_M
+family: gemma4
+role: chat
+format: gguf
+runtime: llama_cpp
+license: gemma
+size_on_disk_gb: 15.8
+recommended_min_ram_gb: 20
+recommended_ram_gb: 32
+# 26B (A4B MoE) Q4 weight ~15.8 GB. Modest default ctx-size on the 24 GB RTX 3090.
+recommended_context_tokens: 8192
+# Gemma has no runtime thinking-mode toggle, so Deep answer mode is not offered.
+supports_thinking_mode: false
+local_path: models/chat/gemma-4-26b-q4.gguf
+sha256: local-unverified
+# User-added local model (managed by `llama list`, symlinked into the dev-root models/chat).
+recommended_profiles: [PRO]
+recommendation_rank: 0
+license_review:
+  status: approved
+  reviewed_by: "vldmr (manual, local test model)"
+  reviewed_at: "2026-06-22"
+  notes: "User-added for local testing. Source: gemma-4-26B-A4B-it (Unsloth UD Q4_K_M), Gemma Terms of Use (local/non-redistribution use). Added manually via `llama get`, not via fetch-models."
