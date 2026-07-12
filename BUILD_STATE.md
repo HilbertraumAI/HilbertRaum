@@ -1177,7 +1177,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     (tag → three build legs + SHA256SUMS → draft → owner smoke → Publish; testers filed #48–#53
     against the shipped build).
     - [ ] **Push `master` to origin BEFORE flipping** (full-audit 2026-07-12 GAP-1). Local
-      `master` is **9 commits ahead** as of the 2026-07-12 close-out — re-derive at push
+      `master` is **12 commits ahead** as of the 2026-07-12 PF-2 reword — re-derive at push
       time; the remote tip `ed1332c` predates the
       BUILD_STATE restructure and still carries the literal NUL in `docs/architecture.md`, so
       flipping without pushing would publish that stale tree as the repo's read-first doc.
@@ -1246,23 +1246,23 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       DOC-13 PVR-at-flip → item 10).
 12. **Full-audit 2026-07-12 — ROUND COMPLETE (close-out 2026-07-12; durable ledger + §-anchor
     legend: [`docs/architecture.md`](docs/architecture.md) **§48**).** Final pre-public-flip
-    audit at baseline `5456935`: **0 Critical, 0 High**; 4 Medium (SEC-1 zero-key sidecar on
+    audit at baseline `b4017be`: **0 Critical, 0 High**; 4 Medium (SEC-1 zero-key sidecar on
     lock-during-import, GAP-1 no push-first flip step, DOC-1 relocation-dead archive links,
     DOC-2 inverted `allowNetwork` default) + a Low/Info tail; the dedicated security,
     vault/shutdown, manifest-chain and cross-platform passes all returned clean (verdicts
-    preserved in §48). Remediated across Phases 1–5, commits `6d8991e` → `466bbad` (every phase
+    preserved in §48). Remediated across Phases 1–5, commits `9ca8b79` → `032b014` (every phase
     independently reviewer-approved BEFORE landing; one repair round all wave), suite
     4168 → **4190/47**, typecheck + build green throughout. Both working papers were deleted at
     close-out (uncommitted for their whole life — NO git-history copy; §48 is the only durable
     record).
     - _2026-07-12 Phase 1 (vault correctness & reliability), two commits:_ **SEC-1** fixed
-      `6d8991e` — "Lock now" mid-import can no longer write a zero-key document sidecar:
+      `9ca8b79` — "Lock now" mid-import can no longer write a zero-key document sidecar:
       `documentCipher()` closures re-read the live key per invocation and throw a typed
       `VaultLockedError`; the drained prepare fails clean (row reconciles `failed`). Red-verified
       characterization + gated-`sha256File` integration tests; security-model "Lock failure &
       durability" lock-during-import bullet; the optional orphan-`.enc` sweep stays OUT (the
       startup sweep runs while the DB is locked — known-limitations note). **REL-1 / REL-2 /
-      REL-4 / REL-3 / CODE-1** fixed `abfde2e` (commit 2) — `preserveNewerPlaintext` pre-shreds a spent
+      REL-4 / REL-3 / CODE-1** fixed `6a33f25` (commit 2) — `preserveNewerPlaintext` pre-shreds a spent
       `.recovery` before the salvage rename; unlock's roll-forward freshness probe is
       exception-guarded (probe error → leave `.recovery`, unlock normally, retry next unlock);
       the in-flight-stream settle await is bounded (`STREAM_SETTLE_TIMEOUT_MS` 5 s in
@@ -1289,9 +1289,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       optional explicit-containment hardening is Phase 5's call — the close-out appends its
       outcome). **Owner-decision batch (surfaced here, NOT executed — audit §3):**
       ① **GAP-1 execution** — the actual `git push` (local `master` 5 ahead of origin as of this
-      entry) and the tag-push decision. ② **PF-2** — optionally reword the unpushed `0d7a76e`
+      entry) and the tag-push decision. ② **PF-2** — optionally reword the unpushed `41acc47`
       "docs update" commit (a 2,125-deletion structural commit: spec retirement + stamp removal
-      + architecture.md NUL fix); verified 2026-07-12 that no tracked file cites `0d7a76e` or
+      + architecture.md NUL fix); verified 2026-07-12 that no tracked file cites `41acc47` or
       its restructure successor. ⚠️ Trade-off: a rebase-reword rewrites the hashes of ALL later
       commits (the restructure commit + this round's three so far) — the hashes cited by this
       item's Phase 1/2 entries would then be stale and need updating; only possible while
@@ -1361,11 +1361,13 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
         on `cla-signatures`) · ⑥ owner decided **NOT** to publish —
         `.claude/skills/screenshot-verify/SKILL.md` untracked via `git rm --cached` (file stays
         on disk for local dev; `.gitignore`'s `.claude` rule, which never applied to the
-        already-tracked file, now covers it). Still open: ① GAP-1 push + tag decision · ② PF-2
-        reword (if executed, the stale-hash sweep must cover this item's round-hash citations
-        AND the `0d7a76e` cite inside ② itself — six round commits now, not three — AND §8's
-        L-7 update (`466bbad`) AND architecture.md §48 throughout, incl. its `5456935` baseline
-        cites). ③ LIC-2 **EXECUTED 2026-07-12** (owner-approved): committed generated
+        already-tracked file, now covers it). ② PF-2 **EXECUTED 2026-07-12** (owner-approved,
+        while still unpushed): the spec-retirement commit reworded from "docs update" to a
+        message naming the retirement + stamp removal + NUL fix (now `41acc47`; rebase rewrote
+        all 11 unpushed hashes) and the stale-hash sweep applied — 28 citations across
+        BUILD_STATE (§5 item 12, §8 L-7 row) + architecture.md §48 updated to the post-reword
+        hashes; trees byte-identical before/after. Still open: ① GAP-1 push + tag decision
+        ONLY. ③ LIC-2 **EXECUTED 2026-07-12** (owner-approved): committed generated
         `THIRD-PARTY-NOTICES.md` (226 shipped packages — asar prod closure minus the yml
         negations; no NOTICE files exist in the set; KaTeX OFL font notice included) +
         `scripts/generate-third-party-notices.mjs` (+ shared `scripts/lib/shipped-packages.mjs`),
@@ -1516,7 +1518,7 @@ the offline/privacy guarantees:
   check this fix calls for; symlink members are the residual soft spot. (The skills importer
   does NOT share this gap — it enumerates and validates every member's path/symlink before
   inflating, arch §22-A2.) Fix: list/extract members with an explicit containment check.
-  **Update (close-out 2026-07-12):** Phase 5 (`466bbad`) added the explicit in-app containment
+  **Update (close-out 2026-07-12):** Phase 5 (`032b014`) added the explicit in-app containment
   check L-7's fix called for: `install()` now runs a post-extract symlink/junction containment
   sweep (`assertExtractedSymlinksContained`, over the final post-flatten layout — an escaping
   member fails the install, no marker written), closing the symlink residual; the
