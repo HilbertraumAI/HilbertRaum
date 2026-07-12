@@ -305,7 +305,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // is dropped, or `appendMessage` throws against the now-closed DB → an unhandled rejection).
     // Awaiting the settle here makes persist-before-close the ORDERING, not a race. Placed after
     // the sidecar stop so a generation that ignores its abort signal is still unwound by the
-    // dead sidecar (no teardown stall). Best-effort (`allSettled`).
+    // dead sidecar (no teardown stall). Best-effort (`allSettled`) and BOUNDED (full-audit
+    // 2026-07-12 REL-4: 5 s ceiling inside `awaitInFlightStreamsSettled`, mirroring the
+    // doc-task settle below) so a wedged settle can never hang "Lock now".
     await awaitInFlightStreamsSettled()
     // TA-1 H2: also await the cancelled doc-task's abort-unwind (its materialize/shred runs
     // synchronously while ctx.db is open) before purge/lock close the DB — bounded so a wedged

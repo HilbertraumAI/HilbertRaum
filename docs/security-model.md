@@ -395,8 +395,13 @@ explicitly:
   session's data rests on the drive **in plaintext** as `<db>.recovery` until the next
   successful unlock secures it — previously that leftover was shredded at the next launch
   (at the cost of silently losing it). Availability of the user's data wins in this
-  already-failed corner; the exposure window ends at the next unlock, when the snapshot
-  is re-encrypted and shredded.
+  already-failed corner; the exposure window ends at the next unlock **under this app
+  version or newer**, when the snapshot is re-encrypted and shredded (full-audit
+  2026-07-12 REL-3). An OLDER app copy (portable drives carry the app; running an old
+  copy is this product's own scenario) predates `.recovery` entirely — it neither rolls
+  the snapshot forward nor shreds it, so under an old copy the plaintext file simply
+  rests beside the vault until a current version next unlocks. If a `<db>.recovery`
+  file lingers, unlock once with a current app version.
 - **Lock during an import fails the document — never a zero-key sidecar (full-audit
   2026-07-12 SEC-1).** `documentCipher()`'s closures re-read the live vault key on every
   invocation and throw a typed `VaultLockedError` once `lock()` has zeroed it. Previously a

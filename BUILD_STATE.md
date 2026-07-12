@@ -1236,6 +1236,23 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       CODE-2 triple-overlap, CODE-11 crash-bypass orphan, CODE-13 cancel-during-extract +
       download-vs-start race, the torn-FTS-content-backfill observation, the CODE-48 watch trio,
       DOC-13 PVR-at-flip → item 10).
+12. **Full-audit 2026-07-12 — remediation round IN PROGRESS** (working papers under untracked
+    `docs/audits/`, never committed; the durable ledger lands at the round's close-out).
+    - _2026-07-12 Phase 1 (vault correctness & reliability), two commits:_ **SEC-1** fixed
+      `6d8991e` — "Lock now" mid-import can no longer write a zero-key document sidecar:
+      `documentCipher()` closures re-read the live key per invocation and throw a typed
+      `VaultLockedError`; the drained prepare fails clean (row reconciles `failed`). Red-verified
+      characterization + gated-`sha256File` integration tests; security-model "Lock failure &
+      durability" lock-during-import bullet; the optional orphan-`.enc` sweep stays OUT (the
+      startup sweep runs while the DB is locked — known-limitations note). **REL-1 / REL-2 /
+      REL-4 / REL-3 / CODE-1** this commit — `preserveNewerPlaintext` pre-shreds a spent
+      `.recovery` before the salvage rename; unlock's roll-forward freshness probe is
+      exception-guarded (probe error → leave `.recovery`, unlock normally, retry next unlock);
+      the in-flight-stream settle await is bounded (`STREAM_SETTLE_TIMEOUT_MS` 5 s in
+      `awaitInFlightStreamsSettled`, covering quit AND interactive lock); security-model's
+      `.recovery` confidentiality window qualified "under this app version or newer";
+      `cleanRelative` persists posix separators (display-only `source_relative_path`). All five
+      forced-failure tests watched red pre-fix (src stashed) then green. Suite 4168 → 4178/47.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

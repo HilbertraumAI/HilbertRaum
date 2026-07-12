@@ -34,6 +34,11 @@ export const streamBuffers = new Map<string, StreamBuffer>()
 // `finally`); always awaited via `allSettled` so one stream can't block teardown.
 export const streamSettled = new Map<string, Promise<void>>()
 
+/** Upper bound on how long lock/quit waits for the in-flight stream settles to unwind
+ *  (full-audit 2026-07-12 REL-4) — mirrors the 5 s doc-task settle bound
+ *  (`shutdown.ts` / `registerWorkspaceIpc.ts` `*_TASK_SETTLE_TIMEOUT_MS`). */
+export const STREAM_SETTLE_TIMEOUT_MS = 5_000
+
 /**
  * R1 — await every in-flight stream's settle (its abort-unwind partial-reply persistence) so a
  * lock/quit closes the DB only AFTER each partial has persisted. Snapshots the live promises (a
@@ -42,9 +47,29 @@ export const streamSettled = new Map<string, Promise<void>>()
  *
  * CONTRACT — the caller MUST `controller.abort()` every in-flight stream FIRST so they are
  * actually unwinding when this is awaited; otherwise a long generation would stall teardown.
+ *
+ * full-audit 2026-07-12 REL-4 — BOUNDED by `timeoutMs` (the doc-task settle treatment): the
+ * settle promises never reject (resolved in the wrapper's `finally`), but one wedged for any
+ * other reason used to stall quit/lock forever → user hard-kills → mid-session wal state →
+ * next-launch shred. After the ceiling the teardown proceeds; the only thing forfeited is the
+ * wedged stream's partial-reply persistence — the same trade the 5 s doc-task ceiling already
+ * accepts. Bounding here covers BOTH callers (`performShutdown` and the interactive-lock
+ * handler) in one place.
  */
 export async function awaitInFlightStreamsSettled(
-  settled: Map<string, Promise<void>> = streamSettled
+  settled: Map<string, Promise<void>> = streamSettled,
+  timeoutMs: number = STREAM_SETTLE_TIMEOUT_MS
 ): Promise<void> {
-  await Promise.allSettled([...settled.values()])
+  const pending = [...settled.values()]
+  if (pending.length === 0) return // fast path: no timer armed on an idle teardown
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs)
+    timer.unref()
+  })
+  try {
+    await Promise.race([Promise.allSettled(pending).then(() => undefined), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }

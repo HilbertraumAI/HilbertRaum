@@ -1940,7 +1940,11 @@ export function expandPathsWithSource(paths: string[]): ExpandedFile[] {
     const rel = relative(root, file)
     // A `..` escape or an absolute result (different drive on Windows) ⇒ basename fallback.
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) return basename(file)
-    return rel
+    // full-audit 2026-07-12 CODE-1 — persist forward slashes regardless of host separator
+    // (the `driveRelKey`/`markerBinaryKey` convention): `source_relative_path` is
+    // display-only (never parsed back into a host path), and a Windows-populated workspace
+    // opened on macOS/Linux should not show `sub\folder\file.pdf` breadcrumbs.
+    return rel.split(sep).join('/')
   }
 
   return flat.map((path) => {

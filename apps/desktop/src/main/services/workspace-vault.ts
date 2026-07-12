@@ -590,7 +590,17 @@ export function preserveNewerPlaintext(vaultPaths: VaultPaths): void {
     if (existsSync(`${vaultPaths.dbPath}-wal`) || existsSync(`${vaultPaths.dbPath}-shm`)) return
     if (statSync(vaultPaths.dbPath).mtimeMs <= statSync(vaultPaths.encPath).mtimeMs) return
     if (!fileHasSqliteHeader(vaultPaths.dbPath)) return
-    renameSync(vaultPaths.dbPath, `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+    const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
+    // full-audit 2026-07-12 REL-1 — shred a pre-existing `.recovery` BEFORE the rename. Any
+    // `.recovery` coexisting with a working dbPath is spent or garbage (an intervening unlock
+    // consumed or out-dated it; this runs only from init(), single-threaded, before any IPC).
+    // On success the rename would overwrite it anyway; the pre-shred covers the case where the
+    // target is HELD (Windows AV/indexer without FILE_SHARE_DELETE; likelier on exFAT/FAT32) —
+    // an unshreddable held target still fails the rename into the swallowing catch below, but
+    // a merely-lingering spent leftover no longer makes this rename fail and hand the ONLY
+    // fresh copy of the session's data to shredStalePlaintext.
+    shredFile(recoveryPath)
+    renameSync(vaultPaths.dbPath, recoveryPath)
   } catch {
     /* best-effort: on any doubt fall through to the sweep (today's behavior) */
   }
@@ -936,12 +946,27 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   // unlock normally.
   const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
   if (existsSync(recoveryPath)) {
-    const fresher =
-      fileHasSqliteHeader(recoveryPath) &&
-      (!existsSync(vaultPaths.encPath) ||
-        statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
-    if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
-    shredFile(recoveryPath)
+    // full-audit 2026-07-12 REL-2 — the freshness PROBE is exception-guarded: a Windows
+    // AV/indexer hold without FILE_SHARE_READ (or the file vanishing between existsSync and
+    // openSync) throws EBUSY/EPERM/ENOENT here, which used to fail the whole unlock raw
+    // (generic openFailed) until the hold cleared. A probe error means "can't decide" —
+    // `fresher` stays null, `.recovery` is left IN PLACE (never shredded on a probe error,
+    // never rolled forward unverified), and the unlock proceeds normally; the next unlock
+    // retries the probe. Only the probe is wrapped: a roll-forward encryptFile failure
+    // (e.g. disk still full) keeps failing the unlock so the snapshot survives untouched.
+    let fresher: boolean | null = null
+    try {
+      fresher =
+        fileHasSqliteHeader(recoveryPath) &&
+        (!existsSync(vaultPaths.encPath) ||
+          statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
+    } catch {
+      /* probe error → can't decide → don't touch `.recovery`; unlock normally */
+    }
+    if (fresher !== null) {
+      if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
+      shredFile(recoveryPath)
+    }
   }
   // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
   // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
