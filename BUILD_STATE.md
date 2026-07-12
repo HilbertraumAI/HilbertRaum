@@ -1365,7 +1365,12 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
         reword (if executed, the stale-hash sweep must cover this item's round-hash citations
         AND the `0d7a76e` cite inside ② itself — six round commits now, not three — AND §8's
         L-7 update (`466bbad`) AND architecture.md §48 throughout, incl. its `5456935` baseline
-        cites) · ③ LIC-2 THIRD-PARTY-NOTICES (in progress).
+        cites). ③ LIC-2 **EXECUTED 2026-07-12** (owner-approved): committed generated
+        `THIRD-PARTY-NOTICES.md` (226 shipped packages — asar prod closure minus the yml
+        negations; no NOTICE files exist in the set; KaTeX OFL font notice included) +
+        `scripts/generate-third-party-notices.mjs` (+ shared `scripts/lib/shipped-packages.mjs`),
+        shipped via `extraResources`, freshness-gated by
+        `tests/integration/third-party-notices.test.ts` (suite 4190 → 4195/47).
       - **SEC-1 orphan-`.enc` sweep — deferred (Info):** the startup sweep runs while the DB is
         LOCKED, so it cannot know which document ids are live; a pre-fix zero-key sidecar
         self-heals only on re-index (known-limitations note shipped with Phase 1). Same family,

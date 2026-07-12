@@ -156,6 +156,16 @@ Key config points:
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
   **never** bundled — they live on the prepared drive.
+- **`THIRD-PARTY-NOTICES.md` ships as an `extraResource` too** (beside `model-manifests`, LIC-2):
+  the aggregated license texts + copyright notices for every npm package that lands in `app.asar`
+  or the Vite-compiled bundles (Apache-2.0 NOTICE preservation for pdfjs-dist/tesseract.js, the
+  SIL-OFL-1.1 notice for the KaTeX fonts, MIT/BSD/ISC attribution). The committed file is
+  **generated** — after any dependency change, regenerate with
+  `node scripts/generate-third-party-notices.mjs` and commit the result;
+  `tests/integration/third-party-notices.test.ts` recomputes the shipped package set from
+  `package-lock.json` + the `files:` negations (shared logic in `scripts/lib/shipped-packages.mjs`)
+  and fails the gate while the file is stale. Electron's own `LICENSE.electron.txt` /
+  `LICENSES.chromium.html` are placed beside the executable by electron-builder itself.
 - The build output goes to `apps/desktop/release/` (git-ignored).
 
 ### Launching from a drive

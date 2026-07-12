@@ -113,6 +113,13 @@ npmRebuild: false
 extraResources:
   - from: ../../model-manifests
     to: model-manifests
+  # LIC-2 (full-audit 2026-07-12): third-party license notices for every npm package bundled
+  # into app.asar / the Vite bundles (Apache-2.0 NOTICE preservation, MIT/BSD attribution,
+  # KaTeX OFL fonts). Generated file — regenerate with
+  # `node scripts/generate-third-party-notices.mjs`; tests/integration/third-party-notices.test.ts
+  # fails the gate when it drifts from package-lock.json.
+  - from: ../../THIRD-PARTY-NOTICES.md
+    to: THIRD-PARTY-NOTICES.md
 
 # Asar keeps the app a single archive; node:sqlite + the parser libs work from it.
 asar: true

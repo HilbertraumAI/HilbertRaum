@@ -319,7 +319,8 @@ time, add tests, keep `npm run typecheck` clean, and update the docs + `BUILD_ST
 ## License
 
 [GPL-3.0-or-later](LICENSE) for the software core. Model weights are **not** included and carry their
-own licenses (see [`docs/model-policy.md`](docs/model-policy.md)).
+own licenses (see [`docs/model-policy.md`](docs/model-policy.md)). Third-party notices for the npm
+packages bundled into packaged builds: [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
 **Our promise: the HilbertRaum core is free software and will stay under GPL-3.0-or-later — every
 version we publish here, forever.** To fund its open development, we additionally offer the same
