@@ -1492,6 +1492,13 @@ djuro-agent allowlist restore, which duplicated flip-batch item 5 — the sole c
 resolved by keeping the commented local version of `cla.yml`). Tag is local until the owner
 pushes it (a pushed tag triggers the release workflow's draft build).
 
+Version checkpoint: **v0.1.49 tagged 2026-07-12** (0.1.48 → 0.1.49, root + apps/desktop +
+lockfile version fields only; CHANGELOG header mention updated) — marks the full-audit
+2026-07-12b pre-public-release round complete at the **4216/49** gate (durable ledger
+architecture.md §49; LIC-1 drive-attribution mechanism + SELLABLE-gate artifact check
+landed). Like v0.1.48, the tag is local until the owner pushes it (a pushed tag triggers
+the release workflow's draft build).
+
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
