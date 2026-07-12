@@ -11,7 +11,7 @@
       devShells = forAll (pkgs:
         let
           # Shared libs the npm-installed Electron binary needs at runtime on Linux.
-          # ponytail: only loaded on Linux; macOS Electron ships self-contained.
+          # Only loaded on Linux; macOS Electron ships self-contained.
           electronLibs = with pkgs; [
             glib nss nspr atk at-spi2-atk at-spi2-core cups dbus gtk3
             pango cairo gdk-pixbuf expat libxkbcommon mesa libgbm libdrm

@@ -1176,8 +1176,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     is published** (pre-release, 5 assets) — the Phase-7 release-flow test PASSED end-to-end
     (tag → three build legs + SHA256SUMS → draft → owner smoke → Publish; testers filed #48–#53
     against the shipped build).
-    - [ ] **Push `master` to origin BEFORE flipping** (full-audit 2026-07-12 GAP-1). As of
-      2026-07-12 local `master` is **5 commits ahead**; the remote tip `ed1332c` predates the
+    - [ ] **Push `master` to origin BEFORE flipping** (full-audit 2026-07-12 GAP-1). Local
+      `master` is **9 commits ahead** as of the 2026-07-12 close-out — re-derive at push
+      time; the remote tip `ed1332c` predates the
       BUILD_STATE restructure and still carries the literal NUL in `docs/architecture.md`, so
       flipping without pushing would publish that stale tree as the repo's read-first doc.
       Then, **as its own deliberate decision** (not a side effect of pushing the branch):
@@ -1243,8 +1244,17 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       CODE-2 triple-overlap, CODE-11 crash-bypass orphan, CODE-13 cancel-during-extract +
       download-vs-start race, the torn-FTS-content-backfill observation, the CODE-48 watch trio,
       DOC-13 PVR-at-flip → item 10).
-12. **Full-audit 2026-07-12 — remediation round IN PROGRESS** (working papers under untracked
-    `docs/audits/`, never committed; the durable ledger lands at the round's close-out).
+12. **Full-audit 2026-07-12 — ROUND COMPLETE (close-out 2026-07-12; durable ledger + §-anchor
+    legend: [`docs/architecture.md`](docs/architecture.md) **§48**).** Final pre-public-flip
+    audit at baseline `5456935`: **0 Critical, 0 High**; 4 Medium (SEC-1 zero-key sidecar on
+    lock-during-import, GAP-1 no push-first flip step, DOC-1 relocation-dead archive links,
+    DOC-2 inverted `allowNetwork` default) + a Low/Info tail; the dedicated security,
+    vault/shutdown, manifest-chain and cross-platform passes all returned clean (verdicts
+    preserved in §48). Remediated across Phases 1–5, commits `6d8991e` → `466bbad` (every phase
+    independently reviewer-approved BEFORE landing; one repair round all wave), suite
+    4168 → **4190/47**, typecheck + build green throughout. Both working papers were deleted at
+    close-out (uncommitted for their whole life — NO git-history copy; §48 is the only durable
+    record).
     - _2026-07-12 Phase 1 (vault correctness & reliability), two commits:_ **SEC-1** fixed
       `6d8991e` — "Lock now" mid-import can no longer write a zero-key document sidecar:
       `documentCipher()` closures re-read the live key per invocation and throw a typed
@@ -1252,7 +1262,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       characterization + gated-`sha256File` integration tests; security-model "Lock failure &
       durability" lock-during-import bullet; the optional orphan-`.enc` sweep stays OUT (the
       startup sweep runs while the DB is locked — known-limitations note). **REL-1 / REL-2 /
-      REL-4 / REL-3 / CODE-1** this commit — `preserveNewerPlaintext` pre-shreds a spent
+      REL-4 / REL-3 / CODE-1** fixed `abfde2e` (commit 2) — `preserveNewerPlaintext` pre-shreds a spent
       `.recovery` before the salvage rename; unlock's roll-forward freshness probe is
       exception-guarded (probe error → leave `.recovery`, unlock normally, retry next unlock);
       the in-flight-stream settle await is bounded (`STREAM_SETTLE_TIMEOUT_MS` 5 s in
@@ -1336,13 +1346,45 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       archive link each failed their assertion; disabling the sweep call turned the escaping-link
       job `done` — all reverted/restored byte-verified. New `engine-extract-containment.test.ts`
       (7 tests, junction-based so unprivileged on Windows); typecheck + build green.
+    - _2026-07-12 Phase 6 (close-out):_ round complete — the audit folded into
+      [`docs/architecture.md`](docs/architecture.md) **§48** (per-finding dispositions, the
+      clean verdicts, §-anchor legend: every `full-audit 2026-07-12 <ID>` citation in
+      code/tests/commits resolves there); both working papers deleted (never committed, no
+      history copy); **PF-1** fixed here (the `flake.nix` garbled comment word); §8's L-7 row
+      gained the Phase-5 containment-sweep outcome. Final gate **4190/47**, typecheck clean,
+      build unaffected (no `apps/desktop/src` touch this phase). **Round residuals (register of
+      record):**
+      - **Owner batch ①–⑥** (the Phase-3 entry above) stands unexecuted: ① GAP-1 push + tag
+        decision · ② PF-2 reword (if executed, the stale-hash sweep must cover this item's
+        round-hash citations AND the `0d7a76e` cite inside ② itself — six round commits now,
+        not three — AND §8's L-7 update (`466bbad`) AND architecture.md §48 throughout, incl.
+        its `5456935` baseline cites) · ③ LIC-2
+        THIRD-PARTY-NOTICES · ④ `reviewed_by` normalization · ⑤ `djuro-agent` restore ·
+        ⑥ `.claude` skill publish confirmation.
+      - **SEC-1 orphan-`.enc` sweep — deferred (Info):** the startup sweep runs while the DB is
+        LOCKED, so it cannot know which document ids are live; a pre-fix zero-key sidecar
+        self-heals only on re-index (known-limitations note shipped with Phase 1). Same family,
+        also unswept: a hard crash mid-lock-encrypt leaves a partial-CIPHERTEXT `<enc>.tmp`
+        (exposure nil, overwritten next lock; one `rmSync` in the sweep would tidy).
+      - **README default-set vision omission (Phase-4 observation, reviewer-CONFIRMED, left
+        unfixed):** `prepare-drive.ps1` `$DefaultModelIds` includes `qwen2.5-vl-3b-instruct-q4`
+        (added 2026-07-01), so the real `--with-assets` model footprint is ≈10.4 GB — not the
+        ~7 GB the README basis sentence states (its 4-model list omits vision) — and README's
+        vision table row still says "opt-in; in-app download". Fix on the next README pass and
+        recompute the DOC-6 swap figures on the corrected basis at the same time.
+      - **Nuance notes (recorded in the §48 rows):** REL-1's in-code "spent or garbage"
+        justification slightly overstates (a REL-2 probe-error corner can leave an
+        unconsumed-FRESH `.recovery`); REL-3's confidentiality window can extend one unlock
+        further under an active probe error; SEC-2 reviewer N1 — the containment sweep removes
+        only the FIRST offender before throwing (the next install's pre-clean removes the rest).
+      - **TS-7 (macOS CI leg)** remains the standing owner call — item 7.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
 round complete at the 4165/47 gate. Tag is local until the owner pushes it (a pushed tag
 triggers the release workflow's draft build).
 
-**Current gate (2026-07-11, full-audit 2026-07-11 Phase J close-out — round complete, durable ledger `docs/architecture.md` §47, both working papers deleted; the round moved the suite 4053 → 4165 across phases A–I): typecheck clean, 4165 tests pass (47 skipped —
+**Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
 real-data smokes — skipped in CI), `npm run build` green. The historical loaded-machine 1–2
@@ -1464,6 +1506,13 @@ the offline/privacy guarantees:
   check this fix calls for; symlink members are the residual soft spot. (The skills importer
   does NOT share this gap — it enumerates and validates every member's path/symlink before
   inflating, arch §22-A2.) Fix: list/extract members with an explicit containment check.
+  **Update (close-out 2026-07-12):** Phase 5 (`466bbad`) added the explicit in-app containment
+  check L-7's fix called for: `install()` now runs a post-extract symlink/junction containment
+  sweep (`assertExtractedSymlinksContained`, over the final post-flatten layout — an escaping
+  member fails the install, no marker written), closing the symlink residual; the
+  `--no-same-owner --no-same-permissions -k` tar flags were deliberately dropped (GNU tar `-k`
+  hard-errors on the legitimately-retained archive `cpu/` dir). The build-time
+  `scripts/fetch-runtime.*` half of L-7 remains as previously recorded.
 - **L-8 — Lockfile / `npm ci` discipline.** Confirm `package-lock.json` is committed and the
   provisioning/build scripts use `npm ci` (not `npm install`) so a build can't float a caret range
   to a newer minor. Integrity anchor = the committed lockfile.
