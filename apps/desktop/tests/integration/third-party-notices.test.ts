@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 import { computeShippedPackages } from '../../../../scripts/lib/shipped-packages.mjs'
+import { KNOWN_EXTRA_NOTICES, LEPTONICA_LICENSE } from '../../../../scripts/lib/extra-notices.mjs'
 
 // LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~226 npm packages
 // (app.asar production closure + the Vite-inlined renderer libs, which are a subset of it) —
@@ -57,6 +58,39 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(text).toContain('KaTeX fonts')
     expect(text).toContain('SIL Open Font License, Version 1.1')
     expect(text).toContain('SIL OPEN FONT LICENSE Version 1.1')
+  })
+
+  // LIC-3 (full-audit 2026-07-12b): six shipped packages publish no license file in
+  // their tarball, so the generator emits texts pinned from upstream at review time
+  // (scripts/lib/extra-notices.mjs). If an upstream starts shipping a license file,
+  // the generator drops the pinned text on the next regeneration (the freshness gate
+  // forces one) and this test then fails — remove the stale map entry and regenerate.
+  it('carries the pinned license text for every shipped package in KNOWN_EXTRA_NOTICES (LIC-3)', () => {
+    const text = readFileSync(NOTICES, 'utf8')
+    const shippedNames = new Set(computeShippedPackages(REPO_ROOT).map((p) => p.name))
+    for (const [name, entry] of Object.entries(KNOWN_EXTRA_NOTICES)) {
+      if (!shippedNames.has(name)) continue
+      expect(
+        text.includes(entry.text),
+        `pinned license text for ${name} missing from THIRD-PARTY-NOTICES.md — ${REGEN}`
+      ).toBe(true)
+    }
+    // The map exists for the shipped set; a key that no longer ships is dead weight.
+    const dead = Object.keys(KNOWN_EXTRA_NOTICES).filter((n) => !shippedNames.has(n))
+    expect(dead, 'KNOWN_EXTRA_NOTICES entry for a package that no longer ships').toEqual([])
+  })
+
+  // LIC-3 (full-audit 2026-07-12b): tesseract.js-core's WASM statically links
+  // leptonica, whose license the published package does not reproduce.
+  it('carries the leptonica attribution while tesseract.js-core ships (LIC-3)', () => {
+    const ships = computeShippedPackages(REPO_ROOT).some((p) => p.name === 'tesseract.js-core')
+    expect(ships).toBe(true) // if tesseract.js-core is ever dropped, retire this test with it
+    const text = readFileSync(NOTICES, 'utf8')
+    expect(text).toContain('Leptonica (statically linked into the tesseract WASM binaries)')
+    expect(
+      text.includes(LEPTONICA_LICENSE),
+      `verbatim leptonica license text missing — ${REGEN}`
+    ).toBe(true)
   })
 
   it('every non-optional peer of a shipped package is itself shipped (full-audit 2026-07-12b TQ-3)', () => {

@@ -23,6 +23,12 @@ import { readFileSync, readdirSync, writeFileSync, existsSync, statSync } from '
 import { join, relative, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { computeShippedPackages } from './lib/shipped-packages.mjs'
+// LIC-3 (full-audit 2026-07-12b): verbatim license texts pinned from upstream at review
+// time for shipped packages whose published tarball carries no license file, plus the
+// leptonica license that tesseract.js-core's WASM statically links but does not
+// reproduce. Kept in a lib so the freshness gate imports the same texts (see the file's
+// doc comment for the pinning convention).
+import { KNOWN_EXTRA_NOTICES, LEPTONICA_LICENSE } from './lib/extra-notices.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_PATH = join(repoRoot, 'THIRD-PARTY-NOTICES.md')
@@ -205,11 +211,29 @@ for (const p of packages) {
 
   const files = licenseFilesByPkg.get(p) ?? []
   if (files.length === 0) {
-    lines.push('')
-    lines.push(
-      `No license file is distributed inside this package; it declares \`${licenseIdOf(pkgJson)}\`` +
-        (repo ? ` — see its repository (${repo}) for the full text.` : '.')
-    )
+    // LIC-3 (full-audit 2026-07-12b): when the published tarball ships no license file,
+    // a repository pointer alone cannot discharge the attribution duty on an offline
+    // product — emit the text pinned from upstream at review time when we have one.
+    // The map only kicks in on this no-license-file path, so if a future version of a
+    // mapped package starts shipping a license file, the shipped file wins automatically.
+    const extra = KNOWN_EXTRA_NOTICES[p.name]
+    if (extra) {
+      lines.push('')
+      lines.push(`#### Pinned \`${licenseIdOf(pkgJson)}\` text (no license file in the published package)`)
+      lines.push('')
+      lines.push(
+        'Text pinned at review time — the published package ships no license file ' +
+          `(full-audit 2026-07-12b LIC-3). ${extra.comment}`
+      )
+      lines.push('')
+      lines.push(fence(cleanText(extra.text, `KNOWN_EXTRA_NOTICES[${p.name}]`)))
+    } else {
+      lines.push('')
+      lines.push(
+        `No license file is distributed inside this package; it declares \`${licenseIdOf(pkgJson)}\`` +
+          (repo ? ` — see its repository (${repo}) for the full text.` : '.')
+      )
+    }
   }
   for (const f of files) {
     const rel = relative(pkgDir, f).split('\\').join('/')
@@ -253,6 +277,24 @@ for (const p of packages) {
         lines.push(fence(ofl.slice(start)))
       }
     }
+  }
+
+  // tesseract.js-core's WASM binaries statically link the leptonica image-processing
+  // library, but the published package reproduces only the tesseract-ocr Apache-2.0
+  // LICENSE — an upstream packaging shortfall (LIC-3, full-audit 2026-07-12b). Append
+  // leptonica's own license, pinned verbatim from the upstream repository at review
+  // time (see scripts/lib/extra-notices.mjs), mirroring the KaTeX-fonts block above.
+  if (p.name === 'tesseract.js-core') {
+    lines.push('')
+    lines.push('#### Leptonica (statically linked into the tesseract WASM binaries)')
+    lines.push('')
+    lines.push('The tesseract WASM binaries shipped in this package statically link the')
+    lines.push('leptonica image-processing library, whose license the published package does')
+    lines.push('not reproduce. Text pinned from the upstream repository')
+    lines.push('(https://github.com/DanBloomberg/leptonica, `leptonica-license.txt`) at')
+    lines.push('review time (full-audit 2026-07-12b LIC-3):')
+    lines.push('')
+    lines.push(fence(cleanText(LEPTONICA_LICENSE, 'LEPTONICA_LICENSE')))
   }
 }
 lines.push('')

@@ -593,7 +593,7 @@ with-aria-expanded, empty-rare-view-hidden, active-aria-current, and collapse-pe
 Playwright `_electron` eyeball walk in BOTH themes AND both locales (EN/DE): populated list with
 no suggestion banner, the regrouped sub-nav with "More" collapsed + expanded, the sub-nav
 collapsed (list full-width) + expanded, the active-item fill — German headers/labels fit without
-hyphenation/overflow. Captures in `docs/design-review/docs-subnav/`
+hyphenation/overflow. Captures went to `docs/design-review/docs-subnav/`
 (`scripts/walk-docs-subnav.mjs`).
 
 **Follow-up — import-failure copy + failed-row actions + sub-nav density (2026-06-15, renderer +
@@ -798,7 +798,7 @@ the *one-time* cost.
 
 _Branch `chat-ui-polish`. A focused, **renderer-only** calm/premium pass on the Chat screen +
 conversation history, deepening §3/§7 (visual hierarchy: conversation → history → nav). No
-backend/data-contract/IPC changes. Before/after eyeball captures live in
+backend/data-contract/IPC changes. Before/after eyeball captures lived in
 `docs/design-review/chat-screenshots/` (before) and `…-after/` (after)._
 
 ### 12.1 What changed (decisions + the facts they rest on)

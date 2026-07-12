@@ -1452,6 +1452,18 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       app.asar (extraResources + test pin). Reviewer APPROVE, 1 should-fix repaired pre-commit
       (MIT weights' upstream copyright lines pinned offline). ⚠️ DRIVE-NOTICES.md's GPL
       source-availability URL assumes the public repo — true once §5 item 10 flips.
+    - _2026-07-12 Phase 5 (owner-batch execution, suite 4214/49 → 4216/49, +2 tests):_ **PF-2**
+      preview marketing header id → `ministral3-8b-instruct-2512-q4` (ranked, shipping;
+      owner-ratified swap). **LIC-3** `scripts/lib/extra-notices.mjs`: pinned verbatim texts for
+      the 6 no-license-file packages + the leptonica license appended to tesseract.js-core
+      (pinned-from-upstream convention; map applies only on the no-license-file path so a future
+      shipped file wins); THIRD-PARTY-NOTICES.md regenerated (+~200 lines, zero pointer-only
+      sections left), 2 test pins. **GAP-2** architecture.md gains a 15-line "layout of this
+      file" block (pure insertion, ledgers untouched, whole-file byte-verified). **DOC-7** the
+      two present-tense design-review pointers tense-fixed (596, 802); the three
+      verbatim-keep mentions untouched. **SEC-2** owner ratified SKIP probe → registered as a
+      close-out watch-item. Reviewer APPROVE (2 nits applied: provenance-sentence precision,
+      test-comment sequencing).
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

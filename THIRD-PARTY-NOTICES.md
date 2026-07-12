@@ -2392,7 +2392,35 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 - Author: Michael Williamson <mike@zwobble.org>
 - Repository: https://github.com/mwilliamson/dingbat-to-unicode
 
-No license file is distributed inside this package; it declares `BSD-2-Clause` — see its repository (https://github.com/mwilliamson/dingbat-to-unicode) for the full text.
+#### Pinned `BSD-2-Clause` text (no license file in the published package)
+
+Text pinned at review time — the published package ships no license file (full-audit 2026-07-12b LIC-3). The upstream repository publishes no license file either; this is the standard BSD-2-Clause text with the copyright holder from the package’s declared `author` (upstream publishes no copyright year, so none is stated).
+
+```
+Copyright (c) Michael Williamson <mike@zwobble.org>
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+```
 
 ### duck@0.1.12
 
@@ -3339,7 +3367,31 @@ THE SOFTWARE.
 - Author: Julian Gruber
 - Repository: git://github.com/juliangruber/isarray
 
-No license file is distributed inside this package; it declares `MIT` — see its repository (git://github.com/juliangruber/isarray) for the full text.
+#### Pinned `MIT` text (no license file in the published package)
+
+Text pinned at review time — the published package ships no license file (full-audit 2026-07-12b LIC-3). Reproduced from the MIT grant in the package’s own README (“License” section).
+
+```
+Copyright (c) 2013 Julian Gruber <julian@juliangruber.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ### js-tokens@4.0.0
 
@@ -7174,7 +7226,33 @@ SOFTWARE.
 - Author: Anton Korzunov <thekashey@gmail.com>
 - Repository: https://github.com/theKashey/react-remove-scroll-bar
 
-No license file is distributed inside this package; it declares `MIT` — see its repository (https://github.com/theKashey/react-remove-scroll-bar) for the full text.
+#### Pinned `MIT` text (no license file in the published package)
+
+Text pinned at review time — the published package ships no license file (full-audit 2026-07-12b LIC-3). Reproduced from the upstream repository’s LICENSE; the copyright line (including its year) is as published upstream at pin time.
+
+```
+MIT License
+
+Copyright (c) 2025 Anton Korzunov <thekashey@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ### react-style-singleton@2.2.3
 
@@ -7335,7 +7413,33 @@ SOFTWARE.
 - Author: Junyoung Choi <fluke8259@gmail.com> (https://rokt33r.github.io)
 - Repository: https://github.com/remarkjs/remark-math/tree/main/packages/rehype-katex
 
-No license file is distributed inside this package; it declares `MIT` — see its repository (https://github.com/remarkjs/remark-math/tree/main/packages/rehype-katex) for the full text.
+#### Pinned `MIT` text (no license file in the published package)
+
+Text pinned at review time — the published package ships no license file (full-audit 2026-07-12b LIC-3). Reproduced from the remark-math monorepo’s root `license` file (github.com/remarkjs/remark-math), which covers this workspace package.
+
+```
+(The MIT License)
+
+Copyright (c) Junyoung Choi <fluke8259@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ### rehype-raw@7.0.0
 
@@ -7442,7 +7546,33 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 - Author: Junyoung Choi <fluke8259@gmail.com> (https://rokt33r.github.io)
 - Repository: https://github.com/remarkjs/remark-math/tree/main/packages/remark-math
 
-No license file is distributed inside this package; it declares `MIT` — see its repository (https://github.com/remarkjs/remark-math/tree/main/packages/remark-math) for the full text.
+#### Pinned `MIT` text (no license file in the published package)
+
+Text pinned at review time — the published package ships no license file (full-audit 2026-07-12b LIC-3). Reproduced from the remark-math monorepo’s root `license` file (github.com/remarkjs/remark-math), which covers this workspace package.
+
+```
+(The MIT License)
+
+Copyright (c) Junyoung Choi <fluke8259@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ### remark-parse@11.0.0
 
@@ -8362,13 +8492,75 @@ SOFTWARE.
    limitations under the License.
 ```
 
+#### Leptonica (statically linked into the tesseract WASM binaries)
+
+The tesseract WASM binaries shipped in this package statically link the
+leptonica image-processing library, whose license the published package does
+not reproduce. Text pinned from the upstream repository
+(https://github.com/DanBloomberg/leptonica, `leptonica-license.txt`) at
+review time (full-audit 2026-07-12b LIC-3):
+
+```
+/*====================================================================*
+ -  Copyright (C) 2001-2020 Leptonica.  All rights reserved.
+ -
+ -  Redistribution and use in source and binary forms, with or without
+ -  modification, are permitted provided that the following conditions
+ -  are met:
+ -  1. Redistributions of source code must retain the above copyright
+ -     notice, this list of conditions and the following disclaimer.
+ -  2. Redistributions in binary form must reproduce the above
+ -     copyright notice, this list of conditions and the following
+ -     disclaimer in the documentation and/or other materials
+ -     provided with the distribution.
+ -
+ -  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ -  ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ -  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ -  A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL ANY
+ -  CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ -  EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ -  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ -  PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ -  OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ -  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ -  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *====================================================================*/
+```
+
 ### tr46@0.0.3
 
 - License: MIT
 - Author: Sebastian Mayr <npm@smayr.name>
 - Repository: https://github.com/Sebmaster/tr46.js
 
-No license file is distributed inside this package; it declares `MIT` — see its repository (https://github.com/Sebmaster/tr46.js) for the full text.
+#### Pinned `MIT` text (no license file in the published package)
+
+Text pinned at review time — the published package ships no license file (full-audit 2026-07-12b LIC-3). Reproduced from the upstream lineage’s LICENSE.md (github.com/jsdom/tr46; byte-identical to the LICENSE.md shipped by the newer tr46 in this same tree).
+
+```
+The MIT License (MIT)
+
+Copyright (c) Sebastian Mayr
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ### trim-lines@3.0.1
 

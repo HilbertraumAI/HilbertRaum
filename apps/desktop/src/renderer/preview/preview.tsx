@@ -537,8 +537,10 @@ overrides.getSettings = async () => {
 const baseGetRuntimeStatus = overrides.getRuntimeStatus as () => Promise<Record<string, unknown>>
 overrides.getRuntimeStatus = async () => {
   const st = await baseGetRuntimeStatus()
-  // A believable model name in the header hint instead of the mock id.
-  return isMkt() ? { ...st, modelId: 'qwen3.5-35b-a3b-q4kxl' } : st
+  // A believable model name in the header hint instead of the mock id — a currently-ranked,
+  // shipping manifest id (PF-2, full-audit 2026-07-12b: captures must not show a model no
+  // user can select; swap deliberately when a bigger model productizes).
+  return isMkt() ? { ...st, modelId: 'ministral3-8b-instruct-2512-q4' } : st
 }
 overrides.listDocuments = async () => {
   if (!isMkt()) return DOCUMENTS

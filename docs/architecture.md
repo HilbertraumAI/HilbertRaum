@@ -5,6 +5,21 @@ _This doc is both the architecture overview and the home of the
 `§N` / finding-id anchors that resolve here. The records absorb the earlier audit ledgers and
 remediation waves; the full original working papers live in git history._
 
+**Layout of this file** (wayfinding only — nothing below is reordered or renumbered):
+
+1. **Overview & system shape** — process model & security, swappable interfaces, storage.
+2. **Design records** — the bulk of the file: one §-numbered record per subsystem or wave
+   (performance waves, models/chat/ingestion, GPU, i18n, document organization, skills,
+   translation, result tables, test-enforcement seams, image understanding, …).
+   **§ numbers restart inside every record** (standing decision — `§N` collisions across
+   records are deliberate; resolve a citation via the record named alongside it), and
+   several records end with their own "§-anchor legend" for retired-plan citations.
+3. **Audit remediation ledgers §24–§48** — one continuous series interleaved among the
+   records (find one with `### §N <audit name>`); each holds a round's finding dispositions.
+4. **Data flow (RAG)** and the **Module ↔ spec map** — near the end of the file.
+5. **"Original MVP spec — retirement record & §-anchor legend"** — at the very END: the
+   resolution table for every `spec §N` citation in code, tests, manifests, and docs.
+
 ## Overview
 
 HilbertRaum is an **Electron** desktop app. It maps the spec's Tauri/Rust design onto
