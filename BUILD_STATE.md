@@ -1417,6 +1417,15 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       corporate-proxy `setup-dev`/`--use-system-ca` note in CONTRIBUTING + README. **PF-1:** §2 dev
       absolute path neutralized + item-10 re-grep widened to a full-tree sweep. Docs-only ⇒ build
       unaffected; every edited file byte-verified NUL + BOM clean.
+    - _2026-07-12 Phase 2 (packaging + test-net hardening, suite 4195/47 → 4199/49, +6 tests):_
+      **CODE-1** `!out/preview/**` negation in electron-builder.yml (+ packaging.md sentence),
+      pinned in packaging.test.ts. **TQ-1** hygiene nets widened to `mjs|cjs|mts|yml|yaml` + both
+      scripts/ roots + model-manifests/ (all pre-verified clean); teeth ritual done (planted
+      BOM + NUL under scripts/ each failed the net, deleted, re-green). **TQ-2** 3 containment
+      tests (relative escape, contained relative, dangling link — the 2 relative ones probe-gated,
+      skip on this box, run on the Ubuntu leg); red-verified: root-anchor / drop-target / realpath
+      mutations each flipped exactly one new test red while the old 7 stayed green, reverted
+      byte-identical. **TQ-4** license pin apps/desktop = root = GPL-3.0-or-later.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

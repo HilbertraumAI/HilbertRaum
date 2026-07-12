@@ -41,7 +41,7 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name)
       if (entry.isDirectory()) out.push(...walk(p))
-      else if (/\.(ts|tsx|js|jsx|json|css|md|html)$/.test(entry.name)) out.push(p)
+      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml)$/.test(entry.name)) out.push(p)
     }
     return out
   }
@@ -87,13 +87,29 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // YAML frontmatter — the exact class where a stray byte breaks the skill silently (a BOM
   // recently broke a skill file's frontmatter detection). `.github/*.md` (the CLA texts) is
   // public-facing. Both trees hold only text files under the extension filter (SKILL.md +
-  // example .md + schema .json; workflow .yml is outside the filter by design) and neither
-  // contains node_modules, so the recursive walk is safe.
+  // example .md + schema .json + workflow .yml since the 2026-07-12b widening below) and
+  // neither contains node_modules, so the recursive walk is safe.
   it('holds no 0x00 byte in any app-skills or .github text file either', () => {
     const repoRoot = join(process.cwd(), '..', '..')
     const offenders = [
       ...walk(join(repoRoot, 'app-skills')),
       ...walk(join(repoRoot, '.github'))
+    ].filter((p) => readFileSync(p).includes(0))
+    expect(offenders).toEqual([])
+  })
+
+  // full-audit 2026-07-12b TQ-1: the nets never covered .mjs/.cjs/.mts/.yml/.yaml or the
+  // scripts/ trees — yet `scripts/lib/shipped-packages.mjs` is IMPORTED by a CI test (a BOM
+  // there breaks the suite with an opaque parse error), `apps/desktop/scripts/*.mjs` are
+  // executed by node/electron, and `model-manifests/**/*.yaml` are runtime-parsed by the
+  // packaged app. The extension filter above now covers those types; this walks the three
+  // missing roots (none contains node_modules).
+  it('holds no 0x00 byte in any scripts or model-manifests file either', () => {
+    const repoRoot = join(process.cwd(), '..', '..')
+    const offenders = [
+      ...walk(join(repoRoot, 'scripts')),
+      ...walk(join(process.cwd(), 'scripts')),
+      ...walk(join(repoRoot, 'model-manifests'))
     ].filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
   })
@@ -111,7 +127,7 @@ describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => 
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name)
       if (entry.isDirectory()) out.push(...walk(p))
-      else if (/\.(ts|tsx|js|jsx|json|css|md|html)$/.test(entry.name)) out.push(p)
+      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml)$/.test(entry.name)) out.push(p)
     }
     return out
   }
@@ -120,11 +136,18 @@ describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => 
     return b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf
   }
 
-  it('no src/tests/docs/app-skills/.github/root-md file starts with EF BB BF', () => {
+  // 2026-07-12b TQ-1: same three extra roots as the NUL net — scripts/ (root + apps/desktop;
+  // shipped-packages.mjs is imported by a CI test, the walk-*.mjs are executed) and
+  // model-manifests/ (runtime-parsed .yaml). The shared extension filter also gained
+  // mjs|cjs|mts|yml|yaml, which pulls the .github workflow .yml files into this net too.
+  it('no src/tests/scripts/docs/app-skills/.github/model-manifests/root-md file starts with EF BB BF', () => {
     const repoRoot = join(process.cwd(), '..', '..')
     const files = [
       ...walk(join(process.cwd(), 'src')),
       ...walk(join(process.cwd(), 'tests')),
+      ...walk(join(process.cwd(), 'scripts')),
+      ...walk(join(repoRoot, 'scripts')),
+      ...walk(join(repoRoot, 'model-manifests')),
       ...walk(join(repoRoot, 'docs')),
       ...walk(join(repoRoot, 'app-skills')),
       ...walk(join(repoRoot, '.github')),

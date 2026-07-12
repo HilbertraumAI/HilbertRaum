@@ -44,6 +44,12 @@ directories:
 # runtime, not in the green gate (see docs/packaging.md + BUILD_STATE R2).
 files:
   - out/**/*
+  # CODE-1 (full-audit 2026-07-12b): `npm run preview:build` / `screenshot` emit the dev-only
+  # screenshot-verify preview harness (incl. staged demo chats) to out/preview/, and
+  # `electron-vite build` clears only out/main|preload|renderer — so a local `npm run package`
+  # after a screenshot run would fold the whole harness into app.asar. Nothing loads it at
+  # runtime; keep it out. tests/integration/packaging.test.ts pins this negation.
+  - '!out/preview/**'
   - package.json
   # L18 (audit-2026-06-13): `@napi-rs/canvas` is an OPTIONAL transitive dep of pdfjs-dist
   # — a platform-specific native `.node` (Skia) we never import (the PDF path uses the

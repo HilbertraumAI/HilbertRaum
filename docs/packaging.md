@@ -148,6 +148,11 @@ Key config points:
   from `package-lock.json`, so a future dep that genuinely needs an excluded package turns the green
   gate red (remove that negation then). If the mermaid plugin is ever adopted, delete the negation
   block and its test.
+- **The dev-only screenshot-verify preview harness is excluded from `app.asar`** via a
+  `!out/preview/**` negation (CODE-1, full-audit 2026-07-12b): `npm run preview:build`/`screenshot`
+  emit it to `out/preview/` and `electron-vite build` clears only `out/main|preload|renderer`, so a
+  local package run after a screenshot run would otherwise fold the harness (incl. staged demo
+  chats) into the artifact; `tests/integration/packaging.test.ts` pins the negation.
 - **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed**: the OCR engine spawns
   its Node worker via `worker_threads`, which loads the worker script (and the WASM core it
   requires) through real filesystem reads that cannot see inside the asar archive. The engine

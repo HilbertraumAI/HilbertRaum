@@ -183,6 +183,40 @@ describe('electron-builder packaging excludes the never-imported mermaid chain',
   })
 })
 
+// CODE-1 (full-audit 2026-07-12b): `npm run preview:build` / `screenshot` emit the dev-only
+// screenshot-verify preview harness (incl. staged demo chats) to out/preview/, and
+// `electron-vite build` clears only out/main|preload|renderer — without a negation a local
+// `npm run package` after a screenshot run folds the whole harness into app.asar (dead weight
+// plus a discoverable staged demo chat inside a released artifact). Pin the negation the same
+// way the mermaid block is pinned: it must exist AND actually match the harness output paths
+// while leaving the real out/main|preload|renderer bundles packaged.
+describe('electron-builder packaging excludes the dev-only preview harness (CODE-1)', () => {
+  it('negates out/preview and only out/preview', () => {
+    const files = loadBuilderConfig().files ?? []
+    const exclusion = files.find((f) => f.startsWith('!') && f.includes('out/preview'))
+    expect(exclusion, 'expected a "!out/preview/**" exclusion in files').toBeTruthy()
+    const rx = globToRegExp(exclusion!.slice(1))
+    for (const p of ['out/preview/preview.html', 'out/preview/assets/preview-x.js']) {
+      expect(rx.test(p), `exclusion should match ${p}`).toBe(true)
+    }
+    for (const p of ['out/main/index.mjs', 'out/preload/index.mjs', 'out/renderer/index.html']) {
+      expect(rx.test(p), `exclusion must NOT match the shipped bundle path ${p}`).toBe(false)
+    }
+  })
+})
+
+// TQ-4 (full-audit 2026-07-12b, §48 LIC-1 follow-up): the desktop package.json `license` field
+// is what electron-builder stamps into the artifact metadata; it must never drift from the
+// repo-root GPL-3.0-or-later declaration (LICENSE file + root package.json).
+describe('desktop package license matches the repo license (TQ-4)', () => {
+  it('apps/desktop and root package.json both declare GPL-3.0-or-later', () => {
+    const read = (p: string): { license?: string } =>
+      JSON.parse(readFileSync(p, 'utf8')) as { license?: string }
+    expect(read(join(__dirname, '..', '..', 'package.json')).license).toBe('GPL-3.0-or-later')
+    expect(read(join(LOCKFILE, '..', 'package.json')).license).toBe('GPL-3.0-or-later')
+  })
+})
+
 // PR #30 (portable-build-cleanup): electron-builder derives the per-platform executable /
 // AppImage name from the npm package name, which in this workspace is the scoped
 // "@hilbertraum/desktop" → "@hilbertraumdesktop"; the '@' is an unsafe path char and the build

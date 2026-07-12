@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }
 }))
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,6 +32,22 @@ import type { EngineDownloadJob } from '../../src/shared/types'
 function plantDirLink(target: string, linkPath: string): void {
   symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
 }
+
+// TQ-2 (full-audit 2026-07-12b): junctions always store ABSOLUTE targets, so the sweep's
+// relative-target branch (`resolve(dirname(p), target)`) is only reachable via a true symlink
+// with a relative stored target. On POSIX that is always creatable; on Windows a 'dir' symlink
+// needs SeCreateSymbolicLinkPrivilege (admin or Developer Mode) — probe once and gate the
+// relative-target tests on the result so they run wherever the OS allows (always on the
+// Ubuntu CI leg) instead of failing with EPERM.
+const canPlantRelativeLink = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'hr-contain-probe-'))
+  try {
+    symlinkSync(join('..', 'probe-target'), join(probe, 'probe-link'), 'dir')
+    return true
+  } catch {
+    return false
+  }
+})()
 
 describe('assertExtractedSymlinksContained (SEC-2)', () => {
   it('passes a plain extracted tree (no links)', async () => {
@@ -64,6 +80,55 @@ describe('assertExtractedSymlinksContained (SEC-2)', () => {
     mkdirSync(join(root, 'release', 'lib'), { recursive: true })
     writeFileSync(join(root, 'release', 'lib', 'ok.so'), 'lib')
     plantDirLink(outside, join(root, 'release', 'lib', 'evil'))
+    await expect(assertExtractedSymlinksContained(root)).rejects.toThrow(
+      /escapes the install dir/
+    )
+  })
+
+  // TQ-2 (full-audit 2026-07-12b): all tests above store ABSOLUTE targets to EXISTING dirs, so
+  // the relative-target branch and the "broken link is still caught" claim in the sweep's
+  // doc-comment were never exercised. The three tests below pin them: a relative `../..`-style
+  // escape, a relative target that is legitimately contained (anchors the resolution to
+  // `dirname(p)`, NOT the install root — resolving against the root would false-positive it),
+  // and a DANGLING escaping link (lexical readlink-based resolution must catch it; a
+  // realpath-based rewrite would throw ENOENT instead of the containment error).
+  it.runIf(canPlantRelativeLink)(
+    'refuses a RELATIVE-target link escaping from a nested dir (TQ-2)',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'hr-contain-rel-esc-'))
+      mkdirSync(join(root, 'release', 'lib'), { recursive: true })
+      // Stored target ../../../<name>: three levels up from release/lib/ = the tmpdir root,
+      // one above the install dir — an escape only the relative branch can detect.
+      symlinkSync(
+        join('..', '..', '..', 'hr-contain-rel-victim'),
+        join(root, 'release', 'lib', 'evil'),
+        'dir'
+      )
+      await expect(assertExtractedSymlinksContained(root)).rejects.toThrow(
+        /escapes the install dir/
+      )
+    }
+  )
+
+  it.runIf(canPlantRelativeLink)(
+    'passes a RELATIVE-target link that resolves INSIDE from its nested dir (TQ-2)',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'hr-contain-rel-good-'))
+      mkdirSync(join(root, 'lib'))
+      mkdirSync(join(root, 'sub'))
+      // ../lib from sub/ = <root>/lib — inside. Mis-anchoring the relative resolution to the
+      // install ROOT instead of the link's OWN directory would resolve this to a sibling of
+      // the root and wrongly refuse a legitimate archive.
+      symlinkSync(join('..', 'lib'), join(root, 'sub', 'alias'), 'dir')
+      await expect(assertExtractedSymlinksContained(root)).resolves.toBeUndefined()
+    }
+  )
+
+  it('refuses a DANGLING link whose outside target no longer exists (TQ-2)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hr-contain-dangling-'))
+    const outside = mkdtempSync(join(tmpdir(), 'hr-contain-gone-'))
+    plantDirLink(outside, join(root, 'evil'))
+    rmSync(outside, { recursive: true, force: true }) // the link now dangles (works for junctions too)
     await expect(assertExtractedSymlinksContained(root)).rejects.toThrow(
       /escapes the install dir/
     )
