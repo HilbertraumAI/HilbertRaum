@@ -34,7 +34,10 @@ const SIZES = {
   // #44/#46: short composer-strip components — no full-screen canvas needed.
   'skill-info-card': [820, 320],
   'skill-info-card-de': [820, 320],
-  'skill-run-result-offer': [820, 220]
+  'skill-run-result-offer': [820, 220],
+  // Marketing captures (full shell + staged transcript); pair with SHOT_SCALE=2 for hi-dpi.
+  'marketing-spending': [1220, 856],
+  'marketing-spending-de': [1220, 856]
 }
 // Per-case readiness selector: an element that only exists once the case's async chain
 // (mock window.api fetch → React state → re-render) has completed, so the poll below can
@@ -50,7 +53,9 @@ const READY = {
   'chat-warmup': '.chat-warmup-hint',
   'skill-info-card': '.skill-info-card',
   'skill-info-card-de': '.skill-info-card',
-  'skill-run-result-offer': '.skill-run-bar'
+  'skill-run-result-offer': '.skill-run-bar',
+  'marketing-spending': 'body[data-marketing-ready]',
+  'marketing-spending-de': 'body[data-marketing-ready]'
 }
 
 // Poll the ready condition, then let two frames paint. The previous fixed settles
@@ -58,7 +63,7 @@ const READY = {
 // warn and capture anyway — same worst-case behavior, but the common case is much faster.
 async function waitReady(win, c) {
   const isAppShell = c.startsWith('brand-home')
-  const ceiling = isAppShell ? 4500 : 1800
+  const ceiling = isAppShell || c.startsWith('marketing-') ? 4500 : 1800
   const selector = READY[c] ?? null
   // Full App-shell cases chain workspace → settings → language re-render → brand <img>
   // fetch; the brand images completing marks the end of that chain.
@@ -108,6 +113,8 @@ if (cases.length === 0) cases = ['documents', 'chat-byproject']
 
 // Headless hardening (pass --no-sandbox on the CLI too; the switch alone is too late for the zygote).
 app.commandLine.appendSwitch('no-sandbox')
+// SHOT_SCALE=2 renders every capture at 2x device pixels (crisp marketing/hero images).
+if (process.env.SHOT_SCALE) app.commandLine.appendSwitch('force-device-scale-factor', process.env.SHOT_SCALE)
 app.commandLine.appendSwitch('disable-dev-shm-usage')
 // Destroying the only window would fire the default window-all-closed → app.quit(), killing the run
 // before the next case. A no-op listener keeps the app alive between captures; we quit explicitly.
@@ -134,6 +141,15 @@ function capture(c) {
     win.webContents.once('did-finish-load', async () => {
       await waitReady(win, c)
       try {
+        if (c.startsWith('marketing-')) {
+          // Park the pointer in the empty transcript area: the hidden window maps the REAL OS
+          // cursor position, so a stray :hover fill (e.g. on a rail item) lands in captures.
+          win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.floor(w * 0.6), y: Math.floor(h * 0.55) })
+          await win.webContents.executeJavaScript(
+            'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))',
+            true
+          )
+        }
         const img = await win.webContents.capturePage()
         const file = resolve(outDir, `${c}.png`)
         writeFileSync(file, img.toPNG())
