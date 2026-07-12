@@ -12,7 +12,7 @@
 
 | Role | Candidate | Size | Min RAM | Auto-tier | Purpose |
 |---|---|---|---|---|---|
-| Chat default | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | TINY / LITE / UNKNOWN | Smallest bundled chat model; default + weak-laptop fallback. Kept as default (has hybrid thinking → Deep) despite 2507 scoring higher (Phase-29 user decision) |
+| Chat default | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | TINY / LITE / UNKNOWN | Smallest chat model; **catalog / weak-laptop-fallback default** and the model bundled on the preconfigured commercial drive (`bundled_on_preconfigured_drive:true`) — distinct from the **DIY `--with-assets` default-set chat model, which is Ministral 3 8B**. Kept as the catalog default (has hybrid thinking → Deep) despite 2507 scoring higher (Phase-29 user decision) |
 | Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 12 GB | BALANCED | 12 GB+ laptops (RAM recalibrated from measured ~8.3 GiB peak) |
 | Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 14 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU (slowest decode of all 8). RAM recalibrated from measured ~10.6 GiB |
 | Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |

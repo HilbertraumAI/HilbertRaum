@@ -81,7 +81,8 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 - **Disk space:** ~**3 GB** for the smallest *hand-built* setup (the 4B chat model + the embeddings
   model only). The one-command `--with-assets` quick-start fetches a larger **default set** (8B chat +
   embeddings + reranker + Whisper + both sidecar runtimes) at ~**7 GB** — size a drive for that if you
-  use it; a bigger chat model takes it to ~**10 GB** (14B) or ~**19 GB** (30B-A3B MoE). A **USB-3 SSD**
+  use it; swapping the 8B chat model for a bigger one takes it to ~**11 GB** (14B) or ~**21 GB**
+  (30B-A3B MoE). A **USB-3 SSD**
   is recommended for a portable drive.
 - **To build from source:** **Node.js ≥ 22.5** (24 recommended; 22.15+ enables the
   `--use-system-ca` corporate-proxy workaround) + **Git**.
@@ -206,7 +207,7 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 
 | Model | Note | Size | Min RAM | License |
 |---|---|---|---|---|
-| Qwen3 4B Instruct Q4 | Bundled default (smallest; keeps **Deep** answer mode) | ~2.7 GB | 8 GB | Apache-2.0 |
+| Qwen3 4B Instruct Q4 | Preconfigured-drive bundled default & weak-laptop fallback (smallest; keeps **Deep** answer mode). The DIY `--with-assets` default-set chat model is Ministral 3 8B (below) | ~2.7 GB | 8 GB | Apache-2.0 |
 | Qwen3 4B Instruct 2507 Q4 | Better 4B quality (no Deep) | ~2.5 GB | 8 GB | Apache-2.0 |
 | Qwen3.5 4B (UD-Q4_K_XL) | Newest 4B (not auto-recommended yet) | ~2.9 GB | 8 GB | Apache-2.0 |
 | Qwen3 8B Instruct Q4 | 12 GB+ laptops | ~5.0 GB | 12 GB | Apache-2.0 |
@@ -246,6 +247,7 @@ are in **[`docs/model-benchmarks.md`](docs/model-benchmarks.md)**.
 
 | Doc | What's inside |
 |---|---|
+| [`docs/product-vision.md`](docs/product-vision.md) | Product intent: thesis, target user, commercial model, positioning guardrails, scope, roadmap |
 | [`docs/user-guide.md`](docs/user-guide.md) | End-user walkthrough of every screen and feature |
 | [`docs/architecture.md`](docs/architecture.md) | System design, services, IPC, runtimes, design records |
 | [`docs/rag-design.md`](docs/rag-design.md) | Retrieval pipeline: ingestion, chunking, hybrid search, rerank |
@@ -301,8 +303,9 @@ they cover the hard rules and the mandatory per-phase ritual (tests green, docs 
 ## Privacy & security
 
 Nothing you type or import is sent anywhere. The workspace can be **password-encrypted at rest**
-(AES-256-GCM, Argon2id key derivation), an **offline guard** trips on any non-loopback connection
-attempt, and a local audit log records activity **for you** (ids/counts only — never content).
+(AES-256-GCM, Argon2id key derivation), an **offline guard** logs (never blocks) any attempt to
+reach a remote host while offline — local `127.0.0.1`/`localhost` connections are exempt — and a
+local audit log records activity **for you** (ids/counts only — never content).
 See [`PRIVACY.md`](PRIVACY.md) and [`docs/security-model.md`](docs/security-model.md); report
 vulnerabilities per [`SECURITY.md`](SECURITY.md).
 

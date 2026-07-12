@@ -8202,7 +8202,7 @@ unchanged — those anchors resolve here:
 | §13 model licensing | [`model-policy.md`](model-policy.md) "Manifest fields" + "License review gate" |
 | §17 demo script | [`packaging.md`](packaging.md) "The canonical USB demo (original spec §17)" |
 | §18.1 offline statement | `shared/i18n/en.ts` `privacy.statement.offline` (verbatim) |
-| §22 definition of done | `BUILD_STATE.md` §4 "MVP Definition of Done" checklist |
+| §22 definition of done | [`data-contracts.md`](data-contracts.md) "MVP Definition of Done (§4 / spec §22) — checklist" |
 
 Any spec anchor not in the table (e.g. §16 milestones, §20 open questions, §21 implementation
 plan) is completed history — resolved in `BUILD_STATE.md`'s phase log or decided in this doc's

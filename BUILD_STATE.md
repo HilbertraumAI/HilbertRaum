@@ -1292,6 +1292,24 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       the other manifests) or keep the handle. ⑤ restore `djuro-agent` to cla.yml's allowlist —
       confirm the post-launch CLA smoke PR is green first (item 10 sidebar). ⑥ confirm the
       tracked `.claude/skills/screenshot-verify/SKILL.md` is deliberately published at flip.
+    - _2026-07-12 Phase 4 (docs-only accuracy sweep, suite unchanged 4178/47):_ **DOC-2..DOC-11**
+      fixed — all numbers/names re-derived from code/repo at edit time. `data-contracts.md`:
+      `allowNetwork` default false→**true** (+ policy-ceiling caveat, mirroring `types.ts:301-303`);
+      catalog "11 manifests"→**19 model manifests across 6 role dirs** (14 chat + E5 + reranker +
+      whisper + translation + vision, both occurrences); runtime pin `b9585`→**b9849**; launcher
+      names → `Start HilbertRaum.cmd` / `Start HilbertRaum.command` / `start-hilbertraum.sh` /
+      `READ ME FIRST.txt`; `AuditEventType` "25"→**42** (enum authoritative). `README.md`: disk
+      upgrade figures ~10/~19→**~11/~21 GB** (7 GB default set + swap 8B→14B/30B, manifest
+      `size_bytes` + sidecars); added a **product-vision.md** Documentation-table row; offline-guard
+      sentence aligned with PRIVACY.md ("logs, never blocks … while offline"); Qwen3-4B row
+      relabeled "preconfigured-drive default" to break the "default" collision with the DIY
+      `--with-assets` chat model (Ministral). `product-vision.md`: voice "input/output"→**input**
+      only (no TTS — grep-verified). `model-policy.md`: Chat-default purpose disambiguates
+      catalog/preconfigured default vs the DIY default-set model. `architecture.md` **§22 legend
+      row ONLY** re-pointed directly at `data-contracts.md` "MVP Definition of Done" (drops the
+      BUILD_STATE §4 hop) — §47 ledger untouched, file byte-verified NUL-free. No doc-pinning test
+      asserts any changed sentence; every edited doc byte-verified NUL-free. Docs-only ⇒ build
+      unaffected.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

@@ -85,8 +85,10 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;
-`updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:false`,
-`workspaceMode:'plaintext_dev'`, `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
+`updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:true`
+(network is PERMITTED on a fresh install so model/engine downloads work — the policy ceiling still
+wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
+`contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
 **The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
 `checksumCache`** (`Record<path, {size, mtimeMs, sha256}>`, default `{}` — the persisted L2 of
@@ -107,9 +109,10 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
 `isRealSha256`). YAML files under `model-manifests/` (originally chat: Qwen3 4B/8B/14B Q4 + 30B-A3B
-MoE + embeddings: E5 small F16 — five; 1.7B dropped, see §9). **The live catalog is now 11 manifests**
-(8 chat + E5 + bge-reranker + whisper transcriber, in `model-manifests/{chat,embeddings,reranker,
-transcriber}/`) — `model-policy.md` is the authoritative list.
+MoE + embeddings: E5 small F16 — five; 1.7B dropped, see §9). **The live catalog is now 19 model
+manifests across 6 role dirs** (14 chat + E5 embeddings + bge-reranker + whisper transcriber +
+translategemma translation + qwen2.5-vl vision, in `model-manifests/{chat,embeddings,reranker,
+transcriber,translation,vision}/`) — `model-policy.md` is the authoritative list.
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
@@ -444,9 +447,11 @@ document answers always run balanced (deep-grounded = wave 2).
   when present; real `download.sha256` must equal a real top-level `sha256`). `shared/runtime-sources.ts`
   `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The committed
   model manifests (the original six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes.
-  **(Updated since Phase 12 — see `model-policy.md` for the live catalog: the catalog is now 11
-  manifests (8 chat + E5 + bge-reranker + whisper transcriber), and `runtime-sources.yaml` is pinned
-  to the REAL `ggml-org/llama.cpp@b9585` release with real URLs + SHA-256, plus `whisper_cpp:`/`ocr:`
+  **(Updated since Phase 12 — see `model-policy.md` for the live catalog: the catalog is now 19 model
+  manifests across 6 role dirs (14 chat + E5 + bge-reranker + whisper transcriber + translategemma
+  translation + qwen2.5-vl vision), and `runtime-sources.yaml` is pinned to the REAL
+  `ggml-org/llama.cpp@b9849` release (bumped from b9585 for the Qwen3.5 gate) with real URLs +
+  SHA-256, plus `whisper_cpp:`/`ocr:`
   asset blocks — the original "b9196 placeholder / one CPU build per OS" text below is the Phase-12
   as-built snapshot.)** The Phase-12 snapshot: `runtime-sources.yaml` referenced
   `ggml-org/llama.cpp@b9196` as a PLACEHOLDER, one CPU build per OS.
@@ -509,8 +514,8 @@ document answers always run balanced (deep-grounded = wave 2).
   progress + cancel via 1 s polling; SettingsScreen hint updated.
 
 ### Audit log (Phase 19 live)
-✅ **Types** (`shared/types.ts`): `AuditEventType` (25 values as of Phase 38 — wave 3 added
-  document-task/export/password-change events);
+✅ **Types** (`shared/types.ts`): `AuditEventType` (42 values — the enum in `types.ts` is the
+  authoritative list; covers runtime/model/document-task/export/collection/skill/workspace events);
   `AuditEvent { id, type, message, metadata: Record<string,unknown> | null, createdAt }`.
 ✅ **`services/audit.ts`** — `AUDIT_MAX_ROWS = 5000`, `recordEvent(db, type, message, metadata?,
   createdAt?)` (never throws; prunes on insert), `pruneAuditEvents(db, maxRows?)`,
@@ -531,10 +536,10 @@ document answers always run balanced (deep-grounded = wave 2).
   'auto')` → the drive root (the launcher's own directory; pure path math, no fs). Handles Windows
   drive-letter + POSIX/macOS paths; throws on empty/relative. **No hardcoded path** — the canonical
   reference the launcher scripts mirror.
-✅ **`launchers/`** (repo templates copied to the drive root by the pipeline) — `Start Private AI
-  Drive.cmd` (`%~dp0` → set `HILBERTRAUM_DRIVE_ROOT` → spawn `HilbertRaum-*-portable.exe`), `Start
-  HilbertRaum.command` (macOS, exec the `.app` binary with the env exported), `start-private-ai-
-  drive.sh` (Linux, next to the AppImage), `READ ME FIRST.txt` (friendly first-run + SmartScreen/
+✅ **`launchers/`** (repo templates copied to the drive root by the pipeline) — `Start
+  HilbertRaum.cmd` (`%~dp0` → set `HILBERTRAUM_DRIVE_ROOT` → spawn `HilbertRaum-*-portable.exe`), `Start
+  HilbertRaum.command` (macOS, exec the `.app` binary with the env exported), `start-hilbertraum.sh`
+  (Linux, next to the AppImage), `READ ME FIRST.txt` (friendly first-run + SmartScreen/
   Gatekeeper "Run anyway" copy).
 ✅ **`services/preflight.ts`** — `runPreflight({ rootPath, measureSpeed?, minFreeBytes? }) →
   PreflightResult { rootPath, writable, freeBytes, slowDriveWarning, problems[] }` (spec §11.4 tone;

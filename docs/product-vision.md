@@ -102,9 +102,9 @@ Still-standing MVP non-goals (deliberate, not omissions):
 - full GDPR compliance automation
 - legal/medical advice claims
 
-Two of the spec's original exclusions were later **reversed by shipping**: local voice
-input/output (Whisper transcription + dictation, Phase 36/37) and scanned-PDF OCR
-("Make searchable", Phase 38).
+Two of the spec's original exclusions were later **reversed by shipping**: local voice **input**
+(Whisper transcription + dictation, Phase 36/37 — voice *output*/TTS remains out of scope) and
+scanned-PDF OCR ("Make searchable", Phase 38).
 
 ## Growth directions
 
