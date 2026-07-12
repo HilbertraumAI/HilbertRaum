@@ -1253,6 +1253,17 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       `.recovery` confidentiality window qualified "under this app version or newer";
       `cleanRelative` persists posix separators (display-only `source_relative_path`). All five
       forced-failure tests watched red pre-fix (src stashed) then green. Suite 4168 → 4178/47.
+    - _2026-07-12 Phase 2 (docs-only, `docs/build-log.md`):_ **DOC-1** fixed — the BUILD_STATE
+      restructure relocated the archive from repo root to `docs/`, breaking its relative markdown
+      links. One scripted pass de-linkified **258** relative links to inline code (F6 recipe: the
+      already-`` `code` `` link text kept, only the `](target)` wrapper dropped, prose otherwise
+      byte-identical); the `../BUILD_STATE.md` header link stays live and **6** non-link `](…)`
+      sequences are untouched (2 regex/call-syntax false positives + 4 inside a stray-backtick
+      paragraph — all confirmed non-links by rendering through `marked`/CommonMark, the ground
+      truth vs the audit's naive 264/265 regex count). Archive header gains a relocation note.
+      Byte-verified NUL-free + LF, line count unchanged; `marked` re-parse shows 0 relative links
+      left. Suite unchanged **4178/47** (docs-only, no new tests). The optional
+      `repo-hygiene.test.ts` link-resolvability assertion is DEFERRED to Phase 5 (owns that file).
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

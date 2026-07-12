@@ -9,6 +9,14 @@
 > live on in the topic docs (the §-ledgers in `docs/architecture.md`, `docs/rag-design.md`,
 > `docs/model-benchmarks.md`, …). When a wave closes, its entries move from `BUILD_STATE.md`
 > to the **top** of this file.
+>
+> **Relocation de-linkification (2026-07-12, full-audit 2026-07-12 DOC-1):** at the repo root these
+> entries' **relative** markdown links resolved from root; moved verbatim under `docs/` they no longer
+> did. In one scripted pass every relative link was de-linkified to inline code — the visible link text
+> (already an inline-code span) is kept and only the `](target)` wrapper is dropped — so the archive
+> renders without a wall of dead links and the prose is otherwise byte-identical. Left as live links: the
+> `../BUILD_STATE.md` pointer above and any `http(s)://` targets; a few `](…)` sequences that were only
+> ever inline code (a regex, an `arr[kind](args)` call) are untouched because they never rendered as links.
 
 _2026-07-09 — **Beta feedback issues #41 + #43 (deep-index build failed instantly on long documents; context-size picker capped at 32k) — SHIPPED on local `master`; issues commented + closed via API.**_
 **#41 (tree build vs the real window):** the reporter's 80k-vs-32k budget trace was based on the stale `DocTaskDeps.getContextTokens` doc comment — the §L0 clamp (doc-task budgets follow the LAUNCHED `--ctx-size` via `effectiveContextWindow`) has been in place since 2026-07-04 (`86e8621`) and every launch site honors the override, so the budget was already ≤ the launched window. The REAL fault: `SUMMARY_TOKENS_PER_WORD` (1.3) is a prose-measured factor, and table/number-heavy PDFs tokenize denser (chat's trim path already carries a 1.5 multiplier for exactly this — architecture "German subword safety"), so ONE packed level-0 group's real tokens could overflow the launched 32k window → llama-server pre-decode HTTP 400 `exceed_context_size_error` → the whole build failed in <0.5 s with copy blaming the document. Fix = the issue's suggestion 2: `DocTaskManager.generate` now maps the 400 to a typed **`ContextOverflowError`** (new `doctasks/errors.ts`; same friendly message ⇒ non-retrying handlers byte-identical), and `buildTree` **halves its packing budget and re-packs the level's REMAINING children** (committed nodes stay; summary_cache keeps them free), floored at `TREE_BUDGET_FLOOR_WORDS` (200 — the `summaryBudgetWords` floor); a LONE over-window child rethrows immediately (children are never split ⇒ no futile retry loop). Halving only shrinks the budget ⇒ the vuln-scan HIGH_BUG `minPerGroup=2` termination invariant is untouched; root selection re-derived per-commit (`ordinal===0 && last group` — re-packs only GROW the remaining count, and only before a commit). Stale comment fixed; `main.model.contextExceeded` copy (EN+DE) now points at the AI Model screen's context size ("a fixed pick caps it") instead of only blaming document/model size (suggestion 3). **#43 (32k ceiling + unlabeled Auto):** `MAX_CONTEXT_TOKENS_OVERRIDE` 32768→**131072** (settings.ts clamp; comment records why the silent cap was a dead end), `CONTEXT_SIZE_PRESETS` += 65536/131072, "Automatic" is labeled with the number it resolves to for the ACTIVE model (`models.context.autoResolved`, `recommendedContextTokens || contextTokens` — the same precedence `startModelRuntime` launches with), and fixed picks ≥ `CONTEXT_SIZE_WARNING_MIN` (65536) show the honest KV-cache memory hint (`models.context.bigWarning`, `.context-size-warning`) — warning instead of cap; a too-big start degrades down the GPU ladder rather than wedging. Per-model native-max clamping was NOT built (no `context_length` field in the manifest schema; the drive's own manifests carry the native window only in comments) — presets stay bounded at 128k instead. Tests **+7** (`whole-doc-analysis.test.ts` "adaptive budget on context overflow (issue #41)" ×3: halve+re-pack completes with full leaf coverage + single root + bounded calls, floor fails friendly with exactly 1 call, END-TO-END raw `ChatRequestError(400, exceed_context_size_error)` through the manager retries to `done`; `settings-context-override.test.ts` ×1: 64k/128k rungs round-trip unclamped + ceiling pinned; `ModelsScreen.test.tsx` "context-size picker beyond 32k (issue #43)" ×3: new rungs offered, Auto labeled with resolved 98,304, big-pick warning present/small-pick absent) → **suite 3939/47**; typecheck + build green. Docs: rag-design §14.3 (adaptive-budget bullet) + §15.8 "User-settable context size" (131072 ceiling, labeled Auto, memory warning); `doctasks/context.ts` `getContextTokens` doc comment de-staled (it claimed bare `settings.contextTokens` — the trap that misled the #41 trace).
@@ -41,7 +49,7 @@ _2026-07-08 — **Chat & Documents audit 2026-07-07 — Session 4 (CB-1, CB-6, C
 _All in `apps/desktop/src/main/services/chat.ts`; the hot-path prompt-assembly invariants held. **CB-1 (Medium — latent/model-dependent, correctness):** `fitMessagesToContext` filled the kept tail newest→oldest breaking purely on budget, so an even-length trim left a `system, assistant, …` tail — strict templates (Mistral-family) `raise_exception` on an assistant-first list (HTTP 500), and a break landing between the synthetic compaction pair's intro (user) and ack (assistant) replayed a bare "Understood — I'll continue…". Latent only because the bundled Qwen3/Gemma templates tolerate it. Fix: in the **trimmed branch only**, `while (keptReversed.length > 1 && last.role === 'assistant') pop()` — a defensive `while` (not `if`), the length-1 guard never drops the mandatory final user turn and never empties — normalizing the kept tail user-first (a lone kept ack IS that leading assistant, so the pair is never replayed ack-without-intro). Lives in `fitMessagesToContext` (single owner for chat + RAG). **Identity path byte-identical:** in the no-trim case the oldest kept turn is the conversation's first turn, always `user` (real chats + the compaction pair are user-first), so the loop pops nothing and the existing `keptReversed.length === turns.length` identity return still fires — the while sits BEFORE that check per plan. Corrected the false docstring at chat.ts:1097-1098 (a contiguous tail preserves ALTERNATION but NOT first-role parity). **CB-6 (Low — perf, per-turn read hygiene):** (a) new `getLatestMessage(db, convId): Message | null` — a `LIMIT 1` twin of `listMessages` (identical skill JOIN + `result_tables` EXISTS + `kind IS NOT 'compaction'` filter, only ordered DESC), byte-identical to `listMessages(...).at(-1)`; `buildTurnFence` now sizes the fence via it instead of paging the whole history for one row. (b) `generateAssistantMessage` reads `getSettings` **once** (was 3×: direct + `compactionEnabled` + `buildChatMessages`'s `compactionEnabled`), deriving both `contextTokens` (`effectiveContextWindow`) and `compactionOn` (`settings.chatCompactionEnabled !== false`) from it, threading the toggle through a new **optional last param `compactionOn: boolean = compactionEnabled(db)`** on `buildChatMessages` (default = a fresh read, so all ~15 existing callers stay byte-identical). Fence content/budget unchanged ⇒ stamp decisions unchanged (skills-turn suite holds). Did NOT reorder fence-before-compaction (that is Session 5 CB-3) — kept `buildTurnFence` free of any checkpoint dependency so S5's reorder stays cheap. **Tests (teeth, +8):** `chat.test.ts` — CB-1 even-count trim → user-first + dropped assistant absent + final user kept + richer `[u2,a3,u4]` tail; CB-1 compaction pair-never-split → no bare/leading ack; CB-1 solo oversize final → `[sys, final]` (length-1 guard preservation); `getLatestMessage` returns the tail (byte-identical to `listMessages(...).at(-1)`) / excludes a checkpoint row / null on empty; `buildChatMessages(…, false)` ignores an existing checkpoint (threaded boolean honored). `skills-turn.test.ts` — `getLatestMessage` twins `listMessages(...).at(-1)` on a **skill-stamped assistant tail** (JOIN column exercised). **Revert-confirmed:** disabling the CB-1 `while` reddens **exactly** the two user-first tests (even-count + pair-never-split); the solo-oversize preservation test stays green (correct — it guards the length-1 condition, not the pop), then restored. **Verify:** `npm run typecheck` clean, **suite 3843/47** (was 3835; +8), `npm run build` green. **Docs:** `architecture.md` "History fits the context window" bullet — CB-1 user-first normalization + corrected first-role-parity claim, and CB-6 `buildTurnFence` LIMIT-1 tail read + single-`getSettings`/threaded-`compactionOn`. **Next actions:** owner push (no GitHub issue attached — unpushed local-master wave); **Session 5 (CB-3 → CB-2 → CB-4 → CB-5 + D-1…D-4 + T-5) can now start** on this stable base; S6/S7 unstarted (S6 shares docs-backend files with S1)._
 
 _2026-07-08 — **Chat & Documents audit 2026-07-07 — Session 3 (DR-1…DR-9, Documents renderer polish) — SHIPPED on local `master`, UNPUSHED.**_ (Plan: `docs/chat-docs-remediation-plan-2026-07-07.md` "Session 3"; report `docs/chat-docs-audit-2026-07-07.md` §5 DR-1…DR-9. Different subsystem from Sessions 1–2 (documents renderer) — no rebase concern; parallelizable with Session 2.)_
-_Renderer-only, all in `renderer/screens/DocumentsScreen.tsx` + `screens/documents/{DocRow,SectionRail,format}.tsx`; the global invariant held — **no fix hands a memoized/windowed `DocRow`/`SectionRail` an unstable prop**, and two fixes TIGHTEN it. **DR-4 (Low — perf/UX, memo tightens):** the screen-global `previewLoading` boolean flipped a memo-busting prop on EVERY windowed `DocRow` twice per preview and made every row read "Opening…"/disabled. Replaced with `previewLoadingId: string | null`; the row prop is now `previewLoading={previewLoadingId === d.id}` — the clicked row gets `true`, every other row a **stable `false`**, so `DocRow.memo` now HOLDS on a preview open (DocRow's boolean prop is unchanged — no DocRow edit). **DR-2 (Med — race, fewer spurious swaps):** `refresh()` had no ordering guard, so an older `listDocuments` could clobber a newer snapshot and STICK once the poll interval cleared. Added a monotonic `refreshSeq` ref stamped at call entry; the single choke point covering every caller (poll tick, toolbar, `run`, mount) gates BEFORE both `setDocs` and the selected-prune (`if (seq !== refreshSeq.current) return`) — an out-of-order snapshot is dropped, reducing spurious full-list swaps. Rejected serializing only the poll tick (misses tick↔toolbar overlaps). **DR-1 (Med — race):** the preview "Show more" updater returned `next` on id-mismatch/closed-modal — resurrecting a closed modal (Esc mid-load) or clobbering a doc-task's auto-opened preview with a stale slice; now returns `cur` (drops the late page). **DR-3 (Low):** the toolbar Refresh `onClick` now catches the `listDocuments` rejection into the banner (`.catch((e) => setError(friendlyIpcError(e)))`) — every other call site already did; the raw click was an unhandled rejection with no banner. **DR-5 (Low):** all four Import buttons gated on `busy !== null` (not just `'import'`) so a concurrent bulk re-index sharing the single `busy` scalar can't fight — main-side job exclusivity stays the correctness backstop; the LABEL still keys on `'import'` (only a real import shows "Importing…"). **DR-6 (Low, a11y):** archived projects in the section rail get the `active` class + `aria-current` (mirroring active projects) so a selected archived section is visible to the user + screen readers. **DR-7 (Low, i18n):** a failed doc-task's persist-canonical error goes through `localizeServerCopy(t, status.error)` (effect dep `t` added — stable, memoized on `lang`) — stops the de-AT UI leaking raw English. **DR-8 (Low, UX):** a first-mount `<div role="status"><Spinner/> {t('docs.loading')}</div>` when `docs == null && error == null` fills the blank-list gap; new `docs.loading` key in `en.ts` + `de.ts`. **DR-9 (Low):** `formatSize` gains a GB tier (`GB = MB*1024`; locale decimal handling unchanged). **Tests (teeth, +9, new [`tests/renderer/DocumentsScreenPolish.test.tsx`](apps/desktop/tests/renderer/DocumentsScreenPolish.test.tsx)):** one per finding — DR-1 close-modal-then-late-page (dialog stays closed), DR-2 out-of-order refresh (newer beta sticks, older gamma dropped), DR-3 toolbar rejection → banner, DR-4 open A's preview → B not disabled/relabeled + B render-count delta 0, DR-5 recovered bulk-reindex → Import disabled, DR-6 archived-project select → `aria-current`/`active`, DR-7 German-forced failed task → localized copy, DR-8 held `listDocuments` → status spinner then gone, DR-9 GB-tier formatting (en/de). **DR-1 + DR-2 revert-confirmed** by hand (reverting each reddens exactly its test — DOM showed the modal reopen / gamma clobbering beta — then restored). **Verify:** `npm run typecheck` clean, **suite 3835/47** (was 3826; +9), `npm run build` green. **Docs:** `architecture.md` FE record — new "FE audit 2026-07-07 — Documents renderer polish (DR-1…DR-9)" bullet after the CR-1…CR-9 entry (calls out DR-4 tightens `DocRow.memo` + DR-2 reduces spurious swaps so it doesn't read as pure churn; keeps `DR-n` code-comment citations resolvable). **Next actions:** owner push (no GitHub issue attached — unpushed local-master wave); Sessions 4–7 unstarted (S4 → S5 → S6 → S7 per the plan's execution order; S6 shares docs-backend files with S1)._
+_Renderer-only, all in `renderer/screens/DocumentsScreen.tsx` + `screens/documents/{DocRow,SectionRail,format}.tsx`; the global invariant held — **no fix hands a memoized/windowed `DocRow`/`SectionRail` an unstable prop**, and two fixes TIGHTEN it. **DR-4 (Low — perf/UX, memo tightens):** the screen-global `previewLoading` boolean flipped a memo-busting prop on EVERY windowed `DocRow` twice per preview and made every row read "Opening…"/disabled. Replaced with `previewLoadingId: string | null`; the row prop is now `previewLoading={previewLoadingId === d.id}` — the clicked row gets `true`, every other row a **stable `false`**, so `DocRow.memo` now HOLDS on a preview open (DocRow's boolean prop is unchanged — no DocRow edit). **DR-2 (Med — race, fewer spurious swaps):** `refresh()` had no ordering guard, so an older `listDocuments` could clobber a newer snapshot and STICK once the poll interval cleared. Added a monotonic `refreshSeq` ref stamped at call entry; the single choke point covering every caller (poll tick, toolbar, `run`, mount) gates BEFORE both `setDocs` and the selected-prune (`if (seq !== refreshSeq.current) return`) — an out-of-order snapshot is dropped, reducing spurious full-list swaps. Rejected serializing only the poll tick (misses tick↔toolbar overlaps). **DR-1 (Med — race):** the preview "Show more" updater returned `next` on id-mismatch/closed-modal — resurrecting a closed modal (Esc mid-load) or clobbering a doc-task's auto-opened preview with a stale slice; now returns `cur` (drops the late page). **DR-3 (Low):** the toolbar Refresh `onClick` now catches the `listDocuments` rejection into the banner (`.catch((e) => setError(friendlyIpcError(e)))`) — every other call site already did; the raw click was an unhandled rejection with no banner. **DR-5 (Low):** all four Import buttons gated on `busy !== null` (not just `'import'`) so a concurrent bulk re-index sharing the single `busy` scalar can't fight — main-side job exclusivity stays the correctness backstop; the LABEL still keys on `'import'` (only a real import shows "Importing…"). **DR-6 (Low, a11y):** archived projects in the section rail get the `active` class + `aria-current` (mirroring active projects) so a selected archived section is visible to the user + screen readers. **DR-7 (Low, i18n):** a failed doc-task's persist-canonical error goes through `localizeServerCopy(t, status.error)` (effect dep `t` added — stable, memoized on `lang`) — stops the de-AT UI leaking raw English. **DR-8 (Low, UX):** a first-mount `<div role="status"><Spinner/> {t('docs.loading')}</div>` when `docs == null && error == null` fills the blank-list gap; new `docs.loading` key in `en.ts` + `de.ts`. **DR-9 (Low):** `formatSize` gains a GB tier (`GB = MB*1024`; locale decimal handling unchanged). **Tests (teeth, +9, new `tests/renderer/DocumentsScreenPolish.test.tsx`):** one per finding — DR-1 close-modal-then-late-page (dialog stays closed), DR-2 out-of-order refresh (newer beta sticks, older gamma dropped), DR-3 toolbar rejection → banner, DR-4 open A's preview → B not disabled/relabeled + B render-count delta 0, DR-5 recovered bulk-reindex → Import disabled, DR-6 archived-project select → `aria-current`/`active`, DR-7 German-forced failed task → localized copy, DR-8 held `listDocuments` → status spinner then gone, DR-9 GB-tier formatting (en/de). **DR-1 + DR-2 revert-confirmed** by hand (reverting each reddens exactly its test — DOM showed the modal reopen / gamma clobbering beta — then restored). **Verify:** `npm run typecheck` clean, **suite 3835/47** (was 3826; +9), `npm run build` green. **Docs:** `architecture.md` FE record — new "FE audit 2026-07-07 — Documents renderer polish (DR-1…DR-9)" bullet after the CR-1…CR-9 entry (calls out DR-4 tightens `DocRow.memo` + DR-2 reduces spurious swaps so it doesn't read as pure churn; keeps `DR-n` code-comment citations resolvable). **Next actions:** owner push (no GitHub issue attached — unpushed local-master wave); Sessions 4–7 unstarted (S4 → S5 → S6 → S7 per the plan's execution order; S6 shares docs-backend files with S1)._
 
 _2026-07-07 — **Chat & Documents audit 2026-07-07 — Session 2 (CR-1…CR-9, T-1, T-2, Chat renderer correctness + stream-recovery tests) — SHIPPED on local `master`, UNPUSHED.**_ (Plan: `docs/chat-docs-remediation-plan-2026-07-07.md` "Session 2"; report `docs/chat-docs-audit-2026-07-07.md` CR-1…CR-9 + T-1/T-2. Different subsystem from Session 1 — no rebase concern.)_
 _Renderer-only, all in `renderer/screens/ChatScreen.tsx` + `renderer/chat/Transcript.tsx`; the global invariant held — **no fix adds an unstable prop to a memoized child (`Transcript`/`MessageBlock`/`ConversationList`) on the keystroke/flush hot path**. **CR-1 (Medium — input loss):** a send that failed BEFORE the user turn persisted (DOC_TASK_BUSY / no model / slot held by another window) lost both the composer draft and the optimistic bubble. Kept the responsive early `setInput('')` but `stream` now returns whether the user turn persisted (derived from its post-failure `listMessages` — no new IPC), and `onSend` restores the draft via `restoreDraft` (`setInput((cur) => cur === '' ? text : cur)` — newer in-flight typing wins) only when it did NOT persist, so a stopped-partial / errored-after-persist turn never duplicates. The synchronous `catch` (ensureConversation throw) restores too. **CR-2 (Medium — scroll bleed):** `key={activeId ?? 'new'}` on the `Transcript` instance remounts it per conversation (resets `atBottomRef` + `scrollTop`; the mount effect re-pins) — keyed on `activeId` NOT `messages`, so refresh/streaming reattach keep the key stable and `React.memo` still skips the transcript on the hot path. **CR-3 (Low-Med):** block a second attach while one is pending (`|| pendingImport != null` in `attachFiles`) + withhold the composer paperclip while pending (`onAttach={pendingImport != null ? undefined : …}`) so the first import's watcher is never orphaned. **CR-4 (Low, M-U2 parity):** the recovery tick's completed branch now confirms a stop (`stopped.current` → `chat.stopped` toast) — the recovered path has no local `stream()` finally; ref reset makes a StrictMode double-invoke a no-op. **CR-5 (Low):** `stream` branches on the conversation's own mode (`conversations.find(convId)?.mode ?? mode`), not the screen `mode` state, so a reattach that failed to mirror `mode` still routes a documents send through `askDocuments`. **CR-6 (Low):** `useEffect(() => setError(null), [activeId])` placed BEFORE the history-load effect clears a stale banner on switch/delete/mode-deselect. **CR-7 (Low, latent):** the sibling `activeIdRef.current === convId` stale-response guard added to the three switch-time loads (history, `refreshContextInfo`, `refreshAttachments`). **CR-8 (Low):** `ensureConversation` deletes `depths['new']` alongside the SKA-18 skill re-key (a 'new'-composer depth pick must not become every later new chat's default). **CR-9 (latent hardening, byte-equivalent today):** `onStop` targets `streamConvId ?? activeId`; reachability (ConversationList `disabled={streaming && !active}` + `busyStreaming` guards ⇒ `streamConvId === activeId` wherever Stop renders) recorded so the disabled-row guard is not relaxed unchecked. **CR-10 out of scope** (accepted PERF-2 chat half). **Tests (teeth-checked, +9):** `ChatStreamRecovery.test.tsx` (T-1: recovered bubble + locked composer + refresh-on-completion folding in CR-4 stop; fresh-mount re-select + documents-mode mirror; CR-5 list-fetch-failure routing; user-click-not-yanked), `ChatSwitchStop.test.tsx` (T-2: mid-stream non-active row disabled + Stop aborts the streaming conv — the CR-9 reachability invariant), `ChatSendFailure.test.tsx` (CR-1 a/b/c + CR-2 scroll-reset). Teeth confirmed by reverting CR-2/CR-4 → exactly those two tests redden. **Verify:** `npm run typecheck` clean, **suite 3826/47** (was 3817; +9), `npm run build` green. **Docs:** `architecture.md` "Stream recovery across navigation" record — new "FE audit 2026-07-07 — Chat renderer correctness (CR-1…CR-9)" bullet (CR-9 reachability + CR-2 rationale + per-finding lines keeping `CR-n` code-comment citations resolvable). **Next actions:** owner push (no GitHub issue attached — unpushed local-master wave); Sessions 3–7 unstarted (S3 Documents renderer polish is parallelizable; S4 → S5 → S6 → S7 per the plan's execution order)._
@@ -67,29 +75,29 @@ _First code+test change of the wave (Phases 1–3 were text-only). **SK-5 (MEDIU
 _Text/comment-only — **no behaviour change anywhere**. **SK-4 (MEDIUM, over-promise):** deadline-obligation-finder claimed "one or more documents" but the `whole-doc` engine requires exactly one in-scope doc (at multi-doc the W2 pre-pass narrows or asks) — reworded to single-document in the EN `description` ("in a document"), the DE `localized.de.description` ("in einem Dokument", formal register kept), and the body ("across one or more selected documents" → "in the selected document") + one what-changed-style scope sentence ("The app handles document scope — with several documents in scope it narrows to the matching one or asks the user to pick; do not police this yourself"). The top-k coverage-honesty rule ("I found these… in the available material") kept; a multi-doc whole-doc sweep was REJECTED (engine work, out of scope — D45 one-doc-at-a-time posture stands). **SK-7 (MEDIUM, i18n):** share-safe-review §4 sibling reference now names both languages ("Run the **Document Redaction / Dokument schwärzen** skill", SKA-42 precedent); the §3 hidden-data warning and §4 redaction copy — English boilerplate under a user's-language rule — reframed so the framing licenses translation ("Always include (in the user's language, equivalent to):" for §3; "tell the user, in their language:" for §4) while the English stays as canonical content. **SK-10 (LOW):** invoice honesty rule under-described `validateInvoiceTotals` (2 of 3 checks) — added the third, "or the tax doesn't match the stated rate", and extended the closing paragraph's "check that the printed totals add up" → "…add up (including the stated tax rate)". **SK-14 (LOW, remaining files):** the auto-fire/suggestion-bar clarifying clause ("auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory keyword hit") added to the `autoFire` comments in invoice + meeting-protocol (bank-statement is Phase 4; redaction got it in Phase 1). **Versions:** deadline-finder / share-safe-review / invoice `1.0.0 → 1.1.0` (body changes); meeting-protocol `1.1.0 → 1.1.1` (comment-only patch). **No test/doc drift:** grep found no pinned copies in `apps/desktop/tests` (parity test guards keywords only, untouched; `skill-i18n.test.ts` doesn't cover SKILL.md `localized` strings — DE re-read by hand for register); user-guide.md:612/618 are paraphrase, not verbatim quotes of the changed strings. `npm run typecheck` clean, **suite 3796/47** (baseline held; no new tests, no new skips). **Next actions:** Phase 4 (bank-statement aux files + schema parity pin, SK-5/SK-6/SK-14 part), then Phase 5 close-out (retire report+plan into arch Skills record; version convention + INFO records). Unpushed on `master`._
 
 _2026-07-07 — **Skills audit 2026-07-07 (SK-1…SK-18) — Phase 2 SHIPPED (what-changed: diff completeness + fence coherence, SK-2/SK-15/SK-3) — on `master`.** (Plan: `docs/skills-remediation-plan-2026-07-07.md` Phase 2; report `docs/skills-audit-2026-07-07.md`. Phases 1+2 done; 3–4 independent, 5 last.)_
-_**SK-2 (HIGH) — the 200-change render cap now sets `truncated`, fixed as a DESIGN change not a patch.** Root cause: `renderChangesForModel`/`renderRedline` default a 200-change cap that drops the LATER changes but the chat compare call sites set `truncated` only from the token budget — so a >200-change pair that fit the budget produced a prompt asserting the diff is "complete and exact" over a capped list (the invented-completeness class). Fix: `DIFF_RENDER_MAX = 200` exported from `services/diff` as the single source of truth and used as both renderers' default; `retrieveCompareDiff` (`rag/index.ts`) computes `renderCapped = changes.length > DIFF_RENDER_MAX`, passes the constant explicitly to both renderers, and ORs `renderCapped` into the `truncated` flag → cap and flag can't drift. The PARTIAL prompt wording was generalized to be true for BOTH truncation causes (budget AND render cap drop LATER changes, never whole later SECTIONS): "This list is PARTIAL — further changes exist that are not listed, so do NOT describe anything as unchanged…". **Second consumer fixed (same bug class, different surface):** the doctask compare handler (`doctasks/handlers/compare.ts`) now passes `DIFF_RENDER_MAX` explicitly and materializes an explicit PARTIAL note under the `## Exact changes (word-level diff)` heading when the cap fires. **SK-15 + SK-3a:** both what-changed honesty rules reworded INSIDE paragraph 0 (SKA-15 fence-merge kept) — rule 1 now discriminates on what the model can actually SEE (A/B labels or an exact-changes block ⇒ compare and don't police scope; ordinary passages with no diff ⇒ just answer), replacing the false "the app replies before you are ever called" claim; rule 3 names the real runtime label ("Exact word-level changes (redline)") and defers to the block's own PARTIAL / "further changes not listed" markers instead of a blanket "complete and exact". what-changed bumped `1.0.0 → 1.1.0`. **SK-3b — decision D-P2a (DECLINED runtime change):** do NOT suppress the compare fence on the `intends()`-miss relevance fall-through — it would silently drop a user-selected skill's instructions, and reworded rule 1 is coherent on both paths; recorded as an accepted residual in `known-limitations.md` beside the A4/SKA-8 record. **Tests:** new teeth-checked unit file [`tests/unit/rag-compare-diff-truncation.test.ts`](apps/desktop/tests/unit/rag-compare-diff-truncation.test.ts) (+2) — >200 changes within budget ⇒ `truncated:true` + PARTIAL prompt (with an explicit assertion that budget-truncation is NOT the cause), ≤200 ⇒ `truncated:false` + completeness assertion; teeth-check verified (reverting the flag OR turns the >200 case RED). `rag.test.ts:227` re-pinned to the new "do NOT describe anything as unchanged" wording. **Docs:** `rag-design.md` §14.6 (render-cap-sets-`truncated` invariant), `known-limitations.md` (D-P2a). `npm run typecheck` clean, **suite 3796/47** (was 3794; +2). **Next actions:** Phases 3–4 (independent), then Phase 5 close-out (retire report+plan into arch Skills record; record SK-3b/D-P2a + version convention). Unpushed on `master`._
+_**SK-2 (HIGH) — the 200-change render cap now sets `truncated`, fixed as a DESIGN change not a patch.** Root cause: `renderChangesForModel`/`renderRedline` default a 200-change cap that drops the LATER changes but the chat compare call sites set `truncated` only from the token budget — so a >200-change pair that fit the budget produced a prompt asserting the diff is "complete and exact" over a capped list (the invented-completeness class). Fix: `DIFF_RENDER_MAX = 200` exported from `services/diff` as the single source of truth and used as both renderers' default; `retrieveCompareDiff` (`rag/index.ts`) computes `renderCapped = changes.length > DIFF_RENDER_MAX`, passes the constant explicitly to both renderers, and ORs `renderCapped` into the `truncated` flag → cap and flag can't drift. The PARTIAL prompt wording was generalized to be true for BOTH truncation causes (budget AND render cap drop LATER changes, never whole later SECTIONS): "This list is PARTIAL — further changes exist that are not listed, so do NOT describe anything as unchanged…". **Second consumer fixed (same bug class, different surface):** the doctask compare handler (`doctasks/handlers/compare.ts`) now passes `DIFF_RENDER_MAX` explicitly and materializes an explicit PARTIAL note under the `## Exact changes (word-level diff)` heading when the cap fires. **SK-15 + SK-3a:** both what-changed honesty rules reworded INSIDE paragraph 0 (SKA-15 fence-merge kept) — rule 1 now discriminates on what the model can actually SEE (A/B labels or an exact-changes block ⇒ compare and don't police scope; ordinary passages with no diff ⇒ just answer), replacing the false "the app replies before you are ever called" claim; rule 3 names the real runtime label ("Exact word-level changes (redline)") and defers to the block's own PARTIAL / "further changes not listed" markers instead of a blanket "complete and exact". what-changed bumped `1.0.0 → 1.1.0`. **SK-3b — decision D-P2a (DECLINED runtime change):** do NOT suppress the compare fence on the `intends()`-miss relevance fall-through — it would silently drop a user-selected skill's instructions, and reworded rule 1 is coherent on both paths; recorded as an accepted residual in `known-limitations.md` beside the A4/SKA-8 record. **Tests:** new teeth-checked unit file `tests/unit/rag-compare-diff-truncation.test.ts` (+2) — >200 changes within budget ⇒ `truncated:true` + PARTIAL prompt (with an explicit assertion that budget-truncation is NOT the cause), ≤200 ⇒ `truncated:false` + completeness assertion; teeth-check verified (reverting the flag OR turns the >200 case RED). `rag.test.ts:227` re-pinned to the new "do NOT describe anything as unchanged" wording. **Docs:** `rag-design.md` §14.6 (render-cap-sets-`truncated` invariant), `known-limitations.md` (D-P2a). `npm run typecheck` clean, **suite 3796/47** (was 3794; +2). **Next actions:** Phases 3–4 (independent), then Phase 5 close-out (retire report+plan into arch Skills record; record SK-3b/D-P2a + version convention). Unpushed on `master`._
 
 _2026-07-07 — **Skills audit 2026-07-07 (SK-1…SK-18) — Phase 1 SHIPPED (document-edit + document-redaction truth pass) — on `master`.** (Plan: `docs/skills-remediation-plan-2026-07-07.md` Phase 1; report `docs/skills-audit-2026-07-07.md`. 5-phase plan, Phases 1–4 independent + 5 last; UNREMEDIATED before this.)_
 _Text/comment-only — **no behaviour change anywhere**. **SK-1 (HIGH):** document-edit's stale "writes a plain `.txt` copy" sentence replaced with the true output matrix — a `.docx` keeps its formatting, any other format (PDF/text/Markdown) saves as a plain-text copy; **D-P1a** — the same matrix line appended to document-redaction's closing paragraph (symmetry over silence; the rare corrupt-DOCX→`.txt` fallback deliberately NOT claimed). **SK-8:** "just below the chat box" is spatially wrong (`SkillRunBar` renders ABOVE the composer) — fixed in both SKILL.md bodies + the EN routing copy (×5 → "just above the message box") + DE routing copy (×5 → "direkt über dem Eingabefeld") so the model's directions match the UI. **SK-9:** document-redaction's third safety rule now names the steerable fourth locate category (custom-scoped items masked as `[REDACTED]`; default stays the three). **SK-11:** document-edit's "never repeat document text" narrowed — may name the user's own find/replace terms, never quote OTHER document text (redaction's stricter rule untouched). **SK-13:** document-edit "byte-for-byte identical" → "identical, character for character"; the over-claiming `docx-rewrite.ts` comment aligned (byte-identity holds for untouched nodes + non-`document.xml` parts; a rewritten node re-escapes entities → char- not byte-stable). **SK-14 (this phase's share):** document-redaction `autoFire` comment now distinguishes the auto-fire bar (≥3) from the suggestion offer bar (≥2 + mandatory keyword). Both skills bumped `1.0.0 → 1.1.0` (SK-12 body-change convention). **No test/doc drift:** routing tests read the catalog via `tr()` (no literal pins); user-guide.md + known-limitations.md already describe the correct DOCX matrix and use "stays identical"; design-guidelines §11.9/§11.10 are unrelated (memory meter / model card). `npm run typecheck` clean, **suite 3794/47** (baseline, no skips). **Next actions:** Phases 2–4 (independent — Phase 2 is the SK-2 render-cap→truncated code fix + what-changed honesty rewrite; Phase 3 deadline/share-safe/invoice text; Phase 4 bank-statement aux + schema parity pin), then Phase 5 close-out (retire report+plan into arch Skills record). Unpushed on `master`._
 
 _2026-07-07 — **Beta feedback wave 1 — Phase 10 SHIPPED — THE WAVE IS COMPLETE (all 10 phases, issues #22–#28, decisions D68–D78) — on `master`.**_
-_The close-out phase (gold set + eyeball note + retire the plan + docs + this record). **No product-code / renderer / main-runtime change** — tests + docs only (the wave's behaviour all shipped in Phases 1–9). **(1) Gold-set locate-pass fixtures.** New [`tests/fixtures/gold-set/legal-corpus.ts`](apps/desktop/tests/fixtures/gold-set/legal-corpus.ts) — SYNTHETIC lawyer-shaped German documents (a **Vollmacht** with names/address/IBAN/email/phone/date; a **Mandantenbrief**; a Vollmachtgeber→Vollmachtgeberin agreement **edit** case), NEVER real user data (same rule as the §10.1 real-layout corpus), each carrying the exact model reply a scripted (mock) runtime replays. New [`tests/integration/skills-gold-set.test.ts`](apps/desktop/tests/integration/skills-gold-set.test.ts) (+6) drives them through the FULL redaction + edit pipelines two ways — PURE (`redactWithEntities`/`verifyAndSpliceEdits`, which expose the drop-unverifiable count + span union) AND through the run SEAM with the scripted runtime, **incl. two Phase-9 same-format DOCX round-trips** (redact a `.docx` → every non-`document.xml` part byte-identical; edit a `.docx` occurrence-precise). Pins the STRUCTURAL guarantees only — verbatim verify, all-occurrence sweep (D75), occurrence precision (D76), drop-unverifiable, per-char masks preserving line length (D74), DOCX formatting byte-identity (D77) — **never model judgement** (the scripted reply IS the "model"). Deterministic, zero-model, zero-network → runs in CI. **(2) Real-model + e2e eyeball = manual harnesses, recorded not run.** [`model-benchmarks.md`](docs/model-benchmarks.md) **§12** added (the §9.1/§10.2/§11.1 `PAID_*`-style convention): §12.1 the CI gold set, §12.2 the real-model locate-quality bar (`PAID_*` on the locally provisioned smoke drive — names+addresses located, steerability, sweep, no-hallucination, floor-degrade, edit precision), §12.3 the real-app redact+edit-a-DOCX-and-a-PDF eyeball (POSIX + running model → **owner** manual harness, the #22/#23 acceptance criteria). **Both §12.2/§12.3 DEFERRED to the owner** — a real chat model + running app (+ POSIX for the eyeball) can't run in CI on this Windows dev box; stated explicitly in §12. **npm run dev NOT launched** — Phase 10 changed no renderer/main surface, and a GUI launch yields no observable signal in this non-interactive shell; the run-bar wiring stays covered by the descriptor/i18n-parity + `SkillRunBar` renderer tests (arch §21/§22). **(3) Plan retired (doc-lifecycle rule).** Verified every phase's decisions/research are captured in the design records, then `git rm docs/beta-feedback-2026-07-plan.md` (full text in git history). A **§-anchor legend** added to `architecture.md` "Skills — design record" (after §23) maps every `beta-feedback-2026-07-plan §N` / `D68–D78` / `Phase N` citation → its canonical record; a **disambiguation note** flags that this record carries TWO §20–§23 blocks (the earlier Wave-2/PDF/categorizer/audit set + the beta-feedback set) resolved by each beta header's `beta-feedback-2026-07 Phase N` tag. Grepped the codebase for `beta-feedback-2026-07`/`D6[89]`/`D7[0-8]` comment citations — all covered by the legend. **(4) User docs.** `troubleshooting.md` gained "Redaction left a name in, or an edit changed nothing" (AI-assisted best-effort posture, no-model degrade, steerable scope, verbatim-only edits, same-format output); `user-guide.md` redaction/edit section was already current from Phases 7–9 (no change). **Suite 3794/47** (was 3788; +6 gold-set). `npm run typecheck` clean, `npm run build` green. **The design records the wave folded into:** arch §20 (span engine, D74), §21 (LLM-located redaction, D73/D75/D78), §22 (targeted edits, D76), §23 (DOCX export, D77); `rag-design.md` §3 (citation labels, D68), §10 (scope, D71), §14.4 (coverage, D72); `design-guidelines.md` §11.9 (memory meter, D69), §11.10 (one model action, D70) — plus the §-anchor legend beside §23._
+_The close-out phase (gold set + eyeball note + retire the plan + docs + this record). **No product-code / renderer / main-runtime change** — tests + docs only (the wave's behaviour all shipped in Phases 1–9). **(1) Gold-set locate-pass fixtures.** New `tests/fixtures/gold-set/legal-corpus.ts` — SYNTHETIC lawyer-shaped German documents (a **Vollmacht** with names/address/IBAN/email/phone/date; a **Mandantenbrief**; a Vollmachtgeber→Vollmachtgeberin agreement **edit** case), NEVER real user data (same rule as the §10.1 real-layout corpus), each carrying the exact model reply a scripted (mock) runtime replays. New `tests/integration/skills-gold-set.test.ts` (+6) drives them through the FULL redaction + edit pipelines two ways — PURE (`redactWithEntities`/`verifyAndSpliceEdits`, which expose the drop-unverifiable count + span union) AND through the run SEAM with the scripted runtime, **incl. two Phase-9 same-format DOCX round-trips** (redact a `.docx` → every non-`document.xml` part byte-identical; edit a `.docx` occurrence-precise). Pins the STRUCTURAL guarantees only — verbatim verify, all-occurrence sweep (D75), occurrence precision (D76), drop-unverifiable, per-char masks preserving line length (D74), DOCX formatting byte-identity (D77) — **never model judgement** (the scripted reply IS the "model"). Deterministic, zero-model, zero-network → runs in CI. **(2) Real-model + e2e eyeball = manual harnesses, recorded not run.** `model-benchmarks.md` **§12** added (the §9.1/§10.2/§11.1 `PAID_*`-style convention): §12.1 the CI gold set, §12.2 the real-model locate-quality bar (`PAID_*` on the locally provisioned smoke drive — names+addresses located, steerability, sweep, no-hallucination, floor-degrade, edit precision), §12.3 the real-app redact+edit-a-DOCX-and-a-PDF eyeball (POSIX + running model → **owner** manual harness, the #22/#23 acceptance criteria). **Both §12.2/§12.3 DEFERRED to the owner** — a real chat model + running app (+ POSIX for the eyeball) can't run in CI on this Windows dev box; stated explicitly in §12. **npm run dev NOT launched** — Phase 10 changed no renderer/main surface, and a GUI launch yields no observable signal in this non-interactive shell; the run-bar wiring stays covered by the descriptor/i18n-parity + `SkillRunBar` renderer tests (arch §21/§22). **(3) Plan retired (doc-lifecycle rule).** Verified every phase's decisions/research are captured in the design records, then `git rm docs/beta-feedback-2026-07-plan.md` (full text in git history). A **§-anchor legend** added to `architecture.md` "Skills — design record" (after §23) maps every `beta-feedback-2026-07-plan §N` / `D68–D78` / `Phase N` citation → its canonical record; a **disambiguation note** flags that this record carries TWO §20–§23 blocks (the earlier Wave-2/PDF/categorizer/audit set + the beta-feedback set) resolved by each beta header's `beta-feedback-2026-07 Phase N` tag. Grepped the codebase for `beta-feedback-2026-07`/`D6[89]`/`D7[0-8]` comment citations — all covered by the legend. **(4) User docs.** `troubleshooting.md` gained "Redaction left a name in, or an edit changed nothing" (AI-assisted best-effort posture, no-model degrade, steerable scope, verbatim-only edits, same-format output); `user-guide.md` redaction/edit section was already current from Phases 7–9 (no change). **Suite 3794/47** (was 3788; +6 gold-set). `npm run typecheck` clean, `npm run build` green. **The design records the wave folded into:** arch §20 (span engine, D74), §21 (LLM-located redaction, D73/D75/D78), §22 (targeted edits, D76), §23 (DOCX export, D77); `rag-design.md` §3 (citation labels, D68), §10 (scope, D71), §14.4 (coverage, D72); `design-guidelines.md` §11.9 (memory meter, D69), §11.10 (one model action, D70) — plus the §-anchor legend beside §23._
 _**Per-issue outcome (GitHub `comilionas/AI_Drive` — commits reference each issue; the actual close left to the OWNER, since the wave is UNPUSHED and no `gh`/PAT is wired here — owner can close on push, or ask to close via the memory PAT+curl recipe):** #28 (DE citation labels) ✅ Phase 1/D68 → rag-design §3; #25 (context meter reads as progress) ✅ Phase 2/D69 → design-guidelines §11.9; #27 (Select vs Start runtime) ✅ Phase 3/D70 → §11.10; #26 (library-by-default scope) ✅ Phase 4/D71 → rag-design §10; #24 (no coverage statement) ✅ Phase 5/D72 → rag-design §14.4; #22 (redaction misses names/addresses, loses layout) ✅ Phases 6/7/9, D73/D74/D75/D77/D78 → arch §20/§21/§23; #23 (targeted edits regenerate + hallucinate) ✅ Phases 8/9, D76/D77 → arch §22/§23. **Carried-forward follow-ups (NOT wave scope, recorded for the backlog):** redaction's run-bar free-text instruction is plumbed end-to-end but the button collects no text field yet (Phase 8 wired only the EDIT instruction, from the latest chat message); the redaction/edit locate calls run OUTSIDE the D26 chat arbiter (accepted per plan — doctask-lane routing is the follow-up if it bites); PDF re-export stays out of scope (D77). Unpushed on `master`._
 
 _2026-07-07 — **Beta feedback wave 1 — Phase 9 SHIPPED (issues #22/#23, D77 — same-format DOCX export + faithful text, the fourth C-wave phase) — on `master`.** (Plan: `docs/beta-feedback-2026-07-plan.md` §12 — now retired into the design records, see the Phase-10 entry; Phases 1–9 done, 10 (wave close-out) open.)_
-_DOCX in → DOCX out with formatting intact: styles, numbering, tables, headers survive because only text content inside `<w:t>` nodes of `word/document.xml` changes — every other zip part copied **byte-identical**, so the D58 diff-verifiability guarantee (only located spans change) extends from the extracted text to the real file. **The faithful-`.txt` half was ALREADY satisfied** (Phase 7/8 read via `resolveDocumentReader`'s newline-preserving segments + per-char `█` masks — the Phase-7 "writes a FAITHFUL copy from the verbatim segments" test pins it); Phase 9 adds the DOCX writer. **New pure module** [`services/export/docx-rewrite.ts`](apps/desktop/src/main/services/export/docx-rewrite.ts) (main-side, no fs/net): `readDocxTextLayer(bytes)` → `{text, nodes}` (concatenate `<w:t>` node text in document order, a `\n` at each `</w:p>`, entities unescaped, with a node→offset map) + `applySpansToDocx(bytes, spans)` → `Buffer` (splice `TransformSpan[]` across the node map — a span crossing a run boundary splits across `<w:t>` nodes; the replacement is emitted once, in the node where the span starts; unchanged nodes keep their raw escaped bytes; only touched `<w:t>` nodes rewritten — then rezip via jszip with every other part copied through). **`jszip` promoted transitive→DIRECT dep** (already under mammoth; lazy `import`). **THE RE-ANCHOR (the crux, D77):** the DOCX `<w:t>` text layer differs from the mammoth-extracted chunk text the model located against in Phase 7/8, so for a DOCX source both seams build the layer, **RE-RUN the locate pass + verify over THAT layer**, and take the SPANS from the pure halves — [`redaction.ts`](apps/desktop/src/main/services/skills/tools/redaction.ts) `redactWithEntities(...).spans` and [`document-edit.ts`](apps/desktop/src/main/services/skills/tools/document-edit.ts) `verifyAndSpliceEdits(...).spans` now expose the applied-span union (also `redactText`/`maskStep` now return `spans`) — feeding them to `applySpansToDocx`. Under `perChar` the entity ∪ floor spans are a valid single-coordinate set (same-length masks; documented). **Reading the ORIGINAL bytes:** new `readStoredDocumentBytes` ([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts) — decrypts the stored copy to raw bytes for ANY format, mirror of `readStoredDocumentText`) + `buildOriginalDocumentReader` ([`ipc/documentSegments.ts`](apps/desktop/src/main/ipc/documentSegments.ts) — probes the stored `.docx` extension via a cheap title query, returns `{format:'docx', bytes}` ONLY for a Word source, else `{format:'other'}` with NO decrypt). Threaded as `readOriginalDocument` through `ToolRunDeps` → the seam (the §14 ceiling holds: the SEAM holds the FS/cipher reach; the tool never does). **Binary write:** new `saveBinaryFile` IPC (the `.docx` sibling of `saveTextFile` — `writeFile` with a Buffer, no `'utf8'`, same save-dialog + privacy posture) + per-tool **`docxDialog`** descriptors (`.docx` filter) beside the `.txt` `dialog` + `main.dialog.filterDocx` i18n (EN "Word document"/DE "Word-Dokument"). **SOURCE-FORMAT BRANCH lives in the seam** (`runDocumentRedaction`/`runDocumentEdit`): a DOCX source + `saveBinaryFile` + confirmed → build the layer, feed it to the tool as ONE chunk (so gate/audit/counts run THROUGH the tool over exactly the rewritten layer), the seam ALSO computes the SAME spans and `applySpansToDocx` → `redacted.docx`/`edited.docx` via `saveBinaryFile`; **everything else → the unchanged `.txt` path**; a corrupt DOCX (no `document.xml`) **falls back to `.txt`**. **PDF re-export OUT OF SCOPE** (scanned/image PDFs redact only their OCR text layer, documented). D58 invariant extended to "every non-`document.xml` zip part byte-identical, every non-span `<w:t>` char byte-identical". **No renderer surface changed** (the save dialog is main-side; the descriptor keys resolve main-side) → **no preview case, no screenshot-verify** (POSIX-only anyway). **Tests:** new [`tests/unit/docx-rewrite.test.ts`](apps/desktop/tests/unit/docx-rewrite.test.ts) (+6: layer concat/unescape, non-document.xml parts byte-identical after a rewrite, only targeted `<w:t>` changed, span crossing two runs splits, length-changing edit across runs, umlauts/UTF-8 survive) over an in-test fixture builder [`tests/helpers/docx.ts`](apps/desktop/tests/helpers/docx.ts); `skills-redaction.test.ts` (+4: DOCX redacted in place → valid `.docx` + masked layer + parts byte-equal; a located name swept across paragraphs; source-format branch; corrupt-DOCX→`.txt` fallback), `skills-document-edit.test.ts` (+2: DOCX edited in place occurrence-precise; source-format branch), `skills-privacy-guard.test.ts` (+2: DOCX-redacted PII / DOCX-edited find-value touch no sink), `skills-tool-registry.test.ts` (+1: the two document-transform tools carry a `.docx` `docxDialog`; no other does), + the `spans`-field pin in `skills-redaction-tool.test.ts`. **Suite 3788/47** (was 3773; +15). `npm run typecheck` clean, `npm run build` green. Docs: `architecture.md` "Skills — design record" **§23**, `known-limitations.md` (redaction/edit output-format + same-format-DOCX + PDF/scan-OCR limits), `user-guide.md` (same-format note), `packaging.md` (jszip direct dep), plan §12 marked DONE. **Carried forward:** redaction's run-bar free-text instruction still unwired (Phase 8 wired the edit instruction only); the locate calls run outside the D26 chat arbiter (accepted); **Phase 10** (wave close-out — gold-set fixtures, real-app eyeball redact+edit a DOCX and a PDF, fold this plan into the design records + delete it, close #22–#28). Unpushed on `master`._
+_DOCX in → DOCX out with formatting intact: styles, numbering, tables, headers survive because only text content inside `<w:t>` nodes of `word/document.xml` changes — every other zip part copied **byte-identical**, so the D58 diff-verifiability guarantee (only located spans change) extends from the extracted text to the real file. **The faithful-`.txt` half was ALREADY satisfied** (Phase 7/8 read via `resolveDocumentReader`'s newline-preserving segments + per-char `█` masks — the Phase-7 "writes a FAITHFUL copy from the verbatim segments" test pins it); Phase 9 adds the DOCX writer. **New pure module** `services/export/docx-rewrite.ts` (main-side, no fs/net): `readDocxTextLayer(bytes)` → `{text, nodes}` (concatenate `<w:t>` node text in document order, a `\n` at each `</w:p>`, entities unescaped, with a node→offset map) + `applySpansToDocx(bytes, spans)` → `Buffer` (splice `TransformSpan[]` across the node map — a span crossing a run boundary splits across `<w:t>` nodes; the replacement is emitted once, in the node where the span starts; unchanged nodes keep their raw escaped bytes; only touched `<w:t>` nodes rewritten — then rezip via jszip with every other part copied through). **`jszip` promoted transitive→DIRECT dep** (already under mammoth; lazy `import`). **THE RE-ANCHOR (the crux, D77):** the DOCX `<w:t>` text layer differs from the mammoth-extracted chunk text the model located against in Phase 7/8, so for a DOCX source both seams build the layer, **RE-RUN the locate pass + verify over THAT layer**, and take the SPANS from the pure halves — `redaction.ts` `redactWithEntities(...).spans` and `document-edit.ts` `verifyAndSpliceEdits(...).spans` now expose the applied-span union (also `redactText`/`maskStep` now return `spans`) — feeding them to `applySpansToDocx`. Under `perChar` the entity ∪ floor spans are a valid single-coordinate set (same-length masks; documented). **Reading the ORIGINAL bytes:** new `readStoredDocumentBytes` (`ingestion/index.ts` — decrypts the stored copy to raw bytes for ANY format, mirror of `readStoredDocumentText`) + `buildOriginalDocumentReader` (`ipc/documentSegments.ts` — probes the stored `.docx` extension via a cheap title query, returns `{format:'docx', bytes}` ONLY for a Word source, else `{format:'other'}` with NO decrypt). Threaded as `readOriginalDocument` through `ToolRunDeps` → the seam (the §14 ceiling holds: the SEAM holds the FS/cipher reach; the tool never does). **Binary write:** new `saveBinaryFile` IPC (the `.docx` sibling of `saveTextFile` — `writeFile` with a Buffer, no `'utf8'`, same save-dialog + privacy posture) + per-tool **`docxDialog`** descriptors (`.docx` filter) beside the `.txt` `dialog` + `main.dialog.filterDocx` i18n (EN "Word document"/DE "Word-Dokument"). **SOURCE-FORMAT BRANCH lives in the seam** (`runDocumentRedaction`/`runDocumentEdit`): a DOCX source + `saveBinaryFile` + confirmed → build the layer, feed it to the tool as ONE chunk (so gate/audit/counts run THROUGH the tool over exactly the rewritten layer), the seam ALSO computes the SAME spans and `applySpansToDocx` → `redacted.docx`/`edited.docx` via `saveBinaryFile`; **everything else → the unchanged `.txt` path**; a corrupt DOCX (no `document.xml`) **falls back to `.txt`**. **PDF re-export OUT OF SCOPE** (scanned/image PDFs redact only their OCR text layer, documented). D58 invariant extended to "every non-`document.xml` zip part byte-identical, every non-span `<w:t>` char byte-identical". **No renderer surface changed** (the save dialog is main-side; the descriptor keys resolve main-side) → **no preview case, no screenshot-verify** (POSIX-only anyway). **Tests:** new `tests/unit/docx-rewrite.test.ts` (+6: layer concat/unescape, non-document.xml parts byte-identical after a rewrite, only targeted `<w:t>` changed, span crossing two runs splits, length-changing edit across runs, umlauts/UTF-8 survive) over an in-test fixture builder `tests/helpers/docx.ts`; `skills-redaction.test.ts` (+4: DOCX redacted in place → valid `.docx` + masked layer + parts byte-equal; a located name swept across paragraphs; source-format branch; corrupt-DOCX→`.txt` fallback), `skills-document-edit.test.ts` (+2: DOCX edited in place occurrence-precise; source-format branch), `skills-privacy-guard.test.ts` (+2: DOCX-redacted PII / DOCX-edited find-value touch no sink), `skills-tool-registry.test.ts` (+1: the two document-transform tools carry a `.docx` `docxDialog`; no other does), + the `spans`-field pin in `skills-redaction-tool.test.ts`. **Suite 3788/47** (was 3773; +15). `npm run typecheck` clean, `npm run build` green. Docs: `architecture.md` "Skills — design record" **§23**, `known-limitations.md` (redaction/edit output-format + same-format-DOCX + PDF/scan-OCR limits), `user-guide.md` (same-format note), `packaging.md` (jszip direct dep), plan §12 marked DONE. **Carried forward:** redaction's run-bar free-text instruction still unwired (Phase 8 wired the edit instruction only); the locate calls run outside the D26 chat arbiter (accepted); **Phase 10** (wave close-out — gold-set fixtures, real-app eyeball redact+edit a DOCX and a PDF, fold this plan into the design records + delete it, close #22–#28). Unpushed on `master`._
 
 _2026-07-07 — **Beta feedback wave 1 — Phase 8 SHIPPED (issue #23, D76 — format-preserving targeted edits, the third C-wave phase) — on `master`.** (Plan: `docs/beta-feedback-2026-07-plan.md` §11; Phases 1–8 done, 9–10 open.)_
-_"Vollmachtgeber → Vollmachtgeberin including dependent pronouns" now works without touching anything else (D76). A **NEW skill** `document-edit` (not an extension of redaction — its privacy posture stays untangled) + tool `apply_document_edits`, sharing the §20 span engine + §21 locate→verify pattern. The local model ONLY LOCATES occurrence-anchored find→replace edits — it **never regenerates the document** (D73/D76), so hallucination is structurally impossible and **diff-verifiability holds by construction** (only verified spans change, byte-identity elsewhere — the `applySpans` guarantee). Output is `.txt` this phase; DOCX is Phase 9. **New module** [`skills/tools/document-edit-locate.ts`](apps/desktop/src/main/services/skills/tools/document-edit-locate.ts) (runtime-touching): `editLocateSchema()` (grammar-constrained JSON, D55 — `{edits:[{line,find,occurrence,replace}]}`), `buildEditWindows` (overlapping globally line-numbered windows, 40/8 — identical to §21), `locateDocumentEdits(text,instruction,deps)` (one temp-0 schema call per window; malformed window skipped; abort → AbortError), `parseEditReply` (re-validates: empty `find` dropped, missing line/occurrence default to 1, empty `replace` = a deletion). **New module** [`skills/tools/document-edit.ts`](apps/desktop/src/main/services/skills/tools/document-edit.ts) (runtime-free): `verifyAndSpliceEdits` — each `find` confirmed **verbatim at its `{line, occurrence}` anchor** (`locateOccurrences(text,find,{line,nth:occurrence})`) or DROPPED+counted; replaces **only its anchored occurrence** (D76 precision, NOT redaction's sweep — this is what makes der→die-only-where-it-refers expressible); `dropped` = unverifiable finds + `applySpans` overlap-skips; byte-identity outside edited spans (D58) — and the pure `apply_document_edits` tool (confirm-gated `export-file`, `{documentId, edits}` → `{editedText, applied, dropped, totalEdits}`). **The model call lives in the SEAM** ([`run.ts`](apps/desktop/src/main/services/skills/run.ts) `runDocumentEdit`, mirroring `runDocumentRedaction`): records `skill_runs`, runs the locate pass main-side via `deps.runtime`, hands VERIFIED-shape edits to the tool as structured input (`runSkillTool` logs ids/counts only — the find/replace values, CONTENT, stay in the §6 boundary), writes the confirm-gated `edited.txt` (new `DIALOG_EDITED` descriptor beside `DIALOG_REDACTED`); nothing matches ⇒ `none` + NO file written. **WHERE THE INSTRUCTION COMES FROM (the central Phase-8 decision): the conversation's latest user message.** Unlike redaction (optional STEERING), the edit instruction is the CORE input; the IPC resolves it MAIN-side (`chat.ts` `getLatestUserMessage(db, conversationId)` → `BuildRunnerArgs.instruction` → the seam → the locate prompt) — **no new renderer input widget**, content stays main-side (scored/used, NEVER logged — the §6/scope posture). Rejected: a run-bar free-text field (a real screenshot-gated surface, for no gain over the chat message the user already typed) + a chat auto-run (an edit must stay user-initiated + confirm-gated). Phase 7 left `deps.instruction` plumbed-but-unwired for redaction's button; Phase 8 actually collects it (for the EDIT tool; redaction's button steering stays a follow-up). **NO FLOOR (D78):** no runtime → `needsModel`, no instruction → `needsInstruction`, model failure mid-locate → `editFailed` — refuse cleanly, never a silent nothing; a user cancel mid-locate is a calm cancel. **Renderer:** a descriptor-driven `edit` resultShape (`SkillToolResultShape` + `EditDoneKeys`) → `SkillRunBar.doneMessage` branches `edited` / `editedPartial` (some requested text not found, skipped) / `none`; the exact `droppedCount` rides the seam result (tested) but is surfaced qualitatively in the bar (applied count + the partial discriminator), like §21's dropped-entity count — a **copy-only branch** like Phase 7's redaction, so **NO new preview case** (the run bar has never had one; validated by i18n parity + descriptor branching). **Routing** ([`analysis/document-edit.ts`](apps/desktop/src/main/services/skills/analysis/document-edit.ts), `mode:'routing'` — mirrors §21): an edit-shaped ask over ≥1 in-scope doc DEFLECTS to the run button (a chat ask never silently rewrites — the #23 failure mode); reads no content. **`document-edit` vocabulary** (EN+DE — find-and-replace phrases + edit verbs) added to `vocabulary.ts`, pinned by the parity test; **`autoFire:false`** (a write-edit is deliberately activated; still SUGGESTED on the discriminating phrases). **i18n:** `chat.skill.tool.applyDocumentEdits`, `chat.skill.run.done.edited*`/`editedNone`, `chat.skill.run.error.needsModel`/`needsInstruction`/`editFailed`, `main.dialog.exportEdited`, `skills.editRouting.answer`/`answerMulti` (EN+DE, placeholder parity). **Tests:** `skills-document-edit-locate.test.ts` (+16), `skills-document-edit.test.ts` (+13: SKILL.md kind:tool+autoFire-off, discovery/dispatch, seam edited/editedPartial/none, needsModel/needsInstruction, cancel-mid-locate, confirm-gate, dismissed-save), `skills-privacy-guard.test.ts` (+1: a located find/replace value renamed out, never touches audit/log/skill_runs) + **skill-count updates** (vocabulary 8→9, skillmd-parity `ALL_APP_SKILL_IDS`, eval label space + 4 corpus true positives + `LABEL_SPACE`, tool-registry list). **Suite 3773/47** (was 3739; +34). `npm run typecheck` clean, `npm run build` + `npm run preview:build` green. Docs: `architecture.md` "Skills — design record" **§22**, `known-limitations.md` targeted-edits bullet + `user-guide.md` edit note, plan §11 marked DONE. **Carried forward:** the DOCX/segment-faithful writer (Phase 9); redaction's run-bar instruction still unwired (Phase 8 wired the EDIT instruction only); the edit locate call runs outside the D26 chat arbiter (same accepted posture as §21). **Next action: Phase 9** (same-format DOCX export + segment-faithful `.txt`, D77). Unpushed on `master`._
+_"Vollmachtgeber → Vollmachtgeberin including dependent pronouns" now works without touching anything else (D76). A **NEW skill** `document-edit` (not an extension of redaction — its privacy posture stays untangled) + tool `apply_document_edits`, sharing the §20 span engine + §21 locate→verify pattern. The local model ONLY LOCATES occurrence-anchored find→replace edits — it **never regenerates the document** (D73/D76), so hallucination is structurally impossible and **diff-verifiability holds by construction** (only verified spans change, byte-identity elsewhere — the `applySpans` guarantee). Output is `.txt` this phase; DOCX is Phase 9. **New module** `skills/tools/document-edit-locate.ts` (runtime-touching): `editLocateSchema()` (grammar-constrained JSON, D55 — `{edits:[{line,find,occurrence,replace}]}`), `buildEditWindows` (overlapping globally line-numbered windows, 40/8 — identical to §21), `locateDocumentEdits(text,instruction,deps)` (one temp-0 schema call per window; malformed window skipped; abort → AbortError), `parseEditReply` (re-validates: empty `find` dropped, missing line/occurrence default to 1, empty `replace` = a deletion). **New module** `skills/tools/document-edit.ts` (runtime-free): `verifyAndSpliceEdits` — each `find` confirmed **verbatim at its `{line, occurrence}` anchor** (`locateOccurrences(text,find,{line,nth:occurrence})`) or DROPPED+counted; replaces **only its anchored occurrence** (D76 precision, NOT redaction's sweep — this is what makes der→die-only-where-it-refers expressible); `dropped` = unverifiable finds + `applySpans` overlap-skips; byte-identity outside edited spans (D58) — and the pure `apply_document_edits` tool (confirm-gated `export-file`, `{documentId, edits}` → `{editedText, applied, dropped, totalEdits}`). **The model call lives in the SEAM** (`run.ts` `runDocumentEdit`, mirroring `runDocumentRedaction`): records `skill_runs`, runs the locate pass main-side via `deps.runtime`, hands VERIFIED-shape edits to the tool as structured input (`runSkillTool` logs ids/counts only — the find/replace values, CONTENT, stay in the §6 boundary), writes the confirm-gated `edited.txt` (new `DIALOG_EDITED` descriptor beside `DIALOG_REDACTED`); nothing matches ⇒ `none` + NO file written. **WHERE THE INSTRUCTION COMES FROM (the central Phase-8 decision): the conversation's latest user message.** Unlike redaction (optional STEERING), the edit instruction is the CORE input; the IPC resolves it MAIN-side (`chat.ts` `getLatestUserMessage(db, conversationId)` → `BuildRunnerArgs.instruction` → the seam → the locate prompt) — **no new renderer input widget**, content stays main-side (scored/used, NEVER logged — the §6/scope posture). Rejected: a run-bar free-text field (a real screenshot-gated surface, for no gain over the chat message the user already typed) + a chat auto-run (an edit must stay user-initiated + confirm-gated). Phase 7 left `deps.instruction` plumbed-but-unwired for redaction's button; Phase 8 actually collects it (for the EDIT tool; redaction's button steering stays a follow-up). **NO FLOOR (D78):** no runtime → `needsModel`, no instruction → `needsInstruction`, model failure mid-locate → `editFailed` — refuse cleanly, never a silent nothing; a user cancel mid-locate is a calm cancel. **Renderer:** a descriptor-driven `edit` resultShape (`SkillToolResultShape` + `EditDoneKeys`) → `SkillRunBar.doneMessage` branches `edited` / `editedPartial` (some requested text not found, skipped) / `none`; the exact `droppedCount` rides the seam result (tested) but is surfaced qualitatively in the bar (applied count + the partial discriminator), like §21's dropped-entity count — a **copy-only branch** like Phase 7's redaction, so **NO new preview case** (the run bar has never had one; validated by i18n parity + descriptor branching). **Routing** (`analysis/document-edit.ts`, `mode:'routing'` — mirrors §21): an edit-shaped ask over ≥1 in-scope doc DEFLECTS to the run button (a chat ask never silently rewrites — the #23 failure mode); reads no content. **`document-edit` vocabulary** (EN+DE — find-and-replace phrases + edit verbs) added to `vocabulary.ts`, pinned by the parity test; **`autoFire:false`** (a write-edit is deliberately activated; still SUGGESTED on the discriminating phrases). **i18n:** `chat.skill.tool.applyDocumentEdits`, `chat.skill.run.done.edited*`/`editedNone`, `chat.skill.run.error.needsModel`/`needsInstruction`/`editFailed`, `main.dialog.exportEdited`, `skills.editRouting.answer`/`answerMulti` (EN+DE, placeholder parity). **Tests:** `skills-document-edit-locate.test.ts` (+16), `skills-document-edit.test.ts` (+13: SKILL.md kind:tool+autoFire-off, discovery/dispatch, seam edited/editedPartial/none, needsModel/needsInstruction, cancel-mid-locate, confirm-gate, dismissed-save), `skills-privacy-guard.test.ts` (+1: a located find/replace value renamed out, never touches audit/log/skill_runs) + **skill-count updates** (vocabulary 8→9, skillmd-parity `ALL_APP_SKILL_IDS`, eval label space + 4 corpus true positives + `LABEL_SPACE`, tool-registry list). **Suite 3773/47** (was 3739; +34). `npm run typecheck` clean, `npm run build` + `npm run preview:build` green. Docs: `architecture.md` "Skills — design record" **§22**, `known-limitations.md` targeted-edits bullet + `user-guide.md` edit note, plan §11 marked DONE. **Carried forward:** the DOCX/segment-faithful writer (Phase 9); redaction's run-bar instruction still unwired (Phase 8 wired the EDIT instruction only); the edit locate call runs outside the D26 chat arbiter (same accepted posture as §21). **Next action: Phase 9** (same-format DOCX export + segment-faithful `.txt`, D77). Unpushed on `master`._
 
 _2026-07-07 — **Beta feedback wave 1 — Phase 7 SHIPPED (issue #22 part 2, D73/D75/D78 — LLM-located redaction: names/addresses/steerable scope, the second C-wave phase) — on `master`.** (Plan: `docs/beta-feedback-2026-07-plan.md` §10; Phases 1–7 done, 8–10 open.)_
-_Redaction v2: the local model ONLY LOCATES spans — it **never generates the output text** (D73), so hallucination is **structurally impossible** (output = source bytes outside a verified mask) and misses shrink via judgement + an all-occurrences sweep (D75). Builds on the Phase-6 §20 engine. **New module** [`skills/tools/redaction-locate.ts`](apps/desktop/src/main/services/skills/tools/redaction-locate.ts) (runtime-touching): `entityLocateSchema()` (grammar-constrained JSON, D55 — `{entities:[{text,category:name|address|org|other,line}]}`), `buildLocateWindows` (overlapping, **globally line-numbered** windows — 40 lines / 8 overlap so an edge-straddling entity is seen whole), `locateEntities(text,instruction,deps)` (one temp-0 schema call per window; a malformed window is skipped — floor still covers it; abort → AbortError). **`redaction.ts` gains** (runtime-free, unit-testable w/o a model): `verifyAndSweepEntities` (confirm each proposal **verbatim** via `locateOccurrences` or DROP+count; `MIN_ENTITY_CHARS`=3 + letter guard; dedup; sweep ALL occurrences) and `redactWithEntities` (entities masked FIRST against pristine input, then the six regex detectors over the result — byte-identity outside the union of spans, D58; `entities` empty ⇒ exactly the floor). **`redact_document`** input schema gains `entities` + `strategy`; output gains `entityCounts`/`entityMaskCount`/`droppedEntities` (all counts; tool always calls `redactWithEntities`, so the existing token-default tool tests stay byte-for-byte green). **The model call lives in the SEAM** (`runDocumentRedaction`, tools hold no runtime handle — §14): reads the joined text once, locates via `deps.runtime`, hands VERIFIED-shape proposals to the tool as structured **input** (which `runSkillTool` audits/logs ids/counts only, never the input — the entity strings, CONTENT, stay in the §6 boundary); the IPC injects `ctx.runtime.active()` (`ctx.runtime?.active() ?? null` — the IPC-test harness has no runtime manager). **WRITTEN FILE FLIPPED TO `perChar` `█`** (D74/D75; the Phase-6-anticipated flip) so line layout survives — the `[EMAIL]`/`[IBAN]` written-content pins in `skills-redaction`/privacy-guard/tool-run-ipc moved to `█`. **Steerability (D73):** `deps.instruction` rides into the locate prompt as the scope directive ("names and street addresses; keep city names"); category set FIXED, app never interprets prose; absent ⇒ default directive. **DEGRADE, never a silent partial (D78):** no runtime OR a model failure (not a cancel) → the deterministic floor with an honest note; `resultKind` carries BOTH masked-or-not AND model-ran-or-not — `redacted`/`clean` (model ran) vs **`redactedFloor`/`cleanFloor`** (rule-based only → run-bar copy "offline rule-based detection only, no model running"). A user cancel mid-locate → calm cancel (nothing written, `cancelled`). **SKILL.md** honesty block rewritten: "no AI judgement / no name detection" → "AI-assisted best-effort with a deterministic floor — still not a guarantee"; keywords/routing/confirm-gate/`saveTextFile` trust model UNCHANGED (parity test green — paragraphs[0] still has the lead + ≥3 bullets). **i18n:** `chat.skill.run.done.redacted*` reworded ("best-effort, not a guarantee — review"); new `redactedFloor.one/.other` + `redactedCleanFloor` (EN+DE, placeholder parity); `RedactionDoneKeys` + the descriptor gain the Floor variants; `SkillRunBar.doneMessage` branches the four discriminators. **Privacy boundary intact** — a privacy-guard test drives a secret NAME through the locate pass and asserts it's masked out AND reaches no audit/log/`skill_runs`. **Tests:** `skills-redaction-locate.test.ts` (+18: schema; window empty/overlap/global-number; parse keep/drop/malformed; locate per-window temp-0 schema + abort; verify/sweep-all/drop-unverifiable/drop-short/dedup; redactWithEntities entities+floor/perChar-length/byte-identity/empty=floor/dropped); `skills-redaction.test.ts` (+5 seam: locate→sweep-all+floor w/ steering, drop-hallucinated, cancel-mid-locate, model-missing degrade leaves the name, model-failure degrade still saves; pins→`█`+`redactedFloor`/`cleanFloor`); `skills-privacy-guard.test.ts` (+1 located-value + perChar); `skills-tool-run-ipc.test.ts` (perChar + `redactedFloor`). **Suite 3739/47** (was 3717; +22). `npm run typecheck` clean, `npm run build` + `npm run preview:build` green. **No renderer preview case** (the run bar has never had one; text-only copy addition, validated by i18n parity + descriptor branching + the SkillRunBar branch). Docs: `architecture.md` "Skills — design record" **§21** (locate→verify→sweep record + the concurrency carry-forward note), `known-limitations.md` redaction bullet rewritten (AI-assisted best-effort + per-char masks), `user-guide.md` redaction note reworded, plan §10 marked DONE. **Carried forward:** the run-bar button collects no free-text instruction yet (pipeline supports it end-to-end); the redaction locate call runs outside the D26 chat arbiter (accepted per plan — doctask-lane routing is the follow-up). **Next action: Phase 8** (format-preserving targeted edits #23, D76 — a new `apply_document_edits` tool sharing the §20/§21 engine). Unpushed on `master`._
+_Redaction v2: the local model ONLY LOCATES spans — it **never generates the output text** (D73), so hallucination is **structurally impossible** (output = source bytes outside a verified mask) and misses shrink via judgement + an all-occurrences sweep (D75). Builds on the Phase-6 §20 engine. **New module** `skills/tools/redaction-locate.ts` (runtime-touching): `entityLocateSchema()` (grammar-constrained JSON, D55 — `{entities:[{text,category:name|address|org|other,line}]}`), `buildLocateWindows` (overlapping, **globally line-numbered** windows — 40 lines / 8 overlap so an edge-straddling entity is seen whole), `locateEntities(text,instruction,deps)` (one temp-0 schema call per window; a malformed window is skipped — floor still covers it; abort → AbortError). **`redaction.ts` gains** (runtime-free, unit-testable w/o a model): `verifyAndSweepEntities` (confirm each proposal **verbatim** via `locateOccurrences` or DROP+count; `MIN_ENTITY_CHARS`=3 + letter guard; dedup; sweep ALL occurrences) and `redactWithEntities` (entities masked FIRST against pristine input, then the six regex detectors over the result — byte-identity outside the union of spans, D58; `entities` empty ⇒ exactly the floor). **`redact_document`** input schema gains `entities` + `strategy`; output gains `entityCounts`/`entityMaskCount`/`droppedEntities` (all counts; tool always calls `redactWithEntities`, so the existing token-default tool tests stay byte-for-byte green). **The model call lives in the SEAM** (`runDocumentRedaction`, tools hold no runtime handle — §14): reads the joined text once, locates via `deps.runtime`, hands VERIFIED-shape proposals to the tool as structured **input** (which `runSkillTool` audits/logs ids/counts only, never the input — the entity strings, CONTENT, stay in the §6 boundary); the IPC injects `ctx.runtime.active()` (`ctx.runtime?.active() ?? null` — the IPC-test harness has no runtime manager). **WRITTEN FILE FLIPPED TO `perChar` `█`** (D74/D75; the Phase-6-anticipated flip) so line layout survives — the `[EMAIL]`/`[IBAN]` written-content pins in `skills-redaction`/privacy-guard/tool-run-ipc moved to `█`. **Steerability (D73):** `deps.instruction` rides into the locate prompt as the scope directive ("names and street addresses; keep city names"); category set FIXED, app never interprets prose; absent ⇒ default directive. **DEGRADE, never a silent partial (D78):** no runtime OR a model failure (not a cancel) → the deterministic floor with an honest note; `resultKind` carries BOTH masked-or-not AND model-ran-or-not — `redacted`/`clean` (model ran) vs **`redactedFloor`/`cleanFloor`** (rule-based only → run-bar copy "offline rule-based detection only, no model running"). A user cancel mid-locate → calm cancel (nothing written, `cancelled`). **SKILL.md** honesty block rewritten: "no AI judgement / no name detection" → "AI-assisted best-effort with a deterministic floor — still not a guarantee"; keywords/routing/confirm-gate/`saveTextFile` trust model UNCHANGED (parity test green — paragraphs[0] still has the lead + ≥3 bullets). **i18n:** `chat.skill.run.done.redacted*` reworded ("best-effort, not a guarantee — review"); new `redactedFloor.one/.other` + `redactedCleanFloor` (EN+DE, placeholder parity); `RedactionDoneKeys` + the descriptor gain the Floor variants; `SkillRunBar.doneMessage` branches the four discriminators. **Privacy boundary intact** — a privacy-guard test drives a secret NAME through the locate pass and asserts it's masked out AND reaches no audit/log/`skill_runs`. **Tests:** `skills-redaction-locate.test.ts` (+18: schema; window empty/overlap/global-number; parse keep/drop/malformed; locate per-window temp-0 schema + abort; verify/sweep-all/drop-unverifiable/drop-short/dedup; redactWithEntities entities+floor/perChar-length/byte-identity/empty=floor/dropped); `skills-redaction.test.ts` (+5 seam: locate→sweep-all+floor w/ steering, drop-hallucinated, cancel-mid-locate, model-missing degrade leaves the name, model-failure degrade still saves; pins→`█`+`redactedFloor`/`cleanFloor`); `skills-privacy-guard.test.ts` (+1 located-value + perChar); `skills-tool-run-ipc.test.ts` (perChar + `redactedFloor`). **Suite 3739/47** (was 3717; +22). `npm run typecheck` clean, `npm run build` + `npm run preview:build` green. **No renderer preview case** (the run bar has never had one; text-only copy addition, validated by i18n parity + descriptor branching + the SkillRunBar branch). Docs: `architecture.md` "Skills — design record" **§21** (locate→verify→sweep record + the concurrency carry-forward note), `known-limitations.md` redaction bullet rewritten (AI-assisted best-effort + per-char masks), `user-guide.md` redaction note reworded, plan §10 marked DONE. **Carried forward:** the run-bar button collects no free-text instruction yet (pipeline supports it end-to-end); the redaction locate call runs outside the D26 chat arbiter (accepted per plan — doctask-lane routing is the follow-up). **Next action: Phase 8** (format-preserving targeted edits #23, D76 — a new `apply_document_edits` tool sharing the §20/§21 engine). Unpushed on `master`._
 
 _2026-07-07 — **Beta feedback wave 1 — Phase 6 SHIPPED (issue #22 part 1, D74 — span-transform engine groundwork, the C-wave substrate) — on `master`.** (Plan: `docs/beta-feedback-2026-07-plan.md` §9; Phases 1–6 done, 7–10 open.)_
-_Phase 6 is the first of the C wave (format-preserving transforms). It generalizes `redaction.ts`'s already-correct splice core (`maskStep`) into a reusable, replacement-strategy-aware **span-transform engine** — the shared substrate Phase 7 (LLM-located redaction #22) and Phase 8 (targeted edits #23) will locate spans for and splice through (D73/D76). **No user-visible behavior change** (the redaction run stays byte-for-byte). **New pure module** [`skills/tools/span-transform.ts`](apps/desktop/src/main/services/skills/tools/span-transform.ts) (main-side, no fs/net/native): **`applySpans(text, spans)`** — the generalized `maskStep`: sorts `{start,length,replacement}` by start, single left-to-right pass, **byte-identity OUTSIDE applied spans by construction** (D58 posture, now the engine's guarantee), overlap/out-of-bounds/zero-length spans **skipped and REPORTED** (`{text, applied, skipped}`); equal-start ties keep the first. **Two D74 replacement strategies** (`replacementText`): `token` (fixed `[EMAIL]`-style labels) and `perChar` (`█` U+2588 — one BMP unit — repeated to the span's UTF-16 length ⇒ **same-length**, so line layout survives, **idempotent** + keeps the SKA-3 same-length shadow invariant, no digit/@/scheme). **`locateOccurrences(text, needle, {line?, nth?})`** — the deterministic verify half of the locate→verify→splice discipline (D75/D76): **verbatim, non-overlapping** matches (a single wrong byte is a miss), each with 0-based offset + length + 1-based line + 1-based global index; `line` restricts, `nth` (1-based, within the line-filtered set) picks one, out-of-range/absent/wrong-line ⇒ `[]` (caller drops). **Refactor:** `redaction.ts`'s `maskStep` now builds its accepted-span list from the shadow matches and splices the **SAME span list into BOTH the text and its same-length shadow** via `applySpans` — **the shadow discipline stays a redaction concern** (the engine has no shadow concept), preserved because a `token`/`█` replacement carries no shadow-mapped character. The exported one-shot detectors (`maskEmails`/…) stay token (their tests pin the fixed tokens); `redactText(input, strategy='token')` threads the strategy through the six fixed-order passes; **counts are strategy-independent** so `scanRedactionCandidates` is identical either way. **`redact_document` input schema** gained an **optional `strategy` enum** (`token`|`perChar`, gate-validated — unknown values refused before the tool runs). **DECISION — token-vs-perChar for the WRITTEN FILE: kept `token` this phase (option b, the lower risk).** The run seam (`runDocumentRedaction`) passes **no** strategy, so the tool defaults to `token` and `redacted.txt` is **byte-for-byte the current `[EMAIL]`-token output**. Rationale: Phase 6's stated goal is *no visible change*; flipping the file to `█` now would change user-facing output while its explanatory copy (SKILL.md, run report, known-limitations) doesn't change until Phase 7's wave, and would need the written-byte pins rewritten. Deferring keeps every existing redaction pin green and makes the Phase-7 flip a **one-line caller change** (`redactText(joined, 'perChar')`). **When Phase 7 flips it:** update `skills-redaction.test.ts` written-content assertions (`[EMAIL]`/`[IBAN]` in saved bytes) + `known-limitations.md` (file now contains `█` runs). **DID NOT touch:** SKILL.md, the routing/analysis handler, the confirm-gate, the `saveTextFile` boundary, the detector regexes/order, no LLM pass. **Tests:** new [`skills-span-transform.test.ts`](apps/desktop/tests/unit/skills-span-transform.test.ts) (+18: `applySpans` byte-identity/ascending-single-pass/skip-and-report/overlap/abutting; `replacementText` token+perChar; `redactText` perChar length + line-count + idempotent + shadow-invariant + counts-parity, token reproduces current masks; `locateOccurrences` verbatim/line/nth/drop-on-mismatch/non-overlap + a locate→splice composition) + `skills-redaction-tool.test.ts` (+3: perChar plumbs through the gate to `█` with unchanged counts, no-strategy default = byte-for-byte token, gate refuses an unknown strategy). **Suite 3717/47** (was 3696; +21). `npm run typecheck` clean, `npm run build` green. **No renderer surface changed → no preview case** (screenshot-verify is POSIX-only anyway; nothing to eyeball). Docs: `architecture.md` "Skills — design record" **§20** (engine shape + the token/perChar decision), plan §9 marked DONE. **Next action: Phase 7** (LLM-located redaction #22 part 2 — names/addresses/steerable scope, D73/D75/D78; needs this engine). Unpushed on `master`._
+_Phase 6 is the first of the C wave (format-preserving transforms). It generalizes `redaction.ts`'s already-correct splice core (`maskStep`) into a reusable, replacement-strategy-aware **span-transform engine** — the shared substrate Phase 7 (LLM-located redaction #22) and Phase 8 (targeted edits #23) will locate spans for and splice through (D73/D76). **No user-visible behavior change** (the redaction run stays byte-for-byte). **New pure module** `skills/tools/span-transform.ts` (main-side, no fs/net/native): **`applySpans(text, spans)`** — the generalized `maskStep`: sorts `{start,length,replacement}` by start, single left-to-right pass, **byte-identity OUTSIDE applied spans by construction** (D58 posture, now the engine's guarantee), overlap/out-of-bounds/zero-length spans **skipped and REPORTED** (`{text, applied, skipped}`); equal-start ties keep the first. **Two D74 replacement strategies** (`replacementText`): `token` (fixed `[EMAIL]`-style labels) and `perChar` (`█` U+2588 — one BMP unit — repeated to the span's UTF-16 length ⇒ **same-length**, so line layout survives, **idempotent** + keeps the SKA-3 same-length shadow invariant, no digit/@/scheme). **`locateOccurrences(text, needle, {line?, nth?})`** — the deterministic verify half of the locate→verify→splice discipline (D75/D76): **verbatim, non-overlapping** matches (a single wrong byte is a miss), each with 0-based offset + length + 1-based line + 1-based global index; `line` restricts, `nth` (1-based, within the line-filtered set) picks one, out-of-range/absent/wrong-line ⇒ `[]` (caller drops). **Refactor:** `redaction.ts`'s `maskStep` now builds its accepted-span list from the shadow matches and splices the **SAME span list into BOTH the text and its same-length shadow** via `applySpans` — **the shadow discipline stays a redaction concern** (the engine has no shadow concept), preserved because a `token`/`█` replacement carries no shadow-mapped character. The exported one-shot detectors (`maskEmails`/…) stay token (their tests pin the fixed tokens); `redactText(input, strategy='token')` threads the strategy through the six fixed-order passes; **counts are strategy-independent** so `scanRedactionCandidates` is identical either way. **`redact_document` input schema** gained an **optional `strategy` enum** (`token`|`perChar`, gate-validated — unknown values refused before the tool runs). **DECISION — token-vs-perChar for the WRITTEN FILE: kept `token` this phase (option b, the lower risk).** The run seam (`runDocumentRedaction`) passes **no** strategy, so the tool defaults to `token` and `redacted.txt` is **byte-for-byte the current `[EMAIL]`-token output**. Rationale: Phase 6's stated goal is *no visible change*; flipping the file to `█` now would change user-facing output while its explanatory copy (SKILL.md, run report, known-limitations) doesn't change until Phase 7's wave, and would need the written-byte pins rewritten. Deferring keeps every existing redaction pin green and makes the Phase-7 flip a **one-line caller change** (`redactText(joined, 'perChar')`). **When Phase 7 flips it:** update `skills-redaction.test.ts` written-content assertions (`[EMAIL]`/`[IBAN]` in saved bytes) + `known-limitations.md` (file now contains `█` runs). **DID NOT touch:** SKILL.md, the routing/analysis handler, the confirm-gate, the `saveTextFile` boundary, the detector regexes/order, no LLM pass. **Tests:** new `skills-span-transform.test.ts` (+18: `applySpans` byte-identity/ascending-single-pass/skip-and-report/overlap/abutting; `replacementText` token+perChar; `redactText` perChar length + line-count + idempotent + shadow-invariant + counts-parity, token reproduces current masks; `locateOccurrences` verbatim/line/nth/drop-on-mismatch/non-overlap + a locate→splice composition) + `skills-redaction-tool.test.ts` (+3: perChar plumbs through the gate to `█` with unchanged counts, no-strategy default = byte-for-byte token, gate refuses an unknown strategy). **Suite 3717/47** (was 3696; +21). `npm run typecheck` clean, `npm run build` green. **No renderer surface changed → no preview case** (screenshot-verify is POSIX-only anyway; nothing to eyeball). Docs: `architecture.md` "Skills — design record" **§20** (engine shape + the token/perChar decision), plan §9 marked DONE. **Next action: Phase 7** (LLM-located redaction #22 part 2 — names/addresses/steerable scope, D73/D75/D78; needs this engine). Unpushed on `master`._
 
 _2026-07-07 — **Beta feedback wave 1 — Phase 5 SHIPPED (issue #24, D72 — a coverage statement on every grounded answer) — on `master`.** (Plan: `docs/beta-feedback-2026-07-plan.md` §8; Phases 1–5 done, 6–10 open.)_
-_A beta user (lawyer) couldn't tell, after an ordinary "ask my documents" answer, how much of the document it drew on — the **relevance** retrieval path stamped **no** `CoverageInfo`, so `CoverageMeter` showed only the flat honesty label *"Based on the most relevant passages — not the whole document."* D72 makes the relevance path stamp a **real `relevance` `CoverageInfo`** so the answer shows a fraction. **Two changes only.** **STAMP (main):** the relevance branch of `generateGroundedAnswer` ([`rag/index.ts`](apps/desktop/src/main/services/rag/index.ts)) — the `else` that runs `retrieve(...)` and sets `chunks`/`citations` — now, when `chunks.length > 0`, builds `coverage = { mode:'relevance', chunksCovered: <distinct cited chunk count = `new Set(chunks.map(c=>c.chunkId)).size`>, chunksTotal: **Σ `documentChunkCount(db, docId)` over the DISTINCT `documentId`s the retrieved chunks came from**, fullyChunked: every such doc is `fully_chunked` }`, instead of leaving it `undefined` ⇒ persisted NULL. Single-doc scope → that one doc's section count; **multi-doc SUMS across the docs actually drawn on** — kept honest by **wording, not math** (`mode` stays `relevance`, NEVER "whole document"). New module-local `documentIsFullyChunked(db, id)` helper (mirrors `computeCoverage`; NULL `fully_chunked` → false). The `chunks.length > 0` guard means an **empty retrieval** (`NO_DOCUMENT_CONTEXT`/`REINDEX_NEEDED`, which returns before the persist) still records **no** coverage. **RENDER (renderer):** `CoverageMeter.breadthOf()`'s relevance branch ([`components/CoverageMeter.tsx`](apps/desktop/src/renderer/components/CoverageMeter.tsx)) renders the fraction via a **new key `coverage.relevance.counted`** (EN **`Based on {covered} of {total} sections`** / DE **`Basiert auf {covered} von {total} Abschnitten`**, `{covered}/{total}` placeholder parity) **only when `chunksTotal > 0`**; when `chunksTotal === 0` it keeps the flat `coverage.relevance` label **byte-identical** — that is the fallback `Transcript.tsx:289` passes for a NULL-coverage legacy turn (`{ mode:'relevance', chunksCovered:0, chunksTotal:0 }`), which must render exactly as before. **UNCHANGED:** the whole-document/tree/capped/extract coverage branches + their honesty gates (never "whole document" from the relevance path; the §14.5 wording gate; tree/capped meters), `SourcesDisclosure`/source cards (page numbers keep riding on citations), the `Transcript.tsx` NULL-coverage fallback object, the flat `coverage.relevance` copy. **Sections (chunks) stays the denominator**, not pages. **Test fix:** two `rag-skill-analysis.test.ts` assertions that pinned the OLD relevance⇒`undefined` behavior (an off-topic/user-tool question that runs the relevance path, no analysis handler) updated to `msg.coverage?.mode === 'relevance'` — still proving no extract/whole-document handler fired. **Tests:** new `rag-relevance-coverage.test.ts` (+5: single-doc `chunksTotal`=doc's count & `chunksCovered`=citations count; `fullyChunked` false for a legacy doc; **multi-doc SUMS over the DISTINCT cited docs only** — a decoy doc in-corpus but uncited whose 5 sections must NOT enter the total; empty-retrieval persists no coverage; whole-document path still stamps `capped`); `Coverage.test.tsx` (+3: counted fraction renders EN, NULL/legacy `chunksTotal:0` keeps the flat label + no fraction, DE fraction forced via `UI_LANGUAGE_STORAGE_KEY` + asserted from the de catalog, D-L8) + `window.localStorage.clear()` added to its `afterEach` so the DE test can't leak; placeholder parity enforced automatically by `tests/unit/i18n.test.ts` once both catalogs carry the key. **Suite 3696/47** (was 3688; +8 net). `npm run typecheck` clean, `npm run build` + `npm run preview:build` green. **Eyeball:** screenshot-verify is POSIX-only (nix+xvfb) and this is a Windows dev box → PNG capture deferred to CI/POSIX; added durable preview cases `coverage-line` + `coverage-line-de` ([`renderer/preview/preview.tsx`](apps/desktop/src/renderer/preview/preview.tsx) — the counted-relevance fraction stacked above the flat legacy fallback; `-de` flips the language mirror). Docs: `rag-design.md` §14.4 (D72 "coverage fraction on the relevance path" record), `user-guide.md` chat step gains the honesty-line note, plan §8 marked DONE. **Next action: start the C wave at Phase 6** (span-transform engine, #22 part 1). Unpushed on `master`._
+_A beta user (lawyer) couldn't tell, after an ordinary "ask my documents" answer, how much of the document it drew on — the **relevance** retrieval path stamped **no** `CoverageInfo`, so `CoverageMeter` showed only the flat honesty label *"Based on the most relevant passages — not the whole document."* D72 makes the relevance path stamp a **real `relevance` `CoverageInfo`** so the answer shows a fraction. **Two changes only.** **STAMP (main):** the relevance branch of `generateGroundedAnswer` (`rag/index.ts`) — the `else` that runs `retrieve(...)` and sets `chunks`/`citations` — now, when `chunks.length > 0`, builds `coverage = { mode:'relevance', chunksCovered: <distinct cited chunk count = `new Set(chunks.map(c=>c.chunkId)).size`>, chunksTotal: **Σ `documentChunkCount(db, docId)` over the DISTINCT `documentId`s the retrieved chunks came from**, fullyChunked: every such doc is `fully_chunked` }`, instead of leaving it `undefined` ⇒ persisted NULL. Single-doc scope → that one doc's section count; **multi-doc SUMS across the docs actually drawn on** — kept honest by **wording, not math** (`mode` stays `relevance`, NEVER "whole document"). New module-local `documentIsFullyChunked(db, id)` helper (mirrors `computeCoverage`; NULL `fully_chunked` → false). The `chunks.length > 0` guard means an **empty retrieval** (`NO_DOCUMENT_CONTEXT`/`REINDEX_NEEDED`, which returns before the persist) still records **no** coverage. **RENDER (renderer):** `CoverageMeter.breadthOf()`'s relevance branch (`components/CoverageMeter.tsx`) renders the fraction via a **new key `coverage.relevance.counted`** (EN **`Based on {covered} of {total} sections`** / DE **`Basiert auf {covered} von {total} Abschnitten`**, `{covered}/{total}` placeholder parity) **only when `chunksTotal > 0`**; when `chunksTotal === 0` it keeps the flat `coverage.relevance` label **byte-identical** — that is the fallback `Transcript.tsx:289` passes for a NULL-coverage legacy turn (`{ mode:'relevance', chunksCovered:0, chunksTotal:0 }`), which must render exactly as before. **UNCHANGED:** the whole-document/tree/capped/extract coverage branches + their honesty gates (never "whole document" from the relevance path; the §14.5 wording gate; tree/capped meters), `SourcesDisclosure`/source cards (page numbers keep riding on citations), the `Transcript.tsx` NULL-coverage fallback object, the flat `coverage.relevance` copy. **Sections (chunks) stays the denominator**, not pages. **Test fix:** two `rag-skill-analysis.test.ts` assertions that pinned the OLD relevance⇒`undefined` behavior (an off-topic/user-tool question that runs the relevance path, no analysis handler) updated to `msg.coverage?.mode === 'relevance'` — still proving no extract/whole-document handler fired. **Tests:** new `rag-relevance-coverage.test.ts` (+5: single-doc `chunksTotal`=doc's count & `chunksCovered`=citations count; `fullyChunked` false for a legacy doc; **multi-doc SUMS over the DISTINCT cited docs only** — a decoy doc in-corpus but uncited whose 5 sections must NOT enter the total; empty-retrieval persists no coverage; whole-document path still stamps `capped`); `Coverage.test.tsx` (+3: counted fraction renders EN, NULL/legacy `chunksTotal:0` keeps the flat label + no fraction, DE fraction forced via `UI_LANGUAGE_STORAGE_KEY` + asserted from the de catalog, D-L8) + `window.localStorage.clear()` added to its `afterEach` so the DE test can't leak; placeholder parity enforced automatically by `tests/unit/i18n.test.ts` once both catalogs carry the key. **Suite 3696/47** (was 3688; +8 net). `npm run typecheck` clean, `npm run build` + `npm run preview:build` green. **Eyeball:** screenshot-verify is POSIX-only (nix+xvfb) and this is a Windows dev box → PNG capture deferred to CI/POSIX; added durable preview cases `coverage-line` + `coverage-line-de` (`renderer/preview/preview.tsx` — the counted-relevance fraction stacked above the flat legacy fallback; `-de` flips the language mirror). Docs: `rag-design.md` §14.4 (D72 "coverage fraction on the relevance path" record), `user-guide.md` chat step gains the honesty-line note, plan §8 marked DONE. **Next action: start the C wave at Phase 6** (span-transform engine, #22 part 1). Unpushed on `master`._
 
 _2026-07-07 — **Beta feedback wave 1 — Phase 4 SHIPPED (issue #26, D71 — single-document scope by default + always-visible "Answering from:" scope) — on `master`.** (Plan: `docs/beta-feedback-2026-07-plan.md` §7; Phases 1–4 done, 5–10 open.)_
 _A beta user (lawyer) wanted to "ask about exactly this one document", but every conversation defaulted its retrieval scope to the whole Library, so single-doc questions pulled in the whole corpus (#26). D71 fixes it at (a) the scope PERSISTED at creation/attach and (b) how scope is DISPLAYED — **retrieval semantics unchanged** (`buildScopeFilter` / the retrieval path untouched; no migration of existing conversations). **SEAM CHOICE — renderer-side (recorded):** the creation-time default is applied in `ChatScreen.createDocsConversationForAttach`, which now persists an **empty EXPLICIT** `DocumentScope` `{collectionIds:[], documentIds:[]}` when the user set no `pendingScope`, instead of the old `null`. `resolveScope` reads a present-but-empty `scope_v2` as its v2 branch (no collections) and **unions the chat attachments in** — so an attachment-born chat resolves to EXACTLY its attachment(s), not `Library ∪ attachment` (the friction). **Why renderer, not main:** at `createConversation` time the `conversation_documents` link does not yet exist (the import runs after), so a main-side "default the persisted scope when a link exists" rule can't see it; the renderer knows the create is attachment-origin. This keeps plain conversations **byte-identical** — `createConversationInMode` (plain + "Ask selected") still passes `null`/the picked scope, so `resolveScope`'s **Library fallback for a null scope is unchanged**. **Why empty-explicit, not the attachment ids in `documentIds`:** attachments are ALWAYS unioned by `resolveScope`, and putting them in `documentIds` would flip `hasExplicitDocSelection` to true — N2 requires an attachment NOT read as a hand-pick (or filename auto-scope misbehaves). Empty-explicit narrows to the attachments while keeping `hasExplicitDocSelection=false`. **"Ask selected" already correct** — its picked ids flow via `pendingScope` → `createConversation({scope})`, persisting docs-only `scope_v2` (no change needed). **Attach-to-existing:** dropping a file into an existing chat still on the whole-Library default (`conv.scope==null` && no legacy docs && no project anchor — `isWholeLibraryDefault`) raises a one-time **`ScopeNarrowDialog`** (new `chat/ScopeNarrowDialog.tsx`, a `ConfirmDialog`): "Just this file" → `setConversationScope` to empty-explicit (narrow), "Whole library" → keep the default; **sticky per conversation** via a session `scopeChoiceAskedRef` Set (narrowing self-heals since the scope becomes explicit). **DISPLAY:** the `ScopePopover` trigger became the always-visible **"Answering from: {source}" / "Antwortet aus: {source}"** chip — `scopeFooterLabel` refactored to expose a shared **`scopeSources`** (the composed "Library + N documents" phrase, single-sourced), and the trigger computes the chip source: a single specific doc/attachment is **named directly** (the #26 workflow), the whole-library case (empty-explicit OR Library-only) reads **"your whole library — N documents"** (corpus size, not the bare word "Library"), everything else the composed phrase. The chip IS the popover trigger, so one click still opens the picker. The one-shot filename auto-scope toast (`chat.scopeNotice`) is **kept** (complements, does not replace). **New i18n keys** (EN+DE, placeholder parity): `chat.scope.answeringFrom` (`{source}`), `chat.scope.wholeLibrary.one/.other` (`{count}`), `chat.scope.narrowTitle`/`narrowBody`(`{name}`)/`narrowJust`/`narrowWhole`. **Tests:** `collections.test.ts` +2 main (empty-explicit `scope_v2` + attachment link resolves to just the attachment with `hasExplicitDocSelection=false`; a NULL-scope plain conversation with the SAME attachment keeps the whole Library = fallback byte-identical; an "Ask selected" `scope_v2.documentIds` resolves to exactly those docs); `ScopePopover.test.tsx` rewritten (chip names single file/doc, "your whole library — N", Library-only → whole-library, one-click opens picker, DE forced via `UI_LANGUAGE_STORAGE_KEY` + asserted from the de catalog D-L8); new `ScopeNarrowDialog.test.tsx` +4 (narrow→onNarrow only, widen→onWhole only, names the file, DE); the stale footer-copy assertions in `ChatAttach`/`ChatHomeNav`/`ChatUnmount`/`GermanSmoke` rewritten in place (createConversation now gets the empty-explicit scope; the chip copy; ChatUnmount's fixture given an explicit scope so its attach doesn't raise the modal that would aria-hide the composer under test). **Suite 3688/47** (was 3678). `npm run typecheck` clean, `npm run build` + `npm run preview:build` green. **Eyeball:** screenshot-verify is POSIX-only (nix+xvfb) and this is a Windows dev box → PNG capture deferred to CI/POSIX; added durable preview cases `scope-chip` + `scope-chip-de` (`renderer/preview/preview.tsx` — the chip in a doc-scoped and a whole-library footer strip; `-de` flips the language mirror). Docs: `rag-design.md` §10 scope section (D71 subsection), `user-guide.md` scope step reworded, plan §7 marked DONE. **Next action: Phase 5** (#24 coverage line, D72) **or start the C wave at Phase 6.** Unpushed on `master`._
@@ -1275,7 +1283,7 @@ adversarially verified against the working tree): **56 confirmed (2 critical / 1
 / 11 low), 5 refuted, 12 testing-dimension findings only partially verified** (spend limit hit; the
 4 load-bearing ones re-verified by hand, incl. running the trigger eval harness). Full report +
 prioritized remediation plan (`docs/skills-audit-2026-07-02.md`, **retired 2026-07-03** — folded into
-[`architecture.md`](docs/architecture.md) §39).
+`architecture.md` §39).
 Headlines: (1) **[CRITICAL]** a multi-document scope silently disables every whole-document engine
 → ~2-chunk top-k (the root cause of the partial-document complaint, compounded by: whole-doc =
 prefix read with NO in-prompt truncation notice at the default 4096 ctx; keyword under-fire; auto-
@@ -1295,7 +1303,7 @@ compare direction, stale-row exports, sepa rule — each with extractor version 
 fixtures), then P1 = the coverage/routing redesign (report §8).
 **UPDATE (same day):** remediation plan written —
 `docs/skills-remediation-plan.md` (**retired 2026-07-03** — folded into
-[`architecture.md`](docs/architecture.md) §39): 20 one-session phases
+`architecture.md` §39): 20 one-session phases
 (R1–R6 correctness, W1–W5 complaint drivers, U1–U5 reach/trust, A1–A3 architecture, T1 eval
 infra) with pre-made design decisions, per-phase copy-paste session prompts (Opus 4.8-tuned,
 context-budget rules), dependency order and a status tracker (plan §0.2). Sessions execute ONE
@@ -3619,7 +3627,7 @@ the plan file — **no application-code change**.
   **P7 (SEC-2/3/4/5/6, REL-4/7/8)** permission-check + redirect guards; vision/OCR byte caps; spawn lifecycle;
   SEC-4/5 accepted residuals. **P8 (API-1, DATA-3/MAINT-3, DATA-4, DOC-2/3/4, BL-4, API-2)** chat
   `requireUnlocked()`; `summary_cache` row-count eviction (50 000); doc-drift fixes; API-2 accepted residual.
-- **Close-out (Phase 9, as built):** the per-finding **ledger** is folded into [`docs/architecture.md`](docs/architecture.md)
+- **Close-out (Phase 9, as built):** the per-finding **ledger** is folded into `docs/architecture.md`
   **§24 "Backend audit (2026-06-27) — remediation close-out"** (mirrors the §23 Skills & Tools precedent) —
   every finding ID → phase → disposition → the topic-doc § its record now lives in, including the docs-only
   and accepted-residual items (SEC-4/SEC-5/API-2 residuals; SEC-7 verified-clean; **TEST-9 not remediated** —
@@ -5743,7 +5751,7 @@ RT-9 (§17(b) is a latent-only win but a behavior-sensitive fence-sizing change)
 FE-3/FE-4/FE-5 (not confidently safe under the behavior-preserving mandate). **Data contracts:** none changed
 (every fix is internal; `RetrievedChunk`/`DocumentPreview`/IPC shapes untouched). **Verification:** `npm test`
 **1899 passed / 29 skipped** (+4 RAG-5 tests), typecheck + `npm run build` clean. **Docs:** decisions folded
-into [`docs/architecture.md`](docs/architecture.md) "Performance — design record … Wave P6 — Low backlog";
+into `docs/architecture.md` "Performance — design record … Wave P6 — Low backlog";
 **`docs/performance-audit-2026-06-18.md` DELETED** per the doc-lifecycle rule (High/Medium records already in
 the Wave P1–P5 sections; full original in git history). **Open residuals:** only the deferred-with-trigger
 items above — P4b worker scan (trigger unmet), P4c ANN/sqlite-vec (rejected, D15), FE-3/4/5 renderer tail.
@@ -5796,12 +5804,12 @@ NOT apply the chat template, so even the "exact" path would tokenize per-message
 overhead fudge, trading a known safe over-count for a new approximation + an HTTP round-trip + a new
 optional interface method. `messages.token_count` stays NULL. Revisit only if the boundary proves jumpy.
 **Doc-lifecycle close-out done (per CLAUDE.md):** the working-paper plan `docs/context-compaction-plan.md`
-is condensed into a §-numbered **design record** [`docs/rag-design.md`](docs/rag-design.md) **§15**
+is condensed into a §-numbered **design record** `docs/rag-design.md` **§15**
 (15.1 L0 window source-of-truth · 15.2 token accounting + trigger · 15.3 L2 pre-pass + checkpoint
 persistence · 15.4 summary representation + summarizer call · 15.5 UX meter/notice/marker/toggle ·
 15.6 deferred Phase-3 + R7/R10 guardrails), with a stable **anchor map** so the existing code/test comments
 that cite the old plan (`§L0`, `§4.x`, `§5.x`, `Rn`, `D-x`) resolve into §15.x. Cross-reference added from
-[`docs/architecture.md`](docs/architecture.md) "Chat & streaming" (a new "Conversation compaction (L2)"
+`docs/architecture.md` "Chat & streaming" (a new "Conversation compaction (L2)"
 bullet → §15). **Plan file DELETED** (`git rm`); full original preserved at
 `git show 4dca3e3:docs/context-compaction-plan.md`. **One pre-existing typecheck defect fixed (not from
 this step):** committed Phase-2 test `tests/renderer/ChatCompaction.test.tsx` typed its `onCompaction`
@@ -5860,18 +5868,18 @@ a synthetic summary pair + only the post-checkpoint turns. **Fail-safe by constr
 ⇒ no model call; any summarizer failure/abort ⇒ NO checkpoint, the turn proceeds via the unchanged L1
 `fitMessagesToContext` floor with no user-visible error; with no checkpoint, behaviour is byte-identical
 to before. **As-built (files):** NEW
-[`services/chat/compaction.ts`](apps/desktop/src/main/services/chat/compaction.ts) (`ensureCompacted`,
+`services/chat/compaction.ts` (`ensureCompacted`,
 constants, `selfSummaryPrompt` VERBATIM §4.8, the non-thinking `mode:'balanced'`+temp 0.2+maxTokens 700
 summarizer, chained re-compaction via `doctasks/summary.ts` windowing).
-[`db.ts`](apps/desktop/src/main/services/db.ts): additive `ensureColumn(messages,'kind')` +
+`db.ts`: additive `ensureColumn(messages,'kind')` +
 `covers_through_rowid` (R13, NULL-sentinel = plain message) and the R8 FTS fix — `messages_fts_ai` gains
 `WHEN new.kind IS NOT 'compaction'` (fresh DBs) + idempotent `ensureMessagesFtsKindFilter` rewrite/prune for
-pre-feature DBs, backfill SELECT also kind-filtered. [`chat.ts`](apps/desktop/src/main/services/chat.ts):
+pre-feature DBs, backfill SELECT also kind-filtered. `chat.ts`:
 checkpoint writer/reader + `listConversationTurns` (rowid-aware, kind-filtered) **kept here** (the existing
 message-SQL owner, not `db.ts` — least-disruptive deviation), `compactionSummaryPair` (§4.5
 `user→assistant`, NEVER persisted, never skill-stamped — R3), `kind`-filter on `listMessages` (renderer/
 export/fence auto-skip checkpoints — R8), `messageTokens` exported; `buildChatMessages` injects the pair +
-post-checkpoint replay; `onCompactionStart` plumbed. [`rag/index.ts`](apps/desktop/src/main/services/rag/index.ts):
+post-checkpoint replay; `onCompactionStart` plumbed. `rag/index.ts`:
 same for `buildGroundedChatMessages`/`generateGroundedAnswer` — checkpoint built from STORED RAW turns, the
 live final grounded turn (question + `[Sn]`) untouched + mandatory (R-RAG). **Data contracts:**
 `messages.kind TEXT` (NULL|'message'|'compaction') + `messages.covers_through_rowid INTEGER` (max subsumed
@@ -5900,7 +5908,7 @@ implemented on the three production runtimes (`LlamaRuntime` stores `opts.contex
 delegating `LadderRuntime` return theirs; window is fixed for a runtime's lifetime). Made OPTIONAL so the ~15
 `ModelRuntime` test-literal stubs stay valid. `RuntimeManager.status()` surfaces it as the new
 `RuntimeStatus.contextWindow?` (absent when not running). New exported helper `effectiveContextWindow(runtime,
-settings)` in [`chat.ts`](apps/desktop/src/main/services/chat.ts) = `runtime.contextWindow?.() ?? settings.contextTokens`
+settings)` in `chat.ts` = `runtime.contextWindow?.() ?? settings.contextTokens`
 (falls back when ≤0 or unreported); `generateAssistantMessage` + `generateGroundedAnswer` now budget through it.
 **Data contract:** `RuntimeStatus.contextWindow?: number`; `ModelRuntime.contextWindow?(): number`. **No
 behaviour change today** — for the shipped Qwen models `recommendedContextTokens` IS the launched window, so the
@@ -5915,7 +5923,7 @@ the user's go). **(prior entries below.)**_
 _2026-06-19 — **Performance Wave P5 landed — the three remaining Medium findings shipped + CLOSED OUT.**
 Branch `performance-tuning-continuation` (off the P1–P4 `performance-tuning` work). Three bounded,
 behavior-preserving wins on hot/felt paths, one commit each:
-- **DB-5** — `prepareCached(db, sql)` in [`db.ts`](apps/desktop/src/main/services/db.ts): a
+- **DB-5** — `prepareCached(db, sql)` in `db.ts`: a
   `WeakMap<Db, Map<sql, Stmt>>` compiling each distinct CONSTANT SQL once per connection (statements GC
   with the `Db`). Routed the hot per-turn callers: `chat.ts` listMessages/appendMessage/getConversation/
   listConversations, `collections.ts` resolveScope (2 prepares), the four `listDocuments` grouped
@@ -5938,7 +5946,7 @@ behavior-preserving wins on hot/felt paths, one commit each:
 the new `previewDocumentPage(id, offset, limit)` IPC; `prepareCached`/`Stmt` exported from `db.ts`;
 `extractDocumentPreviewPage`/`DEFAULT_PREVIEW_PAGE_SIZE` exported from `ingestion`. **Verification:**
 `npm test` 1858 passed / 29 skipped, typecheck clean, `npm run build` clean. **Docs:** folded into
-[`docs/architecture.md`](docs/architecture.md) "Performance — design record … Wave P5"; DB-5/ING-4/FE-6
+`docs/architecture.md` "Performance — design record … Wave P5"; DB-5/ING-4/FE-6
 tagged ✅ IMPLEMENTED inline + §6 in `docs/performance-audit-2026-06-18.md`.
 **Open residuals:** only the deferred-with-unmet-triggers items — P4b worker scan (trigger: cached
 main-thread scan >100 ms routinely; measured ≤70 ms @10k), P4c ANN/sqlite-vec (rejected, D15), and the
@@ -5948,7 +5956,7 @@ behavior-sensitive renderer tail FE-5/FE-3/FE-4. **Next:** branch ready to merge
 _2026-06-19 — **Brand refresh BR6 landed — the wave is CLOSED OUT.** Branch `design-adjustments`. **The
 HilbertRaum brand refresh is fully shipped (BR1–BR6).** **Why BR6:** discharge the doc-lifecycle rule —
 fold the durable decisions into the binding guidelines and retire the plan file. **Docs fold:**
-[`docs/design-guidelines.md`](docs/design-guidelines.md) gained **§13** ("Brand refresh — design record":
+`docs/design-guidelines.md` gained **§13** ("Brand refresh — design record":
 the one-line brand, §13.2 token decisions + the contrast facts + the pinning test, §13.3 mark
 assets/component incl. the gate-safe CSS theme toggle + the relative-`src`/`file://` gotcha, §13.4 icon
 pipeline, §13.5 verification + the nested-`policy.json` harness note); the LIVE token tables were updated
@@ -5994,13 +6002,13 @@ one leaked blue fixed.** Branch `design-adjustments`; plan
 `docs/brand-refresh-plan.md` phase BR4 of BR1–BR6 (WORKING PAPER — BR5/BR6
 next). **Scope:** verification + one tiny renderer fix; no token/component changes were needed (the BR2
 role swap propagated through `styles.css` as designed). **Only leak found + fixed:** a grep for hard hex
-in the renderer surfaced ONE — [`chat/Waveform.tsx`](apps/desktop/src/renderer/chat/Waveform.tsx) (the
+in the renderer surfaced ONE — `chat/Waveform.tsx` (the
 dictation visualizer) read `--accent` from computed style but had a hardcoded BLUE fallback `#6aa0ff`;
 changed to the brand teal `#57d0a4` (only used if `--accent` ever resolves empty). Everything else is
 token-driven — zero other hard colours in the renderer. **Progress bars** use theme-aware `--accent`
 (light = dark teal `#1B7F5F` on a light track, dark = bright teal on a dark track — both ≥3:1; no
 light-track weak-teal problem because light never uses the bright teal). **Eyeball walk
-([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), now ALL six screens ×
+(`scripts/walk-brand-refresh.mjs`, now ALL six screens ×
 both themes × both locales EN/DE, captures in `docs/design-review/brand-refresh/br4/`):** Home (teal
 adaptive primary), Chat (teal primary, NO mark in the content), Documents (teal "Import files", neutral
 active sub-nav), AI Model (teal "Install AI engine"/"Download", amber warning banner, neutral status
@@ -6020,7 +6028,7 @@ is wired into the rail + gate.** Branch `design-adjustments`; plan
 `docs/brand-refresh-plan.md` phase BR3 of BR1–BR6 (WORKING PAPER — BR4
 next). **Scope:** renderer-only (new component + two call sites + CSS + a test); no backend/IPC/schema
 touch. **New component**
-[`components/BrandMark.tsx`](apps/desktop/src/renderer/components/BrandMark.tsx) exports `BrandMark`
+`components/BrandMark.tsx` exports `BrandMark`
 + `BrandLockup` (barrelled in `components/index.ts`). **Theme selection is CSS, not JS** (plan §4.2
 option 1): BOTH theme images render and a `[data-theme]` pair-toggle shows the correct one
 (`.brand-img-light`/`.brand-img-dark` in `styles.css`) — so it works **pre-unlock in the gate**, which
@@ -6037,12 +6045,12 @@ frame; left as-is.) **Wiring:** rail brand slot (`App.tsx`) `◈ → <BrandMark 
 visually-hidden `.brand-name` + `title` for a11y); gate (`WorkspaceGate.tsx`) `◈ → <BrandMark size={36}/>`
 above the existing "HilbertRaum Lite" edition line (mark decorative — the edition text announces the
 brand). Dead `.brand-mark`/`.gate-brand-mark` glyph CSS removed; `◈` is gone from `src/` entirely.
-**New guard:** [`tests/renderer/BrandMark.test.tsx`](apps/desktop/tests/renderer/BrandMark.test.tsx)
+**New guard:** `tests/renderer/BrandMark.test.tsx`
 (12 cases): both theme assets chosen, relative src, min-size clamp + dev-warn, clear-space padding,
 decorative vs labelled a11y, and an asset-existence check for `public/brand/*` + `icon.svg`.
 `WorkspaceGate.test.tsx`/`rail-labels.test.ts` stay green (neither pins the mark). **Verify:**
 typecheck + build clean; full vitest from `apps/desktop` **1852 passed / 27 skipped** (+12 BrandMark).
-Eyeball walk ([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), now at
+Eyeball walk (`scripts/walk-brand-refresh.mjs`, now at
 `br3/`): rail mark flips light↔dark correctly; **gate mark flips correctly PRE-UNLOCK** in both themes
 (dark-ink square on light, light-ink on dark), above "HILBERTRAUM LITE", with the teal+dark-ink primary.
 **Eyeball-harness fix recorded:** the §11.4 recipe's `policy.json {encryption_required:true}` is **flat
@@ -6076,7 +6084,7 @@ thumb is white `--n-0` (white on bright teal = 1.9:1 fails; on dark teal = 5.22:
 colours (success/error/warning) UNTOUCHED** — teal never replaces a status colour. **§11 answers
 settled:** Q1 dark-bg nudge done; Q2 `--brand-teal-dark` kept at `#1B7F5F` (computes **4.92:1** on light
 bg / 5.22:1 on white — comfortable AA headroom, no darkening needed). **New guard:**
-[`tests/unit/token-contrast.test.ts`](apps/desktop/tests/unit/token-contrast.test.ts) parses `tokens.css`,
+`tests/unit/token-contrast.test.ts` parses `tokens.css`,
 resolves every `var()` chain per theme, and computes WCAG contrast for all role pairings in BOTH themes
 (text ≥4.5, UI ≥3) — it both verifies AND PINS the derived teal (incl. asserting the FORBIDDEN
 bright-teal-on-white < 3:1, so the value can't drift off the bright hex). The repo had no contrast test
@@ -6085,7 +6093,7 @@ before — this is the most valuable new guard. **Measured ratios:** light link/
 9.98:1 (hover 8.20, active 6.84); switch-on+thumb 5.22:1. **Verify:** `npm run typecheck` + `npm run
 build` clean; full vitest from `apps/desktop` **1840 passed / 27 skipped** (+12 contrast cases;
 `Theme.test.tsx`/`Components.test.tsx` unchanged — neither pins a hex). BR2 eyeball spot-check
-([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), Home/Chat/Settings both
+(`scripts/walk-brand-refresh.mjs`, Home/Chat/Settings both
 themes, captures in `docs/design-review/brand-refresh/br2/`): teal reads calm/restrained, no teal
 surfaces, switch-on + segmented controls correct, warning stays amber, dark-bg nudge clean. The full
 six-screen / both-locale walk is BR4. **Next: BR3** — `BrandMark`/`BrandLockup` components (theme-pair
@@ -6102,16 +6110,16 @@ phase BR1 of BR1–BR6 (still a WORKING PAPER — BR2 next). **Scope:** static b
 final hex picked by the BR2 token-contrast test; **commit `build/icon.{png,ico}`** (matches repo;
 packaging mustn't depend on running the generator); lockup-on-Home DEFERRED to the BR4 eyeball; og/PWA
 assets SKIPPED (web-only). **Assets:** the user dropped the kit SVGs into
-[`public/brand/`](apps/desktop/src/renderer/public/brand/); each was opened and the actual fill/stroke
+`public/brand/`; each was opened and the actual fill/stroke
 confirmed before the mandatory semantic rename (kit names are background-inverted — `mark-dark.svg` is a
 LIGHT square FOR dark bg). Final set in `public/brand/`: `mark-on-{light,dark}.svg` (in-app mark — dark
 ink `#11171F` / light ink `#E8EDF2` square + always-teal `#57D0A4` dot), `lockup-on-{light,dark}.svg`
 (mark + "Hilbert"+teal "Raum" wordmark), `mark-mono-{ink,white}.svg` (single-colour). The favicon →
-[`public/icon.svg`](apps/desktop/src/renderer/public/icon.svg) (filename + `index.html` `<link>`
+`public/icon.svg` (filename + `index.html` `<link>`
 unchanged; theme-adaptive via an internal `@media prefers-color-scheme` that flips the square ink, dot
-always teal); the app-icon → [`build/icon.svg`](apps/desktop/build/icon.svg) (light square + teal dot on
+always teal); the app-icon → `build/icon.svg` (light square + teal dot on
 OPAQUE brand surface `#0E1319` — the OS icon carries its own background). **Pipeline rewrite:**
-[`scripts/generate-icons.mjs`](apps/desktop/scripts/generate-icons.mjs) dropped the `diamond()` /
+`scripts/generate-icons.mjs` dropped the `diamond()` /
 `ACCENT='#2f6fed'` geometry for a rounded-square (`arcTo` corners) + centre-dot render ported from the
 512-unit `build/icon.svg`, on the opaque surface; KEPT the offline `@napi-rs/canvas` draw + hand-assembled
 PNG-embedded `.ico` + `[16,24,32,48,64,128,256]` size set; regenerated + committed `build/icon.png` (512)
@@ -6130,7 +6138,7 @@ _2026-06-19 — **Full-doc-skills Phase 4 landed — invoice adoption + the plan
 records + plan file deleted. The feature is now FULLY CLOSED OUT.** Branch `fix-use-full-doc-for-skills`.
 **Why:** Phase 3 wired the seam into chat with bank-statement as the first adopter; the seam is general
 (D44), so the closing phase proves it with a second content class and discharges the doc-lifecycle rule.
-**Invoice handler** ([`analysis/invoice.ts`](apps/desktop/src/main/services/skills/analysis/invoice.ts),
+**Invoice handler** (`analysis/invoice.ts`,
 D49 fast-follow): `INVOICE_INSTALL_ID = skillInstallId('app','invoice')`; `applies()` = a single in-scope
 doc (`singleInScopeDocument`/`buildScopeFilter`, mirroring bank) + an invoice-shaped EN+DE keyword set
 (substring-ambiguous tokens — `vat`/`ust`/bare `net` — deliberately avoided per the §1 DS17 caution).
@@ -6139,7 +6147,7 @@ doc (`singleInScopeDocument`/`buildScopeFilter`, mirroring bank) + an invoice-sh
 PERSISTED `invoices`/`invoice_line_items` rows (a local `loadInvoice` mirroring `invoice-run.ts`) and
 computes the answer's figures via the PURE `validateInvoiceTotals` — the seams surface only counts.
 **`runInvoiceCsvExport` is never imported** (export stays confirm-gated). The deterministic, localized
-Markdown answer honours [`app-skills/invoice/SKILL.md`](app-skills/invoice/SKILL.md): leads with the
+Markdown answer honours `app-skills/invoice/SKILL.md`: leads with the
 line-item count, surfaces any FAILED reconciliation check (line-items→net, net+tax→gross, tax-vs-rate)
 **before** the headline gross, prints only the figures the invoice states (a field that couldn't be
 parsed is left out — never invented). Real `[Sn]` citations are the document's leading source chunks
@@ -6158,11 +6166,11 @@ adoption); rag-design.md gained **§14.9** (the coverage half — per-message `C
 data-driven, cross-linked to §19); known-limitations.md records the **third coverage state** (a
 `kind:tool` skill answers exhaustively over a fully-chunked doc or refuses, never partially). The plan
 file **`docs/full-doc-skills-plan.md` is deleted** (full text in git history). **Tests:** 13 new in
-[`skills-analysis-invoice.test.ts`](apps/desktop/tests/integration/skills-analysis-invoice.test.ts)
+`skills-analysis-invoice.test.ts`
 (handler-level: `applies()` pre-flight, exhaustive figures from rows, failed check surfaced before the
 gross, figures quoted not invented, export never auto-run, coverage `fullyChunked` true/false, real
 source citations, registry round-trip) + 3 new in
-[`rag-skill-analysis-invoice.test.ts`](apps/desktop/tests/integration/rag-skill-analysis-invoice.test.ts)
+`rag-skill-analysis-invoice.test.ts`
 (IPC-level over the REAL `askDocuments`: exhaustive path `coverage.mode==='extract'`+0 model calls+export
 never auto-run, refuse path, relevance byte-unchanged). Suite **1828 green**; typecheck + production build
 clean. **Next:** the feature is closed; the branch is ready to merge to `master`. **(prior entries
@@ -6174,10 +6182,10 @@ _2026-06-19 — **Full-doc-skills Phase 3 landed — the analysis handler is now
 **Phase 4 open**). **Why:** Phases 1–2 built the data contract + the standalone bank analysis handler
 but nothing called it; a `kind:tool` skill's exhaustive whole-document tools were still bypassed on the
 chat path. Phase 3 routes the turn to the handler. **App init:** `registerBuiltinSkillAnalysisHandlers()`
-is now called once in [`main/index.ts`](apps/desktop/src/main/index.ts) (right after the startup skill
+is now called once in `main/index.ts` (right after the startup skill
 reconcile, BEFORE every `register*Ipc`) so the registry is populated before the first chat turn — no
 import-time side effects, opt-in per skill (D49). **Chat wiring**
-([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): after the turn skill resolves +
+(`registerRagIpc.ts`): after the turn skill resolves +
 scope/filename auto-scope and BEFORE the `routeQuestion`/`generateGroundedAnswer` decision, a new branch
 looks up `getSkillAnalysisHandler(skill.installId)` — **the registry IS the opt-in**, a registered
 handler implies `kind:tool` (no separate kind check) — and when `handler.applies({ question, scope, db })`
@@ -6201,16 +6209,16 @@ the whole block is skipped and the relevance + coverage-extract paths run **byte
 the off-topic test). **No new capability reach:** the only content handles are the audit + segment reader
 the skills-run IPC already uses; `runCsvExport` is never imported (export stays confirm-gated). **i18n:**
 `skills.analysis.refusePartial` added to en.ts + de.ts (parity). **Tests:** 5 new in
-[`rag-skill-analysis.test.ts`](apps/desktop/tests/integration/rag-skill-analysis.test.ts) driving the
+`rag-skill-analysis.test.ts` driving the
 REAL `askDocuments` IPC over an ingested statement + an enabled `app:bank-statement` skill — exhaustive
 (real figures, `coverage.mode==='extract'`+`fullyChunked`, citations, 0 model calls, skill stamped),
 refuse (fixed message, 0 model calls, 0 tool runs, no partial), relevance byte-unchanged for an off-topic
 question, export never auto-run, single-locked-slot contract (token+done emitted, in-flight registry
 cleared, exactly user+assistant rows). Suite **1812 green**; typecheck + production build clean. **Next —
 Phase 4 (open):** confirm `invoice` registers a handler on the same seam (`document-redaction`
-intentionally does not); fold this plan into [`architecture.md`](docs/architecture.md) "Skills — design
-record" + the coverage half into [`rag-design.md`](docs/rag-design.md) §14; update
-[`known-limitations.md`](docs/known-limitations.md) (third coverage state: tool-skill exhaustive); then
+intentionally does not); fold this plan into `architecture.md` "Skills — design
+record" + the coverage half into `rag-design.md` §14; update
+`known-limitations.md` (third coverage state: tool-skill exhaustive); then
 **delete the plan file**. **(prior entries below.)**_
 
 _2026-06-19 — **Full-doc-skills Phase 2 landed — the analysis-handler seam + bank handler (NOT yet
@@ -6220,7 +6228,7 @@ Phases 3–4 open). **Why:** a `kind:tool` skill's exhaustive, deterministic who
 bypassed the moment a user just *asks* about a document (the chat path runs top-k RAG, not the tools).
 Phase 2 builds the bridge a chat turn will (Phase 3) call: a per-skill **analysis handler** that
 auto-runs the read-only tools and synthesises a grounded answer + honest coverage. **New module**
-[`apps/desktop/src/main/services/skills/analysis/`](apps/desktop/src/main/services/skills/analysis/):
+`apps/desktop/src/main/services/skills/analysis/`:
 `types.ts` (`SkillAnalysisHandler` = `applies()` cheap pre-flight + `run(ctx)`; `SkillAnalysisContext`;
 `SkillAnalysisResult { answer; citations; coverage }` — reuses the chat path's real `RetrievalScope`
 and the shared `Citation`/`CoverageInfo`), `registry.ts` (`register`/`get` keyed by skill `install_id`,
@@ -6243,7 +6251,7 @@ real `chunks` rows narrowed to the transactions' `sourcePage` (`[Sn]`, M2-safe �
 total). **Coverage** = `{ mode:'extract', chunksCovered=chunksTotal, chunksTotal, fullyChunked }`
 (`documentChunkCount` + `documents.fully_chunked`; NULL → false), gating the "whole document" wording
 (D48). **New i18n:** `skills.bankAnalysis.*` (EN + DE parity). **Tests:** 15 new in
-[`skills-analysis-bank.test.ts`](apps/desktop/tests/integration/skills-analysis-bank.test.ts) — applies()
+`skills-analysis-bank.test.ts` — applies()
 pre-flight (single doc / no doc / multi-doc / off-topic), exhaustive math, unreconciled-before-total,
 mixed-currency no-total, figures-not-invented, export-never-auto-run, category-shaped gating, coverage
 fullyChunked true/false, citations are real source chunks, registry round-trip. Suite **1807 green**;
@@ -6257,26 +6265,26 @@ question via top-k RAG, so the coverage badge was **hardcoded** `mode:'relevance
 `Transcript.tsx` regardless of what happened — making "if we analysed the full document, show that"
 (D48) impossible to express. Phase 1 is **pure plumbing, zero behaviour change**: it persists a real
 `CoverageInfo` per assistant message so later phases can render the truth. **New data contract:**
-**`messages.coverage_json`** — additive + nullable `ensureColumn` migration ([`db.ts`](apps/desktop/src/main/services/db.ts),
+**`messages.coverage_json`** — additive + nullable `ensureColumn` migration (`db.ts`,
 after `auto_fired`). Holds a JSON-serialized `CoverageInfo` (mode + sections covered/total — counts/mode
 only, never content); NULL = legacy/pre-migration row OR a turn that recorded no coverage. An older app
-ignores the column. **Round-trip** in [`chat.ts`](apps/desktop/src/main/services/chat.ts): `appendMessage`
+ignores the column. **Round-trip** in `chat.ts`: `appendMessage`
 gained `coverage?: CoverageInfo | null` → `serializeCoverage` (tolerant — a stringify fault degrades to
 NULL, never blocks the append); `rowToMessage` → `parseCoverage` (NULL/malformed → undefined; the three
 required keys coalesced so a partial payload still satisfies the contract), mirroring the existing
-`citations_json` model. **Type:** `Message.coverage?: CoverageInfo` in [`shared/types.ts`](apps/desktop/src/shared/types.ts).
-**Renderer:** [`Transcript.tsx`](apps/desktop/src/renderer/chat/Transcript.tsx) now reads
+`citations_json` model. **Type:** `Message.coverage?: CoverageInfo` in `shared/types.ts`.
+**Renderer:** `Transcript.tsx` now reads
 `m.coverage ?? { mode:'relevance', chunksCovered:0, chunksTotal:0 }` — every pre-migration message AND the
 unchanged relevance path render **byte-identically** (R5). The relevance path persists no coverage (stays
 NULL). **Tests:** 4 new — round-trip + no-coverage→undefined + malformed→undefined in
-[`chat.test.ts`](apps/desktop/tests/integration/chat.test.ts); a data-driven `extract` coverage renders +
-NULL→relevance fallback in [`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx). Suite
+`chat.test.ts`; a data-driven `extract` coverage renders +
+NULL→relevance fallback in `Coverage.test.tsx`. Suite
 **1792 green**; typecheck + production build clean. **Next:** Phase 2 (analysis-handler seam + bank
 handler) — NOT started. **(prior entries below.)**_
 
 _2026-06-18 — **New chat model added: Qwen3.5 4B (UD-Q4_K_XL)** (user request). Manifest-only
 addition (model-policy.md "adding a model is manifest-only"):
-[`model-manifests/chat/qwen3.5-4b-ud-q4kxl.yaml`](model-manifests/chat/qwen3.5-4b-ud-q4kxl.yaml).
+`model-manifests/chat/qwen3.5-4b-ud-q4kxl.yaml`.
 Quant **UD-Q4_K_XL** (unsloth Dynamic 2.0 — better quality than plain Q4_K_M at ~same footprint;
 user decision). Apache-2.0; `supports_thinking_mode: true` (Qwen3.5 thinks by default → Deep applies);
 ~2.9 GB, 8 GB-RAM tier. **Real SHA-256 captured** by fetching the upstream weight 2026-06-18
@@ -6296,14 +6304,14 @@ reported "I want to anonymize my attached document" not auto-firing the redactio
 `skillsAutoFireEnabled` opt-in on and a document selected. Root cause: the **D6** author-opt-in was
 never set — `document-redaction/SKILL.md` had keywords but no `triggers.autoFire`, so the candidate
 set in `resolveAutoFireSkill` was empty (no bundled skill declared it). **Fix:** added
-`triggers.autoFire: true` to [`app-skills/document-redaction/SKILL.md`](app-skills/document-redaction/SKILL.md).
+`triggers.autoFire: true` to `app-skills/document-redaction/SKILL.md`.
 Now, with the user opt-in on, "anonymize/redact"-style turn (keyword, score 2) over a **selected**
 pdf/plain/markdown document (in-scope-doc MIME, +1) = 3 clears `AUTOFIRE_SCORE_THRESHOLD` and fires.
 "Selected" = in the conversation's persisted scope, which `inScopeDocSignals` resolves main-side
 (§22-C4) — verified: the same phrase with no doc in scope (score 2) does NOT fire. **No code/contract
 change** — only the skill manifest + docs; the autoFire flag doesn't enter the eval harness scoring, so
 the `threshold-3` D1 gate stays **100% precision** on the S13a corpus. **Tests:** 4 new in
-[`skills-autofire.test.ts`](apps/desktop/tests/integration/skills-autofire.test.ts) exercising the REAL
+`skills-autofire.test.ts` exercising the REAL
 redaction skill end-to-end (fires on the reported phrase + a selected PDF; inert keyword-only,
 non-redactable MIME, and opt-in-off) — file 17→21, suite green. **Docs:** architecture §18 safe-merge
 paragraph corrected (the property now rests on the default-false opt-in alone, not on "no skill
@@ -6520,18 +6528,18 @@ audit §6._
 _(prior) 2026-06-17 — **Skills Phase S13c SHIPPED — surprise-mitigation UX; S13 (auto-fire) is
 now FULLY CLOSED.** The S13b mechanics are now reachable by a user, behind the two ratified D3/D4
 surfaces, both EN/DE. **Shipped:** (1) **The opt-in toggle (D4):** a Switch in **Settings → Skills**
-([`SkillsTab.tsx`](apps/desktop/src/renderer/screens/settings/SkillsTab.tsx)) reads/writes the existing
+(`SkillsTab.tsx`) reads/writes the existing
 `skillsAutoFireEnabled` setting through the shared `updateSettings` patch path — **off by default**,
 hidden until settings load (never implies an unconfirmed state). This is the ONLY control that makes
 S13b reachable; until it ships auto-fire could not be enabled. (2) **The per-turn undo (D3):** an
 auto-fired turn stamps an **additive, nullable `messages.auto_fired` column**
-([`db.ts`](apps/desktop/src/main/services/db.ts)) — set only when the auto-fire path placed the skill
+(`db.ts`) — set only when the auto-fire path placed the skill
 AND the fence fit (the §22-A5 stamp-only-when-fenced precedent), so it lines up 1:1 with the glyph and a
 deleted skill drops glyph+undo together. Threaded additively via `TurnSkill.autoFired` (set by
 `resolveAutoFireSkill`) → `appendMessage`/both generators (`chat.ts` `generateAssistantMessage`,
-`rag/index.ts`) → `Message.autoFired` (read back in `rowToMessage`). The [`Transcript`](apps/desktop/src/renderer/chat/Transcript.tsx)
+`rag/index.ts`) → `Message.autoFired` (read back in `rowToMessage`). The `Transcript`
 glyph on an auto-fired turn reads **"Answered with `<skill>`"** + a one-click **"answer without it"** on
-the LAST assistant turn; tapping it ([`ChatScreen`](apps/desktop/src/renderer/screens/ChatScreen.tsx)
+the LAST assistant turn; tapping it (`ChatScreen`
 `onAnswerWithoutSkill`) re-runs the SAME question with the skill **explicitly cleared
 (`skillInstallId: null`)** — the explicit per-turn clear stamps no skill AND suppresses a re-auto-fire.
 Reuses the regenerate path in BOTH modes; `askDocuments` gained a symmetric `regenerate` arg (drop the
@@ -6557,19 +6565,19 @@ fires only when a user opts in AND a skill declares it AND no skill is otherwise
 property: with the new `skillsAutoFireEnabled` setting defaulting FALSE and no S13c toggle yet, S13b
 changes NOTHING in production behaviour** — `resolveAutoFireSkill` is a true no-op when off, and no
 bundled app skill declares `triggers.autoFire` yet, so the candidate set is empty regardless. **Shipped:**
-(1) **Schema (D6):** `triggers.autoFire?: boolean` in [`skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts)
+(1) **Schema (D6):** `triggers.autoFire?: boolean` in `skill-manifest.ts`
 — additive + lenient (only boolean `true` opts in; non-boolean noted+clamped to false; absent/false →
 `undefined` so existing `manifest_json` is byte-unchanged), parser-validated (camelCase + `auto_fire`),
 round-trip tested; mirrors the `localized`/`reservesTools` precedent. (2) **Threshold (D2):**
-`AUTOFIRE_SCORE_THRESHOLD = 3` in [`selector.ts`](apps/desktop/src/main/services/skills/selector.ts)
+`AUTOFIRE_SCORE_THRESHOLD = 3` in `selector.ts`
 (distinct from `SUGGEST_SCORE_THRESHOLD = 2` — suggestion UNCHANGED) + `selectAutoFire` sharing a
 `selectByThreshold` helper with `selectSuggestion` (differ only in the gate). Score ≥ 3 structurally =
-"keyword + ≥1 doc signal". (3) **Decision path:** new [`autofire.ts`](apps/desktop/src/main/services/skills/autofire.ts)
+"keyword + ≥1 doc signal". (3) **Decision path:** new `autofire.ts`
 `resolveAutoFireSkill(db, deps, conversationId, question)` — candidates = enabled + available +
 **app-only** (`source==='app'`, D4) + **`triggers.autoFire===true`** (D6) + **compatible**
 (`skillNeedsNewerApp`, §6.5/M1), scored via the existing `scoreSkillTriggers`, gated at the new
 threshold, deterministic installId tie-break. Shares the **factored-out**
-[`scope-signals.ts`](apps/desktop/src/main/services/skills/scope-signals.ts) `inScopeDocSignals` with
+`scope-signals.ts` `inScopeDocSignals` with
 `suggest.ts` (no duplication). LOGS NOTHING (question is content — §6). (4) **Opt-in (D4):** persisted
 `skillsAutoFireEnabled` boolean in `AppSettings`/`DEFAULT_SETTINGS` (default **false**); the resolver
 reads it first and no-ops when off. (5) **Plumbing (D5/§22-A1):** `resolveTurnSkill`(+`FromRegistry`)
@@ -6577,7 +6585,7 @@ gains an optional `question` and calls auto-fire **only** in the would-return-nu
 `requestedInstallId === undefined` (so a sticky default, a per-turn pick, and an explicit per-turn
 clear `null`/`''` are all respected); both chat channels (`registerChatIpc`/`registerRagIpc`) pass the
 turn text so a documents conversation auto-fires too. (6) **Harness is now the GATE:**
-[`skill-triggers.test.ts`](apps/desktop/tests/eval/skill-triggers.test.ts) asserts the `threshold-3`
+`skill-triggers.test.ts` asserts the `threshold-3`
 policy (sharing `AUTOFIRE_SCORE_THRESHOLD`) clears D1 as **`fired-wrong == 0` AND `precision ≥ 0.95`**
 (owner-set form, survives corpus growth) ALONGSIDE the kept baseline printout. (7) **Privacy guard
 extended:** the S12 sentinel test drives a sentinel-bearing question through `resolveAutoFireSkill` —
@@ -6596,10 +6604,10 @@ baseline (NO runtime behaviour change).** S13 (auto-fire triggers) is gated: aut
 an offline harness proves a precision bar on a labelled corpus. S13a is that harness + the baseline —
 pure measurement, no behaviour change; S13b (auto-fire mechanics) and S13c (UX) stay GATED and unstarted
 until the owner ratifies D1–D6 from these numbers. **Shipped:** (1) a **synthetic, no-user-data** corpus
-of **33 labelled turns** ([`apps/desktop/tests/fixtures/skill-triggers/corpus.json`](apps/desktop/tests/fixtures/skill-triggers/corpus.json))
+of **33 labelled turns** (`apps/desktop/tests/fixtures/skill-triggers/corpus.json`)
 — de-AT + EN true positives, lone-doc-signal true negatives, filename-near-miss + generic-substring
 adversarials; label space = the four real enabled app skills. (2) a deterministic vitest harness
-([`apps/desktop/tests/eval/skill-triggers.ts`](apps/desktop/tests/eval/skill-triggers.ts) +
+(`apps/desktop/tests/eval/skill-triggers.ts` +
 `skill-triggers.test.ts`) that scores the corpus through the **real** `scoreSkillTriggers`/
 `selectSuggestion` (no model/network/DB — DS4) and reports precision/recall + the four-cell confusion
 matrix, sweeping a few higher thresholds (the D2 proposal). A faithfulness guard pins `threshold-2` ≡
@@ -6634,10 +6642,10 @@ CPU/GPU difference. Whether that prefill is one-time (plain chat, fence in the *
 or per-turn (grounded, fence rides the **varying user turn** by §22-H2 placement) is governed by KV-cache
 prefix reuse — which the app was leaving to the llama-server default. **Two low-risk fixes (behind the
 unchanged §7 ceiling — offline, audit ids/counts-only, no i18n surface):** **(PERF-1)** the chat request
-now sends **`cache_prompt: true` explicitly** ([`runtime/llama.ts`](apps/desktop/src/main/services/runtime/llama.ts)
+now sends **`cache_prompt: true` explicitly** (`runtime/llama.ts`
 `chatStream`) so the slot reuses the longest common prefix instead of relying on a release-dependent
 default → plain-chat fence is a **one-time** prefill, not per-turn (asserted in `llama-runtime.test.ts`).
-**(PERF-2)** the per-turn `loadSkillPackage` ([`skills/loader.ts`](apps/desktop/src/main/services/skills/loader.ts))
+**(PERF-2)** the per-turn `loadSkillPackage` (`skills/loader.ts`)
 is **cached by SKILL.md (mtime,size)** — measured **~33 µs hit vs ~650 µs** uncached (~20×; far more on a
 slow portable drive, and it elides the O(paragraphs²) ~19 ms re-size for a 64 KB user skill). DS1/DS2
 honoured (an on-disk edit re-parses); reconcile/installer call `parseSkillManifestFromDir` **directly**,
@@ -6654,10 +6662,10 @@ single title/description) — visible in the composer picker, the per-message gl
 Skills. Fixed for the **display metadata** (the body stays single-language — the model is multilingual,
 D-L6). Design record: **architecture.md "Skills — design record" §16**. **Additive manifest block:**
 `SKILL.md` may carry `localized:` (locale → {title?, description?}), parsed in
-[`skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts) (lenient: malformed/blank/over-long/
+`skill-manifest.ts` (lenient: malformed/blank/over-long/
 multi-line → noted+skipped, never an error; ≤16 locales; keys lower-cased). `SkillManifest.localized` +
 `SkillInfo.localized` are optional/additive (manifest_json round-trips it); `recordToInfo` projects it.
-**Renderer pick:** a pure helper [`renderer/lib/skillI18n.ts`](apps/desktop/src/renderer/lib/skillI18n.ts)
+**Renderer pick:** a pure helper `renderer/lib/skillI18n.ts`
 (`localizedSkillTitle`/`localizedSkillDescription` + `skillTitleResolver` for the glyph), used by
 `SkillPicker`, the Settings → Skills cards + detail, and the `Transcript` glyph (installId→title resolver
 threaded from `ChatScreen`, built from the full skills list with a stamped-title fallback); every pick
@@ -6672,10 +6680,10 @@ EN/DE app-string parity still compile-enforced._
 _(prior) 2026-06-17 — **Skills — LOW / residual follow-ups (no new phase).** The four remaining
 LOW/residual items after the §14 audit, all fixed behind the unchanged §7 ceiling (no new capability,
 still offline, audit still ids/counts-only, EN/DE parity compile-enforced). Full design record:
-**architecture.md "Skills — design record" §15**. **(1) Docs:** [`user-guide.md`](docs/user-guide.md)
+**architecture.md "Skills — design record" §15**. **(1) Docs:** `user-guide.md`
 gained a §8 "Skills" section (composer picker, per-message glyph, one-tap suggestion, tool skills +
 run bar + confirm/cancel, Settings → Skills with import/enable/delete, drop-ins install disabled, the
-"Needs newer app" badge) and [`troubleshooting.md`](docs/troubleshooting.md) gained four entries
+"Needs newer app" badge) and `troubleshooting.md` gained four entries
 (drop-in disabled DS19, structural import-rejection reasons, the "Needs newer app" badge, "the skill
 tool found nothing"). **(2) `reconcileBalances` honesty:** the lone **baseline** row (first row, or any
 row whose predecessor printed no balance) is now `unknown`, not `ok` — `reconciled` needs ≥1 row
@@ -6684,7 +6692,7 @@ genuinely compared against a predecessor (`okCount > 0`), so a single-transactio
 downstream `resultKind` logic was already keyed off `unknown` (unchanged); the baseline now persists
 `reconciled = NULL`. Invoice (`validateInvoiceTotals`) has no baseline concept → no change.
 **(3) Cancel ⇄ audit consistency:** when `ctx.signal.aborted`, the gate
-([`tool-registry.ts`](apps/desktop/src/main/services/skills/tool-registry.ts)) suppresses the
+(`tool-registry.ts`) suppresses the
 `skill_run_failed` audit event (a cancelled run audits as started-then-no-terminal), so it agrees with
 the `skill_runs` row the seam records as `cancelled`; a genuine non-cancel `!ok` still audits failed.
 **(4) minAppVersion gate airtight (the §14/M1 residual):** the use-sites now gate on **compatibility**,
@@ -6707,13 +6715,13 @@ overlap), so the line-oriented extractors got ≈0 rows and the redaction copy w
 on actually-ingested documents (the tests masked it by seeding single chunks with real `\n`). Fix: the IPC
 now injects a `readDocumentSegments` capability (the same `extractDocumentPreview` the doc-tasks use —
 ordered, non-overlapping, newline-preserving parser segments re-extracted from the stored copy), and the
-run seams build the tool reader from it via [`resolveDocumentReader`](apps/desktop/src/main/services/skills/run.ts);
+run seams build the tool reader from it via `resolveDocumentReader`;
 the legacy chunk-table reader stays as the no-injection fallback. Ceiling unchanged — the SEAM holds the
 FS/cipher closure, the reach stays frozen to the in-scope id, a failed re-extraction surfaces through the
 tool's own "could not be read" path. The tool-run IPC tests now seed a REAL stored `.txt` so they exercise
 the production path end-to-end (+ new bank/redaction seam tests prove the injected verbatim reader is
 preferred over collapsed chunks). **M1:** the §6.5 `minAppVersion` gate is now ENFORCED (was parsed but
-ignored) via a pure [`skillNeedsNewerApp`](apps/desktop/src/shared/skill-manifest.ts) — incompatible app
+ignored) via a pure `skillNeedsNewerApp` — incompatible app
 skills reconcile DISABLED, imports install disabled, the enable IPC refuses (`main.skills.incompatible`),
 `SkillInfo` gains `incompatible`/`minAppVersion`, and the Skills tab shows a "Needs newer app" badge with
 the toggle off; app version threaded from `app.getVersion()` through registry+installer deps+IPC. **M2:**
@@ -6727,7 +6735,7 @@ _(prior) 2026-06-17 — **Skills — third Tier-2 bundled app skill: `document-r
 tests, no new phase).** A FOURTH app skill ships in `app-skills/`: **`document-redaction`**
 (`id: document-redaction`, German "Anonymisierung"), the **third Tier-2 tool skill** and the
 **read-transform-export** shape the bank/invoice domains don't exercise. ONE tool in
-[`tools/redaction.ts`](apps/desktop/src/main/services/skills/tools/redaction.ts): `redact_document`
+`tools/redaction.ts`: `redact_document`
 (permissions `['read-selected-docs','export-file']` ⇒ confirm-gated) reads the **whole** selected document
 (the same `readDocumentChunks` reach over the frozen scope), masks personal data with **deterministic,
 offline, regex-only** detectors (email/url/iban/date/phone — each a small pure exported function; dates
@@ -6736,7 +6744,7 @@ validated via the shared `parseDate`, IBANs by structure + per-country length, p
 (`email → url → iban → date → phone`) with a fixed category token per match (so redaction is **idempotent**),
 and returns `{ redactedText, counts{email,phone,iban,date,url}, totalRedactions }` (JsonSchema-validated).
 **Data contract: NO content-class table and NO `BEGIN…COMMIT`** — the deliverable is a FILE: the seam
-[`runDocumentRedaction`](apps/desktop/src/main/services/skills/run.ts) records only the `skill_runs`
+`runDocumentRedaction` records only the `skill_runs`
 lifecycle row (started → terminal; `result_ref` stays **NULL**), writes `redactedText` via the existing
 confirm-gated MAIN-side `saveTextFile('redacted.txt', …)` boundary, honours the cancelled-before-write
 guard (B2) + B4, and surfaces only `totalRedactions` (a count) + a content-free `resultKind`
@@ -6748,9 +6756,9 @@ review the copy before sharing; `docs/known-limitations.md` records the limit. W
 `saveTextFile`). New i18n EN/DE keys (`chat.skill.tool.redactDocument`, `chat.skill.run.done.redacted.*` +
 `…redactedClean`); `SkillRunBar` gains the label + the redaction `resultKind` branch (handled like
 `validate`). **No IPC / shared-type / controller change.** New tests:
-[`skills-redaction-tool.test.ts`](apps/desktop/tests/unit/skills-redaction-tool.test.ts) (each detector
+`skills-redaction-tool.test.ts` (each detector
 in isolation incl. near-misses + the full pass + idempotence + cancellation + the gate),
-[`skills-redaction.test.ts`](apps/desktop/tests/integration/skills-redaction.test.ts) (committed SKILL.md
+`skills-redaction.test.ts` (committed SKILL.md
 parse → kind:tool + 1 allowedTool + reservesTools; reconcile-enabled; dispatch descriptor; the read→mask→
 write seam incl. clean/dismissed/throwing-save) + extensions to `skills-suggest.test.ts` (German "Bitte
 dieses Dokument anonymisieren" clears the threshold), `skills-privacy-guard.test.ts` (a secret email+IBAN
@@ -6764,17 +6772,17 @@ _(prior) 2026-06-17 — **Skills — second Tier-2 bundled app skill: `invoice` 
 new phase).** A THIRD app skill ships in `app-skills/`: **`invoice`** (`id: invoice`), the **second
 Tier-2 tool skill** — it mirrors `bank-statement` layer-for-layer to prove the gate generalizes to a
 second content-class domain, with strong EN+DE coverage. Three tools in
-[`tools/invoice.ts`](apps/desktop/src/main/services/skills/tools/invoice.ts): `extract_invoice`
+`tools/invoice.ts`: `extract_invoice`
 (read-only; reads the selected invoice's chunks → header + line items + totals, deterministic/offline,
 **conservative** — labeled-line header/totals, ambiguous data dropped, header fields optional),
 `validate_invoice_totals` (read-only; half-cent checks — line items→net, net+tax→gross, tax vs. rate —
 each ok/mismatch/unknown + a `reconciled` verdict + `resultKind`), and `export_invoice_csv`
 (confirm-gated `export-file`; line-items CSV). The deterministic money/date primitives + the CSV
 formula-injection `csvField` are now **shared** by both domains in
-[`tools/money.ts`](apps/desktop/src/main/services/skills/tools/money.ts) (bank-statement.ts re-exports
+`tools/money.ts` (bank-statement.ts re-exports
 them for compat; `detectCurrency` improved to scan all 3-letter tokens so an invoice number's "INV"
 never blocks a later "EUR"). The run seam is the sibling
-[`invoice-run.ts`](apps/desktop/src/main/services/skills/invoice-run.ts) (reuses `run.ts`'s
+`invoice-run.ts` (reuses `run.ts`'s
 `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, atomic persist
 (BEGIN…COMMIT/ROLLBACK), B2/B4 guards, latest-invoice-for-document downstream target, structured input
 (no new `SkillToolContext` accessor — §14 ceiling unchanged). **Data contract:** two new content-class
@@ -6788,9 +6796,9 @@ an `invoices.id`. Wired tool names: `extract_invoice` / `validate_invoice_totals
 `needsExtraction` copy genericized "statement"→"document"/"Dokument". `SkillRunBar` gains the three labels
 + the invoice `resultKind` branch. **No IPC / shared-type / controller change** (the generic infra already
 supports an arbitrary wired tool). New tests:
-[`skills-invoice-tool.test.ts`](apps/desktop/tests/unit/skills-invoice-tool.test.ts) (parsers + each tool
+`skills-invoice-tool.test.ts` (parsers + each tool
 through the gate + CSV formula-injection),
-[`skills-invoice.test.ts`](apps/desktop/tests/integration/skills-invoice.test.ts) (committed SKILL.md
+`skills-invoice.test.ts` (committed SKILL.md
 parse → kind:tool + 3 allowedTools + reservesTools; reconcile-enabled; dispatch descriptors; extract →
 validate → export seams; needs-extraction guard; cancelled-save calm path) + extensions to
 `skills-suggest.test.ts` (German "Prüfe die Beträge auf dieser Rechnung" clears the threshold),
@@ -6808,10 +6816,10 @@ terms, with umlaut singular/plural pairs listed separately (`beschluss`/`beschl�
 `aufgabe`/`aufgaben`) because the §6 selector matches case-insensitive **substring**
 (`question.includes`), so an umlaut breaks the substring. Pure folder drop-in — discovery is the
 wholesale `resolveAppSkillsDir → listSkillFolders` scan, so **no IPC / shared-type / main-process
-change**. New tests: [`skills-meeting-protocol.test.ts`](apps/desktop/tests/integration/skills-meeting-protocol.test.ts)
+change**. New tests: `skills-meeting-protocol.test.ts`
 (parse → kind:instruction + `allowedTools===[]` + `reservesTools===false`; English+German trigger
 coverage incl. the umlaut pairs; reconcile-enabled; resolveTurnSkill → fence with `SKILL_GUARD_LINE`
-last) + a focused case in [`skills-suggest.test.ts`](apps/desktop/tests/integration/skills-suggest.test.ts)
+last) + a focused case in `skills-suggest.test.ts`
 (a German "Erstelle bitte ein Protokoll dieser Besprechung" clears `SUGGEST_SCORE_THRESHOLD` and is the
 returned offer against the **real** selector; a neutral question returns none). Nothing pins the
 app-skill set (the bank-statement test asserts `toContain`, not equality; commercial-drive tests use
@@ -6822,7 +6830,7 @@ typecheck + build clean._
 _(prior) 2026-06-17 — **Skills — frontend IA + modal follow-ups (manual-test fixes, no new phase).**
 Two issues found while eyeballing the running Skills surface, both fixed. **(1) Skills is now a top-level
 rail destination, not a Settings tab.** `ScreenId` gains `'skills'`; `SettingsTab` drops it; a thin
-[`SkillsScreen`](apps/desktop/src/renderer/screens/SkillsScreen.tsx) wraps the unchanged `SkillsTab`
+`SkillsScreen` wraps the unchanged `SkillsTab`
 body in `.screen` chrome (h1 = `skills.title`). `App.tsx` `NAV_TOP` adds `{ id:'skills', icon:'puzzle' }`
 (new Lucide puzzle glyph in `Icon.tsx`) → rail is now Home · Chat · Documents · AI Model · **Skills** ‖
 Settings. `resolveNavTarget('skills')` → the screen; the legacy `settings:skills` alias still resolves
@@ -6874,7 +6882,7 @@ isolation (`bank_*` + `skill_runs` never logged/audited/exported), ids/counts-on
 **formula-injection** in `export_transactions_csv` — `transactionsToCsv` now prefixes a leading
 `= + - @`/tab/CR free-text field with `'` so a crafted statement can't execute on CSV open (numeric
 columns untouched; unit-tested). The scattered S10/S11 sentinel tests were **consolidated** into a new
-[`tests/integration/skills-privacy-guard.test.ts`](apps/desktop/tests/integration/skills-privacy-guard.test.ts):
+`tests/integration/skills-privacy-guard.test.ts`:
 one secret driven through every sink (import error, loader, all five tool runs, the CSV export, the IPC
 `SkillRunState`) **plus a console spy**, proving absence in audit/log/console/run-metadata while confirming
 the deliberate exceptions (content-class tables + the user-chosen CSV); a prompt-injection containment test
@@ -6890,7 +6898,7 @@ skipped**, typecheck + build clean. **No open SL-#.** **Carry-forward (RESIDUAL,
 the running-model Playwright eyeball of the run surfaces (busy row + the now-production-firing export confirm
 modal + the result rows) was NOT captured — it needs a seeded indexed statement + a live run + a stubbed
 native save dialog, not reliably author-and-verifiable here; the residual + a concrete recipe live in
-[`docs/design-review/skills-s12/README.md`](docs/design-review/skills-s12/README.md), and every visual state
+`docs/design-review/skills-s12/README.md`, and every visual state
 is unit-covered by `SkillRunBar.test.tsx`. See the **"Skills — S12 handoff"** block below. **The Skills wave
 is done.**_
 
@@ -6930,16 +6938,16 @@ the skills security hardening/audit pass)._
 
 _(prior) 2026-06-17 — **Skills Phase S11b SHIPPED — app-orchestrated run trigger + busy row +
 write-confirm modal.** The S11a `run.ts` seam is now startable from a USER action (DS4 — never the
-model). New generic, bank-free [`services/skills/run-controller.ts`](apps/desktop/src/main/services/skills/run-controller.ts)
+model). New generic, bank-free `services/skills/run-controller.ts`
 (`SkillRunController`: single active run, polling state, Cancel via `AbortSignal`, one-at-a-time) +
-[`services/skills/tool-runs.ts`](apps/desktop/src/main/services/skills/tool-runs.ts) — the ONE place
+`services/skills/tool-runs.ts` — the ONE place
 that maps a tool name → the `run.ts` seam (bank specifics stay out of the generic infra, §13), resolves
 the in-scope document(s) MAIN-side from the conversation (§22-C4), and bridges the app `AuditRecorder`
 down to the ids/counts-only `SkillToolAudit`. Four GENERIC `skills:*` IPC channels (`listRunnableTools` /
 `startSkillRun` / `getSkillRun` / `cancelSkillRun` — NOT bank-named, so S11c slots its tools in with no
 renderer/IPC change), all `requireUnlocked`, **logging NOTHING content-bearing** (scope is content;
-responses are ids/counts only) + preload. Renderer: [`renderer/lib/skillruns.ts`](apps/desktop/src/renderer/lib/skillruns.ts)
-(the doc-task polling-store precedent — no new event channel) + [`renderer/chat/SkillRunBar.tsx`](apps/desktop/src/renderer/chat/SkillRunBar.tsx)
+responses are ids/counts only) + preload. Renderer: `renderer/lib/skillruns.ts`
+(the doc-task polling-store precedent — no new event channel) + `renderer/chat/SkillRunBar.tsx`
 (calm OFFER "Extract transactions" → RUNNING "Running: `<tool>` on `<N>` documents… Cancel" → RESULT
 "Extracted N transactions"; the **`ConfirmDialog` write/export path** built now even though the read-only
 `extract_transactions` skips it), wired into ChatScreen. The trigger keys off the skill's `reservesTools`
@@ -6961,10 +6969,10 @@ first: ship `extract_transactions` only; defer `export_transactions_csv` to S11c
 page-addressable chunks; runs are purely user-initiated). Adds to `SkillToolContext` the ONLY content
 reach a tool gets — `readDocumentChunks(documentId) → {text,page,index}[]`, scope-bounded to the frozen
 `documentIds` (out-of-scope id ⇒ `[]`; still no `Db`/SQL/FS/net handle). New
-[`tools/bank-statement.ts`](apps/desktop/src/main/services/skills/tools/bank-statement.ts) (deterministic
+`tools/bank-statement.ts` (deterministic
 offline parser — bank specifics OUT of the generic registry, §13) defines `extract_transactions`
 (read-only); it's listed in the static `REGISTRY` (gate unchanged). New
-[`services/skills/run.ts`](apps/desktop/src/main/services/skills/run.ts) `runBankExtraction` is the
+`services/skills/run.ts` `runBankExtraction` is the
 app-orchestrated seam (DS4, never model `tool_calls`): records a `skill_runs` lifecycle row (ids/refs
 only) → builds the narrow ctx → runs through `runSkillTool` → on success persists the **content-class**
 `bank_statements` + `bank_transactions` atomically (ROLLBACK ⇒ no partial rows). Additive DDL in
@@ -6981,11 +6989,11 @@ _(prior) 2026-06-17 — **Skills — S6 composer-picker live eyeball CAPTURED (c
 closed).** The one open carry-forward from the Skills wave (every UI phase since S6 forwarded the
 chat-composer `SkillPicker` "live eyeball" as uncaptured, because the walk harness never brought up
 a running model) is now done. New committed walk
-[`scripts/walk-skills-composer.mjs`](apps/desktop/scripts/walk-skills-composer.mjs) starts a chat
+`scripts/walk-skills-composer.mjs` starts a chat
 runtime with no weights present → the factory falls back to the **mock runtime** (clearing ChatScreen
 gate A), and the bundled `app-skills/bank-statement/` skill is installed-enabled in dev (gate B), so
 the composer + picker finally render for the camera. Captures **5 surfaces × light/dark × EN/DE = 20
-PNGs** into [`docs/design-review/skills-s6/`](docs/design-review/skills-s6/): closed picker
+PNGs** into `docs/design-review/skills-s6/`: closed picker
 ("Skill: No skill"), open picker (None + the enabled skill + its description hint), the S8
 "Suggested: …" one-tap offer pinned on top, the active state after picking, and the per-message
 `.msg-skill` glyph on a mock-runtime answer. **No source behaviour changed** — the walk surfaced NO
@@ -6995,7 +7003,7 @@ S6 eyeball capture"** block below. No open carry-forward._
 
 _(prior) 2026-06-17 — **Skills Phase S10 SHIPPED — Tier-2 tool-registry design + the
 validate→run→validate gate.** New file
-[`services/skills/tool-registry.ts`](apps/desktop/src/main/services/skills/tool-registry.ts): the
+`services/skills/tool-registry.ts`: the
 static app-owned `SkillTool` map (a skill can never register a tool), the effective-set intersection
 `resolveEffectiveTools(declared, userGrant)` = `declared ∩ registry ∩ userGrant`, a dependency-free
 JSON-Schema-subset validator (`validateJsonSchema` — CLAUDE.md §0, no validator dep), and
@@ -7013,7 +7021,7 @@ handoff"** block below. Next: Phase S11 (bank-statement tools + `skill_runs` + d
 its own follow-up plan doc)._
 
 _(prior) 2026-06-17 — **Skills Phase S9 SHIPPED — built-in bank-statement instruction stub.**
-The FIRST real app skill: committed [`app-skills/bank-statement/`](app-skills/bank-statement/)
+The FIRST real app skill: committed `app-skills/bank-statement/`
 (`SKILL.md` + `schemas/transaction.schema.json` + `examples/reading-a-statement.md`, text-only product
 content — DS17). The body is **guidance-honest (§22-D1):** quote the statement's own printed figures,
 decline to derive unstated ones, flag what can't be confirmed — it makes **no** extraction/reconcile
@@ -7034,9 +7042,9 @@ security-model.md, known-limitations.md (the THREE ratified residuals). See the 
 handoff"** block below. Next: Phase S10 (Tier-2 tool-registry design — no heavy tools)._
 
 _(prior) 2026-06-17 — **Skills Phase S8 SHIPPED — skill selector heuristics.** New files:
-[`services/skills/selector.ts`](apps/desktop/src/main/services/skills/selector.ts) (pure deterministic
+`services/skills/selector.ts` (pure deterministic
 `triggers` scoring — keyword/MIME/filename, fixed threshold, tie-break by installId) and
-[`services/skills/suggest.ts`](apps/desktop/src/main/services/skills/suggest.ts)
+`services/skills/suggest.ts`
 (`suggestSkillsForTurn` — resolves the conversation scope MAIN-side from the conversationId, §22-C4,
 scores ENABLED skills, returns ≤1 offer). New IPC `suggestSkills(conversationId, question?)→
 SkillSuggestion[]` (requireUnlocked; logs nothing — the question is content) + preload + the new
@@ -7049,11 +7057,11 @@ the three known-limitations.md entries)._
 
 _(prior) 2026-06-17 — **Skills Phases S6+S7 SHIPPED (one unit) — manual activation + prompt
 integration.** Skills now actually shape answers. New files:
-[`services/skills/prompt.ts`](apps/desktop/src/main/services/skills/prompt.ts) (the fenced data block
+`services/skills/prompt.ts` (the fenced data block
 + guard line + the pre-sized token budget — §11) and
-[`services/skills/turn.ts`](apps/desktop/src/main/services/skills/turn.ts) (`resolveTurnSkill` — the
+`services/skills/turn.ts` (`resolveTurnSkill` — the
 ONE resolver shared by both chat channels) +
-[`renderer/chat/SkillPicker.tsx`](apps/desktop/src/renderer/chat/SkillPicker.tsx) (composer footer
+`renderer/chat/SkillPicker.tsx` (composer footer
 "Skill: …" picker). `chat.ts` gains the `buildSystemPrompt(skillFence?)` seam, `appendMessage.skillId`,
 `getConversationDefaultSkill`/`setConversationDefaultSkill`, and a `listMessages` LEFT JOIN that
 resolves a **deleted** skill → NULL (carry-forward invariant, §22-C3); `rag/index.ts` places the fence
@@ -7068,7 +7076,7 @@ paragraph) + rag-design.md (§8 grounded fence note). See the **"Skills — S6+S
 Next: Phase S8 (skill selector heuristics — the in-picker "Suggested: …" offer)._
 
 _(prior) 2026-06-17 — **Skills Phase S5 SHIPPED — Settings → Skills UI.** New file:
-[`renderer/screens/settings/SkillsTab.tsx`](apps/desktop/src/renderer/screens/settings/SkillsTab.tsx)
+`renderer/screens/settings/SkillsTab.tsx`
 (the installed-skills list with compact rows · `App`/`Made by you` trust chip · enable Switch ·
 duplicate-id / files-missing / `Review` chips · "⋯" overflow Export + Delete (Delete hidden for
 `source === 'app'`); a toolbar **Import skill…** dropdown → `pickSkillPackage(file|folder)` →
@@ -7081,17 +7089,17 @@ S4 surface. Registered in `SettingsScreen` (tab order General · **Skills** · P
 `'skills'` added to `SettingsTab` + nav alias `settings:skills`. **[superseded — see the top
 entry: Skills graduated to a top-level rail destination; it is no longer a Settings tab.]** ~70 EN/DE catalog keys (informal
 „du"); skill-row + permission-block CSS. 11 new renderer tests
-([`tests/renderer/SkillsTab.test.tsx`](apps/desktop/tests/renderer/SkillsTab.test.tsx)). Full suite
+(`tests/renderer/SkillsTab.test.tsx`). Full suite
 **1482 passed / 25 skipped**, typecheck + build clean, Playwright eyeball walk green (list/drawer/
 empty in EN+DE × light/dark — `docs/design-review/skills-s5/`, untracked). No docs touched (no new
 broadly-reusable UI pattern — §18.0-E). See the **"Skills — S5 handoff"** block below. Next: Phases
 S6+S7 (manual activation + prompt integration, shipped together)._
 
 _(prior) 2026-06-17 — **Skills Phase S4 SHIPPED — import/export/install/delete lifecycle + IPC.**
-New files: [`services/skills/installer.ts`](apps/desktop/src/main/services/skills/installer.ts) (the
+New files: `services/skills/installer.ts` (the
 lifecycle core + a NET-NEW dependency-free safe zip extractor — built-in `node:zlib` + a hand-rolled
 central-directory parser, NOT JSZip/tar; §22-A2) and
-[`ipc/registerSkillsIpc.ts`](apps/desktop/src/main/ipc/registerSkillsIpc.ts) (10 channels:
+`ipc/registerSkillsIpc.ts` (10 channels:
 list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning). Import VALIDATES
 (traversal/symlink/zip-bomb-on-inflated-bytes/nested-archive-magic/extension-allowlist/§6.4 caps) →
 places PLAIN files at `user-skills/<id>/` → reconciles to enabled-with-warning (DS7); coexist-disabled
@@ -7108,12 +7116,12 @@ prompt path / activation yet (S5+). See the **"Skills — S4 handoff"** block be
 (Settings → Skills UI)._
 
 _(prior) 2026-06-17 — **Skills Phase S3 SHIPPED — registry & persistence (plaintext plain-folder
-model).** New files: [`services/skills/registry.ts`](apps/desktop/src/main/services/skills/registry.ts)
+model).** New files: `services/skills/registry.ts`
 (uniform disk discovery + reconcile of `app-skills/` + `user-skills/`, `mark-unavailable`, drop-in →
 DISABLED, enable/disable, the `createSkillRegistry` handle) and
-[`services/skills/loader.ts`](apps/desktop/src/main/services/skills/loader.ts) (ONE mode — read the
+`services/skills/loader.ts` (ONE mode — read the
 folder — for both sources). Schema: additive `skills` table + nullable `conversations.active_skill_id`
-+ `messages.skill_id` (no FK into `skills`). [`services/drive.ts`](apps/desktop/src/main/services/drive.ts)
++ `messages.skill_id` (no FK into `skills`). `services/drive.ts`
 gains `app-skills`+`user-skills` in `DRIVE_LAYOUT_DIRS` (+ both prepare-drive scripts, parity) and
 `resolveAppSkillsDir`/`resolveUserSkillsDir`; `AppContext.skills` wired in `main/index.ts` (best-effort
 startup reconcile). 17 new integration tests (`tests/integration/skills-registry.test.ts`); full suite
@@ -7121,11 +7129,11 @@ startup reconcile). 17 new integration tests (`tests/integration/skills-registry
 S3 handoff"** block below. Next: Phase S4 (import/export/install/delete lifecycle + IPC)._
 
 _(prior) 2026-06-17 — **Skills Phase S2 SHIPPED — skill package schema & parser (pure, Electron-free).**
-New files: [`shared/skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts) (the frozen type
+New files: `shared/skill-manifest.ts` (the frozen type
 contract + `parseSkillMarkdown`/`validateSkillManifest`), plus main-side wrappers
-[`services/skills/manifest.ts`](apps/desktop/src/main/services/skills/manifest.ts) (single I/O point
+`services/skills/manifest.ts` (single I/O point
 that reads SKILL.md + optional manifest.json and runs the shared validator — §8.1) and
-[`services/skills/limits.ts`](apps/desktop/src/main/services/skills/limits.ts) (env-overridable §6.4
+`services/skills/limits.ts` (env-overridable §6.4
 caps). 55 new unit tests; suite was **1430 passed / 25 skipped** at S2. See the **"Skills — S2 handoff"**
 block below for the four-field handoff._
 
@@ -7224,7 +7232,7 @@ mandatory Playwright screenshot-walk artifact (design-guidelines §11.4), becaus
 never brought up a running model, so the composer (gated behind a RUNNING runtime) never rendered.
 
 **How.** New committed walk
-[`scripts/walk-skills-composer.mjs`](apps/desktop/scripts/walk-skills-composer.mjs) (mirrors the
+`scripts/walk-skills-composer.mjs` (mirrors the
 `walk-docs-subnav.mjs` shape: gate flow, `shotBoth(theme)`, per-locale loop, seeding via
 `window.api`). It clears **both** ChatScreen gates: (A) it calls `window.api.selectModel` +
 `startRuntime` on a chat manifest with **no weights on the fresh eyeball root**, so the start gate's
@@ -7937,7 +7945,7 @@ surfacing), `rag-design.md` (grounded assembly now whole-prompt budgeted), `know
 
 _(prior) 2026-06-16 — **Adaptive Home CTA + one app-wide privacy indicator + AI-Model
 de-jargon.** A **renderer + EN/DE i18n only** wave (no IPC/schema/data-contract/main-process logic
-changes), folded into [`design-guidelines.md`](docs/design-guidelines.md) **§11.7** (new record),
+changes), folded into `design-guidelines.md` **§11.7** (new record),
 **§11.3 D-UI3** (hero now adaptive), and **§12.1 #2** (single indicator moved, superseded note).
 **(A) Home hero CTA adaptive (D-UI3).** Home led with a loud "Start chatting" even while the hub
 showed "⚠ Needs a model", dead-ending at the no-model empty state. The hero is now driven by the
@@ -7977,7 +7985,7 @@ D38–D43; owner-gated doc-org Phase E.2)._
 _(prior) 2026-06-15 — **Docs-screen-refinement polish: rail label hyphenation +
 import-failure copy + failed-row actions + sub-nav density.** A renderer-only wave (plus the one
 scoped main-process user-facing string exception, §11.2) on the Documents screen + app shell,
-folded into [`design-guidelines.md`](docs/design-guidelines.md) **§12.1 #1** (rail) and **§11.6**
+folded into `design-guidelines.md` **§12.1 #1** (rail) and **§11.6**
 (extended, §-anchors stable). **No IPC/schema/data-contract changes.** **(A) Rail labels never
 break mid-word.** The compact app rail hyphenated long labels ("Docu-ments"/"Doku-mente"/
 "Einstel-lungen") via soft hyphens (U+00AD) baked into the i18n strings + `hyphens: manual`. Fixed:
@@ -7989,9 +7997,9 @@ below the fit width. **(B) Import-failure copy localized + softened (§7).** The
 `Unsupported file type: .xyz` (persisted + shown, leaking English into the German UI) now routes
 through a new **interpolated** persist-canonical key `main.ingest.unsupportedType` (`{ext}` param;
 EN "This file type isn't supported (.xyz). Try TXT, PDF, DOCX, CSV, or a supported audio format.",
-DE informal „du"). [`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts) persists
+DE informal „du"). `ingestion/index.ts` persists
 canonical English via `t('en', …, {ext})` (preview sibling uses `tMain`); the D-L4 display map
-([`displayMap.ts`](apps/desktop/src/renderer/lib/displayMap.ts)) gains an **interpolated matcher**
+(`displayMap.ts`) gains an **interpolated matcher**
 (template→regex recovers `{ext}`, re-renders in-language) + a **legacy matcher** so pre-change rows
 still localize. The key is OUTSIDE `DISPLAY_MAP_KEYS` (exact set) → new `INTERPOLATED_MAP_KEYS`;
 copy-tone guard now bans the raw literal. **(C) Failed-row actions.** A failed import has no text →
@@ -8012,20 +8020,20 @@ Preview, compact banner), "Failed imports" view — captures in `docs/design-rev
 unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2)._
 
 _(prior) 2026-06-15 — **Documents screen: suggested-project FEATURE REMOVAL + sub-nav
-regroup/collapse.** Two changes folded into [`design-guidelines.md`](docs/design-guidelines.md)
+regroup/collapse.** Two changes folded into `design-guidelines.md`
 **§11.6** (extended, §-anchor stable). **(A) Removed the auto "suggested project" feature** —
 an intentional product decision (it surfaced a near-equal row affordance for a low-value guess).
 Deleted across the stack: the per-row suggestion chip + Apply/Dismiss + renderer state
-([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)); the read-only
-`docs:filingSuggestions` IPC handler ([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts))
+(`DocumentsScreen.tsx`); the read-only
+`docs:filingSuggestions` IPC handler (`registerDocsIpc.ts`)
 + its preload bridge + the `IPC.filingSuggestions` channel; the pure rule engine
 `services/filing-suggestions.ts` (**deleted**); the `FilingRuleId`/`FilingTarget`/`FilingSuggestion`/
 `FilingSuggestionResult` types + the `AppSettings.dismissedFilingSuggestions` setting (+ default)
-([`shared/types.ts`](apps/desktop/src/shared/types.ts)); the `docs.suggest.*` i18n keys (EN+DE);
+(`shared/types.ts`); the `docs.suggest.*` i18n keys (EN+DE);
 the `.doc-suggest*` styles. Filing stays fully manual via the row **⋯** / selection toolbar
 (`addToCollection`/`createCollection`). `source_folder_label` import metadata is **retained**
 (generic ingestion metadata, not suggestion-specific); the generic string[]-setting sanitizer in
-[`settings.ts`](apps/desktop/src/main/services/settings.ts) stays as defensive code (comment
+`settings.ts` stays as defensive code (comment
 generalized — no string[] setting ships today). Tests: removed `filing-suggestions.test.ts`,
 `filing-suggestions-ipc.test.ts`, the db-settings string[] case, the 4 DocumentsScreen suggestion
 cases, the GermanSmoke suggestion-chip case, and the audit-ipc FOLDER_SENTINEL; **added** a
@@ -8057,7 +8065,7 @@ open work unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc
 _(prior) 2026-06-15 — **Documents-screen UI refinement — follow-up pass (renderer-only,
 presentation only).** Four visual fixes after the compact-row restructure shipped; **no IPC,
 schema, persistence, or main-process changes**, document-task handlers untouched. Folded into
-[`design-guidelines.md`](docs/design-guidelines.md) **§11.6** (the same design record the prior
+`design-guidelines.md` **§11.6** (the same design record the prior
 pass added — extended, §-anchor stable). **What changed:** (1) **Right-aligned trailing cluster
 + reading column** — chips/badges/Preview/"⋯" wrapped in one `.doc-row-trailing`
 (`flex-shrink:0`, right-aligned) next to the flex-filling `.doc-row-main` (`flex:1;min-width:0`),
@@ -8095,7 +8103,7 @@ unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc-org Phase
 _(prior) 2026-06-15 — **Documents-screen UI refinement (renderer-only; extends the Phase
 23–27 wave).** A presentation-only pass on the Documents screen — **no IPC, schema, persistence,
 or main-process changes**; every document task keeps its existing handler/IPC. Folded into
-[`design-guidelines.md`](docs/design-guidelines.md) **§11.6** (the design record; code/i18n
+`design-guidelines.md` **§11.6** (the design record; code/i18n
 comments cite it). **What changed:** (1) the per-card bank of 6–7 equal-weight buttons collapsed
 to **one inline Preview (Secondary) + a "⋯" Radix `DropdownMenu` overflow** (Summarize/again,
 Translate, Re-index, Build deep index [hidden once deeply indexed], Make searchable (OCR) for
@@ -8141,15 +8149,15 @@ D38–D43; owner-gated doc-org Phase E.2)._
 _(prior) 2026-06-15 — **Bugfix: translation import failed with `Embedding request failed:
 HTTP 500` (beta-tester report).** Symptom: translating a document ran to completion, then the
 materialized output failed to import with `Embedding request failed: HTTP 500`
-([`e5.ts`](apps/desktop/src/main/services/embeddings/e5.ts)), surfaced to the user as "The task could
+(`e5.ts`), surfaced to the user as "The task could
 not be finished. Make sure the model is still running." **Root cause (same class as the 0.1.20 HTTP 400
 fix, but in the embedder):** the chunker now sizes chunks by space-aware `approxTokenCount` (~500), but
 `E5Embedder.truncateForContext` still truncated each chunk by a **naive whitespace-word split** at an
 **English-calibrated 1.4 tokens/word** (`maxInputWords = floor(512/1.4) ≈ 365`). The embedder is the
 **multilingual** E5 and the translation target was **German**, which is subword-heavy at ~2 real BPE
-tokens/word (see [`translation.ts`](apps/desktop/src/main/services/doctasks/translation.ts) output-token
+tokens/word (see `translation.ts` output-token
 note) — so 365 German words ≈ 730 real tokens, well over the sidecar's `--ctx-size 512`
-([`sidecar.ts`](apps/desktop/src/main/services/runtime/sidecar.ts)), and llama-server's embeddings
+(`sidecar.ts`), and llama-server's embeddings
 endpoint returns **HTTP 500** for an over-context sequence (chat returns 400; embeddings 500). Space-less
 scripts (CJK/Thai — the whole-word-collapse case) had the same exposure. **Fix:** `truncateForContext`
 now reuses the chunker's space-aware **`truncateToApproxTokens`** and budgets against the context with a
@@ -8157,21 +8165,21 @@ conservative **real-BPE safety factor `REAL_TOKENS_PER_APPROX_TOKEN = 2.2`** (�
 ~464 real worst-case German, ~50-token headroom for BOS/EOS + slop). The vector still covers the chunk's
 head (adjacent chunks overlap by ~80 tokens), so retrieval is unaffected in practice. **Tests:** typecheck
 clean, `npm test` **1348 passed / 25 skipped** (+2 in
-[`e5-embedder.test.ts`](apps/desktop/tests/integration/e5-embedder.test.ts): the existing truncation test
+`e5-embedder.test.ts`: the existing truncation test
 now asserts `approxTokenCount(sent) ≤ floor(512/2.2)`; a new regression embeds a glued space-less run + a
 2000-char CJK run and asserts both are truncated within the approx-token budget — i.e. can't overflow the
-sidecar). **Docs:** [`known-limitations.md`](docs/known-limitations.md) token-budgeting bullet gained the
+sidecar). **Docs:** `known-limitations.md` token-budgeting bullet gained the
 embedder-side NB. No version bump, no schema change. **Documents embedded before this fix are unaffected
 (their vectors already persisted); the bug only ever blocked NEW imports of subword-heavy/space-less
 text.** **Next:** open work unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc-org Phase
 E.2)._
 
 _(prior) 2026-06-15 — **Document-summary preview UI fixes (3 reported bugs).** The summary in
-the document preview modal ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)
+the document preview modal (`DocumentsScreen.tsx`
 `PreviewModal`) had three frontend problems, all fixed. **(1) Layout/scroll:** the summary `<details>`
 block sat ABOVE the single `.modal-body` scroll region, so a long summary grew past the dialog's
 `max-height` with no scrollbar — it's now moved INSIDE `.modal-body` (summary + extracted text share one
-scroll region) and `.modal-body` got `flex: 1 1 auto` so it absorbs the leftover height ([`styles.css`](apps/desktop/src/renderer/styles.css)).
+scroll region) and `.modal-body` got `flex: 1 1 auto` so it absorbs the leftover height (`styles.css`).
 **(2) Copy + Save:** the summary action row now always offers **Copy** (→ `window.api.copyToClipboard`,
 the MAIN clipboard bridge) and **Save** (→ new `exportSummary` IPC: dialog + fs in MAIN, writes the
 summary as Markdown, audited as `summary_exported` with id-only metadata — the exportDocument pattern),
@@ -8228,7 +8236,7 @@ audit commit; this release-version increment to 0.1.26 supersedes it as the curr
 
 _(prior) 2026-06-15 — **Whole-document analysis — second-pass review follow-up (2 fixes).** A
 high-effort re-review of the closeout diff surfaced two honesty gaps the first pass left, both now fixed in
-[`manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts). **(1) Mode-(b) belt parity:**
+`manager.ts`. **(1) Mode-(b) belt parity:**
 `runCompareSectionMatched`'s reduce-input belt was structurally identical to the one M-1 fixed in mode (c)
 but still returned only `plan.truncated` (the map-ceiling flag) — so a model that overruns `maxTokens`
 could silently condense the asymmetric report with no notice. It now returns `plan.truncated ||
@@ -8238,7 +8246,7 @@ its beginning") wording is accurate. **(2) Symmetric loss is now mirror-even:** 
 then-all-B, so a tail-truncating reduce sheds both documents' unique content roughly evenly — preserving
 the mirror property under truncation (swapping A/B drops the same sections, off by ≤1 note at an odd
 boundary) rather than always sacrificing the Only-B tail. Folded into
-[`rag-design.md`](docs/rag-design.md) §14.6. **Tests:** typecheck clean, `whole-doc-compare` suite 6/6
+`rag-design.md` §14.6. **Tests:** typecheck clean, `whole-doc-compare` suite 6/6
 green (the M-1 truncation test still passes; the alignNodes mirror unit tests are unaffected — the
 interleave is manager-level, the pure function is unchanged). No version bump, no schema change. Feature
 remains COMPLETE._
@@ -8251,12 +8259,12 @@ H5/M2/M13/mirror invariants all held. **Fixed (M-1, Medium — honesty):** a *lo
 (few aligned sections but many free Only-A/Only-B notes, e.g. A=3 vs B=40 — admitted by the min-section
 gate) could let the reduce-input belt condense the note tail (Only-B notes are last) and silently
 under-report B, with **no** truncation notice — exactly the H8 failure mode the asymmetric label exists to
-prevent. `runCompareSymmetricTrees` ([`manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts))
+prevent. `runCompareSymmetricTrees` (`manager.ts`)
 now returns `truncated` when the belt fires, and `runCompare` materializes the new
-**`compareSymmetricTruncationNotice`** ([`compare.ts`](apps/desktop/src/main/services/doctasks/compare.ts) —
+**`compareSymmetricTruncationNotice`** (`compare.ts` —
 document-neutral wording, NOT mode-(b)'s "beginning of A"; English literal per the existing notice
 precedent, EN/DE parity untouched). **Fixed (L-3, Low — robustness):** `ensureNodeEmbeddings`
-([`node-vectors.ts`](apps/desktop/src/main/services/analysis/node-vectors.ts)) now throws a clear error if
+(`node-vectors.ts`) now throws a clear error if
 the sidecar returns a vector count ≠ the input count, instead of an opaque `encodeVector(undefined)` throw.
 **Deferred (acknowledged, not fixed):** L-2 (dedup identical node summaries before the sidecar batch —
 efficiency), L-4 (`nodeVectorSearch` is reserved/unused in prod — semi-global QA is §14.8-deferred), L-5
@@ -8264,7 +8272,7 @@ efficiency), L-4 (`nodeVectorSearch` is reserved/unused in prod — semi-global 
 authoritative scoping is `tree_nodes.embedding_model_id`), L-6 (verify the embedder sidecar serializes
 concurrent `embed` from the import loop — pre-existing architecture), and a naming nit ("greedy
 mutual-best-match" is really greedy global-best-first). **Docs:** the M-1 fix folded into
-[`rag-design.md`](docs/rag-design.md) §14.6; the spent `docs/whole-doc-analysis-review-prompt.md`
+`rag-design.md` §14.6; the spent `docs/whole-doc-analysis-review-prompt.md`
 **deleted** (its own header said to). **Tests:** typecheck clean, build OK, `npm test` **1346 passed /
 25 skipped** (+1: `whole-doc-compare.test.ts` "labels the symmetric report truncated when a lopsided pair
 overflows the reduce budget (M-1)" — asserts the notice appears AND the symmetric path was still taken,
@@ -8277,7 +8285,7 @@ mechanisms §4.3 symmetric compare, §3.1 node vectors). Completes the feature a
 plan into a §-record. **The point:** make a long-document comparison HONEST and mirror-symmetric, and
 make node vectors (stored NULL since Phase 1 — L6) earn their keep as their first and only consumer.
 **(1) Lazy node embeddings + node-cosine helper** (new
-[`services/analysis/node-vectors.ts`](apps/desktop/src/main/services/analysis/node-vectors.ts)):
+`services/analysis/node-vectors.ts`):
 `ensureNodeEmbeddings(db, documentId, embedder)` embeds each tree node's `summary_text` on the **CPU
 embedder sidecar** (`--device none`, NOT the chat slot) in one batch, reusing the exact `encodeVector`
 LE-Float32 encoding, stores the blob in `tree_nodes.embedding_blob`/`dimensions`/`embedding_model_id`,
@@ -8287,13 +8295,13 @@ rebuild mints fresh NULL-vector rows with the same `content_hash`). **Scoped by 
 one — a mixed-embedder alignment NEVER silently happens; stamps `tree_meta_json.embeddingModelId`.
 `nodeVectorSearch`/`loadNodeVectors` read **only `tree_nodes`** (never the chunk `embeddings` table —
 node vectors stay out of citation-grade chunk retrieval, §3.6); they are NOT `VectorIndex` [H4].
-**(2) Pure alignment** ([`doctasks/compare.ts`](apps/desktop/src/main/services/doctasks/compare.ts)):
+**(2) Pure alignment** (`doctasks/compare.ts`):
 `alignNodes(a, b)` — **greedy mutual-best-match** by node-vector cosine with a **swap-invariant**
 tie-break (the canonical pair key) above `SYMMETRIC_MATCH_MIN_SCORE` (0.5) → pairs + unmatched-A +
 unmatched-B; pure ⇒ the **mirror property** (swap A/B ⇒ Only-A ↔ Only-B, Same/Different stable) is
 unit-tested without the model [M11]. Plus `compareNodePairPrompt` (equal-footing diff),
 `comparePairOutputCap`, `compareAsymmetricNotice`, `SYMMETRIC_COMPARE_CALL_CEILING` (24).
-**(3) Symmetric compare** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+**(3) Symmetric compare** (`doctasks/manager.ts`):
 `runCompare` now picks a mode — **(a)** single-pass (already symmetric, unchanged); **(c)
 `runCompareSymmetricTrees`** when BOTH docs have a `ready` tree under the active embedder AND the smaller
 has ≤ ceiling level-1 sections (`bothTreesReadyForSymmetric`): lazily embed both trees' nodes, align
@@ -8317,22 +8325,22 @@ so EN/DE parity is untouched). **NOT built (deferred):** the collection "tree of
 for unmapped extract types; semi-global QA (node summaries as derived context); node vectors in chunk
 retrieval/citations; a symmetric compare above the 24-section ceiling (→ labelled asymmetric). **Tests:**
 typecheck clean, build OK, `npm test` **1345 passed / 25 skipped** (+12: unit
-[`node-align.test.ts`](apps/desktop/tests/unit/node-align.test.ts) — alignNodes identical→pair/orthogonal→
+`node-align.test.ts` — alignNodes identical→pair/orthogonal→
 unmatched, the **mirror** property incl. tied scores [swap-invariant tie-break], match-floor + dim-mismatch
 skip, `comparePairOutputCap` bounds; integration
-[`whole-doc-compare.test.ts`](apps/desktop/tests/integration/whole-doc-compare.test.ts) — symmetric path
+`whole-doc-compare.test.ts` — symmetric path
 taken + node vectors populated under the active embedder = node count, second compare reuses [0 extra
 node-embeds], rebuild refills from `summary_cache` [0 sidecar], H5 re-embed under a NEW embedder [never a
 silent empty align], labelled asymmetric fallback reached only without both trees, node vectors persist +
 decode after a DB reopen [whole-file-encrypted round-trip]). No version bump, no schema change (Phase 1's
 nullable node-vector columns suffice). **FEATURE CLOSEOUT (doc-lifecycle):** the whole four-phase
-`docs/whole-document-analysis-plan.md` is condensed into **[`docs/rag-design.md`](docs/rag-design.md) §14
+`docs/whole-document-analysis-plan.md` is condensed into **`docs/rag-design.md` §14
 (analysis design record, §14.1–§14.8)** and the plan file is **deleted** (full original incl. all three
 audit passes: `git show 4071685:docs/whole-document-analysis-plan.md`). §14.x anchors are stable; the two
-in-code "plan §x" path pointers ([`db.ts`](apps/desktop/src/main/services/db.ts) → §14.2,
-[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) → §14.1–§14.3)
+in-code "plan §x" path pointers (`db.ts` → §14.2,
+`whole-doc-analysis.test.ts` → §14.1–§14.3)
 are repointed (inline "plan §x" comments resolve via git history, per the doc-org precedent);
-[`known-limitations.md`](docs/known-limitations.md) compare entry updated (symmetric-when-both-deeply-
+`known-limitations.md` compare entry updated (symmetric-when-both-deeply-
 indexed, else labelled one-directional). **Risks / next:** the symmetric path is O(sections) `generate`
 calls (bounded by the 24-section ceiling → labelled asymmetric above it) — a heavy but user-initiated
 background task on weak CPUs; the mock embedder is structure-only so semantic diff quality is a manual/
@@ -8343,13 +8351,13 @@ Third phase of `docs/whole-document-analysis-plan.md` (§6 Phase 3;
 mechanisms §3.3 schema, §4.2 extract+aggregate, §4.4 router, §5.1 IPC). Moves "list every X / how many"
 off top-k relevance and onto a precomputed, provenance-backed SQL aggregation answered at **zero
 query-time model calls** — exhaustive OVER INDEXED SECTIONS, never "complete" [H7]. **(1) Schema**
-([`db.ts`](apps/desktop/src/main/services/db.ts)): additive `extraction_records` table (one item row per
+(`db.ts`): additive `extraction_records` table (one item row per
 surfaced item + one `__scan__` marker row/chunk recording `ok`/`unparsed`; `chunk_id` **FK ON DELETE
 CASCADE** ⇒ re-index self-invalidates [H1 free win, under `PRAGMA foreign_keys = ON`]) + `idx_extract_doc_type`/
 `idx_extract_chunk`; `documents.extract_status` column via `ensureColumn` (NULL|pending|extracting|ready|stale|
 failed, mirrors `tree_status`); `reconcileStuckExtracts` (mirror of `reconcileStuckTrees`, `extracting`→
 `pending`); re-index resets `extract_status`→`stale` in the chunk-replacement block (rows cascade away).
-**(2) Extract pass** (new [`services/analysis/extract.ts`](apps/desktop/src/main/services/analysis/extract.ts)):
+**(2) Extract pass** (new `services/analysis/extract.ts`):
 `extractDocument` — the second YIELDING build (same arbiter handshake/park/cancel/lock discipline as the
 tree, [H3/H9/H10]); one `generate`/chunk over the fixed v1 type set (`generic|date|amount|party|obligation`),
 strict JSON-array prompt at temp 0, tolerant `parseExtraction` (recovers fenced/prose-wrapped arrays;
@@ -8359,29 +8367,29 @@ chunk** [H7]; per-`(chunk_id, content_hash)` **resume cache** = **0** calls on r
 `aggregateExtractions` — query-time GROUP BY `normalized_value` through the shared
 `buildScopeFilter('document_id')` [M3], **0** model calls, returns items+counts+source-chunk provenance +
 `scannedChunks`/`totalChunks`/`unparsedChunks`/`fullyChunked`. **(3) DocTaskManager**
-([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)): new `extract` `DocTaskKind`
+(`doctasks/manager.ts`): new `extract` `DocTaskKind`
 + `runExtract` (registers/unregisters the arbiter like `runTreeBuild`), validated like `tree` (one doc,
 runtime required, **`fully_chunked` gate [C4]**); `isYieldingKind` makes `abortActiveBuild`/`cancelDocTask`
 arbiter-reject treat extract like tree (chat-stream's pause-vs-refuse already keys off the arbiter).
-**(4) Router** (new [`services/analysis/router.ts`](apps/desktop/src/main/services/analysis/router.ts),
+**(4) Router** (new `services/analysis/router.ts`,
 pure): `routeQuestion` — EN+DE classification (list/every/each/how many/count + jede/alle/wie viele/
 sämtliche/liste/zähl), fixed precedence **explicit-button > compare(2 docs) > coverage-extract >
 tree-summary > relevance** [M7], closed-vocab→type synonym map (`mapQuestionToRecordType`, EN+DE, default
 generic), **low-confidence / no-extract-data / compare-without-2-docs → labelled relevance** (never an
 empty "no items" or a false "complete"). **(5) rag:ask wiring**
-([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): after scope resolve + filename
+(`registerRagIpc.ts`): after scope resolve + filename
 auto-scope, a `coverage-extract` decision over a mapped pre-extracted type streams the deterministic
-listing (new [`services/analysis/listing-answer.ts`](apps/desktop/src/main/services/analysis/listing-answer.ts)
+listing (new `services/analysis/listing-answer.ts`
 — coverage line + per-item provenance + caveat, built via `tMain`) at 0 model calls; **everything else
 falls through to the existing relevance path byte-unchanged**. **(6) IPC**: `analysis:listAll`
-([`registerDocTasksIpc.ts`](apps/desktop/src/main/ipc/registerDocTasksIpc.ts)) → `ExtractionListing|null`
-(read-only, content stays in DB); mirrored in [`preload`](apps/desktop/src/preload/index.ts); channel in
-[`shared/ipc.ts`](apps/desktop/src/shared/ipc.ts). **(7) Shared contracts**
-([`shared/types.ts`](apps/desktop/src/shared/types.ts)): `ExtractRecordType`/`EXTRACT_RECORD_TYPES`,
+(`registerDocTasksIpc.ts`) → `ExtractionListing|null`
+(read-only, content stays in DB); mirrored in `preload`; channel in
+`shared/ipc.ts`. **(7) Shared contracts**
+(`shared/types.ts`): `ExtractRecordType`/`EXTRACT_RECORD_TYPES`,
 `ExtractStatus`, `ExtractionListing`/`ExtractionListingItem`/`ExtractionListingRequest`; `DocTaskKind +=
 'extract'`; `CoverageMode += 'extract'` + `CoverageInfo.unparsedChunks`/`fullyChunked` (the reserved Phase-2
 field, now real); `DocumentInfo.extractStatus` (threaded via `DocumentRow`/`rowToInfo`). **(8) Renderer**:
-`CoverageMeter` ([`CoverageMeter.tsx`](apps/desktop/src/renderer/components/CoverageMeter.tsx)) gains the
+`CoverageMeter` (`CoverageMeter.tsx`) gains the
 `extract` listing copy ("every match … N sections scanned (k unparsed)", whole-document wording gated on
 `fullyChunked`, NEVER "complete"). **i18n**: EN+DE `analysis.kind.*`/`analysis.listing.*`/`coverage.extract.*`/
 `docs.task.extract*` (type-enforced parity; forbidden-UI-words honoured — "sections", no chunk/record/extract
@@ -8395,13 +8403,13 @@ per-message `CoverageInfo` payload (avoids a `messages`-table change); the `extr
 wired for the meter component + future preview use. **NOT built (Phase 4):** symmetric/both-trees compare,
 node-vector align, node embeddings (node vectors stay NULL — L6); the collection "tree of trees"; a live
 full-scan for unmapped types. **Tests:** typecheck clean, build OK, `npm test` **1333 passed / 25 skipped**
-(+27: unit [`extract-router.test.ts`](apps/desktop/tests/unit/extract-router.test.ts) — router classification/
+(+27: unit `extract-router.test.ts` — router classification/
 precedence/low-confidence→relevance/open-vocab→type EN+DE + `parseExtraction` JSON tolerance/empty-vs-unparsed/
-unknown-type-coerce; integration [`whole-doc-extract.test.ts`](apps/desktop/tests/integration/whole-doc-extract.test.ts)
+unknown-type-coerce; integration `whole-doc-extract.test.ts`
 — O(n) calls + per-chunk markers, unparsed marker [H7], warm-cache re-run = 0 calls, per-chunk ROLLBACK +
 connection-survives + resumable [H11], aggregation GROUP BY via buildScopeFilter = 0 calls + ground-truth
 count + per-item provenance, archived-excluded [M3], re-index cascade→stale [H1], honest listing answer
-"sections scanned"+caveat + unparsed surfaced; renderer [`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx)
+"sections scanned"+caveat + unparsed surfaced; renderer `Coverage.test.tsx`
 — extract meter whole-vs-sections + unparsed, never "complete"; +1 GermanSmoke extract meter). No version
 bump, no schema-version (additive table/column). **Risks / next:** the extract pass is a multi-minute
 serialized CPU pass on weak hardware (manual, size-unbounded — a UI trigger + size gate like the deep index
@@ -8414,36 +8422,36 @@ provenance UI).** Second phase of `docs/whole-document-analysis-plan.md`
 honesty layer over Phase 1's deep index: surface BREADTH (whole document vs the most relevant
 passages) and DEPTH (tier) as two separate, honest statements — **breadth ≠ fidelity [C1/L2]**,
 "100%"/"deeply indexed" shown ONLY for a `ready` tree, and node summaries are NEVER `[Sn]`
-citations [M2]. **(1) Shared contracts** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)):
+citations [M2]. **(1) Shared contracts** (`shared/types.ts`):
 new `CoverageInfo` (`mode:'tree'|'relevance'|'capped'`, `treeStatus?`, `chunksCovered/Total`,
 `treeLevels?`, `tier?`, `truncated?`; `unparsedChunks` reserved for Phase 3), `DocumentCoverage`
 (`{coverage, provenance: Citation[]}`), `TreeBuildStatus`, `CoverageTier`; `DocumentSummary.tier?`;
 `DocumentInfo.treeStatus`/`fullyChunked`/`treeLevels` (additive/optional, threaded via
 `DocumentRow`/`rowToInfo`/`listDocuments`/`getDocument` in
-[`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts); `parseSummary` now keeps
+`ingestion/index.ts`; `parseSummary` now keeps
 `tier`). **(2) Coverage + provenance reader** (new
-[`services/analysis/coverage.ts`](apps/desktop/src/main/services/analysis/coverage.ts)):
+`services/analysis/coverage.ts`):
 `reachableLeafChunkIds` (the PRODUCTION `tree_edges`→leaf-chunk walk, replacing Phase 1's test-only
 helper), `documentLeafProvenance` (leaf SOURCE chunks → `Citation[]`, M2-safe), `documentCoverage`
 (breadth+depth — ready ⇒ whole-document at tier; building/stale/pending ⇒ partial fraction, never
 100%; no tree ⇒ capped/beginning), plus `maxTreeLevel`/`nodeSummariesAtLevel` for the tiers. Pure DB
 reads, no model call; all CONTENT-derived (never logged/audited). **(3) Coverage tiers** in
-`runSummary` ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts) new
+`runSummary` (`doctasks/manager.ts` new
 `summarizeFromTree`): requested via the `summary` task `params.tier` (no-arg = **Tier 1**, so the
 one-click summary is byte-unchanged) — **Tier 1** = stored root verbatim (**0** model calls, Q6);
 **Tier 2** = ONE reduce over the root's children (the layer that fit the root's single budget group,
 so always one window); **Tier 3** = ALL level-1 nodes reduced in budget batches **bounded by node
 count**, never document size. All tiers cover the whole document (`truncated:false`). **(4) IPC**:
-`analysis:coverage(documentId)` ([`registerDocTasksIpc.ts`](apps/desktop/src/main/ipc/registerDocTasksIpc.ts))
+`analysis:coverage(documentId)` (`registerDocTasksIpc.ts`)
 → `DocumentCoverage|null` (read-only; provenance only for a `ready`-tree summary); mirrored in
-[`preload`](apps/desktop/src/preload/index.ts); channel in
-[`shared/ipc.ts`](apps/desktop/src/shared/ipc.ts). **(5) Renderer**: new
-[`components/CoverageMeter.tsx`](apps/desktop/src/renderer/components/CoverageMeter.tsx) — `CoverageMeter`
+`preload`; channel in
+`shared/ipc.ts`. **(5) Renderer**: new
+`components/CoverageMeter.tsx` — `CoverageMeter`
 (breadth pill + depth line) and `TierMenu` (reusing the `DepthMenu` Radix pattern); the
-PreviewModal ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)) renders
+PreviewModal (`DocumentsScreen.tsx`) renders
 the meter (augmenting the truncated banner), the tier selector (only with a ready deep index), and
 `SourcesDisclosure` provenance — fetched via `documentCoverage` on open; the chat
-[`Transcript`](apps/desktop/src/renderer/chat/Transcript.tsx) labels every grounded (cited) answer
+`Transcript` labels every grounded (cited) answer
 mode `relevance` ("the most relevant passages — not the whole document"); a **"Build deep index"** /
 **"Re-index for deep index"** (C4) / **"Deeply indexed"** badge row action on `DocumentsScreen`
 (`onBuildDeepIndex`/`onSummarizeTier`). **i18n**: new EN+DE `coverage.*` + `docs.deepIndex.*` +
@@ -8452,11 +8460,11 @@ mode `relevance` ("the most relevant passages — not the whole document"); a **
 built (Phases 3–4):** `extraction_records`/`extract.ts`, the "list every X" router rule, symmetric
 compare, node embeddings (node vectors stay NULL — L6). **Tests:** typecheck clean, build OK,
 `npm test` **1306 passed / 25 skipped** (+22: 8 integration in
-[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) — ready-tree
+`whole-doc-analysis.test.ts` — ready-tree
 whole-document coverage at tier, reachable-leaves==chunk-count + leaf provenance [M2], tree-less
 capped truncated/whole, building reports partial-not-ready [C1], Tier 1/2/3 = 0/1/bounded calls +
 absent-param-defaults-Tier-1; 10 renderer in
-[`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx) — meter honesty [relevance label,
+`Coverage.test.tsx` — meter honesty [relevance label,
 ready whole+tier, building never 100%, capped never complete], chat relevance label on/off, Build-deep-
 index starts a `tree` task, C4 "Re-index first" re-indexes not a dead build, ready "Deeply indexed"
 badge, PreviewModal meter+selector from `analysis:coverage`; +2 GermanSmoke — deep-index action +
@@ -8471,43 +8479,43 @@ summary tree).** First phase of `docs/whole-document-analysis-plan.md`
 to ingest time via a persistent hierarchical summary tree (RAPTOR-lite), and makes the
 1 000-chunk cap HONEST. Offline, one model job at a time, node vectors deferred (NULL) to Phase 4.
 **(1) Cap honesty [C1/C2/C4/M13].** New single source of truth `MAX_CHUNKS_PER_DOCUMENT`
-([`chunker.ts`](apps/desktop/src/main/services/ingestion/chunker.ts)); `processDocument`
-([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)) now chunks with
+(`chunker.ts`); `processDocument`
+(`ingestion/index.ts`) now chunks with
 `maxChunks = cap + 1` and **rejects an over-cap document** with a persist-canonical
 `main.ingest.tooManyChunks` **BEFORE** the destructive `DELETE FROM chunks` (M13 — a re-index of
 an over-cap doc keeps its existing searchable chunks; the gate fails closed), and stamps a
 `documents.fully_chunked` marker at the ONE indexing-success site (every path funnels through it —
 C4), so "the stored chunks ARE the whole document" is provable. A legacy `fully_chunked IS NULL`
-doc must re-index before any deep index / 100 %-coverage. **(2) Schema** ([`db.ts`](apps/desktop/src/main/services/db.ts)):
+doc must re-index before any deep index / 100 %-coverage. **(2) Schema** (`db.ts`):
 additive `tree_nodes` / `tree_edges` (polymorphic `child_id`, NO FK to chunks) / `summary_cache`
 tables in `SCHEMA`; `documents.tree_status` / `tree_meta_json` / `fully_chunked` columns via
 `ensureColumn`; `reconcileStuckTrees` (mirror of `reconcileStuckDocuments`, flips a stuck
 `building` → `pending`); **tree teardown** in the chunk-replacement block (`DELETE FROM tree_nodes`,
 edges cascade via `parent_id`; `tree_status` → `stale` when a tree existed — H1/H2). Everything
 inherits whole-file encryption; node summaries / cache are CONTENT (never logged/audited).
-**(3) Model-slot arbiter [H9/H10/M9]** (new [`services/analysis/model-slot-arbiter.ts`](apps/desktop/src/main/services/analysis/model-slot-arbiter.ts)):
+**(3) Model-slot arbiter [H9/H10/M9]** (new `services/analysis/model-slot-arbiter.ts`):
 the single in-process owner of the chat runtime slot for a YIELDING build — `shouldYield`/`reacquire`
 (builder PARKS, does NOT return) / `acquireForChat` (chat requests a pause, awaits the handoff,
 gets a release fn) / `abort` (rejects the parked reacquire on cancel/lock/quit). **(4) Yielding
-per-node build** (new [`services/analysis/tree-build.ts`](apps/desktop/src/main/services/analysis/tree-build.ts)):
+per-node build** (new `services/analysis/tree-build.ts`):
 packs chunks → summarizes each group into one fresh node → recurses to one root; **one
 `try{BEGIN…COMMIT}catch{ROLLBACK;rethrow}` per node** (H11 — a thrown insert never poisons the
 shared connection); summary text from the content cache keyed `(content_hash, model_id)` (C3 — a
 rebuild/resume over a warm cache costs **0** chat calls; node identity is a fresh row per
 position so boilerplate can't collapse the tree); **node vectors NULL** (L6 — embedded lazily in
 Phase 4); resume = discard partial tree + rebuild from cache; model pinned via `tree_meta.modelId`
-(M12). **(5) DocTaskManager** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+(M12). **(5) DocTaskManager** (`doctasks/manager.ts`):
 new `tree` DocTaskKind (validates `fully_chunked`), `runTreeBuild` (registers/unregisters with the
 arbiter), `isYieldingBuildActive` / `acquireChatSlot` / `abortActiveBuild`, and
 `maybeEnqueueTreeBuild` (auto-offer, size-gated on `planSummaryWindows().truncated`, runtime-gated →
 `pending`). `runSummary` now **serves the ready tree root verbatim** (`truncated:false`, 0 extra
 calls — M1) and falls back to the capped map-reduce when there is no tree. **(6) Chat handoff**
-([`chat-stream.ts`](apps/desktop/src/main/ipc/chat-stream.ts) now **async** + branches on the
+(`chat-stream.ts` now **async** + branches on the
 running task's kind; `withChatStream` acquires the slot before any model call and releases it in
 `finally`; callers `registerChatIpc`/`registerRagIpc` await it). Lock/quit
-([`registerWorkspaceIpc.ts`](apps/desktop/src/main/ipc/registerWorkspaceIpc.ts), `index.ts`
+(`registerWorkspaceIpc.ts`, `index.ts`
 `shutdown`) call `abortActiveBuild()` before the sidecar teardown (M9); `listDocuments`
-([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)) reconciles stuck trees when
+(`registerDocsIpc.ts`) reconciles stuck trees when
 no task is live, and import/reindex call `maybeEnqueueTreeBuild`. **i18n:** `main.ingest.tooManyChunks`
 + `docs.task.treeBusy`/`treeBusyTitle` (EN+DE, type-enforced parity; "deep index" is the user word —
 no chunk/node/tree jargon; German flagged for the standing **D-L7** review); `tooManyChunks` added
@@ -8515,9 +8523,9 @@ to the D-L4 display map. **Docs:** plan status banner → "Phase 1 shipped"; `kn
 (over-cap rejection behavior change + deep-index coverage note). **NOT built (Phases 2–4):** the
 coverage-meter UI, `extraction_records`/`extract.ts`, symmetric compare, node embeddings.
 **Tests:** typecheck clean, build OK, `npm test` **1284 passed / 25 skipped** (+21: 6 unit
-[`model-slot-arbiter.test.ts`](apps/desktop/tests/unit/model-slot-arbiter.test.ts) — pause/resume,
+`model-slot-arbiter.test.ts` — pause/resume,
 last-chat-resumes, abort-rejects, no-hang-on-finish, idempotent release; 15 integration
-[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) — over-cap
+`whole-doc-analysis.test.ts` — over-cap
 rejection + never-partial, M13 re-index-fails-closed, `fully_chunked`, structural root→every-leaf
 incl. the last chunk [M11], tree-first summary [M1], tree-less fallback, warm-cache rebuild = 0
 calls + re-index→stale→cache reuse despite chunk-id churn [C3/H1/H2], C4 legacy gate, H11
@@ -8580,7 +8588,7 @@ _(prior) 2026-06-14 — **Bugfix: document analysis failed with `HTTP 400` on sp
 text (beta-tester report).** Symptom: every document **summary** and **document answer** failed
 with `Chat request failed: HTTP 400` while plain chat worked, across two models (qwen3-4b-2507 /
 4096 ctx and qwen3-8b / 8192 ctx). **Root cause:** `tokenize`/`approxTokenCount`
-([`chunker.ts`](apps/desktop/src/main/services/ingestion/chunker.ts)) counted whitespace WORDS, so
+(`chunker.ts`) counted whitespace WORDS, so
 text with no word breaks — CJK/Thai, or a glued PDF/extraction run — collapsed to ~1 "token". That
 silently defeated every context budget (chunker, summary/translation/compare windows, the RAG cap),
 so the assembled prompt overflowed the model context and llama-server returned
@@ -8608,7 +8616,7 @@ llama-runtime error-body + `isExceedContextError`, `collapseToAlternating`). No 
 
 _(prior) 2026-06-14 — **D-L7 German-copy review (document-organization slice) + UX-3.**
 Closing the i18n/a11y items deferred by the doc-org audit remediation. Surveyed the German catalog
-against the pinned informal-„du" glossary ([`de.ts`](apps/desktop/src/shared/i18n/de.ts) header, D-L7):
+against the pinned informal-„du" glossary (`de.ts` header, D-L7):
 the Phase D/E/F doc-org copy was clean **except** for **7 formal „Sie/Ihre" strings**, all now recast
 informal — `chat.scope.sourcesTitle` („Wähle deine Quellen", **UX-2**), `chat.scope.librarySourceHint`
 („Deine gesamte Wissensbasis", **UX-2**), `chat.scope.archivedFallback`, `docs.project.deleteBody`/
@@ -8617,7 +8625,7 @@ other `Sie/Ihr` hits at `de.ts:714/839/940` are the pronoun „it/its", not addr
 six `D-L7-Review ausstehend`/`…markiert` markers on the doc-org blocks (de.ts + en.ts) now read
 **`erledigt (2026-06-14)`**. **UX-3 (a11y):** attachment processing/added is now announced on the
 keyboard/picker path — a visually-hidden polite **`role="status"` aria-live** region in the chat surface
-([`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx)) driven by a new
+(`ChatScreen.tsx`) driven by a new
 **`chat.attach.added`** key (EN „Added {name} to this chat" / DE „{name} zu diesem Chat hinzugefügt");
 processing reuses `chat.attach.processing`; failures stay on `ErrorBanner`. en/de key parity stays
 type-enforced. **Tests:** typecheck clean, **`npm test` 1243 passed / 25 skipped** (count unchanged;
@@ -8634,7 +8642,7 @@ incl. the remediation banner is recoverable via
 Implementation pass fixing the audit's correctness bugs + adding the tests that should have caught them.
 **FIXED (closed):** **DM-1 (High)** — M1 crash-resume now files by pending destination on EVERY
 indexing success: `fileFromPendingDestination` is called inside
-[`reindexDocument`](apps/desktop/src/main/services/ingestion/index.ts) (not only the import loop), so a
+`reindexDocument` (not only the import loop), so a
 crash-interrupted Project/Temporary/conversation import that the user re-indexes lands in its intended
 destination, not Library; the helper now also **skips generated docs** (`origin_json` set ⇒ never filed,
 D3/N1) so re-indexing a translation can't sweep it into Library. **DM-2 (Medium)** — generated
@@ -8654,7 +8662,7 @@ FTS scope predicate moved from the JOIN `ON` to `WHERE` (param order preserved; 
 (Low)** — clarifying comment (inheriting `includeArchived` is correct/consistent with `documentsInScope`;
 no leak); no risky pin. **DEFERRED (with reason):** **UX-2** (formal "Sie/Ihre") + **UX-3** (attachment
 `aria-live`, needs a new German "added" string) — both folded into the pending **D-L7 German-copy review**
-rather than fixed ad hoc; noted in [`known-limitations.md`](docs/known-limitations.md). RAG-4/DOC-2/4 etc.
+rather than fixed ad hoc; noted in `known-limitations.md`. RAG-4/DOC-2/4 etc.
 are correct-by-spec or stale-but-permitted nits (left as-is). **Tests:** typecheck clean, build OK,
 `npm test` **1243 passed / 25 skipped** (+8): **TEST-1** (real crash-resume flow through the
 `reindexDocument` IPC — reconcile→failed→re-index→asserts PROJECT membership; fails pre-DM-1) + a
@@ -8681,17 +8689,17 @@ bill/statement·Rechnung/Beleg/Quittung/Kontoauszug, contract/agreement·Vertrag
 existing project else a `newProject` with a canonical English name). **Subjects EXCLUDED** (D3/§7):
 generated (`origin != null`), Temporary/archived lifecycle, and already-project-filed docs — and archived
 projects are never suggestion targets. Tolerant: missing/empty metadata ⇒ no suggestion, never throws;
-**deterministic** (no clock, no randomness). **Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)):
+**deterministic** (no clock, no randomness). **Data contract** (`shared/types.ts`):
 new `FilingRuleId`/`FilingTarget`/`FilingSuggestion`/`FilingSuggestionResult` (reason is an i18n KEY +
 params, NOT free text); new `AppSettings.dismissedFilingSuggestions: string[]` (DEFAULT `[]`) — dismissals
 persist in the **existing settings JSON blob, NOT a new `documents` column** (additive, tolerant, sticky
-across restart). **IPC** ([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)): new
+across restart). **IPC** (`registerDocsIpc.ts`): new
 **read-only `docs:filingSuggestions`** ⇒ `suggestFilingForDocuments(listDocuments, listCollections)`;
-mirrored in [`preload`](apps/desktop/src/preload/index.ts). **Apply reuses existing channels** (existing ⇒
+mirrored in `preload`. **Apply reuses existing channels** (existing ⇒
 `docs:addToCollection`; new ⇒ `collections:create` + `docs:addToCollection`); no new audit event — applying
 records only `documents_added_to_collection` (id/type/count), so the suggestion REASON
 (folder/pattern/project name) is **never** logged. **Renderer**
-([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)): a quiet, dismissible
+(`DocumentsScreen.tsx`): a quiet, dismissible
 per-row chip ("Suggested project: Tax 2025 — Apply?" + a localized reason line + **Apply**/**Dismiss**) on
 unfiled docs (its natural home is the Phase-E **Unfiled** view, also shown in All); Apply files via the
 membership path then the doc leaves Unfiled; Dismiss hides it + persists via `updateSettings`; suppressed
@@ -8716,14 +8724,14 @@ called, no network touched, and the audit log records only ids/counts — never 
 name. **DOC-LIFECYCLE CLOSE-OUT (DONE — owner-confirmed 2026-06-14):** the whole v1 feature (Phases A–F;
 E.2 owner-deferred) was condensed into §-numbered design records and
 `docs/document-organization-plan.md` was **deleted** (full original in git: `git show
-477f803:docs/document-organization-plan.md`). The records: **[`docs/architecture.md`](docs/architecture.md)
+477f803:docs/document-organization-plan.md`). The records: **`docs/architecture.md`
 "Document organization — design record" §1–§8** (decisions D1/D2/D3 + the audit fixes, data model,
-services, IPC, generated provenance, audit, trade-offs); **[`docs/rag-design.md`](docs/rag-design.md) §13**
+services, IPC, generated provenance, audit, trade-offs); **`docs/rag-design.md` §13**
 (the scope/retrieval half — `DocumentScope`, `resolveScope`, the arg-5 `RetrievalScope` union H3, the
 membership-OR-id SQL filter, C1 archive, D3/N1 generated exclusion, N2 filename auto-scope, M2 scoped
-re-index); **[`docs/user-guide.md`](docs/user-guide.md) §7** (the user-facing Library/Projects/Temporary/
+re-index); **`docs/user-guide.md` §7** (the user-facing Library/Projects/Temporary/
 Generated/Archived + source picker + filing suggestions copy). The two in-code doc pointers
-([`types.ts`](apps/desktop/src/shared/types.ts), [`db.ts`](apps/desktop/src/main/services/db.ts)) and the
+(`types.ts`, `db.ts`) and the
 `known-limitations.md` C4 note were repointed to the new records (existing inline "plan §x" comments
 resolve via git history). **Next:** owner-gated Phase E.2 (explicit retention + Temporary review
 dashboard); local-AI filing suggestions (owner-gated); or new work._
@@ -8732,7 +8740,7 @@ _(prior) 2026-06-14 — **Document organization — Phase E (Smart views + gener
 Fifth phase of `docs/document-organization-plan.md` (esp. §5,
 §7.5/§7.6, §8.2, §12.1, §15.3, §16, §17, §19, §20 "Phase E"). **Additive, query-time only — no new
 column, no migration, no parser/chunker/embedder change, no new audit events.**
-**Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `LARGE_FILE_BYTES` (10 MB),
+**Data contract** (`shared/types.ts`): new `LARGE_FILE_BYTES` (10 MB),
 `SmartListView`/`SmartViewPredicate`, a pure **`matchesSmartView(doc, view)`** (the single source of truth
 for the smart-view predicates so the renderer rail and the `docs:list` filter never drift), and
 `GeneratedStaleness`/`GeneratedStaleReason` + a pure **`generatedStaleness(doc, sources)`**.
@@ -8741,9 +8749,9 @@ for the smart-view predicates so the renderer rail and the `docs:list` filter ne
 Library/Temporary builtins don't count as filed), Needs re-index (`staleEmbeddings`), Large files
 (`sizeBytes >= LARGE_FILE_BYTES`), Failed imports (`status='failed'`), Audio (audio mime / generated
 transcript), OCR/scanned (`ocr != null || scanDetected`). **IPC**
-([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)): `DocumentListFilter.smart` widened
+(`registerDocsIpc.ts`): `DocumentListFilter.smart` widened
 to `SmartListView`; `filterDocuments` routes `recent`⇒createdAt-desc order, `all`⇒no-op, else
-`matchesSmartView`. **Renderer** ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)):
+`matchesSmartView`. **Renderer** (`DocumentsScreen.tsx`):
 `DocSection` union + `inSection` extended (generated/archived/unfiled/needsReindex/large/failed/audio/ocr
 delegate to `matchesSmartView`; `recent` ordered in `visibleDocs`); a **Views** rail group reusing the
 projects-group layout so the existing 760px reflow applies (L4, no horizontal page scroll). **Generated
@@ -8762,7 +8770,7 @@ embedding). **Decisions locked:** smart views are query-time predicates, **not**
 (§14.3 — needs the reserved `expires_at` column, a review-before-delete UI, default Never, must never touch
 Library/generated/project-filed docs, must shred sidecars under an encrypted workspace); `last_used_at`
 (§8.2 L2). **Tests:** typecheck clean, build OK, `npm test` **1216 passed / 25 skipped** (+16: new
-[`smart-views.test.ts`](apps/desktop/tests/unit/smart-views.test.ts) [each predicate incl. Unfiled
+`smart-views.test.ts` [each predicate incl. Unfiled
 project-vs-Library-only + the 7 staleness cases]; `docs-ipc` smart-view filter + recent ordering;
 `DocumentsScreen` smart-rail filter + staleness-badge-on-stale-not-fresh; GermanSmoke extended for the new
 keys). No version bump. **Deliverable proof (covered by tests):** the Documents screen exposes the full
@@ -8775,25 +8783,25 @@ _(prior) 2026-06-14 — **Document organization — Phase D (Generated provenanc
 Fourth phase of `docs/document-organization-plan.md` (esp. §2.3, §7.4,
 §15.1–§15.3, §16, §17, §19, §20 "Phase D"; decisions D3/M4 + audit N1). Gives generated
 translation/comparison documents **structured provenance** and locks the **no-membership** invariant.
-**Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `GeneratedProvenance`
+**Data contract** (`shared/types.ts`): new `GeneratedProvenance`
 (`{kind:'summary'|'translation'|'compare'|'transcript'|'other', sourceDocumentIds[], sourceCollectionIds?,
 modelId?, createdAt}`) + `GeneratedKind`; `DocumentOrigin` widened to the union
 `TranslationOrigin | CompareOrigin | GeneratedProvenance` (reuses `origin_json` — **no new column**); a new
 **`provenanceView(origin)`** normalizer collapses old+new shapes to `{kind, sourceDocumentIds}` so the UI
-has one code path. **Read** ([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)):
+has one code path. **Read** (`ingestion/index.ts`):
 `parseOrigin` now reads the structured shape FIRST (by `kind`+`sourceDocumentIds`, narrowed via a
 `GENERATED_KINDS` tuple), then falls back to the legacy `type`/`translatedFrom`/`comparedFrom` branches
 **unchanged** (old rows keep parsing); malformed ⇒ null, never throws (tolerant — `createdAt` defaulted to
-`''` when absent). **Write** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+`''` when absent). **Write** (`doctasks/manager.ts`):
 a new `buildProvenance(kind, sourceIds, modelId)` builds the `GeneratedProvenance` translation/compare now
 write (capturing `modelId=runtime.modelId` + a de-duped `sourceCollectionIds` snapshot via new
-[`collectionIdsForDocument`](apps/desktop/src/main/services/collections.ts)); `materializeDocument`'s
+`collectionIdsForDocument`); `materializeDocument`'s
 `origin` param is now `GeneratedProvenance`. **N1/D3 locked:** a generated row still gets **NO**
 `document_collections` membership at all (doctasks call `createQueuedDocument`+`processDocument` directly,
 never `fileFromPendingDestination`/`fileIntoLibraryIfUnfiled`), so it is **structurally excluded** from
 every collection-derived scope and reachable only via explicit `documentIds` (or download + re-import).
 `role='generated'` stays a reserved-unused enum string; the `role <> 'generated'` predicate stays dropped.
-**Renderer** ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)):
+**Renderer** (`DocumentsScreen.tsx`):
 `provenanceLine` + the PreviewModal origin line now render from `provenanceView` (kind+source ids), not the
 parsed display strings — "Translated from …" / "Comparison of … and …" / new "Summary of …" /
 "Generated from …"; source titles still resolve tolerantly (deleted source ⇒ "a removed document"). The
@@ -8819,14 +8827,14 @@ _(prior) 2026-06-14 — **Document organization — Phase C (Temporary analysis)
 Third phase of `docs/document-organization-plan.md` (esp. §2.5, §7.3,
 §11.1–§11.4 D2, §13.1/§13.3/§13.5, §14.1/§14.2, §16, §17, §19, §20 "Phase C"; audit C3/H1/H2/M1/N3/N4/N12).
 Builds the **net-new chat attach / drag-drop intake** + import-destination filing over the Phase-A/B
-backend. **Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `ImportDestination`
+backend. **Data contract** (`shared/types.ts`): new `ImportDestination`
 (`{kind:'library'} | {kind:'collection';collectionId} | {kind:'temporary'} | {kind:'conversation';conversationId}`)
 + `ImportOptions` (`{destination?, preserveRelativePaths?}`). **Ingestion**
-([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)): `createQueuedDocument(db, path,
+(`ingestion/index.ts`): `createQueuedDocument(db, path,
 opts)` now persists the resolved destination into `documents.pending_destination_json` **at queue time**
 (M1) + folder `source_relative_path`/`source_folder_label`; new `expandPathsWithSource` (N12 folder
 metadata, L3 basename fallback); a bare-string 3rd arg still means `displayTitle` (doctasks caller
-unchanged). **Filing** ([`collections.ts`](apps/desktop/src/main/services/collections.ts)): new
+unchanged). **Filing** (`collections.ts`): new
 `fileFromPendingDestination` (the single indexing-success entry point — reads `pending_destination_json`,
 files, clears; NULL ⇒ Library default so old options-less imports stay byte-for-byte; also the crash-resume
 path), `fileDocumentByDestination`, `linkConversationDocument` (**FK-guarded N3** — verifies the conversation
@@ -8836,18 +8844,18 @@ A conversation/temporary destination ⇒ Temporary membership + `lifecycle='temp
 writes the `conversation_documents` link (C3) — **never** `scope_json` (H4/N5). **IPC/preload**:
 `docs:import` extended to `(paths, options?)` (the loop now files via `fileFromPendingDestination`, replacing
 the Phase-B blanket `fileIntoLibraryIfUnfiled`); new **`chat:listAttachments`** (the conversation's
-`conversation_documents` docs for the footer); both mirrored in [`preload`](apps/desktop/src/preload/index.ts).
+`conversation_documents` docs for the footer); both mirrored in `preload`.
 A renderer-untrusted `ImportDestination` is sanitized in the IPC (`sanitizeDestination` ⇒ Library fallback).
-**Renderer**: [`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx) gains a chat-surface
+**Renderer**: `ChatScreen.tsx` gains a chat-surface
 **drag-drop target** + a Composer **📎 attach** picker (`onAttach`), the **intake** (`attachFiles` →
 `importDocuments(paths,{destination:{kind:'conversation',…}})`), **plain-chat drop routing** (§13.5/H2:
 documents chat ⇒ attach in place; empty ⇒ switch in place to a new documents conversation; an in-progress
 plain chat ⇒ **create+commit a NEW documents conversation before** the import references its id (N3), focus
 it, toast — **never** mutate/clear the plain chat), and the **pending chip → live attachment** transition
-(N4, driven by the existing `getImportJob` polling); [`ScopePopover.tsx`](apps/desktop/src/renderer/chat/ScopePopover.tsx)
+(N4, driven by the existing `getImportJob` polling); `ScopePopover.tsx`
 shows a read-only **"Files in this chat"** line (attachments always unioned in, NOT removable chips; a
 processing one is a pending chip) + a "· N file(s) in this chat" footer suffix;
-[`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx) "Move to project" on a
+`DocumentsScreen.tsx` "Move to project" on a
 **Temporary** doc now also makes it permanent + drops Temporary membership (§14.1; Keep-in-Library already did).
 **i18n**: new flat `chat.attach.*` keys (button/drop/processing/newDocChat/failed) EN+DE — **German copy
 flagged for the D-L7 review.** **Decisions locked:** temporary attachments live in `conversation_documents`
@@ -8868,24 +8876,24 @@ Temporary, and is NOT in Library until the user explicitly Keeps it. **Next:** P
 _(prior) 2026-06-14 — **Document organization — Phase B (Projects + composite scope, D1).**
 Second phase of `docs/document-organization-plan.md` (esp. §0.1 D1,
 §8.3, §10.1, §12, §13, §16). Builds the user-facing surface over the Phase-A backend.
-**Data contract** ([`chat.ts`](apps/desktop/src/main/services/chat.ts)): `Conversation` gains
+**Data contract** (`chat.ts`): `Conversation` gains
 `collectionId: string|null` + `scope: DocumentScope|null` (parsed tolerantly from `scope_v2_json` via the
-relocated, now-exported `parseDocumentScope` in [`collections.ts`](apps/desktop/src/main/services/collections.ts));
+relocated, now-exported `parseDocumentScope` in `collections.ts`);
 `createConversation` gains `opts.collectionId`/`opts.scope`; new `setScope` (persists `scope_v2_json`,
 empty scope = explicit "All documents", null clears) + `setConversationCollection` writers.
 `updateConversationScope`'s legacy replace semantics are **unchanged** (H4/C3). **IPC/preload** (plan §16):
-new [`registerCollectionsIpc.ts`](apps/desktop/src/main/ipc/registerCollectionsIpc.ts)
-(`collections:list/create/rename/setArchived/delete`); [`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)
+new `registerCollectionsIpc.ts`
+(`collections:list/create/rename/setArchived/delete`); `registerDocsIpc.ts`
 gains `docs:addToCollection`/`removeFromCollection`/`setLifecycle` + a `docs:list` filter
 (`{collectionId?,lifecycle?,smart?}`) + **imports default-file into Library** on indexing success
 (`fileIntoLibraryIfUnfiled`, zero-membership-guarded so re-index never re-files a project-only doc, keeping
-"Library == all"); [`registerChatIpc.ts`](apps/desktop/src/main/ipc/registerChatIpc.ts) gains
+"Library == all"); `registerChatIpc.ts` gains
 `chat:setScope`/`setCollection` + the two `createConversation` opts. "Move" = add + remove (no channel).
 **delete-project two modes** (plan §12.3): `membershipOnly` (CASCADE) and `withDocuments` (deletes ONLY
 genuinely project-only docs — the C2 `projectOnlyDocumentIds` predicate counts ALL memberships so a Library
 member is spared; reuses ingestion `deleteDocument`, which **now `shredFile`s** the stored copy instead of
-`rmSync` — M5). Every channel mirrored 1:1 in [`preload/index.ts`](apps/desktop/src/preload/index.ts).
-**Live ask path** ([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): now calls
+`rmSync` — M5). Every channel mirrored 1:1 in `preload/index.ts`.
+**Live ask path** (`registerRagIpc.ts`): now calls
 `resolveScope(db, conversationId)`, passes the `RetrievalScope` to `generateGroundedAnswer` via `opts.scope`
 (so `corpusNeedsReindex` is scope-aware — M2), and runs filename auto-scope **within** the resolved scope
 (`documentsInScope` + `buildScopeFilter`), skipping it only when `hasExplicitDocSelection` (N2); the
@@ -8893,24 +8901,24 @@ STREAM.scope notice is kept. **DocumentInfo** gains `collections[]` (joined in `
 (NULL⇒permanent), `sourceFolderLabel` (NOT `lastUsedAt` — L2). **Audit** (plan §17): `collection_created/
 renamed/archived/deleted` + `documents_added_to_collection/removed_from_collection/document_lifecycle_changed`
 — **id/type/count ONLY, never the project NAME** (asserted by the extended `audit-ipc` sentinel-grep with a
-project-name sentinel). **Renderer**: [`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)
+project-name sentinel). **Renderer**: `DocumentsScreen.tsx`
 left **section rail** (Library/Projects/Temporary/Generated/Archived/All — responsive collapse at 760px) +
 membership chips + lifecycle pills + an Organize per-row menu + bulk move/lifecycle + project
-create/rename/archive/delete (two-mode confirm); [`ScopePopover.tsx`](apps/desktop/src/renderer/chat/ScopePopover.tsx)
+create/rename/archive/delete (two-mode confirm); `ScopePopover.tsx`
 is now a **multi-select source picker** (Library + each non-archived project + "Specific documents…" +
 one-tap "All documents"; Temporary/Generated not pickable — N10/D3) writing a persisted `DocumentScope`;
 the composer footer summarizes the composed union (`scopeFooterLabel`);
-[`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx) derives the picker scope, persists via
+`ChatScreen.tsx` derives the picker scope, persists via
 `setConversationScope`, project-defaults the anchor on create, and shows the dangling/archived-project →
-Library fallback notice (§13.4); [`ConversationList.tsx`](apps/desktop/src/renderer/chat/ConversationList.tsx)
+Library fallback notice (§13.4); `ConversationList.tsx`
 groups by the creation-anchor `collection_id` with an "Other / Library" group when any chat is anchored
 (`groupByProject`, additive — date grouping otherwise unchanged, N8). **i18n**: new flat `docs.section.*`/
 `docs.action.*`/`docs.project.*`/`chat.scope.*`/`chat.list.otherGroup`/`diag.audit.collection_*` keys in
-[`{en,de}.ts`](apps/desktop/src/shared/i18n) — **German copy flagged for the D-L7 review.** **Forbidden UI
+`{en,de}.ts` — **German copy flagged for the D-L7 review.** **Forbidden UI
 words** (bucket/vector/scope_json/FTS/collection_id/membership/embedding) avoided. **Out of scope (Phase C+):**
 chat attach/drag-drop INTAKE + `conversation_documents` writes + plain-chat drop; generated provenance;
 smart views/retention. **Tests:** typecheck clean, build OK, `npm test` **1179 passed / 25 skipped** (+16:
-new [`collections-ipc.test.ts`](apps/desktop/tests/integration/collections-ipc.test.ts) [CRUD, membership+
+new `collections-ipc.test.ts` [CRUD, membership+
 lifecycle+filtered list, C2 delete-with-documents spares a Library member, `chat:setScope` round-trip across
 a DB reopen, resolveScope-in-IPC filename auto-scope + N2 skip] + chat scope/collection round-trip & writers &
 C2 predicate in `collections.test.ts` + the audit sentinel/event extensions + renderer rail/project/picker
@@ -8922,7 +8930,7 @@ an app restart (`scope_v2_json`). **Next:** Phase C — Temporary analysis (chat
 _(prior) 2026-06-14 — **Document organization — Phase A (Collections core, backend
 foundation).** First phase of `docs/document-organization-plan.md`.
 Adds a collection-membership layer over the existing pipeline — one stored file, one chunk set,
-one vector set per document; organization is metadata. **Schema** ([`db.ts`](apps/desktop/src/main/services/db.ts)):
+one vector set per document; organization is metadata. **Schema** (`db.ts`):
 three additive tables in the `SCHEMA` constant — `collections`, `document_collections`,
 `conversation_documents` (the last two with **`ON DELETE CASCADE` on both FKs**, plan C4: with
 `PRAGMA foreign_keys = ON` a pre-feature app's direct `DELETE FROM documents` would otherwise hit an
@@ -8934,28 +8942,28 @@ since the `ensureColumn` DDL grammar forbids DEFAULT/NOT NULL). **Migration** (`
 English names, UI localizes by type) and back-fills Library membership for every `status='indexed'`,
 **`origin_json IS NULL`** (generated docs get NO membership — D3/N1), **unfiled** document (the
 `NOT EXISTS` guard makes re-open a no-op; the `status='indexed'` gate is M1). **Services** (new
-[`collections.ts`](apps/desktop/src/main/services/collections.ts)): CollectionService CRUD
+`collections.ts`): CollectionService CRUD
 (create/rename/archive/delete — built-ins undeletable/unarchivable, delete is membership-only via
 CASCADE) + membership (add/remove, idempotent `ON CONFLICT DO NOTHING`) + `docLifecycle` coalesce +
 **`resolveScope`** (a conversation's stored scope → a `RetrievalScope`: `scope_v2_json` composite ⇒
 authoritative union; else legacy `scope_json`⇒specific docs / `collection_id`⇒project / else Library
 default; chat attachments from `conversation_documents` always unioned in; `hasExplicitDocSelection`
 set from hand-picks BEFORE merging attachments — N2; tolerant parse → never throws). **Retrieval**:
-new neutral [`retrieval-scope.ts`](apps/desktop/src/main/services/retrieval-scope.ts) `buildScopeFilter`
+new neutral `retrieval-scope.ts` `buildScopeFilter`
 (membership-OR-id UNION + document-level archived exclusion, plan §10.2/C1/D1) shared by `VectorIndex`
-([`embeddings/index.ts`](apps/desktop/src/main/services/embeddings/index.ts)), `keywordSearchChunks`
-([`rag/hybrid.ts`](apps/desktop/src/main/services/rag/hybrid.ts)), and scope-threaded `corpusNeedsReindex`
+(`embeddings/index.ts`), `keywordSearchChunks`
+(`rag/hybrid.ts`), and scope-threaded `corpusNeedsReindex`
 (M2); `retrieve`'s arg-5 is now a normalized union **`string[] | RetrievalScope | null`** (H3 — a bare
 array/null still means legacy doc-ids, so **every existing positional caller/test is byte-identical**),
 `generateGroundedAnswer` gains `opts.scope`. **Data contract:** `RetrievalScope`, `DocumentScope`,
 `Collection`/`CollectionType`/`DocumentCollectionRole`/`DocumentLifecycle` in
-[`shared/types.ts`](apps/desktop/src/shared/types.ts). **Deliberately deferred to later phases:** no IPC/
+`shared/types.ts`. **Deliberately deferred to later phases:** no IPC/
 preload/renderer surface, no `Conversation.scope`/`collectionId` fields, no project UI, no chat attach
 UI, no delete-with-documents, no audit events for collection ops, no `last_used_at` (L2) — Phase A is
 backend-only and leaves observable behaviour **identical** (Library == all documents on day one). The
-live ask path ([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)) is **unchanged**;
+live ask path (`registerRagIpc.ts`) is **unchanged**;
 `resolveScope` is built + tested but wired into the IPC in Phase B. **Docs:** version-skew note added to
-[`known-limitations.md`](docs/known-limitations.md); the plan stays open (condensed into §-records +
+`known-limitations.md`; the plan stays open (condensed into §-records +
 deleted only when the whole feature ships — CLAUDE.md doc-lifecycle rule). **Tests:** typecheck clean,
 build OK, `npm test` **1163 passed / 25 skipped** (+21: new `collections.test.ts` [seed/backfill,
 CRUD, membership idempotency, CASCADE version-skew, resolveScope, no-network] + `rag-collections.test.ts`
@@ -9067,7 +9075,7 @@ loading state (a post-download cold re-hash isn't in that state — out of scope
 
 _(prior) **Onboarding follow-ups: whisper auto-install, embeddings card,
 policy cleanup, responsive screens (0.1.14 cont.).** (1) **Engine installer generalized to all
-families.** [`runtime-download.ts`](apps/desktop/src/main/services/runtime-download.ts) now drives
+families.** `runtime-download.ts` now drives
 an `ENGINE_FAMILIES` list — `llama_cpp` (chat, `llama-server`) **and `whisper_cpp` (voice,
 `whisper-cli`)`; one install fetches every missing family for the host (a family with no host build,
 e.g. whisper on mac/linux, is skipped). `EngineStatus` gained `missingFamilies`; the banner copy
@@ -9093,7 +9101,7 @@ OK, `npm test` **1133 passed / 25 skipped** (+2 engine family tests)._
 _(prior) 2026-06-13 — **Onboarding fixes: network-on-by-default, in-app engine
 installer, voice discoverability.** Three issues found testing the first-run flow.
 **(1) Downloads possible by default:** `DEFAULT_SETTINGS.allowNetwork` flipped `false → true`
-([`shared/types.ts`](apps/desktop/src/shared/types.ts)) so a fresh install can fetch models
+(`shared/types.ts`) so a fresh install can fetch models
 out of the box. The **policy ceiling is still authoritative** — a commercial `policy.json`
 with `allow_model_downloads: false` (or the packaged-build `STRICT_POLICY` fallback) keeps the
 app offline regardless; telemetry stays hardcoded off. Updated `smoke.test.ts` +
@@ -9102,8 +9110,8 @@ app offline regardless; telemetry stays hardcoded off. Updated `smoke.test.ts` +
 setting-off gate is still exercised. **(2) In-app engine installer (the real fix for "I
 downloaded a model but it said mock mode"):** the model downloader fetches WEIGHTS only — without
 the `llama-server` engine binary a started model falls back to the demo runtime
-([`runtime/factory.ts`](apps/desktop/src/main/services/runtime/factory.ts) — "no llama-server
-binary on the drive"). New [`services/runtime-download.ts`](apps/desktop/src/main/services/runtime-download.ts)
+(`runtime/factory.ts` — "no llama-server
+binary on the drive"). New `services/runtime-download.ts`
 `EngineDownloadManager` fetches + SHA-256-verifies + extracts the host's prebuilt build from
 `runtime-sources.yaml` into `runtime/llama.cpp/<os>/` (download → verify → clean → extract →
 flatten → install marker — mirrors the canonical fetch-runtime scripts), with the network
@@ -9263,15 +9271,15 @@ design record per the CLAUDE.md doc lifecycle rule:
 - **Phase 21 retrieval quality** (hybrid FTS5 + RRF, optional reranker) —
   `docs/rag-design.md` §11 (as built) + §12 (design record, D8–D15); both manual
   measurements done (rerank smoke; `ragMinSimilarity` confirmed 0).
-- **UI polish wave (Phases 23–27)** — [`docs/design-guidelines.md`](docs/design-guidelines.md)
+- **UI polish wave (Phases 23–27)** — `docs/design-guidelines.md`
   (ADOPTED; its §11 is the rollout record incl. decisions D-UI1–4).
 - **Model catalog wave 1 + benchmark (Phases 28–29)** —
-  [`docs/model-benchmarks.md`](docs/model-benchmarks.md) (protocol + first-run results +
+  `docs/model-benchmarks.md` (protocol + first-run results +
   the §7 design record, D16–D22) + `docs/model-policy.md` (catalog + quality-aware
   recommendation + the disqualified-candidates list).
 - **Functionality wave 3 (Phases 31–38):** conversation search · vault password change ·
   document tasks + summary · translation · compare · audio transcription · dictation · OCR —
-  [`docs/architecture.md`](docs/architecture.md) "Functionality wave 3 — design record"
+  `docs/architecture.md` "Functionality wave 3 — design record"
   (decisions D23–D37 in its §13; research gates R-S1/R-T1–2/R-W1–4/R-O1–3 with their banked
   findings in its §14; the per-feature as-built sections are elsewhere in `architecture.md` +
   `security-model.md`/`model-policy.md`/`drive-layout.md`/`known-limitations.md`). The plan file
@@ -9283,9 +9291,9 @@ design record per the CLAUDE.md doc lifecycle rule:
 
 **Open:** Phase 22 (signed offline update bundles) is 🔴 blocked on a key-management design;
 Phase 30 (opt-in big slot + embeddings) has a drafted working paper
-([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); the i18n wave's
+(`docs/big-slot-embeddings-plan.md`); the i18n wave's
 German copy awaits the **user's human review pass (D-L7)** — the Phase-42 change list +
 screenshots were handed over. Release-wise the
 remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
-[`docs/known-limitations.md`](docs/known-limitations.md).
+`docs/known-limitations.md`.
 
