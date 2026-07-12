@@ -8,24 +8,20 @@ license: apache-2.0
 size_on_disk_gb: 2.9
 recommended_min_ram_gb: 8
 recommended_ram_gb: 16
-# Default 0: NOT auto-recommended yet. Two reasons — (1) it has not been through a benchmark
-# run like the Phase-29 models, and (2) the RUNTIME compatibility on the freshly-bumped b9849
-# build still needs a manual smoke (see the note below). Selectable manual pick; promote with a
-# real `recommendation_rank` only after it is both benchmarked AND confirmed to load on b9849.
-#
-# FIELD SIGNAL (issue #53, 2026-07-11): a tester reports this model as the best speed/quality
-# trade-off on a weak 16 GB laptop (weak iGPU, ~2 tok/s via the app — which is also an informal
-# load+stream datapoint for b9849, though not the §9.1 smoke). The issue asks to promote it as
-# the standard low-end pick; per model-benchmarks.md §9 that stays gated on the local grounded-QA
-# eval + the §9.1 smoke (field/public datapoints deliberately don't count).
-# PICKER MECHANICS FOR THE EVENTUAL PROMOTION (verified against recommendModelIdByRam): at rank
-# 1–2 this model wins NOTHING — qwen3-4b-instruct-q4 (rank 2, min 8, smaller on disk) takes the
-# ≤12 GB tiers on the tiebreaks, Ministral the 16–20 GB ones. Rank ≥ 3 makes it the ≤12 GB pick
-# but would ALSO steal 16/20 GB from Ministral (both carry recommended_ram_gb: 16) — so a
-# promotion that only targets the low end must retune recommended_ram_gb (needs the real
-# peak-RSS measurement) or rank it alongside a picker change (issue #53 option 2: feed the
-# benchmark's measured tok/s — now recorded per issue #52 — into the recommendation).
-recommendation_rank: 0
+# Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):
+# a subjective owner judgment that newer model generations improve on the ones they replace, so
+# the newest-generation model is recommended per tier EVEN THOUGH the #48 tester eval favors the incumbent here
+# (qwen3-4b F1 .3277 vs .2728; but F1 is length-confounded per the §9 scorer caveats, EM is
+# comparable at .9765 vs .9647, so the eval is treated as directional, not decisive). The two
+# old gates are otherwise satisfied: it HAS been through the tester eval (b9849 binary), and
+# the b9849 load gate was observed directly on 2026-07-12 (loaded + streamed through the app
+# from the portable drive, rung 1, GPU backend). The #53 field signal (best speed/quality
+# trade-off on a weak 16 GB laptop) now counts as supporting context, not the promotion basis.
+# Picker effect (verified against recommendModelIdByRam, with the full 2026-07-12 promotion
+# set): wins the ≤12 GB runnable tiers from qwen3-4b-instruct-q4 (rank 2, same min 8); does NOT
+# steal 16-20 GB because the promoted 9B (same rank 3, same recommended_ram_gb 16, bigger on
+# disk) wins that tier on the disk-size tiebreak.
+recommendation_rank: 3
 recommended_context_tokens: 4096
 # Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat
 # template honours `enable_thinking` → the Deep answer mode applies (like the original 4B).
@@ -47,13 +43,12 @@ download:
   size_bytes: 2912109728
   license_url: https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
-# ⚠️ REQUIRES THE b9849 RUNTIME SMOKE BEFORE PROMOTION: the runtime was BUMPED to llama.cpp
-# b9849 (2026-06-30, runtime-sources.yaml) specifically as the Qwen3.5 compatibility gate — the
-# old b9585 build is too old for this newer architecture. b9849 SHOULD load Qwen3.5, but that is
-# NOT yet confirmed by a local smoke on this project's drive (BUILD_STATE "Qwen3.5 Unsloth wave"):
-# do NOT promote (rank > 0) until the model is observed loading + streaming through the app on
-# b9849. The manifest is harmless either way. NOTE ALSO: upstream is a VISION model; this `.gguf`
-# runs TEXT-ONLY (the mmproj projector is not shipped), which is all our chat pipeline uses.
+# b9849 RUNTIME SMOKE: SATISFIED 2026-07-12. The runtime was bumped to llama.cpp b9849
+# (2026-06-30, runtime-sources.yaml) as the Qwen3.5 compatibility gate; this model was then
+# observed loading + streaming through the app from the portable drive on b9849 (rung 1, GPU
+# backend, 2026-07-12), and the #48 tester eval ran it on the same b9849 binary. NOTE: upstream
+# is a VISION model; this `.gguf` runs TEXT-ONLY (the mmproj projector is not shipped), which
+# is all our chat pipeline uses.
 recommended_profiles: []
 license_review:
   status: approved

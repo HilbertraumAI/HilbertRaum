@@ -22,8 +22,10 @@ function committedManifests(): ModelManifest[] {
 // The Qwen3.5 Unsloth wave (model-policy.md "Qwen3.5 Unsloth wave"): the 4B incumbent plus the
 // 9B / 27B / 35B-A3B additions, and the later fast-tier 2B / 0.8B (issue #48 closed the test
 // gap — the fast-tier pair shipped without joining these invariants). All are text-only chat
-// models, rank 0, not bundled, not auto-recommended until the offline benchmark + b9849
-// runtime smoke promote them.
+// models, not bundled. Ranks: the 4B and 9B carry rank 3 since the newest-Qwen promotion
+// (owner decision 2026-07-12, model-benchmarks.md §6.4); the rest stay rank 0 (selectable,
+// never auto-recommended). Pin BOTH so neither an accidental demotion nor a silent promotion
+// slips through.
 const QWEN35_WAVE_IDS = [
   'qwen3.5-0.8b-q6',
   'qwen3.5-2b-ud-q4kxl',
@@ -32,6 +34,16 @@ const QWEN35_WAVE_IDS = [
   'qwen3.5-27b-ud-q4kxl',
   'qwen3.5-35b-a3b-ud-q4kxl'
 ]
+
+// The committed promotion facts of the 2026-07-12 newest-Qwen decision.
+const QWEN_WAVE_RANKS: Record<string, number> = {
+  'qwen3.5-0.8b-q6': 0,
+  'qwen3.5-2b-ud-q4kxl': 0,
+  'qwen3.5-4b-ud-q4kxl': 3,
+  'qwen3.5-9b-ud-q4kxl': 3,
+  'qwen3.5-27b-ud-q4kxl': 0,
+  'qwen3.5-35b-a3b-ud-q4kxl': 0
+}
 
 describe('committed catalog — Qwen3.5 Unsloth wave', () => {
   it('all six Qwen3.5 wave manifests are present and validate', () => {
@@ -49,8 +61,9 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
       expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
       expect(m.format, `${id} format`).toBe('gguf')
       expect(m.family, `${id} family`).toBe('qwen3.5')
-      // Not promoted: rank 0 + no legacy profiles → never auto-recommended (asserted below too).
-      expect(m.recommendationRank, `${id} rank`).toBe(0)
+      // Ranks per the 2026-07-12 promotion record; legacy profiles stay empty for the whole
+      // wave (promotion is carried by recommendation_rank, never by the legacy profile table).
+      expect(m.recommendationRank, `${id} rank`).toBe(QWEN_WAVE_RANKS[id])
       expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
       // Apache-2.0, license reviewed + approved (drive-shippable provenance).
       expect(m.license, `${id} license`).toBe('apache-2.0')
@@ -86,15 +99,15 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     expect(byId['qwen3.5-9b-ud-q4kxl'].role).toBe('chat')
   })
 
-  it('NEVER auto-recommends a rank-0 Qwen3.5 model at any realistic RAM level', () => {
-    // recommendModelIdByRam is the production picker (RAM-best-fit + rank tiebreak). With rank 0
-    // the new models always lose the tiebreak to a ranked incumbent that also fits — so a
-    // Qwen3.5 wave model is never the auto-recommendation until a benchmark gives it a rank.
+  it('NEVER auto-recommends a rank-0 (unpromoted) wave model at any realistic RAM level', () => {
+    // recommendModelIdByRam is the production picker (RAM-best-fit + rank tiebreak). The
+    // 2026-07-12 promotion covers exactly the 4B and 9B (plus the Qwen3.6 27B pair below);
+    // every OTHER wave member stays rank 0 and must never be the auto-recommendation.
     const chat = committedManifests()
-    const waveSet = new Set(QWEN35_WAVE_IDS)
+    const unpromoted = new Set(QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] === 0))
     for (const ram of [8, 12, 16, 24, 32, 48, 64, 128]) {
       const picked = recommendModelIdByRam(chat, ram, 'chat')
-      expect(waveSet.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
+      expect(unpromoted.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
     }
   })
 
@@ -110,6 +123,37 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
     ]) {
       expect(ids.has(id), `${id} still present`).toBe(true)
     }
+  })
+})
+
+// The Qwen3.6 27B pair: productized from local-test stubs and promoted to rank 3 in the
+// newest-Qwen decision (owner, 2026-07-12, model-benchmarks.md §6.4). These are the #48 tester
+// eval's top quality scorers, and the only promoted models whose promotion the eval AGREES
+// with — pin the full promotion facts so a mis-edit fails CI, not a user's drive.
+describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion)', () => {
+  it('both Qwen3.6 manifests hold the productization + promotion invariants', () => {
+    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
+    for (const id of ['qwen3.6-27b-q4', 'qwen3.6-27b-q5']) {
+      const m = byId[id]
+      expect(m, id).toBeDefined()
+      expect(m.role, `${id} role`).toBe('chat')
+      expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
+      expect(m.format, `${id} format`).toBe('gguf')
+      expect(m.family, `${id} family`).toBe('qwen3.6')
+      expect(m.recommendationRank, `${id} rank`).toBe(3)
+      expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
+      expect(m.license, `${id} license`).toBe('apache-2.0')
+      expect(m.licenseReview.status, `${id} review`).toBe('approved')
+      // Productized: real upstream hash (HF LFS OID) + a download block carrying the same hash.
+      expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
+      expect(m.download, `${id} download block`).toBeDefined()
+      expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)
+      expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
+      expect(m.recommendedContextTokens, `${id} ctx not native`).toBeLessThanOrEqual(32768)
+    }
+    // The tier split the promotion rests on: Q4 owns the 24 GB capacity group, Q5 the 32 GB one.
+    expect(byId['qwen3.6-27b-q4'].recommendedRamGb, 'Q4 comfortable tier').toBe(24)
+    expect(byId['qwen3.6-27b-q5'].recommendedRamGb, 'Q5 comfortable tier').toBe(32)
   })
 })
 

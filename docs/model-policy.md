@@ -22,9 +22,11 @@
 | Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
 | Chat (fast-tier 0.8B) | Qwen3.5 0.8B Q6_K | ~0.6 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** Smallest runnable; Q6_K (not UD-Q4_K_XL — quant error bites hardest at 0.8B). Text-only, not bundled. **§9 eval: the surviving fast-tier candidate — the honest floor (better F1 + abstention than the 2B).** Pending b9849 smoke + owner ratification. |
 | Chat (fast-tier 2B) | Qwen3.5 2B (UD-Q4_K_XL) | ~1.3 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** CPU-only speed tier. Text-only, not bundled. **§9 eval: FAILED — worst unanswerable-discipline of all models scored (should not be recommended anywhere); the 0.8B dominates it.** Pending b9849 smoke + owner ratification. |
-| Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 0) | Added 2026-06-18 (user request). unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). **Not auto-recommended/benchmarked; runtime pin bumped to b9849 (Qwen3.5 gate) but b9849 load smoke still PENDING before promotion.** Vision model run text-only. |
-| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** unsloth Dynamic-2.0 quant; balanced-tier challenger to Ministral 3 8B / Qwen3 8B. Text-only. Not bundled/benchmarked; needs b9849 load smoke + offline eval before promotion. |
-| Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger to Gemma 4 12B / Qwen3 14B / Qwen3 30B-A3B on 32 GB machines. Text-only, opt-in (not bundled). Pending b9849 smoke + offline eval. |
+| Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 3) | **Recommended ≤12 GB since the newest-Qwen promotion (owner decision 2026-07-12, `model-benchmarks.md` §6.4).** unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). §9 eval standing recorded honestly in the manifest (F1 under the Qwen3-4B incumbent, EM comparable); b9849 load observed through the app 2026-07-12. Vision model run text-only. |
+| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended 16–20 GB since the newest-Qwen promotion (2026-07-12, §6.4).** unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (F1 under Ministral, EM tied); ran on the b9849 binary in the #48 tester eval. Text-only, not bundled. |
+| Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger; superseded at its tier by the Qwen3.6 27B pair (below) before ever being promoted. Text-only, opt-in (not bundled). |
+| Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~15.7 GB | 20 GB | — (rank 3) | **Recommended 24 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M (the exact quant the #48 tester eval scored), real HF-LFS hash, apache-2.0 review. Top of the §9 quality table with its Q5 sibling. Text-only, not bundled. |
+| Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~18.2 GB | 24 GB | — (rank 3) | **Recommended ≥32 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Same productization posture as the Q4; the eval's outright top scorer (F1 .3573, zero unanswerable-set hallucinations). Text-only, not bundled. |
 | Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
@@ -54,11 +56,12 @@ Sizes/RAM come from each manifest
 > than mis-encode the **Phase-29** winners there, each manifest carries a `recommendation_rank`
 > (higher = preferred) that the picker now uses as the tiebreak among models that fit the
 > machine's RAM (the **quality-aware recommender** follow-up — `model-benchmarks.md` §6.2, tiers
-> since recalibrated by §6.3). Net effect on real hardware (§6.3 / issue #48, 2026-07-11; asserted
-> in `benchmark.test.ts`): **≤12 GB → Qwen3-4B (default, keeps Deep), 16–20 GB → Ministral 8B,
-> ≥24 GB → Gemma 4 12B**; Granite (loser) and the 30B MoE (opt-in) are never auto-recommended.
-> The "Auto-tier" column above is the declared `recommended_profiles` (kept as-is); the live
-> recommendation is `recommendation_rank` + RAM-best-fit.
+> since recalibrated by §6.3). Net effect on real hardware (newest-Qwen promotion, owner decision
+> 2026-07-12, `model-benchmarks.md` §6.4; asserted in `benchmark.test.ts`): **≤12 GB → Qwen3.5 4B,
+> 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.6 27B Q4, ≥32 GB → Qwen3.6 27B Q5**; Granite, both MoEs,
+> and the superseded Phase-29 winners (Ministral, Gemma 4 12B, both still ranked and selectable)
+> are never auto-recommended. The "Auto-tier" column above is the declared `recommended_profiles`
+> (kept as-is); the live recommendation is `recommendation_rank` + RAM-best-fit.
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
 12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in

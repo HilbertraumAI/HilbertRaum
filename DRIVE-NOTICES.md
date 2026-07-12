@@ -28,7 +28,9 @@ runtime-family: llama_cpp b9849
 runtime-family: ocr 4.0.0_best_int
 runtime-family: whisper_cpp v1.8.6
 model: bge-reranker-v2-m3-f16 apache-2.0
+model: gemma-4-26b-q4 gemma
 model: gemma4-12b-it-qat-q4 apache-2.0
+model: gemma4-coding-q8 gemma
 model: granite-4.1-8b-q4 apache-2.0
 model: ministral3-8b-instruct-2512-q4 apache-2.0
 model: multilingual-e5-small-q8 mit
@@ -43,7 +45,10 @@ model: qwen3.5-27b-ud-q4kxl apache-2.0
 model: qwen3.5-2b-ud-q4kxl apache-2.0
 model: qwen3.5-35b-a3b-ud-q4kxl apache-2.0
 model: qwen3.5-4b-ud-q4kxl apache-2.0
+model: qwen3.5-9b-q8 apache-2.0
 model: qwen3.5-9b-ud-q4kxl apache-2.0
+model: qwen3.6-27b-q4 apache-2.0
+model: qwen3.6-27b-q5 apache-2.0
 model: translategemma-12b-it-q4 gemma
 model: whisper-small-multilingual mit
 ```
@@ -159,7 +164,7 @@ manifest's recorded `download.license_url`. A `license_review.status` other than
 `approved` is noted on the line — such a model is never pre-loaded on a sold drive
 (the sell gate requires an approved review for every manifest).
 
-### apache-2.0 (16 models)
+### apache-2.0 (19 models)
 
 Licensed under the Apache License 2.0 — the full text is reproduced once in the
 "Apache License 2.0" section at the end of this file.
@@ -179,14 +184,19 @@ Licensed under the Apache License 2.0 — the full text is reproduced once in th
 - Qwen3.5 2B (UD-Q4_K_XL) (`qwen3.5-2b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-2B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/LICENSE)
 - Qwen3.5 35B-A3B (UD-Q4_K_XL) (`qwen3.5-35b-a3b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/main/LICENSE)
 - Qwen3.5 4B (UD-Q4_K_XL) (`qwen3.5-4b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE)
+- Qwen3.5 9B Q8_0 (`qwen3.5-9b-q8`) — upstream: (no download block — see the manifest) — license: apache-2.0
 - Qwen3.5 9B (UD-Q4_K_XL) (`qwen3.5-9b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE)
+- Qwen3.6 27B Q4_K_M (`qwen3.6-27b-q4`) — upstream: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE)
+- Qwen3.6 27B Q5_K_M (`qwen3.6-27b-q5`) — upstream: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE)
 
-### gemma (1 model)
+### gemma (3 models)
 
 Not covered by a permissive text reproduced in this file — see each line's
 license URL for the governing terms and the manifest's `license_review` block
 for the review record.
 
+- Gemma 4 26B A4B Q4_K_M (`gemma-4-26b-q4`) — upstream: (no download block — see the manifest) — license: gemma
+- Gemma 4 Coding Q8_0 (`gemma4-coding-q8`) — upstream: (no download block — see the manifest) — license: gemma
 - TranslateGemma 12B (Q4_K_M) (`translategemma-12b-it-q4`) — upstream: https://huggingface.co/mradermacher/translategemma-12b-it-GGUF — license: gemma (https://ai.google.dev/gemma/terms) — license_review.status: pending
 
 ### mit (2 models)

@@ -8,17 +8,32 @@ license: apache-2.0
 size_on_disk_gb: 18.2
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
-# 27B Q5 weight ~18.2 GB — tight on the 24 GB RTX 3090. Small default ctx-size to fit
-# the KV cache in remaining VRAM; expect partial CPU offload at larger contexts.
+# Rank 3 (owner decision 2026-07-12, newest-generation preference; see the Q4 sibling for the
+# full record): top scorer of the #48 tester eval (F1 .3573, EM .9765, zero unanswerable-set
+# hallucinations, b9849 binary). The ~18.2 GiB weight needs the 32 GB tier to be comfortable;
+# the Q4 sibling covers 24 GB. Takes ≥32 GB from gemma4-12b (rank 2).
+recommendation_rank: 3
+# Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true
 local_path: models/chat/qwen3.6-27b-q5.gguf
-sha256: local-unverified
-# User-added local model (managed by `llama list`, symlinked into the dev-root models/chat).
-recommended_profiles: [PRO]
-recommendation_rank: 0
+# Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured
+# 2026-07-12 at productization. A pre-productization local copy fetched via `llama get` may
+# hash differently; re-download through the app if verification reports a mismatch.
+sha256: cfecab168156269f25d5ffe9e13cf2a401ca2f43a9693fa00bcd1625316ccbde
+# Quantization: unsloth Q5_K_M, the exact quant the #48 tester eval scored (established-
+# quantizer posture; the Qwen org publishes no official GGUF for the 3.6 refresh).
+download:
+  url: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/main/Qwen3.6-27B-Q5_K_M.gguf?download=true
+  sha256: cfecab168156269f25d5ffe9e13cf2a401ca2f43a9693fa00bcd1625316ccbde
+  size_bytes: 19509790944
+  license_url: https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Qwen3.6 is a vision-language model, but this chat manifest ships only
+# the language GGUF and no mmproj/projector, which is all our chat pipeline uses.
+recommended_profiles: []
 license_review:
   status: approved
-  reviewed_by: "vldmr (manual, local test model)"
-  reviewed_at: "2026-06-22"
-  notes: "User-added for local testing. Source: Qwen3.6-27B GGUF (Q5_K_M), license apache-2.0. Added manually via `llama get`, not via fetch-models."
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-07-12"
+  notes: "APPROVED 2026-07-12 (productization of the former local-test stub): base model Qwen/Qwen3.6-27B is apache-2.0 (verified via the HF API; LICENSE blob at download.license_url). Quantization provenance: unsloth Q5_K_M GGUF (https://huggingface.co/unsloth/Qwen3.6-27B-GGUF, card tag apache-2.0), a third-party requant of apache-2.0 weights; same established-quantizer posture as the Qwen3.5 wave. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (DRIVE-NOTICES.md regeneration required before any preload). Supersedes the 2026-06-22 local-test-scoped review."
