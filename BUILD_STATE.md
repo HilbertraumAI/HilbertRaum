@@ -1354,13 +1354,18 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       gained the Phase-5 containment-sweep outcome. Final gate **4190/47**, typecheck clean,
       build unaffected (no `apps/desktop/src` touch this phase). **Round residuals (register of
       record):**
-      - **Owner batch ①–⑥** (the Phase-3 entry above) stands unexecuted: ① GAP-1 push + tag
-        decision · ② PF-2 reword (if executed, the stale-hash sweep must cover this item's
-        round-hash citations AND the `0d7a76e` cite inside ② itself — six round commits now,
-        not three — AND §8's L-7 update (`466bbad`) AND architecture.md §48 throughout, incl.
-        its `5456935` baseline cites) · ③ LIC-2
-        THIRD-PARTY-NOTICES · ④ `reviewed_by` normalization · ⑤ `djuro-agent` restore ·
-        ⑥ `.claude` skill publish confirmation.
+      - **Owner batch ①–⑥** (the Phase-3 entry above) — **④⑤⑥ EXECUTED 2026-07-12
+        post-close-out (owner-directed):** ④ `reviewed_by` normalized to "project maintainer
+        (Claude-assisted review, HF card/LFS verification)" · ⑤ `djuro-agent` restored to
+        cla.yml's allowlist (smoke PR #55 verified green: block → sign → ✅, signature recorded
+        on `cla-signatures`) · ⑥ owner decided **NOT** to publish —
+        `.claude/skills/screenshot-verify/SKILL.md` untracked via `git rm --cached` (file stays
+        on disk for local dev; `.gitignore`'s `.claude` rule, which never applied to the
+        already-tracked file, now covers it). Still open: ① GAP-1 push + tag decision · ② PF-2
+        reword (if executed, the stale-hash sweep must cover this item's round-hash citations
+        AND the `0d7a76e` cite inside ② itself — six round commits now, not three — AND §8's
+        L-7 update (`466bbad`) AND architecture.md §48 throughout, incl. its `5456935` baseline
+        cites) · ③ LIC-2 THIRD-PARTY-NOTICES (in progress).
       - **SEC-1 orphan-`.enc` sweep — deferred (Info):** the startup sweep runs while the DB is
         LOCKED, so it cannot know which document ids are live; a pre-fix zero-key sidecar
         self-heals only on re-index (known-limitations note shipped with Phase 1). Same family,
