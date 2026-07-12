@@ -339,7 +339,7 @@ findings are §0–§6 of this document. Decision numbering continues the repo s
 | D18 | Incumbent refresh | Evaluate **Qwen3-4B-Instruct-2507** as a 4th Phase-28 manifest | Report data: the 2507 4B beats the *original* 8B on most axes. ⚠️ 2507 is instruct-only (no hybrid thinking) — interacts with Phase-20 depth modes |
 | D19 | Quality benchmark = judge-free, ours | Hand-rolled **German/English grounded-QA set** + deterministic string/F1/citation/abstain scoring; `llama-bench` for speed | No cloud judge (hard rule); tests exactly what the product does (RAG + citations + abstention); no new toolchain |
 | D20 | Benchmark form | **Manual protocol doc first** (this document + a results CSV convention); automate only if the manual loop proves annoying | One developer, 2–3 laptops; don't build automation before the protocol has run once |
-| D21 | Big/opt-in slot + embeddings | **Phase 30, outline only** — Gemma 4 26B-A4B vs the incumbent Qwen3 30B-A3B; Granite Embedding R2 small as the only near-drop-in embedder | MoE comparisons need Phase-29 numbers first; an embedder swap forces a reindex story — separate, later. Now drafted as [`big-slot-embeddings-plan.md`](big-slot-embeddings-plan.md) (D38–D43) |
+| D21 | Big/opt-in slot + embeddings | **Phase 30, outline only** — Gemma 4 26B-A4B vs the incumbent Qwen3 30B-A3B; Granite Embedding R2 small as the only near-drop-in embedder | MoE comparisons need Phase-29 numbers first; an embedder swap forces a reindex story — separate, later. Drafted as the Phase-30 plan (D38–D43); retired 2026-07-12 unimplemented — disposition §9.2 |
 | D22 | License gate posture | Every new manifest lands with a **real `license_review` record** (approved, with source URLs) before merge | Licensing is the #1 disqualifier; the review work is cheap now (all picks verified Apache-2.0) and mandatory before any drive bundles them |
 
 **Outcomes (as built):** D16 — all three challengers shipped + license-reviewed. **D17
@@ -350,8 +350,8 @@ the legacy picker is one-model-per-profile), so promotion is now carried by the
 **D18 resolved**: 2507 shipped (via the unsloth fallback) and beat the original 4B on
 *every* Phase-29 metric, but the original stays the **bundled default** (it has hybrid
 thinking → keeps Deep working out of the box); 2507 is ranked just below it. D19/D20 — the
-judge-free harness + protocol shipped and ran (§2–§6). D21 — Phase 30 outline →
-`big-slot-embeddings-plan.md`. D22 — all four `license_review`s approved Apache-2.0.
+judge-free harness + protocol shipped and ran (§2–§6). D21 — Phase 30 outline → the D38–D43
+plan, retired 2026-07-12 unimplemented (§9.2). D22 — all four `license_review`s approved Apache-2.0.
 
 ### 7.2 Verified research facts (2026-06-10 — what the wave rested on; confirmed live on b9585)
 
@@ -633,6 +633,46 @@ tokens):
 `qwen3.5-27b-q4km.yaml` / `qwen3.5-35b-a3b-q4km.yaml` fallback (hashes recorded in the manifest
 templates in the wave plan), keep `UD-Q4_K_XL` as the preferred quant. Do NOT add a fallback
 pre-emptively.
+
+### 9.2 Phase-30 "big slot + embeddings" plan — RETIRED unimplemented (2026-07-12; D38–D43 disposition)
+
+The standalone plan (`docs/big-slot-embeddings-plan.md`, drafted 2026-06-11; deleted 2026-07-12 —
+full text: `git show 1e5d17e:docs/big-slot-embeddings-plan.md`) was retired without implementation:
+neither track had started, and the facts moved underneath it (the b9585→b9849 pin bump, the Qwen3.5
+wave, the §9 tester evidence). Disposition of its decisions:
+
+- **D38 (Track A candidate set: Gemma 4 26B-A4B / Mistral Small 3.2 24B / Granite 4.0 H-Small) —
+  SUPERSEDED, none ever fetched.** The §9 tester eval answered Track A's question ("is anything
+  above the 12–14B tier worth recommending?") with different candidates: Qwen3.6 27B sweeps the
+  20–24 GB tier and the 35B-A3B challenges the MoE incumbent. The live big-slot work is the §9
+  promotion pipeline (BUILD_STATE §5 item 8); fetching the old candidate list would duplicate it.
+- **D39 (inclusion bar: a big model must beat the incumbent at usable speed, or be a clear GPU-only
+  ceiling) — CARRIED FORWARD**: restated as §9's "must beat" table.
+- **D42 (eval-set hardening) — STILL NEEDED, merged into §5 item 8 step (a)**: the tester run
+  confirmed the scorer can't separate strong models (length-confounded F1 + refusal-detector gaps,
+  §9 "Scorer confound").
+- **D43 (MoE RAM from weight-file size + KV headroom, not mmap-undercounted RSS) — STILL OPEN**,
+  carried into item 8's §3/§4 speed/RSS step (the 27B/35B RAM lines are placeholders).
+- **D40/D41 (Track B — the default-embedder swap) — DEFERRED post-MVP, decisions unmade.** Durable
+  facts for whoever reopens it (registration: BUILD_STATE §5 item 4):
+  1. Start with a **384-dim drop-in** (reindex only, no storage change); 1024-dim models (~2.7×
+     vector-blob storage, a heavier embedder) are a separate, later decision. The schema already
+     supports a different-dimension embedder mechanically (per-row `dimensions`, id-scoped search) —
+     the real work is the retrieval A/B plus the Phase-17 reindex UX (an embedder change must
+     honestly prompt "your documents need re-indexing"; id-scoping already prevents silent
+     vector-space mixing).
+  2. **Adoption bar: a measurable win on the hardened eval set** — a default-embedder swap
+     invalidates every user's existing index, so the bar is higher than for a chat model, and it
+     gets more expensive the larger the install base (an argument for deciding early post-MVP).
+  3. **Compat hazard:** the E5 q8_0 conversion CRASHED the old b9585 runtime (`binary_op:
+     unsupported types … q8_0`) — the reason E5 + the reranker pin F16. Re-verify this hazard class
+     on the current b9849 pin before any embedder work; test candidate GGUFs as F16 first.
+  4. Re-verify the candidate landscape at reopen time — the plan's pick (Granite Embedding R2
+     small, ~97M, 384-dim, Apache-2.0) dates from 2026-06.
+  5. A materially better retriever may change whether the bge reranker still earns its CPU cost —
+     re-measure rerank-on/off on the new retriever (rag-design §11).
+- **D1 rider — UNCHANGED, now recorded solely in rag-design §10**: a prefix-using embedder with a
+  measurable relevance floor re-opens D1 (unified auto-RAG chat).
 
 ---
 

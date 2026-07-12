@@ -19,6 +19,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-12 — **Phase-30 plan retired unimplemented: `docs/big-slot-embeddings-plan.md` DELETED (contributor-clarity: neither track had started and the plan had drifted — stale b9585 pin, a Track-A candidate list overtaken by the §9 tester evidence).**_
+Owner decision 2026-07-12, retired per the CLAUDE.md doc-lifecycle rule instead of rewritten. Disposition + the durable Track-B facts → **`model-benchmarks.md` §9.2** (D38 superseded by the Qwen3.5/3.6 evidence; D39 carried forward as §9's must-beat table; D42 merged into §5 item 8 step (a); D43 still open inside item 8's speed/RSS step; D40/D41 deferred with the F16/q8_0 compat hazard + reindex-UX notes). Open-work registration → §5 item 4 (rewritten: deferred post-MVP, reopen prerequisites listed); the D1 rider now lives solely in rag-design §10; CLAUDE.md's sanctioned-open-plan example → `result-tables-plan.md`; Phase-table row 30 updated. Full original: `git show 1e5d17e:docs/big-slot-embeddings-plan.md`. Docs-only.
+
 _2026-07-12 — **BUILD_STATE restructure: the file had grown to 1.48 MB / ~11,200 lines — unreadable in one pass, defeating its "read this FIRST" purpose.**_
 Split three ways, all moved content **byte-verified verbatim** against `git show HEAD`: (1) the 260+ closed-wave dated entries (2026-07-09 and earlier) + the Skills S2–S12 handoffs → new archive [`docs/build-log.md`](docs/build-log.md); (2) §4 data contracts → new [`docs/data-contracts.md`](docs/data-contracts.md) (pointer stub kept, so "BUILD_STATE §4" citations resolve); (3) this file keeps the header, open-wave entries, and live §1–§9 (§8/§9 stay — cited by `BUILD_STATE §9`/`R6` and §8 holds open deferred items). Retention rule added to the header + CLAUDE.md; budget (≤ 300 KB / ≤ 2,000 lines) enforced by a new `repo-hygiene.test.ts` block. README doc table gains both files. Cross-doc citations need NO churn: date-cited entries resolve via the archive pointer below.
 
@@ -194,7 +197,7 @@ the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" / "Skills — Sn handoff"
 | 23–27 | UI polish wave (tokens/theming · components · chat restructure · IA regroup · microcopy/ambient signal/first-run) | 🟢 done, merged to master 2026-06-10 — `docs/design-guidelines.md` (+ its §11 rollout record) |
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18/D22) | 🟢 done 2026-06-10 — 4 Apache-2.0 challengers, real hashes, all 10 catalog weights VERIFIED on `D:\`, bring-up smokes PASS |
 | 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done 2026-06-11 — judge-free QA+speed+RSS protocol run on all 8 models; RAM mins recalibrated, recommender quality-aware (`recommendation_rank`), Gemma thinking flag ON. Optional dev-box speed sweep = completeness only |
-| 30 | Opt-in big slot + embeddings (D21 → D38–D43) | ⚪ not started — plan drafted (`docs/big-slot-embeddings-plan.md`) |
+| 30 | Opt-in big slot + embeddings (D21 → D38–D43) | ⚪ retired 2026-07-12 unimplemented — Track A superseded by the Qwen3.5/3.6 pipeline (§5 item 8), Track B deferred post-MVP (§5 item 4); disposition `model-benchmarks.md` §9.2 |
 | 31 | Conversation search + permission-handler rider | 🟢 done 2026-06-11 — wave-3 record §4 |
 | 32 | Vault password change (descriptor v2 envelope) | 🟢 done 2026-06-11 — wave-3 record §5 |
 | 33 | Document tasks foundation + one-click summary | 🟢 done 2026-06-11 — wave-3 record §6 |
@@ -885,8 +888,8 @@ Repo root: `f:\_coding\ai_drive`.
   R3), the reranker gate is optional equipment at up to ~25 s worst-case CPU per message, and
   the wrong-tab failure is already triple-defended (awareness notice, mode subtitles,
   filename auto-scope). **Revisit trigger = Phase 30 Track B** (a prefix-using embedder with
-  a measurable floor) — rider recorded in `big-slot-embeddings-plan.md` �4.4; full
-  rationale in `rag-design.md` �10 (D1).
+  a measurable floor) — rider + full rationale recorded in `rag-design.md` §10 (D1); the Phase-30 plan that
+  also carried the rider was retired 2026-07-12 (model-benchmarks §9.2).
 
 - **Phase 39 — i18n foundation + proof slice (2026-06-13; condensed record:
   `architecture.md` "Internationalization — design record"; full original plan
@@ -1071,11 +1074,13 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    DIY drives trust a repo key) — needs its own short design doc before any code. The
    commercial pitch ("signed update bundles", spec §1.3) makes this the first priority once
    drives actually ship.
-4. **Phase 30 — opt-in big slot + embeddings:** working paper drafted
-   ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md), D38–D43): Track A
-   (Gemma 4 26B-A4B etc. vs the incumbent Qwen3 30B-A3B, reusing the Phase-29 benchmark) +
-   Track B (a better embedder — the reindex-forcing swap; D42 eval-set hardening is the
-   prerequisite). Key verified fact: the pinned b9585 already runs Gemma 4 — no runtime bump.
+4. **Embedder swap (ex-Phase-30 Track B) — deferred post-MVP; write a fresh short plan when it
+   actually starts.** The 2026-06-11 big-slot plan was retired unimplemented on 2026-07-12 (file
+   deleted; disposition + the durable Track-B facts: `model-benchmarks.md` §9.2; full text
+   `git show 1e5d17e:docs/big-slot-embeddings-plan.md`). Track A (a bigger chat model) is
+   superseded by item 8's Qwen3.5/3.6 promotion pipeline. Reopen prerequisites: item 8's scorer
+   fix + eval-set hardening (ex-D42), the b9849 embedder-compat re-check (the F16/q8_0 hazard,
+   §9.2 fact 3), and a fresh embedder-candidate survey.
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 6. **Format-preserving PDF output for redact/edit (issue #45 stages 1–2 — OWNER DECISION needed).**

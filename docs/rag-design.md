@@ -550,10 +550,11 @@ measured floor result (§12.1 R3) proves there is no cheap "is this question abo
 documents?" signal under prefix-less E5 (relevant and irrelevant cosines overlap), the only
 reliable gate is the *optional* reranker at up to ~25 s worst-case on CPU — unacceptable
 per plain-chat message — and the original wrong-tab failure is already triple-defended
-(awareness notice, mode subtitles, filename auto-scope). **Revisit trigger: Phase 30
-Track B** — if a prefix-using embedder lands with a measurable relevance floor,
-auto-grounding becomes cheap to gate and D1 gets re-evaluated (rider recorded in
-`big-slot-embeddings-plan.md` §4.4).
+(awareness notice, mode subtitles, filename auto-scope). **Revisit trigger: a future
+embedder swap** (the deferred ex-Phase-30 Track B — retirement disposition in
+[`model-benchmarks.md`](model-benchmarks.md) §9.2) — if a prefix-using embedder lands with
+a measurable relevance floor, auto-grounding becomes cheap to gate and D1 gets re-evaluated.
+This paragraph is the rider's record (the retired plan file used to carry a copy).
 **D2** — the scope persists as the additive nullable
 `conversations.scope_json` column (guarded `ALTER TABLE`).
 
