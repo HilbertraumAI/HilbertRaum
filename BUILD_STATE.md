@@ -1508,6 +1508,15 @@ architecture.md §49; LIC-1 drive-attribution mechanism + SELLABLE-gate artifact
 landed). Like v0.1.48, the tag is local until the owner pushes it (a pushed tag triggers
 the release workflow's draft build).
 
+Version checkpoint: **v0.1.50 tagged 2026-07-12** (0.1.49 → 0.1.50, root + apps/desktop +
+lockfile version fields only; CHANGELOG header mention updated) — marks the **PR #56 merge**
+(newest-Qwen promotion, owner decision 2026-07-12, model-benchmarks.md §6.4: recommendation
+tiers now Qwen3.5 4B / 9B / Qwen3.6 27B Q4 / Q5, the Qwen3.6 pair productized, the stub
+`[PRO]` profile hijack that had broken master CI at `0883020` fixed), rebase-merged as
+`a42254f` after all four checks (incl. the now-required `ci-success` — master is ruleset-
+protected since 2026-07-12) went green. Like its predecessors, the tag is local until the
+owner pushes it (a pushed tag triggers the release workflow's draft build).
+
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
 bring-up/eval/concurrency-probe/translategemma/categorizer/compare/whisper/dictation/OCR/vision/
