@@ -1176,6 +1176,13 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     is published** (pre-release, 5 assets) — the Phase-7 release-flow test PASSED end-to-end
     (tag → three build legs + SHA256SUMS → draft → owner smoke → Publish; testers filed #48–#53
     against the shipped build).
+    - [ ] **Push `master` to origin BEFORE flipping** (full-audit 2026-07-12 GAP-1). As of
+      2026-07-12 local `master` is **5 commits ahead**; the remote tip `ed1332c` predates the
+      BUILD_STATE restructure and still carries the literal NUL in `docs/architecture.md`, so
+      flipping without pushing would publish that stale tree as the repo's read-first doc.
+      Then, **as its own deliberate decision** (not a side effect of pushing the branch):
+      decide whether to push the local `v0.1.47` tag — it points at `ed1332c`, and pushing a
+      tag triggers `release.yml`'s draft build.
     - [ ] **Branch cleanup** (2026-07-10 interim owner call was keep-ALL; decide at flip).
       Real unmerged work — decide keep/kill, don't blind-delete: `origin/mkg` (5 commits — the
       conversation-folders feature: nested collections, folder browser, rail tree; the only
@@ -1264,6 +1271,27 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       Byte-verified NUL-free + LF, line count unchanged; `marked` re-parse shows 0 relative links
       left. Suite unchanged **4178/47** (docs-only, no new tests). The optional
       `repo-hygiene.test.ts` link-resolvability assertion is DEFERRED to Phase 5 (owns that file).
+    - _2026-07-12 Phase 3 (BUILD_STATE prose + owner batch — docs/process only, suite unchanged
+      4178/47):_ **GAP-1** (checklist half) — item 10 gained "push `master` first / decide the
+      `v0.1.47` tag push deliberately" as its first unchecked step. **SEC-2** (doc half) — §8's
+      L-7 row corrected from "build-time only" to cover the in-app `extractWithTar` path
+      (tar-implicit `..` refusal + pre-extraction sha256 recorded as the current posture;
+      optional explicit-containment hardening is Phase 5's call — the close-out appends its
+      outcome). **Owner-decision batch (surfaced here, NOT executed — audit §3):**
+      ① **GAP-1 execution** — the actual `git push` (local `master` 5 ahead of origin as of this
+      entry) and the tag-push decision. ② **PF-2** — optionally reword the unpushed `0d7a76e`
+      "docs update" commit (a 2,125-deletion structural commit: spec retirement + stamp removal
+      + architecture.md NUL fix); verified 2026-07-12 that no tracked file cites `0d7a76e` or
+      its restructure successor. ⚠️ Trade-off: a rebase-reword rewrites the hashes of ALL later
+      commits (the restructure commit + this round's three so far) — the hashes cited by this
+      item's Phase 1/2 entries would then be stale and need updating; only possible while
+      unpushed, so couple with ①. ③ **LIC-2** — generate/ship a THIRD-PARTY-NOTICES for bundled
+      npm deps (pdfjs-dist/tesseract.js are Apache-2.0, which asks for NOTICE preservation) or
+      defer past the flip. ④ normalize `reviewed_by: comilionas` →
+      "project maintainer" in `model-manifests/translation/translategemma-12b-it-q4.yaml` (as
+      the other manifests) or keep the handle. ⑤ restore `djuro-agent` to cla.yml's allowlist —
+      confirm the post-launch CLA smoke PR is green first (item 10 sidebar). ⑥ confirm the
+      tracked `.claude/skills/screenshot-verify/SKILL.md` is deliberately published at flip.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
@@ -1379,11 +1407,19 @@ the offline/privacy guarantees:
   no cycle guard, so a picked folder with a symlink to e.g. `C:\Windows` traverses outside the
   selection. Blast radius: "indexes files the user didn't intend" (supported extensions only), not
   RCE. Fix: `lstatSync` for directory entries (skip symlinks) or a visited-realpath cycle guard.
-- **L-7 — Runtime-archive extraction doesn't prevent member traversal (build-time only).**
-  `Expand-Archive` / `tar -xzf` in `scripts/fetch-runtime.{ps1,sh}` run on the drive **builder's**
-  trusted machine, not the shipped app. A crafted archive (attacker controlling both URL and its
-  placeholder hash) could write outside `extract_to`. Fix: list/extract members with an explicit
-  containment check.
+- **L-7 — Runtime-archive extraction doesn't prevent member traversal (build-time AND in-app;
+  scope corrected 2026-07-12, full-audit SEC-2 — the earlier "build-time only" framing was
+  wrong).** `Expand-Archive` / `tar -xzf` in `scripts/fetch-runtime.{ps1,sh}` run on the drive
+  **builder's** trusted machine — but the shipped app's engine installer performs the same
+  extraction (`runtime-download.ts` `extractWithTar`: `tar -xf … -C extractTo` via the OS
+  `tar`) of an archive whose source list (`runtime-sources.yaml`) lives on the user-writable
+  drive. Current in-app posture: the archive's sha256 is verified **before** extraction
+  (tampering needs drive write access to both the archive/URL and the matching hash; a
+  placeholder hash extracts flagged `unverified`), and the OS `tar` refuses `..` members by
+  default — containment rests on tar's *implicit* behavior rather than the explicit member
+  check this fix calls for; symlink members are the residual soft spot. (The skills importer
+  does NOT share this gap — it enumerates and validates every member's path/symlink before
+  inflating, arch §22-A2.) Fix: list/extract members with an explicit containment check.
 - **L-8 — Lockfile / `npm ci` discipline.** Confirm `package-lock.json` is committed and the
   provisioning/build scripts use `npm ci` (not `npm install`) so a build can't float a caret range
   to a newer minor. Integrity anchor = the committed lockfile.
