@@ -397,6 +397,16 @@ explicitly:
   (at the cost of silently losing it). Availability of the user's data wins in this
   already-failed corner; the exposure window ends at the next unlock, when the snapshot
   is re-encrypted and shredded.
+- **Lock during an import fails the document — never a zero-key sidecar (full-audit
+  2026-07-12 SEC-1).** `documentCipher()`'s closures re-read the live vault key on every
+  invocation and throw a typed `VaultLockedError` once `lock()` has zeroed it. Previously a
+  cipher captured by an in-flight import kept "working" after "Lock now": the drained
+  prepare encrypted the document copy under the in-place-zeroed (all-zero) key — a
+  GCM-valid `.enc` sidecar decryptable with a public constant, resting inside the locked
+  workspace. Now the drained prepare fails cleanly (the row reconciles `failed` after
+  unlock and re-indexes normally). The check-then-encrypt cannot race `lock()` (both are
+  synchronous, and `createCipheriv` copies the key before the first await); an encrypt
+  already past that point finishes under the real key — harmless ciphertext.
 - **fsync before the atomic rename (CODE-10).** `encryptFile`/`encryptFileAsync` fsync the
   written frame before renaming it into place (the `writeVaultDescriptor` idiom). Without
   it, quit → unplug-without-eject on a non-write-through mount could land a truncated

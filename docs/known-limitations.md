@@ -613,6 +613,13 @@ password recovery — are documented in
   workspace DB the unlock screen / "Lock now" can therefore still pause briefly; adopting the async vault
   siblings there (keeping a synchronous crash-lock) is a tracked follow-up.
 - The per-import `jobs` map in `registerDocsIpc` is never pruned (tiny, ephemeral, per-process).
+- Orphaned document sidecars (`workspace/documents/<id><ext>.enc` with no matching `documents`
+  row) are never swept: the startup crash sweep matches only transient `.parse`/`.tmp` names, and
+  it runs while the encrypted DB is still locked, so it cannot know which ids exist (full-audit
+  2026-07-12 SEC-1, sweep half deliberately left out). Post-SEC-1-fix an orphan can only be a
+  REAL-key encrypted leftover (a lock landed between a finished sidecar write and its
+  `stored_path` UPDATE, and the failed row was then deleted) — unreadable ciphertext wasting a
+  little disk, not a confidentiality issue.
 - `getSettings` does not type-guard stored JSON values (the privacy-critical network path is
   double-gated by the policy AND). The write gate in `updateSettings` now also rejects `null` for
   non-nullable keys and shape-checks the null-default keys (bounded strings for the model ids /

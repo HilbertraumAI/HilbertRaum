@@ -121,6 +121,22 @@ export class VaultLockError extends Error {
 }
 
 /**
+ * Thrown by a `DocumentCipher` closure invoked AFTER `lock()` zeroed the vault key
+ * (full-audit 2026-07-12 SEC-1). The closures re-read the live key per invocation, so a
+ * cipher captured by an in-flight import fails CLOSED when "Lock now" lands mid-job —
+ * previously it kept "working" against the in-place-zeroed key Buffer and encrypted the
+ * document sidecar under 32 zero bytes. Content-free ON PURPOSE (like `VaultLockError`):
+ * every consumer already treats a cipher failure as that document/task failing, so this
+ * surfaces as the ordinary failed-row path, never raw to the user.
+ */
+export class VaultLockedError extends Error {
+  constructor() {
+    super('The workspace is locked')
+    this.name = 'VaultLockedError'
+  }
+}
+
+/**
  * Thrown when a password change and document work (import/re-index, which writes `.enc`
  * sidecars) would overlap — either operation refuses to START while the other runs, so
  * a sidecar is never written under a key that is being swapped out.
@@ -1227,18 +1243,33 @@ export class WorkspaceController {
   }
 
   /**
-   * A `DocumentCipher` bound to the unlocked vault key, or null in plaintext mode /
-   * while locked. Ingestion uses it to keep the imported-document cache encrypted at
-   * rest (the cipher captures the key; it stops working only at process exit).
+   * A `DocumentCipher` bound to the unlocked vault, or null in plaintext mode / while
+   * locked. Ingestion uses it to keep the imported-document cache encrypted at rest.
+   *
+   * full-audit 2026-07-12 SEC-1 — each closure re-reads `this.key` PER INVOCATION and
+   * throws a typed `VaultLockedError` once `lock()` has zeroed it. The old closures
+   * captured the key Buffer OBJECT, which `lock()` fills with zeros in place, so a cipher
+   * captured by an in-flight import kept "working" after "Lock now" — encrypting the
+   * document sidecar under 32 zero bytes (a GCM-valid `.enc` anyone can decrypt). The
+   * check-then-encrypt cannot race `lock()`: both are synchronous, and the encrypt paths
+   * call `createCipheriv` (which copies the key into the cipher context) before their
+   * first await — an encrypt already past that point when a lock lands finishes under
+   * the real key (harmless ciphertext). A cipher held across a lock → unlock cycle (or
+   * the v1→v2 password-change key swap) picks up the LIVE key instead of the retired
+   * one — strictly more correct; no consumer holds one that long by design (fresh
+   * capture per IPC call / import job).
    */
   documentCipher(): DocumentCipher | null {
-    const key = this.key
-    if (!key || this._mode !== 'encrypted') return null
+    if (!this.key || this._mode !== 'encrypted') return null
+    const requireKey = (): Buffer => {
+      if (!this.key) throw new VaultLockedError()
+      return this.key
+    }
     return {
-      encryptFile: (src, dest) => encryptFile(src, dest, key),
-      decryptFile: (src, dest) => decryptFile(src, dest, key),
-      encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-      decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
+      encryptFile: (src, dest) => encryptFile(src, dest, requireKey()),
+      decryptFile: (src, dest) => decryptFile(src, dest, requireKey()),
+      encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, requireKey()),
+      decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, requireKey())
     }
   }
 
