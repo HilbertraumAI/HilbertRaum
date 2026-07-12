@@ -1176,14 +1176,13 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     is published** (pre-release, 5 assets) — the Phase-7 release-flow test PASSED end-to-end
     (tag → three build legs + SHA256SUMS → draft → owner smoke → Publish; testers filed #48–#53
     against the shipped build).
-    - [ ] **Push `master` to origin BEFORE flipping** (full-audit 2026-07-12 GAP-1). Local
-      `master` is **12 commits ahead** as of the 2026-07-12 PF-2 reword — re-derive at push
-      time; the remote tip `ed1332c` predates the
-      BUILD_STATE restructure and still carries the literal NUL in `docs/architecture.md`, so
-      flipping without pushing would publish that stale tree as the repo's read-first doc.
-      Then, **as its own deliberate decision** (not a side effect of pushing the branch):
-      decide whether to push the local `v0.1.47` tag — it points at `ed1332c`, and pushing a
-      tag triggers `release.yml`'s draft build.
+    - [x] **Push `master` to origin BEFORE flipping** (full-audit 2026-07-12 GAP-1) —
+      **DONE 2026-07-12**: the owner's push surfaced 3 remote-only commits (two staged-preview
+      commits + a remote djuro-agent allowlist restore duplicating flip-batch item 5); merged
+      (sole conflict `cla.yml`, local commented version kept) and pushed with the v0.1.48
+      checkpoint. The `v0.1.47` tag was already on origin (decision resolved). Still open, as
+      its own deliberate decision: pushing the **v0.1.48** tag triggers `release.yml`'s draft
+      build.
     - [ ] **Branch cleanup** (2026-07-10 interim owner call was keep-ALL; decide at flip).
       Real unmerged work — decide keep/kill, don't blind-delete: `origin/mkg` (5 commits — the
       conversation-folders feature: nested collections, folder browser, rail tree; the only
@@ -1393,8 +1392,16 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
-round complete at the 4165/47 gate. Tag is local until the owner pushes it (a pushed tag
-triggers the release workflow's draft build).
+round complete at the 4165/47 gate. The tag is on origin (observed 2026-07-12), so the
+push-the-tag decision from the flip checklist is resolved.
+
+Version checkpoint: **v0.1.48 tagged 2026-07-12** (0.1.47 → 0.1.48, root + apps/desktop +
+lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-12 round complete
+at the 4195/47 gate, plus the merge of the three remote-only commits that had landed on
+origin/master beside the local round (two staged-preview commits + the remote's own
+djuro-agent allowlist restore, which duplicated flip-batch item 5 — the sole conflict,
+resolved by keeping the commented local version of `cla.yml`). Tag is local until the owner
+pushes it (a pushed tag triggers the release workflow's draft build).
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
