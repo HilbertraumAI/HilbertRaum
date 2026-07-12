@@ -158,6 +158,31 @@ for rel in docs/user-guide.md docs/troubleshooting.md PRIVACY.md; do
 done
 echo
 
+# License / attribution notices (LIC-1, full-audit 2026-07-12b): distribution-level
+# notices go to the DRIVE ROOT (not docs/) — the app's own GPLv3 text, the bundled-
+# npm-package notices, and the GENERATED drive-wide notices for runtime binaries +
+# model weights (regenerate with `node scripts/generate-drive-notices.mjs`; the
+# committed file is copied here so no Node is needed at drive-build time). Copied
+# unconditionally — dev drives get them too (harmless). The commercial SELLABLE gate
+# (build-commercial-drive step 7 / assertCommercialDrive) requires all three. Keep this
+# list in sync with commercial-drive.ts DRIVE_LICENSE_ARTIFACTS (script-drift test).
+LICENSE_ARTIFACTS=(
+  LICENSE
+  THIRD-PARTY-NOTICES.md
+  DRIVE-NOTICES.md
+)
+echo "License notices:"
+for lic in "${LICENSE_ARTIFACTS[@]}"; do
+  src="$REPO_ROOT/$lic"
+  if [[ -f "$src" ]]; then
+    if [[ $DRY_RUN -eq 1 ]]; then echo "  copy $lic -> drive root"
+    else cp "$src" "$TARGET/$lic"; echo "  copied $lic"; fi
+  else
+    echo "  WARNING: $lic not found at the repo root (run from a repo clone)"
+  fi
+done
+echo
+
 write_json() {
   local rel="$1" content="$2" full="$TARGET/$1"
   if [[ $DRY_RUN -eq 1 ]]; then echo "  + $rel"; return; fi

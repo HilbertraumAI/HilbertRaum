@@ -1439,6 +1439,19 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       `rekeyVaultLog`), red-verified unit test + security-model.md clause. Reviewer pass: 1 real
       catch repaired pre-commit (peer fold had silently broken the documented shipped-packages ↔
       packaging.test.ts closure-mirror invariant).
+    - _2026-07-12 Phase 4 (LIC-1 drive attribution, owner-ratified; suite 4201/49 → 4214/49,
+      +13 tests):_ **LIC-1** the sold drive now carries LICENSE + THIRD-PARTY-NOTICES.md +
+      **DRIVE-NOTICES.md** at drive root (copied by `prepare-drive.{ps1,sh}`); DRIVE-NOTICES.md
+      is committed + generated (`scripts/generate-drive-notices.mjs` from runtime-sources.yaml +
+      all 19 manifests + pinned texts in the new `licenses/` dir — upstream zips ship no LICENSE),
+      deterministic, drift+coverage-gated (`drive-notices.test.ts`, coverage leg YAML-independent);
+      the step-7 SELLABLE gate (both scripts) **and** the TS canonical `assertCommercialDrive`
+      fail on a missing/empty artifact (red-verified: the old assert passed a zero-attribution
+      drive green); `script-drift.test.ts` pins all 4 scripts to `DRIVE_LICENSE_ARTIFACTS`;
+      hygiene nets +`txt`+`licenses/`. **LIC-2** root LICENSE ships as `LICENSE.txt` beside
+      app.asar (extraResources + test pin). Reviewer APPROVE, 1 should-fix repaired pre-commit
+      (MIT weights' upstream copyright lines pinned offline). ⚠️ DRIVE-NOTICES.md's GPL
+      source-availability URL assumes the public repo — true once §5 item 10 flips.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

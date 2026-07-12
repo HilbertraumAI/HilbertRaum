@@ -36,12 +36,16 @@ describe('repo hygiene — lockfile discipline (issue #49)', () => {
 // excludes the legitimate BINARY fixtures under tests/ (the .png vision chart, the local-only
 // real-data .pdf corpus) — only text/source files must be NUL-free.
 describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
+  // `txt` joined the filter with licenses/ (LIC-1, 2026-07-12b): the pinned license
+  // texts are inlined verbatim into the generated DRIVE-NOTICES.md, so a stray byte
+  // there ships onto every drive. The only pre-existing .txt under the covered roots
+  // are two plain-ASCII test fixtures (byte-checked when the root was added).
   const walk = (dir: string): string[] => {
     const out: string[] = []
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name)
       if (entry.isDirectory()) out.push(...walk(p))
-      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml)$/.test(entry.name)) out.push(p)
+      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml|txt)$/.test(entry.name)) out.push(p)
     }
     return out
   }
@@ -113,6 +117,16 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
     ].filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
   })
+
+  // LIC-1 (full-audit 2026-07-12b): licenses/*.txt are the pinned upstream license texts
+  // that generate-drive-notices.mjs inlines verbatim into DRIVE-NOTICES.md (which ships
+  // at the root of every prepared drive) — the same byte-trap class as the manifests.
+  it('holds no 0x00 byte in any licenses/ file either', () => {
+    const offenders = walk(join(process.cwd(), '..', '..', 'licenses')).filter((p) =>
+      readFileSync(p).includes(0)
+    )
+    expect(offenders).toEqual([])
+  })
 })
 
 // full-audit 2026-07-12 TQ-1 (BOM half): a UTF-8 BOM is the same authoring-tool byte-trap as
@@ -122,12 +136,13 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
 // filter; PowerShell 5.1 writes BOM'd UTF-8 by default on this dev machine, so the class is
 // one careless `Out-File` away).
 describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => {
+  // Same filter as the NUL net above (incl. the LIC-1 `txt` widening for licenses/).
   const walk = (dir: string): string[] => {
     const out: string[] = []
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name)
       if (entry.isDirectory()) out.push(...walk(p))
-      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml)$/.test(entry.name)) out.push(p)
+      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml|txt)$/.test(entry.name)) out.push(p)
     }
     return out
   }
@@ -148,6 +163,7 @@ describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => 
       ...walk(join(process.cwd(), 'scripts')),
       ...walk(join(repoRoot, 'scripts')),
       ...walk(join(repoRoot, 'model-manifests')),
+      ...walk(join(repoRoot, 'licenses')), // LIC-1: pinned texts inlined into DRIVE-NOTICES.md
       ...walk(join(repoRoot, 'docs')),
       ...walk(join(repoRoot, 'app-skills')),
       ...walk(join(repoRoot, '.github')),

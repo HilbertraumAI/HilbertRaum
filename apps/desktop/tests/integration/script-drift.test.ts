@@ -12,6 +12,7 @@ import {
 } from '../../src/main/services/drive'
 import { isRealSha256 } from '../../src/shared/manifest'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
+import { DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 
 // Drift guard (audit H5 / M-A1). The drive layout, the format version, and the runtime
 // build matrix have a single canonical source of truth in TypeScript / `runtime-sources.yaml`,
@@ -91,6 +92,23 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
     expect(rows.length, 'expected the runtime-assert matrix rows in build-commercial-drive.ps1').toBeGreaterThan(0)
     const scriptSet = new Set(rows.map((m) => `${m[1]}|${m[3]}|${m[2]}`))
     expect(scriptSet).toEqual(canonicalBuilds())
+  })
+})
+
+// --- Root license/attribution artifacts (LIC-1, full-audit 2026-07-12b) -------------
+// prepare-drive.{ps1,sh} COPY the three drive-root notice files and
+// build-commercial-drive.{ps1,sh} GATE on them — four re-spelled literals of the one
+// canonical list (commercial-drive.ts DRIVE_LICENSE_ARTIFACTS). A drift here ships a
+// drive the sell gate rejects (or, worse, a gate that checks the wrong filename and
+// passes a non-compliant drive).
+describe('TS ↔ shell-script drift (drive license artifacts, LIC-1)', () => {
+  it.each([
+    ['scripts/prepare-drive.ps1', '$LicenseArtifacts = @(', ')'],
+    ['scripts/prepare-drive.sh', 'LICENSE_ARTIFACTS=(', ')'],
+    ['scripts/build-commercial-drive.ps1', '$LicenseArtifacts = @(', ')'],
+    ['scripts/build-commercial-drive.sh', 'LICENSE_ARTIFACTS=(', ')']
+  ])('%s spells exactly the canonical artifact list', (rel, header, close) => {
+    expect(extractArray(read(rel), header, close)).toEqual([...DRIVE_LICENSE_ARTIFACTS])
   })
 })
 

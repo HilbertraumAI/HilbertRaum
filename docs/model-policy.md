@@ -157,6 +157,26 @@ license_review:
 
 Do not bundle a model unless its license has been reviewed.
 
+**How the recorded attribution requirements are discharged (LIC-1, full-audit 2026-07-12b).**
+The approved review notes record "ship the LICENSE/NOTICE attribution with the drive" — a
+`license_url` in YAML is not a license copy, and resolving one needs network on an offline
+product. The mechanism: the committed, **GENERATED** root file `DRIVE-NOTICES.md`
+(`node scripts/generate-drive-notices.mjs`) carries one attribution line per model manifest
+(id, upstream repo, declared license, `download.license_url`, plus any non-`approved`
+`license_review.status`), the full Apache-2.0 text once, and the MIT / zlib texts for the
+llama.cpp + whisper.cpp binaries and the SDL2.dll the whisper Windows archive bundles — those
+texts are **pinned in-repo under `licenses/`** at review time because the upstream release
+archives ship no license file (see `licenses/README.md`). `prepare-drive` copies
+`LICENSE` + `THIRD-PARTY-NOTICES.md` + `DRIVE-NOTICES.md` to the drive **root**, and the sell
+gate (`assertCommercialDrive` + `build-commercial-drive.{ps1,sh}` step 7) fails a drive where
+any of the three is missing or empty. Freshness + coverage (every runtime family in
+`runtime-sources.yaml`, every manifest) are enforced by
+`apps/desktop/tests/integration/drive-notices.test.ts` — regenerate + commit the file together
+with any manifest or runtime-pin change. The TranslateGemma commercial flow-down items (a
+Gemma Terms copy on the drive, the verbatim Gemma notice, the sale-terms clause) fold into
+this same mechanism when that separate review closes; until then its `pending` status keeps
+it off sold drives while its attribution line is already carried.
+
 ### Disqualified / parked candidates (Phase-28 license research, 2026-06-10)
 
 **Disqualified (do not revisit without new facts):** EXAONE 4.x (NC license); Ministral

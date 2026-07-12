@@ -58,6 +58,18 @@ function writePolicy(root: string, json: unknown): void {
   writeFileSync(join(root, 'config', 'policy.json'), JSON.stringify(json))
 }
 
+/**
+ * Root license/attribution artifacts (LIC-1, full-audit 2026-07-12b) — prepare-drive copies
+ * these three files from the repo root to the DRIVE root; the sell gate requires them
+ * present and non-empty. Spelled as literals here (not the exported constant) so the test
+ * stays an independent check of the canonical list.
+ */
+function provisionLicenseArtifacts(root: string): void {
+  for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'DRIVE-NOTICES.md']) {
+    writeFileSync(join(root, name), `${name} text`)
+  }
+}
+
 /** Provision a trusted product skill under app-skills/ (skills plan S9) — a sold drive ships one. */
 function provisionAppSkill(root: string, id = 'bank-statement'): void {
   const dir = join(root, 'app-skills', id)
@@ -123,6 +135,7 @@ describe('assertCommercialDrive', () => {
     const root = tempDir('hilbertraum-commercial-ok-')
     writePolicy(root, buildPolicyJson()) // commercial default
     provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     const embed = writeVerifiedWeight(root, 'embed', 'models/embeddings/e5.gguf', 'embed-weights')
 
@@ -139,8 +152,48 @@ describe('assertCommercialDrive', () => {
       runtimeCurrent: true,
       ocrAssetsVerified: true,
       appSkillsPresent: true,
-      userSkillsEmpty: true
+      userSkillsEmpty: true,
+      licenseArtifactsPresent: true
     })
+  })
+
+  // LIC-1 (full-audit 2026-07-12b): the root license/attribution artifacts are part of the
+  // sellable posture — every approved Apache-2.0 review note records "ship the LICENSE/NOTICE
+  // attribution with the drive", the llama.cpp/whisper.cpp binaries are MIT (the notice must
+  // accompany copies), and the app itself is GPL. A drive without the three root files must
+  // NOT pass, however green everything else is.
+  it('fails when the root license/attribution artifacts are missing (LIC-1)', async () => {
+    const root = tempDir('hilbertraum-commercial-lic-')
+    writePolicy(root, buildPolicyJson())
+    provisionAppSkill(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    // Deliberately NO provisionLicenseArtifacts — the drive carries none of the three files.
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.ok).toBe(false)
+    expect(res.checks.licenseArtifactsPresent).toBe(false)
+    for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'DRIVE-NOTICES.md']) {
+      expect(
+        res.problems.some((p) => p.includes(`drive root: ${name}`)),
+        `expected a problem naming ${name}`
+      ).toBe(true)
+    }
+  })
+
+  it('fails when a license artifact exists but is EMPTY — and names only that one (LIC-1)', async () => {
+    const root = tempDir('hilbertraum-commercial-lic-empty-')
+    writePolicy(root, buildPolicyJson())
+    provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
+    writeFileSync(join(root, 'DRIVE-NOTICES.md'), '') // zero bytes = not an attribution artifact
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.ok).toBe(false)
+    expect(res.checks.licenseArtifactsPresent).toBe(false)
+    expect(res.problems.some((p) => p.includes('drive root: DRIVE-NOTICES.md'))).toBe(true)
+    // The other two artifacts are fine — they must NOT be flagged (match on the precise
+    // "drive root: <name>" fragment; the remediation hint names all three files).
+    expect(res.problems.some((p) => p.includes('drive root: THIRD-PARTY-NOTICES.md'))).toBe(false)
+    expect(res.problems.some((p) => p.includes('drive root: LICENSE'))).toBe(false)
   })
 
   // Skills plan S9 / §14: a sold drive must ship at least one trusted product skill.
@@ -174,6 +227,7 @@ describe('assertCommercialDrive', () => {
     const root = tempDir('hilbertraum-commercial-emptyuser-')
     writePolicy(root, buildPolicyJson())
     provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     mkdirSync(join(root, 'user-skills'), { recursive: true }) // empty
     const res = await assertCommercialDrive(root, [chat])
@@ -354,6 +408,7 @@ describe('assertCommercialDrive', () => {
     const root = tempDir('hilbertraum-commercial-emptydocs-')
     writePolicy(root, buildPolicyJson())
     provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     mkdirSync(join(root, 'workspace', 'documents'), { recursive: true }) // empty
     const res = await assertCommercialDrive(root, [chat])
@@ -416,6 +471,7 @@ describe('assertCommercialDrive', () => {
       const root = tempDir('hilbertraum-commercial-rt-ok-')
       writePolicy(root, buildPolicyJson())
       provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
       const res = await assertCommercialDrive(root, [chat], sources())
@@ -503,6 +559,7 @@ describe('assertCommercialDrive', () => {
       const root = tempDir('hilbertraum-commercial-rt-skip-')
       writePolicy(root, buildPolicyJson())
       provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       const res = await assertCommercialDrive(root, [chat])
       expect(res.ok).toBe(true)
@@ -561,6 +618,7 @@ describe('assertCommercialDrive', () => {
       const root = tempDir('hilbertraum-commercial-wh-ok-')
       writePolicy(root, buildPolicyJson())
       provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
       writeWhisperInstall(root)

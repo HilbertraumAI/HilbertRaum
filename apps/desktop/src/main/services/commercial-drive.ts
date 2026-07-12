@@ -27,6 +27,23 @@ import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './d
 // models must verify, NETWORK DENIED — spec §12.2) and contain NO user data. The assertion
 // FAILS LOUDLY if any of that is violated.
 
+/**
+ * Distribution-level license/attribution artifacts every prepared drive carries at its
+ * ROOT (LIC-1, full-audit 2026-07-12b): the app's own GPL-3.0-or-later license text, the
+ * bundled-npm-package notices, and the GENERATED drive-wide notices (runtime binaries +
+ * model weights + the GPLv3 source-availability statement — regenerated with
+ * `node scripts/generate-drive-notices.mjs` from model-manifests/ + licenses/).
+ * `prepare-drive.{ps1,sh}` copy all three from the repo root; `assertCommercialDrive`
+ * below (and the build-commercial-drive scripts' native cross-check) fails a drive where
+ * any is missing or empty. `tests/integration/script-drift.test.ts` pins the four
+ * scripts' literals to this list.
+ */
+export const DRIVE_LICENSE_ARTIFACTS = [
+  'LICENSE',
+  'THIRD-PARTY-NOTICES.md',
+  'DRIVE-NOTICES.md'
+] as const
+
 // ---- The ordered "build a sellable drive" plan -------------------------------------
 
 export interface CommercialStep {
@@ -107,8 +124,10 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
       command: `prepare-drive --target ${target}`,
       manual: false,
       description:
-        'Create the directory tree + copy manifests/docs + write config/{drive,policy}.json ' +
-        'in the commercial posture (encryption required, plaintext off, network denied).'
+        'Create the directory tree + copy manifests/docs + the root license/attribution ' +
+        'notices (LICENSE, THIRD-PARTY-NOTICES.md, DRIVE-NOTICES.md — LIC-1) + write ' +
+        'config/{drive,policy}.json in the commercial posture (encryption required, ' +
+        'plaintext off, network denied).'
     },
     {
       id: 'fetch-models',
@@ -182,7 +201,9 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
       description:
         'Automated gate: commercial policy (encryption required, plaintext off, models must ' +
         'verify, network denied), all weights VERIFIED, every license_review APPROVED ' +
-        '(spec §13 — not overridable by --accept-license), and NO user data present.'
+        '(spec §13 — not overridable by --accept-license), NO user data present, and the ' +
+        'root license/attribution artifacts (LICENSE, THIRD-PARTY-NOTICES.md, ' +
+        'DRIVE-NOTICES.md) present and non-empty (LIC-1).'
     }
   ]
 }
@@ -247,6 +268,13 @@ export interface CommercialAssertion {
      * skills and no user-installed ones — the same "ships empty" rule as the workspace.
      */
     userSkillsEmpty: boolean
+    /**
+     * Every root license/attribution artifact (`DRIVE_LICENSE_ARTIFACTS`) is present and
+     * non-empty (LIC-1, full-audit 2026-07-12b): the approved reviews record "ship the
+     * LICENSE/NOTICE attribution with the drive", the MIT binaries require their notice
+     * in all copies, and the app's own GPL text + source statement ride the same files.
+     */
+    licenseArtifactsPresent: boolean
   }
   /** The per-weight verification detail (for surfacing which weight failed). */
   modelResults: ModelVerifyResult[]
@@ -365,6 +393,29 @@ export async function assertCommercialDrive(
   const noUserData = userData.length === 0
   for (const path of userData) {
     problems.push(`user data present on a drive meant to ship empty: ${path}`)
+  }
+
+  // --- Root license/attribution artifacts present + non-empty (LIC-1, 2026-07-12b) ---
+  // A sold drive ships MIT binaries (llama.cpp/whisper.cpp — the notice must accompany
+  // copies), Apache-2.0 weights/traineddata (every approved review note records "ship the
+  // LICENSE/NOTICE attribution with the drive"), and the GPL app itself — all discharged
+  // by the three root files prepare-drive copies. Missing OR empty fails the sell gate.
+  let licenseArtifactsPresent = true
+  for (const rel of DRIVE_LICENSE_ARTIFACTS) {
+    let present = false
+    try {
+      const p = join(rootPath, rel)
+      present = existsSync(p) && statSync(p).size > 0
+    } catch {
+      present = false
+    }
+    if (!present) {
+      licenseArtifactsPresent = false
+      problems.push(
+        `license/attribution artifact missing or empty at the drive root: ${rel} — ` +
+          're-run prepare-drive (it copies LICENSE + THIRD-PARTY-NOTICES.md + DRIVE-NOTICES.md)'
+      )
+    }
   }
 
   // --- Runtime install markers match the yaml pin (opt-in) ---
@@ -492,7 +543,8 @@ export async function assertCommercialDrive(
       runtimeCurrent,
       ocrAssetsVerified,
       appSkillsPresent,
-      userSkillsEmpty
+      userSkillsEmpty,
+      licenseArtifactsPresent
     },
     modelResults
   }

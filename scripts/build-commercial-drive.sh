@@ -115,6 +115,9 @@ else
 fi
 
 # --- 5. Copy the launcher + user docs onto the drive root --------------------------
+# NOTE: the root license/attribution artifacts (LICENSE, THIRD-PARTY-NOTICES.md,
+# DRIVE-NOTICES.md — LIC-1) are NOT re-copied here: step 1 runs prepare-drive, whose
+# base flow already places them at the drive root; the step-7 gate below verifies them.
 step 5 "Copy the launcher + user docs onto the drive root"
 for f in "Start HilbertRaum.cmd" "Start HilbertRaum.command" "start-hilbertraum.sh" "READ ME FIRST.txt"; do
   src="$REPO_ROOT/launchers/$f"
@@ -194,6 +197,21 @@ if [[ $DRY_RUN -eq 0 ]]; then
     PROBLEMS+=("model-manifests missing on the drive")
   fi
 fi
+# License/attribution artifacts gate (assertCommercialDrive parity, LIC-1, full-audit
+# 2026-07-12b): a sold drive ships MIT binaries + Apache-2.0 weights/traineddata + the
+# GPL app — the three root notice files prepare-drive copies discharge the recorded
+# "ship the LICENSE/NOTICE attribution with the drive" requirements. Missing OR EMPTY
+# fails. Keep in sync with commercial-drive.ts DRIVE_LICENSE_ARTIFACTS (script-drift test).
+LICENSE_ARTIFACTS=(
+  LICENSE
+  THIRD-PARTY-NOTICES.md
+  DRIVE-NOTICES.md
+)
+for lic in "${LICENSE_ARTIFACTS[@]}"; do
+  if [[ ! -s "$TARGET/$lic" ]]; then
+    PROBLEMS+=("license/attribution artifact missing or empty at the drive root: $lic (re-run prepare-drive)")
+  fi
+done
 # Runtime-marker gate (assertCommercialDrive parity, Phase 14): every pinned sidecar
 # build must be PRESENT (binary) and carry a .hilbertraum-runtime.json whose version AND
 # backend match runtime-sources.yaml — a missing binary or a missing/stale marker means

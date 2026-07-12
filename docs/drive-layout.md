@@ -61,6 +61,9 @@ HILBERTRAUM/
 ├── Start HilbertRaum.command              # macOS launcher
 ├── start-hilbertraum.sh                   # Linux launcher
 ├── READ ME FIRST.txt                           # friendly first-run + SmartScreen note
+├── LICENSE                                     # the app's own GPL-3.0-or-later text (LIC-1)
+├── THIRD-PARTY-NOTICES.md                      # bundled npm-package notices (also ships inside the packaged app)
+├── DRIVE-NOTICES.md                            # GENERATED drive-wide notices: runtime binaries + model weights + GPL source statement (scripts/generate-drive-notices.mjs)
 ├── HilbertRaum-<version>-portable.exe   # the portable build — signed for commercial
 ├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Vulkan on win/linux)
 │   ├── .hilbertraum-runtime.json                       # install marker: { version, backend, os, arch }
@@ -156,9 +159,14 @@ scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 ```
 
 `prepare-drive` creates the directory tree, copies the committed manifests + user docs onto the
-drive, and generates `config/drive.json` (the prepared-drive marker) + `config/policy.json`
+drive, copies the three **root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`,
+`DRIVE-NOTICES.md` — LIC-1, full-audit 2026-07-12b; unconditional, dev drives get them too), and
+generates `config/drive.json` (the prepared-drive marker) + `config/policy.json`
 (no-phone-home posture — model downloads permitted, update-checks + telemetry denied; `--dev`/`-Dev`
-for a plaintext developer drive).
+for a plaintext developer drive). `DRIVE-NOTICES.md` is a committed, GENERATED file
+(`node scripts/generate-drive-notices.mjs` — derived from `model-manifests/**` + the pinned texts
+under `licenses/`); the commercial sell gate fails a drive where any of the three is missing or
+empty (see [`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md)).
 
 By default it does **not** download artifacts. `--with-assets`/`-WithAssets`
 then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar) — each download is

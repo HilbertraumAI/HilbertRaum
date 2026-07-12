@@ -126,6 +126,13 @@ extraResources:
   # fails the gate when it drifts from package-lock.json.
   - from: ../../THIRD-PARTY-NOTICES.md
     to: THIRD-PARTY-NOTICES.md
+  # LIC-2 (full-audit 2026-07-12b): the project's OWN GPL-3.0-or-later license text.
+  # Without this the packaged artifact carries the GPL only as the package.json SPDX
+  # string (the root LICENSE sits outside the apps/desktop build context and files:
+  # only bundles out/** + package.json). Shipped as LICENSE.txt beside Electron's own
+  # LICENSE.electron.txt / LICENSES.chromium.html; third-party-notices.test.ts pins it.
+  - from: ../../LICENSE
+    to: LICENSE.txt
 
 # Asar keeps the app a single archive; node:sqlite + the parser libs work from it.
 asar: true

@@ -173,6 +173,10 @@ Key config points:
   `package-lock.json` + the `files:` negations (shared logic in `scripts/lib/shipped-packages.mjs`)
   and fails the gate while the file is stale. Electron's own `LICENSE.electron.txt` /
   `LICENSES.chromium.html` are placed beside the executable by electron-builder itself.
+- **The project's own `LICENSE` ships as an `extraResource` too** (as `LICENSE.txt`, LIC-2
+  full-audit 2026-07-12b): the root GPL-3.0-or-later text sits outside the `apps/desktop` build
+  context, so without this entry the artifact would carry the GPL only as the `package.json` SPDX
+  string. `third-party-notices.test.ts` pins the entry.
 - The build output goes to `apps/desktop/release/` (git-ignored).
 
 ### Launching from a drive
@@ -241,7 +245,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
 | `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
@@ -377,6 +381,8 @@ steps. Its plan + the final "is this sellable?" assertion are mirrored from the 
 
 ```
 prepare-drive  --force            # commercial policy (encrypted, plaintext off, no phone-home)
+                                  # + the root license/attribution notices (LICENSE,
+                                  # THIRD-PARTY-NOTICES.md, DRIVE-NOTICES.md — LIC-1)
 fetch-models   --accept-license   # verified weights (a SOLD drive needs an approved, redistributable license — spec §13)
 fetch-runtime                     # verified llama.cpp sidecar builds: per OS the default (Vulkan/Metal)
                                   # + the pure-CPU safety net on win/linux
@@ -386,6 +392,7 @@ verify-models  --generate         # capture real hashes -> config/checksums.json
 final check: commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied) + all weights VERIFIED
              + runtime install markers match the pin + no user data
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
+             + root license/attribution artifacts present + non-empty (LIC-1)
 ```
 
 ```powershell
@@ -408,6 +415,14 @@ weight VERIFIED" spans every shipped runtime family (2026-07-01):** the verifier
 gate on the canonical `(runtime → format)` support table (`models.ts` `SUPPORTED_RUNTIME_FORMATS`), so the
 bundled **ggml / whisper_cpp** transcriber verifies by SHA-256 like any GGUF — previously it was reported
 `UNSUPPORTED`, which meant a drive that bundles Whisper could never pass `-Strict` / the sell gate.
+**The gate also requires the three root license/attribution artifacts** (LIC-1, full-audit
+2026-07-12b): `LICENSE` (the app's GPL-3.0-or-later text), `THIRD-PARTY-NOTICES.md` (bundled npm
+packages), and `DRIVE-NOTICES.md` (GENERATED — runtime-binary + model-weight attribution derived
+from `model-manifests/**` and the pinned texts under `licenses/`, plus the GPLv3 source-availability
+statement; regenerate with `node scripts/generate-drive-notices.mjs`). `prepare-drive` copies them
+to the drive root in step 1; a missing or empty artifact fails the SELLABLE verdict
+(`assertCommercialDrive` + both scripts' native cross-check; freshness/coverage enforced by
+`tests/integration/drive-notices.test.ts`, list parity by `script-drift.test.ts`).
 **Remaining manual acceptance (R5/R7):** a
 real signed build + notarization + a USB-drive §17 demo on a fresh laptop with Wi-Fi off, and the
 second-laptop continuity check.

@@ -103,4 +103,17 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(entry!.from).toBe('../../THIRD-PARTY-NOTICES.md')
     expect(entry!.to).toBe('THIRD-PARTY-NOTICES.md')
   })
+
+  // LIC-2 (full-audit 2026-07-12b): the artifact must also carry the project's OWN
+  // GPL-3.0-or-later text — the root LICENSE is outside the apps/desktop build context,
+  // so without this extraResources entry the packaged app ships the GPL only as the
+  // package.json SPDX string.
+  it('electron-builder ships the project LICENSE beside app.asar as LICENSE.txt', () => {
+    const cfg = parse(
+      readFileSync(join(__dirname, '..', '..', 'electron-builder.yml'), 'utf8')
+    ) as { extraResources?: Array<{ from?: string; to?: string }> }
+    const entry = (cfg.extraResources ?? []).find((e) => e.from === '../../LICENSE')
+    expect(entry, 'extraResources entry for the project LICENSE missing').toBeTruthy()
+    expect(entry!.to).toBe('LICENSE.txt')
+  })
 })
