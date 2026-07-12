@@ -255,6 +255,41 @@ describe('logging service (L17)', () => {
       expect(hits).toBe(1)
     })
 
+    it('refuses to rewrite app.log.enc under an in-place-zeroed key (full-audit 2026-07-12b SEC-1)', () => {
+      const key = randomBytes(32)
+      const liveKeyBytes = Buffer.from(key) // the original bytes, before the in-place zero
+      initLogging(dir)
+      attachVaultKey(key)
+      log.error('sealed under the real key') // error → flushed to disk
+      const encPath = join(dir, 'app.log.enc')
+      const snapshot = readFileSync(encPath)
+
+      // changePassword's v1→v2 branch zero-fills the retired key Buffer IN PLACE while
+      // logging still holds the reference; rekeyVaultLog re-attaches the live key only
+      // AFTER changePassword returns. A log.error inside that window must NOT rewrite
+      // app.log.enc under 32 zero bytes (a GCM-valid blob anyone can decrypt).
+      key.fill(0)
+      log.error('inside the zero-key window')
+
+      const after = readFileSync(encPath)
+      expect(after.equals(snapshot), 'app.log.enc was rewritten inside the zero-key window').toBe(
+        true
+      )
+      expect(() => decrypt(Buffer.alloc(32), deserializeBlob(after))).toThrow()
+      // The prior generation still decrypts under the original key bytes.
+      const text = decrypt(liveKeyBytes, deserializeBlob(after)).toString('utf8')
+      expect(text).toContain('sealed under the real key')
+
+      // The refused line is buffered, NOT lost: once rekeyVaultLog re-attaches the live
+      // key (registerWorkspaceIpc does so right after changePassword returns), the next
+      // flush persists it.
+      const newKey = randomBytes(32)
+      rekeyVaultLog(newKey)
+      const rekeyed = decrypt(newKey, deserializeBlob(readFileSync(encPath))).toString('utf8')
+      expect(rekeyed).toContain('inside the zero-key window')
+      expect(rekeyed).toContain('sealed under the real key')
+    })
+
     it('rekeyVaultLog (v1 password change, rotated key) preserves history under the new key', () => {
       const oldKey = randomBytes(32)
       const newKey = randomBytes(32)

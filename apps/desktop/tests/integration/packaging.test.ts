@@ -45,6 +45,8 @@ function globToRegExp(glob: string): RegExp {
 interface LockPackage {
   dependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   dev?: boolean
 }
 
@@ -82,6 +84,12 @@ function prodClosure(packages: Record<string, LockPackage>, skipMermaid: boolean
     seen.add(cur)
     const entry = packages[cur]
     const deps = { ...entry.dependencies, ...entry.optionalDependencies }
+    // Keep the mirror with scripts/lib/shipped-packages.mjs exact: that walk folds
+    // NON-OPTIONAL peerDependencies (TQ-3, full-audit 2026-07-12b), so this copy must too,
+    // or the two closures silently disagree about what ships.
+    for (const d of Object.keys(entry.peerDependencies ?? {})) {
+      if (!entry.peerDependenciesMeta?.[d]?.optional) deps[d] = d
+    }
     for (const d of Object.keys(deps)) {
       const r = resolveDep(cur, d)
       if (r && !seen.has(r)) queue.push(r)

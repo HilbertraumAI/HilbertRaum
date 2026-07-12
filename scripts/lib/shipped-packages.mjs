@@ -81,6 +81,15 @@ function prodClosure(packages) {
     seen.add(cur)
     const entry = packages[cur]
     const deps = { ...entry.dependencies, ...entry.optionalDependencies }
+    // TQ-3 (full-audit 2026-07-12b): fold NON-OPTIONAL peerDependencies into the walk —
+    // npm 7+ auto-installs them and electron-builder ships them, so skipping them could
+    // let a future dep's required peer ship un-noticed with every gate green. Peers
+    // flagged optional in peerDependenciesMeta are NOT auto-installed and stay out.
+    // Verified 2026-07-12: every required peer of the current shipped set is already in
+    // the closure, so this changes nothing today (regeneration stays byte-identical).
+    for (const d of Object.keys(entry.peerDependencies ?? {})) {
+      if (!entry.peerDependenciesMeta?.[d]?.optional) deps[d] = true
+    }
     for (const d of Object.keys(deps)) {
       const r = resolveDep(cur, d)
       if (r && !seen.has(r)) queue.push(r)
@@ -93,9 +102,11 @@ function prodClosure(packages) {
  * Compute the shipped package set for a packaged artifact.
  *
  * @param {string} repoRoot absolute path to the repository root
- * @returns {Array<{ name: string, version: string, lockPath: string }>}
+ * @returns {Array<{ name: string, version: string, lockPath: string, lockLicense: string | null }>}
  *   sorted by name (then version), deduplicated by name@version. `lockPath` is the
- *   lockfile/node_modules path of one physical copy (for reading license files).
+ *   lockfile/node_modules path of one physical copy (for reading license files);
+ *   `lockLicense` is the lockfile entry's license identifier, the fallback when the
+ *   package is not installed on this host (REL-2, full-audit 2026-07-12b).
  */
 export function computeShippedPackages(repoRoot) {
   const lock = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8'))
@@ -127,9 +138,19 @@ export function computeShippedPackages(repoRoot) {
     const version = lock.packages[p].version
     if (!version) throw new Error(`lockfile entry has no version: ${p}`)
     const id = `${name}@${version}`
-    if (!byId.has(id)) byId.set(id, { name, version, lockPath: p })
+    if (!byId.has(id)) {
+      byId.set(id, { name, version, lockPath: p, lockLicense: lock.packages[p].license ?? null })
+    }
   }
+  // Code-unit comparison (codepoint order for these ASCII names), NOT localeCompare
+  // (REL-1, full-audit 2026-07-12b): this order feeds a byte-exact drift gate
+  // (apps/desktop/tests/integration/third-party-notices.test.ts), and no-locale
+  // localeCompare uses the HOST ICU collation (dev = de-AT, CI = en/C), whose punctuation
+  // handling (`@ / - .`) is not guaranteed stable across ICU versions. Probed 2026-07-12:
+  // the current 226-name set orders identically either way, so this changes nothing
+  // today — but code-unit order can never drift with the host.
+  const byCodepoint = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
   return [...byId.values()].sort(
-    (a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version)
+    (a, b) => byCodepoint(a.name, b.name) || byCodepoint(a.version, b.version)
   )
 }

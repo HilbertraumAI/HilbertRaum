@@ -117,9 +117,26 @@ function writeFileAtomicSync(path: string, blob: Buffer): void {
   renameSync(tmp, path)
 }
 
+/**
+ * full-audit 2026-07-12b SEC-1 — the changePassword v1→v2 zero-key window. This module holds
+ * the vault key Buffer BY REFERENCE (`encryptionKey()` hands out the live buffer), and the v1
+ * migration branch of `changePassword` zero-fills the retired buffer IN PLACE while logging
+ * still references it; `rekeyVaultLog` re-attaches the new key only AFTER changePassword
+ * returns (registerWorkspaceIpc). A `log.error` inside that window would otherwise atomically
+ * rewrite `app.log.enc` — the whole-session metadata log — under 32 zero bytes: a GCM-valid
+ * blob anyone can decrypt (the §48 SEC-1 false-assurance shape). So both encrypted write
+ * paths refuse an all-zero key. The refused line is NOT lost: it stays in the in-memory
+ * buffer and rides the next flush once the live key is re-attached. (The belt lives here and
+ * not as a rekey call inside workspace-vault: logging already imports `shredFile` FROM
+ * workspace-vault, so a vault→logging call would create an import cycle.)
+ */
+function vaultKeyZeroed(): boolean {
+  return vaultKey !== null && vaultKey.every((b) => b === 0)
+}
+
 /** Encrypt `buffer` and write it to `app.log.enc` atomically (temp + fsync + rename). */
 function persistEncrypted(): void {
-  if (!encLogFile || !vaultKey) return
+  if (!encLogFile || !vaultKey || vaultKeyZeroed()) return
   try {
     writeFileAtomicSync(encLogFile, serializeBlob(encrypt(vaultKey, Buffer.from(buffer, 'utf8'))))
   } catch {
@@ -227,7 +244,7 @@ function rotatePlainIfNeeded(): void {
 
 /** Rotate the encrypted log: re-encrypt the current buffer to `app.1.log.enc`, then reset. */
 function rotateEncryptedIfNeeded(): void {
-  if (!encLogFile || !logDir || !vaultKey) return
+  if (!encLogFile || !logDir || !vaultKey || vaultKeyZeroed()) return
   if (Buffer.byteLength(buffer, 'utf8') <= MAX_BYTES) return
   try {
     const blob = serializeBlob(encrypt(vaultKey, Buffer.from(buffer, 'utf8')))

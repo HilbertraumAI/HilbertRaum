@@ -35,6 +35,25 @@ function cleanText(raw, source) {
 }
 
 /**
+ * Case-folded code-unit order (codepoint order for these ASCII names), NOT localeCompare
+ * (REL-1, full-audit 2026-07-12b): this order feeds the byte-exact notices drift gate,
+ * and no-locale localeCompare depends on the HOST ICU collation (dev = de-AT, CI = en/C).
+ * Pure code-unit order would REORDER the committed file today (ICU's primary strength is
+ * case-insensitive, so `cmaps` < `LICENSE` inside pdfjs-dist; raw code units put
+ * `LICENSE` first) — so we case-fold first, which reproduces the committed
+ * ICU-primary-strength order byte-identically, and tiebreak equal folds by raw code
+ * units. `String.prototype.toLowerCase()` is locale-INDEPENDENT (Unicode default case
+ * conversion — unlike toLocaleLowerCase), so this is fully deterministic across hosts
+ * and ICU versions.
+ */
+function foldedCodepointCompare(a, b) {
+  const fa = a.toLowerCase()
+  const fb = b.toLowerCase()
+  if (fa !== fb) return fa < fb ? -1 : 1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/**
  * Find license/notice files in a package directory: LICENSE / LICENCE / COPYING /
  * NOTICE basenames (any case, any extension except code), including nested asset
  * copies (pdfjs-dist ships per-asset licenses under standard_fonts/, wasm/, cmaps/,
@@ -44,7 +63,7 @@ function findLicenseFiles(pkgDir, depth = 0) {
   const out = []
   if (depth > 3) return out
   for (const entry of readdirSync(pkgDir, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name)
+    foldedCodepointCompare(a.name, b.name)
   )) {
     const p = join(pkgDir, entry.name)
     if (entry.isDirectory()) {
@@ -93,9 +112,29 @@ function repositoryOf(pkgJson) {
 
 const packages = computeShippedPackages(repoRoot)
 
+// REL-2 (full-audit 2026-07-12b): npm skips installing optionalDependencies whose os/cpu
+// don't match the host, so a platform-gated optional in the shipped closure can be ABSENT
+// from this host's node_modules while still shipping on the platform it targets. Such a
+// package STAYS in the list — computeShippedPackages is lockfile-only, so the freshness
+// gate (apps/desktop/tests/integration/third-party-notices.test.ts) recomputes the same
+// list on every host regardless of what is installed; dropping it here would desync the
+// generated file from the gate permanently. Instead its section falls back to lockfile
+// metadata (with a warning) rather than crashing with ENOENT on the very machine the
+// gate is demanding regeneration from. Empty on this host today.
+const notInstalled = new Set(
+  packages.filter((p) => !existsSync(join(repoRoot, p.lockPath, 'package.json')))
+)
+for (const p of notInstalled) {
+  console.warn(
+    `WARNING: ${p.name}@${p.version} is in the shipped closure but not installed on this ` +
+      'host (platform-gated optional dependency?) — emitting its notices section from ' +
+      'package-lock.json metadata; its license text cannot be reproduced here.'
+  )
+}
+
 // Pre-scan license/notice files so the header can state the NOTICE situation truthfully.
 const licenseFilesByPkg = new Map(
-  packages.map((p) => [p, findLicenseFiles(join(repoRoot, p.lockPath))])
+  packages.map((p) => [p, notInstalled.has(p) ? [] : findLicenseFiles(join(repoRoot, p.lockPath))])
 )
 const noticeCount = [...licenseFilesByPkg.values()]
   .flat()
@@ -139,6 +178,20 @@ lines.push('## Licenses')
 
 for (const p of packages) {
   const pkgDir = join(repoRoot, p.lockPath)
+  if (notInstalled.has(p)) {
+    // REL-2 fallback section (see above): keeps the gate's per-package section check
+    // satisfied and the package honestly noticed even when this host cannot read it.
+    lines.push('')
+    lines.push(`### ${p.name}@${p.version}`)
+    lines.push('')
+    lines.push(`- License: ${p.lockLicense ?? '(unspecified)'} (from package-lock.json metadata)`)
+    lines.push('')
+    lines.push('This package was not installed on the host that regenerated this file (npm')
+    lines.push('skips optional dependencies gated to another OS/CPU), so its license text')
+    lines.push('could not be reproduced here. The license identifier above comes from the')
+    lines.push('lockfile; see the published package for the full text.')
+    continue
+  }
   const pkgJson = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
   lines.push('')
   lines.push(`### ${p.name}@${p.version}`)

@@ -411,7 +411,11 @@ explicitly:
   workspace. Now the drained prepare fails cleanly (the row reconciles `failed` after
   unlock and re-indexes normally). The check-then-encrypt cannot race `lock()` (both are
   synchronous, and `createCipheriv` copies the key before the first await); an encrypt
-  already past that point finishes under the real key — harmless ciphertext.
+  already past that point finishes under the real key — harmless ciphertext. The diagnostics
+  log carries the same belt (full-audit 2026-07-12b SEC-1): its encrypted write paths refuse
+  to rewrite `app.log.enc` while the attached key buffer is all-zero (the v1→v2
+  password-change window between the in-place zero and the `rekeyVaultLog` re-attach); the
+  refused line stays buffered and flushes under the re-attached live key.
 - **fsync before the atomic rename (CODE-10).** `encryptFile`/`encryptFileAsync` fsync the
   written frame before renaming it into place (the `writeVaultDescriptor` idiom). Without
   it, quit → unplug-without-eject on a non-write-through mount could land a truncated

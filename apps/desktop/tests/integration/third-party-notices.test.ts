@@ -59,6 +59,39 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(text).toContain('SIL OPEN FONT LICENSE Version 1.1')
   })
 
+  it('every non-optional peer of a shipped package is itself shipped (full-audit 2026-07-12b TQ-3)', () => {
+    // The freshness gate above recomputes the shipped set via the SAME lib as the generator
+    // (scripts/lib/shipped-packages.mjs), so a closure-computation bug — e.g. the TQ-3 peer
+    // fold regressing — would pass both sides. This assertion is the independent belt: it
+    // re-derives the peer requirement straight from the lockfile entries of the shipped set
+    // and checks against shipped package NAMES (npm 7+ auto-installs required peers and
+    // electron-builder ships them, so a missing one would ship un-noticed).
+    const lock = JSON.parse(readFileSync(join(REPO_ROOT, 'package-lock.json'), 'utf8')) as {
+      packages: Record<
+        string,
+        {
+          peerDependencies?: Record<string, string>
+          peerDependenciesMeta?: Record<string, { optional?: boolean }>
+        }
+      >
+    }
+    const shipped = computeShippedPackages(REPO_ROOT)
+    const shippedNames = new Set(shipped.map((p) => p.name))
+    const missing: string[] = []
+    for (const p of shipped) {
+      const entry = lock.packages[p.lockPath]
+      for (const peer of Object.keys(entry?.peerDependencies ?? {})) {
+        if (entry.peerDependenciesMeta?.[peer]?.optional) continue
+        if (!shippedNames.has(peer)) missing.push(`${p.name}@${p.version} → peer ${peer}`)
+      }
+    }
+    expect(
+      missing,
+      'required peer of a shipped package is NOT shipped — closure bug, or a deliberate ' +
+        'yml negation of a peer (then extend this test to accept it explicitly)'
+    ).toEqual([])
+  })
+
   it('electron-builder ships the file beside app.asar via extraResources', () => {
     const cfg = parse(
       readFileSync(join(__dirname, '..', '..', 'electron-builder.yml'), 'utf8')

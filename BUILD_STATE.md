@@ -1426,6 +1426,19 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       skip on this box, run on the Ubuntu leg); red-verified: root-anchor / drop-target / realpath
       mutations each flipped exactly one new test red while the old 7 stayed green, reverted
       byte-identical. **TQ-4** license pin apps/desktop = root = GPL-3.0-or-later.
+    - _2026-07-12 Phase 3 (notices-generator robustness + logging belt, suite 4199/49 → 4201/49,
+      +2 tests):_ **REL-1** both notices sorts localeCompare → deterministic code-unit order
+      (license-file sort case-folded to reproduce the committed ICU-primary order); regeneration
+      byte-identical ("unchanged"). **REL-2** not-installed shipped package (platform-gated
+      optional) now emits a lockfile-metadata fallback section + warning instead of ENOENT — the
+      package stays in the list so the gate stays in sync. **TQ-3** non-optional peerDependencies
+      folded into the closure walk (byte-identical today) + an independent lockfile-derived belt
+      test (red-verified by mutation) + the packaging.test.ts mirror copy kept exact. **SEC-1**
+      diagnostics-log belt: `persistEncrypted`/`rotateEncryptedIfNeeded` refuse an all-zero vault
+      key (the changePassword v1→v2 in-place-zero window; the refused line flushes after
+      `rekeyVaultLog`), red-verified unit test + security-model.md clause. Reviewer pass: 1 real
+      catch repaired pre-commit (peer fold had silently broken the documented shipped-packages ↔
+      packaging.test.ts closure-mirror invariant).
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
