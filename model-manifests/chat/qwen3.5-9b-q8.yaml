@@ -20,7 +20,10 @@ local_path: models/chat/qwen3.5-9b-q8.gguf
 sha256: local-unverified
 # User-added local model (downloaded via `llama get`, hardlinked into models/chat).
 # No `download:` block — the weight is supplied locally, not fetched by fetch-models.
-recommended_profiles: [PRO]
+# Profiles emptied 2026-07-12 (catalog rule D17): an unpromoted manifest carries no legacy
+# profiles; the stub's [PRO] was hijacking the legacy profile picker from qwen3-14b. Stays
+# rank 0: the productized 16-20 GB pick is the UD-Q4_K_XL sibling (qwen3.5-9b-ud-q4kxl).
+recommended_profiles: []
 recommendation_rank: 0
 license_review:
   status: approved

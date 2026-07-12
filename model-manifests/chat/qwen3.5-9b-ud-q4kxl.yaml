@@ -10,12 +10,16 @@ size_on_disk_gb: 6.0
 # SQLite + the embedding/reranker sidecars + KV cache all need headroom alongside it.
 recommended_min_ram_gb: 12
 recommended_ram_gb: 16
-# Default 0: NOT auto-recommended. Balanced-tier challenger intended to challenge the current
-# 8B-class winners (Ministral 3 8B, Qwen3 8B). Promote with a real `recommendation_rank` ONLY
-# after it (1) beats the current 8B winner on the offline German/English grounded-QA harness AND
-# (2) is confirmed to load on the bumped b9849 runtime (manual smoke). Until then: selectable
-# manual pick, never auto-recommended.
-recommendation_rank: 0
+# Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):
+# a subjective owner judgment that newer model generations improve on the ones they replace, so
+# the newest-generation model is recommended per tier EVEN THOUGH the #48 tester eval placed this under the
+# incumbent Ministral 3 8B (F1 .3124/.3152 vs .3262; but F1 is length-confounded per the §9
+# scorer caveats, EM ties at .9765, so the eval is treated as directional, not decisive). It
+# HAS been through the tester eval on the b9849 binary (both this UD-Q4_K_XL and the local Q8
+# ran), which also discharges the old load-smoke gate. Picker effect (with the full 2026-07-12
+# promotion set): wins 16-20 GB from Ministral (rank 2); within the promoted pair at this tier
+# (the 4B carries the same rank 3 and recommended_ram_gb 16) it wins on the disk-size tiebreak.
+recommendation_rank: 3
 # Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). HilbertRaum recommends
 # 8192 here because this field is the SAFE LOCAL RUNTIME context budget for normal laptops, not
 # the theoretical model maximum. Revisit only after KV-cache/RAM budgeting + a long-context eval.

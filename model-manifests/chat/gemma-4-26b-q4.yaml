@@ -15,7 +15,9 @@ supports_thinking_mode: false
 local_path: models/chat/gemma-4-26b-q4.gguf
 sha256: local-unverified
 # User-added local model (managed by `llama list`, symlinked into the dev-root models/chat).
-recommended_profiles: [PRO]
+# Profiles emptied 2026-07-12 (catalog rule D17): an unpromoted manifest carries no legacy
+# profiles; the stub's [PRO] was hijacking the legacy profile picker from qwen3-14b.
+recommended_profiles: []
 recommendation_rank: 0
 license_review:
   status: approved

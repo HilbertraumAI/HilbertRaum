@@ -212,18 +212,19 @@ describe('recommendation per profile', () => {
     }
   })
 
-  // Phase-29: the RAM-best-fit picker is now quality-aware (recommendation_rank). It recommends
-  // the BENCHMARK WINNER for each machine size, not the biggest-on-disk model. Issue #48
-  // (model-benchmarks.md §6.3) recalibrated the 12-14B tier to its honest comfortable RAM (24),
-  // so a 24 GB machine now reaches the tier winner instead of being served the same 8B as 16 GB.
-  it('recommends the Phase-29 benchmark winner per machine RAM (real manifests)', () => {
+  // Newest-Qwen promotion (owner decision 2026-07-12, model-benchmarks.md §6.4): the picker
+  // recommends the newest-generation Qwen model per RAM tier. The Phase-29 winners (Ministral,
+  // Gemma 4 12B) keep their ranks and stay selectable but lose the tiebreaks to the rank-3
+  // promoted set. Issue #48's honest-RAM recalibration (12-14B tier at 24) is unchanged; the
+  // Qwen3.6 27B Q4 joins that 24 GB capacity group and wins it on rank.
+  it('recommends the newest-Qwen promoted model per machine RAM (real manifests)', () => {
     const m = realManifests()
-    expect(recommendModelIdByRam(m, 8, 'chat')).toBe('qwen3-4b-instruct-q4') // default 4B (Deep)
-    expect(recommendModelIdByRam(m, 12, 'chat')).toBe('qwen3-4b-instruct-q4')
-    expect(recommendModelIdByRam(m, 16, 'chat')).toBe('ministral3-8b-instruct-2512-q4') // best 8B
-    expect(recommendModelIdByRam(m, 20, 'chat')).toBe('ministral3-8b-instruct-2512-q4') // 12-14B tier starts at 24
-    expect(recommendModelIdByRam(m, 24, 'chat')).toBe('gemma4-12b-it-qat-q4') // #48: the 20–24 GB gap
-    expect(recommendModelIdByRam(m, 32, 'chat')).toBe('gemma4-12b-it-qat-q4') // best 12-14B
+    expect(recommendModelIdByRam(m, 8, 'chat')).toBe('qwen3.5-4b-ud-q4kxl') // low-end pick
+    expect(recommendModelIdByRam(m, 12, 'chat')).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(recommendModelIdByRam(m, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl') // 8B-class tier
+    expect(recommendModelIdByRam(m, 20, 'chat')).toBe('qwen3.5-9b-ud-q4kxl') // 24 GB tier starts at 24
+    expect(recommendModelIdByRam(m, 24, 'chat')).toBe('qwen3.6-27b-q4') // eval top scorer (Q4)
+    expect(recommendModelIdByRam(m, 32, 'chat')).toBe('qwen3.6-27b-q5') // eval top scorer (Q5)
   })
 
   it('never auto-recommends the opt-in 30B MoE or the benchmark-loser Granite (real manifests)', () => {

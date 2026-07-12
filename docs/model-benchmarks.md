@@ -317,6 +317,48 @@ Net mapping (asserted in `benchmark.test.ts` at 8/12/16/20/24/32): **≤12 GB �
 16–20 GB → Ministral, ≥24 GB → Gemma 4**; Granite, the MoEs, and every rank-0 Qwen3.5 model are
 never auto-recommended. The rest of issue #48 — promoting the Qwen3.5/3.6 generation — is NOT a
 rank edit: it stays gated on the §9 eval + §9.1 smoke (owner, offline, real weights).
+*(Superseded 2026-07-12: §6.4 promoted the Qwen3.5/3.6 generation by owner decision; the
+mapping above is the historical Phase-29/issue-48 state.)*
+
+### 6.4 Newest-Qwen promotion (owner decision, 2026-07-12)
+
+**The decision.** The owner promoted the newest-generation Qwen models to `recommendation_rank: 3`
+per RAM tier: `qwen3.5-4b-ud-q4kxl` (≤12 GB), `qwen3.5-9b-ud-q4kxl` (16–20 GB), `qwen3.6-27b-q4`
+(24 GB, productized from its local-test stub with a real unsloth download source + HF-LFS hash),
+and `qwen3.6-27b-q5` (≥32 GB, same productization). Net mapping (asserted in `benchmark.test.ts`
+and `committed-catalog.test.ts`): **≤12 GB → Qwen3.5 4B, 16–20 GB → Qwen3.5 9B, 24 GB →
+Qwen3.6 27B Q4, ≥32 GB → Qwen3.6 27B Q5**. Granite, both MoEs, the fast-tier 2B/0.8B, and the
+superseded incumbents stay selectable, never auto-recommended.
+
+**The rationale (recorded verbatim so the trade-off stays visible).** A subjective owner
+judgment: newer model generations are expected to be better than the ones they replace (training
+data, instruction tuning, and multilingual quality all move forward), and the current local
+evidence is not strong enough to override that prior. The owner weighed the §9 tester eval and
+judged it directional, not decisive: its primary quality signal (F1) is length-confounded (the
+§9 scorer caveats; Qwen3.5's verbose house style), EM rates across the promoted set and the
+incumbents differ by at most ~1 point, and the runs are single-machine, single-run, pending the
+§5-item-8 scorer fixes. Follow-up benchmarks on BOTH axes (rescored quality, plus the missing
+speed/peak-RSS rows) are planned and stay recorded as open work below. Where the eval IS clear
+it AGREES with the promotion at the top end: Qwen3.6 27B Q5/Q4 lead the quality table outright
+(F1 .3573/.3523, zero unanswerable-set hallucinations for Q5).
+
+**What this supersedes.** The §-9/D17 rule "a challenger earns promotion only via the local
+eval" is amended: the owner may also promote on product/positioning grounds, and the honest
+eval standing must then be recorded next to the rank (done, in each promoted manifest and
+here). Specifically: the 4B FAILED its §9 bar against `qwen3-4b-instruct-q4` (F1 .2728 vs
+.3277, EM .9647 vs .9765) and the 9B sat under Ministral (F1 .3124/.3152 vs .3262, EM tied);
+they are recommended anyway by this decision. The b9849 load gate is satisfied for all four
+(the #48 tester ran the whole wave on the b9849 binary; the 4B additionally loaded + streamed
+through the app from the portable drive on 2026-07-12).
+
+**Still open after this decision** (unchanged from §5 item 8): the scorer follow-ups
+(refusal-phrase list, `rescore.mjs` rerun), owner ratification of the tester CSVs as canonical
+(the raw CSVs are now committed under `eval/results/i9-9900X-vulkan-*`), **speed + peak-RSS
+rows for every promoted model** (the tester runs were QUALITY-ONLY; the promoted set has no §3/§4
+rows yet, so their `recommended_min_ram_gb` values rest on file size + headroom convention, not
+measured RSS), and the §9.1 through-the-app smoke for the 9B and both 27Bs. If the speed/RSS
+rows or the rescored quality table later contradict a promoted rank, this decision is the one
+to revisit, not silently override.
 
 ---
 

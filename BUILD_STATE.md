@@ -19,6 +19,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-12: **Newest-Qwen promotion (owner decision): the recommendation tiers now point at the newest Qwen generation; the Qwen3.6 27B pair productized from local-test stubs; the stub [PRO] profile hijack fixed.**_
+Owner decision 2026-07-12, durable record in **`model-benchmarks.md` §6.4** (rationale: a subjective owner judgment that newer model generations improve on the ones they replace; the §9 tester eval is treated as directional, its F1 being length-confounded, EM near-tied, single-run; follow-up quality + speed benchmarks recorded as open work in §5 item 8). This partially front-runs §5 item 8's ratify-and-complete sequence BY DESIGN: the rank/RAM/test/README edits land now on product grounds; the scorer fixes, owner ratification, §3/§4 speed+RSS rows for the promoted set (the tester runs were QUALITY-ONLY), and the §9.1 smokes for the 9B and both 27Bs stay open in item 8. Changes: (1) ranks: `qwen3.5-4b-ud-q4kxl` and `qwen3.5-9b-ud-q4kxl` 0→3 (eval standing recorded honestly in each manifest: the 4B FAILED its §9 F1 bar, the 9B sat under Ministral); (2) `qwen3.6-27b-q4`/`-q5` PRODUCTIZED (unsloth GGUF download blocks, real HF-LFS hashes, apache-2.0 reviews superseding the 2026-06-22 local-test scope, ram_gb 24/32, ctx 8192) and promoted to rank 3 (here the eval AGREES: they top the §9 quality table); (3) the five 2026-06-22 local-test stubs committed earlier today carried `recommended_profiles: [PRO]`, which HIJACKED the legacy profile picker from qwen3-14b and broke `benchmark.test.ts` on master (the push had bypassed the ci-success gate) — all five emptied per D17, the gemma stub pair (`gemma-4-26b-q4`, `gemma4-coding-q8`) and `qwen3.5-9b-q8` otherwise untouched (still rank 0, license G3 provenance issues still open in the private preload review). New mapping (asserted in `benchmark.test.ts` + `committed-catalog.test.ts`, incl. a new Qwen3.6 promotion-facts pin): **≤12 GB → Qwen3.5 4B, 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.6 27B Q4, ≥32 GB → Qwen3.6 27B Q5**. Docs: README tiers+table, model-policy catalog rows + ‡ footnote, model-benchmarks §6.3 superseded-note + new §6.4. NOT changed (follow-ups, deliberate): the bundled drive default (`qwen3-4b-instruct-q4`), the DIY `--with-assets` default set (Ministral), DRIVE-NOTICES regeneration if a Qwen3.6 model is ever preloaded.
+
 _2026-07-12 — **`docs/design-review/` DELETED (contributor-clarity sweep, third item): the stale S6 composer-picker PNGs + the S12 run-surface recipe README.**_
 Owner decision 2026-07-12. The 20 `skills-s6/` PNGs (2026-06-18) predate the composer/picker changes since (#46 SkillInfoCard/ⓘ among them) and had escaped the existing delete-captures-after-review convention (commits `5e53749`/`b8020b5`/`ecd58d5` deleted every other capture set). The `skills-s12/README.md` was NOT stale — it is the recipe for the OPEN R-2 run-surface eyeball residual — so its essentials were folded into the R-2 bullet in architecture.md (§23 skills-audit ledger) with a `git show f549ce8:` pointer to the full text. Breaks nothing: the six `walk-*.mjs` capture scripts `mkdirSync` their output dir on demand; design-guidelines' capture mentions are dated design-record narrative (kept verbatim per the Phase-4 sweep's bucket (b)). Docs-only.
 
@@ -1141,7 +1144,13 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
      are recorded at those sites.
 8. **Qwen3.5/3.6 wave promotion (owner — issue #48's open half + issue #53; model-benchmarks
    §9/§9.1): the QUALITY half now EXISTS as tester evidence — remaining work is ratify + the
-   missing axes, not "run the eval from scratch".** A tester ran the §2 grounded-QA harness over
+   missing axes, not "run the eval from scratch".** *(Update 2026-07-12: steps (e) and the
+   coupled rank/RAM/test/README edits LANDED EARLY by owner decision, see the 2026-07-12
+   newest-Qwen entry + model-benchmarks §6.4; the promotion deliberately did not wait for
+   (a)-(d), which stay open exactly as written. The raw tester CSVs are now committed under
+   `eval/results/i9-9900X-vulkan-*`. Note the eval-vs-decision divergence recorded in §6.4:
+   the promoted 4B/9B ranks contradict the tester verdicts below; revisit §6.4 first if
+   (a)-(d) produce contradicting evidence.)* A tester ran the §2 grounded-QA harness over
    13 chat GGUFs incl. all six wave candidates (2026-07-09, i9-9900X + RTX 3090, b9849 binary;
    full tables in issue #48's comments; recorded in model-benchmarks §9 "Tester eval runs",
    2026-07-11). Verdicts as reported: **Qwen3.6 27B Q5/Q4 sweep the 20–24 GB tier** (rank 2/1

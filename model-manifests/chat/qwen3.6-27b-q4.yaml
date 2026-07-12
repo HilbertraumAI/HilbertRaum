@@ -7,19 +7,43 @@ runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 15.7
 recommended_min_ram_gb: 20
-recommended_ram_gb: 32
-# 27B Q4 weight ~15.7 GB. On the 24 GB RTX 3090 that leaves limited room for the KV
-# cache, so a modest default ctx-size; raise per-model if VRAM allows (partial offload
-# otherwise). Becomes llama-server --ctx-size.
-recommended_context_tokens: 16384
+# recommended_ram_gb recalibrated 32→24 at productization (2026-07-12): same physical tier as
+# the 12-14B pair (gemma4-12b / qwen3-14b, both 24), so the §6.2 rank decides the tier winner
+# instead of capacity alone. Weight is ~15.7 GiB; 24 GB is the honest comfortable floor.
+recommended_ram_gb: 24
+# Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):
+# the newest-generation model is recommended per tier (a subjective owner judgment; follow-up
+# quality + speed benchmarks recorded as open work in §5 item 8).
+# Here the promotion also AGREES with the evidence: the #48 tester eval (i9-9900X + RTX 3090,
+# b9849 binary) put Qwen3.6 27B Q4/Q5 at the top of the quality table (F1 .3523/.3573, EM .9765,
+# zero unanswerable-set hallucinations for Q5), sweeping the 20-24 GB tier. Wins the 24 GB tier
+# from gemma4-12b (rank 2); the Q5 sibling takes ≥32 GB.
+recommendation_rank: 3
+# Safe LOCAL runtime budget (catalog convention for the big additions, not the native window).
+# The earlier local-test value 16384 assumed a 24 GB RTX 3090; 8192 is the honest default for
+# a generic 24 GB machine (KV cache + sidecars need headroom). Raise per-machine in Settings.
+recommended_context_tokens: 8192
 supports_thinking_mode: true
 local_path: models/chat/qwen3.6-27b-q4.gguf
-sha256: local-unverified
-# User-added local model (managed by `llama list`, symlinked into the dev-root models/chat).
-recommended_profiles: [PRO]
-recommendation_rank: 0
+# Real hash from HuggingFace LFS metadata (git-LFS OID = the file's SHA-256), captured
+# 2026-07-12 at productization. A pre-productization local copy fetched via `llama get` may
+# hash differently; re-download through the app if verification reports a mismatch.
+sha256: 5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0
+# Quantization: unsloth Q4_K_M. The Qwen org publishes no official GGUF for the 3.6 refresh,
+# so this pins the established quantizer unsloth (same posture as every Qwen3.5 wave entry).
+# Q4_K_M (not UD-Q4_K_XL) is deliberately the productized quant: it is the exact quant the #48
+# tester eval scored, and it is ~1.8 GiB smaller, which keeps the 24 GB tier honest.
+download:
+  url: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/main/Qwen3.6-27B-Q4_K_M.gguf?download=true
+  sha256: 5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0
+  size_bytes: 16817244384
+  license_url: https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Qwen3.6 is a vision-language model, but this chat manifest ships only
+# the language GGUF and no mmproj/projector, which is all our chat pipeline uses.
+recommended_profiles: []
 license_review:
   status: approved
-  reviewed_by: "vldmr (manual, local test model)"
-  reviewed_at: "2026-06-22"
-  notes: "User-added for local testing. Source: Qwen3.6-27B GGUF (Q4_K_M), license apache-2.0. Added manually via `llama get`, not via fetch-models."
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-07-12"
+  notes: "APPROVED 2026-07-12 (productization of the former local-test stub): base model Qwen/Qwen3.6-27B is apache-2.0 (verified via the HF API; LICENSE blob at download.license_url). Quantization provenance: unsloth Q4_K_M GGUF (https://huggingface.co/unsloth/Qwen3.6-27B-GGUF, card tag apache-2.0), a third-party requant of apache-2.0 weights; the Qwen org publishes no official GGUF for the 3.6 refresh, same established-quantizer posture as the Qwen3.5 wave. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (DRIVE-NOTICES.md regeneration required before any preload). Supersedes the 2026-06-22 local-test-scoped review."

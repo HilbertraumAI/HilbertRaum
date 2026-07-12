@@ -75,9 +75,10 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 
 - **A computer:** Windows (first-class), macOS, or Linux.
 - **RAM decides which model the benchmark recommends** (the app benchmarks your machine and picks the
-  best *fit*): ≤12 GB → Qwen3-4B · 16–20 GB → Ministral 8B · ≥24 GB → Gemma 4 12B (or the 30B-A3B MoE,
-  opt-in). These are *recommended best-fit* tiers, **not** hard minimums — each model's actual floor is
-  the lower **Min RAM** column in the model table below (e.g. Ministral 8B already runs from 12 GB).
+  best *fit*): ≤12 GB → Qwen3.5 4B · 16–20 GB → Qwen3.5 9B · 24 GB → Qwen3.6 27B (Q4) · ≥32 GB →
+  Qwen3.6 27B (Q5); the MoEs stay opt-in. These are *recommended best-fit* tiers, **not** hard
+  minimums — each model's actual floor is the lower **Min RAM** column in the model table below
+  (e.g. Qwen3.5 9B already runs from 12 GB).
 - **Disk space:** ~**3 GB** for the smallest *hand-built* setup (the 4B chat model + the embeddings
   model only). The one-command `--with-assets` quick-start fetches a larger **default set** (8B chat +
   embeddings + reranker + Whisper + the Qwen2.5-VL vision model + both sidecar runtimes) at ~**10.4 GB** —
@@ -200,10 +201,11 @@ policy in **[`docs/model-policy.md`](docs/model-policy.md)**.
 
 **The default set** (`-WithAssets`) is enough for everyday use: a chat model + **embeddings**
 (document Q&A) + **reranker** (retrieval quality) + **Whisper** (audio). The benchmark
-auto-recommends the best chat model that fits your RAM: **≤12 GB → Qwen3-4B, 16–20 GB → Ministral
-8B, ≥24 GB → Gemma 4 12B** (best-*fit* tiers; the table's **Min RAM** column is each model's lower
-hard floor). The **30B-A3B MoE** is opt-in (≈30B quality at ≈3.3B *active*
-params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
+auto-recommends the newest-generation Qwen chat model that fits your RAM: **≤12 GB → Qwen3.5 4B,
+16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.6 27B (Q4), ≥32 GB → Qwen3.6 27B (Q5)** (best-*fit* tiers;
+the table's **Min RAM** column is each model's lower hard floor). The **MoEs** (Qwen3 30B-A3B,
+Qwen3.5 35B-A3B) are opt-in (≈30B quality at ≈3B *active* params/token → near-small-model CPU
+speed **if** the ~18-22 GB weight fits in RAM).
 
 ### Chat models
 
@@ -211,13 +213,15 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 |---|---|---|---|---|
 | Qwen3 4B Instruct Q4 | Preconfigured-drive bundled default & weak-laptop fallback (smallest; keeps **Deep** answer mode). The DIY `--with-assets` default-set chat model is Ministral 3 8B (below) | ~2.7 GB | 8 GB | Apache-2.0 |
 | Qwen3 4B Instruct 2507 Q4 | Better 4B quality (no Deep) | ~2.5 GB | 8 GB | Apache-2.0 |
-| Qwen3.5 4B (UD-Q4_K_XL) | Newest 4B (not auto-recommended yet) | ~2.9 GB | 8 GB | Apache-2.0 |
+| Qwen3.5 4B (UD-Q4_K_XL) | **Recommended ≤12 GB**: newest-generation 4B | ~2.9 GB | 8 GB | Apache-2.0 |
 | Qwen3 8B Instruct Q4 | 12 GB+ laptops | ~5.0 GB | 12 GB | Apache-2.0 |
-| Ministral 3 8B Instruct (2512) Q4 | **Recommended 8B** — benchmark winner | ~5.2 GB | 12 GB | Apache-2.0 |
-| Qwen3.5 9B (UD-Q4_K_XL) | Qwen3.5 wave challenger (selectable; not auto-recommended) | ~6.0 GB | 12 GB | Apache-2.0 |
+| Ministral 3 8B Instruct (2512) Q4 | Phase-29 8B benchmark winner (selectable; the 16–20 GB pick is now Qwen3.5 9B) | ~5.2 GB | 12 GB | Apache-2.0 |
+| Qwen3.5 9B (UD-Q4_K_XL) | **Recommended 16–20 GB**: newest-generation 9B | ~6.0 GB | 12 GB | Apache-2.0 |
 | Granite 4.1 8B Q4 | Challenger (selectable, not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 |
-| Gemma 4 12B Instruct QAT Q4_0 | **Recommended 12–14B** — benchmark winner; has **Deep** | ~7.0 GB | 14 GB | Apache-2.0 |
+| Gemma 4 12B Instruct QAT Q4_0 | Phase-29 12–14B benchmark winner; has **Deep** (selectable; the ≥24 GB pick is now Qwen3.6 27B) | ~7.0 GB | 14 GB | Apache-2.0 |
 | Qwen3 14B Instruct Q4 | Dense, 32 GB+ | ~9.3 GB | 14 GB | Apache-2.0 |
+| Qwen3.6 27B Q4_K_M | **Recommended 24 GB**: newest generation, top scorer of the 2026-07 quality eval | ~15.7 GB | 20 GB | Apache-2.0 |
+| Qwen3.6 27B Q5_K_M | **Recommended ≥32 GB**: the same top scorer at a richer quant | ~18.2 GB | 24 GB | Apache-2.0 |
 | Qwen3 30B-A3B (MoE) Q4 | ≈30B quality, ≈3B speed (opt-in) | ~18.6 GB | 24 GB | Apache-2.0 |
 | Qwen3.5 27B (UD-Q4_K_XL) | Qwen3.5 wave dense challenger (selectable; not auto-recommended) | ~17.6 GB | 24 GB | Apache-2.0 |
 | Qwen3.5 35B-A3B (UD-Q4_K_XL) | Qwen3.5 wave MoE (~3B active; opt-in, selectable) | ~22.2 GB | 24 GB | Apache-2.0 |
