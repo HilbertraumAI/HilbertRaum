@@ -14,7 +14,7 @@ remediation waves; the full original working papers live in git history._
    **§ numbers restart inside every record** (standing decision — `§N` collisions across
    records are deliberate; resolve a citation via the record named alongside it), and
    several records end with their own "§-anchor legend" for retired-plan citations.
-3. **Audit remediation ledgers §24–§48** — one continuous series interleaved among the
+3. **Audit remediation ledgers §24–§49** — one continuous series interleaved among the
    records (find one with `### §N <audit name>`); each holds a round's finding dispositions.
 4. **Data flow (RAG)** and the **Module ↔ spec map** — near the end of the file.
 5. **"Original MVP spec — retirement record & §-anchor legend"** — at the very END: the
@@ -7177,6 +7177,141 @@ hygiene/BOM/build-log-pin nets in `repo-hygiene.test.ts` (TQ-1, DOC-1), the 2507
 invariants in `committed-catalog.test.ts` (TQ-2), BUILD_STATE §5 item 10's push-first step
 (GAP-1) and item 12's owner batch (GAP-1/PF-2/LIC-2 + watch-items), and the swept docs
 themselves (DOC-1…11, REL-3).
+
+### §49 Full audit (2026-07-12b) — remediation ledger + close-out
+
+The **final pre-public-release round**, run the same day as §48 (the "b" disambiguates the round
+tags), at baseline `06920c1` (v0.1.48 + three doc-plan retirements; suite 4195/47 green,
+re-run at audit start), audited delta `032b014..HEAD`. Method: orchestrator + **six parallel
+fresh-context finder passes** (public-release lens, license/notices, contributor-docs
+readability, docs-vs-code accuracy, delta code review, tests + hard-rules hygiene), each
+grounded in ledgers §46/§47/§48 + BUILD_STATE §5 before reporting; **independent adversarial
+verifier** on every Medium+ candidate. Verdict: **the repo is publish-ready — 0 Critical,
+0 flip-blocking High.** The one High (LIC-1, CONFIRMED) gated the **first commercial drive
+sale, not the repo flip**; the other 23 findings were Low/Info polish. All 24 dispositioned:
+23 fixed across a **five-phase wave committed directly to `master`** (Phase 1 `015c9d9`,
+Phase 2 `a93e970`, Phase 3 `e49630e`, Phase 4 `486c96c`, Phase 5 `c16f433`; Phase 6 = this
+close-out), 1 declined by owner decision (SEC-2). Gate progression **4195/47 → 4199/49 (P2) →
+4201/49 (P3) → 4214/49 (P4) → 4216/49 (P5)**, typecheck + build green throughout; the +2 skips
+are TQ-2's POSIX-symlink probe cases (Windows-skip, run on the Ubuntu CI leg).
+
+**This record is the only durable artifact of the round.** The working paper
+(`docs/audits/full-audit-2026-07-12b.md`) was an uncommitted working paper for its whole life
+and was deleted at this close-out — **no recoverable copy in git history** (the §46–§48
+handling). Finding detail survives as: this table, the dated 2026-07-12 BUILD_STATE §5
+entries, and the five phase commits.
+
+**Owner-decisions batch (ratified 2026-07-12, one pass):** ① LIC-1 — build the
+drive-attribution mechanism NOW, this round's scope (→ Phase 4). ② PF-2 — swap the staged
+preview header id to a ranked model. ③ LIC-3 — add the extra-notices map. ④ SEC-2 — SKIP the
+hardlink probe; register a watch-item at close-out. ⑤ GAP-2 — add the architecture.md layout
+block. ⑥ DOC-7 — tense-fix the two present-tense pointers.
+
+Per-finding disposition (fixed → phase@commit; OWNER = ratified batch item):
+
+| # | Sev | Phase | Disposition (decision / mechanism) |
+|---|---|---|---|
+| **LIC-1** | HIGH | P4 `486c96c` | **fixed (OWNER: build now)** — the `build-commercial-drive` flow shipped Apache-2.0 model weights, MIT llama.cpp/whisper.cpp binaries, and Apache-2.0 OCR traineddata onto a sold drive with **no license or attribution text at all**, despite every approved Apache-2.0 manifest's own review note instructing "ship the LICENSE/NOTICE attribution with the drive" (a `license_url` in YAML is not an Apache-2.0 §4(a) license copy on an offline product; the upstream bin zips carry no LICENSE — empirically confirmed on the real smoke drive); the step-7 "SELLABLE" gate passed a zero-attribution drive green. **Gate = first drive SALE, not the flip** (the GitHub release channel co-locates source, LICENSE, and in-artifact notices). Mechanism landed: in-repo pinned `licenses/` upstream texts (Apache-2.0, llama.cpp MIT "The ggml authors", whisper.cpp MIT, SDL2 zlib) + committed generated `DRIVE-NOTICES.md` (`scripts/generate-drive-notices.mjs` + `scripts/lib/drive-notices.mjs` — deterministic; all 19 manifests + 3 runtime families derived at generation time; MIT weights carry pinned offline copyright lines with a throw-on-unpinned net); `prepare-drive.{ps1,sh}` copy LICENSE + THIRD-PARTY-NOTICES.md + DRIVE-NOTICES.md to drive root; SELLABLE gate (both scripts) + `assertCommercialDrive` fail on a missing/empty artifact (**red-verified** — the old assert passed a zero-attribution drive); a script-drift test pins all 4 scripts to `DRIVE_LICENSE_ARTIFACTS`; hygiene nets extended (+txt, +licenses/); docs: drive-layout.md, packaging.md, model-policy.md's license-review-gate discharge paragraph. Residual watch: DRIVE-NOTICES.md's GPL source-availability URL assumes the public repo — true once the flip lands. |
+| **LIC-2** | LOW | P4 | **fixed** — the packaged artifact carried the project's own GPL license only as the package.json SPDX string (root LICENSE outside the apps/desktop build context and unlisted; on the win-portable target even the notices live inside the self-extracting archive). Added extraResources `../../LICENSE → LICENSE.txt` + test pin; the notices header's "beside the executable" softening deliberately SKIPPED as optional. Presence in the actual packaged artifact rides the next manual R2 package smoke (registered residual). |
+| **LIC-3** | INFO | P5 `c16f433` | **fixed (OWNER: add the map)** — six shipped npm packages publish no license file in their tarball (dingbat-to-unicode, isarray, react-remove-scroll-bar, rehype-katex, remark-math, tr46 — MIT/BSD notices not reproduced, repo pointer only) and tesseract.js-core's WASM statically links leptonica (BSD-style) without its license text. `scripts/lib/extra-notices.mjs`: deterministic pinned verbatim texts + a leptonica attribution block; the map applies ONLY on the no-license-file path (never overrides a shipped file); 2 test pins. All 226 shipped licenses verified GPL-compatible; zero UNLICENSED/NC. |
+| **DOC-1** | LOW | P1 `015c9d9` | **fixed** — packaging.md contradicted model-policy.md AND the prepare-drive scripts: it said vision is "opt-in: `--with-assets` does NOT fetch it by default", but `qwen2.5-vl-3b-instruct-q4` has been in `$DefaultModelIds`/`DEFAULT_MODEL_IDS` since 2026-07-01 (real default set ≈10.4 GB, not ~7 GB). New evidence extending §48 watch-item ⑥ (which named only README); all three packaging.md spots corrected alongside the registered README fix. |
+| **DOC-2** | LOW | P1 | **fixed** — stale Qwen3.5 27B/35B download sizes in README + model-policy (~16.7 / ~20.6 GB vs manifest `size_bytes` ≈17.6 / ≈22.2 GB) — the exact understated estimates that caused the dl-size-cap-2026-07-03 bug; six cells re-derived from `size_bytes` (all other size cells verified matching per-manifest). |
+| **DOC-3** | LOW | P1 | **fixed** — the model-policy catalog table listed 12 of the 14 shipped chat manifests, omitting the rank-0 fast-tier pair (qwen3.5-2b ~1.3 GB, qwen3.5-0.8b ~0.6 GB); two rows added mirroring the wave's rank-0 rows, with the model-benchmarks §9 fast-tier verdicts (0.8B surviving candidate; 2B failed its eval). |
+| **DOC-4** | INFO | P1 | **fixed** — README's repo-tree comment omitted the `translation` manifest role (the repo has 6 role dirs); one-word fix. |
+| **DOC-5** | INFO | P1 | **fixed** — data-contracts' thinking-switch rationale spoke of "the b9585 default" in present tense (pin is b9849; the operative enable_thinking claim verified TRUE in `llama.ts`); reworded to the "verified on b9585; expected on the b9849 pin" idiom. |
+| **DOC-6** | INFO | P1 | **fixed** — architecture.md's R-2 recipe cited the walk script at `scripts/…`; it lives under `apps/desktop/scripts/` (a root `scripts/` dir exists without walk scripts, so the ambiguity was real). Qualified once; historical design-guidelines/build-log occurrences left per convention. |
+| **DOC-7** | INFO | P5 | **fixed (OWNER: tense-fix the two)** — design-guidelines kept two PRESENT-TENSE pointers at the deleted `docs/design-review/` dirs (06920c1 had dispositioned all five mentions "dated narrative, stay verbatim" <1 day earlier, so re-touching was an owner call): :596 → "went to", :802 → "lived in"; the three dated-narrative mentions stay verbatim. |
+| **DOC-8** | INFO | P1 | **fixed** — CONTRIBUTING's bare "spec §9.2" cite (the only bare `spec §N` in a front-line onboarding doc, resolvable only via a two-hop chain) re-pointed directly at architecture.md's "Swappable interfaces (spec §9.2)". |
+| **GAP-1** | LOW | P1 | **fixed** — the corporate-proxy `npm ci` silent-hang workaround (`scripts/setup-dev.{ps1,sh}` → `NODE_OPTIONS=--use-system-ca` on Node ≥22.15; a documented real occurrence on the dev machine, with no error message to search for) was documented only in packaging.md's script table — unreachable from the contributor onboarding path. Added to CONTRIBUTING's Dev setup. |
+| **GAP-2** | INFO | P5 | **fixed (OWNER: add layout block)** — architecture.md (8,477 lines) had no TOC/layout map, with the two load-bearing resolution tools (Module↔spec map, spec-retirement legend) at the very END. 15-line "Layout of this file" block added to the header as a pure insertion — no renumbering, no moves, ledgers untouched, whole file byte-verified. NOT about §-collisions (standing decision, untouched). |
+| **CODE-1** | LOW | P2 `a93e970` | **fixed** — `npm run preview:build`/`screenshot` emits the dev-only preview harness (incl. the staged marketing chat) to `out/preview/`, which `electron-vite build` never clears — so a subsequent LOCAL `npm run package` folded the whole harness into app.asar via the `out/**/*` glob (dead weight + discoverable staged chat in a released artifact; release CI unaffected — fresh checkouts — but this bites the documented local/owner flow incl. the commercial-drive `-AppArtifact` path). `- '!out/preview/**'` in electron-builder.yml files + packaging.test.ts pin (the mermaid-negation template). |
+| **SEC-1** | INFO | P3 `e49630e` | **fixed** — the §48 SEC-1 class, one key consumer over: changePassword's v1→v2 migration zero-fills the live key Buffer in place while logging (`vaultKey`, reference retained via `encryptionKey()`) still references it; `rekeyVaultLog` re-attaches only AFTER changePassword returns. The window was walked — nothing can persist inside it TODAY (no live defect) — but any future `log.error` in the window would atomically rewrite `app.log.enc` under 32 zero bytes (the §48 false-assurance shape; all lock paths verified safe via detachVaultKey). Belt: `persistEncrypted`/`rotateEncryptedIfNeeded` refuse an all-zero key — the belt lives in logging.ts because vault→logging would cycle the shredFile import. **Red-verified** (the unguarded code really rewrote app.log.enc under the zero key) + a security-model.md clause. |
+| **SEC-2** | INFO | — | **DECLINED (OWNER: skip probe, register watch-item)** — hypothesis (Low confidence, never empirically tested): the containment sweep (`runtime-download.ts`) covers symlinks/junctions but not tar HARDLINK members whose linkname points outside the extract dir (a hardlink is not a symlink dirent). Likely moot: libarchive/bsdtar checks linknames, hardlinks need an existing same-volume target, and the hash is owner-pinned. §48 SEC-2 dispositioned symlinks only — hardlinks were never dispositioned either way. Registered as a watch-item: BUILD_STATE §8's L-7 clause + §5 residuals. If it ever bites: run the one-time hardlink-escape tar fixture probe (Windows bsdtar + GNU tar) and extend the sweep if it extracts. |
+| **REL-1** | LOW | P3 | **fixed** — both notices-generator sorts used no-locale `localeCompare` (host ICU: dev = de-AT, CI = en/C) feeding a byte-exact drift gate; the current 226-name set sorts identically under all probed locales, but ICU punctuation collation isn't guaranteed stable across versions — divergence would surface as a confusing STALE failure on CI that dev-machine regeneration can't fix. Package sort → raw code-unit; license-file sort → case-folded code-unit (keeps the committed ICU-primary order); regeneration verified byte-identical. |
+| **REL-2** | INFO | P3 | **fixed** — the generator threw raw ENOENT if the closure ever gained a platform-gated optional dep absent from host node_modules (npm skips os/cpu-mismatched optionals; nothing in the current set trips it). Lockfile-metadata fallback section + warning; the package stays in the list so the drift gate stays in sync. |
+| **TQ-1** | LOW | P2 | **fixed** — the repo-hygiene NUL/BOM nets filtered to `ts|tsx|js|jsx|json|css|md|html` and never walked root `scripts/` or `apps/desktop/scripts/` — exactly the file class this delta added (the notices `.mjs` libs are imported by a CI test, so a BOM there breaks the suite with an opaque parse error; the class recurred 4× historically; all five delta files verified clean — coverage gap, not a live offense). Nets extended: +`mjs|cjs|mts|yml|yaml`, +both `scripts/` roots + `model-manifests/`; teeth demonstrated live (planted offenders failed, reverted). |
+| **TQ-2** | LOW | P2 | **fixed** — all 7 containment tests planted absolute-target links to EXISTING dirs, so the sweep's explicitly-claimed relative-target resolution and broken-escaping-link catch had no driving test on either CI leg (a refactor to realpath — which throws on dangling links — would silently reopen the SEC-2(§48) escape with all 7 green). 3 tests added (escaping relative `../..` from a nested dir, dangling escaping link, contained-relative negative case), **red-verified against 3 sweep mutations**; 2 probe-skip on Windows → run on the Ubuntu leg. |
+| **TQ-3** | INFO | P3 | **fixed (both options)** — the notices drift gate recomputed via the SAME lib as the generator (detects staleness, not correctness), and `prodClosure` skipped peerDependencies, which npm 7+ auto-installs and electron-builder ships (verified: zero REQUIRED peers missing today). Peer fold in the walk (output byte-identical, confirmed via the "unchanged" print) + an independent lockfile-derived belt test, red-verified by mutation (flipping the optionality filter surfaced 49 optional-peer entries). |
+| **TQ-4** | INFO | P2 | **fixed** — §48 LIC-1's `license` field in apps/desktop/package.json had no asserting test; one-line pin: desktop license === root license === `GPL-3.0-or-later`. |
+| **PF-1** | LOW | P1 | **fixed** — BUILD_STATE §2 published the developer's absolute repo path — the one developer-specific absolute path in the tracked tree (tree-wide sweep; not a hard-rule violation, but registered nowhere, and the pre-flip re-grep is scoped to things that "crept in since the scan", so it evaded that net too). Line neutralized. |
+| **PF-2** | INFO | P5 | **fixed (OWNER: swap to ranked)** — the marketing preview header hard-coded `qwen3.5-35b-a3b-q4kxl`: (a) a near-miss of the real manifest id (missing `-ud`) and (b) an unproductized, rank-deferred model (§5 item 8) — website captures would show a header model no shipping user can select. Swapped to the ranked `ministral3-8b-instruct-2512-q4`, with a comment recording the deliberate-swap-on-promotion convention. Dev-harness only, never bundled; zero product impact. |
+
+**Reviewer passes (every phase reviewed independently BEFORE its commit; 4 of 5 needed real
+pre-commit repairs or nits):** P1 — 2 real same-class leftovers caught (README `-WithAssets`
+walkthrough paragraph, drive-layout.md default-set list), repaired pre-commit. P2 — APPROVE,
+0 defects; one nit registered for close-out (`.ps1`/`.sh` outside the hygiene extension
+filter). P3 — 1 real should-fix repaired pre-commit (packaging.test.ts's independent
+`prodClosure` mirror had silently diverged from the peer-folded walk) + 3 nits applied. P4 —
+1 should-fix repaired pre-commit (the MIT weights' copyright lines were URL-only — the exact
+offline-attribution defect class the round existed to close) + `Get-Item -Force` hardening.
+P5 — APPROVE, 2 nits applied pre-commit (provenance-sentence precision for the 2
+non-repo-sourced texts; test-comment sequencing).
+
+**Clean verdicts** (what the round checked and found sound — preserved from the paper's §9):
+
+- **Secrets/PII delta (`032b014..HEAD`, 12 commits):** clean — no keys/tokens/credentials;
+  only noreply@anthropic.com trailers + upstream license-attribution emails in the notices
+  file; IPs only 127.0.0.1/169.254.169.254 (SSRF-defense context); no personal paths added.
+- **Preview commits (e6c2f87 + follow-up):** content appropriate — staged data explicitly
+  labeled fictional in-code and in the commit message; no names/IBANs/accounts; dev-harness
+  only, builds to gitignored out/preview, NOT in the shipped electron-vite inputs (the only
+  packaging interaction was CODE-1's local-flow glob leak).
+- **Merge cc5cce9:** lossless — cla.yml resolution keeps djuro-agent exactly once; both-parent
+  diffs walked, no silently dropped hunks.
+- **Tracked-file inventory (743 files):** nothing under .claude/ tracked; no editor configs,
+  weights, logs, user data; only deliberate binaries (icons + one test fixture PNG).
+- **Private-repo assumptions:** none functional — cla.yml URLs on HilbertraumAI/HilbertRaum;
+  residual `comilionas` hits are CLA account names + dated ledger prose (per §48); owner email
+  absent from the tree; no private dashboard/infra links; workflows use SHA-pinned public
+  actions + GITHUB_TOKEN on hosted runners.
+- **License/GPL posture:** root LICENSE = verbatim GPLv3; both package.json SPDX consistent;
+  226-package closure 100% GPL-compatible (203 MIT / 8 Apache-2.0 / BSD/ISC tail; zero
+  UNLICENSED/NC); notices file matches computeShippedPackages byte-for-byte; CLA v1.1 coherent
+  with GPL dual-licensing; Contributor Covenant 2.1 with attribution; no vendored third-party
+  code needing attribution.
+- **§48 code fixes re-derived sound:** SEC-1 per-invocation key (no zeroed-but-non-null
+  interleave; the only other key consumer is logging — became SEC-1 this round); REL-4 bounded
+  settle (timer cleared in finally; late unwind hits the CODE-18 guard; both callers covered);
+  SEC-2 sweep (single in-app extraction path, junctions covered, broken links caught, throw
+  fails the job marker-less; skills importer separate by design).
+- **Docs/onboarding:** clone→ci→dev→test path complete on all 3 OSes except GAP-1; the three
+  doc-plan retirements left ZERO dead references; zero dead relative links across README/
+  CONTRIBUTING/all 15 docs; §-anchor legends resolve; data-contracts sample-verified against
+  code; i18n EN+DE parity spot-check clean; CLAUDE.md structural claims true.
+- **Tests (re-derivation, not just green):** §48 SEC-1 tests drive the REAL import flow;
+  the containment suite runs unskipped on BOTH CI legs; the notices drift gate genuinely
+  fails on any prod-dep change on both legs without node_modules; no over-mocking in any new
+  suite (the §47/§48 verdict stands); no flaky tests observed.
+- **Hygiene:** independent byte-level scan of 688 files (incl. .yml/.mjs/.txt the in-repo net
+  excludes) — NUL/BOM/UTF-16-clean everywhere; no hardcoded dev paths in src/scripts/tests
+  (only generic fixtures); no cloud endpoints in src/; path-separator discipline holds in
+  every persisted/wire string changed since 41acc47; lockfile discipline intact (npm@11.6.2
+  pin, lockfileVersion 3, v0.1.48 consistent).
+- **Performance:** nothing in the delta touches a runtime hot path (requireKey null-check =
+  noise vs AES-GCM streaming; the containment sweep is a one-shot install-time walk; the
+  notices generator/gate + hygiene nets are script/test-time only). The §46/§47/§48 perf
+  verdicts stand; no new perf findings.
+
+Surviving residuals/watch-items were registered in `BUILD_STATE.md` §5 before the paper was
+deleted: ① the **SEC-2 hardlink hypothesis** (owner-declined probe — watch-item, with the
+BUILD_STATE §8 L-7 clause); ② **DRIVE-NOTICES.md's GPL source-availability URL** assumes the
+public repo — flip-gate coupling; ③ **LIC-2 packaged-artifact presence** rides the next manual
+R2 package smoke; ④ **`.ps1`/`.sh` still outside the hygiene extension filter** (Phase-2
+reviewer nit).
+
+**§-anchor legend.** Commits, code comments, and tests cite this audit as
+`full-audit 2026-07-12b <ID>` (or the bare id beside a qualified cite); all 24 ids —
+**LIC-1…LIC-3 · DOC-1…DOC-8 · GAP-1/GAP-2 · CODE-1 · SEC-1/SEC-2 · REL-1/REL-2 · TQ-1…TQ-4 ·
+PF-1/PF-2** — resolve to the table above. This doc's § numbers collide across records
+(deliberate, never renumbered) — "§49" means THIS section, the 2026-07-12b ledger directly
+following §48. The design "as built" lives where each phase folded it: `licenses/` +
+`scripts/generate-drive-notices.mjs` / `scripts/lib/drive-notices.mjs` + `DRIVE-NOTICES.md` +
+the SELLABLE-gate artifact checks (LIC-1), the extraResources LICENSE.txt entry (LIC-2),
+`scripts/lib/extra-notices.mjs` (LIC-3), logging.ts's zero-key belt + security-model's clause
+(SEC-1), the extended nets in `repo-hygiene.test.ts` (TQ-1), the relative/dangling cases in
+`engine-extract-containment.test.ts` (TQ-2), the peer fold + belt test in
+`third-party-notices.test.ts` (TQ-3), the packaging.test.ts pins (CODE-1, TQ-4), this file's
+header layout block (GAP-2), and the swept docs themselves (DOC-1…8, GAP-1, PF-1).
 
 ### §20 Span-transform engine (beta-feedback-2026-07 Phase 6, decision D74)
 

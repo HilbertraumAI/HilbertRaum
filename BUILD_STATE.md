@@ -1401,8 +1401,16 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
         only the FIRST offender before throwing (the next install's pre-clean removes the rest).
       - **TS-7 (macOS CI leg)** remains the standing owner call — item 7.
 
-13. **Full-audit 2026-07-12b — IN PROGRESS.** New audit round on baseline `06920c1`; working paper
-    in `docs/audits/` (uncommitted; orchestrator commits per phase).
+13. **Full-audit 2026-07-12b — ROUND COMPLETE (close-out 2026-07-12; durable ledger + §-anchor
+    legend: `docs/architecture.md` §49; working paper DELETED, never committed, no history
+    copy).** Baseline `06920c1`; 24 findings (23 fixed across Phases 1–5, SEC-2 owner-declined
+    → §8 L-7 watch-item); phase commits `015c9d9`/`a93e970`/`e49630e`/`486c96c`/`c16f433` +
+    close-out; gate 4195/47 → **4216/49**. Residuals/watch-items (all also in §49):
+    ① SEC-2 hardlink hypothesis — §8 L-7 watch clause, re-open on extraction-path/tar change;
+    ② DRIVE-NOTICES.md's GPL source-availability URL assumes the public repo — true at flip
+    (couple with §5 item 10); ③ LIC-2 LICENSE.txt presence in the packaged artifact rides the
+    next manual R2 package smoke; ④ `.ps1`/`.sh` remain outside the hygiene-net extension
+    filter (Phase-2 reviewer nit — candidate for a future net widening).
     - _2026-07-12 Phase 1 (docs accuracy + onboarding sweep, docs-only, suite unchanged 4195/47):_
       **DOC-1..DOC-6, DOC-8, GAP-1, PF-1** fixed — all numbers re-derived from manifests/scripts at
       edit time. **DOC-1:** vision (`qwen2.5-vl-3b-instruct-q4`) IS in the `--with-assets` default set
@@ -1464,6 +1472,12 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       verbatim-keep mentions untouched. **SEC-2** owner ratified SKIP probe → registered as a
       close-out watch-item. Reviewer APPROVE (2 nits applied: provenance-sentence precision,
       test-comment sequencing).
+    - _2026-07-12 Phase 6 (close-out):_ round folded into `docs/architecture.md` **§49**
+      (24-finding disposition table, owner-batch ratifications, per-phase reviewer outcomes,
+      clean verdicts, §-anchor legend — every `full-audit 2026-07-12b <ID>` citation in
+      code/tests/docs resolves there); architecture.md layout block updated §24–§48 → §24–§49;
+      §8 L-7 gains the SEC-2 hardlink watch clause; working paper deleted after verifying no
+      tracked file references it; final gate green.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
@@ -1607,6 +1621,11 @@ the offline/privacy guarantees:
   `--no-same-owner --no-same-permissions -k` tar flags were deliberately dropped (GNU tar `-k`
   hard-errors on the legitimately-retained archive `cpu/` dir). The build-time
   `scripts/fetch-runtime.*` half of L-7 remains as previously recorded.
+  **Watch-item (full-audit 2026-07-12b SEC-2, owner-declined probe):** the sweep covers
+  symlink/junction dirents but not tar HARDLINK members (a hardlink is not a symlink dirent) —
+  labeled hypothesis, likely moot (libarchive/bsdtar checks linknames; hardlinks need an
+  existing same-volume target; the archive hash is owner-pinned). Owner ratified 2026-07-12:
+  skip the one-time fixture probe; re-open only if the extraction path or tar binary changes.
 - **L-8 — Lockfile / `npm ci` discipline.** Confirm `package-lock.json` is committed and the
   provisioning/build scripts use `npm ci` (not `npm install`) so a build can't float a caret range
   to a newer minor. Integrity anchor = the committed lockfile.
