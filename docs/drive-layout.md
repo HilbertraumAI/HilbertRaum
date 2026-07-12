@@ -165,7 +165,7 @@ then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar
 **resumable** and **SHA-256-verified before it counts as installed** (mismatch → delete partial +
 exit 1; placeholder hash → *UNVERIFIED*). For a fast setup `--with-assets` fetches a small **default
 set** — the default chat model (Ministral 3 8B) + the embeddings model + the reranker + the Whisper
-transcriber model — plus **both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter
+transcriber model + the vision model — plus **both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter
 Windows-only/best-effort); the user pulls any other models (larger chat models) from the app's AI
 Model screen on demand. Add `--all-models`/`-AllModels` to provision every model up front (runtimes
 either way). You can still drop artifacts in by hand (R5). `verify-models`

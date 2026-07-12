@@ -57,6 +57,12 @@ npm run typecheck
 npm run test:coverage  # optional: suite + V8 coverage report (writes coverage/, gitignored; not a CI gate)
 ```
 
+**Behind a TLS-intercepting corporate proxy, `npm ci` can hang silently.** Run the one-shot
+bootstrap `scripts/setup-dev.{ps1,sh}` instead of a bare `npm ci`: it probes for and sets
+`NODE_OPTIONS=--use-system-ca` (Node ≥ 22.15) so the install reads the system cert store, then runs
+`npm ci` + build + test. (Older Node continues without the flag; last resort, dev-only:
+`npm config set strict-ssl false`.)
+
 **Install with `npm ci`, not `npm install`** (issue #49): different npm versions compute the
 lockfile's `peer` flags differently, so a plain `npm install` under another npm rewrites
 `package-lock.json` and leaves it permanently dirty (and the next `git pull` complains). `npm ci`
@@ -106,7 +112,8 @@ still be NTFS. Override the check with `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` if ne
 
 ## Code style
 - TypeScript, strict mode. Prefer small, well-named modules.
-- Each backend service hides behind an interface (see spec §9.2) so it stays swappable.
+- Each backend service hides behind an interface (see [`docs/architecture.md`](docs/architecture.md)
+  "Swappable interfaces (spec §9.2)") so it stays swappable.
 - Match the surrounding code's style and comment density.
 
 ## Scripts mirror canonical TypeScript modules

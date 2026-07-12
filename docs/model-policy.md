@@ -20,10 +20,12 @@
 | Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 12 GB | — (not promoted) | Phase-29: lost its tier (most 8B hallucinations 3/15, lowest F1); kept selectable for its IBM provenance story |
 | Chat (winner, 12–14B) | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 14 GB | — (rank‡) | **Phase-29 winner at 12–14B**: beats Qwen3 14B on every axis (fewer hallucinations, faster). `supports_thinking_mode` **flipped on** — only thinking-capable challenger |
 | Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
+| Chat (fast-tier 0.8B) | Qwen3.5 0.8B Q6_K | ~0.6 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** Smallest runnable; Q6_K (not UD-Q4_K_XL — quant error bites hardest at 0.8B). Text-only, not bundled. **§9 eval: the surviving fast-tier candidate — the honest floor (better F1 + abstention than the 2B).** Pending b9849 smoke + owner ratification. |
+| Chat (fast-tier 2B) | Qwen3.5 2B (UD-Q4_K_XL) | ~1.3 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** CPU-only speed tier. Text-only, not bundled. **§9 eval: FAILED — worst unanswerable-discipline of all models scored (should not be recommended anywhere); the 0.8B dominates it.** Pending b9849 smoke + owner ratification. |
 | Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 0) | Added 2026-06-18 (user request). unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). **Not auto-recommended/benchmarked; runtime pin bumped to b9849 (Qwen3.5 gate) but b9849 load smoke still PENDING before promotion.** Vision model run text-only. |
 | Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** unsloth Dynamic-2.0 quant; balanced-tier challenger to Ministral 3 8B / Qwen3 8B. Text-only. Not bundled/benchmarked; needs b9849 load smoke + offline eval before promotion. |
-| Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~16.7 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger to Gemma 4 12B / Qwen3 14B / Qwen3 30B-A3B on 32 GB machines. Text-only, opt-in (not bundled). Pending b9849 smoke + offline eval. |
-| Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~20.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
+| Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger to Gemma 4 12B / Qwen3 14B / Qwen3 30B-A3B on 32 GB machines. Text-only, opt-in (not bundled). Pending b9849 smoke + offline eval. |
+| Chat (Qwen3.5 35B-A3B) | Qwen3.5 35B-A3B (UD-Q4_K_XL) MoE | ~22.2 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** ~35B total / ~3B active MoE (256 experts, 8+1 active); opt-in challenger to `qwen3-30b-a3b-q4`. Text-only, not bundled. Pending b9849 smoke + offline eval. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
 | Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation; whisper.cpp GGML; MIT |
@@ -72,8 +74,8 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
 |---|---|---|---|---|
 | `qwen3.5-4b-ud-q4kxl` (existing) | ~2.9 GB | 8 GB | UD-Q4_K_XL | the 4B tier (`qwen3-4b-instruct-q4`) |
 | `qwen3.5-9b-ud-q4kxl` (new) | ~6.0 GB | 12 GB | UD-Q4_K_XL | the 8B tier (Ministral 3 8B, Qwen3 8B) |
-| `qwen3.5-27b-ud-q4kxl` (new) | ~16.7 GB | 24 GB | UD-Q4_K_XL | dense 12–14B + Qwen3 30B-A3B |
-| `qwen3.5-35b-a3b-ud-q4kxl` (new, MoE) | ~20.6 GB | 24 GB | UD-Q4_K_XL | the opt-in MoE (`qwen3-30b-a3b-q4`) |
+| `qwen3.5-27b-ud-q4kxl` (new) | ~17.6 GB | 24 GB | UD-Q4_K_XL | dense 12–14B + Qwen3 30B-A3B |
+| `qwen3.5-35b-a3b-ud-q4kxl` (new, MoE) | ~22.2 GB | 24 GB | UD-Q4_K_XL | the opt-in MoE (`qwen3-30b-a3b-q4`) |
 
 - **Text-only in HilbertRaum.** Upstream Qwen3.5 are hybrid reasoning / vision-language models, but
   every manifest here ships ONLY the language GGUF and **no `mmproj`/projector** (chat does not use
@@ -412,9 +414,11 @@ honest co-residency bar is higher: vision + a 12B chat (~7 GB) + the E5 embedder
 `llama-server` processes ⇒ **>16 GB** at peak. The idle teardown bounds the *window*, not the
 active-use peak (model-benchmarks §8.4). So vision is realistically co-resident only with a small
 chat model, or after the chat sidecar idles out; the `recommended_min_ram_gb` / RAM-best-fit gate
-keeps it off machines that can't hold it. **Opt-in only** — `fetch-models`/`prepare-drive
---with-assets` does NOT pull a vision model by default (like the larger chat models); `--only
-<vision-id>` or `--all-models` pulls both files.
+keeps it off machines that can't hold it. **In the `--with-assets` default set (2026-07-01)** — `prepare-drive --with-assets` pulls the
+vision model's two files by default (it is in `$DefaultModelIds`/`DEFAULT_MODEL_IDS`), but it is
+**never auto-recommended in-app** (`recommended_profiles: []`, rank 0) — availability-driven, used
+on demand by the Images screen. On a hand-built drive, `fetch-models --only <vision-id>` or
+`--all-models` pulls both files.
 
 **License-review record — Qwen2.5-VL-3B-Instruct (status: approved, reviewed 2026-06-20):** the base
 model **`Qwen/Qwen2.5-VL-3B-Instruct` is Apache-2.0** (the all-permissive posture — same as the Qwen3

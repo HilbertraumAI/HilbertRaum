@@ -174,8 +174,8 @@ renderer for the session (NOT persisted — no schema change). Threads
 cap · balanced/omitted = thinking off, server defaults · deep = thinking on + temp 0.6.
 Explicit `maxTokens`/`temperature` win over mode-derived values.
 ✅ **Thinking switch (D5):** per-request `chat_template_kwargs: { enable_thinking }` on
-`/v1/chat/completions`, ALWAYS sent explicitly (the b9585 default is thinking ON for capable
-templates). Chat sidecars spawn with **`CHAT_SERVER_ARGS` = `--jinja --reasoning-format
+`/v1/chat/completions`, ALWAYS sent explicitly (the runtime default is thinking ON for capable
+templates — verified on b9585, expected on the b9849 pin). Chat sidecars spawn with **`CHAT_SERVER_ARGS` = `--jinja --reasoning-format
 deepseek`** (pins the mechanism's preconditions; embedder excluded). Reasoning streams as
 separate `delta.reasoning_content` frames → `RuntimeChatOptions.onReasoning(delta)` →
 `chat:reasoning:<id>`; the generator yields answer text only.

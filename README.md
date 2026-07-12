@@ -80,12 +80,13 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
   the lower **Min RAM** column in the model table below (e.g. Ministral 8B already runs from 12 GB).
 - **Disk space:** ~**3 GB** for the smallest *hand-built* setup (the 4B chat model + the embeddings
   model only). The one-command `--with-assets` quick-start fetches a larger **default set** (8B chat +
-  embeddings + reranker + Whisper + both sidecar runtimes) at ~**7 GB** — size a drive for that if you
-  use it; swapping the 8B chat model for a bigger one takes it to ~**11 GB** (14B) or ~**21 GB**
-  (30B-A3B MoE). A **USB-3 SSD**
+  embeddings + reranker + Whisper + the Qwen2.5-VL vision model + both sidecar runtimes) at ~**10.4 GB** —
+  size a drive for that if you use it; swapping the 8B chat model for a bigger one takes it to
+  ~**14 GB** (14B) or ~**24 GB** (30B-A3B MoE). A **USB-3 SSD**
   is recommended for a portable drive.
 - **To build from source:** **Node.js ≥ 22.5** (24 recommended; 22.15+ enables the
-  `--use-system-ca` corporate-proxy workaround) + **Git**.
+  `--use-system-ca` corporate-proxy workaround — run `scripts/setup-dev.{ps1,sh}`, which sets it
+  automatically so `npm ci` doesn't hang behind a TLS-intercepting proxy) + **Git**.
 - **The AI itself** = a **GGUF model file** *plus* the **`llama.cpp` `llama-server` binary**. Neither
   ships in this repo (licensing + size); the steps below download and verify them, or you add them by
   hand.
@@ -146,11 +147,12 @@ scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 **To keep setup fast, `-WithAssets` downloads a small but complete default set** — not the whole
 catalog. It fetches the benchmark-winning mid-tier chat model (Ministral 3 8B, ~5 GB; on a ≤12 GB
 machine you may prefer the smaller bundled Qwen3-4B — add it with `-AllModels` or from the AI Model
-screen), the **embeddings** model (for document Q&A), the **reranker**, and the **Whisper**
-transcriber model, plus **both sidecar runtimes** (`llama.cpp` for chat/embeddings, `whisper.cpp`
-for audio). That's enough to chat, ask questions about your documents, get higher-quality
-retrieval, and transcribe audio out of the box. You download any **other** models (larger chat
-models, the opt-in **vision** model) **from inside the app** later, on demand. To provision
+screen), the **embeddings** model (for document Q&A), the **reranker**, the **Whisper**
+transcriber model, and the **vision** model (for image understanding), plus **both sidecar
+runtimes** (`llama.cpp` for chat/embeddings, `whisper.cpp` for audio). That's enough to chat, ask
+questions about your documents, get higher-quality retrieval, transcribe audio, and understand
+images out of the box. You download any **other** models (larger chat
+models) **from inside the app** later, on demand. To provision
 *every* model up front instead, add `-AllModels` (Windows) / `--all-models` (macOS/Linux). The
 sidecar runtimes are fetched either way.
 
@@ -217,8 +219,8 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 | Gemma 4 12B Instruct QAT Q4_0 | **Recommended 12–14B** — benchmark winner; has **Deep** | ~7.0 GB | 14 GB | Apache-2.0 |
 | Qwen3 14B Instruct Q4 | Dense, 32 GB+ | ~9.3 GB | 14 GB | Apache-2.0 |
 | Qwen3 30B-A3B (MoE) Q4 | ≈30B quality, ≈3B speed (opt-in) | ~18.6 GB | 24 GB | Apache-2.0 |
-| Qwen3.5 27B (UD-Q4_K_XL) | Qwen3.5 wave dense challenger (selectable; not auto-recommended) | ~16.7 GB | 24 GB | Apache-2.0 |
-| Qwen3.5 35B-A3B (UD-Q4_K_XL) | Qwen3.5 wave MoE (~3B active; opt-in, selectable) | ~20.6 GB | 24 GB | Apache-2.0 |
+| Qwen3.5 27B (UD-Q4_K_XL) | Qwen3.5 wave dense challenger (selectable; not auto-recommended) | ~17.6 GB | 24 GB | Apache-2.0 |
+| Qwen3.5 35B-A3B (UD-Q4_K_XL) | Qwen3.5 wave MoE (~3B active; opt-in, selectable) | ~22.2 GB | 24 GB | Apache-2.0 |
 
 ### Supporting models (non-chat)
 
@@ -227,7 +229,7 @@ params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM).
 | Multilingual E5 Small (F16) | Embeddings | Document search / RAG (**required** for Q&A) | 4 GB | MIT |
 | BGE Reranker v2 M3 (F16) | Reranker | Higher-quality retrieval ordering | 6 GB | Apache-2.0 |
 | Whisper Small (multilingual) | Transcriber | Audio-file transcription + dictation | 4 GB | MIT |
-| Qwen2.5-VL 3B Instruct Q4 | Vision | Image understanding (opt-in; in-app download) | 12 GB | Apache-2.0 |
+| Qwen2.5-VL 3B Instruct Q4 | Vision | Image understanding (in the `--with-assets` default set; else in-app download) | 12 GB | Apache-2.0 |
 | TranslateGemma 12B (Q4_K_M) | Translation | Document & text translation (opt-in; in-app download behind a license prompt) | 13 GB | Gemma Terms |
 
 Document Q&A needs the **embeddings** model; chat needs **one** of the chat models. Bigger **dense**
@@ -276,7 +278,7 @@ HilbertRaum/
 ├─ apps/desktop/        # the Electron app (main / preload / renderer + tests)
 │  └─ src/main/services # chat, rag, embeddings, reranker, vision, ocr, skills, …
 ├─ docs/                # architecture, rag, security, packaging, … (see above)
-├─ model-manifests/     # per-model YAML (chat, embeddings, reranker, transcriber, vision)
+├─ model-manifests/     # per-model YAML (chat, embeddings, reranker, transcriber, translation, vision)
 ├─ app-skills/          # bundled skills (bank-statement, invoice, redaction, document-edit + Professional Documents: meeting-minutes, contract-brief, deadlines, what-changed, share-safe)
 ├─ scripts/             # prepare-drive / fetch-models / fetch-runtime / verify-models / …
 ├─ launchers/           # double-click launcher templates for a prepared drive

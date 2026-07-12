@@ -5331,7 +5331,7 @@ comment's `audit <ID>` citation through it:
   explicit fallback, since NO new skill opts in, no corpus rows were added — the corpus is deliberately
   scoped to the auto-fire surface and the eval gate is unchanged. (See §18 for the auto-fire contract.)
 - **R-2 — run-surface eyeball deferred (re-affirmed, surfaced for opt-in).** The live `SkillRunBar`
-  Playwright walk (a `walk-skills-runbar.mjs`, to be modelled on `scripts/walk-skills-composer.mjs`) needs
+  Playwright walk (a `walk-skills-runbar.mjs`, to be modelled on `apps/desktop/scripts/walk-skills-composer.mjs`) needs
   a GUI session a test harness cannot drive; every visual state stays unit-covered by
   `SkillRunBar.test.tsx` (offer / running / result / confirm-modal, EN+DE). The honest deferral (the
   documented default since Phase 5) is re-affirmed — no fake captures; the owner may run the capture on a

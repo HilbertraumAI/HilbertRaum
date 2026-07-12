@@ -239,7 +239,7 @@ Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 | Python | ❌ NOT installed |
 
 OS: Windows 11 Pro (10.0.26200). Shell: PowerShell + bash both available.
-Repo root: `f:\_coding\ai_drive`.
+Repo root: the repo checkout (any path/drive — no path assumptions).
 
 ---
 
@@ -1223,8 +1223,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       SECURITY.md's "where available" phrasing fully true) · branch protection on `master`
       requiring **`ci-success`** · disable unused Projects (wiki is already off). Issue templates
       = nice-to-have.
-    - [ ] **Hygiene re-grep immediately before the flip** (dev paths/secrets that crept in since
-      the 2026-07-10 scan; that scan verified NO secrets/PII anywhere in the working tree or git
+    - [ ] **Hygiene re-grep immediately before the flip** (a full-tree sweep for dev
+      paths/secrets, not just deltas since the 2026-07-10 scan; that scan verified NO secrets/PII anywhere in the working tree or git
       history — history publishes as-is, owner decision 2026-07-10).
     - Owner sidebars (any time, not flip-gated): monitor `security@hilbertraum.ai` · Apple
       Developer enrollment (packaging.md signing stage 1; when the `APPLE_*`/`CSC_*` secrets land,
@@ -1390,18 +1390,33 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
         self-heals only on re-index (known-limitations note shipped with Phase 1). Same family,
         also unswept: a hard crash mid-lock-encrypt leaves a partial-CIPHERTEXT `<enc>.tmp`
         (exposure nil, overwritten next lock; one `rmSync` in the sweep would tidy).
-      - **README default-set vision omission (Phase-4 observation, reviewer-CONFIRMED, left
-        unfixed):** `prepare-drive.ps1` `$DefaultModelIds` includes `qwen2.5-vl-3b-instruct-q4`
-        (added 2026-07-01), so the real `--with-assets` model footprint is ≈10.4 GB — not the
-        ~7 GB the README basis sentence states (its 4-model list omits vision) — and README's
-        vision table row still says "opt-in; in-app download". Fix on the next README pass and
-        recompute the DOC-6 swap figures on the corrected basis at the same time.
+      - **README default-set vision omission — FIXED 2026-07-12 (full-audit 2026-07-12b DOC-1):**
+        README + packaging.md corrected (default set ≈10.4 GB incl. `qwen2.5-vl-3b-instruct-q4`,
+        vision row + 3 packaging.md spots + model-policy.md "Opt-in only" line), swap figures
+        recomputed on the corrected basis (~14 GB 14B / ~24 GB 30B-A3B).
       - **Nuance notes (recorded in the §48 rows):** REL-1's in-code "spent or garbage"
         justification slightly overstates (a REL-2 probe-error corner can leave an
         unconsumed-FRESH `.recovery`); REL-3's confidentiality window can extend one unlock
         further under an active probe error; SEC-2 reviewer N1 — the containment sweep removes
         only the FIRST offender before throwing (the next install's pre-clean removes the rest).
       - **TS-7 (macOS CI leg)** remains the standing owner call — item 7.
+
+13. **Full-audit 2026-07-12b — IN PROGRESS.** New audit round on baseline `06920c1`; working paper
+    in `docs/audits/` (uncommitted; orchestrator commits per phase).
+    - _2026-07-12 Phase 1 (docs accuracy + onboarding sweep, docs-only, suite unchanged 4195/47):_
+      **DOC-1..DOC-6, DOC-8, GAP-1, PF-1** fixed — all numbers re-derived from manifests/scripts at
+      edit time. **DOC-1:** vision (`qwen2.5-vl-3b-instruct-q4`) IS in the `--with-assets` default set
+      (≈**10.4 GB**, not ~7 GB) — corrected across `packaging.md` (3 spots), `README.md` (basis +
+      vision row), and `model-policy.md`'s stale "Opt-in only" line; README swap figures recomputed
+      **~14 GB** (14B) / **~24 GB** (30B-A3B). **DOC-2:** Qwen3.5 27B/35B `16.7/20.6`→**17.6/22.2 GB**
+      (README + model-policy, 6 cells). **DOC-3:** model-policy catalog gains the two fast-tier rows
+      (0.8B surviving §9 candidate / 2B failed). **DOC-4:** `translation` role added to README repo-tree.
+      **DOC-5:** data-contracts b9585 present-tense reworded (verified b9585 / expected b9849).
+      **DOC-6:** architecture R-2 walk-script path qualified `apps/desktop/scripts/` (line 5334 only;
+      §47/§48 untouched). **DOC-8:** CONTRIBUTING spec §9.2 → architecture.md pointer. **GAP-1:**
+      corporate-proxy `setup-dev`/`--use-system-ca` note in CONTRIBUTING + README. **PF-1:** §2 dev
+      absolute path neutralized + item-10 re-grep widened to a full-tree sweep. Docs-only ⇒ build
+      unaffected; every edited file byte-verified NUL + BOM clean.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
