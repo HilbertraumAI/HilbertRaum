@@ -5331,11 +5331,19 @@ comment's `audit <ID>` citation through it:
   explicit fallback, since NO new skill opts in, no corpus rows were added — the corpus is deliberately
   scoped to the auto-fire surface and the eval gate is unchanged. (See §18 for the auto-fire contract.)
 - **R-2 — run-surface eyeball deferred (re-affirmed, surfaced for opt-in).** The live `SkillRunBar`
-  Playwright walk (`walk-skills-runbar.mjs`, recipe in `docs/design-review/skills-s12/README.md`) needs a
-  GUI session a test harness cannot drive; every visual state stays unit-covered by `SkillRunBar.test.tsx`
-  (offer / running / result / confirm-modal, EN+DE). The honest deferral (the documented default since
-  Phase 5) is re-affirmed — no fake captures; the owner may run the capture on a GUI machine and commit the
-  PNGs.
+  Playwright walk (a `walk-skills-runbar.mjs`, to be modelled on `scripts/walk-skills-composer.mjs`) needs
+  a GUI session a test harness cannot drive; every visual state stays unit-covered by
+  `SkillRunBar.test.tsx` (offer / running / result / confirm-modal, EN+DE). The honest deferral (the
+  documented default since Phase 5) is re-affirmed — no fake captures; the owner may run the capture on a
+  GUI machine. Recipe essentials (full version:
+  `git show f549ce8:docs/design-review/skills-s12/README.md` — the `docs/design-review/` capture staging
+  folder was deleted 2026-07-12 per the delete-captures-after-review convention; the walk scripts
+  `mkdirSync` it back on demand): (1) seed ONE indexed statement whose lines match the deterministic
+  parser (`<ISO-date> <description> <amount with 2 minor digits>` + a currency marker on the page) —
+  `listRunnableTools` returns `[]` without an `indexed` in-scope document; (2) drive extract → the busy
+  row → each tool's result row, then the export tool to reach the `ConfirmDialog`; (3) stub
+  `dialog.showSaveDialog` so the walk never blocks on an OS dialog; capture every state in both themes ×
+  EN/DE; Playwright stays an ad-hoc dev tool (`--no-save`, never a committed dependency).
 
 **Posture held across all 11 phases (load-bearing):** offline / no telemetry; the **content class** (skill
 bodies, the draft question, extracted figures, redacted text, document text **and** titles/filenames) is
