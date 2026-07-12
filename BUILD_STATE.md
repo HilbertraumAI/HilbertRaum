@@ -19,6 +19,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-12 — **Result-tables plan retired IMPLEMENTED: `docs/result-tables-plan.md` DELETED, condensed into the new architecture.md "Generic result tables — design record" (§1–§6 + D59–D67; §-numbers match the plan 1:1 so the ~25 in-code `result-tables plan §N`/`D59`–`D67` citations resolve unchanged, zero code churn).**_
+Owner decision 2026-07-12 (same contributor-clarity sweep as the big-slot retirement below): all phases (1/1.5/1.6/2/3 v1) had shipped 2026-07-05 via PRs #14/#16 — the "plan" was a finished design record wearing a plan costume. Residuals (invoice `TableSpec` port, derived-column eval, no-skill tabular routing, remaining §5 deferrals) → record §6 + §5 item 10's issue-filing list; known-limitations' two plan links re-pointed to the record; CLAUDE.md's open-plan example → "none currently open" (no standalone plan file remains in the repo). Full original: `git show f2b628c:docs/result-tables-plan.md`. Docs-only.
+
 _2026-07-12 — **Phase-30 plan retired unimplemented: `docs/big-slot-embeddings-plan.md` DELETED (contributor-clarity: neither track had started and the plan had drifted — stale b9585 pin, a Track-A candidate list overtaken by the §9 tester evidence).**_
 Owner decision 2026-07-12, retired per the CLAUDE.md doc-lifecycle rule instead of rewritten. Disposition + the durable Track-B facts → **`model-benchmarks.md` §9.2** (D38 superseded by the Qwen3.5/3.6 evidence; D39 carried forward as §9's must-beat table; D42 merged into §5 item 8 step (a); D43 still open inside item 8's speed/RSS step; D40/D41 deferred with the F16/q8_0 compat hazard + reindex-UX notes). Open-work registration → §5 item 4 (rewritten: deferred post-MVP, reopen prerequisites listed); the D1 rider now lives solely in rag-design §10; CLAUDE.md's sanctioned-open-plan example → `result-tables-plan.md`; Phase-table row 30 updated. Full original: `git show 1e5d17e:docs/big-slot-embeddings-plan.md`. Docs-only.
 
@@ -1207,7 +1210,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       add issue cross-references where the Phase-4 readability sweep left plain-language gap
       descriptions): signed offline update bundles (item 3, blocked on key management) · big slot
       + embeddings (item 4) · PDF→PDF output for redact/edit (item 6, #45) ·
-      `result-tables-plan.md` residuals · security-hardening lows L-4/L-5/L-7 (§8; L-8 is closed
+      generic result-tables residuals (architecture.md result-tables record §6: invoice
+      `TableSpec` port, derived-column eval, no-skill tabular routing, remaining §5 deferrals) ·
+      security-hardening lows L-4/L-5/L-7 (§8; L-8 is closed
       — `npm ci` everywhere) · the `IBAN_CANDIDATE_RE` backtracking hazard (known-limitations) ·
       restart-required mid-session installs for transcriber/reranker/embedder · the open GPU
       hardware-matrix legs (item 1b: ② ④ ⑤ ⑥ ⑦ ⑧ ⑨).

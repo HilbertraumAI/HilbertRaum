@@ -7473,6 +7473,153 @@ beta header carries its `beta-feedback-2026-07 Phase N` tag, which is the stable
 title + phase tag, so the collision never mis-resolves.
 
 
+## Generic result tables — design record (result-tables wave 2026-07-05, §1–§6 + D59–D67)
+
+_Condensed from the retired working paper `docs/result-tables-plan.md` (all phases — 1, 1.5, 1.6,
+2, 3 v1 — shipped 2026-07-05 via PRs #14/#16; file deleted 2026-07-12, full text:
+`git show f2b628c:docs/result-tables-plan.md`). **§-anchor legend: the §-numbers below match the
+retired plan 1:1**, so code/test/doc citations of the form "result-tables plan §3" / `D59`–`D67`
+resolve here unchanged (decision numbering continues the repo series after the
+invoice-hardening/whole-doc waves' D44–D58). The consciously-deferred residuals are listed in §6
+and tracked for issue-filing at the public flip (BUILD_STATE §5 item 10)._
+
+### §1 The problem (observed failure, 2026-07-05)
+
+"Categorize all transactions and export them, including the category, as CSV" failed although both
+halves existed, in five seams: the bank handler's format short-circuit returned on the `csv` token
+BEFORE the categorization block ran; `transactionsToCsv` hardcoded seven columns
+(`TransactionInput` had no category field); the file-export lane's `loadTransactions` never joined
+`bank_categories`; nothing decomposed "categorize AND export" into two steps; and the no-skill
+route classified the ask as top-k relevance. Diagnosis: **which rows**, **which columns**, and
+**the deliverable** were fused at compile time — every "but what if the user asks for X" failure
+(category, subcategory, German column names, grouping) is the same failure. The general fix (D59):
+request → typed TableRequest → deterministic rows → constrained-LLM derived columns → generic
+table → schema-agnostic serializer → inline render or confirm-gated export, resting on the
+runtime's grammar-constrained JSON output (D55).
+
+### §2 Decisions (D59–D63)
+
+| # | Decision | Why |
+|---|---|---|
+| D59 | Schema-driven table pipeline: separate rows / columns / deliverable; serializers take a `TableSpec` (columns + typed cells), never a fixed struct | Kills the whole class, not one prompt shape; generalizes to invoice line items, deadlines, extractions |
+| D60 | `TableSpec` + `tableToCsv` live in `services/tables/` (pure, main-side); `transactionsToCsv` becomes a `TableSpec` builder + delegate | Both CSV surfaces (inline format answer, file export) reuse ONE audited serializer incl. the `csvField` formula-injection neutralization (S12 F4) |
+| D61 | `TransactionInput` gains OPTIONAL `category?: string` (+ row schema) | The category travels WITH the row through the existing seams (no index-matched parallel arrays crossing a seam); backward compatible — the extractor never emits it |
+| D62 | The category column is **presence-gated**: emitted only when ≥ 1 row carries a category | Byte-identical CSV/JSON for every existing non-category flow (tests pin this); an always-empty column would imply "categorized, all blank" — dishonest |
+| D63 | A category-shaped format ask runs the categorize seam FIRST (persisting, `skill_runs` lifecycle intact), then serializes rows+categories; the honest `categoryAssisted`/`categoryRuleBased` note rides under the fenced block | A model-assigned category must never masquerade as a parser figure |
+
+### §3 Phase 1 — schema-agnostic serializer + category end-to-end (as built)
+
+`services/tables/index.ts`: `TableColumn { key, label, kind?: 'text'|'money'|'integer' }`,
+`TableSpec`, `tableToCsv()` — money cells fixed 2-dp dot-decimal, `csvField` neutralization on
+text, blank for null/undefined, `\r\n` + trailing newline (the existing CSV contract).
+`skills/tools/bank-statement.ts`: `TransactionInput.category?` (+ `TRANSACTION_ROW_SCHEMA`);
+`transactionsToCsv` builds a presence-gated `TableSpec` (D62) and delegates;
+`statementToPlainObject` emits `category` under the same gate (JSON parity).
+`skills/analysis/bank-statement.ts`: the category block (seed-if-unpersisted + reload +
+`modelAssisted`) hoisted ABOVE the format short-circuit (D63); non-category format asks stay
+byte-identical. `skills/run.ts` `loadTransactions`: LEFT JOIN `bank_categories` — the
+confirm-gated file export carries the column whenever the statement has been categorized.
+Deliberately NOT in scope: chat-triggered file export (stays a confirm-gated UI action; the inline
+CSV is copyable) and new i18n keys (the existing `formatIntroCsv` + category notes compose).
+
+### §3a Phase 1.5 — user-defined category sets from the prompt (D64/D65)
+
+"Kategorisiere in Miete, Lebensmittel, Kinder und Sonstiges …" works end-to-end. **D64**: a custom
+set runs the enum-constrained categorizer **inline in the chat slot** — not a doctask enqueue (the
+chat turn already holds the exclusive model slot, so one llama-server is never hit twice and the
+answer arrives in the same turn); with NO runtime the ask is REFUSED with friendly copy echoing
+the parsed set — the deterministic rules cannot know the user's labels, and a silent
+fixed-taxonomy fallback would answer a different question. **D65**: the prompt parse is
+**conservative and all-or-nothing** (`parseRequestedCategories`: categorize stem + preposition,
+deliverable-tail cut, ≥ 2 plausible labels of ≤ 40 chars / ≤ 4 words; ONE bad token rejects the
+whole parse) — a half-understood list must never silently categorize into garbage; refusal copy
+and output both echo the parsed labels so a mis-parse is immediately visible. As built:
+`categorizer.ts` takes an optional `categories` list (per-run enum/prompt/validation; prefilter
+skipped; `Uncategorized` always appended as the drop target); `persistCategorization` (run.ts)
+persists assignments + `categorized_by_model` atomically, inserting user labels as NON-builtin
+`bank_categories` rows; the handler REUSES a prior run when the persisted labels ⊆ the requested
+set; `categoryLabel` never probes the i18n catalog with a user-defined name (content must not
+reach the diagnostics log). `SkillAnalysisContext.runtime` is the one sanctioned model hook,
+threaded from `registerRagIpc`.
+
+### §3b Phase 1.6 — taxonomy CSV referenced from the prompt (D66/D67)
+
+"Kategorisiere nach den Kategorien in `taxonomie.csv` …". **D66**: the referenced file is found by
+**name across the indexed library** (`findDocumentByName`: case-insensitive title match,
+extension-stripped stems, statement excluded, ties → most recently updated) — never by widening
+scope, since the bank handler requires exactly ONE in-scope document. **D67**: the CSV's second
+column is a per-label **gloss fed to the model prompt** (never persisted, never an enum value) —
+`Kinder;Schule, Kita, Taschengeld` → `- Kinder (Schule, Kita, Taschengeld)`; the single biggest
+quality lever for custom labels on a small model. As built: `parseTaxonomyFileRef` (categorize
+stem + a quoted-or-bare `.csv` token) and `parseTaxonomyCsv` (one label per line,
+first-of-`;`/tab/`,` delimiter, header + `#`-comment skip, all-or-nothing like D65, 2–40 labels);
+missing / unparseable → honest refusals NAMING the file (`customTaxonomyNotFound` /
+`customTaxonomyUnparseable`, EN+DE). The parser understands BOTH text shapes it can be handed —
+the raw file and the app CSV importer's LINEARIZED form (`Header: value; …` lines, detected by the
+constant first key and reconstructed before the label/gloss split); a full-path reference is
+reduced to its basename (the library stores titles, and the app deliberately cannot read an
+arbitrary disk path — the file must be imported first). File labels accept real-world shapes
+(`Kfz/Auto`, `Essen & Trinken`, `Vers. + Vorsorge`). Caveats (recorded in known-limitations):
+filename auto-scope can narrow the turn to the taxonomy file itself; filenames with spaces need
+quotes; chunk-boundary splits only matter for files far beyond 40 labels.
+
+### §4 Phase 2 — result-table artifact + message-level export (as built)
+
+`result_tables` (db.ts SCHEMA, next to `extraction_records`): one generic tabular artifact per
+assistant message — columns/rows as JSON (CONTENT — never logged/audited), `row_count`, a
+content-free `source` discriminator, and a `message_id` FK **ON DELETE CASCADE** (regenerate
+delete + conversation delete purge automatically). Store seam `services/tables/store.ts`:
+`saveResultTable` best-effort — empty / over-cap (`MAX_RESULT_TABLE_ROWS` 10 000) / unserializable
+persists NOTHING and never blocks the answer; `loadResultTable` tolerant like `parseCoverage`.
+`SkillAnalysisResult.table?: TableSpec` — the bank format path (CSV *and* JSON asks) emits
+`transactionsTableSpec(rows)` (the ONE column definition all tabular surfaces share);
+`registerRagIpc` persists it right after the plain-answer `appendMessage` and lights
+`Message.hasResultTable` on the returned object; `listMessages` derives the flag via an EXISTS
+subselect — table content never rides message loading. `chat:exportMessageTable` IPC:
+`requireUnlocked` → `loadResultTable` → `tableToCsv` (the one audited CSV path) → `saveTextExport`
+(save dialog = consent, no confirm modal — the transcript-export posture; no BOM on .csv); audit
+event `message_table_exported`, metadata `{ messageId, rows }` only. Renderer: an "Export CSV"
+action in `MessageActions`, rendered only on answers with `hasResultTable`. Notes: answers
+produced before 2026-07-05 carry no table (no backfill — the table is the answer's artifact);
+only the bank format path emits one so far (invoice port = §6); tables key off messages, so no
+document-purge hook is needed.
+
+### §5 Phase 3 v1 — TableRequest parse + derived-column enrichment (as built + conscious deferrals)
+
+`services/skills/enricher.ts`: **`wantsExtraColumns`** — a cheap deterministic PRE-GATE
+(spalte/column/subcategory/payee/… stems): a plain "als CSV" turn stays the Phase-1 **0-model**
+short-circuit (pinned by a zero-calls integration test); only a column-shaped ask pays the parse
+call. **`parseTableRequest`** — ONE grammar-constrained call (D55) turning the ask into
+`DerivedColumn { name, description?, enumValues? }[]` (≤ 4), validated ALL-OR-NOTHING (the D65
+posture: an invalid name or one shadowing a fixed column rejects the whole request → plain-table
+fallback, never a half-understood one; an empty list is a valid "no extra columns" outcome).
+**`enrichRows`** — batched (12 rows/call) per-row fill of EVERY requested column over the WHOLE
+extracted row set; enum columns grammar-enum-constrained (+ the `unknown` drop target), free text
+length-capped (60); `unknown`/invalid/dropped cells serialize as **blank** — absent, never
+invented; unparseable batch → one retry → blanks (the categorizer's L-1/L-2 posture incl. the
+runaway-output char cap). Enriched turns emit an EXTENDED `TableSpec` (fixed columns + category
+presence-gated + derived columns) through the same fenced answer, the persisted result table, and
+the message-level export, with the honest `derivedColumnsNote` (EN+DE) naming the model-filled
+columns; any parse/enrich fault falls back to the plain table. **Consciously DEFERRED** (still
+open): **no-skill tabular routing** (§1 seam 5 — needs a GENERIC row extractor, which does not
+exist; the A4 class-match inversion already routes most statement questions to the handler;
+revisit when a second tabular domain lands); the model parse GATES on the deterministic pre-gate
+rather than replacing the format regexes (cheaper, honest to D55's cost); `filter` / `groupBy` /
+`deliverable` fields of the original TableRequest sketch not parsed; JSON-format asks not
+enriched (CSV only in v1).
+
+### §6 Residuals open at retirement (2026-07-12)
+
+Registered for issue-filing at the public flip (BUILD_STATE §5 item 10) and narrated user-facing
+in `known-limitations.md` ("categorize … as CSV/JSON"):
+
+- **Invoice parity** — the invoice handler has the same format short-circuit shape; port the
+  `TableSpec` delegation there (its serializers already share `csvField`).
+- **Derived-column quality eval** — free-form derived columns on a small model need an eval item
+  (mitigated today by enum grammars + the explicit `unknown` drop target).
+- **No-skill tabular routing** — the §5 deferral; needs a generic row extractor first.
+- **`filter`/`groupBy`/`deliverable` parse + JSON-ask enrichment** — the remaining §5 deferrals.
+
 ## Test-enforcement seams — design record (full audit 2026-06-29, Phase 3)
 
 The 2026-06-29 audit's testing review flagged a class of gap distinct from a bug: a **security/reliability

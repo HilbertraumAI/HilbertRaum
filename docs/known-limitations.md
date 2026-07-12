@@ -1455,7 +1455,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   enum and the model-assisted detection key on it), but the breakdown **display labels are localized**
   (EN + DE); a future user-defined category with no catalog entry falls back to its raw name.
 - **A "categorize … as CSV/JSON" chat turn serializes WITH the category column
-  ([`result-tables-plan.md`](result-tables-plan.md) carries the open residuals).** The
+  (the [`architecture.md`](architecture.md) "Generic result tables" record §6 carries the open
+  residuals).** The
   bank format answer categorizes FIRST (persisting, with the honest model-assisted / rule-based note
   under the fenced block — D63) and both CSV surfaces (the inline answer and the confirm-gated export
   button) emit each row's category through one generic table serializer (D60); the column is
@@ -1475,7 +1476,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   be signalled with a column-shaped phrasing (Spalte/column/subcategory/payee …); (c) **without
   the skill active** a tabular ask still routes to top-k relevance, not whole-document — routing
   it through extract-then-enrich needs a generic row extractor that does not exist yet (deferred,
-  `result-tables-plan.md` §5).
+  architecture.md result-tables record §5).
   **USER-DEFINED category sets from the prompt are supported** ("Kategorisiere in Miete,
   Lebensmittel, Kinder und Sonstiges … als CSV"): the enum-constrained categorizer runs INLINE in the
   chat slot with the user's labels (+ the `Uncategorized` drop target), persists them as non-builtin
