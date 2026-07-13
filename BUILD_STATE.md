@@ -19,6 +19,9 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 
+_2026-07-13 — **PR #57: the no-direct-master-pushes rule stated prominently in CLAUDE.md (new top section) + CONTRIBUTING.md ("Commits & pull requests") — the repo is PUBLIC since 2026-07-12.**_
+Docs-only contributor PR (`humaniser`; this ritual entry added at merge review). The rule codifies what the 2026-07-12 `master` ruleset already enforces (changes via PR, required `ci-success`, no deletion/force-push): never commit or push to `master` directly, even with bypass rights, docs included. In the same review pass, §5 item 10's "Flip to public" sub-item is checked off — observed done 2026-07-13 via the GitHub API (repo public, private vulnerability reporting ENABLED, the ruleset active, Projects disabled). Still open in item 10: branch cleanup, filing the open work as issues, and the pre-flip hygiene re-grep (overtaken by the flip having happened — needs an owner disposition note, not a re-run gate).
+
 _2026-07-12: **Newest-Qwen promotion (owner decision): the recommendation tiers now point at the newest Qwen generation; the Qwen3.6 27B pair productized from local-test stubs; the stub [PRO] profile hijack fixed.**_
 Owner decision 2026-07-12, durable record in **`model-benchmarks.md` §6.4** (rationale: a subjective owner judgment that newer model generations improve on the ones they replace; the §9 tester eval is treated as directional, its F1 being length-confounded, EM near-tied, single-run; follow-up quality + speed benchmarks recorded as open work in §5 item 8). This partially front-runs §5 item 8's ratify-and-complete sequence BY DESIGN: the rank/RAM/test/README edits land now on product grounds; the scorer fixes, owner ratification, §3/§4 speed+RSS rows for the promoted set (the tester runs were QUALITY-ONLY), and the §9.1 smokes for the 9B and both 27Bs stay open in item 8. Changes: (1) ranks: `qwen3.5-4b-ud-q4kxl` and `qwen3.5-9b-ud-q4kxl` 0→3 (eval standing recorded honestly in each manifest: the 4B FAILED its §9 F1 bar, the 9B sat under Ministral); (2) `qwen3.6-27b-q4`/`-q5` PRODUCTIZED (unsloth GGUF download blocks, real HF-LFS hashes, apache-2.0 reviews superseding the 2026-06-22 local-test scope, ram_gb 24/32, ctx 8192) and promoted to rank 3 (here the eval AGREES: they top the §9 quality table); (3) the five 2026-06-22 local-test stubs committed earlier today carried `recommended_profiles: [PRO]`, which HIJACKED the legacy profile picker from qwen3-14b and broke `benchmark.test.ts` on master (the push had bypassed the ci-success gate) — all five emptied per D17, the gemma stub pair (`gemma-4-26b-q4`, `gemma4-coding-q8`) and `qwen3.5-9b-q8` otherwise untouched (still rank 0, license G3 provenance issues still open in the private preload review). New mapping (asserted in `benchmark.test.ts` + `committed-catalog.test.ts`, incl. a new Qwen3.6 promotion-facts pin): **≤12 GB → Qwen3.5 4B, 16–20 GB → Qwen3.5 9B, 24 GB → Qwen3.6 27B Q4, ≥32 GB → Qwen3.6 27B Q5**. Docs: README tiers+table, model-policy catalog rows + ‡ footnote, model-benchmarks §6.3 superseded-note + new §6.4. NOT changed (follow-ups, deliberate): the bundled drive default (`qwen3-4b-instruct-q4`), the DIY `--with-assets` default set (Ministral), DRIVE-NOTICES regeneration if a Qwen3.6 model is ever preloaded.
 
@@ -1228,10 +1231,11 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       — `npm ci` everywhere) · the `IBAN_CANDIDATE_RE` backtracking hazard (known-limitations) ·
       restart-required mid-session installs for transcriber/reranker/embedder · the open GPU
       hardware-matrix legs (item 1b: ② ④ ⑤ ⑥ ⑦ ⑧ ⑨).
-    - [ ] **Flip to public**, then: enable **private vulnerability reporting** (item 1c — makes
-      SECURITY.md's "where available" phrasing fully true) · branch protection on `master`
-      requiring **`ci-success`** · disable unused Projects (wiki is already off). Issue templates
-      = nice-to-have.
+    - [x] **Flip to public** — **DONE 2026-07-12** (observed via the GitHub API 2026-07-13 at
+      the PR #57 merge review): repo public, **private vulnerability reporting ENABLED** (item
+      1c satisfied — SECURITY.md's "where available" phrasing is fully true), `master` ruleset
+      active (changes via PR + required **`ci-success`**, no deletion/force-push), Projects
+      disabled (wiki was already off). Issue templates = nice-to-have, still open.
     - [ ] **Hygiene re-grep immediately before the flip** (a full-tree sweep for dev
       paths/secrets, not just deltas since the 2026-07-10 scan; that scan verified NO secrets/PII anywhere in the working tree or git
       history — history publishes as-is, owner decision 2026-07-10).
