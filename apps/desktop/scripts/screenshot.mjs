@@ -34,10 +34,7 @@ const SIZES = {
   // #44/#46: short composer-strip components — no full-screen canvas needed.
   'skill-info-card': [820, 320],
   'skill-info-card-de': [820, 320],
-  'skill-run-result-offer': [820, 220],
-  // Marketing captures (full shell + staged transcript); pair with SHOT_SCALE=2 for hi-dpi.
-  'marketing-spending': [1220, 856],
-  'marketing-spending-de': [1220, 856]
+  'skill-run-result-offer': [820, 220]
 }
 // Per-case readiness selector: an element that only exists once the case's async chain
 // (mock window.api fetch → React state → re-render) has completed, so the poll below can
@@ -53,9 +50,26 @@ const READY = {
   'chat-warmup': '.chat-warmup-hint',
   'skill-info-card': '.skill-info-card',
   'skill-info-card-de': '.skill-info-card',
-  'skill-run-result-offer': '.skill-run-bar',
-  'marketing-spending': 'body[data-marketing-ready]',
-  'marketing-spending-de': 'body[data-marketing-ready]'
+  'skill-run-result-offer': '.skill-run-bar'
+}
+
+// Marketing captures (preview.tsx marketing block): every shot renders as
+// marketing-<shot>[-de][-light]; pair with SHOT_SCALE=2 for hi-dpi output. The staged shells
+// self-report readiness via body[data-marketing-ready]; the indicator close-up is a plain
+// component case.
+const MKT_SHOTS = {
+  'marketing-salary': [1220, 856],
+  'marketing-spending': [1220, 856],
+  'marketing-contract': [1220, 1226],
+  'marketing-documents': [1220, 856],
+  'marketing-privacy': [1220, 1136],
+  'marketing-indicator': [640, 280]
+}
+for (const [base, size] of Object.entries(MKT_SHOTS)) {
+  for (const suffix of ['', '-de', '-light', '-de-light']) {
+    SIZES[base + suffix] = size
+    READY[base + suffix] = base === 'marketing-indicator' ? '.local-indicator' : 'body[data-marketing-ready]'
+  }
 }
 
 // Poll the ready condition, then let two frames paint. The previous fixed settles
@@ -142,9 +156,10 @@ function capture(c) {
       await waitReady(win, c)
       try {
         if (c.startsWith('marketing-')) {
-          // Park the pointer in the empty transcript area: the hidden window maps the REAL OS
-          // cursor position, so a stray :hover fill (e.g. on a rail item) lands in captures.
-          win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.floor(w * 0.6), y: Math.floor(h * 0.55) })
+          // Park the pointer in the harness padding (bottom-left corner): the hidden window maps
+          // the REAL OS cursor position, so a stray :hover fill (a rail item, a document row)
+          // lands in captures. The 16px harness padding is guaranteed interaction-free.
+          win.webContents.sendInputEvent({ type: 'mouseMove', x: 8, y: h - 8 })
           await win.webContents.executeJavaScript(
             'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))',
             true

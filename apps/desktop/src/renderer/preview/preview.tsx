@@ -6,9 +6,9 @@
 // self-describing. This file is dev-only (never bundled into the shipped app).
 import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DEFAULT_SETTINGS, type Collection, type Conversation, type DocumentInfo, type Message, type ModelInfo, type SkillInfo } from '@shared/types'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../i18n'
-import { ToastProvider } from '../components'
+import { DEFAULT_SETTINGS, type Citation, type Collection, type Conversation, type DocumentInfo, type DriveStatus, type Message, type ModelInfo, type PolicyStatus, type SkillInfo } from '@shared/types'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY, useT } from '../i18n'
+import { LocalIndicator, ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
 import { ContextMeter } from '../chat/ContextMeter'
 import { SkillInfoCard } from '../chat/SkillInfoCard'
@@ -455,14 +455,20 @@ CASES['scope-chip-de'] = { ...CASES['scope-chip'], label: `${CASES['scope-chip']
 CASES['coverage-line-de'] = { ...CASES['coverage-line'], label: `${CASES['coverage-line'].label} — DE` }
 
 
-// ---- Marketing staged chat (website/press screenshots) ------------------------------------------
-// A full app-shell chat showing a finished, entirely FICTIONAL spending answer — no real user
-// data ever appears in marketing captures. `?case=marketing-spending` (EN) / `-de` (DE). The
-// wrapper walks the real UI (rail → Chat → conversation row) so the capture is the actual
-// product rendering, not a mock composition. Dark theme is forced (the website is dark).
+// ---- Marketing staged captures (website/press screenshots) --------------------------------------
+// Full app-shell captures showing finished, entirely FICTIONAL conversations and data. No real
+// user data ever appears in marketing captures. Case ids follow `marketing-<shot>[-de][-light]`:
+// every shot renders in EN/DE and dark/light. The wrapper walks the real UI (rail, conversation
+// row, settings tab) so each capture is the actual product rendering, not a mock composition.
+// Shots: salary (plain chat), spending (documents Q&A, sources collapsed), contract (documents
+// Q&A, sources expanded), documents (library screen), privacy (Settings privacy tab), and
+// indicator (the rail privacy indicator close-up with its reassurance line).
 const mktCase = (): string => new URLSearchParams(location.search).get('case') ?? ''
-const isMkt = (): boolean => mktCase().startsWith('marketing-spending')
-const mktDe = (): boolean => mktCase().endsWith('-de')
+const isMkt = (): boolean => mktCase().startsWith('marketing-')
+const mktSegs = (): string[] => mktCase().split('-')
+const mktDe = (): boolean => mktSegs().includes('de')
+const mktLight = (): boolean => mktSegs().includes('light')
+const mktShot = (): string => mktSegs()[1] ?? ''
 
 const MKT_ANSWER_EN = [
   'Based on your bank statements, your largest spending category last year was **housing**. Here is the full breakdown:',
@@ -491,60 +497,231 @@ const MKT_ANSWER_DE = [
   'Zusammen machen diese fünf Kategorien rund **71 %** deiner Gesamtausgaben von **35.900 €** im letzten Jahr aus [S1].'
 ].join('\n')
 
+// Salary shot: a plain chat (no documents) about preparing a salary conversation. Amounts are
+// deliberately currency-free ("52k"/"58k") so the same capture works for EUR and USD audiences.
+const MKT_SALARY_EN = [
+  'Going from 52k to 58k is an 11.5% raise: ambitious, but arguable if you anchor it in results. Structure the conversation in three parts:',
+  '',
+  '**1. Lead with what changed, not with the number.** Your current salary was set for the role you had then. Open with how the role has grown since.',
+  '',
+  '**2. Bring three concrete arguments:**',
+  '1. **Scope**: you have taken on work beyond your role. Name two examples, with dates.',
+  '2. **Results**: make the impact measurable, for example "the reporting I automated saves the team about six hours a week".',
+  '3. **Market**: comparable roles are currently advertised at 55k to 62k, so 58k is mid-range, not the top.',
+  '',
+  '**3. Say the number first, and only once.** "Based on this, I am asking for 58,000." Then stop talking and let them respond.',
+  '',
+  'If the answer is no, ask what specifically would justify 58k within six months, and get it in writing.'
+].join('\n')
+const MKT_SALARY_DE = [
+  'Von 52k auf 58k sind rund 11,5 % mehr: ambitioniert, aber gut vertretbar, wenn du mit Ergebnissen argumentierst. Baue das Gespräch in drei Teilen auf:',
+  '',
+  '**1. Beginne mit dem, was sich geändert hat, nicht mit der Zahl.** Dein aktuelles Gehalt wurde für deine damalige Rolle festgelegt. Starte damit, wie die Rolle seitdem gewachsen ist.',
+  '',
+  '**2. Bringe drei konkrete Argumente:**',
+  '1. **Verantwortung**: Du hast Aufgaben über deine Rolle hinaus übernommen. Nenne zwei Beispiele, mit Datum.',
+  '2. **Ergebnisse**: Mach den Nutzen messbar, zum Beispiel "das automatisierte Reporting spart dem Team rund sechs Stunden pro Woche".',
+  '3. **Markt**: Vergleichbare Stellen sind derzeit mit 55k bis 62k ausgeschrieben, 58k liegt also in der Mitte, nicht am oberen Rand.',
+  '',
+  '**3. Nenne die Zahl zuerst und nur einmal.** "Auf dieser Basis möchte ich 58.000." Danach bewusst schweigen und die Reaktion abwarten.',
+  '',
+  'Falls die Antwort Nein ist: Frag, was 58k innerhalb von sechs Monaten konkret rechtfertigen würde, und lass es dir schriftlich geben.'
+].join('\n')
+
+// Contract shot: deadlines/notice periods extracted from the fictional sample lease used across
+// the marketing material (marketing repo: product-video/samples/lease-lindenstrasse-14.md).
+const MKT_CONTRACT_EN = [
+  'Your rental contract contains these deadlines and notice periods:',
+  '',
+  '1. **Fixed term**: three years, 1 September 2026 to 31 August 2029; ends without notice (§ 3) [S1].',
+  '2. **Ordinary termination**: possible after the first 12 months, with **three months\' written notice** to the end of a calendar month, by registered letter (§ 7) [S2].',
+  '3. **Rent payment**: due in advance, on the landlord\'s account **by the 5th of each month** (§ 4) [S3].',
+  '4. **Operating costs**: reconciled annually **each June**; differences settled **within four weeks** of the statement (§ 5) [S4].',
+  '5. **Deposit**: €2,850, due **before handover of the keys** (§ 6) [S5].',
+  '',
+  'The date to watch is the termination window: to end the lease on 31 December, your notice must reach the landlord by 30 September.'
+].join('\n')
+const MKT_CONTRACT_DE = [
+  'Dein Mietvertrag enthält folgende Fristen und Kündigungsfristen:',
+  '',
+  '1. **Befristung**: drei Jahre, 1. September 2026 bis 31. August 2029; endet ohne Kündigung (§ 3) [S1].',
+  '2. **Ordentliche Kündigung**: möglich nach den ersten 12 Monaten, mit **drei Monaten schriftlicher Frist** zum Ende eines Kalendermonats, per Einschreiben (§ 7) [S2].',
+  '3. **Mietzahlung**: im Voraus fällig, **bis zum 5. jedes Monats** auf dem Konto der Vermieterin (§ 4) [S3].',
+  '4. **Betriebskosten**: Abrechnung jährlich **im Juni**; Ausgleich **innerhalb von vier Wochen** nach der Abrechnung (§ 5) [S4].',
+  '5. **Kaution**: 2.850 €, fällig **vor der Schlüsselübergabe** (§ 6) [S5].',
+  '',
+  'Entscheidend ist das Kündigungsfenster: Um zum 31. Dezember zu kündigen, muss die Kündigung bis 30. September bei der Vermieterin eingehen.'
+].join('\n')
+
+// Citations for the documents-mode answers. Labels stay machine-stable `S{n}` (the renderer
+// localizes the display to `[Q{n}]` in German). Titles match the staged document lists below.
+function mktSpendingCitations(): Citation[] {
+  const de = mktDe()
+  const bank = (q: number): string => (de ? `kontoauszuege-2025-q${q}.pdf` : `bank-statements-2025-q${q}.pdf`)
+  const ins = de ? 'versicherungspolicen.pdf' : 'insurance-policies.pdf'
+  const card = de ? 'kreditkarte-2025.csv' : 'credit-card-2025.csv'
+  return [
+    { label: 'S1', sourceTitle: bank(4), pageNumber: 12 },
+    { label: 'S2', sourceTitle: de ? 'mietvertrag-2024.pdf' : 'rental-contract-2024.pdf', pageNumber: 2 },
+    { label: 'S3', sourceTitle: ins, pageNumber: 7 },
+    { label: 'S4', sourceTitle: bank(2), pageNumber: 5 },
+    { label: 'S5', sourceTitle: bank(3), pageNumber: 9 },
+    { label: 'S6', sourceTitle: ins, pageNumber: 14 },
+    { label: 'S7', sourceTitle: ins, pageNumber: 11 },
+    { label: 'S8', sourceTitle: card },
+    { label: 'S9', sourceTitle: card }
+  ]
+}
+function mktContractCitations(): Citation[] {
+  const de = mktDe()
+  const doc = de ? 'mietvertrag-lindenstrasse-14.pdf' : 'lease-lindenstrasse-14.pdf'
+  const c = (label: string, pageNumber: number, en: string, deSnip: string): Citation => ({
+    label,
+    sourceTitle: doc,
+    pageNumber,
+    snippet: de ? deSnip : en
+  })
+  return [
+    c('S1', 1,
+      'The lease is concluded for a fixed term of three years, beginning on 1 September 2026 and ending on 31 August 2029, without need of notice at expiry.',
+      'Das Mietverhältnis wird auf die Dauer von drei Jahren geschlossen, beginnend am 1. September 2026 und endend am 31. August 2029, ohne dass es einer Kündigung bedarf.'),
+    c('S2', 2,
+      'After the first 12 months of the term, either party may terminate this lease with three months\' written notice to the end of a calendar month.',
+      'Nach Ablauf der ersten 12 Monate kann jede Partei das Mietverhältnis mit einer Frist von drei Monaten schriftlich zum Ende eines Kalendermonats kündigen.'),
+    c('S3', 1,
+      'Rent is due in advance and must be credited by the 5th day of each month to the Landlord\'s account.',
+      'Die Miete ist im Voraus fällig und muss bis zum 5. Tag eines jeden Monats dem Konto der Vermieterin gutgeschrieben sein.'),
+    c('S4', 1,
+      'Actual costs are reconciled annually each June; differences are settled within four weeks of the statement.',
+      'Die tatsächlichen Kosten werden jährlich im Juni abgerechnet; Differenzen werden innerhalb von vier Wochen nach der Abrechnung ausgeglichen.'),
+    c('S5', 2,
+      'The Tenant provides a deposit of €2,850 (three months\' rent) before handover of the keys.',
+      'Der Mieter leistet vor Schlüsselübergabe eine Kaution von 2.850 € (drei Monatsmieten).')
+  ]
+}
+
 function mktConversations(): Conversation[] {
   const de = mktDe()
-  const mk = (id: string, title: string): Conversation => ({
+  const docsConv = (id: string, title: string): Conversation => ({
     ...conv(id, title, null),
     mode: 'documents' as Conversation['mode']
   })
+  if (mktShot() === 'salary') {
+    return [
+      conv('m1', de ? 'Gehaltsgespräch: Argumente' : 'Salary review: my arguments', null),
+      conv('m2', de ? 'Entwurf: E-Mail an Vermieterin' : 'Draft: email to my landlord', null),
+      conv('m3', de ? 'Ideen fürs Team-Offsite' : 'Ideas for the team offsite', null)
+    ]
+  }
+  if (mktShot() === 'contract') {
+    return [
+      {
+        ...docsConv('m1', de ? 'Mietvertrag: Fristen' : 'Rental contract: deadlines'),
+        // Scoped to the lease itself so the composer chip names the single document.
+        scope: { collectionIds: [], documentIds: ['mkt-d1'] }
+      },
+      docsConv('m2', de ? 'Ausgabenübersicht 2025' : 'Spending overview 2025'),
+      docsConv('m3', de ? 'Versicherungsbrief zusammengefasst' : 'Insurance letter summary')
+    ]
+  }
   return [
-    mk('m1', de ? 'Ausgabenübersicht 2025' : 'Spending overview 2025'),
+    docsConv('m1', de ? 'Ausgabenübersicht 2025' : 'Spending overview 2025'),
     { ...conv('m2', de ? 'Mietvertrag: Kündigungsklauseln' : 'Rental contract clauses', null) },
     { ...conv('m3', de ? 'Versicherungsbrief zusammengefasst' : 'Insurance letter summary', null) }
   ]
 }
 function mktMessages(): Message[] {
   const de = mktDe()
-  return [
+  const turn = (prompt: string, answer: string, extra?: Partial<Message>): Message[] => [
+    { id: 'mm1', conversationId: 'm1', role: 'user', content: prompt, createdAt: now },
+    { id: 'mm2', conversationId: 'm1', role: 'assistant', content: answer, createdAt: now, ...extra }
+  ]
+  if (mktShot() === 'salary') {
+    return turn(
+      de
+        ? 'Ich habe nächsten Monat ein Gehaltsgespräch. Ich verdiene 52k und möchte 58k verlangen. Hilf mir, meine Argumente zu strukturieren.'
+        : 'I have a salary review next month. I earn 52k and want to ask for 58k. Help me structure my arguments.',
+      de ? MKT_SALARY_DE : MKT_SALARY_EN
+    )
+  }
+  if (mktShot() === 'contract') {
+    return turn(
+      de
+        ? 'Liste alle Fristen und Kündigungsfristen in meinem Mietvertrag auf, jeweils mit der Klausel, aus der sie stammen.'
+        : 'List every deadline and notice period in my rental contract, with the clause it comes from.',
+      de ? MKT_CONTRACT_DE : MKT_CONTRACT_EN,
+      {
+        citations: mktContractCitations(),
+        coverage: { mode: 'relevance', chunksCovered: 5, chunksTotal: 14 }
+      }
+    )
+  }
+  return turn(
+    de ? 'Wofür habe ich letztes Jahr am meisten Geld ausgegeben?' : 'What did I spend the most money on last year?',
+    de ? MKT_ANSWER_DE : MKT_ANSWER_EN,
     {
-      id: 'mm1',
-      conversationId: 'm1',
-      role: 'user',
-      content: de ? 'Wofür habe ich letztes Jahr am meisten Geld ausgegeben?' : 'What did I spend the most money on last year?',
-      createdAt: now
-    },
-    {
-      id: 'mm2',
-      conversationId: 'm1',
-      role: 'assistant',
-      content: de ? MKT_ANSWER_DE : MKT_ANSWER_EN,
-      createdAt: now
+      citations: mktSpendingCitations(),
+      coverage: { mode: 'relevance', chunksCovered: 9, chunksTotal: 52 }
     }
+  )
+}
+// Staged fictional document library. The `documents` shot shows the full row fidelity
+// (type, size, sections, project chips); the chat shots reuse the finance/lease lists that
+// their citations name. Everything here is invented data.
+function mktDoc(
+  id: string,
+  title: string,
+  mimeType: string,
+  sizeBytes: number,
+  chunkCount: number,
+  collections: Array<{ id: string; name: string; type: string }>
+): DocumentInfo {
+  return {
+    id,
+    title,
+    status: 'indexed',
+    errorMessage: null,
+    mimeType,
+    chunkCount,
+    sizeBytes,
+    createdAt: now,
+    updatedAt: now,
+    collections: collections.map((c) => ({ ...c, role: 'source' }))
+  } as unknown as DocumentInfo
+}
+const MKT_LIB = { id: 'lib', name: 'Library', type: 'library' }
+function mktProjects(): Array<{ id: string; name: string; type: string }> {
+  const de = mktDe()
+  return [
+    { id: 'p-fin', name: de ? 'Finanzen 2025' : 'Finances 2025', type: 'project' },
+    { id: 'p-legal', name: de ? 'Rechtliches' : 'Legal', type: 'project' },
+    { id: 'p-tax', name: de ? 'Steuern' : 'Taxes', type: 'project' },
+    { id: 'p-work', name: de ? 'Arbeit' : 'Work', type: 'project' }
   ]
 }
-// Case-aware overrides: the marketing case swaps in its own conversations/messages and
-// forces the dark theme; every other case keeps the exact behavior above.
-const baseListConversations = overrides.listConversations as () => Promise<Conversation[]>
-overrides.listConversations = async () => (isMkt() ? mktConversations() : baseListConversations())
-overrides.listMessages = async () => (isMkt() ? mktMessages() : [])
-const baseGetSettings = overrides.getSettings as () => Promise<typeof DEFAULT_SETTINGS>
-overrides.getSettings = async () => {
-  const s = await baseGetSettings()
-  // Force theme AND UI language: settings-driven language resolution would otherwise follow
-  // the OS locale, mixing e.g. German chrome into the English capture.
-  return isMkt() ? { ...s, theme: 'dark', uiLanguage: mktDe() ? 'de' : 'en' } : s
-}
-const baseGetRuntimeStatus = overrides.getRuntimeStatus as () => Promise<Record<string, unknown>>
-overrides.getRuntimeStatus = async () => {
-  const st = await baseGetRuntimeStatus()
-  // A believable model name in the header hint instead of the mock id — a currently-ranked,
-  // shipping manifest id (PF-2, full-audit 2026-07-12b: captures must not show a model no
-  // user can select; swap deliberately when a bigger model productizes).
-  return isMkt() ? { ...st, modelId: 'ministral3-8b-instruct-2512-q4' } : st
-}
-overrides.listDocuments = async () => {
-  if (!isMkt()) return DOCUMENTS
+function mktDocuments(): DocumentInfo[] {
   const de = mktDe()
+  const [fin, legal, tax, work] = mktProjects()
+  const PDF = 'application/pdf'
+  if (mktShot() === 'contract') {
+    return [
+      mktDoc('mkt-d1', de ? 'mietvertrag-lindenstrasse-14.pdf' : 'lease-lindenstrasse-14.pdf', PDF, 412 * 1024, 14, [legal]),
+      mktDoc('mkt-d2', de ? 'versicherungspolicen.pdf' : 'insurance-policies.pdf', PDF, 1258 * 1024, 42, [MKT_LIB]),
+      mktDoc('mkt-d3', de ? 'uebergabeprotokoll-2026.pdf' : 'handover-protocol-2026.pdf', PDF, 186 * 1024, 5, [legal])
+    ]
+  }
+  if (mktShot() === 'documents') {
+    return [
+      mktDoc('mkt-d1', de ? 'mietvertrag-lindenstrasse-14.pdf' : 'lease-lindenstrasse-14.pdf', PDF, 412 * 1024, 14, [legal]),
+      mktDoc('mkt-d2', de ? 'versicherungspolicen-2026.pdf' : 'insurance-policies-2026.pdf', PDF, 1258 * 1024, 42, [MKT_LIB]),
+      mktDoc('mkt-d3', de ? 'kontoauszuege-2025.pdf' : 'bank-statements-2025.pdf', PDF, 3480 * 1024, 86, [fin]),
+      mktDoc('mkt-d4', de ? 'kreditkarte-2025.csv' : 'credit-card-2025.csv', 'text/csv', 96 * 1024, 12, [fin]),
+      mktDoc('mkt-d5', de ? 'gehaltsabrechnungen-2025.pdf' : 'payslips-2025.pdf', PDF, 1126 * 1024, 24, [fin]),
+      mktDoc('mkt-d6', de ? 'steuerbescheid-2024.pdf' : 'tax-assessment-2024.pdf', PDF, 640 * 1024, 18, [tax]),
+      mktDoc('mkt-d7', de ? 'arztbrief-2026-03.pdf' : 'medical-letter-2026-03.pdf', PDF, 210 * 1024, 6, [MKT_LIB]),
+      mktDoc('mkt-d8', de ? 'besprechungsnotizen-lieferant.md' : 'meeting-notes-supplier.md', 'text/markdown', 48 * 1024, 9, [work])
+    ]
+  }
   const names = de
     ? ['kontoauszuege-2025-q1.pdf', 'kontoauszuege-2025-q2.pdf', 'kontoauszuege-2025-q3.pdf',
        'kontoauszuege-2025-q4.pdf', 'kreditkarte-2025.csv', 'mietvertrag-2024.pdf',
@@ -557,14 +734,121 @@ overrides.listDocuments = async () => {
   return names.map((n, i) => docRow(`mkt-d${i + 1}`, n))
 }
 
-function StagedMarketingChat(): JSX.Element {
-  // Walk the real UI once the shell has rendered: rail "Chat" → the staged conversation.
-  // Marks body[data-marketing-ready] for the screenshot script when the transcript is up.
+// Case-aware overrides: the marketing cases swap in their own conversations/messages/documents
+// and force theme + UI language; every other case keeps the exact behavior above.
+const baseListConversations = overrides.listConversations as () => Promise<Conversation[]>
+overrides.listConversations = async () => (isMkt() ? mktConversations() : baseListConversations())
+const baseListCollections = overrides.listCollections as () => Promise<Collection[]>
+overrides.listCollections = async () => {
+  if (!isMkt()) return baseListCollections()
+  return [
+    coll('lib', 'Library', 'library'),
+    coll('tmp', 'Temporary', 'temporary'),
+    ...mktProjects().map((p) => coll(p.id, p.name))
+  ]
+}
+overrides.listMessages = async () => (isMkt() ? mktMessages() : [])
+const baseGetSettings = overrides.getSettings as () => Promise<typeof DEFAULT_SETTINGS>
+overrides.getSettings = async () => {
+  const s = await baseGetSettings()
+  // Force theme AND UI language: settings-driven language resolution would otherwise follow
+  // the OS locale, mixing e.g. German chrome into the English capture. workspaceMode reads
+  // 'encrypted' so the privacy shot shows the shipping posture, not the dev fallback.
+  return isMkt()
+    ? {
+        ...s,
+        theme: mktLight() ? ('light' as const) : ('dark' as const),
+        uiLanguage: mktDe() ? ('de' as const) : ('en' as const),
+        workspaceMode: 'encrypted' as const
+      }
+    : s
+}
+const baseGetRuntimeStatus = overrides.getRuntimeStatus as () => Promise<Record<string, unknown>>
+overrides.getRuntimeStatus = async () => {
+  const st = await baseGetRuntimeStatus()
+  // A believable model name in the header hint instead of the mock id — a currently-ranked,
+  // shipping manifest id (PF-2, full-audit 2026-07-12b: captures must not show a model no
+  // user can select; swap deliberately when a bigger model productizes).
+  return isMkt() ? { ...st, modelId: 'ministral3-8b-instruct-2512-q4' } : st
+}
+overrides.listDocuments = async () => (isMkt() ? mktDocuments() : DOCUMENTS)
+// The privacy shot (and the rail indicator on every marketing shell) reads the effective
+// offline state + drive paths. Fully-offline posture, prepared drive at E:\ (Windows-flavored
+// paths: the Kit's primary platform).
+overrides.getPolicy = async () =>
+  isMkt()
+    ? ({
+        policy: {},
+        policyFilePresent: true,
+        driveFilePresent: true,
+        allowNetworkSetting: false,
+        networkAllowedByPolicy: true,
+        networkAllowed: false,
+        offlineMode: true,
+        telemetryAllowed: false
+      } as unknown as PolicyStatus)
+    : null
+overrides.getDriveStatus = async () =>
+  isMkt()
+    ? ({
+        rootPath: 'E:\\',
+        workspacePath: 'E:\\workspace',
+        modelsPath: 'E:\\models',
+        logsPath: 'E:\\logs',
+        isPreparedDrive: true,
+        writable: true,
+        freeBytes: 91 * 1024 * 1024 * 1024,
+        platform: 'win32',
+        arch: 'x64'
+      } as unknown as DriveStatus)
+    : null
+
+// Walk helpers: each staged shell ticks until its goal selector exists, clicking its way
+// through the real UI. Nav labels are matched in both languages.
+function mktClickNav(labels: string[]): void {
+  const btn = Array.from(document.querySelectorAll<HTMLButtonElement>('.nav-item')).find((b) =>
+    labels.includes(b.querySelector('.nav-label')?.textContent ?? '')
+  )
+  btn?.click()
+}
+function mktStepChat(): void {
+  const row = document.querySelector<HTMLButtonElement>('.chat-conv-row button')
+  if (row) {
+    row.click()
+    return
+  }
+  mktClickNav(['Chat'])
+}
+function mktStepChatSources(): void {
+  const toggle = document.querySelector<HTMLButtonElement>('.sources-toggle[aria-expanded="false"]')
+  if (toggle) {
+    toggle.click()
+    return
+  }
+  mktStepChat()
+}
+function mktStepDocuments(): void {
+  mktClickNav(['Documents', 'Dokumente'])
+}
+function mktStepPrivacy(): void {
+  const seg = Array.from(document.querySelectorAll<HTMLButtonElement>('.seg-btn')).find((b) =>
+    ['Privacy & data', 'Privatsphäre & Daten'].includes((b.textContent ?? '').trim())
+  )
+  if (seg) {
+    seg.click()
+    return
+  }
+  mktClickNav(['Settings', 'Einstellungen'])
+}
+
+function StagedShell({ goal, step }: { goal: string; step: () => void }): JSX.Element {
+  // Walk the real UI once the shell has rendered. Marks body[data-marketing-ready] for the
+  // screenshot script when the goal element is up.
   useEffect(() => {
-    document.documentElement.dataset.theme = 'dark'
+    document.documentElement.dataset.theme = mktLight() ? 'light' : 'dark'
     // The settings load can remount the tree (language/theme application) AFTER a first
-    // successful walk, resetting the selection — so keep walking until the transcript has
-    // been continuously present for a few ticks, and only then mark the capture ready.
+    // successful walk, resetting the selection — so keep walking until the goal has been
+    // continuously present for a few ticks, and only then mark the capture ready.
     let tries = 0
     let stable = 0
     const timer = setInterval(() => {
@@ -573,7 +857,7 @@ function StagedMarketingChat(): JSX.Element {
         clearInterval(timer)
         return
       }
-      if (document.querySelector('.msg-content')) {
+      if (document.querySelector(goal)) {
         stable += 1
         if (stable >= 5) {
           document.body.dataset.marketingReady = '1'
@@ -583,40 +867,64 @@ function StagedMarketingChat(): JSX.Element {
       }
       stable = 0
       delete document.body.dataset.marketingReady
-      const row = document.querySelector<HTMLButtonElement>('.chat-conv-row button')
-      if (row) {
-        row.click()
-        return
-      }
-      const chatNav = Array.from(document.querySelectorAll<HTMLButtonElement>('.nav-item')).find(
-        (b) => b.querySelector('.nav-label')?.textContent === 'Chat'
-      )
-      chatNav?.click()
+      step()
     }, 100)
     return () => clearInterval(timer)
-  }, [])
+  }, [goal, step])
   return <App />
 }
-CASES['marketing-spending'] = {
-  label: 'Marketing — full shell, staged fictional spending answer (dark)',
-  node: (
-    <div style={{ width: 1180, height: 800 }}>
-      <StagedMarketingChat />
+
+// The rail privacy indicator close-up: the real component in its offline state, with the
+// hover/focus reassurance line rendered statically below (a real Radix tooltip needs
+// focus-visible, which a headless capture cannot produce).
+function MktIndicator(): JSX.Element {
+  const { t } = useT()
+  return (
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, padding: 24 }}>
+      <LocalIndicator variant="header" offline onNavigate={noop} t={t} />
+      <div className="tooltip" style={{ position: 'static' }}>
+        {t('indicator.offlineDetail')}
+      </div>
     </div>
   )
 }
-CASES['marketing-spending-de'] = {
-  ...CASES['marketing-spending'],
-  label: 'Marketing — full shell, staged fictional spending answer (dark) — DE'
+
+const MKT_SHELL: Record<string, { goal: string; step: () => void; w: number; h: number; what: string }> = {
+  salary: { goal: '.msg-content', step: mktStepChat, w: 1180, h: 800, what: 'staged salary-negotiation chat' },
+  spending: { goal: '.msg-content', step: mktStepChat, w: 1180, h: 800, what: 'staged fictional spending answer' },
+  contract: { goal: '.sources-cards', step: mktStepChatSources, w: 1180, h: 1170, what: 'staged contract-deadlines answer, sources expanded' },
+  documents: { goal: '.doc-row', step: mktStepDocuments, w: 1180, h: 800, what: 'staged document library' },
+  privacy: { goal: '.offline-statement', step: mktStepPrivacy, w: 1180, h: 1080, what: 'Settings privacy tab, offline posture' }
 }
+for (const [shot, cfg] of Object.entries(MKT_SHELL)) {
+  for (const suffix of ['', '-de', '-light', '-de-light']) {
+    CASES[`marketing-${shot}${suffix}`] = {
+      label: `Marketing — full shell, ${cfg.what} (${suffix.includes('light') ? 'light' : 'dark'}${suffix.includes('de') ? ', DE' : ''})`,
+      node: (
+        <div style={{ width: cfg.w, height: cfg.h }}>
+          <StagedShell goal={cfg.goal} step={cfg.step} />
+        </div>
+      )
+    }
+  }
+}
+for (const suffix of ['', '-de', '-light', '-de-light']) {
+  CASES[`marketing-indicator${suffix}`] = {
+    label: `Marketing — rail privacy indicator close-up (${suffix.includes('light') ? 'light' : 'dark'}${suffix.includes('de') ? ', DE' : ''})`,
+    node: <MktIndicator />
+  }
+}
+// Theme must be on <html> before first paint (the indicator case has no shell to apply it).
+if (isMkt()) document.documentElement.dataset.theme = mktLight() ? 'light' : 'dark'
 
 const params = new URLSearchParams(location.search)
 const caseId = params.get('case') ?? 'documents'
 // The By-Project view is a localStorage preference; force it on for the chat case.
 try {
   localStorage.setItem('hilbertraum.chat.listView', caseId === 'chat-byproject' ? 'byProject' : 'recent')
-  // A `-de` case renders in German (I18nProvider reads this mirror at init); everything else EN.
-  localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, caseId.endsWith('-de') ? 'de' : 'en')
+  // A case with a `-de` segment renders in German (I18nProvider reads this mirror at init);
+  // everything else EN. Segment check, not endsWith: marketing ids can end in `-de-light`.
+  localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, caseId.split('-').includes('de') ? 'de' : 'en')
 } catch {
   /* ignore */
 }
