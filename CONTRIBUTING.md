@@ -41,6 +41,9 @@ also CLA §7 for submissions on behalf of third parties.
 5. Open a focused PR referencing the phase/milestone.
 
 ## Commits & pull requests
+- **IMPORTANT: no direct pushes to `master`.** The repo is public; `master` is protected
+  (`ci-success` required, changes through pull requests). This applies to maintainers and
+  automation too: never use bypass rights to push to `master` directly, docs included.
 - Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `docs:`, …), often
   scoped (e.g. `feat(image-understanding): …`). Keep each PR a focused vertical slice.
 - A PR is not done until: `npm test` is green, `npm run typecheck` is clean, affected `docs/` are

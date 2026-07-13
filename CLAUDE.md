@@ -3,6 +3,14 @@
 HilbertRaum is an **open-source, offline, local-LLM workspace** that runs from a
 portable drive. No cloud, no telemetry, all user data local.
 
+## ⚠️ IMPORTANT: this repo is PUBLIC — never push directly to `master`
+The repository is public on GitHub (`HilbertraumAI/HilbertRaum`, since 2026-07-12). Every
+change, however small, goes through a **feature branch + pull request with green CI**
+(`ci-success` is a required check). Do NOT commit on `master` and do NOT push to `master`
+directly, even when your credentials can bypass the branch protection: a direct push skips
+CI and review and publishes the change to the world immediately. Docs-only changes follow
+the same rule.
+
 ## Read these first, in order
 1. [`BUILD_STATE.md`](BUILD_STATE.md) — the live handoff/state file. **Always read first.** It says what is done, current decisions, and the next actions. It holds dated entries for the currently-open waves ONLY (hard size budget, enforced by `repo-hygiene.test.ts`): retired entries live verbatim in [`docs/build-log.md`](docs/build-log.md) (grep it when an old "BUILD_STATE <date> entry" citation needs resolving), and the shared data contracts live in [`docs/data-contracts.md`](docs/data-contracts.md).
 2. [`docs/product-vision.md`](docs/product-vision.md) — the durable product intent (thesis, target user, commercial model, positioning guardrails, scope boundaries, roadmap). It condenses the retired original spec `CLAUDE_HilbertRaum_MVP.md` (deleted 2026-07-11; full text in git history). The `spec §N` anchors cited across code and docs resolve via the **§-anchor legend** at the end of [`docs/architecture.md`](docs/architecture.md) ("Original MVP spec — retirement record").
