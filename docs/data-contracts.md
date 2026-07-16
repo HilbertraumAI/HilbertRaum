@@ -109,10 +109,11 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
 `isRealSha256`). YAML files under `model-manifests/` (originally chat: Qwen3 4B/8B/14B Q4 + 30B-A3B
-MoE + embeddings: E5 small F16 — five; 1.7B dropped, see §9). **The live catalog is now 19 model
-manifests across 6 role dirs** (14 chat + E5 embeddings + bge-reranker + whisper transcriber +
-translategemma translation + qwen2.5-vl vision, in `model-manifests/{chat,embeddings,reranker,
-transcriber,translation,vision}/`) — `model-policy.md` is the authoritative list.
+MoE + embeddings: E5 small F16 — five; 1.7B dropped, see §9). **The live catalog spans 6 role dirs**
+(chat + E5 embeddings + bge-reranker + whisper transcriber + translategemma translation +
+qwen2.5-vl vision, in `model-manifests/{chat,embeddings,reranker,transcriber,translation,vision}/`).
+`model-policy.md` is the authoritative catalog and manifest count — this doc no longer restates a
+hard total (the number drifted twice, see DOC-3/F-20).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
@@ -447,8 +448,9 @@ document answers always run balanced (deep-grounded = wave 2).
   when present; real `download.sha256` must equal a real top-level `sha256`). `shared/runtime-sources.ts`
   `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The committed
   model manifests (the original six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes.
-  **(Updated since Phase 12 — see `model-policy.md` for the live catalog: the catalog is now 19 model
-  manifests across 6 role dirs (14 chat + E5 + bge-reranker + whisper transcriber + translategemma
+  **(Updated since Phase 12 — see `model-policy.md` for the live catalog and its authoritative
+  manifest count (this doc no longer restates a hard total — it drifted twice, see DOC-3/F-20): the
+  catalog spans 6 role dirs (chat + E5 + bge-reranker + whisper transcriber + translategemma
   translation + qwen2.5-vl vision), and `runtime-sources.yaml` is pinned to the REAL
   `ggml-org/llama.cpp@b9849` release (bumped from b9585 for the Qwen3.5 gate) with real URLs +
   SHA-256, plus `whisper_cpp:`/`ocr:`

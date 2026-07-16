@@ -12,8 +12,11 @@ export const en = {
   'nav.aria': 'Main',
   'nav.home': 'Home',
   'nav.chat': 'Chat',
-  // Soft hyphen (U+00AD) gives the narrow nav rail a clean break point ("Docu-/ments")
-  // since Electron has no auto-hyphenation; invisible when the word fits or in the tooltip.
+  // 'Documents' is a plain string. Soft hyphens (U+00AD) were once added here for a narrow-rail
+  // break point but were REMOVED in bad4eaf ("unbreak rail labels"). Do NOT re-add them: the
+  // marketing walker (renderer/preview/preview.tsx) matches nav labels by exact textContent, so a
+  // soft hyphen ('Docu­ments' !== 'Documents') would silently break mktStepDocuments/mktStepPrivacy
+  // navigation. rail-labels.test.ts + i18n.test.ts also pin the plain values.
   'nav.documents': 'Documents',
   'nav.translate': 'Translate',
   'nav.images': 'Images',

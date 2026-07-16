@@ -12,9 +12,12 @@ recommended_min_ram_gb: 12
 recommended_ram_gb: 16
 # Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):
 # a subjective owner judgment that newer model generations improve on the ones they replace, so
-# the newest-generation model is recommended per tier EVEN THOUGH the #48 tester eval placed this under the
-# incumbent Ministral 3 8B (F1 .3124/.3152 vs .3262; but F1 is length-confounded per the §9
-# scorer caveats, EM ties at .9765, so the eval is treated as directional, not decisive). It
+# the newest-generation model is recommended per tier. The #48 tester eval ranked this UNDER the
+# incumbent Ministral 3 8B ONLY on the hallucination-trap axis (the `en-contract-penalty`
+# invoice-distractor trap, where Ministral is clean); on F1/EM the 9B actually EDGED Ministral
+# within cross-run tolerance (F1 .3152/.3124 vs Ministral's Phase-29 i7 .3111, EM .9765 vs .9529)
+# — and F1 is length-confounded per the §9 scorer caveats anyway, so the eval is treated as
+# directional, not decisive. It
 # HAS been through the tester eval on the b9849 binary (both this UD-Q4_K_XL and the local Q8
 # ran), which also discharges the old load-smoke gate. Picker effect (with the full 2026-07-12
 # promotion set): wins 16-20 GB from Ministral (rank 2); within the promoted pair at this tier
@@ -51,4 +54,4 @@ license_review:
   status: approved
   reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
   reviewed_at: "2026-07-01"
-  notes: "APPROVED 2026-07-01: base model Qwen/Qwen3.5-9B and Unsloth GGUF card are apache-2.0. Quantization provenance: Unsloth Dynamic 2.0 GGUF, third-party quantization of Apache-2.0 Qwen weights. Apache-2.0 permits commercial redistribution; ship LICENSE/NOTICE attribution with the drive. TEXT-ONLY USE: upstream is a vision-language model, but this chat manifest ships only the language GGUF and no mmproj/projector. Not bundled and not auto-recommended until the HilbertRaum offline benchmark + b9849 runtime smoke pass."
+  notes: "APPROVED 2026-07-01: base model Qwen/Qwen3.5-9B and Unsloth GGUF card are apache-2.0. Quantization provenance: Unsloth Dynamic 2.0 GGUF, third-party quantization of Apache-2.0 Qwen weights. Apache-2.0 permits commercial redistribution; ship LICENSE/NOTICE attribution with the drive. TEXT-ONLY USE: upstream is a vision-language model, but this chat manifest ships only the language GGUF and no mmproj/projector. Not bundled and not auto-recommended until the HilbertRaum offline benchmark + b9849 runtime smoke pass. UPDATE 2026-07-12: promoted to recommendation_rank 3 (owner decision, newest-generation preference; model-benchmarks.md §6.4) and now the 16-20 GB auto-pick; the #48 tester eval ran it on the b9849 binary, discharging the load-smoke gate (the §9.1 through-the-app smoke remains open). Supersedes the 'not auto-recommended until...' precondition above."

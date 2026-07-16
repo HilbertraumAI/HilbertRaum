@@ -336,7 +336,8 @@ data, instruction tuning, and multilingual quality all move forward), and the cu
 evidence is not strong enough to override that prior. The owner weighed the §9 tester eval and
 judged it directional, not decisive: its primary quality signal (F1) is length-confounded (the
 §9 scorer caveats; Qwen3.5's verbose house style), EM rates across the promoted set and the
-incumbents differ by at most ~1 point, and the runs are single-machine, single-run, pending the
+incumbents are all high and close (the widest promoted-vs-incumbent EM gap is ~2.4 points — the
+9B's .9765 vs Ministral's .9529), and the runs are single-machine, single-run, pending the
 §5-item-8 scorer fixes. Follow-up benchmarks on BOTH axes (rescored quality, plus the missing
 speed/peak-RSS rows) are planned and stay recorded as open work below. Where the eval IS clear
 it AGREES with the promotion at the top end: Qwen3.6 27B Q5/Q4 lead the quality table outright
@@ -346,8 +347,11 @@ it AGREES with the promotion at the top end: Qwen3.6 27B Q5/Q4 lead the quality 
 eval" is amended: the owner may also promote on product/positioning grounds, and the honest
 eval standing must then be recorded next to the rank (done, in each promoted manifest and
 here). Specifically: the 4B FAILED its §9 bar against `qwen3-4b-instruct-q4` (F1 .2728 vs
-.3277, EM .9647 vs .9765) and the 9B sat under Ministral (F1 .3124/.3152 vs .3262, EM tied);
-they are recommended anyway by this decision. The b9849 load gate is satisfied for all four
+.3277, EM tied at .9647 — a cross-run i9-vs-i7 comparison) and the 9B actually EDGED Ministral
+on F1/EM within cross-run tolerance (F1 .3152/.3124 vs Ministral's Phase-29 i7 .3111, EM .9765
+vs .9529) but fell once for the `en-contract-penalty` invoice-distractor trap where Ministral's
+record is clean — the tester's basis for proposing rank 1 under it (§9); they are recommended
+anyway by this decision. The b9849 load gate is satisfied for all four
 (the #48 tester ran the whole wave on the b9849 binary; the 4B additionally loaded + streamed
 through the app from the portable drive on 2026-07-12).
 
@@ -541,7 +545,11 @@ Unsloth wave"). **No wins are claimed here.** They had NOT been through the §2�
 this section was written, and the runtime pin they need (**b9849**, bumped from b9585) has not
 been smoked on this project's drive. *(Update 2026-07-11: a tester has since run the §2 quality
 half on their own machine — see "Tester eval runs (2026-07-09)" below. Ranks still unchanged:
-ratification + the speed/RSS and §9.1 halves are owner work.)*
+ratification + the speed/RSS and §9.1 halves are owner work.)* *(Superseded 2026-07-12: §6.4
+promoted `qwen3.5-4b-ud-q4kxl` and `qwen3.5-9b-ud-q4kxl` to `recommendation_rank: 3` by owner
+decision — the "rank 0 / not auto-recommended / ranks unchanged" statements throughout this
+section describe the pre-promotion state; `qwen3.5-27b-ud-q4kxl` and `qwen3.5-35b-a3b-ud-q4kxl`
+remain rank 0. See §6.4.)*
 
 | Candidate | Tier | Must beat (to earn a `recommendation_rank > 0`) |
 |---|---|---|
@@ -555,14 +563,17 @@ ratification + the speed/RSS and §9.1 halves are owner work.)*
 > below. Qwen3.5 27B's public numbers may look stronger than 35B-A3B's on several categories — that
 > is *not* a promotion signal here. Until the local eval gives a model a real rank, every Qwen3.5
 > manifest stays `recommendation_rank: 0` (selectable manually, never auto-recommended, never
-> bundled). The §4 `recommended_min_ram_gb` values for these are **placeholders pending a real peak-RSS
+> bundled). *(Superseded 2026-07-12: §6.4 amended this "local eval only" rule — the 4B and 9B are
+> now rank 3 by owner decision on product/positioning grounds; the 27B/35B-A3B stay rank 0.)* The
+> §4 `recommended_min_ram_gb` values for these are **placeholders pending a real peak-RSS
 > measurement** (24 GB for the 27B/35B is a conservative guess, not a measured floor).
 
 **Tester eval runs (2026-07-09, recorded here 2026-07-11; full tables in issue #48's comments)** —
 a tester ran the §2 grounded-QA harness (`tests/manual/model-eval.test.ts`) on their own machine
 (i9-9900X + RTX 3090, Vulkan, the b9849 drive binary; 100 DE/EN items, temp 0, identical
 retrieval) over **13 chat GGUFs** in two runs — all six wave candidates included. Raw CSV/JSONL
-stay on the tester's drive (not committed). Cross-run calibration held (three overlap models
+are now committed under `eval/results/i9-9900X-vulkan-*` (§6.4; originally kept on the tester's
+drive). Cross-run calibration held (three overlap models
 within ≤.022 F1 / ≤1 hallucination item of the committed Phase-29 i7 run), and the tester audited
 all flagged hallucinations by hand. **Status: quality evidence, pending owner ratification —
 NOT yet the §9 record and no rank has moved.** Headline verdicts as reported:

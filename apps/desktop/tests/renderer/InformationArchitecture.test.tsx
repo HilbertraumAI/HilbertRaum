@@ -137,8 +137,9 @@ describe('App shell — 8-item nav (TranslateGemma adds Translate)', () => {
     const items = within(nav)
       .getAllByRole('button')
       .filter((b) => b.className.includes('nav-item'))
-    // Strip soft hyphens (U+00AD): nav labels carry them so the narrow rail wraps cleanly
-    // ("Docu­ments"); they are invisible to the user and irrelevant to the IA assertion.
+    // Defensive: strip any soft hyphens (U+00AD) before comparing. The nav labels no longer carry
+    // them (removed in bad4eaf); this .replace is a harmless no-op guard kept so a future
+    // hyphenation-polish change can't silently break the IA assertion.
     // Icons are now aria-hidden line SVGs (no text content), so only the label remains.
     expect(items.map((b) => b.textContent?.replace(/­/g, ''))).toEqual([
       'Home',
