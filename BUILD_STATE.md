@@ -1491,6 +1491,15 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       code/tests/docs resolves there); architecture.md layout block updated §24–§48 → §24–§49;
       §8 L-7 gains the SEC-2 hardlink watch clause; working paper deleted after verifying no
       tracked file references it; final gate green.
+14. **Full-audit 2026-07-16 — REMEDIATION IN PROGRESS (wave opened 2026-07-17).** Baseline
+    `4e02a48` (v0.1.50); 41 verified findings (F-01…F-41; 0 Critical/High, 14 Medium, 27 Low).
+    Report: `docs/audit-2026-07-16.md` (frozen working paper); executable plan + wave ledger:
+    `docs/audit-2026-07-16-remediation-plan.md` (the repo's sanctioned open plan; §D owner
+    decisions recorded 2026-07-17 — D-A add CSV BOM, D-B relabel/drop cached read figure,
+    D-C approve async image-history port, D-D CSP investigation pre-authorized both ways,
+    D-E stacked branches + one wave-close PR). Branch chain `fix/audit-2026-07-16-p1…p9`,
+    merged once at Phase 10; both working papers deleted at close-out after the durable
+    record is folded into `architecture.md` §50.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
