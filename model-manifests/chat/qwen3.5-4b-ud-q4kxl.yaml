@@ -11,8 +11,8 @@ recommended_ram_gb: 16
 # Rank 3 (owner decision 2026-07-12, newest-generation preference; model-benchmarks.md §6.4):
 # a subjective owner judgment that newer model generations improve on the ones they replace, so
 # the newest-generation model is recommended per tier EVEN THOUGH the #48 tester eval favors the incumbent here
-# (qwen3-4b F1 .3277 vs .2728; but F1 is length-confounded per the §9 scorer caveats, EM is
-# comparable at .9765 vs .9647, so the eval is treated as directional, not decisive). The two
+# (qwen3-4b F1 .3277 vs .2728; but F1 is length-confounded per the §9 scorer caveats, EM ties at
+# .9647 — a cross-run i9-vs-i7 comparison — so the eval is treated as directional, not decisive). The two
 # old gates are otherwise satisfied: it HAS been through the tester eval (b9849 binary), and
 # the b9849 load gate was observed directly on 2026-07-12 (loaded + streamed through the app
 # from the portable drive, rung 1, GPU backend). The #53 field signal (best speed/quality
@@ -54,4 +54,4 @@ license_review:
   status: approved
   reviewed_by: "project maintainer (Claude-assisted review, HF card verification)"
   reviewed_at: "2026-06-18"
-  notes: "APPROVED 2026-06-18: base model Qwen/Qwen3.5-4B is apache-2.0 (per the unsloth GGUF model card; LICENSE blob expected at download.license_url). QUANTIZATION PROVENANCE: the Qwen org publishes no official GGUF for the 3.5 refresh, so this manifest pins the established quantizer unsloth (https://huggingface.co/unsloth/Qwen3.5-4B-GGUF, card tag apache-2.0) — a third-party requant of apache-2.0 weights, NOT a vendor GGUF; same posture as the qwen3-4b-instruct-2507-q4 entry. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive. NOT yet bundled (bundled_on_preconfigured_drive: false) and not benchmarked; the runtime was bumped to b9849 (2026-06-30) as the Qwen3.5 gate but b9849 still REQUIRES a manual load smoke before this model is promoted (see comment above)."
+  notes: "APPROVED 2026-06-18: base model Qwen/Qwen3.5-4B is apache-2.0 (per the unsloth GGUF model card; LICENSE blob expected at download.license_url). QUANTIZATION PROVENANCE: the Qwen org publishes no official GGUF for the 3.5 refresh, so this manifest pins the established quantizer unsloth (https://huggingface.co/unsloth/Qwen3.5-4B-GGUF, card tag apache-2.0) — a third-party requant of apache-2.0 weights, NOT a vendor GGUF; same posture as the qwen3-4b-instruct-2507-q4 entry. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive. NOT yet bundled (bundled_on_preconfigured_drive: false) and not benchmarked; the runtime was bumped to b9849 (2026-06-30) as the Qwen3.5 gate but b9849 still REQUIRES a manual load smoke before this model is promoted (see comment above). UPDATE 2026-07-12: promoted to recommendation_rank 3 (owner decision, newest-generation preference; model-benchmarks.md §6.4) and now the <=12 GB auto-pick; the b9849 load smoke is SATISFIED (loaded + streamed through the app from the portable drive, rung 1, GPU backend, 2026-07-12 — see the comment above). Supersedes the 'not benchmarked / b9849 still REQUIRES a manual load smoke before promotion' precondition above."

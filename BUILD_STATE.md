@@ -1500,6 +1500,14 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     D-E stacked branches + one wave-close PR). Branch chain `fix/audit-2026-07-16-p1…p9`,
     merged once at Phase 10; both working papers deleted at close-out after the durable
     record is folded into `architecture.md` §50.
+    **Phase 1 done 2026-07-17** (branch `fix/audit-2026-07-16-p1`): model-catalog + eval
+    docs/comment accuracy — F-08 (corrected the incumbent eval figures misattributed in §6.4 /
+    the two promoted manifests / model-policy row 26), F-07 (benchmark.md tier table → the four
+    §6.4 tiers), F-09 (supersede annotations on the pre-promotion model-policy/§9 wave text),
+    F-20 (data-contracts manifest counts → model-policy pointer), F-21 (presets 4k–128k), F-17
+    (dated promotion append to both license_review.notes), F-27 (preload 51-code comment), F-37
+    (stale soft-hyphen comment). Docs/comments only; gate unchanged at **4217/49**, typecheck +
+    build green. Details: plan §L Phase-1 ledger entry.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

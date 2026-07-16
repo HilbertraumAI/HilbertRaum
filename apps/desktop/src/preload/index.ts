@@ -432,7 +432,8 @@ const api = {
 
   // ---- Document tasks ----
   /** Start a document task (summary; translation with `params.sourceLang` +
-   *  `params.targetLang` — both from the curated 10, source ≠ target, TranslateGemma
+   *  `params.targetLang` — both from the closed 51-code WMT24++ set
+   *  (`TRANSLATION_LANGUAGE_CODES`, widened at issue #31), source ≠ target, TranslateGemma
    *  required (TG-3); compare with exactly two documentIds). Strictly one at a time;
    *  refused while a chat answer is streaming. */
   startDocTask: (req: StartDocTaskRequest): Promise<{ jobId: string }> =>

@@ -23,7 +23,7 @@
 | Chat (fast-tier 0.8B) | Qwen3.5 0.8B Q6_K | ~0.6 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** Smallest runnable; Q6_K (not UD-Q4_K_XL — quant error bites hardest at 0.8B). Text-only, not bundled. **§9 eval: the surviving fast-tier candidate — the honest floor (better F1 + abstention than the 2B).** Pending b9849 smoke + owner ratification. |
 | Chat (fast-tier 2B) | Qwen3.5 2B (UD-Q4_K_XL) | ~1.3 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** CPU-only speed tier. Text-only, not bundled. **§9 eval: FAILED — worst unanswerable-discipline of all models scored (should not be recommended anywhere); the 0.8B dominates it.** Pending b9849 smoke + owner ratification. |
 | Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 3) | **Recommended ≤12 GB since the newest-Qwen promotion (owner decision 2026-07-12, `model-benchmarks.md` §6.4).** unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). §9 eval standing recorded honestly in the manifest (F1 under the Qwen3-4B incumbent, EM comparable); b9849 load observed through the app 2026-07-12. Vision model run text-only. |
-| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended 16–20 GB since the newest-Qwen promotion (2026-07-12, §6.4).** unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (F1 under Ministral, EM tied); ran on the b9849 binary in the #48 tester eval. Text-only, not bundled. |
+| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended 16–20 GB since the newest-Qwen promotion (2026-07-12, §6.4).** unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (edges Ministral on F1/EM within cross-run tolerance, ranked under it only on the hallucination-trap axis); ran on the b9849 binary in the #48 tester eval. Text-only, not bundled. |
 | Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger; superseded at its tier by the Qwen3.6 27B pair (below) before ever being promoted. Text-only, opt-in (not bundled). |
 | Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~15.7 GB | 20 GB | — (rank 3) | **Recommended 24 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M (the exact quant the #48 tester eval scored), real HF-LFS hash, apache-2.0 review. Top of the §9 quality table with its Q5 sibling. Text-only, not bundled. |
 | Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~18.2 GB | 24 GB | — (rank 3) | **Recommended ≥32 GB since the newest-Qwen promotion (2026-07-12, §6.4).** Same productization posture as the Q4; the eval's outright top scorer (F1 .3573, zero unanswerable-set hallucinations). Text-only, not bundled. |
@@ -92,16 +92,23 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
   the theoretical native window — revisit only after KV-cache/RAM budgeting + a long-context eval.
   Since 2026-07-04 the user can override it: the chat sidecar launches with
   `settings.contextTokensOverride ?? (recommended_context_tokens || settings.contextTokens)` — the
-  AI Model screen's "Context size" card (presets 4k–32k, default Automatic; rag-design §15.8).
+  AI Model screen's "Context size" card (presets 4k–128k, default Automatic; rag-design §15.8).
 - **Runtime pin bumped to b9849** (see "runtime-sources.yaml" below) specifically because Qwen3.5 is
-  a newer architecture than the old b9585 build. b9849 *should* load these models, but that is not
-  yet confirmed by a local smoke — see the manual-smoke checklist in `model-benchmarks.md` §9 / the
-  BUILD_STATE "Qwen3.5 Unsloth wave" entry.
+  a newer architecture than the old b9585 build. The **4B load smoke is SATISFIED (2026-07-12)** — it
+  loaded + streamed through the app from the portable drive, and the #48 tester eval ran all four on
+  the b9849 binary; the §9.1 through-the-app smokes for the 9B, the 27Bs, and the 35B-A3B remain
+  open — see the manual-smoke checklist in `model-benchmarks.md` §9 / the BUILD_STATE "Qwen3.5
+  Unsloth wave" entry.
 - **None are auto-recommended.** All four carry `recommendation_rank: 0` + `recommended_profiles: []`
   and `bundled_on_preconfigured_drive: false`: selectable manually on the AI Model screen, never the
   RAM-best-fit auto-pick, never bundled — **until the offline benchmark harness promotes them** with
   a real rank (`model-benchmarks.md` §9 promotion criteria). Public benchmark scores do not count;
   only the local German/English grounded-QA eval + manual smoke do.
+
+  _(Superseded 2026-07-12: the `qwen3.5-4b-ud-q4kxl` and `qwen3.5-9b-ud-q4kxl` were promoted to
+  `recommendation_rank: 3` by owner decision — they are the ≤12 GB / 16–20 GB auto-picks now, see
+  the catalog table above and `model-benchmarks.md` §6.4. `qwen3.5-27b-ud-q4kxl` and
+  `qwen3.5-35b-a3b-ud-q4kxl` remain rank 0.)_
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package

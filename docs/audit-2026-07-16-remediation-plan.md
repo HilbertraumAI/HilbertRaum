@@ -476,7 +476,67 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
 
-### Phase 0 — 2026-07-17 — branch fix/audit-2026-07-16-p1 @ (kickoff commit)
+### Phase 1 — 2026-07-17 — branch fix/audit-2026-07-16-p1 @ this commit (sha is this Phase-1 commit; also carries the Phase-0 kickoff sha backfill)
+- Gate: **4,217 passed / 49 skipped** · typecheck clean · build green (src comments touched, so
+  built to be safe). Matches the entry-0 baseline exactly — docs/comment-only neutrality proven.
+- Fixed (docs/comments only, zero runtime behavior):
+  - **F-08** — corrected the incumbent eval figures misattributed to Ministral (its real committed
+    row is F1 .3111 / EM .9529, i7-1185G7 Phase-29 rescored run; the .3262/.9765 quoted in the
+    stale text is qwen3-8b's i9 row). Restated the 9B standing: EDGES Ministral on F1/EM within
+    cross-run tolerance (F1 .3152/.3124 vs .3111, EM .9765 vs .9529), ranked under it only on the
+    hallucination-trap (`en-contract-penalty`) axis. Fixed the 4B EM (tied .9647, not .9765) and
+    the "~1 point EM" claim (widest 9B-tier gap is 2.36 pts). model-policy.md:25 (4B row) left as
+    accurate. Sites: `docs/model-benchmarks.md` §6.4 (the EM-spread rationale line + the
+    "what this supersedes" 4B/9B standing), `model-manifests/chat/qwen3.5-9b-ud-q4kxl.yaml` rank
+    comment (~15-20), `qwen3.5-4b-ud-q4kxl.yaml` rank comment (~14-15), `docs/model-policy.md:26`.
+  - **F-07** — `docs/benchmark.md` Recommendation table (~86-90) → the four §6.4 tiers (≤12 →
+    qwen3.5-4b-ud-q4kxl, 16–20 → qwen3.5-9b-ud-q4kxl, 24 → qwen3.6-27b-q4, ≥32 → qwen3.6-27b-q5);
+    added a separate bundled-default note (qwen3-4b unchanged); re-pointed the rank link §6.2 →
+    §6.2–§6.4.
+  - **F-09** — supersede annotations (§6.3 style): `docs/model-policy.md` "Qwen3.5 Unsloth wave"
+    (fixed the 96-99 smoke sentence → 4B smoke SATISFIED 2026-07-12, 9B/27B/35B §9.1 smokes open;
+    added a `_(Superseded 2026-07-12: …)_` note after the "None are auto-recommended" bullet) and
+    `docs/model-benchmarks.md` §9 (three spots: the update-note supersede marker, the "stays rank
+    0" rule-sentence supersede, and the committed-CSV status "now committed under eval/results/
+    i9-9900X-vulkan-*").
+  - **F-20** — `docs/data-contracts.md:112-115` and `:450-452`: dropped the rotting hard total
+    ("19 model manifests (14 chat)") and converted both to a `model-policy.md` pointer (kept the
+    6-role-dir enumeration, which is structural).
+  - **F-21** — `docs/model-policy.md:95` "presets 4k–32k" → "presets 4k–128k".
+  - **F-17** — appended a dated `UPDATE 2026-07-12: …` line to both promoted manifests'
+    `license_review.notes` (9b-ud-q4kxl + 4b-ud-q4kxl), recording the smoke + rank-3 promotion,
+    original text preserved, matching the 27B "Supersedes…" style. ASCII-only append (`<=`/`-`).
+  - **F-27** — `apps/desktop/src/preload/index.ts` startDocTask JSDoc: "curated 10" → "closed
+    51-code WMT24++ set (`TRANSLATION_LANGUAGE_CODES`, issue #31)".
+  - **F-37** — rewrote the stale soft-hyphen comment in `apps/desktop/src/shared/i18n/en.ts`
+    (~15-19) and `de.ts` (~31-35): hyphens removed in bad4eaf; preview.tsx matches nav labels by
+    exact textContent, so re-adding U+00AD would break the marketing walker.
+- Deviations from plan:
+  - **F-37** also updated the THIRD stale copy of the comment in
+    `apps/desktop/tests/renderer/InformationArchitecture.test.tsx` (~140-143) — comment-only, zero
+    test churn. The condensed plan named only en.ts + de.ts, but the audit-report F-37 blast radius
+    explicitly lists this test file as the third site, so this is executing the report contract, not
+    scope creep. The `.replace(/­/g,'')` there is a harmless no-op guard, left in place.
+  - **F-37 optional mktClickNav hardening: DEFERRED (not done).** It is optional per the plan and
+    would require a marketing-capture re-run (heavy in this env). The latent re-add risk it guards is
+    already fenced by CI (`rail-labels.test.ts` + `i18n.test.ts` block re-adding U+00AD, per the
+    audit blast radius), so deferring leaves no unguarded hole. Not queued to §Q; if a future phase
+    wants belt-and-suspenders, it is a one-line dev-harness change in preview.tsx.
+- New findings: none. Cross-checked every eval figure against the committed CSVs
+  (`eval/results/i7-1185G7-cpu-quality-rescored.csv`, `i9-9900X-vulkan-quality.csv`) before writing
+  — all match. No unlisted pinning test surfaced (typecheck + full suite confirm).
+- Messages to later phases: **Phase 2** — my F-08/F-17 manifest edits touched
+  `qwen3.5-9b-ud-q4kxl.yaml` and `qwen3.5-4b-ud-q4kxl.yaml` (rank comments + license notes only;
+  YAML values untouched). Phase 2's targets are `qwen3.5-9b-q8.yaml` and the two `qwen3.6-27b-*`
+  manifests — no overlap, but you now stack on top of these two files. The benchmark.md tier table
+  (F-07) is now the four-tier §6.4 mapping; no sentence in it quotes a ctx value, so a Phase-2 F-06
+  ctx change needs no benchmark.md edit.
+- Docs touched: `docs/model-benchmarks.md`, `docs/model-policy.md`, `docs/benchmark.md`,
+  `docs/data-contracts.md`, two chat manifests, `preload/index.ts`, `i18n/en.ts`, `i18n/de.ts`,
+  `InformationArchitecture.test.tsx`, `BUILD_STATE.md` (§5 item 14 Phase-1 line), this plan (§L).
+  BUILD_STATE entry added: yes (short line under §5 item 14).
+
+### Phase 0 — 2026-07-17 — branch fix/audit-2026-07-16-p1 @ 8bf0fc7 (sha backfilled post-commit; rides in the Phase 1 commit)
 - Gate: **4,217 passed / 49 skipped** · typecheck clean · build n/a (docs-only).
   **Baseline correction for all later phases:** the plan's "4,216/49" figure predates PR #56's
   added Qwen3.6 promotion-facts pin (+1 test, BUILD_STATE 2026-07-12 entry); the true

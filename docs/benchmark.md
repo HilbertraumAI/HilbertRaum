@@ -85,13 +85,19 @@ measured RAM, breaking ties on each manifest's `recommendation_rank`. The profil
 
 | Measured RAM | Chat model |
 |---|---|
-| ≤ 12 GB | `qwen3-4b-instruct-q4` (also the bundled default) |
-| 16–20 GB | `ministral3-8b-instruct-2512-q4` |
-| ≥ 24 GB | `gemma4-12b-it-qat-q4` |
+| ≤ 12 GB | `qwen3.5-4b-ud-q4kxl` |
+| 16–20 GB | `qwen3.5-9b-ud-q4kxl` |
+| 24 GB | `qwen3.6-27b-q4` |
+| ≥ 32 GB | `qwen3.6-27b-q5` |
+
+(This is the newest-Qwen promotion, owner decision 2026-07-12; see `model-benchmarks.md` §6.4.
+The **bundled** default on a preconfigured drive stays `qwen3-4b-instruct-q4` — the promotion
+deliberately did NOT change the bundled model; the tiers above are the RAM-best-fit
+recommendation the picker offers, not the bundled pick.)
 
 The profile fallback maps TINY/LITE/UNKNOWN → `qwen3-4b-instruct-q4`, BALANCED → `qwen3-8b-instruct-q4`,
 PRO → `qwen3-14b-instruct-q4` (it matches a manifest whose `recommended_profiles` includes the profile).
-Full benchmark detail and the rank rationale: [`model-benchmarks.md`](model-benchmarks.md) §6.2.
+Full benchmark detail and the rank rationale: [`model-benchmarks.md`](model-benchmarks.md) §6.2–§6.4.
 
 (`qwen3-1.7b-instruct-q4` was the TINY/UNKNOWN model in the original spec §7.3 table, but it was
 dropped — the official `Qwen/Qwen3-1.7B-GGUF` repo ships no Q4_K_M — so `qwen3-4b-instruct-q4`,
