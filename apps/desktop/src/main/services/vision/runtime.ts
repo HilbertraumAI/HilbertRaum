@@ -204,7 +204,21 @@ export class VisionRuntime {
         threads: this.opts.threads,
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host
+        host: this.opts.host,
+        // M1 (ported verbatim from translation/runtime.ts TA-6, F-14): a mid-session sidecar
+        // crash — the child dies on its OWN after becoming healthy (OOM is the named realistic
+        // cause: the three-process RAM peak makes 12 GB machines likely-OOM) — otherwise leaves
+        // `this.server` pointing at a dead handle. Every later `analyze()` then dials the closed
+        // loopback port and fails 'runtimeFailed', and each failure re-arms the idle clock, so
+        // the outage persists as long as retries arrive < the idle window apart. Drop the dead
+        // handle here so the NEXT `analyze()` cold-starts a fresh child. Identity-compared so a
+        // late crash notification can never clobber a NEWER instance a soft idle teardown +
+        // restart already installed. `LlamaServer` fires this only for a healthy child dying
+        // outside `stop()`, so a lock/quit kill never trips it. (No device-fallback twin: unlike
+        // translation, the vision sidecar has no GPU/CPU ladder — the CPU pin is fixed.)
+        onUnexpectedExit: () => {
+          if (this.server === server) this.server = null
+        }
       })
       this.starting = server
         .start()
