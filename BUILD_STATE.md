@@ -1531,6 +1531,18 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     siblings). Dry-run ps1↔sh parity + F-04/F-18 teeth verified manually (win32; bash 3.2 not
     available — F-03 argued by idiom + M23 precedent). Gate **4221/49** (+2 F-05 parity assertions),
     typecheck green, build n/a (scripts/docs/one test only). Details: plan §L Phase-3 ledger entry.
+    **Phase 4 done 2026-07-17** (branch `fix/audit-2026-07-16-p4`): streaming honesty & extract
+    freshness — F-02 (`readChatSSE`/`parseSseLine` now REJECT with a typed `ChatStreamError` on
+    llama-server's two in-band mid-stream error carriers — `data: {"error":{…}}` frame and bare
+    `error: {…}` field line — instead of ending cleanly; a failed generation can never persist
+    as a clean answer. Consumer sweep pinned by tests: main chat turn propagates (partial never
+    silently persisted), a mid-way-failed compaction summary writes NO checkpoint, both grounded
+    paths propagate; new friendly `main.chat.streamError` EN+DE copy via `withChatStream`,
+    content-free. Real-server error-frame smoke queued §Q → Phase 9's consolidated smoke
+    checklist), F-01 (extract scan-cache hit lookup now carries `AND model_id = ?` — a chat-model
+    swap re-extracts on the next explicit run; hash pinned byte-identical, same-model re-run
+    stays 0-call, #50 economy holds). All red-green-demonstrated. Gate **4233/49** (+12),
+    typecheck + build green. Details: plan §L Phase-4 ledger entry.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
