@@ -18,8 +18,23 @@ import {
   loadSession,
   resetVisionSessionForTests
 } from '../../src/renderer/lib/visionSession'
-import { DEFAULT_SETTINGS, type PolicyStatus, type WorkspaceStateInfo } from '../../src/shared/types'
+import {
+  DEFAULT_SETTINGS,
+  type PolicyStatus,
+  type WorkspaceStateInfo,
+  type AppStatus,
+  type PreflightResult,
+  type TranslateJob,
+  type ImportJob
+} from '../../src/shared/types'
+import type { DecodedImage } from '../../src/renderer/images/decode'
 import { stubApi } from '../helpers/renderer'
+
+// F-41 (audit-2026-07-16): the stubApi payloads are typed against the real PreloadApi bridge
+// contract (no blanket `} as never)` erasure) — a rename of any mocked method now reddens
+// typecheck. Payloads that are DELIBERATELY partial (a "keep the shell calm" AppStatus/
+// PreflightResult, or a preview-only DecodedImage without `bytes`) carry a narrow, named
+// `as unknown as <Type>` at exactly that value (the HomeScreenPoll pattern), not a blanket cast.
 
 // TA-2 / H3: the renderer session-store purge must fire at the REAL lock seam. A screen-effect
 // purge was dead code (lock unmounts the screen before the effect could observe `locked`); the
@@ -65,21 +80,21 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
       getWorkspaceState: vi.fn(async () => unlockedEncrypted),
       getPolicy: vi.fn(async () => offlinePolicy),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}) as never,
+      onRuntimeNotice: vi.fn(() => () => {}),
       lockWorkspace,
       // Home (default screen) readiness — keep the shell calm.
-      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as never),
-      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }) as never),
+      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as unknown as AppStatus),
+      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: 'Stopped' })),
       listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async () => ({ ok: true, rootPath: '/d', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] }) as never),
+      runPreflight: vi.fn(async () => ({ ok: true, rootPath: '/d', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] }) as unknown as PreflightResult),
       // Seeds: a running text job to re-adopt + a never-resolving document import.
-      getActiveTranslateJob: vi.fn(async () => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
+      getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {}),
       getDroppedFilePath: vi.fn(() => 'C:\\docs\\secret.pdf'),
-      importDocuments: vi.fn(() => new Promise(() => {}))
-    } as never)
+      importDocuments: vi.fn(() => new Promise<ImportJob>(() => {}))
+    })
 
     const user = userEvent.setup()
     render(<App />)
@@ -93,7 +108,7 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     void translateDroppedFiles([new File(['%PDF'], 'secret.pdf', { type: 'application/pdf' })], CHOICE)
     await adoptActiveJob()
     loadSession(
-      { decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as never, name: 'secret.png', sizeBytes: 42 },
+      { decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as unknown as DecodedImage, name: 'secret.png', sizeBytes: 42 },
       [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
       'sess1'
     )
@@ -128,13 +143,13 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
       getWorkspaceState: vi.fn(async () => unlockedEncrypted),
       getPolicy: vi.fn(async () => offlinePolicy),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}) as never,
+      onRuntimeNotice: vi.fn(() => () => {}),
       lockWorkspace,
-      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as never),
-      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }) as never),
+      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as unknown as AppStatus),
+      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: 'Stopped' })),
       listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async () => ({ ok: true, rootPath: '/d', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] }) as never)
-    } as never)
+      runPreflight: vi.fn(async () => ({ ok: true, rootPath: '/d', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] }) as unknown as PreflightResult)
+    })
 
     const user = userEvent.setup()
     render(<App />)
@@ -142,7 +157,7 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
 
     // Seed one session store so the "stores NOT purged" half has teeth.
     loadSession(
-      { decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as never, name: 'secret.png', sizeBytes: 42 },
+      { decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as unknown as DecodedImage, name: 'secret.png', sizeBytes: 42 },
       [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
       'sess1'
     )
