@@ -423,6 +423,74 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
   })
 })
 
+// F-33 (full-audit 2026-07-16): extractWithTar was the only unbounded child in the repo. A cancel
+// during 'extracting' only flipped job.status and aborted the fetch controller — nothing reached
+// tar — and because activeJob() reported null for a 'cancelled' job, a retry could launch a SECOND
+// installOne into the SAME extractTo while the wedged tar was still writing. The fix threads the
+// abort signal into ExtractFn (default extractWithTar gains a deadline + SIGKILL escalation) and
+// makes a not-yet-settled run() count as busy.
+describe('extraction bounds + concurrency (F-33)', () => {
+  async function waitForStatus(
+    mgr: EngineDownloadManager,
+    jobId: string,
+    status: EngineDownloadJob['status']
+  ): Promise<void> {
+    const start = Date.now()
+    while (mgr.get(jobId).status !== status) {
+      if (Date.now() - start > 5000) throw new Error(`job never reached ${status}`)
+      await new Promise((r) => setTimeout(r, 2))
+    }
+  }
+
+  it('threads the job cancel into the extractor so a signal-aware extract settles at once', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    let sawSignal: AbortSignal | undefined
+    // An extract that hangs until its abort signal fires — proves the signal is threaded through.
+    const signalAwareExtract: ExtractFn = (_a, _d, signal) =>
+      new Promise<void>((_res, rej) => {
+        sawSignal = signal
+        if (signal?.aborted) return rej(new Error('extract cancelled'))
+        signal?.addEventListener('abort', () => rej(new Error('extract cancelled')), { once: true })
+      })
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: signalAwareExtract })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await waitForStatus(mgr, started.jobId, 'extracting')
+    expect(sawSignal).toBeDefined() // the extractor received the job's abort signal…
+    expect(sawSignal!.aborted).toBe(false)
+    mgr.cancel(started.jobId) // …and the cancel reaches it (pre-fix: nothing reached tar)
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('cancelled')
+  })
+
+  it('a cancelled-but-unsettled run() still counts as busy — a second start is refused', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    let releaseExtract: () => void = () => undefined
+    const wedged = new Promise<void>((r) => (releaseExtract = r))
+    // A wedged tar that ignores the signal and only settles when we let it.
+    const neverExtract: ExtractFn = async (_a, destDir) => {
+      await wedged
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: neverExtract })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await waitForStatus(mgr, started.jobId, 'extracting')
+    mgr.cancel(started.jobId) // status → cancelled, but run() is still awaiting the wedged extract
+    expect(mgr.get(started.jobId).status).toBe('cancelled')
+    // Pre-fix: activeJob() returned null for a 'cancelled' job while run() was in flight, so a
+    // retry launched a SECOND install into the same extractTo. Now the unsettled run is busy.
+    expect(mgr.activeJob()).toBe(started.jobId)
+    await expect(mgr.start({ rootPath, manifestsDir, gates: ALLOW })).rejects.toThrow(/already downloading/i)
+    // Let the wedged extract finish so run() settles and the slot frees (no dangling promise).
+    releaseExtract()
+    const freeBy = Date.now()
+    while (mgr.activeJob() !== null) {
+      if (Date.now() - freeBy > 5000) throw new Error('slot never freed after run() settled')
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(mgr.get(started.jobId).status).toBe('cancelled')
+  })
+})
+
 describe('re-install invalidates the binary-verifier session cache (full-audit 2026-07-11 CODE-12)', () => {
   it('a pre-install mismatch verdict does not stick to the freshly installed binary', async () => {
     const { rootPath, manifestsDir } = makeDrive()
