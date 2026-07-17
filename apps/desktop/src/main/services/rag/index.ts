@@ -57,6 +57,7 @@ import { getSettings } from '../settings'
 import { scanRedactionCandidates, type RedactionCounts } from '../skills/tools/redaction'
 import { answerWholeDocFromTree, continueUntilComplete, streamWholeDocMapReduce } from './whole-doc-tree'
 import { documentChunkCount } from '../analysis/coverage'
+import { codePointSlice } from '../text'
 import { SUMMARY_MAP_CALL_CEILING } from '../doctasks/summary'
 import { buildGroundedDataPrompt } from './grounded-data'
 export { buildGroundedDataPrompt, GROUNDED_DATA_RULES } from './grounded-data'
@@ -367,16 +368,15 @@ export async function retrieve(
  * Cap a citation snippet to keep `citations_json` small. Counts and slices by CODE POINT, not
  * UTF-16 code unit (full-audit-2026-06-29 RAG-2): a raw `String.slice` can cut inside a
  * surrogate pair (emoji, CJK ext-B, math symbols) and leave the snippet ending in a lone
- * surrogate that renders as `�`. Spreading iterates whole code points, so the cut always lands
- * on a code-point boundary. (Code points, not graphemes — a combining mark could still be split,
- * but that never produces an invalid string; the goal here is only "never end mid-code-point".)
+ * surrogate that renders as `�`. The pair-safe cut itself now lives in the shared
+ * `services/text.ts` `codePointSlice` (audit 2026-07-16 F-15 routed the sibling snippet sites
+ * through it); this keeps the RAG-specific trim + trimEnd-before-ellipsis shape byte-identical.
  * Exported for the RAG-2 boundary unit test.
  */
 export function truncateSnippet(text: string): string {
   const trimmed = text.trim()
-  const codePoints = [...trimmed]
-  if (codePoints.length <= SNIPPET_MAX_CHARS) return trimmed
-  return codePoints.slice(0, SNIPPET_MAX_CHARS).join('').trimEnd() + '…'
+  const cut = codePointSlice(trimmed, SNIPPET_MAX_CHARS)
+  return cut === trimmed ? trimmed : cut.trimEnd() + '…'
 }
 
 /** The whole-document read for a skill-aware analysis answer (skill-whole-doc engine, Wave 2). */
