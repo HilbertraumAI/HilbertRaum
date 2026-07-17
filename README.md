@@ -81,7 +81,7 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
   (e.g. Qwen3.5 9B already runs from 12 GB).
 - **Disk space:** ~**3 GB** for the smallest *hand-built* setup (the 4B chat model + the embeddings
   model only). The one-command `--with-assets` quick-start fetches a larger **default set** (8B chat +
-  embeddings + reranker + Whisper + the Qwen2.5-VL vision model + both sidecar runtimes) at ~**10.4 GB** —
+  embeddings + reranker + Whisper + the Qwen2.5-VL vision model + both sidecar runtimes + the OCR language files) at ~**10.4 GB** —
   size a drive for that if you use it; swapping the 8B chat model for a bigger one takes it to
   ~**14 GB** (14B) or ~**24 GB** (30B-A3B MoE). A **USB-3 SSD**
   is recommended for a portable drive.
@@ -150,12 +150,13 @@ catalog. It fetches the benchmark-winning mid-tier chat model (Ministral 3 8B, ~
 machine you may prefer the smaller bundled Qwen3-4B — add it with `-AllModels` or from the AI Model
 screen), the **embeddings** model (for document Q&A), the **reranker**, the **Whisper**
 transcriber model, and the **vision** model (for image understanding), plus **both sidecar
-runtimes** (`llama.cpp` for chat/embeddings, `whisper.cpp` for audio). That's enough to chat, ask
-questions about your documents, get higher-quality retrieval, transcribe audio, and understand
-images out of the box. You download any **other** models (larger chat
+runtimes** (`llama.cpp` for chat/embeddings, `whisper.cpp` for audio) and the **OCR language
+files** (`deu`/`eng`, ~4 MB, for scanned-PDF and photo text recognition). That's enough to chat, ask
+questions about your documents, get higher-quality retrieval, transcribe audio, understand
+images, and OCR scanned documents out of the box. You download any **other** models (larger chat
 models) **from inside the app** later, on demand. To provision
 *every* model up front instead, add `-AllModels` (Windows) / `--all-models` (macOS/Linux). The
-sidecar runtimes are fetched either way.
+sidecar runtimes and OCR files are fetched either way.
 
 Whatever it fetches, it **SHA-256-verifies** against the manifest and copies the manifests/config
 onto the drive. Downloads **resume** if interrupted and re-running **skips** what's already there.

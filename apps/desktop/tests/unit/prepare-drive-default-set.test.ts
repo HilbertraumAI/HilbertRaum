@@ -52,3 +52,24 @@ describe('prepare-drive default model set parity (DOC-N4)', () => {
     expect(sh).toEqual(ps1)
   })
 })
+
+// F-05 (full audit 2026-07-16): --with-assets used to fetch models + the llama.cpp and
+// whisper.cpp runtimes but NEVER the `ocr` family, so every DIY drive shipped with an empty
+// ocr/ dir and scanned-PDF/photo OCR was silently unavailable (open issue #59). Only
+// build-commercial-drive fetched it. There is no canonical TS plan for the with-assets fetch
+// CALL SET (drive.ts planPrepareDrive models layout/config/copies only — the with-assets
+// orchestration lives solely in the two shells, per docs/packaging.md), so this parity net
+// pins the invariant directly against the two scripts: both siblings' --with-assets block must
+// invoke fetch-runtime for the ocr family, or a Windows-vs-mac/linux drive drifts on OCR again.
+describe('prepare-drive --with-assets fetches the OCR family in both siblings (F-05)', () => {
+  const ps1 = readFileSync(PS1, 'utf8')
+  const sh = readFileSync(SH, 'utf8')
+
+  it('prepare-drive.ps1 invokes fetch-runtime with -Family ocr', () => {
+    expect(ps1).toMatch(/Family\s*=\s*'ocr'/)
+  })
+
+  it('prepare-drive.sh invokes fetch-runtime with --family ocr', () => {
+    expect(sh).toMatch(/--family ocr\b/)
+  })
+})

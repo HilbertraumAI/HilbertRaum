@@ -1518,6 +1518,19 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     size_bytes/1e9| < 0.15` for real download blocks), both red-green-demonstrated. Recommendation
     mapping unchanged (`benchmark.test.ts` byte-identical). Gate **4219/49** (+2 invariants),
     typecheck green, build n/a (tests/manifests/docs only). Details: plan §L Phase-2 ledger entry.
+    **Phase 3 done 2026-07-17** (branch `fix/audit-2026-07-16-p3`): DIY drive & script parity —
+    F-05 (added the `ocr` family fetch to `--with-assets` in BOTH prepare-drive siblings, so DIY
+    drives now ship scanned-PDF/photo OCR; new sh↔ps1 parity net pins it; ~10.4 GB figure
+    unchanged, OCR data ≈4 MB; #59 provisioning root cause fixed — its in-app warning-copy half
+    queued §Q Q-1 → Phase 7, and a ready-to-post #59 comment left for Phase 10 in §L), F-03
+    (`prepare-drive.sh` empty-array expansion made bash-3.2/`set -u`-safe via the M23 idiom — the
+    macOS DIY abort), F-04 (`fetch-models.sh` continues past a mid-batch download failure + prints
+    the summary + exits 1, matching the .ps1), F-18 (`setup-dev.ps1` `--use-system-ca` probe → a
+    redirect-free `node -p` introspection, no more EAP-Stop crash on Node < 22.15), F-19
+    (`fetch-runtime.sh` archive name strips `?query`/`#fragment`, converging with the ps1/TS
+    siblings). Dry-run ps1↔sh parity + F-04/F-18 teeth verified manually (win32; bash 3.2 not
+    available — F-03 argued by idiom + M23 precedent). Gate **4221/49** (+2 F-05 parity assertions),
+    typecheck green, build n/a (scripts/docs/one test only). Details: plan §L Phase-3 ledger entry.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
