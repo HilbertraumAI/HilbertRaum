@@ -1387,7 +1387,17 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   open (#37 suggestion 3):** the listing engine groups by `normalized_value` with **counts** — a
   user-defined categorization with per-category numeric **sums** is served exhaustively only by the
   bank-statement skill's category engine; the no-skill coverage-extract answer for such an ask is an
-  honest whole-document *listing* of the mapped type, not the requested sums.
+  honest whole-document *listing* of the mapped type, not the requested sums. **Since issue #54
+  (owner decision 2026-07-17, option 1 of 3):** that wrong-shaped answer now SAYS so — when the
+  `AGGREGATION_RE` lexicon fired (exposed as the pure `isAggregationShaped`, router.ts), a non-empty
+  listing LEADS with `analysis.listing.aggregationHint` ("you asked for categories or sums, but this
+  answer can only list the values found…") plus `analysis.listing.aggregationHintAmountSkill` for the
+  `amount` type (enable the bank-statement skill and re-ask). Plain list/count asks (`COVERAGE_RE`
+  only) stay byte-unchanged; the EMPTY branch keeps its #50 hint pair (never a double skill pointer).
+  The declined alternatives: auto-routing to the skill's category engine (reverses the ratified
+  default-off auto-fire posture, S13b D4) and replacing the listing with a redirect (withholds data,
+  over-trigger risk). The structural fix — no-skill tabular routing over a generic row extractor —
+  remains the architecture.md result-tables §5/§6 deferral.
 - **Low-confidence fallback hint — AS BUILT (#37/#38).** `RouteDecision` carries a `fallback` reason
   (`'coverage' | 'compare'`) alongside `confidence`; `rag:ask` (which previously **discarded**
   `confidence` — the answer over 5 of 25 sections read like any normal answer) now leads the relevance

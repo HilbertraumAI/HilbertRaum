@@ -478,6 +478,55 @@ describe('aggregateExtractions', () => {
     expect(answer).not.toMatch(/bank-statement skill/)
   })
 
+  // Issue #54 (owner decision 2026-07-17, option 1): an aggregation-shaped ask (categorize /
+  // group by / sum per …) served by this engine gets a WRONG-SHAPED answer — a frequency list,
+  // not the requested categories/sums. A non-empty listing must LEAD with the honest shape hint
+  // (+ the bank-statement-skill pointer for `amount`); without the flag it stays byte-unchanged.
+  it('#54: aggregationAsk LEADS a non-empty amount listing with the shape hint + skill pointer', async () => {
+    // The scripted extract runtime only emits `party` records, so plant the amount row directly
+    // (the extract pass supplies the scan markers; the row shape matches the pass's own inserts).
+    const id = await importText('Pay 12,50 EUR and 99,00 EUR today, plus some filler prose.')
+    await extractOf(id)
+    const chunkId = (
+      db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(id) as { id: string }
+    ).id
+    db.prepare(
+      `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
+       VALUES ('54rec1', ?, ?, 'amount', '12,50 EUR', '12.50', 'hash-54', '2026-07-17T00:00:00.000Z')`
+    ).run(id, chunkId)
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'amount')
+    expect(listing.items.length).toBeGreaterThan(0)
+    const answer = buildListingAnswer(db, listing, tr, { aggregationAsk: true })
+    expect(answer.startsWith(tr('analysis.listing.aggregationHint'))).toBe(true)
+    expect(answer).toContain(tr('analysis.listing.aggregationHintAmountSkill'))
+    // The hint leads the list — it never replaces it (items + caveat still present).
+    expect(answer).toMatch(/12,50/)
+    expect(answer).toMatch(/not guaranteed complete/)
+    // Without the flag the answer is byte-unchanged (no hint).
+    const plain = buildListingAnswer(db, listing, tr)
+    expect(plain).not.toContain(tr('analysis.listing.aggregationHint'))
+  })
+
+  it('#54: a non-amount aggregation listing gets the generic hint WITHOUT the bank-skill pointer', async () => {
+    const id = await importText('Pay @@alice@@ then @@bob@@ once.')
+    await extractOf(id)
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
+    expect(listing.items.length).toBeGreaterThan(0)
+    const answer = buildListingAnswer(db, listing, tr, { aggregationAsk: true })
+    expect(answer.startsWith(tr('analysis.listing.aggregationHint'))).toBe(true)
+    expect(answer).not.toContain(tr('analysis.listing.aggregationHintAmountSkill'))
+  })
+
+  it('#54: the EMPTY branch keeps its own #50 hint pair — the aggregation hint never doubles it', async () => {
+    const id = await importText('@@BADJSON@@')
+    await extractOf(id)
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'amount')
+    expect(listing.items.length).toBe(0)
+    const answer = buildListingAnswer(db, listing, tr, { aggregationAsk: true })
+    expect(answer).not.toContain(tr('analysis.listing.aggregationHint'))
+    expect(answer).toMatch(/bank-statement skill/) // the #50 pointer, exactly once
+  })
+
   it('re-index cascades away the old rows [H1] and marks the pass stale', async () => {
     const id = await importText('@@alice@@ and @@bob@@.')
     await extractOf(id)

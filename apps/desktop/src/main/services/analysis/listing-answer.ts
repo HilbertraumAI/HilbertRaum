@@ -59,12 +59,25 @@ function sectionRefs(
   return labels.length > 0 ? ` (${labels.join(', ')}${more})` : ''
 }
 
+/** Rendering options (additive). */
+export interface ListingAnswerOptions {
+  /**
+   * Issue #54: the question matched the #37 AGGREGATION lexicon (categorize / group by /
+   * sum per …), not just a plain list/count trigger. This engine can only list values with
+   * counts — it cannot categorize or sum — so a non-empty answer LEADS with an honest
+   * shape hint (+ the bank-statement-skill pointer for `amount`) instead of presenting the
+   * frequency list as if it were the requested categories/sums.
+   */
+  aggregationAsk?: boolean
+}
+
 /** Build the full deterministic listing answer (Markdown). Scope is already applied by
  *  `aggregateExtractions`, so this only formats the result + resolves provenance labels. */
 export function buildListingAnswer(
   db: Db,
   listing: ExtractionListing,
-  tr: (key: MessageKey, params?: MessageParams) => string
+  tr: (key: MessageKey, params?: MessageParams) => string,
+  opts: ListingAnswerOptions = {}
 ): string {
   const kind = tr(KIND_KEY[listing.recordType])
   const unparsed =
@@ -102,7 +115,19 @@ export function buildListingAnswer(
   const headKey: MessageKey = coverageWhole
     ? 'analysis.listing.coverageWhole'
     : 'analysis.listing.coverageSections'
-  const lines: string[] = [tr(headKey, headParams), '']
+  const lines: string[] = []
+  // #54: an aggregation-shaped ask (categorize / group by / sum per …) served by this engine
+  // gets an answer of the WRONG SHAPE — say so FIRST, before the list, and point at the engine
+  // that can actually do it (the bank-statement skill's category totals) for `amount`. The
+  // empty branch above deliberately keeps its own #50 hint pair instead (no double pointer).
+  if (opts.aggregationAsk) {
+    let hint = tr('analysis.listing.aggregationHint')
+    if (listing.recordType === 'amount') {
+      hint += ` ${tr('analysis.listing.aggregationHintAmountSkill')}`
+    }
+    lines.push(hint, '')
+  }
+  lines.push(tr(headKey, headParams), '')
   for (const item of listing.items) {
     const refs = sectionRefs(db, item.sourceChunkIds, tr)
     lines.push(tr('analysis.listing.item', { value: item.value, count: item.count }) + refs)

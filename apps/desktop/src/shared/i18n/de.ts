@@ -664,6 +664,17 @@ export const de: Record<keyof typeof en, string> = {
     'versucht (ein größeres Modell hilft).',
   'analysis.listing.unparsedHintAmountSkill':
     'Für Kontoauszüge liest der Kontoauszug-Skill im Skill-Menü des Chats die Beträge exakt.',
+  // #54: eine Aggregations-Frage (kategorisieren / gruppieren / Summe pro Kategorie) wird
+  // bewusst von der Ganzdokument-Liste beantwortet (nie eine verlustbehaftete Top-k-Summe,
+  // #37) — aber die Liste kann Werte nur ZÄHLEN, nicht gruppieren oder aufsummieren. Die
+  // Formabweichung zuerst sagen und auf den Weg zeigen, der es kann.
+  'analysis.listing.aggregationHint':
+    '**Hinweis:** Du hast nach Kategorien oder Summen gefragt — diese Antwort kann aber nur ' +
+    'die im Dokument gefundenen Werte auflisten, mit ihrer Häufigkeit. Gruppieren oder ' +
+    'aufsummieren kann sie nicht.',
+  'analysis.listing.aggregationHintAmountSkill':
+    'Für Kontoauszüge aktiviere den Kontoauszug-Skill im Skill-Menü des Chats und frage ' +
+    'erneut — er ordnet die Transaktionen Kategorien zu und summiert jede Kategorie exakt auf.',
   // #37/#38: der Router hat eine Frage zum ganzen Dokument erkannt (auflisten / zählen /
   // kategorisieren / Summe pro Kategorie), aber es gibt keinen Tiefenindex im Umfang — die
   // Antwort darunter stammt aus der Relevanzsuche. Das AKTIV sagen und den Weg zeigen — der
