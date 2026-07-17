@@ -168,6 +168,147 @@ export function planTranslationWindows(
   return { windows, windowMaxTokens, stepsTotal: windows.length + 1 }
 }
 
+// ---- Completeness accounting (issue #58) -------------------------------------------------
+//
+// A PDF page whose text-layer trims empty emits NO segment (parsers/pdf.ts), so before this
+// wave a 5-page document could materialize as a seamless 4-page translation — no warning, no
+// gap marker. The planner below makes that structurally impossible for the translation task:
+// the source's DECLARED page count (ParsedDocument.pageCount) is compared against the pages
+// that actually contributed segments, every gap becomes an inline notice block at its true
+// reading position, and the same ranges surface on the task status for the UI. On top of the
+// page accounting, `assertNoTextDropped` enforces the per-segment invariant that window
+// packing preserved every non-whitespace character of the input — a planner regression fails
+// the task loudly instead of shipping a silently incomplete document.
+
+/** One re-extracted source segment with its page identity (null = page-less format). */
+export interface TranslationSegment {
+  text: string
+  pageNumber: number | null
+}
+
+/** A 1-based, inclusive run of source pages that yielded no translatable text. */
+export interface PageGap {
+  from: number
+  to: number
+}
+
+/** One planned output block: a model window to translate, or a page gap to mark inline. */
+export type TranslationBlock =
+  | { kind: 'window'; text: string }
+  | { kind: 'gap'; gap: PageGap }
+
+export interface TranslationBlockPlan {
+  /** Windows and gap notices, interleaved in document order. */
+  blocks: TranslationBlock[]
+  /** Model calls planned (the window blocks only). */
+  windowCount: number
+  /** Output cap per window call: everything the input share leaves free. */
+  windowMaxTokens: number
+  /** Model calls (windows) + the final materialize step. */
+  stepsTotal: number
+  /** The page gaps, in order (also carried by the gap blocks — duplicated for the status). */
+  gaps: PageGap[]
+}
+
+/**
+ * Which source pages yielded NO translatable text. Pure. Requires the declared `pageCount`
+ * AND a page number on every segment — a page-less source (txt/md/docx/audio) or a mixed
+ * shape returns [] (no page semantics to account against). Derived from the PRESENT pages,
+ * never by walking 1..pageCount — a crafted PDF can declare an enormous page count (M-2)
+ * and this must stay O(segments), with the result bounded as ranges.
+ */
+export function computeMissingPageRanges(
+  segments: TranslationSegment[],
+  pageCount: number | null
+): PageGap[] {
+  if (pageCount == null || !Number.isFinite(pageCount) || pageCount <= 0) return []
+  if (segments.length === 0 || segments.some((s) => s.pageNumber == null)) return []
+  const present = [...new Set(segments.map((s) => s.pageNumber as number))].sort((a, b) => a - b)
+  const gaps: PageGap[] = []
+  let expected = 1
+  for (const page of present) {
+    if (page > expected) gaps.push({ from: expected, to: page - 1 })
+    expected = page + 1
+  }
+  if (expected <= pageCount) gaps.push({ from: expected, to: pageCount })
+  return gaps
+}
+
+/**
+ * The per-segment completeness invariant (issue #58): window packing must preserve every
+ * non-whitespace character of its input, in order (`packIntoWindows` only ever re-joins on
+ * whitespace). A violation throws — the manager maps it to the friendly generic failure, so
+ * a planner regression becomes a VISIBLE failed task, never a silently incomplete document.
+ */
+export function assertNoTextDropped(segmentTexts: string[], windows: string[]): void {
+  const strip = (s: string): string => s.replace(/\s+/g, '')
+  const input = segmentTexts.map(strip).join('')
+  const packed = windows.map(strip).join('')
+  if (input !== packed) {
+    throw new Error(
+      `Translation planning dropped content: ${input.length} source chars vs ${packed.length} packed`
+    )
+  }
+}
+
+/**
+ * Plan the translation as ordered BLOCKS: the segment runs between page gaps are packed
+ * into model windows (same budget math as `planTranslationWindows`), and every gap becomes
+ * an inline notice block at its true reading position. With no gaps this degenerates to
+ * exactly `planTranslationWindows` (one run, identical windows). Pure.
+ */
+export function planTranslationBlocks(
+  segments: TranslationSegment[],
+  pageCount: number | null,
+  contextTokens: number
+): TranslationBlockPlan {
+  const usable = translationUsableTokens(contextTokens)
+  const budgetWords = translationBudgetWords(contextTokens)
+  const gaps = computeMissingPageRanges(segments, pageCount)
+
+  const blocks: TranslationBlock[] = []
+  const allWindows: string[] = []
+  let run: string[] = []
+  const flushRun = (): void => {
+    if (run.length === 0) return
+    for (const w of packIntoWindows(run, budgetWords)) {
+      blocks.push({ kind: 'window', text: w })
+      allWindows.push(w)
+    }
+    run = []
+  }
+  let gi = 0
+  for (const seg of segments) {
+    // Emit every gap that precedes this segment's page (segments arrive in document order).
+    while (gi < gaps.length && seg.pageNumber != null && gaps[gi].to < seg.pageNumber) {
+      flushRun()
+      blocks.push({ kind: 'gap', gap: gaps[gi] })
+      gi += 1
+    }
+    run.push(seg.text)
+  }
+  flushRun()
+  // Trailing gaps (an empty last page — undetectable from segment numbering alone).
+  for (; gi < gaps.length; gi += 1) blocks.push({ kind: 'gap', gap: gaps[gi] })
+
+  assertNoTextDropped(
+    segments.map((s) => s.text),
+    allWindows
+  )
+
+  const windowMaxTokens = Math.max(
+    TRANSLATION_MIN_OUTPUT_TOKENS,
+    usable - Math.ceil(budgetWords * TRANSLATION_INPUT_TOKENS_PER_WORD)
+  )
+  return {
+    blocks,
+    windowCount: allWindows.length,
+    windowMaxTokens,
+    stepsTotal: allWindows.length + 1,
+    gaps
+  }
+}
+
 /**
  * Visible marker for a window the model refused/garbled after a retry: the output
  * keeps the ORIGINAL text under the notice — never a silent gap. L12: this text is
@@ -176,6 +317,17 @@ export function planTranslationWindows(
  */
 export function failedWindowNotice(part: number, total: number): string {
   return tMain('main.translation.failedWindowNotice', { part, total })
+}
+
+/**
+ * Visible marker for a source page range that yielded no translatable text (issue #58) —
+ * placed at the gap's true reading position in the materialized output. L12 posture like
+ * `failedWindowNotice`: persisted into the document, localized at materialization time.
+ */
+export function missingPageNotice(gap: PageGap): string {
+  return gap.from === gap.to
+    ? tMain('main.translation.missingPageNotice', { page: gap.from })
+    : tMain('main.translation.missingPageRangeNotice', { from: gap.from, to: gap.to })
 }
 
 /**

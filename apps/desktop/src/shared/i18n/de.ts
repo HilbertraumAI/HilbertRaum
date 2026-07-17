@@ -1827,6 +1827,14 @@ export const de: Record<keyof typeof en, string> = {
   'main.translation.failedWindowNotice':
     '> ⚠ Dieser Teil ({part} von {total}) konnte nicht übersetzt werden — ' +
     'der Originaltext bleibt unten unverändert erhalten.',
+  // Issue #58 — ebenfalls in das erzeugte Übersetzungsdokument geschrieben (L12), an der
+  // Leseposition der Lücke: eine Quellseite ohne extrahierbaren Text darf nie stumm verschwinden.
+  'main.translation.missingPageNotice':
+    '> ⚠ Seite {page} des Originals konnte nicht übersetzt werden — ' +
+    'sie enthält keinen lesbaren Text (möglicherweise eine gescannte Seite).',
+  'main.translation.missingPageRangeNotice':
+    '> ⚠ Die Seiten {from}–{to} des Originals konnten nicht übersetzt werden — ' +
+    'sie enthalten keinen lesbaren Text (möglicherweise gescannte Seiten).',
   'main.translation.attributionLine':
     'Maschinell übersetzt von {modelId} — kann Fehler enthalten.',
   'main.model.contextExceeded':
@@ -2302,6 +2310,18 @@ export const de: Record<keyof typeof en, string> = {
   'translate.file.exported': 'Dokument exportiert',
   'translate.file.show': 'Unter Dokumente anzeigen',
   'translate.file.reset': 'Weiteres Dokument übersetzen',
+  // Issue #58 — die Vollständigkeits-Hinweise neben einer fertigen Übersetzung. {pages} kommt
+  // vorformatiert ("3" / "3–4, 7"); count = fehlende Seiten insgesamt / fehlgeschlagene Teile.
+  'translate.file.gapPages.one':
+    '⚠ Seite {pages} des Originals konnte nicht übersetzt werden — sie enthält keinen lesbaren ' +
+    'Text (möglicherweise eine gescannte Seite). Die Lücke ist in der Ausgabe markiert.',
+  'translate.file.gapPages.other':
+    '⚠ Die Seiten {pages} des Originals konnten nicht übersetzt werden — sie enthalten keinen ' +
+    'lesbaren Text (möglicherweise gescannte Seiten). Jede Lücke ist in der Ausgabe markiert.',
+  'translate.file.failedParts.one':
+    '⚠ {count} Teil konnte nicht übersetzt werden — an der markierten Stelle bleibt der Originaltext erhalten.',
+  'translate.file.failedParts.other':
+    '⚠ {count} Teile konnten nicht übersetzt werden — an den markierten Stellen bleibt der Originaltext erhalten.',
   'translate.file.err.multiDrop': 'Lege jeweils nur ein Dokument ab.',
   'translate.file.err.noPath':
     'Dieses Element hat keine Datei auf dem Datenträger. Ziehe ein Dokument aus einem Ordner oder nutze „ein Dokument auswählen".',

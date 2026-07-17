@@ -148,7 +148,11 @@ describe('planSummaryWindows — reduce-input safety', () => {
 // by `tests/unit/translation-prompt.test.ts`.)
 
 import {
+  assertNoTextDropped,
+  computeMissingPageRanges,
   failedWindowNotice,
+  missingPageNotice,
+  planTranslationBlocks,
   planTranslationWindows,
   translatedDocumentTitle,
   translationAttributionLine,
@@ -156,7 +160,8 @@ import {
   TRANSLATION_MAX_INPUT_TOKENS,
   TRANSLATION_INPUT_TOKENS_PER_WORD,
   TRANSLATION_OUTPUT_TOKENS_PER_WORD,
-  TRANSLATION_PROMPT_RESERVE_TOKENS
+  TRANSLATION_PROMPT_RESERVE_TOKENS,
+  type TranslationSegment
 } from '../../src/main/services/doctasks'
 
 const T_BUDGET = translationBudgetWords(CTX)
@@ -461,5 +466,133 @@ describe('compare templates (R-T2-validated on the real b9585 + Qwen3-4B)', () =
   it('report titles strip the source extensions and become Markdown', () => {
     expect(compareDocumentTitle('report.pdf', 'draft.docx')).toBe('Comparison: report vs draft.md')
     expect(compareDocumentTitle('no-ext', 'x.txt')).toBe('Comparison: no-ext vs x.md')
+  })
+})
+
+// ---- Issue #58: completeness accounting (computeMissingPageRanges / planTranslationBlocks) ----
+
+describe('computeMissingPageRanges (#58)', () => {
+  const seg = (page: number | null, text = 'some real text'): TranslationSegment => ({
+    text,
+    pageNumber: page
+  })
+
+  it('finds leading, middle, and trailing gaps and collapses consecutive pages into ranges', () => {
+    expect(computeMissingPageRanges([seg(2), seg(5)], 7)).toEqual([
+      { from: 1, to: 1 },
+      { from: 3, to: 4 },
+      { from: 6, to: 7 }
+    ])
+  })
+
+  it('a complete document has no gaps', () => {
+    expect(computeMissingPageRanges([seg(1), seg(2), seg(3)], 3)).toEqual([])
+  })
+
+  it('several segments on one page count once', () => {
+    expect(computeMissingPageRanges([seg(1), seg(1), seg(2)], 2)).toEqual([])
+  })
+
+  it('page-less sources (null pageCount, or any null pageNumber) yield NO page accounting', () => {
+    expect(computeMissingPageRanges([seg(null)], null)).toEqual([])
+    expect(computeMissingPageRanges([seg(null)], 5)).toEqual([])
+    expect(computeMissingPageRanges([seg(1), seg(null)], 5)).toEqual([])
+    expect(computeMissingPageRanges([seg(1)], 0)).toEqual([])
+    expect(computeMissingPageRanges([seg(1)], Number.NaN)).toEqual([])
+  })
+
+  it('stays O(segments) with a bounded result on a crafted huge page count (M-2 shape)', () => {
+    // One text page in a PDF that DECLARES a million pages: one trailing range, not a
+    // million-entry list — and no walk over 1..pageCount.
+    expect(computeMissingPageRanges([seg(1)], 1_000_000)).toEqual([{ from: 2, to: 1_000_000 }])
+  })
+})
+
+describe('planTranslationBlocks (#58)', () => {
+  const CTX = 4096
+
+  it('with no gaps it degenerates to EXACTLY planTranslationWindows', () => {
+    const texts = [chunkOf(300, 'a'), chunkOf(translationBudgetWords(CTX) + 50, 'b'), chunkOf(30, 'c')]
+    const flat = planTranslationWindows(texts, CTX)
+    const blocks = planTranslationBlocks(
+      texts.map((t, i) => ({ text: t, pageNumber: i + 1 })),
+      texts.length,
+      CTX
+    )
+    expect(blocks.gaps).toEqual([])
+    expect(blocks.blocks.map((b) => (b.kind === 'window' ? b.text : ''))).toEqual(flat.windows)
+    expect(blocks.windowCount).toBe(flat.windows.length)
+    expect(blocks.windowMaxTokens).toBe(flat.windowMaxTokens)
+    expect(blocks.stepsTotal).toBe(flat.stepsTotal)
+  })
+
+  it('places a gap block at its true reading position and packs the runs separately', () => {
+    const plan = planTranslationBlocks(
+      [
+        { text: chunkOf(50, 'p1w'), pageNumber: 1 },
+        { text: chunkOf(50, 'p2w'), pageNumber: 2 },
+        { text: chunkOf(50, 'p4w'), pageNumber: 4 },
+        { text: chunkOf(50, 'p5w'), pageNumber: 5 }
+      ],
+      5,
+      CTX
+    )
+    expect(plan.gaps).toEqual([{ from: 3, to: 3 }])
+    // Tiny runs each pack to one window: [window(p1+p2), gap(3), window(p4+p5)].
+    expect(plan.blocks.map((b) => b.kind)).toEqual(['window', 'gap', 'window'])
+    const [w1, , w2] = plan.blocks
+    expect(w1.kind === 'window' && w1.text).toContain('p2w0')
+    expect(w2.kind === 'window' && w2.text).toContain('p4w0')
+    // A gap never merges the surrounding text into one window across it.
+    expect(w1.kind === 'window' && w1.text).not.toContain('p4w0')
+    expect(plan.windowCount).toBe(2)
+    expect(plan.stepsTotal).toBe(3)
+  })
+
+  it('a TRAILING gap lands after the last window block', () => {
+    const plan = planTranslationBlocks(
+      [{ text: chunkOf(40, 'p1w'), pageNumber: 1 }],
+      3,
+      CTX
+    )
+    expect(plan.gaps).toEqual([{ from: 2, to: 3 }])
+    expect(plan.blocks.map((b) => b.kind)).toEqual(['window', 'gap'])
+  })
+
+  it('a LEADING gap lands before the first window block', () => {
+    const plan = planTranslationBlocks(
+      [{ text: chunkOf(40, 'p3w'), pageNumber: 3 }],
+      3,
+      CTX
+    )
+    expect(plan.gaps).toEqual([{ from: 1, to: 2 }])
+    expect(plan.blocks.map((b) => b.kind)).toEqual(['gap', 'window'])
+  })
+})
+
+describe('assertNoTextDropped — the per-segment completeness invariant (#58)', () => {
+  it('accepts whitespace-only re-joins (packing and windowByTokens splits)', () => {
+    expect(() =>
+      assertNoTextDropped(['alpha beta', 'gamma\ndelta'], ['alpha beta\n\ngamma delta'])
+    ).not.toThrow()
+  })
+
+  it('THROWS when packed windows lost content (teeth)', () => {
+    expect(() => assertNoTextDropped(['alpha beta', 'gamma'], ['alpha beta'])).toThrow(
+      /dropped content/
+    )
+    // Reordering/altering non-whitespace content is also a violation.
+    expect(() => assertNoTextDropped(['ab cd'], ['cd ab'])).toThrow(/dropped content/)
+  })
+})
+
+describe('missingPageNotice framing (#58)', () => {
+  it('uses the single-page phrasing for a one-page gap and the range phrasing otherwise', () => {
+    const single = missingPageNotice({ from: 3, to: 3 })
+    expect(single).toContain('Page 3')
+    expect(single).toMatch(/^> ⚠ /)
+    const range = missingPageNotice({ from: 2, to: 4 })
+    expect(range).toContain('Pages 2–4')
+    expect(range).toMatch(/^> ⚠ /)
   })
 })

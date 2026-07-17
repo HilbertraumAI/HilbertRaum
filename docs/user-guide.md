@@ -425,6 +425,10 @@ A few honest notes about translations:
   is thorough but not fast: a long document can take many minutes on a CPU laptop.
 - If a part cannot be translated even after a retry, the app **marks that part clearly in
   the result and keeps the original text there** — it never silently drops content.
+- If a **page of the original contains no readable text** (for example a scanned page inside
+  an otherwise normal PDF), the result **marks that page in place** — *"Page 3 of the original
+  could not be translated…"* — and the Translate screen shows a warning naming the affected
+  pages, so a shorter output never goes unnoticed.
 - The translation is a snapshot: if you re-import or re-index the **original**, the
   translated copy does not update — run Translate again.
 - Number and date *values*, names, and codes survive, and their formats are adapted to the

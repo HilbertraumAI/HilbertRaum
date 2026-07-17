@@ -165,12 +165,15 @@ export const PdfParser: DocumentParser = {
           .filter((p) => p.text.trim().length > 0)
           .map((p) => ({ text: p.text.trim(), pageNumber: p.pageNumber }))
         if (recognized.length > 0) {
-          return { segments: recognized, mimeType: 'application/pdf' }
+          return { segments: recognized, mimeType: 'application/pdf', pageCount: numPages }
         }
       }
       throw new Error(PDF_SCAN_DETECTED_MESSAGE)
     }
 
-    return { segments, mimeType: 'application/pdf' }
+    // `pageCount` is the DECLARED total (issue #58): a page whose text-layer trimmed empty
+    // pushed no segment above, and pages past the M-2 cap were never walked — both are real
+    // content gaps the translation completeness accounting must be able to see.
+    return { segments, mimeType: 'application/pdf', pageCount: numPages }
   }
 }
