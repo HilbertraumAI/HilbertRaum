@@ -77,7 +77,7 @@ before the next numbered phase.
 
 | id | found in | description + location | proposed phase | status |
 |---|---|---|---|---|
-| Q-1 | Phase 3 (F-05) | **#59 warning-copy half.** F-05 fixed the provisioning root cause (DIY `--with-assets` now fetches the `ocr` family), but the in-app scanned-PDF/photo dead-end warning (`shared/i18n/en.ts:488,1811` + de.ts counterparts) still says "OCR files not on this drive" without telling the user how to get them. Renderer-copy change: add an actionable EN+DE `unavailable → how to get it` hint keyed off the packaging docs (`fetch-runtime --family ocr`, or rebuild with `--with-assets`). Overlaps `user-guide.md:356-363` / `troubleshooting.md:185-197`. | Phase 7 | open |
+| Q-1 | Phase 3 (F-05) | **#59 warning-copy half.** F-05 fixed the provisioning root cause (DIY `--with-assets` now fetches the `ocr` family), but the in-app scanned-PDF/photo dead-end warning (`shared/i18n/en.ts:488,1811` + de.ts counterparts) still says "OCR files not on this drive" without telling the user how to get them. Renderer-copy change: add an actionable EN+DE `unavailable → how to get it` hint keyed off the packaging docs (`fetch-runtime --family ocr`, or rebuild with `--with-assets`). Overlaps `user-guide.md:356-363` / `troubleshooting.md:185-197`. | Phase 7 | **resolved (P7, 2026-07-17)** — `docs.scan.ocrMissing` + `main.task.needsOcr` gained an EN+DE `--with-assets` / `fetch-runtime --family ocr` remedy hint; `imageNeedsOcr` (persist-canonical) left byte-stable, covered by docs; user-guide + troubleshooting cross-refs added. See §L Phase-7. |
 | Q-2 | Phase 4 (F-02) | **Real-server error-frame smoke owed.** The F-02 in-band error-frame shapes (`data: {"error":{…}}` + bare `error: {…}` field line) are pinned from the TA-4-verified wire contract + hand-authored fixtures — CI green does NOT evidence the real b9849 wire format (TS-3(a)). At the next manual smoke-drive session, force a real llama-server mid-stream error (tiny ctx + context-shift disabled, `HILBERTRAUM_*` env) and verify the reader rejects + the friendly copy surfaces. Also watch the PARTIAL error-frame case: an error frame whose JSON is truncated mid-write (`data: {"error":{"mess` + close, no `[DONE]`) still parses as a keep-alive and the stream ends CLEANLY — inside Phase 4's §N close-without-`[DONE]` scope-out, and the real server is where it would surface if it occurs. COUPLES with Phase 9's F-40 b9849 re-capture — Phase 9: register this into the ONE consolidated smoke-session checklist (BUILD_STATE §5 item 7 TS-3 bullet) rather than as a scattered note. | Phase 9 | open |
 
 ---
@@ -476,6 +476,101 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Messages to later phases: <"Phase 7: …" | none>
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
+
+### Phase 7 — 2026-07-17 — branch fix/audit-2026-07-16-p7 (stacked on p6 @ 748fc06); commits F-25 @ bbefe6e, F-26 @ ad1a176, F-28 @ 4a29e6f, F-36/F-38 @ 397a7fc, Q-1 @ ed69824, docs+ledger @ this commit
+- Gate: **4,267 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
+  Baseline entering P7 was 4,265/49 (P6 + its review fix-up); +2 = 1 F-25 stop()-purge detach case
+  (translate-ipc.test.ts) + 1 F-26 L6a busy-guard case (visionSession.test.ts); F-28/F-36/F-38/Q-1
+  added no unit tests (typecheck-only / dev-harness / copy). One full-run flake seen once
+  (`workspace-vault-durability.test.ts` threw in an encrypted-vault `openDatabase`→`seedCollections`
+  under parallel load — passes in isolation, unrelated to any P7 file; a re-run was clean 4,267/49).
+  Hygiene: every edited file LF, BOM-free, NUL-free (repo-hygiene net green in the full run; the DE
+  `„…“` guillemets are pre-existing catalog convention, not new bytes).
+- Fixed (in listed order):
+  - **F-25** (`bbefe6e`) — `TranslateJobService.stop()` (the workspace-lock + quit purge) is a THIRD
+    stream terminal the FA-1/F-4 detach missed: it aborts + clears the job map but emits neither
+    trDone nor trError, and a lock does NOT destroy the window (App swaps the React shell in place),
+    so each lock-during-in-flight text translation leaked one `destroyed` once-listener + one
+    `detachers` entry (MaxListenersExceededWarning at ~11). Added `onStop(listener)` to the service
+    (a purge-observer set fired at the end of `stop()`); `registerTranslateIpc` subscribes and runs
+    every outstanding detach. Chose the purge-hook over routing-through-the-error-terminal (the
+    audit's two options): a single observed terminal is cleaner than reconstructing per-job emitters,
+    and lock/quit already call `stop()` (no new call site to remember — the exact class of bug F-25
+    is). Characterization test watched RED first (listener count stayed 1 after `stop()`); green
+    post-fix (back to 0). Annotated the architecture.md F-4 disposition record (design record, not a
+    §46–§49 ledger).
+  - **F-26** (`ad1a176`) — `visionSession.analyze` guard was `if (snapshot.activeJobId) return 'busy'`,
+    but `activeJobId` isn't set until AFTER the `imageAnalyze` create round-trip; a second analyze in
+    that window slipped through, main busy-rejected it, and its busy branch's `set({ analyzing:false })`
+    clobbered the still-live first job's flag (re-enabling composer/drop-zone mid-stream, where a
+    dropped image cancels the live analyze). Ported translateSession's L6a guard verbatim:
+    `activeJobId || analyzing`. Store test (mirrors the translate L6a case) watched RED (second
+    returned 'started', analyzing went false); green post-fix (second 'busy', analyzing stays true).
+    The existing F8 superseded-teardown test still passes (its `selectImage` resets `analyzing:false`
+    before the second analyze, as the audit noted).
+  - **F-28** (`4a29e6f`) — preload `listDocuments` filter `smart` retyped from
+    `'generated'|'archived'|'all'` to the shared `SmartListView` (imported); main's
+    `DocumentListFilter` already accepts the full ten-member set (`filterDocuments` implements
+    'recent' + `matchesSmartView` the rest), so the bridge no longer forbids values main supports.
+    Also deleted `ChatOptions.useDocuments` — a pre-askDocuments relic with zero references repo-wide
+    (grep-confirmed; no wire-shape change, the field was never sent). Type-only; `npm run typecheck`
+    is the gate (clean). `docs/architecture.md:3358` already stated `smart?: SmartListView`, so the
+    fix aligns code with docs (no doc edit needed).
+  - **F-36** (`397a7fc`) — the marketing `getSettings` override forces `workspaceMode:'encrypted'`
+    (PrivacyTab's encrypted card) but `getWorkspaceState` unconditionally returned `plaintext_dev`,
+    and App gates the rail's Lock-now control on `workspace.mode==='encrypted'` — so every shell shot
+    staged an impossible posture (encrypted card, no Lock-now button). Made the override case-aware
+    (mirrors `getSettings`): `isMkt()` → `{ state:'unlocked', mode:'encrypted', plaintextAllowed:false,
+    encryptionRequired:true }`, component cases keep the plaintext_dev base. Captures re-run + eyeballed
+    (documents, privacy, salary dark+light, privacy-de): Lock-now now present in all shell shots, the
+    privacy card is still encrypted, and the walker reaches every goal (the extra rail button doesn't
+    shift matched labels).
+  - **F-38** (`397a7fc`, same commit as F-36 — same file, verified together via the one capture re-run)
+    — `body[data-marketing-ready]` was sticky: StagedShell `clearInterval`'d on success, making its own
+    flag-delete unreachable, so a late settings-driven remount after readiness yielded a silently-wrong
+    (reset-shell) capture. Took the audit's fix option (a) (fully local to StagedShell, no shared
+    `screenshot.mjs`/waitReady change): keep observing after readiness (no clearInterval); a vanished
+    goal now clears the flag and re-walks so waitReady re-blocks; the tries-cap give-up path now prints
+    an actionable `console.warn`. Verified manually: an 800 ms `getSettings` settle-delay still captures
+    the staged transcript, and a temporary low tries-cap (20) + bogus goal made the give-up print
+    `[marketing] goal "…" never stabilized after 21 ticks — capture may be wrong` (both temp probes
+    reverted; diff confirmed clean).
+- **Q-1 (#59 copy half) — resolved** (`ed69824`): the scanned-PDF OCR dead-ends `docs.scan.ocrMissing`
+  (renderer copy) and `main.task.needsOcr` (thrown-localized, dynamically exact-matched via
+  `isFriendlyTaskError` against both catalogs) gained an actionable EN+DE remedy: re-run the drive setup
+  with `--with-assets`, or fetch only the OCR family with `fetch-runtime --family ocr`. Offline-safe
+  (names local scripts, no URLs — the packaging-doc keying the plan asked for). `main.ingest.imageNeedsOcr`
+  (the photo path) is persist-canonical (`documents.error_message`) so LEFT byte-stable — changing its
+  canonical English would strand legacy German rows without a legacy matcher, over-engineering for a
+  hint; its identical remedy is now covered by the docs cross-ref. These two are exactly the §Q line refs
+  (488 → docs.scan region, ~1811 → main.task region). Display-map round-trip + copy-tone + i18n tests
+  green. §Q table marked resolved.
+- Deviations from plan: none material. F-36 and F-38 share one file (preview.tsx) and one verification
+  (the capture re-run), so they landed in one commit referencing both rather than one-per-finding — the
+  blast radii are identical (dev-harness marketing captures). F-38 used fix option (a), so
+  `scripts/screenshot.mjs` was untouched (the plan offered a-or-b).
+- New findings: none (NF-* none). No new §Q items. Q-1 (the only §Q item assigned to P7) resolved above.
+- Messages to later phases:
+  - **Phase 10 — issue #59 comment now covers BOTH halves** (post verbatim after the wave merges to a
+    pushed sha; supersedes/extends the Phase-3 parked text, which covered only the provisioning half):
+    > Fixed both halves of #59 in the audit-2026-07-16 remediation wave.
+    > **Provisioning (Phase 3):** `prepare-drive --with-assets` now fetches the `ocr` family (deu/eng
+    > traineddata) in BOTH the `.ps1` and `.sh` siblings, so every DIY-built drive ships with
+    > scanned-PDF/photo OCR working out of the box — previously only commercially-built drives got it.
+    > A parity test (`prepare-drive-default-set.test.ts`) pins that both shells fetch it. Existing DIY
+    > drives can be topped up with one command: `scripts/fetch-runtime.sh --target <drive> --family ocr`
+    > (or `.ps1 -Family ocr`).
+    > **In-app copy (Phase 7):** the scanned-PDF "Make searchable (OCR)" dead-end and the OCR-task
+    > failure now tell the user how to get the files when they're missing — an EN+DE hint pointing at
+    > `prepare-drive --with-assets` / `fetch-runtime --family ocr` (offline, no URLs). The User Guide and
+    > Troubleshooting docs gained the same cross-ref. Closing as fully resolved.
+  - **Phase 10:** durable dispositions for §50 — F-25's purge-hook (`onStop`) as the third-terminal
+    seam; F-26 as the vision L6a port; F-36/F-38 as the marketing-capture truthfulness fixes; Q-1's
+    persist-canonical scoping (why `imageNeedsOcr` was left byte-stable).
+- Docs touched: `docs/architecture.md` (F-4 disposition record — F-25 addendum), `docs/user-guide.md`
+  (§7 scanned-PDF how-to-get-OCR cross-ref), `docs/troubleshooting.md` (OCR-missing remedy paragraph),
+  `BUILD_STATE.md` (§5 item 14 Phase-7 line), this plan (§Q Q-1 resolved + §L). BUILD_STATE entry
+  added: yes.
 
 ### Phase 6 — 2026-07-17 — branch fix/audit-2026-07-16-p6 (stacked on p5 @ f59359c); commits F-11 @ facacad, F-22 @ c5297f9, F-24 @ e3a2ef2, F-23 @ 750860d, F-15 @ 5677f90 (+ typecheck fixup 18796f9), F-10 @ 9fb73cb, docs+ledger @ this commit
 - Gate: **4,264 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
