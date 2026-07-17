@@ -332,6 +332,21 @@ export interface StartEngineDownloadOptions {
    * `ctx.runtime.activeModelId() !== null`.
    */
   chatRuntimeActive?: boolean
+  /**
+   * F-32: true while ANY OTHER llama-server-backed sidecar — the E5 embedder, reranker, vision
+   * or translation — has a live child. They all execute the SAME `runtime/llama.cpp/<os>/`
+   * binary a llama_cpp (re-)install pre-cleans, so the guard must refuse the install while any
+   * of them runs, not just the chat runtime. The IPC layer passes
+   * `registeredSidecarPids('llama_cpp').length > 0`.
+   */
+  llamaSidecarActive?: boolean
+  /**
+   * F-32: true while a whisper transcription/dictation child is executing from
+   * `runtime/whisper.cpp/<os>/` (a legitimate audio import can run for hours). A whisper_cpp
+   * install pre-cleans that dir, so it is refused while one runs. The IPC layer passes
+   * `registeredSidecarPids('whisper_cpp').length > 0`.
+   */
+  whisperActive?: boolean
   platform?: NodeJS.Platform
   arch?: string
 }
@@ -385,9 +400,18 @@ export class EngineDownloadManager {
     if (installs.length === 0) {
       throw new Error(tMain('main.engine.alreadyInstalled'))
     }
-    // CODE-13: refuse to replace the LIVE chat engine — see `StartEngineDownloadOptions`.
-    if (opts.chatRuntimeActive && installs.some((e) => e.family === 'llama_cpp')) {
+    // CODE-13 + F-32: refuse an install that would pre-clean a dir a LIVE child executes from.
+    // A llama_cpp install is refused while the chat runtime OR any other llama-server-backed
+    // sidecar (embedder/reranker/vision/translation) is up; a whisper_cpp install while a
+    // transcription/dictation runs. Installs touching only the OTHER family stay allowed.
+    if (
+      installs.some((e) => e.family === 'llama_cpp') &&
+      (opts.chatRuntimeActive || opts.llamaSidecarActive)
+    ) {
       throw new Error(tMain('main.engine.runtimeRunning'))
+    }
+    if (installs.some((e) => e.family === 'whisper_cpp') && opts.whisperActive) {
+      throw new Error(tMain('main.engine.transcriptionRunning'))
     }
 
     const job: EngineDownloadJob = {

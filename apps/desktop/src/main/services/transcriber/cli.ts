@@ -248,7 +248,8 @@ export class WhisperCliTranscriber implements Transcriber {
       onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup
       // CODE-11 (full-audit 2026-07-11): make the child reachable by the crash-exit reap —
       // a hard uncaughtException skips suspend()/stop(), and on Windows the child survives.
-      registerSidecarChild(child.pid)
+      // F-32: whisper-cli runs the `runtime/whisper.cpp/<os>/` binary — the whisper_cpp family.
+      registerSidecarChild(child.pid, 'whisper_cpp')
       let stderrTail = ''
       const scanProgress = (text: string): void => {
         for (const m of text.matchAll(/progress\s*=\s*(\d{1,3})%/g)) {

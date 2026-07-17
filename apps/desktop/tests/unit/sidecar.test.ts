@@ -679,10 +679,10 @@ describe('LlamaServer', () => {
 describe('sidecar child-PID registry (full-audit 2026-07-11 CODE-11)', () => {
   it('register/deregister lifecycle, guarded against pid-less failed spawns', () => {
     killRegisteredSidecarChildren(() => undefined) // isolate: clear leftovers from other tests
-    registerSidecarChild(undefined) // a failed spawn has no pid — ignored, never throws
-    registerSidecarChild(1234)
-    registerSidecarChild(1234) // idempotent
-    registerSidecarChild(5678)
+    registerSidecarChild(undefined, 'llama_cpp') // a failed spawn has no pid — ignored, never throws
+    registerSidecarChild(1234, 'llama_cpp')
+    registerSidecarChild(1234, 'llama_cpp') // idempotent
+    registerSidecarChild(5678, 'llama_cpp')
     expect([...registeredSidecarPids()].sort()).toEqual([1234, 5678])
     unregisterSidecarChild(1234)
     unregisterSidecarChild(undefined)
@@ -692,11 +692,26 @@ describe('sidecar child-PID registry (full-audit 2026-07-11 CODE-11)', () => {
     expect(registeredSidecarPids()).toEqual([])
   })
 
+  it('partitions the registry by engine family (F-32 in-use guard signal)', () => {
+    killRegisteredSidecarChildren(() => undefined) // isolate
+    registerSidecarChild(101, 'llama_cpp') // e.g. the E5 embedder sidecar
+    registerSidecarChild(102, 'llama_cpp') // e.g. the translation sidecar
+    registerSidecarChild(201, 'whisper_cpp') // a transcription child
+    expect([...registeredSidecarPids('llama_cpp')].sort()).toEqual([101, 102])
+    expect(registeredSidecarPids('whisper_cpp')).toEqual([201])
+    expect([...registeredSidecarPids()].sort()).toEqual([101, 102, 201]) // no filter → every family
+    unregisterSidecarChild(201)
+    expect(registeredSidecarPids('whisper_cpp')).toEqual([]) // whisper family now idle…
+    expect([...registeredSidecarPids('llama_cpp')].sort()).toEqual([101, 102]) // …llama still live
+    unregisterSidecarChild(101)
+    unregisterSidecarChild(102)
+  })
+
   it('killRegisteredSidecarChildren SIGKILLs every registered pid, is throw-safe per pid, and clears the set', () => {
     killRegisteredSidecarChildren(() => undefined)
-    registerSidecarChild(11)
-    registerSidecarChild(22)
-    registerSidecarChild(33)
+    registerSidecarChild(11, 'llama_cpp')
+    registerSidecarChild(22, 'whisper_cpp') // crash-reap is family-agnostic — kills both
+    registerSidecarChild(33, 'llama_cpp')
     const killed: number[] = []
     const signals = new Set<string>()
     killRegisteredSidecarChildren((pid, signal) => {

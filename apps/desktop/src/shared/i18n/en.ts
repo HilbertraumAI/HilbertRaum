@@ -1866,6 +1866,10 @@ export const en = {
   // engine executes from — refuse while a model runs (stop it first; §11.4 tone, no blame).
   'main.engine.runtimeRunning':
     "The AI engine can't be replaced while a model is running. Stop the model on the AI Model screen, then try again.",
+  // F-32 (full-audit 2026-07-16): the whisper install pre-cleans the folder whisper-cli runs
+  // from — refuse while audio is being transcribed/dictated (§11.4 tone, no blame).
+  'main.engine.transcriptionRunning':
+    "The voice engine can't be replaced while audio is being transcribed. Wait for it to finish, then try again.",
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
   'main.docs.taskRunning': 'A task is running for this document. Cancel it or wait for it to finish.',

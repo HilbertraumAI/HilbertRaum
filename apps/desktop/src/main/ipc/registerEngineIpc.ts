@@ -3,6 +3,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
 import { EngineDownloadManager, engineStatus } from '../services/runtime-download'
+import { registeredSidecarPids } from '../services/runtime/sidecar'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
@@ -24,6 +25,22 @@ import type { DownloadGates } from '../services/downloads'
  */
 export function chatEngineInUse(runtime: Pick<RuntimeManager, 'activeModelId' | 'status'>): boolean {
   return runtime.activeModelId() !== null || runtime.status().startingModelId != null
+}
+
+/**
+ * Is ANY llama-server-backed sidecar's install dir in live use (F-32)? The E5 embedder, reranker,
+ * vision and translation sidecars all execute the SAME `runtime/llama.cpp/<os>/` binary a
+ * llama_cpp (re-)install pre-cleans — not just the chat runtime CODE-13 covered. The CODE-11
+ * per-family sidecar PID registry is the cheap unified signal (a live child ⇒ its family is in
+ * use). Exported for the engine-download suite.
+ */
+export function llamaSidecarInUse(): boolean {
+  return registeredSidecarPids('llama_cpp').length > 0
+}
+
+/** Is a whisper transcription/dictation child executing from `runtime/whisper.cpp/<os>/` (F-32)? */
+export function whisperSidecarInUse(): boolean {
+  return registeredSidecarPids('whisper_cpp').length > 0
 }
 
 export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManager): void {
@@ -51,7 +68,13 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
         // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
         // LIVE chat sidecar executes from — the manager refuses a job that would touch it
         // while a model runtime is up OR still starting (friendly copy; stop the model first).
-        chatRuntimeActive: chatEngineInUse(ctx.runtime)
+        chatRuntimeActive: chatEngineInUse(ctx.runtime),
+        // F-32 (full-audit 2026-07-16): widen the guard per family — refuse a llama_cpp install
+        // while ANY llama-server sidecar (embedder/reranker/vision/translation) has a live child,
+        // and a whisper_cpp install mid-transcription/dictation. Installs touching only the other
+        // family still proceed.
+        llamaSidecarActive: llamaSidecarInUse(),
+        whisperActive: whisperSidecarInUse()
       })
   )
 
