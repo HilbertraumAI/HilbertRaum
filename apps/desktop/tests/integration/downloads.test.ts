@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -759,6 +759,41 @@ describe('DownloadManager jobs', () => {
       expect(finished.status).toBe('done') // …and recovered by verifying it in place, not looping
       expect(readFileSync(dest, 'utf8')).toBe(body)
       expect(existsSync(partPath(dest))).toBe(false)
+    })
+
+    it('a throw INSIDE the 416-path settle fails the job with friendly copy (never a stuck job / unhandled rejection)', async () => {
+      // Review fix-up (Phase 5): the catch-path settleCompletePart invocation had no exception
+      // protection — a rename/finish failure on the AV-interfered destination (the audit F-13
+      // entry's own named producer of complete .parts) escaped runOne, became an unhandled
+      // rejection, and left the job stuck at non-terminal 'verifying' forever (no error copy,
+      // never pruned). Deterministic stand-in for the AV interference: the injected verifier
+      // reports OK and then the `.part` VANISHES (AV quarantine) before the rename, so
+      // finishVerifiedFile's renameSync throws inside the settle.
+      const body = 'hello-world-weights'
+      // No size_bytes → the pre-download short-circuit cannot fire; recovery goes via the 416 catch.
+      const m = manifest({
+        sha256: sha256(body),
+        download: { url: 'https://example.test/x.gguf', sha256: sha256(body), license_url: 'https://example.test/l' }
+      })
+      const root = tempRoot()
+      const dest = weightPath(root, m)
+      mkdirSync(join(dest, '..'), { recursive: true })
+      writeFileSync(partPath(dest), body) // complete file already staged
+      const only416 = (async () => new Response(null, { status: 416 })) as unknown as FetchFn
+      const mgr = new DownloadManager({
+        fetchImpl: only416,
+        verifyImpl: async (path, expected) => {
+          const result = await verifyDownloadedFile(path, expected) // ok — the bytes DO verify
+          rmSync(path) // …then the .part vanishes (AV quarantine) → the rename throws
+          return result
+        }
+      })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const finished = await waitForTerminal(mgr, job.jobId) // pre-fix: stuck at 'verifying' → timeout
+      expect(finished.status).toBe('failed')
+      expect(finished.error).toBeTruthy() // friendly copy, not a raw stack
+      expect(finished.error).not.toMatch(/Error:/)
+      expect(existsSync(dest)).toBe(false) // nothing half-renamed into place
     })
 
     it('a complete-but-CORRUPT .part is discarded and the download restarts clean', async () => {

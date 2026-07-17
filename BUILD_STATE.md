@@ -1552,7 +1552,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     sidecar gains the TA-6 M1 identity-compared `onUnexpectedExit` so a mid-session OOM crash
     cold-starts the next analyze instead of failing for a full idle window), F-33 (`extractWithTar`
     gains a 5-min deadline + SIGKILL escalation + abort-signal threading, and a cancelled-but-unsettled
-    `run()` counts as busy — the only unbounded child + the concurrent-install window are closed),
+    `run()` counts as busy — the only unbounded child is bounded and the concurrent-install window
+    narrows to the ≤2 s kill grace, an accepted residual),
     F-32 (the engine in-use guard is widened per family via a family-partitioned sidecar PID registry:
     a `llama_cpp` install is refused while ANY llama-server sidecar — embedder/reranker/vision/
     translation — is live, a `whisper_cpp` install mid-transcription; new EN+DE

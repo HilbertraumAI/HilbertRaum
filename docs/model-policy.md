@@ -274,7 +274,10 @@ time**, bytes land in `<weight>.part` and are renamed into place **only after th
 verifies**; a mismatch deletes the partial and fails the job; a placeholder manifest hash completes
 the download but leaves the model **UNVERIFIED** (checksum honesty — capture a real hash with
 `verify-models --generate`). Cancel keeps the `.part`; the next attempt resumes with a `Range`
-header (best-effort — a server without range support restarts cleanly). On success the persisted
+header (best-effort — a server without range support restarts cleanly). A `.part` that is already
+COMPLETE (a cancel/crash during the verify, or a failed rename) is verified **in place** instead of
+re-requested — a match renames into place, a mismatch discards it for a clean restart (F-13,
+full-audit 2026-07-16; no HTTP 416 dead-end). On success the persisted
 checksum-cache entry for that path is invalidated so the fresh file is re-hashed. The offline
 guarantee is unchanged: no update checks, no catalog/browsing (only manifests already on the
 drive), no background anything.

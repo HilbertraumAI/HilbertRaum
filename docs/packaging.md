@@ -60,7 +60,10 @@ master pipeline** that produces a finished, sellable drive (see the last section
     simply skipped by the in-app installer. **Extraction is bounded** (F-33, full-audit 2026-07-16):
     `extractWithTar` runs under a 5-min deadline + SIGTERM→SIGKILL escalation and threads the job's
     abort signal, so a wedged tar can't pin the job in `extracting` forever, and a cancelled-but-still
-    settling `run()` counts as busy so a retry can't launch a second install into the same dir.
+    settling `run()` counts as busy. That NARROWS the second-install-into-the-same-dir window to the
+    ≤2 s SIGKILL grace (the extractor rejects after signalling the child, not after its exit; a tar
+    wedged in uninterruptible I/O can outlive even that) — an accepted residual: rejecting only after
+    the child's exit would reintroduce the unbounded wait this fix removes.
     **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install pre-cleans the dir EVERY
     llama-server sidecar runs from (chat + embedder + reranker + vision + translation), so it is
     refused while any of them has a live child; a `whisper_cpp` install is refused mid-transcription/

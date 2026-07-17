@@ -509,7 +509,9 @@ document answers always run balanced (deep-grounded = wave 2).
   `partPath(dest)`, `DownloadManager({ fetchImpl?, log? })` with `start({rootPath, manifest,
   gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
   (keeps the `.part`), `activeJob()`. One live job at a time; `.part` → verify → rename;
-  mismatch deletes the partial; success invalidates the checksum-cache entry.
+  mismatch deletes the partial; success invalidates the checksum-cache entry. A COMPLETE `.part`
+  (cancel/crash during verify, failed rename) is verified in place rather than Range-resumed —
+  match renames, mismatch discards + clean restart (F-13, full-audit 2026-07-16).
 ✅ **`assets.ts` seam (additive):** `DownloadDeps += { signal?, headers?, append?, onResponse? }`,
   `downloadToFile → DownloadToFileResult { status, received, contentLength }` (append only on a
   real 206); `PlanModelOptions += { hashStore? }` (present multi-GB weights are not re-hashed).
