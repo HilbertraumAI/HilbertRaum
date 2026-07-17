@@ -35,6 +35,7 @@ import {
   selfSummaryPrompt
 } from '../../src/main/services/chat/compaction'
 import { buildGroundedChatMessages, GROUNDED_SYSTEM_PROMPT } from '../../src/main/services/rag'
+import { ChatStreamError } from '../../src/main/services/runtime/llama'
 import { log } from '../../src/main/services/logging'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
@@ -74,6 +75,9 @@ function scriptedRuntime(opts: {
   window: number
   summary?: string
   failSummary?: boolean
+  /** F-02: yield HALF the summary, then throw (what the fixed readChatSSE does on an in-band
+   *  mid-stream error frame) — the partial summary must never be written as a checkpoint. */
+  failSummaryMidStream?: Error
 }): CompactionRuntime {
   const rt: CompactionRuntime = {
     modelId: 'scripted-compaction',
@@ -89,10 +93,13 @@ function scriptedRuntime(opts: {
         rt.summaryCalls.push({ input: messages[messages.length - 1]?.content ?? '' })
         if (opts.failSummary) throw new Error('summary boom')
         const text = opts.summary ?? 'Goal: testing. Facts: value 42 from [S1].'
-        for (const tok of text.match(/\S+\s*/g) ?? [text]) {
+        const tokens = text.match(/\S+\s*/g) ?? [text]
+        const emitUpTo = opts.failSummaryMidStream ? Math.ceil(tokens.length / 2) : tokens.length
+        for (const tok of tokens.slice(0, emitUpTo)) {
           if (options?.signal?.aborted) return
           yield tok
         }
+        if (opts.failSummaryMidStream) throw opts.failSummaryMidStream
         return
       }
       rt.answerCalls += 1
@@ -448,6 +455,30 @@ describe('ensureCompacted — fallback safety (a failure never breaks the turn)'
     expect(rt.answerCalls).toBe(1)
     expect(rt.summaryCalls).toHaveLength(1) // attempted
     expect(getLatestCheckpoint(db, conv.id)).toBeNull() // but no checkpoint persisted
+  })
+
+  // F-02 (audit 2026-07-16) consumer semantics: the summarizer stream FAILS MID-WAY with an
+  // in-band error frame (the fixed readChatSSE throws ChatStreamError after some tokens).
+  // Pre-fix the reader ended cleanly and the SILENTLY TRUNCATED summary was written as the
+  // conversation's compaction checkpoint, corrupting every later turn's assembled context.
+  // The decided semantics: a failed summary must NEVER become a checkpoint — the existing
+  // R4/R6 fallback (L1 trim, turn proceeds, non-abort logged) absorbs the rejection.
+  it('a summary stream that fails MID-WAY (in-band error frame) writes NO checkpoint; the turn still answers (F-02)', async () => {
+    const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    appendTurns(db, conv.id, 14, 90)
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'the current question' })
+    const rt = scriptedRuntime({
+      window: 2000,
+      failSummaryMidStream: new ChatStreamError('slot error', 'server_error')
+    })
+    const msg = await generateAssistantMessage(db, rt, conv.id)
+    expect(msg.role).toBe('assistant')
+    expect(msg.content.length).toBeGreaterThan(0) // the turn proceeded on the L1 fallback
+    expect(rt.summaryCalls).toHaveLength(1) // the summarizer ran and failed mid-stream
+    expect(getLatestCheckpoint(db, conv.id)).toBeNull() // the partial summary was NOT checkpointed
+    expect(warnSpy).toHaveBeenCalledTimes(1) // a real (non-abort) failure is logged, content-free
   })
 })
 

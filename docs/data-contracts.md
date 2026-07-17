@@ -155,6 +155,11 @@ never replayed (D6) — see "Answer-depth modes" below.
 **Cancellation:** `ipc/registerChatIpc.ts` keeps a per-conversation `AbortController` map;
 `stopGeneration(conversationId)` aborts it → `chatStream` stops on `options.signal`, the partial
 reply is persisted, a normal `done` fires.
+**Mid-stream runtime failure (audit 2026-07-16 F-02, additive — channel shape unchanged):** an
+in-band SSE error frame from the runtime rejects the stream (`ChatStreamError`) instead of
+ending it cleanly, so a partial can never persist as a complete answer; it reaches the renderer
+on `chat:error:<id>` as the friendly localized `main.chat.streamError` copy (still an error
+string). The structural server reason goes to the local log only — never to the renderer.
 **Regenerate:** `sendChatMessage` with `options.regenerate = true` deletes the last assistant
 message and re-streams from existing history (no new user turn).
 **Decision (documented):** `sendChatMessage` does **not** auto-start a runtime — a chat needs a

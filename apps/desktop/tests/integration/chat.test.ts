@@ -26,6 +26,7 @@ import {
   writeCheckpoint
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
+import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { CoverageInfo } from '../../src/shared/types'
@@ -624,6 +625,37 @@ describe('generateAssistantMessage (streaming)', () => {
 
     await expect(generateAssistantMessage(db, failingRuntime, conv.id, {})).rejects.toThrow(/HTTP 500/)
     // Nothing partial was persisted on a real failure.
+    expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
+  })
+
+  // F-02 (audit 2026-07-16) consumer semantics, main chat turn: an in-band MID-STREAM error
+  // frame (the fixed readChatSSE throws ChatStreamError after some tokens streamed). Pre-fix
+  // the stream ended cleanly and the partial persisted as a COMPLETE answer (finishReason null
+  // ⇒ truncated=false, no error). Decided semantics (mirrors the CB-5 mid-stream precedent): the
+  // typed error PROPAGATES — withChatStream maps it to the friendly `main.chat.streamError`
+  // copy — and the partial is never silently persisted as complete.
+  it('a mid-stream in-band error frame rejects the turn; the partial never persists as complete (F-02)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+
+    const midStreamErrorRuntime: ModelRuntime = {
+      modelId: 'real-ish',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+      chatStream: async function* () {
+        yield 'The first half of the answer'
+        throw new ChatStreamError('slot error', 'server_error')
+      }
+    }
+
+    const err = await generateAssistantMessage(db, midStreamErrorRuntime, conv.id, {}).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(isChatStreamError(err)).toBe(true) // the typed error propagates to the IPC mapping
+    // The partial is not persisted — never a silently "complete" answer in the transcript.
     expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
   })
 

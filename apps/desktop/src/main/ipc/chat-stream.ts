@@ -18,7 +18,11 @@ import {
 } from '../services/chat'
 import type { Db } from '../services/db'
 import type { ModelRuntime } from '../services/runtime'
-import { isExceedContextError, isRuntimeUnresponsiveError } from '../services/runtime/llama'
+import {
+  isChatStreamError,
+  isExceedContextError,
+  isRuntimeUnresponsiveError
+} from '../services/runtime/llama'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers, streamSettled } from './inflight'
@@ -239,20 +243,24 @@ export async function withChatStream(
       return assistant
     }
     const raw = err instanceof Error ? err.message : String(err)
-    // Friendly-mapping chain (CB-4/CB-5), most-specific first: a HUNG sidecar (runtimeUnresponsive) →
-    // a genuine EMPTY completion (emptyCompletion) → a prompt-OVERFLOW HTTP 400 (contextExceeded) →
-    // else the raw reason. Each mapped case shows actionable copy to the user (the raw reason still
-    // goes to the local log).
+    // Friendly-mapping chain (CB-4/CB-5/F-02), most-specific first: a HUNG sidecar
+    // (runtimeUnresponsive) → a genuine EMPTY completion (emptyCompletion) → a mid-stream
+    // IN-BAND error frame (streamError, audit 2026-07-16 F-02) → a prompt-OVERFLOW HTTP 400
+    // (contextExceeded) → else the raw reason. Each mapped case shows actionable, CONTENT-FREE
+    // copy to the user (the raw structural reason still goes to the local log only).
     const unresponsive = isRuntimeUnresponsiveError(err)
     const emptyCompletion = isEmptyCompletionError(err)
+    const streamError = isChatStreamError(err)
     const overflow = isExceedContextError(err)
     const message = unresponsive
       ? tMain('main.chat.runtimeUnresponsive')
       : emptyCompletion
         ? tMain('main.chat.emptyCompletion')
-        : overflow
-          ? tMain('main.model.contextExceeded')
-          : raw
+        : streamError
+          ? tMain('main.chat.streamError')
+          : overflow
+            ? tMain('main.model.contextExceeded')
+            : raw
     log.error(logLabel, { conversationId, message: raw })
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.error(conversationId), message)
@@ -262,7 +270,7 @@ export async function withChatStream(
     // here is what leaked the unmapped "ChatRequestError: HTTP 400 …" string to users. For
     // any other failure (incl. aborts) rethrow the original error untouched so its type and
     // message are preserved upstream.
-    throw unresponsive || emptyCompletion || overflow ? new Error(message) : err
+    throw unresponsive || emptyCompletion || streamError || overflow ? new Error(message) : err
   } finally {
     // Resume any paused deep-index build first (idempotent; no-op when none was paused).
     releaseSlot()
