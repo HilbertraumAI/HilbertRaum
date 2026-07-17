@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,6 +23,15 @@ import { CsvParser } from '../../src/main/services/ingestion/parsers/csv'
 import { PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
 import { DocxParser } from '../../src/main/services/ingestion/parsers/docx'
 import { makePdf, makeDocx } from '../helpers/fixtures'
+
+// `save-export.ts` (the export side of the F-22/F-10 round-trip tests below) imports electron at module
+// top; on CI the electron binary is absent — mock the transport like save-export-bom.test.ts does.
+// `bomFor` itself is pure.
+vi.mock('electron', () => ({
+  BrowserWindow: { getFocusedWindow: () => null },
+  dialog: { showSaveDialog: async () => ({ canceled: true }) }
+}))
+import { bomFor } from '../../src/main/ipc/save-export'
 
 let tmp: string
 function dir(): string {
@@ -113,6 +122,29 @@ describe('MarkdownParser', () => {
     const out = await MarkdownParser.parse(p)
     expect(out.segments.map((s) => s.sectionLabel)).toEqual(['One', 'Two'])
     expect(out.segments[0].text).toContain('# not a heading')
+  })
+
+  // F-22 (audit 2026-07-16): a leading UTF-8 BOM (kept by `readFile(..,'utf8')`) made line 1 read
+  // '\uFEFF# Title', which fails the `^`-anchored HEADING regex — the document's FIRST heading lost
+  // section detection and merged into the label-less preamble. Self-inflicted on round-trip: the app's
+  // own .md exports prepend the BOM via `bomFor` (P4), so this replays an export→re-import with the
+  // REAL export prefix. BOM-writing editors (Notepad UTF-8-with-BOM) hit the same path.
+  it("detects the FIRST heading of a BOM'd file — the app-export round-trip (F-22)", async () => {
+    const transcript = ['# My Chat', 'hello there', '', '## Sub', 'body b'].join('\n')
+    expect(bomFor('exported.md')).toBe('\uFEFF') // the exact prefix saveTextExport writes
+    const p = write('exported.md', bomFor('exported.md') + transcript)
+    const out = await MarkdownParser.parse(p)
+    expect(out.segments.map((s) => s.sectionLabel)).toEqual(['My Chat', 'Sub'])
+    // The invisible U+FEFF must not survive into the first chunkable segment either.
+    expect(out.segments[0].text.charCodeAt(0)).not.toBe(0xfeff)
+  })
+})
+
+describe('TxtParser — BOM handling (F-22)', () => {
+  it('strips a single leading BOM from the segment text', async () => {
+    const p = write('noted.txt', '\uFEFF' + 'plain note text')
+    const out = await TxtParser.parse(p)
+    expect(out.segments[0].text).toBe('plain note text')
   })
 })
 
