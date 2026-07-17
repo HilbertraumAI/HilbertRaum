@@ -8439,6 +8439,14 @@ As built in `runtime.ts`:
   `stopped`, so the next analyze cold-starts cleanly. It is **guarded** against `stopped`/`starting`/
   `inFlight>0` (never tears down under a running job); an analyze arriving mid-teardown sees
   `server===null` and cold-starts a fresh, independent child (the old one finishes stopping on its own).
+- **Crash recovery (F-14, full-audit 2026-07-16).** The `LlamaServer` is composed with an
+  **identity-compared `onUnexpectedExit`** that nulls `this.server` (`if (this.server === server)`), so a
+  healthy vision child dying on its own (OOM — the three-process RAM peak makes 12 GB machines
+  likely-OOM) drops the dead handle and the next `analyze()` cold-starts, instead of failing
+  `runtimeFailed` for a full idle window while every failed retry re-arms the idle timer against the
+  corpse. Ported verbatim from `TranslationRuntime`'s TA-6 M1; no device-fallback twin (vision has no
+  GPU/CPU ladder — the CPU pin is fixed). `armIdleTimer`/`idleTeardown` already null-guard, so a
+  null-out mid-idle is safe (`vision-runtime.test.ts` mirrors translation's M1 crash + identity cases).
 - `stop()` (permanent — lock/quit/cancel) cancels the timer + **awaits an in-flight soft teardown** so
   no child orphans on quit; the timer is `unref()`-ed so it never blocks a clean exit.
 - Default **120 000 ms** (tuned V5 — model-benchmarks §8.3), env `HILBERTRAUM_VISION_IDLE_MS`.

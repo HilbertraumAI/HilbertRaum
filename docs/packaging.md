@@ -57,7 +57,14 @@ master pipeline** that produces a finished, sellable drive (see the last section
     `ENGINE_FAMILIES` (`{ family, binaryBase }`); status, install, flatten, marker, and the banner
     generalize automatically. A family with **no prebuilt host build** (e.g. whisper.cpp on
     macOS/Linux, which ships Windows-only binaries — built from source by the drive builder) is
-    simply skipped by the in-app installer.
+    simply skipped by the in-app installer. **Extraction is bounded** (F-33, full-audit 2026-07-16):
+    `extractWithTar` runs under a 5-min deadline + SIGTERM→SIGKILL escalation and threads the job's
+    abort signal, so a wedged tar can't pin the job in `extracting` forever, and a cancelled-but-still
+    settling `run()` counts as busy so a retry can't launch a second install into the same dir.
+    **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install pre-cleans the dir EVERY
+    llama-server sidecar runs from (chat + embedder + reranker + vision + translation), so it is
+    refused while any of them has a live child; a `whisper_cpp` install is refused mid-transcription/
+    dictation. Installs touching only the OTHER family still proceed.
 - **Model weights** — GGUF files under `models/`, resolved from each manifest's `local_path` (relative
   to the drive root) via `weightPath(rootPath, manifest)`. They are **git-ignored**; a real drive is
   built by the prepare-drive scripts (and verified against the manifest `sha256`). The bundled

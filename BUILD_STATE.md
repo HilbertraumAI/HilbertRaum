@@ -1544,6 +1544,21 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     stays 0-call, #50 economy holds). All red-green-demonstrated. Gate **4233/49** (+12),
     typecheck + build green. Details: plan §L Phase-4 ledger entry.
 
+    **Phase 5 done 2026-07-17** (branch `fix/audit-2026-07-16-p5`): download & sidecar recovery
+    dead-ends closed — F-13 (a COMPLETE `.part` is verified in place instead of re-requesting an
+    unsatisfiable `Range` → the HTTP 416 loop with no in-app remedy is gone; typed
+    `RangeNotSatisfiableError`), F-34 (the `.part` is fsynced to the device before rename — the
+    post-completion power-cut/unplug torn-weight window is closed; CODE-10 wiring pin), F-14 (vision
+    sidecar gains the TA-6 M1 identity-compared `onUnexpectedExit` so a mid-session OOM crash
+    cold-starts the next analyze instead of failing for a full idle window), F-33 (`extractWithTar`
+    gains a 5-min deadline + SIGKILL escalation + abort-signal threading, and a cancelled-but-unsettled
+    `run()` counts as busy — the only unbounded child + the concurrent-install window are closed),
+    F-32 (the engine in-use guard is widened per family via a family-partitioned sidecar PID registry:
+    a `llama_cpp` install is refused while ANY llama-server sidecar — embedder/reranker/vision/
+    translation — is live, a `whisper_cpp` install mid-transcription; new EN+DE
+    `main.engine.transcriptionRunning`). All red-green-demonstrated. Gate **4247/49** (+14),
+    typecheck + build green. Details: plan §L Phase-5 ledger entry.
+
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
 round complete at the 4165/47 gate. The tag is on origin (observed 2026-07-12), so the

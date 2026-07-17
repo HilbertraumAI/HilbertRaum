@@ -477,6 +477,86 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
 
+### Phase 5 — 2026-07-17 — branch fix/audit-2026-07-16-p5 (stacked on p4 @ 0404ee6); commits F-13/F-34 @ eb50209, F-14 @ 7e55c6f, F-33 @ a7e61de, F-32 @ 9bc861b, docs+ledger @ this commit
+- Gate: **4,247 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
+  Baseline entering P5 was 4,233/49 (entry 4); +14 = 3 F-13 complete-`.part`/416 cases, 1 F-34
+  fsync wiring pin (new `download-fsync-durability.test.ts`), 2 F-14 vision M1 cases, 2 F-33
+  extraction bound/concurrency cases, 5 F-32 per-family guard cases, 1 F-32 registry-partition
+  case (sidecar.test.ts). Hygiene: every edited file LF, no BOM, no NUL (repo-hygiene net green in
+  the full run). NOTE: `assets.test.ts`'s "committed runtime-sources.yaml" pins ENOENT-fail when
+  that file is run in ISOLATION on this box (a cwd-relative read) — PRE-EXISTING, cwd-dependent,
+  unrelated to this phase; they pass in the full `npm test` run (verified: 4247/49).
+- Fixed (each red-then-green demonstrated; one commit per finding, F-33 isolated per plan):
+  - **F-13** (commit `eb50209`, shared with F-34) — `runOne` no longer resumes a COMPLETE `.part`
+    with an unsatisfiable `Range: bytes=<fullSize>-` (→ HTTP 416, which looped forever with no
+    in-app remedy). A complete `.part` is now VERIFIED IN PLACE: reached by a pre-download
+    short-circuit when `size_bytes` is known (`resumeFrom >= sizeBytes`, fetch never called) OR by
+    a caught typed `RangeNotSatisfiableError` from `downloadToFile` when size is unknown. A match
+    (or placeholder) renames into place; a mismatch discards the `.part` and restarts ONE clean
+    download (`allowResume=false`, the ResumeOffsetMismatch treatment). Extracted a shared
+    `finishVerifiedFile` (rename + checksum-cache prime) so the fresh-download and complete-part
+    paths stay identical. RED first: all 3 cases failed pre-fix (`bytes=22-` sent / 416 thrown).
+  - **F-34** (commit `eb50209`) — `downloadToFile` now fsyncs the `.part` to the DEVICE (open `r+`
+    so Windows `FlushFileBuffers` succeeds; best-effort) before returning, so the caller's rename +
+    `(size,mtime)` checksum-cache prime can't record a torn weight after a power cut/unplug. New
+    `download-fsync-durability.test.ts` is a CODE-10 wiring pin (`vi.mock('node:fs')`) asserting the
+    `.part` fsync precedes the rename — watched RED (no `.part` fsync) pre-fix.
+  - **F-14** (commit `7e55c6f`) — ported TA-6 M1 verbatim: `VisionRuntime.ensureStarted` composes
+    `LlamaServer` with an identity-compared `onUnexpectedExit` (`if (this.server === server)
+    this.server = null`) so a healthy vision child dying on its own (OOM) drops the dead handle and
+    the next `analyze()` cold-starts, instead of failing `runtimeFailed` for a full 120 s idle
+    window while every retry re-arms the timer against the corpse. NO device-fallback twin (vision
+    has no GPU/CPU ladder). Mirrored translation's two M1 cases; the crash→cold-start case watched
+    RED pre-port (the identity/clobber case is a regression companion — passes either way, as in
+    translation).
+  - **F-33** (commit `a7e61de`, ISOLATED per plan) — `ExtractFn` gains an OPTIONAL `signal`;
+    `extractWithTar` now has a 5-min deadline (`HILBERTRAUM_EXTRACT_DEADLINE_MS`-overridable) +
+    SIGTERM→SIGKILL escalation (whisper REL-2) + abort handling, and `installOne` threads
+    `controller.signal` through `install()` into the extractor. A `runSettled` latch makes
+    `activeJob()`/`start()` treat a not-yet-settled `run()` as busy regardless of `job.status`,
+    closing the second-install-into-the-same-dir window. Both new cases (signal reaches a
+    signal-aware extract; a cancelled-but-unsettled run refuses a second start) watched RED.
+    **Blast-radius deviation (smaller than the audit's estimate):** because `signal` is OPTIONAL,
+    the ~12 injected 2-arg `extractImpl` sites AND `engine-extract-containment.test.ts` compile +
+    pass UNCHANGED — no mechanical sweep of the injected sites was needed (a 3-arg-required
+    signature would have forced it; optional is TS-assignable from a 2-arg fn and is the standard
+    signal-threading shape). The real-tar deadline/escalation is verified by construction (mirrors
+    the tested whisper pattern) — not unit-tested (would need a real wedged process); the injected
+    signal path IS tested. Ledgered, not a scope change.
+  - **F-32** (commit `9bc861b`) — the CODE-13 in-use guard covered only the chat runtime; widened
+    per family. Partitioned the CODE-11 sidecar PID registry by `SidecarFamily`
+    (`registerSidecarChild(pid, family)`; `registeredSidecarPids(family?)`; `killRegisteredSidecar
+    Children` stays family-agnostic). `LlamaServer` registers `'llama_cpp'`, whisper-cli
+    `'whisper_cpp'`. `StartEngineDownloadOptions` gains `llamaSidecarActive` + `whisperActive`; the
+    guard refuses a `llama_cpp` install while chat OR any llama sidecar (embedder/reranker/vision/
+    translation) is live, and a `whisper_cpp` install mid-transcription. `registerEngineIpc` exposes
+    `llamaSidecarInUse()`/`whisperSidecarInUse()` (reading the registry) and passes both. Reused
+    `main.engine.runtimeRunning` for the llama family; added an EN+DE `main.engine.transcription
+    Running` pair (thrown-and-localized via `tMain`, session-only — same pattern as the sibling
+    engine errors, no display-map). Both refusal cases watched RED (pre-fix `llamaSidecarActive:
+    true`/`whisperActive: true` were ignored → install proceeded → fetch called). Updated the two
+    existing `registerSidecarChild` test call sites to the 2-arg signature.
+- Deviations from plan: only F-33's smaller blast radius (above) — the optional-signal choice made
+  the ~12-site mechanical sweep unnecessary. No force-fits; no assertion weakened.
+- New findings: none (NF-* none). No §Q items assigned to P5; none added.
+- Messages to later phases:
+  - **Phase 8 (F-30 caching, same IPC file family `registerEngineIpc.ts`):** F-32's guard shape
+    matches the plan spec — no new activity getters on the services were needed. The final seam
+    names Phase 8 will see in that file: `chatEngineInUse(runtime)` (unchanged), and the two NEW
+    exported helpers `llamaSidecarInUse()` / `whisperSidecarInUse()` (both read
+    `registeredSidecarPids(family)` from `runtime/sidecar.ts`). `StartEngineDownloadOptions` now
+    carries `chatRuntimeActive` + `llamaSidecarActive` + `whisperActive`. The `downloadEngine`
+    handler is unchanged in structure (just passes the two extra signals) — F-30's `loadPolicy`
+    memo in the same file is untouched by any of this.
+  - **Phase 10:** the durable per-finding dispositions above (esp. the F-33 optional-signal
+    decision and F-32's registry-partition seam) fold into the §50 record.
+- Docs touched: `docs/known-limitations.md` (downloader-edges: new complete-`.part`/416 recovery
+  bullet + the F-34 fsync clause on the checksum-cache bullet), `docs/architecture.md`
+  (Image-understanding §6 RUNTIME-4 living record: crash-recovery bullet for the F-14 vision port —
+  additive, the dated TA-6 M1 row + §46–§49 ledgers untouched), `docs/packaging.md` (in-app
+  engine-install record: extraction-bound + per-family-guard clauses), `BUILD_STATE.md` (§5 item 14
+  Phase-5 line), this plan (§L). BUILD_STATE entry added: yes.
+
 ### Phase 4 — 2026-07-17 — branch fix/audit-2026-07-16-p4 @ this commit (stacked on p3 @ 16b6438; F-02 landed separately @ d57cfd9)
 - Gate: **4,233 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
   Baseline entering P4 was 4,221/49 (entry 3); +12 = 6 new `read-chat-sse` cases (4 error-frame
