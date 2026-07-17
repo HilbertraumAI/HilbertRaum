@@ -6624,7 +6624,10 @@ model to the extract; (4) the exported transcript rendered **mojibake** in CP125
   (`invoice-us-glyph-soup`, `invoice-de-unreconcilable-totals`) and the FIRST geometry-invoice fixture
   (`invoice-de-geometry-columns`, via the real `reconstructPage` — closes the T1 residual); the snapshot
   guard covers all of them. Plain-text exports (`.md`/`.txt` only — never JSON/log) get a UTF-8 BOM
-  (`bomFor`, `save-export.ts`) so legacy Windows viewers stop rendering mojibake.
+  (`bomFor`, `save-export.ts`) so legacy Windows viewers stop rendering mojibake. _(Superseded in part
+  2026-07-17, audit-2026-07-16 F-10 / owner decision D-A: `bomFor` now covers `.csv` too — Excel opens
+  BOM-less UTF-8 CSVs in the ANSI code page — and the skills `saveTextFile` boundary applies it, so
+  `redacted.txt`/`edited.txt` gained the P4-mandated `.txt` BOM as well. JSON/log stay BOM-free.)_
 
 Decisions worth keeping: negation windows beat sentence-level negation detection (clause-level negators
 must not disarm a distant format ask); weak-read retraction is CORROBORATION-weighted (an ok check
@@ -7738,7 +7741,8 @@ persists NOTHING and never blocks the answer; `loadResultTable` tolerant like `p
 `Message.hasResultTable` on the returned object; `listMessages` derives the flag via an EXISTS
 subselect — table content never rides message loading. `chat:exportMessageTable` IPC:
 `requireUnlocked` → `loadResultTable` → `tableToCsv` (the one audited CSV path) → `saveTextExport`
-(save dialog = consent, no confirm modal — the transcript-export posture; no BOM on .csv); audit
+(save dialog = consent, no confirm modal — the transcript-export posture; UTF-8 BOM on .csv since
+audit-2026-07-16 F-10 / owner decision D-A 2026-07-17 — Excel-friendly, was "no BOM"); audit
 event `message_table_exported`, metadata `{ messageId, rows }` only. Renderer: an "Export CSV"
 action in `MessageActions`, rendered only on answers with `hasResultTable`. Notes: answers
 produced before 2026-07-05 carry no table (no backfill — the table is the answer's artifact);

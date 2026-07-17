@@ -17,11 +17,17 @@ export interface SaveExportDialogOptions {
  * Windows editors detect the encoding. Without it, an exported German transcript opened in a
  * CP1252-defaulting viewer rendered mojibake ("ausschlieÃlich" for "ausschließlich" — a real user's
  * bug report arrived pre-garbled this way). Windows is first-class (CLAUDE.md §0), and every modern
- * reader tolerates the BOM in md/txt. NEVER on other extensions: a BOM breaks strict JSON parsers
- * (the audit-log export) and is wrong for .log tooling.
+ * reader tolerates the BOM in md/txt.
+ *
+ * Audit 2026-07-16 F-10 (owner decision D-A, 2026-07-17): `.csv` gets the BOM too. Excel \u2014 the
+ * PRIMARY consumer of a transactions/invoice CSV \u2014 opens a BOM-less UTF-8 .csv in the ANSI code page
+ * on double-click, garbling every umlaut/\u00df in payee/description text (the same P4 mojibake class).
+ * Re-import is safe: the app's own CSV parser (papaparse) strips a leading BOM itself. NEVER on
+ * other extensions: a BOM breaks strict JSON parsers (the audit-log export) and is wrong for .log
+ * tooling.
  */
 export function bomFor(filePath: string): string {
-  return /\.(?:md|txt)$/i.test(filePath) ? '\ufeff' : ''
+  return /\.(?:md|txt|csv)$/i.test(filePath) ? '\ufeff' : ''
 }
 
 /**

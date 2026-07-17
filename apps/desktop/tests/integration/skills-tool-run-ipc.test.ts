@@ -965,7 +965,8 @@ describe('skills export_transactions_csv IPC (S11c)', () => {
     // The CSV really landed on disk with the rows (content-class — that is correct).
     expect(existsSync(out)).toBe(true)
     const csv = readFileSync(out, 'utf8')
-    expect(csv).toMatch(/^date,valueDate,description,amount,currency,balanceAfter,sourcePage/)
+    expect(csv.startsWith('\ufeff')).toBe(true) // UTF-8 BOM on .csv (audit F-10, D-A 2026-07-17 — Excel-friendly)
+    expect(csv.replace(/^\ufeff/, '')).toMatch(/^date,valueDate,description,amount,currency,balanceAfter,sourcePage/)
     expect(csv).toContain('Grocery')
     expect(csv).toContain('Salary')
     // …but the run state the renderer polls is ids/counts only — no figures/paths.

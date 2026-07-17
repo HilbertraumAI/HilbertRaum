@@ -16,15 +16,18 @@ import { bomFor } from '../../src/main/ipc/save-export'
 // transcript opened in a CP1252-defaulting Windows viewer rendered mojibake ("ausschlieÃlich"); the BOM
 // makes legacy editors detect UTF-8. It must ride ONLY .md/.txt — a BOM breaks strict JSON parsers (the
 // audit-log export) and is wrong for .log tooling.
-describe('bomFor (P4 — plain-text export BOM)', () => {
-  it('prefixes .md and .txt (case-insensitive)', () => {
+// Audit 2026-07-16 F-10 (owner decision D-A, 2026-07-17) extended the BOM to .csv: Excel — the primary
+// consumer of a transactions CSV — opens BOM-less UTF-8 in the ANSI code page on double-click, garbling
+// every umlaut/ß in payee/description text. Still NEVER on .json/.log.
+describe('bomFor (P4 + F-10 — text/CSV export BOM)', () => {
+  it('prefixes .md, .txt and .csv (case-insensitive)', () => {
     expect(bomFor('C:/exports/chat.md')).toBe('\ufeff')
     expect(bomFor('C:/exports/chat.TXT')).toBe('\ufeff')
+    expect(bomFor('C:/exports/items.csv')).toBe('\ufeff') // F-10 (D-A 2026-07-17): Excel-friendly CSV
   })
 
-  it('never prefixes JSON / log / CSV exports', () => {
+  it('never prefixes JSON / log exports', () => {
     expect(bomFor('C:/exports/audit.json')).toBe('')
     expect(bomFor('C:/exports/app.log')).toBe('')
-    expect(bomFor('C:/exports/items.csv')).toBe('')
   })
 })
