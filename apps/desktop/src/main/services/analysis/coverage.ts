@@ -5,6 +5,7 @@ import type {
   CoverageTier,
   DocumentSummary
 } from '../../../shared/types'
+import { truncateByCodePoints } from '../text'
 
 // Coverage + provenance reader for the deep-index summary tree (whole-document-analysis
 // plan §4.5/§5.1 → rag-design §14.4). Pure DB reads — no model calls. Two honest jobs:
@@ -111,7 +112,9 @@ export function documentLeafProvenance(db: Db, documentId: string, title: string
       sourceTitle: r.source_label ?? title,
       pageNumber: r.page_number,
       section: r.section_label,
-      snippet: r.text.length > 280 ? `${r.text.slice(0, 280)}…` : r.text
+      // Cut by CODE POINT (F-15, the RAG-2 class): a raw slice(0, 280) could split a surrogate
+      // pair and persist a snippet ending in a lone surrogate (permanent `�` in the sources panel).
+      snippet: truncateByCodePoints(r.text, 280)
     })
   })
   return out

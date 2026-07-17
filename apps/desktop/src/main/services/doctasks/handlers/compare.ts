@@ -38,6 +38,7 @@ import {
   COMPARE_DIFF_MAX_CHANGED_RATIO
 } from '../compare'
 import { wordDiff, renderRedline, renderChangesForModel, isPreciseDiffUseful, DIFF_RENDER_MAX } from '../../diff'
+import { codePointSlice } from '../../text'
 import type { DocTaskCtx, InternalTask } from '../context'
 import { buildProvenance, extractSegmentTexts, materializeDocument } from './shared'
 
@@ -454,7 +455,9 @@ async function runCompareSymmetricTrees(
   const aById = new Map(aNodes.map((n) => [n.id, n]))
   const bById = new Map(bNodes.map((n) => [n.id, n]))
   const pairCap = comparePairOutputCap(contextTokens, alignment.pairs.length)
-  const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim().slice(0, 400)
+  // Code-point slice (F-15): a raw .slice(0, 400) could cut an astral char in half and hand the
+  // model a note ending in a lone surrogate (cosmetic — these notes are model-facing only).
+  const oneLine = (s: string): string => codePointSlice(s.replace(/\s+/g, ' ').trim(), 400)
 
   const partials: string[] = []
   let part = 0

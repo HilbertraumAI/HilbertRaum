@@ -693,6 +693,25 @@ describe('coverage math + provenance', () => {
     expect(prov[0].label).toBe('S1')
   })
 
+  // F-15 (audit 2026-07-16): provenance snippets were cut with a raw UTF-16 `slice(0, 280)` — the
+  // RAG-2 class. A chunk whose 280 boundary splits a surrogate pair persisted a citation snippet
+  // ending in a lone surrogate (permanent `�` in the sources panel, rides messages.citations_json).
+  it('provenance snippets never end in a lone surrogate at the 280 cut (F-15)', async () => {
+    const hasLoneSurrogate = (s: string): boolean =>
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s)
+    const id = await buildReadyTree()
+    // Place '😀' (astral, 2 UTF-16 units) as code point 279 so a raw slice(0,280) halves it.
+    const boundaryText = 'a'.repeat(279) + '😀' + 'b'.repeat(60)
+    db.prepare('UPDATE chunks SET text = ? WHERE document_id = ? AND chunk_index = 0').run(
+      boundaryText,
+      id
+    )
+    const prov = documentLeafProvenance(db, id, 'doc.txt')
+    expect(prov.filter((c) => hasLoneSurrogate(c.snippet))).toEqual([])
+    const cut = prov.find((c) => c.snippet.startsWith('aaa'))
+    expect(cut?.snippet).toBe('a'.repeat(279) + '😀…')
+  })
+
   it('a tree-less doc is capped: truncated ⇒ beginning, untruncated ⇒ whole (never tree 100%)', async () => {
     const id = await importWords(300)
     expect(treeStatus(id)).toBeNull()

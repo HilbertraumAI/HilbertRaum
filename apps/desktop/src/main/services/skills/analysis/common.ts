@@ -4,6 +4,7 @@ import { documentsInScope } from '../scope-documents'
 import { documentChunkCount } from '../../analysis/coverage'
 import { getSkill } from '../registry'
 import { matchesSkillDocSignals } from '../selector'
+import { truncateByCodePoints } from '../../text'
 
 // Shared analysis-handler plumbing (A1, audit §6.4 plumbing bullet). Before A1 these helpers were copied
 // verbatim across `analysis/bank-statement.ts`, `analysis/invoice.ts` (and `singleInScopeDocument` a third
@@ -120,13 +121,17 @@ export function loadCitationChunks(db: Db, documentId: string): ChunkRow[] {
 }
 
 /** Project selected chunks into `[Sn]`-labelled citations (M2-safe: real source rows, never a synthesised
- *  figure) — the shared projection both domains apply after their own selection. Snippet capped at 280. */
+ *  figure) — the shared projection both domains apply after their own selection. Snippet capped at 280
+ *  CODE POINTS (F-15, the RAG-2 class): a raw UTF-16 slice could split a surrogate pair and persist a
+ *  snippet ending in a lone surrogate. The P-6 `substr(text,1,281)` head above counts SQLite code
+ *  points, so comparing code points here keeps the 281st char working as the ">280 ⇒ truncate"
+ *  sentinel even for astral-bearing heads (281 SQL code points ⇒ 281 JS code points ⇒ still > 280). */
 export function chunksToCitations(chunks: ChunkRow[], title: string): Citation[] {
   return chunks.map((c, i) => ({
     label: `S${i + 1}`,
     sourceTitle: c.source_label ?? title,
     pageNumber: c.page_number,
     section: c.section_label,
-    snippet: c.text.length > 280 ? `${c.text.slice(0, 280)}…` : c.text
+    snippet: truncateByCodePoints(c.text, 280)
   }))
 }
