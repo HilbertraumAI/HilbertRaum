@@ -229,7 +229,12 @@ export async function analyze(question: string): Promise<AnalyzeOutcome> {
   // `activeJobId` is set on the imageAnalyze round-trip), so the UI disables the trigger across the
   // whole window; this guard is the belt-and-suspenders for a click that still reaches here.
   if (!sel || !q) return 'noop'
-  if (snapshot.activeJobId) return 'busy'
+  // F-26 (L6a, parity with translateSession.ts:163): the old guard checked only `activeJobId`, which
+  // isn't set until AFTER the imageAnalyze create round-trip resolves. A second analyze entering that
+  // window slipped through; main busy-rejected it, and its busy branch's `set({ analyzing:false })`
+  // clobbered the still-live first job's flag. Also gate on `analyzing` (flipped true at :240 before
+  // the awaited round-trip) so a second click during the start round-trip is refused at the store.
+  if (snapshot.activeJobId || snapshot.analyzing) return 'busy'
 
   const turnId = nextTurnId()
   // F8: claim this generation. A session change (abortActive / clearVisionSession) bumps it, so a
