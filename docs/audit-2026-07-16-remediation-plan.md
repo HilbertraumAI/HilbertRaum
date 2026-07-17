@@ -78,6 +78,7 @@ before the next numbered phase.
 | id | found in | description + location | proposed phase | status |
 |---|---|---|---|---|
 | Q-1 | Phase 3 (F-05) | **#59 warning-copy half.** F-05 fixed the provisioning root cause (DIY `--with-assets` now fetches the `ocr` family), but the in-app scanned-PDF/photo dead-end warning (`shared/i18n/en.ts:488,1811` + de.ts counterparts) still says "OCR files not on this drive" without telling the user how to get them. Renderer-copy change: add an actionable EN+DE `unavailable → how to get it` hint keyed off the packaging docs (`fetch-runtime --family ocr`, or rebuild with `--with-assets`). Overlaps `user-guide.md:356-363` / `troubleshooting.md:185-197`. | Phase 7 | open |
+| Q-2 | Phase 4 (F-02) | **Real-server error-frame smoke owed.** The F-02 in-band error-frame shapes (`data: {"error":{…}}` + bare `error: {…}` field line) are pinned from the TA-4-verified wire contract + hand-authored fixtures — CI green does NOT evidence the real b9849 wire format (TS-3(a)). At the next manual smoke-drive session, force a real llama-server mid-stream error (tiny ctx + context-shift disabled, `HILBERTRAUM_*` env) and verify the reader rejects + the friendly copy surfaces. COUPLES with Phase 9's F-40 b9849 re-capture — Phase 9: register this into the ONE consolidated smoke-session checklist (BUILD_STATE §5 item 7 TS-3 bullet) rather than as a scattered note. | Phase 9 | open |
 
 ---
 
@@ -475,6 +476,86 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Messages to later phases: <"Phase 7: …" | none>
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
+
+### Phase 4 — 2026-07-17 — branch fix/audit-2026-07-16-p4 @ this commit (stacked on p3 @ 16b6438; F-02 landed separately @ d57cfd9)
+- Gate: **4,233 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
+  Baseline entering P4 was 4,221/49 (entry 3); +12 = 6 new `read-chat-sse` cases (4 error-frame
+  characterizations + 2 regressions), 1 `chat-stream` friendly-mapping pin, 1 `chat.test` main-turn
+  consumer pin, 1 `chat-compaction` mid-stream-failure pin, 2 `rag.test` grounded-path pins, 1
+  `whole-doc-extract` model-swap characterization. Hygiene: all 15 edited files BOM-free, NUL-free
+  (byte-checked); LF via `.gitattributes` normalization.
+- Fixed (in listed order, one commit per finding per §O):
+  - **F-02** (commit `d57cfd9`) — `parseSseLine` now recognizes BOTH in-band mid-stream failure
+    carriers (a `data:` JSON with a top-level `error` object, and a bare `error: {…}` SSE field
+    line — the plan's "optional" shape included deliberately: it is the exact TA-4 M3 carrier the
+    repo verified for the same server, and completion.ts handles it; parity mirrored verbatim) and
+    `readChatSSE` REJECTS with a new typed `ChatStreamError` (name/serverMessage/serverType,
+    SEC-N3 structural-only posture) instead of ending cleanly — incl. the flushed-tail path (error
+    frame with no trailing newline before close). Frame shapes pinned with b9849 provenance
+    comments + the TS-3(a) re-verify rider in code AND fixtures. Characterization tests watched
+    RED first: pre-fix, all 4 cases ended cleanly (err === null — the exact swallow). NOT built:
+    a missing-`[DONE]`-terminal check (completion.ts M2 analog) — the plan's fix spec scopes F-02
+    to error-frame recognition; a bare close-without-DONE keeps today's semantics (see §N note).
+    **Consumer-semantics sweep (each decided + pinned by a test):**
+    - `chat.ts` main turn → PROPAGATE (the CB-5 mid-stream precedent): partial never silently
+      persisted as complete; regenerate's F2 guard restores the prior reply. NOT chosen: persisting
+      the partial stamped `truncated` — that badge's copy claims a context-limit stop, which an
+      error frame is not; consistency with the established RuntimeUnresponsive semantics won.
+    - `chat/compaction.ts` → the existing R4/R6 catch absorbs the rejection: a summary stream that
+      fails MID-WAY (tokens, then error frame) writes NO checkpoint, non-abort logged, turn answers
+      on the L1 fallback. Pre-fix this was the worst case: the silently truncated summary WAS
+      checkpointed, corrupting later turns' context.
+    - `rag/index.ts:1682` (grounded relevance) + `:1842` (grounded-data) → PROPAGATE, nothing
+      persists; both handlers run under the same `withChatStream` wrapper as plain chat, so the
+      friendly mapping covers them with zero extra wiring.
+    - `ipc/chat-stream.ts` → new mapping link (unresponsive → emptyCompletion → **streamError** →
+      overflow → raw): `main.chat.streamError` EN+DE pair (i18n §S5; content-free — the structural
+      reason goes to the local log only). Mapping teeth shown by temporary revert (raw
+      "Chat stream failed: …" leaked → red → restored).
+    - Remaining blast-radius consumers verified, no per-consumer change needed: whole-doc-tree
+      (:248/:474/:583) + doctasks `generate` propagate into the existing friendly-task-failure
+      envelope; vision/runtime.ts:285 (direct readChatSSE caller) rejects into the images-IPC
+      failure path; benchmark.ts benign; skills JSON-schema flows already failed visibly on parse.
+  - **F-01** (this commit) — `extract.ts` markerExists cache-hit lookup gains `AND model_id = ?`
+    (the current pass's `deps.modelId`); the hash (`contentHashOf`) untouched — the
+    `analysis-extract-hash.test.ts` byte-identity pin stays green, persisted rows stay
+    addressable. Characterization test watched RED (corrected stub — see deviations): pre-fix a
+    model-B re-run made 0 generate calls and rows stayed `extract-model`; post-fix it re-extracts,
+    rows replaced (never mixed), same-model re-run stays 0-call and the #50 unparsed-retry +
+    DATA-3 idempotency pins are unchanged. Stale comments corrected (file invariants block +
+    `ExtractDeps.modelId` doc).
+- Deviations from plan: none material.
+  (1) The F-01 test's first red run used a spread-copied stub whose `calls` counter didn't share
+  the factory closure — red for a partly wrong reason; corrected the stub and RE-demonstrated
+  red→green against the pre-fix extract.ts via stash (the honest teeth are the re-run).
+  (2) `data-contracts.md` was updated even though the renderer-visible surface did not change
+  SHAPE (`chat:error:<id>` still carries an error string): one additive clause documents the new
+  mid-stream rejection + friendly key — recorded here since the plan conditioned that edit.
+  (3) `architecture.md` "Chat & streaming" record line (readChatSSE description) gained the
+  error-frame clause per the audit's doc-updates note — a design-record annotation, not a
+  §46–§49 ledger touch.
+- New findings: none fixed in-phase (NF-* none). §N note, disposition (b)-adjacent: a graceful
+  server close WITHOUT `[DONE]` and WITHOUT an error frame still ends the chat reader cleanly
+  (translation's M2 `IncompleteStreamError` analog does not exist for chat). The audit's F-02
+  entry mentions the M2 pattern as mirror-worthy but the plan's fix spec deliberately scopes to
+  error frames; a terminal-frame requirement would change abort/close semantics for every
+  consumer and deserves its own audit finding if wanted. Left as-is, noted for the record (the
+  Q-2 smoke can observe whether the real server ever closes error-free mid-generation).
+- §Q: added **Q-2** — the real-server error-frame smoke (TS-3(a) territory), targeted Phase 9,
+  couples with F-40's b9849 re-capture; Phase 9 folds it into the ONE consolidated smoke-session
+  checklist in BUILD_STATE §5 item 7.
+- Messages to later phases:
+  - **Phase 7 (F-25/F-26 renderer polish):** the chat error surface gained one new friendly copy
+    key `main.chat.streamError` (EN+DE); no renderer code change was needed (the copy rides the
+    existing `chat:error` string channel). Nothing else re-scoped.
+  - **Phase 9:** consume §Q Q-2 into the consolidated smoke checklist (with F-40's re-capture and
+    the standing TS-3(a) rider).
+  - **Phase 10:** fold the F-02 consumer-semantics decisions above into the §50 record — they are
+    the durable "decided semantics per consumer" table the audit asked for.
+- Docs touched: `docs/rag-design.md` §14.5 (error-frame clause + model-keyed cache clause + the
+  accepted one-re-extract-per-swap cost note), `docs/data-contracts.md` (streaming-contract
+  additive clause), `docs/architecture.md` (Chat & streaming record line), `BUILD_STATE.md`
+  (§5 item 14 Phase-4 line), this plan (§Q Q-2 + §L). BUILD_STATE entry added: yes.
 
 ### Phase 3 — 2026-07-17 — branch fix/audit-2026-07-16-p3 @ this commit (stacked on p2 @ 293a0e4)
 - Gate: **4,221 passed / 49 skipped** · typecheck clean · build n/a (only `scripts/`, `docs/`, `README.md`,

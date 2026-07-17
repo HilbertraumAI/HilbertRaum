@@ -30,10 +30,13 @@ import type { ModelSlotArbiter } from './model-slot-arbiter'
 //     `BEGIN…COMMIT`; a thrown insert ROLLBACKs so the shared connection is never poisoned.
 //   - CONTENT CACHE / RESUME: each scanned chunk gets exactly one `__scan__` marker row keyed
 //     by (chunk_id, content_hash); a re-run/resume SKIPS any chunk that already has a matching
-//     `ok` marker (0 model calls). An `unparsed` marker is NOT a cache hit (#50): the chunk is
-//     retried on the next explicit run, so one bad model run cannot poison the document until
-//     re-import. Re-index changes chunk ids and cascades the rows away (H1), so the cache is
-//     correctly cold after the text changes.
+//     `ok` marker FOR THE CURRENT MODEL (0 model calls). An `unparsed` marker is NOT a cache
+//     hit (#50): the chunk is retried on the next explicit run, so one bad model run cannot
+//     poison the document until re-import. A MODEL SWAP is also NOT a cache hit (F-01, audit
+//     2026-07-16): the hit lookup carries `AND model_id = ?`, mirroring the tree cache's M12
+//     posture, so an explicit re-run under a different model re-extracts (rows replaced by
+//     commitChunk — never a mixed-model set). Re-index changes chunk ids and cascades the rows
+//     away (H1), so the cache is correctly cold after the text changes.
 //   - CONTENT NEVER LOGGED: value_text/normalized_value are content — never logged/audited.
 
 /** The fixed type-set version — folded into the per-chunk content hash so a future type-set
@@ -78,7 +81,8 @@ function extractPrompt(chunkText: string): string {
 
 export interface ExtractDeps {
   db: Db
-  /** The pinned chat model id for this pass (recorded on each row; cache is content-keyed). */
+  /** The pinned chat model id for this pass — recorded on each row AND part of the cache-hit
+   *  lookup (content + model keyed, F-01): a re-run under a different model re-extracts. */
   modelId: string
   signal: AbortSignal
   arbiter: ModelSlotArbiter
@@ -218,9 +222,16 @@ export async function extractDocument(documentId: string, deps: ExtractDeps): Pr
   // accounting but is RETRIED on the next run — one bad model run (e.g. a reasoning model that
   // returned only reasoning tokens) must not poison the document until re-import. commitChunk
   // deletes the chunk's prior rows, so the retried chunk's marker is replaced, never doubled.
+  // F-01 (audit 2026-07-16): the hit is ALSO keyed by the CURRENT pass's model_id — the same
+  // model-switch invalidation the sibling tree cache has (tree-build.ts M12, "a model-switch
+  // can't yield a mixed-model tree") — so an explicit re-run after a chat-model swap
+  // re-extracts under the new model instead of serving the old model's rows forever. The
+  // model id lives in the LOOKUP predicate, never in contentHashOf: the hash is pinned
+  // byte-identical (analysis-extract-hash.test.ts) and persisted rows must stay addressable.
   const markerExists = db.prepare(
     `SELECT 1 FROM extraction_records
-     WHERE chunk_id = ? AND record_type = ? AND content_hash = ? AND normalized_value = ? LIMIT 1`
+     WHERE chunk_id = ? AND record_type = ? AND content_hash = ? AND normalized_value = ?
+       AND model_id = ? LIMIT 1`
   )
   const deleteChunkRows = db.prepare('DELETE FROM extraction_records WHERE chunk_id = ?')
   const insertRow = db.prepare(
@@ -297,8 +308,9 @@ export async function extractDocument(documentId: string, deps: ExtractDeps): Pr
   for (const chunk of chunks) {
     if (signal.aborted) throw new DOMException('Extract cancelled', 'AbortError')
     const hash = contentHashOf(chunk.text)
-    // Resume/cache: skip a chunk already scanned OK under this exact content (0 model calls).
-    const cached = markerExists.get(chunk.id, SCAN_MARKER_TYPE, hash, SCAN_OK) as unknown as
+    // Resume/cache: skip a chunk already scanned OK under this exact content AND this exact
+    // model (0 model calls) — a different model's ok scan is a MISS (F-01).
+    const cached = markerExists.get(chunk.id, SCAN_MARKER_TYPE, hash, SCAN_OK, modelId) as unknown as
       | { 1: number }
       | undefined
     if (!cached) {

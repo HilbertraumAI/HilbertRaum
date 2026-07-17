@@ -1323,8 +1323,16 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   yielding build — one `generate`/chunk over the fixed v1 type set (`generic|date|amount|party|
   obligation`), strict JSON-array prompt at temp 0, tolerant `parseExtraction` + retry-once, then an
   `unparsed` marker (the chunk is **surfaced, never dropped** — H7); same arbiter/cancel/lock discipline
-  + per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` (H11); per-`(chunk_id, content_hash)` resume cache = **0**
-  calls on re-run **for `ok` scans only**. Gated on `fully_chunked` (C4).
+  + per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` (H11); per-`(chunk_id, content_hash, model_id)`
+  resume cache = **0** calls on re-run **for `ok` scans under the CURRENT model only** — a
+  chat-model swap is a cache MISS, so an explicit re-run re-extracts under the new model and
+  `commitChunk`'s delete-then-insert replaces the rows (never a mixed-model set; the tree
+  cache's M12 posture, F-01 audit 2026-07-16 — the model id lives in the marker LOOKUP, never
+  in `contentHashOf`, which stays pinned byte-identical). One consequence, accepted: the next
+  explicit re-run after a model swap pays one full re-extract per document (mirrors the SKA-26
+  version-mismatch posture); a document already `ready` under both passes offers no re-run
+  affordance in the UI, so completed documents refresh only when a re-run is triggered again
+  (e.g. after re-index or an unparsed retry). Gated on `fully_chunked` (C4).
   **Streaming honesty (F-02, audit 2026-07-16):** the pass's `generate` rides the locked
   `chatStream` contract, whose SSE reader (`readChatSSE`) now **rejects with a typed
   `ChatStreamError`** when the server reports a mid-generation failure in-band on the open

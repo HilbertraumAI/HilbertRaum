@@ -246,6 +246,47 @@ describe('extract pass', () => {
     expect(listing.items.map((i) => i.value)).toContain('acme')
   })
 
+  // F-01 (audit 2026-07-16): the scan cache was content-keyed ONLY — after a chat-model swap an
+  // explicit re-run hit every old-model `ok` marker (0 calls) and flipped extract_status to
+  // 'ready' without re-extracting, so listings permanently served the weakest model that ever
+  // scanned the document. The markerExists lookup is now ALSO keyed by the current pass's
+  // model_id (the sibling tree cache's M12 posture); commitChunk's delete-then-insert makes the
+  // replacement clean. The hash itself stays model-free (analysis-extract-hash.test.ts pins it
+  // byte-identical; persisted rows must stay addressable).
+  it('a model swap invalidates the scan cache — an explicit re-run under a different model re-extracts (F-01)', async () => {
+    const id = await importText('Payment to @@acme@@ and @@globex@@.')
+    // Pass 1 under model A ('extract-model'): the chunk scans ok.
+    const modelA = extractRuntime()
+    const mA = makeManager(modelA)
+    await waitTerminal(mA, mA.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(modelA.calls).toBe(1)
+    const modelIds = (): string[] =>
+      (
+        db
+          .prepare('SELECT DISTINCT model_id AS m FROM extraction_records WHERE document_id = ?')
+          .all(id) as unknown as Array<{ m: string }>
+      ).map((r) => r.m)
+    expect(modelIds()).toEqual(['extract-model'])
+
+    // Pass 2 under model B: the old-model ok marker must be a cache MISS — the chunk is
+    // re-extracted and its rows now carry model B (replaced, never mixed). Same object as the
+    // factory returns (its chatStream closes over itself for `calls`), only the id differs.
+    const modelB = extractRuntime()
+    ;(modelB as { modelId: string }).modelId = 'stronger-model'
+    const mB = makeManager(modelB)
+    await waitTerminal(mB, mB.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(modelB.calls).toBe(1) // generate ran again under the new model
+    expect(modelIds()).toEqual(['stronger-model']) // rows replaced — no mixed-model set
+    expect(extractStatus(id)).toBe('ready')
+    const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
+    expect(listing.items.map((i) => i.value).sort()).toEqual(['acme', 'globex'])
+
+    // Same-model re-run stays a warm cache — the #50 economy holds (0 further calls).
+    const mB2 = makeManager(modelB)
+    await waitTerminal(mB2, mB2.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
+    expect(modelB.calls).toBe(1)
+  })
+
   it('an unparsed marker is NOT a cache hit — the next run retries the chunk [#50]', async () => {
     const id = await importText('Once-broken chunk. @@BADJSON@@')
     // Run 1: unparseable both attempts → unparsed marker (the poisoned state of #50).
