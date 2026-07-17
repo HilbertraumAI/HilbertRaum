@@ -168,12 +168,34 @@ function atomize(text: string, cap: number, overlap = 0): TokenAtom[] {
     }
     // Over-long word (no whitespace to break on): cut by character. A `sliceChars`-char slice is
     // ≤ sliceChars ≤ maxAtom tokens (≤ 1 token/char), so every piece fits a window.
-    for (let i = 0; i < word.length; i += sliceChars) {
-      const piece = word.slice(i, i + sliceChars)
+    let i = 0
+    while (i < word.length) {
+      let end = Math.min(word.length, i + sliceChars)
+      // F-24 (audit 2026-07-16): never cut between the halves of a surrogate pair — at a WINDOW
+      // boundary the cut becomes the stored chunk-text boundary, and an unaligned cut left one chunk
+      // ending in a lone high surrogate and the next starting with the lone low one (U+FFFD after
+      // every downstream UTF-8 conversion). RETRACT the cut one code unit (the pair moves whole into
+      // the next piece — a shorter piece can only cost fewer tokens, so the window budget still
+      // holds); EXTEND instead only in the degenerate sliceChars=1 case where retracting would empty
+      // the piece (a 2-unit pair is ≤ 1 approx token, so it still fits any window). Boundary-only:
+      // BMP text hits identical cut positions, so non-astral chunk output is byte-identical.
+      if (end < word.length && isHighSurrogate(word.charCodeAt(end - 1)) && isLowSurrogate(word.charCodeAt(end))) {
+        end = end - 1 > i ? end - 1 : end + 1
+      }
+      const piece = word.slice(i, end)
       atoms.push({ text: piece, tokens: approxTokenCount(piece), glued: i > 0 })
+      i = end
     }
   }
   return atoms
+}
+
+/** UTF-16 surrogate-half classifiers for the F-24 pair-aligned cut (code UNITS, not code points). */
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff
+}
+function isLowSurrogate(unit: number): boolean {
+  return unit >= 0xdc00 && unit <= 0xdfff
 }
 
 /**
