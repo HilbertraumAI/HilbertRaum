@@ -62,7 +62,9 @@ password recovery — are documented in
   mtime-preserving in-place tamper is therefore not re-detected by the app's routine checks (mtime
   is attacker-forgeable anyway). Mitigations: the AI Model screen's **Verify checksum** forces a real
   re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
-  fully.
+  fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
+  full-audit 2026-07-16), closing the post-completion power-cut/unplug window that could otherwise
+  persist the rename + `(size,mtime)` cache entry over a torn weight the cache then reports verified.
 - **Sidecar binaries built by an OLD `fetch-runtime` carry no pre-spawn hash (accept + document).**
   The re-hash-before-spawn control ([`security-model.md`](security-model.md) "Re-hash
   sidecar binaries before spawn") re-verifies `llama-server` / `whisper-cli` against a SHA-256 the
@@ -559,6 +561,13 @@ password recovery — are documented in
     and re-downloading, but does not detect the change up front — an accepted residual until
     `If-Range`/ETag revalidation lands (the `Content-Range` start is validated, which catches a
     wrong-offset 206 but not a same-offset content change).
+  - **A complete but un-renamed `.part` recovers in place (no 416 dead-end).** A cancel/crash during
+    the minutes-long hash verify, or a failed final rename (e.g. an AV lock on the destination), can
+    leave the WHOLE file staged as `<weight>.part`. Resuming it would send an unsatisfiable `Range:
+    bytes=<fullSize>-` — every HF/CloudFront/S3-class origin answers HTTP 416, which used to loop
+    forever with no in-app remedy (F-13, full-audit 2026-07-16). The downloader now verifies a
+    complete `.part` in place instead: a matching hash renames it into place, a mismatch discards it
+    and restarts clean (the same treatment as a wrong-offset 206).
 - **Drive updates are manual — signed offline update bundles (spec §12.3) are not built yet;
   there is no update mechanism.** The `updates/` and `workspace/backups/` directories
   are not created. The manual procedure is documented in [`drive-layout.md`](drive-layout.md)
