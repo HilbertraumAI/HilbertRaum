@@ -436,4 +436,49 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
 
     expect(state.fire).toBeNull() // no idle timer armed/left live after the racing stop()
   })
+
+  // M1 (F-14): the TA-6 crash-recovery fix ported verbatim from translation/runtime.ts. A healthy
+  // vision child that dies on its OWN (OOM — the three-process RAM peak makes 12 GB machines
+  // likely-OOM) must not leave `this.server` pointing at a dead handle where every later analyze
+  // fails 'runtimeFailed' until a full idle window elapses. The onUnexpectedExit hook drops the
+  // dead handle so the next analyze cold-starts. Mirrors translation-runtime.test.ts's M1 cases.
+  it('recovers from a mid-session sidecar CRASH: the next analyze cold-starts a fresh child (M1)', async () => {
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = visionFetch()
+    const { clock } = fakeClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.analyze(analyzeOpts)
+    expect(calls.length).toBe(1)
+    // The child dies on its OWN (OOM) after having been healthy, outside stop() — a real 'exit'.
+    // LlamaServer fires onUnexpectedExit, and the runtime drops the dead handle so the next
+    // analyze cold-starts instead of failing forever against a stale server.
+    children[0].emit('exit', 137, null) // 137 = OOM-killed
+    await tick()
+    const answer = await rt.analyze(analyzeOpts)
+    expect(answer).toBe(FIXTURE_ANSWER)
+    expect(calls.length).toBe(2) // cold-started a fresh child rather than reusing the dead one
+    await rt.stop()
+  })
+
+  it('a healthy crash does NOT clobber a newer instance (identity-compared)', async () => {
+    // The exit callback captures the child that crashed; if a soft idle teardown + restart has
+    // already installed a NEWER server by the time a late crash notification lands, nulling must
+    // be a no-op (`if (this.server === server)`), never tear the fresh child's handle out.
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = visionFetch()
+    const { clock, state } = fakeClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.analyze(analyzeOpts) // child0
+    state.fire!() // soft idle teardown of child0 (not held → exits)
+    await tick()
+    await rt.analyze(analyzeOpts) // cold-starts child1 (the NEWER instance)
+    expect(calls.length).toBe(2)
+    children[0].emit('exit', 137, null) // a LATE crash notice from the already-dead child0
+    await tick()
+    // child1 is untouched — the next analyze reuses it, no third spawn.
+    const answer = await rt.analyze(analyzeOpts)
+    expect(answer).toBe(FIXTURE_ANSWER)
+    expect(calls.length).toBe(2)
+    await rt.stop()
+  })
 })
