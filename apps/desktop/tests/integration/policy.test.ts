@@ -13,7 +13,9 @@ import {
   parsePolicy,
   loadPolicy,
   resolveNetwork,
-  buildPolicyStatus
+  buildPolicyStatus,
+  __policyMaterializations,
+  __resetPolicyCache
 } from '../../src/main/services/policy'
 import {
   isLoopbackHost,
@@ -100,6 +102,28 @@ describe('loadPolicy', () => {
     expect(loaded.driveFilePresent).toBe(true)
     expect(loaded.policy.network.allowModelDownloads).toBe(true)
     expect(loaded.allowNetworkByDefault).toBe(false)
+  })
+
+  // F-30 (audit 2026-07-16): getAppStatus/getPolicy re-read+re-parse policy.json+drive.json on every
+  // call (TranslateScreen polls every 4 s for a whole run). Cache the parsed result keyed by each
+  // file's mtime/size; re-read ONLY when a signature changes so a live edit is still honoured.
+  it('caches the parsed policy across repeated calls; re-reads only when a file changes (F-30)', () => {
+    __resetPolicyCache()
+    const cfg = configDir({ policy: PERMISSIVE_POLICY })
+    const a = loadPolicy(cfg)
+    const b = loadPolicy(cfg)
+    const c = loadPolicy(cfg)
+    expect(a.policy.network.allowModelDownloads).toBe(true)
+    expect(b).toEqual(a)
+    expect(c).toEqual(a)
+    // Polled three times → parsed exactly once (the other two are stat-only cache hits).
+    expect(__policyMaterializations()).toBe(1)
+
+    // Rewrite policy.json to a different content+size → the mtime/size signature changes → re-read.
+    writeFileSync(join(cfg, 'policy.json'), COMMERCIAL_POLICY)
+    const d = loadPolicy(cfg)
+    expect(d.policy.network.allowModelDownloads).toBe(false) // the live edit is reflected
+    expect(__policyMaterializations()).toBe(2)
   })
 
   it('degrades to defaults + warning on a malformed drive.json (no throw)', () => {
