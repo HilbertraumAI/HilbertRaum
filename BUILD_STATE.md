@@ -1560,6 +1560,21 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     `main.engine.transcriptionRunning`). All red-green-demonstrated. Gate **4247/49** (+14),
     typecheck + build green. Details: plan §L Phase-5 ledger entry.
 
+    **Phase 6 done 2026-07-17** (branch `fix/audit-2026-07-16-p6`): ingestion & export
+    correctness — F-11 (docx-rewrite parses a self-closing `<w:t …/>` as an EMPTY node instead of
+    swallowing following markup into the text layer — the D77 corruption on POI/lxml-produced
+    files is gone), F-22 (md/txt parsers strip one leading UTF-8 BOM — the app's own BOM'd `.md`
+    exports re-import with correct section labels, round-trip proven), F-24 (chunker slice cuts
+    are surrogate-pair-aligned, boundary-only — no more lone surrogates at chunk edges for glued
+    emoji/astral runs; chunk counts pinned unchanged for non-astral corpora), F-23 (`wordDiff`
+    of two zero-word texts returns identical instead of null via an OOB Int32Array read), F-15
+    (citation snippets at coverage.ts/common.ts cut by CODE POINT via the new shared
+    `services/text.ts`; compare.ts `oneLine` too; RAG-2 pin byte-identical), F-10 (per owner
+    decision **D-A**: `.csv` exports carry the UTF-8 BOM — Excel-friendly; the two no-BOM pins +
+    one audit-unlisted anchored header pin flipped WITH the fix; BOM'd-CSV re-import round-trip
+    proven through papaparse). All red-green-demonstrated. Gate **4264/49** (+16), typecheck +
+    build green. Details: plan §L Phase-6 ledger entry.
+
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
 round complete at the 4165/47 gate. The tag is on origin (observed 2026-07-12), so the

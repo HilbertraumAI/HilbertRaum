@@ -477,6 +477,94 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
 
+### Phase 6 — 2026-07-17 — branch fix/audit-2026-07-16-p6 (stacked on p5 @ f59359c); commits F-11 @ facacad, F-22 @ c5297f9, F-24 @ e3a2ef2, F-23 @ 750860d, F-15 @ 5677f90 (+ typecheck fixup 18796f9), F-10 @ 9fb73cb, docs+ledger @ this commit
+- Gate: **4,264 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
+  Baseline entering P6 was 4,248/49 (P5 + its review fix-up); +16 = 3 F-11 self-closing-`<w:t/>`
+  cases (docx-rewrite.test.ts), 2 F-22 BOM round-trip cases (ingestion.test.ts), 3 F-24 surrogate/
+  no-churn cases (chunker.test.ts), 3 F-23 empty-diff cases (diff.test.ts), 4 F-15 boundary cases
+  (new citation-snippet-boundary.test.ts ×3 + whole-doc-analysis.test.ts ×1), 1 F-10 BOM'd-CSV
+  re-import round-trip (ingestion.test.ts). Hygiene: every edited file LF, BOM-free, NUL-free (all
+  BOM/lone-surrogate fixtures are constructed programmatically via `\uFEFF`/`\uD83D…` escapes — no
+  bytes committed that the nets would fight).
+- Fixed (in listed order, red-then-green demonstrated per finding; one commit per finding):
+  - **F-11** (`facacad`) — `NODE_OR_PARA_RE` gained an explicit self-closing `<w:t(?:\s[^>]*)?\/>`
+    alternative BEFORE the paired-tag one; `parseTextLayer` skips it as an EMPTY node (raw bytes
+    survive verbatim — D77 byte-identity). Pre-fix the attribute-bearing self-closing form read as
+    an OPENER and the lazy body swallowed all markup to the next `</w:t>`; a span overlapping the
+    pseudo-node re-emitted that markup xmlEscape'd as visible text. RED first: text layer contained
+    `</w:r><w:r>…` and the rewritten document.xml contained `&lt;w:` — both watched. Bare `<w:t/>`
+    skip pinned as a regression case (passes pre- and post-fix, as the audit verified). Existing 6
+    docx-rewrite tests + redaction/document-edit suites unchanged-green (no self-closing fixtures).
+  - **F-22** (`c5297f9`) — one-line `replace(/^\uFEFF/, '')` after readFile in BOTH MarkdownParser
+    and TxtParser. Round-trip proof: a transcript-shaped export built with the REAL `bomFor('…md')`
+    prefix re-imports with section labels `['My Chat', 'Sub']` (was `[null, 'Sub']` pre-fix — the
+    watched red); TxtParser BOM-strip case also red-first. ingestion.test.ts now mocks electron
+    (bomFor's module imports it) — inert for the rest of the file.
+  - **F-24** (`e3a2ef2`) — `atomize`'s over-long-word slice loop now RETRACTS the cut one code unit
+    when it lands between a high/low surrogate (EXTENDS only in the degenerate sliceChars=1 case
+    where retracting would empty the piece — a 2-unit pair is ≤1 approx token, still window-safe).
+    Retract-not-extend is deliberate: a shorter piece can only cost fewer tokens, so the "window
+    never over budget" guarantee is preserved (an extended sliceChars+1 piece could exceed the cap
+    by one token when overlap=0). Boundary-only: BMP text hits byte-identical cut positions —
+    chunk-count no-churn pinned in-file with PRE-FIX-computed counts (CJK 500/0 → 12, prose
+    defaults → 3, CJK 500/80 → 3, glued Latin 500/80 → 2, Thai+prose defaults → 5). RED first:
+    3001-unit glued-emoji run at defaults had lone surrogates at both chunk edges (the audit's
+    exact repro); overlap-0 astral partition stays lossless (join === original). No migration —
+    existing corpora re-chunk only on re-index (documented; known-limitations L10 clause updated).
+  - **F-23** (`750860d`) — `wordDiff` early-returns an identical/empty DiffResult when BOTH token
+    arrays are empty (chose the plan's early-return over resizing the Int32Array — it also states
+    the contract). RED first: `('','')` and `('   ','\n')` returned null. Empty-vs-nonempty
+    pure-insert/delete pinned as a regression guard. Latent-only today (both compare entry points
+    gate on non-empty text, per the audit's verified reachability).
+  - **F-15** (`5677f90` + fixup `18796f9`) — NEW leaf module `services/text.ts`
+    (`codePointSlice` + `truncateByCodePoints`). Chose "shared codePointSlice" over "import rag's
+    truncateSnippet" because rag/index.ts imports analysis/coverage → coverage importing rag would
+    cycle. Both persisting sites (`coverage.ts` documentLeafProvenance, `common.ts`
+    chunksToCitations) now cut at 280 CODE POINTS; cosmetic `compare.ts` oneLine uses
+    codePointSlice(…, 400) (no ellipsis, matching its old shape); rag's `truncateSnippet` now
+    delegates to codePointSlice with its trim/trimEnd shape byte-identical (RAG-2 pin green
+    untouched). The P-6 `substr(text,1,281)` SQL stays: SQLite substr counts code points and the
+    JS guard now does too, so the 281st-char sentinel still fires — proven against REAL
+    node:sqlite in the new test (562-unit/281-cp head → truncates pair-safe). RED first at both
+    persisting sites. Fixup commit: the new tests needed `?? ''` narrowing for the optional
+    `Citation.snippet` (typecheck-only; vitest was green either way).
+  - **F-10** (`9fb73cb`, per §D **D-A**) — `bomFor` covers `.csv`; `registerSkillsIpc.saveTextFile`
+    prepends `bomFor(chosenPath)` (tableToCsv stays pure). Side effect the audit flagged as
+    adjacent inconsistency, taken deliberately: `redacted.txt`/`edited.txt` (same boundary) now get
+    the P4-mandated `.txt` BOM; JSON/XML/log stay BOM-free. BOTH no-BOM pins flipped WITH the fix
+    in the same commit (save-export-bom.test.ts, result-tables.test.ts — the flips are the
+    owner-decided D-A posture change, NOT assertion weakening) and the BOM'd-CSV re-import
+    round-trip added (papaparse strips the BOM — proven through the real CsvParser). All flips +
+    the round-trip watched RED pre-fix. Blast-radius docs moved in-commit: architecture.md
+    result-tables record ("no BOM on .csv" → dated flip) + P4 record (dated supersede-in-part
+    annotation).
+- Deviations from plan (§N-a, both small + in-phase, ledgered):
+  - **F-10 third pin.** The audit's blast radius claimed save-export-bom.test.ts:28 +
+    result-tables.test.ts:144 were "the only two BOM pins in the tree; skill-lane export tests
+    assert audit/content, not leading bytes" — but `skills-tool-run-ipc.test.ts:968`'s ANCHORED
+    `/^date,…/` header regex on a CSV written through the real saveTextFile is a third, implicit
+    no-BOM pin. Moved with the fix in the same commit (asserts BOM + header after it). Triage per
+    §O step 3: same file family, same posture change, fully understood — no re-scope needed.
+  - **F-15 test typecheck fixup** (`18796f9`): optional `Citation.snippet` narrowing in the two
+    new test files, discovered at the typecheck gate. Assertion semantics unchanged.
+- New findings: none (NF-* none). No §Q items were assigned to P6; none added.
+- Messages to later phases:
+  - **Phase 7 (renderer polish):** nothing re-scoped. FYI: `services/text.ts` (codePointSlice/
+    truncateByCodePoints) now exists as the shared code-point cutting seam if any renderer copy
+    needs it (it is main-side; do not import it in the renderer — mirror it if needed).
+  - **Phase 9 (test-infra):** `tests/integration/ingestion.test.ts` now carries a `vi.mock('electron')`
+    for bomFor's module — if the F-41 cast-conversion slice touches that file, keep the mock ABOVE
+    the `import { bomFor }` line (vi.mock hoisting).
+  - **Phase 10:** durable dispositions for §50 — the F-24 retract-not-extend rationale, the F-15
+    leaf-module (cycle-avoidance) decision, the F-10 D-A execution incl. the redacted.txt/edited.txt
+    BOM side effect + the third-pin deviation, and the known-limitations L10 narrowing.
+- Docs touched: `docs/known-limitations.md` (L10 bullet narrowed with the F-24 clause; new
+  "text/CSV exports carry a UTF-8 BOM" trade-off bullet covering F-10/D-A + the F-22 round-trip +
+  the strict-consumer caveat), `docs/architecture.md` (result-tables record BOM clause flipped +
+  P4 record supersede annotation — both in the F-10 commit; TA-wave L10 ledger line got a dated
+  update annotation, text preserved), `BUILD_STATE.md` (§5 item 14 Phase-6 line), this plan (§L).
+  BUILD_STATE entry added: yes.
+
 ### Phase 5 — 2026-07-17 — branch fix/audit-2026-07-16-p5 (stacked on p4 @ 0404ee6); commits F-13/F-34 @ eb50209, F-14 @ 7e55c6f, F-33 @ a7e61de, F-32 @ 9bc861b, docs+ledger @ this commit
 - Gate: **4,247 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
   Baseline entering P5 was 4,233/49 (entry 4); +14 = 3 F-13 complete-`.part`/416 cases, 1 F-34
