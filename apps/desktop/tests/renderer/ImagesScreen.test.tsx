@@ -7,8 +7,20 @@ import { ToastProvider } from '../../src/renderer/components'
 import { resetVisionSessionForTests } from '../../src/renderer/lib/visionSession'
 import { __turnRowRenderCounts } from '../../src/renderer/images'
 import type { DecodedImage, DecodeImage } from '../../src/renderer/images'
-import type { ImageJob, VisionStatus } from '../../src/shared/types'
+import type {
+  ImageJob,
+  VisionStatus,
+  VisionUnavailableReason,
+  ImageSessionSummary,
+  ImageSessionDetail
+} from '../../src/shared/types'
+import type { PreloadApi } from '../../src/preload'
 import { stubApi } from '../helpers/renderer'
+
+// F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
+// (no `as never` erasure). The status/history builders return the real shared types, and
+// `streamStubs().api` is `Partial<PreloadApi>`, so a rename of any mocked method or of
+// VisionStatus/ImageSession* reddens typecheck instead of drifting silently.
 
 // Renderer test (jsdom + RTL) for the Images screen state machine (image-understanding §5.6,
 // §17). The decode pipeline uses createImageBitmap/OffscreenCanvas which jsdom lacks, so a
@@ -41,12 +53,14 @@ const AVAILABLE: VisionStatus = {
   modelDisplayName: 'Qwen2.5-VL 3B'
 }
 
+const unavailable = (reason: VisionUnavailableReason): VisionStatus => ({ available: false, reason })
+
 /** Stream-driving stubs: capture the subscriber callbacks so a test can push tokens/done/error. */
 function streamStubs(): {
   token: { fn?: (t: string) => void }
   done: { fn?: (j: ImageJob) => void }
   error: { fn?: (j: ImageJob) => void }
-  api: Record<string, unknown>
+  api: Partial<PreloadApi>
   cancel: ReturnType<typeof vi.fn>
   copyToClipboard: ReturnType<typeof vi.fn>
 } {
@@ -93,7 +107,7 @@ describe('ImagesScreen — availability (§5.6)', () => {
   it('shows the reason-adaptive unavailable card and routes the CTA to AI Model', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    stubApi({ imageGetStatus: vi.fn(async () => ({ available: false, reason: 'no-model' })) } as never)
+    stubApi({ imageGetStatus: vi.fn(async () => unavailable('no-model')) })
     render(<ImagesScreen onNavigate={onNavigate} decodeImpl={fakeDecode} />)
 
     expect(
@@ -106,7 +120,7 @@ describe('ImagesScreen — availability (§5.6)', () => {
   })
 
   it('adapts the note for the no-runtime reason', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => ({ available: false, reason: 'no-runtime' })) } as never)
+    stubApi({ imageGetStatus: vi.fn(async () => unavailable('no-runtime')) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     expect(
       await screen.findByText('Image understanding needs the AI engine installed first.')
@@ -116,7 +130,7 @@ describe('ImagesScreen — availability (§5.6)', () => {
 
 describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
   it('shows the drop zone when a model is available and no image is selected', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) } as never)
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     expect(await screen.findByRole('button', { name: 'Drop an image here' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'or choose an image' })).toBeInTheDocument()
@@ -124,7 +138,7 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
 
   it('decodes a picked image into the two-pane workspace (preview + composer + chips)', async () => {
     const user = userEvent.setup()
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...pickStubs() } as never)
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
 
@@ -138,7 +152,7 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
   })
 
   it('rejects a multi-drop with a friendly banner rather than taking the first file', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) } as never)
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     const zone = await screen.findByRole('button', { name: 'Drop an image here' })
     const file = (n: string) => new File([new Uint8Array([1])], n, { type: 'image/png' })
@@ -154,7 +168,7 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
 describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('a chip fills the composer (no auto-send)', async () => {
     const user = userEvent.setup()
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...pickStubs() } as never)
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
 
@@ -168,7 +182,7 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('streams an answer: starting → tokens → done with Copy / Try again', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
 
@@ -193,7 +207,7 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('Copy uses the main-process clipboard (not navigator.clipboard, which the renderer denies)', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
@@ -208,7 +222,7 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('shows a friendly runtime-failure banner (never raw output)', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
 
@@ -227,7 +241,7 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('disables a prior turn’s "Try again" while another analysis is in flight (F4)', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
 
@@ -251,7 +265,7 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('a settled TurnRow does not re-render while a new turn streams (PF-7c)', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
 
@@ -282,7 +296,7 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('maps an empty model response to the friendly empty-response copy', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
@@ -299,7 +313,7 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
   it('Remove clears the image and the thread (back to the drop zone)', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
@@ -317,7 +331,7 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
   it('selecting a new image mid-analysis cancels the in-flight job and resets the thread', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
@@ -337,7 +351,7 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
   it('Stop cancels the active job and marks the turn stopped', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
@@ -355,7 +369,7 @@ describe('ImagesScreen — survives navigation (running analysis recovery)', () 
   it('lands on the list with a running row after unmount + remount; clicking it shows the live stream', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     const { unmount } = render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
@@ -389,7 +403,7 @@ describe('ImagesScreen — survives navigation (running analysis recovery)', () 
   it('Back returns to the list (analysis keeps running) without cancelling', async () => {
     const user = userEvent.setup()
     const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
@@ -408,7 +422,7 @@ describe('ImagesScreen — survives navigation (running analysis recovery)', () 
 })
 
 describe('ImagesScreen — history (image-understanding history)', () => {
-  const summary = (over?: Record<string, unknown>) => ({
+  const summary = (over?: Partial<ImageSessionSummary>): ImageSessionSummary => ({
     id: 's1',
     title: 'receipt.png',
     mimeType: 'image/png',
@@ -426,7 +440,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     stubApi({
       imageGetStatus: vi.fn(async () => AVAILABLE),
       listImageSessions: vi.fn(async () => [summary()])
-    } as never)
+    })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
     expect(await screen.findByText('History')).toBeInTheDocument()
     expect(await screen.findByText('receipt.png')).toBeInTheDocument()
@@ -451,7 +465,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
       imageGetStatus: vi.fn(async () => AVAILABLE),
       listImageSessions: vi.fn(async () => [summary()]),
       getImageSession
-    } as never)
+    })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
 
     await user.click(await screen.findByText('receipt.png'))
@@ -470,7 +484,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
       imageGetStatus: vi.fn(async () => AVAILABLE),
       listImageSessions,
       deleteImageSession
-    } as never)
+    })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
 
     await screen.findByText('receipt.png')
@@ -495,7 +509,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
       imageGetStatus: vi.fn(async () => AVAILABLE),
       listImageSessions,
       deleteImageSession
-    } as never)
+    })
     render(
       <ToastProvider>
         <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
@@ -527,7 +541,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
       imageGetStatus: vi.fn(async () => AVAILABLE),
       listImageSessions: vi.fn(async () => [summary()]),
       getImageSession
-    } as never)
+    })
     render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
 
     await user.click(await screen.findByText('receipt.png'))
@@ -543,7 +557,7 @@ describe('ImagesScreen — copy feedback (full-audit 2026-07-11 CODE-36)', () =>
     const user = userEvent.setup()
     const s = streamStubs()
     s.copyToClipboard.mockResolvedValue(false) // main refused the write
-    stubApi({ ...s.api, ...pickStubs() } as never)
+    stubApi({ ...s.api, ...pickStubs() })
     render(
       <ToastProvider>
         <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />

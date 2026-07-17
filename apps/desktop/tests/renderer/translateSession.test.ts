@@ -13,6 +13,11 @@ import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
 import type { TranslateJob } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
+// F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
+// (no `as never` erasure) — a rename of any mocked method or of TranslateJob reddens typecheck.
+// The one intentional exception (a malformed `translateStart` resolve, L6b) is expressed as a
+// narrow `as unknown as TranslateJob` at exactly the violating field, not a blanket erasure.
+
 // Unit test for the Translate-view module store (TG-4, plan §2 D6): the remount recovery
 // (`adoptActiveJob`), the one-at-a-time guard, and the lock-time content purge. The TranslateScreen
 // renderer suite covers the happy translate→stream→copy path through this store; this file targets
@@ -37,7 +42,7 @@ describe('translateSession — remount recovery + guards', () => {
       }),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
 
     await adoptActiveJob()
     let snap = getTranslateSession()
@@ -52,7 +57,7 @@ describe('translateSession — remount recovery + guards', () => {
   })
 
   it('adoptActiveJob is a no-op when main reports no running job', async () => {
-    stubApi({ getActiveTranslateJob: vi.fn(async () => null) } as never)
+    stubApi({ getActiveTranslateJob: vi.fn(async () => null) })
     await adoptActiveJob()
     expect(getTranslateSession().activeJobId).toBeNull()
     expect(getTranslateSession().state).toBe('idle')
@@ -65,7 +70,7 @@ describe('translateSession — remount recovery + guards', () => {
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
 
     const first = await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
     expect(first).toBe('started')
@@ -74,7 +79,7 @@ describe('translateSession — remount recovery + guards', () => {
   })
 
   it('translate() no-ops on empty text', async () => {
-    stubApi({} as never)
+    stubApi({})
     expect(await translate({ sourceLang: 'de', targetLang: 'en', text: '   ' })).toBe('noop')
   })
 
@@ -92,7 +97,7 @@ describe('translateSession — remount recovery + guards', () => {
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
 
     const p = translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
     clearTranslateSession() // supersede while the start round-trip is in flight
@@ -118,7 +123,7 @@ describe('translateSession — remount recovery + guards', () => {
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
 
     const p = translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
     // Mid start round-trip: translating true, no job id yet.
@@ -147,7 +152,7 @@ describe('translateSession — remount recovery + guards', () => {
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
 
     const first = translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
     const second = await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
@@ -164,11 +169,13 @@ describe('translateSession — remount recovery + guards', () => {
     // defensive resolve handling now treats it as a runtime failure and resets translating.
     stubApi({
       getActiveTranslateJob: vi.fn(async () => null),
-      translateStart: vi.fn(async () => undefined),
+      // Deliberately contract-violating: the bridge type promises a TranslateJob but this
+      // malformed resolve yields undefined (the L6b defensive-handling case under test).
+      translateStart: vi.fn(async () => undefined as unknown as TranslateJob),
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
 
     const outcome = await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
     expect(outcome).toBe('started')
@@ -180,11 +187,11 @@ describe('translateSession — remount recovery + guards', () => {
 
   it('clearTranslateSession drops resident content (workspace lock)', async () => {
     stubApi({
-      getActiveTranslateJob: vi.fn(async () => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
+      getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
       onTranslateToken: vi.fn(() => () => {}),
       onTranslateDone: vi.fn(() => () => {}),
       onTranslateError: vi.fn(() => () => {})
-    } as never)
+    })
     await adoptActiveJob()
     expect(getTranslateSession().output).toBe('geheim')
 
