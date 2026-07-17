@@ -68,9 +68,13 @@ function xmlEscape(s: string): string {
   return s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'))
 }
 
-// A `<w:t ...>inner</w:t>` element (inner is non-greedy: `<w:t>` bodies hold only text, no `</w:t>`),
-// OR a paragraph close `</w:p>` (a layer newline). Alternation, scanned in document order via matchAll.
-const NODE_OR_PARA_RE = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<\/w:p>/g
+// A SELF-CLOSING `<w:t .../>` (an EMPTY text node — third-party OOXML producers emit these for empty
+// runs; matched FIRST so `[^>]*` can't read the trailing `/` as attribute text and treat the node as an
+// opener whose lazy body swallows all markup up to the next `</w:t>` — audit 2026-07-16 F-11), OR a
+// paired `<w:t ...>inner</w:t>` element (inner is non-greedy: `<w:t>` bodies hold only text, no
+// `</w:t>`), OR a paragraph close `</w:p>` (a layer newline). Alternation, scanned in document order
+// via matchAll.
+const NODE_OR_PARA_RE = /<w:t(?:\s[^>]*)?\/>|<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<\/w:p>/g
 
 /**
  * Parse `word/document.xml` into the text layer + the `<w:t>` node map. Deterministic — `readDocxTextLayer`
@@ -83,8 +87,10 @@ function parseTextLayer(xml: string): DocxTextLayer {
   for (const m of xml.matchAll(NODE_OR_PARA_RE)) {
     if (m[1] === undefined) {
       // `</w:p>` — a paragraph/cell boundary becomes a single layer newline (not part of any node, so a
-      // span never rewrites it; masks/edits never straddle a paragraph in practice).
-      layer += '\n'
+      // span never rewrites it; masks/edits never straddle a paragraph in practice). A self-closing
+      // `<w:t .../>` (F-11) is an EMPTY node: no inner text, nothing to map or rewrite — skipped, so
+      // its raw bytes survive verbatim (byte-identity outside spans, D77).
+      if (m[0] === '</w:p>') layer += '\n'
       continue
     }
     const whole = m[0]
