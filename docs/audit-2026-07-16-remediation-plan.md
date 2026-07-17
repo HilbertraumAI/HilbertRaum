@@ -508,7 +508,15 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 - Deviations from plan: none beyond the deliberate step-3/4 split above (the plan's step 3
   wording bundles the CLAUDE.md restore with close-out; restoring it while this file still
   exists on disk would make CLAUDE.md false, so it rides the deletion commit).
-- New findings: none.
+- New findings: **NF-2** (§N-a, fixed by the ORCHESTRATOR post-folding, own commit) — the flake
+  in the gate line above was traced to a race in the Phase-5-ADDED test itself, not to load
+  luck: `runtime-download.ts` sets `job.status = 'extracting'` (:600) BEFORE awaiting
+  `install()` (:604), which pre-cleans the dest dir before invoking the extractor, so the test's
+  `waitForStatus('extracting')` can observe the status while `signalAwareExtract` has not yet
+  run and `sawSignal` is still undefined. Fix (test-only, TS-1 gate-on-observable-state rule):
+  after the status wait, a bounded poll on `sawSignal !== undefined` before the assertions —
+  the production contract asserted is unchanged. Verified green ×2 in isolation post-fix; the
+  wave no longer hands the owner a known-flaky test it introduced.
 - Messages to later phases: none — the wave's remaining work is the owner-action list in
   BUILD_STATE §5 item 14 (delete papers + CLAUDE.md restore · PR/merge + #59 comment · tag).
 - Docs touched: `docs/architecture.md` (new §50 + layout block), `BUILD_STATE.md` (§5 item 14

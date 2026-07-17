@@ -460,6 +460,15 @@ describe('extraction bounds + concurrency (F-33)', () => {
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: signalAwareExtract })
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
     await waitForStatus(mgr, started.jobId, 'extracting')
+    // Gate on the extractor being ENTERED, not just the status flip: runOne sets 'extracting'
+    // BEFORE awaiting install() (which pre-cleans the dest dir before calling extract), so under
+    // CPU starvation the status poll can win that race (observed once at the Phase-10 full-run
+    // gate). TS-1 rule: gate on the observable state the assertion needs.
+    const entered = Date.now()
+    while (sawSignal === undefined) {
+      if (Date.now() - entered > 5000) throw new Error('extractor never entered')
+      await new Promise((r) => setTimeout(r, 2))
+    }
     expect(sawSignal).toBeDefined() // the extractor received the job's abort signal…
     expect(sawSignal!.aborted).toBe(false)
     mgr.cancel(started.jobId) // …and the cancel reaches it (pre-fix: nothing reached tar)
