@@ -802,6 +802,27 @@ overrides.getDriveStatus = async () =>
         arch: 'x64'
       } as unknown as DriveStatus)
     : null
+// F-36: the marketing getSettings override (above) forces settings.workspaceMode 'encrypted' so
+// PrivacyTab renders the encrypted protection card — but App gates the rail's Lock-now control on
+// workspace.mode === 'encrypted', read from getWorkspaceState. Left at 'plaintext_dev' (the
+// brand-home base), the shell shots staged an impossible posture: an encrypted privacy card beside
+// a rail with NO Lock-now button. Make this override case-aware too so the two sources agree; the
+// component-level cases keep the plaintext_dev base (brand-home needs only 'unlocked').
+const baseGetWorkspaceState = overrides.getWorkspaceState as () => Promise<{
+  state: string
+  mode: string
+  plaintextAllowed: boolean
+  encryptionRequired: boolean
+}>
+overrides.getWorkspaceState = async () =>
+  isMkt()
+    ? {
+        state: 'unlocked' as const,
+        mode: 'encrypted' as const,
+        plaintextAllowed: false,
+        encryptionRequired: true
+      }
+    : baseGetWorkspaceState()
 
 // Walk helpers: each staged shell ticks until its goal selector exists, clicking its way
 // through the real UI. Nav labels are matched in both languages.
@@ -854,15 +875,23 @@ function StagedShell({ goal, step }: { goal: string; step: () => void }): JSX.El
     const timer = setInterval(() => {
       tries += 1
       if (tries > 120) {
+        // F-38 give-up path: the goal never stabilized. Print an actionable warning so a wrong
+        // (reset-shell) capture cannot ship silently — waitReady only ever times out generically,
+        // and if we reached readiness earlier the flag is set so this is skipped.
+        if (!document.body.dataset.marketingReady) {
+          console.warn(`[marketing] goal "${goal}" never stabilized after ${tries} ticks — capture may be wrong`)
+        }
         clearInterval(timer)
         return
       }
       if (document.querySelector(goal)) {
         stable += 1
-        if (stable >= 5) {
-          document.body.dataset.marketingReady = '1'
-          clearInterval(timer)
-        }
+        if (stable >= 5) document.body.dataset.marketingReady = '1'
+        // F-38: do NOT clearInterval on success. The settings load can remount the tree AFTER a
+        // first successful walk; if the goal then disappears the else-branch below clears the flag
+        // and re-walks, so waitReady re-blocks instead of capturing the reset shell. Keep observing
+        // until the tries cap. (The flag was previously sticky: clearing the timer on success made
+        // its own delete unreachable, so a post-readiness remount yielded a silently wrong capture.)
         return
       }
       stable = 0
