@@ -9,8 +9,9 @@
 > at close-out (Phase 10) its durable content is folded into an `architecture.md` §-numbered
 > design record and both working papers are deleted per the CLAUDE.md doc-lifecycle rule.
 
-**Status: IN PROGRESS** — Phase 0 complete 2026-07-17; §D decisions recorded below; ledger
-entry 0 appended.
+**Status: CLOSE-OUT (Phase 10 folding done 2026-07-17)** — all 41 findings dispositioned
+(§L entries 0–9); the durable record is folded into `docs/architecture.md` **§50**; this file
+awaits the owner-confirmed deletion (Phase 10 step 4) + the wave-close PR/merge/tag (steps 5–6).
 
 ---
 
@@ -476,6 +477,42 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Messages to later phases: <"Phase 7: …" | none>
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
+
+### Phase 10 (close-out folding) — 2026-07-17 — branch fix/audit-2026-07-16-p9 (on p9 @ 886be68) @ this commit
+- Gate: **4,271 passed / 49 skipped** (docs-only — unchanged from Phase 9) · typecheck clean ·
+  build n/a (nothing under `apps/desktop/src` touched). One full-run flake seen once (the P7
+  ledger's one-flake class): `engine-download.test.ts` F-33 "threads the job cancel into the
+  extractor" failed `expect(sawSignal).toBeDefined()` after `waitForStatus('extracting')` under
+  parallel load — passes 31/31 in isolation and the full re-run was clean **4,271/49**;
+  unrelated to this phase's three edited `.md` files (docs cannot reach that code path).
+  Hygiene: both edited repo docs (`docs/architecture.md`, `BUILD_STATE.md`) + this plan
+  byte-verified LF, BOM-free, NUL-free; architecture.md sits inside the repo-hygiene walk and
+  its net ran green.
+- Fixed: no findings (close-out). **Step 1 verified:** every F-01…F-41 has a §L disposition,
+  cross-checked against the report §3 id list (41/41; plus Q-1/Q-2 resolved and NF-1 fixed).
+  **Step 2 done:** durable record folded into `docs/architecture.md` as **§50** (after §49,
+  house template §46/§49): intro + method + gate history (4,217/49 → 4,271/49, +54, with the
+  Phase-0 baseline correction), the working-papers git-show pointers (report via
+  `git show 886be68:docs/audit-2026-07-16.md`, unchanged since kickoff 8bf0fc7; plan at this
+  close-out commit), the §D owner-decisions batch as executed, the 41-row per-finding
+  disposition table (F-39 recorded as investigated→KEEP+documented; F-40's re-capture and Q-2's
+  smoke recorded as REGISTERED to §5 item 7 items (h)/(i)), the Q-1/Q-2/NF-1 block, the
+  P4/P5/P6 independent-review outcomes + §N-a deviations, the clean-verdicts bullets (report §1
+  + Appendix B highlights), the residuals/watch list, and the §-anchor legend. The
+  architecture.md layout block updated (§24–§49 → §24–§50). **Step 3 PARTIAL by design:**
+  BUILD_STATE §5 item 14 gained the Phase-10 close-out block but stays OPEN, and the CLAUDE.md
+  doc-lifecycle sentence is NOT yet restored — that restore is coupled to the owner-confirmed
+  paper deletion (step 4), which has not happened at this commit. Steps 4–6 (delete papers,
+  stacked-chain PR + merge on green `ci-success` + the #59 comment, version tag) are owner
+  actions, listed in the BUILD_STATE item.
+- Deviations from plan: none beyond the deliberate step-3/4 split above (the plan's step 3
+  wording bundles the CLAUDE.md restore with close-out; restoring it while this file still
+  exists on disk would make CLAUDE.md false, so it rides the deletion commit).
+- New findings: none.
+- Messages to later phases: none — the wave's remaining work is the owner-action list in
+  BUILD_STATE §5 item 14 (delete papers + CLAUDE.md restore · PR/merge + #59 comment · tag).
+- Docs touched: `docs/architecture.md` (new §50 + layout block), `BUILD_STATE.md` (§5 item 14
+  Phase-10 close-out block), this plan (Status line + this entry). BUILD_STATE entry added: yes.
 
 ### Phase 9 — 2026-07-17 — branch fix/audit-2026-07-16-p9 (stacked on p8 @ 70a52b2); commits F-40+F-41+ratchet @ 29427a4, docs+§Q+ledger @ this commit
 - Gate: **4,271 passed / 49 skipped** (baseline entering P9 was 4,270/49; +1 = the new ratchet
