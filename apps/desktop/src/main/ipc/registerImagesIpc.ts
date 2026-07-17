@@ -186,10 +186,14 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     // created lazily and at most once; a busy/failed reject persists nothing. Persistence is
     // best-effort — any failure is logged content-free and the live analysis still runs.
     let sessionId: string | null = typeof req.sessionId === 'string' ? req.sessionId : null
-    const ensureSession = (): string | null => {
+    // ASYNC (audit 2026-07-16 F-12): createImageSession now runs the ~20 MiB write+encrypt+shred off the
+    // main thread. The `done` wrapper AWAITS this before `base.done` so the sessionId still rides the
+    // done event (the renderer's follow-up contract, pinned by images-ipc.test.ts). Best-effort — a
+    // persistence failure is logged content-free and the live answer still surfaces.
+    const ensureSession = async (): Promise<string | null> => {
       if (sessionId) return sessionId
       try {
-        sessionId = createImageSession(
+        sessionId = await createImageSession(
           ctx.db,
           imagesDir(ctx.paths.workspacePath),
           req,
@@ -205,10 +209,12 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     const base = emitterFor(event)
     const emitter: VisionStreamEmitter = {
       token: base.token,
-      done: (jobId, job) => {
+      // Async-tolerant: the service fires `emit.done` without awaiting; we await persistence so the
+      // done EVENT is sent only once the session/turn are stored and sessionId is known.
+      done: async (jobId, job) => {
         const answer = job.answer
         if (answer && answer.trim()) {
-          const sid = ensureSession()
+          const sid = await ensureSession()
           if (sid) {
             try {
               addImageTurn(ctx.db, sid, req.question, answer)
@@ -250,9 +256,10 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     return listImageSessions(ctx.db)
   })
 
-  ipcMain.handle(IPC.imageGetSession, (_e, id: unknown): ImageSessionDetail | null => {
+  ipcMain.handle(IPC.imageGetSession, (_e, id: unknown): Promise<ImageSessionDetail | null> => {
     requireUnlocked()
-    if (typeof id !== 'string') return null
+    if (typeof id !== 'string') return Promise.resolve(null)
+    // ASYNC (audit 2026-07-16 F-12): decrypt+read off the main thread.
     return getImageSession(
       ctx.db,
       imagesDir(ctx.paths.workspacePath),
@@ -261,8 +268,9 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     )
   })
 
-  ipcMain.handle(IPC.imageDeleteSession, (_e, id: unknown): void => {
+  ipcMain.handle(IPC.imageDeleteSession, async (_e, id: unknown): Promise<void> => {
     requireUnlocked()
-    if (typeof id === 'string') deleteImageSession(ctx.db, imagesDir(ctx.paths.workspacePath), id)
+    // ASYNC (audit 2026-07-16 F-12): the post-commit shred runs off the main thread.
+    if (typeof id === 'string') await deleteImageSession(ctx.db, imagesDir(ctx.paths.workspacePath), id)
   })
 }
