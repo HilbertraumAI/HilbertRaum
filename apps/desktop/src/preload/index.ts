@@ -49,6 +49,7 @@ import type {
   SkillReconcileStatus,
   SkillRunState,
   SkillSuggestion,
+  SmartListView,
   StartDocTaskRequest,
   TranslateJob,
   TranslateRequest,
@@ -382,7 +383,11 @@ const api = {
   listDocuments: (filter?: {
     collectionId?: string
     lifecycle?: DocumentLifecycle
-    smart?: 'generated' | 'archived' | 'all'
+    // F-28: was narrowed to 'generated'|'archived'|'all', but main's DocumentListFilter accepts the
+    // full shared SmartListView (registerDocsIpc filterDocuments implements 'recent' + matchesSmartView
+    // covers the rest); the bridge type must not forbid values main supports. Type-only — the value
+    // rides ipcRenderer.invoke unchanged.
+    smart?: SmartListView
   }): Promise<DocumentInfo[]> => ipcRenderer.invoke(IPC.listDocuments, filter),
   /** Add documents to a collection (membership; idempotent). "Move" = add then remove. */
   addToCollection: (documentIds: string[], collectionId: string): Promise<void> =>

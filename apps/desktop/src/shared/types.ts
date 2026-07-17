@@ -793,7 +793,6 @@ export type ChatDepthMode = 'fast' | 'balanced' | 'deep'
 
 export interface ChatOptions {
   mode?: ChatDepthMode
-  useDocuments?: boolean
   /** Re-answer the last user turn: drop the previous assistant reply, then stream a fresh one. */
   regenerate?: boolean
   /**
