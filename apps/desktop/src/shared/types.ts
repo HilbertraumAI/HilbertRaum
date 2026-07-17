@@ -732,6 +732,17 @@ export interface Citation {
    * panel can show what was cited without a second lookup.
    */
   snippet?: string | null
+  /**
+   * EP-1 Phase 0 (evidence-pack plan §5 item 2) — the cited chunk's source document id
+   * (`chunks.document_id`), captured ADDITIVELY at citation construction so an evidence
+   * review can pin source identity exactly (hash freshness, spec §21). Absent on rows
+   * persisted before this landed — legacy answers resolve best-effort by title with an
+   * honest "unresolved" state (plan §1.2). Optional forever; the renderer ignores it.
+   */
+  documentId?: string | null
+  /** EP-1 Phase 0 — the cited chunk's id (`chunks.id`), where cheaply available at
+   *  construction. Same additive/back-compat rules as `documentId`. */
+  chunkId?: string | null
 }
 
 export interface Message {
@@ -2159,6 +2170,14 @@ export type AuditEventType =
   | 'settings_changed'
   | 'policy_warning'
   | 'offline_guard_violation'
+  // Evidence Pack / Review Mode (EP-1 plan §5 item 5): review lifecycle + pack export.
+  // Metadata is IDS/COUNTS ONLY — never the review title, notes, reviewer label, snippets,
+  // or the export path (all content, exactly like conversation/document exports). Literals
+  // land in Phase 0; the first emitter is the Phase-1 IPC surface.
+  | 'evidence_review_created'
+  | 'evidence_review_ready'
+  | 'evidence_review_deleted'
+  | 'evidence_pack_exported'
 
 /** One audit-log entry (a `runtime_events` row), newest-first over the IPC surface. */
 export interface AuditEvent {
@@ -2262,4 +2281,255 @@ export interface ContextUsage {
 export interface ConversationSummaryMarker {
   summary: string
   beforeMessageId: string | null
+}
+
+// ---- Evidence Pack / Review Mode (EP-1) — evidence-pack plan §5, spec §18 ----
+// Phase 0 defines the persisted contracts + storage CRUD only (no IPC, no UI, no export).
+// All shapes follow the repo data-contract rules: additive-nullable persistence, tolerant
+// row→DTO parsing (malformed JSON → safe defaults, never a throw, never invented values).
+
+/**
+ * A human review decision on one review item (spec §6.7/§14.1). Machine values are persisted
+ * verbatim in `evidence_review_items.decision` and localized only at render time (the
+ * citation-label precedent). "Supported" refers ONLY to support found in the linked evidence,
+ * never universal truth. 'not_reviewed' is the honest "no human decision recorded" state —
+ * tolerant parsing degrades an unknown stored value to it, never to an invented judgment.
+ */
+export type ReviewDecision =
+  | 'supported'
+  | 'partly_supported'
+  | 'not_supported'
+  | 'follow_up'
+  | 'not_reviewed'
+  | 'not_applicable'
+
+/**
+ * Persisted review lifecycle status (spec §18.4). ONLY these two are ever stored in
+ * `evidence_reviews.status`; `outdated` is a DERIVED overlay computed at open time (the
+ * Phase-4 freshness engine) precisely so drifted sources can never erase the fact that a
+ * review HAD been completed.
+ */
+export type EvidenceReviewStatus = 'draft' | 'ready'
+
+/**
+ * Deterministic markdown block classes the Phase-1 segmenter emits (plan §6.1). Persisted on
+ * block items (`evidence_review_items.block_kind`, nullable) so the D-7 ready gate can exempt
+ * headings without re-segmenting; NULL/absent = unknown → treated as REQUIRED (the safe
+ * direction: an unclassified block never silently skips review).
+ */
+export type AnswerBlockKind = 'paragraph' | 'list_item' | 'heading' | 'fence' | 'table' | 'blockquote'
+
+/**
+ * One snapshotted source behind a reviewed answer (spec §18.2 + plan §1.2), an element of
+ * `evidence_reviews.source_snapshot_json`. The snapshot keeps the review understandable after
+ * the workspace changes, so it records source identity HONESTLY:
+ *  - `identity: 'resolved'` — `documentId` names the source row (post-Phase-0 answers carry it
+ *    on the `Citation`; a legacy citation resolves only on an UNAMBIGUOUS title match).
+ *  - `identity: 'unresolved'` — the document could not be uniquely identified (zero OR
+ *    multiple title matches — never guessed). DISTINCT from a missing document: freshness can
+ *    only say "cannot verify", not "changed"/"deleted".
+ * `availabilityAtCreation` records whether the resolved document row existed at review
+ * creation; absent/null when identity is 'unresolved' (it cannot be known — never invented).
+ */
+export interface EvidenceSourceSnapshot {
+  /** Stable key items link to (`evidence_review_links.evidence_key`), unique within the review. */
+  key: string
+  /** The persisted machine citation label (e.g. "S1"); absent for provenance-only sources. */
+  machineLabel?: string | null
+  /**
+   * The honesty class of this source (spec §6.5/§6.6; Phase 1 derives it from
+   * `coverage.mode`): 'direct_excerpt' = a labeled excerpt supplied to the model (relevance
+   * path); 'whole_document_provenance' = contributed to a whole-document analysis — NEVER
+   * presented as a direct citation; 'structured_record' = deterministic extraction output.
+   */
+  kind: 'direct_excerpt' | 'whole_document_provenance' | 'structured_record'
+  identity: 'resolved' | 'unresolved'
+  documentId?: string | null
+  documentTitle: string
+  /** `documents.sha256` at snapshot time (resolved sources only) — the Phase-4 freshness
+   *  anchor (spec §21.2: compare stored hashes, never re-hash on open). */
+  documentSha256?: string | null
+  mimeType?: string | null
+  pageNumber?: number | null
+  sectionLabel?: string | null
+  snippet?: string | null
+  sourceChunkId?: string | null
+  availabilityAtCreation?: 'available' | 'missing' | null
+}
+
+/**
+ * How the reviewed answer was generated (spec §18.3), SYNTHESIZED at review creation from the
+ * conversation row + live model catalog + app status (plan §1.3 — no per-message model id
+ * exists in storage). EVERY field is optional: absent = rendered as "Unavailable", never
+ * invented (spec §20.2/§25.5).
+ */
+export interface EvidenceGenerationSnapshot {
+  /** The reviewed message's `createdAt`. */
+  generatedAt?: string | null
+  modelId?: string | null
+  modelDisplayName?: string | null
+  skillId?: string | null
+  skillDisplayName?: string | null
+  appVersion?: string | null
+  /** The message's honest output-truncation flag (`messages.truncated`). */
+  answerTruncated?: boolean | null
+  /** The answer's `coverage.mode` at snapshot time; 'unknown' when none was recorded. */
+  answerMode?: 'relevance' | 'tree' | 'capped' | 'extract' | 'unknown' | null
+}
+
+/**
+ * One evidence link on a review item (spec §6.4/§13): item → source snapshot `key`. `origin`
+ * is load-bearing honesty: 'answer_marker' = the ANSWER cited this source (an `[Sn]` marker in
+ * the item's text — relevance answers only; whole-document answers get ZERO auto-links, spec
+ * §13.3); 'reviewer' = a human associated it ("Reviewer linked", never presented as "Cited by
+ * the answer"). Tolerant parsing degrades an unknown stored origin to 'reviewer' — the
+ * claim-nothing default.
+ */
+export interface EvidenceLink {
+  /** The linked source's `EvidenceSourceSnapshot.key`. At most one link per (item, key). */
+  evidenceKey: string
+  origin: 'answer_marker' | 'reviewer'
+  /** Reviewer-assigned relation flag (spec §14.3); null/absent = none recorded. */
+  relation?: 'supports' | 'qualifies' | 'contradicts' | 'context' | null
+}
+
+/**
+ * One reviewable unit (spec §6.3/§12): an answer block (deterministic markdown segment,
+ * Phase 1) or a reviewer-created text selection within one block. `textSnapshot` is the
+ * unit's FROZEN text; selection offsets are UTF-16 code-unit indexes into the parent block's
+ * `textSnapshot` (spec Risk 7 — offsets bind to the snapshot, never to live rendering).
+ */
+export interface EvidenceReviewItem {
+  id: string
+  reviewId: string
+  /** Render order within the review (creation order; selections append after the blocks). */
+  ordinal: number
+  kind: 'block' | 'selection'
+  /** Stable key of the answer block this item is (or was carved from) — plan §6.1. */
+  blockKey: string
+  blockKind?: AnswerBlockKind | null
+  startOffset?: number | null
+  endOffset?: number | null
+  textSnapshot: string
+  decision: ReviewDecision
+  reviewerNote?: string | null
+  links: EvidenceLink[]
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * Ready-gate progress (D-7): a review may be marked ready when every REQUIRED item is
+ * decided. Required = block items that are not headings (`blockKind === 'heading'` is exempt;
+ * NULL/unknown counts as required); selections are refinements and never gate. Decided = any
+ * decision other than 'not_reviewed' ('not_applicable' COUNTS as decided). `decidedTotal`
+ * counts decided REQUIRED items, so progress renders as decided/required.
+ */
+export interface EvidenceReadyGate {
+  eligible: boolean
+  requiredTotal: number
+  decidedTotal: number
+}
+
+/**
+ * The review head (spec §6.2/§18.1): one persisted review attached to one assistant message —
+ * at most ONE active review per message in v1, enforced in service code (deliberately not a
+ * UNIQUE constraint, so the spec's later relaxation stays additive). `outdated` is the derived
+ * freshness overlay (spec §18.4): Phase 0/1 always report false; the Phase-4 engine computes
+ * it. It is never stored, so it can never erase `status: 'ready'`.
+ */
+export interface EvidenceReview {
+  id: string
+  conversationId: string
+  messageId: string
+  /** The user question the answer replied to, when identifiable; null when not. */
+  questionMessageId?: string | null
+  /** Review title (D-6): defaults to the conversation title at creation, renameable. */
+  title: string
+  status: EvidenceReviewStatus
+  outdated: boolean
+  /** Free-text reviewer identity label (D-3) — user-entered, never a system identity. */
+  reviewerLabel?: string | null
+  generalNote?: string | null
+  createdAt: string
+  updatedAt: string
+  /** When the review was last marked ready; null while draft (cleared on reopen). */
+  completedAt?: string | null
+}
+
+/** Light entry-point shape for `getEvidenceReviewForMessage` (chat action row, Phase 2). */
+export interface EvidenceReviewSummary {
+  id: string
+  conversationId: string
+  messageId: string
+  title: string
+  status: EvidenceReviewStatus
+  outdated: boolean
+  gate: EvidenceReadyGate
+  updatedAt: string
+}
+
+/** The full review read-model (`getEvidenceReview`): head + frozen snapshots + items + exports. */
+export interface EvidenceReviewDetail extends EvidenceReview {
+  /** The reviewed answer's frozen markdown — the review renders THIS, never the live message. */
+  answerSnapshot: string
+  /** The frozen question text ('' when none was identifiable). */
+  questionSnapshot: string
+  sources: EvidenceSourceSnapshot[]
+  /** The answer's coverage stamp at snapshot time; null = none recorded (legacy answers). */
+  coverageSnapshot: CoverageInfo | null
+  generationSnapshot: EvidenceGenerationSnapshot | null
+  items: EvidenceReviewItem[]
+  exports: EvidenceExportRecord[]
+  gate: EvidenceReadyGate
+}
+
+/** Export formats the plan ships ('html' Phase 3, 'pdf' Phase 6 — D-1). The column is plain
+ *  TEXT, so a later format (spec §18.1 also names markdown) lands additively. */
+export type EvidenceExportFormat = 'html' | 'pdf'
+
+/**
+ * One export event's metadata (D-8: metadata + content hash ONLY — no file copy kept, and the
+ * destination path is deliberately NOT persisted, spec §18.1). `fileName` is the bare chosen
+ * file name (no directory).
+ */
+export interface EvidenceExportRecord {
+  id: string
+  reviewId: string
+  format: EvidenceExportFormat
+  /** Pack schema version stamped into the export. */
+  schemaVersion: number
+  fileName: string
+  fileSha256: string
+  /** Export option flags as recorded (D-4); null = none stored / unparseable. */
+  options: Record<string, unknown> | null
+  createdAt: string
+}
+
+// Patch/input shapes for the Phase-1 IPC surface (spec §19). Omitted fields are left
+// unchanged. The renderer sends ids + user-entered review text ONLY (spec §19 security
+// rules) — snapshots, paths, and derived state are main-side.
+
+export interface EvidenceReviewPatch {
+  title?: string
+  reviewerLabel?: string | null
+  generalNote?: string | null
+}
+
+export interface EvidenceReviewItemPatch {
+  decision?: ReviewDecision
+  reviewerNote?: string | null
+}
+
+/** Create a reviewer selection (spec §12.1): UTF-16 code-unit offsets into the parent
+ *  block's `textSnapshot`, exclusive end. */
+export interface EvidenceSelectionInput {
+  blockKey: string
+  startOffset: number
+  endOffset: number
+}
+
+export interface EvidenceLinkInput {
+  origin: 'answer_marker' | 'reviewer'
+  relation?: 'supports' | 'qualifies' | 'contradicts' | 'context' | null
 }

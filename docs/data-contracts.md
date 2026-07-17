@@ -531,8 +531,9 @@ document answers always run balanced (deep-grounded = wave 2).
   progress + cancel via 1 s polling; SettingsScreen hint updated.
 
 ### Audit log (Phase 19 live)
-✅ **Types** (`shared/types.ts`): `AuditEventType` (42 values — the enum in `types.ts` is the
-  authoritative list; covers runtime/model/document-task/export/collection/skill/workspace events);
+✅ **Types** (`shared/types.ts`): `AuditEventType` (the enum in `types.ts` is the authoritative
+  list — hard counts drifted before, see DOC-3/F-20; covers runtime/model/document-task/export/
+  collection/skill/workspace events + the four EP-1 evidence-review literals, below);
   `AuditEvent { id, type, message, metadata: Record<string,unknown> | null, createdAt }`.
 ✅ **`services/audit.ts`** — `AUDIT_MAX_ROWS = 5000`, `recordEvent(db, type, message, metadata?,
   createdAt?)` (never throws; prunes on insert), `pruneAuditEvents(db, maxRows?)`,
@@ -584,6 +585,74 @@ document answers always run balanced (deep-grounded = wave 2).
   `tests/integration/commercial-drive.test.ts` (8: ordered plan + manual package + `--accept-license`
   threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
   placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
+
+### Evidence Pack / Review Mode (EP-1 Phase 0 live — contracts + storage, no IPC/UI yet)
+Source of truth while the wave is open: `docs/evidence-pack-implementation-plan.md` §5 (this
+section records the AS-BUILT Phase-0 shapes; the IPC surface arrives in Phase 1).
+
+✅ **`Citation` enrichment (ADDITIVE, `shared/types.ts`):** `documentId?: string | null`
+  (`chunks.document_id`) + `chunkId?: string | null` (`chunks.id`), stamped at every citation
+  construction site — relevance retrieval, whole-document read, chunk map-reduce reps,
+  compare-diff (`rag/index.ts`) and deep-index leaf provenance (`analysis/coverage.ts`,
+  reached via `whole-doc-tree.ts`). `isCitation` (`chat.ts`) validates them tolerantly:
+  **rows persisted before EP-1 parse byte-identically** (fields absent, never null-filled);
+  a mistyped value rejects that element only, exactly like the existing optional fields.
+  Purpose: post-EP-1 answers pin source identity exactly; legacy answers resolve best-effort
+  by title with an honest `identity: 'unresolved'` state (plan §1.2).
+✅ **Tables (`db.ts` SCHEMA, idempotent `IF NOT EXISTS`):** `evidence_reviews` (head + frozen
+  `answer_snapshot`/`question_snapshot` TEXT + nullable JSON snapshot columns
+  `source_snapshot_json`/`coverage_snapshot_json`/`generation_snapshot_json`; FK `message_id →
+  messages(id) ON DELETE CASCADE` — the `result_tables` template, so the REAL
+  `deleteConversation` drops the whole chain) → `evidence_review_items` (FK → reviews CASCADE;
+  `kind` 'block'|'selection', `block_key`, nullable `block_kind`
+  'paragraph'|'list_item'|'heading'|'fence'|'table'|'blockquote' — **beyond spec §18.1**, added
+  so the D-7 heading exemption is exact without re-segmenting; NULL = required), →
+  `evidence_review_links` (FK → items CASCADE; `link_origin` 'answer_marker'|'reviewer',
+  nullable `reviewer_relation`) and `evidence_exports` (FK → reviews CASCADE; D-8 metadata +
+  hash only — `file_name` is the bare name, the destination path is NEVER persisted). Indexes
+  on each FK column. One ACTIVE review per message = **service-enforced** (deliberately no
+  UNIQUE constraint). All tables inherit encrypted-at-rest (same workspace DB). `status`
+  stores ONLY `'draft'|'ready'`; **`outdated` is derived, never stored** (spec §18.4 — it can
+  never erase ready; Phase 0/1 always report `false`, Phase 4 computes it).
+✅ **Types (`shared/types.ts`):** `ReviewDecision`
+  ('supported'|'partly_supported'|'not_supported'|'follow_up'|'not_reviewed'|'not_applicable'),
+  `EvidenceReviewStatus` ('draft'|'ready'), `AnswerBlockKind`, `EvidenceSourceSnapshot`
+  (spec §18.2 **plus** `identity: 'resolved'|'unresolved'` — the plan-§1.2 honest legacy
+  state; `availabilityAtCreation` is nullable and reported only for resolved identities),
+  `EvidenceGenerationSnapshot` (spec §18.3 but **every field optional** per plan §1.3 — absent
+  renders "Unavailable", never invented), `EvidenceLink`, `EvidenceReviewItem`,
+  `EvidenceReadyGate`, `EvidenceReview`, `EvidenceReviewSummary`, `EvidenceReviewDetail`,
+  `EvidenceExportFormat` ('html'|'pdf' — the formats the plan ships), `EvidenceExportRecord`;
+  IPC patch/input shapes `EvidenceReviewPatch`, `EvidenceReviewItemPatch`,
+  `EvidenceSelectionInput` (UTF-16 offsets into the parent block's `textSnapshot`, exclusive
+  end — spec Risk 7), `EvidenceLinkInput`.
+✅ **Service (`main/services/evidence-reviews.ts`):** storage CRUD + tolerant row→DTO parsing
+  (the `parseCitations` idiom per JSON column; `coverage_snapshot_json` reuses chat.ts's
+  now-exported `parseCoverage`). Safe defaults always point AWAY from unearned confidence:
+  unknown decision → 'not_reviewed', unknown status → 'draft', unknown link origin →
+  'reviewer', unknown source kind → 'whole_document_provenance', unknown identity →
+  'unresolved'; malformed JSON → `[]`/null, never a throw. Exports: `createEvidenceReview`
+  (reads `conversation_id` from the message row — never trusted from the caller; throws on
+  unknown message / existing review, ids-only messages), `getEvidenceReview`,
+  `getEvidenceReviewForMessage`, `countEvidenceReviewsForConversation` (the D-2 confirm
+  count), `updateEvidenceReview`, `markEvidenceReviewReady` (refuses + returns the gate while
+  ineligible), `reopenEvidenceReview`, `deleteEvidenceReview`, `createEvidenceReviewItems`
+  (batch, one transaction), `updateEvidenceReviewItem`, `createEvidenceSelection` (refuses
+  out-of-range offsets — never clamps), `deleteEvidenceSelection` (selections only — block
+  items are structural), `setEvidenceLink` (upsert per (item, key); refuses unknown source
+  keys), `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`, and the pure
+  `deriveReadyGate` (D-7: required = non-heading block items, NULL `blockKind` counts as
+  required; 'not_applicable' counts as decided; selections never gate).
+✅ **Audit literals (types only — no emitter until Phase 1):** `evidence_review_created`,
+  `evidence_review_ready`, `evidence_review_deleted`, `evidence_pack_exported`. Metadata
+  contract: ids/counts ONLY — never titles, notes, reviewer labels, snippets, or paths.
+  (The exhaustive Diagnostics label record forced the matching `diag.audit.*` EN/DE keys to
+  land now; behaviorally inert until an event exists.)
+✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix + pure snapshot parsers) +
+  `tests/integration/evidence-reviews.test.ts` (schema on fresh/reopened DBs via `listTables`;
+  full round-trip incl. Unicode/markdown/hostile strings; malformed-JSON tolerance; cascade
+  through the REAL `deleteConversation`; service-level status derivation; citation enrichment
+  incl. byte-identical legacy parsing).
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

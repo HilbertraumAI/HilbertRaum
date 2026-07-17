@@ -237,6 +237,10 @@ function isCitation(v: unknown): v is Citation {
   if (c.pageNumber != null && typeof c.pageNumber !== 'number') return false
   if (c.section != null && typeof c.section !== 'string') return false
   if (c.snippet != null && typeof c.snippet !== 'string') return false
+  // EP-1 Phase 0 additive identity fields (plan §5 item 2): optional, tolerant — a legacy
+  // row without them passes unchanged; a malformed value rejects the element like the rest.
+  if (c.documentId != null && typeof c.documentId !== 'string') return false
+  if (c.chunkId != null && typeof c.chunkId !== 'string') return false
   return true
 }
 
@@ -259,8 +263,10 @@ function parseCitations(json: string | null): Citation[] | undefined {
  * `parseCitations` — a malformed/legacy (NULL) payload must never break rendering a conversation, so
  * it degrades to undefined and the renderer falls back to the relevance badge. Counts default to 0 so
  * a partially-shaped payload still satisfies the `CoverageInfo` contract.
+ * Exported for EP-1 (evidence-reviews.ts): `evidence_reviews.coverage_snapshot_json` holds the
+ * same serialized `CoverageInfo` shape, so the snapshot read reuses THIS parser verbatim.
  */
-function parseCoverage(json: string | null): CoverageInfo | undefined {
+export function parseCoverage(json: string | null): CoverageInfo | undefined {
   if (!json) return undefined
   try {
     const v = JSON.parse(json) as unknown
