@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   NetworkPolicy,
@@ -162,16 +162,60 @@ export interface LoadedPolicy {
   allowNetworkByDefault: boolean
 }
 
+// F-30 (audit 2026-07-16) — mtime/size-keyed cache for the parsed policy. `getAppStatus` and
+// `getPolicy` call `buildPolicyStatus → loadPolicy` on every invocation, and `TranslateScreen` polls
+// `getAppStatus` every 4 s for a whole (minutes-to-hours) translation — each call `readFileSync` +
+// `JSON.parse`'d policy.json AND drive.json synchronously off the portable drive. This caches the
+// merged result per config dir, keyed by each file's `(mtimeMs, size)` signature (plus `isDev`, which
+// selects the fail-closed base): a `stat` per call replaces the two reads, and a re-read happens ONLY
+// when a signature shows a change — so a live policy edit is still picked up (an admin tightening the
+// policy is never masked), while the steady-state poll does no drive reads. A missing file is a
+// distinct `absent` signature, so create/delete of either file invalidates too. Bounded: at most one
+// entry per config dir (overwritten on change), and in the app there is exactly one config dir.
+interface PolicyCacheEntry {
+  sig: string
+  loaded: LoadedPolicy
+}
+const policyCache = new Map<string, PolicyCacheEntry>()
+let policyMaterializations = 0
+
+/** Test probe (F-30): how many times `loadPolicy` actually parsed the files (cache misses). */
+export function __policyMaterializations(): number {
+  return policyMaterializations
+}
+/** Test hook (F-30): drop the policy cache + reset the probe. */
+export function __resetPolicyCache(): void {
+  policyCache.clear()
+  policyMaterializations = 0
+}
+
+/** `(mtimeMs, size)` of a file, or `absent` if it is missing/unstatable (F-30 cache key part). */
+function fileSignature(path: string): string {
+  try {
+    const st = statSync(path)
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return 'absent'
+  }
+}
+
 /**
  * Load + merge the policy from a config directory. Both `policy.json` and `drive.json`
  * are optional; either being absent or malformed falls back to safe defaults. Pure with
- * respect to its inputs aside from reading those two files; never throws.
+ * respect to its inputs aside from reading those two files; never throws. The parsed result
+ * is cached per config dir keyed by each file's mtime/size (F-30) — a live edit still re-reads.
  */
 export function loadPolicy(
   configDir: string,
   onWarn?: (msg: string) => void,
   opts: PolicyLoadOptions = {}
 ): LoadedPolicy {
+  const policyPathForSig = join(configDir, 'policy.json')
+  const drivePathForSig = join(configDir, 'drive.json')
+  const sig = `${opts.isDev === false ? 0 : 1}|${fileSignature(policyPathForSig)}|${fileSignature(drivePathForSig)}`
+  const cached = policyCache.get(configDir)
+  if (cached && cached.sig === sig) return cached.loaded
+
   // Fail-closed base for a packaged build (M-4): a missing/malformed/unreadable
   // policy.json degrades to STRICT_POLICY, not the dev-friendly DEFAULT_POLICY.
   const base = basePolicyFor(opts)
@@ -203,7 +247,10 @@ export function loadPolicy(
     }
   }
 
-  return { policy, policyFilePresent, driveFilePresent, allowNetworkByDefault }
+  const loaded: LoadedPolicy = { policy, policyFilePresent, driveFilePresent, allowNetworkByDefault }
+  policyCache.set(configDir, { sig, loaded })
+  policyMaterializations += 1
+  return loaded
 }
 
 export interface EffectiveNetwork {
