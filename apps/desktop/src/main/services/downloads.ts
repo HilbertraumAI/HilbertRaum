@@ -10,8 +10,10 @@ import {
   modelWeightMaxBytes,
   verifyDownloadedFile,
   ResumeOffsetMismatchError,
+  RangeNotSatisfiableError,
   type FetchFn,
-  type ModelDownloadTask
+  type ModelDownloadTask,
+  type VerifyResult
 } from './assets'
 import { invalidateChecksum, primeChecksum, type HashStore } from './models'
 
@@ -32,6 +34,11 @@ import { invalidateChecksum, primeChecksum, type HashStore } from './models'
 //   where `computeInstallState` can see it. A cancelled/failed `.part` is KEPT and
 //   resumed via a `Range` header next time (best-effort; a server without ranges → 200
 //   → clean restart).
+// - A COMPLETE `.part` (a cancel/crash during the minutes-long verify, or a failed rename,
+//   leaves the full file staged) is NOT re-requested with an unsatisfiable `Range:
+//   bytes=<fullSize>-` (→ HTTP 416, which used to loop forever with no in-app recovery,
+//   F-13). It is VERIFIED in place: a matching hash renames it into place; a mismatch
+//   discards the `.part` and restarts clean (the ResumeOffsetMismatch treatment).
 // - Verify-before-trust: a hash MISMATCH deletes the `.part` and fails the job; a
 //   PLACEHOLDER expected hash completes the job but marks it `unverified` — the model
 //   stays UNVERIFIED until a real hash lands in the manifest (never a silent pass).
@@ -346,148 +353,249 @@ export class DownloadManager {
     remainingPlanned: number | null
   ): Promise<boolean> {
     const part = partPath(task.dest)
-    try {
-      // Best-effort Range resume: a kept `.part` (cancelled/crashed earlier attempt)
-      // becomes the prefix. The server decides — 206 appends, 200 restarts cleanly.
-      const resumeFrom = existsSync(part) ? statSync(part).size : 0
-      let prefix = resumeFrom
-      job.status = 'downloading'
-      job.receivedBytes = baseBytes + prefix
-      const download = this.deps.downloadImpl ?? downloadToFile
-      const result = await download(task.url, part, {
-        fetchImpl: this.deps.fetchImpl,
-        signal: controller.signal,
-        // D3 + F17: cap the body so a redirected/hostile endpoint can't stream past it and fill the
-        // drive (the SHA verify already rejects wrong bytes). The cap is the manifest's exact
-        // `size_bytes` when known, else a bounded per-role default — never unbounded (so a manifest
-        // that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
-        maxBytes: modelWeightMaxBytes(task.role, task.sizeBytes),
-        ...(resumeFrom > 0
-          ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true, resumeFrom }
-          : {}),
-        onResponse: ({ status, contentLength }) => {
-          // A 200 means the server ignored the Range request → the file restarts.
-          prefix = status === 206 ? resumeFrom : 0
-          job.receivedBytes = baseBytes + prefix
-          // Combined total = finished files + this file (Content-Length) + the files still queued.
-          // Any unknown size collapses the total to null (the bar then shows the byte count only).
-          job.totalBytes =
-            contentLength != null && remainingPlanned != null
-              ? baseBytes + prefix + contentLength + remainingPlanned
-              : null
-        },
-        onProgress: (received) => {
-          job.receivedBytes = baseBytes + prefix + received
-        }
-      })
-      this.deps.log?.('Model download finished, verifying', {
-        modelId: job.modelId,
-        status: result.status,
-        bytes: job.receivedBytes
-      })
-
-      // A cancel that raced the final bytes: cancel() aborts our controller, so the
-      // signal is the explicit cancel flag (no status-narrowing cast needed).
-      if (controller.signal.aborted) return false // keep the .part for resume
-
-      job.status = 'verifying'
-      const verify = await (this.deps.verifyImpl ?? verifyDownloadedFile)(part, task.expectedSha256)
-      // BE-4 (full-audit 2026-07-10): honour a cancel that landed DURING the hash — before
-      // acting on the verify result. Same contract as a mid-download cancel: the `.part` is
-      // kept for resume, nothing is renamed into place, and a two-file job stops here. The
-      // status is set explicitly because a cancel racing the `verifying` transition above
-      // could have been overwritten.
-      if (controller.signal.aborted) {
-        job.status = 'cancelled'
-        this.deps.log?.('Model download cancelled during verify; partial kept for resume', {
-          modelId: job.modelId
-        })
-        return false
-      }
-      if (verify.reason === 'mismatch') {
-        // Verify-before-trust: the partial is deleted, the job fails loudly.
-        await rm(part, { force: true })
-        job.status = 'failed'
-        job.error = tMain('main.download.checksumMismatch')
-        this.deps.log?.('Model download checksum mismatch — partial deleted', {
-          modelId: job.modelId,
-          expected: task.expectedSha256,
-          actual: verify.actual
-        })
-        this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
-          modelId: job.modelId,
-          jobId: job.jobId,
-          reason: 'checksum mismatch — file discarded'
-        })
-        return false
-      }
-      if (verify.reason === 'missing') {
-        job.status = 'failed'
-        job.error = tMain('main.download.fileMissing')
-        this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
-          modelId: job.modelId,
-          jobId: job.jobId,
-          reason: 'file missing before verification'
-        })
-        return false
-      }
-
-      // ok (verified) or placeholder (cannot verify — checksum honesty): the bytes are
-      // complete either way, so move the file into place and refresh install state.
-      renameSync(part, task.dest)
-      // Prime the checksum cache with the hash we JUST computed (identical bytes, same file) so the
-      // Models screen's install-state refresh reports `installed` immediately instead of redundantly
-      // re-hashing the multi-GB weight — that re-hash is the invisible gap where the card briefly
-      // looked un-downloaded (download→verify UX). A placeholder file has no real hash to trust, so
-      // it is invalidated (computeInstallState short-circuits placeholder weights without hashing).
-      // BE-2 (full-audit 2026-07-10): the checksum cache is an OPTIMIZATION — a store fault
-      // (e.g. the workspace was locked mid-download, closing the settings DB) must never
-      // change the outcome of a download whose bytes are already verified + in place.
+    // A COMPLETE `.part` cannot be resumed (Range would be unsatisfiable → 416). When the
+    // staged bytes turn out corrupt we discard them and restart ONE clean download; the loop
+    // caps that at a single retry (`allowResume` false → no Range → 200 restart / fresh fetch).
+    let allowResume = true
+    for (;;) {
       try {
-        if (verify.reason === 'placeholder' || !verify.actual) {
-          invalidateChecksum(task.dest, hashStore)
-        } else {
-          primeChecksum(task.dest, verify.actual, hashStore)
+        // Best-effort Range resume: a kept `.part` (cancelled/crashed earlier attempt)
+        // becomes the prefix. The server decides — 206 appends, 200 restarts cleanly.
+        const resumeFrom = allowResume && existsSync(part) ? statSync(part).size : 0
+        // F-13: the `.part` already holds the WHOLE file (size known + covered) — a cancel/
+        // crash during the minutes-long verify, or a failed rename, staged it. Resuming would
+        // send `Range: bytes=<fullSize>-` and every origin answers 416, with no in-app
+        // recovery. Verify the staged bytes in place instead; a mismatch discards + restarts.
+        if (resumeFrom > 0 && task.sizeBytes != null && resumeFrom >= task.sizeBytes) {
+          const settled = await this.settleCompletePart(job, task, controller, hashStore, baseBytes)
+          if (settled === 'restart') {
+            allowResume = false
+            continue
+          }
+          return settled === 'done'
         }
-      } catch {
-        // Ids only (S1 policy) — the next install-state read simply re-hashes.
-        this.deps.log?.('Checksum cache update failed after verify; download outcome unchanged', {
-          modelId: job.modelId,
-          jobId: job.jobId
+        let prefix = resumeFrom
+        job.status = 'downloading'
+        job.receivedBytes = baseBytes + prefix
+        const download = this.deps.downloadImpl ?? downloadToFile
+        const result = await download(task.url, part, {
+          fetchImpl: this.deps.fetchImpl,
+          signal: controller.signal,
+          // D3 + F17: cap the body so a redirected/hostile endpoint can't stream past it and fill the
+          // drive (the SHA verify already rejects wrong bytes). The cap is the manifest's exact
+          // `size_bytes` when known, else a bounded per-role default — never unbounded (so a manifest
+          // that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
+          maxBytes: modelWeightMaxBytes(task.role, task.sizeBytes),
+          ...(resumeFrom > 0
+            ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true, resumeFrom }
+            : {}),
+          onResponse: ({ status, contentLength }) => {
+            // A 200 means the server ignored the Range request → the file restarts.
+            prefix = status === 206 ? resumeFrom : 0
+            job.receivedBytes = baseBytes + prefix
+            // Combined total = finished files + this file (Content-Length) + the files still queued.
+            // Any unknown size collapses the total to null (the bar then shows the byte count only).
+            job.totalBytes =
+              contentLength != null && remainingPlanned != null
+                ? baseBytes + prefix + contentLength + remainingPlanned
+                : null
+          },
+          onProgress: (received) => {
+            job.receivedBytes = baseBytes + prefix + received
+          }
         })
-      }
-      // A single placeholder-hash file taints the whole model as UNVERIFIED (never silently pass).
-      if (verify.reason === 'placeholder') job.unverified = true
-      // Pin the combined received total to this file's true on-disk size before the next file.
-      job.receivedBytes = baseBytes + statSync(task.dest).size
-      return true
-    } catch (err) {
-      if (job.status === 'cancelled') {
-        // The abort we asked for — the kept `.part` resumes next time.
-        this.deps.log?.('Model download stopped after cancel; partial kept for resume', {
-          modelId: job.modelId
+        this.deps.log?.('Model download finished, verifying', {
+          modelId: job.modelId,
+          status: result.status,
+          bytes: job.receivedBytes
+        })
+
+        // A cancel that raced the final bytes: cancel() aborts our controller, so the
+        // signal is the explicit cancel flag (no status-narrowing cast needed).
+        if (controller.signal.aborted) return false // keep the .part for resume
+
+        job.status = 'verifying'
+        const verify = await (this.deps.verifyImpl ?? verifyDownloadedFile)(part, task.expectedSha256)
+        // BE-4 (full-audit 2026-07-10): honour a cancel that landed DURING the hash — before
+        // acting on the verify result. Same contract as a mid-download cancel: the `.part` is
+        // kept for resume, nothing is renamed into place, and a two-file job stops here. The
+        // status is set explicitly because a cancel racing the `verifying` transition above
+        // could have been overwritten.
+        if (controller.signal.aborted) {
+          job.status = 'cancelled'
+          this.deps.log?.('Model download cancelled during verify; partial kept for resume', {
+            modelId: job.modelId
+          })
+          return false
+        }
+        if (verify.reason === 'mismatch') {
+          // Verify-before-trust: the partial is deleted, the job fails loudly.
+          await rm(part, { force: true })
+          job.status = 'failed'
+          job.error = tMain('main.download.checksumMismatch')
+          this.deps.log?.('Model download checksum mismatch — partial deleted', {
+            modelId: job.modelId,
+            expected: task.expectedSha256,
+            actual: verify.actual
+          })
+          this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+            modelId: job.modelId,
+            jobId: job.jobId,
+            reason: 'checksum mismatch — file discarded'
+          })
+          return false
+        }
+        if (verify.reason === 'missing') {
+          job.status = 'failed'
+          job.error = tMain('main.download.fileMissing')
+          this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+            modelId: job.modelId,
+            jobId: job.jobId,
+            reason: 'file missing before verification'
+          })
+          return false
+        }
+
+        // ok (verified) or placeholder (cannot verify — checksum honesty): the bytes are
+        // complete either way, so move the file into place and refresh install state.
+        this.finishVerifiedFile(job, task, hashStore, baseBytes, verify)
+        return true
+      } catch (err) {
+        if (job.status === 'cancelled') {
+          // The abort we asked for — the kept `.part` resumes next time.
+          this.deps.log?.('Model download stopped after cancel; partial kept for resume', {
+            modelId: job.modelId
+          })
+          return false
+        }
+        // F-13: a `Range` resume answered 416 — the `.part` is already complete (size unknown,
+        // so the pre-download short-circuit above could not fire). Verify it in place: a match
+        // renames into place, a mismatch discards + restarts clean. Same recovery, reached via
+        // the network this time.
+        if (err instanceof RangeNotSatisfiableError && existsSync(part)) {
+          const settled = await this.settleCompletePart(job, task, controller, hashStore, baseBytes)
+          if (settled === 'restart') {
+            allowResume = false
+            continue
+          }
+          return settled === 'done'
+        }
+        // A misaligned 206 resume (the server served a slice starting at the wrong byte): the on-disk
+        // `.part` can't be safely continued, so discard it — the NEXT attempt restarts from scratch
+        // rather than re-appending onto a poisoned prefix (BUG dl-size-cap-2026-07-03 hardening).
+        if (err instanceof ResumeOffsetMismatchError) {
+          await rm(part, { force: true })
+          this.deps.log?.('Model download resume offset mismatch — partial discarded for a clean restart', {
+            modelId: job.modelId
+          })
+        }
+        job.status = 'failed'
+        job.error = friendlyDownloadError(err)
+        this.deps.log?.('Model download failed', { modelId: job.modelId, error: String(err) })
+        this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+          modelId: job.modelId,
+          jobId: job.jobId,
+          reason: String(err).slice(0, 300)
         })
         return false
       }
-      // A misaligned 206 resume (the server served a slice starting at the wrong byte): the on-disk
-      // `.part` can't be safely continued, so discard it — the NEXT attempt restarts from scratch
-      // rather than re-appending onto a poisoned prefix (BUG dl-size-cap-2026-07-03 hardening).
-      if (err instanceof ResumeOffsetMismatchError) {
-        await rm(part, { force: true })
-        this.deps.log?.('Model download resume offset mismatch — partial discarded for a clean restart', {
-          modelId: job.modelId
-        })
-      }
+    }
+  }
+
+  /**
+   * Settle a `.part` that already holds the COMPLETE file (F-13): reached from the pre-download
+   * size short-circuit or from a caught 416. Verify the staged bytes in place rather than
+   * re-requesting an unsatisfiable `Range`. A matching (or placeholder) hash renames into
+   * place exactly like a fresh download; a real mismatch discards the `.part` so the caller
+   * restarts one clean download. A cancel landing during the hash keeps the `.part` (resume
+   * contract). Returns 'done' | 'cancelled' | 'failed' | 'restart'.
+   */
+  private async settleCompletePart(
+    job: DownloadJob,
+    task: ModelDownloadTask,
+    controller: AbortController,
+    hashStore: HashStore | undefined,
+    baseBytes: number
+  ): Promise<'done' | 'cancelled' | 'failed' | 'restart'> {
+    const part = partPath(task.dest)
+    job.status = 'verifying'
+    job.receivedBytes = baseBytes + statSync(part).size
+    this.deps.log?.('Completed .part found — verifying in place instead of resuming (F-13)', {
+      modelId: job.modelId
+    })
+    const verify = await (this.deps.verifyImpl ?? verifyDownloadedFile)(part, task.expectedSha256)
+    // Honour a cancel that landed DURING the hash — keep the `.part` (BE-4 resume contract).
+    if (controller.signal.aborted) {
+      job.status = 'cancelled'
+      this.deps.log?.('Model download cancelled during complete-part verify; partial kept', {
+        modelId: job.modelId
+      })
+      return 'cancelled'
+    }
+    if (verify.reason === 'missing') {
       job.status = 'failed'
-      job.error = friendlyDownloadError(err)
-      this.deps.log?.('Model download failed', { modelId: job.modelId, error: String(err) })
+      job.error = tMain('main.download.fileMissing')
       this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
         modelId: job.modelId,
         jobId: job.jobId,
-        reason: String(err).slice(0, 300)
+        reason: 'file missing before verification'
       })
-      return false
+      return 'failed'
     }
+    if (verify.reason === 'mismatch') {
+      // The staged bytes are wrong (a torn/aborted prior write) — discard and restart clean
+      // rather than serving a corrupt weight the checksum cache would later report verified.
+      await rm(part, { force: true })
+      this.deps.log?.('Completed .part failed verification — discarded for a clean restart (F-13)', {
+        modelId: job.modelId,
+        expected: task.expectedSha256,
+        actual: verify.actual
+      })
+      return 'restart'
+    }
+    // ok (verified) or placeholder (cannot verify): the bytes are complete either way.
+    this.finishVerifiedFile(job, task, hashStore, baseBytes, verify)
+    return 'done'
+  }
+
+  /**
+   * Rename a verified/placeholder `.part` into place and refresh the checksum cache. Shared by
+   * the fresh-download finish and the F-13 complete-part settle so the prime/invalidate + total
+   * accounting has ONE definition.
+   */
+  private finishVerifiedFile(
+    job: DownloadJob,
+    task: ModelDownloadTask,
+    hashStore: HashStore | undefined,
+    baseBytes: number,
+    verify: VerifyResult
+  ): void {
+    renameSync(partPath(task.dest), task.dest)
+    // Prime the checksum cache with the hash we JUST computed (identical bytes, same file) so the
+    // Models screen's install-state refresh reports `installed` immediately instead of redundantly
+    // re-hashing the multi-GB weight — that re-hash is the invisible gap where the card briefly
+    // looked un-downloaded (download→verify UX). A placeholder file has no real hash to trust, so
+    // it is invalidated (computeInstallState short-circuits placeholder weights without hashing).
+    // BE-2 (full-audit 2026-07-10): the checksum cache is an OPTIMIZATION — a store fault
+    // (e.g. the workspace was locked mid-download, closing the settings DB) must never
+    // change the outcome of a download whose bytes are already verified + in place.
+    try {
+      if (verify.reason === 'placeholder' || !verify.actual) {
+        invalidateChecksum(task.dest, hashStore)
+      } else {
+        primeChecksum(task.dest, verify.actual, hashStore)
+      }
+    } catch {
+      // Ids only (S1 policy) — the next install-state read simply re-hashes.
+      this.deps.log?.('Checksum cache update failed after verify; download outcome unchanged', {
+        modelId: job.modelId,
+        jobId: job.jobId
+      })
+    }
+    // A single placeholder-hash file taints the whole model as UNVERIFIED (never silently pass).
+    if (verify.reason === 'placeholder') job.unverified = true
+    // Pin the combined received total to this file's true on-disk size before the next file.
+    job.receivedBytes = baseBytes + statSync(task.dest).size
   }
 }
 

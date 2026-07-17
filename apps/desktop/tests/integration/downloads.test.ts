@@ -710,4 +710,75 @@ describe('DownloadManager jobs', () => {
       expect(existsSync(dest)).toBe(false)
     })
   })
+
+  // F-13 (full-audit 2026-07-16): a COMPLETE `.part` (a cancel/crash during the minutes-long
+  // verify, or a failed rename, leaves the whole file staged) used to be re-requested with an
+  // unsatisfiable `Range: bytes=<fullSize>-` → HTTP 416 forever, with no in-app recovery. The
+  // fix verifies the staged bytes IN PLACE: a match renames into place; a mismatch discards +
+  // restarts clean.
+  describe('complete .part recovery (F-13)', () => {
+    it('a matching complete .part renames into place WITHOUT re-requesting (no 416 dead-end)', async () => {
+      const body = 'hello-world-weights'
+      const m = verifiedManifest(body) // size_bytes = body.length
+      const root = tempRoot()
+      const dest = weightPath(root, m)
+      mkdirSync(join(dest, '..'), { recursive: true })
+      writeFileSync(partPath(dest), body) // the full file, staged by a cancel-during-verify
+      const fetchSpy = vi.fn()
+      const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('done')
+      expect(finished.unverified).toBe(false)
+      // The pre-download short-circuit means the unsatisfiable Range is never even sent.
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(readFileSync(dest, 'utf8')).toBe(body)
+      expect(existsSync(partPath(dest))).toBe(false)
+    })
+
+    it('a caught HTTP 416 on a complete .part (size unknown) verifies in place → done', async () => {
+      const body = 'hello-world-weights'
+      // No size_bytes → the pre-download short-circuit cannot fire; recovery goes via the 416 catch.
+      const m = manifest({
+        sha256: sha256(body),
+        download: { url: 'https://example.test/x.gguf', sha256: sha256(body), license_url: 'https://example.test/l' }
+      })
+      const root = tempRoot()
+      const dest = weightPath(root, m)
+      mkdirSync(join(dest, '..'), { recursive: true })
+      writeFileSync(partPath(dest), body) // complete file already staged
+      const ranges: Array<string | null> = []
+      const only416 = (async (_url: unknown, init?: RequestInit) => {
+        ranges.push(new Headers(init?.headers).get('range'))
+        return new Response(null, { status: 416 }) // Range Not Satisfiable — the .part is complete
+      }) as unknown as FetchFn
+      const mgr = new DownloadManager({ fetchImpl: only416 })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(ranges[0]).toBe('bytes=19-') // we DID ask to resume the full-length .part…
+      expect(finished.status).toBe('done') // …and recovered by verifying it in place, not looping
+      expect(readFileSync(dest, 'utf8')).toBe(body)
+      expect(existsSync(partPath(dest))).toBe(false)
+    })
+
+    it('a complete-but-CORRUPT .part is discarded and the download restarts clean', async () => {
+      const body = 'fresh-complete-weights'
+      const m = verifiedManifest(body) // size_bytes = body.length
+      const root = tempRoot()
+      const dest = weightPath(root, m)
+      mkdirSync(join(dest, '..'), { recursive: true })
+      // A torn/aborted prior write left a full-length .part whose bytes DON'T match the hash.
+      writeFileSync(partPath(dest), 'X'.repeat(body.length))
+      const { fetch, ranges } = rangeFetch(body) // honourRange off → 200 full body on a fresh request
+      const mgr = new DownloadManager({ fetchImpl: fetch })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      // The corrupt .part failed verify → discarded → a single clean re-download (no Range).
+      expect(ranges).toEqual([null])
+      expect(finished.status).toBe('done')
+      expect(finished.unverified).toBe(false)
+      expect(readFileSync(dest, 'utf8')).toBe(body)
+      expect(existsSync(partPath(dest))).toBe(false)
+    })
+  })
 })

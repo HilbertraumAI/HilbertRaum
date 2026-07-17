@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
@@ -371,6 +371,21 @@ export class ResumeOffsetMismatchError extends Error {
 }
 
 /**
+ * A `Range` resume answered HTTP 416 Range Not Satisfiable — the requested first-byte-pos is
+ * at or beyond the file length, i.e. the `.part` we asked to resume already holds the COMPLETE
+ * file (a cancel/crash during the minutes-long verify, or a failed rename, leaves it staged;
+ * F-13). Surfaced as a typed error so `downloads.ts` can verify the staged bytes in place — a
+ * matching hash renames into place, a mismatch discards the `.part` for a clean restart —
+ * instead of looping on the same unsatisfiable Range forever.
+ */
+export class RangeNotSatisfiableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RangeNotSatisfiableError'
+  }
+}
+
+/**
  * Parse the START byte of a `Content-Range: bytes <start>-<end>/<total>` response header. Returns null
  * when the header is absent or unsatisfiable (`bytes * /<total>`) — i.e. when the resume offset cannot
  * be validated and the append is trusted as before.
@@ -590,6 +605,12 @@ export async function downloadToFile(
     // Resolve a relative Location against the current URL; the loop re-validates it next.
     currentUrl = new URL(location, currentUrl).toString()
   }
+  if (res.status === 416) {
+    // Range Not Satisfiable: the resume offset is at/beyond the file length — the `.part` is
+    // already complete (F-13). Surface a typed error so the caller verifies-in-place instead
+    // of throwing a generic 'HTTP 416' that loops forever.
+    throw new RangeNotSatisfiableError(`Download failed: HTTP 416 (range not satisfiable) for ${url}`)
+  }
   if (!res.ok) {
     throw new Error(`Download failed: HTTP ${res.status} for ${url}`)
   }
@@ -654,6 +675,25 @@ export async function downloadToFile(
     })
     nodeStream.pipe(out)
   })
+  // F-34 / CODE-10: the write stream flushed to the OS on 'finish', but neither 'finish' nor the
+  // auto-close fsyncs to the DEVICE. On the app's primary medium (an exFAT USB stick — the #51
+  // hard-unplug habit is explicitly anticipated) a power cut / unplug shortly after completion can
+  // persist the caller's later renameSync + (size,mtime) checksum-cache prime while trailing data
+  // blocks are still only in the page cache — a torn weight the primed cache then reports verified
+  // without re-hashing. Flush the file to the device BEFORE returning (the caller renames only
+  // after this resolves), matching the writeVaultDescriptor/logging.ts fsync-before-rename standard.
+  // Open r+ (write-capable so Windows FlushFileBuffers succeeds; a read handle's would ERROR_ACCESS_
+  // DENIED); best-effort — a flush fault must never fail an otherwise-complete, verified download.
+  try {
+    const fd = openSync(dest, 'r+')
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    /* durability best-effort — the subsequent SHA verify still guards correctness on this run */
+  }
   return { status: res.status, received, contentLength }
 }
 
