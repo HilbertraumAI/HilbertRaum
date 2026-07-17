@@ -356,7 +356,9 @@ search model than the one currently active, and takes a moment per file.
 **Scanned PDFs — "Make searchable (OCR)".** A PDF that is only pictures of pages (a
 scanner's output) has no readable text, so the app tells you honestly: *"This PDF looks
 like a scan — it has no readable text yet."* If your drive has the OCR files, the row
-offers **Make searchable (OCR)** in its **⋯** menu: the pages are read **on this drive** (no cloud OCR —
+offers **Make searchable (OCR)** in its **⋯** menu (if it says the OCR files are *not on
+this drive*, add them with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
+see the Troubleshooting guide): the pages are read **on this drive** (no cloud OCR —
 German and English are included), with per-page progress and a Cancel button. When it
 finishes, the document is a normal searchable document; answers cite it **by page**, and
 **Preview** shows the recognized text per page with a *"Text recognized on this drive

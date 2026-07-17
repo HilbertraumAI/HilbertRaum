@@ -500,7 +500,9 @@ export const de: Record<keyof typeof en, string> = {
   'docs.scan.ocrOffer':
     'Nutze unten „Durchsuchbar machen (OCR)“, um die Seiten auf diesem Laufwerk zu lesen.',
   'docs.scan.ocrMissing':
-    'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk.',
+    'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Um sie zu ergänzen, ' +
+    'die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur die OCR-Dateien ' +
+    'mit „fetch-runtime --family ocr“ holen.',
   'docs.stale.banner':
     'Dieses Dokument wurde mit einem anderen Suchmodell vorbereitet — indexiere es neu, ' +
     'damit Antworten es finden können.',
@@ -1865,7 +1867,9 @@ export const de: Record<keyof typeof en, string> = {
     'Die gespeicherte Kopie dieses Dokuments konnte nicht gelesen werden. Importiere das ' +
     'Dokument neu und versuch es dann noch einmal.',
   'main.task.needsOcr':
-    'Für die Texterkennung werden die OCR-Dateien benötigt, die auf diesem Laufwerk fehlen.',
+    'Für die Texterkennung werden die OCR-Dateien benötigt, die auf diesem Laufwerk fehlen. ' +
+    'Um sie zu ergänzen, die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur ' +
+    'die OCR-Dateien mit „fetch-runtime --family ocr“ holen.',
   'main.task.ocrNotAScan':
     'Nur ein PDF, das als Scan erkannt wurde, kann auf diesem Weg durchsuchbar gemacht werden.',
   'main.task.ocrNoText':

@@ -187,6 +187,11 @@ text locally (German + English; needs the drive's `ocr/` language files; runs a 
 seconds per page). PDFs that mix real text pages with scanned pages index their text pages
 only — they are not detected as scans.
 
+If the action reports *"…the OCR files, which are not on this drive"*, the drive was built
+without them. Add them by re-running `prepare-drive --with-assets`, or fetch only the OCR
+family with `fetch-runtime --family ocr` (`.ps1 -Family ocr` on Windows) — see
+[`packaging.md`](packaging.md). Commercially-built drives already include them.
+
 ---
 
 ## A document failed to import

@@ -488,7 +488,10 @@ export const en = {
   'docs.meta.type': 'Type',
   'docs.meta.summary': 'Summary',
   'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" below to read the pages on this drive.',
-  'docs.scan.ocrMissing': 'Making it searchable needs the OCR files, which are not on this drive.',
+  'docs.scan.ocrMissing':
+    'Making it searchable needs the OCR files, which are not on this drive. To add them, re-run ' +
+    'the drive setup with "--with-assets", or fetch only the OCR files with ' +
+    '"fetch-runtime --family ocr".',
   'docs.stale.banner':
     'This document was prepared with a different search model — re-index it so answers ' +
     'can find it.',
@@ -1815,7 +1818,9 @@ export const en = {
     'Choose a supported source language and a different target language for the translation.',
   'main.task.sourceUnreadable':
     'The stored copy of this document could not be read. Re-import the document, then try again.',
-  'main.task.needsOcr': 'Text recognition needs the OCR files, which are not on this drive.',
+  'main.task.needsOcr':
+    'Text recognition needs the OCR files, which are not on this drive. To add them, re-run the ' +
+    'drive setup with "--with-assets", or fetch only the OCR files with "fetch-runtime --family ocr".',
   'main.task.ocrNotAScan': 'Only a PDF that was detected as a scan can be made searchable this way.',
   'main.task.ocrNoText':
     'No readable text was found in this scan. The pages may be blank or too blurry.',
