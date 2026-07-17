@@ -7371,10 +7371,9 @@ branch at kickoff (`8bf0fc7`) precisely so the close-out deletion loses nothing:
 audit report is recoverable via `git show 886be68:docs/audit-2026-07-16.md` (committed
 unchanged since `8bf0fc7`; any wave-branch sha from kickoff onward resolves it), and the
 remediation plan — whose §L wave ledger carries the full per-phase narrative, the review
-details, and the parked #59 comment text — at its final state via the commit that
-introduced this §50 section (`git show <that commit>:docs/audit-2026-07-16-remediation-plan.md`).
-The deletion itself awaits owner confirmation (pending when this section landed — see the
-owner-action list below). Finding detail also survives as: this table, the BUILD_STATE §5
+details, and the parked #59 comment text — at its final on-disk state via
+`git show bb2da00:docs/audit-2026-07-16-remediation-plan.md` (the NF-2 commit, the last to
+touch it before the owner-confirmed deletion on 2026-07-17). Finding detail also survives as: this table, the BUILD_STATE §5
 item-14 block, and the per-phase commits.
 
 **Owner-decisions batch (§D, taken 2026-07-17 in one pass — all five per recommendation):**
@@ -7520,8 +7519,8 @@ means THIS section, the 2026-07-16 ledger directly following §49. **Working pap
 §46–§49, the full texts are recoverable — the frozen report via
 `git show 886be68:docs/audit-2026-07-16.md` (committed unchanged since kickoff `8bf0fc7`) and
 the plan (incl. the complete §L wave ledger, the per-phase gate evidence, and the parked #59
-comment) via `git show <sha>:docs/audit-2026-07-16-remediation-plan.md` at the close-out commit
-that introduced this section. The design "as built" lives where each phase folded it:
+comment) via `git show bb2da00:docs/audit-2026-07-16-remediation-plan.md` (its final on-disk
+state before the owner-confirmed deletion). The design "as built" lives where each phase folded it:
 rag-design §14.5's error-frame + model-keyed-cache clauses (F-01/F-02, with the Chat & streaming
 record line in this doc), the new `services/text.ts` leaf (F-15), known-limitations' downloader
 416/fsync bullets + the BOM trade-off bullet + the narrowed L10 (F-13/F-34, F-10/F-22, F-24),
