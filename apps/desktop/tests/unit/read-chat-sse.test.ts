@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   readChatSSE,
   RuntimeUnresponsiveError,
-  isRuntimeUnresponsiveError
+  isRuntimeUnresponsiveError,
+  ChatStreamError,
+  isChatStreamError
 } from '../../src/main/services/runtime/llama'
 
 // CB-5 — the completion stream had no inactivity timeout: a sidecar that HANGS (GPU stall, deadlocked
@@ -112,5 +114,101 @@ describe('readChatSSE — CB-5 idle watchdog', () => {
     )
     expect((err as Error).name).toBe('AbortError')
     expect(isRuntimeUnresponsiveError(err)).toBe(false)
+  })
+})
+
+// F-02 (audit 2026-07-16) — llama-server reports a MID-GENERATION failure in-band on the open
+// SSE stream and then closes it without `[DONE]`. parseSseLine used to treat both in-band shapes
+// as keep-alives, so readChatSSE ended CLEANLY and a partially-generated answer persisted as if
+// complete (finish_reason null ⇒ no truncated badge, no error — the silent-truncation class the
+// translation reader was hardened against in TA-4 M2/M3). The reader must reject instead.
+//
+// Frame-shape provenance (b9849, TS-3(a) rider): the two in-band shapes mirror the ones the
+// repo verified for the pinned server in the TA-4 translation-audit record
+// (docs/architecture.md "translation audit"): a `data: {"error":{…}}` frame and a bare
+// `error: {…}` SSE field line. CI green does NOT evidence the real wire contract — re-verify
+// both shapes against a captured smoke transcript on every runtime pin bump (BUILD_STATE §5
+// TS-3 inventory; the real-server error-frame smoke is owed at the next smoke-drive session).
+describe('readChatSSE — in-band error frames reject the stream (F-02)', () => {
+  const errorDataFrame = (message: string, type: string): string =>
+    `data: ${JSON.stringify({ error: { code: 500, message, type } })}\n\n`
+
+  it('tokens → `data: {"error":{…}}` frame → close ⇒ the generator REJECTS; the partial is not treated complete', async () => {
+    const stream = pacedStream(
+      [chatChunk('The first half of'), chatChunk(' the answer'), errorDataFrame('slot error', 'server_error')],
+      1
+    )
+    const out: string[] = []
+    const err = await (async () => {
+      for await (const t of readChatSSE(stream)) out.push(t)
+      return null
+    })().catch((e: unknown) => e)
+    // The tokens before the failure streamed through (live UI), but the iteration must REJECT —
+    // never end cleanly with the partial masquerading as a finished reply.
+    expect(out.join('')).toBe('The first half of the answer')
+    expect(err).not.toBeNull()
+    expect(isChatStreamError(err)).toBe(true)
+    expect(err).toBeInstanceOf(ChatStreamError)
+    expect((err as ChatStreamError).serverType).toBe('server_error')
+  })
+
+  it('a bare `error: {…}` SSE field line (the non-`data:` carrier) also rejects', async () => {
+    const stream = pacedStream(
+      [chatChunk('partial'), `error: ${JSON.stringify({ message: 'context shift refused', type: 'slot_error' })}\n\n`],
+      1
+    )
+    const out: string[] = []
+    const err = await (async () => {
+      for await (const t of readChatSSE(stream)) out.push(t)
+      return null
+    })().catch((e: unknown) => e)
+    expect(out).toEqual(['partial'])
+    expect(isChatStreamError(err)).toBe(true)
+    expect((err as ChatStreamError).serverType).toBe('slot_error')
+  })
+
+  it('an error frame with an unparseable payload still rejects (an error field is never a keep-alive)', async () => {
+    const stream = pacedStream([chatChunk('x'), 'error: not-json\n\n'], 1)
+    const err = await (async () => {
+      for await (const _t of readChatSSE(stream)) void _t
+      return null
+    })().catch((e: unknown) => e)
+    expect(isChatStreamError(err)).toBe(true)
+  })
+
+  it('an error frame sent WITHOUT a trailing newline before close (the flushed tail) still rejects', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode(chatChunk('tok')))
+        // The server dies mid-write: the error frame arrives with no trailing newline, then close.
+        controller.enqueue(enc.encode('data: {"error":{"message":"oom","type":"server_error"}}'))
+        controller.close()
+      }
+    })
+    const err = await (async () => {
+      for await (const _t of readChatSSE(stream)) void _t
+      return null
+    })().catch((e: unknown) => e)
+    expect(isChatStreamError(err)).toBe(true)
+  })
+
+  it('regression: answer content that merely CONTAINS "error:" is data, never an error frame', async () => {
+    const stream = pacedStream(
+      [chatChunk('error: this is answer text'), chatChunk(' more'), 'data: [DONE]\n\n'],
+      1
+    )
+    const out: string[] = []
+    for await (const t of readChatSSE(stream)) out.push(t)
+    expect(out.join('')).toBe('error: this is answer text more')
+  })
+
+  it('regression: a well-formed stream (tokens → finish_reason → [DONE]) is byte-identical — no error, finish surfaced', async () => {
+    const finishChunk = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`
+    const stream = pacedStream([chatChunk('a'), chatChunk('b'), finishChunk, 'data: [DONE]\n\n'], 1)
+    const out: string[] = []
+    let finish: string | null = null
+    for await (const t of readChatSSE(stream, undefined, undefined, (r) => (finish = r))) out.push(t)
+    expect(out.join('')).toBe('ab')
+    expect(finish).toBe('stop')
   })
 })

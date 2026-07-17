@@ -2432,7 +2432,10 @@ files**.
   sending `messages` as plain role/content (the server applies the model's chat template — we never
   hand-roll Qwen's prompt format) and mapping `maxTokens`/`temperature`. `readChatSSE` parses the SSE
   `data:` frames (buffering partial lines, ignoring keep-alives, stopping on `[DONE]`) and `yield`s
-  each delta, honouring `options.signal`. This feeds the **locked Phase-3 streaming contract**
+  each delta, honouring `options.signal`. An IN-BAND mid-stream error frame (`data: {"error":{…}}`
+  or a bare `error: {…}` field line, then a close without `[DONE]`) **rejects** with a typed
+  `ChatStreamError` instead of ending cleanly — a failed generation can never persist as a clean
+  answer (audit 2026-07-16 F-02; frame shapes pinned to b9849, re-verify on pin bumps per TS-3(a)). This feeds the **locked Phase-3 streaming contract**
   unchanged, so `measureTokensPerSecond` (Phase 7) now reports **real tokens/sec** the moment a real
   runtime streams.
 - **`services/runtime/factory.ts`** — `createSelectingRuntimeFactory({ rootPath, … })` returns a

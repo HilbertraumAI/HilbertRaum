@@ -1789,6 +1789,10 @@ export const en = {
     'The model returned an empty response. Try again, or rephrase your message.',
   'main.chat.runtimeUnresponsive':
     'The AI model stopped responding. Try again — if it keeps happening, restart the model on the AI Model screen.',
+  // F-02 (audit 2026-07-16): the sidecar reported a mid-generation failure in-band on the open
+  // stream (ChatStreamError). Content-free — the structural reason goes to the local log only.
+  'main.chat.streamError':
+    'The AI model ran into an error before finishing the answer. Try again — if it keeps happening, restart the model on the AI Model screen.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
   'main.chat.emptyMessage': 'Cannot send an empty message.',
   'main.chat.emptyQuestion': 'Cannot send an empty question.',

@@ -18,6 +18,7 @@ import {
   GROUNDED_SYSTEM_PROMPT,
   detectFilenameScope,
   generateGroundedAnswer,
+  generateGroundedDataAnswer,
   ragSettingsFrom,
   retrieve,
   NO_DOCUMENT_CONTEXT_ANSWER,
@@ -31,6 +32,7 @@ import {
   listMessages
 } from '../../src/main/services/chat'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
@@ -705,6 +707,59 @@ describe('generateGroundedAnswer', () => {
     const msg = await generateGroundedAnswer(db, rt, embedder, conv.id, q, SETTINGS)
     expect(msg.content).toBe('Cited answer [S1].')
     expect(listMessages(db, conv.id).at(-1)?.content).not.toContain('<think>')
+  })
+
+  // F-02 (audit 2026-07-16) consumer semantics, grounded relevance path: a mid-stream in-band
+  // error frame (the fixed readChatSSE throws ChatStreamError after tokens). Pre-fix the stream
+  // ended cleanly and the partial persisted as a complete, CITED answer. Decided semantics:
+  // the typed error propagates (registerRagIpc runs under the same withChatStream wrapper as
+  // plain chat, which maps it to the friendly `main.chat.streamError` copy); nothing persists.
+  it('a mid-stream in-band error frame rejects the grounded answer; the partial never persists (F-02)', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'science.pdf', [
+      { text: 'photosynthesis converts sunlight into chemical energy in plants' }
+    ])
+    const conv = createConversation(db, { mode: 'documents' })
+    const question = 'photosynthesis converts sunlight into chemical energy in plants'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* () {
+      yield 'The first half of a cited answer [S1]'
+      throw new ChatStreamError('slot error', 'server_error')
+    })
+    const err = await generateGroundedAnswer(db, rt, embedder, conv.id, question, SETTINGS).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(isChatStreamError(err)).toBe(true)
+    expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
+  })
+
+  // F-02 consumer semantics, grounded-DATA path (the skills §8.1 answer mode): same decided
+  // semantics as the relevance path — propagate the typed error, persist nothing (a partial
+  // narration over a verified extract must not be stamped with `extract` coverage).
+  it('a mid-stream in-band error frame rejects the grounded-DATA answer; nothing persists (F-02)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
+
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* () {
+      yield 'The vendor is'
+      throw new ChatStreamError('slot error', 'server_error')
+    })
+    const err = await generateGroundedDataAnswer(db, rt, conv.id, 'who is the vendor?', {
+      dataBlock: '{"vendor":"Acme GmbH"}',
+      postscript: '',
+      citations: []
+    }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(isChatStreamError(err)).toBe(true)
+    expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
   })
 
   it('buildGroundedChatMessages scrubs think blocks from replayed assistant turns', () => {

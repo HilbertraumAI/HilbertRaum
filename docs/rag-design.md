@@ -1325,6 +1325,15 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   `unparsed` marker (the chunk is **surfaced, never dropped** — H7); same arbiter/cancel/lock discipline
   + per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` (H11); per-`(chunk_id, content_hash)` resume cache = **0**
   calls on re-run **for `ok` scans only**. Gated on `fully_chunked` (C4).
+  **Streaming honesty (F-02, audit 2026-07-16):** the pass's `generate` rides the locked
+  `chatStream` contract, whose SSE reader (`readChatSSE`) now **rejects with a typed
+  `ChatStreamError`** when the server reports a mid-generation failure in-band on the open
+  stream (a `data: {"error":{…}}` frame or a bare `error: {…}` SSE field line, then a close
+  without `[DONE]`) instead of ending cleanly — so a mid-stream server failure fails the pass
+  (resumable, H11) rather than committing a silently truncated reply as a scanned chunk. The
+  same rejection protects every `chatStream` consumer: the main chat turn and both grounded
+  paths surface the friendly `main.chat.streamError` copy via `withChatStream`, and a failed
+  compaction summary is never written as a checkpoint (the R4/R6 fallback absorbs it).
   **Reasoning-model hardening (#50):** a reasoning model can spend the whole 384-token cap on
   `reasoning_content` (the manager's `generate` discards reasoning deltas, and `enable_thinking:false`
   is already sent but a template may ignore it), collapsing the reply to `''` — and at temp 0 an

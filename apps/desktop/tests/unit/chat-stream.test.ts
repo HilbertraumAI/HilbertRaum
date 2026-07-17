@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { withChatStream } from '../../src/main/ipc/chat-stream'
-import { ChatRequestError, RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
+import {
+  ChatRequestError,
+  ChatStreamError,
+  RuntimeUnresponsiveError
+} from '../../src/main/services/runtime/llama'
 import { EmptyCompletionError } from '../../src/main/services/chat'
 import { inFlightStreams, streamBuffers, streamSettled } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
@@ -131,6 +135,23 @@ describe('withChatStream (M-A2)', () => {
     }).catch((e: Error) => e.message)
     expect(rejection).toBe(friendly)
     expect(rejection).not.toMatch(/30000|responding \(/) // the raw diagnostic never reaches the user
+    expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
+    expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  // F-02 (audit 2026-07-16): an in-band mid-stream SSE error frame (ChatStreamError from the
+  // hardened readChatSSE) maps to the friendly `main.chat.streamError` copy on BOTH channels —
+  // a new link in the runtimeUnresponsive → emptyCompletion → streamError → overflow → raw
+  // chain. The structural server reason (message/type) must never reach the user (content-free
+  // surface; the raw reason goes to the local log only).
+  it('maps ChatStreamError to the friendly streamError copy on the error event AND the rejection (F-02)', async () => {
+    const { event, sent } = fakeEvent()
+    const friendly = t('en', 'main.chat.streamError')
+    const rejection = await withChatStream(event, 'c1', 'label', async () => {
+      throw new ChatStreamError('slot error: kv cache full', 'server_error')
+    }).catch((e: Error) => e.message)
+    expect(rejection).toBe(friendly)
+    expect(rejection).not.toMatch(/kv cache|server_error|Chat stream failed/) // structural reason stays local
     expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
     expect(inFlightStreams.has('c1')).toBe(false)
   })

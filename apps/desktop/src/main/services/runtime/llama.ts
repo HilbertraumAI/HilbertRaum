@@ -106,19 +106,60 @@ interface ChatCompletionChunk {
   }>
 }
 
-/** Parse one SSE `data:` line → content/reasoning deltas, a finish reason, a `[DONE]` sentinel, or nothing. */
+/**
+ * Parse one SSE line → content/reasoning deltas, a finish reason, a `[DONE]` sentinel, an
+ * in-band ERROR frame, or nothing.
+ *
+ * F-02 (audit 2026-07-16): llama-server reports a mid-generation failure IN-BAND on the open
+ * stream and then closes it without `[DONE]`. Two carrier shapes exist at the pinned b9849 —
+ * the same pair the repo verified for the translation reader (TA-4 M3, architecture.md
+ * "translation audit"): a `data: {"error":{message,type,…}}` frame and a bare `error: {…}`
+ * SSE FIELD line. Both used to fall through as keep-alives (`{}`), so the reader ended
+ * cleanly and a partial answer persisted as complete. Both now map to `streamError`. An
+ * `error:` field line with an unparseable payload is still an error (a present error field is
+ * never a keep-alive), surfaced content-free. RE-VERIFY both shapes against a captured smoke
+ * transcript on every runtime pin bump (TS-3(a), BUILD_STATE §5 TS-3 inventory).
+ */
 function parseSseLine(line: string): {
   delta?: string
   reasoning?: string
   finishReason?: string
   done?: boolean
+  streamError?: ChatStreamError
 } {
   const t = line.trim()
+  // F-02: the bare `error: {…}` SSE field-line carrier (mirrors completion.ts's M3 handling).
+  if (t.startsWith('error:')) {
+    const data = t.slice('error:'.length).trim()
+    if (!data) return { streamError: new ChatStreamError('', '') }
+    try {
+      const parsed = JSON.parse(data) as {
+        error?: { message?: string; type?: string }
+        message?: string
+        type?: string
+      }
+      const e = parsed.error ?? parsed
+      return { streamError: new ChatStreamError(e.message?.trim() ?? '', e.type?.trim() ?? '') }
+    } catch {
+      return { streamError: new ChatStreamError('', '') }
+    }
+  }
   if (!t.startsWith('data:')) return {}
   const data = t.slice(5).trim()
   if (data === '[DONE]') return { done: true }
   try {
-    const json = JSON.parse(data) as ChatCompletionChunk
+    const json = JSON.parse(data) as ChatCompletionChunk & {
+      error?: { message?: string; type?: string }
+    }
+    // F-02: the `data: {"error":{…}}` carrier — a top-level error object is terminal, never a delta.
+    if (json.error != null && typeof json.error === 'object') {
+      return {
+        streamError: new ChatStreamError(
+          json.error.message?.trim() ?? '',
+          json.error.type?.trim() ?? ''
+        )
+      }
+    }
     const choice = json.choices?.[0]
     const d = choice?.delta
     const out: { delta?: string; reasoning?: string; finishReason?: string } = {}
@@ -155,6 +196,35 @@ export class RuntimeUnresponsiveError extends Error {
 /** True when `err` is a {@link RuntimeUnresponsiveError} (the hung-sidecar idle timeout, CB-5). */
 export function isRuntimeUnresponsiveError(err: unknown): boolean {
   return err instanceof RuntimeUnresponsiveError
+}
+
+/**
+ * F-02 (audit 2026-07-16) — a MID-STREAM in-band error frame on the open completion stream.
+ * llama-server reports a mid-generation failure (slot error, context-shift refusal, grammar
+ * failure, server-side-handled OOM) in-band and then closes the stream WITHOUT `[DONE]`;
+ * `readChatSSE` throws this instead of ending cleanly, so a partially-generated answer can
+ * never persist as if complete. `withChatStream` maps it to the friendly
+ * `main.chat.streamError` copy; the raw reason goes to the local log only.
+ *
+ * `serverMessage`/`serverType` are upstream-STRUCTURAL only (the SEC-N3 posture shared with
+ * `ChatRequestError`): the sidecar is our own loopback llama.cpp server and its error payloads
+ * are a reason code/type, never user document/prompt content — re-verify on every runtime pin
+ * bump (TS-3(a)).
+ */
+export class ChatStreamError extends Error {
+  readonly serverMessage: string
+  readonly serverType: string
+  constructor(serverMessage: string, serverType: string) {
+    super(`Chat stream failed${serverMessage ? `: ${serverMessage}` : ''}`)
+    this.name = 'ChatStreamError'
+    this.serverMessage = serverMessage
+    this.serverType = serverType
+  }
+}
+
+/** True when `err` is a {@link ChatStreamError} (an in-band mid-stream error frame, F-02). */
+export function isChatStreamError(err: unknown): boolean {
+  return err instanceof ChatStreamError
 }
 
 /**
@@ -245,6 +315,11 @@ function readWithIdleTimeout<T>(
  * lines, and stops on the `[DONE]` sentinel. Honours `signal` so an aborted request stops
  * promptly and cancels the underlying reader.
  *
+ * F-02 (audit 2026-07-16): an IN-BAND error frame (`data: {"error":{…}}` or a bare
+ * `error: {…}` field line — the server's graceful mid-generation failure report, followed by
+ * a close without `[DONE]`) throws a `ChatStreamError` instead of ending cleanly, so a
+ * partially-generated answer can never persist as if complete.
+ *
  * CB-5: each read is raced against a two-phase idle watchdog (`idle`, injectable for tests; the
  * production default keeps behaviour byte-identical on any live stream) so a HUNG sidecar rejects with
  * `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop still wins first.
@@ -277,6 +352,11 @@ export async function* readChatSSE(
         const line = buffer.slice(0, nl)
         buffer = buffer.slice(nl + 1)
         const r = parseSseLine(line)
+        // F-02: an in-band error frame is TERMINAL — reject instead of ending cleanly, so a
+        // partial can never masquerade as a finished reply. A user Stop still wins: a
+        // signal-aborted read never reaches this loop, and consumers treat a race via
+        // `isAbortError(err, signal)` (signal-aborted ⇒ abort semantics, partial kept).
+        if (r.streamError) throw r.streamError
         // The finish reason rides the final content chunk, which arrives BEFORE `[DONE]`;
         // surface it before honouring the sentinel so a 'length' stop is never dropped.
         if (r.finishReason) onFinish?.(r.finishReason)
@@ -296,6 +376,8 @@ export async function* readChatSSE(
     // Flush any final line the server sent without a trailing newline before closing.
     buffer += decoder.decode()
     const r = parseSseLine(buffer)
+    // F-02: a server that dies mid-write can flush the error frame WITHOUT a trailing newline.
+    if (r.streamError) throw r.streamError
     if (r.finishReason) onFinish?.(r.finishReason)
     if (r.reasoning) onReasoning?.(r.reasoning)
     if (r.delta) yield r.delta
