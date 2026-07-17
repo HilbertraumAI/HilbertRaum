@@ -1508,6 +1508,16 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     (dated promotion append to both license_review.notes), F-27 (preload 51-code comment), F-37
     (stale soft-hyphen comment). Docs/comments only; gate unchanged at **4217/49**, typecheck +
     build green. Details: plan §L Phase-1 ledger entry.
+    **Phase 2 done 2026-07-17** (branch `fix/audit-2026-07-16-p2`): model-catalog data hygiene —
+    F-06 (qwen3.5-9b-q8 `recommended_context_tokens` 98304→8192, the catalog's safe-local
+    convention: the 14 GB hard start-gate no longer admits machines a 96k f16 KV cache can't fit;
+    capable owners restore a big context via the in-app Settings override), F-16 (Qwen3.6 27B
+    Q4/Q5 `size_on_disk_gb` normalized GiB→decimal GB, 15.7→16.8 / 18.2→19.5 = `size_bytes/1e9`;
+    README + model-policy display cells + the manifests' own GiB-labelled comments follow). Two new
+    `committed-catalog.test.ts` invariants (ctx ≤ 2048 tok/GB of hard-min RAM; `|size_on_disk_gb −
+    size_bytes/1e9| < 0.15` for real download blocks), both red-green-demonstrated. Recommendation
+    mapping unchanged (`benchmark.test.ts` byte-identical). Gate **4219/49** (+2 invariants),
+    typecheck green, build n/a (tests/manifests/docs only). Details: plan §L Phase-2 ledger entry.
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation

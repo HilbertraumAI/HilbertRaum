@@ -242,3 +242,60 @@ describe('committed catalog — RAM start-gate invariants (PROD-1)', () => {
     )
   })
 })
+
+// full-audit 2026-07-16 F-06 + F-16: two catalog-internal coherence invariants. The catalog
+// carried defects that no existing test could catch — a chat manifest whose recommended context
+// was physically incompatible with the RAM its own hard start-gate declared sufficient (F-06:
+// qwen3.5-9b-q8, ctx 98304 @ min 14 GB → a ~12 GB f16 KV cache the 14 GB gate admits but cannot
+// hold), and a manifest pair recording size_on_disk_gb in GiB while the whole catalog uses
+// decimal GB (F-16: the Qwen3.6 27B pair). Both are cross-field consistency checks that belong in
+// CI, not on a user's drive.
+describe('committed catalog — internal coherence invariants (F-06, F-16)', () => {
+  // F-06 — ctx-vs-hard-min-RAM plausibility. recommended_context_tokens becomes llama-server
+  // --ctx-size verbatim when the user leaves context on "Automatic" (models.ts launchContextTokens
+  // → sidecar --ctx-size), and recommended_min_ram_gb is the HARD start gate (registerModelIpc
+  // §11.4 admits any machine at/above it). The KV cache grows with ctx, so a large context on a
+  // small hard-min is an incoherent promise: the gate lets the machine in, then the spawn cannot
+  // fit. This is a model-agnostic PLAUSIBILITY bound (not a physical KV model): cap the recommended
+  // runtime context at 2048 tokens per GB of hard-min RAM. The whole committed catalog sits at or
+  // below 1024 tok/GB (tightest: gemma4-coding-q8, 16384 @ 16 → 1024), so 2048 leaves 2x headroom;
+  // the F-06 defect (98304 @ 14 → 7022 tok/GB) blows past it by 3.4x. A future manifest that
+  // genuinely wants a bigger context must raise its hard-min RAM to stay honest — which is exactly
+  // the coherence the start gate is supposed to encode.
+  it('no chat manifest promises a context its hard-min RAM gate cannot plausibly hold', () => {
+    const MAX_CTX_PER_MIN_RAM_GB = 2048
+    for (const m of committedManifests().filter((m) => m.role === 'chat')) {
+      const ceiling = m.recommendedMinRamGb * MAX_CTX_PER_MIN_RAM_GB
+      expect(
+        m.recommendedContextTokens,
+        `${m.id}: recommended_context_tokens (${m.recommendedContextTokens}) exceeds the ` +
+          `plausibility ceiling (${ceiling} = ${m.recommendedMinRamGb} GB hard-min * ` +
+          `${MAX_CTX_PER_MIN_RAM_GB} tok/GB) — the RAM start gate would admit machines the ` +
+          `resulting --ctx-size cannot fit`
+      ).toBeLessThanOrEqual(ceiling)
+    }
+  })
+
+  // F-16 — size_on_disk_gb must be decimal GB (size_bytes / 1e9), the catalog-wide convention
+  // (ledgered: full-audit DOC-3 at architecture.md fixed this exact GiB-mislabel class once, and
+  // BUILD_STATE DOC-2 normalized the Qwen3.5 27B/35B pair). A GiB value is ~6.9% low, which on a
+  // multi-GB weight is >1 GB — far outside rounding. Only manifests carrying a real single-file
+  // download block with a byte count are checked (the vision manifest's size_on_disk_gb is a
+  // composite of two files — GGUF + mmproj — with no single download.size_bytes, so it is
+  // excluded by the numeric-sizeBytes guard). Tolerance 0.15 GB clears every honest rounding
+  // (largest gap in the catalog: qwen3.5-0.8b, 0.7 vs 0.639 = 0.061) yet reddens on a GiB mislabel
+  // of any sizable weight (the F-16 pair was off by 1.12 / 1.31 GB).
+  it('size_on_disk_gb matches size_bytes/1e9 (decimal GB) for every real download block', () => {
+    const TOLERANCE_GB = 0.15
+    for (const m of committedManifests()) {
+      const sizeBytes = m.download?.sizeBytes
+      if (sizeBytes == null || sizeBytes <= 0) continue
+      const decimalGb = sizeBytes / 1e9
+      expect(
+        Math.abs(m.sizeOnDiskGb - decimalGb),
+        `${m.id}: size_on_disk_gb (${m.sizeOnDiskGb}) must be decimal GB = size_bytes/1e9 ` +
+          `(${decimalGb.toFixed(3)}); a gap this large means GiB was recorded instead of GB`
+      ).toBeLessThan(TOLERANCE_GB)
+    }
+  })
+})

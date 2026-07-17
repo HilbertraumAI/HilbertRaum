@@ -5,12 +5,12 @@ role: chat
 format: gguf
 runtime: llama_cpp
 license: apache-2.0
-size_on_disk_gb: 18.2
+size_on_disk_gb: 19.5
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
 # Rank 3 (owner decision 2026-07-12, newest-generation preference; see the Q4 sibling for the
 # full record): top scorer of the #48 tester eval (F1 .3573, EM .9765, zero unanswerable-set
-# hallucinations, b9849 binary). The ~18.2 GiB weight needs the 32 GB tier to be comfortable;
+# hallucinations, b9849 binary). The ~19.5 GB (18.2 GiB) weight needs the 32 GB tier to be comfortable;
 # the Q4 sibling covers 24 GB. Takes ≥32 GB from gemma4-12b (rank 2).
 recommendation_rank: 3
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
