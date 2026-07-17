@@ -213,8 +213,15 @@ for mf in "${MANIFEST_FILES[@]}"; do
     fi
   fi
 
-  handle_file "$id" "" "$dest" "$sha" "$url" "$local_path" "$gguf_state"
-  [[ $has_mmproj -eq 1 ]] && handle_file "$id" " (mmproj)" "$mmproj_dest" "$mmproj_sha" "$mmproj_url" "$mmproj_local" "$mmproj_state"
+  # Call failure-tolerantly (|| true): handle_file's download-error path does `return 1`, and
+  # under `set -euo pipefail` a non-zero return in plain-command (or post-`&&`) position trips
+  # errexit and kills the whole batch — so one flaky link would silently skip every remaining
+  # manifest and the failed model's mmproj sibling, and the summary/gate would never print. The
+  # function already records the outcome in had_failure, which sets the exit code at the end, so
+  # swallowing the return here keeps the batch going while still exiting 1 — matching
+  # fetch-models.ps1's continue-then-summarize-then-exit-1 behavior (F-04, full audit 2026-07-16).
+  handle_file "$id" "" "$dest" "$sha" "$url" "$local_path" "$gguf_state" || true
+  [[ $has_mmproj -eq 1 ]] && { handle_file "$id" " (mmproj)" "$mmproj_dest" "$mmproj_sha" "$mmproj_url" "$mmproj_local" "$mmproj_state" || true; }
 done
 
 echo

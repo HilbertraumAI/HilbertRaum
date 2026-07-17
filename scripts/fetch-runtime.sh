@@ -317,8 +317,15 @@ fi
 
 mkdir -p "$EXTRACT_TO"
 # Archive name from the URL basename so a .tar.gz (the macOS/Linux release format) is
-# not saved — and mis-extracted — as a .zip.
+# not saved — and mis-extracted — as a .zip. Strip a trailing ?query / #fragment after the
+# basename: an HF-style URL (`...file.tar.gz?download=true`, the convention the model manifests
+# already use everywhere) would otherwise yield 'file.tar.gz?download=true', which fails the
+# `*.tar.gz` extraction glob below and gets fed to unzip. fetch-runtime.ps1 ([uri].AbsolutePath)
+# and assets.ts (split('?')[0]) already strip it; the sh variant had drifted (F-19, full audit
+# 2026-07-16). All current runtime-sources URLs are query-free, so this is latent-until-edit.
 ARCHIVE_NAME="$(basename "$URL")"
+ARCHIVE_NAME="${ARCHIVE_NAME%%\?*}"
+ARCHIVE_NAME="${ARCHIVE_NAME%%#*}"
 [[ -z "$ARCHIVE_NAME" ]] && ARCHIVE_NAME="$BIN_BASE-$VERSION-${B_OS[$SEL]}-${B_ARCH[$SEL]}.zip"
 ARCHIVE="$EXTRACT_TO/$ARCHIVE_NAME"
 

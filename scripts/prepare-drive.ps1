@@ -36,9 +36,11 @@
   network only — the app itself stays offline. To keep setup fast the default set is small
   but complete for the core features: the default chat model (Ministral 3 8B), the embeddings
   model, the reranker, the Whisper transcriber model, and the Qwen2.5-VL image-description
-  model (GGUF + mmproj), PLUS both sidecar runtimes (llama.cpp + whisper.cpp). The user
-  downloads any other models (larger chat models) from inside the app. Without this flag the
-  behaviour is unchanged (layout + config; you drop artifacts in by hand).
+  model (GGUF + mmproj), PLUS both sidecar runtimes (llama.cpp + whisper.cpp) and the OCR
+  language files (deu/eng traineddata for scanned-PDF and photo text recognition, Phase 38 --
+  OS-independent, ~4 MB). The user downloads any other models (larger chat models) from inside
+  the app. Without this flag the behaviour is unchanged (layout + config; you drop artifacts
+  in by hand).
 
 .PARAMETER AllModels
   With -WithAssets, fetch ALL models with a download block (every chat model + embeddings +
@@ -70,9 +72,9 @@ $ErrorActionPreference = 'Stop'
 # embeddings model, reranker, Whisper transcriber, and the Qwen2.5-VL image-description model,
 # so chat, document Q&A, retrieval quality, audio/dictation, and image understanding all work
 # out of the box. Every OTHER model (larger chat models) is downloaded by the user from inside
-# the app. Pass -AllModels to fetch everything. The whisper.cpp runtime is fetched alongside
-# these (see the -WithAssets block). Keep these ids in sync with the manifests under
-# model-manifests/.
+# the app. Pass -AllModels to fetch everything. The whisper.cpp runtime and the OCR language
+# files are fetched alongside these (see the -WithAssets block). Keep these ids in sync with
+# the manifests under model-manifests/.
 $DefaultModelIds = @(
   'ministral3-8b-instruct-2512-q4',   # chat (benchmark-winning 8B)
   'multilingual-e5-small-q8',         # embeddings (document Q&A)
@@ -306,6 +308,18 @@ if ($WithAssets) {
   if ($LASTEXITCODE -ne 0) {
     Write-Host '  note: whisper.cpp runtime not provisioned (no prebuilt build for this host -- build from source on mac/linux).' -ForegroundColor Yellow
   }
+
+  # OCR language files (Phase 38, D32): the ocr/ asset class -- plain sha256-verified
+  # traineddata files, OS-independent (one run covers every shipped OS). Unlike the whisper
+  # build there is nothing host-specific to miss, so this is fetched unconditionally like
+  # llama.cpp (a failure aborts). Without it the DIY drive's ocr/ dir stays empty and
+  # scanned-PDF/photo OCR (Phase 38) is silently unavailable -- the provisioning root cause
+  # of issue #59 (F-05, full audit 2026-07-16). build-commercial-drive already fetches it.
+  $ocrArgs = @{ Target = $Target; Family = 'ocr' }
+  if ($DryRun) { $ocrArgs.DryRun = $true }
+  & $fetchRuntime @ocrArgs
+  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime (ocr) failed.'; exit 1 }
+
   Write-Host ''
   Write-Host "Now capture real hashes: scripts\verify-models.ps1 -Target '$Target' -Generate" -ForegroundColor Cyan
 } else {

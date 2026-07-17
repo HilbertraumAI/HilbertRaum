@@ -94,12 +94,14 @@ downloads + SHA-256-verifies the artifacts in one command. By default it fetches
 complete **default set** (~10.4 GB) — the default **chat** model (Ministral 3 8B), the **embeddings**
 model, the **reranker**, the **Whisper** transcriber model, and the **Qwen2.5-VL** vision model —
 plus **both sidecar runtimes** (`llama.cpp`
-+ `whisper.cpp`), so chat, document Q&A, retrieval quality, audio, and image understanding work out of the box. The user
++ `whisper.cpp`) and the **OCR language files** (`deu`/`eng` traineddata, ~4 MB, OS-independent),
+so chat, document Q&A, retrieval quality, audio, image understanding, and scanned-PDF/photo OCR
+work out of the box. The user
 grabs any other models (larger chat models) from the app's AI Model screen on demand; add
-`-AllModels`/`--all-models` to provision every model up front (the runtimes are fetched either way).
+`-AllModels`/`--all-models` to provision every model up front (the runtimes + OCR files are fetched either way).
 The
 whisper.cpp runtime is prebuilt for **Windows only**, so on a macOS/Linux build host `--with-assets`
-skips it with a note (build it from source). You can still drop everything in by hand. Then start a
+skips it with a note (build it from source); the OCR files are plain verified downloads and are fetched on every OS. You can still drop everything in by hand. Then start a
 chat model on the AI Model screen to get real on-device inference and real tokens/sec.
 
 ## Portable build (electron-builder)
@@ -259,7 +261,8 @@ NOT in `assets.ts`**: it lives only in `scripts/prepare-drive.ps1`
 (`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
 **between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
 does not change which models `--with-assets` fetches (a parity test,
-`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match and that both
+fetch the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer

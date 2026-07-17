@@ -35,9 +35,17 @@ Set-Location $RepoRoot
 # --use-system-ca only exists from Node 22.15 / 23.8 — probe first (an unknown flag in
 # NODE_OPTIONS aborts EVERY node/npm invocation), and APPEND so a pre-existing
 # NODE_OPTIONS is preserved (audit M19).
-$global:LASTEXITCODE = 0
-& node --use-system-ca -e 0 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+#
+# Probe via `node -p` on the flag-introspection set, NOT `& node --use-system-ca -e 0 2>$null`:
+# under $ErrorActionPreference='Stop' (line 30) Windows PowerShell 5.1 wraps a native command's
+# REDIRECTED stderr in ErrorRecords and TERMINATES the script — so a Node that rejects the flag
+# (any 22.5–22.14, all within our >=22.5 engines floor) would print 'bad option' to stderr and
+# crash the bootstrap with a NativeCommandError instead of falling back. `node -p` needs no
+# stderr redirect: it prints True/False on stdout and exits 0 on every supported Node
+# (`process.allowedNodeEnvironmentFlags` exists since Node 10), so the EAP hazard never arises
+# (F-18, full audit 2026-07-16 — mirrors the redirect-free intent of setup-dev.sh).
+$hasSystemCa = & node -p "process.allowedNodeEnvironmentFlags.has('--use-system-ca')"
+if ($hasSystemCa -eq 'true') {
   $env:NODE_OPTIONS = ("$($env:NODE_OPTIONS) --use-system-ca").Trim()
 } else {
   Write-Host 'Note: this Node does not support --use-system-ca (needs >= 22.15); continuing without it.' -ForegroundColor Yellow

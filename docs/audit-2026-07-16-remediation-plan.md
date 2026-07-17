@@ -77,7 +77,7 @@ before the next numbered phase.
 
 | id | found in | description + location | proposed phase | status |
 |---|---|---|---|---|
-| — | — | (empty at wave start) | — | — |
+| Q-1 | Phase 3 (F-05) | **#59 warning-copy half.** F-05 fixed the provisioning root cause (DIY `--with-assets` now fetches the `ocr` family), but the in-app scanned-PDF/photo dead-end warning (`shared/i18n/en.ts:488,1811` + de.ts counterparts) still says "OCR files not on this drive" without telling the user how to get them. Renderer-copy change: add an actionable EN+DE `unavailable → how to get it` hint keyed off the packaging docs (`fetch-runtime --family ocr`, or rebuild with `--with-assets`). Overlaps `user-guide.md:356-363` / `troubleshooting.md:185-197`. | Phase 7 | open |
 
 ---
 
@@ -475,6 +475,87 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Messages to later phases: <"Phase 7: …" | none>
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
+
+### Phase 3 — 2026-07-17 — branch fix/audit-2026-07-16-p3 @ this commit (stacked on p2 @ 293a0e4)
+- Gate: **4,221 passed / 49 skipped** · typecheck clean · build n/a (only `scripts/`, `docs/`, `README.md`,
+  and one test file touched — nothing under `apps/desktop/src`). Baseline entering P3 was 4,219/49 (ledger
+  entry 0 + P2's +2); +2 = the two new F-05 OCR-family parity assertions. Hygiene: all edited `.ps1`/`.sh`
+  are outside the repo-hygiene nets (§49 ④, known); verified NUL-free + BOM-free, and `.gitattributes`
+  (`* text=auto eol=lf`) normalizes every committed blob to LF (working-tree CRLF is just autocrlf checkout).
+- Fixed (all five in listed order):
+  - **F-05** — added the `ocr` family fetch to the `--with-assets` block in BOTH prepare-drive siblings
+    (`prepare-drive.sh` after the whisper block; `prepare-drive.ps1` after its whisper block), mirroring the
+    whisper_cpp call but fetched UNCONDITIONALLY like llama.cpp (OS-independent, ~4 MB — no best-effort
+    wrapper, a failure aborts). Updated both header comments (sh:11-18 + the DEFAULT_MODEL_IDS block comment;
+    ps1 `.PARAMETER WithAssets` + the `$DefaultModelIds` block comment). New parity net in
+    `prepare-drive-default-set.test.ts` (describe "…OCR family in both siblings (F-05)") pins both siblings
+    invoke fetch-runtime for `ocr` — there is NO canonical TS plan for the with-assets fetch-CALL set
+    (drive.ts planPrepareDrive models layout/config/copies only), so this is a direct sh↔ps1 parity assertion,
+    not a TS-drift one. TEETH: added the two assertions FIRST, watched both redden against the pre-fix scripts,
+    then greened after the script edits. Dry-run parity confirmed (see below).
+  - **F-03** — `prepare-drive.sh` COMMON_MODEL_ARGS empty-array expansion at both call sites (the `--all-models`
+    single call + the default-set per-id loop) now uses the M23 idiom `${COMMON_MODEL_ARGS[@]+"${COMMON_MODEL_ARGS[@]}"}`;
+    added a guard comment citing fetch-models.sh:161. Swept the file: COMMON_MODEL_ARGS was the only
+    empty-capable array (DIRS/LICENSE_ARTIFACTS/DEFAULT_MODEL_IDS are literal-non-empty, RUNTIME_ARGS always
+    carries --target — matches the audit's non-impact list).
+  - **F-04** — `fetch-models.sh` handle_file now called failure-tolerantly at BOTH sites (`… || true`;
+    the mmproj site wrapped as `[[ … ]] && { … || true; }` to keep the `|| true` bound to handle_file);
+    had_failure still aggregates and drives the exit-1 gate. Now matches fetch-models.ps1 (continue +
+    summary + exit 1).
+  - **F-18** — `setup-dev.ps1` `--use-system-ca` probe rewritten to `node -p "process.allowedNodeEnvironmentFlags.has('--use-system-ca')"`
+    (no stderr redirect at all), replacing `& node --use-system-ca -e 0 2>$null | Out-Null`. Under
+    `$ErrorActionPreference='Stop'` PS 5.1 wrapped the redirected native stderr in ErrorRecords and
+    terminated; the introspection probe prints True/False on stdout and exits 0 on every supported Node, so
+    the EAP hazard is gone. Kept the same append-to-NODE_OPTIONS + fallback-note structure.
+  - **F-19** — `fetch-runtime.sh:321` archive-name derivation now strips `?query` then `#fragment` after
+    basename (`%%\?*` / `%%#*`), converging with fetch-runtime.ps1 ([uri].AbsolutePath) and assets.ts
+    (split('?')[0]). Latent-until-edit (all current runtime-sources URLs are query-free) but the extraction
+    dispatch keys on ARCHIVE_NAME, so an HF-style `?download=true` would have mis-routed a `.tar.gz` to unzip.
+- Verification evidence (this box is Windows/win32; genuine bash-3.2 not available — GNU bash 5.3):
+  - **Dry-run parity ps1↔sh** (`--with-assets --dry-run --accept-license`): both print the identical asset
+    plan — 5 default models, llama.cpp win/vulkan @ b9849, whisper.cpp win/cpu @ v1.8.6, **and OCR deu/eng
+    traineddata @ 4.0.0_best_int** into `ocr/`. F-05 confirmed on both shells.
+  - **F-03** verified by idiom correctness (empty array under `set -u` → expands to nothing, no unbound error;
+    filled array → expands verbatim) + the repo's own M23 precedent (fetch-models.sh:161 uses the same class).
+    The bash-3.2 abort itself could NOT be reproduced here (bash 5.3 tolerates the bare empty expansion) — stated
+    honestly per the orchestrator instruction; the fix is the exact idiom the repo already relies on.
+  - **F-04** teeth shown against the REAL script: ran the committed (HEAD) `fetch-models.sh` vs the fixed one
+    over 3 forced-bad-URL manifests (curl/sleep stubbed for instant failure). Pre-fix: aborts after the first
+    FAIL, test-b/test-c never attempted, no summary. Fixed: all 3 attempted, `Planned 3 | fetched 0 | skipped 0`
+    prints, exit 1.
+  - **F-18** teeth under PS 5.1 + EAP Stop: NEW probe works on the real node (enable branch) AND on a stub node
+    lacking the flag (fallback branch, no crash); the OLD stderr-redirect shape crashes with NativeCommandError
+    on the same stub — the exact bug removed.
+  - **F-19** verified: `build.tar.gz?download=true` and `build.tgz#frag` now strip to `.tar.gz`/`.tgz` and route
+    to the tar case (were routed to unzip pre-fix).
+- **--with-assets size figure (handoff):** unchanged at **~10.4 GB**. The OCR data is deu+eng `.traineddata.gz`
+  ≈ **~4 MB total** — within the headline's rounding, so Phase 1's ~10.4 GB stands. Updated the enumerations in
+  `docs/packaging.md` (default-set paragraph + the parity-test note) and `README.md` (lines ~84 and ~148-158) to
+  LIST the OCR files; the GB figure was deliberately left at 10.4.
+- Deviations from plan: none material. The condensed plan said "extend prepare-drive-default-set.test.ts /
+  script-drift.test.ts where the canonical TS plan exists" — the audit F-05 blast radius confirms NO canonical
+  TS plan exists for the with-assets fetch-call set, so the OCR pin is a direct sh↔ps1 parity assertion added to
+  prepare-drive-default-set.test.ts (the audit's "a new parity assertion would be additive"). Not a scope change.
+- New findings: none (NF-* none). §Q: added **Q-1** — the #59 warning-copy half (in-app dead-end message),
+  targeted to **Phase 7** per the plan default (renderer-copy EN+DE hint).
+- Messages to later phases:
+  - **Phase 7:** consume §Q Q-1 (the #59 in-app scanned-PDF/photo warning still has no "how to get the OCR
+    files" hint). The provisioning root cause is now fixed, so the copy can point at a concrete remedy:
+    `fetch-runtime --family ocr` (or rebuild the drive with `--with-assets`).
+  - **Phase 10:** do NOT let this wave close without commenting on issue **#59** — but only AFTER the wave is
+    merged to a pushed sha (nothing is pushed pre-merge; a comment now would reference an unpushed commit).
+    Ready-to-post comment text (post it verbatim after merge, filling the merge sha):
+    > Fixed the provisioning root cause in the audit-2026-07-16 remediation wave (Phase 3): `prepare-drive
+    > --with-assets` now fetches the `ocr` family (deu/eng traineddata) in BOTH the `.ps1` and `.sh` siblings,
+    > so every DIY-built drive ships with scanned-PDF/photo OCR working out of the box — previously only
+    > commercially-built drives got it. A parity test (`prepare-drive-default-set.test.ts`) now pins that both
+    > shells fetch it, so it can't silently regress. Existing DIY drives can be topped up with one command:
+    > `scripts/fetch-runtime.sh --target <drive> --family ocr` (or `.ps1 -Family ocr`). **Still open (this
+    > issue's other half):** the in-app scanned-PDF warning copy doesn't yet point users to that remedy — that
+    > renderer-copy fix is tracked for Phase 7 of the same wave.
+- Docs touched: `docs/packaging.md`, `README.md`, `apps/desktop/tests/unit/prepare-drive-default-set.test.ts`
+  (new describe block), the five scripts, `BUILD_STATE.md` (§5 item 14 Phase-3 line), this plan (§Q + §L).
+  BUILD_STATE entry added: yes.
 
 ### Phase 2 — 2026-07-17 — branch fix/audit-2026-07-16-p2 @ this commit (stacked on p1 @ e8e1313)
 - Gate: **4,219 passed / 49 skipped** · typecheck clean · build n/a (only `tests/`, `model-manifests/`,

@@ -13,9 +13,10 @@
 # fast the default set is small but complete for the core features: the default chat model
 # (Ministral 3 8B), the embeddings model, the reranker, the Whisper transcriber model, and
 # the Qwen2.5-VL image-description model (GGUF + mmproj), PLUS both sidecar runtimes
-# (llama.cpp + whisper.cpp). The user downloads any other models
-# (larger chat models) from inside the app. Pass --all-models to fetch every model instead
-# (the sidecar runtimes are fetched either way).
+# (llama.cpp + whisper.cpp) and the OCR language files (deu/eng traineddata for scanned-PDF
+# and photo text recognition, Phase 38 — OS-independent, ~4 MB). The user downloads any
+# other models (larger chat models) from inside the app. Pass --all-models to fetch every
+# model instead (the sidecar runtimes + OCR files are fetched either way).
 #
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM [--dry-run] [--force] \
@@ -26,9 +27,9 @@ set -euo pipefail
 # the embeddings model, reranker, Whisper transcriber, and the Qwen2.5-VL image-description
 # model, so chat, document Q&A, retrieval quality, audio/dictation, and image understanding
 # all work out of the box. Every OTHER model (larger chat models) is downloaded by the user
-# from inside the app. Pass --all-models to fetch everything. The whisper.cpp runtime is
-# fetched alongside these (see the --with-assets block). Keep these ids in sync with the
-# manifests under model-manifests/.
+# from inside the app. Pass --all-models to fetch everything. The whisper.cpp runtime and the
+# OCR language files are fetched alongside these (see the --with-assets block). Keep these ids
+# in sync with the manifests under model-manifests/.
 DEFAULT_MODEL_IDS=(
   ministral3-8b-instruct-2512-q4   # chat (benchmark-winning 8B)
   multilingual-e5-small-q8         # embeddings (document Q&A)
@@ -234,7 +235,12 @@ echo
 if [[ $WITH_ASSETS -eq 1 ]]; then
   echo "Fetching assets (build-time network; the app itself stays offline):"
 
-  # Common model args (license + dry-run) shared by every fetch-models call below.
+  # Common model args (license + dry-run) shared by every fetch-models call below. In the
+  # natural DIY invocation (--with-assets with neither --accept-license nor --dry-run — every
+  # default-set model is already license-approved) this array is EMPTY, and Bash 3.2 + `set -u`
+  # (macOS stock /bin/bash) aborts an unguarded empty-array expansion with "unbound variable"
+  # (M23 — the same class guarded in fetch-models.sh:161 / verify-models.sh). Expand it via the
+  # `${arr[@]+"${arr[@]}"}` idiom so an empty array vanishes instead of erroring (F-03).
   COMMON_MODEL_ARGS=()
   [[ $ACCEPT_LICENSE -eq 1 ]] && COMMON_MODEL_ARGS+=(--accept-license)
   [[ $DRY_RUN -eq 1 ]] && COMMON_MODEL_ARGS+=(--dry-run)
@@ -242,11 +248,11 @@ if [[ $WITH_ASSETS -eq 1 ]]; then
   # fetch-models takes a single --only id, so the default set is fetched one id at a time;
   # --all-models fetches every manifest in one pass (a single call with no --only).
   if [[ $ALL_MODELS -eq 1 ]]; then
-    bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" "${COMMON_MODEL_ARGS[@]}"
+    bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" ${COMMON_MODEL_ARGS[@]+"${COMMON_MODEL_ARGS[@]}"}
   else
     echo "  (default set: ${DEFAULT_MODEL_IDS[*]}; pass --all-models for every model)"
     for id in "${DEFAULT_MODEL_IDS[@]}"; do
-      bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" --only "$id" "${COMMON_MODEL_ARGS[@]}"
+      bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" --only "$id" ${COMMON_MODEL_ARGS[@]+"${COMMON_MODEL_ARGS[@]}"}
     done
   fi
 
@@ -262,6 +268,15 @@ if [[ $WITH_ASSETS -eq 1 ]]; then
   if ! bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" --family whisper_cpp; then
     echo "  note: whisper.cpp runtime not provisioned (no prebuilt build for this host — build from source on mac/linux)."
   fi
+
+  # OCR language files (Phase 38, D32): the ocr/ asset class — plain sha256-verified
+  # traineddata files, OS-independent (one run covers every shipped OS). Unlike the whisper
+  # build there is nothing host-specific to miss, so this is fetched unconditionally like
+  # llama.cpp (a failure aborts). Without it the DIY drive's ocr/ dir stays empty and
+  # scanned-PDF/photo OCR (Phase 38) is silently unavailable — the provisioning root cause
+  # of issue #59 (F-05, full audit 2026-07-16). build-commercial-drive already fetches it.
+  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" --family ocr
+
   echo
   echo "Now capture real hashes: scripts/verify-models.sh --target \"$TARGET\" --generate"
 else
