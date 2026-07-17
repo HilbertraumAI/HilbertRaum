@@ -591,6 +591,14 @@ password recovery — are documented in
   makes an oversize text/CSV file hit the friendly "file too large" reject instead. PDF/DOCX/audio/image
   keep the full `maxBytes` (they stream / are page-bounded). A streaming line/row parser would lift the
   cap; the byte ceiling is the safe interim win.
+- **Text and CSV exports carry a UTF-8 BOM (`.md`/`.txt`/`.csv`) — deliberate Windows/Excel
+  friendliness, visible to strict non-Windows tooling.** `bomFor` (invoice-hardening P4 for md/txt; audit-2026-07-16
+  F-10 / owner decision D-A 2026-07-17 for csv) prefixes U+FEFF so CP1252-defaulting editors and
+  double-click Excel detect the encoding instead of garbling umlauts/ß. The app's own round-trip is
+  clean: the md/txt parsers strip one leading BOM on import (F-22) and the CSV importer (papaparse)
+  strips it itself — but a strict external consumer that treats bytes verbatim (a naive `cut`/`awk`
+  pipeline, some JSON-adjacent CSV loaders) will see U+FEFF glued to the first header cell. JSON and
+  `.log` exports never carry a BOM (it breaks strict JSON parsers and log tooling).
 - **The documents list is windowed, so the browser's find-in-page (Ctrl+F) only matches rows that are
   currently rendered ([`architecture.md`](architecture.md) §36).**
   To stop the list DOM (and the per-row Radix menu-root state machines) from growing linearly with library
@@ -1622,7 +1630,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   input is not worth the blast radius across summary/compare/retrieval, and the failure mode
   is benign — the over-long window simply comes back without a clean stop and is surfaced as
   an honest "could not be translated" failed-window notice (see below), never a silent bad
-  translation. A real fix belongs in a separate chunker-owned change.
+  translation. A real fix belongs in a separate chunker-owned change. _(Narrowed 2026-07-17,
+  audit-2026-07-16 F-24: the SIBLING symptom of the same astral gap — the chunker's fixed-offset
+  character slices could split a surrogate pair at a window boundary, storing chunks with a lone
+  surrogate at the edge (U+FFFD in SQLite/FTS/embeddings) — is now FIXED by a boundary-only
+  pair-aligned cut in `chunker.ts` `atomize`. The token UNDER-COUNT half described here remains
+  accepted; existing corpora re-chunk only on re-index, the documented behavior.)_
 - **Numbers and dates are LOCALIZED, not copied verbatim — that is correct machine
   translation.** The TG-2 smoke on the real model: *14.03.2026* → *March 14, 2026*,
   *1.250* → *1,250* — formats adapt to the target language, while stable identifiers

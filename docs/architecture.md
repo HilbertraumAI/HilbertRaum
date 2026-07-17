@@ -1951,7 +1951,9 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     (touching the shared chunker for a pathological input is not worth the cross-pipeline blast radius;
     the failure mode is an honest failed-window notice). Documented in `known-limitations.md`
     (translation) + the `doctasks/translation.ts` header; a real fix belongs in a separate chunker-owned
-    change.
+    change. _(Update 2026-07-17: audit-2026-07-16 F-24 fixed the SIBLING symptom of the same astral gap —
+    surrogate-pair-splitting cuts at window boundaries — with a boundary-only pair-aligned slice in
+    `chunker.ts`; the under-count itself remains accepted as recorded here.)_
   - **Doc drift D1–D5.** Smoke row / header wording aligned to what the tests assert (identifiers
     verbatim, numbers/dates localize — `packaging.md`, `translategemma-smoke.test.ts`); the
     `doctasks/translation.ts` prompt-reserve comment made past-tense; `security-model.md` log
