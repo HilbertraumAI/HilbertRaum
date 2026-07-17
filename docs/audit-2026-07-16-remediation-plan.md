@@ -78,7 +78,7 @@ before the next numbered phase.
 | id | found in | description + location | proposed phase | status |
 |---|---|---|---|---|
 | Q-1 | Phase 3 (F-05) | **#59 warning-copy half.** F-05 fixed the provisioning root cause (DIY `--with-assets` now fetches the `ocr` family), but the in-app scanned-PDF/photo dead-end warning (`shared/i18n/en.ts:488,1811` + de.ts counterparts) still says "OCR files not on this drive" without telling the user how to get them. Renderer-copy change: add an actionable EN+DE `unavailable → how to get it` hint keyed off the packaging docs (`fetch-runtime --family ocr`, or rebuild with `--with-assets`). Overlaps `user-guide.md:356-363` / `troubleshooting.md:185-197`. | Phase 7 | open |
-| Q-2 | Phase 4 (F-02) | **Real-server error-frame smoke owed.** The F-02 in-band error-frame shapes (`data: {"error":{…}}` + bare `error: {…}` field line) are pinned from the TA-4-verified wire contract + hand-authored fixtures — CI green does NOT evidence the real b9849 wire format (TS-3(a)). At the next manual smoke-drive session, force a real llama-server mid-stream error (tiny ctx + context-shift disabled, `HILBERTRAUM_*` env) and verify the reader rejects + the friendly copy surfaces. COUPLES with Phase 9's F-40 b9849 re-capture — Phase 9: register this into the ONE consolidated smoke-session checklist (BUILD_STATE §5 item 7 TS-3 bullet) rather than as a scattered note. | Phase 9 | open |
+| Q-2 | Phase 4 (F-02) | **Real-server error-frame smoke owed.** The F-02 in-band error-frame shapes (`data: {"error":{…}}` + bare `error: {…}` field line) are pinned from the TA-4-verified wire contract + hand-authored fixtures — CI green does NOT evidence the real b9849 wire format (TS-3(a)). At the next manual smoke-drive session, force a real llama-server mid-stream error (tiny ctx + context-shift disabled, `HILBERTRAUM_*` env) and verify the reader rejects + the friendly copy surfaces. Also watch the PARTIAL error-frame case: an error frame whose JSON is truncated mid-write (`data: {"error":{"mess` + close, no `[DONE]`) still parses as a keep-alive and the stream ends CLEANLY — inside Phase 4's §N close-without-`[DONE]` scope-out, and the real server is where it would surface if it occurs. COUPLES with Phase 9's F-40 b9849 re-capture — Phase 9: register this into the ONE consolidated smoke-session checklist (BUILD_STATE §5 item 7 TS-3 bullet) rather than as a scattered note. | Phase 9 | open |
 
 ---
 
@@ -515,7 +515,17 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
     - Remaining blast-radius consumers verified, no per-consumer change needed: whole-doc-tree
       (:248/:474/:583) + doctasks `generate` propagate into the existing friendly-task-failure
       envelope; vision/runtime.ts:285 (direct readChatSSE caller) rejects into the images-IPC
-      failure path; benchmark.ts benign; skills JSON-schema flows already failed visibly on parse.
+      failure path; benchmark.ts benign. Skills JSON-schema flows (reviewer correction): the
+      pre-fix behavior was NOT "already failed visibly" everywhere — in
+      `services/skills/categorizer.ts:308-316` a mid-stream error frame produced an unparseable
+      truncated reply → one retry → the batch dropped HONESTLY to Uncategorized and the analysis
+      COMPLETED. Post-fix a `ChatStreamError` propagates out of `streamBatchReply` (no catch in
+      the loop) and fails the whole analysis turn via `withChatStream`'s friendly mapping — a
+      real, sane, propagate-consistent behavior change in the categorizer/enricher/locate flows
+      (fail-the-turn beats a degraded-but-complete answer built on a mid-generation server
+      failure). Deliberately not test-pinned: these flows are computed-then-persisted (no half
+      state to assert against) and the surfaced error is already covered by the friendly-mapping
+      pin in `chat-stream.test.ts`.
   - **F-01** (this commit) — `extract.ts` markerExists cache-hit lookup gains `AND model_id = ?`
     (the current pass's `deps.modelId`); the hash (`contentHashOf`) untouched — the
     `analysis-extract-hash.test.ts` byte-identity pin stays green, persisted rows stay
