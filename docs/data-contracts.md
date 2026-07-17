@@ -56,7 +56,13 @@ Phase 34: `kind: 'translation'` takes `params.targetLang: TranslationTargetLang 
 Phase 35: `kind: 'compare'` takes exactly TWO distinct `documentIds` and `DocumentOrigin` is
 now a discriminated union — `{ type: 'translation', translatedFrom, targetLang }` |
 `{ type: 'compare', comparedFrom: [a, b] }`; Phase-34 rows persisted without `type` parse as
-`'translation'`, an additive migration) +
+`'translation'`, an additive migration;
+issue #58 (2026-07-17): `DocTaskStatus` gained the ADDITIVE optional `gaps?: DocTaskGaps |
+null` — a DONE translation's honest completeness accounting: `{ missingPageRanges: Array<{
+from, to }>, failedWindows: number }`, set only when the output is incomplete (absent =
+complete; other kinds never set it); `DocumentPreview` gained the additive optional
+`pageCount?: number | null` — the parser's declared source page total (PDF; null/absent for
+page-less formats), feeding that accounting) +
 `exportDocument` (`docs:export`, Phase 34 — save-dialog export of a text document's stored
 content, the `exportConversation` pattern; resolves with the path or null on cancel) +
 `importPreflight` (`docs:importPreflight`, Phase 36 — read-only selection summary driving the

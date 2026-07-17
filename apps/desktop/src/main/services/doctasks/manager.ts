@@ -362,7 +362,18 @@ export class DocTaskManager {
     const task = this.tasks.get(jobId)
     if (task) {
       // Return a copy — the renderer must not share mutable state with the engine.
-      return { ...task.status, progress: { ...task.status.progress } }
+      return {
+        ...task.status,
+        progress: { ...task.status.progress },
+        ...(task.status.gaps
+          ? {
+              gaps: {
+                ...task.status.gaps,
+                missingPageRanges: task.status.gaps.missingPageRanges.map((r) => ({ ...r }))
+              }
+            }
+          : {})
+      }
     }
     // The task is gone — evicted past the terminal-history cap, or a never-issued id (L11).
     // Echo its REAL kind if we still remember it (never mislabel an evicted translation as a

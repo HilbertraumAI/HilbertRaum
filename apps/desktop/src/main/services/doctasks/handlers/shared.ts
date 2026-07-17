@@ -18,13 +18,26 @@ import { collectionIdsForDocument } from '../../collections'
 import { log } from '../../logging'
 import type { DocTaskCtx, InternalTask } from '../context'
 
+/** A re-extracted source with the page identity the completeness accounting needs (#58). */
+export interface TranslationSource {
+  /** Ordered, non-overlapping, non-empty segments with their source page (null = page-less). */
+  segments: Array<{ text: string; pageNumber: number | null }>
+  /** The source's DECLARED total pages (PDF), or null for page-less formats. */
+  pageCount: number | null
+}
+
 /**
- * Re-extract a document's ordered, non-overlapping segment texts from its stored
- * copy (never the ~80-token-overlapping chunks). Encrypted copies decrypt to a
- * `.parse*` transient inside and are shredded on the way out.
+ * Re-extract a document's ordered, non-overlapping segments from its stored copy
+ * (never the ~80-token-overlapping chunks), KEEPING each segment's page number plus
+ * the parser's declared page total (issue #58: an empty page emits no segment, so
+ * only `pageCount` can reveal it). Encrypted copies decrypt to a `.parse*` transient
+ * inside and are shredded on the way out.
  */
-export async function extractSegmentTexts(documentId: string, ctx: DocTaskCtx): Promise<string[]> {
-  let texts: string[]
+export async function extractTranslationSource(
+  documentId: string,
+  ctx: DocTaskCtx
+): Promise<TranslationSource> {
+  let source: TranslationSource
   try {
     const preview = await extractDocumentPreview(
       ctx.deps.getDb(),
@@ -32,7 +45,12 @@ export async function extractSegmentTexts(documentId: string, ctx: DocTaskCtx): 
       documentId,
       { cipher: ctx.deps.getIngestionDeps().cipher ?? null }
     )
-    texts = preview.segments.map((s) => s.text).filter((t) => t.trim().length > 0)
+    source = {
+      segments: preview.segments
+        .map((s) => ({ text: s.text, pageNumber: s.pageNumber }))
+        .filter((s) => s.text.trim().length > 0),
+      pageCount: preview.pageCount ?? null
+    }
   } catch (err) {
     log.warn('Document task source re-extraction failed', {
       documentId,
@@ -40,8 +58,16 @@ export async function extractSegmentTexts(documentId: string, ctx: DocTaskCtx): 
     })
     throw new Error(tMain('main.task.sourceUnreadable'))
   }
-  if (texts.length === 0) throw new Error(tMain('main.task.documentNotReady'))
-  return texts
+  if (source.segments.length === 0) throw new Error(tMain('main.task.documentNotReady'))
+  return source
+}
+
+/**
+ * Re-extract a document's ordered, non-overlapping segment TEXTS (the compare handler's
+ * input — page accounting not needed there). Same error semantics as above.
+ */
+export async function extractSegmentTexts(documentId: string, ctx: DocTaskCtx): Promise<string[]> {
+  return (await extractTranslationSource(documentId, ctx)).segments.map((s) => s.text)
 }
 
 /**

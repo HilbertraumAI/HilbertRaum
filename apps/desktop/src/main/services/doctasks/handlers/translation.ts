@@ -13,13 +13,14 @@ import { isCleanStop, isTranslationStartError } from '../../translation'
 import type { CompletionFinal, Translator } from '../../translation'
 import type { TranslationSourceLang, TranslationTargetLang } from '../../../../shared/types'
 import {
-  planTranslationWindows,
+  planTranslationBlocks,
   failedWindowNotice,
+  missingPageNotice,
   translationAttributionLine,
   translatedDocumentTitle
 } from '../translation'
 import type { DocTaskCtx, InternalTask } from '../context'
-import { buildProvenance, extractSegmentTexts, materializeDocument } from './shared'
+import { buildProvenance, extractTranslationSource, materializeDocument } from './shared'
 
 interface WindowRequest {
   sourceLang: TranslationSourceLang
@@ -127,13 +128,16 @@ export async function runTranslation(
 
   // The input is the parser's SEGMENTS re-extracted from the stored copy —
   // ordered and non-overlapping (see the window-math note above; stored chunks
-  // would duplicate their ~80-token overlap into the translation).
-  const segmentTexts = await extractSegmentTexts(documentId, ctx)
+  // would duplicate their ~80-token overlap into the translation). Page numbers +
+  // the declared page count ride along for the #58 completeness accounting.
+  const source = await extractTranslationSource(documentId, ctx)
 
   // Window budgets follow the SIDECAR's launched `--ctx-size` (4096 from the manifest,
   // read back via `contextWindow()`) plus the D4 ≤2K-input clamp inside the planner —
   // the chat runtime's context window is irrelevant to translation since TG-3.
-  const plan = planTranslationWindows(segmentTexts, translator.contextWindow())
+  // The plan is BLOCKS (#58): windows to translate, interleaved with gap notices for
+  // source pages that yielded no text — those mark the output at their true position.
+  const plan = planTranslationBlocks(source.segments, source.pageCount, translator.contextWindow())
   task.status.progress.stepsTotal = plan.stepsTotal
   const signal = task.controller.signal
 
@@ -144,11 +148,18 @@ export async function runTranslation(
   // fails the task.
   const parts: string[] = []
   let failedWindows = 0
-  for (let i = 0; i < plan.windows.length; i++) {
+  let windowIndex = 0
+  for (const block of plan.blocks) {
+    if (block.kind === 'gap') {
+      // A page gap costs no model call and no progress step — just its inline notice.
+      parts.push(missingPageNotice(block.gap))
+      continue
+    }
+    windowIndex += 1
     const translated = await translateWithRetry(translator, {
       sourceLang,
       targetLang,
-      text: plan.windows[i],
+      text: block.text,
       maxTokens: plan.windowMaxTokens,
       signal
     })
@@ -156,11 +167,17 @@ export async function runTranslation(
       parts.push(translated)
     } else {
       failedWindows += 1
-      parts.push(`${failedWindowNotice(i + 1, plan.windows.length)}\n\n${plan.windows[i]}`)
+      parts.push(`${failedWindowNotice(windowIndex, plan.windowCount)}\n\n${block.text}`)
     }
     task.status.progress.stepsDone += 1
   }
-  if (failedWindows === plan.windows.length) throw new Error(tMain('main.task.genericFailure'))
+  if (failedWindows === plan.windowCount) throw new Error(tMain('main.task.genericFailure'))
+
+  // #58: surface the honest completeness accounting to the UI poller. Set ONLY when the
+  // output is incomplete — absent means "covers the whole source" (the common case).
+  if (plan.gaps.length > 0 || failedWindows > 0) {
+    task.status.gaps = { missingPageRanges: plan.gaps, failedWindows }
+  }
 
   // Materialize ONLY now that every window succeeded (or is honestly marked) — a
   // cancelled task persists nothing, so the last cancellation point is here.

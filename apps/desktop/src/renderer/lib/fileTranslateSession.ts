@@ -1,4 +1,4 @@
-import type { TranslationSourceLang, TranslationTargetLang } from '@shared/types'
+import type { DocTaskGaps, TranslationSourceLang, TranslationTargetLang } from '@shared/types'
 import { getActiveDocTask, isDocTaskTerminal } from './doctasks'
 import { friendlyIpcError } from './errors'
 import { clearTranslateSession, getTranslateSession, setLastTranslateChoice } from './translateSession'
@@ -57,6 +57,9 @@ export interface FileTranslateSnapshot {
   truncated: boolean
   /** The materialized document's id — drives Export + "Show in Documents". */
   resultDocumentId: string | null
+  /** Issue #58 — the doc-task's honest completeness accounting on done: source pages that
+   *  yielded no text + model-failed windows. Null = the output covers the whole source. */
+  gaps: DocTaskGaps | null
   /** A CODE the screen maps to friendly copy. */
   error: FileTranslateErrorCode | null
   /** A backend-provided friendly failure message. Doc-task failures are persist-canonical
@@ -75,6 +78,7 @@ const EMPTY: FileTranslateSnapshot = {
   output: '',
   truncated: false,
   resultDocumentId: null,
+  gaps: null,
   error: null,
   errorMessage: null,
   busy: false
@@ -369,6 +373,9 @@ function pollDocTask(taskJobId: string, myGen: number): void {
         set(windowProgress(status.progress)) // F-8: subtract the materialize step for display
         if (status.state === 'done') {
           stopPolling()
+          // #58: capture the completeness accounting BEFORE the result load (whose `set`
+          // does not touch it) — the screen shows the gap warning next to the output.
+          set({ gaps: status.gaps ?? null })
           void loadResult(status.resultRef?.documentId ?? null, myGen)
         } else if (status.state === 'failed') {
           stopPolling()

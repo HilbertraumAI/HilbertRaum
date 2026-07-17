@@ -1786,6 +1786,14 @@ export const en = {
   'main.translation.failedWindowNotice':
     '> ⚠ This part ({part} of {total}) could not be translated — ' +
     'the original text is kept below unchanged.',
+  // Issue #58 — also persisted INTO the generated translation (L12), at the gap's true
+  // reading position: a source page with no extractable text must never vanish silently.
+  'main.translation.missingPageNotice':
+    '> ⚠ Page {page} of the original could not be translated — ' +
+    'it contains no readable text (it may be a scanned image).',
+  'main.translation.missingPageRangeNotice':
+    '> ⚠ Pages {from}–{to} of the original could not be translated — ' +
+    'they contain no readable text (they may be scanned images).',
   'main.translation.attributionLine': 'Machine-translated by {modelId} — may contain errors.',
   'main.model.contextExceeded':
     "This is too large for the current model's context window. Raise the context size on " +
@@ -2258,6 +2266,18 @@ export const en = {
   'translate.file.exported': 'Document exported',
   'translate.file.show': 'Show in Documents',
   'translate.file.reset': 'Translate another document',
+  // Issue #58 — the at-a-glance completeness warnings next to a finished translation. The
+  // {pages} value is preformatted ("3" / "3–4, 7"); count = total missing pages / failed parts.
+  'translate.file.gapPages.one':
+    '⚠ Page {pages} of the original could not be translated — it contains no readable text ' +
+    '(it may be a scanned page). The output marks the gap.',
+  'translate.file.gapPages.other':
+    '⚠ Pages {pages} of the original could not be translated — they contain no readable text ' +
+    '(they may be scanned pages). The output marks each gap.',
+  'translate.file.failedParts.one':
+    '⚠ {count} part could not be translated — the original text is kept at the marked place in the output.',
+  'translate.file.failedParts.other':
+    '⚠ {count} parts could not be translated — the original text is kept at the marked places in the output.',
   // Friendly file-path errors — a CODE is mapped here; a backend friendly message shows verbatim.
   'translate.file.err.multiDrop': 'Drop one document at a time.',
   'translate.file.err.noPath':
