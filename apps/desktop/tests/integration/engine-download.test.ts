@@ -20,7 +20,12 @@ import {
   selectHostBuild,
   type ExtractFn
 } from '../../src/main/services/runtime-download'
-import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
+import {
+  llamaServerBinaryName,
+  registerSidecarChild,
+  unregisterSidecarChild,
+  killRegisteredSidecarChildren
+} from '../../src/main/services/runtime/sidecar'
 import {
   runtimeMarkerPath,
   verifyDownloadedFile,
@@ -33,7 +38,7 @@ import {
   initBinaryVerification,
   verifyBinaryBeforeSpawn
 } from '../../src/main/services/binary-verifier'
-import { chatEngineInUse } from '../../src/main/ipc/registerEngineIpc'
+import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../src/main/ipc/registerEngineIpc'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
 
@@ -543,5 +548,78 @@ describe('resolveTarBinary (CWD-binary-planting hardening, vuln-scan 2026-06-21)
   it('falls back to the bare name only when no known absolute tar exists (exotic host)', () => {
     expect(resolveTarBinary('linux', {}, () => false)).toBe('tar')
     expect(resolveTarBinary('win32', { SystemRoot: 'C:\\Windows' }, () => false)).toBe('tar')
+  })
+})
+
+// F-32 (full-audit 2026-07-16): the in-use guard covered only the CHAT runtime — but the
+// embedder/reranker/vision/translation sidecars all execute the SAME runtime/llama.cpp/<os>/
+// binary an install pre-cleans, and whisper-cli runs for hours mid-import from
+// runtime/whisper.cpp/<os>/. The guard is now widened per family.
+describe('engine in-use guard, widened per family (F-32)', () => {
+  it('llamaSidecarInUse / whisperSidecarInUse read the per-family PID registry', () => {
+    killRegisteredSidecarChildren(() => undefined) // isolate leftovers from other suites
+    expect(llamaSidecarInUse()).toBe(false)
+    expect(whisperSidecarInUse()).toBe(false)
+    registerSidecarChild(7001, 'llama_cpp') // e.g. a live E5 embedder / translation sidecar
+    expect(llamaSidecarInUse()).toBe(true)
+    expect(whisperSidecarInUse()).toBe(false) // still no transcription child
+    registerSidecarChild(7002, 'whisper_cpp')
+    expect(whisperSidecarInUse()).toBe(true)
+    unregisterSidecarChild(7001)
+    unregisterSidecarChild(7002)
+    expect(llamaSidecarInUse()).toBe(false)
+    expect(whisperSidecarInUse()).toBe(false)
+  })
+
+  it('refuses a llama_cpp install while a NON-chat llama sidecar is live — fetch never called', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const fetchSpy = vi.fn()
+    const mgr = new EngineDownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+    // chatRuntimeActive false (no chat model), but an embedder/translation sidecar is up.
+    await expect(
+      mgr.start({ rootPath, manifestsDir, gates: ALLOW, llamaSidecarActive: true })
+    ).rejects.toThrow(/while a model is running/i)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a whisper_cpp install mid-transcription — fetch never called', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const fetchSpy = vi.fn()
+    const mgr = new EngineDownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+    await expect(
+      mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['whisper_cpp'], whisperActive: true })
+    ).rejects.toThrow(/transcrib/i)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('a whisper_cpp install still proceeds while a llama sidecar runs (other-family scoping)', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+    // A llama sidecar is live, but the whisper-only install touches a different dir → allowed.
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['whisper_cpp'],
+      llamaSidecarActive: true
+    })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(rootPath, 'runtime', 'whisper.cpp', HOST_OS, WHISPER_BIN))).toBe(true)
+  })
+
+  it('a llama_cpp install still proceeds mid-transcription (other-family scoping)', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      whisperActive: true
+    })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(true)
   })
 })

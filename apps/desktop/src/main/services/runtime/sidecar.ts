@@ -218,11 +218,22 @@ const realSpawn: SpawnFn = (command, args, options) => nodeSpawn(command, args, 
 // before dying. Dependency-free and throw-safe: each kill is wrapped, and a PID that is
 // already gone (or was recycled to a foreign process the kill then fails on) is skipped.
 
-const liveSidecarPids = new Set<number>()
+/**
+ * The engine FAMILY a live sidecar child belongs to (F-32). Both families execute from a shared
+ * per-family install dir (`runtime/llama.cpp/<os>/` and `runtime/whisper.cpp/<os>/`), so the
+ * engine-installer's in-use guard partitions the registry by family: a `llama_cpp` (re-)install
+ * is refused while ANY llama-server-backed child (chat/embedder/reranker/vision/translation) is
+ * live, a `whisper_cpp` install while a transcription/dictation child runs. Structurally identical
+ * to runtime-download's `EngineFamily`; kept local so this low-level module owns no upward import.
+ */
+export type SidecarFamily = 'llama_cpp' | 'whisper_cpp'
 
-/** Record a just-spawned sidecar child so a crash exit can reap it (CODE-11). */
-export function registerSidecarChild(pid: number | undefined): void {
-  if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) liveSidecarPids.add(pid)
+const liveSidecarPids = new Map<number, SidecarFamily>()
+
+/** Record a just-spawned sidecar child so a crash exit can reap it (CODE-11) and the engine
+ *  installer can see its family is in use (F-32). */
+export function registerSidecarChild(pid: number | undefined, family: SidecarFamily): void {
+  if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) liveSidecarPids.set(pid, family)
 }
 
 /** Forget a sidecar child that exited/errored — on its own or via stop() (CODE-11). */
@@ -230,9 +241,14 @@ export function unregisterSidecarChild(pid: number | undefined): void {
   if (typeof pid === 'number') liveSidecarPids.delete(pid)
 }
 
-/** Read-only view of the currently registered sidecar PIDs (tests / diagnostics). */
-export function registeredSidecarPids(): number[] {
-  return [...liveSidecarPids]
+/** Read-only view of the currently registered sidecar PIDs — all families, or one (tests /
+ *  diagnostics / the F-32 per-family in-use guard). */
+export function registeredSidecarPids(family?: SidecarFamily): number[] {
+  const pids: number[] = []
+  for (const [pid, f] of liveSidecarPids) {
+    if (!family || f === family) pids.push(pid)
+  }
+  return pids
 }
 
 /**
@@ -245,7 +261,7 @@ export function registeredSidecarPids(): number[] {
 export function killRegisteredSidecarChildren(
   kill: (pid: number, signal: NodeJS.Signals) => unknown = (pid, signal) => process.kill(pid, signal)
 ): void {
-  for (const pid of [...liveSidecarPids]) {
+  for (const pid of [...liveSidecarPids.keys()]) {
     try {
       kill(pid, 'SIGKILL')
     } catch {
@@ -492,7 +508,9 @@ export class LlamaServer {
     })
     this.child = child
     // CODE-11: make the child reachable by the crash-exit reap for as long as it lives.
-    registerSidecarChild(child.pid)
+    // F-32: every LlamaServer consumer (chat/embedder/reranker/vision/translation) runs the
+    // shared `runtime/llama.cpp/<os>/` binary, so it registers under the llama_cpp family.
+    registerSidecarChild(child.pid, 'llama_cpp')
     child.stderr?.on('data', (chunk: unknown) => {
       const text = String(chunk)
       this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_MAX)

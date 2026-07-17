@@ -1930,6 +1930,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.engine.runtimeRunning':
     'Die KI-Engine kann nicht ersetzt werden, während ein Modell läuft. Stoppe das Modell im ' +
     'KI-Modell-Bereich und versuche es dann erneut.',
+  // F-32 (full-audit 2026-07-16): die Whisper-Installation überschreibt den Ordner, aus dem
+  // whisper-cli läuft — während einer Transkription/Diktat ablehnen.
+  'main.engine.transcriptionRunning':
+    'Die Sprach-Engine kann nicht ersetzt werden, während Audio transkribiert wird. Warte, bis ' +
+    'es fertig ist, und versuche es dann erneut.',
   'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
   'main.docs.processing':
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',
