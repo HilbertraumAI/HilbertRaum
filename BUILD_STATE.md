@@ -1649,6 +1649,21 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     Gate **4271/49** (+1 = the ratchet test), typecheck green (test-only phase — no
     `apps/desktop/src` touched, build n/a). Details: plan §L Phase-9 ledger entry.
 
+    **Phase 10 (close-out folding) done 2026-07-17** (on branch `fix/audit-2026-07-16-p9`):
+    **round COMPLETE pending the owner confirmations below.** Durable ledger folded into
+    `docs/architecture.md` **§50** (41-finding disposition table, §D decisions as executed,
+    Q-1/Q-2/NF-1 + review outcomes + deviations, clean verdicts, residuals, §-anchor legend —
+    every `audit 2026-07-16 F-xx` citation resolves there; layout block updated §24–§49 →
+    §24–§50). Final wave gate **4271/49** (kickoff baseline 4217/49; +54), typecheck clean.
+    Both working papers still on disk (deletion is owner-gated). **OWNER actions to close this
+    item:** ① confirm + delete `docs/audit-2026-07-16.md` and
+    `docs/audit-2026-07-16-remediation-plan.md` (full text stays in wave-branch history —
+    git-show pointers in §50) and restore the CLAUDE.md doc-lifecycle sentence to "none are
+    currently open" (coupled edits); ② open the stacked-chain PR `fix/audit-2026-07-16-p9` →
+    `master`, merge on green `ci-success`, then post the parked #59 both-halves comment (text
+    in plan §L Phase-7) and close #59; ③ version checkpoint tag after merge (v0.1.51-style,
+    owner-pushed per the standing tag policy).
+
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
 round complete at the 4165/47 gate. The tag is on origin (observed 2026-07-12), so the
