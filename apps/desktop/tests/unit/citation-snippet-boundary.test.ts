@@ -27,12 +27,12 @@ describe('chunksToCitations — surrogate-safe snippet truncation (F-15)', () =>
     // '😀' (U+1F600) is astral: two UTF-16 code units, placed as code point index 279 so a raw
     // `.slice(0, 280)` keeps only its HIGH surrogate; padded past the cap so we truncate.
     const text = 'a'.repeat(279) + '😀' + 'b'.repeat(60)
-    const [cit] = chunksToCitations([row(text)], 'doc.pdf')
-    expect(cit.snippet.endsWith('…')).toBe(true)
+    const snippet = chunksToCitations([row(text)], 'doc.pdf')[0].snippet ?? ''
+    expect(snippet.endsWith('…')).toBe(true)
     // Teeth: revert to `c.text.slice(0, 280)` → the high surrogate is kept alone → this trips.
-    expect(hasLoneSurrogate(cit.snippet)).toBe(false)
+    expect(hasLoneSurrogate(snippet)).toBe(false)
     // The astral char is kept whole as the last real char before the ellipsis.
-    expect(cit.snippet).toBe('a'.repeat(279) + '😀…')
+    expect(snippet).toBe('a'.repeat(279) + '😀…')
   })
 
   it('returns short text unchanged and truncates plain long text with an ellipsis', () => {
@@ -55,10 +55,10 @@ describe('chunksToCitations — surrogate-safe snippet truncation (F-15)', () =>
     const astralHead = head(astralFull)
     expect([...astralHead].length).toBe(281)
     expect(astralHead.length).toBe(562) // > 281 UTF-16 units — the unit-vs-point mismatch is real
-    const [cit] = chunksToCitations([row(astralHead)], 't')
-    expect(cit.snippet.endsWith('…')).toBe(true)
-    expect(hasLoneSurrogate(cit.snippet)).toBe(false)
-    expect([...cit.snippet].length).toBe(281) // 280 code points + the ellipsis
+    const snippet = chunksToCitations([row(astralHead)], 't')[0].snippet ?? ''
+    expect(snippet.endsWith('…')).toBe(true)
+    expect(hasLoneSurrogate(snippet)).toBe(false)
+    expect([...snippet].length).toBe(281) // 280 code points + the ellipsis
 
     // A text that fits (≤ 280 code points) comes back whole and untouched.
     const short = 'ä'.repeat(280)

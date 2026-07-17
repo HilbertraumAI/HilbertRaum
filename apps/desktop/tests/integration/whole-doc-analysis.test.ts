@@ -707,8 +707,8 @@ describe('coverage math + provenance', () => {
       id
     )
     const prov = documentLeafProvenance(db, id, 'doc.txt')
-    expect(prov.filter((c) => hasLoneSurrogate(c.snippet))).toEqual([])
-    const cut = prov.find((c) => c.snippet.startsWith('aaa'))
+    expect(prov.filter((c) => hasLoneSurrogate(c.snippet ?? ''))).toEqual([])
+    const cut = prov.find((c) => (c.snippet ?? '').startsWith('aaa'))
     expect(cut?.snippet).toBe('a'.repeat(279) + '😀…')
   })
 
