@@ -39,6 +39,18 @@ the `index.html` meta tag (defence in depth).
 - **Production** (strict): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
   connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none';
   frame-ancestors 'none'`. No remote origins are reachable from the renderer.
+  **Why prod keeps `style-src 'unsafe-inline'` (audit 2026-07-16 F-39 — investigated, kept):** it is
+  load-bearing for **KaTeX** math. `katex.renderToString` (used via `@streamdown/math` → rehype-katex
+  in `AssistantMarkdown`) emits many per-expression inline `style="height:…;vertical-align:…"`
+  attributes computed from the specific formula — e.g. `x^2 + y^2` produces 11 such attributes.
+  Inline **style attributes** have no nonce/hash escape hatch (CSP nonces apply only to `<style>`/
+  `<link>` elements, and `'unsafe-hashes'` would require hashing every dynamically-generated value),
+  so dropping `'unsafe-inline'` would render all math with its sizing/alignment styles blocked
+  (misaligned, broken). The residual risk is bounded and NON-critical: `script-src 'self'` blocks
+  script injection and `connect-src 'self'` + `img-src 'self' data:` close every network exfiltration
+  channel, so the only reachable effect of injected CSS is same-origin cosmetic manipulation
+  (content hiding / UI redressing) of rendered untrusted markdown — no script execution, no data
+  disclosure. The directive is therefore an accepted defence-in-depth trade-off, not a gap.
 - **Development** (HMR-compatible): relaxes `connect-src` to allow `ws://localhost:*` /
   `http://localhost:*`, and adds `'unsafe-inline'`/`'unsafe-eval'` to `script-src` (and
   `'unsafe-inline'` to `style-src`) for Vite hot-reload. Without this split, `npm run dev` would break.

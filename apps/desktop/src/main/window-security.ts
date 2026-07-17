@@ -30,6 +30,19 @@ export const SECURE_WINDOW_WEB_PREFERENCES = Object.freeze({
  * connect/img/script — the renderer cannot reach any cloud service. Dev relaxes
  * script-src (Vite/React refresh need inline+eval) and connect-src for Vite HMR over
  * ws://localhost (otherwise `npm run dev` breaks) — localhost is the ONLY added origin.
+ *
+ * Why PROD keeps `style-src 'unsafe-inline'` (audit 2026-07-16 F-39 — investigated, kept):
+ * it is load-bearing for KaTeX math. `katex.renderToString` (via `@streamdown/math` →
+ * rehype-katex in AssistantMarkdown) emits many per-expression inline
+ * `style="height:…;vertical-align:…"` attributes computed from the formula (e.g. `x^2 + y^2`
+ * → 11 of them). Inline STYLE ATTRIBUTES have no nonce/hash alternative (CSP nonces cover
+ * only `<style>`/`<link>` elements; `'unsafe-hashes'` can't hash dynamic values), so dropping
+ * it would render all math with its sizing/alignment styles blocked. The residual risk is
+ * bounded: `script-src 'self'` blocks script injection and `connect-src 'self'` + `img-src
+ * 'self' data:` close network exfiltration, so injected CSS can only cause same-origin cosmetic
+ * effects — no script execution, no data disclosure. See docs/security-model.md. If this string
+ * changes, tests/unit/window-security.test.ts + security-model.md + the index.html/ocr.html
+ * meta tags must move in lockstep (the effective policy is the intersection of all of them).
  */
 export function buildCsp(isDev: boolean): string {
   return isDev
