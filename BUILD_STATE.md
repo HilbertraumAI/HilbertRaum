@@ -1656,14 +1656,19 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     Q-1/Q-2/NF-1 + review outcomes + deviations, clean verdicts, residuals, §-anchor legend —
     every `audit 2026-07-16 F-xx` citation resolves there; layout block updated §24–§49 →
     §24–§50). Final wave gate **4271/49** (kickoff baseline 4217/49; +54), typecheck clean.
-    **Owner confirmations received 2026-07-17 (all three):** ① DONE — both working papers
-    deleted (full text: `git show 886be68:docs/audit-2026-07-16.md`,
+    **Owner confirmations received 2026-07-17 — ALL THREE EXECUTED, ITEM CLOSED:** ① both
+    working papers deleted (full text: `git show 886be68:docs/audit-2026-07-16.md`,
     `git show bb2da00:docs/audit-2026-07-16-remediation-plan.md`; §50 carries the pointers) and
-    the CLAUDE.md doc-lifecycle sentence restored to "none are currently open" (coupled edits,
-    same commit); ② IN PROGRESS — stacked-chain PR `fix/audit-2026-07-16-p9` → `master`, merge
-    on green `ci-success`, then post the parked #59 both-halves comment and close #59; ③ after
-    merge: version checkpoint tag v0.1.51 (local until owner-pushed per the standing tag
-    policy).
+    the CLAUDE.md doc-lifecycle sentence restored; ② **PR #60 rebase-merged to `master`**
+    (head `ae6d588`) after green `ci-success` (both OS legs + CLA), the #59 both-halves comment
+    posted and **#59 closed**; ③ version checkpoint below (PR #61, tag v0.1.51 local until
+    owner-pushed). Final post-merge gates on `master`: **4271/49**, typecheck clean, build
+    green. ⚠️ **Branch note (load-bearing, like `cla-signatures`):**
+    `origin/fix/audit-2026-07-16-p9` must be KEPT — the rebase-merge rewrote the wave's commit
+    shas onto master, so §50's per-finding commit citations and the two `git show` paper
+    pointers (`886be68`, `bb2da00`) resolve ONLY through that branch's history; deleting it
+    would orphan them. The local p1–p8 labels are ancestors of p9 (redundant, cleaned up);
+    `release/v0.1.51` cleaned up after merge (nothing cites its pre-rebase sha).
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
@@ -1693,6 +1698,13 @@ tiers now Qwen3.5 4B / 9B / Qwen3.6 27B Q4 / Q5, the Qwen3.6 pair productized, t
 `a42254f` after all four checks (incl. the now-required `ci-success` — master is ruleset-
 protected since 2026-07-12) went green. Like its predecessors, the tag is local until the
 owner pushes it (a pushed tag triggers the release workflow's draft build).
+
+Version checkpoint: **v0.1.51 tagged 2026-07-17** (0.1.50 → 0.1.51, root + apps/desktop +
+lockfile version fields only; CHANGELOG header mention updated; bump PR #61 rebase-merged as
+`7448942` after green `ci-success`) — marks the **full-audit 2026-07-16 remediation wave
+complete** (PR #60, 41/41 findings, durable ledger `docs/architecture.md` §50) at the
+**4271/49** gate. Like its predecessors, the tag is local until the owner pushes it (a pushed
+tag triggers the release workflow's draft build).
 
 **Current gate (2026-07-12, full-audit 2026-07-12 Phase 6 close-out — round complete, durable ledger `docs/architecture.md` §48, both working papers deleted; the round moved the suite 4168 → 4190 across Phases 1–5): typecheck clean, 4190 tests pass (47 skipped —
 the manual tests behind `HILBERTRAUM_*`/`PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/
