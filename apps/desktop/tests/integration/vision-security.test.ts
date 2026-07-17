@@ -29,7 +29,7 @@ import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '..
 import { VisionService } from '../../src/main/services/vision'
 import { VisionRuntime } from '../../src/main/services/vision/runtime'
 import { log } from '../../src/main/services/logging'
-import { IPC } from '../../src/shared/ipc'
+import { IPC, STREAM } from '../../src/shared/ipc'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
@@ -348,9 +348,16 @@ describe('vision security sentinel', () => {
     })
     registerImagesIpc(ctxFor(audit, root), service)
 
-    const initial = (await invoke(handlers, IPC.imageAnalyze, sentinelReq())).result as ImageJob
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, sentinelReq())) as ImageJob
     const done = await waitForTerminal(initial.jobId)
     expect(done.state).toBe('done')
+    // F-12 (audit 2026-07-16): the encrypted store is async, so the .enc sidecar (and the shred of the
+    // plaintext temp) land only after the streamed done EVENT fires — wait for it before the disk check.
+    for (let i = 0; i < 200; i++) {
+      if (event.sender.send.mock.calls.some((c: unknown[]) => c[0] === STREAM.imgDone(initial.jobId))) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
 
     expect(ocrSpy).not.toHaveBeenCalled() // no OCR engine ever built on the vision path
     expect(existsSync(join(root, 'documents'))).toBe(false) // never the documents pipeline
