@@ -477,6 +477,79 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
 > - Docs touched: <files> · BUILD_STATE entry added: <yes>
 > ```
 
+### Phase 8 — 2026-07-17 — branch fix/audit-2026-07-16-p8 (stacked on p7 @ c47c50d); commits F-29 @ 314ce66, F-30 @ 11a556c, F-31 @ 150fd0c, F-35 @ 42e5d32, F-39 @ 306f7bb, F-12 @ 88dd8f5, NF-1 @ 7b90210, docs+ledger @ this commit
+- Gate: **4,270 passed / 49 skipped** (baseline entering P8 was 4,267/49; +3 = F-29 memo test + F-30
+  cache test + F-31 coalescing test; F-35/F-39/F-12/NF-1 modified existing tests). `typecheck` clean;
+  `build` green (`apps/desktop/src` touched). Hygiene: every edited file LF, BOM-free, NUL-free.
+- Fixed (in listed order; F-29/F-30/F-31 red-green-demonstrated):
+  - **F-29** — the SUGGESTION path re-materialized the in-scope `indexed` title+MIME set on every
+    debounced composer pause; with the default install's doc-signal skills (bank/invoice) the common
+    Library scope is the expensive one (`resolveScope` returns the built-in library COLLECTION, so it is
+    a membership scan, not literally unfiltered). Added a resident cache in `scope-signals`
+    (WeakMap-per-Db, single entry) keyed by the resolved scope fingerprint + a cheap corpus signature —
+    `(COUNT, MAX(rowid))` over `indexed` documents **and** over `document_collections` (so a membership
+    move invalidates too) + `includeArchived`. Hit serves byte-identical signals; auto-fire
+    (`explicitDocumentsOnly`) reads live. `documentsInScope` semantics untouched (audit caution). Probe
+    `__suggestSignalMaterializations`: 5 pauses → 1 materialization, +1 on import.
+  - **F-30** — `loadPolicy` now caches the merged `LoadedPolicy` per config dir keyed by
+    `isDev | fileSig(policy.json) | fileSig(drive.json)` where `fileSig = mtimeMs:size` (or `absent`).
+    A `stat` per call replaces the two `readFileSync+JSON.parse`; re-parse only on a signature change, so
+    the download gate / developerLeniency still see a live policy tightening. `buildPolicyStatus`
+    signature unchanged. Probe `__policyMaterializations`: 3 polls → 1 parse, +1 on a content edit.
+  - **F-31** — `DocumentsScreen.watchJob` **and** `watchReindex` route completion refreshes through
+    `makeRefreshCoalescer` (leading edge + trailing throttle, `REFRESH_THROTTLE_MS = 1500`,
+    piggybacked on the 400 ms poll ticks — no nested timer). The terminal `job.done` refresh stays
+    immediate. The FE-7 exact-call-count pins (`DocumentsScreen.test.tsx`) are PRESERVED (single
+    mid-import transition → +1; done → +2) since they exercise one transition; a NEW test proves 3 rapid
+    completions in one window → 1 refresh (old code: +3). architecture.md FE-7 note amended.
+  - **F-35 ⟨D-B⟩** — the drive-READ probe reads the 8 MB file back from the OS page cache (RAM, ~100×
+    inflated). Relabelled `diag.bench.driveRead` → "Drive read (cached)" (EN + DE); `driveWriteMbps`
+    stays the honest headline. `buildWarnings` gates the slow-drive warning on the fsync-bound WRITE only
+    (the `min(read,write)` never fired on the cached read leg) — code now matches the documented
+    "write < SLOW_DRIVE_MBPS". Old persisted inflated values render sanely under the new label (no
+    migration). DiagnosticsCopySave test asserts the "(cached)" label; benchmark.md + data-contracts.md
+    updated.
+  - **F-39 ⟨D-D⟩ — VERDICT: KEEP + document.** Investigated by rendering KaTeX: valid math emits many
+    per-expression inline `style="height:…;vertical-align:…"` attributes (e.g. `x^2 + y^2` → **11**;
+    `\sum_{i=0}^{n} i` → 7). Inline STYLE ATTRIBUTES have no nonce/hash escape hatch (CSP nonces cover
+    only `<style>`/`<link>`; `'unsafe-hashes'` can't hash dynamic values), so dropping `'unsafe-inline'`
+    would render all math with sizing/alignment blocked. Residual risk bounded: `script-src 'self'`
+    blocks script injection, `connect-src`/`img-src` close exfiltration → only same-origin cosmetic CSS
+    effects. The CSP string, `window-security.test.ts` pin, and the index.html/ocr.html meta tags are
+    **UNCHANGED**; rationale added to the `buildCsp` header + security-model.md.
+  - **F-12 ⟨D-C⟩** — image-history store/open/delete were ~60 MiB of SYNC fs+crypto+shred on the main
+    thread per image (≤20 MiB cap), the store firing inside the `done` emitter. Ported `vision/history.ts`
+    to `encryptFileAsync`/`decryptFileAsync` + `fs.promises` + a new `shredFileAsync` twin
+    (`workspace-vault.ts`), all three functions async. `registerImagesIpc.ensureSession` is async and
+    **awaited before `base.done`** so `sessionId` still rides the done event; REL-5 delete ordering
+    (row-first, shred-after) preserved; sync `shredFile`/`encryptFile` retained for crash-lock / export /
+    DB-lifecycle. **Measurement** (dev box, local SSD, 16 MiB encrypted store ×5, `monitorEventLoopDelay`
+    res 1 ms with a 1 ms breather-tick): SYNC max **94.8 ms** / mean **22.4 ms** / 20 ticks;
+    ASYNC max **24.1 ms** / mean **3.37 ms** / 198 ticks. A real USB-stick + encrypted-workspace run was
+    **not reproducible on the dev box** (recorded honestly — the target USB medium's stall scales with
+    `(2–3×size)/throughput`, so the win is proportionally larger there; no USB numbers fabricated).
+- Deviations from plan: F-29's cache key needed `document_collections` in the signature (not just the
+  documents `(COUNT,MAX)` the plan named) because the "whole-corpus" scope resolves to the built-in
+  Library COLLECTION, so a membership-scoped query — the plain documents signature would miss membership
+  moves. Still sits strictly above `documentsInScope` per the caution. F-12 forced the images-ipc + a
+  vision-security test to wait on the streamed done EVENT instead of the job STATE (job state flips before
+  the async persistence) — the sanctioned lockstep move, mirroring the renderer's real signal.
+- New findings: **NF-1** (fixed here) — `tests/integration/vision-security.test.ts` was an UNLISTED
+  pinning test in F-12's blast radius (asserted the `.enc` sidecar after `waitForTerminal`/job state,
+  which now races the async temp-shred). Fixed by waiting for `STREAM.imgDone` before the disk check.
+- Messages to later phases:
+  - **Phase 9:** F-30 seam — `loadPolicy` now has a module-level cache + `__resetPolicyCache`/
+    `__policyMaterializations` test hooks; if any Phase-9 test edits policy.json in-place expecting a
+    re-read, it must change the file's size/mtime (same-mtime+same-size in-place edits are cache hits).
+  - **Phase 10:** durable §50 dispositions — F-29 resident-cache-above-`documentsInScope`; F-30
+    mtime/size policy cache; F-31 `makeRefreshCoalescer` throttle (amends FE-7); F-35 "(cached)" label +
+    write-only slow-drive gate (D-B); F-39 KEEP-verdict with the KaTeX inline-style evidence (D-D); F-12
+    async image-history + `shredFileAsync`, retiring the §35 PERF-1 sync carve-out (D-C); NF-1.
+- Docs touched: `docs/architecture.md` (FE-7 amend, §35 PERF-1 dated supersede, image-understanding
+  history paragraph), `docs/benchmark.md`, `docs/data-contracts.md`, `docs/security-model.md`,
+  `apps/desktop/src/main/window-security.ts` header, `BUILD_STATE.md` (§5 item 14 Phase-8 line), this
+  plan (§L). BUILD_STATE entry added: yes.
+
 ### Phase 7 — 2026-07-17 — branch fix/audit-2026-07-16-p7 (stacked on p6 @ 748fc06); commits F-25 @ bbefe6e, F-26 @ ad1a176, F-28 @ 4a29e6f, F-36/F-38 @ 397a7fc, Q-1 @ ed69824, docs+ledger @ this commit
 - Gate: **4,267 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).
   Baseline entering P7 was 4,265/49 (P6 + its review fix-up); +2 = 1 F-25 stop()-purge detach case

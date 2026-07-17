@@ -1595,6 +1595,29 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     **4267/49** (+2), typecheck + build green. Details: plan §L Phase-7 ledger entry (incl. the
     updated #59 comment for Phase 10 and the §Q Q-1 disposition).
 
+    **Phase 8 done 2026-07-17** (branch `fix/audit-2026-07-16-p8`): performance & posture —
+    F-29 (skill-suggestion whole-corpus doc signals now memoized in `scope-signals` by a
+    `(scope, indexed-COUNT/MAX-rowid, document_collections-COUNT/MAX-rowid)` signature — 5 typing
+    pauses → 1 materialization, invalidates on import/delete/membership; `documentsInScope`
+    untouched), F-30 (`loadPolicy` caches the parsed policy per config dir keyed by each file's
+    mtime/size — the 4 s TranslateScreen poll stops re-reading policy.json+drive.json off the drive;
+    a live edit still re-reads), F-31 (Documents `watchJob`+`watchReindex` completion refreshes
+    coalesced by a leading+trailing throttle `REFRESH_THROTTLE_MS=1500` — a rapid small-file import
+    no longer re-derives the whole library ~2.5×/s; FE-7 pins preserved, new coalescing test),
+    F-35⟨D-B⟩ (drive-READ probe relabelled "(cached)" EN+DE — it reads the OS page cache, ~100×
+    inflated; `driveWriteMbps` is the honest headline; slow-drive warning gated on write only; old
+    persisted values render sanely), F-39⟨D-D⟩ (**verdict: KEEP** `style-src 'unsafe-inline'` —
+    KaTeX emits per-expression inline `style=` attributes with no nonce/hash alternative, e.g.
+    `x^2 + y^2` → 11; documented in the buildCsp header + security-model.md; CSP string/pin test
+    UNCHANGED), F-12⟨D-C⟩ (image-history store/open/delete now ASYNC — `encryptFileAsync`/
+    `decryptFileAsync` + `fs.promises` + new `shredFileAsync` twin; analyze handler awaits
+    `ensureSession` before `done` so sessionId still rides the event; retires the §35 PERF-1
+    sync carve-out. Dev-box `monitorEventLoopDelay`, 16 MiB encrypted store: main-thread stall
+    mean 22.4 ms → 3.4 ms, max ~95 → ~24 ms; USB run not reproducible on the dev box). F-29/F-30/
+    F-31 red-green-demonstrated; **NF-1** (unlisted F-12 pinning test `vision-security.test.ts`
+    waited on job state → now waits on the streamed done event) fixed in-phase. Gate **4270/49**
+    (+3), typecheck + build green. Details: plan §L Phase-8 ledger entry.
+
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
 round complete at the 4165/47 gate. The tag is on origin (observed 2026-07-12), so the
