@@ -564,6 +564,17 @@ Decisions taken by the owner 2026-07-17 (Phase 0 batch — all five follow the r
   P4 record supersede annotation — both in the F-10 commit; TA-wave L10 ledger line got a dated
   update annotation, text preserved), `BUILD_STATE.md` (§5 item 14 Phase-6 line), this plan (§L).
   BUILD_STATE entry added: yes.
+- **Review note (2026-07-17, same branch; independent Phase-6 review verdict ACCEPT — no
+  blockers/should-fixes; one nit, §N-recorded):** the F-24 EXTEND branch (`chunker.ts` atomize,
+  `end = end + 1` — taken only when `sliceChars === 1` and retracting would empty the piece) had no
+  test coverage: sliceChars = gcd(cap, overlap) is 20 for the production 500/80 config and = cap
+  for overlap-0, so the branch needs a cap/overlap-COPRIME config plus a pair exactly at the cut.
+  Resolved by ADDING the test (the reviewer's stronger option): `windowByTokens('😀'×30, 7, 3)`
+  (gcd = 1 ⇒ every cut mid-pair ⇒ extend fires per piece) asserts every window is whole-emoji with
+  no lone-surrogate edge. TEETH by mutation, per the reviewer's red-bar condition: flipping the
+  branch to a plain retract hangs the slice loop (piece never advances) — the run errored with the
+  fork killed after ~38 s, test never completing (the honest red); restored, chunker.ts
+  byte-identical to the F-24 commit, 25/25 green. Suite count moves 4,264 → **4,265 / 49**.
 
 ### Phase 5 — 2026-07-17 — branch fix/audit-2026-07-16-p5 (stacked on p4 @ 0404ee6); commits F-13/F-34 @ eb50209, F-14 @ 7e55c6f, F-33 @ a7e61de, F-32 @ 9bc861b, docs+ledger @ this commit
 - Gate: **4,247 passed / 49 skipped** · typecheck clean · build green (`apps/desktop/src` touched).

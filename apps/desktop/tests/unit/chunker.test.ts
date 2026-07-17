@@ -270,6 +270,22 @@ describe('chunker — surrogate-pair-safe slicing of astral runs (F-24)', () => 
     expect(wins.join('')).toBe(glued) // shifted cuts still partition — no unit dropped/duplicated
   })
 
+  // The degenerate EXTEND branch (reviewer nit, Phase-6 review): a cap/overlap-coprime config makes
+  // sliceChars = gcd(cap, overlap) = 1, so EVERY cut through an astral run lands mid-pair AND
+  // retracting would empty the piece — the correction must extend instead (a 2-unit pair is 1 approx
+  // token, so it still fits any window, and the loop still advances). No production config reaches
+  // this (500/80 ⇒ 20; overlap-0 ⇒ cap), but the branch must not rot. Teeth shown by mutation:
+  // flipping the branch to a plain retract hangs the slice loop (piece never advances) → timeout red.
+  it('a coprime cap/overlap (sliceChars = 1) extends through pairs instead of emptying the piece', () => {
+    const glued = '😀'.repeat(30) // one whitespace-free astral word, 60 code units
+    const wins = windowByTokens(glued, 7, 3) // gcd(7, 3) = 1
+    expect(wins.length).toBeGreaterThan(1)
+    for (const w of wins) {
+      expect(w).not.toMatch(LONE_SURROGATE_EDGE)
+      expect(w.length % 2).toBe(0) // every window is a run of WHOLE emoji — no half pair anywhere
+    }
+  })
+
   // No-churn acceptance: the correction is BOUNDARY-ONLY (a charCodeAt pair check at the cut), so
   // non-astral corpora — CJK, Thai, prose, glued Latin — hit byte-identical cut positions. These
   // counts were computed on the PRE-FIX chunker and must never move.

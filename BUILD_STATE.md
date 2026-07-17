@@ -1573,7 +1573,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     decision **D-A**: `.csv` exports carry the UTF-8 BOM — Excel-friendly; the two no-BOM pins +
     one audit-unlisted anchored header pin flipped WITH the fix; BOM'd-CSV re-import round-trip
     proven through papaparse). All red-green-demonstrated. Gate **4264/49** (+16), typecheck +
-    build green. Details: plan §L Phase-6 ledger entry.
+    build green. Independent review: ACCEPT; its one nit (the F-24 degenerate extend branch was
+    untested) closed with a coprime-config test, mutation-red-proven → **4265/49**. Details:
+    plan §L Phase-6 ledger entry (incl. the review note).
 
 Version checkpoint: **v0.1.47 tagged 2026-07-11** (0.1.46 → 0.1.47, root + apps/desktop +
 lockfile; CHANGELOG header mention updated) — marks the full-audit 2026-07-11 remediation
